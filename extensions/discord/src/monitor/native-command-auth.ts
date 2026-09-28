@@ -307,8 +307,6 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
     channelSlug,
     rawChannelId,
     threadParentId,
-    threadParentName,
-    threadParentSlug,
   } = channelContext;
   if (params.isPolicyCurrent?.() === false) {
     return false;
@@ -324,11 +322,7 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
     }) ?? [];
   const { ownerAllowList, ownerAllowed: ownerOk } = resolveDiscordOwnerAccess({
     allowFrom: configuredDmAllowFrom,
-    sender: {
-      id: sender.id,
-      name: sender.name,
-      tag: sender.tag,
-    },
+    sender,
     allowNameMatching,
   });
   const { commandsAllowFromAccess, guildInfo, channelConfig } =
@@ -336,14 +330,8 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
       cfg,
       discordConfig,
       sender,
-      isThreadChannel,
+      ...channelContext,
       guild: interaction.guild ?? null,
-      rawChannelId,
-      channelName,
-      channelSlug,
-      threadParentId,
-      threadParentName,
-      threadParentSlug,
     });
   if (channelConfig?.enabled === false) {
     return false;
@@ -376,11 +364,7 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
       accountId,
       dmPolicy,
       configuredAllowFrom: configuredDmAllowFrom,
-      sender: {
-        id: sender.id,
-        name: sender.name,
-        tag: sender.tag,
-      },
+      sender,
       allowNameMatching,
       cfg,
       rest: interaction.client.rest,

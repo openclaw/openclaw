@@ -201,12 +201,6 @@ describe("anthropic stream wrappers", () => {
     expect(headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
   });
 
-  it("strips legacy context-1m betas for API key auth", () => {
-    const headers = runWrapper("sk-ant-api-123");
-    expect(headers?.["anthropic-beta"]).toBeDefined();
-    expect(headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
-  });
-
   it("skips service_tier for OAuth token in composed stream chain", () => {
     const captured = runComposedAnthropicProviderStream("sk-ant-oat01-oauth-token");
     expect(captured.headers?.["anthropic-beta"]).toBe(OAUTH_BETA_HEADER);

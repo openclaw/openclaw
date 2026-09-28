@@ -48,8 +48,10 @@ import {
   setSessionActivitySummaryState,
   type ActivitySummaryTarget,
 } from "./session-activity-summary-state.js";
+import { readSessionListSelectionFacts } from "./session-list-target.js";
 import type { SessionObserverEvent } from "./session-observer-contract.js";
 import { defaultCompleteModel, defaultPrepareModel } from "./session-observer-model.js";
+import type { SessionRowProjection } from "./session-row-projection.js";
 import { resolveSessionStoreKey } from "./session-store-key.js";
 
 const log = createSubsystemLogger("gateway/activity-summary");
@@ -106,6 +108,7 @@ export type SessionActivitySummaryService = {
 
 export function createSessionActivitySummaries(deps: {
   getConfig: () => OpenClawConfig;
+  getSessionRowProjection?: () => SessionRowProjection | undefined;
   onChanged: (target: ActivitySummaryTarget & { storePath: string }) => void;
   prepareModel?: typeof defaultPrepareModel;
   completeModel?: typeof defaultCompleteModel;
@@ -128,8 +131,14 @@ export function createSessionActivitySummaries(deps: {
       agentId: target.agentId,
     }),
   });
-  const read = (target: ActivitySummaryTarget) =>
-    loadSessionEntryReadOnly({ ...scope(target), projection: "list" });
+  const read = (target: ActivitySummaryTarget) => {
+    const projection = deps.getSessionRowProjection?.();
+    if (projection?.sharingRevision) {
+      return projection.sharingTarget(target)?.entry;
+    }
+    // Startup and store-topology recovery have no current resident facts yet.
+    return loadSessionEntryReadOnly({ ...scope(target), projection: "list" });
+  };
   const current = (state: Tracked) =>
     !disposed &&
     states.get(activitySummaryScope(state)) === state &&
@@ -180,7 +189,7 @@ export function createSessionActivitySummaries(deps: {
       entry.initializationPending ||
       entry.incognito ||
       entry.heartbeatIsolatedBaseSessionKey ||
-      entry.spawnedBy
+      readSessionListSelectionFacts(target.key, entry).isSubagent
     ) {
       return undefined;
     }
@@ -249,6 +258,7 @@ export function createSessionActivitySummaries(deps: {
     if (
       !entry ||
       entry.initializationPending ||
+      readSessionListSelectionFacts(state.key, entry).isSubagent ||
       entry.sessionId !== state.sessionId ||
       entry.lifecycleRevision !== state.lifecycleRevision
     ) {

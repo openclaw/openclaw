@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, it, vi } from "vitest";
-import { parseCLI, type JsonTestResults } from "vitest/node";
+import { parseCLI, type CliOptions, type JsonTestResults } from "vitest/node";
 import type { VitestReportCapture } from "../../scripts/lib/vitest-report-capture.mts";
+import { canParallelizeVitestOutput } from "../../scripts/lib/vitest-report-owner.mts";
 import { isPidDefinitelyDead } from "../../src/shared/pid-alive.ts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import {
@@ -30,6 +31,50 @@ const expected = [
   ["beta/skip", "skipped"],
   ["beta/todo", "todo"],
 ];
+
+it.for([
+  { args: [], owner: false, expected: false },
+  { args: ["--reporter=dot"], owner: false, expected: false },
+  { args: ["--coverage.enabled=false"], owner: false, expected: false },
+  { args: ["--reporter=dot", "--coverage.enabled=false"], owner: false, expected: true },
+  { args: ["--reporter=verbose", "--coverage=false"], owner: false, expected: true },
+  { args: ["--reporter=json", "--coverage.enabled=false"], owner: false, expected: false },
+  {
+    args: ["--reporter=github-actions", "--coverage.enabled=false"],
+    owner: false,
+    expected: false,
+  },
+  { args: ["--reporter=json", "--reporter=verbose", "--coverage"], owner: true, expected: true },
+  { args: ["--reporter=json", "--reporter=github-actions"], owner: true, expected: false },
+])(
+  "requires explicit native output ownership: $args owner=$owner",
+  ({ args, owner, expected: admitted }, { expect }) => {
+    const { options } = parseCLI(["vitest", "run", ...args]);
+    expect(canParallelizeVitestOutput(options, owner)).toBe(admitted);
+  },
+);
+
+it.for([
+  { options: { reporter: "dot", coverage: { enabled: false } }, owner: false, admitted: true },
+  { options: { reporters: "verbose", coverage: { enabled: false } }, owner: false, admitted: true },
+  {
+    options: { reporter: ["dot", "verbose"], coverage: { enabled: false } },
+    owner: false,
+    admitted: true,
+  },
+  { options: { reporter: "github-actions" }, owner: true, admitted: false },
+  { options: { reporters: "./custom-reporter.mjs" }, owner: true, admitted: false },
+  {
+    options: { reporters: [["json", { outputFile: "shared.json" }]] },
+    owner: true,
+    admitted: false,
+  },
+] satisfies Array<{ options: CliOptions; owner: boolean; admitted: boolean }>)(
+  "keeps output ownership for native reporter shapes: $options",
+  ({ options, owner, admitted }, { expect }) => {
+    expect(canParallelizeVitestOutput(options, owner)).toBe(admitted);
+  },
+);
 
 describe.skipIf(process.platform === "win32")("native multi-invocation report ownership", () => {
   const cacheLifetime = createFixtureLifetime();
@@ -110,7 +155,6 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     "batch",
     "batch-parallel",
     "retry",
-    "watchdog",
     "dotted",
     "metadata",
     "ignored-unhandled",
@@ -162,16 +206,6 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
         );
         expect(index.merge).toMatchObject({ code: 0, signal: null });
       }
-      if (mode === "watchdog") {
-        expect(
-          fs.readFileSync(
-            path.join(path.dirname(path.dirname(result.output)), "cold-started"),
-            "utf8",
-          ),
-        ).toBe("started");
-        expect(index.entries[0].attempts).toHaveLength(2);
-        expect(index.entries[0].attempts[0].outcome.noOutputTimedOut).toBe(true);
-      }
       if (mode === "metadata") {
         expect(parts.map((part: { json: string }) => json(part.json).snapshot.matched)).toEqual([
           1, 1,
@@ -185,6 +219,85 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
           ).toBe(true);
         }
       }
+    },
+  );
+
+  reportTest(
+    "automatically overlaps exact targets with isolated reports and joins before publication",
+    { timeout: 60000 },
+    async ({ expect, reports }) => {
+      const root = reports.make("oc-report-automatic-");
+      const result = await reports.fixture(root)("automatic");
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stderr).toContain("2 exact-target plans with parallelism 2");
+      expect(inventory(json(result.output))).toEqual(expected);
+      const index = json(path.join(result.reportSet!, "index.json"));
+      expect(index.complete).toBe(true);
+      expect(index.entries).toHaveLength(2);
+      const outputs = index.entries.map((entry: { attempts: { json: string; blob: string }[] }) => {
+        expect(entry.attempts).toHaveLength(1);
+        return entry.attempts[0]!;
+      });
+      expect(
+        new Set(outputs.flatMap((part: { json: string; blob: string }) => [part.json, part.blob]))
+          .size,
+      ).toBe(4);
+      expect(fs.readFileSync(path.join(root, "reports/merge-after-joins"), "utf8")).toBe("joined");
+      for (const part of outputs) {
+        expect(isPidDefinitelyDead(json(`${part.json}.capture.json`).pid)).toBe(true);
+      }
+    },
+  );
+
+  reportTest(
+    "explicit console and coverage overrides isolate automatic runs from config writers",
+    { timeout: 60000 },
+    async ({ expect, reports }) => {
+      const root = reports.make("oc-report-config-output-");
+      const result = await reports.fixture(root)("automatic", {
+        report: false,
+        configOutput: true,
+        nativeArgs: ["--reporter=dot", "--coverage.enabled=false"],
+      });
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stderr).toContain("2 exact-target plans with parallelism 2");
+      expect(result.reportSet).toBeUndefined();
+      expect(fs.existsSync(path.join(root, "reports/config-output.json"))).toBe(false);
+      expect(fs.readFileSync(path.join(root, "config-coverage/canary"), "utf8")).toBe("retained");
+      const events = fs
+        .readFileSync(path.join(root, "reports/executed.jsonl"), "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(
+        events.map((event) => event.name).toSorted((left, right) => left.localeCompare(right)),
+      ).toEqual(["alpha/one", "beta/one"]);
+      expect(events.every((event) => isPidDefinitelyDead(event.pid))).toBe(true);
+    },
+  );
+
+  reportTest(
+    "preserves the first watchdog failure without publishing an aggregate",
+    { timeout: 60000 },
+    async ({ expect, reports }) => {
+      const result = await reports.run("watchdog");
+      expect(result.code, result.stderr).toBe(143);
+      expect(
+        fs.readFileSync(
+          path.join(path.dirname(path.dirname(result.output)), "cold-started"),
+          "utf8",
+        ),
+      ).toBe("started");
+      const index = json(path.join(result.reportSet!, "index.json"));
+      expect(index.complete).toBe(false);
+      expect(index.entries[0].attempts).toHaveLength(1);
+      expect(index.entries[0].attempts[0].outcome).toMatchObject({
+        code: 143,
+        noOutputTimedOut: true,
+      });
+      expect(index.entries[1].attempts).toHaveLength(0);
+      expect(fs.existsSync(result.output)).toBe(false);
+      expect(result.stderr).not.toContain("[test] retrying");
     },
   );
 

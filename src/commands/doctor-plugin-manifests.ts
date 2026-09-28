@@ -102,6 +102,18 @@ export function collectLegacyPluginManifestContractMigrations(params?: {
 }): LegacyManifestContractMigration[] {
   const seen = new Set<string>();
   const migrations: LegacyManifestContractMigration[] = [];
+  const inspectManifest = (manifestPath: string) => {
+    const seenKey = manifestSeenKey(manifestPath);
+    if (seen.has(seenKey)) {
+      return;
+    }
+    seen.add(seenKey);
+    const raw = readManifestJson(manifestPath);
+    const migration = raw && buildLegacyManifestContractMigration({ manifestPath, raw });
+    if (migration) {
+      migrations.push(migration);
+    }
+  };
 
   for (const root of params?.manifestRoots ?? []) {
     if (!fs.existsSync(root)) {
@@ -111,20 +123,7 @@ export function collectLegacyPluginManifestContractMigrations(params?: {
       if (!entry.isDirectory()) {
         continue;
       }
-      const manifestPath = path.join(root, entry.name, "openclaw.plugin.json");
-      const seenKey = manifestSeenKey(manifestPath);
-      if (seen.has(seenKey)) {
-        continue;
-      }
-      seen.add(seenKey);
-      const raw = readManifestJson(manifestPath);
-      if (!raw) {
-        continue;
-      }
-      const migration = buildLegacyManifestContractMigration({ manifestPath, raw });
-      if (migration) {
-        migrations.push(migration);
-      }
+      inspectManifest(path.join(root, entry.name, "openclaw.plugin.json"));
     }
   }
 
@@ -133,22 +132,7 @@ export function collectLegacyPluginManifestContractMigrations(params?: {
     ...(params?.env ? { env: params.env } : {}),
     ...(params?.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   }).plugins) {
-    const seenKey = manifestSeenKey(plugin.manifestPath);
-    if (seen.has(seenKey)) {
-      continue;
-    }
-    seen.add(seenKey);
-    const raw = readManifestJson(plugin.manifestPath);
-    if (!raw) {
-      continue;
-    }
-    const migration = buildLegacyManifestContractMigration({
-      manifestPath: plugin.manifestPath,
-      raw,
-    });
-    if (migration) {
-      migrations.push(migration);
-    }
+    inspectManifest(plugin.manifestPath);
   }
 
   return migrations.toSorted((left, right) => left.manifestPath.localeCompare(right.manifestPath));

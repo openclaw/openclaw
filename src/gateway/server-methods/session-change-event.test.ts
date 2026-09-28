@@ -17,6 +17,7 @@ import {
 import { createPluginRuntimeCapabilityLease } from "../../plugins/capability-lease.js";
 import { createPluginServiceGatewayEvents } from "../../plugins/gateway-events.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
@@ -594,8 +595,12 @@ describe("sessions.changed coalescing", () => {
       const projection = await createSessionRowProjection({ cfg: config });
       const context = createContext(new Set(["conn-1"]), config);
       bindSessionRowProjection(context, () => projection);
-      const connection = createGatewayConnectionState({ bootId: "event-generation", cfg: config });
-      const send = vi.fn<(frame: string) => void>();
+      const connection = createGatewayConnectionState({
+        scheduler: createTestGatewayScheduler("fake-timers"),
+        bootId: "event-generation",
+        cfg: config,
+      });
+      const send = vi.fn<(frame: string | Buffer) => void>();
       connection.clients.add({
         connId: "conn-1",
         usesSharedGatewayAuth: false,
@@ -646,7 +651,9 @@ describe("sessions.changed coalescing", () => {
         ]);
         expect(payloads[0]).not.toHaveProperty("session");
         expect(payloads[1]).not.toHaveProperty("session");
-        expect(send.mock.calls.map(([frame]) => JSON.parse(frame).payload)).toMatchObject([
+        expect(
+          send.mock.calls.map(([frame]) => JSON.parse(frame.toString()).payload),
+        ).toMatchObject([
           { reason: "delete", sessionId: "original" },
           { reason: "create", sessionId: "replacement", session: { sessionId: "replacement" } },
         ]);
@@ -677,7 +684,7 @@ describe("sessions.changed coalescing", () => {
             await flushPendingSessionsChangedEvents(context);
             expect(
               send.mock.calls
-                .map(([frame]) => JSON.parse(frame).payload)
+                .map(([frame]) => JSON.parse(frame.toString()).payload)
                 .filter((payload) => payload.sessionKey === sessionKey),
             ).toMatchObject([
               {

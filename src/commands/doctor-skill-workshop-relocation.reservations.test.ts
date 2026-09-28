@@ -10,11 +10,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { renderProposalMarkdown } from "../skills/workshop/frontmatter.js";
 import { inspectSkillProposal, listSkillProposals } from "../skills/workshop/service.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
-import { readStoredProposal } from "../skills/workshop/store-sqlite-record.js";
+import { readStoredProposal } from "../skills/workshop/store-client.js";
 import {
   readSkillProposalRollback,
   writeSkillProposalRollback,
-} from "../skills/workshop/store-sqlite-rollback.js";
+} from "../skills/workshop/store-rollback.js";
 import { hashSkillProposalContent } from "../skills/workshop/store.js";
 import {
   SKILL_WORKSHOP_ROLLBACK_SCHEMA,
@@ -138,7 +138,7 @@ async function seedUnresolvedRollback(source: LegacySource): Promise<SkillPropos
 async function expectSourcesPreserved(sources: readonly LegacySource[]): Promise<void> {
   for (const { record, content } of sources) {
     await expect(fs.readFile(record.target.skillFile, "utf8")).resolves.toBe(content);
-    expect(readStoredProposal(record.id, { env: testState.env })?.record).toEqual(record);
+    expect((await readStoredProposal(record.id, { env: testState.env }))?.record).toEqual(record);
   }
 }
 
@@ -229,7 +229,7 @@ describe("doctor Workshop relocation reservations", () => {
     );
     for (const { record, content } of colliding) {
       await expect(fs.readFile(record.target.skillFile, "utf8")).resolves.toBe(content);
-      expect(readStoredProposal(record.id, { env: testState.env })?.record).toMatchObject({
+      expect((await readStoredProposal(record.id, { env: testState.env }))?.record).toMatchObject({
         status: "stale",
         statusReason: conflictReason,
         target: record.target,

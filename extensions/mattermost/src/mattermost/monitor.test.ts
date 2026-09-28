@@ -17,18 +17,6 @@ import {
 } from "./monitor-context.js";
 import { buildMattermostInboundMediaPayload } from "./monitor-resources.js";
 
-function resolveMattermostEffectiveReplyToId(params: {
-  kind: "direct" | "group" | "channel";
-  postId?: string | null;
-  replyToMode: "off" | "first" | "all" | "batched";
-  threadRootId?: string | null;
-}): string | undefined {
-  return resolveMattermostThreadSessionContext({
-    baseSessionKey: "agent:main:mattermost:test",
-    ...params,
-  }).effectiveReplyToId;
-}
-
 describe("buildMattermostInboundMediaPayload", () => {
   it("keeps a failed attachment kind aligned with a successful path", async () => {
     await expect(
@@ -101,31 +89,6 @@ describe("buildMattermostInboundMediaPayload", () => {
   });
 });
 
-describe("resolveMattermostReplyRootId with block streaming payloads", () => {
-  it("uses threadRootId for block-streamed payloads with replyToId", () => {
-    // When block streaming sends a payload with replyToId from the threading
-    // mode, the deliver callback should still use the existing threadRootId.
-    expect(
-      resolveMattermostReplyRootId({
-        kind: "channel",
-        threadRootId: "thread-root-1",
-        replyToId: "streamed-reply-id",
-      }),
-    ).toBe("thread-root-1");
-  });
-
-  it("falls back to payload replyToId when no threadRootId in block streaming", () => {
-    // Top-level channel message: no threadRootId, payload carries the
-    // inbound post id as replyToId from the "all" threading mode.
-    expect(
-      resolveMattermostReplyRootId({
-        kind: "channel",
-        replyToId: "inbound-post-for-threading",
-      }),
-    ).toBe("inbound-post-for-threading");
-  });
-});
-
 describe("resolveMattermostReplyRootId", () => {
   it("uses replyToId for top-level replies", () => {
     expect(
@@ -168,16 +131,6 @@ describe("resolveMattermostReplyRootId", () => {
         replyToId: "dm-post-123",
       }),
     ).toBeUndefined();
-  });
-
-  it("keeps group replies on the existing Mattermost thread root", () => {
-    expect(
-      resolveMattermostReplyRootId({
-        kind: "group",
-        threadRootId: "group-root-456",
-        replyToId: "group-child-789",
-      }),
-    ).toBe("group-root-456");
   });
 });
 
@@ -238,26 +191,6 @@ describe("resolveMattermostInteractionReplyRootId", () => {
 });
 
 describe("canFinalizeMattermostPreviewInPlace", () => {
-  it("allows in-place finalization when the final reply target matches the preview thread", () => {
-    expect(
-      canFinalizeMattermostPreviewInPlace({
-        kind: "channel",
-        previewRootId: "thread-root-456",
-        threadRootId: "thread-root-456",
-        replyToId: "child-post-789",
-      }),
-    ).toBe(true);
-  });
-
-  it("prevents in-place finalization when a top-level preview would become a threaded reply", () => {
-    expect(
-      canFinalizeMattermostPreviewInPlace({
-        kind: "channel",
-        replyToId: "child-post-789",
-      }),
-    ).toBe(false);
-  });
-
   it("uses direct-message root suppression when checking in-place finalization", () => {
     expect(
       canFinalizeMattermostPreviewInPlace({
@@ -412,103 +345,23 @@ describe("formatMattermostFinalDeliveryOutcomeLog", () => {
   });
 });
 
-describe("resolveMattermostEffectiveReplyToId", () => {
-  it("keeps an existing thread root", () => {
-    expect(
-      resolveMattermostEffectiveReplyToId({
-        kind: "channel",
-        postId: "post-123",
-        replyToMode: "all",
-        threadRootId: "thread-root-456",
-      }),
-    ).toBe("thread-root-456");
-  });
-
-  it("keeps an existing thread root when replyToMode is off", () => {
-    expect(
-      resolveMattermostEffectiveReplyToId({
-        kind: "channel",
-        postId: "post-123",
-        replyToMode: "off",
-        threadRootId: "thread-root-456",
-      }),
-    ).toBe("thread-root-456");
-  });
-
-  it("does not start a new thread for top-level messages when replyToMode is off", () => {
-    expect(
-      resolveMattermostEffectiveReplyToId({
-        kind: "channel",
-        postId: "post-123",
-        replyToMode: "off",
-      }),
-    ).toBeUndefined();
-  });
-
-  it("starts a thread for top-level channel messages when replyToMode is all", () => {
-    expect(
-      resolveMattermostEffectiveReplyToId({
-        kind: "channel",
-        postId: "post-123",
-        replyToMode: "all",
-      }),
-    ).toBe("post-123");
-  });
-
-  it("starts a thread for top-level group messages when replyToMode is first", () => {
-    expect(
-      resolveMattermostEffectiveReplyToId({
-        kind: "group",
-        postId: "post-123",
-        replyToMode: "first",
-      }),
-    ).toBe("post-123");
-  });
-
-  it("starts a direct-message thread under the post when its effective mode is all", () => {
-    expect(
-      resolveMattermostEffectiveReplyToId({
-        kind: "direct",
-        postId: "post-123",
-        replyToMode: "all",
-      }),
-    ).toBe("post-123");
-  });
-
-  it("keeps direct messages flat when their effective mode is off", () => {
-    expect(
-      resolveMattermostEffectiveReplyToId({
-        kind: "direct",
-        postId: "post-123",
-        replyToMode: "off",
-        threadRootId: "dm-root-456",
-      }),
-    ).toBeUndefined();
-  });
-
+describe("resolveMattermostThreadSessionContext", () => {
   it("uses an existing direct-message thread root when threading is enabled", () => {
     expect(
-      resolveMattermostEffectiveReplyToId({
+      resolveMattermostThreadSessionContext({
+        baseSessionKey: "agent:main:mattermost:direct:user-1",
         kind: "direct",
         postId: "post-123",
         replyToMode: "all",
         threadRootId: "dm-root-456",
       }),
-    ).toBe("dm-root-456");
+    ).toEqual({
+      effectiveReplyToId: "dm-root-456",
+      sessionKey: "agent:main:mattermost:direct:user-1:thread:dm-root-456",
+      parentSessionKey: undefined,
+    });
   });
 
-  it("starts a new direct-message thread under the post when threading is enabled", () => {
-    expect(
-      resolveMattermostEffectiveReplyToId({
-        kind: "direct",
-        postId: "post-123",
-        replyToMode: "first",
-      }),
-    ).toBe("post-123");
-  });
-});
-
-describe("resolveMattermostThreadSessionContext", () => {
   it("forks channel sessions by top-level post when replyToMode is all", () => {
     expect(
       resolveMattermostThreadSessionContext({

@@ -54,7 +54,7 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.19.0"
+  NODE_VERSION: "24.21.0"
   PREFLIGHT_WORKFLOW_SHA: ${{ github.workflow_sha }}
 
 jobs:
@@ -63,7 +63,7 @@ jobs:
     if: ${{ inputs.preflight_phase != 'prepare' && (inputs.preflight_phase != 'verify' || inputs.source_check_json == '') }}
     # The 2026-09-01 probe delivered 4 CPUs/15 GiB for 16, versus 8 CPUs/31 GiB for 32.
     # Request 32 to clear parallel-check thresholds; see docs/ci.md#blacksmith-runner-capacity.
-    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) || ((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404') }}
     outputs:
       source_check_json: ${{ steps.source_evidence.outputs.bundle_json }}
     steps:
@@ -239,7 +239,7 @@ jobs:
     if: ${{ inputs.preflight_phase == 'prepare' || inputs.preflight_phase == 'all' }}
     # The 2026-09-01 probe delivered 4 CPUs/15 GiB for 16, versus 8 CPUs/31 GiB for 32.
     # Request 32 to clear parallel-check thresholds; see docs/ci.md#blacksmith-runner-capacity.
-    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) || ((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404') }}
     outputs:
       prepared_bundle_json: ${{ steps.describe.outputs.bundle_json }}
     steps:
@@ -288,6 +288,18 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
           build-all-cache-scope: full
+
+      - name: Materialize trusted package preparation runtime
+        run: |
+          git -C .release-harness sparse-checkout add \
+            .github/actions/setup-release-harness \
+            .github/actions/setup-pnpm-store-cache \
+            packages patches
+
+      - name: Provision trusted package preparation runtime
+        uses: ./.release-harness/.github/actions/setup-release-harness
+        with:
+          node-version: ${{ env.NODE_VERSION }}
 
       - name: Validate npm release request
         env:
@@ -417,7 +429,7 @@ jobs:
   check_sdk_npm:
     name: Check npm Plugin SDK
     if: ${{ inputs.preflight_phase == 'all' || inputs.preflight_phase == 'verify' }}
-    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) || ((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404') }}
     outputs:
       proof_json: ${{ steps.proof.outputs.proof_json }}
     steps:
@@ -546,7 +558,7 @@ jobs:
   check_dependencies_npm:
     name: Check npm dependencies
     if: ${{ inputs.preflight_phase == 'all' || inputs.preflight_phase == 'verify' }}
-    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) || ((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404') }}
     outputs:
       proof_json: ${{ steps.proof.outputs.proof_json }}
     steps:
@@ -691,7 +703,7 @@ jobs:
     if: >-
       ${{ !cancelled() && (inputs.preflight_phase == 'all' || inputs.preflight_phase == 'verify') &&
           (needs.prepare_openclaw_npm.result == 'success' || inputs.preflight_phase == 'verify') }}
-    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) || ((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404') }}
     outputs:
       proof_json: ${{ steps.proof.outputs.proof_json }}
     steps:
@@ -858,7 +870,7 @@ jobs:
           (needs.check_openclaw_npm.result == 'success' || inputs.source_check_json != '') &&
           needs.check_sdk_npm.result == 'success' && needs.check_dependencies_npm.result == 'success' &&
           needs.check_contents_npm.result == 'success' }}
-    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404'))) || ((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404') }}
     outputs:
       qualified_preflight_bundle_json: ${{ steps.qualified_bundle.outputs.bundle_json }}
     steps:

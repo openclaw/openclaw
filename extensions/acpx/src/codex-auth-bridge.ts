@@ -7,8 +7,9 @@ import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
+import { tryReadJson } from "@openclaw/fs-safe/json";
 import { isRecord as isConfigRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   parse as parseToml,
   stringify as stringifyToml,
@@ -84,11 +85,8 @@ async function resolveInstalledAcpPackageBinPath(
 ): Promise<string | undefined> {
   try {
     const packageJsonPath = requireFromHere.resolve(`${packageName}/package.json`);
-    const { value: manifest } = await readJsonFileWithFallback<PackageManifest>(
-      packageJsonPath,
-      {},
-    );
-    if (manifest.name !== packageName) {
+    const manifest = await tryReadJson<PackageManifest>(packageJsonPath);
+    if (manifest?.name !== packageName) {
       return undefined;
     }
     const binPath = resolvePackageBinPath(packageJsonPath, manifest, binName);
@@ -100,16 +98,6 @@ async function resolveInstalledAcpPackageBinPath(
   } catch {
     return undefined;
   }
-}
-
-async function resolveInstalledCodexAcpBinPath(): Promise<string | undefined> {
-  // Keep OpenClaw's isolated CODEX_HOME wrapper, but launch the plugin-local
-  // Codex ACP adapter when the package dependency is available.
-  return await resolveInstalledAcpPackageBinPath(CODEX_ACP_PACKAGE, CODEX_ACP_BIN);
-}
-
-async function resolveInstalledClaudeAcpBinPath(): Promise<string | undefined> {
-  return await resolveInstalledAcpPackageBinPath(CLAUDE_ACP_PACKAGE, CLAUDE_ACP_BIN);
 }
 
 type DiagnosticRedactionRuleSpec = {
@@ -736,14 +724,12 @@ function buildWrapperCommand(wrapperPath: string, args: string[] = []): string[]
 }
 
 function isAcpPackageSpec(value: string, packageName: string): boolean {
-  const escapedPackageName = packageName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`^${escapedPackageName}(?:@.+)?$`, "i").test(value.trim());
+  return new RegExp(`^${escapeRegExp(packageName)}(?:@.+)?$`, "i").test(value.trim());
 }
 
 function isAcpBinName(value: string, binName: string): boolean {
   const commandName = basename(value);
-  const escapedBinName = binName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`^${escapedBinName}(?:\\.exe|\\.[cm]?js)?$`, "i").test(commandName);
+  return new RegExp(`^${escapeRegExp(binName)}(?:\\.exe|\\.[cm]?js)?$`, "i").test(commandName);
 }
 
 function isPackageRunnerCommand(value: string): boolean {
@@ -927,11 +913,9 @@ function buildClaudeAcpWrapperCommand(
 export async function prepareAcpxCodexAuthConfig(params: {
   pluginConfig: ResolvedAcpxPluginConfig;
   stateDir: string;
-  logger?: unknown;
   resolveInstalledCodexAcpBinPath?: () => Promise<string | undefined>;
   resolveInstalledClaudeAcpBinPath?: () => Promise<string | undefined>;
 }): Promise<ResolvedAcpxPluginConfig> {
-  void params.logger;
   const codexBaseDir = path.join(params.stateDir, "acpx");
   const configuredCodexCommand = params.pluginConfig.agents.codex;
   const configuredClaudeCommand = params.pluginConfig.agents.claude;
@@ -944,12 +928,12 @@ export async function prepareAcpxCodexAuthConfig(params: {
     codexHome,
     migratedConfig: codexLaunch?.migratedConfig,
   });
-  const installedCodexBinPath = await (
-    params.resolveInstalledCodexAcpBinPath ?? resolveInstalledCodexAcpBinPath
-  )();
-  const installedClaudeBinPath = await (
-    params.resolveInstalledClaudeAcpBinPath ?? resolveInstalledClaudeAcpBinPath
-  )();
+  const installedCodexBinPath = await (params.resolveInstalledCodexAcpBinPath
+    ? params.resolveInstalledCodexAcpBinPath()
+    : resolveInstalledAcpPackageBinPath(CODEX_ACP_PACKAGE, CODEX_ACP_BIN));
+  const installedClaudeBinPath = await (params.resolveInstalledClaudeAcpBinPath
+    ? params.resolveInstalledClaudeAcpBinPath()
+    : resolveInstalledAcpPackageBinPath(CLAUDE_ACP_PACKAGE, CLAUDE_ACP_BIN));
   const wrapperPath = await writeAdapterWrapper(
     codexBaseDir,
     "codex-acp-wrapper.mjs",

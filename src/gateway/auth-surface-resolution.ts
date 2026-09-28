@@ -4,16 +4,14 @@ import type { OpenClawConfig } from "../config/types.js";
 import { createGatewayCredentialPlan } from "./credential-planner.js";
 import { trimToUndefined, type ExplicitGatewayAuth } from "./credentials.js";
 import { resolveConfiguredSecretInputWithFallback } from "./resolve-configured-secret-input-string.js";
+import {
+  readGatewaySecretInputValue,
+  type SupportedGatewaySecretInputPath,
+} from "./secret-input-paths.js";
 
 // Gateway auth is resolved differently for passive probes and interactive
 // clients. This module owns the shared precedence so CLI, UI, and remote
 // surfaces do not silently choose different token/password sources.
-type GatewayCredentialPath =
-  | "gateway.auth.token"
-  | "gateway.auth.password"
-  | "gateway.remote.token"
-  | "gateway.remote.password";
-
 type ResolvedGatewayCredential = {
   value?: string;
   unresolvedRefReason?: string;
@@ -25,27 +23,27 @@ type GatewayCredentialDiagnostic = {
   code?: "SECRET_REF_REDACTED_VALUE";
 };
 
-async function resolveGatewayCredential(params: {
+function createGatewayCredentialResolver(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   diagnostics: GatewayCredentialDiagnostic[];
-  path: GatewayCredentialPath;
-  value: unknown;
-}): Promise<ResolvedGatewayCredential> {
-  const resolved = await resolveConfiguredSecretInputWithFallback({
-    config: params.config,
-    env: params.env,
-    value: params.value,
-    path: params.path,
-    unresolvedReasonStyle: "detailed",
-  });
-  if (resolved.unresolvedRefReason) {
-    params.diagnostics.push({
-      message: resolved.unresolvedRefReason,
-      code: resolved.unresolvedRefCode,
+}) {
+  return async (path: SupportedGatewaySecretInputPath): Promise<ResolvedGatewayCredential> => {
+    const resolved = await resolveConfiguredSecretInputWithFallback({
+      config: params.config,
+      env: params.env,
+      value: readGatewaySecretInputValue(params.config, path),
+      path,
+      unresolvedReasonStyle: "detailed",
     });
-  }
-  return resolved;
+    if (resolved.unresolvedRefReason) {
+      params.diagnostics.push({
+        message: resolved.unresolvedRefReason,
+        code: resolved.unresolvedRefCode,
+      });
+    }
+    return resolved;
+  };
 }
 
 function withDiagnostics<T extends object>(
@@ -77,25 +75,18 @@ export async function resolveGatewayProbeSurfaceAuth(params: {
 }> {
   const env = params.env ?? process.env;
   const diagnostics: GatewayCredentialDiagnostic[] = [];
+  const resolveCredential = createGatewayCredentialResolver({
+    config: params.config,
+    env,
+    diagnostics,
+  });
   const authMode = params.config.gateway?.auth?.mode;
 
   if (params.surface === "remote") {
-    const remoteToken = await resolveGatewayCredential({
-      config: params.config,
-      env,
-      diagnostics,
-      path: "gateway.remote.token",
-      value: params.config.gateway?.remote?.token,
-    });
+    const remoteToken = await resolveCredential("gateway.remote.token");
     const remotePassword = remoteToken.value
       ? { value: undefined, secretRefConfigured: false }
-      : await resolveGatewayCredential({
-          config: params.config,
-          env,
-          diagnostics,
-          path: "gateway.remote.password",
-          value: params.config.gateway?.remote?.password,
-        });
+      : await resolveCredential("gateway.remote.password");
     const envToken = trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN);
     const envPassword = trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD);
     const hasConfiguredAuth = Boolean(remoteToken.value || remotePassword.value);
@@ -119,13 +110,7 @@ export async function resolveGatewayProbeSurfaceAuth(params: {
   const envPassword = trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD);
 
   if (authMode === "token" || authMode === "password") {
-    const credential = await resolveGatewayCredential({
-      config: params.config,
-      env,
-      diagnostics,
-      path: `gateway.auth.${authMode}`,
-      value: params.config.gateway?.auth?.[authMode],
-    });
+    const credential = await resolveCredential(`gateway.auth.${authMode}`);
     if (credential.value) {
       return withDiagnostics(diagnostics, {
         [authMode]: credential.value,
@@ -138,26 +123,14 @@ export async function resolveGatewayProbeSurfaceAuth(params: {
       : withDiagnostics(diagnostics, {});
   }
 
-  const token = await resolveGatewayCredential({
-    config: params.config,
-    env,
-    diagnostics,
-    path: "gateway.auth.token",
-    value: params.config.gateway?.auth?.token,
-  });
+  const token = await resolveCredential("gateway.auth.token");
   if (token.value) {
     return withDiagnostics(diagnostics, { token: token.value, source: "config" as const });
   }
   if (token.secretRefConfigured) {
     return withDiagnostics(diagnostics, {});
   }
-  const password = await resolveGatewayCredential({
-    config: params.config,
-    env,
-    diagnostics,
-    path: "gateway.auth.password",
-    value: params.config.gateway?.auth?.password,
-  });
+  const password = await resolveCredential("gateway.auth.password");
   if (password.secretRefConfigured) {
     return withDiagnostics(
       diagnostics,
@@ -193,6 +166,11 @@ export async function resolveGatewayInteractiveSurfaceAuth(params: {
 }> {
   const env = params.env ?? process.env;
   const diagnostics: GatewayCredentialDiagnostic[] = [];
+  const resolveCredential = createGatewayCredentialResolver({
+    config: params.config,
+    env,
+    diagnostics,
+  });
   const explicitToken = trimToUndefined(params.explicitAuth?.token);
   const explicitPassword = trimToUndefined(params.explicitAuth?.password);
   const credentialPlan = createGatewayCredentialPlan({ config: params.config, env });
@@ -216,13 +194,7 @@ export async function resolveGatewayInteractiveSurfaceAuth(params: {
   if (params.surface === "remote") {
     const remoteToken = explicitToken
       ? { value: explicitToken, secretRefConfigured: false }
-      : await resolveGatewayCredential({
-          config: params.config,
-          env,
-          diagnostics,
-          path: "gateway.remote.token",
-          value: params.config.gateway?.remote?.token,
-        });
+      : await resolveCredential("gateway.remote.token");
     if (
       remoteToken.value &&
       (remoteToken.secretRefConfigured || credentialPlan.remotePassword.hasSecretRef)
@@ -231,13 +203,7 @@ export async function resolveGatewayInteractiveSurfaceAuth(params: {
     }
     const remotePassword = explicitPassword
       ? { value: explicitPassword, secretRefConfigured: false }
-      : await resolveGatewayCredential({
-          config: params.config,
-          env,
-          diagnostics,
-          path: "gateway.remote.password",
-          value: params.config.gateway?.remote?.password,
-        });
+      : await resolveCredential("gateway.remote.password");
     const secretRefConfigured =
       remoteToken.secretRefConfigured || remotePassword.secretRefConfigured;
     const token = remoteToken.value ?? (secretRefConfigured ? undefined : envToken);
@@ -271,13 +237,7 @@ export async function resolveGatewayInteractiveSurfaceAuth(params: {
   const envCredential = shouldUsePassword ? envPassword : envToken;
   const credential = explicitCredential
     ? { value: explicitCredential, secretRefConfigured: false }
-    : await resolveGatewayCredential({
-        config: params.config,
-        env,
-        diagnostics,
-        path: `gateway.auth.${credentialKind}`,
-        value: params.config.gateway?.auth?.[credentialKind],
-      });
+    : await resolveCredential(`gateway.auth.${credentialKind}`);
   const value = credential.value ?? (credential.secretRefConfigured ? undefined : envCredential);
   return {
     token: shouldUsePassword

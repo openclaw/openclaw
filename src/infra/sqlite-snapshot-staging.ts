@@ -166,21 +166,33 @@ export function sqliteSnapshotStagingError(
   allocation = false,
 ): unknown {
   markSqliteInspectionOperation(cause, "snapshot");
+  let destination = allocation;
+  let capacity = false;
+  let sqliteErrcode: number | undefined;
   for (let depth = 0, error = cause; depth < 8 && error instanceof Error; depth += 1) {
     const { code, errcode, path: errorPath }: NodeJS.ErrnoException & { errcode?: unknown } = error;
     // SQLite FULL and IOERR_WRITE/FSYNC/DIR_FSYNC identify destination writes.
+    capacity ||= ["ENOSPC", "EDQUOT"].includes(code ?? "") || errcode === 13;
     if (
-      allocation ||
-      ["ENOSPC", "EDQUOT"].includes(code ?? "") ||
+      capacity ||
       (typeof errcode === "number" && [13, 778, 1034, 1290].includes(errcode)) ||
       `${errorPath ?? ""}${path.sep}`.startsWith(`${tempDir}${path.sep}`)
     ) {
-      const message = `${cause instanceof Error ? cause.message : String(cause)}${typeof errcode === "number" ? ` (SQLite errcode=${errcode})` : ""}; snapshot staging root ${allocation ? tempDir : path.dirname(tempDir)}: free disk space/quota or set XDG_CACHE_HOME to a writable filesystem`;
-      return new Error(message, { cause });
+      destination = true;
+      if (typeof errcode === "number") {
+        sqliteErrcode = errcode;
+      }
     }
     error = error.cause;
   }
-  return cause;
+  if (!destination) {
+    return cause;
+  }
+  const guidance = capacity
+    ? "free disk space/quota"
+    : "check filesystem health and write permissions";
+  const message = `${cause instanceof Error ? cause.message : String(cause)}${sqliteErrcode !== undefined ? ` (SQLite errcode=${sqliteErrcode})` : ""}; snapshot staging root ${allocation ? tempDir : path.dirname(tempDir)}: ${guidance} or set XDG_CACHE_HOME to a writable filesystem`;
+  return new Error(message, { cause });
 }
 
 export async function createSqliteSnapshotStagingDirectory(
@@ -205,7 +217,8 @@ export async function createSqliteSnapshotStagingDirectory(
       throw error;
     }
     signal?.throwIfAborted();
-    throw sqliteSnapshotStagingError(stagingRoot, error, true);
+    markSqliteInspectionOperation(error, "snapshot");
+    throw error;
   }
 }
 
@@ -268,10 +281,16 @@ export function createSqliteSnapshotStagingTokenSync(
   let directory: string | undefined;
   try {
     // A selected installation may launch a worker without token admission.
-    directory = createPrivateSqliteTempDirectorySync(
-      root,
-      allowLegacyWorker ? `openclaw-sqlite-readonly-${process.pid}-` : prefix,
-    );
+    try {
+      directory = createPrivateSqliteTempDirectorySync(
+        root,
+        allowLegacyWorker ? `openclaw-sqlite-readonly-${process.pid}-` : prefix,
+      );
+    } catch (error) {
+      // Preserve allocation context before worker IPC reduces errors to messages.
+      // Launch and token-admission failures are not directory write failures.
+      throw sqliteSnapshotStagingError(root, error, true);
+    }
     return { directory, release: snapshotToken(directory, "create") };
   } catch (error) {
     if (directory) {

@@ -13,7 +13,6 @@ import type {
 import type { ServerUiPrefProvenance } from "../../app/server-prefs.ts";
 import type { ChatFollowUpMode, ChatSendShortcut, CatalogOpenTarget } from "../../app/settings.ts";
 import type { ThemeCatalogSnapshot } from "../../app/theme-catalog.ts";
-import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
 import type { TypefaceId } from "../../app/typography.ts";
 import type { WebPushSnapshot } from "../../app/web-push.ts";
@@ -129,8 +128,8 @@ export type ConfigProps = {
   onLocaleChange: (locale: Locale | undefined) => void;
   themeCatalog?: ThemeCatalogSnapshot;
   onRetryThemeCatalog?: () => void;
-  setTheme: (theme: ThemeName, context?: ThemeTransitionContext) => void;
-  setThemeMode: (mode: ThemeMode, context?: ThemeTransitionContext) => void;
+  setTheme: (theme: ThemeName) => void;
+  setThemeMode: (mode: ThemeMode) => void;
   setAccent: (accent: string | undefined) => void;
   hasCustomTheme: boolean;
   customThemeLabel: string | null;
@@ -152,6 +151,8 @@ export type ConfigProps = {
   hiddenSessionCatalogIds: ReadonlySet<string>;
   hiddenSessionCatalogLabels: ReadonlyMap<string, string>;
   setSessionCatalogHidden: (catalogId: string, hidden: boolean) => void;
+  openLinksExternally?: boolean;
+  setOpenLinksExternally?: (enabled: boolean) => void;
   chatMessageMaxWidth?: string;
   setChatMessageMaxWidth: (value: string | undefined) => void;
   chatShowTaskProgress: boolean;

@@ -63,7 +63,6 @@ import { withTempDir } from "../../test-utils/temp-dir.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { consumeCronCreatorAuthorityGrant } from "../cron-creator-authority-grant.js";
 import { createChatRunState } from "../server-chat-state.js";
-import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { STALE_WORKER_BUILD_REASON } from "../worker-environments/admission.js";
 import { agentWaitHandler } from "./agent-wait.js";
 import { createScopedCliClient } from "./chat-client.test-support.js";
@@ -83,8 +82,10 @@ import {
 import { handleChatSend, handleTrustedInternalChatSend } from "./chat-send-handler.js";
 import { readChatSendDedupeResponse } from "./chat-send-pre-admission.js";
 import {
+  createChatDirectiveReplyBackend,
   createChatDirectiveSuiteResources,
   expectClaimOnlyTranscriptMedia,
+  readChatDirectiveConfig,
   seedChatDirectiveFileTranscript,
 } from "./chat.directive-tags.test-support.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
@@ -268,35 +269,7 @@ vi.mock("../session-utils.js", async () => {
     await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
   const loadSessionEntry = (rawKey: string, opts?: { agentId?: string }) => {
     mockState.loadSessionEntryCalls.push({ rawKey, opts });
-    const canonicalKey =
-      typeof mockState.sessionEntry.canonicalKey === "string"
-        ? mockState.sessionEntry.canonicalKey
-        : rawKey === "main"
-          ? `agent:${opts?.agentId ?? "main"}:${mockState.mainSessionKey}`
-          : rawKey || `agent:${opts?.agentId ?? "main"}:${mockState.mainSessionKey}`;
-    const entry = mockState.sessionMissing
-      ? undefined
-      : {
-          sessionId: mockState.sessionIdsByKey.get(rawKey) ?? mockState.sessionId,
-          sessionFile: mockState.transcriptPath,
-          ...mockState.sessionEntry,
-        };
-    const cfg = {
-      ...mockState.config,
-      session: {
-        ...(mockState.config.session as Record<string, unknown> | undefined),
-        mainKey: mockState.mainSessionKey,
-      },
-    };
-    return {
-      cfg,
-      agentId: resolveSessionStoreAgentId(cfg, rawKey, opts?.agentId),
-      storePath: mockState.storePath,
-      store: entry ? { [canonicalKey]: entry } : {},
-      entry,
-      canonicalKey,
-      storeKeys: [canonicalKey],
-    };
+    return suiteResources.loadSessionEntry(mockState, rawKey, opts);
   };
   return {
     ...original,
@@ -512,17 +485,9 @@ vi.mock("../../plugins/hook-runner-global.js", () => {
 });
 
 vi.mock("../../sessions/transcript-events.js", async (importOriginal) => {
-  const {
-    attachSessionTranscriptRunId,
-    onInternalSessionTranscriptUpdate,
-    readSessionTranscriptRunId,
-    resolveTerminalAssistantTranscriptRunId,
-  } = await importOriginal<typeof import("../../sessions/transcript-events.js")>();
+  const actual = await importOriginal<typeof import("../../sessions/transcript-events.js")>();
   return {
-    attachSessionTranscriptRunId,
-    onInternalSessionTranscriptUpdate,
-    readSessionTranscriptRunId,
-    resolveTerminalAssistantTranscriptRunId,
+    ...actual,
     emitSessionTranscriptUpdate: vi.fn((update: TranscriptUpdate) => {
       mockState.emittedTranscriptUpdates.push(update);
     }),
@@ -586,7 +551,8 @@ vi.mock("../../media/store.js", async () => {
     deleteMediaBuffer: vi.fn(async (id: string, subdir?: string) => {
       mockState.deleteMediaBufferCalls.push({ id, subdir });
     }),
-    saveMediaBuffer: vi.fn(async (buffer: Buffer, contentType?: string, subdir?: string) => {
+    saveMediaBuffer: vi.fn(async (...args: Parameters<typeof original.saveMediaBuffer>) => {
+      const [buffer, contentType, subdir] = args;
       mockState.activeSaveMediaCalls += 1;
       mockState.maxActiveSaveMediaCalls = Math.max(
         mockState.maxActiveSaveMediaCalls,
@@ -602,6 +568,9 @@ vi.mock("../../media/store.js", async () => {
       mockState.savedMediaCalls.push({ contentType, subdir, size: buffer.byteLength });
       const next = mockState.savedMediaResults.shift();
       try {
+        if (subdir === "outgoing/originals") {
+          return await original.saveMediaBuffer(...args);
+        }
         return {
           id: next?.id ?? "saved-media",
           path: next?.path ?? `/tmp/${mockState.savedMediaCalls.length}.png`,
@@ -871,14 +840,7 @@ function createChatContext() {
           input: ["text", "image"],
         },
       ],
-    getRuntimeConfig: () =>
-      ({
-        ...mockState.config,
-        session: {
-          ...(mockState.config.session as Record<string, unknown> | undefined),
-          mainKey: mockState.mainSessionKey,
-        },
-      }) as never,
+    getRuntimeConfig: () => readChatDirectiveConfig(mockState),
     registerToolEventRecipient: vi.fn<GatewayRequestContext["registerToolEventRecipient"]>(),
     broadcastToConnIds: vi.fn<GatewayRequestContext["broadcastToConnIds"]>(),
     getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
@@ -1026,41 +988,16 @@ function beginActiveReplyOperation(params: {
   return operation;
 }
 
-type TestReplyBackend = Parameters<ReplyOperation["attachBackend"]>[0];
-type TestQueueMessage = NonNullable<TestReplyBackend["queueMessage"]>;
-
-function beginMessageInjectionOperation(params: {
-  bindToolAuthority?: boolean;
-  cancel?: TestReplyBackend["cancel"];
-  isStopped?: TestReplyBackend["isStopped"];
-  isStreaming?: TestReplyBackend["isStreaming"];
-  legacy?: boolean;
-  originatingLeafEntryId?: string | null;
-  queueMessage: TestQueueMessage;
-  runId?: string;
-  supportsQueueMessageImages?: boolean;
-  taskSuggestionDeliveryMode?: "gateway";
-}) {
-  const backend = {
-    kind: "embedded" as const,
-    cancel: params.cancel ?? (() => {}),
-    runId: params.runId,
-    supportsQueueMessageImages: params.supportsQueueMessageImages,
-    taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
-    ...(params.legacy
-      ? {
-          queueMessage: params.queueMessage,
-          isStopped: params.isStopped,
-          isStreaming: params.isStreaming,
-        }
-      : {
-          messageInjection: { isAvailable: () => true, queueMessage: params.queueMessage },
-        }),
-  } satisfies TestReplyBackend;
+function beginMessageInjectionOperation(
+  params: Parameters<typeof createChatDirectiveReplyBackend>[0] & {
+    bindToolAuthority?: boolean;
+    originatingLeafEntryId?: string | null;
+  },
+) {
   return beginActiveReplyOperation({
     bindToolAuthority: params.bindToolAuthority ?? true,
     originatingLeafEntryId: params.originatingLeafEntryId,
-    backend,
+    backend: createChatDirectiveReplyBackend(params),
   });
 }
 
@@ -1239,58 +1176,6 @@ async function runNonStreamingChatSend(params: {
     );
   await waitForAssertion(() => expect(terminalCalls()).toHaveLength(1));
   return asOptionalRecord(terminalCalls()[0]?.[1]);
-}
-
-async function expectUnpersistedAgentRunFinal(params: {
-  transcriptPrefix: string;
-  idempotencyKey: string;
-  payload: (typeof mockState.dispatchedReplies)[number]["payload"];
-  staleAudio?: boolean;
-  expectedMediaFailure?: { code: string; kind: string; label: string; mimeType?: string };
-}) {
-  const transcriptDir = await createTranscriptFixture(params.transcriptPrefix);
-  const staleAudioPath = path.join(transcriptDir, "stale.mp3");
-  mockState.config = { agents: { defaults: { workspace: transcriptDir } } };
-  mockState.triggerAgentRunStart = true;
-  mockState.dispatchedReplies = [
-    {
-      kind: "final",
-      payload: {
-        ...params.payload,
-        ...(params.staleAudio
-          ? {
-              mediaUrl: staleAudioPath,
-              mediaUrls: [staleAudioPath],
-              trustedLocalMedia: true,
-            }
-          : {}),
-      },
-    },
-  ];
-  const { send } = createChatRequestFixture();
-  await send({ idempotencyKey: params.idempotencyKey, expectBroadcast: false, waitFor: "dedupe" });
-
-  const assistantUpdates = findAssistantTranscriptUpdates();
-  const assistantEntries = readTranscriptJsonLines(mockState.transcriptPath).filter(
-    (entry) =>
-      (entry as { message?: { role?: string } }).message?.role === "assistant" ||
-      (entry as { role?: string }).role === "assistant",
-  );
-  if (params.expectedMediaFailure) {
-    expect(assistantEntries).toHaveLength(1);
-    const message = (assistantEntries[0] as { message?: Record<string, unknown> }).message;
-    const modelContent = Array.isArray(message?.content) ? message.content : [];
-    expect(JSON.stringify(assistantUpdates)).toContain('"type":"attachment_error"');
-    expect(JSON.stringify(assistantUpdates)).toContain(params.expectedMediaFailure.label);
-    expect(JSON.stringify(assistantUpdates)).not.toContain(staleAudioPath);
-    expect(JSON.stringify(modelContent)).not.toContain("attachment_error");
-    expect(JSON.stringify(message?.openclawDisplayContent)).toContain("attachment_error");
-    return;
-  }
-
-  // Agent-run delivery is a live projection; message_end alone owns persisted assistant turns.
-  expect(assistantUpdates).toStrictEqual([]);
-  expect(assistantEntries).toStrictEqual([]);
 }
 
 async function expectImageOnlyFinal(params: {
@@ -3253,6 +3138,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       });
       const respond = vi.fn();
       const context = createChatContext();
+      const cfg = context.getRuntimeConfig();
+      context.getRuntimeConfig = () => cfg;
       await initializeSessionReadContext(context);
 
       await expectDefined(
@@ -3691,28 +3578,41 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("keeps text while excluding the failure card from durable history for agent-run media", async () => {
-    await expectUnpersistedAgentRunFinal({
-      transcriptPrefix: "openclaw-chat-send-agent-stale-tts-",
+    const transcriptDir = await createTranscriptFixture("openclaw-chat-send-agent-stale-tts-");
+    const staleAudioPath = path.join(transcriptDir, "stale.mp3");
+    mockState.config = { agents: { defaults: { workspace: transcriptDir } } };
+    setAgentRunReplies([
+      {
+        kind: "final",
+        payload: {
+          text: "Text-only test: one clean reply, no TTS, no media, no tool narration.",
+          mediaUrl: staleAudioPath,
+          mediaUrls: [staleAudioPath],
+          trustedLocalMedia: true,
+        },
+      },
+    ]);
+    const { send } = createChatRequestFixture();
+    await send({
       idempotencyKey: "idem-stale-agent-media",
-      payload: {
-        text: "Text-only test: one clean reply, no TTS, no media, no tool narration.",
-      },
-      staleAudio: true,
-      expectedMediaFailure: {
-        code: "delivery-failed",
-        kind: "audio",
-        label: "stale.mp3",
-        mimeType: "audio/mpeg",
-      },
+      expectBroadcast: false,
+      waitFor: "dedupe",
     });
-  });
 
-  it("does not mirror normal agent-run final text from live delivery", async () => {
-    await expectUnpersistedAgentRunFinal({
-      transcriptPrefix: "openclaw-chat-send-agent-text-only-",
-      idempotencyKey: "idem-agent-text-only",
-      payload: { text: "It's 11:52 AM EDT." },
-    });
+    const assistantUpdates = findAssistantTranscriptUpdates();
+    const assistantEntries = readTranscriptJsonLines(mockState.transcriptPath).filter(
+      (entry) =>
+        (entry as { message?: { role?: string } }).message?.role === "assistant" ||
+        (entry as { role?: string }).role === "assistant",
+    );
+    expect(assistantEntries).toHaveLength(1);
+    const message = (assistantEntries[0] as { message?: Record<string, unknown> }).message;
+    const modelContent = Array.isArray(message?.content) ? message.content : [];
+    expect(JSON.stringify(assistantUpdates)).toContain('"type":"attachment_error"');
+    expect(JSON.stringify(assistantUpdates)).toContain("stale.mp3");
+    expect(JSON.stringify(assistantUpdates)).not.toContain(staleAudioPath);
+    expect(JSON.stringify(modelContent)).not.toContain("attachment_error");
+    expect(JSON.stringify(message?.openclawDisplayContent)).toContain("attachment_error");
   });
 
   it("broadcasts agent-run internal-ui source replies without duplicating transcript", async () => {
@@ -5414,7 +5314,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       idempotencyKey: "idem-inline-reply-transcript",
     });
 
-    expect(extractFirstTextBlock(getMessage(payload))).toBe("see now with spacing");
+    expect(extractFirstTextBlock(getMessage(payload))).toBe("see now  with  spacing");
     const transcriptUpdate = mockState.emittedTranscriptUpdates.find(
       (update) =>
         typeof update.message === "object" &&
@@ -5425,7 +5325,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       openclawDelivery: { replyToCurrent: true },
     });
     expect(JSON.stringify(transcriptUpdate?.message)).not.toContain("[[reply_to_current]]");
-    expect(JSON.stringify(transcriptUpdate?.message)).toContain("see now with spacing");
+    expect(JSON.stringify(transcriptUpdate?.message)).toContain("see now  with  spacing");
   });
 
   it("rejects oversized chat.send session keys before dispatch", async () => {

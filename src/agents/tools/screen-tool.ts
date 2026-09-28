@@ -87,14 +87,8 @@ function commandForAction(
     return { kind: "sidebar", visible: action === "sidebar_show" };
   }
   if (
-    action === "terminal_show" ||
-    action === "terminal_hide" ||
-    action === "browser_show" ||
-    action === "browser_hide" ||
-    action === "desktop_show" ||
-    action === "desktop_hide" ||
-    action === "portal_show" ||
-    action === "portal_hide"
+    ACTIONS.some((candidate) => candidate === action) &&
+    (action.endsWith("_show") || action.endsWith("_hide"))
   ) {
     const open = action.endsWith("_show");
     const dock = open ? readDock(params) : undefined;

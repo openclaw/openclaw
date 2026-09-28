@@ -268,6 +268,7 @@ describe("doctor --fix include write ownership", () => {
           const configPath = await writeOpenClawConfig(home, {
             agents: { entries: { main: { $include: "./config/main-parent.json5" } } },
             gateway: { mode: "local" },
+            plugins: { enabled: false },
           });
           const fragmentDir = path.join(path.dirname(configPath), "config");
           await fs.mkdir(fragmentDir);
@@ -275,7 +276,7 @@ describe("doctor --fix include write ownership", () => {
           const parentRaw = '{ /* keep this delegation */ $include: "./main.json5" }\n';
           await fs.writeFile(parentPath, parentRaw);
           const fragmentPath = path.join(fragmentDir, "main.json5");
-          const fragmentRaw = JSON.stringify({ sandbox: { perSession: true } });
+          const fragmentRaw = JSON.stringify({ sandbox: { browser: { enableNoVnc: true } } });
           await fs.writeFile(fragmentPath, fragmentRaw);
           const rootRaw = await fs.readFile(configPath, "utf-8");
 
@@ -284,7 +285,10 @@ describe("doctor --fix include write ownership", () => {
           expect(ctx.configResult.skipWizardMetadataForIncludeWrite).toBe(true);
           const retainedFragmentRaw =
             refusal === "include-input-changed"
-              ? JSON.stringify({ sandbox: { perSession: true }, name: "Operator edit" })
+              ? JSON.stringify({
+                  sandbox: { browser: { enableNoVnc: true } },
+                  name: "Operator edit",
+                })
               : fragmentRaw;
           if (refusal === "include-input-changed") {
             await fs.writeFile(fragmentPath, retainedFragmentRaw);
@@ -326,7 +330,7 @@ describe("doctor --fix include write ownership", () => {
           expect(ctx.configWriteRefusal).toBeUndefined();
           expect(ctx.configResultWriteCommitted).toBe(true);
           expect(JSON.parse(await fs.readFile(fragmentPath, "utf-8"))).toEqual({
-            sandbox: { scope: "session" },
+            sandbox: { browser: { noVncEnabled: true } },
           });
           await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(rootRaw);
           await expect(fs.readFile(parentPath, "utf-8")).resolves.toBe(parentRaw);
@@ -369,7 +373,7 @@ describe("doctor --fix include write ownership", () => {
           expect(secondSnapshot.hash).not.toBe(firstSnapshot.hash);
           expect(secondSnapshot.hash).not.toBe(hashConfigRaw(rootRaw));
           expect(JSON.parse(await fs.readFile(fragmentPath, "utf8"))).toEqual({
-            sandbox: { scope: "session" },
+            sandbox: { browser: { noVncEnabled: true } },
             name: "Second repair",
           });
           await expect(fs.readFile(`${fragmentPath}.bak`, "utf8")).resolves.toBe(firstFragmentRaw);
@@ -522,6 +526,7 @@ describe("doctor --fix include write ownership", () => {
           agents: { list: [{ id: "ops" }] },
           browser: { $include: "./browser.json" },
           gateway: { mode: "local" },
+          plugins: { enabled: false },
         });
         const includePath = path.join(path.dirname(configPath), "browser.json");
         const includeRaw = JSON.stringify({ enabled: true, actionTimeoutMs: 5000 });

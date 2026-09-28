@@ -68,10 +68,6 @@ function deriveSelectedConversation(state: UiState): string | null {
   return state.selectedConversationKey ?? (first ? conversationSelectionKey(first) : null);
 }
 
-function deriveSelectedThread(state: UiState): string | null {
-  return state.selectedThreadId ?? null;
-}
-
 function filteredMessages(state: UiState) {
   const messages = state.snapshot?.messages ?? [];
   const selectedConversationThreadIds = new Set(
@@ -129,7 +125,7 @@ export function renderChatView(state: UiState): string {
       threadConversationSelectionKey(thread) === state.selectedConversationKey,
   );
   const selectedConv = deriveSelectedConversation(state);
-  const selectedThread = deriveSelectedThread(state);
+  const selectedThread = state.selectedThreadId;
   const activeConversation = findConversationBySelectionKey(conversations, selectedConv);
   const messages = filteredMessages({
     ...state,

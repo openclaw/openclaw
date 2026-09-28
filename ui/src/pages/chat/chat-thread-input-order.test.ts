@@ -199,4 +199,45 @@ describe("transcript input order", () => {
       }
     },
   );
+
+  it("reuses loaded history when a render rebuilds its pending input list", () => {
+    let messageReads = 0;
+    const loaded = new Proxy(
+      {
+        role: "assistant",
+        content: "Loaded history",
+        timestamp: 1,
+        __openclaw: { id: "loaded", seq: 1 },
+      },
+      {
+        get(target, key, receiver) {
+          messageReads += 1;
+          return Reflect.get(target, key, receiver);
+        },
+      },
+    );
+    const accepted = acceptedInput("Later input", 30);
+    const input: BuildChatItemsProps = {
+      paneId: "input-order",
+      sessionKey: "agent:main:input-order",
+      messages: [loaded],
+      toolMessages: [],
+      streamSegments: [],
+      stream: null,
+      streamStartedAt: null,
+      showToolCalls: true,
+    };
+    resetChatThreadState("input-order");
+    try {
+      const first = buildCachedChatItems({ ...input, pendingInputs: [accepted] });
+      messageReads = 0;
+      // renderChat derives this list on every render, including scroll-driven ones.
+      const next = buildCachedChatItems({ ...input, pendingInputs: [accepted] });
+
+      expect(next).toBe(first);
+      expect(messageReads).toBe(0);
+    } finally {
+      resetChatThreadState("input-order");
+    }
+  });
 });

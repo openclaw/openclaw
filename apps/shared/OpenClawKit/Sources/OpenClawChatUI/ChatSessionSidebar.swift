@@ -1,5 +1,4 @@
 #if os(macOS)
-import AppKit
 import SwiftUI
 
 extension ChatSessionSidebarModel.Node {
@@ -7,7 +6,7 @@ extension ChatSessionSidebarModel.Node {
         self.children.isEmpty ? nil : self.children
     }
 
-    fileprivate var previewSessions: [OpenClawChatSessionEntry] {
+    var previewSessions: [OpenClawChatSessionEntry] {
         [self.session] + self.children.flatMap(\.previewSessions)
     }
 }
@@ -16,17 +15,17 @@ extension ChatSessionSidebarModel.Node {
 struct ChatSessionSidebar: View {
     @Bindable var viewModel: OpenClawChatViewModel
     @Binding var query: String
+    @Binding var groups: [OpenClawChatSessionGroup]
+    let previews: ChatSessionSidebarPreviews
     var additionalAttentionRequests: [OpenClawChatAttentionRequest] = []
     @State private var presentedAttention: OpenClawChatAttentionPresentation?
     @State private var sessionPendingDeletion: OpenClawChatSessionEntry?
     @State private var sessionPendingRename: OpenClawChatSessionEntry?
     @State private var renameText = ""
-    @State private var groups: [OpenClawChatSessionGroup] = []
     @State private var groupRefreshNonce = 0
     @State private var groupLoadFailed = false
     @State private var inspectedSession: OpenClawChatSessionEntry?
     @State private var isPresentingNewSessionOptions = false
-    @State private var previews = ChatSessionSidebarPreviews()
     @AppStorage("openclaw.chat.collapsedSessionGroups") private var collapsedSessionGroups = ""
 
     var body: some View {
@@ -416,18 +415,18 @@ struct ChatSessionSidebar: View {
         let session = node.session
         let attention = self.attentionSummary(sessions: node.previewSessions, now: now)
         let targetID = "session:\(session.key)"
-        let subtitle = self.rowSubtitle(for: session, now: now, previewRequest: previewRequest)
-        let timestamp = ChatSessionSidebarModel.activityTimestamp(for: session).map {
-            Date(timeIntervalSince1970: $0 / 1000).formatted(.relative(
-                presentation: .named, unitsStyle: .abbreviated))
-        }
+        let presentation = ChatSessionRowPresentation(
+            session: session,
+            isConnected: self.viewModel.healthOK,
+            preview: self.rowPreview(for: session, previewRequest: previewRequest),
+            now: now)
         return HStack(alignment: .top, spacing: 8) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(ChatSessionSidebarModel.displayName(for: session))
                     .font(OpenClawChatTypography.body(
                         size: 13, weight: session.unread == true ? .medium : .regular, relativeTo: .body))
                     .lineLimit(1)
-                if let subtitle {
+                if let subtitle = presentation.subtitle {
                     Text(subtitle)
                         .font(OpenClawChatTypography.caption)
                         .foregroundStyle(.secondary)
@@ -436,7 +435,7 @@ struct ChatSessionSidebar: View {
             }
             Spacer(minLength: 0)
             VStack(alignment: .trailing, spacing: 6) {
-                if let timestamp {
+                if let timestamp = presentation.timestamp {
                     Text(verbatim: timestamp)
                         .font(OpenClawChatTypography.body(size: 10, weight: .regular, relativeTo: .caption))
                         .foregroundStyle(.tertiary)
@@ -444,7 +443,11 @@ struct ChatSessionSidebar: View {
                 }
                 HStack(spacing: 5) {
                     self.attentionBadge(summary: attention, targetID: targetID)
-                    self.badges(for: node)
+                    ChatSidebarSessionBadges(
+                        node: node,
+                        isConnected: self.viewModel.healthOK,
+                        isCurrentSession: self.viewModel.matchesCurrentSessionKey(
+                            incoming: node.session.key, current: self.viewModel.sessionKey))
                 }
             }
         }
@@ -460,7 +463,7 @@ struct ChatSessionSidebar: View {
             title: ChatSessionSidebarModel.displayName(for: session),
             targetID: targetID,
             summary: attention,
-            metadata: [subtitle, timestamp].compactMap(\.self),
+            metadata: [presentation.subtitle, presentation.timestamp].compactMap(\.self),
             presentation: self.$presentedAttention,
             isOutlineHeading: !node.children.isEmpty))
     }
@@ -486,36 +489,6 @@ struct ChatSessionSidebar: View {
         if let summary {
             OpenClawChatAttentionBadge(
                 summary: summary, targetID: targetID, presentation: self.$presentedAttention)
-        }
-    }
-
-    @ViewBuilder
-    private func badges(for node: ChatSessionSidebarModel.Node) -> some View {
-        if self.viewModel.healthOK, node.badges.queuedCount > 0 {
-            Image(systemName: "hourglass")
-                .foregroundStyle(OpenClawChatTheme.warning)
-                .accessibilityLabel(String(localized: "Thread queued"))
-        }
-        if self.viewModel.healthOK, node.badges.runningCount > 0 {
-            ProgressView()
-                .controlSize(.small)
-                .accessibilityLabel(String(localized: "Thread running"))
-        }
-        if node.badges.failedCount > 0 {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(OpenClawChatTheme.warning)
-                .accessibilityLabel(String(localized: "Thread failed"))
-        }
-        let isCurrentSession = self.viewModel.matchesCurrentSessionKey(
-            incoming: node.session.key,
-            current: self.viewModel.sessionKey)
-        if node.children.contains(where: \.badges.hasUnread) ||
-            (node.session.unread == true && !isCurrentSession)
-        {
-            Circle()
-                .fill(.tint)
-                .frame(width: 7, height: 7)
-                .accessibilityLabel(String(localized: "Unread"))
         }
     }
 
@@ -578,8 +551,7 @@ struct ChatSessionSidebar: View {
         }
         Divider()
         Button {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(session.key, forType: .string)
+            ChatPasteboard.copy(session.key)
         } label: {
             self.actionLabel(String(localized: "Copy Session Key"), systemImage: "doc.on.doc")
         }
@@ -596,7 +568,7 @@ struct ChatSessionSidebar: View {
     }
 
     private func isGroupCollapsed(_ name: String) -> Bool {
-        Set(self.collapsedSessionGroups.split(separator: "\u{1F}").map(String.init)).contains(name)
+        self.collapsedSessionGroups.split(separator: "\u{1F}").contains(Substring(name))
     }
 
     private func toggleGroupCollapsed(_ name: String) {
@@ -612,28 +584,15 @@ struct ChatSessionSidebar: View {
             .font(OpenClawChatTypography.body(size: 13, weight: .regular, relativeTo: .body))
     }
 
-    private func rowSubtitle(
+    private func rowPreview(
         for session: OpenClawChatSessionEntry,
-        now: Date,
         previewRequest: ChatSessionSidebarPreviews.Request) -> String?
     {
-        let activity = ChatSessionSidebarModel.activity(for: session, now: now.timeIntervalSince1970 * 1000)
-        if let activity, activity.kind == .attention { return activity.text }
-        if self.viewModel.healthOK, let activity, [.running, .queued].contains(activity.kind) { return activity.text }
-        if let activity, activity.kind == .failed,
-           session.unread == true || (session.lastReadAt ?? 0) < (session.endedAt ?? session.updatedAt ?? 0)
-        { return activity.text }
         if self.viewModel.matchesCurrentSessionKey(
             incoming: session.key, agentId: session.agentId, current: self.viewModel.sessionKey),
             let current = ChatSessionSidebarModel.messagePreview(from: self.viewModel.messages)
         { return current }
-        if let preview = self.previews.text(for: session, in: previewRequest) { return preview }
-        let workSubtitle = ChatSessionSidebarModel.workSubtitle(for: session)
-        if !self.viewModel.healthOK, let activity, [.running, .queued].contains(activity.kind) { return workSubtitle }
-        return ChatSessionSidebarModel.subtitle(
-            for: session,
-            workSubtitle: workSubtitle,
-            now: now.timeIntervalSince1970 * 1000)
+        return self.previews.text(for: session, in: previewRequest)
     }
 
     private var connectionFooter: some View {
@@ -663,25 +622,91 @@ struct ChatSessionSidebar: View {
     }
 }
 
+/// Sidebar and palette render the same preformatted timestamp and subtitle.
+/// SwiftUI's date-formatted Text uses different relative-time rounding.
+struct ChatSessionRowPresentation {
+    let timestamp: String?
+    let subtitle: String?
+
+    init(
+        session: OpenClawChatSessionEntry,
+        isConnected: Bool,
+        preview: @autoclosure () -> String?,
+        now: Date)
+    {
+        self.timestamp = ChatSessionSidebarModel.activityTimestamp(for: session).map {
+            Date(timeIntervalSince1970: $0 / 1000).formatted(.relative(
+                presentation: .named, unitsStyle: .abbreviated))
+        }
+        let activity = ChatSessionSidebarModel.activity(for: session, now: now.timeIntervalSince1970 * 1000)
+        if let activity, activity.kind == .attention {
+            self.subtitle = activity.text
+        } else if isConnected, let activity, [.running, .queued].contains(activity.kind) {
+            self.subtitle = activity.text
+        } else if let activity, activity.kind == .failed,
+                  session.unread == true || (session.lastReadAt ?? 0) < (session.endedAt ?? session.updatedAt ?? 0)
+        {
+            self.subtitle = activity.text
+        } else if let preview = preview() {
+            self.subtitle = preview
+        } else {
+            let workSubtitle = ChatSessionSidebarModel.workSubtitle(for: session)
+            self.subtitle = if !isConnected, let activity, [.running, .queued].contains(activity.kind) {
+                workSubtitle
+            } else {
+                ChatSessionSidebarModel.subtitle(
+                    for: session,
+                    workSubtitle: workSubtitle,
+                    now: now.timeIntervalSince1970 * 1000)
+            }
+        }
+    }
+}
+
+struct ChatSidebarSessionBadges: View {
+    let node: ChatSessionSidebarModel.Node
+    let isConnected: Bool
+    let isCurrentSession: Bool
+
+    var body: some View {
+        if self.isConnected, self.node.badges.queuedCount > 0 {
+            Image(systemName: "hourglass")
+                .foregroundStyle(OpenClawChatTheme.warning)
+                .accessibilityLabel(String(localized: "Thread queued"))
+        }
+        if self.isConnected, self.node.badges.runningCount > 0 {
+            ProgressView()
+                .controlSize(.small)
+                .accessibilityLabel(String(localized: "Thread running"))
+        }
+        if self.node.badges.failedCount > 0 {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(OpenClawChatTheme.warning)
+                .accessibilityLabel(String(localized: "Thread failed"))
+        }
+        if self.node.children.contains(where: \.badges.hasUnread) ||
+            (self.node.session.unread == true && !self.isCurrentSession)
+        {
+            Circle()
+                .fill(.tint)
+                .frame(width: 7, height: 7)
+                .accessibilityLabel(String(localized: "Unread"))
+        }
+    }
+}
+
 struct ChatSidebarAgentAvatar: View {
     let agent: OpenClawChatAgentChoice
     var size: CGFloat = 28
 
     var body: some View {
-        Text(self.avatarText)
+        Text(verbatim: self.agent.avatarText)
             .font(OpenClawChatTypography.navigationAvatar(size: self.size * 0.5))
             .lineLimit(1)
             .minimumScaleFactor(0.7)
             .frame(width: self.size, height: self.size)
             .background(.quaternary, in: RoundedRectangle(cornerRadius: self.size * 0.3))
             .accessibilityHidden(true)
-    }
-
-    private var avatarText: String {
-        if let emoji = self.agent.emoji?.trimmingCharacters(in: .whitespacesAndNewlines), !emoji.isEmpty {
-            return String(emoji.prefix(1))
-        }
-        return String(self.agent.displayName.prefix(1)).uppercased()
     }
 }
 

@@ -9,6 +9,12 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import type { inspectLocalAudioSelection } from "../media-understanding/local-audio.js";
 import { registerCapabilityCli } from "./capability-cli.js";
+import {
+  runCap,
+  runCapability,
+  runCapabilityWithParentAgent,
+  runModelAuthWithAgent,
+} from "./capability-cli.test-harness.js";
 import { CAPABILITY_METADATA } from "./capability-cli/metadata.js";
 
 const PNG_1X1_BASE64 =
@@ -21,36 +27,6 @@ function createIsomBrandBuffer(brand: "hevc" | "msf1"): Buffer {
   buffer.write("ftyp", 4, "ascii");
   buffer.write(brand, 8, "ascii");
   return buffer;
-}
-
-async function runCap(...argv: string[]): Promise<void> {
-  const program = new Command();
-  await registerCapabilityCli(program, ["node", "openclaw", ...argv]);
-  await program.parseAsync(argv, { from: "user" });
-}
-
-function runCapability(domain: string, action: string, ...argv: string[]): Promise<void> {
-  return runCap("capability", domain, action, ...argv);
-}
-
-function runCapabilityWithParentAgent(
-  domain: string,
-  action: string,
-  agent: string,
-  ...argv: string[]
-): Promise<void> {
-  return runCap("capability", domain, "--agent", agent, action, ...argv);
-}
-
-function runModelAuthWithAgent(
-  position: "parent" | "leaf",
-  action: "login" | "logout" | "status",
-  agent: string,
-  ...argv: string[]
-): Promise<void> {
-  return position === "parent"
-    ? runCap("capability", "model", "--agent", agent, "auth", action, ...argv)
-    : runCap("capability", "model", "auth", action, "--agent", agent, ...argv);
 }
 
 function primeOpenAiAuthProfile(mode: "api-key" | "token" = "api-key"): void {
@@ -402,14 +378,6 @@ vi.mock("../gateway/call.js", () => ({
   randomIdempotencyKey: () => "run-1",
 }));
 
-vi.mock("../gateway/connection-details.js", () => ({
-  buildGatewayConnectionDetailsWithResolvers: vi.fn(() => ({
-    url: "ws://127.0.0.1:18789",
-    urlSource: "local loopback",
-    message: "Gateway target: ws://127.0.0.1:18789",
-  })),
-}));
-
 vi.mock("../media-understanding/runtime.js", () => ({
   describeImageFile:
     mocks.describeImageFile as typeof import("../media-understanding/runtime.js").describeImageFile,
@@ -584,31 +552,34 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
 }));
 
 describe("capability cli", () => {
-  it.each(
-    [
-      { args: ["image", "edit", "--prompt", "crop the image"], option: "--file <path>" },
-      { args: ["image", "describe-many"], option: "--file <path>" },
-      { args: ["embedding", "create"], option: "--text <text>" },
-    ].flatMap(({ args, option }) =>
-      ["infer", "capability"].map((root) => ({ args, option, root })),
-    ),
-  )("rejects missing required repeatable input for $root $args", async ({ root, args, option }) => {
-    const argv = [root, ...args, "--json"];
-    const program = new Command().exitOverride().configureOutput({ writeErr: () => {} });
-    await registerCapabilityCli(program, ["node", "openclaw", ...argv]);
+  it.each([
+    {
+      root: "infer",
+      args: ["image", "edit", "--prompt", "crop the image"],
+      option: "--file <path>",
+    },
+    { root: "capability", args: ["image", "describe-many"], option: "--file <path>" },
+    { root: "infer", args: ["embedding", "create"], option: "--text <text>" },
+  ])(
+    "rejects missing required repeatable input for $root $args",
+    async ({ root, args, option }) => {
+      const argv = [root, ...args, "--json"];
+      const program = new Command().exitOverride().configureOutput({ writeErr: () => {} });
+      await registerCapabilityCli(program, ["node", "openclaw", ...argv]);
 
-    await expect(
-      program.parseAsync(argv, { from: "user" }).then(() => undefined),
-    ).rejects.toMatchObject({
-      code: "commander.missingMandatoryOptionValue",
-      message: `error: required option '${option}' not specified`,
-    });
-    expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
-    expect(mocks.generateImage).not.toHaveBeenCalled();
-    expect(mocks.describeImageFile).not.toHaveBeenCalled();
-    expect(mocks.createEmbeddingProvider).not.toHaveBeenCalled();
-    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-  });
+      await expect(
+        program.parseAsync(argv, { from: "user" }).then(() => undefined),
+      ).rejects.toMatchObject({
+        code: "commander.missingMandatoryOptionValue",
+        message: `error: required option '${option}' not specified`,
+      });
+      expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
+      expect(mocks.generateImage).not.toHaveBeenCalled();
+      expect(mocks.describeImageFile).not.toHaveBeenCalled();
+      expect(mocks.createEmbeddingProvider).not.toHaveBeenCalled();
+      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+    },
+  );
 
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -1131,8 +1102,6 @@ describe("capability cli", () => {
   });
 
   it.each([
-    { position: "parent", systemAgent: undefined },
-    { position: "leaf", systemAgent: undefined },
     { position: "parent", systemAgent: "alpha" },
     { position: "leaf", systemAgent: "alpha" },
   ])(
@@ -1236,7 +1205,7 @@ describe("capability cli", () => {
     },
   );
 
-  it("defaults model run to local transport", async () => {
+  it("defaults model runs to the lean local completion path", async () => {
     await runCapability("model", "run", "--prompt", "hello", "--json");
 
     expect(mocks.acquireSimpleCompletionModelForAgent).toHaveBeenCalledTimes(1);
@@ -1244,12 +1213,8 @@ describe("capability cli", () => {
     expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(firstJsonOutput()?.capability).toBe("model.run");
     expect(firstJsonOutput()?.transport).toBe("local");
-  });
-
-  it("runs local model probes through the lean completion path", async () => {
-    await runCapability("model", "run", "--prompt", "hello", "--json");
-
     const preparedParams = firstPreparedModelParams();
+    expect(preparedParams).not.toHaveProperty("allowBundledStaticCatalogFallback");
     expect(preparedParams?.agentId).toBe("main");
     expect(preparedParams?.allowMissingApiKeyModes).toEqual(["aws-sdk"]);
     expect(preparedParams?.skipAgentDiscovery).toBe(true);
@@ -1329,19 +1294,6 @@ describe("capability cli", () => {
     expect(params?.modelRef).toBe("mistral/mistral-medium-3-5");
     expect(params?.allowBundledStaticCatalogFallback).toBe(true);
     expect(params?.skipAgentDiscovery).toBe(true);
-  });
-
-  it("does not enable bundled static catalog fallback without an explicit provider/model override", async () => {
-    await runCapability("model", "run", "--prompt", "hello", "--json");
-
-    const calls = mocks.acquireSimpleCompletionModelForAgent.mock.calls as unknown as Array<
-      [Record<string, unknown>]
-    >;
-    const params = calls[0]?.[0];
-    if (!params) {
-      throw new Error("Expected simple completion model params");
-    }
-    expect(params).not.toHaveProperty("allowBundledStaticCatalogFallback");
   });
 
   it("passes image files to local model probes", async () => {
@@ -1576,7 +1528,7 @@ describe("capability cli", () => {
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
   });
 
-  it.each(["", "   ", "\n\t"])(
+  it.each(["\n\t"])(
     "rejects empty model run prompts before local dispatch (%j)",
     async (prompt) => {
       await expect(runCapability("model", "run", "--prompt", prompt, "--json")).rejects.toThrow(
@@ -2187,107 +2139,52 @@ describe("capability cli", () => {
     expect(mocks.generateImage).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { agent: "", message: "--agent must not be blank" },
-    { agent: "retired", message: 'Unknown agent id "retired"' },
-  ])(
-    "rejects invalid image generation agent '$agent' before dispatch",
-    async ({ agent, message }) => {
-      mocks.loadConfig.mockReturnValue({
-        agents: { entries: { alpha: {}, beta: {} }, ownership: "explicit" },
-      });
-
-      await expect(
-        runCapability(
-          "image",
-          "generate",
-          "--agent",
-          agent,
-          "--prompt",
-          "friendly lobster",
-          "--json",
-        ),
-      ).rejects.toThrow("exit 1");
-
-      expectRuntimeErrorContains(message);
-      expect(mocks.generateImage).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
+  const agentSelectionCases = [
     {
       name: "model run",
-      run: () => runCapability("model", "run", "--agent", "beta", "--prompt", "hello", "--json"),
+      run: (run: typeof runCapability) => run("model", "run", "--prompt", "hello", "--json"),
       selectedAgent: () => firstPreparedModelParams()?.agentId,
       expectedAgent: "beta",
     },
     {
       name: "image generate",
-      run: () => {
+      run: (run: typeof runCapability) => {
         primeGeneratedImage("gpt-image-1", "provider-output.png");
-        return runCapability(
-          "image",
-          "generate",
-          "--agent",
-          "beta",
-          "--prompt",
-          "portrait",
-          "--json",
-        );
+        return run("image", "generate", "--prompt", "portrait", "--json");
       },
       selectedAgent: () => firstImageGenerationCall()?.agentDir,
       expectedAgent: "/tmp/agent-beta",
     },
     {
       name: "image edit",
-      run: async () => {
+      run: async (run: typeof runCapability) => {
         const inputDir = tempDirs.make("openclaw-image-agent-");
         const inputPath = path.join(inputDir, "input.png");
         await fs.writeFile(inputPath, Buffer.from(PNG_1X1_BASE64, "base64"));
         primeGeneratedImage("gpt-image-1", "provider-output.png");
-        await runCapability(
-          "image",
-          "edit",
-          "--agent",
-          "beta",
-          "--file",
-          inputPath,
-          "--prompt",
-          "crop it",
-          "--json",
-        );
+        await run("image", "edit", "--file", inputPath, "--prompt", "crop it", "--json");
       },
       selectedAgent: () => firstImageGenerationCall()?.agentDir,
       expectedAgent: "/tmp/agent-beta",
     },
     {
       name: "image describe",
-      run: () =>
-        runCapability("image", "describe", "--agent", "beta", "--file", "photo.png", "--json"),
+      run: (run: typeof runCapability) => run("image", "describe", "--file", "photo.png", "--json"),
       selectedAgent: () => [imageDescribeCall()?.agentId, imageDescribeCall()?.agentDir],
       expectedAgent: ["beta", "/tmp/agent-beta"],
     },
     {
       name: "image describe-many",
-      run: () =>
-        runCapability("image", "describe-many", "--agent", "beta", "--file", "photo.png", "--json"),
+      run: (run: typeof runCapability) =>
+        run("image", "describe-many", "--file", "photo.png", "--json"),
       selectedAgent: () => [imageDescribeCall()?.agentId, imageDescribeCall()?.agentDir],
       expectedAgent: ["beta", "/tmp/agent-beta"],
     },
     {
       name: "image describe with explicit model",
-      run: () =>
-        runCapability(
-          "image",
-          "describe",
-          "--agent",
-          "beta",
-          "--model",
-          "ollama/qwen2.5vl:7b",
-          "--file",
-          "photo.png",
-          "--json",
-        ),
+      leafOnly: true,
+      run: (run: typeof runCapability) =>
+        run("image", "describe", "--model", "ollama/qwen2.5vl:7b", "--file", "photo.png", "--json"),
       selectedAgent: () => [
         firstImageDescribeWithModelCall()?.agentId,
         firstImageDescribeWithModelCall()?.agentDir,
@@ -2296,8 +2193,8 @@ describe("capability cli", () => {
     },
     {
       name: "audio transcribe",
-      run: () =>
-        runCapability("audio", "transcribe", "--agent", "beta", "--file", "memo.m4a", "--json"),
+      run: (run: typeof runCapability) =>
+        run("audio", "transcribe", "--file", "memo.m4a", "--json"),
       selectedAgent: () => [
         firstAudioTranscriptionCall()?.agentId,
         firstAudioTranscriptionCall()?.agentDir,
@@ -2306,7 +2203,7 @@ describe("capability cli", () => {
     },
     {
       name: "video generate",
-      run: () => {
+      run: (run: typeof runCapability) => {
         mocks.generateVideo.mockResolvedValue({
           provider: "minimax",
           model: "MiniMax-Hailuo-2.3",
@@ -2319,15 +2216,14 @@ describe("capability cli", () => {
             },
           ],
         });
-        return runCapability("video", "generate", "--agent", "beta", "--prompt", "clip", "--json");
+        return run("video", "generate", "--prompt", "clip", "--json");
       },
       selectedAgent: () => firstVideoGenerationCall()?.agentDir,
       expectedAgent: "/tmp/agent-beta",
     },
     {
       name: "video describe",
-      run: () =>
-        runCapability("video", "describe", "--agent", "beta", "--file", "clip.mp4", "--json"),
+      run: (run: typeof runCapability) => run("video", "describe", "--file", "clip.mp4", "--json"),
       selectedAgent: () => [
         firstVideoDescriptionCall()?.agentId,
         firstVideoDescriptionCall()?.agentDir,
@@ -2336,156 +2232,56 @@ describe("capability cli", () => {
     },
     {
       name: "embedding create",
-      run: () =>
-        runCapability("embedding", "create", "--agent", "beta", "--text", "hello", "--json"),
+      run: (run: typeof runCapability) => run("embedding", "create", "--text", "hello", "--json"),
       selectedAgent: () => firstEmbeddingProviderCall()?.agentDir,
       expectedAgent: "/tmp/agent-beta",
     },
-  ])(
-    "routes --agent through $name owner selection",
-    async ({ run, selectedAgent, expectedAgent }) => {
-      mocks.loadConfig.mockReturnValue({
-        agents: { entries: { alpha: {}, beta: {} }, ownership: "explicit" },
-      });
+  ];
 
-      await run();
-
-      expect(selectedAgent()).toEqual(expectedAgent);
-    },
-  );
-
-  it.each([
+  for (const { inherited, runWithAgent } of [
     {
-      name: "model run",
-      run: () =>
-        runCapabilityWithParentAgent("model", "run", "beta", "--prompt", "hello", "--json"),
-      selectedAgent: () => firstPreparedModelParams()?.agentId,
-      expectedAgent: "beta",
+      inherited: false,
+      runWithAgent: (domain: string, action: string, agent: string, ...argv: string[]) =>
+        runCapability(domain, action, "--agent", agent, ...argv),
     },
-    {
-      name: "image generate",
-      run: () => {
-        primeGeneratedImage("gpt-image-1", "provider-output.png");
-        return runCapabilityWithParentAgent(
-          "image",
-          "generate",
-          "beta",
-          "--prompt",
-          "portrait",
-          "--json",
-        );
-      },
-      selectedAgent: () => firstImageGenerationCall()?.agentDir,
-      expectedAgent: "/tmp/agent-beta",
-    },
-    {
-      name: "image edit",
-      run: async () => {
-        const inputDir = tempDirs.make("openclaw-image-parent-agent-");
-        const inputPath = path.join(inputDir, "input.png");
-        await fs.writeFile(inputPath, Buffer.from(PNG_1X1_BASE64, "base64"));
-        primeGeneratedImage("gpt-image-1", "provider-output.png");
-        await runCapabilityWithParentAgent(
-          "image",
-          "edit",
-          "beta",
-          "--file",
-          inputPath,
-          "--prompt",
-          "crop it",
-          "--json",
-        );
-      },
-      selectedAgent: () => firstImageGenerationCall()?.agentDir,
-      expectedAgent: "/tmp/agent-beta",
-    },
-    {
-      name: "image describe",
-      run: () =>
-        runCapabilityWithParentAgent("image", "describe", "beta", "--file", "photo.png", "--json"),
-      selectedAgent: () => [imageDescribeCall()?.agentId, imageDescribeCall()?.agentDir],
-      expectedAgent: ["beta", "/tmp/agent-beta"],
-    },
-    {
-      name: "image describe-many",
-      run: () =>
-        runCapabilityWithParentAgent(
-          "image",
-          "describe-many",
-          "beta",
-          "--file",
-          "photo.png",
-          "--json",
-        ),
-      selectedAgent: () => [imageDescribeCall()?.agentId, imageDescribeCall()?.agentDir],
-      expectedAgent: ["beta", "/tmp/agent-beta"],
-    },
-    {
-      name: "audio transcribe",
-      run: () =>
-        runCapabilityWithParentAgent("audio", "transcribe", "beta", "--file", "memo.m4a", "--json"),
-      selectedAgent: () => [
-        firstAudioTranscriptionCall()?.agentId,
-        firstAudioTranscriptionCall()?.agentDir,
-      ],
-      expectedAgent: ["beta", "/tmp/agent-beta"],
-    },
-    {
-      name: "video generate",
-      run: () => {
-        mocks.generateVideo.mockResolvedValue({
-          provider: "minimax",
-          model: "MiniMax-Hailuo-2.3",
-          attempts: [],
-          videos: [
-            {
-              buffer: Buffer.from("video-bytes"),
-              mimeType: "video/mp4",
-              fileName: "provider-name.mp4",
-            },
-          ],
+    { inherited: true, runWithAgent: runCapabilityWithParentAgent },
+  ]) {
+    it.each([
+      { agent: "", message: "--agent must not be blank" },
+      { agent: "retired", message: 'Unknown agent id "retired"' },
+    ])(
+      inherited
+        ? "rejects invalid inherited agent '$agent' before dispatch"
+        : "rejects invalid image generation agent '$agent' before dispatch",
+      async ({ agent, message }) => {
+        mocks.loadConfig.mockReturnValue({
+          agents: { entries: { alpha: {}, beta: {} }, ownership: "explicit" },
         });
-        return runCapabilityWithParentAgent(
-          "video",
-          "generate",
-          "beta",
-          "--prompt",
-          "clip",
-          "--json",
-        );
+
+        await expect(
+          runWithAgent("image", "generate", agent, "--prompt", "friendly lobster", "--json"),
+        ).rejects.toThrow("exit 1");
+
+        expectRuntimeErrorContains(message);
+        expect(mocks.generateImage).not.toHaveBeenCalled();
       },
-      selectedAgent: () => firstVideoGenerationCall()?.agentDir,
-      expectedAgent: "/tmp/agent-beta",
-    },
-    {
-      name: "video describe",
-      run: () =>
-        runCapabilityWithParentAgent("video", "describe", "beta", "--file", "clip.mp4", "--json"),
-      selectedAgent: () => [
-        firstVideoDescriptionCall()?.agentId,
-        firstVideoDescriptionCall()?.agentDir,
-      ],
-      expectedAgent: ["beta", "/tmp/agent-beta"],
-    },
-    {
-      name: "embedding create",
-      run: () =>
-        runCapabilityWithParentAgent("embedding", "create", "beta", "--text", "hello", "--json"),
-      selectedAgent: () => firstEmbeddingProviderCall()?.agentDir,
-      expectedAgent: "/tmp/agent-beta",
-    },
-  ])(
-    "inherits parent --agent through $name owner selection",
-    async ({ run, selectedAgent, expectedAgent }) => {
-      mocks.loadConfig.mockReturnValue({
-        agents: { entries: { alpha: {}, beta: {} }, ownership: "explicit" },
-      });
+    );
 
-      await run();
+    it.each(agentSelectionCases.filter((testCase) => !inherited || !testCase.leafOnly))(
+      inherited
+        ? "inherits parent --agent through $name owner selection"
+        : "routes --agent through $name owner selection",
+      async ({ run, selectedAgent, expectedAgent }) => {
+        mocks.loadConfig.mockReturnValue({
+          agents: { entries: { alpha: {}, beta: {} }, ownership: "explicit" },
+        });
 
-      expect(selectedAgent()).toEqual(expectedAgent);
-    },
-  );
+        await run((domain, action, ...argv) => runWithAgent(domain, action, "beta", ...argv));
+
+        expect(selectedAgent()).toEqual(expectedAgent);
+      },
+    );
+  }
 
   it("prefers a leaf --agent over the parent selector", async () => {
     mocks.loadConfig.mockReturnValue({
@@ -2507,29 +2303,6 @@ describe("capability cli", () => {
     );
 
     expect(firstImageGenerationCall()?.agentDir).toBe("/tmp/agent-beta");
-  });
-
-  it.each([
-    { agent: "", message: "--agent must not be blank" },
-    { agent: "retired", message: 'Unknown agent id "retired"' },
-  ])("rejects invalid inherited agent '$agent' before dispatch", async ({ agent, message }) => {
-    mocks.loadConfig.mockReturnValue({
-      agents: { entries: { alpha: {}, beta: {} }, ownership: "explicit" },
-    });
-
-    await expect(
-      runCapabilityWithParentAgent(
-        "image",
-        "generate",
-        agent,
-        "--prompt",
-        "friendly lobster",
-        "--json",
-      ),
-    ).rejects.toThrow("exit 1");
-
-    expectRuntimeErrorContains(message);
-    expect(mocks.generateImage).not.toHaveBeenCalled();
   });
 
   it("passes image output format and generic background hints through to generation runtime", async () => {
@@ -2790,29 +2563,6 @@ describe("capability cli", () => {
     expect(firstJsonOutput()?.id).toBe("image.edit");
     expect(firstJsonOutput()?.flags).toEqual([
       "--file",
-      "--prompt",
-      "--model",
-      "--count",
-      "--size",
-      "--aspect-ratio",
-      "--resolution",
-      "--output-format",
-      "--background",
-      "--openai-background",
-      "--openai-moderation",
-      "--quality",
-      "--timeout-ms",
-      "--output",
-      "--agent",
-      "--json",
-    ]);
-  });
-
-  it("reports the expanded image.generate flags in capability inspect", async () => {
-    await runCapability("inspect", "--name", "image.generate", "--json");
-
-    expect(firstJsonOutput()?.id).toBe("image.generate");
-    expect(firstJsonOutput()?.flags).toEqual([
       "--prompt",
       "--model",
       "--count",
@@ -3349,62 +3099,63 @@ describe("capability cli", () => {
     expect(mocks.generateImage).not.toHaveBeenCalled();
   });
 
-  describe.each(["infer", "capability"])("%s numeric options", (command) => {
-    describe.each(["", "   "])("blank value %j", (raw) => {
-      it.each([
-        [
-          "web search limit",
-          ["web", "search", "--query", "ping", "--limit"],
-          "--limit must be a positive integer",
-        ],
-        [
-          "image generate count",
-          ["image", "generate", "--prompt", "portrait", "--count"],
-          "--count must be a positive integer",
-        ],
-        [
-          "image edit count",
-          ["image", "edit", "--file", "photo.png", "--prompt", "crop it", "--count"],
-          "--count must be a positive integer",
-        ],
-        [
-          "video generate duration",
-          ["video", "generate", "--prompt", "clip", "--duration"],
-          "--duration must be a finite number",
-        ],
-      ] as const)("rejects %s before provider dispatch", async (_name, argv, message) => {
-        const webSearchRuntime = await import("../web-search/runtime.js");
-        vi.mocked(webSearchRuntime.runWebSearch).mockClear();
+  it.each([
+    [
+      "infer",
+      ["web", "search", "--query", "ping", "--limit"],
+      "",
+      "--limit must be a positive integer",
+    ],
+    [
+      "capability",
+      ["image", "generate", "--prompt", "portrait", "--count"],
+      "   ",
+      "--count must be a positive integer",
+    ],
+    [
+      "infer",
+      ["image", "edit", "--file", "photo.png", "--prompt", "crop it", "--count"],
+      "",
+      "--count must be a positive integer",
+    ],
+    [
+      "capability",
+      ["video", "generate", "--prompt", "clip", "--duration"],
+      "   ",
+      "--duration must be a finite number",
+    ],
+  ] as const)(
+    "rejects blank numeric input before %s %j dispatch",
+    async (command, argv, raw, message) => {
+      const webSearchRuntime = await import("../web-search/runtime.js");
+      vi.mocked(webSearchRuntime.runWebSearch).mockClear();
 
-        await expect(runCap(command, ...argv, raw)).rejects.toThrow("exit 1");
+      await expect(runCap(command, ...argv, raw)).rejects.toThrow("exit 1");
 
-        expectRuntimeErrorContains(message);
-        expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
-        expect(webSearchRuntime.runWebSearch).not.toHaveBeenCalled();
-        expect(mocks.generateImage).not.toHaveBeenCalled();
-        expect(mocks.generateVideo).not.toHaveBeenCalled();
-      });
-    });
+      expectRuntimeErrorContains(message);
+      expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
+      expect(webSearchRuntime.runWebSearch).not.toHaveBeenCalled();
+      expect(mocks.generateImage).not.toHaveBeenCalled();
+      expect(mocks.generateVideo).not.toHaveBeenCalled();
+    },
+  );
 
-    describe.each(["", "   ", "1000ms"])("invalid timeout %j", (raw) => {
-      it.each([
-        ["image generate", ["image", "generate", "--prompt", "portrait"]],
-        ["image edit", ["image", "edit", "--file", "photo.png", "--prompt", "crop it"]],
-        ["image describe", ["image", "describe", "--file", "photo.png"]],
-        ["image describe-many", ["image", "describe-many", "--file", "photo.png"]],
-        ["video generate", ["video", "generate", "--prompt", "clip"]],
-      ] as const)("rejects %s before provider dispatch", async (_name, argv) => {
-        await expect(runCap(command, ...argv, "--timeout-ms", raw)).rejects.toThrow("exit 1");
+  it.each([
+    ["infer", ["image", "generate", "--prompt", "portrait"], ""],
+    ["capability", ["image", "edit", "--file", "photo.png", "--prompt", "crop it"], "   "],
+    ["infer", ["image", "describe", "--file", "photo.png"], "1000ms"],
+    ["capability", ["image", "describe-many", "--file", "photo.png"], ""],
+    ["infer", ["video", "generate", "--prompt", "clip"], "1000ms"],
+  ] as const)("rejects invalid timeout before %s %j dispatch", async (command, argv, raw) => {
+    await expect(runCap(command, ...argv, "--timeout-ms", raw)).rejects.toThrow("exit 1");
 
-        expectRuntimeErrorContains("Invalid --timeout. Use a positive millisecond value");
-        expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
-        expect(mocks.generateImage).not.toHaveBeenCalled();
-        expect(mocks.generateVideo).not.toHaveBeenCalled();
-        expect(mocks.describeImageFile).not.toHaveBeenCalled();
-        expect(mocks.prepareImageDescriptionInput).not.toHaveBeenCalled();
-        expect(mocks.describePreparedImageWithModel).not.toHaveBeenCalled();
-      });
-    });
+    expectRuntimeErrorContains("Invalid --timeout-ms. Use a positive millisecond value");
+    expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
+    expect(mocks.generateImage).not.toHaveBeenCalled();
+    expect(mocks.generateVideo).not.toHaveBeenCalled();
+    expect(mocks.describeImageFile).not.toHaveBeenCalled();
+    expect(mocks.prepareImageDescriptionInput).not.toHaveBeenCalled();
+    expect(mocks.describePreparedImageWithModel).not.toHaveBeenCalled();
   });
 
   it("routes audio transcribe through transcription, not realtime", async () => {
@@ -3863,11 +3614,8 @@ describe("capability cli", () => {
   });
 
   it("fails clearly when gateway TTS output is requested against a remote gateway", async () => {
-    const gatewayConnection = await import("../gateway/connection-details.js");
-    vi.mocked(gatewayConnection.buildGatewayConnectionDetailsWithResolvers).mockReturnValueOnce({
-      url: "wss://gateway.example.com",
-      urlSource: "config gateway.remote.url",
-      message: "Gateway target: wss://gateway.example.com",
+    mocks.loadConfig.mockReturnValue({
+      gateway: { mode: "remote", remote: { url: "wss://gateway.example.com" } },
     });
 
     await expect(

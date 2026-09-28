@@ -41,7 +41,8 @@ type CheckoutOptions = WorktreeFilesystemOptions & {
   base: string;
   branch?: string | { mode: "existing"; name: string };
   sourceProfile?: WorktreeSourceProfile;
-  prepareCommit?: (commit: string) => Promise<void>;
+  /** Hydrate the registered commit and return its estimated checkout bytes. */
+  prepareCommit?: (commit: string) => Promise<number>;
   rollbackGuard?: () => void;
   /** Restore reuses a warm template, or materializes its snapshot after registration. */
   deferGitCheckout?: boolean;
@@ -63,6 +64,18 @@ function gitOptions(options: WorktreeFilesystemOptions) {
     signal: options.signal,
     beforeRun: () => assertOwned(options),
     killProcessTree: true,
+  };
+}
+
+function checkoutGitOptions(options: CheckoutOptions, cloneBytes?: number): GitCommandOptions {
+  return {
+    ...gitOptions(options),
+    beforeRun: () => {
+      assertOwned(options);
+      options.requireSpace(cloneBytes);
+    },
+    timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS,
+    ...options.checkoutBudget,
   };
 }
 
@@ -305,15 +318,11 @@ async function prepareTemplate(options: CheckoutOptions) {
   options.requireSpace();
   await backend.createTemplate(record.path, options);
   assertOwned(options);
-  await requireGit(options.repoRoot, ["worktree", "add", "--detach", "--", record.path, commit], {
-    ...gitOptions(options),
-    beforeRun: () => {
-      assertOwned(options);
-      options.requireSpace();
-    },
-    timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS,
-    ...options.checkoutBudget,
-  });
+  await requireGit(
+    options.repoRoot,
+    ["worktree", "add", "--detach", "--", record.path, commit],
+    checkoutGitOptions(options),
+  );
   assertOwned(options);
   markTemplateReady(options.env, id, options.now(), options.commitGuard);
   return { record, backend, sourceIndex: await indexPath(record.path, options) };
@@ -382,15 +391,7 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
       input.destination,
       existingBranch ?? input.base,
     ],
-    {
-      ...gitOptions(input),
-      beforeRun: () => {
-        assertOwned(input);
-        input.requireSpace(0);
-      },
-      timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS,
-      ...input.checkoutBudget,
-    },
+    checkoutGitOptions(input, 0),
   );
   if (added.code !== 0) {
     return added;
@@ -441,15 +442,7 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
     materializationStarted = true;
     const result = await materializeManagedWorktree(
       { destination: options.destination, commit, sourceOnly: options.sourceOnly },
-      {
-        ...gitOptions(options),
-        beforeRun: () => {
-          assertOwned(options);
-          options.requireSpace();
-        },
-        timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS,
-        ...options.checkoutBudget,
-      },
+      checkoutGitOptions(options),
     );
     if (result.code === 0) {
       await assertRegistration();
@@ -463,10 +456,10 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
         "Worktree source commit changed before sparse materialization; preserve it for recovery.",
       );
     }
-    await options.prepareCommit?.(commit);
+    const checkoutBytes = await options.prepareCommit?.(commit);
     let template: Awaited<ReturnType<typeof prepareTemplate>>;
     let cloneBytes: number | undefined;
-    if (options.enabled && !profile && !options.sourceOnly) {
+    if (options.enabled && checkoutBytes !== 0 && !profile && !options.sourceOnly) {
       try {
         template = await prepareTemplate(options);
         cloneBytes = template ? await estimateTemplateCloneBytes(template) : undefined;
@@ -495,14 +488,8 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
         options.destination,
         ["sparse-checkout", "set", "--cone", "--no-sparse-index", "--stdin"],
         {
-          ...gitOptions(options),
+          ...checkoutGitOptions(options),
           input: `${profile.directories.join("\n")}\n`,
-          beforeRun: () => {
-            assertOwned(options);
-            options.requireSpace();
-          },
-          timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS,
-          ...options.checkoutBudget,
         },
       );
       const result = await checkout();

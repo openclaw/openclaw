@@ -4,7 +4,21 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import nodeTest from "node:test";
+import {
+  applyScenarioConfigPatch,
+  assertSutMatchesLease,
+  assertTesterMatchesLease,
+  createGatewayEnvironment,
+  createScenarioCommandEnvironment,
+  drainSutUpdates,
+  ownChild,
+  runCommand,
+  summarizeScenarioCommand,
+  watchChildCompletion,
+  writeConfig,
+} from "./run-mock-sut-user-e2e.mjs";
 import { currentTelegramRun, withTelegramRun } from "./telegram-run-scope.mjs";
+
 // Cancellation cases return their expected terminal error after checking cleanup.
 const test = (name, run) =>
   nodeTest(name, async (context) => {
@@ -15,23 +29,12 @@ const test = (name, run) =>
       () => ({}),
       (error) => ({ error }),
     );
-    if (expectedFailure) assert.equal(result.error, expectedFailure);
-    else if (result.error) throw result.error;
+    if (expectedFailure) {
+      assert.equal(result.error, expectedFailure);
+    } else if (result.error) {
+      throw result.error;
+    }
   });
-import {
-  applyScenarioConfigPatch,
-  assertSutMatchesLease,
-  assertTesterMatchesLease,
-  createGatewayEnvironment,
-  createScenarioCommandEnvironment,
-  drainSutUpdates,
-  ownChild,
-  runCommand,
-  sanitizeChildEnvironment,
-  summarizeScenarioCommand,
-  watchChildCompletion,
-  writeConfig,
-} from "./run-mock-sut-user-e2e.mjs";
 
 function startOwnedChild() {
   return ownChild(
@@ -43,8 +46,12 @@ function startOwnedChild() {
 }
 
 function exited(child) {
-  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
-  return new Promise((resolve) => child.once("exit", resolve));
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    child.once("exit", resolve);
+  });
 }
 
 test("config patches restart before releasing their scenario barrier", async (context) => {
@@ -119,6 +126,9 @@ test("gateway environment strips inherited bot tokens and keeps the synthetic pr
       TELEGRAM_BOT_TOKEN: "synthetic-bot-token",
       TELEGRAM_E2E_SUT_BOT_TOKEN: "synthetic-bot-token",
       OPENCLAW_QA_CONVEX_SECRET_CI: "synthetic-broker-secret",
+      GITHUB_TOKEN: "github-secret",
+      TELEGRAM_E2E_STATE_DIR: "/private/lease",
+      TELEGRAM_USER_DRIVER_STATE_DIR: "/private/lease/user-driver",
     },
     configPath: "/tmp/openclaw.json",
     stateDir: "/tmp/state",
@@ -222,7 +232,9 @@ test("signal cleanup waits for credential acquisition before releasing scratch",
   resolveCredential(credential);
   await credentialPromise;
   const mainCleanup = currentTelegramRun().close();
-  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => {
+    setImmediate(resolve);
+  });
   assert.equal(releaseCount, 1);
   finishRelease();
   await Promise.all([signalCleanup, mainCleanup]);
@@ -234,7 +246,7 @@ test("lease loss signals active Telegram process groups before waiting", async (
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-concurrent-lease-fence-"));
   const cronSideEffect = path.join(temp, "cron-delivered");
   context.after(() => fs.rmSync(temp, { recursive: true, force: true }));
-  const probe = ownChild(
+  ownChild(
     spawn(
       process.execPath,
       [
@@ -277,7 +289,9 @@ test("lease loss signals active Telegram process groups before waiting", async (
   });
   scope.cancel(leaseError);
   await scope.close();
-  await new Promise((resolve) => setTimeout(resolve, 200));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 200);
+  });
   assert.equal(fs.existsSync(cronSideEffect), false);
   assert.equal(logsPersisted, true);
   return leaseError;
@@ -307,7 +321,7 @@ test("lease loss during blocked readiness stops the gateway before polling", asy
     configPath: path.join(temp, "openclaw.json"),
     stateDir: path.join(temp, "state"),
   });
-  const gateway = ownChild(
+  ownChild(
     spawn(process.execPath, [gatewayScript], {
       detached: true,
       env: {
@@ -323,7 +337,9 @@ test("lease loss during blocked readiness stops the gateway before polling", asy
   const leaseError = new Error("lease heartbeat failed during gateway readiness");
   const leaseFailure = new Promise((resolve) => {
     const poll = setInterval(() => {
-      if (!fs.existsSync(gatewayReady)) return;
+      if (!fs.existsSync(gatewayReady)) {
+        return;
+      }
       clearInterval(poll);
       resolve({ type: "lease-failure", error: leaseError });
     }, 5);
@@ -335,7 +351,9 @@ test("lease loss during blocked readiness stops the gateway before polling", asy
     (error) => error === leaseError,
   );
   await currentTelegramRun().close();
-  await new Promise((resolve) => setTimeout(resolve, 250));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 250);
+  });
   assert.equal(gatewayEnv.PATH, "/safe/bin");
   assert.equal(gatewayEnv.OPENCLAW_QA_CONVEX_SECRET_CI, undefined);
   assert.equal(gatewayEnv.TELEGRAM_E2E_STATE_DIR, undefined);
@@ -368,7 +386,9 @@ test("lease revocation between startup Bot API calls prevents update polling", a
   };
   const lease = {
     assertHealthy: () => {
-      if (!healthy) throw leaseError;
+      if (!healthy) {
+        throw leaseError;
+      }
     },
     whenUnhealthy,
   };
@@ -422,7 +442,9 @@ test("lease loss during a credential command stops every owned child before its 
     (error) => error === leaseError,
   );
   await exited(gateway);
-  await new Promise((resolve) => setTimeout(resolve, 250));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 250);
+  });
   assert.equal(fs.existsSync(wrapperReady), true);
   assert.equal(fs.existsSync(sideEffect), false);
   return leaseError;
@@ -451,7 +473,9 @@ test("successful command parents keep descendants lease-owned until cleanup", as
   assert.equal(result.status, 0);
   assert.equal(result.timedOut, false);
   await currentTelegramRun().close();
-  await new Promise((resolve) => setTimeout(resolve, 300));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 300);
+  });
   assert.equal(fs.existsSync(sideEffect), false);
 });
 
@@ -524,21 +548,12 @@ test("credential command timeout stops a nested wrapper before its side effect",
     },
     timeoutMs: 500,
   });
-  await new Promise((resolve) => setTimeout(resolve, 600));
+  await new Promise((resolve) => {
+    setTimeout(resolve, 600);
+  });
   assert.equal(result.timedOut, true);
   assert.equal(fs.existsSync(wrapperReady), true);
   assert.equal(fs.existsSync(sideEffect), false);
-});
-
-test("credential-bearing child processes receive no parent control secrets", () => {
-  const env = sanitizeChildEnvironment({
-    PATH: "/safe/bin",
-    OPENCLAW_QA_CONVEX_SECRET_CI: "broker-secret",
-    GITHUB_TOKEN: "github-secret",
-    TELEGRAM_E2E_STATE_DIR: "/private/lease",
-    TELEGRAM_USER_DRIVER_STATE_DIR: "/private/lease/user-driver",
-  });
-  assert.deepEqual(env, { PATH: "/safe/bin" });
 });
 
 test("clears a leased bot webhook before polling updates", async () => {

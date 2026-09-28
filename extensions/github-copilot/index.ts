@@ -1,4 +1,3 @@
-// Github Copilot plugin entrypoint registers its OpenClaw integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   definePluginEntry,
@@ -587,10 +586,6 @@ export default definePluginEntry({
       };
     }
 
-    async function runGitHubCopilotAuth(ctx: ProviderAuthContext) {
-      return await runGitHubCopilotDeviceAuth(ctx, PUBLIC_GITHUB_COPILOT_DOMAIN);
-    }
-
     async function runGitHubCopilotEnterpriseAuth(ctx: ProviderAuthContext) {
       const domain = await promptForEnterpriseDomain(ctx);
       if (!domain) {
@@ -621,15 +616,15 @@ export default definePluginEntry({
           hint: "Browser device-code flow",
           kind: "device_code",
           starterModel: DEFAULT_COPILOT_MODEL,
-          run: async (ctx) => await runGitHubCopilotAuth(ctx),
-          runNonInteractive: async (ctx) => await runGitHubCopilotNonInteractiveAuth(ctx),
+          run: (ctx) => runGitHubCopilotDeviceAuth(ctx, PUBLIC_GITHUB_COPILOT_DOMAIN),
+          runNonInteractive: runGitHubCopilotNonInteractiveAuth,
         },
         {
           id: "device-enterprise",
           label: "GitHub Enterprise device login (data residency)",
           hint: "Device-code flow against your *.ghe.com tenant",
           kind: "device_code",
-          run: async (ctx) => await runGitHubCopilotEnterpriseAuth(ctx),
+          run: runGitHubCopilotEnterpriseAuth,
           wizard: {
             choiceId: "github-copilot-enterprise",
             choiceLabel: "GitHub Copilot (Enterprise / data residency)",

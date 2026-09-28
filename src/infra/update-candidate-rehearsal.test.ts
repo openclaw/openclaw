@@ -97,7 +97,7 @@ it.each(["token", "password"] as const)(
       await rehearsal.cleanup((directory) => {
         checked.push(directory);
       });
-      expect(checked).toEqual(rehearsal.cleanupDirectories);
+      expect(checked).toEqual([rehearsal.stateDir, ...rehearsal.cleanupDirectories]);
     }
   },
 );

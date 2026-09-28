@@ -1,3 +1,4 @@
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
   adaptScopedAccountAccessor,
   createScopedDmSecurityResolver,
@@ -42,7 +43,6 @@ import { matrixApprovalCapability } from "./approval-native.js";
 import { createMatrixPairingText, createMatrixProbeAccount } from "./channel-account-paths.js";
 import { createMatrixMessageAdapter } from "./channel-message-adapter.js";
 import { matrixPluginBase } from "./channel.setup.js";
-import { DEFAULT_ACCOUNT_ID } from "./config-adapter.js";
 import {
   legacyConfigRules as MATRIX_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig as normalizeMatrixCompatibilityConfig,
@@ -91,18 +91,6 @@ const loadMatrixMonitorModule = createLazyRuntimeModule(() =>
     throw error;
   }),
 );
-
-function buildMatrixTrafficStatusSummary(
-  snapshot?: {
-    lastInboundAt?: number | null;
-    lastOutboundAt?: number | null;
-  } | null,
-) {
-  return {
-    lastInboundAt: snapshot?.lastInboundAt ?? null,
-    lastOutboundAt: snapshot?.lastOutboundAt ?? null,
-  };
-}
 
 const matrixDoctor: ChannelDoctorAdapter = {
   dmAllowFromMode: "nestedOnly",
@@ -388,12 +376,7 @@ const matrixChannelOutbound: ChannelOutboundAdapter = {
       },
     },
   },
-  shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload }) =>
-    shouldSuppressLocalMatrixExecApprovalPrompt({
-      cfg,
-      accountId,
-      payload,
-    }),
+  shouldSuppressLocalPayloadPrompt: shouldSuppressLocalMatrixExecApprovalPrompt,
   ...createRuntimeOutboundDelegates({
     getRuntime: loadMatrixChannelRuntime,
     renderPresentation: {
@@ -468,11 +451,9 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
           const target = resolveMatrixTargetIdentity(to);
           return target ? (target.kind === "user" ? "direct" : "channel") : undefined;
         },
-        resolveInboundConversation: ({ to, conversationId, threadId }) =>
-          resolveMatrixInboundConversation({ to, conversationId, threadId }),
-        resolveDeliveryTarget: ({ conversationId, parentConversationId }) =>
-          resolveMatrixDeliveryTarget({ conversationId, parentConversationId }),
-        resolveOutboundSessionRoute: (params) => resolveMatrixOutboundSessionRoute(params),
+        resolveInboundConversation: resolveMatrixInboundConversation,
+        resolveDeliveryTarget: resolveMatrixDeliveryTarget,
+        resolveOutboundSessionRoute: resolveMatrixOutboundSessionRoute,
         resolveConversationRouteOwner: resolveMatrixConversationRouteOwner,
         targetResolver: {
           looksLikeId: (raw) => {
@@ -522,13 +503,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
             conversationId,
             parentConversationId,
           }),
-        resolveCommandConversation: ({ threadId, originatingTo, commandTo, fallbackTo }) =>
-          resolveMatrixCommandConversation({
-            threadId,
-            originatingTo,
-            commandTo,
-            fallbackTo,
-          }),
+        resolveCommandConversation: resolveMatrixCommandConversation,
       },
       status: createComputedAccountStatusAdapter<ResolvedMatrixAccount, MatrixProbe>({
         defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
@@ -537,11 +512,8 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
           buildProbeChannelStatusSummary(snapshot, { baseUrl: snapshot.baseUrl ?? null }),
         probeAccount: async ({ account, timeoutMs, cfg }) =>
           await createMatrixProbeAccount({
-            resolveMatrixAuth: async ({ cfg: cfgLocal, accountId }) =>
-              (await loadMatrixChannelRuntime()).resolveMatrixAuth({
-                cfg: cfgLocal,
-                accountId,
-              }),
+            resolveMatrixAuth: async (params) =>
+              (await loadMatrixChannelRuntime()).resolveMatrixAuth(params),
             probeMatrix: async (params) =>
               await (await loadMatrixChannelRuntime()).probeMatrix(params),
           })({
@@ -557,7 +529,8 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
           extra: {
             baseUrl: account.homeserver,
             lastProbeAt: runtime?.lastProbeAt ?? null,
-            ...buildMatrixTrafficStatusSummary(runtime),
+            lastInboundAt: runtime?.lastInboundAt ?? null,
+            lastOutboundAt: runtime?.lastOutboundAt ?? null,
           },
         }),
       }),

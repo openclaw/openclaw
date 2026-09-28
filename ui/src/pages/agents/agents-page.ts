@@ -67,6 +67,7 @@ import {
   reloadAgentFile,
   retainAgentFileDrafts,
   resetAgentFile,
+  resetAgentFiles,
   saveAgentFile,
   type RetainedAgentFileDrafts,
 } from "./files.ts";
@@ -123,8 +124,8 @@ class AgentsPage
   @state() agentFilesError: string | null = null;
   @state() agentFilesList: AgentsFilesListResult | null = null;
   @state() agentFileContents: Record<string, string> = {};
-  @state() agentFileBaseHashes: Record<string, string> = {};
-  @state() agentFileHashes: Record<string, string> = {};
+  @state() agentFileBaseVersions: RetainedAgentFileDrafts["versions"] = {};
+  @state() agentFileVersions: RetainedAgentFileDrafts["versions"] = {};
   @state() agentFileConflict: string | null = null;
   @state() agentFileDrafts: Record<string, string> = {};
   @state() agentFileActive: string | null = null;
@@ -195,6 +196,10 @@ class AgentsPage
     ensureInitialData: () => this.ensureInitialData(),
   });
   private readonly subscriptions = new SubscriptionsController(this)
+    .watch(
+      () => this.context?.config,
+      (config, notify) => config.subscribe(notify),
+    )
     .watch(() => this.client, subscribeModelCatalogCache)
     .effect(
       () => this.context?.settingsAgentSelection,
@@ -398,7 +403,7 @@ class AgentsPage
       if (retained && selectedId) {
         this.retainedFileDrafts.delete(selectedId);
         this.agentFileDrafts = retained.drafts;
-        this.agentFileHashes = retained.hashes;
+        this.agentFileVersions = retained.versions;
         this.agentFileActive = retained.active;
         this.agentFileConflict = retained.conflict;
         // Loaded bases stay empty: returning must read disk while retaining the draft's ancestry.
@@ -835,6 +840,7 @@ class AgentsPage
     const agentIdentity = this.context.agentIdentity;
     void saveIdentityDraft({
       host: this,
+      config: this.context.config,
       expectedClient: client,
       agentId,
       agents,
@@ -852,17 +858,7 @@ class AgentsPage
   private resetSelectionState() {
     this.gateway.invalidate();
     this.resetModelCatalog();
-    this.agentFilesList = null;
-    this.agentFilesError = null;
-    this.agentFileActive = null;
-    this.agentFileContents = {};
-    this.agentFileBaseHashes = {};
-    this.agentFileHashes = {};
-    this.agentFileConflict = null;
-    this.agentFileDrafts = {};
-    this.agentFileWriteRevisions.clear();
-    this.agentFilesLoading = false;
-    this.agentFileSaving = false;
+    resetAgentFiles(this);
     this.agentSkillsReport = null;
     this.agentSkillsLoading = false;
     this.agentSkillsError = null;
@@ -922,15 +918,12 @@ class AgentsPage
   }
 
   private saveAgentConfig() {
-    if (!this.canCall("config.set", "operator.admin")) {
+    const client = this.client;
+    if (!client || !this.canCall("config.set", "operator.admin")) {
       return;
     }
-    const client = this.client;
     const generation = this.requestGeneration;
     const agents = this.context.agents;
-    if (!client) {
-      return;
-    }
     void (async () => {
       if (!(await this.context.runtimeConfig.save())) {
         return;
@@ -939,6 +932,7 @@ class AgentsPage
       if (!this.isCurrentRequest(client, generation, undefined, { agents })) {
         return;
       }
+      resetToolsEffectiveState(this);
       this.syncAgentState(agents);
       this.ensureAgentIdentities();
       this.loadActivePanelData();
@@ -1047,6 +1041,7 @@ class AgentsPage
       ${renderSettingsWorkspace(
         this.identityAvatarLoader.withActiveRoutes(() =>
           renderAgents({
+            applicationConfig: this.context.config,
             access,
             basePath: this.context.basePath,
             loading: agentsState.agentsLoading,
@@ -1178,7 +1173,7 @@ class AgentsPage
                 selectedAgentId === this.agentsSelectedId &&
                 this.canCall("agents.update", "operator.admin")
               ) {
-                selectIdentityAvatar(this, file);
+                selectIdentityAvatar(this, file, this.context.config);
               }
             },
             onIdentitySave: () => this.saveIdentityDraft(),

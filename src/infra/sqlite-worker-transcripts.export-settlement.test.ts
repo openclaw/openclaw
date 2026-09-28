@@ -1,15 +1,11 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { readOpenClawStateLease } from "../state/openclaw-state-lease-store.js";
+import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import type { TranscriptSessionDescriptor } from "../transcripts/provider-types.js";
 import { readTranscriptExportOwnership } from "../transcripts/store-sqlite-read.js";
 import { transcriptSessionExportKey, TranscriptsStore } from "../transcripts/store.js";
@@ -17,14 +13,7 @@ import type { SqliteWorkerOperations, SqliteWorkerStore } from "./sqlite-worker-
 import type { SqliteWorkerOperationSettlement } from "./sqlite-worker-operation-settlement.js";
 import * as workerStore from "./sqlite-worker-store.js";
 
-const dirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    cleanup();
-  }),
-);
+const dirs = useStateDatabaseTempDirs();
 
 it("retains the export lease while accepted bookkeeping has an unknown settlement", async () => {
   const stateDir = dirs.make("transcript-export-settlement-");
@@ -50,7 +39,6 @@ it("retains the export lease while accepted bookkeeping has an unknown settlemen
         stateContext?: Parameters<typeof original>[2],
         assertCurrent?: Parameters<typeof original>[3],
         createAdmission?: Parameters<typeof original>[4],
-        requireStateLifecycle?: Parameters<typeof original>[5],
       ) => {
         let exporting = false;
         return original(
@@ -79,7 +67,6 @@ it("retains the export lease while accepted bookkeeping has an unknown settlemen
                     }
                   : retained,
               )),
-          requireStateLifecycle,
         );
       },
     );

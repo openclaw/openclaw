@@ -10,6 +10,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "../service.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import { loadCronStore } from "../store.js";
@@ -22,6 +23,7 @@ import {
   inspectActiveCronRunReceipt,
   makeCronRecoveryJob,
 } from "../store/run-receipt-store.test-support.js";
+import { prepareCronRunReceiptWriteSchema } from "../store/run-receipt-write-admission.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import * as serviceState from "./state.js";
 import { onTimer } from "./timer.test-support.js";
@@ -48,6 +50,7 @@ it("lists behind healthy recovery while a writer is held, and retires a waiting 
   const onEvent = vi.fn();
   const runner = vi.fn(async () => ({ status: "ok" as const }));
   const cron = new CronService({
+    scheduler: createTestGatewayScheduler(),
     storePath,
     cronEnabled: true,
     defaultAgentId: "alpha",
@@ -101,7 +104,12 @@ it("lists behind healthy recovery while a writer is held, and retires a waiting 
         startedAtMs,
       });
       const receipt = runOpenClawStateWriteTransaction(({ db }) =>
-        claimCronRunReceiptInDatabase({ database: db, prepared, resolveAgentId: () => "alpha" }),
+        claimCronRunReceiptInDatabase({
+          database: db,
+          receiptSchema: prepareCronRunReceiptWriteSchema(db),
+          prepared,
+          resolveAgentId: () => "alpha",
+        }),
       );
       receipts.push(receipt);
       job.state.runningAtMs = startedAtMs;

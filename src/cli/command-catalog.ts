@@ -1,14 +1,8 @@
 // Declarative CLI command catalog for startup policy and fast-path routing.
 import { hasFlag } from "./argv.js";
-import type { CliCommandCatalogEntry, CliCommandPathPolicy } from "./command-catalog.types.js";
-
-export type {
-  CliCommandPluginLoadPolicy,
-  CliPluginRegistryScope,
-  CliNetworkProxyPolicy,
-  CliCommandPathPolicy,
-  CliCommandCatalogEntry,
-} from "./command-catalog.types.js";
+import { PASSIVE_STARTUP_POLICY } from "./command-catalog-policies.js";
+import type { CliCommandCatalogEntry } from "./command-catalog-types.js";
+import { updateCommandCatalog } from "./command-catalog-update.js";
 
 function hasCliOption(argv: readonly string[], name: string): boolean {
   for (const arg of argv.slice(2)) {
@@ -22,13 +16,11 @@ function hasCliOption(argv: readonly string[], name: string): boolean {
   return false;
 }
 
-// These commands own their state boundary; bootstrap must not observe or initialize it first.
-const PASSIVE_STARTUP_POLICY = {
-  configGuard: "skip",
-  loadPlugins: "never",
-  ensureCliPath: false,
-  networkProxy: "bypass",
-} satisfies Partial<CliCommandPathPolicy>;
+const modelRunStartupPolicy: CliCommandCatalogEntry["policy"] = {
+  // Gateway model runs need only non-observing client config validation.
+  configGuard: ({ options }) =>
+    options?.gateway === true && options.local !== true ? "validate" : "run",
+};
 
 /** Command path registry used before Commander registration has loaded all plugins. */
 export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
@@ -70,12 +62,15 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
       networkProxy: "default",
     },
   },
+  { commandPath: ["infer", "model", "run"], policy: modelRunStartupPolicy },
+  { commandPath: ["capability", "model", "run"], policy: modelRunStartupPolicy },
   {
     commandPath: ["transcripts"],
     // Lists, summaries, and artifact paths own stdout; startup notes must not corrupt them.
     policy: { ownsProtocolStdout: true, hideBanner: true },
   },
-  { commandPath: ["message"], policy: { loadPlugins: "never" } },
+  // The message runner selects config preparation from the action's execution mode.
+  { commandPath: ["message"], policy: { configGuard: "defer", loadPlugins: "never" } },
   { commandPath: ["docs"], policy: { configGuard: "skip" } },
   // Destructive maintenance owns a validity-aware, non-observing config read.
   // Startup migrations would mutate the SQLite state these commands may refuse to remove.
@@ -319,23 +314,6 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     route: { id: "models-status" },
   },
   {
-    commandPath: ["tasks", "list"],
-    exact: true,
-    policy: PASSIVE_STARTUP_POLICY,
-    route: { id: "tasks-list" },
-  },
-  {
-    commandPath: ["tasks", "audit"],
-    exact: true,
-    policy: PASSIVE_STARTUP_POLICY,
-    route: { id: "tasks-audit" },
-  },
-  {
-    commandPath: ["tasks"],
-    policy: PASSIVE_STARTUP_POLICY,
-    route: { id: "tasks-list" },
-  },
-  {
     // This unregistered root is reserved so plugin registration cannot claim it;
     // the catalog entry preserves its startup policy.
     commandPath: ["tool"],
@@ -508,18 +486,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["terminal"], policy: { networkProxy: "bypass" } },
   { commandPath: ["tui"], policy: { networkProxy: "bypass" } },
   { commandPath: ["uninstall"], policy: { networkProxy: "bypass" } },
-  {
-    commandPath: ["update", "cleanup"],
-    exact: true,
-    policy: { ...PASSIVE_STARTUP_POLICY, hideBanner: true },
-  },
-  {
-    commandPath: ["update"],
-    policy: {
-      configGuard: "skip",
-      hideBanner: true,
-    },
-  },
+  ...updateCommandCatalog,
   {
     commandPath: ["config", "validate"],
     exact: true,

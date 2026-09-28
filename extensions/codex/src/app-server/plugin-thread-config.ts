@@ -1,7 +1,3 @@
-/**
- * Builds Codex thread config patches that expose only policy-approved apps
- * for native Codex turns.
- */
 import crypto from "node:crypto";
 import { codexAppIdentityKey } from "./app-identity.js";
 import { defaultCodexAppInventoryCache, CodexAppInventoryCache } from "./app-inventory-cache.js";
@@ -19,6 +15,7 @@ import {
 import { buildCodexAppApprovalOverrides } from "./plugin-app-approval-overrides.js";
 import {
   readCodexPluginInventory,
+  toCodexPluginOwnedAccountApp,
   type CodexPluginInventory,
   type CodexPluginInventoryDiagnostic,
   type CodexPluginRuntimeRequest,
@@ -33,15 +30,12 @@ import {
   resolveCodexPluginThreadAppCacheKey,
   resolveCodexExplicitAppEnablement,
   resolveCodexPluginAppThreadAdmission,
-  resolveCodexThreadConfigAppsForRecord,
   shouldForceRefreshCodexNotReadyPluginApps,
-  toCodexPluginOwnedAccountApp,
   type CodexPluginThreadAppAdmissionConfig,
   type CodexPluginThreadAppAdmissionDiagnostic,
 } from "./plugin-thread-app-admission.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 
-/** Policy context for one app id exposed by a configured Codex plugin. */
 export type PluginAppPolicyContextEntry = {
   source?: "plugin";
   configKey: string;
@@ -53,7 +47,6 @@ export type PluginAppPolicyContextEntry = {
   mcpServerNames: string[];
 };
 
-/** Policy context for one account-connected app admitted without a plugin package. */
 type AccountAppPolicyContextEntry = {
   source: "account";
   appName: string;
@@ -63,7 +56,6 @@ type AccountAppPolicyContextEntry = {
   mcpServerNames: string[];
 };
 
-/** Policy context for any app exposed to a native Codex thread. */
 export type CodexAppPolicyContextEntry = PluginAppPolicyContextEntry | AccountAppPolicyContextEntry;
 
 /** Stable app-to-plugin ownership context persisted with Codex thread bindings. */
@@ -73,7 +65,6 @@ export type PluginAppPolicyContext = {
   pluginAppIds: Record<string, string[]>;
 };
 
-/** Diagnostic emitted while building app config for a native Codex thread. */
 type CodexPluginThreadConfigDiagnostic =
   | CodexPluginInventoryDiagnostic
   | CodexPluginThreadAppAdmissionDiagnostic
@@ -87,7 +78,6 @@ type CodexPluginThreadConfigDiagnostic =
       message: string;
     };
 
-/** Complete Codex thread config patch plus inventory and policy fingerprints. */
 export type CodexPluginThreadConfig = {
   enabled: boolean;
   configPatch?: JsonObject;
@@ -100,7 +90,6 @@ export type CodexPluginThreadConfig = {
   diagnostics: CodexPluginThreadConfigDiagnostic[];
 };
 
-/** Inputs for building a Codex thread app/plugin config patch. */
 type BuildCodexPluginThreadConfigParams = {
   pluginConfig?: unknown;
   request: CodexPluginRuntimeRequest;
@@ -114,10 +103,9 @@ type BuildCodexPluginThreadConfigParams = {
 
 // Admission changes must rebuild existing bindings too, or older bindings can
 // bypass updated app approval checks after the gateway has been upgraded.
-const CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION = 13;
+const CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION = 15;
 const CODEX_PLUGIN_THREAD_CONFIG_FINGERPRINT_VERSION = 2;
 
-/** Returns true when plugin config exists and thread config may need app patches. */
 export function shouldBuildCodexPluginThreadConfig(pluginConfig?: unknown): boolean {
   return resolveCodexPluginsPolicy(pluginConfig).configured;
 }
@@ -153,7 +141,6 @@ export function buildCodexPluginThreadConfigTimeoutFallback(params: {
   };
 }
 
-/** Builds the Codex apps config patch and policy context for a native thread. */
 export async function buildCodexPluginThreadConfig(
   params: BuildCodexPluginThreadConfigParams,
 ): Promise<CodexPluginThreadConfig> {
@@ -194,10 +181,10 @@ export async function buildCodexPluginThreadConfig(
       nowMs: params.nowMs,
       suppressAppInventoryRefresh,
     });
-  let inventory =
+  let inventory: CodexPluginInventory =
     policy.pluginPolicies.length > 0
       ? await readInventory(true)
-      : emptyCodexPluginInventory(policy);
+      : { policy, records: [], diagnostics: [] };
   const refreshInventory = async (options: { forceRefetch: boolean; reason: string }) => {
     await refreshCodexPluginAppInventory(params, appCache, {
       ...options,
@@ -209,10 +196,11 @@ export async function buildCodexPluginThreadConfig(
       appCacheKey: params.appCacheKey,
     });
   };
-  const appInventoryRefreshDeferredForActivation =
-    inventory.records.some((record) => record.activationRequired) &&
-    shouldRefreshMissingAppInventory(params, policy, inventory);
-  if (shouldWaitForInitialAppInventory(params, policy, inventory)) {
+  const activationRequired = inventory.records.some((record) => record.activationRequired);
+  const appInventoryMissing = shouldRefreshMissingAppInventory(params, policy, inventory);
+  const appInventoryRefreshDeferredForActivation = activationRequired && appInventoryMissing;
+  // Install/enable first so the initial app snapshot observes newly activated plugin apps.
+  if (!activationRequired && appInventoryMissing) {
     await refreshInventory({
       // OpenClaw is missing its process-local snapshot, but Codex may already
       // have a current inventory. Avoid rebuilding the entire remote catalog
@@ -337,7 +325,7 @@ export async function buildCodexPluginThreadConfig(
       continue;
     }
     pluginAppIds[record.policy.configKey] = [...record.ownedAppIds].toSorted();
-    for (const app of resolveCodexThreadConfigAppsForRecord({ record, inventory })) {
+    for (const app of inventory.appInventory?.state === "missing" ? [] : record.apps) {
       const admission = resolveCodexPluginAppThreadAdmission(app, inventory);
       const admissionConfig = admission === "blocked" ? undefined : await getAdmissionConfig();
       if (
@@ -436,12 +424,11 @@ export function mergeCodexThreadConfigs(
     if (!config) {
       continue;
     }
-    merged = mergeJsonObjects(merged ?? {}, config);
+    merged = mergeJsonObjects(merged ?? {}, normalizeShellEnvironmentOverrides(config));
   }
   return merged && Object.keys(merged).length > 0 ? merged : undefined;
 }
 
-/** Detects when a stored thread binding no longer matches current plugin policy inputs. */
 export function isCodexPluginThreadBindingStale(params: {
   codexPluginsEnabled: boolean;
   bindingFingerprint?: string;
@@ -526,8 +513,11 @@ function buildEnabledAppConfig(
     enabled: true,
     destructive_enabled: policy.allowDestructiveActions,
     open_world_enabled: policy.allowOpenWorld !== false,
-    default_tools_approval_mode: "auto",
-    ...(policy.destructiveApprovalMode === "ask" ? { approvals_reviewer: "user" } : {}),
+    // Native app/link/tool approval settings merge underneath this patch. Only
+    // explicit ask replaces them, so native prompt and approve modes survive replay.
+    ...(policy.destructiveApprovalMode === "ask"
+      ? { default_tools_approval_mode: "auto", approvals_reviewer: "user" }
+      : {}),
   };
 }
 
@@ -632,18 +622,6 @@ export function buildPluginAppPolicyContext(
   };
 }
 
-function shouldWaitForInitialAppInventory(
-  params: BuildCodexPluginThreadConfigParams,
-  policy: ResolvedCodexPluginsPolicy,
-  inventory: CodexPluginInventory,
-): boolean {
-  // Install/enable first so the initial app snapshot observes newly activated plugin apps.
-  if (inventory.records.some((record) => record.activationRequired)) {
-    return false;
-  }
-  return shouldRefreshMissingAppInventory(params, policy, inventory);
-}
-
 function shouldRefreshMissingAppInventory(
   params: BuildCodexPluginThreadConfigParams,
   policy: ResolvedCodexPluginsPolicy,
@@ -654,14 +632,6 @@ function shouldRefreshMissingAppInventory(
     policy.pluginPolicies.some((plugin) => plugin.enabled) &&
     inventory.appInventory?.state === "missing",
   );
-}
-
-function emptyCodexPluginInventory(policy: ResolvedCodexPluginsPolicy): CodexPluginInventory {
-  return {
-    policy,
-    records: [],
-    diagnostics: [],
-  };
 }
 
 function policyFingerprint(policy: ResolvedCodexPluginsPolicy): JsonValue {
@@ -679,6 +649,25 @@ function policyFingerprint(policy: ResolvedCodexPluginsPolicy): JsonValue {
       destructiveApprovalMode: plugin.destructiveApprovalMode,
     })),
   };
+}
+
+// Native request keys may be dotted. Normalize each policy patch before merging
+// layers so a retained dotted key cannot override the final managed environment.
+function normalizeShellEnvironmentOverrides(config: JsonObject): JsonObject {
+  let normalized = { ...config };
+  for (const [key, value] of Object.entries(config)) {
+    if (!key.startsWith("shell_environment_policy.")) {
+      continue;
+    }
+    delete normalized[key];
+    let patch: JsonValue = value;
+    for (const segment of key.split(".").toReversed()) {
+      patch = { [segment]: patch };
+    }
+    // SAFETY: the nonempty dotted key wraps the value in an object before merging.
+    normalized = mergeJsonObjects(normalized, patch as JsonObject);
+  }
+  return normalized;
 }
 
 function mergeJsonObjects(left: JsonObject, right: JsonObject): JsonObject {

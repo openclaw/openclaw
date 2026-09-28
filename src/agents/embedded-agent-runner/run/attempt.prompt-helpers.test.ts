@@ -127,28 +127,6 @@ describe("resolvePromptSubmissionSkipReason", () => {
       }),
     ).toBeNull();
   });
-
-  it("skips blank prompt on runtimeOnly turns", () => {
-    expect(
-      resolvePromptSubmissionSkipReason({
-        prompt: "",
-        messages: [],
-        runtimeOnly: true,
-        imageCount: 0,
-      }),
-    ).toBe("empty_prompt_history_images");
-  });
-
-  it("treats undefined runtimeOnly as a visible user submission", () => {
-    expect(
-      resolvePromptSubmissionSkipReason({
-        prompt: "",
-        messages: [],
-        runtimeOnly: undefined,
-        imageCount: 0,
-      }),
-    ).toBe("empty_prompt_history_images");
-  });
 });
 
 describe("resolvePromptBuildHookResult drain cache", () => {

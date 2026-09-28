@@ -53,11 +53,43 @@ type RequireReferencePath = {
   scope: {
     getBinding(name: string): { constant: boolean; path: RequireReferencePath } | undefined;
   };
+  key: string | number | null;
+  parentPath: RequireReferencePath | null;
   get(key: "arguments"): RequireReferencePath[];
   get(key: string): RequireReferencePath;
   referencesImport(source: string, name: string): boolean;
   matchesPattern(pattern: string): boolean;
+  replaceWith(node: { type: "Identifier"; name: string }): void;
 };
+
+/** Whether this expression receives a value, directly or through a destructuring pattern. */
+function isAssignmentTarget(target: RequireReferencePath): boolean {
+  let child = target;
+  for (let parent = target.parentPath; parent?.node; parent = parent.parentPath) {
+    switch (parent.node.type) {
+      case "AssignmentExpression":
+      case "AssignmentPattern":
+      case "ForInStatement":
+      case "ForOfStatement":
+        return child.key === "left";
+      case "UpdateExpression":
+        return true;
+      case "ObjectProperty":
+        if (child.key !== "value") {
+          return false;
+        }
+        break;
+      case "ArrayPattern":
+      case "ObjectPattern":
+      case "RestElement":
+        break;
+      default:
+        return false;
+    }
+    child = parent;
+  }
+  return false;
+}
 
 function unwrapReferenceArgument(input: RequireReferencePath | undefined) {
   let argument = input;
@@ -220,6 +252,17 @@ const TRANSFORMED_REFERENCE_NAMES = new Set([
   "__dirname",
 ]);
 
+function* sourceChildren(node: AnyNode): Generator<AnyNode> {
+  for (const value of Object.values(node)) {
+    for (const child of Array.isArray(value) ? value : [value]) {
+      if (child && typeof child === "object" && "type" in child) {
+        // SAFETY: Child fields and arrays come from the same Acorn tree.
+        yield child as AnyNode;
+      }
+    }
+  }
+}
+
 function parseNativePluginJavaScript(source: string, sourceText: string): Program | undefined {
   if (!/\.[cm]?js$/.test(source)) {
     return undefined;
@@ -297,32 +340,12 @@ function parseNativePluginJavaScript(source: string, sourceText: string): Progra
         }
       }
     }
-    for (const value of Object.values(node)) {
-      if (Array.isArray(value)) {
-        for (const child of value) {
-          if (
-            child &&
-            typeof child === "object" &&
-            "type" in child &&
-            needsTransform(
-              // SAFETY: Array children belong to the same Acorn tree.
-              child as AnyNode,
-              exportedDeclaration ||
-                (node.type === "ExportNamedDeclaration" && child === node.declaration),
-            )
-          ) {
-            return true;
-          }
-        }
-      } else if (
-        value &&
-        typeof value === "object" &&
-        "type" in value &&
+    for (const child of sourceChildren(node)) {
+      if (
         needsTransform(
-          // SAFETY: Children belong to the Acorn tree, as in the reference visitor below.
-          value as AnyNode,
+          child,
           exportedDeclaration ||
-            (node.type === "ExportNamedDeclaration" && value === node.declaration),
+            (node.type === "ExportNamedDeclaration" && child === node.declaration),
         )
       ) {
         return true;
@@ -331,6 +354,26 @@ function parseNativePluginJavaScript(source: string, sourceText: string): Progra
     return false;
   };
   return needsTransform(tree) ? undefined : tree;
+}
+
+function parseTransformedPluginSource(source: string, code: string): Program {
+  try {
+    return parse(code, {
+      ecmaVersion: "latest",
+      // Jiti can retain import.meta in its mixed ESM/CommonJS inspection output.
+      allowImportExportEverywhere: true,
+      allowAwaitOutsideFunction: true,
+      allowReturnOutsideFunction: true,
+    });
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) {
+      throw error;
+    }
+    // Name the blocking file; positions refer to the Jiti output, not the authored source.
+    throw new SyntaxError(`${source}: could not parse transformed source: ${error.message}`, {
+      cause: error,
+    });
+  }
 }
 
 /** Visit literal module and explicit asset inputs without evaluating plugin code. */
@@ -353,7 +396,8 @@ export function visitPluginSourceReferences(
   };
   const tree =
     parseNativePluginJavaScript(source, sourceText) ??
-    parse(
+    parseTransformedPluginSource(
+      source,
       resolver.transform({
         source: sourceText,
         filename: source,
@@ -364,10 +408,24 @@ export function visitPluginSourceReferences(
             {
               pre(file: {
                 path: {
-                  traverse(visitor: { CallExpression(call: RequireReferencePath): void }): void;
+                  traverse(visitor: {
+                    CallExpression(call: RequireReferencePath): void;
+                    MemberExpression(member: RequireReferencePath): void;
+                  }): void;
                 };
               }) {
                 file.path.traverse({
+                  MemberExpression(member) {
+                    // Jiti inlines import.meta.url, dirname and filename as strings, also
+                    // where valid code assigns to them. Inspection reads only references,
+                    // so a plain identifier keeps that target parseable.
+                    if (
+                      member.get("object").node?.type === "MetaProperty" &&
+                      isAssignmentTarget(member)
+                    ) {
+                      member.replaceWith({ type: "Identifier", name: "importMetaTarget" });
+                    }
+                  },
                   CallExpression(call) {
                     const args = call.get("arguments");
                     // Jiti replaces this anchor with a string; capture its meaning before rewriting.
@@ -404,13 +462,6 @@ export function visitPluginSourceReferences(
           ],
         },
       }),
-      {
-        ecmaVersion: "latest",
-        // Jiti can retain import.meta in its mixed ESM/CommonJS inspection output.
-        allowImportExportEverywhere: true,
-        allowAwaitOutsideFunction: true,
-        allowReturnOutsideFunction: true,
-      },
     );
   const staticImports = new Set<string>();
   for (const statement of tree.body) {
@@ -470,18 +521,8 @@ export function visitPluginSourceReferences(
         visitDirectoryAsset(name, args.slice(1).map(staticString));
       }
     }
-    for (const value of Object.values(node)) {
-      if (Array.isArray(value)) {
-        for (const child of value) {
-          if (child && typeof child === "object" && "type" in child) {
-            // SAFETY: Array children belong to the same Acorn tree.
-            visit(child as AnyNode);
-          }
-        }
-      } else if (value && typeof value === "object" && "type" in value) {
-        // SAFETY: The tree comes directly from Acorn; typed child fields are Acorn nodes.
-        visit(value as AnyNode);
-      }
+    for (const child of sourceChildren(node)) {
+      visit(child);
     }
   };
   visit(tree);

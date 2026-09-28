@@ -2,10 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayErrorDetailCodes } from "../../packages/gateway-protocol/src/index.js";
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import * as profileReader from "../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { SessionCompanionAskError } from "./session-companion-ask.js";
+import { SessionCompanionAskError } from "./session-companion-errors.js";
 import { sessionCompanionHandlers } from "./session-companion-rpc.js";
 import type { SessionCompanionService } from "./session-companion.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
@@ -86,6 +88,75 @@ describe("session companion RPC", () => {
       expect(() => captured?.assertCurrent()).toThrow("no longer active");
     });
   });
+
+  it.each(["params", "connection"] as const)(
+    "retains the original side chat request while profile preparation waits for %s",
+    async (change) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const client = {
+          ...roleClient("view", `companion-await-${change}`),
+          connId: "original-connection",
+        };
+        const attachment = { mimeType: "image/png", content: "b3JpZ2luYWw=" };
+        const params = {
+          sessionKey: "agent:main:original",
+          question: "Original question",
+          attachments: [attachment],
+        };
+        const entered = createDeferredCore();
+        const resume = createDeferredCore();
+        const originalPrepare = profileReader.prepareUserProfileIdentity;
+        const release = vi.fn();
+        const spy = vi
+          .spyOn(profileReader, "prepareUserProfileIdentity")
+          .mockImplementation(async (...args) => {
+            const prepared = await originalPrepare(...args);
+            release.mockImplementation(prepared.release);
+            prepared.release = release;
+            entered.resolve();
+            await resume.promise;
+            return prepared;
+          });
+        const ask = vi.fn(async () => ({ answer: "Original answer", ts: 1 }));
+        const running = invoke("sessions.companion.ask", params, { ask }, client);
+        try {
+          await entered.promise;
+          if (change === "params") {
+            params.sessionKey = "agent:main:replacement";
+            params.question = "Replacement question";
+            attachment.content = "cmVwbGFjZW1lbnQ=";
+          } else {
+            client.connId = "replacement-connection";
+          }
+          resume.resolve();
+          const respond = await running;
+          if (change === "params") {
+            expect(ask).toHaveBeenCalledExactlyOnceWith(
+              expect.objectContaining({
+                sessionKey: "agent:main:original",
+                question: "Original question",
+                connId: "original-connection",
+                attachments: [{ mimeType: "image/png", content: "b3JpZ2luYWw=" }],
+              }),
+            );
+            expect(respond).toHaveBeenCalledWith(true, { answer: "Original answer", ts: 1 });
+          } else {
+            expect(ask).not.toHaveBeenCalled();
+            expect(respond).toHaveBeenCalledWith(
+              false,
+              undefined,
+              expect.objectContaining({ code: "UNAVAILABLE" }),
+            );
+          }
+          expect(release).toHaveBeenCalledOnce();
+        } finally {
+          resume.resolve();
+          await running;
+          spy.mockRestore();
+        }
+      });
+    },
+  );
 
   it("dispatches a valid ask and returns its timestamp", async () => {
     const ask = vi.fn(async () => ({ answer: "It is checking the fix.", ts: 123 }));

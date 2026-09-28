@@ -25,23 +25,23 @@ export async function listMSTeamsDirectoryPeersLive(params: {
 
   const users = await searchGraphUsers({ token, query, top: limit });
 
-  return users
-    .map((user) => {
-      const id = user.id?.trim();
-      if (!id) {
-        return null;
-      }
-      const name = user.displayName?.trim();
-      const handle = user.userPrincipalName?.trim() || user.mail?.trim();
-      return {
+  return users.flatMap((user): ChannelDirectoryEntry[] => {
+    const id = user.id?.trim();
+    if (!id) {
+      return [];
+    }
+    const name = user.displayName?.trim();
+    const handle = user.userPrincipalName?.trim() || user.mail?.trim();
+    return [
+      {
         kind: "user",
         id: `user:${id}`,
         name: name || undefined,
         handle: handle ? `@${handle}` : undefined,
         raw: user,
-      } satisfies ChannelDirectoryEntry;
-    })
-    .filter(Boolean) as ChannelDirectoryEntry[];
+      },
+    ];
+  });
 }
 
 export async function listMSTeamsDirectoryGroupsLive(params: {

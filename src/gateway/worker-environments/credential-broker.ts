@@ -2,11 +2,8 @@ import {
   type WorkerAdmissionHandshake,
   WORKER_RPC_SET_VERSION,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import {
-  StaleWorkerBuildError,
-  verifyWorkerAdmissionHandshake,
-  type ExpectedWorkerBuild,
-} from "./admission.js";
+import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
+import { StaleWorkerBuildError, type ExpectedWorkerBuild } from "./admission.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import {
   createWorkerCredentialMaterial,
@@ -40,7 +37,7 @@ type WorkerCredentialBrokerOptions = {
   placementStore?: WorkerSessionPlacementGate;
   now: () => number;
   isStopping: () => boolean;
-  cancelInferenceEnvironment: (environmentId: string) => void;
+  cancelInferenceEnvironment: (environmentId: string) => Promise<void>;
   inState: (record: WorkerEnvironmentRecord, ...states: WorkerEnvironmentState[]) => boolean;
   move: (
     record: WorkerEnvironmentRecord,
@@ -56,7 +53,6 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
   const { store } = options;
   const tunnels = options.tunnelManager;
   const now = options.now;
-  const inference = { cancelEnvironment: options.cancelInferenceEnvironment };
   const inState = options.inState;
   const move = options.move;
   const serviceError = options.serviceError;
@@ -77,6 +73,15 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
 
   const credentialMaterial = (claim?: WorkerSessionTurnClaim) =>
     createWorkerCredentialMaterial(options.generateWorkerCredential, claim);
+
+  const validateTurnClaim = (claim: WorkerSessionTurnClaim): boolean =>
+    claim.owner.kind === "worker" && options.placementStore?.validateWorkerTurn(claim) === true;
+
+  const assertTurnClaim = (claim: WorkerSessionTurnClaim) => {
+    if (!validateTurnClaim(claim)) {
+      throw serviceError("invalid_state", "Worker turn credential claim is not authoritative");
+    }
+  };
 
   const grantFrom = (params: {
     credential: string;
@@ -106,7 +111,7 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
   ): Promise<{ credentialHash: string; grant: MintedWorkerCredential }> => {
     const previous = store.getCredential(request.environmentId);
     if (previous) {
-      inference.cancelEnvironment(request.environmentId);
+      await options.cancelInferenceEnvironment(request.environmentId);
     }
     const material = credentialMaterial(claim);
     const credential = {
@@ -116,18 +121,7 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
       sessionId: request.sessionId,
       rpcSetVersion: WORKER_RPC_SET_VERSION,
       expiresAtMs: credentialExpiry(),
-      ...(claim
-        ? {
-            assertCurrent: () => {
-              if (!validateTurnClaim(claim)) {
-                throw serviceError(
-                  "invalid_state",
-                  "Worker turn credential claim is not authoritative",
-                );
-              }
-            },
-          }
-        : {}),
+      ...(claim ? { assertCurrent: () => assertTurnClaim(claim) } : {}),
     };
     const record = await store.renewCredential(credential);
     credential.assertCurrent?.();
@@ -237,14 +231,12 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
       placementBinding?: PreparedEnvironmentPlacementBinding;
     },
   ): Promise<MintedWorkerCredential> => {
-    let stopping = options.isStopping();
-    if (stopping) {
+    if (options.isStopping()) {
       throw serviceError("invalid_state", "Worker environment service is stopping");
     }
     return withLock(request.environmentId, async () => {
       await store.ready();
-      stopping = options.isStopping();
-      if (stopping) {
+      if (options.isStopping()) {
         throw serviceError("invalid_state", "Worker environment service is stopping");
       }
       const current = store.get(request.environmentId);
@@ -263,10 +255,7 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
       } catch {
         throw serviceError("invalid_state", "Current worker build identity is unavailable");
       }
-      if (
-        !current.bootstrapReceipt ||
-        !verifyWorkerAdmissionHandshake(current.bootstrapReceipt, currentBuild)
-      ) {
+      if (!current.bootstrapReceipt || !sameWorkerBuild(current.bootstrapReceipt, currentBuild)) {
         throw new StaleWorkerBuildError();
       }
       const material = credentialMaterial();
@@ -308,8 +297,7 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
     binding: WorkerCredentialBinding,
     claim?: WorkerSessionTurnClaim,
   ) => {
-    const stopping = options.isStopping();
-    if (stopping) {
+    if (options.isStopping()) {
       return undefined;
     }
     const grant = pendingCredentials.get(binding.environmentId);
@@ -353,9 +341,6 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
       sessionId: claim.sessionId,
     };
   };
-
-  const validateTurnClaim = (claim: WorkerSessionTurnClaim): boolean =>
-    claim.owner.kind === "worker" && options.placementStore?.validateWorkerTurn(claim) === true;
 
   const acquireTurnCredential = (claim: WorkerSessionTurnClaim) => {
     const binding = bindingForClaim(claim);
@@ -416,18 +401,7 @@ export function createWorkerCredentialBroker(options: WorkerCredentialBrokerOpti
       sessionId: grant.sessionId,
       credentialHash: pending.credentialHash,
       deliveredAtMs: pending.checkedAtMs,
-      ...(grant.turnClaim
-        ? {
-            assertCurrent: () => {
-              if (!validateTurnClaim(grant.turnClaim!)) {
-                throw serviceError(
-                  "invalid_state",
-                  "Worker turn credential claim is not authoritative",
-                );
-              }
-            },
-          }
-        : {}),
+      ...(grant.turnClaim ? { assertCurrent: () => assertTurnClaim(grant.turnClaim!) } : {}),
     });
     if (pendingCredentials.get(grant.environmentId)?.deliveryId === grant.deliveryId) {
       pendingCredentials.delete(grant.environmentId);

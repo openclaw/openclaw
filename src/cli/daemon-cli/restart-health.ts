@@ -92,6 +92,7 @@ type GatewayRestartWaitOptions = {
   attempts?: number;
   delayMs?: number;
   timeoutMs?: number;
+  probeTimeoutMs?: number;
   /** Absolute performance.now() deadline supplied by a longer diagnostic operation. */
   deadlineMs?: number;
   deadline?: GatewayRestartDeadline;
@@ -111,6 +112,7 @@ type GatewayRestartWaitOptions = {
   probeHosts?: readonly string[];
   probeContext?: GatewayRestartProbeContext;
   onProgress?: (phase: string) => void;
+  onObservation?: (snapshot: GatewayRestartSnapshot) => void;
   signal?: AbortSignal;
 };
 
@@ -163,12 +165,16 @@ export async function waitForGatewayHealthyRestart(
   // A longer update budget must not make an old heartbeat count as fresh progress.
   const progressWindowMs = attempts * delayMs;
   const standardDeadlineMs = timeoutMs ?? progressWindowMs;
-  const probeTimeoutMs = () =>
-    params.deadline
+  const probeTimeoutMs = () => {
+    const remaining = params.deadline
       ? Math.max(1, params.deadline.remainingMs())
       : timeoutMs === undefined
         ? undefined
         : Math.max(1, timeoutMs + settleDurationMs - (performance.now() - startedAtMs));
+    return params.probeTimeoutMs === undefined
+      ? remaining
+      : Math.min(params.probeTimeoutMs, remaining ?? Infinity);
+  };
   const updateInProgress = (params.env ?? process.env).OPENCLAW_UPDATE_IN_PROGRESS === "1";
 
   let snapshot: GatewayRestartSnapshot = {
@@ -310,6 +316,7 @@ export async function waitForGatewayHealthyRestart(
             : snapshot.portUsage.status === "free"
               ? "waiting for Gateway listener"
               : "waiting for Gateway health and identity");
+      params.onObservation?.(snapshot);
       if (boundedDeadlineMs !== undefined && elapsedMs > boundedDeadlineMs + settleDurationMs) {
         return withWaitContext(
           { ...snapshot, healthy: false },

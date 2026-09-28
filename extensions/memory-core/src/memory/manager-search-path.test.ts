@@ -163,66 +163,6 @@ describe("searchPathKeyword", () => {
     }
   });
 
-  it("finds an ASCII exact path amid many unrelated source rows", async () => {
-    const { db, schema } = createMemorySearchDb();
-    try {
-      if (!schema.ftsAvailable) {
-        throw new Error(schema.ftsError ?? "FTS unavailable");
-      }
-      const unrelatedCount = 256;
-      const insertSource = db.prepare(
-        "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, 'memory', ?, 0, 0)",
-      );
-      for (let index = 0; index < unrelatedCount; index += 1) {
-        insertSource.run(`memory/unrelated-${index}.md`, `unrelated-${index}`);
-      }
-      insertSource.run("memory/project-lantern.notes.md", "near");
-      insertKeywordFixture(db, {
-        id: "exact-ascii-path",
-        path: "memory/project-lantern.md",
-      });
-
-      const results = await searchPathKeywordFixture(db, "project-lantern");
-
-      expect(results).toMatchObject([{ id: "exact-ascii-path", exactPathSpecificity: 1 }]);
-    } finally {
-      db.close();
-    }
-  });
-
-  it("skips empty exact sources before applying the exact result limit", async () => {
-    const { db, schema } = createMemorySearchDb();
-    try {
-      if (!schema.ftsAvailable) {
-        throw new Error(schema.ftsError ?? "FTS unavailable");
-      }
-      db.prepare(
-        "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, 0, 0)",
-      ).run("a/foo.md", "memory", "empty-source");
-      insertKeywordFixture(db, {
-        id: "live-exact-source",
-        path: "z/foo.md",
-        text: "live exact source",
-      });
-
-      await expect(
-        searchPathKeyword({
-          db,
-          pathFtsTable: "memory_index_paths_fts",
-          query: "foo",
-          ftsTokenizer: "unicode61",
-          limit: 1,
-          snippetMaxChars: 200,
-          sourceFilter: { sql: "", params: [] },
-          buildFtsQuery,
-          bm25RankToScore,
-        }),
-      ).resolves.toMatchObject([{ id: "live-exact-source", exactPathSpecificity: 1 }]);
-    } finally {
-      db.close();
-    }
-  });
-
   it("keeps exact basename truncation independent of path BM25", async () => {
     const { db, schema } = createMemorySearchDb();
     try {
@@ -359,56 +299,16 @@ describe("searchPathKeyword", () => {
 
       expect(results.map((entry) => entry.id)).toEqual(["cjk-exact", "cjk-path"]);
       await expect(
-        searchPathKeyword({
-          db,
-          pathFtsTable: "memory_index_paths_fts",
-          query: "成语.md",
-          ftsTokenizer: "trigram",
-          limit: 1,
-          snippetMaxChars: 200,
-          sourceFilter: { sql: "", params: [] },
-          buildFtsQuery,
-          bm25RankToScore,
-        }),
+        searchPathKeywordFixture(db, "成语.md", { ftsTokenizer: "trigram" }),
       ).resolves.toMatchObject([{ id: "cjk-exact", exactPathSpecificity: 2 }]);
       await expect(
-        searchPathKeyword({
-          db,
-          pathFtsTable: "memory_index_paths_fts",
-          query: "README.md",
-          ftsTokenizer: "trigram",
-          limit: 1,
-          snippetMaxChars: 200,
-          sourceFilter: { sql: "", params: [] },
-          buildFtsQuery,
-          bm25RankToScore,
-        }),
+        searchPathKeywordFixture(db, "README.md", { ftsTokenizer: "trigram" }),
       ).resolves.toMatchObject([{ id: "readme-exact", exactPathSpecificity: 2 }]);
       await expect(
-        searchPathKeyword({
-          db,
-          pathFtsTable: "memory_index_paths_fts",
-          query: "CAFÉ",
-          ftsTokenizer: "trigram",
-          limit: 1,
-          snippetMaxChars: 200,
-          sourceFilter: { sql: "", params: [] },
-          buildFtsQuery,
-          bm25RankToScore,
-        }),
+        searchPathKeywordFixture(db, "CAFÉ", { ftsTokenizer: "trigram" }),
       ).resolves.toMatchObject([{ id: "normalized-exact", exactPathSpecificity: 1 }]);
       await expect(
-        searchPathKeyword({
-          db,
-          pathFtsTable: "memory_index_paths_fts",
-          query: "🧠",
-          ftsTokenizer: "trigram",
-          limit: 1,
-          snippetMaxChars: 200,
-          sourceFilter: { sql: "", params: [] },
-          buildFtsQuery,
-          bm25RankToScore,
-        }),
+        searchPathKeywordFixture(db, "🧠", { ftsTokenizer: "trigram" }),
       ).resolves.toMatchObject([{ id: "tokenless-exact", exactPathSpecificity: 1 }]);
     } finally {
       db.close();

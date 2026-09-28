@@ -1,7 +1,6 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { composeTranscriptDisplay } from "../../../../src/chat/transcript-display-position.js";
-import { readAssistantTextBlocksForPhase } from "../../../../src/shared/chat-message-content.js";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import {
   type ChatGuardianNotice,
@@ -61,7 +60,6 @@ import {
   transcriptPositionTimestamp,
   type TurnInsertionBounds,
 } from "./chat-thread-items.ts";
-import { latestWorkingPreamble } from "./chat-thread-preamble.ts";
 import {
   applyPersistedToolInvocationBounds,
   findCurrentTurnBounds,
@@ -71,6 +69,7 @@ import {
   optionalBoundaryIdentity,
   optionalRunIdentity,
   resolveRunInsertionBounds,
+  transcriptRunId,
 } from "./chat-thread-run-identity.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
@@ -128,11 +127,31 @@ export function buildChatItems(
       preview: extractChatMessagePreview(item.message),
     };
   });
+  const queuedSends = props.queue ?? [];
+  const segments = props.streamSegments;
+  let progress: ReturnType<typeof resolveWorkingProgress> | null = null;
+  const resolveProgress = () =>
+    (progress ??= resolveWorkingProgress(
+      props.sessionKey,
+      props.runId ?? null,
+      props.streamStartedAt,
+      queuedSends,
+      segments,
+      tools,
+    ));
+  // Retention and live status share the same explicit or inferred run ownership.
+  const activeCommentaryRunId =
+    props.persistCommentary === false && (props.runWorking || props.runActive)
+      ? normalizeOptionalString(resolveProgress().runId)
+      : undefined;
   const history = composeTranscriptDisplay(
     props.messages.filter(
       (message) =>
         !isAssistantHeartbeatAckForDisplay(message) &&
-        (props.persistCommentary !== false || !isKeyedAssistantStreamFallbackMessage(message)),
+        (props.persistCommentary !== false ||
+          !isKeyedAssistantStreamFallbackMessage(message) ||
+          (activeCommentaryRunId !== undefined &&
+            transcriptRunId(message) === activeCommentaryRunId)),
     ),
   );
   const searchFiltering = props.searchOpen === true && Boolean(props.searchQuery?.trim());
@@ -269,23 +288,8 @@ export function buildChatItems(
       continue;
     }
 
-    const projected = projectChatSystemNotice(item, normalized);
-    if (projected) {
-      items.push(projected);
-    }
+    items.push(...projectChatSystemNotice(item, normalized));
   }
-  const queuedSends = props.queue ?? [];
-  const segments = props.streamSegments;
-  let progress: ReturnType<typeof resolveWorkingProgress> | null = null;
-  const resolveProgress = () =>
-    (progress ??= resolveWorkingProgress(
-      props.sessionKey,
-      props.runId ?? null,
-      props.streamStartedAt,
-      queuedSends,
-      segments,
-      tools,
-    ));
   const currentRunId =
     props.runId ??
     (props.stream !== null || queuedSends.some(shouldRenderQueuedSendInThread)
@@ -616,36 +620,10 @@ export function buildChatItems(
   if (showWorkingIndicator) {
     const workingProgress = resolveProgress();
     const workingRunId = props.runId ?? workingProgress.runId;
-    const preamble = latestWorkingPreamble(props, workingRunId);
-    if (preamble) {
-      // Move only this live presentation into the status row. The canonical
-      // messages remain intact for history, reconnect, and terminal settlement.
-      items = items.flatMap((item): ChatItem[] => {
-        if (item.kind === "message" && item.message === preamble.message) {
-          const message = asRecord(item.message)!;
-          const commentary = new Set(readAssistantTextBlocksForPhase(message, "commentary"));
-          const content = Array.isArray(message.content)
-            ? message.content.filter((block) => !commentary.has(block))
-            : [];
-          // Mixed envelopes can carry answers or tool calls beside commentary.
-          // Project those blocks unchanged instead of hiding the whole message.
-          return commentary.size && content.length
-            ? [{ ...item, message: { ...message, content, phase: undefined } }]
-            : [];
-        }
-        return item.kind === "stream" &&
-          item.runId === workingRunId &&
-          preamble.itemId &&
-          item.key === `stream-seg:${props.sessionKey}:${preamble.itemId}`
-          ? []
-          : [item];
-      });
-    }
     appendActiveRunItem({
       kind: "reading-indicator",
       key: workingProgress.key,
       startedAt: workingProgress.startedAt,
-      ...(preamble ? { preamble: preamble.text } : {}),
       ...optionalRunIdentity(workingRunId),
       ...optionalBoundaryIdentity(activeBoundaryRunId ?? workingRunId),
     });

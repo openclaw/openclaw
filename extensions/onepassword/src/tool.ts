@@ -99,10 +99,7 @@ export function createOnePasswordTool(
       "List curated 1Password secret slugs or retrieve one secret under its configured access policy.",
     parameters: OnePasswordToolSchema,
     execute: async (toolCallId, rawParams) => {
-      const params =
-        rawParams && typeof rawParams === "object" && !Array.isArray(rawParams)
-          ? (rawParams as Record<string, unknown>)
-          : {};
+      const params = asNonArrayRecord(rawParams);
       try {
         const input = parseToolInput(params);
         if (input.action === "list") {

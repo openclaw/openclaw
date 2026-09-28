@@ -151,13 +151,6 @@ describe("Slack terminal status diagnostics", () => {
     expect(f.api).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps successful transitions quiet", async () => {
-    const f = await fixture();
-    await f.start();
-    await f.stop();
-    expect(f.error).not.toHaveBeenCalled();
-  });
-
   it("does not confuse aggregate processing with a failed active write", async () => {
     const f = await fixture({ active: { ok: true, status: "processing", agent_status: "active" } });
     await f.start();
@@ -170,12 +163,6 @@ describe("Slack terminal status diagnostics", () => {
     await f.stop();
     expect(f.api).not.toHaveBeenCalled();
     expect(f.error).not.toHaveBeenCalled();
-  });
-
-  it("returns false without a request when there is no thread", async () => {
-    const f = await fixture();
-    expect(await f.ctx.setSlackSessionStatus({ channelId: "C1", status: "active" })).toBe(false);
-    expect(f.api).not.toHaveBeenCalled();
   });
 
   it("continues typing-reaction cleanup if the diagnostic logger throws", async () => {

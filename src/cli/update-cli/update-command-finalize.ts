@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
   assertConfigWriteAllowedInCurrentMode,
@@ -37,9 +36,9 @@ import { formatCliCommand } from "../command-format.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { retainCliProcessJobUntilExit } from "../runtime-cleanup-scope.js";
 import {
-  parseTimeoutMsOrExit,
   parseUpdateTimeoutMs,
   readPackageVersion,
+  resolveNodeRunner,
   resolveUpdateRoot,
   tryWriteCompletionCache,
   type UpdateFinalizeOptions,
@@ -47,6 +46,7 @@ import {
 import { suppressDeprecations } from "./suppress-deprecations.js";
 import { createUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import {
+  capturePreUpdateSourceConfig,
   persistRequestedUpdateChannel,
   preparePostCorePluginConfig,
   persistValidatedDowngradeConfig,
@@ -57,6 +57,7 @@ import {
   runUpdateFinalizationDoctorInFreshProcess,
   withPrePluginUpdateDoctorEnv,
 } from "./update-command-fresh-doctor.js";
+import { settleUpdateDoctorMaintenance } from "./update-command-maintenance.js";
 import {
   collectPostCorePluginAdvisories,
   collectPostCorePluginFailureFacts,
@@ -85,10 +86,7 @@ export async function updateFinalizeCommand(
 ): Promise<void> {
   const invocationCwd = tryProcessCwd();
   suppressDeprecations();
-  const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
-  if (timeoutMs === null) {
-    return;
-  }
+  const timeoutMs = parseUpdateTimeoutMs(opts.timeout);
   const requestedChannel = normalizeUpdateChannel(opts.channel);
   if (opts.channel !== undefined && !requestedChannel) {
     defaultRuntime.error(
@@ -140,8 +138,11 @@ export async function updateFinalizeCommand(
         recoveryRunIds === undefined ? "finalize" : "unknown",
       );
       lifecycle.root = root;
+      // A custom Bun executable may not be named "bun".
+      const nodeRunner = process.versions.bun ? process.execPath : resolveNodeRunner();
       const target: UpdateTriageTarget = {
         root,
+        nodeRunner,
         env: {
           ...resolveServiceRefreshEnv(process.env, invocationCwd),
           [UPDATE_RUN_ID_ENV]: runId,
@@ -159,7 +160,7 @@ export async function updateFinalizeCommand(
                 );
                 return await updateFinalizeCommandInternal(
                   opts,
-                  prepared,
+                  { ...prepared, nodeRunner },
                   lifecycle,
                   recoveryRunIds ?? [],
                   runId,
@@ -244,15 +245,7 @@ async function prepareUpdateFinalization(
     (await readPostCorePreUpdateSourceConfig({
       sourceConfigPath: process.env[POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV],
       currentSnapshot: configSnapshot,
-    })) ??
-    (configSnapshot.valid
-      ? {
-          sourceConfig: configSnapshot.sourceConfig,
-          authoredConfig: isRecord(configSnapshot.parsed)
-            ? (configSnapshot.parsed as OpenClawConfig) // SAFETY: snapshot parser validated this config record.
-            : configSnapshot.sourceConfig,
-        }
-      : undefined);
+    })) ?? capturePreUpdateSourceConfig(configSnapshot);
   if (requestedChannel === "extended-stable" && installKind === "git") {
     await reportPreMutationUpdateResult({
       root,
@@ -297,14 +290,21 @@ async function prepareUpdateFinalization(
 
 async function updateFinalizeCommandInternal(
   opts: UpdateFinalizeOptions,
-  prepared: Awaited<ReturnType<typeof prepareUpdateFinalization>>,
+  prepared: Awaited<ReturnType<typeof prepareUpdateFinalization>> & { nodeRunner: string },
   lifecycle: UpdateFinalizationLifecycle,
   recoveryRunIds: readonly string[],
   invokingRunId: string,
   ownsMaintenance: boolean,
 ): Promise<() => Promise<void>> {
-  const { root, preFinalizeConfig, requestedChannel, storedChannel, effectiveChannel, channel } =
-    prepared;
+  const {
+    root,
+    nodeRunner,
+    preFinalizeConfig,
+    requestedChannel,
+    storedChannel,
+    effectiveChannel,
+    channel,
+  } = prepared;
   let { configSnapshot } = prepared;
   let doctorWarnings: string[] = [];
   const onDoctorWarnings = (warnings: string[]) => {
@@ -321,6 +321,9 @@ async function updateFinalizeCommandInternal(
     const owned = maintenance;
     maintenance = undefined;
     await owned?.finish(cfg);
+    if (owned?.warnings?.length) {
+      onDoctorWarnings(owned.warnings);
+    }
   };
   let outcome: { complete: () => Promise<void> } | { error: unknown };
   try {
@@ -339,6 +342,7 @@ async function updateFinalizeCommandInternal(
           runUpdateFinalizationDoctorInFreshProcess({
             phase: "pre-plugin",
             root,
+            nodeRunner,
             runId: invokingRunId,
             yes: opts.yes === true,
             json: opts.json === true,
@@ -408,6 +412,7 @@ async function updateFinalizeCommandInternal(
       async (phase) => {
         const result = await completePostCorePluginUpdate({
           root,
+          nodeRunner,
           runId: invokingRunId,
           pluginUpdate: initialPluginUpdate,
           freshDoctorRequired: initialPluginUpdate.changed,
@@ -433,7 +438,7 @@ async function updateFinalizeCommandInternal(
       async () =>
         opts.deferCompletionCache
           ? ("deferred" as const)
-          : await tryWriteCompletionCache(root, Boolean(opts.json), completionTimeout),
+          : await tryWriteCompletionCache(root, Boolean(opts.json), completionTimeout, nodeRunner),
       (result) => result,
     );
 
@@ -518,36 +523,17 @@ async function updateFinalizeCommandInternal(
   } catch (error) {
     outcome = { error };
   }
-  if (maintenance && !("error" in outcome && hasCommandProcessCleanupError(outcome.error))) {
+  if (maintenance) {
     const owned = maintenance;
-    const failures = "error" in outcome ? [outcome.error] : [];
-    for (const restore of [
+    outcome = await settleUpdateDoctorMaintenance(
+      outcome,
       async () =>
         restoreMaintenance(
           (await readConfigFileSnapshot({ skipPluginValidation: true, observe: false })).config,
         ),
       () => owned.release(),
-    ]) {
-      if (failures.some(hasCommandProcessCleanupError)) {
-        break;
-      }
-      try {
-        await withCommandProcessScope(restore);
-      } catch (error) {
-        if (!failures.includes(error)) {
-          failures.push(error);
-        }
-      }
-    }
-    if (failures.length === 1) {
-      outcome = { error: failures[0] };
-    } else if (failures.length > 1) {
-      outcome = {
-        error: new AggregateError(failures, "Update finalization and service restoration failed", {
-          cause: failures[0],
-        }),
-      };
-    }
+      "Update finalization and service restoration failed",
+    );
   }
   if ("error" in outcome) {
     throw outcome.error;

@@ -1,7 +1,6 @@
 /**
  * Prepares Google prompt-cache payloads for embedded-agent stream calls.
  */
-import crypto from "node:crypto";
 import {
   sortPromptCacheToolsByName,
   splitSystemPromptCacheBoundary,
@@ -9,6 +8,7 @@ import {
 } from "@openclaw/ai/internal/shared";
 import { mergeTransportHeaders, sanitizeTransportPayloadText } from "@openclaw/ai/transports";
 import { stableStringify } from "@openclaw/normalization-core";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import {
   asDateTimestampMs,
   isFutureDateTimestampMs,
@@ -97,20 +97,6 @@ type GooglePromptCacheDeps = {
   now?: () => number;
 };
 
-function resolveGooglePromptCacheTtl(cacheRetention: CacheRetention): string {
-  return cacheRetention === "long" ? "3600s" : "300s";
-}
-
-function resolveGooglePromptCacheRefreshWindowMs(cacheRetention: CacheRetention): number {
-  return cacheRetention === "long"
-    ? GOOGLE_PROMPT_CACHE_LONG_REFRESH_WINDOW_MS
-    : GOOGLE_PROMPT_CACHE_SHORT_REFRESH_WINDOW_MS;
-}
-
-function digestSystemPrompt(systemPrompt: string): string {
-  return crypto.createHash("sha256").update(systemPrompt).digest("hex");
-}
-
 function resolveExplicitCachedContent(
   extraParams: Record<string, unknown> | undefined,
 ): string | undefined {
@@ -122,17 +108,6 @@ function resolveExplicitCachedContent(
         : undefined;
   const trimmed = raw?.trim();
   return trimmed ? trimmed : undefined;
-}
-
-function buildGooglePromptCacheMatchKey(params: {
-  provider: string;
-  modelId: string;
-  modelApi?: string | null;
-  baseUrl: string;
-  systemPromptDigest: string;
-  cacheConfigDigest?: string;
-}) {
-  return stableStringify(params);
 }
 
 function stringifyGooglePromptCacheKeyPart(value: unknown): string {
@@ -161,7 +136,7 @@ function readLatestGooglePromptCacheEntry(
         continue;
       }
       const cacheData = data as Record<string, unknown>;
-      const candidateKey = buildGooglePromptCacheMatchKey({
+      const candidateKey = stableStringify({
         provider: stringifyGooglePromptCacheKeyPart(cacheData.provider),
         modelId: stringifyGooglePromptCacheKeyPart(cacheData.modelId),
         modelApi:
@@ -291,28 +266,19 @@ function resolveGooglePromptCacheAuthHeaders(params: {
   apiKey: string;
   provider: string;
 }): Record<string, string> {
-  if (!looksLikeSecretSentinel(params.apiKey)) {
-    const headers = parseGeminiAuth(params.apiKey).headers;
-    if (!isSecretValueRegisteredForRedaction(params.apiKey)) {
-      return headers;
-    }
-    return Object.fromEntries(
-      Object.entries(headers).map(([name, value]) => [
-        name,
-        name.toLowerCase() === "authorization" || name.toLowerCase() === "x-goog-api-key"
-          ? mintSecretSentinel(value, { label: `model-auth:${params.provider}` })
-          : value,
-      ]),
-    );
-  }
-  const resolved = resolveSecretSentinel(params.apiKey);
-  if (resolved === undefined) {
+  const sentinel = looksLikeSecretSentinel(params.apiKey);
+  const apiKey = sentinel ? resolveSecretSentinel(params.apiKey) : params.apiKey;
+  if (apiKey === undefined) {
     throw new Error(
       `Secret sentinel ${params.apiKey} is not registered in this process; refusing Google prompt-cache auth`,
     );
   }
+  const headers = parseGeminiAuth(apiKey).headers;
+  if (!sentinel && !isSecretValueRegisteredForRedaction(params.apiKey)) {
+    return headers;
+  }
   return Object.fromEntries(
-    Object.entries(parseGeminiAuth(resolved).headers).map(([name, value]) => {
+    Object.entries(headers).map(([name, value]) => {
       const isCredentialHeader =
         name.toLowerCase() === "authorization" || name.toLowerCase() === "x-goog-api-key";
       return [
@@ -374,12 +340,13 @@ async function requestGooglePromptCache(
     ? `${params.baseUrl}/${params.cachedContent}?updateMask=ttl`
     : `${params.baseUrl}/cachedContents`;
   const headers = buildGooglePromptCacheHeaders(params);
+  const ttl = params.cacheRetention === "long" ? "3600s" : "300s";
   const body = JSON.stringify(
     refreshing
-      ? { ttl: resolveGooglePromptCacheTtl(params.cacheRetention) }
+      ? { ttl }
       : {
           model: params.modelId.startsWith("models/") ? params.modelId : `models/${params.modelId}`,
-          ttl: resolveGooglePromptCacheTtl(params.cacheRetention),
+          ttl,
           systemInstruction: { parts: [{ text: params.systemPrompt }] },
           ...(params.tools ? { tools: params.tools } : {}),
           ...(params.toolConfig ? { toolConfig: params.toolConfig } : {}),
@@ -440,8 +407,8 @@ async function ensureGooglePromptCache(
   if (now === undefined) {
     return null;
   }
-  const systemPromptDigest = digestSystemPrompt(params.systemPrompt);
-  const matchKey = buildGooglePromptCacheMatchKey({
+  const systemPromptDigest = sha256Hex(params.systemPrompt);
+  const matchKey = stableStringify({
     provider: params.provider,
     modelId: params.model.id,
     modelApi: params.model.api,
@@ -479,7 +446,10 @@ async function ensureGooglePromptCache(
     now,
     signal: params.signal,
   };
-  const refreshWindowMs = resolveGooglePromptCacheRefreshWindowMs(params.cacheRetention);
+  const refreshWindowMs =
+    params.cacheRetention === "long"
+      ? GOOGLE_PROMPT_CACHE_LONG_REFRESH_WINDOW_MS
+      : GOOGLE_PROMPT_CACHE_SHORT_REFRESH_WINDOW_MS;
   const cachedContent =
     latestEntry?.status === "ready" ? readGooglePromptCacheName(latestEntry.cachedContent) : null;
   if (latestEntry?.status === "ready" && cachedContent) {
@@ -500,7 +470,6 @@ async function ensureGooglePromptCache(
           cachedContent,
           expireTime: refreshed.expireTime,
         });
-        return cachedContent;
       }
       return cachedContent;
     }

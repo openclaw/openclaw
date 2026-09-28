@@ -1,4 +1,8 @@
+import { StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import * as acpReads from "../../acp/runtime/session-meta-readonly.js";
+import { notifyPreparedModelRuntimePublication } from "../../agents/prepared-model-runtime.publication-events.js";
 import {
   createConfigResolutionFacts,
   setConfigResolutionFacts,
@@ -7,10 +11,14 @@ import {
   getRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  replaceSessionEntrySync,
+} from "../../config/sessions/session-accessor.js";
 import * as history from "../../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { OperatorScope } from "../operator-scopes.js";
 import { retainSessionListForegroundWork } from "../session-projection-work.js";
@@ -24,6 +32,144 @@ import {
 } from "./sessions-read-cache.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("reuses committed row facts when a changed model catalog updates session lists", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", default: true }],
+        defaults: { utilityModel: "unit-test/small" },
+      },
+      plugins: { enabled: false },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    const scopes = ["first", "second"].map((name) => ({
+      agentId: "main",
+      sessionKey: `agent:main:catalog-${name}`,
+    }));
+    for (const scope of scopes) {
+      replaceSessionEntrySync(scope, {
+        sessionId: scope.sessionKey,
+        updatedAt: 1,
+        visibility: "shared",
+        providerOverride: "unit-test",
+        modelOverride: "fixture",
+        activitySummary: {
+          version: 1,
+          formatRevision: 2,
+          text: "Ready",
+          updatedAt: 1,
+          sessionId: scope.sessionKey,
+          generation: null,
+          maxSeq: null,
+          leafEntryId: null,
+          coveredMessages: 0,
+          totalMessages: 0,
+          omittedContent: false,
+        },
+      });
+    }
+    let catalog = [{ id: "fixture", name: "Fixture", provider: "unit-test", contextTokens: 8192 }];
+    const release = retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({
+      cfg,
+      getModelCatalog: async () => catalog,
+    });
+    const context = bindSessionRowProjection(requestContext(cfg), () => projection);
+    const client = identifiedClient("viewer");
+    const list = () => listSessions({ context, client, request: { includeActivitySummary: true } });
+    try {
+      expect((await list()).sessions.map((row) => row.contextTokens)).toEqual([8192, 8192]);
+      const reads: string[] = [];
+      const readDatabases = history.withSessionHistoryWorkerDatabases;
+      vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
+        (targets, consume) =>
+          readDatabases(targets, (owners) =>
+            consume(
+              owners.map((owner) => ({
+                ...owner,
+                readRowFacts(input) {
+                  reads.push(...input.sessionKeys);
+                  return owner.readRowFacts(input);
+                },
+              })),
+            ),
+          ),
+      );
+      const acp = vi.spyOn(acpReads, "readAcpSessionMetaForEntries");
+      const hostReads = observeSqliteReadSql(StatementSync.prototype);
+      try {
+        catalog = [{ ...catalog[0]!, contextTokens: 16384 }];
+        notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
+        const result = await list();
+        expect(result.sessions).toHaveLength(2);
+        for (const row of result.sessions) {
+          expect(row).toMatchObject({
+            contextTokens: 16384,
+            activitySummary: { text: "Ready", state: "current" },
+          });
+        }
+        expect(reads).toEqual([]);
+        expect(acp).not.toHaveBeenCalled();
+        expect(
+          hostReads.queries.filter((sql) =>
+            /session_nodes|board_tabs|transcript_rewrite_watermarks|acp_sessions/.test(sql),
+          ),
+        ).toEqual([]);
+      } finally {
+        hostReads.restore();
+      }
+
+      // A catalog publication cannot turn an in-flight stored update into stale presentation.
+      const captured = createDeferredCore();
+      const resume = createDeferredCore();
+      const first = scopes[0]!;
+      vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
+        (targets, consume) =>
+          readDatabases(targets, (owners) =>
+            consume(
+              owners.map((owner) => ({
+                ...owner,
+                async readRowFacts(input) {
+                  reads.push(...input.sessionKeys);
+                  const result = await owner.readRowFacts(input);
+                  captured.resolve();
+                  await resume.promise;
+                  return result;
+                },
+              })),
+            ),
+          ),
+      );
+      replaceSessionEntrySync(first, {
+        ...loadSessionEntry(first)!,
+        label: "Committed during renewal",
+      });
+      const listing = list();
+      try {
+        await captured.promise;
+        catalog = [{ ...catalog[0]!, contextTokens: 32768 }];
+        notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
+      } finally {
+        resume.resolve();
+        await listing;
+      }
+      expect(reads).toEqual([first.sessionKey]);
+      expect((await listing).sessions.find((row) => row.key === first.sessionKey)).toMatchObject({
+        label: "Committed during renewal",
+        contextTokens: 32768,
+      });
+
+      reads.length = 0;
+      sessionChanges.emit({ all: true, scope: "catalog", factsInvalidated: true });
+      await list();
+      expect(new Set(reads)).toEqual(new Set(scopes.map((scope) => scope.sessionKey)));
+    } finally {
+      projection.dispose();
+      release();
+    }
+  });
+});
 
 it("retains session facts on identity-scope changes and refreshes changes that affect the rows", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

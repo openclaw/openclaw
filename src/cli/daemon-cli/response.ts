@@ -41,12 +41,7 @@ type DaemonActionResponse = {
   hintItems?: DaemonHintItem[];
   warnings?: string[];
   definitionBackup?: GatewayServiceDefinitionBackupReceipt;
-  service?: {
-    label: string;
-    loaded: boolean;
-    loadedText: string;
-    notLoadedText: string;
-  };
+  service?: ReturnType<typeof buildDaemonServiceSnapshot>;
 };
 
 function emitDaemonActionJson(payload: DaemonActionResponse) {
@@ -157,17 +152,7 @@ export function createDaemonActionContext(params: {
   action: DaemonAction;
   json: boolean;
   definitionBackup?: () => GatewayServiceDefinitionBackupReceipt | undefined;
-}): {
-  stdout: Writable;
-  warnings: string[];
-  emit: (payload: Omit<DaemonActionResponse, "action">) => void;
-  emitMessage: DaemonEmit;
-  fail: (
-    message: string,
-    hints?: string[],
-    result?: "restart-health-failed" | "still-starting",
-  ) => void;
-} {
+}) {
   const warnings: string[] = [];
   const stdout = params.json ? createNullWriter() : process.stdout;
   const emit = (payload: Omit<DaemonActionResponse, "action">) => {

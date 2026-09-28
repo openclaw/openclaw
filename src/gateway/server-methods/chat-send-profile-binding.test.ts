@@ -29,7 +29,7 @@ import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-hel
 import { admitChatSend } from "./chat-send-admission.js";
 import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
-import { prepareChatSendSession } from "./chat-send-session.js";
+import { prepareChatSendSession, qualifyChatSendSession } from "./chat-send-session.js";
 installGatewayTestHooks();
 registerAgentSessionLoopTestLifecycle();
 const createBrowserFollowupFixture = useBrowserFollowupFixture();
@@ -75,18 +75,19 @@ describe("native profile-bound input admission", () => {
           if (!prepared.ok) {
             throw new Error("Native session preparation failed");
           }
+          const session = qualifyChatSendSession(prepared.value);
           const binding = (await createExpectedProfileBinding(source.id, fixture.client))!;
           binding.markInvoked();
           linkEmail(email, target.id);
           await expect(
             admitChatSend({
               request: normalized.value,
-              session: prepared.value,
+              session,
               client: fixture.client,
               context: fixture.context,
               respond: vi.fn(),
               assertCurrent: binding.assertCurrent,
-            }),
+            }).finally(session.releaseSessionTarget),
           ).rejects.toMatchObject({
             error: {
               details: { reason: "EXPECTED_PROFILE_MISMATCH", execution: "may_have_executed" },

@@ -332,6 +332,7 @@ docker_e2e_print_failed_container_state() {
   inspect_output="$(
     docker_e2e_docker_cmd inspect --format 'ExitCode={{.State.ExitCode}}
 OOMKilled={{.State.OOMKilled}}
+Init={{.HostConfig.Init}}
 Error={{printf "%.4096s" .State.Error}}' "$container_id" 2>&1
   )" || inspect_status="$?"
   if [ "$inspect_status" -ne 0 ]; then

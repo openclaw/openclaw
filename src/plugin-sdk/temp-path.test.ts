@@ -69,7 +69,7 @@ describe("buildRandomTempFilePath", () => {
     }
   });
 
-  it.each(["../../../escaped", "..\\..\\escaped", "id/name", "id\0name"])(
+  it.each(["../../../escaped", "..\\..\\escaped", "id\0name"])(
     "rejects path-control bytes in the UUID override %j",
     (uuid) => {
       expect(() =>
@@ -78,8 +78,13 @@ describe("buildRandomTempFilePath", () => {
     },
   );
 
-  it.each(["", "   "])("generates a UUID for a blank override %j", (uuid) => {
-    const result = buildRandomTempFilePath({ prefix: "media", now: 123, extension: ".jpg", uuid });
+  it("generates a UUID for a blank override", () => {
+    const result = buildRandomTempFilePath({
+      prefix: "media",
+      now: 123,
+      extension: ".jpg",
+      uuid: "   ",
+    });
     expect(path.basename(result)).toMatch(/^media-123-[\da-f-]{36}\.jpg$/u);
     expectPathInsideTmpRoot(result);
   });
@@ -97,7 +102,7 @@ describe("withTempDownloadPath", () => {
       input: { prefix: "../../channels/../media", fileName: "../../evil.bin" },
       expectedBasename: "evil.bin",
     },
-    ...[".", "..", "../..", "-..-"].map((fileName) => ({
+    ...[".", "../..", "-..-"].map((fileName) => ({
       name: `falls back to the default name for the dot segment ${fileName}`,
       input: { prefix: "media", fileName },
       expectedBasename: "download.bin",

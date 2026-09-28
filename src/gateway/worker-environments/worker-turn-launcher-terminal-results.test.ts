@@ -12,6 +12,10 @@ import type { AgentRunTerminalReplySnapshot } from "../../agents/agent-run-termi
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent-runner/run.js";
 import { resolveModelFallbackError } from "../../agents/failover-error.js";
+import {
+  getGeneratedMediaTaskIdsForSessionKey,
+  hasNewGeneratedMediaTaskForSessionKey,
+} from "../../agents/media-generation-activity.js";
 import { runWithModelFallback } from "../../agents/model-fallback-runner.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
@@ -19,10 +23,7 @@ import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../../infra/agent-run-registry.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import {
-  getGeneratedMediaTaskIdsForSessionKey,
-  hasNewGeneratedMediaTaskForSessionKey,
-} from "../../tasks/task-status-access.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { NodeWorkerWorkspaceTransferError } from "../../worker/node-workspace-transfer-protocol.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { hashWorkerCredential } from "./credential.js";
@@ -116,7 +117,7 @@ describe("worker turn launcher terminal results", () => {
     "retains the ACKed finishing outcome after assistant $stopReason (reconciliation fails: $reconciliationFails; cleanup: $cleanupFailure; provider fallback: $providerFailure)",
     async ({ stopReason, reconciliationFails, cleanupFailure, providerFailure }) => {
       const outerFallback = cleanupFailure !== undefined || providerFailure === true;
-      seedActivePlacement();
+      await seedActivePlacement();
       const grant = credential();
       const environment = attachedEnvironment();
       const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
@@ -124,6 +125,7 @@ describe("worker turn launcher terminal results", () => {
       const getConfig = () => ({ session: { store: sessionTarget.storePath } });
       const liveEvents = createWorkerLiveEventReceiver();
       const service = createWorkerEnvironmentService({
+        scheduler: createTestGatewayScheduler(),
         store: {
           ...(await createWorkerEnvironmentStore({ database })),
           get: () => environment,
@@ -143,7 +145,7 @@ describe("worker turn launcher terminal results", () => {
         prepareInstallation: vi.fn(),
         bootstrapWorker: vi.fn(),
         executeInference: vi.fn(),
-        inferenceStore: createWorkerInferenceStore({ database }),
+        inferenceStore: createWorkerInferenceStore({ path: database.path }),
         placementStore: gate,
         liveEvents,
       });
@@ -461,7 +463,7 @@ describe("worker turn launcher terminal results", () => {
   );
 
   it("requests immediate recovery when reconciliation fails after worker finishing", async () => {
-    seedActivePlacement();
+    await seedActivePlacement();
     const destroy = vi.fn(async () => attachedEnvironment());
     const tunnelFailure = new NodeWorkerWorkspaceTransferError(
       "workspace-transfer-failed: gateway TLS fingerprint mismatch",
@@ -620,7 +622,7 @@ describe("worker turn launcher terminal results", () => {
       terminalReply,
       costs = { first: 0, last: 0, total: 0 },
     }) => {
-      seedActivePlacement();
+      await seedActivePlacement();
       const environments: WorkerTurnEnvironmentService = {
         get: vi.fn(() => attachedEnvironment()),
         acquireTurnCredential: vi.fn(async () => credential()),

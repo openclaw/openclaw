@@ -1,4 +1,3 @@
-// Workboard plugin module implements store behavior.
 import { randomUUID } from "node:crypto";
 import type {
   WorkboardAttachment,
@@ -654,10 +653,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
   }
 
   async buildWorkerContext(id: string): Promise<string> {
-    const card = await this.get(id);
-    if (!card) {
-      throw new Error(`card not found: ${id}`);
-    }
+    const card = await this.requireCard(id);
     return buildWorkerContext(
       card,
       await readCards(this.store, {

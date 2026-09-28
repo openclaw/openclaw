@@ -99,6 +99,7 @@ describe("plugin lifecycle protocol validators", () => {
     { source: "official", pluginId: "demo", version: "latest", pin: true },
   ])("accepts the CLI's $source install intent without caller trust metadata", (request) => {
     expect(validatePluginsInstallParams(request)).toBe(true);
+    expect(validatePluginsInstallParams({ ...request, enable: false })).toBe(true);
     for (const trust of [
       { trustedSourceLinkedOfficialInstall: true },
       { bundledOrigin: true },
@@ -402,6 +403,7 @@ describe("plugin lifecycle protocol validators", () => {
       generation: 2,
       pluginIds: ["notes"],
       sourceDigests: { notes: "sha256-fixture" },
+      selectedEntries: { notes: "/plugins/notes/dist/index.js" },
     };
     expect(Value.Check(PluginRuntimeApplicationSchema, receipt)).toBe(true);
     expect(Value.Check(PluginsChangedEventSchema, { generation: 2 })).toBe(true);

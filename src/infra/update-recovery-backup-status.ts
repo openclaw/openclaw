@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -10,6 +9,7 @@ import {
 } from "../commands/backup-verify-manifest.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
+import { sha256Hex } from "./crypto-digest.js";
 import { pinDirectory, sha256File } from "./directory-durability.js";
 import { hasErrnoCode } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
@@ -88,10 +88,6 @@ function canonicalEntryPath(pathname: string): string {
 
 const MAX_MANIFEST_BYTES = 128 * 1024 * 1024;
 
-function digest(value: string | Buffer): string {
-  return createHash("sha256").update(value).digest("hex");
-}
-
 function backupStore(stateDir = resolveStateDir()): string {
   return `${resolvePathViaExistingAncestorSync(stateDir)}.update-captures`;
 }
@@ -124,7 +120,6 @@ async function withRecoveryMetadata<T>(
   run: (state: {
     manifest: UpdateRecoveryBackupManifest;
     outcome?: RecordedOutcome;
-    source: Awaited<ReturnType<typeof safeRoot>>;
     pin: Awaited<ReturnType<typeof pinDirectory>>;
   }) => Promise<T>,
 ): Promise<T> {
@@ -138,29 +133,21 @@ async function withRecoveryMetadata<T>(
   }
   const pin = await pinDirectory(ref.directory);
   try {
-    const source = await safeRoot(ref.directory);
-    const bytes = await source.read("manifest.json", {
+    const source = await safeRoot(ref.directory, { symlinks: "reject", hardlinks: "reject" });
+    const bytes = await source.readBytes("manifest.json", {
       maxBytes: MAX_MANIFEST_BYTES,
-      symlinks: "reject",
-      hardlinks: "reject",
     });
-    if (digest(bytes.buffer) !== ref.manifestSha256) {
+    if (sha256Hex(bytes) !== ref.manifestSha256) {
       throw new Error("Update recovery manifest changed before metadata access.");
     }
-    const manifest = parseUpdateRecoveryBackupManifest(bytes.buffer.toString("utf8"));
+    const manifest = parseUpdateRecoveryBackupManifest(bytes.toString("utf8"));
     assertManifestLocation(ref, manifest);
     let outcome: RecordedOutcome | undefined;
     if (await statOrMissing(path.join(ref.directory, "outcome.json"))) {
       outcome = recordedOutcomeSchema.parse(
-        JSON.parse(
-          (
-            await source.read("outcome.json", {
-              maxBytes: MAX_UPDATE_RECOVERY_OUTCOME_BYTES,
-              symlinks: "reject",
-              hardlinks: "reject",
-            })
-          ).buffer.toString("utf8"),
-        ),
+        await source.readJson("outcome.json", {
+          maxBytes: MAX_UPDATE_RECOVERY_OUTCOME_BYTES,
+        }),
       );
       if (outcome.manifestSha256 !== ref.manifestSha256) {
         throw new Error("Update recovery outcome refers to another manifest.");
@@ -168,7 +155,7 @@ async function withRecoveryMetadata<T>(
     }
     await pin.assertCurrent();
     authority.assertOwned();
-    return await run({ manifest, outcome, source, pin });
+    return await run({ manifest, outcome, pin });
   } finally {
     await pin.close();
   }
@@ -232,7 +219,7 @@ async function fingerprintIncompleteRecoveryGeneration(
     ]);
   }
   assertOwned();
-  return digest(JSON.stringify(inventory));
+  return sha256Hex(JSON.stringify(inventory));
 }
 /** This records repair of current state, never reverse publication or permission to delete B/C/T. */
 async function readBinding(ref: UpdateRecoveryBackupRef, authority: Authority) {
@@ -273,13 +260,11 @@ async function readBinding(ref: UpdateRecoveryBackupRef, authority: Authority) {
         continue;
       }
       const source = await safeRoot(directory);
-      const raw = (
-        await source.read("manifest.json", {
-          maxBytes: MAX_MANIFEST_BYTES,
-          symlinks: "reject",
-          hardlinks: "reject",
-        })
-      ).buffer;
+      const raw = await source.readBytes("manifest.json", {
+        maxBytes: MAX_MANIFEST_BYTES,
+        symlinks: "reject",
+        hardlinks: "reject",
+      });
       let generation;
       try {
         generation = parseUpdateRecoveryBackupManifest(raw.toString("utf8"));
@@ -308,9 +293,9 @@ async function readBinding(ref: UpdateRecoveryBackupRef, authority: Authority) {
         throw new Error("Forward recovery generation identity changed.");
       }
       if (kind === "candidate") {
-        generations.candidateSha256 = digest(raw);
+        generations.candidateSha256 = sha256Hex(raw);
       } else {
-        generations.preparedSha256 = digest(raw);
+        generations.preparedSha256 = sha256Hex(raw);
       }
     }
     await pin.assertCurrent();
@@ -409,19 +394,15 @@ async function listBackups(installRoot?: string): Promise<
         `Unresolved update capture ${directory} has incomplete publication. Inspection only: openclaw update status --json; npx openclaw@latest doctor --fix. Earlier captures are retained.`,
       );
     }
-    const source = await safeRoot(directory);
-    const raw = (
-      await source.read("manifest.json", {
-        maxBytes: MAX_MANIFEST_BYTES,
-        symlinks: "reject",
-        hardlinks: "reject",
-      })
-    ).buffer.toString("utf8");
+    const source = await safeRoot(directory, { symlinks: "reject", hardlinks: "reject" });
+    const raw = await source.readText("manifest.json", {
+      maxBytes: MAX_MANIFEST_BYTES,
+    });
     const manifest = parseUpdateRecoveryBackupManifest(raw);
     if (installRoot && manifest.installRoot !== path.resolve(installRoot)) {
       continue;
     }
-    const ref = { directory, manifestPath, manifestSha256: digest(raw) };
+    const ref = { directory, manifestPath, manifestSha256: sha256Hex(raw) };
     assertManifestLocation(ref, manifest);
     const capture = (await getUpdateRunAsync(manifest.runId))?.origin.updateRecoveryCapture;
     if (capture && capture.manifestSha256 !== ref.manifestSha256) {
@@ -433,15 +414,9 @@ async function listBackups(installRoot?: string): Promise<
     let outcome: Outcome;
     if (await statOrMissing(terminalPath)) {
       const terminal = recordedOutcomeSchema.parse(
-        JSON.parse(
-          (
-            await source.read("outcome.json", {
-              maxBytes: MAX_UPDATE_RECOVERY_OUTCOME_BYTES,
-              symlinks: "reject",
-              hardlinks: "reject",
-            })
-          ).buffer.toString("utf8"),
-        ),
+        await source.readJson("outcome.json", {
+          maxBytes: MAX_UPDATE_RECOVERY_OUTCOME_BYTES,
+        }),
       );
       if (terminal.manifestSha256 !== ref.manifestSha256) {
         throw new Error(`Update recovery outcome refers to another manifest: ${manifestPath}`);

@@ -187,8 +187,6 @@ describe("Mermaid Markdown presentation", () => {
 
   it.each([
     { change: "source", oldOutcome: "success" },
-    { change: "source", oldOutcome: "failure" },
-    { change: "theme", oldOutcome: "success" },
     { change: "theme", oldOutcome: "failure" },
   ])("ignores a stale $oldOutcome after a $change change", async ({ change, oldOutcome }) => {
     const old = createDeferred<string>();

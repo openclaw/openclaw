@@ -1,4 +1,4 @@
-import fsSync from "node:fs";
+import { safeStatSync } from "@openclaw/fs-safe/path";
 import {
   findNormalizedProviderValue,
   normalizeProviderId,
@@ -606,11 +606,7 @@ function hasLocalEmbeddings(local: { modelPath?: string }): boolean {
     return true;
   }
   const resolved = resolveUserPath(modelPath);
-  try {
-    return fsSync.statSync(resolved).isFile();
-  } catch {
-    return false;
-  }
+  return safeStatSync(resolved)?.isFile() ?? false;
 }
 
 async function hasApiKeyForProvider(

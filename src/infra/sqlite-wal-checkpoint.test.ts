@@ -14,6 +14,7 @@ import {
 } from "./sqlite-reader-lifecycle.js";
 import { runSqliteDeferredTransactionSync } from "./sqlite-transaction.js";
 import {
+  createSqliteWalCheckpoint,
   onSqliteWalCheckpoint,
   publishSqliteWalCheckpointObservation,
   type SqliteWalCheckpointSnapshot,
@@ -23,6 +24,42 @@ import { configureSqliteWalMaintenance } from "./sqlite-wal.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("SQLite WAL checkpoint observations", () => {
+  it("retains relayed health across native generations and rejects older observations", () => {
+    const databasePath = path.join(tempDirs.make("openclaw-wal-health-relay-"), "state.sqlite");
+    const database = openNodeSqliteDatabase(databasePath);
+    database.exec("PRAGMA journal_mode=WAL; CREATE TABLE events(value TEXT)");
+    const reader = openNodeSqliteDatabase(databasePath);
+    const owner = createSqliteWalCheckpoint(database, { databasePath }, 64 * 1024 * 1024);
+    const replacement = createSqliteWalCheckpoint(database, { databasePath }, 64 * 1024 * 1024);
+    try {
+      expect(owner.checkpoint("PASSIVE")).toBe(true);
+      const completed = owner.snapshot!;
+      replacement.adopt(completed);
+      reader.exec("BEGIN");
+      reader.prepare("SELECT value FROM events").all();
+      database.exec("INSERT INTO events VALUES ('retained')");
+      expect(replacement.checkpoint("PASSIVE")).toBe(false);
+      owner.adopt(replacement.snapshot!);
+      expect(owner.health).toMatchObject({
+        state: "blocked",
+        consecutiveBlocked: 1,
+        lastCompletedAtMs: completed.health.lastCompletedAtMs,
+      });
+      expect(owner.checkpoint("PASSIVE")).toBe(false);
+      const blocked = owner.snapshot;
+      owner.adopt(completed);
+      expect(owner.snapshot).toEqual(blocked);
+      expect(owner.health).toMatchObject({ consecutiveBlocked: 2, warning: true });
+      reader.exec("ROLLBACK");
+      expect(owner.checkpoint("PASSIVE")).toBe(true);
+      owner.adopt(replacement.snapshot!);
+      expect(owner.health).toMatchObject({ state: "complete", consecutiveBlocked: 0 });
+    } finally {
+      reader.close();
+      database.close();
+    }
+  });
+
   it("recycles an oversized completed WAL during admitted periodic maintenance without waiting for readers", async () => {
     vi.useFakeTimers();
     const databasePath = path.join(tempDirs.make("openclaw-wal-recycle-"), "state.sqlite");

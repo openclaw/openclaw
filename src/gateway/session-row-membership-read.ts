@@ -1,3 +1,5 @@
+import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.js";
+import type { GatewaySessionStoreDiscovery } from "../config/sessions/combined-store-paths.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionEntryListScope } from "../config/sessions/session-accessor.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -27,8 +29,9 @@ export function createSessionRowMembershipReadAccess(params: {
   runInOwner: <T>(read: () => T) => T;
   isActive: () => boolean;
   topologyDirty: () => boolean;
-  topology: () => void;
+  topology: () => Promise<void>;
   lookup: (query: records.Lookup) => records.Row | undefined;
+  stores: () => ReadonlyMap<string, records.SessionRowStore>;
   owner: () => SessionRowReadView & { isCurrent(row: records.Row): boolean };
 }) {
   const { membership } = params;
@@ -37,7 +40,13 @@ export function createSessionRowMembershipReadAccess(params: {
   async function prepareMembership() {
     do {
       if (params.isActive() && params.topologyDirty()) {
-        params.runInOwner(params.topology);
+        await params.runInOwner(params.topology);
+      }
+      if (!params.isActive()) {
+        return;
+      }
+      if (params.topologyDirty()) {
+        continue;
       }
       await params.runInOwner(() => membership.prepare());
     } while (needsMembershipPreparation());
@@ -61,6 +70,37 @@ export function createSessionRowMembershipReadAccess(params: {
       : null;
   };
   return {
+    readMembership(query: records.Lookup) {
+      if (!params.isActive()) {
+        return undefined;
+      }
+      const row = params.lookup(query);
+      if (row && isIncognitoSessionKey(row.key)) {
+        return params.owner().describe(query)?.membership;
+      }
+      const members = row && membership.membership(row.storeTarget.storePath, row.key);
+      return members ? new Set(members) : undefined;
+    },
+    readSource(target: records.Row | records.Lookup) {
+      const row = "storeTarget" in target ? target : params.lookup(target);
+      if (!row) {
+        throw new Error("Session store changed while preparing authorization");
+      }
+      const source = params.stores().get(row.storeTarget.storePath);
+      // Incognito rows retain their process-local locator and native lifetime guard.
+      if (!source && isIncognitoSessionKey(row.key)) {
+        return undefined;
+      }
+      if (!source || !params.owner().isCurrent(row)) {
+        throw new Error("Session store changed while preparing authorization");
+      }
+      return {
+        agentId: source.target.agentId,
+        path: source.filename,
+        databaseIdentity: source.identity,
+        databaseBirthtime: source.birthtime,
+      };
+    },
     prepareMembership,
     needsMembershipPreparation,
     sessionGroupTargets() {
@@ -143,13 +183,46 @@ export function createSessionRowEntryReadAccess(
       stores: ReadonlyMap<string, records.SessionRowStore>;
       rows: ReadonlyMap<string, records.Row>;
       byStore: ReadonlyMap<string, ReadonlySet<string>>;
+      env?: NodeJS.ProcessEnv;
     }) => {
       const { stores, rows, byStore } = params;
       const sources = new Map<string, records.SessionRowStore>();
       const replaced = new Set<string>();
-      return {
+      const read = {
         sources,
         replaced,
+        loadCombinedStore(
+          cfg: OpenClawConfig,
+          discovery: GatewaySessionStoreDiscovery,
+        ): ReturnType<typeof loadCombinedSessionStoreForGatewayCore> {
+          return loadCombinedSessionStoreForGatewayCore(cfg, {
+            discovery,
+            includeIncognito: false,
+            preserveSentinelOwners: "physical",
+            loadEntries: read.loadEntries,
+            onStoreLoaded(target, agentId, owner) {
+              const source = sources.get(target.storePath);
+              if (source) {
+                source.agentId = agentId;
+                source.discoveryAgentId = owner?.agentId ?? null;
+                source.discoveryOrder = owner?.order;
+              }
+            },
+          });
+        },
+        updateMembership() {
+          membership.updateTargets(
+            [...sources.values()].map((source) => ({
+              agentId: source.target.agentId,
+              storePath: source.target.storePath,
+              discoveryAgentId: source.discoveryAgentId,
+              discoveryOrder: source.discoveryOrder,
+              identity: source.identity,
+              birthtime: source.birthtime,
+              filename: source.filename,
+            })),
+          );
+        },
         loadEntries: (
           target: records.Row["storeTarget"],
           projection: SessionEntryListScope["projection"],
@@ -157,6 +230,7 @@ export function createSessionRowEntryReadAccess(
           const opened = withOpenClawAgentDatabaseReadOnly(readOpenClawAgentDatabaseIdentity, {
             agentId: target.agentId,
             path: target.storePath,
+            env: params.env,
           });
           if (!opened.found) {
             return [];
@@ -178,10 +252,11 @@ export function createSessionRowEntryReadAccess(
             });
           }
           replaced.add(target.storePath);
-          const entryScope = { ...target, projection, clone: false };
+          const entryScope = { ...target, projection, clone: false, env: params.env };
           return listSessionEntriesReadOnly(entryScope, { deferParticipants: true });
         },
       };
+      return read;
     },
   };
 }

@@ -13,6 +13,7 @@ import {
   getFirstStreamEventTimeoutMs,
 } from "../utils/stream-first-event-timeout.js";
 import { buildGuardedModelFetch } from "./host-policy.js";
+import { prepareModelRequestBody } from "./model-request-body.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import { formatModelTransportDebugBaseUrl } from "./model-transport-url.js";
 import { isOpenAICodexResponsesModel } from "./openai-completions-compat.js";
@@ -98,7 +99,6 @@ import {
   createWritableTransportEventStream,
   failTransportStream,
   finalizeTransportStream,
-  mergeTransportMetadata,
   notifyProviderStreamOpened,
   transportAbortError,
   withProviderResponseHook,
@@ -200,6 +200,9 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           model,
           responsesOptions?.transport,
         );
+        const encodeBody = prepareModelRequestBody(
+          websocketMode || compactRequest ? undefined : options,
+        );
         const turnState = resolveProviderTransportTurnState(model, {
           sessionId: options?.sessionId,
           turnId: randomUUID(),
@@ -252,9 +255,6 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
           const nextParams = await options?.onPayload?.(params, model);
           if (nextParams !== undefined) {
             params = nextParams as typeof params;
-          }
-          if (!isOpenAICodexResponsesModel(model)) {
-            params = mergeTransportMetadata(params, turnState?.metadata);
           }
           params = sanitizeOpenAICodexResponsesParams(
             model,
@@ -394,6 +394,7 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             request: initialRequest,
             requestOptions,
             model,
+            encodeBody,
             observePrompt,
             initialAttemptKind,
             initialRejectedCompaction,

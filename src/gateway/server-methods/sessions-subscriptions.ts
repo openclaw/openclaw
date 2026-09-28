@@ -20,7 +20,7 @@ import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.j
 import { retainSessionScopedRead } from "./session-scoped-read.js";
 import { sessionsListHandler } from "./sessions-read.js";
 import { requireSessionKey } from "./sessions-shared.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandlers, PreparedSessionApprovalReplay } from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
 export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
@@ -138,14 +138,13 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
       });
       const subscriptionKey = resolveSessionSubscriptionKey(canonicalKey, requestedAgentId);
       let read: ReturnType<typeof retainSessionScopedRead>;
+      let prepared: PreparedSessionApprovalReplay | undefined;
       try {
         sessionMutationAuthorization?.assertCurrent();
-        read = retainSessionScopedRead(
-          options,
-          canonicalKey,
-          requestedAgentId,
-          readGatewayRequestMutationAuthority(options).sessionScope === "operator.sessions.read",
-        );
+        read = retainSessionScopedRead(options, canonicalKey, requestedAgentId, {
+          requireMaterialized:
+            readGatewayRequestMutationAuthority(options).sessionScope === "operator.sessions.read",
+        });
         read?.assertCurrent();
         options.sessionMutationCommitGuard?.();
         if (connId) {
@@ -159,10 +158,11 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
               { includeApprovals: true, provisional: true },
             );
             try {
-              let prepared = await context.listSessionPendingApprovals?.(subscriptionKey, client);
+              prepared = await context.listSessionPendingApprovals?.(subscriptionKey, client);
               read?.assertCurrent();
               sessionMutationAuthorization?.assertCurrent();
               if (prepared && !prepared.isCurrent()) {
+                prepared.release();
                 prepared = await context.listSessionPendingApprovals?.(subscriptionKey, client);
                 read?.assertCurrent();
                 sessionMutationAuthorization?.assertCurrent();
@@ -242,6 +242,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
         }
         respond(false, undefined, error.error);
       } finally {
+        prepared?.release();
         read?.release();
       }
     },

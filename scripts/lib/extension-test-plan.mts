@@ -33,9 +33,12 @@ import { isZaloExtensionRoot } from "../../test/vitest/vitest.extension-zalo-pat
 import { isSharedVitestExcludedPath } from "../../test/vitest/vitest.pattern-file.ts";
 import { isPluginControlUiPath } from "../../test/vitest/vitest.ui-paths.mjs";
 import { BUNDLED_PLUGIN_PATH_PREFIX, BUNDLED_PLUGIN_ROOT_DIR } from "./bundled-plugin-paths.mjs";
-import { listAvailableExtensionIds } from "./changed-extensions.mts";
+import { hasExtensionMetadata, listAvailableExtensionIds } from "./changed-extensions.mts";
+import { isRuntimePlacementIncludePatterns } from "./ci-test-timings-schema.mts";
+import { readCompactGroupTimings } from "./ci-test-timings.mts";
 import { GIT_LS_FILES_MAX_BUFFER_BYTES } from "./list-test-files.mts";
 import { parsePositiveInt } from "./numeric-options.mjs";
+import { createCompactSplitTimingGeneration } from "./vitest-shard-metadata.mts";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
 const TRACKED_EXTENSION_TEST_PATHSPECS = [
@@ -227,7 +230,7 @@ function listTrackedTestFiles(rootPath: string) {
   return trackedFiles.filter((file) => file.startsWith(rootPrefix));
 }
 
-function listFilesystemTestFiles(rootPath: string) {
+function listFilesystemTestFiles(rootPath: string, cwd = repoRoot) {
   const files = [];
   const stack = [rootPath];
 
@@ -238,7 +241,7 @@ function listFilesystemTestFiles(rootPath: string) {
     }
     for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
       const fullPath = path.join(current, entry.name);
-      if (isPluginControlUiPath(normalizeRelative(path.relative(repoRoot, fullPath)))) {
+      if (isPluginControlUiPath(normalizeRelative(path.relative(cwd, fullPath)))) {
         continue;
       }
       if (entry.isDirectory()) {
@@ -249,7 +252,7 @@ function listFilesystemTestFiles(rootPath: string) {
         continue;
       }
       if (entry.isFile() && (fullPath.endsWith(".test.ts") || fullPath.endsWith(".test.tsx"))) {
-        files.push(normalizeRelative(path.relative(repoRoot, fullPath)));
+        files.push(normalizeRelative(path.relative(cwd, fullPath)));
       }
     }
   }
@@ -258,12 +261,12 @@ function listFilesystemTestFiles(rootPath: string) {
 }
 
 /** List working-tree test files for extension roots, including new untracked tests. */
-export function listExtensionTestFilesForRoots(roots: string[]) {
+export function listExtensionTestFilesForRoots(roots: string[], cwd = repoRoot) {
   const files = roots.flatMap((root) => {
-    const rootPath = path.join(repoRoot, root);
+    const rootPath = path.join(cwd, root);
     return fs.existsSync(rootPath) && fs.statSync(rootPath).isFile()
       ? [root]
-      : listFilesystemTestFiles(rootPath);
+      : listFilesystemTestFiles(rootPath, cwd);
   });
   return [...new Set(files)].toSorted((left, right) => left.localeCompare(right));
 }
@@ -392,13 +395,14 @@ export function createExtensionTestProcessTargetChunks(
   config: string,
   roots: string[],
   vitestArgs: string[] = [],
+  cwd = repoRoot,
 ) {
   if (!shouldSplitExtensionTestProcesses(config, vitestArgs)) {
     return [roots];
   }
   // Explicit file targets replace Vitest's root discovery, so inventory the working tree.
   // Otherwise a newly authored untracked test would silently disappear from a broad run.
-  const discoveredFiles = listExtensionTestFilesForRoots(roots);
+  const discoveredFiles = listExtensionTestFilesForRoots(roots, cwd);
   if (discoveredFiles.length === 0) {
     return [roots];
   }
@@ -415,6 +419,31 @@ function countTestFiles(rootPath: string) {
   }
 
   return listFilesystemTestFiles(rootPath).length;
+}
+
+/** Exact envelope identity survives ordinal renumbering without crossing worker policies. */
+export function createExtensionTestTimingKey(
+  config: string,
+  files: readonly string[],
+  env: Readonly<Record<string, string>> = { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+  kind: "envelope" | "singleton-invocation" | "wrapper-overhead" = "envelope",
+): string | undefined {
+  if (
+    !/^test\/vitest\/vitest\.extensions?(?:-[^/]+)?\.config\.ts$/u.test(config) ||
+    (kind === "wrapper-overhead"
+      ? files.length !== 0
+      : !isRuntimePlacementIncludePatterns(files) ||
+        (kind === "singleton-invocation" && files.length !== 1)) ||
+    !/^[1-9]\d*$/u.test(env.OPENCLAW_VITEST_MAX_WORKERS ?? "")
+  ) {
+    return undefined;
+  }
+  return createCompactSplitTimingGeneration({
+    configs: [config],
+    env,
+    parentShardName: `extension-test:${config}#workers-${env.OPENCLAW_VITEST_MAX_WORKERS}${kind === "envelope" ? "" : `#${kind}`}`,
+    stripes: [files],
+  }).timingKeys[0];
 }
 
 export function estimateExtensionTestCost(
@@ -437,7 +466,41 @@ export function estimateExtensionTestCost(
     config === DATABASE_WORKER_CONFIG
       ? files.filter((file) => file.startsWith("extensions/codex/src/app-server/")).length
       : 0;
-  return Math.max(1, Math.ceil(testFileCount * multiplier + appServerFiles * (17.31 - multiplier)));
+  const key =
+    files.length === testFileCount ? createExtensionTestTimingKey(config, files) : undefined;
+  const timings = readCompactGroupTimings("blacksmith");
+  const measured = key ? timings[key] : undefined;
+  const processes = key ? splitExtensionTestProcessTargets(config, [...files]) : [];
+  let singletonSeconds = 0;
+  if (processes.length === files.length && processes.every((process) => process.length === 1)) {
+    let observed = false;
+    for (const file of files) {
+      const fileKey = createExtensionTestTimingKey(
+        config,
+        [file],
+        undefined,
+        "singleton-invocation",
+      )!;
+      const fileSeconds = timings[fileKey];
+      observed ||= fileSeconds !== undefined;
+      singletonSeconds += Math.max(
+        fileSeconds ?? 0,
+        config === DATABASE_WORKER_CONFIG && file.startsWith("extensions/codex/src/app-server/")
+          ? 17.31
+          : multiplier,
+      );
+    }
+    const overheadKey = createExtensionTestTimingKey(config, [], undefined, "wrapper-overhead");
+    singletonSeconds = observed
+      ? singletonSeconds + (overheadKey ? (timings[overheadKey] ?? 0) : 0)
+      : 0;
+  }
+  return Math.max(
+    1,
+    measured ?? 0,
+    Math.ceil(singletonSeconds),
+    Math.ceil(testFileCount * multiplier + appServerFiles * (17.31 - multiplier)),
+  );
 }
 
 /** Resolve the dedicated Vitest config for an extension root or test file. */
@@ -459,12 +522,12 @@ export function resolveExtensionTestConfig(target: string) {
 function resolveExtensionDirectory(targetArg: string | undefined, cwd = process.cwd()) {
   if (targetArg) {
     const asGiven = path.resolve(cwd, targetArg);
-    if (fs.existsSync(path.join(asGiven, "package.json"))) {
+    if (hasExtensionMetadata(asGiven)) {
       return asGiven;
     }
 
     const byName = path.join(repoRoot, BUNDLED_PLUGIN_ROOT_DIR, targetArg);
-    if (fs.existsSync(path.join(byName, "package.json"))) {
+    if (hasExtensionMetadata(byName)) {
       return byName;
     }
 
@@ -477,7 +540,7 @@ function resolveExtensionDirectory(targetArg: string | undefined, cwd = process.
   while (true) {
     if (
       normalizeRelative(path.relative(repoRoot, current)).startsWith(BUNDLED_PLUGIN_PATH_PREFIX) &&
-      fs.existsSync(path.join(current, "package.json"))
+      hasExtensionMetadata(current)
     ) {
       return current;
     }

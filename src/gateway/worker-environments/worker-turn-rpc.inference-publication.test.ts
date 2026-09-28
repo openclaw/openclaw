@@ -102,7 +102,7 @@ describe("worker inference inventory publication", () => {
         to: "attached",
         patch: support.attachedPatch(environmentId, sessionId),
       });
-      const { claim, store: placements } = claimWorkerPlacement({
+      const { claim, store: placements } = await claimWorkerPlacement({
         environmentId,
         ownerEpoch: attached.ownerEpoch,
         sessionId,
@@ -129,7 +129,7 @@ describe("worker inference inventory publication", () => {
       const instance = createOperationalRunInstanceRef(claim.runId);
       const authority = claimAgentRunDelegatedAuthority(instance);
       try {
-        bindWorkerTurnOwner(
+        await bindWorkerTurnOwner(
           placements,
           claim,
           undefined,
@@ -260,7 +260,7 @@ describe("worker inference inventory publication", () => {
         delivery.afterCommit = undefined;
         await workerService.stop();
         if (placements.validateTurnClaim(claim)) {
-          placements.releaseTurn(claim);
+          await placements.releaseTurn(claim);
         }
         releaseAgentRunDelegatedAuthority(authority);
       }

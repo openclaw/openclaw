@@ -89,6 +89,10 @@ names are open strings; consumers must not discard an unfamiliar owner phase.
 Validation does not authorize a stop or replace lease, process-identity, and
 readiness checks owned by the controller.
 
+Leave `includeLifecycle` unset when using older published status validators.
+Request `includeLifecycle: true` only with a validator that supports `ownerId`
+and `phase`.
+
 ## Guard an event without TypeBox
 
 Use the lightweight guards when code only needs safe frame discrimination. They

@@ -1,3 +1,4 @@
+import "./attempt-spawn-workspace.tools-mock.test-support.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -793,12 +794,6 @@ vi.mock("../thinking.js", async (importOriginal) => {
     dropThinkingBlocks: <T>(messages: T) => messages,
   };
 });
-
-vi.mock("../tool-split.js", () => ({
-  splitSdkTools: ({ tools }: { tools: unknown[] }) => ({
-    customTools: tools,
-  }),
-}));
 
 vi.mock("../utils.js", async () => {
   const actual = await vi.importActual<typeof import("../utils.js")>("../utils.js");

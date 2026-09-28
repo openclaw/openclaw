@@ -1,17 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import type ts from "typescript";
+import * as ts from "typescript/unstable/ast";
+import { createNativeTypeScriptParser } from "./native-typescript.mts";
 import { parseReleaseVersion } from "./release-version.mjs";
-import { getTypeScript } from "./ts-guard-utils.mts";
 import {
   isUpdateCompatibilityChunk,
   UPDATE_COMPATIBILITY_CHUNK_HEADER,
 } from "./update-compat-contract.mjs";
-import {
-  ModuleGraph,
-  parseModule,
-  type UpdateCompatibilityOrigin,
-} from "./update-compat-module-graph.mts";
+import { ModuleGraph, type UpdateCompatibilityOrigin } from "./update-compat-module-graph.mts";
 import { isUpdatePackageAssetImport } from "./update-compat-source-imports.mts";
 
 export { isUpdateCompatibilityChunk } from "./update-compat-contract.mjs";
@@ -108,7 +104,6 @@ function ownerAt(source: string, offset: number): string | undefined {
 }
 
 function consumedExports(node: ts.CallExpression): string[] | undefined {
-  const ts = getTypeScript();
   let expression: ts.Node = node;
   let awaited = false;
   while (
@@ -129,7 +124,7 @@ function consumedExports(node: ts.CallExpression): string[] | undefined {
   if (
     ts.isElementAccessExpression(parent) &&
     parent.expression === expression &&
-    ts.isStringLiteralLike(parent.argumentExpression)
+    ts.isStringLiteralLikeNode(parent.argumentExpression)
   ) {
     return [parent.argumentExpression.text];
   }
@@ -138,15 +133,15 @@ function consumedExports(node: ts.CallExpression): string[] | undefined {
     parent.initializer === expression &&
     ts.isObjectBindingPattern(parent.name)
   ) {
-    if (
-      parent.name.elements.some(
-        (element) =>
-          element.dotDotDotToken || !ts.isIdentifier(element.propertyName ?? element.name),
-      )
-    ) {
-      return undefined;
+    const names: string[] = [];
+    for (const element of parent.name.elements) {
+      const name = element.propertyName ?? element.name;
+      if (element.dotDotDotToken || !name || !ts.isIdentifier(name)) {
+        return undefined;
+      }
+      names.push(name.text);
     }
-    return parent.name.elements.map((element) => (element.propertyName ?? element.name).getText());
+    return names;
   }
   return undefined;
 }
@@ -178,7 +173,8 @@ export function recordUpdateCompatibilityRelease(params: {
       release.commit === build.commit &&
       release.integrity === params.integrity,
   )?.chunk;
-  const graph = new ModuleGraph();
+  using parser = createNativeTypeScriptParser({ cwd: packageDir });
+  const graph = new ModuleGraph(parser);
   const chunks = new Map<string, UpdateCompatibilityChunk>();
   for (const file of moduleFiles(distDir)) {
     const source = fs.readFileSync(file, "utf8");
@@ -190,14 +186,13 @@ export function recordUpdateCompatibilityRelease(params: {
     ) {
       continue;
     }
-    const ts = getTypeScript();
     const visit = (node: ts.Node) => {
       if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
         const owner = ownerAt(source, node.getStart());
         // The wizard's only lazy command import starts the update, before replacement.
         if (owner && POST_SWAP_OWNER.test(owner) && owner !== "src/cli/update-cli/wizard.ts") {
           const specifier = node.arguments[0];
-          if (!specifier || !ts.isStringLiteralLike(specifier)) {
+          if (!specifier || !ts.isStringLiteralLikeNode(specifier)) {
             if (isUpdatePackageAssetImport(owner, node)) {
               return;
             }
@@ -240,9 +235,9 @@ export function recordUpdateCompatibilityRelease(params: {
           }
         }
       }
-      ts.forEachChild(node, visit);
+      node.forEachChild(visit);
     };
-    visit(parseModule(file, source));
+    visit(parser.parseSourceFile(file, source));
   }
   return {
     version: packageJson.version,
@@ -448,8 +443,9 @@ export function writeUpdateCompatibilityChunks(params: {
   inventory: UpdateCompatibilityInventory;
 }): string[] {
   const distDir = path.resolve(params.distDir);
-  const graph = new ModuleGraph();
-  const sourceGraph = new ModuleGraph(params.sourceDir);
+  using parser = createNativeTypeScriptParser({ cwd: params.sourceDir });
+  const graph = new ModuleGraph(parser);
+  const sourceGraph = new ModuleGraph(parser, params.sourceDir);
   const required = collectRequiredCompatibilityChunks(params.inventory.releases);
   const origins = new Map<string, UpdateCompatibilityOrigin>();
   for (const chunk of required) {
@@ -462,11 +458,14 @@ export function writeUpdateCompatibilityChunks(params: {
   const candidates = new Map<string, Map<string, { file: string; exported: string }>>();
   for (const file of moduleFiles(distDir)) {
     const relative = portable(path.relative(distDir, file));
-    // Retained config repairs are built separately from the updater's runtime graph.
+    // Retained config repairs and the one-shot native hook relay are built
+    // separately from the updater's runtime graph; their copies of shared
+    // modules are not bridge candidates.
     if (
       relative.startsWith("extensions/") ||
       relative.startsWith("plugin-sdk/") ||
-      relative.startsWith("config-doctor/")
+      relative.startsWith("config-doctor/") ||
+      relative.startsWith("native-hook-relay/")
     ) {
       continue;
     }

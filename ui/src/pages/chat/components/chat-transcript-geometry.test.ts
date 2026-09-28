@@ -174,7 +174,8 @@ describe("chat transcript geometry", () => {
       transcript.hostUpdated();
       const viewport = expectDefined(transcript.scrollElement, "rail viewport");
       const inner = expectDefined(viewport.querySelector(".chat-thread-inner"), "rail column");
-      emitResize(inner, innerWidth, 1200);
+      const column = expectDefined(inner.querySelector(".chat-virtual-sizer"), "column width");
+      emitResize(column, innerWidth, 0);
       emitResize(region, 1200, regionHeight);
       flushFrames();
       expect(viewport.hasAttribute("data-position-rail-gutter")).toBe(true);
@@ -194,7 +195,7 @@ describe("chat transcript geometry", () => {
       // Saved message width changes the column without resizing its viewport.
       gutter = 20;
       innerWidth = 1160;
-      emitResize(inner, innerWidth, 1500);
+      emitResize(column, innerWidth, 0);
       flushFrames();
       expect(viewport.hasAttribute("data-position-rail-gutter")).toBe(false);
       expect(viewport.style.getPropertyValue("--chat-transcript-column-width")).toBe("1160px");

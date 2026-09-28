@@ -1,9 +1,6 @@
-import type {
-  SessionsCompanionAskResult,
-  SessionsCompanionStateResult,
-} from "../../packages/gateway-protocol/src/schema/sessions.js";
-import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import type { SessionsCompanionStateResult } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import {
   createSessionCompanionAskRuntime,
@@ -16,32 +13,22 @@ import { onGatewaySessionReset } from "./session-reset-notifications.js";
 type SessionCompanionTarget = { sessionKey: string; agentId: string };
 
 export type SessionCompanionService = {
-  ask: (params: {
-    agentId: string;
-    sessionKey: string;
-    question: string;
-    connId: string;
-    operatorAuthority?: AdmittedRunOperatorAuthority;
-    assertSourceCurrent?: () => void;
-    signal?: AbortSignal;
-  }) => Promise<SessionsCompanionAskResult>;
+  ask: ReturnType<typeof createSessionCompanionAskRuntime>["ask"];
   state: (target: SessionCompanionTarget) => SessionsCompanionStateResult;
   reset: (target: SessionCompanionTarget) => void;
   dispose: () => void;
 };
 
 type SessionCompanionDeps = SessionCompanionAskDeps & {
-  setIntervalFn?: typeof setInterval;
-  clearIntervalFn?: typeof clearInterval;
+  scheduler: GatewayScheduler;
 };
 
 const SESSION_COMPANION_IDLE_TTL_MS = 2 * 60 * 60_000;
 const SESSION_COMPANION_SWEEP_INTERVAL_MS = 10 * 60_000;
 
 export function createSessionCompanion(deps: SessionCompanionDeps): SessionCompanionService {
-  const now = deps.now ?? Date.now;
-  const setIntervalFn = deps.setIntervalFn ?? setInterval;
-  const clearIntervalFn = deps.clearIntervalFn ?? clearInterval;
+  const { scheduler } = deps;
+  const now = deps.now ?? (() => scheduler.now());
   const threads = new Map<string, SessionCompanionThread>();
   let disposed = false;
   const askRuntime = createSessionCompanionAskRuntime({
@@ -73,8 +60,12 @@ export function createSessionCompanion(deps: SessionCompanionDeps): SessionCompa
       }
     }
   };
-  const sweepTimer = setIntervalFn(sweep, SESSION_COMPANION_SWEEP_INTERVAL_MS);
-  sweepTimer.unref?.();
+  const sweepJob = scheduler.schedule({
+    id: "session-companion-sweep",
+    atMs: scheduler.now() + SESSION_COMPANION_SWEEP_INTERVAL_MS,
+    everyMs: SESSION_COMPANION_SWEEP_INTERVAL_MS,
+    run: sweep,
+  });
   const unsubscribeReset = onGatewaySessionReset((sessionKey, suppliedAgentId) => {
     let agentId = suppliedAgentId;
     try {
@@ -118,7 +109,7 @@ export function createSessionCompanion(deps: SessionCompanionDeps): SessionCompa
         return;
       }
       disposed = true;
-      clearIntervalFn(sweepTimer);
+      sweepJob.cancel();
       unsubscribeReset();
       unsubscribeIdentity();
       askRuntime.dispose();

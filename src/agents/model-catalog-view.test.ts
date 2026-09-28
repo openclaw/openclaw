@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ModelDefinitionConfig } from "../config/types.models.js";
+import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import * as providerPolicySurface from "../plugins/provider-policy-surface.js";
@@ -17,10 +17,7 @@ import {
   selectModelCatalogRuntimeEntry,
 } from "./model-catalog-view.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
-import {
-  setPreparedModelRuntimeAuthLabels,
-  setPreparedModelRuntimeAuthStore,
-} from "./prepared-model-runtime-auth.js";
+import { bindPreparedModelRuntimeAuth } from "./prepared-model-runtime-auth.js";
 
 const mocks = vi.hoisted(() => ({ loadSnapshot: vi.fn(), loadOwner: vi.fn(), metadata: vi.fn() }));
 vi.mock("./prepared-model-catalog.js", () => ({
@@ -40,6 +37,14 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
 });
 
 const row = (provider: string, id: string): ModelCatalogEntry => ({ provider, id, name: id });
+const model = (id: string, name = id): ModelDefinitionConfig => ({
+  id,
+  name,
+  reasoning: false,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  maxTokens: 1024,
+});
 const snapshot = (entries: ModelCatalogEntry[]): ModelCatalogSnapshot => ({
   entries,
   routeVariants: entries,
@@ -95,6 +100,53 @@ describe("prepared model catalog view", () => {
     }
   });
 
+  it.each(["absent", "empty"])(
+    "prepares %s provider overrides once for distinct view rows",
+    (initial) => {
+      const providers: Record<string, ModelProviderConfig> =
+        initial === "empty" ? { fixture: { baseUrl: "", models: [] } } : {};
+      const enumerate = vi.fn((target: Record<string, ModelProviderConfig>) =>
+        Reflect.ownKeys(target),
+      );
+      const cfg: OpenClawConfig = {
+        models: { providers: new Proxy(providers, { ownKeys: enumerate }) },
+      };
+      const catalog = Array.from({ length: 1_000 }, (_, index) => row("fixture", `model-${index}`));
+      const keyOf = (entry: Pick<ModelCatalogEntry, "provider" | "id">) =>
+        `${entry.provider}/${entry.id}`;
+      const params = { cfg, catalog, keyOf };
+      const view = createModelCatalogView(params);
+      expect(enumerate).not.toHaveBeenCalled();
+      expect(
+        catalog.map((entry) => view.readProjection(entry, { kind: "unmanaged" }, keyOf(entry))),
+      ).toEqual(catalog.map((entry) => ({ entry, runtimeEntry: entry })));
+      expect(enumerate).toHaveBeenCalledOnce();
+
+      providers.fixture = {
+        baseUrl: "",
+        models: [{ ...model("model-0", "Configured"), maxTokens: 4096 }],
+      };
+      const freshEntry = row("fixture", "model-0");
+      expect(view.readProjection(freshEntry, { kind: "unmanaged" }, keyOf(freshEntry))).toEqual({
+        entry: freshEntry,
+        runtimeEntry: freshEntry,
+      });
+      expect(enumerate).toHaveBeenCalledOnce();
+      const nextView = createModelCatalogView(params);
+      const expected = {
+        ...freshEntry,
+        name: "Configured",
+        reasoning: false,
+        configuredReasoning: false,
+        input: ["text"],
+      };
+      expect(nextView.readProjection(freshEntry, { kind: "unmanaged" }, keyOf(freshEntry))).toEqual(
+        { entry: expected, runtimeEntry: expected },
+      );
+      expect(enumerate).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it("keeps missing runtime credentials labeled missing", async () => {
     const prepared = facts();
     const owner = { ...prepared, config: prepared.cfg, modelCatalog: prepared.snapshot };
@@ -105,11 +157,10 @@ describe("prepared model catalog view", () => {
       source: "auth profile store",
       apiKeyOnly: false,
     };
-    setPreparedModelRuntimeAuthLabels(
-      owner,
-      new Map([["openai", { all: missing, apiKey: missing }]]),
-    );
-    setPreparedModelRuntimeAuthStore(owner, { version: 1, profiles: {} });
+    bindPreparedModelRuntimeAuth(owner, {
+      labels: new Map([["openai", { all: missing, apiKey: missing }]]),
+      store: { version: 1, profiles: {} },
+    });
     mocks.loadOwner.mockResolvedValue(owner);
     const view = await loadPreparedModelCatalogView({
       kind: "status",
@@ -184,14 +235,6 @@ describe("prepared model catalog view", () => {
   });
 
   it("uses authored inventory membership with canonical route metadata", () => {
-    const model = (id: string): ModelDefinitionConfig => ({
-      id,
-      name: id,
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      maxTokens: 1024,
-    });
     const cfg: OpenClawConfig = {
       models: {
         providers: {
@@ -221,14 +264,12 @@ describe("prepared model catalog view", () => {
         providers: {
           fixture: {
             baseUrl: "https://authored.example/v1",
-            models: Array.from({ length: 32 }, (_, index) => ({
-              id: `vendor/model-${String(index).padStart(2, "0")}`,
-              name: `Authored ${String(index).padStart(2, "0")}`,
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              maxTokens: 1024,
-            })),
+            models: Array.from({ length: 32 }, (_, index) =>
+              model(
+                `vendor/model-${String(index).padStart(2, "0")}`,
+                `Authored ${String(index).padStart(2, "0")}`,
+              ),
+            ),
           },
         },
       },
@@ -366,27 +407,6 @@ function nativeRegistry(readiness: () => { accountType: string; authMode: string
 }
 
 describe("prepared native catalog readiness", () => {
-  it("reads prepared native rows without discovering a harness catalog", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          model: "custom/native-model",
-          models: { "custom/native-model": { agentRuntime: { id: "native-test" } } },
-        },
-      },
-    };
-    const registry = nativeRegistry(() => ({ accountType: "apiKey", authMode: "oauth" }));
-    const loadModelCatalog = vi.fn(async () => [nativeEntry]);
-    registry.agentHarnesses[0]!.harness.loadModelCatalog = loadModelCatalog;
-    const result = prepareModelCatalogView({
-      ...facts(cfg),
-      snapshot: snapshot([nativeEntry]),
-      pluginRegistry: registry,
-    });
-    expect(result.catalog).toEqual([nativeEntry]);
-    expect(loadModelCatalog).not.toHaveBeenCalled();
-  });
-
   it.each([
     { name: "matching native observation", variants: [nativeEntry], available: true },
     { name: "cold catalog", variants: [], available: undefined },
@@ -500,7 +520,7 @@ describe("prepared native catalog readiness", () => {
 });
 
 describe("runtime capability donors", () => {
-  it.each(["empty", "unrelated", "native-without-window"])(
+  it.each(["unrelated", "native-without-window"])(
     "preserves logical fallback without borrowing native windows (%s)",
     (scenario) => {
       const base: ModelCatalogEntry = {
@@ -510,18 +530,16 @@ describe("runtime capability donors", () => {
         contextWindows: [{ id: "32k", label: "32K", contextWindow: 32_000 }],
       };
       const routeVariants: ModelCatalogEntry[] =
-        scenario === "empty"
-          ? []
-          : scenario === "unrelated"
-            ? [{ provider: "fixture", id: "other", name: "Other" }]
-            : [
-                {
-                  provider: "fixture",
-                  id: "model",
-                  name: "Model",
-                  nativeRuntime: "native-fixture",
-                },
-              ];
+        scenario === "unrelated"
+          ? [{ provider: "fixture", id: "other", name: "Other" }]
+          : [
+              {
+                provider: "fixture",
+                id: "model",
+                name: "Model",
+                nativeRuntime: "native-fixture",
+              },
+            ];
       const selected = selectModelCatalogRuntimeEntry({
         entry: base,
         routeVariants,

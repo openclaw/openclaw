@@ -1,14 +1,9 @@
-/**
- * Remote shell-backed sandbox filesystem bridge.
- *
- * Resolves sandbox paths against uploaded remote mounts and performs guarded operations through backend shell commands.
- */
 import path from "node:path";
-import { parseDirectoryEntries, type DirectoryEntry } from "../../infra/directory-entries.js";
 import {
   GUEST_FILESYSTEM_CREATE_EXISTS_EXIT_CODE,
   GUEST_FILESYSTEM_READ_NOT_FOUND_EXIT_CODE,
-} from "../../infra/guest-filesystem.js";
+} from "@openclaw/fs-safe/guest";
+import { parseDirectoryEntries, type DirectoryEntry } from "../../infra/directory-entries.js";
 import type {
   SandboxBackendCommandResult,
   SandboxFsBridgeContext,
@@ -50,7 +45,6 @@ import { resolveReadOnlyWorkspaceSkillMounts } from "./workspace-mounts.js";
 
 export type { RemoteShellSandboxHandle } from "./remote-fs-bridge.types.js";
 
-/** Create the filesystem bridge for remote shell-backed sandbox runtimes. */
 export function createRemoteShellSandboxFsBridge(params: {
   sandbox: SandboxFsBridgeContext;
   runtime: RemoteShellSandboxHandle;
@@ -291,12 +285,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     return { result, containerPath: target.containerPath };
   }
 
-  async mkdirp(params: {
-    filePath: string;
-    cwd?: string;
-    pinnedPath?: string;
-    signal?: AbortSignal;
-  }): Promise<void> {
+  async mkdirp(params: Parameters<SandboxFsBridge["mkdirp"]>[0]): Promise<void> {
     const target = this.resolveTarget(params);
     await this.ensureRemoteWritable(target, "create directories", params.signal);
     const relativePath = path.posix.relative(target.mountRootPath, target.containerPath);
@@ -347,7 +336,6 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       action: "remove files",
       requireWritable: true,
       includeDescendants: params.recursive,
-      allowFinalSymlinkForUnlink: true,
       pinnedCanonicalPath: authorizedRemotePinnedPath(
         params.pinnedPath,
         target.containerPath,
@@ -377,7 +365,6 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       action: "rename files",
       requireWritable: true,
       includeDescendants: true,
-      allowFinalSymlinkForUnlink: true,
       signal: params.signal,
     });
     const toPinned = await this.resolvePinnedTarget({
@@ -620,12 +607,11 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     containerPath: string;
     mountRootPath: string;
     action: string;
-    allowFinalSymlinkForUnlink?: boolean;
     signal?: AbortSignal;
   }): Promise<RemoteCanonicalPath> {
     return await resolveRemoteCanonicalPath({
       ...params,
-      runRemoteShellScript: async (command) => await this.runtime.runRemoteShellScript(command),
+      runRemoteShellScript: (command) => this.runtime.runRemoteShellScript(command),
     });
   }
 
@@ -713,10 +699,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
         `python_script=${SANDBOX_PINNED_MUTATION_PYTHON_SHELL_LITERAL}`,
         'python3 -c "$python_script" "$@"',
       ].join("\n"),
-      args: params.args,
-      stdin: params.stdin,
-      signal: params.signal,
-      allowFailure: params.allowFailure,
+      ...params,
     });
   }
 }

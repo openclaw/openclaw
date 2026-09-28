@@ -119,7 +119,9 @@ if (process.versions.bun) {
   const entryPath = fileURLToPath(new URL("../../src/entry.ts", import.meta.url));
   return runCliProcessChild({
     nodeArgs: [
-      ...(process.versions.bun ? ["--preload"] : ["--import", "tsx", "--import"]),
+      ...(process.versions.bun
+        ? ["--preload"]
+        : ["--import", new URL("../../scripts/tsx.mjs", import.meta.url).href, "--import"]),
       loaderPath,
       entryPath,
       "doctor",

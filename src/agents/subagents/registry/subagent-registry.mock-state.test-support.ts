@@ -1,9 +1,11 @@
+import type { Result } from "@openclaw/normalization-core/result";
 import { vi } from "vitest";
 import type { SessionEntry } from "../../../config/sessions.js";
 import type {
   listSessionEntriesCore,
   loadSessionEntry,
   patchSessionEntryCore,
+  SessionEntryReadScope,
 } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
@@ -114,5 +116,30 @@ export function createSubagentRegistryMockState() {
     })),
     lifecycleGeneration: "test-generation",
   };
-  return mocks;
+  return Object.assign(mocks, {
+    sessionAccessors: {
+      findTranscriptEvent: vi.fn(async () => undefined),
+      listSessionEntriesCore: mocks.listSessionEntriesCore,
+      listSessionEntriesReadOnly: mocks.listSessionEntriesCore,
+      loadSessionEntry: mocks.loadSessionEntry,
+      loadSessionEntryReadOnly: mocks.loadSessionEntry,
+      patchSessionEntryCore: mocks.patchSessionEntryCore,
+    },
+    withSessionEntryReadOnlyInWorker: async <T>(
+      scope: SessionEntryReadScope,
+      assertCurrent: () => void,
+      consume: (read: Result<SessionEntry | undefined, unknown>) => Promise<T>,
+    ): Promise<T> => {
+      assertCurrent();
+      let read: Result<SessionEntry | undefined, unknown>;
+      try {
+        read = { ok: true, value: mocks.loadSessionEntry(scope) };
+      } catch (error) {
+        read = { ok: false, error };
+      }
+      const result = await consume(read);
+      assertCurrent();
+      return result;
+    },
+  });
 }

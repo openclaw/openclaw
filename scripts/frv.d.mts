@@ -42,11 +42,6 @@ export interface FrvClient {
     runAttempt: number,
     options?: FrvReadOptions,
   ) => Promise<Record<string, unknown>>;
-  getManualRetryAuthority?: (
-    plan: Record<string, unknown>,
-    childKey: string,
-    operationDeadline: number,
-  ) => Promise<{ outcome: "not-attempted" | "rejected" }>;
   rerunFailed?: (runId: string) => Promise<unknown>;
   rerunJob?: (jobId: number) => Promise<unknown>;
   rerunParent?: (runId: string) => Promise<unknown>;
@@ -74,12 +69,7 @@ export type FrvConcreteClient = FrvClient &
   Required<
     Pick<
       FrvClient,
-      | "getManualRetryAuthority"
-      | "rerunFailed"
-      | "rerunJob"
-      | "rerunParent"
-      | "verify"
-      | "verifySeal"
+      "rerunFailed" | "rerunJob" | "rerunParent" | "listRuns" | "verify" | "verifySeal"
     >
   >;
 

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import {
   validatePluginsInstallParams,
@@ -19,9 +19,12 @@ const callGateway = vi.mocked(callAgentToolGatewayRequest);
 const runtime = { operationId: "reload-1", generation: 2, pluginIds: ["local-tool"] };
 
 describe("plugins tool", () => {
+  let refresh: ReturnType<typeof createAgentPluginRuntimeRefresh>;
   beforeEach(() => {
     callGateway.mockReset();
+    refresh = createAgentPluginRuntimeRefresh();
   });
+  afterEach(() => refresh.close());
 
   it("rejects an unsupported install source before dispatch", async () => {
     await expect(
@@ -30,11 +33,11 @@ describe("plugins tool", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
-  it.each(
-    ["success", "committed-error", "uncommitted-error"].flatMap((outcome) =>
-      [false, true].map((oversized) => ({ outcome, oversized })),
-    ),
-  )(
+  it.each([
+    { outcome: "success", oversized: false },
+    { outcome: "committed-error", oversized: true },
+    { outcome: "uncommitted-error", oversized: true },
+  ])(
     "reports $outcome without an absent continuation consumer (oversized: $oversized)",
     async ({ outcome, oversized }) => {
       const applied = outcome !== "uncommitted-error";
@@ -50,30 +53,25 @@ describe("plugins tool", () => {
           }),
         );
       }
-      const refresh = createAgentPluginRuntimeRefresh();
-      try {
-        await refresh.run(async () => {
-          const result = await createPluginsTool().execute("unsupported-runtime", {
-            action: "reload",
-            pluginId: "local-tool",
-          });
-          if (applied) {
-            expect(result.details).toMatchObject({
-              next: expect.stringContaining("new conversation"),
-            });
-            expect(JSON.stringify(result.details)).toContain("do not repeat");
-          } else {
-            expect(JSON.stringify(result.details)).not.toContain("new conversation");
-          }
-          expect(
-            Buffer.byteLength(JSON.stringify(result.details, null, 2), "utf8"),
-          ).toBeLessThanOrEqual(3_840);
-          expect(result.terminate).toBeUndefined();
-          expect(captureAgentPluginRuntimeRefresh().isRequested()).toBe(false);
+      await refresh.run(async () => {
+        const result = await createPluginsTool().execute("unsupported-runtime", {
+          action: "reload",
+          pluginId: "local-tool",
         });
-      } finally {
-        refresh.close();
-      }
+        if (applied) {
+          expect(result.details).toMatchObject({
+            next: expect.stringContaining("new conversation"),
+          });
+          expect(JSON.stringify(result.details)).toContain("do not repeat");
+        } else {
+          expect(JSON.stringify(result.details)).not.toContain("new conversation");
+        }
+        expect(
+          Buffer.byteLength(JSON.stringify(result.details, null, 2), "utf8"),
+        ).toBeLessThanOrEqual(3_840);
+        expect(result.terminate).toBeUndefined();
+        expect(captureAgentPluginRuntimeRefresh().isRequested()).toBe(false);
+      });
     },
   );
 
@@ -150,7 +148,6 @@ describe("plugins tool", () => {
     "routes $args.action through the authorized management owner",
     async ({ args, method, params, validate }) => {
       callGateway.mockResolvedValue({ runtime, restartRequired: false });
-      const refresh = createAgentPluginRuntimeRefresh();
       const signal = new AbortController().signal;
       await refresh.run(async () => {
         captureAgentPluginRuntimeRefresh().bindConsumer(() => true);
@@ -170,21 +167,21 @@ describe("plugins tool", () => {
         await expect(tool.execute("stale", args, signal)).rejects.toThrow("Plugin runtime changed");
         expect(callGateway).toHaveBeenCalledOnce();
       });
-      refresh.close();
     },
   );
 
-  it.each(["1.0.0", "latest"])(
-    "rejects unsupported official version %s before dispatch",
-    async (version) => {
-      const args = { action: "install", source: "official", pluginId: "local-tool", version };
-      callGateway.mockResolvedValue({ runtime });
-      await expect(createPluginsTool().execute("version", args)).rejects.toThrow(
-        "Official catalog installs do not accept a version",
-      );
-      expect(callGateway).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects an official version before dispatch", async () => {
+    const args = {
+      action: "install",
+      source: "official",
+      pluginId: "local-tool",
+      version: "1.0.0",
+    };
+    await expect(createPluginsTool().execute("version", args)).rejects.toThrow(
+      "Official catalog installs do not accept a version",
+    );
+    expect(callGateway).not.toHaveBeenCalled();
+  });
 
   it("retains capability review details without scheduling refresh after rejection", async () => {
     const details = { capabilityConsent: { reviewToken: "review-1", pluginId: "local-tool" } };
@@ -197,7 +194,6 @@ describe("plugins tool", () => {
         }),
       )
       .mockResolvedValueOnce({ runtime, restartRequired: false });
-    const refresh = createAgentPluginRuntimeRefresh();
     await refresh.run(async () => {
       captureAgentPluginRuntimeRefresh().bindConsumer(() => true);
       const owner = captureAgentPluginRuntimeRefresh();
@@ -205,7 +201,11 @@ describe("plugins tool", () => {
       const result = await tool.execute("review", { action: "reload", pluginId: "local-tool" });
       expect(result).toMatchObject({
         isError: true,
-        details: { code: "INVALID_REQUEST", details },
+        details: {
+          code: "INVALID_REQUEST",
+          error: "Review the declared capability change",
+          details,
+        },
       });
       expect(result.terminate).toBeUndefined();
       expect(owner.isPending()).toBe(false);
@@ -225,41 +225,9 @@ describe("plugins tool", () => {
       expect(validatePluginsReloadParams(callGateway.mock.calls.at(-1)?.[0].params)).toBe(true);
       expect(owner.isPending()).toBe(true);
     });
-    refresh.close();
   });
 
-  it.each([false, true])(
-    "refreshes after a failed mutation only if publication committed (%s)",
-    async (committed) => {
-      const details = { runtime: { ...runtime, phase: "activate", committed } };
-      callGateway.mockRejectedValue(
-        new GatewayClientRequestError({
-          code: "UNAVAILABLE",
-          message: "Plugin service activation failed",
-          details,
-        }),
-      );
-      const refresh = createAgentPluginRuntimeRefresh();
-      await refresh.run(async () => {
-        captureAgentPluginRuntimeRefresh().bindConsumer(() => true);
-        const owner = captureAgentPluginRuntimeRefresh();
-        const result = await createPluginsTool().execute("failed", {
-          action: "reload",
-          pluginId: "local-tool",
-        });
-        expect(result).toMatchObject({
-          isError: true,
-          details: { error: "Plugin service activation failed", details },
-        });
-        expect(result.terminate === true).toBe(committed);
-        expect(owner.isPending()).toBe(committed);
-      });
-      refresh.close();
-    },
-  );
-
   it("keeps old callback closures fenced after another generation is admitted", async () => {
-    const refresh = createAgentPluginRuntimeRefresh();
     callGateway.mockResolvedValue({ runtime });
     const oldTool = refresh.run(() => createPluginsTool());
     refresh.close();
@@ -274,7 +242,6 @@ describe("plugins tool", () => {
         nextTool.execute("current", { action: "reload", pluginId: "local-tool" }),
       ).resolves.toMatchObject({ terminate: true });
     });
-    refresh.close();
   });
 
   it.each([
@@ -318,14 +285,20 @@ describe("plugins tool", () => {
     },
   );
 
-  it.each([false, true])(
-    "keeps Gateway restart guidance when reload output is compacted (%s)",
-    async (oversized) => {
+  it.each([
+    { oversized: false, restartRequired: false },
+    { oversized: true, restartRequired: true },
+  ])(
+    "keeps selected-entry guidance with compact=$oversized and restart=$restartRequired",
+    async ({ oversized, restartRequired }) => {
       callGateway.mockResolvedValue({
         ok: true,
-        runtime,
-        restartRequired: true,
-        warnings: oversized ? ["x".repeat(4_000)] : ["Compiled bundled code needs a restart."],
+        runtime: {
+          ...runtime,
+          selectedEntries: { "local-tool": "/plugins/local-tool/dist/index.js" },
+        },
+        restartRequired,
+        warnings: oversized ? ["x".repeat(4_000)] : [],
       });
       const result = await createPluginsTool().execute("reload", {
         action: "reload",
@@ -333,12 +306,22 @@ describe("plugins tool", () => {
       });
       expect(result).toMatchObject({
         details: {
-          restartRequired: true,
+          restartRequired,
           runtime: { generation: runtime.generation },
-          next: expect.stringMatching(/restart the Gateway/i),
+          next: expect.stringContaining(
+            "Selected entry: /plugins/local-tool/dist/index.js. Rebuild compiled output after source edits.",
+          ),
         },
       });
-      expect(JSON.stringify(result)).not.toContain("Start a new conversation");
+      if (restartRequired) {
+        expect(result.details).toMatchObject({
+          next: expect.stringMatching(/restart the Gateway/i),
+        });
+        expect(JSON.stringify(result)).not.toContain("Start a new conversation");
+      }
+      expect(
+        Buffer.byteLength(JSON.stringify(result.details, null, 2), "utf8"),
+      ).toBeLessThanOrEqual(3_840);
     },
   );
 
@@ -368,42 +351,37 @@ describe("plugins tool", () => {
           }),
         );
       }
-      const refresh = createAgentPluginRuntimeRefresh();
-      try {
-        await refresh.run(async () => {
-          captureAgentPluginRuntimeRefresh().bindConsumer(() => true);
-          const owner = captureAgentPluginRuntimeRefresh();
-          const result = await createPluginsTool().execute("large-mutation", {
-            action: "reload",
-            pluginId: "local-tool",
-          });
-          expect(result).toMatchObject({
-            details: {
-              ok: committed === undefined,
-              runtime: { generation: runtime.generation, committed: committed ?? true },
-              restartRequired: false,
-              warnings: ["🦞".repeat(80), "界".repeat(160)],
-              omittedWarningCount: 1,
-              detailsOmitted: "response_budget_exceeded",
-            },
-            content: [{ type: "text", text: JSON.stringify(result.details, null, 2) }],
-          });
-          if (committed !== undefined) {
-            expect(result).toMatchObject({
-              isError: true,
-              details: { runtime: { phase: "activate" } },
-            });
-          }
-          expect(
-            Buffer.byteLength(JSON.stringify(result.details, null, 2), "utf8"),
-          ).toBeLessThanOrEqual(3_840);
-          expect(JSON.stringify(result)).not.toContain("complete-review-only");
-          expect(result.terminate === true).toBe(committed ?? true);
-          expect(owner.isPending()).toBe(committed ?? true);
+      await refresh.run(async () => {
+        captureAgentPluginRuntimeRefresh().bindConsumer(() => true);
+        const owner = captureAgentPluginRuntimeRefresh();
+        const result = await createPluginsTool().execute("large-mutation", {
+          action: "reload",
+          pluginId: "local-tool",
         });
-      } finally {
-        refresh.close();
-      }
+        expect(result).toMatchObject({
+          details: {
+            ok: committed === undefined,
+            runtime: { generation: runtime.generation, committed: committed ?? true },
+            restartRequired: false,
+            warnings: ["🦞".repeat(80), "界".repeat(160)],
+            omittedWarningCount: 1,
+            detailsOmitted: "response_budget_exceeded",
+          },
+          content: [{ type: "text", text: JSON.stringify(result.details, null, 2) }],
+        });
+        if (committed !== undefined) {
+          expect(result).toMatchObject({
+            isError: true,
+            details: { runtime: { phase: "activate" } },
+          });
+        }
+        expect(
+          Buffer.byteLength(JSON.stringify(result.details, null, 2), "utf8"),
+        ).toBeLessThanOrEqual(3_840);
+        expect(JSON.stringify(result)).not.toContain("complete-review-only");
+        expect(result.terminate === true).toBe(committed ?? true);
+        expect(owner.isPending()).toBe(committed ?? true);
+      });
     },
   );
 

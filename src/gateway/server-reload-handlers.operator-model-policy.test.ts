@@ -28,6 +28,7 @@ import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js"
 import { createEmptyRuntimeWebToolsMetadata } from "../secrets/runtime-fast-path.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveGatewayAuthPolicyGeneration } from "./auth-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
@@ -138,6 +139,7 @@ it("commits model-only role changes without retiring permitted models or origina
     });
     const log = createInfoWarnErrorLogger();
     const reloader = startManagedGatewayConfigReloader({
+      scheduler: createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
       getPluginRegistry: () => registry,
       configRevisionProjector: {
         projectRawHash: (hash) => hash,
@@ -197,7 +199,7 @@ it("commits model-only role changes without retiring permitted models or origina
       }),
       requestRecoveryRestart,
     });
-    let original: ReturnType<typeof captureGatewayOperatorRunAuthority>;
+    let original: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
     let modelA: ReturnType<typeof bindOperatorModelExecution>;
     let modelB: ReturnType<typeof bindOperatorModelExecution>;
     try {
@@ -210,8 +212,8 @@ it("commits model-only role changes without retiring permitted models or origina
         buildRequestContext: () => context,
         extraHandlers: {
           // A classified write route exercises ordinary operator admission before capture.
-          wake: (options) => {
-            original = captureGatewayOperatorRunAuthority({
+          wake: async (options) => {
+            original = await captureGatewayOperatorRunAuthority({
               client: options.client,
               context,
               hasCurrentClientAuthority: options.hasCurrentClientAuthority,

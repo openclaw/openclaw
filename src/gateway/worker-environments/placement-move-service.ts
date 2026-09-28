@@ -8,6 +8,7 @@ import type {
   WorkerPlacementMoveIntent,
   WorkerPlacementMoveTarget,
 } from "./placement-move-intent.js";
+import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
 import {
   matchesWorkerPlacementTarget,
   type WorkerReclaimPlacement,
@@ -216,9 +217,12 @@ export function createWorkerPlacementMoveService(options: {
     }
   };
 
-  const recover = async (intent: WorkerPlacementMoveIntent): Promise<void> => {
+  const recover = async (
+    intent: WorkerPlacementMoveIntent,
+    initialPlacement: WorkerDispatchPlacement | undefined,
+  ): Promise<void> => {
     try {
-      let placement = options.placements.get(intent.sessionId);
+      let placement = initialPlacement;
       if (!placement) {
         throw new Error(`Session ${intent.sessionId} placement move lost its session placement`);
       }
@@ -341,10 +345,13 @@ export function createWorkerPlacementMoveService(options: {
     }
   };
 
-  const recoverAll = async (environmentId?: string): Promise<Set<string>> => {
+  const recoverSession = async (
+    projection: WorkerSessionPlacementProjection,
+    environmentId?: string,
+  ): Promise<Set<string>> => {
     const protectedSessions = new Set<string>();
-    for (const intent of options.placements.listPlacementMoves()) {
-      const placement = options.placements.get(intent.sessionId);
+    for (const intent of projection.moves.values()) {
+      const placement = projection.placements.get(intent.sessionId);
       // Source cleanup can leave a local placement; destination activation keeps the
       // move intent until completion. Either owner must be able to finish that move.
       if (
@@ -362,10 +369,10 @@ export function createWorkerPlacementMoveService(options: {
       ) {
         protectedSessions.add(intent.sessionId);
       }
-      await recover(intent).catch(() => undefined);
+      await recover(intent, placement).catch(() => undefined);
     }
     return protectedSessions;
   };
 
-  return { move, recoverAll };
+  return { move, recoverSession };
 }

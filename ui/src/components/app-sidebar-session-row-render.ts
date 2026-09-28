@@ -18,7 +18,6 @@ import type {
   SessionMethodAccess,
   SessionMethodAccessRequest,
 } from "../lib/session-method-access.ts";
-import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { writeSessionDragData } from "../lib/sessions/drag.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import { canArchiveSessionRow, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
@@ -57,7 +56,9 @@ export interface SessionListHost {
     | Pick<ApplicationContext, "gateway" | "agentSelection" | "agents" | "sessions">
     | undefined;
   readonly sidebarLiveActivity: boolean;
+  readonly sessionsShowCron: boolean;
   readonly sessionsShowPreview: boolean;
+  readonly sessionsShowSystem: boolean;
   readonly sidebarNarrationLines: ReadonlyMap<string, string>;
   readonly sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest>;
   readonly sessionProjection: Pick<SidebarSessionProjection, "resolveSubtitle">;
@@ -66,7 +67,9 @@ export interface SessionListHost {
   readonly sessionData: Pick<
     SessionDataController,
     | "childSessionErrorsByParent"
+    | "dismissSessionMutationError"
     | "loadMoreSessionCatalog"
+    | "loadMoreSidebarSessions"
     | "presenceInstanceId"
     | "presencePayload"
     | "refreshSessionCatalogs"
@@ -81,10 +84,20 @@ export interface SessionListHost {
     SessionOrganizerController,
     | "draggingSidebarSection"
     | "draggingSessionKey"
+    | "finishSessionDrag"
+    | "finishSidebarSectionDrag"
+    | "handleSessionListDragLeave"
+    | "handleSessionListDragOver"
+    | "handleSessionListDrop"
+    | "sectionDragLeave"
+    | "sectionDragOver"
+    | "sectionDrop"
     | "sessionDropTarget"
     | "sidebarSectionDropTarget"
     | "sessionListRemovalDrop"
     | "setSessionsStatusFilter"
+    | "startSessionDrag"
+    | "startSidebarSectionDrag"
     | "archiveSessionWithUndo"
     | "patchSession"
     | "reorderSidebarSection"
@@ -119,8 +132,6 @@ export interface SessionListHost {
   setSessionOwnerFilter(ownerId: string | null, involvingMe?: boolean): void;
   isSessionChildrenExpanded(session: SidebarRecentSession): boolean;
   isSessionChildrenFullyShown(sessionKey: string): boolean;
-  startSessionDrag(session: SidebarRecentSession): void;
-  finishSessionDrag(): void;
   sidebarSessionHref(session: SidebarRecentSession): string;
   handleSessionRowClick(event: MouseEvent, session: SidebarRecentSession): void;
   toggleSessionChildren(session: SidebarRecentSession): void;
@@ -131,11 +142,6 @@ export interface SessionListHost {
     catalogMenu?: CatalogSessionMenuRequest,
   ): void;
   showMoreChildren(sessionKey: string): void;
-  sectionDragOver(event: DragEvent, sectionId: string, group?: string): void;
-  sectionDragLeave(event: DragEvent, sectionId: string, group?: string): void;
-  sectionDrop(event: DragEvent, sectionId: string, group?: string): void;
-  startSidebarSectionDrag(sectionId: string): void;
-  finishSidebarSectionDrag(): void;
   toggleSection(sectionId: string): void;
   expandedAgentId(): string;
   readNewSessionAccess(): SessionMethodAccess;
@@ -143,17 +149,6 @@ export interface SessionListHost {
   requestOpenNewSession(agentId: string, target?: NewSessionTarget): void;
   setVisibleSessionLimit(sectionId: string, limit: number): void;
   clearSessionSelection(): void;
-  handleSessionListDragOver(event: DragEvent): void;
-  handleSessionListDragLeave(event: DragEvent): void;
-  handleSessionListDrop(event: DragEvent): void;
-  dismissSessionMutationError(): void;
-  openCatalogMenu(
-    request: CatalogSessionMenuRequest,
-    x: number,
-    y: number,
-    trigger?: HTMLElement,
-  ): void;
-  retargetCatalogMenuTrigger(key: CatalogSessionKey, element: Element | undefined): void;
 }
 
 export function visibleSessionChildren(params: {
@@ -374,7 +369,7 @@ export function renderRecentSession(params: {
       (event.currentTarget as HTMLElement).querySelector(".sidebar-recent-session__link"),
       (trigger, x, y) => {
         if (display?.catalogMenu) {
-          host.openCatalogMenu(display.catalogMenu, x, y, trigger ?? undefined);
+          host.sidebarMenus.catalogMenu.open(display.catalogMenu, x, y, trigger ?? undefined);
           return;
         }
         host.sidebarMenus.openSessionMenu(session, x, y, trigger);
@@ -456,7 +451,7 @@ export function renderRecentSession(params: {
           : (event: DragEvent) => {
               if (event.dataTransfer) {
                 writeSessionDragData(event.dataTransfer, session.key);
-                host.startSessionDrag(session);
+                host.sessionOrganizer.startSessionDrag(session);
               }
             }
       }
@@ -464,7 +459,7 @@ export function renderRecentSession(params: {
         !rowDraggable
           ? nothing
           : () => {
-              host.finishSessionDrag();
+              host.sessionOrganizer.finishSessionDrag();
             }
       }
       @contextmenu=${openMenuFromEvent}

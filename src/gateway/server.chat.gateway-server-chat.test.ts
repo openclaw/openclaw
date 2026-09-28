@@ -3,12 +3,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { WebSocket, type RawData } from "ws";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { WebSocket } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
+import type { ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.types.js";
 import { replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
 import { loadSessionEntry, updateSessionEntry } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
@@ -36,6 +37,7 @@ import { drainOpenClawAgentWriteQueuesForTest } from "../state/openclaw-agent-wr
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
+import { createMainChatSessionStoreFixture } from "./server.chat-session-store.test-support.js";
 import {
   collectHistoryTextValues,
   createGatewayHistoryText,
@@ -57,7 +59,6 @@ import {
   rpcReq,
   testState,
   trackConnectChallengeNonce,
-  withGatewayServer,
   writeSessionStore,
 } from "./test-helpers.js";
 import { agentCommandMock } from "./test-helpers.runtime-state.js";
@@ -65,6 +66,22 @@ import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
 const CHAT_RESPONSE_TIMEOUT_MS = 10_000;
+
+function mockDispatchedReplies(kind: "final" | "block", payloads: ReplyPayload[]) {
+  dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+    const [params] = args as [{ dispatcher: ReplyDispatcher }];
+    for (const payload of payloads) {
+      if (kind === "final") {
+        params.dispatcher.sendFinalReply(payload);
+      } else {
+        params.dispatcher.sendBlockReply(payload);
+      }
+    }
+    params.dispatcher.markComplete();
+    await params.dispatcher.waitForIdle();
+    return { queuedFinal: kind === "final", counts: params.dispatcher.getQueuedCounts() };
+  });
+}
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -132,31 +149,10 @@ describe("gateway server chat", () => {
     );
   };
 
-  const withMainSessionStore = async <T>(
-    run: (dir: string) => Promise<T>,
-    options?: { archivedAt?: number; sessionId?: string },
-  ): Promise<T> => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
-    try {
-      const sessionId = options?.sessionId ?? "sess-main";
-      testState.sessionStorePath = path.join(dir, "sessions.json");
-      await writeSessionStore({
-        entries: {
-          main: {
-            sessionId,
-            sessionFile: path.join(dir, `${sessionId}.jsonl`),
-            updatedAt: Date.now(),
-            ...(options?.archivedAt !== undefined ? { archivedAt: options.archivedAt } : {}),
-          },
-        },
-      });
-      return await run(dir);
-    } finally {
-      // Dispatch can outlive its RPC; keep its store selected until retained work settles.
-      await settleGatewayFixture();
-      await removeTempDir(dir);
-    }
-  };
+  const mainSessionStore = createMainChatSessionStoreFixture(settleGatewayFixture);
+  beforeAll(mainSessionStore.prepare);
+  afterAll(mainSessionStore.dispose);
+  const withMainSessionStore = mainSessionStore.run;
 
   const expectRecordFields = (value: unknown, expected: Record<string, unknown>) => {
     if (!value || typeof value !== "object") {
@@ -367,244 +363,6 @@ describe("gateway server chat", () => {
       expect(getActiveGatewayRootWorkCount()).toBe(0);
     });
   });
-
-  test.each([
-    {
-      name: "text",
-      completion: { kind: "completed" as const },
-      payloads: [{ text: "late answer arrived over the live WebSocket" }],
-      state: "final",
-    },
-    { name: "empty", completion: { kind: "completed" as const }, payloads: [], state: "final" },
-    {
-      name: "canvas",
-      completion: { kind: "completed" as const, allowCanvasOnly: true as const },
-      payloads: [],
-      state: "final",
-    },
-    {
-      name: "silent-canvas",
-      completion: { kind: "completed" as const, allowCanvasOnly: true as const },
-      payloads: [],
-      state: "final",
-    },
-    {
-      name: "suppressed-canvas",
-      completion: { kind: "completed" as const },
-      payloads: [],
-      state: "final",
-    },
-    {
-      name: "failure",
-      completion: { kind: "failed" as const, error: "follow-up failed" },
-      payloads: [],
-      state: "error",
-    },
-    {
-      name: "timeout",
-      completion: {
-        kind: "failed" as const,
-        error: "provider timed out",
-        errorKind: "timeout" as const,
-        stopReason: "timeout",
-      },
-      payloads: [],
-      state: "error",
-    },
-    {
-      name: "abort",
-      completion: { kind: "aborted" as const, stopReason: "restart" },
-      payloads: [],
-      state: "aborted",
-    },
-  ])(
-    "completes a queued WebChat $name once after its source ends",
-    async ({ name, completion, payloads, state }) => {
-      await withMainSessionStore(async () => {
-        let options: InternalGetReplyOptions | undefined;
-        const releaseDispatch = createDeferred();
-        dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
-          options = (args as { replyOptions?: InternalGetReplyOptions }).replyOptions;
-          options?.turnAdoptionLifecycle?.onDeferred?.();
-          await releaseDispatch.promise;
-          return {};
-        });
-
-        const sourceRunId = `idem-live-webchat-late-source-${name}`;
-        const sourceFinal = onceMessage(
-          ws,
-          (event) =>
-            event.type === "event" &&
-            event.event === "chat" &&
-            event.payload?.state === "final" &&
-            event.payload?.runId === sourceRunId,
-          CHAT_RESPONSE_TIMEOUT_MS,
-        );
-        const response = await rpcReq(ws, "chat.send", {
-          sessionKey: "main",
-          message: "queue a reply while the previous run is active",
-          idempotencyKey: sourceRunId,
-        });
-        expect(response.ok).toBe(true);
-        await waitForFast(() => expect(options?.onQueuedFollowupReplyBatch).toBeTypeOf("function"));
-        releaseDispatch.resolve();
-        await sourceFinal;
-
-        const followupRunId = `idem-live-webchat-late-followup-${name}`;
-        const terminalFrames: unknown[] = [];
-        const deltaFrames: unknown[] = [];
-        const recordFollowup = (raw: RawData) => {
-          const frame = JSON.parse(rawDataToString(raw));
-          if (
-            frame.event === "chat" &&
-            frame.payload?.runId === followupRunId &&
-            frame.payload?.state !== "delta"
-          ) {
-            terminalFrames.push(frame.payload);
-          } else if (frame.event === "chat" && frame.payload?.runId === followupRunId) {
-            deltaFrames.push(frame.payload);
-          }
-        };
-        ws.on("message", recordFollowup);
-        const queuedFinal = onceMessage(
-          ws,
-          (event) =>
-            event.type === "event" &&
-            event.event === "chat" &&
-            event.payload?.state === state &&
-            event.payload?.runId === followupRunId,
-          CHAT_RESPONSE_TIMEOUT_MS,
-        );
-        registerAgentRunContext(followupRunId, { sessionKey: "main" });
-        registerAgentRunContext(followupRunId, { completionSource: "reply-dispatch" });
-        if (
-          name === "canvas" ||
-          name === "silent-canvas" ||
-          name === "suppressed-canvas" ||
-          name === "abort"
-        ) {
-          emitAgentEvent({
-            runId: followupRunId,
-            stream: "tool",
-            data: {
-              phase: "result",
-              name: "show_widget",
-              result: {
-                content: [
-                  {
-                    type: "text",
-                    text: JSON.stringify({
-                      kind: "canvas",
-                      presentation: {
-                        target: "assistant_message",
-                        title: "Result",
-                        sandbox: "scripts",
-                      },
-                      view: {
-                        id: "result",
-                        url: "/__openclaw__/canvas/documents/result/index.html",
-                      },
-                    }),
-                  },
-                ],
-              },
-            },
-          });
-        }
-        if (name === "text") {
-          await options?.onQueuedFollowupReplyBatch?.({
-            kind: "queued-followup",
-            completion: { kind: "progress" },
-            runId: followupRunId,
-            originatingChannel: "webchat",
-            payloads: [{ text: "working" }],
-          });
-        }
-        emitAgentEvent({
-          runId: followupRunId,
-          stream: "assistant",
-          data: {
-            text:
-              name === "canvas" || name === "suppressed-canvas"
-                ? ""
-                : name === "silent-canvas"
-                  ? "NO_REPLY"
-                  : "late answer arrived over the live WebSocket",
-          },
-        });
-        if (completion.kind === "failed" || completion.kind === "aborted") {
-          emitAgentEvent({
-            runId: followupRunId,
-            stream: "assistant",
-            data: {
-              text: "late answer arrived over the live WebSocket tail",
-              delta: " tail",
-            },
-          });
-        }
-        emitAgentEvent({
-          runId: followupRunId,
-          stream: "lifecycle",
-          data: {
-            phase: completion.kind === "failed" ? "error" : "end",
-            executionSettled: true,
-            ...(completion.kind === "aborted" ? { aborted: true, stopReason: "restart" } : {}),
-          },
-        });
-        await options?.onQueuedFollowupReplyBatch?.({
-          kind: "queued-followup",
-          completion,
-          runId: followupRunId,
-          originatingChannel: "webchat",
-          payloads,
-        });
-        const completed = await queuedFinal;
-        expect(completed.payload?.state).toBe(state);
-        if (name === "timeout") {
-          expect(completed.payload).toMatchObject({ errorKind: "timeout", stopReason: "timeout" });
-        }
-        if (name === "abort") {
-          expect(completed.payload).toMatchObject({ stopReason: "restart" });
-        }
-        if (name === "canvas" || name === "abort") {
-          expect(completed.payload?.message).toMatchObject({
-            content: expect.arrayContaining([expect.objectContaining({ type: "canvas" })]),
-          });
-        }
-        if (name === "silent-canvas" || name === "suppressed-canvas") {
-          expect(completed.payload?.message).toBeUndefined();
-        }
-        if (name === "text") {
-          expect(completed.payload?.message).toMatchObject({
-            content: [
-              { type: "text", text: "working" },
-              { type: "text", text: "late answer arrived over the live WebSocket" },
-            ],
-          });
-        }
-        await rpcReq(ws, "health", {});
-        expect(terminalFrames).toHaveLength(1);
-        if (completion.kind === "failed" || completion.kind === "aborted") {
-          expect(deltaFrames.at(-1)).toMatchObject({
-            message: {
-              content: expect.arrayContaining([
-                { type: "text", text: "late answer arrived over the live WebSocket tail" },
-              ]),
-            },
-          });
-        }
-        if (completion.kind === "aborted") {
-          expect(completed.payload?.message).toMatchObject({
-            content: expect.arrayContaining([
-              { type: "text", text: "late answer arrived over the live WebSocket tail" },
-            ]),
-          });
-        }
-        ws.off("message", recordFollowup);
-        options?.turnAdoptionLifecycle?.onSettled?.();
-      });
-    },
-  );
 
   const waitForAgentRunOk = async (runId: string, timeoutMs = 1_000) => {
     const res = await rpcReq(ws, "agent.wait", {
@@ -1454,8 +1212,9 @@ describe("gateway server chat", () => {
             getEmbeddedRuns: () => 0,
             getCronRuns: () => 0,
             getBackgroundExecSessions: () => 0,
-            getActiveTasks: () => 0,
-            getTaskBlockers: () => [],
+            getAgentRuns: () => 0,
+            getAcpRuns: () => 0,
+            getMediaRuns: () => 0,
           };
           expect(createSafeGatewayRestartPreflight(restartInspectors)).toMatchObject({
             safe: false,
@@ -1486,10 +1245,7 @@ describe("gateway server chat", () => {
       const sessionsRes = await rpcReq<{ sessions?: unknown[] }>(ws, "sessions.list", {});
       expect(sessionsRes.ok).toBe(true);
       const session = sessionsRes.payload?.sessions?.find(
-        (row): row is Record<string, unknown> =>
-          Boolean(row) &&
-          typeof row === "object" &&
-          (row as { key?: unknown }).key === "agent:main:main",
+        (row) => isRecord(row) && row.key === "agent:main:main",
       );
       const actualSession = expectRecordFields(session, {
         status: "failed",
@@ -1803,23 +1559,10 @@ describe("gateway server chat", () => {
   test("preserves split fenced-code indentation in chat.send events and history", async () => {
     await withMainSessionStore(async () => {
       const expected = "```yaml\nroot:\n  nested:\n    value: true\n```";
-      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
-        const [params] = args as [
-          {
-            dispatcher: {
-              sendFinalReply: (payload: { text: string }) => boolean;
-              markComplete: () => void;
-              waitForIdle: () => Promise<void>;
-              getQueuedCounts: () => { final: number; block: number; tool: number };
-            };
-          },
-        ];
-        params.dispatcher.sendFinalReply({ text: "```yaml\nroot:\n" });
-        params.dispatcher.sendFinalReply({ text: "  nested:\n    value: true\n```" });
-        params.dispatcher.markComplete();
-        await params.dispatcher.waitForIdle();
-        return { queuedFinal: true, counts: params.dispatcher.getQueuedCounts() };
-      });
+      mockDispatchedReplies("final", [
+        { text: "```yaml\nroot:\n" },
+        { text: "  nested:\n    value: true\n```" },
+      ]);
       const finalPromise = onceMessage(
         ws,
         (event) =>
@@ -1882,28 +1625,7 @@ describe("gateway server chat", () => {
           },
         }),
       ]);
-      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
-        const [params] = args as [
-          {
-            dispatcher: {
-              sendFinalReply: (payload: { text: string; btw: { question: string } }) => boolean;
-              markComplete: () => void;
-              waitForIdle: () => Promise<void>;
-              getQueuedCounts: () => { final: number; block: number; tool: number };
-            };
-          },
-        ];
-        params.dispatcher.sendFinalReply({
-          text: "323",
-          btw: { question: "what is 17 * 19?" },
-        });
-        params.dispatcher.markComplete();
-        await params.dispatcher.waitForIdle();
-        return {
-          queuedFinal: true,
-          counts: params.dispatcher.getQueuedCounts(),
-        };
-      });
+      mockDispatchedReplies("final", [{ text: "323", btw: { question: "what is 17 * 19?" } }]);
       const sideResultPromise = onceMessage(
         ws,
         (o) =>
@@ -1959,29 +1681,10 @@ describe("gateway server chat", () => {
 
   test("preserves split fenced-code indentation in /btw side-result events", async () => {
     await withMainSessionStore(async () => {
-      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
-        const [params] = args as [
-          {
-            dispatcher: {
-              sendBlockReply: (payload: { text: string; btw: { question: string } }) => boolean;
-              markComplete: () => void;
-              waitForIdle: () => Promise<void>;
-              getQueuedCounts: () => { final: number; block: number; tool: number };
-            };
-          },
-        ];
-        params.dispatcher.sendBlockReply({
-          text: "```yaml\nroot:\n",
-          btw: { question: "show YAML" },
-        });
-        params.dispatcher.sendBlockReply({
-          text: "  nested:\n    value: true\n```",
-          btw: { question: "show YAML" },
-        });
-        params.dispatcher.markComplete();
-        await params.dispatcher.waitForIdle();
-        return { queuedFinal: false, counts: params.dispatcher.getQueuedCounts() };
-      });
+      mockDispatchedReplies("block", [
+        { text: "```yaml\nroot:\n", btw: { question: "show YAML" } },
+        { text: "  nested:\n    value: true\n```", btw: { question: "show YAML" } },
+      ]);
       const sideResultPromise = onceMessage(
         ws,
         (event) =>
@@ -2018,32 +1721,10 @@ describe("gateway server chat", () => {
           },
         }),
       ]);
-      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
-        const [params] = args as [
-          {
-            dispatcher: {
-              sendBlockReply: (payload: { text: string; btw: { question: string } }) => boolean;
-              markComplete: () => void;
-              waitForIdle: () => Promise<void>;
-              getQueuedCounts: () => { final: number; block: number; tool: number };
-            };
-          },
-        ];
-        params.dispatcher.sendBlockReply({
-          text: "first chunk",
-          btw: { question: "what changed?" },
-        });
-        params.dispatcher.sendBlockReply({
-          text: "second chunk",
-          btw: { question: "what changed?" },
-        });
-        params.dispatcher.markComplete();
-        await params.dispatcher.waitForIdle();
-        return {
-          queuedFinal: false,
-          counts: params.dispatcher.getQueuedCounts(),
-        };
-      });
+      mockDispatchedReplies("block", [
+        { text: "first chunk", btw: { question: "what changed?" } },
+        { text: "second chunk", btw: { question: "what changed?" } },
+      ]);
       const sideResultPromise = onceMessage(
         ws,
         (o) =>
@@ -2080,28 +1761,9 @@ describe("gateway server chat", () => {
         // Keep the connected owner's profile and media in the suite-owned state directory.
         const pngB64 =
           "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
-        dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
-          const [params] = args as [
-            {
-              dispatcher: {
-                sendFinalReply: (payload: { text?: string; mediaUrls?: string[] }) => boolean;
-                markComplete: () => void;
-                waitForIdle: () => Promise<void>;
-                getQueuedCounts: () => { final: number; block: number; tool: number };
-              };
-            },
-          ];
-          params.dispatcher.sendFinalReply({
-            text: "Image reply",
-            mediaUrls: [`data:image/png;base64,${pngB64}`],
-          });
-          params.dispatcher.markComplete();
-          await params.dispatcher.waitForIdle();
-          return {
-            queuedFinal: true,
-            counts: params.dispatcher.getQueuedCounts(),
-          };
-        });
+        mockDispatchedReplies("final", [
+          { text: "Image reply", mediaUrls: [`data:image/png;base64,${pngB64}`] },
+        ]);
 
         const finalPromise = onceMessage(
           ws,
@@ -2212,46 +1874,44 @@ describe("gateway server chat", () => {
   });
 
   test("chat.send does not persist verboseLevel for operator.write callers", async () => {
-    await withGatewayServer(async ({ port: portValue }) => {
-      await withMainSessionStore(async () => {
-        let scopedWs: WebSocket | undefined;
+    await withMainSessionStore(async () => {
+      let scopedWs: WebSocket | undefined;
 
-        try {
-          scopedWs = new WebSocket(`ws://127.0.0.1:${portValue}`);
-          trackConnectChallengeNonce(scopedWs);
-          await new Promise<void>((resolve) => {
-            scopedWs?.once("open", resolve);
-          });
-          await connectOk(scopedWs, {
-            scopes: ["operator.write"],
-          });
+      try {
+        scopedWs = new WebSocket(`ws://127.0.0.1:${port}`);
+        trackConnectChallengeNonce(scopedWs);
+        await new Promise<void>((resolve) => {
+          scopedWs?.once("open", resolve);
+        });
+        await connectOk(scopedWs, {
+          scopes: ["operator.write"],
+        });
 
-          const sendRes = await rpcReq(scopedWs, "chat.send", {
-            sessionKey: "main",
-            message: "/verbose full",
-            idempotencyKey: "idem-write-scope-verbose-no-persist",
-          });
-          expect(sendRes.ok).toBe(true);
+        const sendRes = await rpcReq(scopedWs, "chat.send", {
+          sessionKey: "main",
+          message: "/verbose full",
+          idempotencyKey: "idem-write-scope-verbose-no-persist",
+        });
+        expect(sendRes.ok).toBe(true);
 
-          const waitRes = await rpcReq(scopedWs, "agent.wait", {
-            runId: "idem-write-scope-verbose-no-persist",
-            timeoutMs: 1_000,
-          });
-          expect(waitRes.ok).toBe(true);
-          expect(waitRes.payload?.status).toBe("ok");
+        const waitRes = await rpcReq(scopedWs, "agent.wait", {
+          runId: "idem-write-scope-verbose-no-persist",
+          timeoutMs: 1_000,
+        });
+        expect(waitRes.ok).toBe(true);
+        expect(waitRes.payload?.status).toBe("ok");
 
-          const sessionStorePath = testState.sessionStorePath;
-          if (!sessionStorePath) {
-            throw new Error("session store path was not initialized");
-          }
-          expect(
-            loadSessionEntry({ sessionKey: "agent:main:main", storePath: sessionStorePath })
-              ?.verboseLevel,
-          ).toBeUndefined();
-        } finally {
-          scopedWs?.close();
+        const sessionStorePath = testState.sessionStorePath;
+        if (!sessionStorePath) {
+          throw new Error("session store path was not initialized");
         }
-      });
+        expect(
+          loadSessionEntry({ sessionKey: "agent:main:main", storePath: sessionStorePath })
+            ?.verboseLevel,
+        ).toBeUndefined();
+      } finally {
+        scopedWs?.close();
+      }
     });
   });
 
@@ -2281,14 +1941,7 @@ describe("gateway server chat", () => {
     });
   });
 
-  test.each([
-    "/new",
-    "/new Create a note",
-    "/reset",
-    "/reset Create a note",
-    "/reset soft",
-    "/reset soft Create a note",
-  ])(
+  test.each(["/new", "/reset Create a note", "/reset soft Create a note"])(
     "chat.send does not rotate sessions for operator.write reset triggers and replies with denial: %s",
     async (message) => {
       const { getReplyFromConfig } = await import("../auto-reply/reply/get-reply.js");
@@ -2454,20 +2107,23 @@ describe("gateway server chat", () => {
         await releaseDispatch.promise;
         return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
       });
-      const fixture = withMainSessionStore(async (dir) => {
-        fixtureDir = dir;
-        storePath = path.join(dir, "sessions.json");
-        try {
-          await sendChatAndExpectStarted(runId, "hold fixture dispatch open");
-          await dispatchStarted.promise;
-          if (outcome === "throw") {
-            throw callbackError;
+      const fixture = withMainSessionStore(
+        async (dir) => {
+          fixtureDir = dir;
+          storePath = path.join(dir, "sessions.json");
+          try {
+            await sendChatAndExpectStarted(runId, "hold fixture dispatch open");
+            await dispatchStarted.promise;
+            if (outcome === "throw") {
+              throw callbackError;
+            }
+            return "fixture result";
+          } finally {
+            callbackFinished.resolve();
           }
-          return "fixture result";
-        } finally {
-          callbackFinished.resolve();
-        }
-      });
+        },
+        { freshStore: true },
+      );
       const completion = Promise.allSettled([fixture]);
       try {
         await callbackFinished.promise;

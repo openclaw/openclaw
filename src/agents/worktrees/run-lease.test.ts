@@ -4,20 +4,26 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-operation-settlement.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
-import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.js";
+import * as stateWorker from "../../state/openclaw-state-worker-store.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { lockState, unlockWorktree } from "./git-lock.js";
 import * as registryRead from "./registry-read.js";
-import * as registry from "./registry.js";
 import {
-  admitWorktreeRunLeaseRow,
+  claimWorktreeRemovalRow,
   getRegistryWorktree,
   releaseWorktreeRunLeaseRow,
 } from "./registry.js";
+import { releaseWorktreeRunLeaseRowAsync } from "./run-lease-store.js";
+import { admitWorktreeRunLeaseInDatabase } from "./run-lease-store.kernel.js";
 import {
   abortWorktreeRemoval,
   acquireWorktreeRunLease,
@@ -95,24 +101,39 @@ describe("worktree run lease", () => {
 
   it("shares one worktree across concurrent runs and refcounts the git lock", async () => {
     const created = await createSessionWorktree();
-    const parent = await acquireWorktreeRunLease(created.id, { env });
-    const child = await acquireWorktreeRunLease(created.id, { env });
+    let parent: Awaited<ReturnType<typeof acquireWorktreeRunLease>> | undefined;
+    let child: typeof parent;
+    try {
+      const acquisitionSql = observeMainThreadSql();
+      try {
+        parent = await acquireWorktreeRunLease(created.id, { env });
+        child = await acquireWorktreeRunLease(created.id, { env });
+        acquisitionSql.expectIdle();
+      } finally {
+        acquisitionSql.restore();
+      }
 
-    const record = getRegistryWorktree(env, created.id);
-    expect(record).toBeDefined();
-    expect(await lockState(record!)).toEqual({ kind: "live", pid: process.pid });
-    expect(hasLiveWorktreeRunLease(env, created.id)).toBe(true);
+      const record = getRegistryWorktree(env, created.id);
+      expect(record).toBeDefined();
+      expect(await lockState(record!)).toEqual({ kind: "live", pid: process.pid });
+      expect(hasLiveWorktreeRunLease(env, created.id)).toBe(true);
 
-    const sql = observeMainThreadSql();
-    await parent.release();
-    sql.expectIdle();
-    sql.restore();
-    expect(await lockState(record!)).toEqual({ kind: "live", pid: process.pid });
-    expect(hasLiveWorktreeRunLease(env, created.id)).toBe(true);
+      const sql = observeMainThreadSql();
+      try {
+        await parent.release();
+        sql.expectIdle();
+      } finally {
+        sql.restore();
+      }
+      expect(await lockState(record!)).toEqual({ kind: "live", pid: process.pid });
+      expect(hasLiveWorktreeRunLease(env, created.id)).toBe(true);
 
-    await child.release();
-    expect(await lockState(record!)).toEqual({ kind: "none" });
-    expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
+      await child.release();
+      expect(await lockState(record!)).toEqual({ kind: "none" });
+      expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
+    } finally {
+      await Promise.all([parent?.release(), child?.release()]);
+    }
   });
 
   it("rejects admission when the linked Git admin directory is missing", async () => {
@@ -139,6 +160,134 @@ describe("worktree run lease", () => {
     expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
   });
 
+  it.each([
+    { settlement: "completed", guard: "live" },
+    { settlement: "unknown", guard: "live" },
+    { settlement: "completed", guard: "pending unlock" },
+  ] as const)(
+    "settles a lost admission reply with $settlement native outcome and a $guard Git guard",
+    async ({ settlement, guard }) => {
+      const created = await createSessionWorktree();
+      const incumbent = await acquireWorktreeRunLease(created.id, { env });
+      const record = getRegistryWorktree(env, created.id)!;
+      let failUnlock = true;
+      if (guard === "pending unlock") {
+        runLeaseTesting.setUnlockImplForTest(async (worktree) => {
+          if (failUnlock) {
+            throw new Error("Retain the incumbent Git guard");
+          }
+          await unlockWorktree(worktree);
+        });
+        await incumbent.release();
+      }
+      const accepted = createDeferred<SqliteWorkerOperationSettlement>();
+      const reported = createDeferred<SqliteWorkerOperationSettlement>();
+      const deliveryFailure = new Error("Run lease admission reply was lost");
+      const execute = stateWorker.runOpenClawStateWorkerOperation;
+      let admittedToken: string | undefined;
+      const delivery = vi
+        .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+        .mockImplementation((context, operation, options) => {
+          const admission = options?.createAdmission;
+          let admitting = false;
+          return execute(
+            context,
+            (scope) =>
+              operation({
+                execute: async (command, executionOptions) => {
+                  admitting = command.type === "worktrees.admitRunLease";
+                  if (command.type !== "worktrees.admitRunLease") {
+                    return scope.execute(command, executionOptions);
+                  }
+                  if (!admission) {
+                    throw new Error("Expected retained run lease admission");
+                  }
+                  await scope.execute(command, executionOptions);
+                  failUnlock = false;
+                  throw deliveryFailure;
+                },
+              }),
+            {
+              ...options,
+              createAdmission:
+                admission &&
+                ((retained) =>
+                  admission(
+                    admitting
+                      ? {
+                          settled: retained.settled.then((native) => {
+                            // Keep the real write; fault only delivery and its settlement evidence.
+                            accepted.resolve(native);
+                            return reported.promise;
+                          }),
+                        }
+                      : retained,
+                  )),
+            },
+          );
+        });
+      const acquisition = acquireWorktreeRunLease(created.id, { env });
+      const result = acquisition.then(
+        (lease) => ({ ok: true as const, lease }),
+        (error: unknown) => ({ ok: false as const, error }),
+      );
+      const { db } = openOpenClawStateDatabase({ env });
+      const tokens = () =>
+        db
+          .prepare("SELECT lease_key FROM state_leases WHERE scope = ? ORDER BY lease_key")
+          .all(`worktree-run:${created.id}`)
+          .map((row) => row.lease_key);
+      const incumbentTokens = guard === "live" ? [incumbent.token] : [];
+      try {
+        const native = await Promise.race([
+          accepted.promise,
+          result.then(() => {
+            throw new Error("Admission failed before native settlement");
+          }),
+        ]);
+        expect(native.kind).toBe("completed");
+        const insertedTokens = tokens().filter((token) => token !== incumbent.token);
+        expect(insertedTokens).toHaveLength(1);
+        const insertedToken = insertedTokens[0];
+        if (typeof insertedToken !== "string") {
+          throw new Error("Expected an admitted lease token");
+        }
+        admittedToken = insertedToken;
+        expect(tokens()).toEqual([...incumbentTokens, admittedToken].toSorted());
+        reported.resolve(
+          settlement === "completed" ? native : { kind: "unknown", error: deliveryFailure },
+        );
+        await expect(result).resolves.toEqual({ ok: false, error: deliveryFailure });
+        const remaining =
+          settlement === "unknown"
+            ? [...incumbentTokens, admittedToken].toSorted()
+            : incumbentTokens;
+        expect(tokens()).toEqual(remaining);
+        // A failed admission never retained this guard, including its zero-refcount retry state.
+        expect(await lockState(record)).toEqual({ kind: "live", pid: process.pid });
+        await runLeaseTesting.drainPendingCleanupsForTest();
+        expect(tokens()).toEqual(remaining);
+        expect(await lockState(record)).toEqual(
+          guard === "live" ? { kind: "live", pid: process.pid } : { kind: "none" },
+        );
+      } finally {
+        reported.resolve({ kind: "completed" });
+        const outcome = await result;
+        delivery.mockRestore();
+        if (outcome.ok) {
+          await outcome.lease.release();
+        }
+        await incumbent.release();
+        // The real worker settled above; only the injected receipt can remain unknown.
+        if (admittedToken) {
+          await releaseWorktreeRunLeaseRowAsync(env, created.id, admittedToken);
+        }
+        failUnlock = false;
+        await runLeaseTesting.drainPendingCleanupsForTest();
+      }
+    },
+  );
+
   it("excludes runs and publishers for the lifetime of an exclusive publication lease", async () => {
     const created = await createSessionWorktree();
     const running = await acquireWorktreeRunLease(created.id, { env });
@@ -163,7 +312,7 @@ describe("worktree run lease", () => {
   it("acquires a Git guard after a previous acquisition failed to read the registry", async () => {
     const created = await createSessionWorktree();
     const record = getRegistryWorktree(env, created.id)!;
-    vi.spyOn(registry, "getRegistryWorktree").mockImplementationOnce(() => {
+    vi.spyOn(registryRead, "readRegistryWorktree").mockImplementationOnce(async () => {
       throw new Error("simulated registry read failure");
     });
 
@@ -195,13 +344,17 @@ describe("worktree run lease", () => {
 
   it("prunes a dead owner lease so removal can proceed", async () => {
     const created = await createSessionWorktree();
-    admitWorktreeRunLeaseRow(env, {
-      worktreeId: created.id,
-      token: "dead-owner",
-      pid: 987_654,
-      startTime: 4242,
-      now: 1,
-    });
+    runOpenClawStateWriteTransaction(
+      ({ db }) =>
+        admitWorktreeRunLeaseInDatabase(db, {
+          worktreeId: created.id,
+          token: "dead-owner",
+          pid: 987_654,
+          startTime: 4242,
+          now: 1,
+        }),
+      { env },
+    );
     runLeaseTesting.setDeadPidResolverForTest((pid) => pid === 987_654);
 
     expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
@@ -212,13 +365,17 @@ describe("worktree run lease", () => {
 
   it("prunes a reused pid whose start time no longer matches", async () => {
     const created = await createSessionWorktree();
-    admitWorktreeRunLeaseRow(env, {
-      worktreeId: created.id,
-      token: "reused-pid",
-      pid: process.pid,
-      startTime: 111,
-      now: 1,
-    });
+    runOpenClawStateWriteTransaction(
+      ({ db }) =>
+        admitWorktreeRunLeaseInDatabase(db, {
+          worktreeId: created.id,
+          token: "reused-pid",
+          pid: process.pid,
+          startTime: 111,
+          now: 1,
+        }),
+      { env },
+    );
     runLeaseTesting.setProcessStartTimeResolverForTest(() => 222);
 
     expect(hasLiveWorktreeRunLease(env, created.id)).toBe(false);
@@ -251,8 +408,13 @@ describe("worktree run lease", () => {
 
   it("recovers admission when the remover died before finalizing the removal", async () => {
     const created = await createSessionWorktree();
-    claimWorktreeRemoval(env, { worktreeId: created.id, token: "remover" });
-    runLeaseTesting.setDeadPidResolverForTest((pid) => pid === process.pid);
+    claimWorktreeRemovalRow(env, {
+      worktreeId: created.id,
+      token: "remover",
+      pid: 2_147_483_647,
+      startTime: null,
+      now: 1,
+    });
 
     const lease = await acquireWorktreeRunLease(created.id, { env });
     expect(lease.token).toBeTruthy();

@@ -37,12 +37,6 @@ vi.mock("../state/openclaw-state-db-cache.js", () => ({
 vi.mock("../state/openclaw-state-db-async-lifecycle.js", () => ({
   getOpenClawDatabaseMaintenanceScope: () => undefined,
 }));
-vi.mock("./state-database-coordinator.js", () => ({
-  captureStateDatabaseCoordinatorRuntime: () => ({
-    directory: "/synthetic/coordinator",
-    keepAlive: false,
-  }),
-}));
 vi.mock("./device-pairing-store.js", () => ({
   loadPairedDevicePairingStoreRecordFromDatabase: mocks.native,
 }));

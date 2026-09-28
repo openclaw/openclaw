@@ -72,11 +72,8 @@ import { persistAgentSession } from "./attempt-execution.shared.js";
 import { normalizeAgentCommandModelRef, parseAgentCommandModelRef } from "./model-ref.js";
 import { prepareCommandModelCatalog } from "./model-selection-catalog.js";
 import { normalizeExplicitOverrideInput } from "./prepare.js";
-import type { resolveAgentRunContext } from "./run-context.js";
 import { loadTranscriptResolveRuntime } from "./runtime-loaders.js";
-import type { AgentCommandOpts } from "./types.js";
-
-type AgentRunContext = ReturnType<typeof resolveAgentRunContext>;
+import type { AgentCommandOpts, AgentRunContext } from "./types.js";
 
 export async function resolveEmbeddedModelSelection(params: {
   cfg: OpenClawConfig;
@@ -643,32 +640,23 @@ export async function resolveEmbeddedModelSelection(params: {
 
   const { resolveSessionTranscriptFile } = await loadTranscriptResolveRuntime();
   assertOperatorModelAllowed(operatorAuthority, { provider, model });
-  let sessionFile: string | undefined;
-  if (params.sessionStore && params.sessionKey) {
-    const resolvedSessionFile = await resolveSessionTranscriptFile({
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      sessionStore: params.suppressVisibleSessionEffects ? undefined : params.sessionStore,
-      storePath: params.suppressVisibleSessionEffects ? undefined : params.storePath,
-      sessionEntry,
-      agentId: params.sessionAgentId,
-      threadId: params.opts.threadId,
-    });
-    sessionFile = resolvedSessionFile.sessionFile;
-    sessionEntry = resolvedSessionFile.sessionEntry;
-  }
-  if (!sessionFile) {
-    const resolvedSessionFile = await resolveSessionTranscriptFile({
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey ?? params.sessionId,
-      storePath: params.storePath,
-      sessionEntry,
-      agentId: params.sessionAgentId,
-      threadId: params.opts.threadId,
-    });
-    sessionFile = resolvedSessionFile.sessionFile;
-    sessionEntry = resolvedSessionFile.sessionEntry;
-  }
+  // Fallback tokens must not adopt entries from a store without a nonempty session key.
+  const hasKeyedSessionStore = Boolean(params.sessionStore && params.sessionKey);
+  const resolvedSessionFile = await resolveSessionTranscriptFile({
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey ?? params.sessionId,
+    sessionStore:
+      hasKeyedSessionStore && !params.suppressVisibleSessionEffects
+        ? params.sessionStore
+        : undefined,
+    storePath:
+      hasKeyedSessionStore && params.suppressVisibleSessionEffects ? undefined : params.storePath,
+    sessionEntry,
+    agentId: params.sessionAgentId,
+    threadId: params.opts.threadId,
+  });
+  const sessionFile = resolvedSessionFile.sessionFile;
+  sessionEntry = resolvedSessionFile.sessionEntry;
 
   return {
     sessionEntry,

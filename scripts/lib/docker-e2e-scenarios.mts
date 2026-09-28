@@ -23,8 +23,6 @@ export type DockerE2eLane = {
   noOutputTimeoutMs?: number;
   prepublishPluginPackages?: string[];
   resources: string[];
-  retries: number;
-  retryPatterns: RegExp[];
   stateScenario?: string;
   timeoutMs?: number;
   upgradeSurvivorScenario?: string;
@@ -36,7 +34,6 @@ type LaneOptions = Partial<Omit<DockerE2eLane, "command" | "e2eImageKind" | "nam
   providers?: string[];
 };
 
-export const DEFAULT_LIVE_RETRIES = 1;
 const LIVE_DOCKER_DEFAULT_HARNESS_DIR =
   /[\\/]\.release-harness[\\/]/u.test(fileURLToPath(import.meta.url)) &&
   process.env.OPENCLAW_DOCKER_E2E_REPO_ROOT
@@ -66,6 +63,9 @@ const updateMigrationCommand = upgradeSurvivorScriptCommand(
   "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1",
   'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-plugin-deps-cleanup}"',
 );
+const dreamingCronDoctorCommand = upgradeSurvivorScriptCommand(
+  "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=openclaw@2026.9.6 OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE=current OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=dreaming-cron-doctor OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=manual OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS=0 OPENCLAW_UPGRADE_SURVIVOR_LIVE_MODELS= OPENCLAW_UPGRADE_SURVIVOR_LIVE_OPENAI=0",
+);
 // One lane per recorded source release so the hops run concurrently; each hop
 // takes ~9-11 minutes on hosted runners as of 2026.9.6.
 const updateFirstHopCompatLanes = listRecordedFirstHopSourceVersions().map((version) =>
@@ -87,15 +87,6 @@ const npmOnboardLaneOptions = {
   stateScenario: "empty",
   weight: 3,
 } satisfies LaneOptions;
-
-const LIVE_RETRY_PATTERNS = [
-  /529\b/i,
-  /overloaded/i,
-  /capacity/i,
-  /rate.?limit/i,
-  /gateway closed \(1000 normal closure\)/i,
-  /ECONNRESET|ETIMEDOUT|ENOTFOUND/i,
-];
 
 export function liveDockerScriptCommand(
   script: string,
@@ -132,8 +123,6 @@ function lane(name: string, command: string, options: LaneOptions = {}): DockerE
     ...(options.needsPackage ? { needsPackage: true } : {}),
     needsLiveImage: options.needsLiveImage,
     prepublishPluginPackages: options.prepublishPluginPackages,
-    retryPatterns: options.retryPatterns ?? [],
-    retries: options.retries ?? 0,
     resources: options.resources ?? [],
     stateScenario: options.stateScenario,
     timeoutMs: options.timeoutMs,
@@ -152,17 +141,8 @@ function liveProviderResource(provider: string) {
   if (provider === "codex-cli" || provider === "codex") {
     return "live:codex";
   }
-  if (provider === "droid") {
-    return "live:droid";
-  }
   if (provider === "google-gemini-cli" || provider === "gemini") {
     return "live:gemini";
-  }
-  if (provider === "opencode") {
-    return "live:opencode";
-  }
-  if (provider === "openai") {
-    return "live:openai";
   }
   return `live:${provider}`;
 }
@@ -180,8 +160,6 @@ function liveLane(name: string, command: string, options: LaneOptions = {}) {
     // not require building the separate source live-test image.
     needsLiveImage: options.needsLiveImage ?? !options.e2eImageKind,
     resources: ["live", ...liveProviderResources(options), ...(options.resources ?? [])],
-    retryPatterns: options.retryPatterns ?? LIVE_RETRY_PATTERNS,
-    retries: options.retries ?? DEFAULT_LIVE_RETRIES,
     weight: options.weight ?? 3,
   });
 }
@@ -230,8 +208,6 @@ function createPackageUpdateMaintenanceLanes() {
       },
     ),
     npmLane("skill-install", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:skill-install", {
-      retryPatterns: LIVE_RETRY_PATTERNS,
-      retries: 1,
       stateScenario: "empty",
       timeoutMs: 10 * 60 * 1000,
       weight: 2,
@@ -246,6 +222,12 @@ function createPackageUpdateMaintenanceLanes() {
       stateScenario: "upgrade-survivor",
       timeoutMs: 25 * 60 * 1000,
       upgradeSurvivorScenario: "base",
+      weight: 3,
+    }),
+    npmLane("dreaming-cron-doctor", dreamingCronDoctorCommand, {
+      stateScenario: "upgrade-survivor",
+      timeoutMs: 25 * 60 * 1000,
+      upgradeSurvivorScenario: "dreaming-cron-doctor",
       weight: 3,
     }),
     npmLane("root-managed-vps-upgrade", rootManagedVpsUpgradeCommand, {
@@ -379,6 +361,16 @@ export const fleetCacheLane = lane("fleet-cache", "pnpm test:docker:fleet-cache"
 
 export const mainLanes: DockerE2eLane[] = [
   lane(
+    "container-image-upgrade",
+    "OPENCLAW_SKIP_DOCKER_BUILD=0 pnpm test:docker:container-image-upgrade",
+    {
+      e2eImageKind: false,
+      resources: ["docker", "service"],
+      timeoutMs: 30 * 60 * 1000,
+      weight: 4,
+    },
+  ),
+  lane(
     "docker-selected-plugins",
     "OPENCLAW_SKIP_DOCKER_BUILD=0 pnpm test:docker:selected-plugins",
     {
@@ -422,8 +414,6 @@ export const mainLanes: DockerE2eLane[] = [
   liveLane("live-anthropic-cache", liveDockerScriptCommand("e2e/anthropic-cache-live-docker.sh"), {
     e2eImageKind: "functional",
     provider: "claude",
-    retries: 0,
-    retryPatterns: [],
     timeoutMs: 15 * 60 * 1000,
     weight: 2,
   }),
@@ -457,7 +447,7 @@ export const mainLanes: DockerE2eLane[] = [
     "live-cli-backend-gemini",
     liveDockerScriptCommand(
       "test-live-cli-backend-docker.sh",
-      "OPENCLAW_LIVE_CLI_BACKEND_ADVISORY=1 OPENCLAW_LIVE_CLI_BACKEND_ALLOW_PROVIDER_SKIP=1 OPENCLAW_LIVE_CLI_BACKEND_MODEL=google-gemini-cli/gemini-3-flash-preview",
+      "OPENCLAW_LIVE_CLI_BACKEND_MODEL=google-gemini-cli/gemini-3-flash-preview",
     ),
     {
       cacheKey: "cli-backend-gemini",
@@ -766,66 +756,27 @@ export const tailLanes: DockerE2eLane[] = [
   liveCodexNpmPluginLane(),
   liveMcpCodeModeGatewayLane(),
   livePluginToolLane(),
-  liveLane(
-    "live-acp-bind-claude",
-    liveDockerScriptCommand("test-live-acp-bind-docker.sh", "OPENCLAW_LIVE_ACP_BIND_AGENT=claude"),
-    {
-      cacheKey: "acp-bind-claude",
-      provider: "claude-cli",
-      resources: ["npm"],
-      timeoutMs: LIVE_ACP_TIMEOUT_MS,
-      weight: 3,
-    },
-  ),
-  liveLane(
-    "live-acp-bind-codex",
-    liveDockerScriptCommand("test-live-acp-bind-docker.sh", "OPENCLAW_LIVE_ACP_BIND_AGENT=codex"),
-    {
-      cacheKey: "acp-bind-codex",
-      provider: "codex-cli",
-      resources: ["live:openai", "npm"],
-      timeoutMs: LIVE_ACP_TIMEOUT_MS,
-      weight: 3,
-    },
-  ),
-  liveLane(
-    "live-acp-bind-droid",
-    liveDockerScriptCommand(
-      "test-live-acp-bind-docker.sh",
-      "OPENCLAW_LIVE_ACP_BIND_AGENT=droid OPENCLAW_LIVE_ACP_BIND_REQUIRE_TRANSCRIPT=1",
+  ...[
+    { agent: "claude", provider: "claude-cli", requireTranscript: false },
+    { agent: "codex", provider: "codex-cli", requireTranscript: false },
+    { agent: "droid", provider: "droid", requireTranscript: true },
+    { agent: "gemini", provider: "google-gemini-cli", requireTranscript: false },
+    { agent: "opencode", provider: "opencode", requireTranscript: true },
+  ].map(({ agent, provider, requireTranscript }) =>
+    liveLane(
+      `live-acp-bind-${agent}`,
+      liveDockerScriptCommand(
+        "test-live-acp-bind-docker.sh",
+        `OPENCLAW_LIVE_ACP_BIND_AGENT=${agent}${requireTranscript ? " OPENCLAW_LIVE_ACP_BIND_REQUIRE_TRANSCRIPT=1" : ""}`,
+      ),
+      {
+        cacheKey: `acp-bind-${agent}`,
+        provider,
+        resources: agent === "codex" ? ["live:openai", "npm"] : ["npm"],
+        timeoutMs: LIVE_ACP_TIMEOUT_MS,
+        weight: 3,
+      },
     ),
-    {
-      cacheKey: "acp-bind-droid",
-      provider: "droid",
-      resources: ["npm"],
-      timeoutMs: LIVE_ACP_TIMEOUT_MS,
-      weight: 3,
-    },
-  ),
-  liveLane(
-    "live-acp-bind-gemini",
-    liveDockerScriptCommand("test-live-acp-bind-docker.sh", "OPENCLAW_LIVE_ACP_BIND_AGENT=gemini"),
-    {
-      cacheKey: "acp-bind-gemini",
-      provider: "google-gemini-cli",
-      resources: ["npm"],
-      timeoutMs: LIVE_ACP_TIMEOUT_MS,
-      weight: 3,
-    },
-  ),
-  liveLane(
-    "live-acp-bind-opencode",
-    liveDockerScriptCommand(
-      "test-live-acp-bind-docker.sh",
-      "OPENCLAW_LIVE_ACP_BIND_AGENT=opencode OPENCLAW_LIVE_ACP_BIND_REQUIRE_TRANSCRIPT=1",
-    ),
-    {
-      cacheKey: "acp-bind-opencode",
-      provider: "opencode",
-      resources: ["npm"],
-      timeoutMs: LIVE_ACP_TIMEOUT_MS,
-      weight: 3,
-    },
   ),
 ];
 

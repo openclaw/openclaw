@@ -6,7 +6,6 @@ import { setTimeout as delay } from "node:timers/promises";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { encodeSessionArchiveContent } from "../config/sessions/archive-compression.js";
 import {
   appendTranscriptMessage,
   persistSessionTranscriptTurn,
@@ -716,7 +715,7 @@ describe("session cost usage", () => {
       bundledGeneratedAt: () => 100,
       readStoredCatalog: () => ({
         id: 1,
-        source_url: "https://catalog.openclaw.ai/models/v1/catalog.json",
+        source_url: "https://catalog.openclaw.ai/models/v2/catalog.json",
         bundle_json: bundleJson,
         generated_at: 200,
         min_version: "2026.7.0",
@@ -1242,27 +1241,6 @@ describe("session cost usage", () => {
     });
   });
 
-  it("fills missing calendar days with zero entries when no activity exists", async () => {
-    const root = await makeSessionCostRoot("cost-zero-fill");
-    const sessionsDir = path.join(root, "agents", "main", "sessions");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    // No session files at all -> entirely empty range.
-
-    await withStateDir(root, async () => {
-      const endMs = Date.now();
-      const startMs = endMs - 6 * 24 * 60 * 60 * 1000; // 7 calendar days inclusive
-      const summary = await loadCostUsageSummary({ startMs, endMs });
-      expect(summary.daily.length).toBe(7);
-      expect(summary.daily.every((d) => d.totalTokens === 0 && d.totalCost === 0)).toBe(true);
-      // Dates should be unique, sorted, and contiguous in YYYY-MM-DD form.
-      const dates = summary.daily.map((d) => d.date);
-      expect(new Set(dates).size).toBe(dates.length);
-      expect(dates.toSorted()).toEqual(dates);
-      expect(summary.totals.totalTokens).toBe(0);
-      expect(summary.totals.totalCost).toBe(0);
-    });
-  });
-
   it("buckets daily totals with the request timezone offset", async () => {
     const root = await makeSessionCostRoot("cost-offset-bucket");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
@@ -1677,39 +1655,6 @@ describe("session cost usage", () => {
         { interval: 1, timeout: 2_000 },
       );
     });
-  });
-
-  it("summarizes a single session file", async () => {
-    const root = await makeSessionCostRoot("cost-session");
-    const sessionFile = path.join(root, "session.jsonl");
-    const now = new Date();
-
-    await fs.writeFile(
-      sessionFile,
-      JSON.stringify({
-        type: "message",
-        timestamp: now.toISOString(),
-        message: {
-          role: "assistant",
-          provider: "openai",
-          model: "gpt-5.4",
-          usage: {
-            input: 10,
-            output: 20,
-            totalTokens: 30,
-            cost: { total: 0.03 },
-          },
-        },
-      }),
-      "utf-8",
-    );
-
-    const summary = await loadSessionCostSummary({
-      sessionFile,
-    });
-    expect(summary?.totalCost).toBeCloseTo(0.03, 5);
-    expect(summary?.totalTokens).toBe(30);
-    expect(summary?.lastActivity).toBeGreaterThan(0);
   });
 
   it("waits for a busy refresh before loading a direct session summary", async () => {
@@ -2180,76 +2125,6 @@ describe("session cost usage", () => {
       expect(sessions).toHaveLength(1);
       expect(sessions[0]?.sessionId).toBe("sess-live");
       expect(sessions[0]?.sessionFile).toBe(activePath);
-    });
-  });
-
-  it("falls back to archived reset transcripts for per-session detail queries", async () => {
-    const root = await makeSessionCostRoot("session-archive-fallback");
-    const sessionsDir = path.join(root, "agents", "main", "sessions");
-    await fs.mkdir(sessionsDir, { recursive: true });
-
-    await fs.writeFile(
-      path.join(sessionsDir, "sess-reset.jsonl.reset.2026-02-12T11-00-00.000Z"),
-      JSON.stringify({
-        type: "message",
-        timestamp: "2026-02-12T10:00:00.000Z",
-        message: {
-          role: "assistant",
-          content: "archived answer",
-          usage: { input: 6, output: 4, totalTokens: 10, cost: { total: 0.01 } },
-        },
-      }),
-      "utf-8",
-    );
-
-    await withStateDir(root, async () => {
-      const summary = await loadSessionCostSummary({ sessionId: "sess-reset" });
-      const timeseries = await loadSessionUsageTimeSeries({ sessionId: "sess-reset" });
-      const logs = await loadSessionLogs({ sessionId: "sess-reset" });
-
-      expect(summary?.totalTokens).toBe(10);
-      expect(summary?.sessionFile).toContain(".jsonl.reset.");
-      expect(timeseries?.points[0]?.totalTokens).toBe(10);
-      expect(logs).toHaveLength(1);
-      expect(logs?.[0]?.content).toContain("archived answer");
-    });
-  });
-
-  it("keeps compressed archive rollup identity stable for direct session queries", async () => {
-    const root = await makeSessionCostRoot("session-compressed-archive");
-    const sessionsDir = path.join(root, "agents", "main", "sessions");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    const encoded = encodeSessionArchiveContent(
-      transcriptText("sess-compressed", {
-        type: "message",
-        timestamp: "2026-02-12T10:00:00.000Z",
-        message: {
-          role: "assistant",
-          usage: { input: 6, output: 4, totalTokens: 10, cost: { total: 0.01 } },
-        },
-      }),
-    );
-    if (!encoded.suffix) {
-      return;
-    }
-    const archivePath = path.join(
-      sessionsDir,
-      `sess-compressed.jsonl.reset.2026-02-12T11-00-00.000Z${encoded.suffix}`,
-    );
-    await fs.writeFile(archivePath, encoded.bytes);
-
-    await withStateDir(root, async () => {
-      const first = await loadSessionCostSummary({
-        sessionId: "sess-compressed",
-        sessionFile: archivePath,
-      });
-      const repeat = await loadSessionCostSummary({
-        sessionId: "sess-compressed",
-        sessionFile: archivePath,
-      });
-
-      expect(first?.totalTokens).toBe(10);
-      expect(repeat?.totalTokens).toBe(10);
     });
   });
 

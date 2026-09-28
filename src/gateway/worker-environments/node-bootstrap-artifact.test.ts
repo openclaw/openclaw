@@ -339,6 +339,32 @@ describe("node bootstrap distribution", () => {
     await expect(provider.prepare()).resolves.toMatchObject({ buildId });
   });
 
+  it("refuses a shortened non-JavaScript package member", async () => {
+    const { packageRoot, provider } = await fixture();
+    const entryPath = path.join(packageRoot, longEntryPath);
+    const openFile = fs.open.bind(fs);
+    let truncated = false;
+    const reader = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await openFile(...args);
+      if (args[0] === entryPath) {
+        const stat = handle.stat.bind(handle);
+        vi.spyOn(handle, "stat").mockImplementationOnce(async () => {
+          const before = await stat();
+          await fs.truncate(entryPath, 1);
+          truncated = true;
+          return before;
+        });
+      }
+      return handle;
+    });
+    try {
+      await expect(provider.prepare()).rejects.toThrow("Node distribution changed while packaging");
+      expect(truncated).toBe(true);
+    } finally {
+      reader.mockRestore();
+    }
+  });
+
   it.each(["root resolution", "staging creation"])(
     "retries preparation after temporary %s becomes available",
     async (stage) => {

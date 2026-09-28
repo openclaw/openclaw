@@ -43,7 +43,6 @@ export function createExistingSessionAgentSharedModule() {
     browserNavigationPolicyForProfile: vi.fn((ctx: BrowserRouteContext) =>
       withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy),
     ),
-    getPwAiModule: vi.fn(async () => null),
     handleRouteError: vi.fn((_ctx: BrowserRouteContext, res: BrowserResponse, err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
       res.status(400);
@@ -63,9 +62,6 @@ export function createExistingSessionAgentSharedModule() {
         const tabs = await params.profileCtx.listTabs();
         return tabs.find((tab) => tab.targetId === params.targetId)?.url ?? params.fallbackUrl;
       },
-    ),
-    resolveTargetIdFromBody: vi.fn((body: Record<string, unknown>) =>
-      typeof body.targetId === "string" ? body.targetId : undefined,
     ),
     withPlaywrightRouteContext: vi.fn(),
     withRouteTabContext: vi.fn(
@@ -94,13 +90,11 @@ export function createExistingSessionAgentSharedModule() {
           cdpUrl: "http://127.0.0.1:18800",
           tab: existingSessionRouteState.tab,
           signal: req.signal ?? new AbortController().signal,
-          resolveTabUrl: vi.fn(async (fallbackUrl?: string) => fallbackUrl ?? routeStateUrl()),
+          resolveTabUrl: vi.fn(
+            async (fallbackUrl?: string) => fallbackUrl ?? existingSessionRouteState.tab.url,
+          ),
         });
       },
     ),
   };
-}
-
-function routeStateUrl() {
-  return existingSessionRouteState.tab.url;
 }

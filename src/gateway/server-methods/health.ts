@@ -3,6 +3,7 @@
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { getPreparedModelRuntimeStartupStatus } from "../../agents/prepared-model-runtime.startup-status.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import { formatErrorMessage as formatError } from "../../infra/errors.js";
 import { readGatewayMaintenanceWork } from "../../infra/gateway-active-work.js";
 import { getStatusSummary } from "../../status/summary.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
@@ -13,7 +14,6 @@ import { createGatewayServerActiveWorkInspectors } from "../server-active-work.j
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
 import type { GatewayShutdownStatus } from "../server-public.js";
-import { formatError } from "../server-utils.js";
 import { shouldScheduleBackgroundHealthRefresh } from "../server/health-refresh-admission.js";
 import { readGatewayProcessVitals, readGatewayWorkerPoolFacts } from "../server/process-vitals.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";

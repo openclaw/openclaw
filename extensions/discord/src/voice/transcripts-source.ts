@@ -1,4 +1,5 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { summarizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -71,29 +72,16 @@ type DiscordTranscriptsGlobalState = {
 // Capability publication can load the Discord source graph through a separate
 // runtime path from the channel monitor. Keep their transient ownership state
 // process-global so published providers see the live voice managers.
-const DISCORD_TRANSCRIPTS_STATE_KEY = Symbol.for("openclaw.discordTranscriptsState");
-let discordTranscriptsState: DiscordTranscriptsGlobalState | undefined;
-
-function resolveDiscordTranscriptsGlobalState(): DiscordTranscriptsGlobalState {
-  if (!discordTranscriptsState) {
-    // SAFETY: globalThis is an object; this view only adds a symbol-keyed property.
-    const globalStore = globalThis as Record<PropertyKey, unknown>;
-    // SAFETY: this module is the sole writer for the process-global symbol.
-    discordTranscriptsState = (globalStore[DISCORD_TRANSCRIPTS_STATE_KEY] as
-      | DiscordTranscriptsGlobalState
-      | undefined) ?? {
-      managersByAccountId: new Map(),
-      captures: new Map(),
-      managerWaiters: new Set(),
-      captureEpochReaders: new Map(),
-      nextRecordingEpoch: 0n,
-    };
-    globalStore[DISCORD_TRANSCRIPTS_STATE_KEY] = discordTranscriptsState;
-  }
-  return discordTranscriptsState;
-}
-
-const TRANSCRIPTS_STATE = resolveDiscordTranscriptsGlobalState();
+const TRANSCRIPTS_STATE = resolveGlobalSingleton<DiscordTranscriptsGlobalState>(
+  Symbol.for("openclaw.discordTranscriptsState"),
+  () => ({
+    managersByAccountId: new Map(),
+    captures: new Map(),
+    managerWaiters: new Set(),
+    captureEpochReaders: new Map(),
+    nextRecordingEpoch: 0n,
+  }),
+);
 const managersByAccountId = TRANSCRIPTS_STATE.managersByAccountId;
 const captures = TRANSCRIPTS_STATE.captures;
 const managerWaiters = TRANSCRIPTS_STATE.managerWaiters;

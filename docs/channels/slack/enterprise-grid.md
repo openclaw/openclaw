@@ -227,10 +227,11 @@ to a workspace installation or an Enterprise Grid org-wide installation. No
 installation-mode setting is required. Slack remains the source of truth for
 which workspaces have granted the installation; OpenClaw then applies the
 configured channel, user, DM, and mention policies to each delivered event.
-Enterprise installs reject bot-authored `message` and `app_mention` events by
-default. Set `allowBots` on the account or channel to admit them under the same
-loop-prevention rules used by workspace installs. OpenClaw retains the org
-installation's `auth.test` `user_id` and `bot_id` for that check.
+Enterprise installs default `allowBots` to `true`, with the same channel access,
+mention, bot-room authorization, and loop-prevention rules as workspace installs.
+Set `allowBots: false` on the account or channel to disable bot-triggered turns.
+OpenClaw retains the org installation's `auth.test` `user_id` and `bot_id` to
+ignore its own messages.
 
 Enterprise support accepts direct Socket Mode or HTTP message, mention,
 membership, reaction, pin, channel-created, channel-renamed, Block Kit action,

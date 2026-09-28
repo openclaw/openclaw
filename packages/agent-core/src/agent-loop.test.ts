@@ -450,6 +450,7 @@ describe("agentLoop continuation guards", () => {
 
 describe("agentLoop streaming updates", () => {
   it("rebuilds assistant message snapshots for text deltas without partial snapshots", async () => {
+    const firstDeltaConsumed = createDeferred();
     const streamFn: StreamFn = async () => {
       const stream = createAssistantMessageEventStream();
       const startMessage: AssistantMessage = {
@@ -458,14 +459,7 @@ describe("agentLoop streaming updates", () => {
         api: model.api,
         provider: model.provider,
         model: model.id,
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
+        usage: TEST_USAGE,
         stopReason: "stop",
         timestamp: 1,
       };
@@ -475,10 +469,11 @@ describe("agentLoop streaming updates", () => {
         content: [{ type: "text", text: "Hello world" }],
       };
 
-      queueMicrotask(() => {
-        stream.push({ type: "start", partial: startMessage });
-        stream.push({ type: "text_start", contentIndex: 0, partial: textStartMessage });
-        stream.push({ type: "text_delta", contentIndex: 0, delta: "Hello" });
+      stream.push({ type: "start", partial: startMessage });
+      stream.push({ type: "text_start", contentIndex: 0, partial: textStartMessage });
+      stream.push({ type: "text_delta", contentIndex: 0, delta: "Hello" });
+      // Keep two consumed updates so this exercises incremental snapshot reconstruction.
+      void firstDeltaConsumed.promise.then(() => {
         stream.push({ type: "text_delta", contentIndex: 0, delta: " world" });
         stream.push({
           type: "text_end",
@@ -492,14 +487,20 @@ describe("agentLoop streaming updates", () => {
       return stream;
     };
 
-    const run = captureAgentLoop(
+    const events: AgentEvent[] = [];
+    await runAgentLoop(
       [{ role: "user", content: "hello", timestamp: 1 }],
       { systemPrompt: "", messages: [] },
       config,
+      (event) => {
+        events.push(event);
+        if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+          firstDeltaConsumed.resolve();
+        }
+      },
       undefined,
       streamFn,
     );
-    const events = await collectEvents(run);
 
     const deltaUpdates = events.filter(
       (event): event is Extract<AgentEvent, { type: "message_update" }> =>

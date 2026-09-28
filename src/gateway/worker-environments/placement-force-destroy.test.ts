@@ -5,10 +5,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { type PlacementStore, REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
@@ -26,7 +26,7 @@ describe("forced worker environment destruction", () => {
   });
 
   afterEach(async () => {
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
 
@@ -41,11 +41,11 @@ describe("forced worker environment destruction", () => {
       ownerEpoch: harness.ready.ownerEpoch,
       sessionId: REQUEST.sessionId,
     });
-    const active = harness.placements.seedActive(harness.attached.ownerEpoch);
+    const active = await harness.placements.seedActive(harness.attached.ownerEpoch);
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }
-    const claim = placementStore.claimTurn({
+    const claim = await placementStore.claimTurn({
       ...REQUEST,
       claimId: "force-destroy-claim",
       runId: "force-destroy-run",
@@ -110,7 +110,7 @@ describe("forced worker environment destruction", () => {
       destroyFailureState: state,
       workspacePath: root,
     });
-    harness.placements.seedActive(harness.attached.ownerEpoch);
+    await harness.placements.seedActive(harness.attached.ownerEpoch);
     const onCleanupError = vi.fn();
 
     await expect(
@@ -132,7 +132,7 @@ describe("forced worker environment destruction", () => {
       destroyFailureState: "destroying",
       failAt: "workspace",
     });
-    const active = harness.placements.seedActive(harness.attached.ownerEpoch);
+    const active = await harness.placements.seedActive(harness.attached.ownerEpoch);
     if (active.state !== "active") {
       throw new Error("active placement fixture was not active");
     }

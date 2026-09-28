@@ -5,10 +5,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   loadAgentIdentityFromFile,
   loadAgentIdentityFromWorkspace,
+  loadAgentIdentityFromWorkspaceAsync,
   mergeIdentityMarkdownContent,
 } from "./identity-file.js";
 
@@ -148,6 +149,7 @@ describe("loadAgentIdentityFromWorkspace", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     fs.rmSync(tempDir, { force: true, recursive: true });
   });
 
@@ -195,7 +197,7 @@ describe("loadAgentIdentityFromWorkspace", () => {
     await expect(loadAgentIdentityFromFile(identityPath)).resolves.toBeNull();
   });
 
-  it("returns null when IDENTITY.md exceeds the size cap", () => {
+  it("treats workspace overflow as absent while explicit file reads report it", async () => {
     fs.writeFileSync(
       path.join(tempDir, "IDENTITY.md"),
       "x".repeat(TEST_MAX_IDENTITY_FILE_BYTES + 1),
@@ -203,5 +205,72 @@ describe("loadAgentIdentityFromWorkspace", () => {
     );
 
     expect(loadAgentIdentityFromWorkspace(tempDir)).toBeNull();
+    expect(await loadAgentIdentityFromWorkspaceAsync(tempDir)).toBeNull();
+    await expect(loadAgentIdentityFromFile(path.join(tempDir, "IDENTITY.md"))).rejects.toThrow(
+      `exceeds the maximum size of ${TEST_MAX_IDENTITY_FILE_BYTES} bytes`,
+    );
+  });
+
+  it("coalesces admission and retains unchanged parsed values without main-thread file reads", async () => {
+    const filePath = path.join(tempDir, "IDENTITY.md");
+    fs.writeFileSync(
+      filePath,
+      `- Name: Prepared\n- Avatar: data:image/png;base64,${"A".repeat(1024 * 1024)}\n`,
+    );
+    const first = await loadAgentIdentityFromWorkspaceAsync(tempDir);
+    expect(first?.name).toBe("Prepared");
+    const operations = [
+      "openSync",
+      "readSync",
+      "readFileSync",
+      "statSync",
+      "lstatSync",
+      "fstatSync",
+      "realpathSync",
+    ] as const;
+    const spies = operations.map((operation) => vi.spyOn(fs, operation));
+    const results = await Promise.all(
+      Array.from({ length: 10 }, () => loadAgentIdentityFromWorkspaceAsync(tempDir)),
+    );
+    for (const result of results) {
+      expect(result).toBe(first);
+    }
+    for (const spy of spies) {
+      expect(spy).not.toHaveBeenCalled();
+    }
+  });
+
+  it("refreshes after same-size replacement, deletion, and recreation", async () => {
+    const filePath = path.join(tempDir, "IDENTITY.md");
+    const modified = new Date("2024-01-01T00:00:00Z");
+    fs.writeFileSync(filePath, "- Name: First\n");
+    fs.utimesSync(filePath, modified, modified);
+    const first = await loadAgentIdentityFromWorkspaceAsync(tempDir);
+    fs.writeFileSync(`${filePath}.next`, "- Name: Other\n");
+    fs.utimesSync(`${filePath}.next`, modified, modified);
+    fs.renameSync(`${filePath}.next`, filePath);
+    expect(await loadAgentIdentityFromWorkspaceAsync(tempDir)).toEqual({ name: "Other" });
+    fs.unlinkSync(filePath);
+    expect(await loadAgentIdentityFromWorkspaceAsync(tempDir)).toBeNull();
+    fs.writeFileSync(filePath, "- Name: First\n");
+    const recreated = await loadAgentIdentityFromWorkspaceAsync(tempDir);
+    expect(recreated).toEqual(first);
+    expect(recreated).not.toBe(first);
+  });
+
+  it("follows a retargeted identity symlink on the next read", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const identityPath = path.join(tempDir, "IDENTITY.md");
+    const firstPath = path.join(tempDir, "FIRST.md");
+    const otherPath = path.join(tempDir, "OTHER.md");
+    fs.writeFileSync(firstPath, "- Name: First\n");
+    fs.writeFileSync(otherPath, "- Name: Other\n");
+    fs.symlinkSync(firstPath, identityPath);
+    expect(await loadAgentIdentityFromWorkspaceAsync(tempDir)).toEqual({ name: "First" });
+    fs.unlinkSync(identityPath);
+    fs.symlinkSync(otherPath, identityPath);
+    expect(await loadAgentIdentityFromWorkspaceAsync(tempDir)).toEqual({ name: "Other" });
   });
 });

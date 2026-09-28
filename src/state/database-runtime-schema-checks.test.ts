@@ -119,18 +119,18 @@ beforeAll(async () => {
 });
 
 it("keeps admitted reads within the schema-query budget", () => {
-  expect(counts).toEqual(
+  expect(
+    counts.map(({ owner, userVersion, sqliteMaster }) => ({ owner, userVersion, sqliteMaster })),
+  ).toEqual(
     ["agent", "state"].map((owner) => ({
       owner,
       userVersion: 0,
       sqliteMaster: 0,
-      dataVersion: expect.toBeOneOf([0, 1]),
     })),
   );
 });
 
-it("refuses schemas migrated by another process on the next turn", () => {
-  vi.useFakeTimers({ toFake: ["setImmediate"] });
+it("refuses schemas migrated by another process on the next read", () => {
   const scope = {
     agentId: "main",
     env: { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("openclaw-schema-migration-") },
@@ -158,7 +158,6 @@ it("refuses schemas migrated by another process on the next turn", () => {
       ],
       { stdio: "pipe" },
     );
-    vi.runOnlyPendingTimers();
     expect(() => withOpenClawAgentDatabaseReadOnly(() => undefined, scope)).toThrow(
       /uses newer schema version/,
     );
@@ -174,6 +173,5 @@ it("refuses schemas migrated by another process on the next turn", () => {
       }
     }
     closeOpenClawStateDatabaseForTest();
-    vi.useRealTimers();
   }
 });

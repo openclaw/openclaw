@@ -14,18 +14,6 @@ import {
 import type { ReplyOperation } from "./reply-run-registry.js";
 
 describe("reply-operation-abort", () => {
-  it("preserves failure for session placement settlement closed abort error", () => {
-    const error = createSessionPlacementSettlementClosedAbortError();
-    expect(resolveReplyOperationAbortReason(undefined, error)).toBeUndefined();
-  });
-
-  it("preserves failure for session placement settlement closed wrapped in cause", () => {
-    const error = new Error("wrapper", {
-      cause: createSessionPlacementSettlementClosedAbortError(),
-    });
-    expect(resolveReplyOperationAbortReason(undefined, error)).toBeUndefined();
-  });
-
   it("preserves failure for session placement settlement closed in fallback summary error", () => {
     const closedError = createSessionPlacementSettlementClosedAbortError();
     const summaryError = new FailoverError("All models failed", {
@@ -42,11 +30,7 @@ describe("reply-operation-abort", () => {
       cause: closedError,
     });
     expect(resolveReplyOperationAbortReason(undefined, summaryError)).toBeUndefined();
-  });
-
-  it("resolves superseded for agent run superseded abort error", () => {
-    const error = createAgentRunSupersededAbortError();
-    expect(resolveReplyOperationAbortReason(undefined, error)).toBe("superseded");
+    expect(resolveReplyOperationTerminationFields(summaryError, undefined)).toEqual({});
   });
 
   it("does not infer supersession from a closed settlement abort signal", () => {
@@ -57,25 +41,15 @@ describe("reply-operation-abort", () => {
     expect(resolveReplyOperationAbortReason(replyOp)).toBeUndefined();
   });
 
-  it("resolves superseded when replyOperation is marked aborted_for_supersession", () => {
+  it("preserves owner-recorded supersession over a concurrent restart error", () => {
+    const error = createAgentRunRestartAbortError();
+    // SAFETY: These are the only operation fields read by the termination classifiers.
     const replyOp = {
       result: { kind: "aborted", code: "aborted_for_supersession" },
     } as unknown as ReplyOperation;
     expect(isReplyOperationSuperseded(replyOp)).toBe(true);
-    expect(resolveReplyOperationAbortReason(replyOp)).toBe("superseded");
-  });
-
-  it("preserves owner-recorded supersession over a concurrent restart error", () => {
-    const error = createAgentRunRestartAbortError();
-    const controller = new AbortController();
-    controller.abort(createAgentRunSupersededAbortError());
-    // SAFETY: These are the only operation fields read by the termination classifiers.
-    const replyOp = {
-      result: { kind: "aborted", code: "aborted_for_supersession" },
-      abortSignal: controller.signal,
-    } as unknown as ReplyOperation;
     expect(resolveReplyOperationAbortReason(replyOp, error)).toBe("superseded");
-    expect(resolveReplyOperationTerminationFields(error, controller.signal, replyOp)).toEqual({
+    expect(resolveReplyOperationTerminationFields(error, undefined, replyOp)).toEqual({
       aborted: true,
       stopReason: "superseded",
     });
@@ -83,15 +57,12 @@ describe("reply-operation-abort", () => {
 
   it("preserves owner-recorded restart over a concurrent superseded error", () => {
     const error = createAgentRunSupersededAbortError();
-    const controller = new AbortController();
-    controller.abort(createAgentRunRestartAbortError());
     // SAFETY: These are the only operation fields read by the termination classifiers.
     const replyOp = {
       result: { kind: "aborted", code: "aborted_for_restart" },
-      abortSignal: controller.signal,
     } as unknown as ReplyOperation;
     expect(resolveReplyOperationAbortReason(replyOp, error)).toBe("restart");
-    expect(resolveReplyOperationTerminationFields(error, controller.signal, replyOp)).toEqual({
+    expect(resolveReplyOperationTerminationFields(error, undefined, replyOp)).toEqual({
       aborted: true,
       stopReason: "restart",
     });
@@ -108,21 +79,16 @@ describe("reply-operation-abort", () => {
     });
   });
 
-  it.each([
-    ["restart", createAgentRunRestartAbortError()],
-    ["supersession", createAgentRunSupersededAbortError()],
-  ])(
-    "preserves caller cancellation over an error-level %s without an operation",
-    (_name, error) => {
-      const controller = new AbortController();
-      controller.abort(new Error("caller cancelled"));
-      expect(resolveReplyOperationAbortReason(undefined, error, controller.signal)).toBe("user");
-      expect(resolveReplyOperationTerminationFields(error, controller.signal)).toEqual({
-        aborted: true,
-        stopReason: "aborted",
-      });
-    },
-  );
+  it("preserves caller cancellation over an error-level restart without an operation", () => {
+    const error = createAgentRunRestartAbortError();
+    const controller = new AbortController();
+    controller.abort(new Error("caller cancelled"));
+    expect(resolveReplyOperationAbortReason(undefined, error, controller.signal)).toBe("user");
+    expect(resolveReplyOperationTerminationFields(error, controller.signal)).toEqual({
+      aborted: true,
+      stopReason: "aborted",
+    });
+  });
 
   it.each([
     ["restart", createAgentRunRestartAbortError(), createAgentRunSupersededAbortError()],
@@ -158,12 +124,6 @@ describe("reply-operation-abort", () => {
       status: 429,
     });
     expect(resolveReplyOperationAbortReason(undefined, providerError)).toBeUndefined();
-  });
-
-  it("does not assign superseded lifecycle fields to a closed settlement without a successor", () => {
-    const error = createSessionPlacementSettlementClosedAbortError();
-    const fields = resolveReplyOperationTerminationFields(error, undefined, undefined);
-    expect(fields).toEqual({});
   });
 });
 

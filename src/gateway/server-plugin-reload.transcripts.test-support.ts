@@ -43,6 +43,7 @@ export async function startTranscriptReloadFixtureSidecars(
   };
   const startup = await startGatewayPostAttachRuntime(
     {
+      scheduler: runtime.scheduler,
       minimalTestGateway: false,
       cfgAtStart: config,
       getConfig: fixture.getConfig,

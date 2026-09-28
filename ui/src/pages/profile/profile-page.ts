@@ -39,7 +39,9 @@ import { registerModelAccountsEnglish } from "../../i18n/locales/en-model-accoun
 import { registerProfileEnglish } from "../../i18n/locales/en-profile.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { IdentityAvatarController } from "../../lib/identity-avatar-loader.ts";
+import { assertUploadsEnabled } from "../../lib/uploads.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 import "../../styles/profile.css";
 import "../../features/github-connections/github-connections.ts";
@@ -84,7 +86,13 @@ export class ProfilePage extends OpenClawLightDomElement {
   private readonly heroAvatarLoader = new IdentityAvatarController(this);
   private identityRequestId = 0;
   private subscriptions: Array<() => void> = [];
-
+  constructor() {
+    super();
+    new SubscriptionsController(this).watch(
+      () => this.context?.config,
+      (config, notify) => config.subscribe(notify),
+    );
+  }
   override connectedCallback() {
     super.connectedCallback();
     this.subscriptions = [
@@ -236,6 +244,7 @@ export class ProfilePage extends OpenClawLightDomElement {
           break;
         }
         case "avatar": {
+          assertUploadsEnabled(this.context.config);
           const displayNameDraft = this.displayName;
           const hasUnsavedDisplayName = displayNameDraft.trim() !== (profile.displayName ?? "");
           const selfAvatarUrlBefore =
@@ -244,6 +253,7 @@ export class ProfilePage extends OpenClawLightDomElement {
           if (!isCurrent()) {
             return;
           }
+          assertUploadsEnabled(this.context.config);
           const result = await client.request<UsersSetAvatarResult>("users.setAvatar", {
             profileId: profile.id,
             mime: avatar.mime,
@@ -309,31 +319,22 @@ export class ProfilePage extends OpenClawLightDomElement {
   }
 
   private renderIdentity() {
-    if (!this.selfUser) {
+    if (!this.selfUser || !this.canWrite || !this.ownProfile) {
       return html`<div id=${PROFILE_SETTINGS_TARGET_IDS.identity}>
         ${renderSettingsSection(
           { title: t("profilePage.identity.title") },
-          renderSettingsEmpty(t("profilePage.identity.unidentified")),
-        )}
-      </div>`;
-    }
-    if (!this.canWrite) {
-      return html`<div id=${PROFILE_SETTINGS_TARGET_IDS.identity}>
-        ${renderSettingsSection(
-          { title: t("profilePage.identity.title") },
-          renderSettingsEmpty(t("profilePage.identity.writeRequired")),
-        )}
-      </div>`;
-    }
-    if (!this.ownProfile) {
-      return html`<div id=${PROFILE_SETTINGS_TARGET_IDS.identity}>
-        ${renderSettingsSection(
-          { title: t("profilePage.identity.title") },
-          this.identityLoading
-            ? renderSettingsLoadingSkeleton({ label: t("profilePage.identity.loading"), rows: 2 })
-            : renderSettingsEmpty(
-                this.identityError ?? t("profilePage.identity.profileUnavailable"),
-              ),
+          !this.selfUser
+            ? renderSettingsEmpty(t("profilePage.identity.unidentified"))
+            : !this.canWrite
+              ? renderSettingsEmpty(t("profilePage.identity.writeRequired"))
+              : this.identityLoading
+                ? renderSettingsLoadingSkeleton({
+                    label: t("profilePage.identity.loading"),
+                    rows: 2,
+                  })
+                : renderSettingsEmpty(
+                    this.identityError ?? t("profilePage.identity.profileUnavailable"),
+                  ),
         )}
       </div>`;
     }
@@ -349,6 +350,7 @@ export class ProfilePage extends OpenClawLightDomElement {
             this.context.resourceBasePath,
           );
     return renderIdentitySection({
+      config: this.context.config,
       profile: this.ownProfile,
       avatarUrl,
       displayName: this.displayName,

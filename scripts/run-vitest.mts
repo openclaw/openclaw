@@ -984,8 +984,14 @@ export async function runVitest(
   const invocations = execution
     ? resolveBoundedVitestInvocations(vitestArgs, { env })
     : [vitestArgs];
+  const sourceMode =
+    !execution || execution.options.watch || resolveExplicitVitestMode(vitestArgs) === "watch";
   const config = resolveVitestConfigArg(vitestArgs);
-  const relativeConfig = config ? toRepoRelativeArg(path.resolve(config), repoRoot) : "";
+  const relativeConfig = config
+    ? toRepoRelativeArg(path.resolve(config), repoRoot)
+    : config === null && !sourceMode && process.cwd() === repoRoot
+      ? "vitest.config.ts"
+      : "";
   const invocationEnv =
     invocations.length > 1 && relativeConfig === E2E_VITEST_CONFIG
       ? { ...env, ...(await prepareE2eVitestRuntime(env)) }
@@ -994,12 +1000,11 @@ export async function runVitest(
   // their own setup; never infer their runtime selection from a config name.
   const canonicalSelection =
     execution &&
-    config &&
     !hasAlternateVitestRootArg(vitestArgs) &&
     !hasExplicitVitestProjectArg(vitestArgs) &&
     !hasNonRunVitestSubcommand(vitestArgs) &&
     !hasExplicitDisabledRunFlag(vitestArgs);
-  if (canonicalSelection) {
+  if (canonicalSelection && relativeConfig) {
     const code = await prepareVitestRuntime(
       invocations.flatMap((cliArgs) =>
         resolveVitestRuntimeCliSelections(relativeConfig, cliArgs, invocationEnv),
@@ -1011,8 +1016,6 @@ export async function runVitest(
       return;
     }
   }
-  const sourceMode =
-    !execution || execution.options.watch || resolveExplicitVitestMode(vitestArgs) === "watch";
   const workers = sourceMode
     ? undefined
     : createVitestWorkerRun(resolveVitestProcessEnv(invocationEnv));
@@ -1034,6 +1037,7 @@ export async function runVitest(
     if (
       workers &&
       canonicalSelection &&
+      config &&
       invocations.some((args) =>
         shouldPrepareVitestCoreWorkers(relativeConfig, args, invocationEnv),
       )

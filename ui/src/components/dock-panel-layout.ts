@@ -1,5 +1,4 @@
-export type DockPanelSide = "bottom" | "left" | "right";
-export type DockPanelPlacement = DockPanelSide | "main";
+export type DockPanelPlacement = "bottom" | "left" | "right" | "main";
 
 type DockPanelLayout<TDock extends DockPanelPlacement> = {
   open: boolean;
@@ -61,7 +60,7 @@ export function createDockPanelLayout<TDock extends DockPanelPlacement>(
         if (!raw) {
           return { ...defaults };
         }
-        const parsed = JSON.parse(raw) as Partial<DockPanelLayout<DockPanelSide>>;
+        const parsed = JSON.parse(raw) as Partial<DockPanelLayout<DockPanelPlacement>>;
         return {
           open: Boolean(parsed.open),
           dock: options.supportedDocks.includes(parsed.dock as TDock)

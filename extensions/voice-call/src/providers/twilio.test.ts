@@ -103,6 +103,7 @@ function expectQueueTwiml(body: string) {
   expect(body).toContain("Please hold while we connect you.");
   expect(body).toContain("<Enqueue");
   expect(body).toContain("hold-queue");
+  expect(body).toContain('waitUrl="/voice/hold-music"');
 }
 
 function requireResponseBody(body: string | undefined): string {
@@ -287,17 +288,6 @@ describe("TwilioProvider", () => {
     expect(params).not.toHaveProperty("Twiml");
   });
 
-  it("returns streaming TwiML for outbound conversation calls before in-progress", () => {
-    const provider = createProvider();
-    const ctx = createContext("CallStatus=initiated&Direction=outbound-api&CallSid=CA123", {
-      callId: "call-1",
-    });
-
-    const result = provider.parseWebhookEvent(ctx);
-
-    expectStreamingTwiml(requireResponseBody(result.providerResponseBody));
-  });
-
   it("serves pre-connect TwiML once before outbound streaming starts", async () => {
     const provider = createProvider();
     (
@@ -345,15 +335,6 @@ describe("TwilioProvider", () => {
     expect(result.providerResponseBody).toBe(
       '<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
     );
-  });
-
-  it("returns streaming TwiML for inbound calls", () => {
-    const provider = createProvider();
-    const ctx = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA456");
-
-    const result = provider.parseWebhookEvent(ctx);
-
-    expectStreamingTwiml(requireResponseBody(result.providerResponseBody));
   });
 
   it("returns queue TwiML for second inbound call when first call is active", () => {
@@ -503,20 +484,6 @@ describe("TwilioProvider", () => {
     );
   });
 
-  it("QUEUE_TWIML references /voice/hold-music waitUrl", () => {
-    const provider = createProvider();
-    const firstInbound = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA611");
-    const secondInbound = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA622");
-
-    provider.parseWebhookEvent(firstInbound);
-    provider.registerCallStream("CA611", "MZ611");
-    const result = provider.parseWebhookEvent(secondInbound);
-
-    expect(requireResponseBody(result.providerResponseBody)).toContain(
-      'waitUrl="/voice/hold-music"',
-    );
-  });
-
   it("does not block subsequent call when first call never opens a media stream", () => {
     const provider = createProvider();
     const firstInbound = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA711");
@@ -616,7 +583,8 @@ describe("TwilioProvider", () => {
     expect(parsed.turnToken).toBe("turn-xyz");
   });
 
-  it.each(["", "   ", "\t\n"])("does not emit blank speech results %#", (speechResult) => {
+  it("does not emit whitespace-only speech results", () => {
+    const speechResult = " \t\n";
     const provider = createProvider();
     const body = new URLSearchParams({
       CallSid: "CA-blank",

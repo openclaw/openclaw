@@ -429,7 +429,9 @@ async function handleSessionFilesRead(
   if (!agentId) {
     return;
   }
-  const read = retainSessionScopedRead(options, params.sessionKey, agentId, true);
+  const read = retainSessionScopedRead(options, params.sessionKey, agentId, {
+    requireMaterialized: true,
+  });
   try {
     const loaded = await loadSessionFiles({ ...params, agentId, context });
     read?.assertCurrent();

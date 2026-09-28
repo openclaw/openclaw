@@ -4,18 +4,28 @@ Use `$one-password` before any credential operation, and `$release-private`
 when available for maintainer credential locators. Core package publishing is
 GitHub OIDC trusted publishing; never substitute `NPM_TOKEN` or plugin OTP
 commands. GitHub's `npm-release` environment must be approved by
-`@openclaw/openclaw-release-managers`.
+`@openclaw/openclaw-release-managers` once on the parent. Its attested approval
+receipt lets npm and ClawHub children skip their human gates. npm trusted
+publishers use `npm-publish`, which admits only protected `release-publish/*`
+tags. Direct human npm recovery keeps a separate `npm-release` approval job.
+Branch-based manual npm recovery (for example `--ref main`) is retired: mint or
+reuse the protected tooling tag with `pnpm release:publish-preflight ...
+--workflow-sha <tooling-sha>` (`ensureReleasePublishToolingTag`), then dispatch
+the npm child with `--ref release-publish/<tooling-sha12>-<epoch>`. On the
+receipt route each final `npm publish` re-verifies that the parent attempt is
+still live; a parent that completed, with any conclusion, refuses publication.
 
 The regular and extended-stable publish parent runs from the protected
 `release-publish/<tooling-sha12>-<epoch>` tag minted at the pinned Tooling SHA;
 use the regular candidate helper's printed command or the extended-stable
 publication reference for that track. Do not dispatch npm/plugin/ClawHub
 publication from a moving main parent. Docker-only recovery may use main.
-Extended-stable direct npm workflow recovery is a separate supported main route;
+Extended-stable direct npm workflow recovery also uses a protected tooling tag;
 follow [trusted-main npm recovery](extended-stable-publish.md#trusted-main-npm-recovery)
 for plugin source inputs and the matching core evidence handoff. It does not use
 the shared publish parent or authorize ClawHub publication.
-Tideclaw alpha uses its matching alpha branch and its owning skill.
+The Tideclaw alpha branch route is currently blocked by the protected-tag
+publication contract; see its owning skill. Do not widen the environment policy.
 
 Publication promotes previously qualified bytes. Bind the successful Full
 Release Validation manifest, exact target SHA, successful attempt, and npm
@@ -31,7 +41,7 @@ Classify a failure before changing Git state:
   downstream evidence; after npm publication use a new beta/version.
 - Changelog-only defect: replace Release SHA and reuse Code SHA evidence only
   after proving the exact changelog delta.
-- Tooling/provenance, credential/infrastructure, wrapper, approval, or selector
+- Tooling, source mismatch, credential, infrastructure, wrapper, approval, or selector
   failure: keep the candidate and recover the smallest failed surface. Change
   Tooling SHA only when needed and record the invalidated evidence.
 
@@ -59,18 +69,22 @@ Use the original successful child run IDs and evidence output path with the
 beta verifier. Restore the draft, dependency evidence asset, proof section and
 finalization from that evidence. Never rerun publication for bytes already
 published. A failed postpublish confidence lane does not authorize unpublishing.
-Do not leave the GitHub release drafted while you recover: once npm is out, run
-`gh release edit v<version> --repo openclaw/openclaw --draft=false --latest`
-first (see [regular release](regular-release.md#publish-and-verify)), then repair
-the parent: run the beta-to-stable dist-tag sync, sweep the failed parent's
-stale `waiting`/`queued` children (reject their gate and cancel them, per
-`$release-openclaw-ci` Publish children), and dispatch a new parent with the
-same inputs. It recognizes published bytes and only runs ClawHub, GitHub
-release evidence, and Docker. Never approve a ClawHub child by hand; without
-the parent's recovery-approval artifact its publish jobs fail
-`Artifact not found`.
+Keep the selected publisher's finalization checks intact while recovering.
+The normal direct route verifies npm and Docker before activation; the prepared
+button also verifies ClawHub downloads. Do not manually un-draft a release to
+bypass a failed gate. The direct publisher's explicit `finalize_release_before_docker=true`
+option changes that ordering, not the validation requirements.
 
-Follow `docs/reference/RELEASING.md`: once a beta tag has been pushed, use the
+Repair a stale beta floor through the dist-tag owner and inspect the failed
+parent's exact children before rejecting stale gates or canceling them. Resume
+through the selected route with the same qualified bytes and inputs; direct
+publication uses the successful original core run, while prepared publication
+uses a new button run with the same readiness artifact. Keep the original run
+attempts and required approvals. Do not substitute a manual child approval for
+the parent's authorization. See `$release-openclaw-ci` Publish children for
+stale-child cleanup.
+
+Follow the [release policy](../../../../docs/reference/RELEASING.md): once a beta tag has been pushed, use the
 next beta number rather than deleting or recreating it, even before npm
 publication. Published npm versions and final stable/extended-stable tags remain
 immutable. Routine release authority does not authorize destructive tag
@@ -78,14 +92,70 @@ rewrites; an exceptional operator request must name its exact scope. Mac-only
 packaging recovery keeps the original tag and follows
 [platform publication](platform-publication.md).
 
+## Interrupted preparation and publication
+
+Keep `request.json`, `dispatch.json`, and `dispatch.next.json` when recovering.
+A missing child run ID means the dispatch is unconfirmed; inspect Actions before
+trying again. Resume partial preparation on the same protected tooling tag with the original
+`publish_inputs` and `preparation_request` containing the verified `npmRunId` and
+`clawhubRunId`. Missing or expired
+artifacts also require reconciliation; they do not authorize another dispatch.
+
+If reconciliation proves that a preparation child never existed, dispatch only
+that missing owner from the original protected tooling tag, with the exact source
+SHA as `ref` and `publish_scope=all-publishable`. For Plugin NPM Release, use
+`preflight_only=true`, `trusted_publisher_preflight=false`, and `npm_dist_tag=default`
+(`extended-stable` for that track). For Plugin ClawHub Release, use `dry_run=true`.
+Then supply both verified positive child IDs; adoption dispatches no new workflow.
+
+Publication records distinguish `unknown` (no confirmed publisher), `unverified`
+(a returned ID without an observed attempt), and `acknowledged` (verified original
+publisher and attempt). Preserve the original `release-button-dispatch-<run>-<attempt>`
+artifact before its 30-day expiration. For an acknowledged request, verification
+is read-only and repeatable from the same protected tooling:
+
+```bash
+node scripts/openclaw-release-ready.mjs verify --request /path/to/dispatch.json
+```
+
+Unknown, unverified, missing, or inconsistent records require manual reconciliation
+of the original button and publisher. Do not adopt a newer run or attempt, edit
+an uncertain record into a success receipt, or rerun the dispatch job. Retained
+`dispatch.next.json` is evidence to inspect, not publication authority.
+
+For a failed nonpublishing preparation child, rerun all of that child's jobs to
+produce a complete package set from one attempt, then only the outer **Verify
+and seal prepared publication** job. After publication has been dispatched,
+rerun only failed verification jobs when the publisher succeeded; otherwise
+inspect its children and follow the recovery route above. Never repeat an
+uncertain dispatch or rerun all publication jobs to fix a download failure.
+
+Explicit ClawHub recovery uses `recovered_clawhub_run_id` and
+`recovered_clawhub_run_attempt` to name the original child. Keep the original
+parent's tooling, inputs, run ID, and attempt. Do not reuse an approval from another
+child. Docker-only recovery does not recover canceled ClawHub publication;
+verify and recover that surface separately.
+
 ## Registry selectors
 
-Promote through the restricted release-ops
-`openclaw/releases/.github/workflows/openclaw-npm-dist-tags.yml` workflow.
-Unlike package publication, npm selector management requires `NPM_TOKEN`.
-Prefer repairing that workflow's token path. Point `latest`, `beta`, or
-`extended-stable` only at the operator-approved already-published version, then
-verify cache-bypassed registry readback.
+Beta-to-stable promotion and stable selector recovery remain supported after the
+exact final release passes stable/full validation, soak, and blocking performance.
+Beta-profile evidence or a publication waiver cannot replace those prerequisites.
+
+Use the restricted release-ops
+`openclaw/releases/.github/workflows/openclaw-npm-dist-tags.yml` workflow with
+`mode=promote_beta_to_latest` to promote an already-published final version from
+`beta` to `latest`, or `mode=sync_stable_dist_tags` to recover stable selectors.
+The operator must verify successful qualification for the exact target before
+dispatch. These modes check tag/package identity and selectors; they do not run
+or authenticate Full Release Validation. A `-beta.N` prerelease cannot be promoted
+through this final-version route.
+
+The same workflow supports the stable-to-beta floor and extended-stable promotion.
+Its `sync_beta_to_stable` mode only updates `beta` to the already-published stable
+version; it does not publish stable or substitute for stable validation. npm
+selector management requires `NPM_TOKEN`. Verify cache-bypassed registry readback
+after an approved change.
 
 To promote an already-published core version to `extended-stable`, use
 `mode=promote_extended_stable` with an exact public final release tag after
@@ -138,3 +208,14 @@ npm view openclaw@latest version dist.tarball --json --prefer-online
 
 An existing tag may still receive validation-only `preflight_only=true` to
 verify packaging after publish; it does not authorize republishing.
+
+## Check the bootstrap token
+
+Before publishing a never-published npm package, check the repository's actual
+`NPM_TOKEN` in an approved GitHub Actions job. Disable shell tracing, write the
+token to a private temporary npmrc, and run `npm whoami` against
+`https://registry.npmjs.org` with that file and an otherwise clean environment.
+Suppress account output, remove the temporary file, and retain the run URL.
+Never print or upload the token. A local login or secret update time is not a
+substitute for this check. Successful authentication does not establish package
+permissions or approve publication; failures go to the credential owner.

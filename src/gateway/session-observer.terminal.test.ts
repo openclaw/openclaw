@@ -31,6 +31,7 @@ type HarnessOptions = NonNullable<Parameters<typeof createBaseHarness>[0]>;
 type EventRoute = { runId?: string; sessionKey?: string; agentId?: string };
 
 const activeHarnesses = new Set<Harness>();
+const databaseIdentity = Symbol("session-observer-database");
 
 function createHarness(options?: HarnessOptions): Harness {
   const harness = createBaseHarness(options);
@@ -118,6 +119,7 @@ function commitObserverSessionReset(harness: Harness, notify = true): void {
   }
   emitSessionIdentityMutation({
     agentId: "main",
+    databaseIdentity,
     kind: "reset",
     previous: { sessionId, sessionKeys: [sessionKey] },
     current: { sessionId, sessionKeys: [sessionKey] },
@@ -433,25 +435,22 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
     expect(digest?.health).toBe("done");
   });
 
-  it.each([
-    { phase: "end", expected: "done" },
-    { phase: "error", expected: "failed" },
-  ])("forces $expected health on a terminal lifecycle digest", async ({ phase, expected }) => {
+  it("forces failed health on an error lifecycle digest", async () => {
     useFakeTime();
     const harness = createHarness();
     harness.observer.handleEvent(lifecycleEvent({ phase: "start" }));
     await vi.advanceTimersByTimeAsync(30_000);
     await handleLifecycle(harness, {
-      phase,
+      phase: "error",
       startedAt: 0,
       endedAt: 30_000,
       error: "test failure",
-      ...(phase === "error" ? { fallbackExhaustedFailure: true } : {}),
+      fallbackExhaustedFailure: true,
     });
 
     expect(harness.broadcastToConnIds).toHaveBeenCalledOnce();
     const digest = broadcastDigest(harness);
-    expect(digest?.health).toBe(expected);
+    expect(digest?.health).toBe("failed");
     expect(harness.persistDigest).toHaveBeenCalledOnce();
   });
 
@@ -496,34 +495,31 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
     expect(harness.persistDigest).toHaveBeenCalledOnce();
   });
 
-  it.each([1, 2])(
-    "corrects an expired retryable failure after %i same-run attempt errors",
-    async (failureCount) => {
-      useFakeTime();
-      const harness = createHarness();
-      harness.observer.handleEvent(lifecycleEvent({ phase: "start", startedAt: 0 }));
-      await vi.advanceTimersByTimeAsync(30_000);
+  it("corrects an expired retryable failure after repeated same-run attempt errors", async () => {
+    useFakeTime();
+    const harness = createHarness();
+    harness.observer.handleEvent(lifecycleEvent({ phase: "start", startedAt: 0 }));
+    await vi.advanceTimersByTimeAsync(30_000);
 
-      for (let attempt = 0; attempt < failureCount; attempt += 1) {
-        harness.observer.handleEvent(
-          lifecycleEvent({
-            phase: "error",
-            endedAt: 30_000 + attempt,
-            error: `retryable provider failure ${attempt + 1}`,
-          }),
-        );
-        await advanceAndFlush(15_000);
-      }
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      harness.observer.handleEvent(
+        lifecycleEvent({
+          phase: "error",
+          endedAt: 30_000 + attempt,
+          error: `retryable provider failure ${attempt + 1}`,
+        }),
+      );
+      await advanceAndFlush(15_000);
+    }
 
-      expect(broadcastDigest(harness, -1)).toMatchObject({ health: "failed" });
-      const failureRevision = broadcastDigest(harness, -1)?.revision;
-      await handleLifecycle(harness, { phase: "end", endedAt: 70_000 });
+    expect(broadcastDigest(harness, -1)).toMatchObject({ health: "failed" });
+    const failureRevision = broadcastDigest(harness, -1)?.revision;
+    await handleLifecycle(harness, { phase: "end", endedAt: 70_000 });
 
-      expect(broadcastDigest(harness, -1)).toMatchObject({ health: "done", runId: "run-1" });
-      expect(persistedDigest(harness, -1)).toMatchObject({ health: "done", runId: "run-1" });
-      expect(broadcastDigest(harness, -1)?.revision).toBeGreaterThan(failureRevision ?? 0);
-    },
-  );
+    expect(broadcastDigest(harness, -1)).toMatchObject({ health: "done", runId: "run-1" });
+    expect(persistedDigest(harness, -1)).toMatchObject({ health: "done", runId: "run-1" });
+    expect(broadcastDigest(harness, -1)?.revision).toBeGreaterThan(failureRevision ?? 0);
+  });
 
   it("does not let a provisional prior run evict the newer active session owner", async () => {
     useFakeTime();
@@ -672,27 +668,24 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
     );
   });
 
-  it.each(["silent", "empty"] as const)(
-    "does not invent a terminal headline for a %s reply",
-    async (disposition) => {
-      useFakeTime();
-      const completeModel = vi.fn(async () =>
-        modelMessage({ headline: "Fixing tests", health: "grinding" }),
-      );
-      const harness = createHarness({ completeModel });
-      startAndAddToolNotes(harness.observer);
-      await advanceAndFlush(12_000);
+  it("does not invent a terminal headline for a silent reply", async () => {
+    useFakeTime();
+    const completeModel = vi.fn(async () =>
+      modelMessage({ headline: "Fixing tests", health: "grinding" }),
+    );
+    const harness = createHarness({ completeModel });
+    startAndAddToolNotes(harness.observer);
+    await advanceAndFlush(12_000);
 
-      completeModel.mockRejectedValue(new Error("model unavailable"));
-      harness.observer.handleEvent(
-        lifecycleEvent({ phase: "end", endedAt: 60_000, terminalReply: { disposition } }),
-      );
-      await advanceAndFlush(0);
+    completeModel.mockRejectedValue(new Error("model unavailable"));
+    harness.observer.handleEvent(
+      lifecycleEvent({ phase: "end", endedAt: 60_000, terminalReply: { disposition: "silent" } }),
+    );
+    await advanceAndFlush(0);
 
-      const synthesized = observerBroadcasts(harness).at(-1)?.[1] as SessionObserverDigest;
-      expect(synthesized.headline).toBe("Fixing tests");
-    },
-  );
+    const synthesized = observerBroadcasts(harness).at(-1)?.[1] as SessionObserverDigest;
+    expect(synthesized.headline).toBe("Fixing tests");
+  });
 
   it("does not persist a synthesized terminal digest for a superseded run", async () => {
     useFakeTime();

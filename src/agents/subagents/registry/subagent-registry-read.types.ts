@@ -65,7 +65,7 @@ export type SubagentCompletionDeliveryState = {
   suspendedReason?: "expiry" | "permanent_failure";
   dismissedAt?: number;
   discardedAt?: number;
-  discardReason?: "expired";
+  discardReason?: "expired" | "task-missing";
   discardedPayloadSummary?: {
     requesterSessionKey?: string;
     childSessionKey?: string;
@@ -119,6 +119,8 @@ export type SubagentRunReadRecord = {
   delivery?: SubagentCompletionDeliveryState;
   execution: {
     status: "queued" | "running" | "interrupted" | "terminal";
+    /** Retained after restart settlement; an interrupted execution is not a task failure. */
+    interruptionReason?: "gateway-restart";
     startedAt?: number;
     endedAt?: number;
     outcome?: SubagentRunOutcome;

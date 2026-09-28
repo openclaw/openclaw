@@ -483,20 +483,32 @@ describe("narrow session read owners", () => {
     });
   });
 
-  it.each(methods)("%s does not expose data after authority or row replacement", async (method) => {
+  it.each(methods)("%s retains only current session read facts", async (method) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const reader = roleClient("view", "retained-reader");
       reader.connect.scopes = ["operator.sessions.read"];
       const cfg = rolePolicyConfig();
       const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-      for (const changed of ["authority", "generation", "visibility"] as const) {
+      for (const changed of [
+        "metadata-no-revision",
+        "metadata",
+        "authority",
+        "generation",
+        "visibility",
+      ] as const) {
+        const metadataOnly = changed === "metadata-no-revision" || changed === "metadata";
         const entry = {
           sessionId: "original",
-          lifecycleRevision: "original",
+          lifecycleRevision: changed === "metadata-no-revision" ? undefined : "original",
           updatedAt: 1,
           visibility: "shared" as const,
         };
         await sessions.upsertSessionEntryCore({ agentId: "main", sessionKey: key }, entry);
+        if (changed === "metadata-no-revision") {
+          expect(
+            sessions.loadSessionEntry({ agentId: "main", sessionKey: key })?.lifecycleRevision,
+          ).toBeUndefined();
+        }
         const entered = createDeferredCore();
         const release = createDeferredCore();
         const io = prepareRead(method, async () => {
@@ -535,9 +547,11 @@ describe("narrow session read owners", () => {
               { agentId: "main", sessionKey: key },
               {
                 ...entry,
-                ...(changed === "generation"
-                  ? { lifecycleRevision: "replacement" }
-                  : { visibility: "draft" }),
+                ...(metadataOnly
+                  ? { label: "Renamed during read", updatedAt: 2 }
+                  : changed === "generation"
+                    ? { lifecycleRevision: "replacement" }
+                    : { visibility: "draft" }),
               },
             );
           }
@@ -555,8 +569,11 @@ describe("narrow session read owners", () => {
         } else {
           expect(settled).toEqual([{ status: "fulfilled", value: undefined }]);
           expect(respond).toHaveBeenCalledOnce();
-          expect(respond.mock.calls[0]?.[0]).toBe(false);
-          expect(respond.mock.calls[0]?.[1]).toBeUndefined();
+          const unchangedAccess = method === "sessions.branches.list" && metadataOnly;
+          expect(respond.mock.calls[0]?.[0]).toBe(unchangedAccess);
+          expect(respond.mock.calls[0]?.[1]).toEqual(
+            unchangedAccess ? { branches: [] } : undefined,
+          );
         }
       }
     });

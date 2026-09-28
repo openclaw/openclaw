@@ -2,12 +2,20 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import {
   collectDatabaseFirstNativeLegacyStoreViolations,
   collectDatabaseFirstLegacyStoreSourceFiles,
   collectDatabaseFirstLegacyStoreViolations,
 } from "../../scripts/check-database-first-legacy-stores.mts";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
+
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
+
+function parseFixture(content: string, fileName: string) {
+  return [content, fileName, parser.parseSourceFile(fileName, content)] as const;
+}
 
 type LegacyStoreViolations = ReturnType<typeof collectDatabaseFirstLegacyStoreViolations>;
 type UnnamedViolationCase = {
@@ -98,6 +106,18 @@ const jsonPersistCase = importedSourceCase(jsonImport, [
   "}",
 ]);
 
+const writeFileOptionsCase = importedSourceCase(writeFileImport, [
+  "function persist(params: { filePath: string }) {",
+  '  return writeFile(params.filePath, "{}\\n");',
+  "}",
+]);
+
+const atomicOptionsCase = importedSourceCase(atomicImport, [
+  "function persist(params: { filePath: string }) {",
+  '  return writeTextAtomic(params.filePath, "{}\\n");',
+  "}",
+]);
+
 function namedCases(cases: Record<string, UnnamedViolationCase>) {
   return Object.entries(cases).map(([name, { source, filename, expected }]) => ({
     name,
@@ -107,88 +127,60 @@ function namedCases(cases: Record<string, UnnamedViolationCase>) {
   }));
 }
 
+async function collectFixtureSources(filenames: string[], roots: string[]) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-db-first-guard-"));
+  try {
+    for (const filename of filenames) {
+      const filePath = path.join(root, filename);
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(filePath, "export {};\n");
+    }
+    const files = await collectDatabaseFirstLegacyStoreSourceFiles(
+      roots.map((entry) => path.join(root, entry)),
+    );
+    return files.map((file) => path.relative(root, file).replaceAll(path.sep, "/")).toSorted();
+  } finally {
+    await fs.rm(root, { force: true, recursive: true });
+  }
+}
+
 describe("check-database-first-legacy-stores", () => {
   it("collects JavaScript runtime source files", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-db-first-guard-"));
-    try {
-      await fs.mkdir(path.join(root, "src"), { recursive: true });
-      await fs.writeFile(path.join(root, "src", "runtime.js"), "export {};\n");
-      await fs.writeFile(path.join(root, "src", "worker.mjs"), "export {};\n");
-      await fs.writeFile(path.join(root, "src", "types.ts"), "export {};\n");
-      await fs.writeFile(path.join(root, "src", "runtime.test.js"), "export {};\n");
-      await fs.writeFile(path.join(root, "src", "test-helpers.ts"), "export {};\n");
-      await fs.writeFile(path.join(root, "src", "test-support.ts"), "export {};\n");
-      await fs.writeFile(path.join(root, "src", "worker.test-helpers.ts"), "export {};\n");
-
-      const files = await collectDatabaseFirstLegacyStoreSourceFiles([path.join(root, "src")]);
-      const relativeFiles = files
-        .map((file) => path.relative(root, file).replaceAll(path.sep, "/"))
-        .toSorted();
-
-      expect(relativeFiles).toEqual(["src/runtime.js", "src/types.ts", "src/worker.mjs"]);
-    } finally {
-      await fs.rm(root, { force: true, recursive: true });
-    }
+    expect(
+      await collectFixtureSources(
+        [
+          "src/runtime.js",
+          "src/worker.mjs",
+          "src/types.ts",
+          "src/runtime.test.js",
+          "src/test-helpers.ts",
+          "src/test-support.ts",
+          "src/worker.test-helpers.ts",
+        ],
+        ["src"],
+      ),
+    ).toEqual(["src/runtime.js", "src/types.ts", "src/worker.mjs"]);
   });
 
   it("skips generated extension asset, renderer, and dist bundles", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-db-first-guard-"));
-    try {
-      await fs.mkdir(path.join(root, "extensions", "diffs", "assets"), { recursive: true });
-      await fs.mkdir(path.join(root, "extensions", "diffs", "dist", "assets"), {
-        recursive: true,
-      });
-      await fs.mkdir(path.join(root, "extensions", "diffs", "src"), { recursive: true });
-      await fs.mkdir(path.join(root, "extensions", "canvas", "src", "host", "a2ui"), {
-        recursive: true,
-      });
-      await fs.mkdir(path.join(root, "packages", "plugin-sdk", "dist"), { recursive: true });
-      await fs.mkdir(path.join(root, "packages", "plugin-sdk", "src"), { recursive: true });
-      await fs.writeFile(
-        path.join(root, "extensions", "diffs", "assets", "viewer-runtime.js"),
-        "export const bundled = true;\n",
-      );
-      await fs.writeFile(
-        path.join(root, "extensions", "diffs", "dist", "assets", "viewer-runtime.js"),
-        "export const bundled = true;\n",
-      );
-      await fs.writeFile(
-        path.join(root, "extensions", "diffs", "src", "runtime.js"),
-        "export const runtime = true;\n",
-      );
-      await fs.writeFile(
-        path.join(root, "extensions", "canvas", "src", "host", "a2ui", "a2ui.bundle.js"),
-        "export const bundled = true;\n",
-      );
-      await fs.writeFile(
-        path.join(root, "extensions", "canvas", "src", "host", "a2ui", "bootstrap.js"),
-        "export const runtime = true;\n",
-      );
-      await fs.writeFile(
-        path.join(root, "packages", "plugin-sdk", "dist", "index.js"),
-        "export const bundled = true;\n",
-      );
-      await fs.writeFile(
-        path.join(root, "packages", "plugin-sdk", "src", "index.js"),
-        "export const runtime = true;\n",
-      );
-
-      const files = await collectDatabaseFirstLegacyStoreSourceFiles([
-        path.join(root, "extensions"),
-        path.join(root, "packages"),
-      ]);
-      const relativeFiles = files
-        .map((file) => path.relative(root, file).replaceAll(path.sep, "/"))
-        .toSorted();
-
-      expect(relativeFiles).toEqual([
-        "extensions/canvas/src/host/a2ui/bootstrap.js",
-        "extensions/diffs/src/runtime.js",
-        "packages/plugin-sdk/src/index.js",
-      ]);
-    } finally {
-      await fs.rm(root, { force: true, recursive: true });
-    }
+    expect(
+      await collectFixtureSources(
+        [
+          "extensions/diffs/assets/viewer-runtime.js",
+          "extensions/diffs/dist/assets/viewer-runtime.js",
+          "extensions/diffs/src/runtime.js",
+          "extensions/canvas/src/host/a2ui/a2ui.bundle.js",
+          "extensions/canvas/src/host/a2ui/bootstrap.js",
+          "packages/plugin-sdk/dist/index.js",
+          "packages/plugin-sdk/src/index.js",
+        ],
+        ["extensions", "packages"],
+      ),
+    ).toEqual([
+      "extensions/canvas/src/host/a2ui/bootstrap.js",
+      "extensions/diffs/src/runtime.js",
+      "packages/plugin-sdk/src/index.js",
+    ]);
   });
 
   it("ignores deeply nested type-only syntax", () => {
@@ -197,11 +189,13 @@ describe("check-database-first-legacy-stores", () => {
       "string",
     );
     const violations = collectDatabaseFirstLegacyStoreViolations(
-      `
+      ...parseFixture(
+        `
         type DeepRuntimeSchema = ${nestedType};
         export const ok: DeepRuntimeSchema | null = null;
       `,
-      "src/runtime/deep-type-only-schema.ts",
+        "src/runtime/deep-type-only-schema.ts",
+      ),
     );
 
     expect(violations).toEqual([]);
@@ -226,27 +220,31 @@ describe("check-database-first-legacy-stores", () => {
       `("session-writer.ts", filesystemWriteViolations(5)),
     }),
   )("$name", ({ source, filename, expected }) => {
-    const violations = collectDatabaseFirstLegacyStoreViolations(source, filename);
+    const violations = collectDatabaseFirstLegacyStoreViolations(...parseFixture(source, filename));
 
     expect(violations).toEqual(expected);
   });
 
   it("keeps legacy restart sentinel filesystem access in its sole migration owner", () => {
     const runtimeViolations = collectDatabaseFirstLegacyStoreViolations(
-      `
+      ...parseFixture(
+        `
         import { readFile } from "node:fs/promises";
         import path from "node:path";
         const legacyFilename = "restart-sentinel.json";
       `,
-      "src/infra/restart-sentinel.ts",
+        "src/infra/restart-sentinel.ts",
+      ),
     );
     const migrationViolations = collectDatabaseFirstLegacyStoreViolations(
-      `
+      ...parseFixture(
+        `
         import { readFile } from "node:fs/promises";
         import path from "node:path";
         const legacyFilename = "restart-sentinel.json";
       `,
-      "src/infra/state-migrations.restart-sentinel.ts",
+        "src/infra/state-migrations.restart-sentinel.ts",
+      ),
     );
 
     expect(runtimeViolations).toEqual([
@@ -259,30 +257,40 @@ describe("check-database-first-legacy-stores", () => {
 
   it("keeps exec approvals legacy paths and stable URI identity in their exact owners", () => {
     const runtimeViolations = collectDatabaseFirstLegacyStoreViolations(
-      `
+      ...parseFixture(
+        `
         import fs from "node:fs";
         const legacyFilename = "exec-approvals.json";
       `,
-      "src/infra/exec-approvals-store.ts",
+        "src/infra/exec-approvals-store.ts",
+      ),
     );
     const migrationViolations = collectDatabaseFirstLegacyStoreViolations(
-      `
+      ...parseFixture(
+        `
         import fs from "node:fs";
         const legacyFilename = "exec-approvals.json";
       `,
-      "src/infra/state-migrations.exec-approvals.ts",
+        "src/infra/state-migrations.exec-approvals.ts",
+      ),
     );
     const configViolations = collectDatabaseFirstLegacyStoreViolations(
-      'const EXEC_APPROVALS_FILE = "exec-approvals.json";',
-      "src/infra/exec-approvals-config.ts",
+      ...parseFixture(
+        'const EXEC_APPROVALS_FILE = "exec-approvals.json";',
+        "src/infra/exec-approvals-config.ts",
+      ),
     );
     const stableUriViolations = collectDatabaseFirstLegacyStoreViolations(
-      'export const EXEC_APPROVALS_POLICY_URI = "oc://exec-approvals.json";',
-      "extensions/policy/src/exec-approvals-uri.ts",
+      ...parseFixture(
+        'export const EXEC_APPROVALS_POLICY_URI = "oc://exec-approvals.json";',
+        "extensions/policy/src/exec-approvals-uri.ts",
+      ),
     );
     const copiedUriViolations = collectDatabaseFirstLegacyStoreViolations(
-      'const copied = "oc://exec-approvals.json";',
-      "extensions/policy/src/doctor/copied-uri.ts",
+      ...parseFixture(
+        'const copied = "oc://exec-approvals.json";',
+        "extensions/policy/src/doctor/copied-uri.ts",
+      ),
     );
 
     expect(runtimeViolations).toEqual([
@@ -304,7 +312,9 @@ describe("check-database-first-legacy-stores", () => {
     `;
 
     expect(
-      collectDatabaseFirstLegacyStoreViolations(content, "src/commands/doctor/boundaries.ts"),
+      collectDatabaseFirstLegacyStoreViolations(
+        ...parseFixture(content, "src/commands/doctor/boundaries.ts"),
+      ),
     ).toEqual([
       { kind: "legacy restart sentinel reference", line: 3 },
       { kind: "legacy restart sentinel reference", line: 4 },
@@ -526,6 +536,15 @@ describe("check-database-first-legacy-stores", () => {
         import * as jsonFiles from "../infra/json-files.js";
         await jsonFiles.writeJson("sessions.json", {});
       `("helper-namespace-write.ts", filesystemWriteViolations(3)),
+      "flags direct fs-safe helper writes without flagging reads": sourceCase`
+        import { appendRegularFile as append } from "@openclaw/fs-safe/advanced";
+        import * as atomic from "@openclaw/fs-safe/atomic";
+        import { writeJsonSync as save, readJson } from "@openclaw/fs-safe/json";
+        await append({ filePath: "sessions.json", content: "{}\\n" });
+        atomic.replaceFileAtomicSync({ filePath: "plugin-state/state.sqlite", content: "" });
+        save("thread-bindings.json", {});
+        await readJson("sessions.json");
+      `("direct-fs-safe-helper-write.ts", filesystemWriteViolations(5, 6, 7)),
       "flags private file store writes to legacy paths": privateStoreCase`
         await privateFileStore(stateDir).writeJson("thread-bindings.json", {});
       `("private-file-store-write.ts", filesystemWriteViolations(3)),
@@ -1043,7 +1062,7 @@ describe("check-database-first-legacy-stores", () => {
       `("regular-file-helper.ts", filesystemWriteViolations(4)),
       "flags legacy paths written through JSON and atomic helpers": sourceCase`
         import { writeJson, writeTextAtomic } from "../infra/json-files.js";
-        import { replaceFileAtomicSync } from "../infra/replace-file.js";
+        import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
         import { saveJsonFile, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
         await writeJson("restart-sentinel.json", {});
         await writeTextAtomic("gateway-restart-intent.json", "{}\\n");
@@ -3156,46 +3175,32 @@ describe("check-database-first-legacy-stores", () => {
         append({ filePath: "sessions.json", content: "{}\\n" });
         replace({ filePath: "plugin-state/state.sqlite", content: "" });
       `("forwarded-filepath-helper-options.ts", filesystemWriteViolations(9, 10)),
-      "flags wrapper options forwarded through another wrapper": atomicCase`
-        function persist(params: { filePath: string }) {
-          return writeTextAtomic(params.filePath, "{}\\n");
-        }
+      "flags wrapper options forwarded through another wrapper": atomicOptionsCase`
         function save(params: { filePath: string }) {
           return persist(params);
         }
         save({ filePath: "sessions.json" });
       `("transitive-wrapper-forwarding.ts", filesystemWriteViolations(9)),
-      "flags wrapper options spread through another wrapper": atomicCase`
-        function persist(params: { filePath: string }) {
-          return writeTextAtomic(params.filePath, "{}\\n");
-        }
+      "flags wrapper options spread through another wrapper": atomicOptionsCase`
         function save(params: { filePath: string }) {
           return persist({ ...params });
         }
         save({ filePath: "sessions.json" });
       `("transitive-wrapper-spread-forwarding.ts", filesystemWriteViolations(9)),
-      "allows wrapper spread forwarding when a later property overrides the path": atomicCase`
-        function persist(params: { filePath: string }) {
-          return writeTextAtomic(params.filePath, "{}\\n");
-        }
+      "allows wrapper spread forwarding when a later property overrides the path":
+        atomicOptionsCase`
         function save(params: { filePath: string }) {
           return persist({ ...params, filePath: currentSqlitePath });
         }
         save({ filePath: "sessions.json" });
       `("transitive-wrapper-spread-overridden-forwarding.ts", []),
-      "flags wrapper spread forwarding when a later spread restores the path": atomicCase`
-        function persist(params: { filePath: string }) {
-          return writeTextAtomic(params.filePath, "{}\\n");
-        }
+      "flags wrapper spread forwarding when a later spread restores the path": atomicOptionsCase`
         function save(params: { filePath: string }) {
           return persist({ filePath: currentSqlitePath, ...params });
         }
         save({ filePath: "sessions.json" });
       `("transitive-wrapper-spread-restored-forwarding.ts", filesystemWriteViolations(9)),
-      "flags wrapper options renamed through another wrapper": atomicCase`
-        function persist(params: { filePath: string }) {
-          return writeTextAtomic(params.filePath, "{}\\n");
-        }
+      "flags wrapper options renamed through another wrapper": atomicOptionsCase`
         function save(params: { storePath: string }) {
           return persist({ filePath: params.storePath });
         }
@@ -3220,10 +3225,7 @@ describe("check-database-first-legacy-stores", () => {
         persist = (params: { filePath: string }) => writeTextAtomic(params.filePath, "{}\\n");
         persist({ filePath: "sessions.json" });
       `("reassigned-wrapper-variable.ts", filesystemWriteViolations(5)),
-      "flags aliased wrapper variables": atomicCase`
-        function persist(params: { filePath: string }) {
-          return writeTextAtomic(params.filePath, "{}\\n");
-        }
+      "flags aliased wrapper variables": atomicOptionsCase`
         const save = persist;
         save({ filePath: "sessions.json" });
       `("aliased-wrapper-variable.ts", filesystemWriteViolations(7)),
@@ -3269,17 +3271,11 @@ describe("check-database-first-legacy-stores", () => {
         };
         writer["persist"]({ filePath: "sessions.json" });
       `("object-property-wrapper-function.ts", filesystemWriteViolations(6)),
-      "flags object wrapper shorthand aliases": atomicCase`
-        function persist(params: { filePath: string }) {
-          return writeTextAtomic(params.filePath, "{}\\n");
-        }
+      "flags object wrapper shorthand aliases": atomicOptionsCase`
         const writer = { persist };
         await writer.persist({ filePath: "sessions.json" });
       `("object-wrapper-shorthand-alias.ts", filesystemWriteViolations(7)),
-      "flags object wrapper property aliases": atomicCase`
-        function persist(params: { filePath: string }) {
-          return writeTextAtomic(params.filePath, "{}\\n");
-        }
+      "flags object wrapper property aliases": atomicOptionsCase`
         const writer = { save: persist };
         await writer.save({ filePath: "sessions.json" });
       `("object-wrapper-property-alias.ts", filesystemWriteViolations(7)),
@@ -3876,23 +3872,11 @@ describe("check-database-first-legacy-stores", () => {
         }
         persist({ paths: { filePath: "sessions.json" } });
       `("nested-inline-chained-wrapper-property.ts", filesystemWriteViolations(6)),
-      "flags inline wrapper paths passed through chained normalize methods": writeFileCase`
-        function persist(params: { path: string }) {
-          return writeFile(params.path.normalize(), "{}\\n");
-        }
-        persist({ path: "sessions.json" });
-      `("inline-normalized-wrapper-property.ts", filesystemWriteViolations(6)),
-      "expands wrapper spread arguments from inline arrays": writeFileCase`
-        function persist(params: { filePath: string }) {
-          return writeFile(params.filePath, "{}\\n");
-        }
+      "expands wrapper spread arguments from inline arrays": writeFileOptionsCase`
         const params = { filePath: "sessions.json" };
         persist(...[params]);
       `("inline-array-spread-wrapper-argument.ts", filesystemWriteViolations(7)),
-      "expands wrapper spread arguments from tuple bindings": writeFileCase`
-        function persist(params: { filePath: string }) {
-          return writeFile(params.filePath, "{}\\n");
-        }
+      "expands wrapper spread arguments from tuple bindings": writeFileOptionsCase`
         const args = [{ filePath: "sessions.json" }] as const;
         persist(...args);
       `("tuple-spread-wrapper-argument.ts", filesystemWriteViolations(7)),
@@ -3903,43 +3887,25 @@ describe("check-database-first-legacy-stores", () => {
         const params = { filePath: "sessions.json" };
         persist("state", ...[...[params]]);
       `("prefixed-nested-spread-wrapper-argument.ts", filesystemWriteViolations(7)),
-      "merges object facts across conditional wrapper arguments": writeFileCase`
-        function persist(params: { filePath: string }) {
-          return writeFile(params.filePath, "{}\\n");
-        }
+      "merges object facts across conditional wrapper arguments": writeFileOptionsCase`
         persist(ready ? { filePath: "sessions.json" } : { filePath: currentPath });
       `("conditional-wrapper-argument.ts", filesystemWriteViolations(6)),
-      "forwards comma-expression wrapper arguments": writeFileCase`
-        function persist(params: { filePath: string }) {
-          return writeFile(params.filePath, "{}\\n");
-        }
+      "forwards comma-expression wrapper arguments": writeFileOptionsCase`
         persist((0, { filePath: "sessions.json" }));
       `("comma-wrapper-argument.ts", filesystemWriteViolations(6)),
-      "forwards satisfies wrapper arguments": writeFileCase`
-        function persist(params: { filePath: string }) {
-          return writeFile(params.filePath, "{}\\n");
-        }
+      "forwards satisfies wrapper arguments": writeFileOptionsCase`
         const params = { filePath: "sessions.json" };
         persist(params satisfies { filePath: string });
       `("satisfies-wrapper-argument.ts", filesystemWriteViolations(7)),
-      "forwards awaited resolved wrapper arguments": writeFileCase`
-        function persist(params: { filePath: string }) {
-          return writeFile(params.filePath, "{}\\n");
-        }
+      "forwards awaited resolved wrapper arguments": writeFileOptionsCase`
         const params = { filePath: "sessions.json" };
         await persist(await Promise.resolve(params));
       `("awaited-wrapper-argument.ts", filesystemWriteViolations(7)),
-      "forwards proxied wrapper arguments": writeFileCase`
-        function persist(params: { filePath: string }) {
-          return writeFile(params.filePath, "{}\\n");
-        }
+      "forwards proxied wrapper arguments": writeFileOptionsCase`
         const params = { filePath: "sessions.json" };
         persist(new Proxy(params, {}));
       `("proxied-wrapper-argument.ts", filesystemWriteViolations(7)),
-      "keeps safe proxied wrapper arguments safe": writeFileCase`
-        function persist(params: { filePath: string }) {
-          return writeFile(params.filePath, "{}\\n");
-        }
+      "keeps safe proxied wrapper arguments safe": writeFileOptionsCase`
         const params = { filePath: currentPath };
         persist(new Proxy(params, {}));
       `("safe-proxied-wrapper-argument.ts", []),
@@ -3957,10 +3923,7 @@ describe("check-database-first-legacy-stores", () => {
         const filePath = "sessions.json";
         persist(...[filePath]);
       `("spread-scalar-wrapper-argument.ts", filesystemWriteViolations(7)),
-      "keeps safe conditional wrapper arguments safe": writeFileCase`
-        function persist(params: { filePath: string }) {
-          return writeFile(params.filePath, "{}\\n");
-        }
+      "keeps safe conditional wrapper arguments safe": writeFileOptionsCase`
         persist(ready ? { filePath: currentPath } : { filePath: sqlitePath });
       `("safe-conditional-wrapper-argument.ts", []),
       "widens truncated conditional argument facts conservatively": {
@@ -4110,10 +4073,7 @@ describe("check-database-first-legacy-stores", () => {
           persist({ store: "sessions.json" });
         }
       `("destructured-wrapper-name-parameter.ts", []),
-      "does not treat sibling object metadata as the wrapper path property": atomicCase`
-        function persist(params: { filePath: string }) {
-          return writeTextAtomic(params.filePath, "{}\\n");
-        }
+      "does not treat sibling object metadata as the wrapper path property": atomicOptionsCase`
         const params = { label: "sessions.json", filePath: currentSqlitePath };
         await persist(params);
       `("current-path-sibling-metadata.ts", []),
@@ -4412,10 +4372,8 @@ describe("check-database-first-legacy-stores", () => {
         const { filePath = "sessions.json" } = params;
         writeTextAtomic(filePath, "{}\\n");
       `("destructured-default-current-object-path.ts", []),
-      "flags wrapper shorthand options destructured from tracked object properties": atomicCase`
-        function persist(params: { filePath: string }) {
-          return writeTextAtomic(params.filePath, "{}\\n");
-        }
+      "flags wrapper shorthand options destructured from tracked object properties":
+        atomicOptionsCase`
         const params = { filePath: "sessions.json" };
         const { filePath } = params;
         persist({ filePath });
@@ -4672,13 +4630,9 @@ describe("check-database-first-legacy-stores", () => {
         fs.appendFileSync("cron/runs/job.jsonl", "{}\\n");
         fs.writeFileSync("plugin-state/state.sqlite", "");
       `("extensions/example/src/store.ts", filesystemWriteViolations(3, 4)),
-      "flags new writes in current legacy-debt files": sourceCase`
-        import fs from "node:fs";
-        fs.writeFileSync("sessions.json", "{}\\n");
-      `("extensions/memory-wiki/src/compile.ts", filesystemWriteViolations(3)),
     }),
   )("$name", ({ source, filename, expected }) => {
-    const violations = collectDatabaseFirstLegacyStoreViolations(source, filename);
+    const violations = collectDatabaseFirstLegacyStoreViolations(...parseFixture(source, filename));
 
     expect(violations).toEqual(expected);
   });
@@ -4686,8 +4640,7 @@ describe("check-database-first-legacy-stores", () => {
   it("flags changed writes on current legacy-debt lines", () => {
     const content = `import fs from "node:fs";${"\n".repeat(667)}fs.writeFileSync("sessions.json", "{}\\n");`;
     const violations = collectDatabaseFirstLegacyStoreViolations(
-      content,
-      "extensions/memory-wiki/src/compile.ts",
+      ...parseFixture(content, "extensions/memory-wiki/src/compile.ts"),
     );
 
     expect(violations).toEqual(filesystemWriteViolations(668));
@@ -4713,7 +4666,7 @@ describe("check-database-first-legacy-stores", () => {
       `("src/infra/state-migrations.device-identity.ts", []),
     }),
   )("$name", ({ source, filename, expected }) => {
-    const violations = collectDatabaseFirstLegacyStoreViolations(source, filename);
+    const violations = collectDatabaseFirstLegacyStoreViolations(...parseFixture(source, filename));
 
     expect(violations).toEqual(expected);
   });
@@ -4759,7 +4712,7 @@ describe("check-database-first-legacy-stores", () => {
       ]),
     }),
   )("$name", ({ source, filename, expected }) => {
-    const violations = collectDatabaseFirstLegacyStoreViolations(source, filename);
+    const violations = collectDatabaseFirstLegacyStoreViolations(...parseFixture(source, filename));
 
     expect(violations).toEqual(expected);
   });

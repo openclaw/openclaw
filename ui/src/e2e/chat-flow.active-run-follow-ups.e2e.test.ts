@@ -633,10 +633,15 @@ suite.define(() => {
       try {
         await expect
           .poll(bubbleTexts)
-          .toEqual([initialText, "A", commentaryText, "B", steerText, afterText]);
-        expect(
-          await transcript.locator(".chat-working-indicator__preamble").allTextContents(),
-        ).toEqual([latestCommentaryText]);
+          .toEqual([
+            initialText,
+            "A",
+            commentaryText,
+            "B",
+            steerText,
+            latestCommentaryText,
+            afterText,
+          ]);
       } finally {
         await capture("recovered-continuation");
       }
@@ -780,8 +785,10 @@ suite.define(() => {
           timestamp: Date.now(),
         },
       ]);
-      const sessionListsBeforeTerminal = (await gateway.getRequests("sessions.list")).length;
-      await gateway.deferNext("sessions.list");
+      const rosterMatch = { includeGlobal: true };
+      const sessionListsBeforeTerminal = (await gateway.getRequests("sessions.list", rosterMatch))
+        .length;
+      await gateway.deferNext("sessions.list", rosterMatch);
       await gateway.emitGatewayEvent("sessions.changed", {
         activeRunIds: [activeRunId],
         hasActiveRun: true,
@@ -792,7 +799,7 @@ suite.define(() => {
         updatedAt: Date.now(),
       });
       await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)
         .toBeGreaterThan(sessionListsBeforeTerminal);
       const terminalSessions = chatSessionListResponse([
         {

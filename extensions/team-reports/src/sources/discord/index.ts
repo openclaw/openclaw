@@ -1,5 +1,11 @@
 import { z } from "zod";
-import type { DiscordMessage, DiscordSource, SourceRuntime, SourceStatus } from "../../types.js";
+import type {
+  ActivityEntry,
+  DiscordMessage,
+  DiscordSource,
+  SourceRuntime,
+  SourceStatus,
+} from "../../types.js";
 import { checkAbort, createResponseParser } from "../http.js";
 import { ABORT_LABEL, createClient, DiscordHttpError } from "./client.js";
 
@@ -35,13 +41,13 @@ const parse = createResponseParser(
 
 export function createDiscordSource(runtime: SourceRuntime): DiscordSource {
   return {
-    async collect(config, window) {
+    async collect(config, window, _roster, emit) {
       const status: SourceStatus = {
         ok: true,
         warnings: [],
         stats: { apiCalls: 0, channelsScanned: 0, threadsScanned: 0, privateArchivesSkipped: 0 },
       };
-      const collected = new Map<string, DiscordMessage>();
+      let messageCount = 0;
       const warn = (scope: string, error: unknown) => {
         checkAbort(runtime.signal, ABORT_LABEL);
         const detail = error instanceof Error ? error.message : "Discord collection failed.";
@@ -50,6 +56,7 @@ export function createDiscordSource(runtime: SourceRuntime): DiscordSource {
           config.token ? warning.replaceAll(config.token, "[redacted]") : warning,
         );
         status.stale = true;
+        status.ok = false;
       };
       checkAbort(runtime.signal, ABORT_LABEL);
       const client = createClient(config, runtime, status);
@@ -63,7 +70,6 @@ export function createDiscordSource(runtime: SourceRuntime): DiscordSource {
         }
       } catch (error) {
         warn("Discord guild channels", error);
-        status.ok = false;
       }
 
       const configured = new Set(config.channels.map((channel) => channel.id));
@@ -180,6 +186,7 @@ export function createDiscordSource(runtime: SourceRuntime): DiscordSource {
             }
             // Discord returns newest first even when selecting messages after a cursor.
             page.sort((left, right) => (BigInt(left.id) < BigInt(right.id) ? -1 : 1));
+            const entries: ActivityEntry<DiscordMessage>[] = [];
             let crossedEnd = false;
             let newest = BigInt(after);
             for (const entry of page) {
@@ -199,15 +206,22 @@ export function createDiscordSource(runtime: SourceRuntime): DiscordSource {
               ) {
                 continue;
               }
-              collected.set(entry.id, {
-                channelId: target.id,
-                parentChannelId: target.parentId,
-                channelName: target.name,
-                authorId: entry.author.id,
-                authorIsBot: false,
-                atMs,
-                content,
+              entries.push({
+                key: entry.id,
+                value: {
+                  channelId: target.id,
+                  parentChannelId: target.parentId,
+                  channelName: target.name,
+                  authorId: entry.author.id,
+                  authorIsBot: false,
+                  atMs,
+                  content,
+                },
               });
+            }
+            if (entries.length > 0) {
+              await emit(entries);
+              messageCount += entries.length;
             }
             if (crossedEnd || page.length < 100) {
               break;
@@ -224,18 +238,10 @@ export function createDiscordSource(runtime: SourceRuntime): DiscordSource {
         }
       }
       checkAbort(runtime.signal, ABORT_LABEL);
-      const messages = [...collected]
-        .toSorted(
-          ([leftId, left], [rightId, right]) =>
-            left.atMs - right.atMs ||
-            left.channelId.localeCompare(right.channelId) ||
-            leftId.localeCompare(rightId),
-        )
-        .map(([, message]) => message);
       runtime.logger.info(
-        `team-reports: Discord messages done: ${status.stats.channelsScanned} channels, ${status.stats.threadsScanned} threads, ${messages.length} messages`,
+        `team-reports: Discord messages done: ${status.stats.channelsScanned} channels, ${status.stats.threadsScanned} threads, ${messageCount} messages`,
       );
-      return { messages, status };
+      return status;
     },
   };
 }

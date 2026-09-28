@@ -58,33 +58,33 @@ describe("completed-work duration", () => {
         rerender();
         transcript.hostConnected();
         await flushDeferredRowPrune();
-        const duration = () => container.querySelector(".chat-activity-group__duration");
-        expect(duration()?.textContent).toBe("27m 35s");
+        const duration = () => container.querySelector(".chat-activity-group__label");
+        expect(duration()?.textContent).toBe("Worked for 27m 35s");
         props.selectedSession.runtimeMs = 1_660_000;
         rerender();
-        expect(duration()?.textContent).toBe("27m 40s");
+        expect(duration()?.textContent).toBe("Worked for 27m 40s");
         props.messages = messages.slice(1);
         rerender();
-        expect(duration()?.textContent).toBe("27m 40s");
+        expect(duration()?.textContent).toBe("Worked for 27m 40s");
         props.messages = messages;
         props.selectedSession.lastRunId = "unrelated-run";
         rerender();
-        expect(duration()).toBeNull();
+        expect(duration()?.textContent).toBe("Worked");
         expect(container.querySelector(".chat-work-group")).not.toBeNull();
         props.selectedSession.lastRunId = runId;
         props.selectedSession.status = "running";
         rerender();
-        expect(duration()).toBeNull();
+        expect(duration()?.textContent).toBe("Worked");
         props.selectedSession.status = status;
         for (const runtimeMs of [undefined, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
           props.selectedSession.runtimeMs = runtimeMs;
           rerender();
-          expect(duration()).toBeNull();
+          expect(duration()?.textContent).toBe("Worked");
         }
         props.selectedSession.runtimeMs = 1_655_000;
         props.selectedSession.key = "agent:main:dashboard:other";
         rerender();
-        expect(duration()).toBeNull();
+        expect(duration()?.textContent).toBe("Worked");
         expect(messages[2]?.timestamp).toBe(508_000);
       } finally {
         transcript.hostDisconnected();
@@ -150,10 +150,9 @@ describe("completed-work duration", () => {
         expect(summaries).toHaveLength(2);
         expect(
           summaries.map(
-            (summary) =>
-              summary.querySelector(".chat-activity-group__duration")?.textContent ?? null,
+            (summary) => summary.querySelector(".chat-activity-group__label")?.textContent ?? null,
           ),
-        ).toEqual(steer ? ["20s", "20s"] : [null, "20s"]);
+        ).toEqual(steer ? ["Worked for 20s", "Worked for 20s"] : ["Worked", "Worked for 20s"]);
       } finally {
         transcript.hostDisconnected();
         container.remove();

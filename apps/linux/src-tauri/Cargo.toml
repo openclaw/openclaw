@@ -41,9 +41,10 @@ tauri-plugin-global-shortcut = "2.3.2"
 tauri-plugin-opener = "2.5.5"
 tauri-plugin-process = "2.3.1"
 tauri-plugin-single-instance = { version = "2.4.4", features = ["deep-link"] }
-# 2.11.0 returns Windows installer errors after Tauri has torn down the UI.
-# Lift this pin once cleanup runs only after a successful installer launch.
-tauri-plugin-updater = "=2.10.1"
+# Defer Windows cleanup until the installer launches successfully.
+# Return to crates.io once an eligible release includes this fix.
+# Preserve 2.10.1's network features instead of enabling OS proxy discovery.
+tauri-plugin-updater = { version = "=2.11.0", git = "https://github.com/steipete/plugins-workspace.git", rev = "63e8185eb184cf0af6b665f631e2314c7b14d9c6", default-features = false, features = ["rustls-tls", "zip"] }
 tauri-plugin-window-state = "2.4.1"
 tauri-utils = { version = "2.9.3", features = ["config-json5"] }
 tokio = { version = "1.53.1", features = ["macros", "sync", "time"] }
@@ -58,6 +59,7 @@ libc = "0.2.189"
 cairo-rs = { version = "0.18.5", features = ["png"] }
 gtk = "0.18.2"
 webkit2gtk = { version = "2.0.2", features = ["v2_40"] }
+x11 = { version = "2.21.0", features = ["xlib"] }
 tauri-plugin-notifications = { git = "https://github.com/steipete/tauri-plugin-notifications.git", rev = "35d04a6af588a5d5d438da0320c7d95a877cfe14" }
 zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
 

@@ -64,17 +64,14 @@ const FETCH_TOOL_NAMES = new Set(["web_fetch", "webfetch", "fetch"]);
 const PATCH_TOOL_NAMES = new Set(["apply_patch", "applypatch", "patch"]);
 
 function resolvePathArg(args: Record<string, unknown> | null): string | undefined {
-  if (!args) {
-    return undefined;
-  }
   return (
-    readNonBlankString(args.path) ??
-    readNonBlankString(args.file_path) ??
-    readNonBlankString(args.filePath) ??
-    readNonBlankString(args.file) ??
-    readNonBlankString(args.filepath) ??
-    readNonBlankString(args.filename) ??
-    readNonBlankString(args.notebook_path)
+    readNonBlankString(args?.path) ??
+    readNonBlankString(args?.file_path) ??
+    readNonBlankString(args?.filePath) ??
+    readNonBlankString(args?.file) ??
+    readNonBlankString(args?.filepath) ??
+    readNonBlankString(args?.filename) ??
+    readNonBlankString(args?.notebook_path)
   );
 }
 
@@ -89,7 +86,7 @@ function splitPathForDisplay(path: string): { base: string; dir?: string } {
 
 type EditPair = { oldText: string; newText: string };
 
-type ResolvedEditDiff = { lines: DiffLine[]; stat?: DiffStat };
+type ResolvedEditDiff = { diff: DiffLine[]; stat?: DiffStat };
 
 const MAX_LOCAL_DIFF_PAIRS = 8;
 const MAX_LOCAL_DIFF_INPUT_CHARS = 120_000;
@@ -98,47 +95,34 @@ function readEditPairs(args: Record<string, unknown>): { pairs: EditPair[]; trun
   const pairs: EditPair[] = [];
   let inputChars = 0;
   let truncated = false;
-  const push = (oldText: unknown, newText: unknown) => {
+  const edits = Array.isArray(args.edits) ? args.edits : [args];
+  for (const [index, entry] of edits.entries()) {
+    if (index >= MAX_LOCAL_DIFF_PAIRS) {
+      truncated = true;
+      break;
+    }
+    const record = asRecord(entry);
+    if (!record) {
+      continue;
+    }
+    const oldText = record.oldText ?? record.old_string ?? record.oldString ?? record.old_str;
+    const newText = record.newText ?? record.new_string ?? record.newString ?? record.new_str;
     if (typeof oldText === "string" && typeof newText === "string") {
       const pairChars = oldText.length + newText.length;
       if (inputChars + pairChars > MAX_LOCAL_DIFF_INPUT_CHARS) {
         truncated = true;
-        return;
+        break;
       }
       inputChars += pairChars;
       pairs.push({ oldText, newText });
     }
-  };
-  if (Array.isArray(args.edits)) {
-    for (let index = 0; index < args.edits.length; index++) {
-      if (index >= MAX_LOCAL_DIFF_PAIRS) {
-        truncated = true;
-        break;
-      }
-      const entry = args.edits[index];
-      const record = asRecord(entry);
-      if (record) {
-        push(
-          record.oldText ?? record.old_string ?? record.oldString ?? record.old_str,
-          record.newText ?? record.new_string ?? record.newString ?? record.new_str,
-        );
-        if (truncated) {
-          break;
-        }
-      }
-    }
-  } else {
-    push(
-      args.oldText ?? args.old_string ?? args.oldString ?? args.old_str,
-      args.newText ?? args.new_string ?? args.newString ?? args.new_str,
-    );
   }
   return { pairs, truncated };
 }
 
 function readDetailsDiff(details: unknown): ResolvedEditDiff | null {
   const record = asRecord(details);
-  const diffText = record ? readNonBlankString(record.diff) : undefined;
+  const diffText = readNonBlankString(record?.diff);
   if (!diffText) {
     return null;
   }
@@ -147,23 +131,18 @@ function readDetailsDiff(details: unknown): ResolvedEditDiff | null {
     return null;
   }
   return {
-    lines: lines.lines,
+    diff: lines.lines,
     ...(lines.kind === "complete" ? { stat: lines.stat } : {}),
   };
 }
 
-function resolveEditDiff(source: ToolCallViewSource): ResolvedEditDiff | null {
-  const fromDetails = readDetailsDiff(source.details);
-  if (fromDetails) {
-    return fromDetails;
-  }
-  const args = asRecord(source.args);
+function resolveEditDiff(args: Record<string, unknown> | null): ResolvedEditDiff | null {
   if (!args) {
     return null;
   }
   const { pairs, truncated } = readEditPairs(args);
   if (pairs.length === 0) {
-    return truncated ? { lines: [{ kind: "skip", text: "" }] } : null;
+    return truncated ? { diff: [{ kind: "skip", text: "" }] } : null;
   }
   const sections = pairs.map((pair) => computeLineDiff(pair.oldText, pair.newText));
   const result = joinDiffSections(sections, { truncated });
@@ -171,27 +150,20 @@ function resolveEditDiff(source: ToolCallViewSource): ResolvedEditDiff | null {
     return null;
   }
   return {
-    lines: result.lines,
+    diff: result.lines,
     ...(result.kind === "complete" ? { stat: result.stat } : {}),
   };
 }
 
-function resolveInsertionDiff(
-  source: ToolCallViewSource,
-  args: Record<string, unknown> | null,
-): ResolvedEditDiff | null {
-  const fromDetails = readDetailsDiff(source.details);
-  if (fromDetails) {
-    return fromDetails;
-  }
-  const insertText = args ? readNonBlankString(args.insert_text) : undefined;
+function resolveInsertionDiff(args: Record<string, unknown> | null): ResolvedEditDiff | null {
+  const insertText = readNonBlankString(args?.insert_text);
   if (!insertText) {
     return null;
   }
   const lines = computeLineDiff("", insertText).lines;
   // The text is known, but its surrounding file context is not. Omit an exact
   // stat rather than implying this preview represents the final placement.
-  return lines.length > 0 ? { lines } : null;
+  return lines.length > 0 ? { diff: lines } : null;
 }
 
 function resolvePatchView(args: Record<string, unknown> | null): ToolCallView | null {
@@ -226,30 +198,13 @@ function resolvePatchView(args: Record<string, unknown> | null): ToolCallView | 
   };
 }
 
-function normalizeKey(name: string): string {
-  return name.trim().toLowerCase();
-}
-
-type TextEditorCommand = "view" | "str_replace" | "create" | "insert" | "undo_edit";
-
-function resolveTextEditorCommand(args: unknown): TextEditorCommand | undefined {
-  const command = readNonBlankString(asRecord(args)?.command)?.trim().toLowerCase();
-  switch (command) {
-    case "view":
-    case "str_replace":
-    case "create":
-    case "insert":
-    case "undo_edit":
-      return command;
-    default:
-      return undefined;
-  }
-}
-
-function resolveToolCallKind(name: string, args?: unknown): ToolCallKind {
-  const key = normalizeKey(name);
+function resolveToolCallKind(
+  key: string,
+  args: Record<string, unknown> | null,
+  editorCommand: string | undefined,
+): ToolCallKind {
   if (TEXT_EDITOR_TOOL_NAMES.has(key)) {
-    switch (resolveTextEditorCommand(args)) {
+    switch (editorCommand) {
       case "view":
         return "read";
       case "str_replace":
@@ -281,8 +236,7 @@ function resolveToolCallKind(name: string, args?: unknown): ToolCallKind {
     return "fetch";
   }
   // Arg-shape fallback for harness-specific command tools.
-  const record = asRecord(args);
-  if (record && typeof record.command === "string" && Object.keys(record).length <= 3) {
+  if (args && typeof args.command === "string" && Object.keys(args).length <= 3) {
     return "command";
   }
   return "generic";
@@ -299,14 +253,14 @@ const toolCallViewCache = new WeakMap<
 export function resolveToolCallView(source: ToolCallViewSource): ToolCallView {
   const args = asRecord(source.args);
   const cacheKey = args ?? asRecord(source.details);
-  const name = normalizeKey(source.name);
+  const name = source.name.trim().toLowerCase();
   if (cacheKey) {
     const cached = toolCallViewCache.get(cacheKey);
     if (cached && cached.details === source.details && cached.name === name) {
       return cached.view;
     }
   }
-  const view = buildToolCallView(source, args);
+  const view = buildToolCallView(source, args, name);
   if (cacheKey) {
     toolCallViewCache.set(cacheKey, { details: source.details, name, view });
   }
@@ -327,12 +281,12 @@ function unwrapShellWrapperCommand(command: string): string {
 function buildToolCallView(
   source: ToolCallViewSource,
   args: Record<string, unknown> | null,
+  key: string,
 ): ToolCallView {
-  const kind = resolveToolCallKind(source.name, source.args);
-  const key = normalizeKey(source.name);
   const editorCommand = TEXT_EDITOR_TOOL_NAMES.has(key)
-    ? resolveTextEditorCommand(source.args)
+    ? readNonBlankString(args?.command)?.trim().toLowerCase()
     : undefined;
+  const kind = resolveToolCallKind(key, args, editorCommand);
 
   if (kind === "command") {
     const command = args ? readNonBlankString(args.command) : undefined;
@@ -359,25 +313,18 @@ function buildToolCallView(
       return view;
     }
 
+    const authoritativeDiff = readDetailsDiff(source.details);
+    if (authoritativeDiff) {
+      return { ...view, ...authoritativeDiff };
+    }
     if (kind === "edit") {
       const diff =
         editorCommand === "insert"
-          ? resolveInsertionDiff(source, args)
+          ? resolveInsertionDiff(args)
           : editorCommand === "undo_edit"
-            ? readDetailsDiff(source.details)
-            : resolveEditDiff(source);
-      return {
-        ...view,
-        ...(diff ? { diff: diff.lines, ...(diff.stat ? { stat: diff.stat } : {}) } : {}),
-      };
-    }
-    const authoritativeDiff = readDetailsDiff(source.details);
-    if (authoritativeDiff) {
-      return {
-        ...view,
-        diff: authoritativeDiff.lines,
-        ...(authoritativeDiff.stat ? { stat: authoritativeDiff.stat } : {}),
-      };
+            ? null
+            : resolveEditDiff(args);
+      return { ...view, ...diff };
     }
     const details = asRecord(source.details);
     if (details?.changed === false) {

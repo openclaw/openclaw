@@ -15,6 +15,8 @@ import { resolveSqliteAgentId } from "./session-accessor.sqlite-scope.js";
 import {
   listSqliteTargetCandidatePathsForSessionStorePath,
   resolveUnsuffixedSqliteTargetFromSessionStorePath,
+} from "./session-sqlite-target-paths.js";
+import {
   resolveSqliteTargetFromSessionStorePath,
   SessionStoreRegistryReadRequired,
   type SessionStoreRegistryRead,
@@ -43,8 +45,13 @@ export type SessionStoreTargetReadRequest = {
   registeredDatabases: SessionStoreRegistryRead;
 };
 
+type SessionStoreRegistryRequired = {
+  kind: "session-target-registry-required";
+  readFailed?: boolean;
+};
+
 export type SessionStoreTargetReadResult =
-  | { kind: "session-target-registry-required" }
+  | SessionStoreRegistryRequired
   | {
       kind: "session-store-target";
       sourcePath: string;
@@ -151,7 +158,7 @@ export type SessionStoreTargetInventoryRequest = {
 };
 
 export type SessionStoreTargetInventoryResult =
-  | { kind: "session-target-registry-required" }
+  | SessionStoreRegistryRequired
   | {
       kind: "session-target-inventory";
       agents: Array<{
@@ -252,6 +259,7 @@ export function readSessionStoreTargetInventory(
   const env = cloneEnvWithPlatformSemantics(request.env);
   const config = retainLegacyDefaultAgentId(request.config, request.legacyDefaultAgentId);
   const cache: SessionStoreTargetsReadCache = new Map();
+  let readFailed = false;
   try {
     return {
       kind: "session-target-inventory",
@@ -268,12 +276,16 @@ export function readSessionStoreTargetInventory(
           readPaths: request.paths,
           onResolvedTarget: (target, database) => reads.push({ target, database }),
         });
+        readFailed ||= !result.available && result.reason !== "database-missing";
         return { agentId, result, reads: result.available ? reads : [] };
       }),
     };
   } catch (error) {
     if (error instanceof SessionStoreRegistryReadRequired) {
-      return { kind: "session-target-registry-required" };
+      return {
+        kind: "session-target-registry-required",
+        readFailed,
+      };
     }
     throw error;
   }

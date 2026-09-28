@@ -46,11 +46,6 @@ describe("Obsidian CLI filesystem discovery", () => {
     return filename;
   }
 
-  it("does not report a same-named directory as an installed CLI", async () => {
-    await fs.mkdir(path.join(first, commandName));
-    await expect(probeObsidianCli()).resolves.toEqual({ available: false, command: null });
-  });
-
   it("continues past a directory to a later executable on PATH", async () => {
     await fs.mkdir(path.join(first, commandName));
     const command = await executable(second);

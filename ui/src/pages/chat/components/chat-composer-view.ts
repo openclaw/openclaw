@@ -88,7 +88,7 @@ type ChatComposerViewContext = {
   slashMenuVisible: boolean;
   skillMenuVisible: boolean;
   mentionMenuVisible: boolean;
-  emojiMenuVisible: boolean;
+  menuVisible: boolean;
   mentionMenuHost: HumanMentionMenuHost;
   mentionError: string | null;
   skillMenuHost: SkillMenuHost;
@@ -131,7 +131,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     slashMenuVisible,
     skillMenuVisible,
     mentionMenuVisible,
-    emojiMenuVisible,
+    menuVisible,
     mentionMenuHost,
     mentionError,
     skillMenuHost,
@@ -215,16 +215,12 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
   const composerAlerts = showComposerInput
     ? html`
         ${renderChatVoiceStatus({
-          status:
-            props.realtimeTalkCameraError || props.realtimeTalkVoice?.error
-              ? "error"
-              : props.realtimeTalkStatus,
-          detail: props.realtimeTalkVoice?.error ?? props.realtimeTalkDetail,
+          status: props.realtimeTalkCameraError ? "error" : props.realtimeTalkStatus,
+          detail: props.realtimeTalkDetail,
           onUseSystemDefaultMicrophone: props.onUseSystemDefaultMicrophone,
-          onDismissError:
-            props.realtimeTalkCameraError || props.realtimeTalkVoice?.error
-              ? undefined
-              : props.onDismissRealtimeTalkError,
+          onDismissError: props.realtimeTalkCameraError
+            ? undefined
+            : props.onDismissRealtimeTalkError,
         })}
         ${
           props.realtimeTalkInputNotice
@@ -237,11 +233,10 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
         }
       `
     : nothing;
-  const offlineText = props.offline
-    ? props.queuedOutboxCount
+  const offlineText =
+    props.offline && props.queuedOutboxCount
       ? t("chat.composer.offlineQueuedHint", { count: String(props.queuedOutboxCount) })
-      : t("chat.composer.offlineHint")
-    : null;
+      : null;
   const primaryComposerStatus = props.disabledReason
     ? {
         text: props.disabledReason,
@@ -325,6 +320,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     displayQueue: props.displayQueue,
     offline: props.offline,
     canAbort: showAbortableUi,
+    canRemoveServerQueued: props.connected && props.canSend && !props.submitDisabledReason,
     onQueueRetry:
       props.connected && props.canSend && !props.submitDisabledReason
         ? props.onQueueRetry
@@ -383,7 +379,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
               @wa-show=${handleChatComposerDropdownShow}
               @wa-after-show=${restorePointerOpenedChatComposerTrigger}
               @openclaw-composer-dismiss-invocations=${() => {
-                state.slashMenuOpen = false;
                 resetSlashMenuState(state);
                 resetSkillMenuState(state);
                 state.mentionMenu.close();
@@ -507,16 +502,8 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     ?disabled=${!canCompose}
                     ?readonly=${dictation?.locksComposer === true || goalComposer.pending}
                     aria-autocomplete="list"
-                    aria-controls=${ifDefined(
-                      slashMenuVisible || skillMenuVisible || mentionMenuVisible || emojiMenuVisible
-                        ? slashMenuListboxId
-                        : undefined,
-                    )}
-                    aria-haspopup=${ifDefined(
-                      slashMenuVisible || skillMenuVisible || mentionMenuVisible || emojiMenuVisible
-                        ? "listbox"
-                        : undefined,
-                    )}
+                    aria-controls=${ifDefined(menuVisible ? slashMenuListboxId : undefined)}
+                    aria-haspopup=${ifDefined(menuVisible ? "listbox" : undefined)}
                     aria-activedescendant=${ifDefined(activeSlashMenuOptionId ?? undefined)}
                     aria-describedby=${`${slashMenuAnnouncementId}${
                       props.disabledReason ? ` ${disabledReasonId}` : ""

@@ -17,6 +17,57 @@ const request = {
   argv: ["openclaw-internal-workspace-seed"],
 };
 const key = "a".repeat(64);
+const completedResult = {
+  workspaceDir: "/workspace",
+  stdout: "",
+  stderr: "",
+  code: 0,
+  signal: null,
+  killed: false,
+  termination: "exit",
+};
+
+it("preserves admitted result identity, optional undefined fields, and host paths", () => {
+  for (const workspaceDir of ["/workspace", "C:\\workspace"]) {
+    const result = {
+      ...completedResult,
+      workspaceDir,
+      stdoutTruncatedBytes: undefined,
+      stderrTruncatedBytes: Number.MAX_SAFE_INTEGER,
+      noOutputTimedOut: false,
+      outputLimitExceeded: undefined,
+      outputErrorStream: "stderr",
+      process: { processId: "worker:1", state: "exited" },
+    };
+    expect(parseNodeWorkerWorkspaceExecResult(result)).toBe(result);
+  }
+});
+
+it("rejects malformed and inherited workspace result fields", () => {
+  for (const invalid of [
+    { ...completedResult, workspaceDir: "relative" },
+    { ...completedResult, stdout: "🦞".repeat(16_384) + "x" },
+    { ...completedResult, stderr: "🦞".repeat(4_096) + "x" },
+    { ...completedResult, code: Number.MAX_SAFE_INTEGER + 1 },
+    { ...completedResult, signal: "" },
+    { ...completedResult, stdoutTruncatedBytes: -1 },
+    { ...completedResult, stderrTruncatedBytes: 0.5 },
+    { ...completedResult, noOutputTimedOut: null },
+    { ...completedResult, outputLimitExceeded: null },
+    { ...completedResult, outputErrorStream: "stdin" },
+    { ...completedResult, process: null },
+    { ...completedResult, process: { processId: "../worker", state: "running" } },
+    { ...completedResult, process: { processId: "worker:1", state: "pending" } },
+    { ...completedResult, extra: true },
+    Object.create(completedResult),
+    Object.assign(Object.create({ process: undefined }), completedResult),
+    { ...completedResult, process: Object.create({ processId: "worker:1", state: "exited" }) },
+    Object.assign([], completedResult),
+    Object.assign(Buffer.from("bytes"), completedResult),
+  ]) {
+    expect(parseNodeWorkerWorkspaceExecResult(invalid)).toBeNull();
+  }
+});
 
 it("admits workspace drain only without a mutation payload", () => {
   const drain = { ...request, argv: [NODE_WORKSPACE_DRAIN_COMMAND] };

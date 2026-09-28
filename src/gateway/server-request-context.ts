@@ -20,14 +20,13 @@ import {
   disconnectStaleSharedGatewayAuthClients,
   enforceSharedGatewaySessionGenerationForConfigWrite,
 } from "./server-shared-auth-generation.js";
-import { recordClientPresenceActivity, refreshClientPresence } from "./server/client-presence.js";
-import type { GatewayClientRegistry } from "./server/client-registry.js";
 import {
-  getHealthCache,
-  getHealthVersion,
-  incrementPresenceVersion,
-} from "./server/health-state.js";
-import { broadcastPresenceSnapshot } from "./server/presence-events.js";
+  recordClientPresenceActivity,
+  refreshClientPresence,
+  snapshotClientPresence,
+} from "./server/client-presence.js";
+import type { GatewayClientRegistry } from "./server/client-registry.js";
+import { getHealthCache } from "./server/health-state.js";
 import { invalidateGatewayPolicyClient } from "./server/ws-policy-close.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 
@@ -48,6 +47,8 @@ type GatewayRequestContextRuntime = Pick<
   | "questionManager"
   | "forwardPluginApprovalRequest"
   | "forwardExecApprovalRequest"
+  | "forwardSystemAgentApprovalRequest"
+  | "forwardSystemAgentApprovalResolved"
   | "execApprovalIosPushDelivery"
   | "approvalWebPushDelivery"
   | "pluginApprovalIosPushDelivery"
@@ -60,6 +61,7 @@ type GatewayRequestContextRuntime = Pick<
   | "readPreparedGatewayModelCatalogBatch"
   | "getRuntimeSnapshot"
   | "broadcast"
+  | "publishPresence"
   | "broadcastToConnIds"
   | "nodeSendToSession"
   | "nodeSendToAllSubscribed"
@@ -98,6 +100,7 @@ type GatewayRequestContextRuntime = Pick<
   Pick<
     GatewayCoreRuntime,
     | "getSessionRowProjection"
+    | "forgetConnectionAncestors"
     | "refreshGatewayHealthSnapshotWithRuntime"
     | "hasTalkNodeConnected"
     | "sharedGatewaySessionGenerationState"
@@ -291,6 +294,8 @@ export function createGatewayRequestContext(
       : undefined,
     forwardPluginApprovalRequest: runtime.forwardPluginApprovalRequest,
     forwardExecApprovalRequest: runtime.forwardExecApprovalRequest,
+    forwardSystemAgentApprovalRequest: runtime.forwardSystemAgentApprovalRequest,
+    forwardSystemAgentApprovalResolved: runtime.forwardSystemAgentApprovalResolved,
     execApprovalIosPushDelivery: runtime.execApprovalIosPushDelivery,
     approvalWebPushDelivery: runtime.approvalWebPushDelivery,
     pluginApprovalIosPushDelivery: runtime.pluginApprovalIosPushDelivery,
@@ -314,9 +319,9 @@ export function createGatewayRequestContext(
     refreshHealthSnapshot: runtime.refreshGatewayHealthSnapshotWithRuntime,
     logHealth: params.logHealth,
     logGateway: params.log,
-    incrementPresenceVersion,
-    getHealthVersion,
     broadcast,
+    publishPresence: runtime.publishPresence,
+    getPresenceSnapshot: () => snapshotClientPresence(clients),
     broadcastToConnIds: runtime.broadcastToConnIds,
     nodeSendToSession: runtime.nodeSendToSession,
     nodeSendToAllSubscribed: runtime.nodeSendToAllSubscribed,
@@ -327,11 +332,7 @@ export function createGatewayRequestContext(
     isConnectionActive: runtime.isConnectionActive,
     recordClientActivity: (client) => {
       if (recordClientPresenceActivity(clients, client)) {
-        broadcastPresenceSnapshot({
-          broadcast,
-          incrementPresenceVersion,
-          getHealthVersion,
-        });
+        runtime.publishPresence();
       }
     },
     hasExecApprovalClients: (excludeConnId?: string) => {
@@ -437,11 +438,7 @@ export function createGatewayRequestContext(
         }
       }
       if (presenceChanged) {
-        broadcastPresenceSnapshot({
-          broadcast,
-          incrementPresenceVersion,
-          getHealthVersion,
-        });
+        runtime.publishPresence();
       }
     },
     invalidateClientsForDevice: (deviceId: string, opts?: { role?: string; reason?: string }) => {
@@ -542,6 +539,7 @@ export function createGatewayRequestContext(
     removeChatRun: runtime.removeChatRun,
     subscribeSessionEvents: sessionEventSubscribers.subscribe,
     unsubscribeSessionEvents: sessionEventSubscribers.unsubscribe,
+    forgetConnectionAncestors: runtime.forgetConnectionAncestors,
     subscribeSessionMessageEvents: runtime.subscribeSessionMessageEvents,
     unsubscribeSessionMessageEvents: runtime.unsubscribeSessionMessageEvents,
     unsubscribeAllSessionEvents: (connId) => {

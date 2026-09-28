@@ -1,6 +1,11 @@
 // Duplicate timer tests cover cron service guards against repeated timer arms.
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "./service.js";
 import {
   createCronStoreHarness,
@@ -17,7 +22,7 @@ const noopLogger = createNoopLogger();
 const { makeStorePath } = createCronStoreHarness({ prefix: "openclaw-cron-" });
 installCronTestHooks({
   logger: noopLogger,
-  baseTimeIso: "2025-12-13T00:00:00.000Z",
+  fakeTimers: false,
 });
 
 describe("CronService", () => {
@@ -29,8 +34,11 @@ describe("CronService", () => {
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    const clockA = createGatewaySchedulerClock(Date.parse("2025-12-13T00:00:00.000Z"));
+    const clockB = createGatewaySchedulerClock(clockA.clock.now());
 
     const cronA = new CronService({
+      scheduler: createTestGatewayScheduler(clockA.clock),
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
@@ -56,6 +64,7 @@ describe("CronService", () => {
     }
 
     const cronB = new CronService({
+      scheduler: createTestGatewayScheduler(clockB.clock),
       storePath: aliasedStorePath,
       cronEnabled: true,
       log: noopLogger,
@@ -67,8 +76,7 @@ describe("CronService", () => {
     await cronB.start();
     expect((await cronStoreModule.loadCronStore(aliasedStorePath)).jobs).toHaveLength(1);
 
-    vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
-    await vi.runOnlyPendingTimersAsync();
+    await Promise.all([clockA.advanceTo(atMs), clockB.advanceTo(atMs)]);
     await cronA.status();
     await cronB.status();
 
@@ -85,6 +93,7 @@ describe("CronService", () => {
     const aliasedStorePath = `${path.dirname(store.storePath)}/../${path.basename(path.dirname(store.storePath))}/${path.basename(store.storePath)}`;
     const createState = (storePath: string) =>
       createCronServiceState({
+        scheduler: createTestGatewayScheduler(),
         storePath,
         cronEnabled: true,
         log: noopLogger,
@@ -93,12 +102,14 @@ describe("CronService", () => {
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
       });
     const events: string[] = [];
+    const firstStarted = createDeferred();
     let releaseFirst: (() => void) | undefined;
     const firstReleased = new Promise<void>((resolve) => {
       releaseFirst = resolve;
     });
     const first = locked(createState(store.storePath), async () => {
       events.push("first-started");
+      firstStarted.resolve();
       await firstReleased;
       events.push("first-finished");
     });
@@ -107,9 +118,8 @@ describe("CronService", () => {
     });
 
     try {
-      await vi.waitFor(() => {
-        expect(events).toEqual(["first-started"]);
-      });
+      await firstStarted.promise;
+      expect(events).toEqual(["first-started"]);
     } finally {
       releaseFirst?.();
       await Promise.all([first, second]);
@@ -123,6 +133,7 @@ describe("CronService", () => {
     const store = await makeStorePath();
     const createService = () =>
       new CronService({
+        scheduler: createTestGatewayScheduler(),
         storePath: store.storePath,
         cronEnabled: true,
         log: noopLogger,
@@ -160,8 +171,10 @@ describe("CronService", () => {
   it("re-arms a stale service after a missing remove reloads an earlier job", async () => {
     const store = await makeStorePath();
     const createState = () => {
+      const clock = createGatewaySchedulerClock(Date.parse("2025-12-13T00:00:00.000Z"));
       const enqueueSystemEvent = vi.fn();
       const state = createCronServiceState({
+        scheduler: createTestGatewayScheduler(clock.clock),
         storePath: store.storePath,
         cronEnabled: true,
         log: noopLogger,
@@ -169,7 +182,7 @@ describe("CronService", () => {
         requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
       });
-      return { state, enqueueSystemEvent };
+      return { state, enqueueSystemEvent, clock };
     };
     const stale = createState();
     const writer = createState();
@@ -191,7 +204,7 @@ describe("CronService", () => {
     const staleTimer = stale.state.timer;
     await addAtJob(writer.state, "earlier-job", baseMs + 10_000);
     if (writer.state.timer) {
-      clearTimeout(writer.state.timer);
+      writer.state.timer.cancel();
       writer.state.timer = null;
     }
     const previousRevision = cronStoreModule.getCronJobsStoreRevision(store.storePath);
@@ -208,17 +221,12 @@ describe("CronService", () => {
     expect(stale.state.timer).not.toBe(staleTimer);
     expect(stale.state.store?.jobs.map((job) => job.id)).toEqual(["later-job", "earlier-job"]);
 
-    await vi.advanceTimersByTimeAsync(10_000);
+    await stale.clock.advanceBy(10_000);
 
-    await vi.waitFor(
-      () => {
-        expect(stale.enqueueSystemEvent).toHaveBeenCalledWith("earlier-job", expect.any(Object));
-        expect(stale.state.activeTimerTicks).toBe(0);
-      },
-      { interval: 0 },
-    );
+    expect(stale.enqueueSystemEvent).toHaveBeenCalledWith("earlier-job", expect.any(Object));
+    expect(stale.state.activeTimerTicks).toBe(0);
     if (stale.state.timer) {
-      clearTimeout(stale.state.timer);
+      stale.state.timer.cancel();
     }
     await store.cleanup();
   });

@@ -6,11 +6,13 @@ import {
 } from "../../process/gateway-work-admission.js";
 import * as stateRead from "../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { cronStoreKey } from "../store/key.js";
 import {
   claimCronRunReceiptInDatabase,
   prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.js";
+import { prepareCronRunReceiptWriteSchema } from "../store/run-receipt-write-admission.js";
 import type { CronRunRecoveryProposal } from "../store/run-recovery-read.types.js";
 import type { CronRunRecoveryResult } from "../store/run-recovery.types.js";
 import type { CronJob } from "../types.js";
@@ -73,6 +75,7 @@ export function makeCronRecoveryState(
   overrides: RecoveryStateOverrides = {},
 ) {
   return createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
     storePath,
     cronEnabled: true,
     log,
@@ -94,6 +97,7 @@ export function claimCronRecoveryReceipt(storePath: string, job: CronJob, starte
   return runOpenClawStateWriteTransaction(({ db }) =>
     claimCronRunReceiptInDatabase({
       database: db,
+      receiptSchema: prepareCronRunReceiptWriteSchema(db),
       prepared,
       resolveAgentId: (current) => current.agentId ?? "alpha",
     }),

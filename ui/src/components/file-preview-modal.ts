@@ -182,19 +182,11 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       class="item ${file.path === this.activeFile?.path ? "is-active" : ""}"
       data-path=${file.path}
       aria-current=${file.path === this.activeFile?.path ? "true" : "false"}
-      @pointerdown=${(event: Event) => {
-        if (this.layout === "files") {
-          this.preventItemPointerFocus(event);
-        }
-      }}
-      @mousedown=${(event: Event) => {
-        if (this.layout === "files") {
-          this.preventItemPointerFocus(event);
-        }
-      }}
+      @pointerdown=${this.preventItemPointerFocus}
+      @mousedown=${this.preventItemPointerFocus}
       @click=${() => this.emitSelect(file.path)}
     >
-      <span class="item-icon">${iconForFile(file.path)}</span
+      <span class="item-icon">${FILE_KIND_ICONS[fileKindForPath(file.path)]}</span
       ><span class="item-name" title=${file.path}
         >${this.layout === "document" ? file.path.split("/").pop() : file.path}</span
       >${this.layout === "files" ? html`<span class="item-meta">${file.size}</span>` : ""}
@@ -334,7 +326,9 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
   };
 
   private preventItemPointerFocus = (event: Event) => {
-    event.preventDefault();
+    if (this.layout === "files") {
+      event.preventDefault();
+    }
   };
 
   private handleKeydown = (event: KeyboardEvent) => {
@@ -444,7 +438,7 @@ function fileKind(path: string): string {
     py: "Python",
     sh: t("filePreview.kind.shell"),
   };
-  return map[ext] ?? (ext ? ext.toUpperCase() : t("filePreview.kind.file"));
+  return Object.hasOwn(map, ext) ? map[ext]! : ext ? ext.toUpperCase() : t("filePreview.kind.file");
 }
 
 // Same glyph vocabulary chat file links paint through CSS masks
@@ -461,10 +455,6 @@ const FILE_KIND_ICONS: Record<FileKind, TemplateResult> = {
   shell: icons.terminal,
   skill: icons.pencilSparkles,
 };
-
-function iconForFile(path: string) {
-  return FILE_KIND_ICONS[fileKindForPath(path)];
-}
 
 declare global {
   interface HTMLElementTagNameMap {

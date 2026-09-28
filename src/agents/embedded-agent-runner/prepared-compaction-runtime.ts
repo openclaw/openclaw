@@ -5,17 +5,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
-import {
-  formatActiveNodeContextLabel,
-  getCurrentActiveNodeContext,
-  prepareActiveNodeContext,
-} from "../../infra/active-node-context.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
 import { attachModelProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import { extractModelCompat } from "../../plugins/provider-model-compat.js";
-import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { transformProviderSystemPrompt } from "../../plugins/provider-runtime.js";
 import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -206,21 +200,20 @@ export async function buildPreparedCompactionRuntime(
     );
     // Apply contextTokens cap to model so session runtime's auto-compaction
     // threshold uses the effective limit, not the native context window.
-    const runtimeModelWithContext = runtimeModel as ProviderRuntimeModel;
     const contextTokenBudget = resolveCompactionContextTokenBudget({
       config: params.config,
       provider: contextConfigProvider,
       modelId,
-      model: runtimeModelWithContext,
+      model: runtimeModel,
       agentId: sessionAgentId,
       requestedTokenBudget: params.contextTokenBudget,
       fallbackTokenBudget: params.tokenBudget,
     });
     const modelWithAuth = applyAuthHeaderOverride(
       applyLocalNoAuthHeaderOverride(
-        contextTokenBudget < (runtimeModelWithContext.contextWindow ?? Infinity)
-          ? { ...runtimeModelWithContext, contextWindow: contextTokenBudget }
-          : runtimeModelWithContext,
+        contextTokenBudget < (runtimeModel.contextWindow ?? Infinity)
+          ? { ...runtimeModel, contextWindow: contextTokenBudget }
+          : runtimeModel,
         apiKeyInfo,
       ),
       // Skip header injection when runtime auth exchange produced a
@@ -352,12 +345,10 @@ export async function buildPreparedCompactionRuntime(
       modelApi: effectiveModel.api,
       model: effectiveModel,
     };
-    const normalizableToolProjection = filterProviderNormalizableTools(
-      toolsEnabled ? toolsRaw : [],
-    );
+    const normalizableToolProjection = filterProviderNormalizableTools(toolsRaw);
     logRuntimeToolSchemaQuarantine({
       diagnostics: normalizableToolProjection.diagnostics,
-      tools: toolsEnabled ? toolsRaw : [],
+      tools: toolsRaw,
       runId,
       agentId: sessionAgentId,
       sessionKey: params.sessionKey,
@@ -453,7 +444,6 @@ export async function buildPreparedCompactionRuntime(
         })
       : undefined;
 
-    await prepareActiveNodeContext();
     const runtimeInfo = {
       agentId: sessionAgentId,
       agentName: params.config ? resolveRuntimeAgentName(params.config, sessionAgentId) : undefined,
@@ -474,21 +464,24 @@ export async function buildPreparedCompactionRuntime(
           agentId: sessionAgentId,
         }),
       }),
-      activeNode: formatActiveNodeContextLabel(getCurrentActiveNodeContext()),
     };
-    const sandboxInfoExecPolicy = sandbox?.enabled
-      ? await resolveEmbeddedSandboxInfoExecPolicy(
-          {
-            config: params.config,
-            agentId: sessionAgentId,
-            sessionKey: params.sessionKey,
-            permissionMode: sessionPermissionPolicy?.mode,
-            sandboxAvailable: sandbox.enabled,
-            execOverrides,
-          },
-          { signal: params.abortSignal },
-        )
-      : undefined;
+    if (sandbox?.enabled) {
+      params.abortSignal?.throwIfAborted();
+    }
+    const sandboxInfoExecPolicy =
+      sandbox?.enabled && params.bashElevated?.enabled === true
+        ? await resolveEmbeddedSandboxInfoExecPolicy(
+            {
+              config: params.config,
+              agentId: sessionAgentId,
+              sessionKey: params.sessionKey,
+              permissionMode: sessionPermissionPolicy?.mode,
+              sandboxAvailable: sandbox.enabled,
+              execOverrides,
+            },
+            { signal: params.abortSignal },
+          )
+        : undefined;
     const sandboxInfo = buildEmbeddedSandboxInfo(
       sandbox,
       params.bashElevated,

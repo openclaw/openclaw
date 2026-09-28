@@ -76,7 +76,6 @@ import { createScopedVitestConfig } from "./vitest/vitest.scoped-config.ts";
 import { createSecretsVitestConfig } from "./vitest/vitest.secrets.config.ts";
 import { createSharedCoreVitestConfig } from "./vitest/vitest.shared-core.config.ts";
 import { sharedVitestConfig } from "./vitest/vitest.shared.config.ts";
-import { createTasksVitestConfig } from "./vitest/vitest.tasks.config.ts";
 import {
   createToolingDockerVitestConfig,
   toolingDockerTestFiles,
@@ -85,6 +84,8 @@ import { toolingIsolatedTestFiles } from "./vitest/vitest.tooling-isolated-paths
 import { createToolingIsolatedVitestConfig } from "./vitest/vitest.tooling-isolated.config.ts";
 import { createToolingVitestConfig } from "./vitest/vitest.tooling.config.ts";
 import { createTuiVitestConfig } from "./vitest/vitest.tui.config.ts";
+import { createUiIsolatedVitestConfig } from "./vitest/vitest.ui-isolated.config.ts";
+import { createUiTimingVitestConfig } from "./vitest/vitest.ui-timing.config.ts";
 import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
 import { isUnitFastTestFile } from "./vitest/vitest.unit-fast-paths.mjs";
 import { bundledPluginDependentUnitTestFiles } from "./vitest/vitest.unit-paths.mjs";
@@ -514,6 +515,62 @@ describe("createScopedVitestConfig", () => {
     }
   });
 
+  it("keeps combined runtime include files inside their owning projects", () => {
+    const projects = [
+      [createAcpVitestConfig, "src/acp/client.test.ts", "client.test.ts"],
+      [
+        createSharedCoreVitestConfig,
+        "src/shared/freebsd-process-identity.test.ts",
+        "shared/freebsd-process-identity.test.ts",
+      ],
+      [
+        createCronVitestConfig,
+        "src/cron/run-continuation-cleanup.test.ts",
+        "cron/run-continuation-cleanup.test.ts",
+      ],
+      [createUtilsVitestConfig, "src/utils/queue-helpers.test.ts", "utils/queue-helpers.test.ts"],
+      [createMediaVitestConfig, "src/media/web-media.test.ts", "media/web-media.test.ts"],
+      [
+        createMediaUnderstandingVitestConfig,
+        "src/media-understanding/apply.test.ts",
+        "media-understanding/apply.test.ts",
+      ],
+      [
+        createTuiVitestConfig,
+        "src/tui/tui-command-handlers.test.ts",
+        "tui/tui-command-handlers.test.ts",
+      ],
+      [
+        createUiIsolatedVitestConfig,
+        "ui/src/app/bootstrap.test.ts",
+        "ui/src/app/bootstrap.test.ts",
+      ],
+      [
+        createUiTimingVitestConfig,
+        "ui/src/components/markdown.progress.node.test.ts",
+        "ui/src/components/markdown.progress.node.test.ts",
+      ],
+      [
+        createWizardVitestConfig,
+        "src/wizard/setup.finalize.test.ts",
+        "wizard/setup.finalize.test.ts",
+      ],
+    ] as const;
+    const tempDirs: string[] = [];
+    const tempDir = makeTempDir(tempDirs, "openclaw-vitest-media-ui-");
+    try {
+      const includeFile = path.join(tempDir, "include.json");
+      fs.writeFileSync(includeFile, JSON.stringify(projects.map(([, file]) => file)), "utf8");
+      const env = { OPENCLAW_VITEST_INCLUDE_FILE: includeFile };
+
+      for (const [createConfig, file, expectedInclude] of projects) {
+        expect.soft(requireTestConfig(createConfig(env)).include, file).toEqual([expectedInclude]);
+      }
+    } finally {
+      cleanupTempDirs(tempDirs);
+    }
+  });
+
   it("overrides setup files when a scoped config requests them", () => {
     const config = createScopedVitestConfig(["src/example.test.ts"], {
       env: {},
@@ -579,7 +636,6 @@ describe("scoped vitest configs", () => {
   const defaultMediaConfig = createMediaVitestConfig({});
   const defaultMediaUnderstandingConfig = createMediaUnderstandingVitestConfig({});
   const defaultSharedCoreConfig = createSharedCoreVitestConfig({});
-  const defaultTasksConfig = createTasksVitestConfig({});
   const defaultCommandsLightConfig = createCommandsLightVitestConfig({});
   const defaultCommandsConfig = createCommandsVitestConfig({});
   const defaultAutoReplyConfig = createAutoReplyVitestConfig({});
@@ -1237,12 +1293,6 @@ describe("scoped vitest configs", () => {
     expect(testConfig.include).toEqual(["process/**/*.test.ts"]);
   });
 
-  it("normalizes tasks include patterns relative to the scoped dir", () => {
-    const testConfig = requireTestConfig(defaultTasksConfig);
-    expect(testConfig.dir).toBe(path.join(process.cwd(), "src"));
-    expect(testConfig.include).toEqual(["tasks/**/*.test.ts"]);
-  });
-
   it("normalizes wizard include patterns relative to the scoped dir", () => {
     const testConfig = requireTestConfig(defaultWizardConfig);
     expect(testConfig.dir).toBe(path.join(process.cwd(), "src"));
@@ -1332,9 +1382,12 @@ describe("scoped vitest configs", () => {
       {
         name: "plugins",
         pool: "forks",
-        execArgv: process.versions.bun
-          ? ["--tsconfig-override", path.join(process.cwd(), "tsconfig.json")]
-          : ["--import", expect.any(String)],
+        execArgv: [
+          ...(process.versions.bun
+            ? ["--tsconfig-override", path.join(process.cwd(), "tsconfig.json")]
+            : ["--import", expect.any(String)]),
+          `--import=${new URL("./vitest/vitest.jsdom-preload.mts", import.meta.url).href}`,
+        ],
       },
       { name: "plugins-native-loader", pool: "forks", execArgv: [] },
     ]);

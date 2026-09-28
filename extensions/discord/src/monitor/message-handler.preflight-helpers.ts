@@ -1,4 +1,3 @@
-// Discord helper module supports message handler.preflight helpers behavior.
 import {
   implicitMentionKindWhen,
   matchesMentionWithExplicit,
@@ -173,10 +172,7 @@ export function resolvePreflightMentionRequirement(params: {
   shouldRequireMention: boolean;
   bypassMentionRequirement: boolean;
 }): boolean {
-  if (!params.shouldRequireMention) {
-    return false;
-  }
-  return !params.bypassMentionRequirement;
+  return params.shouldRequireMention && !params.bypassMentionRequirement;
 }
 
 export function shouldIgnoreBoundThreadWebhookMessage(params: {
@@ -196,11 +192,5 @@ export function shouldIgnoreBoundThreadWebhookMessage(params: {
     return true;
   }
   const threadId = normalizeOptionalString(params.threadId) ?? "";
-  if (!threadId) {
-    return false;
-  }
-  if (params.threadBinding) {
-    return true;
-  }
-  return false;
+  return Boolean(threadId && params.threadBinding);
 }

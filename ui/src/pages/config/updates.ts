@@ -57,6 +57,7 @@ type UpdatesViewProps = {
   canCheckStatus: boolean;
   canHoldUpdate: boolean;
   canReport: boolean;
+  canDiagnose: boolean;
   updateBusy: boolean;
   nowMs?: number;
   onChannelChange: (channel: UpdatesChannel) => void;
@@ -66,6 +67,7 @@ type UpdatesViewProps = {
   onHoldUpdate: () => Promise<boolean>;
   onCheckStatus: () => Promise<boolean>;
   onReportFailure: (attemptId: string) => Promise<void>;
+  onDiagnoseFailure: (attemptId: string) => void;
 };
 
 function renderDeviceUpdates(capability: NativeDeviceSettingsCapability | null | undefined) {
@@ -149,6 +151,19 @@ function renderRecordedAttempt(props: UpdatesViewProps) {
                 ${t("updates.page.checkStatus")}
               </button>
               ${
+                props.update.diagnosableUpdateFailureId
+                  ? html`<button
+                      class="btn btn--sm"
+                      type="button"
+                      title=${props.canDiagnose ? "" : t("updates.adminRequired")}
+                      ?disabled=${!props.canDiagnose || props.updateBusy || props.update.updateStatusRefreshing || props.update.updateFailureReportBusy}
+                      @click=${() => props.onDiagnoseFailure(props.update.diagnosableUpdateFailureId!)}
+                    >
+                      ${t("updates.page.diagnoseFailure")}
+                    </button>`
+                  : nothing
+              }
+              ${
                 failed
                   ? html`<button
                       class="btn btn--sm primary"
@@ -180,7 +195,7 @@ function renderRecordedAttempt(props: UpdatesViewProps) {
               }
             </div>`,
           }),
-          failed
+          failed && run?.target.installationMethod !== "ocm"
             ? renderSettingsRow({
                 title: t("updates.page.cliFallback"),
                 description: t("updates.triage.hostHint"),

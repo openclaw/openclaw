@@ -133,12 +133,14 @@ export async function createSpawnBoundaryParent(params: {
   };
 }
 
-export function createBoundWorker(bound: Awaited<ReturnType<typeof createSpawnBoundaryParent>>) {
+export async function createBoundWorker(
+  bound: Awaited<ReturnType<typeof createSpawnBoundaryParent>>,
+) {
   const { parentSessionKey, parentRunId } = bound;
   const database = openOpenClawStateDatabase();
   const store = createWorkerSessionPlacementStore({ database });
   const session = { sessionId: "parent-session", agentId: "main", sessionKey: parentSessionKey };
-  let placement = store.startDispatch({ ...session, executionMode: "worker-turn" });
+  let placement = await store.startDispatch({ ...session, executionMode: "worker-turn" });
   placement = store.transition({
     sessionId: session.sessionId,
     from: "requested",
@@ -178,13 +180,13 @@ export function createBoundWorker(bound: Awaited<ReturnType<typeof createSpawnBo
   if (placement.state !== "active") {
     throw new Error("expected the active worker placement");
   }
-  const claim = store.claimTurn({
+  const claim = await store.claimTurn({
     ...session,
     owner: placementTurnOwner(placement),
     claimId: "queued-worker-claim",
     runId: parentRunId,
   });
-  bindWorkerTurnOwner(
+  await bindWorkerTurnOwner(
     store,
     claim,
     bound.admitted.executionIdentityToken,

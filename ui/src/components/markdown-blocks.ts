@@ -142,27 +142,20 @@ class MarkdownBlocksDirective extends AsyncDirective {
       }
       if (wrapper.matches(".markdown-mermaid")) {
         if (wrapper.querySelector("pre code")) {
+          const isCurrent = () =>
+            this.active &&
+            this.isConnected &&
+            this.root === root &&
+            root.isConnected &&
+            root.contains(wrapper);
           void import("./markdown-mermaid.ts").then(
             ({ mountMermaidBlocks }) => {
-              if (
-                this.active &&
-                this.isConnected &&
-                this.root === root &&
-                root.isConnected &&
-                root.contains(wrapper)
-              ) {
+              if (isCurrent()) {
                 mountMermaidBlocks(wrapper);
               }
             },
             () => {
-              if (
-                !this.active ||
-                !this.isConnected ||
-                this.root !== root ||
-                !root.isConnected ||
-                !root.contains(wrapper) ||
-                !wrapper.matches(".markdown-mermaid")
-              ) {
+              if (!isCurrent() || !wrapper.matches(".markdown-mermaid")) {
                 return;
               }
               wrapper.classList.remove("markdown-mermaid");

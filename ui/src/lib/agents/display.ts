@@ -257,47 +257,30 @@ export function normalizeModelValue(label: string): string {
 }
 
 export function resolveModelPrimary(model?: unknown): string | null {
-  if (!model) {
+  if (typeof model === "string") {
+    return normalizeOptionalString(model) ?? null;
+  }
+  if (!model || typeof model !== "object") {
     return null;
   }
-  if (typeof model === "string") {
-    const trimmed = normalizeOptionalString(model);
-    return trimmed || null;
-  }
-  if (typeof model === "object" && model) {
-    const record = model as Record<string, unknown>;
-    const candidate =
-      typeof record.primary === "string"
-        ? record.primary
-        : typeof record.model === "string"
-          ? record.model
-          : typeof record.id === "string"
-            ? record.id
-            : typeof record.value === "string"
-              ? record.value
-              : null;
-    const primary = normalizeOptionalString(candidate);
-    return primary || null;
-  }
-  return null;
+  const record = model as Record<string, unknown>;
+  const candidate = [record.primary, record.model, record.id, record.value].find(
+    (value) => typeof value === "string",
+  );
+  return normalizeOptionalString(candidate) ?? null;
 }
 
 export function resolveModelFallbacks(model?: unknown): string[] | null {
-  if (!model || typeof model === "string") {
+  if (!model || typeof model !== "object") {
     return null;
   }
-  if (typeof model === "object" && model) {
-    const record = model as Record<string, unknown>;
-    const fallbacks = Array.isArray(record.fallbacks)
-      ? record.fallbacks
-      : Array.isArray(record.fallback)
-        ? record.fallback
-        : null;
-    return fallbacks
-      ? fallbacks.filter((entry): entry is string => typeof entry === "string")
+  const record = model as Record<string, unknown>;
+  const fallbacks = Array.isArray(record.fallbacks)
+    ? record.fallbacks
+    : Array.isArray(record.fallback)
+      ? record.fallback
       : null;
-  }
-  return null;
+  return fallbacks ? fallbacks.filter((entry): entry is string => typeof entry === "string") : null;
 }
 
 export function resolveEffectiveModelFallbacks(

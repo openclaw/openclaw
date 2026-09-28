@@ -1,0 +1,178 @@
+.cron-transcript-feed {
+  min-width: 0;
+  font-size: var(--control-ui-text-sm);
+}
+
+.cron-transcript-feed__entry {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+  padding-block: 8px;
+}
+
+.cron-transcript-feed__icon,
+.cron-transcript-feed__time,
+.cron-transcript-feed__summary,
+.cron-transcript-feed__user,
+.cron-transcript-feed__block {
+  color: var(--muted);
+}
+
+.cron-transcript-feed__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.cron-transcript-feed__time {
+  text-align: end;
+  font-size: var(--control-ui-text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.cron-transcript-feed__body {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cron-transcript-feed__body .chat-text {
+  font-size: inherit;
+}
+
+.cron-transcript-feed__body :is(img, iframe, video, svg) {
+  max-width: 100%;
+}
+
+.cron-transcript-feed__body :is(pre, table) {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.cron-transcript-feed__user {
+  border-inline-start: 2px solid var(--border);
+  padding-inline-start: 8px;
+}
+
+.cron-transcript-feed__tool-group > summary,
+.cron-transcript-feed__tool-line > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 8px;
+  list-style: none;
+  border-radius: var(--radius-sm);
+}
+
+.cron-transcript-feed__tool-group > summary::-webkit-details-marker,
+.cron-transcript-feed__tool-line > summary::-webkit-details-marker {
+  display: none;
+}
+
+.cron-transcript-feed__tool-group > summary:is(:hover, :focus-visible),
+.cron-transcript-feed__tool-line > summary:is(:hover, :focus-visible) {
+  background: var(--bg-elevated);
+}
+
+.cron-transcript-feed__overview {
+  display: grid;
+  flex: 1;
+  gap: 4px;
+  min-width: 0;
+}
+
+.cron-transcript-feed__overview-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+}
+
+.cron-transcript-feed__summary,
+.cron-transcript-feed__outcome {
+  font-size: var(--control-ui-text-xs);
+}
+
+.cron-transcript-feed__outcome {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.cron-transcript-feed__outcome--failed {
+  color: var(--danger);
+}
+
+.cron-transcript-feed__outcome--blocked {
+  color: var(--warn);
+}
+
+.cron-transcript-feed__row-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cron-transcript-feed__row-icon,
+.cron-transcript-feed__chevron {
+  display: flex;
+  flex: none;
+  color: var(--muted);
+}
+
+.cron-transcript-feed__row-icon svg,
+.cron-transcript-feed__chevron svg,
+.cron-transcript-feed__row-outcome svg {
+  width: 14px;
+  height: 14px;
+}
+
+.cron-transcript-feed__row-outcome {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.cron-transcript-feed__error .cron-transcript-feed__row-outcome {
+  color: var(--danger);
+}
+
+.cron-transcript-feed__tool-group[open] > summary > .cron-transcript-feed__chevron,
+.cron-transcript-feed__tool-line[open] > summary > .cron-transcript-feed__chevron {
+  transform: rotate(90deg);
+}
+
+.cron-transcript-feed__tool-line--full {
+  max-height: 18rem;
+  margin: 0 8px 8px;
+  padding: 10px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: var(--control-ui-text-xs);
+}
+
+.cron-transcript-feed__tool-line--full code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.cron-transcript-feed__calls {
+  max-height: min(52vh, 28rem);
+  margin-top: 4px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  scrollbar-gutter: stable;
+}
+
+.cron-transcript-feed__label {
+  margin-inline-end: 6px;
+}
+
+.cron-transcript-feed__error {
+  color: var(--danger);
+}

@@ -179,20 +179,6 @@ async function publishLocalOverrideTarget(params: {
   });
 }
 
-async function restoreMovedLocalOverrideTarget(params: {
-  packageFs: LocalOverridePackageRoot;
-  runtimeUrls: readonly string[];
-  movedPath: string;
-  relativePath: string;
-}): Promise<void> {
-  await publishLocalOverrideTarget({
-    packageFs: params.packageFs,
-    runtimeUrls: params.runtimeUrls,
-    sourcePath: params.movedPath,
-    relativePath: params.relativePath,
-  });
-}
-
 async function throwAfterRestoringMovedLocalOverrideTarget(params: {
   packageFs: LocalOverridePackageRoot;
   runtimeUrls: readonly string[];
@@ -202,10 +188,10 @@ async function throwAfterRestoringMovedLocalOverrideTarget(params: {
   removeMovedAfterFailedRestore: boolean;
 }): Promise<never> {
   try {
-    await restoreMovedLocalOverrideTarget({
+    await publishLocalOverrideTarget({
       packageFs: params.packageFs,
       runtimeUrls: params.runtimeUrls,
-      movedPath: params.movedPath,
+      sourcePath: params.movedPath,
       relativePath: params.relativePath,
     });
   } catch (rollbackError) {

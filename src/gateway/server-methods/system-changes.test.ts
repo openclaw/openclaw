@@ -30,6 +30,21 @@ function configRecord(
   } as unknown as ConfigAuditRecord;
 }
 
+function createAuditStores(env: NodeJS.ProcessEnv) {
+  return {
+    systemStore: createSqliteAuditRecordStore<SystemAgentAuditEntry>({
+      scope: SYSTEM_AGENT_AUDIT_SCOPE,
+      maxEntries: SYSTEM_AGENT_AUDIT_MAX_ENTRIES,
+      env,
+    }),
+    configStore: createSqliteAuditRecordStore<ConfigAuditRecord>({
+      scope: CONFIG_AUDIT_SCOPE,
+      maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
+      env,
+    }),
+  };
+}
+
 describe("openclaw.changes.list", () => {
   afterEach(() => {
     closeOpenClawStateDatabase();
@@ -38,16 +53,7 @@ describe("openclaw.changes.list", () => {
   it("merges journals, collapses matching writes, and skips non-history records", async () => {
     await withTestDir({ prefix: "openclaw-system-changes-" }, async (stateDir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-      const systemStore = createSqliteAuditRecordStore<SystemAgentAuditEntry>({
-        scope: SYSTEM_AGENT_AUDIT_SCOPE,
-        maxEntries: SYSTEM_AGENT_AUDIT_MAX_ENTRIES,
-        env,
-      });
-      const configStore = createSqliteAuditRecordStore<ConfigAuditRecord>({
-        scope: CONFIG_AUDIT_SCOPE,
-        maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
-        env,
-      });
+      const { systemStore, configStore } = createAuditStores(env);
 
       systemStore.register(
         "operation",
@@ -205,16 +211,7 @@ describe("openclaw.changes.list", () => {
   it("keeps pages newest-first while suppressing an older collapse partner", async () => {
     await withTestDir({ prefix: "openclaw-system-changes-collapse-cursor-" }, async (stateDir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-      const systemStore = createSqliteAuditRecordStore<SystemAgentAuditEntry>({
-        scope: SYSTEM_AGENT_AUDIT_SCOPE,
-        maxEntries: SYSTEM_AGENT_AUDIT_MAX_ENTRIES,
-        env,
-      });
-      const configStore = createSqliteAuditRecordStore<ConfigAuditRecord>({
-        scope: CONFIG_AUDIT_SCOPE,
-        maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
-        env,
-      });
+      const { systemStore, configStore } = createAuditStores(env);
       configStore.register(
         "matching-write",
         configRecord({
@@ -290,16 +287,7 @@ describe("openclaw.changes.list", () => {
   it("keeps an outside-window repeated transition on a later page", async () => {
     await withTestDir({ prefix: "openclaw-system-changes-pending-window-" }, async (stateDir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-      const systemStore = createSqliteAuditRecordStore<SystemAgentAuditEntry>({
-        scope: SYSTEM_AGENT_AUDIT_SCOPE,
-        maxEntries: SYSTEM_AGENT_AUDIT_MAX_ENTRIES,
-        env,
-      });
-      const configStore = createSqliteAuditRecordStore<ConfigAuditRecord>({
-        scope: CONFIG_AUDIT_SCOPE,
-        maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
-        env,
-      });
+      const { systemStore, configStore } = createAuditStores(env);
       configStore.register(
         "old-matching-transition",
         configRecord({
@@ -369,16 +357,7 @@ describe("openclaw.changes.list", () => {
   it("does not collapse a repeated transition outside the operation window", async () => {
     await withTestDir({ prefix: "openclaw-system-changes-collapse-window-" }, async (stateDir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-      const systemStore = createSqliteAuditRecordStore<SystemAgentAuditEntry>({
-        scope: SYSTEM_AGENT_AUDIT_SCOPE,
-        maxEntries: SYSTEM_AGENT_AUDIT_MAX_ENTRIES,
-        env,
-      });
-      const configStore = createSqliteAuditRecordStore<ConfigAuditRecord>({
-        scope: CONFIG_AUDIT_SCOPE,
-        maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
-        env,
-      });
+      const { systemStore, configStore } = createAuditStores(env);
       configStore.register(
         "old-transition",
         configRecord({
@@ -415,16 +394,7 @@ describe("openclaw.changes.list", () => {
       { prefix: "openclaw-system-changes-repeated-transition-" },
       async (stateDir) => {
         const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-        const systemStore = createSqliteAuditRecordStore<SystemAgentAuditEntry>({
-          scope: SYSTEM_AGENT_AUDIT_SCOPE,
-          maxEntries: SYSTEM_AGENT_AUDIT_MAX_ENTRIES,
-          env,
-        });
-        const configStore = createSqliteAuditRecordStore<ConfigAuditRecord>({
-          scope: CONFIG_AUDIT_SCOPE,
-          maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
-          env,
-        });
+        const { systemStore, configStore } = createAuditStores(env);
         configStore.register(
           "old-transition",
           configRecord({
@@ -537,16 +507,7 @@ describe("openclaw.changes.list", () => {
   it("freezes an untouched scope before the first page is emitted", async () => {
     await withTestDir({ prefix: "openclaw-system-changes-frozen-heads-" }, async (stateDir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-      const systemStore = createSqliteAuditRecordStore<SystemAgentAuditEntry>({
-        scope: SYSTEM_AGENT_AUDIT_SCOPE,
-        maxEntries: SYSTEM_AGENT_AUDIT_MAX_ENTRIES,
-        env,
-      });
-      const configStore = createSqliteAuditRecordStore<ConfigAuditRecord>({
-        scope: CONFIG_AUDIT_SCOPE,
-        maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
-        env,
-      });
+      const { systemStore, configStore } = createAuditStores(env);
       systemStore.register(
         "older-operation",
         {

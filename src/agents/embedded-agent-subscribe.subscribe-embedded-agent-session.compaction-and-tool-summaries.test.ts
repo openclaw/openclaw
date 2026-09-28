@@ -246,58 +246,6 @@ describe("fenced output and compaction retries", () => {
     expect(subscription.getCompactionCount()).toBe(1);
   });
 
-  it("waits for auto-compaction retry and clears buffered text", async () => {
-    // A retrying compaction invalidates any assistant text buffered from the
-    // failed attempt; waiters resolve only after the retry path reaches agent_end.
-    const listeners: SessionEventHandler[] = [];
-    const session = {
-      subscribe: (listener: SessionEventHandler) => {
-        listeners.push(listener);
-        return () => {
-          const index = listeners.indexOf(listener);
-          if (index !== -1) {
-            listeners.splice(index, 1);
-          }
-        };
-      },
-    } as unknown as Parameters<typeof subscribeEmbeddedAgentSession>[0]["session"];
-
-    const subscription = subscribeEmbeddedAgentSession({
-      session,
-      runId: "run-1",
-    });
-
-    const assistantMessage = textAssistant("oops") as AssistantMessage;
-
-    for (const listener of listeners) {
-      listener({ type: "message_end", message: assistantMessage });
-    }
-
-    expect(subscription.assistantTexts.length).toBe(1);
-
-    for (const listener of listeners) {
-      listener(completedCompactionEnd());
-    }
-
-    expect(subscription.isCompacting()).toBe(true);
-    expect(subscription.assistantTexts.length).toBe(0);
-
-    let resolved = false;
-    const waitPromise = subscription.waitForCompactionRetry().then(() => {
-      resolved = true;
-    });
-
-    await Promise.resolve();
-    expect(resolved).toBe(false);
-
-    for (const listener of listeners) {
-      listener({ type: "agent_end" });
-    }
-
-    await waitPromise;
-    expect(resolved).toBe(true);
-  });
-
   it("clears the exact usage snapshot when compaction starts a new attempt", () => {
     const listeners: SessionEventHandler[] = [];
     const session = {

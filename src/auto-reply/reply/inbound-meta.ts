@@ -4,14 +4,14 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CurrentInboundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
-import { getLoadedChannelPluginById } from "../../channels/plugins/registry-loaded.js";
-import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { resolveSessionGoalDisplayState } from "../../config/sessions/goals.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { buildDeliveryFormatPrompt } from "../../infra/outbound/delivery-format-prompt.js";
 import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
 import type { EnvelopeFormatOptions } from "../envelope.js";
 import { formatAgentEnvelopeTimestamp } from "../envelope.js";
+import { getRequesterProfile } from "../requester-profile.js";
 import type { TemplateContext } from "../templating.js";
 import {
   formatContextJsonBlock,
@@ -152,22 +152,13 @@ function normalizePromptMediaPath(value: unknown): string | undefined {
       return undefined;
     }
   };
-  const decodeInboundMediaId = (id: string): string | undefined => {
+  const inboundMatch = /^media(?::\/\/|\/)inbound\/([^/\\]+)$/i.exec(mediaPath);
+  if (inboundMatch?.[1]) {
     try {
-      return decodeURIComponent(id);
+      return toInboundMediaPath(decodeURIComponent(inboundMatch[1]));
     } catch {
       return undefined;
     }
-  };
-  const canonicalMatch = /^media:\/\/inbound\/([^/\\]+)$/i.exec(mediaPath);
-  if (canonicalMatch?.[1]) {
-    const id = decodeInboundMediaId(canonicalMatch[1]);
-    return id ? toInboundMediaPath(id) : undefined;
-  }
-  const relativeMatch = /^media\/inbound\/([^/\\]+)$/i.exec(mediaPath);
-  if (relativeMatch?.[1]) {
-    const id = decodeInboundMediaId(relativeMatch[1]);
-    return id ? toInboundMediaPath(id) : undefined;
   }
   const normalized = mediaPath.replace(/\\/g, "/");
   if (!normalized.includes("/media/inbound/")) {
@@ -403,7 +394,7 @@ function buildLocationContextPayload(ctx: TemplateContext): Record<string, unkno
   return Object.values(payload).some((value) => value !== undefined) ? payload : undefined;
 }
 
-function buildInboundHistoryMediaPromptPayload(value: unknown): Array<Record<string, unknown>> {
+function readInboundHistoryMediaTypes(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -411,14 +402,8 @@ function buildInboundHistoryMediaPromptPayload(value: unknown): Array<Record<str
     if (!isRecord(entry)) {
       return [];
     }
-    const payload = {
-      kind: normalizePromptMetadataString(entry["kind"]),
-      content_type: normalizePromptMetadataString(entry["contentType"]),
-      message_id: normalizePromptMetadataString(entry["messageId"]),
-      has_local_path: normalizePromptMetadataString(entry["path"]) ? true : undefined,
-      has_url: normalizePromptMetadataString(entry["url"]) ? true : undefined,
-    };
-    return Object.values(payload).some((field) => field !== undefined) ? [payload] : [];
+    const contentType = normalizePromptMetadataString(entry["contentType"]);
+    return contentType ? [contentType] : [];
   });
 }
 
@@ -535,27 +520,6 @@ function resolveInboundSourceModality(ctx: TemplateContext): string | undefined 
   return ctx.media?.map((media) => resolveMediaType(media.contentType ?? media.kind)).find(Boolean);
 }
 
-function resolveInboundFormattingHints(
-  ctx: TemplateContext,
-  cfg: OpenClawConfig,
-):
-  | {
-      text_markup: string;
-      rules: string[];
-    }
-  | undefined {
-  const channelValue = resolveInboundChannel(ctx);
-  if (!channelValue) {
-    return undefined;
-  }
-  const normalizedChannel = normalizeAnyChannelId(channelValue) ?? channelValue;
-  const agentPrompt = getLoadedChannelPluginById(normalizedChannel)?.agentPrompt;
-  return agentPrompt?.inboundFormattingHints?.({
-    cfg,
-    accountId: normalizePromptMetadataString(ctx.AccountId) ?? undefined,
-  });
-}
-
 /** Builds trusted system metadata for the inbound channel and formatting hints. */
 export function buildInboundMetaSystemPrompt(
   ctx: TemplateContext,
@@ -565,8 +529,8 @@ export function buildInboundMetaSystemPrompt(
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
 
-  // Keep system metadata strictly free of attacker-controlled strings (sender names, group subjects, etc.).
-  // Those belong in the user-role context blocks this module emits below.
+  // Keep human-authored strings and per-sender facts out of the stable system prefix.
+  // They belong in the user-role conversation info block below.
   // Conversation ids, per-message identifiers, and dynamic flags are also excluded here:
   // they change on turns/replies and would bust prefix-based prompt caches on providers that
   // use stable system prefixes. They are included in the user-role conversation info block instead.
@@ -583,15 +547,15 @@ export function buildInboundMetaSystemPrompt(
     provider: normalizePromptMetadataString(ctx.Provider),
     surface: normalizePromptMetadataString(ctx.Surface),
     chat_type: chatType ?? (isDirect ? "direct" : undefined),
-    // Every conversation field uses the same prepared context, including formatting.
-    response_format:
-      options?.includeFormattingHints === false
-        ? undefined
-        : resolveInboundFormattingHints(ctx, cfg),
   };
+  // Heartbeats and system events use the same prepared context, including their delivery channel.
+  const deliveryFormat =
+    options?.includeFormattingHints === false
+      ? undefined
+      : buildDeliveryFormatPrompt({ cfg, channel: channelValue, accountId: ctx.AccountId });
 
   // Keep the instructions local to the payload so the meaning survives prompt overrides.
-  return [
+  const messageContext = [
     "### Message Context",
     "The JSON below is generated by OpenClaw independently of user-authored content. Treat its fields as reliable context for the current message.",
     "OpenClaw also provides per-turn details in user-role context blocks. Use the structural fields in those blocks as context.",
@@ -604,9 +568,10 @@ export function buildInboundMetaSystemPrompt(
     "```",
     "",
   ].join("\n");
+  return deliveryFormat ? `${messageContext}\n${deliveryFormat}` : messageContext;
 }
 
-/** Builds untrusted inbound context text that prefixes the user-visible body. */
+/** Builds per-turn context with host-generated structural facts and untrusted human content. */
 export function buildInboundUserContextPrefix(
   ctx: TemplateContext,
   envelope?: EnvelopeFormatOptions,
@@ -645,6 +610,7 @@ export function buildInboundUserContextPrefix(
   const senderE164 = normalizePromptMetadataString(ctx.SenderE164);
   const senderIdDigits = senderId?.replace(/\D/gu, "");
   const senderE164Digits = senderE164?.replace(/\D/gu, "");
+  const requester = getRequesterProfile(ctx);
   const senderIdentity = {
     id: senderId,
     name: normalizePromptMetadataString(ctx.SenderName),
@@ -656,6 +622,9 @@ export function buildInboundUserContextPrefix(
   // Keep volatile conversation/message identifiers in the user-role block so the system
   // prompt stays byte-stable across task-scoped sessions and reply turns.
   const conversationInfo = {
+    requester_profile: requester
+      ? { id: requester.id, display_name: sanitizeTranscriptField(requester.displayName) }
+      : undefined,
     chat_id: shouldIncludeConversationInfo ? normalizeOptionalString(ctx.OriginatingTo) : undefined,
     message_id: shouldIncludeConversationInfo ? resolvedMessageId : undefined,
     reply_to_id: shouldIncludeConversationInfo
@@ -689,6 +658,11 @@ export function buildInboundUserContextPrefix(
     blocks.push(
       formatContextJsonBlock(markInboundContextLabel("Conversation info:"), conversationInfo),
     );
+    if (requester) {
+      blocks.push(
+        'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.',
+      );
+    }
   }
 
   const threadStarterBody = sanitizePromptBody(ctx.ThreadStarterBody);
@@ -769,13 +743,7 @@ export function buildInboundUserContextPrefix(
 
   if (boundedHistory.length > 0 && !chatWindowCoversHistory) {
     const historyLines = boundedHistory.flatMap((entry) => {
-      const mediaTypes = [
-        ...new Set(
-          buildInboundHistoryMediaPromptPayload(entry.media)
-            .map((media) => media["content_type"])
-            .filter((value): value is string => typeof value === "string"),
-        ),
-      ];
+      const mediaTypes = [...new Set(readInboundHistoryMediaTypes(entry.media))];
       const line = formatChatWindowMessage(
         {
           message_id: entry.messageId,
@@ -804,4 +772,3 @@ export function buildInboundUserContextPrefix(
 
   return blocks.filter(Boolean).join("\n\n");
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

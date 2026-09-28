@@ -70,17 +70,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-.chat-working-indicator__status:has(> .chat-working-indicator__preamble) {
-  flex-wrap: nowrap;
-  white-space: nowrap;
-}
-
-.chat-working-indicator__preamble {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .chat-working-indicator__elapsed {
   color: var(--muted);
 }
@@ -89,6 +78,39 @@
   gap: 6px;
   min-height: 0;
   margin-top: 4px;
+}
+
+.chat-turn-recap {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 8px;
+  margin: 4px 0 2px;
+  min-height: 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-turn-recap__claw {
+  display: inline-flex;
+  align-items: center;
+  color: var(--accent);
+}
+
+.chat-turn-recap__claw svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+  stroke: none;
+  transform: rotate(8deg);
+}
+
+/* The parked claw reports a settled turn, not an active run. */
+.chat-turn-recap__claw svg .claw-icon__jaw {
+  transform-box: view-box;
+  transform-origin: 8.6px 11px;
+  transform: rotate(-4deg);
 }
 
 .chat-turn-recap--continuation {

@@ -47,3 +47,30 @@ export function hasTelegramBotEndpointApiRoot(apiRoot: unknown): boolean {
     return false;
   }
 }
+
+function readRequestUrl(input: unknown): string | null {
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.toString();
+  }
+  if (input instanceof Request) {
+    return input.url;
+  }
+  return null;
+}
+
+export function extractTelegramApiMethod(input: unknown): string | null {
+  const url = readRequestUrl(input);
+  if (!url) {
+    return null;
+  }
+  try {
+    const pathname = new URL(url).pathname;
+    const segments = pathname.split("/").filter(Boolean);
+    return segments.at(-1)?.toLowerCase() ?? null;
+  } catch {
+    return null;
+  }
+}

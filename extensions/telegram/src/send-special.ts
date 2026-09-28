@@ -1,3 +1,4 @@
+import { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/media-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveTelegramMessageThreadSpec, type TelegramThreadSpec } from "./bot/helpers.js";
 import { resolveTelegramEffectiveGroupPolicy } from "./group-access.js";
@@ -15,7 +16,6 @@ import type {
   TelegramThreadedSendOpts,
 } from "./send-message-types.js";
 import { finalizeTelegramOutbound, prepareTelegramOutbound } from "./send-outbound.js";
-import { normalizePollInput, type PollInput } from "./send.runtime.js";
 import { parseTelegramTarget } from "./targets.js";
 import { resolveTelegramBotUserIdFromToken } from "./token-fingerprint.js";
 
@@ -43,12 +43,6 @@ function resolveTelegramPollThreadSpec(
     : undefined;
 }
 
-/**
- * Send a sticker to a Telegram chat by file_id.
- * @param to - Chat ID or username (e.g., "123456789" or "@username")
- * @param fileId - Telegram file_id of the sticker to send
- * @param opts - Optional configuration
- */
 export async function sendStickerTelegram(
   to: string,
   fileId: string,
@@ -92,12 +86,6 @@ type TelegramPollOpts = TelegramThreadedSendOpts &
     isAnonymous?: boolean;
   };
 
-/**
- * Send a poll to a Telegram chat.
- * @param to - Chat ID or username (e.g., "123456789" or "@username")
- * @param poll - Poll input with question, options, maxSelections, and optional durationHours
- * @param opts - Optional configuration
- */
 export async function sendPollTelegram(
   to: string,
   poll: PollInput,

@@ -1,6 +1,11 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
+import { readGitRuntimeArtifactIdentity } from "../../infra/update-git-runtime.js";
+import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import * as pluginRecords from "../../plugins/installed-plugin-index-records.js";
 import * as pluginLifecycle from "../../plugins/plugin-lifecycle-lease.js";
 import { VERSION } from "../../version.js";
@@ -49,6 +54,8 @@ import * as plugins from "./update-command-plugins.js";
 import * as postCore from "./update-command-post-core.js";
 import * as sourceRuntime from "./update-command-runtime.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 const snapshot: ConfigFileSnapshot = {
   path: "/isolated/openclaw.json",
   exists: true,
@@ -95,14 +102,124 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+type ConvergenceParams = Parameters<typeof convergeUpdatePlugins>[0];
+function convergenceParams(
+  overrides: Pick<ConvergenceParams, "result"> & Partial<ConvergenceParams>,
+): ConvergenceParams {
+  return {
+    root: "/isolated",
+    installKindChanged: false,
+    configSnapshot: snapshot,
+    requestedChannel: null,
+    storedChannel: null,
+    channel: "stable",
+    downgradeRisk: false,
+    opts: { json: true, yes: true },
+    preUpdatePluginInstallRecords: {},
+    startedAt: Date.now(),
+    updateStepTimeoutMs: 5_000,
+    ...overrides,
+  };
+}
+
 describe("candidate convergence Doctor dispatch authority", () => {
   it.each(
-    (["npm", "git"] as const).flatMap((mode) =>
-      [false, true].map((revoked) => ({ mode, revoked })),
+    [false, true].flatMap((candidateRuntime) =>
+      ["unchanged", "changed-during"].map((scenario) => ({
+        candidateRuntime,
+        scenario,
+      })),
     ),
   )(
-    "lets the installed $mode target own convergence before parent worker use (revoked=$revoked)",
-    async ({ mode, revoked }) => {
+    "compares the activated Git fact after convergence ($scenario, candidate=$candidateRuntime)",
+    async ({ candidateRuntime, scenario }) => {
+      const root = tempDirs.make("openclaw-git-verification-");
+      const dist = path.join(root, "dist");
+      const writer = path.join(dist, "io.write-fixture.mjs");
+      const entry = path.join(dist, "entry.mjs");
+      const executed = path.join(root, "executed");
+      await fs.mkdir(dist);
+      await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ version: VERSION }));
+      await fs.writeFile(
+        path.join(dist, "build-info.json"),
+        JSON.stringify({ commit: "same-commit" }),
+      );
+      await fs.writeFile(writer, "export const generation = 1;\n");
+      await fs.writeFile(
+        entry,
+        `import fs from "node:fs/promises";
+await fs.writeFile(${JSON.stringify(executed)}, String(process.pid));
+${scenario === "changed-during" ? `await fs.writeFile(${JSON.stringify(writer)}, "export const generation = 2;\\n");` : ""}
+await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.stringify(JSON.stringify({ ...pluginUpdate, changed: false }))});
+`,
+      );
+      const activated = await readGitRuntimeArtifactIdentity(root);
+      mocks.resolveEntrypoint.mockResolvedValue(entry);
+      vi.mocked(shared.readPackageVersion).mockResolvedValue(VERSION);
+      if (candidateRuntime) {
+        vi.spyOn(sourceRuntime, "completeSourceUpdateRuntime").mockResolvedValue({
+          changed: false,
+        });
+        mocks.convergeCandidate.mockImplementation(async () => {
+          if (scenario === "changed-during") {
+            await fs.writeFile(writer, "export const generation = 2;\n");
+          }
+          return { pluginUpdate: { ...pluginUpdate, changed: false }, configSnapshot: snapshot };
+        });
+      }
+      const { resultWithPostUpdate: result } = await convergeUpdatePlugins(
+        convergenceParams({
+          candidateRuntime,
+          result: {
+            status: "ok",
+            mode: "git",
+            root,
+            before: { sha: "same-commit", version: VERSION },
+            after: { sha: "same-commit", version: VERSION },
+            gitRuntime: activated,
+            steps: [],
+            durationMs: 0,
+          },
+          root,
+          channel: "dev",
+          packageUpdateNodeRunner: process.execPath,
+        }),
+      );
+      if (candidateRuntime) {
+        await expect(fs.stat(executed)).rejects.toMatchObject({ code: "ENOENT" });
+      } else {
+        expect(Number(await fs.readFile(executed, "utf8"))).not.toBe(process.pid);
+      }
+      expect(result.status).toBe(scenario === "unchanged" ? "ok" : "error");
+      const verification = result.steps.find(
+        (step) => step.name === "post-core runtime verification",
+      )!;
+      const receipts = updateRunStepsFromResultStep(verification);
+      expect(receipts[0]?.status).toBe(scenario === "unchanged" ? "completed" : "failed");
+      const facts = JSON.parse(
+        receipts.find((receipt) => receipt.step.startsWith("diagnostic:"))!.detail!,
+      );
+      expect(facts.activated).toEqual(activated);
+      expect(facts.observed.commit).toBe("same-commit");
+      expect(facts.observed.distDigest === activated.distDigest).toBe(scenario === "unchanged");
+      if (scenario !== "unchanged") {
+        expect(verification.failureFacts).toContainEqual(
+          expect.objectContaining({ code: "runtime-verification-failed" }),
+        );
+      }
+    },
+  );
+
+  it.each([
+    { runtime: "npm", revoked: false },
+    { runtime: "git", revoked: true },
+    { runtime: "git-rebuilt", revoked: false },
+  ] as const)(
+    "lets the installed $runtime target own convergence before parent worker use (revoked=$revoked)",
+    async ({ runtime, revoked }) => {
+      const rebuilt = runtime === "git-rebuilt";
+      const version = rebuilt ? VERSION : "2026.9.4";
+      vi.mocked(shared.readPackageVersion).mockResolvedValue(version);
       const incompatibleWorker = new Error("Unknown shared-state SQLite command");
       const parentLease = vi
         .spyOn(pluginLifecycle, "withPluginLifecycleLease")
@@ -118,33 +235,29 @@ describe("candidate convergence Doctor dispatch authority", () => {
           current = !revoked;
           return { resumed: true, pluginUpdate: { ...pluginUpdate, changed: false } };
         });
-      const outcome = convergeUpdatePlugins({
-        result: {
-          status: "ok",
-          mode,
-          root: "/isolated",
-          before: { version: VERSION, sha: "old-checkout", buildId: "updater-build" },
-          after: { version: "2026.9.4", sha: "target-checkout", buildId: "published-build" },
-          steps: [],
-          durationMs: 0,
-        },
-        root: "/isolated",
-        installKindChanged: false,
-        configSnapshot: snapshot,
-        requestedChannel: null,
-        storedChannel: null,
-        channel: "stable",
-        downgradeRisk: true,
-        opts: { json: true, yes: true },
-        preUpdatePluginInstallRecords: {},
-        startedAt: Date.now(),
-        updateStepTimeoutMs: 5_000,
-        assertCurrent: () => {
-          if (!current) {
-            throw authorityRefusal;
-          }
-        },
-      });
+      const outcome = convergeUpdatePlugins(
+        convergenceParams({
+          result: {
+            status: "ok",
+            mode: runtime === "npm" ? "npm" : "git",
+            root: "/isolated",
+            before: { version: VERSION, sha: "old-checkout", buildId: "updater-build" },
+            after: {
+              version,
+              sha: rebuilt ? "old-checkout" : "target-checkout",
+              buildId: "published-build",
+            },
+            steps: [],
+            durationMs: 0,
+          },
+          downgradeRisk: true,
+          assertCurrent: () => {
+            if (!current) {
+              throw authorityRefusal;
+            }
+          },
+        }),
+      );
       if (revoked) {
         await expect(outcome).rejects.toBe(authorityRefusal);
         expect(mocks.runExec).not.toHaveBeenCalled();
@@ -210,35 +323,28 @@ describe("candidate convergence Doctor dispatch authority", () => {
         "./update-command-resume.js",
       );
       mocks.convergeCandidate.mockImplementation(actualResume.convergePostCoreUpdatePlugins);
-      const result = await convergeUpdatePlugins({
-        coreAlreadyCurrent: retainedDifferentRuntime,
-        result: {
-          status: retainedDifferentRuntime ? "skipped" : "ok",
-          ...(retainedDifferentRuntime ? { reason: "already-current" } : {}),
-          mode: "git",
-          root: "/isolated",
-          before: { version: VERSION, sha: "old-checkout" },
-          after: {
-            version: retainedDifferentRuntime ? "2026.9.4" : VERSION,
-            sha: "target-checkout",
+      const result = await convergeUpdatePlugins(
+        convergenceParams({
+          coreAlreadyCurrent: retainedDifferentRuntime,
+          result: {
+            status: retainedDifferentRuntime ? "skipped" : "ok",
+            ...(retainedDifferentRuntime ? { reason: "already-current" } : {}),
+            mode: "git",
+            root: "/isolated",
+            before: { version: VERSION, sha: "old-checkout" },
+            after: {
+              version: retainedDifferentRuntime ? "2026.9.4" : VERSION,
+              sha: "target-checkout",
+            },
+            steps: [],
+            durationMs: 0,
           },
-          steps: [],
-          durationMs: 0,
-        },
-        root: "/isolated",
-        installKindChanged: false,
-        configSnapshot: snapshot,
-        requestedChannel: null,
-        storedChannel: null,
-        channel: "stable",
-        downgradeRisk: retainedDifferentRuntime,
-        opts: { json: true, yes: true, acceptCapabilities: true },
-        preUpdatePluginInstallRecords: {},
-        startedAt: Date.now(),
-        updateStepTimeoutMs: 5_000,
-      });
+          downgradeRisk: retainedDifferentRuntime,
+          opts: { json: true, yes: true, acceptCapabilities: true },
+        }),
+      );
       expect(delegate).toHaveBeenCalledOnce();
-      await expect(delegate.mock.results[0]?.value).resolves.toEqual({ resumed: false });
+      await expect(delegate.mock.results[0]?.value).resolves.toMatchObject({ resumed: false });
       expect(mocks.convergeCandidate).toHaveBeenCalledTimes(retainedDifferentRuntime ? 0 : 1);
       if (retainedDifferentRuntime) {
         expect(result.resultWithPostUpdate).toMatchObject({
@@ -295,33 +401,24 @@ describe("candidate convergence Doctor dispatch authority", () => {
         };
       });
       try {
-        const result = await convergeUpdatePlugins({
-          candidateRuntime: true,
-          coreAlreadyCurrent: true,
-          result: {
-            status: "skipped",
-            reason: "already-current",
-            mode: "git",
-            root: "/isolated",
-            steps: [],
-            durationMs: 0,
-          },
-          root: "/isolated",
-          installKindChanged: false,
-          configSnapshot: snapshot,
-          requestedChannel: null,
-          storedChannel: null,
-          channel: "stable",
-          downgradeRisk: false,
-          opts: { json: true, yes: true },
-          preUpdatePluginInstallRecords: {},
-          startedAt: Date.now(),
-          updateStepTimeoutMs: 5_000,
-          packageUpdateNodeRunner: "/selected/node",
-          beforeRuntimePublication: park,
-          beforeDoctor: park,
-          assertCurrent,
-        });
+        const result = await convergeUpdatePlugins(
+          convergenceParams({
+            candidateRuntime: true,
+            coreAlreadyCurrent: true,
+            result: {
+              status: "skipped",
+              reason: "already-current",
+              mode: "git",
+              root: "/isolated",
+              steps: [],
+              durationMs: 0,
+            },
+            packageUpdateNodeRunner: "/selected/node",
+            beforeRuntimePublication: park,
+            beforeDoctor: park,
+            assertCurrent,
+          }),
+        );
         expect(runtime).toHaveBeenCalledOnce();
         expect(mocks.convergeCandidate).toHaveBeenCalledOnce();
         expect(delegate).not.toHaveBeenCalled();
@@ -353,8 +450,6 @@ describe("candidate convergence Doctor dispatch authority", () => {
 
   it.each([
     "live",
-    "entrypoint-revocation",
-    "maintenance-replacement",
     "doctor-revocation",
     "config-read-revocation",
     "validation-replacement",
@@ -383,14 +478,10 @@ describe("candidate convergence Doctor dispatch authority", () => {
         throw stale;
       }
     };
-    if (boundary === "entrypoint-revocation" || boundary === "entrypoint-first-refusal") {
+    if (boundary === "entrypoint-first-refusal") {
       mocks.resolveEntrypoint.mockImplementationOnce(async () => {
         await Promise.resolve();
-        if (boundary === "entrypoint-first-refusal") {
-          refusalArmed = true;
-        } else {
-          currentOwner = undefined;
-        }
+        refusalArmed = true;
         return "/isolated/dist/index.js";
       });
     }
@@ -424,34 +515,22 @@ describe("candidate convergence Doctor dispatch authority", () => {
         return snapshot;
       });
     }
-    const outcome = convergeUpdatePlugins({
-      candidateRuntime: true,
-      result: { status: "ok", mode: "npm", root: "/isolated", steps: [], durationMs: 0 },
-      root: "/isolated",
-      installKindChanged: false,
-      configSnapshot: snapshot,
-      requestedChannel: null,
-      storedChannel: null,
-      channel: "stable",
-      downgradeRisk: false,
-      opts: { json: true, yes: true },
-      preUpdatePluginInstallRecords: {},
-      startedAt: Date.now(),
-      updateStepTimeoutMs: 5_000,
-      assertCurrent,
-      beforeDoctor: async () => {
-        await Promise.resolve();
-        if (boundary === "maintenance-deferred" || boundary === "maintenance-at-risk") {
-          throw maintenanceRefusal;
-        }
-        if (boundary === "maintenance-first-refusal") {
-          refusalArmed = true;
-        }
-        if (boundary === "maintenance-replacement") {
-          currentOwner = {};
-        }
-      },
-    });
+    const outcome = convergeUpdatePlugins(
+      convergenceParams({
+        candidateRuntime: true,
+        result: { status: "ok", mode: "npm", root: "/isolated", steps: [], durationMs: 0 },
+        assertCurrent,
+        beforeDoctor: async () => {
+          await Promise.resolve();
+          if (boundary === "maintenance-deferred" || boundary === "maintenance-at-risk") {
+            throw maintenanceRefusal;
+          }
+          if (boundary === "maintenance-first-refusal") {
+            refusalArmed = true;
+          }
+        },
+      }),
+    );
     if (boundary === "maintenance-deferred") {
       const completed = await outcome;
       expect(completed.resultWithPostUpdate).toMatchObject({

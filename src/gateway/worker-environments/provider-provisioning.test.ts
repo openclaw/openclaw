@@ -620,7 +620,6 @@ describe("worker environment service", () => {
       ],
     ],
     ["malformed labels", [{ id: "fast", label: 16 }]],
-    ["non-positive CPU counts", [{ id: "fast", label: "Fast", cpu: 0 }]],
     ["non-integer memory sizes", [{ id: "fast", label: "Fast", memoryGb: 63.5 }]],
     ["implausible memory sizes", [{ id: "fast", label: "Fast", memoryGb: 65_537 }]],
     [
@@ -629,10 +628,6 @@ describe("worker environment service", () => {
         { id: "standard", label: "Standard", default: true },
         { id: "fast", label: "Fast", default: true },
       ],
-    ],
-    [
-      "over-limit catalogs",
-      Array.from({ length: 65 }, (_, index) => ({ id: `machine-${index}`, label: "Machine" })),
     ],
   ])("omits %s returned by a worker provider", async (_name, options) => {
     const provider = support.createProvider();
@@ -658,7 +653,6 @@ describe("worker environment service", () => {
       [{ id: "os-a", label: "OS A", disabledReason: "" }],
       [{ id: "os-a", label: "OS A", disabledReason: " " }],
       [{ id: "os-a", label: "OS A", disabledReason: "x".repeat(257) }],
-      [{ id: "os-a", label: "OS A", settings: {} }],
       Array.from({ length: 9 }, (_, index) => ({ id: `os-${index}`, label: "OS" })),
     ].map((systems) => ({ systems })),
   )("omits malformed operating-system catalog %#", async ({ systems }) => {

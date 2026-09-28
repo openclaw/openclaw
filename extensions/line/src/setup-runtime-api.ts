@@ -6,4 +6,5 @@ export {
   splitSetupEntries,
 } from "openclaw/plugin-sdk/setup";
 export type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
-export { listLineAccountIds, normalizeAccountId, resolveLineAccount } from "./accounts.js";
+export { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+export { listLineAccountIds, resolveLineAccount } from "./accounts.js";

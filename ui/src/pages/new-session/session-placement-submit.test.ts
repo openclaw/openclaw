@@ -19,6 +19,17 @@ type AdvanceParams = Omit<
     recoveryPhase: SessionPlacementRecovery["phase"];
   };
 
+const placementDefaults = {
+  agentId: "cloud",
+  target: { kind: "profile", profileId: "aws" },
+  gatewayUrl: "ws://gateway.example",
+  recoveryScope: "principal-a",
+  recoveryPhase: "dispatching",
+  mode: "dispatch",
+  isLifecycleCurrent: () => true,
+  ownsRecovery: () => true,
+} satisfies Partial<AdvanceParams>;
+
 function advanceSessionPlacementDraft(params: AdvanceParams) {
   const {
     key,
@@ -91,18 +102,13 @@ describe("session placement draft advancement", () => {
 
     await expect(
       advanceSessionPlacementDraft({
+        ...placementDefaults,
         client: clientWith(request),
         key: "agent:cloud:recovered",
-        agentId: "cloud",
-        target: { kind: "profile", profileId: "aws" },
         message: "resume remotely",
         messageId: "message-recovered",
-        gatewayUrl: "ws://gateway.example",
-        recoveryScope: "principal-a",
         recoveryPhase: "sending",
         mode: "recover",
-        isLifecycleCurrent: () => true,
-        ownsRecovery: () => true,
         clearRecovery,
         setRecoveryPhase: vi.fn(),
       }),
@@ -169,19 +175,14 @@ describe("session placement draft advancement", () => {
 
     await expect(
       advanceSessionPlacementDraft({
+        ...placementDefaults,
         client: clientWith(request),
         key: sessionKey,
-        agentId: "cloud",
-        target: { kind: "profile", profileId: "aws" },
         message: recovered.message,
         mentions: recovered.mentions,
         messageId: "message-older",
         gatewayUrl,
         recoveryScope,
-        recoveryPhase: "dispatching",
-        mode: "dispatch",
-        isLifecycleCurrent: () => true,
-        ownsRecovery: () => true,
         clearRecovery,
         setRecoveryPhase,
       }),
@@ -234,18 +235,11 @@ describe("session placement draft advancement", () => {
 
     await expect(
       advanceSessionPlacementDraft({
+        ...placementDefaults,
         client: clientWith(request),
         key: "agent:cloud:current",
-        agentId: "cloud",
-        target: { kind: "profile", profileId: "aws" },
         message: "current task",
         messageId: "message-current",
-        gatewayUrl: "ws://gateway.example",
-        recoveryScope: "principal-a",
-        recoveryPhase: "dispatching",
-        mode: "dispatch",
-        isLifecycleCurrent: () => true,
-        ownsRecovery: () => true,
         clearRecovery: vi.fn(),
         setRecoveryPhase,
       }),
@@ -289,16 +283,11 @@ describe("session placement draft advancement", () => {
 
     await expect(
       advanceSessionPlacementDraft({
+        ...placementDefaults,
         client: clientWith(request),
         key: "agent:cloud:stale",
-        agentId: "cloud",
-        target: { kind: "profile", profileId: "aws" },
         message: "stale task",
         messageId: "message-stale",
-        gatewayUrl: "ws://gateway.example",
-        recoveryScope: "principal-a",
-        recoveryPhase: "dispatching",
-        mode: "dispatch",
         isLifecycleCurrent: () => false,
         ownsRecovery: () => false,
         clearRecovery,
@@ -360,16 +349,13 @@ describe("session placement draft advancement", () => {
 
     await expect(
       advanceSessionPlacementDraft({
+        ...placementDefaults,
         client: clientWith(request),
         key: sessionKey,
-        agentId: "cloud",
-        target: { kind: "profile", profileId: "aws" },
         message: "interrupted task",
         messageId: "message-interrupted",
         gatewayUrl,
         recoveryScope,
-        recoveryPhase: "dispatching",
-        mode: "dispatch",
         isLifecycleCurrent: () => {
           lifecycleChecks += 1;
           return lifecycleCurrent || lifecycleChecks < 6;
@@ -397,17 +383,12 @@ describe("session placement draft advancement", () => {
 
     await expect(
       advanceSessionPlacementDraft({
+        ...placementDefaults,
         client: clientWith(request),
         key: "agent:cloud:incognito",
-        agentId: "cloud",
-        target: { kind: "profile", profileId: "aws" },
         message: "private task",
         messageId: "message-private",
-        gatewayUrl: "ws://gateway.example",
-        recoveryScope: "principal-a",
-        recoveryPhase: "dispatching",
         persistRecovery: false,
-        mode: "dispatch",
         isLifecycleCurrent: () => false,
         ownsRecovery: () => false,
         clearRecovery: vi.fn(),
@@ -433,16 +414,11 @@ describe("session placement draft advancement", () => {
 
     await expect(
       advanceSessionPlacementDraft({
+        ...placementDefaults,
         client: clientWith(request),
         key: "agent:cloud:cancelled",
-        agentId: "cloud",
-        target: { kind: "profile", profileId: "aws" },
         message: "cancelled task",
         messageId: "message-cancelled",
-        gatewayUrl: "ws://gateway.example",
-        recoveryScope: "principal-a",
-        recoveryPhase: "dispatching",
-        mode: "dispatch",
         isLifecycleCurrent: () => false,
         ownsRecovery: () => false,
         clearRecovery,
@@ -484,18 +460,14 @@ describe("session placement draft advancement", () => {
 
     await expect(
       advanceSessionPlacementDraft({
+        ...placementDefaults,
         client: clientWith(request),
         key: "agent:cloud:recovered",
-        agentId: "cloud",
         target: { kind: "profile", profileId: "aws", machineClass: "fast" },
         message: "possibly accepted task",
         messageId: "message-recovered",
-        gatewayUrl: "ws://gateway.example",
-        recoveryScope: "principal-a",
         recoveryPhase: "sending",
         mode: "recover",
-        isLifecycleCurrent: () => true,
-        ownsRecovery: () => true,
         clearRecovery,
         setRecoveryPhase: vi.fn(),
       }),
@@ -539,18 +511,11 @@ describe("session placement draft advancement", () => {
 
     await expect(
       advanceSessionPlacementDraft({
+        ...placementDefaults,
         client: clientWith(request),
         key: "agent:cloud:recovered",
-        agentId: "cloud",
-        target: { kind: "profile", profileId: "aws" },
         message: "retry this task",
         messageId: "message-recovered",
-        gatewayUrl: "ws://gateway.example",
-        recoveryScope: "principal-a",
-        recoveryPhase: "dispatching",
-        mode: "dispatch",
-        isLifecycleCurrent: () => true,
-        ownsRecovery: () => true,
         clearRecovery,
         setRecoveryPhase: vi.fn(),
       }),
@@ -585,18 +550,12 @@ describe("session placement draft advancement", () => {
 
     await expect(
       advanceSessionPlacementDraft({
+        ...placementDefaults,
         client: clientWith(request),
         key: "agent:cloud:missing",
-        agentId: "cloud",
-        target: { kind: "profile", profileId: "aws" },
         message: "missing task",
         messageId: "message-missing",
-        gatewayUrl: "ws://gateway.example",
-        recoveryScope: "principal-a",
-        recoveryPhase: "dispatching",
         mode: "recover",
-        isLifecycleCurrent: () => true,
-        ownsRecovery: () => true,
         clearRecovery,
         setRecoveryPhase: vi.fn(),
       }),
@@ -626,18 +585,12 @@ describe("session placement draft advancement", () => {
 
     await expect(
       advanceSessionPlacementDraft({
+        ...placementDefaults,
         client: clientWith(request),
         key: "agent:cloud:pre-send",
-        agentId: "cloud",
-        target: { kind: "profile", profileId: "aws" },
         message: "not sent yet",
         messageId: "message-pre-send",
-        gatewayUrl: "ws://gateway.example",
-        recoveryScope: "principal-a",
-        recoveryPhase: "dispatching",
         mode: "recover",
-        isLifecycleCurrent: () => true,
-        ownsRecovery: () => true,
         clearRecovery,
         setRecoveryPhase: vi.fn(),
       }),

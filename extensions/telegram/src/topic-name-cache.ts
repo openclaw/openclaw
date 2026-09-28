@@ -1,15 +1,15 @@
 import { createHash } from "node:crypto";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
-import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
 import { getTelegramRuntime } from "./runtime.js";
 
-export const TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES = 2_048;
+const TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES = 2_048;
 const STORE_NAMESPACE_PREFIX = "telegram.topic-name-cache";
 const TOPIC_NAME_CACHE_STATE_KEY = Symbol.for("openclaw.telegramTopicNameCacheState");
 const DEFAULT_TOPIC_NAME_CACHE_SCOPE = "default";
 
 type TopicEntry = {
   name: string;
+  creatorUserId?: number;
   iconColor?: number;
   iconCustomEmojiId?: string;
   closed?: boolean;
@@ -54,17 +54,9 @@ function cacheKey(chatId: number | string, threadId: number | string): string {
   return `${chatId}:${threadId}`;
 }
 
-export function resolveTopicNameCacheNamespace(scope: string): string {
+function resolveTopicNameCacheNamespace(scope: string): string {
   const hash = createHash("sha256").update(scope).digest("hex").slice(0, 16);
   return `${STORE_NAMESPACE_PREFIX}.${hash}`;
-}
-
-export function resolveTopicNameCachePath(storePath: string): string {
-  return `${storePath}.telegram-topic-names.json`;
-}
-
-export function resolveTopicNameCacheScope(storePath: string): string {
-  return storePath;
 }
 
 function openTopicNamePersistentStore(namespace: string): TopicNamePersistentStore {
@@ -163,12 +155,14 @@ export async function updateTopicName(
   const iconColor = patch.iconColor ?? existing?.iconColor;
   const iconCustomEmojiId = patch.iconCustomEmojiId ?? existing?.iconCustomEmojiId;
   const closed = patch.closed ?? existing?.closed;
+  const creatorUserId = patch.creatorUserId ?? existing?.creatorUserId;
   const merged: TopicEntry = {
     name: patch.name ?? existing?.name ?? "",
     updatedAt: nextUpdatedAt(scope),
     ...(iconColor !== undefined ? { iconColor } : {}),
     ...(iconCustomEmojiId !== undefined ? { iconCustomEmojiId } : {}),
     ...(closed !== undefined ? { closed } : {}),
+    ...(creatorUserId !== undefined ? { creatorUserId } : {}),
   };
   if (!merged.name) {
     return;
@@ -197,17 +191,27 @@ export async function getTopicName(
   return entry?.name;
 }
 
-export async function listTelegramLegacyTopicNameCacheEntries(params: {
-  persistedPath: string;
-  maxEntries?: number;
-}): Promise<Array<{ key: string; value: TopicEntry }>> {
-  const { value } = await readJsonFileWithFallback<Record<string, unknown>>(
-    params.persistedPath,
-    {},
-  );
-  return Object.entries(value)
-    .filter((entry): entry is [string, TopicEntry] => isTopicEntry(entry[1]))
-    .toSorted(([, left], [, right]) => right.updatedAt - left.updatedAt)
-    .slice(0, params.maxEntries ?? TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES)
-    .map(([key, entry]) => ({ key, value: entry }));
+export async function recordTopicCreation(
+  chatId: number | string,
+  threadId: number | string,
+  creation: Pick<TopicEntry, "name" | "creatorUserId" | "iconColor" | "iconCustomEmojiId">,
+  scope?: string,
+): Promise<void> {
+  const state = getTopicStoreState(scope);
+  await hydrateTopicStoreState(state);
+  // A late creation service message must not undo a subsequent rename or close.
+  const patch = state.store.has(cacheKey(chatId, threadId))
+    ? { creatorUserId: creation.creatorUserId }
+    : { ...creation, closed: false };
+  await updateTopicName(chatId, threadId, patch, scope);
+}
+
+export async function getTopicCreatorUserId(
+  chatId: number | string,
+  threadId: number | string,
+  scope?: string,
+): Promise<number | undefined> {
+  const state = getTopicStoreState(scope);
+  await hydrateTopicStoreState(state);
+  return state.store.get(cacheKey(chatId, threadId))?.creatorUserId;
 }

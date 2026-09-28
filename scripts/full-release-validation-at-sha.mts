@@ -50,13 +50,6 @@ import {
 import { requireOptionArgument } from "./lib/arg-utils.mts";
 import { execPlainGh } from "./lib/plain-gh.mjs";
 import { parseReleaseContextRef, resolveReleaseContextIdentity } from "./lib/release-context.mjs";
-import {
-  RELEASE_PRIORITY_RECORD_KIND,
-  RELEASE_PRIORITY_VARIABLE,
-  defaultReleasePriorityRecordPath,
-  readReleasePriorityRecord,
-  writeReleasePriorityRecord,
-} from "./lib/release-priority.mjs";
 import { validatePackageSourceRef } from "./package-source-preflight.mjs";
 
 const REPOSITORY = "openclaw/openclaw";
@@ -413,6 +406,22 @@ export function parseArgs(argv: string[]) {
     dryRun: false,
     inputs,
   };
+  const valueOptions = [
+    ["--sha", "sha"],
+    ["--request-file", "requestFile"],
+    ["--reconcile-request", "reconcileRequest"],
+    ["--workflow-sha", "workflowSha"],
+    ["--trusted-workflow-ref", "trustedWorkflowRef"],
+    ["--target-ref", "targetRef"],
+  ] as const;
+  const assignInput = (assignment: string, errorMessage: string) => {
+    const [key, ...valueParts] = assignment.split("=");
+    if (!key || valueParts.length === 0) {
+      throw new Error(errorMessage);
+    }
+    args.inputs[key] = valueParts.join("=");
+    args.specifiedInputs.push(key);
+  };
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i]!;
@@ -420,32 +429,9 @@ export function parseArgs(argv: string[]) {
       usage();
       process.exit(0);
     }
-    if (arg === "--sha") {
-      args.sha = requireOptionArgument(argv, i, arg);
-      i += 1;
-      continue;
-    }
-    if (arg === "--request-file" || arg === "--reconcile-request") {
-      args[arg === "--request-file" ? "requestFile" : "reconcileRequest"] = requireOptionArgument(
-        argv,
-        i,
-        arg,
-      );
-      i += 1;
-      continue;
-    }
-    if (arg === "--workflow-sha") {
-      args.workflowSha = requireOptionArgument(argv, i, arg);
-      i += 1;
-      continue;
-    }
-    if (arg === "--trusted-workflow-ref") {
-      args.trustedWorkflowRef = requireOptionArgument(argv, i, arg);
-      i += 1;
-      continue;
-    }
-    if (arg === "--target-ref") {
-      args.targetRef = requireOptionArgument(argv, i, arg);
+    const valueKey = valueOptions.find(([flag]) => flag === arg)?.[1];
+    if (valueKey) {
+      args[valueKey] = requireOptionArgument(argv, i, arg);
       i += 1;
       continue;
     }
@@ -468,34 +454,19 @@ export function parseArgs(argv: string[]) {
         } else {
           assignment = extra.startsWith("-f") ? extra.slice(2).trim() : extra;
         }
-        const [key, ...valueParts] = assignment.split("=");
-        if (!key || valueParts.length === 0) {
-          throw new Error(`Unsupported extra argument after --: ${extra}`);
-        }
-        args.inputs[key] = valueParts.join("=");
-        args.specifiedInputs.push(key);
+        assignInput(assignment, `Unsupported extra argument after --: ${extra}`);
       }
       break;
     }
     if (arg === "-f") {
       const assignment = requireOptionArgument(argv, i, arg);
       i += 1;
-      const [key, ...valueParts] = assignment.split("=");
-      if (!key || valueParts.length === 0) {
-        throw new Error(`Invalid -f assignment: ${assignment}`);
-      }
-      args.inputs[key] = valueParts.join("=");
-      args.specifiedInputs.push(key);
+      assignInput(assignment, `Invalid -f assignment: ${assignment}`);
       continue;
     }
     if (arg.startsWith("-f") && arg.includes("=")) {
       const assignment = arg.slice(2).trim();
-      const [key, ...valueParts] = assignment.split("=");
-      if (!key || valueParts.length === 0) {
-        throw new Error(`Invalid -f assignment: ${arg}`);
-      }
-      args.inputs[key] = valueParts.join("=");
-      args.specifiedInputs.push(key);
+      assignInput(assignment, `Invalid -f assignment: ${arg}`);
       continue;
     }
     throw new Error(`Unknown argument: ${arg}`);
@@ -863,8 +834,7 @@ function validateDispatchRecord(value: unknown): asserts value is DispatchRecord
       !enveloped ||
         (!Object.hasOwn(request.inputs, "validation_purpose") &&
           !Object.hasOwn(request.inputs, "publication_selection_json") &&
-          !Object.hasOwn(request.inputs, "extension_test_exclude_patterns_json") &&
-          !Object.hasOwn(request.inputs, "known_flaky_jobs_json")),
+          !Object.hasOwn(request.inputs, "extension_test_exclude_patterns_json")),
       "Retained dispatch contains conflicting source intent representations",
     );
     requireDispatch(
@@ -1013,21 +983,16 @@ function resolveDispatchSelection(workflowSha: string, overrides: Record<string,
     ...wireOverrides
   } = overrides;
   const laneInputs =
-    extension_test_exclude_patterns_json === undefined && known_flaky_jobs_json === undefined
+    extension_test_exclude_patterns_json === undefined
       ? undefined
-      : {
-          ...(extension_test_exclude_patterns_json !== undefined
-            ? { extension_test_exclude_patterns_json }
-            : {}),
-          ...(known_flaky_jobs_json !== undefined ? { known_flaky_jobs_json } : {}),
-        };
+      : { extension_test_exclude_patterns_json };
   requireDispatch(
     laneInputs === undefined || workflow.env.FULL_RELEASE_LANE_INPUTS_CONTRACT === "1",
     `Tooling SHA ${workflowSha} does not support packed lane inputs; no remote refs or run were created. Keep the frozen Tooling SHA.`,
   );
   requireDispatch(
-    known_flaky_jobs_json === undefined || workflow.env.FULL_RELEASE_FLAKE_RETRY_CONTRACT === "1",
-    `Tooling SHA ${workflowSha} does not support declared flake retries; no remote refs or run were created. Keep the frozen Tooling SHA.`,
+    known_flaky_jobs_json === undefined,
+    "Automatic test retries are disabled; remove known_flaky_jobs_json and diagnose the failed job.",
   );
   const intent = normalizePublicationIntent(validation_purpose, publication_selection_json);
   requireDispatch(
@@ -1388,7 +1353,7 @@ async function reopenDispatch(path: string, args: ReturnType<typeof parseArgs>, 
           ? publicationIntentInputs(
               normalizePublicationIntent(retainedIntent.validationPurpose, args.inputs[key]),
             ).publicationSelectionJson === retainedIntent.publicationSelectionJson
-          : key === "extension_test_exclude_patterns_json" || key === "known_flaky_jobs_json"
+          : key === "extension_test_exclude_patterns_json"
             ? normalizePublicationLaneInputs({ [key]: args.inputs[key] })[key] ===
               retainedInputs[key]
             : args.inputs[key] === retainedInputs[key],
@@ -1408,46 +1373,6 @@ async function reopenDispatch(path: string, args: ReturnType<typeof parseArgs>, 
       `Retained refs: refs/heads/${request.workflowRef} and refs/heads/${request.targetRef}`,
     );
     throw error;
-  }
-}
-
-// Release priority: the active parent holds hosted-runner priority until it seals.
-// The variable is advisory tooling state, so a failure here never fails validation.
-function setReleasePriority(parentRunId: string, dryRun: boolean, mode: "set" | "clear" = "set") {
-  const variableArgs = [RELEASE_PRIORITY_VARIABLE, "--repo", REPOSITORY];
-  try {
-    if (mode === "set") {
-      // The pause window is recorded before the gate so `prioritize --restore`
-      // can re-queue deferred work even if this parent never seals.
-      const recordPath = defaultReleasePriorityRecordPath(parentRunId);
-      if (!dryRun && !readReleasePriorityRecord(recordPath, { optional: true })) {
-        writeReleasePriorityRecord(recordPath, {
-          kind: RELEASE_PRIORITY_RECORD_KIND,
-          parentRunId,
-          repository: REPOSITORY,
-          recordedAt: new Date().toISOString(),
-          cancelled: [],
-        });
-      }
-      runGh(["variable", "set", ...variableArgs, "--body", parentRunId], { dryRun });
-    } else if (
-      dryRun ||
-      runGh([
-        "api",
-        `repos/${REPOSITORY}/actions/variables/${RELEASE_PRIORITY_VARIABLE}`,
-        "--jq",
-        ".value",
-      ]) === parentRunId
-    ) {
-      runGh(["variable", "delete", ...variableArgs], { dryRun });
-    } else {
-      return;
-    }
-    console.log(`Release priority ${mode}: ${RELEASE_PRIORITY_VARIABLE}=${parentRunId}`);
-  } catch (error) {
-    console.warn(
-      `Release priority ${mode} failed (${error instanceof Error ? error.message : String(error)}); use pnpm frv prioritize ${mode === "set" ? `--run ${parentRunId}` : "--restore <record>"}.`,
-    );
   }
 }
 
@@ -2079,7 +2004,6 @@ async function main() {
       retain({ ...record, phase: "observed", run: observed });
       parentRunId = String(observed.id);
       console.log(`dispatch=observed: attempt=${observed.attempt}`);
-      setReleasePriority(parentRunId, args.dryRun);
     }
     if (parentRunId) {
       console.log(`Parent run: https://github.com/openclaw/openclaw/actions/runs/${parentRunId}`);
@@ -2104,11 +2028,6 @@ async function main() {
         `node scripts/full-release-validation-at-sha.mjs --reconcile-request ${JSON.stringify(requestPath)}`,
       );
     }
-  }
-
-  // Never leave hosted-runner priority set once this operation ends, sealed or not.
-  if (parentRunId) {
-    setReleasePriority(parentRunId, args.dryRun, "clear");
   }
 
   const createdRefs = [

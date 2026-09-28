@@ -22,12 +22,18 @@ import {
   resolveManagedServiceNodeRunner,
   summarizeGatewayServiceLayout,
 } from "../../daemon/service-layout.js";
+import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import {
   hasGatewayServiceDefinitionOverrides,
   type GatewayServiceCommandConfig,
   type GatewayServiceState,
+  type GatewayServiceUnitInspection,
 } from "../../daemon/service-types.js";
-import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import {
+  readGatewayServiceState,
+  resolveGatewayService,
+  type GatewayService,
+} from "../../daemon/service.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
@@ -45,6 +51,7 @@ import {
   createFreeBsdPkgOwnershipInspection,
   type FreeBsdPkgOwnershipInspection,
 } from "../../infra/update-freebsd-pkg-ownership.js";
+import type { UPDATE_PREFLIGHT_DETAILS } from "../../infra/update-preflight-details.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
@@ -72,13 +79,18 @@ export type ManagedServiceRootRedirect = {
 export class GatewayServiceUpdateOwnershipError extends Error {
   readonly failureFacts: UpdateFailureFact[];
 
-  constructor(message: string, cause: unknown, inspectionReason?: ServiceInspectionReason) {
+  constructor(
+    message: string,
+    cause: unknown,
+    inspectionReason?: ServiceInspectionReason,
+    code?: keyof typeof UPDATE_PREFLIGHT_DETAILS,
+  ) {
     super(inspectionReason ? formatServiceInspectionReason(inspectionReason) : message, { cause });
     this.name = "GatewayServiceUpdateOwnershipError";
     this.failureFacts = [
       createUpdateFailureFact({
         check: "managed-service",
-        code: inspectionReason ?? "service-ownership-unverified",
+        code: inspectionReason ?? code ?? "service-ownership-unverified",
         message: this.message,
       }),
     ];
@@ -99,6 +111,7 @@ export function assertGatewayServiceAdmissionUnchanged(
       serviceUpdateVerdict.kind === "unavailable"
         ? serviceUpdateVerdict.inspectionReason
         : undefined,
+      serviceUpdateVerdict.kind === "unavailable" ? undefined : "service-ownership-changed",
     );
   }
   if (
@@ -111,6 +124,8 @@ export function assertGatewayServiceAdmissionUnchanged(
     throw new GatewayServiceUpdateOwnershipError(
       "Gateway service definition changed after database admission; retry against its current configuration.",
       undefined,
+      undefined,
+      "service-definition-changed",
     );
   }
 }
@@ -133,7 +148,12 @@ export function assertGatewayServiceManagementAllowedForUpdate(
     assertGatewayServiceMutationAllowed("manage the gateway service during update", env);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    throw new GatewayServiceUpdateOwnershipError(message, err);
+    throw new GatewayServiceUpdateOwnershipError(
+      message,
+      err,
+      undefined,
+      "service-mutation-refused",
+    );
   }
 }
 
@@ -151,10 +171,7 @@ function serviceInspectionWarningMessage(state: GatewayServiceState): string {
     return `${GATEWAY_SERVICE_INSPECTION_WARNING} ${formatServiceInspectionReason(state.inspectionReason)}`;
   }
   if (process.platform === "freebsd") {
-    return (
-      `${GATEWAY_SERVICE_INSPECTION_WARNING} ` +
-      "On FreeBSD, use the Gateway's rc.d or foreground process owner for service management."
-    );
+    return `${GATEWAY_SERVICE_INSPECTION_WARNING} On FreeBSD, use the Gateway's rc.d or foreground process owner for service management.`;
   }
   const runtime = state.runtime;
   const tasksCurrent = runtime?.systemd?.tasksCurrent;
@@ -208,6 +225,11 @@ export async function inspectManagedGatewayServiceBeforeUpdate(params: {
         "free"
       ? { kind: "absent" }
       : unavailable();
+  }
+  // Direct Windows actions are readable, but the updater cannot restore them
+  // through its managed CMD/VBS definition and control owners.
+  if (process.platform === "win32" && !command.sourcePath) {
+    return unavailable();
   }
   if (
     !params.allowIncompleteInspection &&
@@ -267,6 +289,39 @@ export async function inspectManagedGatewayServiceBeforeUpdate(params: {
     : { kind: "unresolved", root, fingerprint };
 }
 
+/** Update ownership requires the effective loaded command and an admitted manager route. */
+export function readGatewayServiceStateForUpdate(
+  service: GatewayService,
+  env: NodeJS.ProcessEnv | undefined,
+  timeoutMs?: number,
+  inspection?: { managerUid: number | undefined; assertCurrent: () => void },
+): Promise<GatewayServiceState> {
+  const read = (loadForInspection?: GatewayServiceUnitInspection) =>
+    readGatewayServiceState(service, {
+      env,
+      requireEffective: true,
+      requireLoadedCommand: true,
+      loadForInspection,
+      validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
+      timeoutMs,
+    });
+  if (process.platform !== "linux" || inspection?.managerUid === undefined) {
+    return read();
+  }
+  const { managerUid } = inspection;
+  // systemd may collect a stopped unit; loading its metadata retains both owners.
+  return withGatewayServiceOperationLock(env ?? process.env, async (assertNative) => {
+    const assertCurrent = () => {
+      assertNative();
+      inspection.assertCurrent();
+    };
+    assertCurrent();
+    const state = await read({ managerUid, assertCurrent, assertReadCurrent: assertNative });
+    assertCurrent();
+    return state;
+  });
+}
+
 /** Recorded launchers cannot select an update's package, Node, or state without live inspection. */
 export async function readManagedGatewayServiceForUpdate(
   env: NodeJS.ProcessEnv,
@@ -277,12 +332,7 @@ export async function readManagedGatewayServiceForUpdate(
     let service: ReturnType<typeof resolveGatewayService> | undefined;
     try {
       service = resolveGatewayService();
-      const state = await readGatewayServiceState(service, {
-        env,
-        requireEffective: true,
-        requireLoadedCommand: true,
-        validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
-      });
+      const state = await readGatewayServiceStateForUpdate(service, env);
       if (!state.command) {
         return null;
       }

@@ -1,4 +1,5 @@
 import type { Result } from "@openclaw/normalization-core/result";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -13,13 +14,13 @@ import {
   killAllControlledSubagentRuns,
   resolveSubagentController,
 } from "../../agents/subagents/registry/subagent-control.js";
+import { SUBAGENT_KILL_TASK_ERROR } from "../../agents/subagents/registry/subagent-control.types.js";
 import {
   getLatestLiveSubagentRunByChildSessionKey,
   isSubagentRunQueued,
 } from "../../agents/subagents/registry/subagent-registry-read.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isAgentEventLifecycleGenerationCurrent } from "../../infra/agent-events.js";
-import { SUBAGENT_KILL_TASK_ERROR } from "../../tasks/detached-task-runtime-contract.js";
 import { createChatAbortOps } from "../chat-abort-ops.js";
 import {
   abortChatRunById,
@@ -28,7 +29,6 @@ import {
   type ChatAbortOps,
 } from "../chat-abort.js";
 import { abortQueuedChatTurnById } from "../chat-queued-turns.js";
-// Cancellation orchestration across active, queued, pending, and worker runs.
 import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
@@ -51,15 +51,12 @@ import {
   abortedPartialPersistenceError,
   captureAbortedPartial,
   deferAbortedPartialPersistence,
-  withAbortedPartialPersistenceWarning,
+  withQueuedCollectorWarning,
+  type QueuedCollectorAbortOutcome,
   type AbortedPartialSnapshot,
   type ChatAbortOrigin,
   type ChatAbortSessionSnapshot,
 } from "./chat-aborted-partial.js";
-import {
-  normalizeOptionalChatText as normalizeOptionalText,
-  normalizeUnknownChatText as normalizeUnknownText,
-} from "./chat-text-normalization.js";
 import { persistAbortedPartials } from "./chat-transcript-persistence.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -93,7 +90,7 @@ export async function abortControlledSubagents(params: {
 }
 
 export function descendantAbortError(
-  result: Awaited<ReturnType<typeof abortControlledSubagents>> | undefined,
+  result: Awaited<ReturnType<typeof abortControlledSubagents>>,
   subject: "Parent run" | "Session",
 ) {
   return result && result.status !== "ok"
@@ -104,31 +101,12 @@ export function descendantAbortError(
     : undefined;
 }
 
-type QueuedCollectorAbortOutcome = Result<
-  { aborted: boolean; runIds: string[]; warning?: string },
-  ErrorShape
->;
-
-function withQueuedCollectorWarning(
-  outcome: QueuedCollectorAbortOutcome,
-  warning: string,
-): QueuedCollectorAbortOutcome {
-  return outcome.ok
-    ? { ok: true, value: { ...outcome.value, warning } }
-    : { ok: false, error: withAbortedPartialPersistenceWarning(outcome.error, warning) };
-}
-
 /** Queued collectors retain scheduler ownership while Gateway admission is still pending. */
 export function abortQueuedCollectorSession(
   params: Omit<ChatSessionAbortParams, "ops"> & { runId?: string },
 ): Promise<QueuedCollectorAbortOutcome> | undefined {
   const entry = getLatestLiveSubagentRunByChildSessionKey(params.sessionKey);
-  if (
-    !entry ||
-    !isSubagentRunQueued(entry) ||
-    params.excludeRunIds?.has(entry.runId) ||
-    (params.runId && entry.runId !== params.runId)
-  ) {
+  if (!entry || !isSubagentRunQueued(entry) || (params.runId && entry.runId !== params.runId)) {
     return undefined;
   }
   const workerCancellation = captureWorkerInferenceForSession({
@@ -201,6 +179,7 @@ export function abortQueuedCollectorSession(
         "Queued collector cancellation was not published; retry Stop.",
       ),
     };
+    let failure: { error: unknown } | undefined;
     try {
       assertCurrent();
       const projection = getSessionRowProjection(params.context);
@@ -334,31 +313,29 @@ export function abortQueuedCollectorSession(
         },
       );
     } catch (error) {
+      failure = { error };
       outcome = {
         ok: false,
         error: errorShapeFromError(ErrorCodes.INVALID_REQUEST, error),
       };
-    } finally {
-      // Gateway cancellation already consumed these buffers. Preserve their snapshots
-      // after later owner failures; the transcript writer still fences the session.
-      if (sessionAbort?.ok) {
-        try {
-          const warning = await sessionAbort.value.plan.finish(sessionAbort.value.result);
-          if (warning) {
-            outcome = withQueuedCollectorWarning(outcome, warning);
-          }
-        } catch (error) {
-          if (outcome.ok) {
-            outcome = {
-              ok: false,
-              error: errorShapeFromError(ErrorCodes.INVALID_REQUEST, error),
-            };
-          } else {
-            params.context.logGateway.warn(
-              "chat.abort could not persist captured output after cancellation was rejected",
-            );
-          }
+    }
+    // Gateway cancellation already consumed these buffers. Preserve their snapshots
+    // after later owner failures; the transcript writer still fences the session.
+    if (sessionAbort?.ok) {
+      try {
+        const warning = await sessionAbort.value.plan.finish(sessionAbort.value.result);
+        if (warning) {
+          outcome = withQueuedCollectorWarning(outcome, warning);
         }
+      } catch (error) {
+        if (outcome.ok) {
+          throw error;
+        }
+        throw new AggregateError(
+          [failure?.error ?? outcome.error, error],
+          "Queued collector cancellation and persistence failed",
+          { cause: error },
+        );
       }
     }
     return outcome;
@@ -370,7 +347,7 @@ export function captureWorkerInferenceForSession(params: {
   sessionId?: string;
   runId?: string;
 }): WorkerInferenceCancellation | undefined {
-  const sessionId = normalizeOptionalText(params.sessionId);
+  const sessionId = normalizeOptionalString(params.sessionId);
   if (!sessionId) {
     return undefined;
   }
@@ -400,7 +377,6 @@ type ChatSessionAbortParams = {
   cascadeDescendants?: true;
   /** Exact lifecycle owners may include hidden and side runs for this one session. */
   includeProtectedRuns?: boolean;
-  excludeRunIds?: ReadonlySet<string>;
   /** Captures exact registrations before cancellation can remove them. */
   onControllerTargets?: (
     targets: Array<{ runId: string; entry: ChatAbortControllerEntry }>,
@@ -435,7 +411,6 @@ function prepareChatSessionAbort(
     agentId: params.agentId,
     defaultAgentId: params.defaultAgentId,
     requester: params.requester,
-    excludeRunIds: params.excludeRunIds,
   });
   const {
     authorizedRuns,
@@ -453,7 +428,6 @@ function prepareChatSessionAbort(
     requester: params.requester,
     preserveSideRuns: params.preserveSideRuns,
     includeProtectedRuns: params.includeProtectedRuns,
-    excludeRunIds: params.excludeRunIds,
   });
   const resolvePendingRuns = (keyPrefix: string) =>
     resolveAuthorizedPreRegisteredRunsForSessionKeys({
@@ -466,7 +440,6 @@ function prepareChatSessionAbort(
       keyPrefix,
       preserveSideRuns: params.preserveSideRuns,
       includeProtectedRuns: params.includeProtectedRuns,
-      excludeRunIds: params.excludeRunIds,
     });
   const pendingAgent = resolvePendingRuns("agent:");
   const pendingChat = resolvePendingRuns(PENDING_CHAT_SEND_DEDUPE_PREFIX);
@@ -502,6 +475,7 @@ function prepareChatSessionAbort(
   // lifecycle path must preserve hidden or explicitly preserved Gateway runs.
   const canCancelWorkerSession = !isLifecycleAbort || !hasProtectedLifecycleRuns;
   let snapshots: AbortedPartialSnapshot[] = [];
+  let workerCancellationPersistence: Promise<string[]> | undefined;
   // Reentrant cancellation can revoke the next effect. Keep committed outcomes
   // available to the partial-persistence owner even when abort() then throws.
   const result: ChatSessionAbortResult = { aborted: false, runIds: [], unauthorized: false };
@@ -510,6 +484,15 @@ function prepareChatSessionAbort(
     if (!result.runIds.includes(runId)) {
       result.runIds.push(runId);
     }
+  };
+  const cancelWorker = () => {
+    workerCancellationPersistence = workerCancellation?.cancel({
+      assertCurrent: params.assertCurrent,
+      onCancelled: recordRun,
+    });
+    // The synchronous abort owner must return before persistence settles. Observe
+    // rejection now, but finish() still joins the original operation and its cause.
+    void workerCancellationPersistence?.catch(() => undefined);
   };
   const abortAdditional = () => {
     if (canRunLifecycleCleanup && params.onAuthorizedAfterQueuedAbort) {
@@ -534,7 +517,7 @@ function prepareChatSessionAbort(
         return result;
       }
       params.assertCurrent?.();
-      workerCancellation?.cancel({ assertCurrent: params.assertCurrent, onCancelled: recordRun });
+      cancelWorker();
       return result;
     }
     snapshots = authorizedRuns.flatMap(({ runId, entry }) => {
@@ -631,7 +614,7 @@ function prepareChatSessionAbort(
           runId,
           stopReason,
           endedAt,
-          attemptId: normalizeUnknownText(payload.attemptId),
+          attemptId: normalizeOptionalString(payload.attemptId),
           expectedPayload: payload,
         })
       ) {
@@ -640,7 +623,7 @@ function prepareChatSessionAbort(
     }
     if (params.requester.isAdmin && canCancelWorkerSession) {
       params.assertCurrent?.();
-      workerCancellation?.cancel({ assertCurrent: params.assertCurrent, onCancelled: recordRun });
+      cancelWorker();
     }
     return result;
   };
@@ -655,16 +638,35 @@ function prepareChatSessionAbort(
     result,
     abort: abortAuthorizedRuns,
     async finish(outcome: Pick<ChatSessionAbortResult, "aborted" | "runIds">) {
-      let warning: string | undefined;
-      if (outcome.aborted && snapshots.length > 0) {
-        const abortedRunIds = new Set(outcome.runIds);
-        warning = await persistAbortedPartials({
-          context: params.context,
-          snapshots: snapshots.filter((snapshot) => abortedRunIds.has(snapshot.runId)),
-        });
+      const abortedRunIds = new Set(outcome.runIds);
+      const [worker, partial] = await Promise.allSettled([
+        workerCancellationPersistence,
+        outcome.aborted && snapshots.length > 0
+          ? persistAbortedPartials({
+              context: params.context,
+              snapshots: snapshots.filter((snapshot) => abortedRunIds.has(snapshot.runId)),
+            })
+          : undefined,
+      ]);
+      // A captured session failure can also surface through partial persistence.
+      const failures = new Set<unknown>();
+      for (const settled of [worker, partial]) {
+        if (settled.status === "rejected") {
+          failures.add(settled.reason);
+        }
       }
       if (params.session && !params.session.ok) {
-        throw params.session.error;
+        failures.add(params.session.error);
+      }
+      const warning = partial.status === "fulfilled" ? partial.value : undefined;
+      if (failures.size > 0) {
+        const errors = [...failures];
+        throw abortedPartialPersistenceError(
+          errors.length === 1
+            ? errors[0]
+            : new AggregateError(errors, "Chat cancellation persistence failed"),
+          warning,
+        );
       }
       return warning;
     },
@@ -717,9 +719,9 @@ export async function abortChatRunsForSessionKeyWithPartials(
     if (!failure) {
       throw error;
     }
-    params.context.logGateway.warn(
-      "chat.abort could not persist captured output after cancellation was rejected",
-    );
+    throw new AggregateError([failure.error, error], "Chat cancellation and persistence failed", {
+      cause: error,
+    });
   }
   if (failure) {
     throw abortedPartialPersistenceError(failure.error, warning);

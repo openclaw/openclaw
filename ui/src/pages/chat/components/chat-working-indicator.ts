@@ -62,10 +62,9 @@ export function renderChatWorkingIndicator(
   const waitingApproval = options.waitingApproval === true;
   const neutral = (options.mascot ?? currentThemeBranding().mascot) === "none";
   const continuation = options.presentation === "continuation";
-  const preamble = !waitingApproval && !options.startupLabel ? part.preamble : undefined;
   const statusLabel = waitingApproval
     ? t("chat.waitingForApproval")
-    : options.startupLabel || preamble || t("common.working");
+    : options.startupLabel || t("common.working");
   const working = !waitingApproval && !options.startupLabel;
   // Providers report exact usage at response boundaries, not per text delta.
   // Keep the latest count visible while the run continues through tools.
@@ -97,17 +96,7 @@ export function renderChatWorkingIndicator(
             `
       }
       <span class="chat-working-indicator__status">
-        <span
-          title=${preamble ?? nothing}
-          class=${
-            preamble
-              ? "chat-working-indicator__preamble"
-              : working && !continuation
-                ? "sr-only"
-                : ""
-          }
-          >${statusLabel}</span
-        >
+        <span class=${working && !continuation ? "sr-only" : ""}>${statusLabel}</span>
         ${
           waitingApproval
             ? nothing
@@ -126,7 +115,7 @@ export function renderChatWorkingIndicator(
                   >${outputTokensLabel(outputTokens)}</span
                 >
               `
-            : working && !preamble
+            : working
               ? html`
                   <openclaw-working-phrase
                     aria-hidden="true"
@@ -156,15 +145,13 @@ export function renderTurnRecapRow(
     typeof recap.outputTokens === "number" ? outputTokensLabel(recap.outputTokens) : null;
   return html`
     <div
-      class="chat-tasks-status chat-turn-recap ${
-        continuation ? "chat-turn-recap--continuation" : ""
-      }"
+      class="chat-turn-recap ${continuation ? "chat-turn-recap--continuation" : ""}"
       role="status"
     >
       ${
         continuation
           ? nothing
-          : html`<span class="chat-tasks-status__claw" aria-hidden="true"
+          : html`<span class="chat-turn-recap__claw" aria-hidden="true"
               >${currentThemeBranding().mascot === "none" ? icons.mark : icons.claw}</span
             >`
       }
@@ -173,7 +160,7 @@ export function renderTurnRecapRow(
         tokens === null
           ? nothing
           : html`
-              <span class="chat-tasks-status__sep" aria-hidden="true">·</span>
+              <span class="chat-turn-recap__sep" aria-hidden="true">·</span>
               <span>${tokens}</span>
             `
       }
