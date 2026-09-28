@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionStoreMigrationRequiredError } from "../config/sessions/migration-required.js";
-import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
 import {
   loadExactSessionEntry,
   upsertSessionEntryCore,
@@ -36,6 +35,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
+  editAndDeleteImportedSessions,
   seedConcurrentDeferredPluginMigration,
   seedDeferredPluginSessionSource,
 } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
@@ -45,16 +45,6 @@ import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
 afterEach(() => vi.restoreAllMocks());
 
 type SessionScope = Awaited<ReturnType<typeof seedDeferredPluginSessionSource>>["scope"];
-
-async function editCanonicalSessions(scope: SessionScope, label: string) {
-  await upsertSessionEntryCore({ ...scope, sessionKey: "agent:main:kept" }, { label });
-  await deleteSessionEntryLifecycle({
-    ...scope,
-    target: { canonicalKey: "agent:main:deleted", storeKeys: ["agent:main:deleted"] },
-    archiveTranscript: false,
-    deleteTranscriptWithoutArchive: true,
-  });
-}
 
 function expectCanonicalSessions(scope: SessionScope, label: string) {
   expect(loadExactSessionEntry({ ...scope, sessionKey: "agent:main:kept" })?.entry.label).toBe(
@@ -106,7 +96,7 @@ describe("session sources needed by deferred plugin migrations", () => {
         for (const [file, bytes] of originals) {
           expect(fs.readFileSync(file)).toEqual(bytes);
         }
-        await editCanonicalSessions(scope, "changed after partial import");
+        await editAndDeleteImportedSessions(scope, "changed after partial import");
         const retried = await run();
         expect(retried.totals.importedEntries).toBe(0);
         expect(
@@ -215,7 +205,7 @@ describe("session sources needed by deferred plugin migrations", () => {
           }),
         );
 
-        await editCanonicalSessions(scope, "edited after interrupted archival");
+        await editAndDeleteImportedSessions(scope, "edited after interrupted archival");
         expect((await run()).totals.importedEntries).toBe(0);
         expectCanonicalSessions(scope, "edited after interrupted archival");
         expect(fs.readFileSync(protectedSource)).toEqual(originals.get(protectedSource));
@@ -329,7 +319,7 @@ describe("session sources needed by deferred plugin migrations", () => {
           allAgents: true,
           mode: "import",
         });
-        await editCanonicalSessions(scope, "changed after import");
+        await editAndDeleteImportedSessions(scope, "changed after import");
         const pluginRoot = state.path("fixture-plugin");
         const marker = state.path("late-migration-pending");
         const newHistoryId = missingTranscript === "appears" ? "legacy-missing" : "new-history";
@@ -557,7 +547,7 @@ describe("session sources needed by deferred plugin migrations", () => {
         closeOpenClawStateDatabaseForTest();
         expect(() => assertSessionStoreMigrationComplete({ cfg, env: state.env })).not.toThrow();
 
-        await editCanonicalSessions(scope, "changed after import");
+        await editAndDeleteImportedSessions(scope, "changed after import");
         expect((await run()).totals.importedEntries).toBe(0);
         expectCanonicalSessions(scope, "changed after import");
         for (const [file, bytes] of originals) {

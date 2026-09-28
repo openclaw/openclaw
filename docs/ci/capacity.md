@@ -76,11 +76,27 @@ three-scenario group limit and 32-job concurrency cap are unchanged. The additio
 share the existing headroom for releases, adjacent repositories, and carryover;
 the live shared bucket must still be checked before further fanout changes.
 
+Hourly extension runtime checks reuse the existing Plugin Prerelease owner,
+with its unchanged `max-parallel: 12`. The current inventory emits eight batch
+rows, eighteen Telegram file rows, and six file rows for plugins without package
+metadata and root extension tests: at most 32 Blacksmith registrations per
+admitted hourly run, including turnover. A single non-canceling schedule slot
+prevents overlap with another hourly extension run. Allowing an active run to finish and its pending replacement to start within
+one five-minute bucket reserves two complete inventories, or 64 registrations.
+Adding these to the 5,110 automatic-run envelope gives 5,174. The complete hourly
+Node inventory has a separate 77-row cap, seven above the unchanged 70-row push
+cap. Reserving those seven rows across all four main arrivals adds 28 registrations,
+for a conservative 5,202 envelope, below the 6,000 reference target. This does not
+spend the savings from removing normal CI's seven partial extension rows or
+unrelated PR extension jobs. Manual/release admission remains
+outside that envelope. Recompute the inventory and check the live organization
+bucket before further increases.
+
 The three Mac Node parts add two hosted jobs per run on `github` and `hybrid`, with no added Blacksmith registrations there. Normal Blacksmith routing adds two registrations per qualifying attempt-1 push or trusted PR; manual runs, retries, and untrusted PRs remain hosted. The matrix concurrency cap is three. GitHub's documented Enterprise macOS concurrency allowance is 50, shared with other hosted Mac workflows; it does not guarantee immediate runner admission. No runner class or repository capacity setting changes with this split.
 
 `Release npm Cache Warm` (`release-npm-cache-warm.yml`) runs a hosted Linux job on scheduled and manual triggers to prepare an npm download seed from the latest published OpenClaw package with lifecycle scripts disabled. Its concurrency group is separate from push-triggered Vitest warming, so newer pushes cannot cancel a pending seed. Scheduled runs publish from `main`, so new release branches can restore that seed through GitHub's default-branch cache scope. Each seed starts empty and contains only the current baseline dependency graph. Cross-OS release checks first restore their candidate-specific cache, then a matching runtime/suite cache, then this shared seed. Only npm's content-addressed `_cacache` directory is archived; install prefixes, OpenClaw state, npm logs, and executable `npx` caches remain fresh. The producer and consumers use the same relative archive path and enable cross-OS archives. npm retains normal freshness and integrity checks and downloads missing platform-specific packages. This adds one hosted Linux job per scheduled or manual warmer run, no jobs on pushes, and no Blacksmith registrations.
 
-Small precise PR changes use a focused Node plan. Broad, deleted or unknown changes retain compact core plus the affected plugin fallback; canonical pushes use the integration compact. Every compact planner profile is capped at 90 rows, and plugin fallback packing is capped at 50. The final canonical Node matrix also enforces 70 push rows or 130 PR rows, including precise plans. Missing changed paths, missing current planner capabilities and planner errors fail preflight instead of emitting an incomplete successful matrix. Approved historical dispatches retain their full named plans. Count every emitted matrix row and nonmatrix job, including the conservative six-row Android inventory, independently of concurrency.
+Canonical PRs use the bounded changed-owner Node plan, including protected transitive consumers and fixed smoke tests. Broad inputs retain their owner coverage; missing or unresolved selection fails preflight. Canonical pushes use the integration compact. Every compact planner profile is capped at 90 rows, and plugin fallback packing is capped at 50. The final canonical Node matrix also enforces 70 push rows, 77 main-tier validation rows, or 130 PR rows, including precise plans. Missing changed paths, missing current planner capabilities and planner errors fail preflight instead of emitting an incomplete successful matrix. Approved historical dispatches retain their full named plans. Count every emitted matrix row and nonmatrix job, including the conservative six-row Android inventory, independently of concurrency.
 
 Android retains four normal rows and six full-manual rows. Normal same-repository canonical first attempts on Blacksmith overlap all four rows; the GitHub override, retries, manual dispatches, forks, and noncanonical repositories retain two. Reassigning app lint to the existing Wear and Kotlin-lint rows adds no jobs or registrations. A three-row cap kept every job below ten minutes but left a 941-second Android span in [run 35812544118](https://github.com/openclaw/openclaw/actions/runs/35812544118), so normal runs admit all four independent rows together. The conservative six-row allowance and `4 × 150 + 21 × 210 = 5,010` registration envelope remain unchanged, below the 6,000 operating target against the 10,000 live bucket checked on September 23, 2026. This allowance does not establish physical runner availability or a measured wall-time improvement.
 
@@ -186,7 +202,7 @@ Eligible `control-ui` rows request `blacksmith-16vcpu-ubuntu-2404`; the browser-
 
 In [run 35028248954, UI job 6/7](https://github.com/openclaw/openclaw/actions/runs/35028248954/job/104582299257), the six-shard Control UI plan requested the 16-class and reported four CPUs. Setup took about 3m45s before the test command. The job recorded 168 passing tests and three failures before cancellation about 25m07s after runner startup; a test completed three seconds before cancellation. The twelve-shard plan still needs native CI timing proof, and widening the plan does not resolve those assertions or guarantee completion within the unchanged deadline.
 
-The two real-Gateway rows retain the existing 32-class request. They add one job and one possible registration when this proof lane is selected; ordinary PR admission still omits the lane. Blacksmith budgets remain 20 minutes and hosted budgets 40, with unchanged test deadlines. The earlier 16-class delivered four CPUs and canceled a progressing unsplit suite at 1,227 seconds in [run 35120538555](https://github.com/openclaw/openclaw/actions/runs/35120538555/job/104877350907). The split does not change backend, contributor-trust, retry, or cache routing.
+The two real-Gateway rows retain the existing 32-class request. They add one job and one possible registration when this proof lane is selected; PR admission retains the ordinary family when its existing Gateway/UI owner changes. Blacksmith budgets remain 20 minutes and hosted budgets 40, with unchanged test deadlines. The earlier 16-class delivered four CPUs and canceled a progressing unsplit suite at 1,227 seconds in [run 35120538555](https://github.com/openclaw/openclaw/actions/runs/35120538555/job/104877350907). The split does not change backend, contributor-trust, retry, or cache routing.
 
 The browser-extension row prepares only its native-host runtime JavaScript and assets through the existing `qaRuntime` build profile rather than rebuilding declarations and the Control UI. Both the nine-row ordinary plan and thirteen-row full-inventory plan stay inside the existing conservative registration bound. A failed-job-only retry retains its previously emitted matrix, including older plans with six Control UI shards. PR retries and hybrid push retries select hosted Ubuntu through live routing, so they may take longer; the existing 25-minute timeout is unchanged. Rerunning preflight selects eight Control UI shards for an ordinary known-inventory plan, or twelve for complete validation, plus the browser-extension row. Matrices emitted before worker metadata existed retain the two-worker fallback. Canonical push retries on the Blacksmith profile retain Blacksmith routing. The `max-parallel` ceiling stays 14 for historical targets without the named-project contract, which retain their previous width. Physical capacity must be checked separately from the registration bound.
 
@@ -432,8 +448,8 @@ main and release proofs; no committed weight baseline was changed for tiering.
 
 | Lane                            | PR coverage                                                                                             | Main/manual and full release coverage                                                                        |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| Docker seed                     | Selector, scheduler, update/Doctor/state unit and boundary owners                                       | Published-upgrade survivor on every admitted canonical main run; all six lanes on ordinary manual/release CI |
-| QA Smoke CI                     | QA plan, catalog, transport, lifecycle and channel unit suites                                          | Owner-selected main; complete supported smoke profile on manual CI                                           |
+| Docker seed                     | Existing per-lane changed owners, alongside selector/update/Doctor/state tests                          | Published-upgrade survivor on every admitted canonical main run; all six lanes on ordinary manual/release CI |
+| QA Smoke CI                     | Existing QA/channel/packaging owner scope, alongside focused unit suites                                | Owner-selected main; complete supported smoke profile on manual CI                                           |
 | Real-Gateway UI                 | UI units and mocked-Gateway browser projects                                                            | Existing selected main/manual real-Gateway inventory                                                         |
 | Built process proofs            | Browser registration, Doctor persistence, Discord multipart, SQLite store, watch and TUI boundary tests | Native host, Doctor, Discord, SQLite, watch and TUI canaries in build-artifacts                              |
 | Doctor refusal / Codex recovery | Doctor admission/repair and harness replacement/cancellation boundaries                                 | Complete files in main/manual Node plans                                                                     |
@@ -752,10 +768,15 @@ complete measurements reached 578 and 491 seconds. Hybrid and hosted already
 split those owners. Standalone agent support retains its existing whole-group
 contract.
 
-Blacksmith-profile PRs changing the compact planner or committed timing file run
-the complete compact core plan: focused planner tests alone cannot measure the
-resulting packing. Hosted profiles retain precise changed-test targeting. This
-uses the existing matrices and caps; plugin fallback keeps its separate owner.
+PRs changing the compact planner or timing inputs now select their owner tests,
+affected transitive import consumers, protected regressions, and fixed smoke
+set on every backend. The complete compact
+inventory still runs hourly on main; Full Release Validation retains its full
+named plan. Changed-owner rows target at most 150 estimated test seconds while
+preserving whole files, existing runner classes, and the 130-row PR cap. A single
+indivisible file or canonical group can exceed that target. These admission estimates do not prove
+job wall time or setup/build/queue savings; before/after replay evidence belongs
+with the change's landing evidence.
 
 The September 16 refresh retained three families' previous complete timing entries to avoid hosted expansion:
 `agentic-gateway-server-isolated`, `agentic-gateway-core-runtime`, and

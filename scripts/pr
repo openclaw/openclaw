@@ -544,8 +544,9 @@ Usage:
     Repeated merge-run reconciles retained outcomes; it never retries an uncertain dispatch.
   scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery [--replacement-head <SHA>] [--body-file <path>] [--legacy-refusal <evidence-directory>] [--pre-dispatch-refusal <evidence-directory>]
     Explicitly authorize one new attempt after inspecting the retained outcome and remote history.
-    Defaults to the retained head; replacement requires an explicitly approved full lowercase 40-character SHA,
-    freshly authored exact-head review/preparation and completed CI proof. Never rebases automatically.
+    Defaults to the retained head; replacement requires an explicitly selected full lowercase 40-character SHA,
+    freshly authored exact-head review/preparation and completed CI proof. Standing landing authority covers
+    a replacement repairing the same scope; new scope or another method needs authorization. Never rebases automatically.
     Keeps prior evidence and reruns admission; requires the same method and no auto/queue/admin route.
     --cancel-auto instead retires the exact accepted or uncertain non-queue auto request before head repair.
     Cancels a matching active request once, or records an already absent request without sending cancellation.

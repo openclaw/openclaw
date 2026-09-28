@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as gatewayService from "../../daemon/service.js";
+import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import * as ports from "../../infra/ports-inspect.js";
 import * as updateLedger from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
@@ -324,7 +325,11 @@ describe("post-update failure recovery observation", () => {
               : {}),
           });
         }),
-      ).rejects.toBe(cleanup);
+      ).rejects.toSatisfy((error: unknown) => {
+        expect(error).toBeInstanceOf(CommandProcessCleanupError);
+        expect(collectNestedErrorCandidates(error)).toContain(cleanup);
+        return true;
+      });
       expect(updateLedger.getUpdateRun(run.runId, { env })?.status).toBe("running");
       expect(mocks.printResult).not.toHaveBeenCalled();
       expect(verifyUpdatedGateway).not.toHaveBeenCalled();

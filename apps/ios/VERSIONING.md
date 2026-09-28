@@ -132,6 +132,15 @@ Missing or mismatched artifacts fail before upload; the store path never falls
 back to a changelog. A changed public baseline during preparation stops the
 attempt before its first store write.
 
+Generation first shortlists up to ten changed files from a compact inventory and
+commit subjects. Focused endpoint diffs support the notes; current source and
+build configuration check feature availability. Localization catalogs contribute
+structural summaries instead of raw translation diffs. A separate factual review
+can request one correction. Each stage reports progress, with at most five model
+requests per audience and a five-minute generation budget. Exhausted budgets or
+unapproved notes stop preparation before upload. Retrying a saved, valid artifact
+reuses its exact text without another model call.
+
 After Apple processes the IPA, the pipeline records its source ref, writes
 What's New, selects that exact build, and reads both back. For the sole first
 App Store version, Apple has no What's New field: the pipeline retains the

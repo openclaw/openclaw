@@ -95,6 +95,7 @@ describe("process supervisor", () => {
 
     const exitPromise = run.wait();
     await vi.advanceTimersByTimeAsync(5);
+    await vi.advanceTimersToNextTimerAsync();
 
     const exit = await exitPromise;
     const expectedTimeoutSignal = process.platform === "win32" ? "SIGKILL" : "SIGTERM";
@@ -124,6 +125,7 @@ describe("process supervisor", () => {
     const exitPromise = run.wait();
 
     await vi.advanceTimersByTimeAsync(5);
+    await vi.advanceTimersToNextTimerAsync();
     expect(adapter.killMock).toHaveBeenCalledTimes(1);
     expect(adapter.killMock).toHaveBeenCalledWith("SIGKILL");
 
@@ -235,6 +237,7 @@ describe("process supervisor", () => {
 
     expect(createChildAdapterMock).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(25);
+    await vi.advanceTimersToNextTimerAsync();
     const constructionState = await Promise.race([
       pendingRun.then(() => "settled" as const),
       Promise.resolve().then(() => "pending" as const),
@@ -744,6 +747,7 @@ describe("process supervisor", () => {
 
     const exitPromise = run.wait();
     await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersToNextTimerAsync();
 
     const exit = await exitPromise;
     expect(adapter.killMock).toHaveBeenCalledWith(
@@ -753,7 +757,50 @@ describe("process supervisor", () => {
     expect(exit.timedOut).toBe(true);
   });
 
-  it("classifies a natural close after a missed overall deadline as timed out", async () => {
+  it("preserves a queued successful exit when the deadline timer runs first", async () => {
+    vi.useFakeTimers();
+    const adapter = createStubChildAdapter();
+    createChildAdapterMock.mockResolvedValue(adapter);
+
+    const run = await spawnChild(createProcessSupervisor(), {
+      argv: createSilentIdleArgv(),
+      timeoutMs: 10,
+    });
+
+    vi.advanceTimersByTime(10);
+    adapter.settle(0);
+    await expect(run.wait()).resolves.toMatchObject({
+      reason: "exit",
+      exitCode: 0,
+      timedOut: false,
+    });
+    await vi.runOnlyPendingTimersAsync();
+    expect(adapter.killMock).not.toHaveBeenCalled();
+  });
+
+  it("refreshes an expired no-output timer before its deferred decision", async () => {
+    vi.useFakeTimers();
+    const adapter = createStubChildAdapter();
+    createChildAdapterMock.mockResolvedValue(adapter);
+
+    const run = await spawnChild(createProcessSupervisor(), {
+      argv: createSilentIdleArgv(),
+      noOutputTimeoutMs: 10,
+    });
+
+    vi.advanceTimersByTime(10);
+    adapter.emitStdout("progress");
+    await vi.advanceTimersByTimeAsync(1);
+    expect(adapter.killMock).not.toHaveBeenCalled();
+    adapter.settle(0);
+    await expect(run.wait()).resolves.toMatchObject({
+      reason: "exit",
+      stdout: "progress",
+      timedOut: false,
+    });
+  });
+
+  it("preserves a natural close observed after a missed overall deadline", async () => {
     vi.useFakeTimers();
     const nowSpy = vi.spyOn(performance, "now").mockReturnValue(1_000);
     const adapter = createStubChildAdapter();
@@ -772,11 +819,11 @@ describe("process supervisor", () => {
 
     const exit = await exitPromise;
     expect(adapter.killMock).not.toHaveBeenCalled();
-    expect(exit.reason).toBe("overall-timeout");
-    expect(exit.timedOut).toBe(true);
+    expect(exit.reason).toBe("exit");
+    expect(exit.timedOut).toBe(false);
   });
 
-  it("uses the refreshed no-output deadline when a missed timer races natural close", async () => {
+  it("preserves natural close observed after the refreshed no-output deadline", async () => {
     vi.useFakeTimers();
     const nowSpy = vi.spyOn(performance, "now").mockReturnValue(1_000);
     const adapter = createStubChildAdapter();
@@ -798,9 +845,9 @@ describe("process supervisor", () => {
 
     const exit = await exitPromise;
     expect(adapter.killMock).not.toHaveBeenCalled();
-    expect(exit.reason).toBe("no-output-timeout");
-    expect(exit.noOutputTimedOut).toBe(true);
-    expect(exit.timedOut).toBe(true);
+    expect(exit.reason).toBe("exit");
+    expect(exit.noOutputTimedOut).toBe(false);
+    expect(exit.timedOut).toBe(false);
   });
 
   it("can stream output without retaining it in RunExit payload", async () => {

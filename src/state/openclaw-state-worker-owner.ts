@@ -17,7 +17,9 @@ import {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { isStateDatabaseReadAdmissionInvalidatedError } from "./openclaw-state-db-async-lifecycle.js";
 import {
+  captureOpenClawStateDatabaseReadAdmission,
   publishOpenClawStateDatabaseWorkerAdmission,
   registerOpenClawStateDatabaseAsyncResource,
   registerOpenClawStateDatabaseLifecycleListener,
@@ -382,8 +384,31 @@ function createSharedStateWorkerOwner() {
       }
       let entry: Entry | undefined;
       for (;;) {
-        for (const candidate of stores) {
+        for (const candidate of new Set([...stores, ...retiring.keys()])) {
+          if (matches(candidate, admission.identity)) {
+            try {
+              candidate.databaseAdmission.assertCurrent();
+            } catch (error) {
+              if (
+                !isStateDatabaseReadAdmissionInvalidatedError(error) ||
+                hasActiveActorOperations(candidate)
+              ) {
+                throw error;
+              }
+              // A revoked generation can leave a lazy actor after inode reuse.
+              // Join all of its clients before admitting the replacement file.
+              await candidate.opening.then(
+                () =>
+                  candidate.actor
+                    ? retireActor(candidate.actor, candidate.context.admission.identity)
+                    : retire(candidate),
+                () => retire(candidate),
+              );
+              assertAdmission();
+            }
+          }
           if (
+            stores.has(candidate) &&
             matches(candidate, admission.identity) &&
             (candidate.context.existingSchemaPath !== context.existingSchemaPath ||
               candidate.source.moduleUrl.href !== source.moduleUrl.href)
@@ -450,6 +475,11 @@ function createSharedStateWorkerOwner() {
         }
       }
       if (!entry) {
+        assertAdmission();
+        // Retain the database generation separately from the caller's lexical
+        // schema scope, which may end while this actor remains reusable.
+        const databaseAdmission = captureOpenClawStateDatabaseReadAdmission(admission.databasePath);
+        assertAdmission();
         const openingGuard = captureOpenClawStateWorkerOpeningGuard(context, assertCurrent);
         const open = async () => {
           try {
@@ -476,6 +506,7 @@ function createSharedStateWorkerOwner() {
         const admitted: Entry = {
           source,
           context,
+          databaseAdmission,
           openingAdmission: openingGuard.admission,
           existingOnly,
           activeOperations: 0,

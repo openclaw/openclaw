@@ -267,7 +267,7 @@ it("rejects parent authority revoked while durable input preparation awaits", as
       items: [{ runId: proof.runId, state: "cancelled" }],
     });
     expect(listSessionPendingInputReceipts(proof.scope, { runIds: [proof.runId] })).toEqual([
-      { runId: proof.runId, state: "pending" },
+      { runId: proof.runId, state: "pending", cancelled: true },
     ]);
     expect(agentCommandMock).not.toHaveBeenCalled();
     expect(proof.finalEffect).not.toHaveBeenCalled();

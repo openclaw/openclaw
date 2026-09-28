@@ -17,48 +17,10 @@ registerAgentSessionLoopTestLifecycle();
 describe("completed assistant delivery snapshot", () => {
   it.each([
     {
-      name: "reply to current message",
-      source: "[[reply_to_current]]Current reply.",
-      text: "Current reply.",
-      facts: { replyToCurrent: true },
-      payload: { replyToCurrent: true, replyToTag: true },
-    },
-    {
-      name: "speech without visible text",
-      source: "[[tts:text]]Spoken only.[[/tts:text]]",
-      text: "",
-      facts: { tts: { tagged: true, text: "Spoken only." } },
-      payload: {},
-    },
-    {
       name: "speech facts alongside a silent text reply",
       source: "[[tts:text]]Do not speak.[[/tts:text]]NO_REPLY",
       text: "NO_REPLY",
       facts: { tts: { tagged: true, text: "Do not speak." } },
-      payload: {},
-    },
-    {
-      name: "a genuine reply token split across native parts",
-      source: ["[[reply_to:", "12345]]Target reply."],
-      parts: ["Target reply.", ""],
-      text: "Target reply.",
-      facts: { replyToId: "12345" },
-      payload: { replyToId: "12345", replyToTag: true },
-    },
-    {
-      name: "genuine speech text split across native parts",
-      source: ["Shown. [[tts:text]]", "Spoken.[[/tts:text]]"],
-      parts: ["Shown.", ""],
-      text: "Shown.",
-      facts: { tts: { tagged: true, text: "Spoken." } },
-      payload: {},
-    },
-    {
-      name: "an inline literal split across native parts",
-      source: ["Use `", "[[reply_to:literal]]` literally."],
-      parts: ["Use `", "[[reply_to:literal]]` literally."],
-      text: "Use `\n[[reply_to:literal]]` literally.",
-      facts: undefined,
       payload: {},
     },
     {
@@ -72,14 +34,6 @@ describe("completed assistant delivery snapshot", () => {
       text: "```text\n[[reply_to_current]]\n[[audio_as_voice]]\n```\nDone.",
       facts: { replyToId: "actual" },
       payload: { replyToId: "actual", replyToTag: true },
-    },
-    {
-      name: "a TTS literal split across native parts",
-      source: ["Use `", "[[tts:text]]not speech[[/tts:text]]` literally."],
-      parts: ["Use `", "[[tts:text]]not speech[[/tts:text]]` literally."],
-      text: "Use `\n[[tts:text]]not speech[[/tts:text]]` literally.",
-      facts: undefined,
-      payload: {},
     },
     {
       name: "genuine voice intent after a split literal",

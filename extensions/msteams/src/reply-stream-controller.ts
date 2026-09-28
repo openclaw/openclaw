@@ -374,11 +374,7 @@ export function createTeamsReplyStreamController(params: {
         progressDraft.markFinalReplyStarted();
       }
       if (replacementSettlementPending) {
-        if (!replacementFinalPending) {
-          deferredReplacementEntries.push({ kind: "payload", payload });
-          return undefined;
-        }
-        if (!payload.text) {
+        if (!replacementFinalPending || !payload.text) {
           // The native stream activity was created before final payloads and
           // remains the provider-visible root. Preserve deferred block order
           // after that root; sending early would leak content after Stop.

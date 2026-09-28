@@ -82,6 +82,7 @@ import {
 import { handleChatSend, handleTrustedInternalChatSend } from "./chat-send-handler.js";
 import { readChatSendDedupeResponse } from "./chat-send-pre-admission.js";
 import {
+  createChatDirectiveReplyBackend,
   createChatDirectiveSuiteResources,
   expectClaimOnlyTranscriptMedia,
   readChatDirectiveConfig,
@@ -987,41 +988,16 @@ function beginActiveReplyOperation(params: {
   return operation;
 }
 
-type TestReplyBackend = Parameters<ReplyOperation["attachBackend"]>[0];
-type TestQueueMessage = NonNullable<TestReplyBackend["queueMessage"]>;
-
-function beginMessageInjectionOperation(params: {
-  bindToolAuthority?: boolean;
-  cancel?: TestReplyBackend["cancel"];
-  isStopped?: TestReplyBackend["isStopped"];
-  isStreaming?: TestReplyBackend["isStreaming"];
-  legacy?: boolean;
-  originatingLeafEntryId?: string | null;
-  queueMessage: TestQueueMessage;
-  runId?: string;
-  supportsQueueMessageImages?: boolean;
-  taskSuggestionDeliveryMode?: "gateway";
-}) {
-  const backend = {
-    kind: "embedded" as const,
-    cancel: params.cancel ?? (() => {}),
-    runId: params.runId,
-    supportsQueueMessageImages: params.supportsQueueMessageImages,
-    taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
-    ...(params.legacy
-      ? {
-          queueMessage: params.queueMessage,
-          isStopped: params.isStopped,
-          isStreaming: params.isStreaming,
-        }
-      : {
-          messageInjection: { isAvailable: () => true, queueMessage: params.queueMessage },
-        }),
-  } satisfies TestReplyBackend;
+function beginMessageInjectionOperation(
+  params: Parameters<typeof createChatDirectiveReplyBackend>[0] & {
+    bindToolAuthority?: boolean;
+    originatingLeafEntryId?: string | null;
+  },
+) {
   return beginActiveReplyOperation({
     bindToolAuthority: params.bindToolAuthority ?? true,
     originatingLeafEntryId: params.originatingLeafEntryId,
-    backend,
+    backend: createChatDirectiveReplyBackend(params),
   });
 }
 

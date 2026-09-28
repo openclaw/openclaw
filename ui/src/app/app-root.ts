@@ -4,7 +4,6 @@ import type { RouteLocation, RouteNotFound } from "@openclaw/uirouter";
 import { html, nothing } from "lit";
 import { state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { readBrowserTabTarget } from "../components/browser/browser-target.ts";
 import "../components/gateway-url-confirmation.ts";
 import "../components/link-reader-hovercard-registration.ts";
 import { renderLazyElementState, renderLazyViewError } from "../components/lazy-view-error.ts";
@@ -19,10 +18,9 @@ import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import type { ChatRouteData } from "../pages/chat/route-loader.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import { applicationContext, type ApplicationContext } from "./context.ts";
-import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import {
   APPROVAL_PAGE_ELEMENT,
-  BROWSER_PANEL_ELEMENT,
+  BROWSER_DOCUMENT_ELEMENT,
   DASHBOARD_DOCUMENT_ELEMENT,
   DESKTOP_PANEL_ELEMENT,
   isOptionalElementDefined,
@@ -35,7 +33,7 @@ import {
 import { availableLinkReaders, availableLinkPreviewReaders } from "./link-reader-routing.ts";
 import { nativeEmbedHost, isNativeWebChromeHost } from "./native-web-chrome.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
-import { isBrowserPanelAvailable, isDesktopPanelAvailable } from "./panel-availability.ts";
+import { isDesktopPanelAvailable } from "./panel-availability.ts";
 import { resolveGatewayCredentialsForUrlEdit } from "./settings.ts";
 
 type FocusDashboardRouteState =
@@ -125,6 +123,12 @@ export class OpenClawApp extends OpenClawLightDomElement {
       "openclaw-native-embed",
       embedHost !== null,
     );
+    this.toggleAttribute(
+      "data-native-titlebar",
+      embedHost?.platform === "macos" &&
+        embedHost.formFactor === "desktop" &&
+        embedHost.surface === "conversation",
+    );
     if (embedHost) {
       void import("../styles/native-embed.css");
     }
@@ -139,7 +143,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
       this.requestLazyDocument(DESKTOP_PANEL_ELEMENT);
     }
     if (focusTarget?.kind === "browser") {
-      this.requestLazyDocument(BROWSER_PANEL_ELEMENT);
+      this.requestLazyDocument(BROWSER_DOCUMENT_ELEMENT);
     }
     if (focusTarget?.kind === "dashboard") {
       this.requestLazyDocument(DASHBOARD_DOCUMENT_ELEMENT);
@@ -498,37 +502,15 @@ export class OpenClawApp extends OpenClawLightDomElement {
     }
     const focusTarget = this.focusTarget;
     if (focusTarget?.kind === "browser") {
-      const tab = readBrowserTabTarget(focusTarget.tab);
-      const available = Boolean(tab && isBrowserPanelAvailable(gatewaySnapshot));
       return html`
-        <openclaw-browser-panel
-          embedded
-          style=${available ? "height: 100dvh;" : "display: none;"}
-          .client=${gatewayConnected ? gatewaySnapshot.client : null}
-          .available=${available}
-          .remoteAvailable=${available}
-          .presented=${true}
-          .sessionKey=${focusTarget.sessionKey}
-          .fixedTab=${tab}
-          .resourceBasePath=${context.resourceBasePath}
-          .authToken=${resolveControlUiAuthToken({
-            hello: gatewaySnapshot.hello,
-            settings: { token: context.gateway.connection.token },
-            password: context.gateway.connection.password,
-          })}
-        ></openclaw-browser-panel>
-        ${!gatewayConnected && gatewaySnapshot.lastError === null ? renderConnectingSplash(gatewayStartupStatus) : nothing}
-        ${available ? this.renderLazyDocumentState(BROWSER_PANEL_ELEMENT) : nothing}
-        ${
-          !available && (gatewayConnected || gatewaySnapshot.lastError)
-            ? html`<main class="connect-splash" role="status">
-                <div class="stack">
-                  <span>${t(tab ? "browser.unavailable" : "focus.unsupported")}</span>
-                  ${this.renderFocusEscape(t("common.back"))}
-                </div>
-              </main>`
-            : nothing
-        }
+        <openclaw-browser-document
+          .props=${{
+            context,
+            target: focusTarget,
+            renderEscape: (label: string) => this.renderFocusEscape(label),
+          }}
+        ></openclaw-browser-document>
+        ${this.renderLazyDocumentState(BROWSER_DOCUMENT_ELEMENT)}
       `;
     }
     // Focused terminals own the whole document. Keep the generic login gate

@@ -95,7 +95,7 @@ function expectCalledWithMessageContaining(mock: MockWithCalls, text: string): v
   expect(hasMatch).toBe(true);
 }
 
-type SetupChannels = typeof import("./onboard-channels.js").setupChannels;
+type SetupChannels = typeof import("../flows/channel-setup.js").setupChannels;
 let setupChannels: SetupChannels;
 
 type SetupChannelsOptions = Parameters<SetupChannels>[3];
@@ -593,7 +593,7 @@ vi.mock("../commands/channel-setup/plugin-install.js", async () => {
 
 describe("setupChannels", () => {
   beforeEach(async () => {
-    ({ setupChannels } = await import("./onboard-channels.js"));
+    ({ setupChannels } = await import("../flows/channel-setup.js"));
     setMinimalOnboardingRegistryForTests();
     catalogMocks.listChannelPluginCatalogEntries.mockReset();
     catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([]);

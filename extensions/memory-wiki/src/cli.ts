@@ -412,50 +412,28 @@ async function runWikiStatus(params: {
   appConfig?: OpenClawConfig;
   agentId?: string;
   json?: boolean;
+  doctor?: boolean;
 }) {
   const routeThroughGateway = shouldRouteBridgeRuntimeThroughGateway(params.config);
-  const status = routeThroughGateway
-    ? await callWikiGateway("wiki.status", params.agentId)
-    : await (async () => {
-        await syncMemoryWikiImportedSources({ config: params.config, appConfig: params.appConfig });
-        return await resolveMemoryWikiStatus(params.config, {
-          appConfig: params.appConfig,
-        });
-      })();
-  writeOutput(
-    routeThroughGateway
-      ? formatGatewayJsonOrText(status, params.json, renderMemoryWikiStatus)
-      : formatJsonOrText(status, params.json, renderMemoryWikiStatus),
-  );
-  return status;
-}
-
-async function runWikiDoctor(params: {
-  config: ResolvedMemoryWikiConfig;
-  appConfig?: OpenClawConfig;
-  agentId?: string;
-  json?: boolean;
-}) {
-  const routeThroughGateway = shouldRouteBridgeRuntimeThroughGateway(params.config);
-  const report = routeThroughGateway
-    ? await callWikiGateway("wiki.doctor", params.agentId)
-    : await (async () => {
-        await syncMemoryWikiImportedSources({ config: params.config, appConfig: params.appConfig });
-        return buildMemoryWikiDoctorReport(
-          await resolveMemoryWikiStatus(params.config, {
-            appConfig: params.appConfig,
-          }),
-        );
-      })();
-  if (!report.healthy) {
-    process.exitCode = 1;
+  let localStatus: MemoryWikiStatus | undefined;
+  if (!routeThroughGateway) {
+    await syncMemoryWikiImportedSources({ config: params.config, appConfig: params.appConfig });
+    localStatus = await resolveMemoryWikiStatus(params.config, { appConfig: params.appConfig });
   }
-  writeOutput(
-    routeThroughGateway
-      ? formatGatewayJsonOrText(report, params.json, renderMemoryWikiDoctor)
-      : formatJsonOrText(report, params.json, renderMemoryWikiDoctor),
-  );
-  return report;
+  const format = routeThroughGateway ? formatGatewayJsonOrText : formatJsonOrText;
+  if (params.doctor) {
+    const report = localStatus
+      ? buildMemoryWikiDoctorReport(localStatus)
+      : await callWikiGateway("wiki.doctor", params.agentId);
+    if (!report.healthy) {
+      process.exitCode = 1;
+    }
+    writeOutput(format(report, params.json, renderMemoryWikiDoctor));
+    return report;
+  }
+  const status = localStatus ?? (await callWikiGateway("wiki.status", params.agentId));
+  writeOutput(format(status, params.json, renderMemoryWikiStatus));
+  return status;
 }
 
 async function runWikiBridgeImport(params: {
@@ -570,7 +548,7 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
     .option("--json", "Print JSON")
     .action(async (opts: WikiJsonOptions) => {
       const { agentId, appConfig, config } = requireCommandContext();
-      await runWikiDoctor({ config, appConfig, agentId, json: opts.json });
+      await runWikiStatus({ config, appConfig, agentId, json: opts.json, doctor: true });
     });
 
   wiki

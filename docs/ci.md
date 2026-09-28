@@ -12,23 +12,32 @@ CI continues during Full Release Validation; the legacy release-priority variabl
 does not pause workflow admission. See [deferred CI recovery](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#deferred-ci-recovery)
 for runs already deferred by older workflow revisions.
 
+Broad PRs retain their compact selected-owner Node plan when time-based splitting
+would exceed the 130-row matrix cap. See [Node test lanes](/ci/scope-and-routing/node-test-lanes).
+
 This page is an index. CI is documented on nine pages, one per reader
 job. Open the page that matches your task.
+
+Full hybrid extension lint packs the same canonical chunks into three existing rows, sharing setup and SDK preparation within each row. Targeted plans and frozen routes retain their existing layout; see [runner profiles](/ci/runners#runner-backend-modes).
 
 [Automation admission](/ci/scheduled-workflows#comment-automation) filters known
 no-op events before runner allocation and concurrency, keeping automation on
 GitHub-hosted runners.
 
-PR Node matrices stop sibling rows on failure. Same-repository PRs also cancel
-other job families through a scoped monitor, preserving a failed aggregate that
-names the originating job. Main and manual runs retain complete matrices. See
+First-attempt PR Node matrices let the scoped monitor classify failures before
+cancelling eligible same-repository work. Fork monitoring is read-only. Exact
+known hourly-main test and supported static failures can remain advisory when the PR leaves their
+subjects unchanged and all remaining checks finish. Retries retain native matrix
+fail-fast. Main and manual runs retain complete matrices. See
 [failure cancellation](/ci/pipeline#fail-fast-order).
 
 For the published-upgrade regression gate, see [selection and routing](/ci/scope-and-routing#scope-and-routing), [runner budgets](/ci/capacity#runner-registration-budget), and [Package Acceptance baselines](/ci/release-validation#suite-profiles). Weekly validation is listed under [Update Migration](/ci/scheduled-workflows#update-migration).
 
-Full `main` CI and cache warming are [hourly by default](/ci/scheduled-workflows#hourly-main-ci); `OPENCLAW_CI_ON_PUSH=true` restores their existing per-push admission. CodeQL, Workflow Sanity, and CI's `security-fast` keep their existing main-push scopes. Docs-only `main` pushes still skip the CI workflow and push-triggered cache warming. The cache warmer publishes dependencies independently of long builds and maintains a bounded hosted seed in hybrid mode. Every admitted canonical `main` run exercises one published-driver × candidate Docker upgrade; ordinary manual/release validation adds the other five Docker seed lanes. QA Smoke, real-Gateway browser checks, and named process proofs retain their selected `main` coverage and manual/release validation. Pull requests and exact-head PR fallback dispatches retain unit, boundary, build, and mocked-Gateway coverage. The [PR-exempt integration tier](/ci/scope-and-routing/node-test-lanes) retains measured slow tests in hourly `main` and Full Release Validation, with PR opt-in when their tests or subjects change. Windows retains its complete inventory across five measured file shards.
+Full `main` CI and cache warming are [hourly by default](/ci/scheduled-workflows#hourly-main-ci); `OPENCLAW_CI_ON_PUSH=true` restores their existing per-push admission. CodeQL, Workflow Sanity, and CI's `security-fast` keep their existing main-push scopes. Docs-only `main` pushes still skip the CI workflow and push-triggered cache warming. The cache warmer publishes dependencies independently of long builds and maintains a bounded hosted seed in hybrid mode. Every admitted canonical `main` run exercises one published-driver × candidate Docker upgrade; ordinary manual/release validation adds the other five Docker seed lanes. QA Smoke, real-Gateway browser checks, and named process proofs retain their selected `main` coverage and manual/release validation. Pull requests and exact-head PR fallback dispatches run static correctness gates, owner-bounded tests, transitive import consumers, protected regressions, and a six-file runtime smoke set. Node rows target at most 150 estimated test seconds. Single files and indivisible canonical groups can exceed that target; setup, builds, and queues are separate from test time. Missing or unbounded runtime selection fails preflight instead of falling back to every test. Windows, browser, Docker, QA Smoke, packaging, contract, and extension families opt in through their existing owners; individual built-process proofs have independent owner flags. Full static fallback does not widen them. The [PR-exempt integration tier](/ci/scope-and-routing/node-test-lanes) retains measured slow tests in hourly `main` and Full Release Validation, with PR opt-in when their tests or subjects change. The existing Plugin Prerelease workflow owns complete extension runtime coverage hourly and in Full Release Validation; normal CI selects affected extension owners on PRs. Windows retains its complete inventory across five measured file shards on hourly main and ordinary manual/release validation; Windows-owner PRs retain that complete inventory.
 
 Hourly iOS retains `ios-build (tests)` with Rust, voice, native Access, and focused lifecycle coverage. Managed attachment UI/export, Watch operation, and Watch delivery UI suites retain every assertion in full manual/release validation. Main-tier simulator builds use the native architecture without indexing or verbose test diagnostics; logs and xcresult bundles remain available. A coalesced scheduled iOS cancellation can leave `openclaw/ci-gate` green with a notice delegating iOS proof to a later scheduled job; it does not validate the canceled revision, and the workflow can still be canceled. Genuine failures remain red. Screenshot capture runs for its own changed inputs and full manual/release validation. See [scope selection](/ci/scope-and-routing/selection) and [capacity](/ci/capacity#owner-path-and-release-coverage) for the coverage trade-off.
+
+iOS release qualification uses [larger hosted capacity](/ci/runners) for its stock simulator and isolated Gateway. The pairing, chat, and native Overview tests retain their existing assertions and deadlines.
 
 Eligible core-source and core-test PRs use targeted type checks when every selected path exists in the checkout. GitHub and hybrid profiles distribute the selected consumers across their existing core stripes; the Blacksmith profile checks them in the central row. Ambiguous ownership and deleted core tests keep the full type-check coverage.
 
@@ -57,7 +66,7 @@ Short hybrid jobs use a [40-row base threshold and 45-row hosted admission limit
 
 Additional hybrid check offloads require [fresh hosted assignment evidence](/ci/runners#hybrid-hosted-assignment-guard). Eligible PRs can move five measured checks; main pushes can also move lint and central types within the same hosted row limit. Artifact builds retain Blacksmith because their measured hosted tail leaves no room for the [15-minute routing objective](/ci/routing-costs).
 
-Windows keeps its complete explicit test inventory in five [measured project-aligned shards](/ci/runners#runner-backend-modes), sharing each small project's setup within one job.
+Windows keeps its complete explicit test inventory in five [measured project-aligned shards](/ci/runners#runner-backend-modes) for main and release validation. Windows-owner PRs retain the complete family; unrelated PRs omit it.
 
 Real-Gateway browser checks use [job budgets matched to their selected runner](/ci/runners#blacksmith-runner-capacity).
 
@@ -69,16 +78,15 @@ Build, QA and test orchestration restore the same [protected Node compile cache]
 
 In-process Gateway test configs use [exclusive plan admission within existing packed jobs](/ci/capacity#measured-shard-weights).
 
-Changed-extension PR jobs use [measured fallback rates and a 300-second packing budget](/ci/capacity#runner-registration-budget) within the landed 90-row compact, 130-row PR and 70-row push caps.
+Changed-owner Node rows use existing file/group timing evidence with a
+150-test-second admission target and the existing 130-row PR cap. Complete files,
+canonical configs, and worker policies remain intact; predicted test seconds
+are separate from measured CI wall time.
 
-Compact planning reserves the actual appended plugin rows before applying those
-Node matrix caps, allowing existing hosted tooling compaction to use the
-remaining capacity.
-
-Plugin-sensitive PRs run the complete `agentic-plugins` suite, including bundled
-metadata public-surface coverage, in both precise and fallback plans. The scope
-includes `extensions/**`, `src/plugins/**`, and the manifest/catalog generators;
-see [Node test lanes](/ci/scope-and-routing/node-test-lanes).
+Plugin-sensitive PRs select their owner tests, transitive import consumers,
+protected regressions, and policy watches. The existing Plugin Prerelease workflow retains complete
+extension coverage hourly and in Full Release Validation; see
+[Node test lanes](/ci/scope-and-routing/node-test-lanes).
 
 Roomy serial Blacksmith Node jobs use [measured Vitest worker sizing](/ci/capacity#vitest-worker-sizing), with existing hosted, frozen-target, and overlapping-plan limits.
 
@@ -192,8 +200,8 @@ The complete [startup corpus](/ci/pipeline) uses eight state test files so exist
 | [Watch a CI run](/ci/watching-runs)                            | Wait on one pull request head, recover a stuck run, and pass the evidence gate.                                     |
 | [CI checkout ownership](/ci/checkout)                          | Shared checkout anchors, fetch retry budgets, and trusted action policy.                                            |
 | [CI scope and routing](/ci/scope-and-routing)                  | Why a job did or did not run: changed-scope detection and manual dispatch.                                          |
-| [CI runner classes](/ci/runners)                               | Trust-based runner routing, preflight queue recovery, Blacksmith classes, and runner backend modes.                 |
-| [CI capacity and shard weights](/ci/capacity)                  | The runner registration budget and the measured timings behind shard packing.                                       |
+| [CI runner classes](/ci/runners)                               | Trust-based runner routing, preflight and ratchet admission, Blacksmith classes, and runner backend modes.          |
+| [CI capacity and shard weights](/ci/capacity)                  | Runner registration, bounded PR concurrency, and measured shard packing.                                            |
 | [Release validation workflows](/ci/release-validation)         | Full Release Validation, live and E2E shards, Package Acceptance, install smoke, Docker E2E, and Plugin Prerelease. |
 | [Scheduled and maintenance workflows](/ci/scheduled-workflows) | OpenClaw Performance, QA Lab, CodeQL, the maintenance jobs, and ClawSweeper activity forwarding.                    |
 | [Local checks and Testbox](/ci/local-proof)                    | Reproduce a lane locally, keep the shrink-only ratchets, and run Crabbox or Testbox proof.                          |

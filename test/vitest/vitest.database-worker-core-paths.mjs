@@ -342,6 +342,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/sessions/sdk.tool-outcomes.test.ts",
   "src/agents/sessions/sdk.test.ts",
   "src/agents/sessions/session-manager-bounded.test.ts",
+  "src/agents/sessions/session-manager-transaction-rollback.test.ts",
   "src/agents/sessions/session-manager-model-context-limits.test.ts",
   "src/agents/sessions/session-manager-model-context.test.ts",
   "src/agents/sessions/session-manager.fork-rebase.test.ts",

@@ -31,7 +31,7 @@ import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { ExpectedCliError } from "./failure-output.js";
 import { getGatewayRunRuntimeHooks } from "./gateway-cli/runtime-hooks.js";
 import type { RootHelpRenderOptions } from "./program/root-help.js";
-import { registerBareRootArgumentTests } from "./run-main.bare-root.test-support.js";
+import { registerBareRootArgumentTests, withCliTty } from "./run-main.bare-root.test-support.js";
 import {
   makeProxyHandle,
   registerRunMainProxyExitTests,
@@ -514,27 +514,6 @@ function makeProgram<T>(primary: string | undefined, parseAsync: T) {
   return { commands: [{ name: () => primary, aliases: () => [] }], parseAsync };
 }
 
-async function withCliTty(value: boolean, fn: () => Promise<void>): Promise<void> {
-  const stdinDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-  const stdoutDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
-  Object.defineProperty(process.stdin, "isTTY", { configurable: true, value });
-  Object.defineProperty(process.stdout, "isTTY", { configurable: true, value });
-  try {
-    await fn();
-  } finally {
-    if (stdinDescriptor) {
-      Object.defineProperty(process.stdin, "isTTY", stdinDescriptor);
-    } else {
-      Reflect.deleteProperty(process.stdin, "isTTY");
-    }
-    if (stdoutDescriptor) {
-      Object.defineProperty(process.stdout, "isTTY", stdoutDescriptor);
-    } else {
-      Reflect.deleteProperty(process.stdout, "isTTY");
-    }
-  }
-}
-
 function withInteractiveTty(fn: () => Promise<void>): Promise<void> {
   return withCliTty(true, fn);
 }
@@ -545,6 +524,7 @@ function runBareCli(): Promise<void> {
 
 function expectBoundTui(expected: {
   url: string;
+  configuredRemote?: boolean;
   token?: string;
   password?: string;
   tlsFingerprint?: string;
@@ -3237,6 +3217,7 @@ describe("runCli exit behavior", () => {
       expect(runRemoteGatewayInferenceOnboardingMock).toHaveBeenCalledWith({
         config: sourceConfig,
         gatewayUrl: url,
+        configuredRemote: true,
         token: "missing-inference-remote-auth",
         tlsFingerprint: TLS_FINGERPRINT,
       });
@@ -3558,7 +3539,7 @@ describe("runCli exit behavior", () => {
     await runBareCli();
 
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
-    expectBoundTui({ url, token: "unverified-remote-auth" });
+    expectBoundTui({ url, configuredRemote: true, token: "unverified-remote-auth" });
   });
 
   it("keeps a configured remote Gateway authoritative across a transient cold-restart probe", async () => {
@@ -3575,7 +3556,7 @@ describe("runCli exit behavior", () => {
 
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
     expect(runRemoteGatewayInferenceOnboardingMock).not.toHaveBeenCalled();
-    expectBoundTui({ url, token: "restart-remote-auth" });
+    expectBoundTui({ url, configuredRemote: true, token: "restart-remote-auth" });
   });
 
   it("keeps a configured local Gateway authoritative across a transient cold-restart probe", async () => {
@@ -3696,10 +3677,12 @@ describe("runCli exit behavior", () => {
     expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
       url,
       originScopedDeviceAuth: true,
+      configuredRemote: true,
+      config: expect.objectContaining({ gateway: expect.objectContaining({ mode: "remote" }) }),
       token: "loopback-remote-auth",
     });
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
-    expectBoundTui({ url, token: "loopback-remote-auth" });
+    expectBoundTui({ url, configuredRemote: true, token: "loopback-remote-auth" });
   });
 
   it("passes configured remote edge auth into the bare-root onboarding probe", async () => {
@@ -3721,10 +3704,11 @@ describe("runCli exit behavior", () => {
     expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
       url,
       originScopedDeviceAuth: true,
+      configuredRemote: true,
       config,
       token: "test-token",
     });
-    expectBoundTui({ url, token: "test-token" });
+    expectBoundTui({ url, configuredRemote: true, token: "test-token" });
   });
 
   it("keeps configured remote password authoritative from preflight through TUI launch", async () => {
@@ -3746,9 +3730,11 @@ describe("runCli exit behavior", () => {
     expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
       url,
       originScopedDeviceAuth: true,
+      configuredRemote: true,
+      config: expect.objectContaining({ gateway: expect.objectContaining({ mode: "remote" }) }),
       password: "configured-remote-password",
     });
-    expectBoundTui({ url, password: "configured-remote-password" });
+    expectBoundTui({ url, configuredRemote: true, password: "configured-remote-password" });
   });
 
   it("does not replace unresolved remote SecretRefs with gateway env auth", async () => {
@@ -3787,9 +3773,11 @@ describe("runCli exit behavior", () => {
     expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
       url,
       originScopedDeviceAuth: true,
+      configuredRemote: true,
+      config: expect.objectContaining({ gateway: expect.objectContaining({ mode: "remote" }) }),
     });
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
-    expectBoundTui({ url });
+    expectBoundTui({ url, configuredRemote: true });
   });
 
   it("probes an explicitly allowed plaintext private remote gateway", async () => {
@@ -3811,10 +3799,12 @@ describe("runCli exit behavior", () => {
     expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
       url,
       originScopedDeviceAuth: true,
+      configuredRemote: true,
+      config: expect.objectContaining({ gateway: expect.objectContaining({ mode: "remote" }) }),
       token: "private-remote-auth",
     });
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
-    expectBoundTui({ url, token: "private-remote-auth" });
+    expectBoundTui({ url, configuredRemote: true, token: "private-remote-auth" });
   });
 
   it("forwards the configured TLS pin when probing a remote gateway", async () => {
@@ -3834,11 +3824,14 @@ describe("runCli exit behavior", () => {
     expect(probeGatewayConfiguredModelMock).toHaveBeenCalledWith({
       url: "wss://gateway.example.com:18789",
       originScopedDeviceAuth: true,
+      configuredRemote: true,
+      config: expect.objectContaining({ gateway: expect.objectContaining({ mode: "remote" }) }),
       token: "tls-remote-auth",
       tlsFingerprint: TLS_FINGERPRINT,
     });
     expectBoundTui({
       url: "wss://gateway.example.com:18789",
+      configuredRemote: true,
       token: "tls-remote-auth",
       tlsFingerprint: TLS_FINGERPRINT,
     });

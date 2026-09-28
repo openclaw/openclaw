@@ -254,6 +254,8 @@ it.each(["exact", "bulk"] as const)(
             return {
               placements: new Map(),
               moves: new Map(),
+              pendingResults: new Map(),
+              workspaceJournalOwnerSessionIds: new Set(),
               environments: new Map(),
               workspaceResultReconcilingSessionIds: new Set(),
               workspaceRecoveryPendingSessionIds: new Set(),

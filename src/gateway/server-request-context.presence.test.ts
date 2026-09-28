@@ -90,7 +90,7 @@ describe("createGatewayRequestContext presence", () => {
         hasAvatar: true,
         updatedAt: 2,
       });
-      vi.advanceTimersByTime(50);
+      vi.advanceTimersByTime(200);
     }
 
     expect(first.authenticatedUserProfile).toEqual({
@@ -188,7 +188,7 @@ describe("createGatewayRequestContext presence", () => {
         ...display,
         updatedAt: linked.updatedAt,
       });
-      vi.advanceTimersByTime(50);
+      vi.advanceTimersByTime(200);
 
       expect(sourceClient.authenticatedUserProfile).toBe(capturedProfile);
       expect(sourceClient.authenticatedUserProfile).toEqual({
@@ -251,7 +251,7 @@ describe("createGatewayRequestContext presence", () => {
       hasAvatar: false,
       updatedAt: 2,
     });
-    vi.advanceTimersByTime(50);
+    vi.advanceTimersByTime(200);
 
     for (const client of ownerClients) {
       expect(client.authenticatedUserProfile.displayName).toBe("Augusta Ada");
@@ -288,10 +288,10 @@ describe("createGatewayRequestContext presence", () => {
     const params = makePresenceContextParams({ clients });
     const context = createGatewayRequestContext(params);
     context.recordClientActivity?.({ ...client });
-    vi.advanceTimersByTime(50);
+    vi.advanceTimersByTime(200);
     expect(params.runtime.broadcast).not.toHaveBeenCalled();
     context.recordClientActivity?.(client);
-    vi.advanceTimersByTime(50);
+    vi.advanceTimersByTime(200);
     expect(params.runtime.broadcast).toHaveBeenCalledExactlyOnceWith(
       "presence",
       {
@@ -308,7 +308,7 @@ describe("createGatewayRequestContext presence", () => {
     now.mockReturnValue(11_000);
     clients.delete(client);
     context.recordClientActivity?.(client);
-    vi.advanceTimersByTime(50);
+    vi.advanceTimersByTime(200);
     expect(params.runtime.broadcast).toHaveBeenCalledOnce();
   });
 
@@ -389,7 +389,7 @@ describe("createGatewayRequestContext presence", () => {
           respond,
         });
         expect(respond).toHaveBeenCalledWith(true, { ok: true, broadcast: false });
-        vi.advanceTimersByTime(50);
+        vi.advanceTimersByTime(200);
       };
 
       for (let second = 0; second < 30; second++) {
@@ -415,12 +415,12 @@ describe("createGatewayRequestContext presence", () => {
         hasAvatar: false,
         updatedAt: started + 31_000,
       });
-      vi.advanceTimersByTime(50);
+      vi.advanceTimersByTime(200);
       expect(events()).toHaveLength(3);
       expect(rows().every((row) => row.user?.name === "Renamed Person")).toBe(true);
       health.mockReturnValue(12);
       context.publishPresence();
-      vi.advanceTimersByTime(50);
+      vi.advanceTimersByTime(200);
       expect(events()).toHaveLength(4);
       await typeAt(32_000, tabs[1]!);
       expect(events()).toHaveLength(4);
@@ -433,7 +433,7 @@ describe("createGatewayRequestContext presence", () => {
         hasAvatar: false,
         updatedAt: started + 179_000,
       });
-      vi.advanceTimersByTime(50);
+      vi.advanceTimersByTime(200);
       expect(events()).toHaveLength(5);
       await typeAt(180_000, tabs[1]!);
       expect(events()).toHaveLength(6);
@@ -488,7 +488,7 @@ describe("createGatewayRequestContext presence", () => {
         hasAvatar: false,
         updatedAt: 2,
       });
-      vi.advanceTimersByTime(50);
+      vi.advanceTimersByTime(200);
       expect(client.authenticatedUserProfile?.displayName).toBe("Before");
       expect(params.runtime.broadcast).not.toHaveBeenCalled();
       expect(
@@ -523,7 +523,7 @@ describe("createGatewayRequestContext presence", () => {
       hasAvatar: false,
       updatedAt: 2,
     });
-    vi.advanceTimersByTime(50);
+    vi.advanceTimersByTime(200);
 
     expect(client.authenticatedUserProfile.hasAvatar).toBe(false);
     const presence = vi.mocked(params.runtime.broadcast).mock.calls[0]?.[1] as {
@@ -567,7 +567,7 @@ describe("createGatewayRequestContext presence", () => {
       hasAvatar: true,
       updatedAt: 2,
     });
-    vi.advanceTimersByTime(50);
+    vi.advanceTimersByTime(200);
 
     const presence = vi.mocked(params.runtime.broadcast).mock.calls[0]?.[1] as {
       presence?: Array<{ user?: { id?: string; email?: string } }>;

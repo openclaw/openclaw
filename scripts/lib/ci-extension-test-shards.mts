@@ -28,7 +28,10 @@ import {
 import { VITEST_PRETEST_BUILD_SECONDS } from "./vitest-shard-metadata.mts";
 
 type CwdOptions = { cwd?: string };
-type ChangedExtensionConfigShard = NodeTestShard & { predictedSeconds: number };
+type ChangedExtensionConfigShard = NodeTestShard & {
+  predictedSeconds: number;
+  predictedTestSeconds: number;
+};
 // Share runner setup while retaining each envelope's process and memory bounds.
 const CHANGED_EXTENSION_JOB_SECONDS = 300;
 const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
@@ -178,6 +181,7 @@ export function createChangedExtensionConfigShards(
         // No plans overlap in this row, so CI can scale the single process's worker budget.
         planConcurrency: 1,
         predictedSeconds,
+        predictedTestSeconds: predictedSeconds,
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
         shardName: `changed-extensions-config${suffix}`,
@@ -267,6 +271,10 @@ export function packChangedExtensionConfigShards(
             })),
             planConcurrency: 1,
             predictedSeconds: bin.reduce((seconds, shard) => seconds + shard.predictedSeconds, 0),
+            predictedTestSeconds: bin.reduce(
+              (seconds, shard) => seconds + shard.predictedTestSeconds,
+              0,
+            ),
             requiresDist: bin[0].requiresDist,
             runner: bin[0].runner,
             shardName: `changed-extensions-bundle-${index + 1}`,

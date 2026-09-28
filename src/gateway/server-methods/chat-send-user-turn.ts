@@ -41,6 +41,7 @@ async function persistChatSendImages(params: {
   offloadedRefs: OffloadedRef[];
   client: GatewayRequestHandlerOptions["client"];
   logGateway: GatewayRequestContext["logGateway"];
+  assertCurrent?: () => void;
 }): Promise<Awaited<ReturnType<typeof persistInboundImagesForTranscript>>> {
   if (
     (params.images.length === 0 && params.offloadedRefs.length === 0) ||
@@ -53,6 +54,7 @@ async function persistChatSendImages(params: {
     offloadedRefs: params.offloadedRefs,
     log: params.logGateway,
     logContext: "chat.send",
+    assertCurrent: params.assertCurrent,
   });
 }
 
@@ -119,7 +121,8 @@ export function prepareChatSendUserTurn(params: {
   >;
   session: Pick<PreparedChatSendSession, "agentId" | "clientRunId" | "sessionKey"> &
     Partial<Pick<PreparedChatSendSession, "cfg">>;
-  admission: Pick<AdmittedChatSend, "originatingRoute">;
+  admission: Pick<AdmittedChatSend, "originatingRoute"> &
+    Partial<Pick<AdmittedChatSend, "assertWorkAdmissionCurrent" | "assertClientUploadAllowed">>;
   attachments: PreparedChatSendAttachments;
   client: GatewayRequestHandlerOptions["client"];
   logGateway: GatewayRequestContext["logGateway"];
@@ -132,6 +135,10 @@ export function prepareChatSendUserTurn(params: {
     offloadedRefs: attachments.offloadedRefs,
     client,
     logGateway,
+    assertCurrent: () => {
+      admission.assertWorkAdmissionCurrent?.();
+      admission.assertClientUploadAllowed?.();
+    },
   });
   userTurn.setInputPromise(
     persistedMediaForTranscriptPromise.then((result) => {

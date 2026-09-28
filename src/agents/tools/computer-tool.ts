@@ -13,6 +13,7 @@ import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import { type AnyAgentTool, readFiniteNumberParam, readToolStringParam } from "./common.js";
 import { buildComputerToolDescription } from "./computer-tool-guidance.js";
 import { ComputerToolSession } from "./computer-tool-node.js";
+import { recordComputerToolOutcome } from "./computer-tool-outcome.js";
 import { buildComputerActParams, isComputerActAction } from "./computer-tool-request.js";
 import {
   computerActResultText,
@@ -222,7 +223,9 @@ export function createComputerTool(options?: {
             modelHasVision: options?.modelHasVision,
           });
           session.recordObservation(resolved, result, projected.imageCoordinates);
-          return projected.result;
+          return action === "get_window_state"
+            ? recordComputerToolOutcome(projected.result, result)
+            : projected.result;
         };
 
         if (action === "screenshot" || action === "wait") {

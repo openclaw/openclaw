@@ -1,6 +1,6 @@
 import { resolveNormalizedAccountEntry } from "openclaw/plugin-sdk/account-core";
 import type { BaseTokenResolution } from "openclaw/plugin-sdk/channel-contract";
-import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
@@ -117,14 +117,9 @@ export function resolveTelegramToken(
 
   // Account IDs are normalized for routing (e.g. lowercased). Config keys may not
   // be normalized, so resolve per-account config by matching normalized IDs.
-  const resolveAccountCfg = (id: string): TelegramAccountConfig | undefined => {
-    const accounts = telegramCfg?.accounts;
-    return Array.isArray(accounts)
-      ? undefined
-      : resolveNormalizedAccountEntry(accounts, id, normalizeAccountId);
-  };
-
-  const accountCfg = resolveAccountCfg(accountId);
+  const accountCfg = Array.isArray(telegramCfg?.accounts)
+    ? undefined
+    : resolveNormalizedAccountEntry(telegramCfg?.accounts, accountId, normalizeAccountId);
 
   // When a non-default accountId is explicitly specified but not found in config,
   // decide whether to fall through to channel-level defaults based on whether
