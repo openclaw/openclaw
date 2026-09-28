@@ -130,7 +130,12 @@ it("distinguishes pinned sessions from automatic fallbacks in a session report",
 });
 
 it("classifies a mixed channel report through the real health formatter", () => {
-  const account = { accountId: "default", configured: true, linked: true, healthState: "healthy" };
+  const account = {
+    accountId: "default",
+    configured: true,
+    linked: true,
+    healthState: "healthy",
+  } satisfies HealthSummary["channels"][string];
   expect(
     healthRows({
       channels: {

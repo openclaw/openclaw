@@ -14,6 +14,8 @@ import {
   useOpenAIPlatformAuthFixture,
 } from "./run.overflow-compaction.harness.js";
 import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
+import { resolveEmbeddedRunAttemptTerminalState } from "./run/terminal-outcome.js";
+import { resolveEmbeddedRunTerminalTimeout } from "./run/terminal-timeout.js";
 
 let state: OpenClawTestState;
 const GENERIC_TIMEOUT = "LLM request timed out.";
@@ -113,4 +115,34 @@ it("delivers one authoritative timeout while preserving an independent same-text
     },
   ]);
   expect(dispatcher.getFailedCounts()).toEqual({ tool: 0, block: 0, final: 0 });
+});
+
+it("does not replace a successfully recovered final assistant after a prompt-timeout race", () => {
+  const attempt = makeAttemptResult({
+    terminal: { kind: "timeout", phase: "prompt", source: "runtime", aborted: true },
+  });
+  const payloads = [{ text: "Completed answer after the timeout race." }];
+  const setTerminalLifecycleMeta = vi.fn();
+  const result = resolveEmbeddedRunTerminalTimeout({
+    terminalPrepared: {
+      timedOutDuringPrompt: true,
+      hasSuccessfulFinalAssistantAfterPromptTimeout: true,
+      hasPartialAssistantTextAfterPromptTimeout: false,
+      payloads,
+      payloadsWithToolMedia: payloads,
+      agentMeta: { sessionId: "session-1", provider: "openai", model: "gpt-5.4" },
+      attemptToolSummary: undefined,
+      failureSignal: undefined,
+    },
+    attempt,
+    terminalState: resolveEmbeddedRunAttemptTerminalState({
+      attempt,
+      assistant: attempt.lastAssistant,
+    }),
+    resolveReplayInvalid: () => false,
+    setTerminalLifecycleMeta,
+    startedAtMs: Date.now(),
+  });
+  expect(result).toBeUndefined();
+  expect(setTerminalLifecycleMeta).not.toHaveBeenCalled();
 });

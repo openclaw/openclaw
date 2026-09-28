@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -23,6 +26,7 @@ import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-to
 import * as nodeHost from "./bash-tools.exec-host-node.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
+import * as codeModeBridge from "./code-mode-bridge.js";
 import { createSubscribedCodeModeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
@@ -405,6 +409,112 @@ describe("Code Mode subscribed host denial", () => {
     expect(consumeTrustedToolNoStartError(producerError)).toBe(false);
     expect(consumeTrustedToolNoStartError(replacement)).toBe(false);
     expect(harness.spawn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "earlier",
+    "mutation-first/settles-first",
+    "denial-first/settles-last",
+    "late-settlement",
+  ] as const)("does not replay completed work around a host denial: %s", async (order) => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "code-mode-host-marker-"));
+    const marker = path.join(dir, "mutation.txt");
+    const mutated = createDeferred();
+    const denied = createDeferred();
+    const releaseLateMutation = createDeferred();
+    const lateMutationFinished = createDeferred();
+    const dispatchOrder: string[] = [];
+    const settlementOrder: string[] = [];
+    const runBridge = codeModeBridge.runBridgeRequest;
+    vi.spyOn(codeModeBridge, "runBridgeRequest").mockImplementation(async (params) => {
+      const name = String(params.request.args[0]);
+      dispatchOrder.push(name);
+      const settled = await runBridge(params);
+      settlementOrder.push(name);
+      if (name === "record_mutation") {
+        mutated.resolve();
+      }
+      if (name === "exec") {
+        denied.resolve();
+      }
+      return settled;
+    });
+    const mutationFirstSettlement = order.endsWith("settles-first");
+    const parallel = order.includes("/");
+    installBefore(async (event) => {
+      if (event.toolName === "exec" && parallel && mutationFirstSettlement) {
+        await mutated.promise;
+      }
+    });
+    const harness = createHostHarness({
+      name: `mutation-${order.replaceAll("/", "-")}`,
+    });
+    const mutation = pluginToolWithExecute(
+      "record_mutation",
+      "Append one mutation marker",
+      async () => {
+        if (order === "late-settlement") {
+          await releaseLateMutation.promise;
+        }
+        if (parallel && !mutationFirstSettlement) {
+          await denied.promise;
+        }
+        await fs.appendFile(marker, "applied\n");
+        lateMutationFinished.resolve();
+        return jsonResult({ applied: true });
+      },
+    );
+    applyCodeModeCatalog({ ...harness, tools: [...harness.tools, harness.shell, mutation] });
+    try {
+      const deny = deniedCode.replace("return await ", "").replace(/;$/, "");
+      const expressions = order.startsWith("denial-first")
+        ? [deny, "record_mutation({})"]
+        : ["record_mutation({})", deny];
+      const code =
+        order === "late-settlement"
+          ? `await Promise.all([record_mutation({}), ${deny}]);`
+          : parallel
+            ? `const results = await Promise.allSettled([${expressions.join(",")}]); throw new Error(results.find(r => r.status === "rejected").reason.message);`
+            : `await record_mutation({}); ${deniedCode}`;
+      let details = await harness.run(code);
+      if (order === "late-settlement") {
+        expect(details.status).toBe("waiting");
+        await expect(fs.readFile(marker, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+        releaseLateMutation.resolve();
+        await lateMutationFinished.promise;
+        details = resultDetails(
+          await expectDefined(harness.tools[1], "wait").execute("settle-late", {
+            runId: details.runId,
+          }),
+        );
+        await vi.waitFor(() => expect(harness.subscription.getItemLifecycle().activeCount).toBe(0));
+      }
+      details = await waitUntilCompleted({
+        details,
+        waitTool: expectDefined(harness.tools[1], "wait"),
+      });
+      expect(details).toMatchObject({ status: "failed", bridgeDispatchStarted: true });
+      expect(details.error).toContain("exec host not allowed");
+      expect(await fs.readFile(marker, "utf8")).toBe("applied\n");
+      expect(mutation.execute).toHaveBeenCalledOnce();
+      if (parallel) {
+        expect(dispatchOrder).toEqual(
+          order.startsWith("denial-first")
+            ? ["exec", "record_mutation"]
+            : ["record_mutation", "exec"],
+        );
+        expect(settlementOrder).toEqual(
+          mutationFirstSettlement ? ["record_mutation", "exec"] : ["exec", "record_mutation"],
+        );
+      }
+      expect(harness.spawn).not.toHaveBeenCalled();
+      expect(harness.remote).not.toHaveBeenCalled();
+    } finally {
+      mutated.resolve();
+      denied.resolve();
+      releaseLateMutation.resolve();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("reports security denial without starting a shell process", async () => {

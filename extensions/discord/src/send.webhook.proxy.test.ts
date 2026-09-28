@@ -224,6 +224,29 @@ describe("Discord webhook transport", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
+  it("aborts when Discord never returns response headers", async () => {
+    fetchMock.mockImplementation((_input, init) => {
+      const signal = init?.signal;
+      if (!signal) {
+        throw new Error("expected webhook request signal");
+      }
+      return new Promise<Response>((_resolve, reject) => {
+        const abort = () => reject(signal.reason);
+        if (signal.aborted) {
+          abort();
+        } else {
+          signal.addEventListener("abort", abort, { once: true });
+        }
+      });
+    });
+    const rejection = expect(sendWebhookMessageDiscord("hello", opts)).rejects.toMatchObject({
+      name: "TimeoutError",
+      message: "request timed out",
+    });
+    await Promise.all([vi.advanceTimersByTimeAsync(DISCORD_REST_TIMEOUT_MS), rejection]);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it.each([200, 503])("keeps the deadline active through a stalled %s body", async (status) => {
     fetchMock.mockImplementation(async (_input, init) => {
       const signal = init?.signal;

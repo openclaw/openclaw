@@ -3437,7 +3437,7 @@ describe("handleSendChat", () => {
     }
   });
 
-  it.each(["move", "edit"] as const)(
+  it.each(["move", "remove", "edit"] as const)(
     "honors a queue %s while attachment hydration is pending",
     async (action) => {
       const { attachments, dataUrls } = createDeliveryAttachmentBatch();
@@ -3481,12 +3481,18 @@ describe("handleSendChat", () => {
         await readStarted.promise;
         if (action === "move") {
           expect(moveQueuedChatMessage(host, second!.id, first!.id)).toBe("moved");
+        } else if (action === "remove") {
+          expect(removeQueuedMessage(host, first!.id)).toBe("removed");
         } else {
           expect(beginQueuedMessageEdit(host, first!.id)).toBe("started");
           updateQueuedMessageEdit(host, "unfinished correction");
         }
         const expected =
-          action === "move" ? ["text B", "attachment A"] : ["attachment A", "text B"];
+          action === "move"
+            ? ["text B", "attachment A"]
+            : action === "remove"
+              ? ["text B"]
+              : ["attachment A", "text B"];
         expect(listStoredChatOutboxes(host)[0]?.queue.map((item) => item.text)).toEqual(expected);
         expect(requestCalls(request, "chat.send")).toHaveLength(0);
         releaseRead.resolve();
@@ -3501,14 +3507,16 @@ describe("handleSendChat", () => {
           requireRecord(params, "reordered delivery"),
         );
         expect(sends.map((params) => params.message)).toEqual(expected);
-        expect(sends.find((params) => params.message === "attachment A")?.attachments).toEqual(
-          attachments.map((attachment, index) => ({
-            type: attachment.mimeType.startsWith("image/") ? "image" : "file",
-            mimeType: attachment.mimeType,
-            fileName: attachment.fileName,
-            content: dataUrls[index]!.split(",")[1],
-          })),
-        );
+        if (action !== "remove") {
+          expect(sends.find((params) => params.message === "attachment A")?.attachments).toEqual(
+            attachments.map((attachment, index) => ({
+              type: attachment.mimeType.startsWith("image/") ? "image" : "file",
+              mimeType: attachment.mimeType,
+              fileName: attachment.fileName,
+              content: dataUrls[index]!.split(",")[1],
+            })),
+          );
+        }
         expect(listStoredChatOutboxes(host)).toEqual([]);
       } finally {
         releaseRead.resolve();
@@ -3605,50 +3613,54 @@ describe("handleSendChat", () => {
     },
   );
 
-  it("retries an unconfirmed volatile send from global with the same run id", async () => {
-    const sessionKey = "global";
-    installQuotaExceededStorage();
-    const runIds: unknown[] = [];
-    const targets: unknown[] = [];
+  it.each(["agent:main:main", "main", "global"])(
+    "retries an unconfirmed volatile send from %s with the same run id",
+    async (sessionKey) => {
+      installQuotaExceededStorage();
+      const runIds: unknown[] = [];
+      const targets: unknown[] = [];
 
-    const host = makeChatHost({
-      sessionKey,
-      agentsList: { defaultId: "main", mainKey: "workspace", scope: "per-sender" },
-      requestHandlers: {
-        "chat.send": (params: unknown) => {
-          const payload = requireRecord(params, "volatile retry payload");
-          runIds.push(payload.idempotencyKey);
-          targets.push(payload.sessionKey);
-          if (runIds.length === 1) {
-            throw new Error("gateway closed (1006): network lost");
-          }
-          return { runId: payload.idempotencyKey, status: "started" };
+      const host = makeChatHost({
+        sessionKey,
+        agentsList: { defaultId: "main", mainKey: "workspace", scope: "per-sender" },
+        requestHandlers: {
+          "chat.send": (params: unknown) => {
+            const payload = requireRecord(params, "volatile retry payload");
+            runIds.push(payload.idempotencyKey);
+            targets.push(payload.sessionKey);
+            if (runIds.length === 1) {
+              throw new Error("gateway closed (1006): network lost");
+            }
+            return { runId: payload.idempotencyKey, status: "started" };
+          },
         },
-      },
-      chatMessage: "retry the oversized turn",
-    });
+        chatMessage: "retry the oversized turn",
+      });
 
-    await handleSendChat(host);
+      await handleSendChat(host);
 
-    const itemId = host.chatQueue[0]?.id ?? "missing-volatile-retry";
-    const originalRunId = host.chatQueue[0]?.sendRunId;
-    expect(host.chatQueue).toEqual([
-      expect.objectContaining({ sendRunId: originalRunId, sendState: "unconfirmed" }),
-    ]);
+      const itemId = host.chatQueue[0]?.id ?? "missing-volatile-retry";
+      const originalRunId = host.chatQueue[0]?.sendRunId;
+      expect(host.chatQueue).toEqual([
+        expect.objectContaining({ sendRunId: originalRunId, sendState: "unconfirmed" }),
+      ]);
 
-    await resumeStoredChatOutboxes(host);
-    expect(runIds).toEqual([originalRunId]);
+      await resumeStoredChatOutboxes(host);
+      expect(runIds).toEqual([originalRunId]);
 
-    await retryQueuedChatMessage(host, itemId);
+      await retryQueuedChatMessage(host, itemId);
 
-    expect(runIds).toEqual([originalRunId, originalRunId]);
-    expect(targets).toEqual(["global", "global"]);
-    expect(host.chatQueue).toStrictEqual([]);
-    expect(host.chatRunId).toBe(originalRunId);
-    expect(
-      host.chatMessages.map((message) => requireRecord(message, "retried transcript").role),
-    ).toEqual(["user"]);
-  });
+      expect(runIds).toEqual([originalRunId, originalRunId]);
+      expect(targets).toEqual(
+        Array(2).fill(sessionKey === "global" ? "global" : "agent:main:workspace"),
+      );
+      expect(host.chatQueue).toStrictEqual([]);
+      expect(host.chatRunId).toBe(originalRunId);
+      expect(
+        host.chatMessages.map((message) => requireRecord(message, "retried transcript").role),
+      ).toEqual(["user"]);
+    },
+  );
 
   it("retries a failed volatile send with a fresh run id", async () => {
     installQuotaExceededStorage();
@@ -3726,6 +3738,105 @@ describe("handleSendChat", () => {
     expect(host.lastError).toBe(
       "Could not store this message for reconnect. Free browser storage or reconnect before sending.",
     );
+  });
+
+  it("retries an explicitly retryable send rejection while still connected", async () => {
+    const sendRunIds: string[] = [];
+    let sendAttempts = 0;
+
+    const host = makeChatHost({
+      requestHandlers: {
+        "chat.history": idleChatHistory(),
+        "chat.send": (params: unknown) => {
+          const payload = requireRecord(params, "retryable send payload");
+          sendRunIds.push(String(payload.idempotencyKey));
+          sendAttempts += 1;
+          if (sendAttempts === 1) {
+            throw new GatewayRequestError({
+              code: "UNAVAILABLE",
+              message: "Gateway is temporarily busy",
+              retryable: true,
+              retryAfterMs: 100,
+            });
+          }
+          return { runId: payload.idempotencyKey, status: "started", messageSeq: 1 };
+        },
+      },
+      chatMessage: "retry without disconnecting",
+    });
+
+    vi.useFakeTimers();
+    try {
+      await handleSendChat(host);
+
+      expect(host.connected).toBe(true);
+      expect(host.chatQueue[0]).toMatchObject({
+        sendAttempts: 0,
+        sendState: "waiting-reconnect",
+      });
+      expect(sendAttempts).toBe(1);
+      await vi.advanceTimersByTimeAsync(100);
+      // The retry timer only kicks off a fire-and-forget drain, so the resend
+      // lands after the tick returns. Wait for the outcome, not the tick.
+      await waitForFast(() => {
+        expect(sendAttempts).toBe(2);
+        expect(listStoredChatOutboxes(host)).toStrictEqual([]);
+      });
+      expect(sendRunIds[1]).toBe(sendRunIds[0]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries reconnect history after a retryable response without a socket close", async () => {
+    const host = makeChatHost({
+      client: null,
+      connected: false,
+      chatMessage: "retry history while connected",
+    });
+    await handleSendChat(host);
+    let historyAttempts = 0;
+    let sendAttempts = 0;
+    const request = makeRequestMock({
+      "chat.history": () => {
+        historyAttempts += 1;
+        if (historyAttempts === 1) {
+          throw new GatewayRequestError({
+            code: "UNAVAILABLE",
+            message: "History is temporarily unavailable",
+            retryable: true,
+            retryAfterMs: 100,
+          });
+        }
+        return idleChatHistory();
+      },
+      "chat.send": (params: unknown) => {
+        sendAttempts += 1;
+        const payload = requireRecord(params, "history retry send payload");
+        return { runId: payload.idempotencyKey, status: "started", messageSeq: 1 };
+      },
+    });
+    host.client = clientWithRequest(request);
+    host.connected = true;
+
+    vi.useFakeTimers();
+    try {
+      await resumeStoredChatOutboxes(host);
+
+      expect(historyAttempts).toBe(1);
+      expect(sendAttempts).toBe(0);
+      await Promise.all(Array.from({ length: 20 }, () => resumeStoredChatOutboxes(host)));
+      expect(historyAttempts).toBe(1);
+      await vi.advanceTimersByTimeAsync(100);
+      // Same fire-and-forget retry hand-off as the send-rejection case above.
+      await waitForFast(() => {
+        expect(sendAttempts).toBe(1);
+        expect(historyAttempts).toBeGreaterThanOrEqual(2);
+        expect(listStoredChatOutboxes(host)).toStrictEqual([]);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("retries after reconnecting with the same Gateway client", async () => {
@@ -3898,41 +4009,43 @@ describe("handleSendChat", () => {
     );
   });
 
-  it("removes a waiting-reconnect send with history proof before stale local busy state blocks it", async () => {
-    const sendState: ChatQueueItem["sendState"] = "waiting-reconnect";
-    const host = makeChatHost({
-      requestHandlers: {
-        "chat.history": () =>
-          Promise.resolve({
-            messages: [
-              {
-                role: "user",
-                __openclaw: { idempotencyKey: "ambiguous-run:user" },
-              },
-            ],
-            sessionInfo: row("agent:main", { hasActiveRun: false, status: "done" }),
-          }),
-      },
-      chatRunId: "ambiguous-run",
-      chatQueue: [
-        {
-          id: "ambiguous-delivered",
-          text: "already delivered",
-          createdAt: 1,
-          sendAttempts: 1,
-          sendRunId: "ambiguous-run",
-          sendState,
-          sessionKey: "agent:main",
+  it.each(["waiting-reconnect", "unconfirmed"] as const)(
+    "removes a %s send with history proof before stale local busy state blocks it",
+    async (sendState) => {
+      const host = makeChatHost({
+        requestHandlers: {
+          "chat.history": () =>
+            Promise.resolve({
+              messages: [
+                {
+                  role: "user",
+                  __openclaw: { idempotencyKey: "ambiguous-run:user" },
+                },
+              ],
+              sessionInfo: row("agent:main", { hasActiveRun: false, status: "done" }),
+            }),
         },
-      ],
-    });
-    admitHostQueueItems(host);
+        chatRunId: "ambiguous-run",
+        chatQueue: [
+          {
+            id: "ambiguous-delivered",
+            text: "already delivered",
+            createdAt: 1,
+            sendAttempts: 1,
+            sendRunId: "ambiguous-run",
+            sendState,
+            sessionKey: "agent:main",
+          },
+        ],
+      });
+      admitHostQueueItems(host);
 
-    await resumeStoredChatOutboxes(host);
+      await resumeStoredChatOutboxes(host);
 
-    expect(requestCalls(host.request, "chat.send")).toHaveLength(0);
-    expect(host.chatQueue).toStrictEqual([]);
-  });
+      expect(requestCalls(host.request, "chat.send")).toHaveLength(0);
+      expect(host.chatQueue).toStrictEqual([]);
+    },
+  );
 
   it.each([
     { correlation: "completed run", active: false, retry: false },

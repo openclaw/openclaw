@@ -58,6 +58,41 @@ describe("embedded run session permissions", () => {
     await state?.cleanup();
   });
 
+  it.each(["requireWorkspaceOnly", "requireWritableSandbox"] as const)(
+    "preserves the host's %s requirement at attempt dispatch",
+    async (requirement) => {
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ assistantTexts: ["OK"] }));
+      await runEmbeddedAgent({
+        ...createPluginHarnessRunParams(state),
+        [requirement]: true,
+        runId: "run-workspace-requirement",
+      });
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
+        expect.objectContaining({ [requirement]: true }),
+      );
+    },
+  );
+
+  it("shares the final plugin-clamped exec mode with the outer run", async () => {
+    const execOverrides = {};
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attempt) => {
+      expect(attempt.execOverrides).toBe(execOverrides);
+      expect(attempt.execOverrides?.mode).toBe("full");
+      attempt.permissionMode = "workspace";
+      attempt.execOverrides!.mode = "auto";
+      return makeAttemptResult({ assistantTexts: ["OK"] });
+    });
+
+    await runEmbeddedAgent({
+      ...createPluginHarnessRunParams(state),
+      permissionMode: "full",
+      execOverrides,
+      runId: "run-plugin-clamped-session-permissions",
+    });
+
+    expect(execOverrides).toEqual({ mode: "auto" });
+  });
+
   it.each([
     { before: "workspace", after: "full", execMode: "full" },
     { before: "full", after: null, execMode: "ask" },
@@ -167,6 +202,8 @@ describe("embedded run session permissions", () => {
           return retained!.request("full");
         }),
       ).rejects.toThrow("not authorized");
+      expect(attempt.permissionMode).toBe("workspace");
+      expect(attempt.sessionRoot).toBe(state.sessionsDir());
       expect(attempt.execOverrides?.mode).toBe("auto");
       return makeAttemptResult({ assistantTexts: ["Still restricted"] });
     });
