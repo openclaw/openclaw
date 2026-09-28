@@ -115,8 +115,11 @@ export function parseFenceSpans(buffer: string): FenceSpan[] {
   return scanFenceSpans(buffer).spans;
 }
 
-/** Looks up the fence containing an offset; spans must be sorted by start offset. */
-export function findFenceSpanAt(spans: FenceSpan[], index: number): FenceSpan | undefined {
+/** Looks up the span containing an offset; spans must be sorted by start offset. */
+export function findFenceSpanAt<T extends Pick<FenceSpan, "start" | "end">>(
+  spans: readonly T[],
+  index: number,
+): T | undefined {
   let low = 0;
   let high = spans.length - 1;
 
@@ -140,7 +143,10 @@ export function findFenceSpanAt(spans: FenceSpan[], index: number): FenceSpan | 
   return undefined;
 }
 
-/** True when a chunk boundary would not split a fenced-code block. */
-export function isSafeFenceBreak(spans: FenceSpan[], index: number): boolean {
+/** True when a chunk boundary would not split any of the given spans. */
+export function isSafeFenceBreak(
+  spans: readonly Pick<FenceSpan, "start" | "end">[],
+  index: number,
+): boolean {
   return !findFenceSpanAt(spans, index);
 }

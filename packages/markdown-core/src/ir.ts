@@ -349,6 +349,25 @@ export function countMarkdownFencedCodeChars(markdown: string): number {
   return count;
 }
 
+/** Locate table source ranges using the same block grammar as table rendering. */
+export function findMarkdownTableRanges(markdown: string): Array<{ start: number; end: number }> {
+  if (!markdown.includes("|")) {
+    return [];
+  }
+  const parser = createMarkdownIt({ linkify: false, autolink: false, tableMode: "block" });
+  const tableLines = parser
+    .parse(markdown, {})
+    .flatMap((token) => (token.type === "table_open" && token.map ? [token.map] : []));
+  if (tableLines.length === 0) {
+    return [];
+  }
+  const { lines, starts } = indexSourceLines(markdown);
+  return tableLines.map(([first, after]) => ({
+    start: starts[first] ?? 0,
+    end: (starts[after - 1] ?? 0) + (lines[after - 1]?.length ?? 0),
+  }));
+}
+
 function preserveDunderIdentifier(state: StateInline, silent: boolean): boolean {
   const match = /^__[\p{L}_][\p{L}\p{N}_]*__/u.exec(state.src.slice(state.pos, state.posMax));
   if (!match) {
