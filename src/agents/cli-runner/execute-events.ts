@@ -4,6 +4,7 @@ import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { markToolExecutionLivenessDiagnosticEvent } from "../../infra/diagnostic-tool-execution-liveness.js";
 import { projectProgressCardChannelUpdate } from "../../session-cards/progress-card-channel-summary.js";
 import { isAgentPlanProgressToolName } from "../../session-cards/progress-card-input.js";
+import { projectAgentActivityItem } from "../agent-activity-presentation.js";
 import type {
   CliCompactionDelta,
   CliStreamingDelta,
@@ -67,13 +68,17 @@ export function createCliEventHandlers(params: {
       result?: unknown;
       resultContentSource?: "network";
     },
-    execution?: { args: unknown },
+    execution?: { args: unknown; requestedArgs?: unknown },
   ) => {
-    const item = projectAgentToolActivity({
+    let item = projectAgentToolActivity({
       ...data,
       name: stripOpenClawMcpToolPrefix(data.name),
       args: execution ? execution.args : data.args,
     });
+    if (execution?.args === undefined && execution?.requestedArgs !== undefined) {
+      // Requested arguments can identify a quiet poll without proving command execution.
+      item = projectAgentActivityItem(item, { args: execution.requestedArgs });
+    }
     const activity = { runId: runParams.runId, stream: "item", data: item };
     if (data.phase === "start") {
       emitAgentEvent(activity);
@@ -219,6 +224,7 @@ export function createCliEventHandlers(params: {
             (startedCall?.kind === "tool_use" && !event.name.startsWith("mcp_")
               ? startedArgs
               : undefined),
+          requestedArgs: startedArgs,
         },
       );
     }
