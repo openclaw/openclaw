@@ -86,6 +86,11 @@ async function mountEndFollowFixture() {
   const dock = host.querySelector<HTMLElement>(".chat-prs")!;
   const distance = () => thread.scrollHeight - thread.clientHeight - thread.scrollTop;
   await expect.poll(() => extent.offsetHeight).toBe(1300);
+  // These cases mutate settled geometry. Row measurement can finish before the
+  // viewport owner copies slot padding, which independently changes the range.
+  await expect.poll(() => thread.style.paddingTop).toBe("0px");
+  await expect.poll(() => thread.style.paddingBottom).toBe("60px");
+  expect(thread.clientHeight).toBe(400);
   return { host, thread, row, extent, dock, distance };
 }
 

@@ -69,11 +69,6 @@
   display: none;
 }
 
-/* Reserve the collapsed card slot without delaying the real composer or transcript. */
-.agent-chat__progress-float--loading {
-  min-height: var(--chat-stack-header-height, 40px);
-}
-
 .agent-chat__goal {
   align-self: center;
   display: flex;

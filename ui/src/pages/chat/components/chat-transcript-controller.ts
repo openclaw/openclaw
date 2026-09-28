@@ -36,16 +36,16 @@ export class ChatTranscriptController implements ReactiveController {
       this.activeSessionKey === null ||
       !areUiSessionKeysEquivalent(this.activeSessionKey, sessionKey)
     ) {
+      this.sessionVirtualizer?.readingPosition.save(true);
       this.sessionVirtualizer?.dispose();
       // Presentation identities include the session; the cache is instead
       // bounded by physical panes, with a separate session LRU inside each pane.
       const paneId = this.scrollPaneId();
       const savedPosition = getChatSessionScrollPosition(paneId, sessionKey);
-      const initialOffset = savedPosition?.anchorToEnd ? null : (savedPosition?.scrollTop ?? null);
       this.activeSessionKey = sessionKey;
       this.sessionVirtualizer = new ChatSessionVirtualizerHost(
         this.host,
-        initialOffset,
+        savedPosition,
         (position) => saveChatSessionScrollPosition(paneId, sessionKey, position),
         this.callbacks,
       );
@@ -91,6 +91,14 @@ export class ChatTranscriptController implements ReactiveController {
   hostConnected(): void {
     this.connected = true;
     this.sessionVirtualizer?.connect();
+  }
+
+  saveScrollPosition(departing = false): void {
+    this.sessionVirtualizer?.readingPosition.save(departing);
+  }
+
+  hostUpdate(): void {
+    this.sessionVirtualizer?.readingPosition.prepareUpdate();
   }
 
   hostUpdated(): void {

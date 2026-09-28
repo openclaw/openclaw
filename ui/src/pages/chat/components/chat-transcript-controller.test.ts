@@ -326,7 +326,7 @@ describe("chat transcript controller", () => {
     expect(app.parentElement?.parentElement).toBe(rowParent);
   });
 
-  it("reconciles an implicit end anchor when committed content has no scroll range", () => {
+  it("reconciles an implicit end anchor when committed content has no scroll range", async () => {
     const flushFrames = stubAnimationFrames();
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));
@@ -347,6 +347,9 @@ describe("chat transcript controller", () => {
     transcript.hostConnected();
     transcript.scrollToEnd({ source: "auto" });
     transcript.hostUpdated();
+    // Initial geometry is committed at the row-ref checkpoint, before paint.
+    await Promise.resolve();
+    await Promise.resolve();
     flushFrames();
     render(renderChatThread(props, transcript), container);
     expect(transcriptRows(container)[0]?.dataset.index).toBe("0");

@@ -133,14 +133,12 @@ describe("composer question takeover", () => {
     },
   );
 
-  it("hides the pending progress slot during question takeover", () => {
+  it("does not insert an empty progress slot during question takeover", () => {
     const view = renderComposer({
       sessionKey: "queue-test",
-      progressCardInitialLoading: true,
       gatewayQuestionPrompts: [questionPrompt("loading-progress", "Continue?")],
     });
-    const slot = view.container.querySelector<HTMLElement>(".agent-chat__progress-float--loading")!;
-    expect(slot.hidden).toBe(true);
+    expect(view.container.querySelector(".agent-chat__progress-float")).toBeNull();
     expect(view.container.querySelector(".agent-chat__input")).toBeNull();
   });
 });

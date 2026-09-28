@@ -28,7 +28,7 @@ describe("chat transcript geometry", () => {
   afterEach(resetTranscriptTestDom);
 
   it.each([null, 4_800])(
-    "bounds the first presented frame then restores the scrolling buffer at offset %s",
+    "bounds ordinary presentation and preserves the pending-restore buffer at offset %s",
     (offset) => {
       const flushFrames = stubAnimationFrames();
       let presented = true;
@@ -77,13 +77,13 @@ describe("chat transcript geometry", () => {
       expect(renderWindow([])).toBe(0);
       flushFrames();
 
-      // A saved viewport needs five estimated rows; the implicit end starts
-      // with the tail row. Neither needs more than two neighbors per edge.
-      expect(renderWindow()).toBe(offset === null ? 3 : 9);
+      // The implicit end starts with two neighbors. A pending saved reader
+      // retains the full buffer until its measurable restoration commits.
+      expect(renderWindow()).toBe(offset === null ? 3 : 17);
       const mounted = transcriptRows(container).map((row) => Number(row.dataset.index));
       expect(mounted).toEqual(expect.arrayContaining(offset === null ? [99] : [40, 44]));
       // Multiple commits before the next frame must not consume the first-paint budget.
-      expect(renderWindow()).toBe(offset === null ? 3 : 9);
+      expect(renderWindow()).toBe(offset === null ? 3 : 17);
       flushFrames();
       expect(renderWindow()).toBe(offset === null ? 7 : 17);
 
@@ -92,12 +92,12 @@ describe("chat transcript geometry", () => {
       presented = false;
       transcript.hostUpdated();
       presented = true;
-      expect(renderWindow()).toBe(offset === null ? 3 : 9);
+      expect(renderWindow()).toBe(offset === null ? 3 : 17);
       presented = false;
       transcript.hostUpdated();
       flushFrames();
       presented = true;
-      expect(renderWindow()).toBe(offset === null ? 3 : 9);
+      expect(renderWindow()).toBe(offset === null ? 3 : 17);
       flushFrames();
       expect(renderWindow()).toBe(offset === null ? 7 : 17);
       transcript.hostDisconnected();

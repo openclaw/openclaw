@@ -10,6 +10,7 @@ import {
   handleChatScrollTakeover,
   lockChatScroll,
   resetChatScroll,
+  restoreChatScrollPosition,
   saveChatSessionScrollPosition,
   scheduleChatScroll,
   scheduleCommittedChatScroll,
@@ -564,6 +565,59 @@ describe("programmatic scroll ownership", () => {
     expect(host.chatHasAutoScrolled).toBe(false);
     expect(host.chatNewMessagesBelow).toBe(true);
   });
+
+  it.each([0, 1])(
+    "keeps a newer manual Latest queued when restoration settles after %i measured frames",
+    (measuredFrames) => {
+      const frames = installAnimationFrameQueue();
+      const { host, container } = createScrollHost({ scrollTop: 420 });
+      // Latest resets follow policy, then waits for the composer and row measurements.
+      resetChatScroll(host);
+      scheduleChatScroll(host, true, true, { source: "manual" });
+      if (measuredFrames === 1) {
+        frames.runNext();
+      }
+      expect(canAutoFollowChat(host)).toBe(false);
+      // An older reader restore completes before the queued latest command is issued.
+      restoreChatScrollPosition(host, { scrollTop: 420, anchorToEnd: false });
+      expect(frames.callbacks).toHaveLength(1);
+      expect(host.chatFollowLocked).toBe(false);
+      expect(host.chatReadingHistory).toBe(false);
+      expect(host.chatHasAutoScrolled).toBe(false);
+      expect(canAutoFollowChat(host)).toBe(false);
+      if (measuredFrames === 0) {
+        frames.runNext();
+        expect(host.chatScrollToEnd).not.toHaveBeenCalled();
+      }
+      frames.runNext();
+      expect(host.chatScrollToEnd).toHaveBeenCalledExactlyOnceWith({
+        behavior: "smooth",
+        source: "manual",
+      });
+      expect(container.scrollTop).toBe(container.scrollHeight);
+      expect(canAutoFollowChat(host)).toBe(true);
+      expect(frames.callbacks).toHaveLength(0);
+    },
+  );
+
+  it.each(["ordinary", "automatic follow queued"])(
+    "applies an older reader restoration with no newer manual command: %s",
+    (stage) => {
+      const frames = installAnimationFrameQueue();
+      const { host, container } = createScrollHost({ scrollTop: 420 });
+      if (stage === "automatic follow queued") {
+        scheduleChatScroll(host, true, true, { source: "auto" });
+        expect(frames.callbacks).toHaveLength(1);
+      }
+      restoreChatScrollPosition(host, { scrollTop: 420, anchorToEnd: false });
+      expect(frames.callbacks).toHaveLength(0);
+      expect(host.chatScrollToEnd).not.toHaveBeenCalled();
+      expect(container.scrollTop).toBe(420);
+      expect(host.chatFollowLocked).toBe(true);
+      expect(host.chatReadingHistory).toBe(true);
+      expect(host.chatHasAutoScrolled).toBe(true);
+    },
+  );
 
   it("allows a real user scroll-up during the programmatic command", () => {
     const { host } = createScrollHost({});

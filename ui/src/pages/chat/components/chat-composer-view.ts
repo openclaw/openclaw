@@ -308,13 +308,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
           props.connected && props.canSend ? props.progressCardRefresh : undefined,
         )}
       </div>`
-    : props.progressCardInitialLoading
-      ? html`<div
-          class="agent-chat__progress-float agent-chat__progress-float--loading"
-          ?hidden=${!showComposer}
-          aria-hidden="true"
-        ></div>`
-      : nothing;
+    : nothing;
   const queue = renderChatQueue({
     queue: props.queue,
     displayQueue: props.displayQueue,

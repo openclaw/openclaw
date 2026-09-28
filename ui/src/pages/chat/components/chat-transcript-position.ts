@@ -4,7 +4,7 @@ import { maxTranscriptScrollOffset } from "./chat-transcript-geometry.ts";
 /** Return the loaded message at or preceding the viewport midpoint. */
 export function activeTranscriptMessageId(
   scrollElement: HTMLDivElement | null,
-  virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+  virtualizer: Pick<Virtualizer<HTMLDivElement, HTMLElement>, "getVirtualItemForOffset">,
   messageIds: readonly string[],
   messageRowKeysById: ReadonlyMap<string, string>,
   rowIndexesByKey: ReadonlyMap<string, number>,

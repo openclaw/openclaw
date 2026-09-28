@@ -26,11 +26,12 @@ export class TranscriptPrependAnchor {
     range: Range,
     indexes: ReadonlyMap<string, number>,
     focusedRowKey: string | null,
+    restoredRowKey: string | null = null,
   ): number[] {
     const messageKey = this.messageKey;
     const rowKey =
       (messageKey === null ? null : this.committedMessageRows.get(messageKey)) ?? this.rowKey;
-    return extractTranscriptRange(range, indexes, [focusedRowKey, rowKey]);
+    return extractTranscriptRange(range, indexes, [focusedRowKey, rowKey, restoredRowKey]);
   }
 
   /** Whether the next projection inserts history before the committed first message. */
@@ -54,7 +55,7 @@ export class TranscriptPrependAnchor {
       this.pending && this.messageKeys.has(this.pending.messageKey) ? this.pending : null;
     const anchor =
       !commanded && (this.hasPrepend || readingProjectionChanged)
-        ? (retained ?? captureTranscriptPrependAnchor(element, this.messageKeys))
+        ? (retained ?? captureTranscriptMessageAnchor(element, this.messageKeys))
         : null;
     if (anchor) {
       this.pending = { ...anchor, measured: false };
@@ -103,7 +104,7 @@ export class TranscriptPrependAnchor {
 }
 
 /** Capture a retained message before history or regrouping changes its row. */
-function captureTranscriptPrependAnchor(
+export function captureTranscriptMessageAnchor(
   scrollElement: HTMLDivElement | null,
   next: TranscriptMessageKeys,
 ): ChatTranscriptPrependAnchor | null {

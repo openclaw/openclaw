@@ -40,7 +40,7 @@ export function renderChatTranscriptLayout<T>({
       class="chat-thread-inner chat-thread-inner--virtual"
       ?data-measuring-rows=${measureRows}
       ${ref(scrollElementRef)}
-      ${transcriptRangeSize(layout, virtualizer.getTotalSize() + headerHeight)}
+      ${transcriptRangeSize(layout, virtualizer.getTotalSize() + headerHeight, virtualRows, virtualizer.options.scrollMargin)}
       @click=${{ handleEvent: captureInteractionResize, capture: true }}
     >
       ${header}

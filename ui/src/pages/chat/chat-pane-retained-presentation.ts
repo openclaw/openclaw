@@ -150,8 +150,6 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     });
   }
 
-  private progressPresentationSessionKey: string | undefined;
-  private progressPresentationReady = false;
   private retainedProgressCard:
     | {
         gatewayScope: object;
@@ -174,7 +172,6 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     if (
       !state ||
       state.settings.chatShowTaskProgress === false ||
-      !this.presented ||
       this.isCurrentSessionArchived(state) ||
       parseCatalogSessionKey(state.sessionKey)
     ) {
@@ -195,6 +192,11 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     ) {
       this.retainedProgressCard = undefined;
     }
+    if (!this.visuallyPresented) {
+      return null;
+    }
+    // An inert retained preview needs the same chrome before route admission.
+    // Reuse only this validated snapshot; progressCardTarget still gates reads.
     const card = this.progressCard.card;
     const target = this.resolveChatReadTarget();
     if (card && target) {
@@ -216,7 +218,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     return this.retainedProgressCard ?? null;
   }
 
-  protected override initialProgressCardTarget() {
+  protected override progressCardTarget() {
     const state = this.state;
     if (
       !state?.connected ||
@@ -228,47 +230,8 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     ) {
       return undefined;
     }
-    // Unlike secondary metadata, the progress card determines transcript geometry.
-    // Consult preferences only after the pane and its history owner are ready.
+    // Read progress only after the foreground pane and its history owner are ready.
     return state.settings.chatShowTaskProgress === false ? undefined : this.resolveChatReadTarget();
-  }
-
-  protected get progressCardInitialLoading(): boolean {
-    const state = this.state;
-    if (!state || state.settings.chatShowTaskProgress === false) {
-      return false;
-    }
-    if (this.progressPresentationSessionKey !== state.sessionKey) {
-      this.progressPresentationSessionKey = state.sessionKey;
-      this.progressPresentationReady = false;
-    }
-    if (this.progressPresentationReady) {
-      return false;
-    }
-    const phase = this.context.gateway.snapshot.phase;
-    if (
-      !this.isCurrentSessionArchived(state) &&
-      !parseCatalogSessionKey(state.sessionKey) &&
-      getChatHistoryLoadState(state).phase !== "failed"
-    ) {
-      if (phase === "connecting" || phase === "starting") {
-        return true;
-      }
-      if (
-        state.connected &&
-        (!this.presented ||
-          document.visibilityState === "hidden" ||
-          (!this.transcriptReady && !getAcceptedChatHistorySession(state)) ||
-          (this.initialProgressCardTarget() &&
-            this.progressCard.loading &&
-            !this.progressCard.error))
-      ) {
-        return true;
-      }
-    }
-    // Only the first read reserves an empty card slot; refreshes retain the mounted card.
-    this.progressPresentationReady = true;
-    return false;
   }
 
   protected clearComposerPrefillAttention(): void {
@@ -395,7 +358,6 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
   protected override presentedChanged(presented: boolean): void {
     if (!presented) {
       this.dashboardPresentationActivation = undefined;
-      this.retainedProgressCard = undefined;
     }
     if (!this.isConnected) {
       return;

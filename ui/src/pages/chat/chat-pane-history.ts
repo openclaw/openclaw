@@ -62,11 +62,7 @@ import {
   publishChatSessionProjectionMessages,
   retireChatSubmissionDisplay,
 } from "./history-merge.ts";
-import {
-  captureChatSessionScrollPosition,
-  saveChatSessionScrollPosition,
-  scheduleChatScroll,
-} from "./scroll.ts";
+import { scheduleChatScroll } from "./scroll.ts";
 import {
   applyChatCacheSnapshot,
   cacheChatSessionSnapshot,
@@ -278,6 +274,10 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
   }
 
   protected handleTranscriptScroll(event: Event): void {
+    // Retained hidden panes remain measurable, but layout clamps are not reader input.
+    if (!this.presented || !this.visuallyPresented) {
+      return;
+    }
     const root =
       event.currentTarget instanceof HTMLElement
         ? event.currentTarget
@@ -287,19 +287,6 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     const previousScrollTop = this.transcriptScrollTop;
     if (root) {
       this.transcriptScrollTop = root.scrollTop;
-      const renderedSessionKey = this.transcript.renderedSessionKey;
-      const stateSessionKey = this.state?.sessionKey;
-      if (
-        renderedSessionKey &&
-        stateSessionKey &&
-        areUiSessionKeysEquivalent(renderedSessionKey, stateSessionKey)
-      ) {
-        saveChatSessionScrollPosition(
-          this.paneId,
-          renderedSessionKey,
-          captureChatSessionScrollPosition(root),
-        );
-      }
     }
     // A shrinking scroll range can move the native offset to its new end.
     // Only movement away from that edge can imply reader intent without input.
@@ -322,6 +309,16 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     // Preserve the normal at-bottom/new-message bookkeeping while layering
     // history-sentinel arming onto the same scroll event.
     this.state?.handleChatScroll(event);
+    const renderedSessionKey = this.transcript.renderedSessionKey;
+    const stateSessionKey = this.state?.sessionKey;
+    if (
+      root &&
+      renderedSessionKey &&
+      stateSessionKey &&
+      areUiSessionKeysEquivalent(renderedSessionKey, stateSessionKey)
+    ) {
+      this.transcript.saveScrollPosition();
+    }
   }
 
   protected consumeHistoryIntent(): boolean {
