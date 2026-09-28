@@ -2,6 +2,7 @@
 import path from "node:path";
 import { isStringRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
+import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -73,6 +74,8 @@ const BUNDLE_PLACEHOLDER_PATTERN = /\$\{(?:CLAUDE_PLUGIN_ROOT|PLUGIN_ROOT|PLUGIN
 const AGENT_MCP_TOP_LEVEL_KEYS = new Set(["$schema", "mcpServers"]);
 const AGENT_STDIO_KEYS = new Set(["type", "command", "args", "env", "cwd"]);
 const AGENT_HTTP_KEYS = new Set(["type", "url", "headers"]);
+const MISSING_NATIVE_MCP_HEADER_ENV_DIAGNOSTIC =
+  "one or more native MCP servers were skipped because a required header environment variable is unavailable";
 
 function resolveBundleMcpConfigPaths(params: {
   raw: Record<string, unknown>;
@@ -430,6 +433,54 @@ function loadRootRelativeMcpConfig(params: {
   };
 }
 
+function loadNativePluginMcpConfig(params: {
+  rootDir: string;
+  mcpServers: Record<string, BundleMcpServerConfig>;
+  inspectNativeHeaderEnvRefs?: boolean;
+}): { config: BundleMcpRuntimeConfig; diagnostics: string[] } {
+  let skippedServerForMissingHeaderEnv = false;
+  const serverEntries: Array<[string, BundleMcpServerConfig]> = [];
+  for (const [serverName, server] of Object.entries(params.mcpServers)) {
+    if (!isRecord(server.headers)) {
+      serverEntries.push([serverName, server]);
+      continue;
+    }
+
+    let missingHeaderEnv = false;
+    // Resolve each value independently so untrusted header names never become object paths
+    // in the general config resolver. The resolver owns the placeholder grammar and escaping.
+    const resolvedHeaders = Object.fromEntries(
+      Object.entries(server.headers).map(([name, value]) => [
+        name,
+        typeof value === "string"
+          ? resolveConfigEnvVars(value, process.env, { onMissing: () => (missingHeaderEnv = true) })
+          : value,
+      ]),
+    );
+    if (missingHeaderEnv) {
+      skippedServerForMissingHeaderEnv = true;
+      continue;
+    }
+    serverEntries.push([
+      serverName,
+      {
+        ...server,
+        // Doctor needs authored references for its literal-secret check. Runtime loads
+        // keep the resolved values; missing refs fail closed in either mode above.
+        headers: params.inspectNativeHeaderEnvRefs ? server.headers : resolvedHeaders,
+      },
+    ]);
+  }
+  const mcpServers = Object.fromEntries(serverEntries);
+  const loaded = loadRootRelativeMcpConfig({ rootDir: params.rootDir, mcpServers });
+  return {
+    ...loaded,
+    diagnostics: skippedServerForMissingHeaderEnv
+      ? [...loaded.diagnostics, MISSING_NATIVE_MCP_HEADER_ENV_DIAGNOSTIC]
+      : loaded.diagnostics,
+  };
+}
+
 function loadBundleMcpConfig(params: {
   pluginId: string;
   rootDir: string;
@@ -532,6 +583,8 @@ export function loadEnabledBundleMcpConfig(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+  /** Preserve authored native header references for static inspection after validating them. */
+  inspectNativeHeaderEnvRefs?: boolean;
 }): EnabledBundleMcpConfigResult {
   const loaded = loadEnabledBundleConfig({
     workspaceDir: params.workspaceDir,
@@ -544,9 +597,10 @@ export function loadEnabledBundleMcpConfig(params: {
     loadBundleConfig: loadBundleMcpConfig,
     loadNativePluginConfig: ({ record }) =>
       record.mcpServers
-        ? loadRootRelativeMcpConfig({
+        ? loadNativePluginMcpConfig({
             rootDir: record.rootDir,
             mcpServers: record.mcpServers,
+            inspectNativeHeaderEnvRefs: params.inspectNativeHeaderEnvRefs,
           })
         : undefined,
     createDiagnostic: (pluginId, message) => ({ pluginId, message }),

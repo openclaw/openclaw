@@ -85,11 +85,14 @@ export function loadMergedBundleMcpConfig(params: {
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   mapConfiguredServer?: BundleMcpServerMapper;
   toolOverrides?: Pick<SessionToolOverrides, "mcpServers">;
+  /** Preserve authored native header references for static inspection after validating them. */
+  inspectNativeHeaderEnvRefs?: boolean;
 }): MergedBundleMcpConfig {
   const bundleMcp = loadEnabledBundleMcpConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
     manifestRegistry: params.manifestRegistry,
+    inspectNativeHeaderEnvRefs: params.inspectNativeHeaderEnvRefs,
   });
   const configuredMcp = normalizeConfiguredMcpServers(params.cfg?.mcp?.servers);
   const serverOverrides = params.toolOverrides?.mcpServers;

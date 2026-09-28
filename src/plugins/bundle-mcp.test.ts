@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { isRecord } from "../utils.js";
 import { loadEnabledBundleLspConfig } from "./bundle-lsp.js";
@@ -17,6 +17,7 @@ import {
   writeClaudeBundleManifest,
   resolveBundlePluginRoot,
 } from "./bundle-mcp.test-support.js";
+import type { PluginManifestRegistry } from "./manifest-registry.js";
 
 function getServerArgs(value: unknown): unknown[] | undefined {
   return isRecord(value) && Array.isArray(value.args) ? value.args : undefined;
@@ -50,6 +51,7 @@ function expectNoDiagnostics(diagnostics: unknown[]) {
 const tempHarness = createBundleMcpTempHarness();
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await tempHarness.cleanup();
 });
 
@@ -230,6 +232,151 @@ describe("loadEnabledBundleMcpConfig", () => {
       args: [path.join(pluginRoot, "mcp-server.js")],
       cwd: pluginRoot,
     });
+  });
+
+  it("resolves native MCP header references with the config substitution grammar", async () => {
+    vi.stubEnv("OPENCLAW_NATIVE_MCP_HEADER_TOKEN", "fixture-token");
+    vi.stubEnv("OPENCLAW_NATIVE_MCP_UNSET_TOKEN", "");
+    const workspaceDir = await tempHarness.createTempDir("openclaw-native-mcp-workspace-");
+    const pluginRoot = await tempHarness.createTempDir("openclaw-native-mcp-plugin-");
+    const manifestRegistry: Pick<PluginManifestRegistry, "plugins"> = {
+      plugins: [
+        {
+          id: "native-mcp",
+          origin: "global",
+          format: "openclaw",
+          channels: [],
+          providers: [],
+          cliBackends: [],
+          skills: [],
+          hooks: [],
+          rootDir: pluginRoot,
+          source: path.join(pluginRoot, "index.js"),
+          manifestPath: path.join(pluginRoot, "openclaw.plugin.json"),
+          mcpServers: {
+            remote: {
+              transport: "streamable-http",
+              url: "https://mcp.example.test",
+              headers: {
+                Authorization: "Bearer ${OPENCLAW_NATIVE_MCP_HEADER_TOKEN}",
+                "X-Default": "${OPENCLAW_NATIVE_MCP_UNSET_TOKEN:-fallback}",
+                "X-Literal": "$${OPENCLAW_NATIVE_MCP_HEADER_TOKEN}",
+                "X-Static": "unchanged",
+                "X-Unsupported": "${lowercase_token}",
+              },
+            },
+          },
+        },
+      ],
+    };
+    const loaded = loadEnabledBundleMcpConfig({
+      workspaceDir,
+      cfg: createEnabledBundleConfig(["native-mcp"]),
+      manifestRegistry,
+    });
+
+    expectNoDiagnostics(loaded.diagnostics);
+    expect(loaded.config.mcpServers.remote).toEqual({
+      transport: "streamable-http",
+      url: "https://mcp.example.test",
+      headers: {
+        Authorization: "Bearer fixture-token",
+        "X-Default": "fallback",
+        "X-Literal": "${OPENCLAW_NATIVE_MCP_HEADER_TOKEN}",
+        "X-Static": "unchanged",
+        "X-Unsupported": "${lowercase_token}",
+      },
+      cwd: pluginRoot,
+    });
+
+    const inspected = loadEnabledBundleMcpConfig({
+      workspaceDir,
+      cfg: createEnabledBundleConfig(["native-mcp"]),
+      manifestRegistry,
+      inspectNativeHeaderEnvRefs: true,
+    });
+    expect(inspected.config.mcpServers.remote?.headers).toEqual({
+      Authorization: "Bearer ${OPENCLAW_NATIVE_MCP_HEADER_TOKEN}",
+      "X-Default": "${OPENCLAW_NATIVE_MCP_UNSET_TOKEN:-fallback}",
+      "X-Literal": "$${OPENCLAW_NATIVE_MCP_HEADER_TOKEN}",
+      "X-Static": "unchanged",
+      "X-Unsupported": "${lowercase_token}",
+    });
+  });
+
+  it("omits native servers with missing header references and reports one redacted diagnostic", async () => {
+    vi.stubEnv("OPENCLAW_NATIVE_MCP_MISSING_TOKEN", "");
+    vi.stubEnv("OPENCLAW_NATIVE_MCP_MISSING_TENANT", "");
+    vi.stubEnv("OPENCLAW_NATIVE_MCP_PRESENT_TOKEN", "fixture-secret-value");
+    const workspaceDir = await tempHarness.createTempDir("openclaw-native-mcp-workspace-");
+    const pluginRoot = await tempHarness.createTempDir("openclaw-native-mcp-plugin-");
+    const manifestRegistry: Pick<PluginManifestRegistry, "plugins"> = {
+      plugins: [
+        {
+          id: "native-mcp",
+          origin: "global",
+          format: "openclaw",
+          channels: [],
+          providers: [],
+          cliBackends: [],
+          skills: [],
+          hooks: [],
+          rootDir: pluginRoot,
+          source: path.join(pluginRoot, "index.js"),
+          manifestPath: path.join(pluginRoot, "openclaw.plugin.json"),
+          mcpServers: {
+            missingAuth: {
+              transport: "streamable-http",
+              url: "https://private-endpoint.example.test/mcp",
+              headers: {
+                Authorization: "Bearer ${OPENCLAW_NATIVE_MCP_MISSING_TOKEN}",
+                "X-Tenant": "${OPENCLAW_NATIVE_MCP_MISSING_TENANT}",
+              },
+            },
+            sibling: {
+              transport: "streamable-http",
+              url: "https://sibling.example.test/mcp",
+              headers: {
+                Authorization: "Bearer ${OPENCLAW_NATIVE_MCP_PRESENT_TOKEN}",
+              },
+            },
+          },
+        },
+      ],
+    };
+    const loaded = loadEnabledBundleMcpConfig({
+      workspaceDir,
+      cfg: createEnabledBundleConfig(["native-mcp"]),
+      manifestRegistry,
+    });
+
+    expect(loaded.config.mcpServers).not.toHaveProperty("missingAuth");
+    expect(loaded.config.mcpServers.sibling).toMatchObject({
+      headers: { Authorization: "Bearer fixture-secret-value" },
+    });
+    expect(loaded.diagnostics).toEqual([
+      {
+        pluginId: "native-mcp",
+        message:
+          "one or more native MCP servers were skipped because a required header environment variable is unavailable",
+      },
+    ]);
+    const diagnosticText = JSON.stringify(loaded.diagnostics);
+    expect(diagnosticText).not.toContain("OPENCLAW_NATIVE_MCP_");
+    expect(diagnosticText).not.toContain("fixture-secret-value");
+    expect(diagnosticText).not.toContain("private-endpoint.example.test");
+
+    const inspected = loadEnabledBundleMcpConfig({
+      workspaceDir,
+      cfg: createEnabledBundleConfig(["native-mcp"]),
+      manifestRegistry,
+      inspectNativeHeaderEnvRefs: true,
+    });
+    expect(inspected.config.mcpServers).not.toHaveProperty("missingAuth");
+    expect(inspected.config.mcpServers.sibling?.headers).toEqual({
+      Authorization: "Bearer ${OPENCLAW_NATIVE_MCP_PRESENT_TOKEN}",
+    });
+    expect(inspected.diagnostics).toEqual(loaded.diagnostics);
   });
 
   it("skips MCP servers declared by a disabled native plugin", async () => {
