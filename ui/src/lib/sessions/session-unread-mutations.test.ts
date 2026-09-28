@@ -153,7 +153,14 @@ describe("session unread mutation capability", () => {
   });
 
   it.each([
-    { name: "newer manual marker", entry: { markedUnreadAt: 99, updatedAt: 99 } },
+    {
+      name: "newer manual marker",
+      entry: {
+        markedUnreadAt: 99,
+        updatedAt: 99,
+        agentStatus: { note: "New attention", expiresAt: Number.MAX_SAFE_INTEGER },
+      },
+    },
     {
       name: "activity after another reader cleared the marker",
       entry: { createdAt: 1, lastReadAt: 50, lastActivityAt: 100, updatedAt: 100 },
@@ -183,6 +190,7 @@ describe("session unread mutation capability", () => {
     });
     await expect(operation).resolves.toBeTruthy();
     expect(rowUnread(sessions.state.result)).toBe(true);
+    expect(sessions.state.result?.sessions[0]?.agentStatus).toEqual(entry.agentStatus);
     sessions.dispose();
   });
 });
