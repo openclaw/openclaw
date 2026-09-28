@@ -86,12 +86,12 @@ class CommandPaletteLogicTest {
   fun appearanceSearchFromSettingsReturnsToSettingsHome() = verifyAppearanceSearch(HomeDestination.Settings)
 
   @Test
-  fun workspacePageRemainsReachableThroughMoreAndSearchWithBackToOrigin() {
+  fun workspacePageRemainsReachableThroughPagesMenuAndSearchWithBackToOrigin() {
     val workshop = nativeString("Skill Workshop")
     val workshopDescription = nativeString("Review generated skill proposals before they become live skills.")
     withShell(HomeDestination.Connect) { backDispatcher, assertRuntimeUnchanged ->
       composeRule.onNodeWithTag("sidebar-open-overview").performClick()
-      composeRule.onNodeWithText(nativeString("More")).performScrollTo().performClick()
+      composeRule.onNodeWithTag("sidebar-pages-menu").performClick()
       composeRule.onNodeWithText(workshop).performScrollTo().performClick()
       composeRule.onNodeWithText(workshopDescription).assertIsDisplayed()
       assertRuntimeUnchanged()

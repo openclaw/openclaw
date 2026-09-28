@@ -44,7 +44,6 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.DesktopWindows
 import androidx.compose.material.icons.outlined.ErrorOutline
@@ -762,12 +761,6 @@ internal fun OpenClawSidebar(
               }
             }
           }
-          SidebarActionRow(
-            label = nativeString("More"),
-            icon = Icons.Default.MoreHoriz,
-            palette = palette,
-            onClick = { pagesMenuMode = SidebarPagesMenuMode.Navigate },
-          )
           SidebarCollapsibleHeader(
             label = nativeString("Pinned"),
             attention = if (pinnedExpanded) null else attentionFor(pinnedSessions.map { sidebarAttentionSessionKey(it.key, it.ownerAgentId ?: selectedAgentId ?: defaultAgentId) }),
