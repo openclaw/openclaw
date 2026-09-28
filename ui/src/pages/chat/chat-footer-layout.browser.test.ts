@@ -197,9 +197,11 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
 
   it("paints message footer focus outlines past virtual row boundaries", async () => {
     await withBrowserPage(openBrowserPage(600, 300), async (page) => {
+      // Production gives the transcript a definite flex viewport. This isolated
+      // row proof must not borrow its height from an unrelated landscape minimum.
       await page.setContent(
         `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-          <div class="chat-thread" style="width: 500px; --accent: rgb(255, 0, 0);">
+          <div class="chat-thread" style="width: 500px; height: 200px; --accent: rgb(255, 0, 0);">
             <div class="chat-thread-inner chat-thread-inner--virtual">
               <div class="chat-virtual-sizer">
                 <div class="chat-virtual-block">

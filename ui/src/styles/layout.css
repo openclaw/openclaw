@@ -36,7 +36,9 @@
   );
   --shell-focus-duration: 200ms;
   --shell-focus-ease: var(--ease-out);
-  height: 100vh;
+  /* Safari keyboards resize only the visual viewport, not vh/dvh. The shell
+     owns the height so transcript, progress, branch and composer reflow together. */
+  height: min(100vh, var(--shell-viewport-height, 100vh));
   display: grid;
   grid-template-columns: var(--shell-nav-width) minmax(0, 1fr);
   grid-template-rows: var(--shell-topbar-height) 1fr;
@@ -92,7 +94,7 @@
 
 @supports (height: 100dvh) {
   .shell {
-    height: 100dvh;
+    height: min(100dvh, var(--shell-viewport-height, 100dvh));
   }
 }
 
