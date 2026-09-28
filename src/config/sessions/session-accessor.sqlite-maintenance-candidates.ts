@@ -68,6 +68,7 @@ export function collectSqliteSessionMaintenanceBaseKeys(
 
 export function readSessionMaintenanceKeyProjection(
   database: Pick<OpenClawAgentDatabase, "db">,
+  sessionKeys?: readonly string[],
 ): Record<string, SessionEntry> {
   const db = getSessionKysely(database.db);
   const store: Record<string, SessionEntry> = {};
@@ -76,6 +77,9 @@ export function readSessionMaintenanceKeyProjection(
     db
       .selectFrom("session_nodes")
       .select(["current_session_id", "parent_session_key", "session_key", "updated_at"])
+      .$if(sessionKeys !== undefined, (query) =>
+        query.where("session_key", "in", sqliteStringSet(sessionKeys ?? [])),
+      )
       .where("archived_at", "is", null)
       .orderBy("session_key", "asc"),
   )) {
