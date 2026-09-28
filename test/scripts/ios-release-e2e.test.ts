@@ -456,6 +456,7 @@ describe("release qualification workflow authority", () => {
     }
     expect(recovery.with["if-no-files-found"]).toBe("error");
     expect(workflow.permissions).toEqual({ contents: "read" });
+    expect(workflow.jobs.qualify["runs-on"]).toBe("xcode-27-xlarge");
     expect(workflow.jobs.qualify.environment).toBeUndefined();
     expect(workflow.on.workflow_dispatch.inputs.target_sha).toBeUndefined();
     expect(workflow.jobs.qualify.env.TARGET_SHA).toBe("${{ inputs.target_sha || github.sha }}");

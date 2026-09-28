@@ -117,7 +117,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
-import androidx.compose.material.icons.automirrored.filled.ScreenShare
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bolt
@@ -129,16 +128,12 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.Palette
-import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Refresh
@@ -232,7 +227,7 @@ private fun UsageSettingsScreen(
     }
   }
 
-  SettingsDetailFrame(title = nativeString("Usage"), subtitle = nativeString("Provider limits and quota health."), icon = Icons.Default.Storage, onBack = onBack) {
+  SettingsDetailFrame(title = nativeString("Usage"), subtitle = nativeString("Provider limits and quota health."), icon = SettingsRoute.Usage.icon, onBack = onBack) {
     SettingsRefreshControls(isConnected, usageConverging, usageState.errorText, viewModel::refreshUsage)
     SettingsSummaryContent(usageState, isConnected, nativeString("Connect the gateway to load usage.")) { usageSummary ->
       SettingsMetricPanel(
@@ -293,7 +288,7 @@ private fun CronJobsSettingsScreen(
   SettingsDetailFrame(
     title = nativeString("Automations"),
     subtitle = nativeString("Scheduled OpenClaw work from your gateway."),
-    icon = Icons.Default.Bolt,
+    icon = SettingsRoute.CronJobs.icon,
     onBack = onBack,
     trailingAction = {
       ClawPlainIconButton(
@@ -480,7 +475,7 @@ private fun CronJobDetailSettingsScreen(
   SettingsDetailFrame(
     title = current?.name ?: jobName ?: nativeString("Automation"),
     subtitle = nativeString("Inspect and manage scheduled gateway work."),
-    icon = Icons.Default.Bolt,
+    icon = SettingsRoute.CronJobs.icon,
     onBack = ::leaveDetail,
   ) {
     ClawSecondaryButton(
@@ -566,7 +561,7 @@ private fun AgentsSettingsScreen(
     }
   }
 
-  SettingsDetailFrame(title = nativeString("Agents"), subtitle = nativeString("Choose and inspect the assistants available on this gateway."), icon = Icons.Default.Person, onBack = onBack) {
+  SettingsDetailFrame(title = nativeString("Agents"), subtitle = nativeString("Choose and inspect the assistants available on this gateway."), icon = SettingsRoute.Agents.icon, onBack = onBack) {
     SettingsMetricPanel(
       rows =
         listOf(
@@ -613,7 +608,7 @@ private fun ApprovalsSettingsScreen(
     }
   }
 
-  SettingsDetailFrame(title = nativeString("Approvals"), subtitle = nativeString("Review actions that need your attention."), icon = Icons.Default.Lock, onBack = onBack) {
+  SettingsDetailFrame(title = nativeString("Approvals"), subtitle = nativeString("Review actions that need your attention."), icon = SettingsRoute.Approvals.icon, onBack = onBack) {
     SettingsMetricPanel(
       rows =
         listOf(
@@ -678,7 +673,7 @@ private fun ProfileSettingsScreen(
   val displayName by viewModel.displayName.collectAsState()
   var draft by remember(displayName) { mutableStateOf(displayName.ifBlank { "OpenClaw" }) }
 
-  SettingsDetailFrame(title = nativeString("Profile"), subtitle = nativeString("How this phone appears to OpenClaw."), icon = Icons.Default.Person, onBack = onBack) {
+  SettingsDetailFrame(title = nativeString("Profile"), subtitle = nativeString("How this phone appears to OpenClaw."), icon = SettingsRoute.Profile.icon, onBack = onBack) {
     ClawPanel {
       Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
         ClawTextField(value = draft, onValueChange = { draft = it }, placeholder = nativeString("Device name"))
@@ -741,7 +736,7 @@ private fun VoiceSettingsScreen(
     onDispose { observer.close() }
   }
 
-  SettingsDetailFrame(title = nativeString("Voice"), subtitle = nativeString("Configure wake words, talk, and playback."), icon = Icons.Default.Mic, onBack = onBack) {
+  SettingsDetailFrame(title = nativeString("Voice"), subtitle = nativeString("Configure wake words, talk, and playback."), icon = SettingsRoute.Voice.icon, onBack = onBack) {
     Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
       Text(text = nativeString("Voice Wake"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
       SettingsTogglePanel(
@@ -1125,7 +1120,7 @@ private fun NotificationSettingsScreen(
     }
   }
 
-  SettingsDetailFrame(title = nativeString("Notifications"), subtitle = nativeString("Choose what reaches OpenClaw."), icon = Icons.Default.Notifications, onBack = onBack) {
+  SettingsDetailFrame(title = nativeString("Notifications"), subtitle = nativeString("Choose what reaches OpenClaw."), icon = SettingsRoute.Notifications.icon, onBack = onBack) {
     SettingsTogglePanel(
       rows =
         listOf(
@@ -1503,7 +1498,7 @@ private fun PhoneCapabilitiesScreen(
     }
   }
 
-  SettingsDetailFrame(title = nativeString("Phone Capabilities"), subtitle = nativeString("Choose what this phone can share."), icon = Icons.AutoMirrored.Filled.ScreenShare, onBack = onBack) {
+  SettingsDetailFrame(title = nativeString("Phone Capabilities"), subtitle = nativeString("Choose what this phone can share."), icon = SettingsRoute.PhoneCapabilities.icon, onBack = onBack) {
     SettingsTogglePanel(
       rows =
         listOfNotNull(
@@ -1829,7 +1824,7 @@ private fun GatewaySettingsScreen(
   SettingsDetailFrame(
     title = nativeString("Gateway"),
     subtitle = nativeString("Connection between this phone and OpenClaw."),
-    icon = Icons.Default.Cloud,
+    icon = SettingsRoute.Gateway.icon,
     onBack = onBack,
     trailingAction = {
       ClawPlainIconButton(
@@ -2031,7 +2026,7 @@ private fun GatewaySettingsScreen(
           setupValidationText?.let {
             Text(text = it, style = ClawTheme.type.caption, color = ClawTheme.colors.warning)
           }
-          ClawSecondaryButton(text = nativeString("Connect"), onClick = { connectGateway(useSetupCode = true) }, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.Cloud)
+          ClawSecondaryButton(text = nativeString("Connect"), onClick = { connectGateway(useSetupCode = true) }, modifier = Modifier.fillMaxWidth(), icon = SettingsRoute.Gateway.icon)
           TextButton(onClick = { showSetupCodeHelp = !showSetupCodeHelp }) {
             Text(nativeString("Where do I get a setup code?"))
           }
@@ -2181,7 +2176,7 @@ private fun AppearanceSettingsScreen(
   var appLanguage by remember { mutableStateOf(currentAppLanguage()) }
   val systemLanguageTag = currentSystemLanguageTag(context)
 
-  SettingsDetailFrame(title = nativeString("Appearance"), subtitle = nativeString("Theme and translated Android text."), icon = Icons.Default.Palette, onBack = onBack) {
+  SettingsDetailFrame(title = nativeString("Appearance"), subtitle = nativeString("Theme and translated Android text."), icon = SettingsRoute.Appearance.icon, onBack = onBack) {
     ClawPanel {
       Column(verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs)) {
         Text(text = nativeString("Theme family"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
@@ -2439,7 +2434,7 @@ private fun AboutSettingsScreen(
   val currentGatewayVersion = updateAvailable?.currentVersion?.takeIf { it.isNotBlank() } ?: gatewayVersion
   val appLocale = LocalConfiguration.current.locales[0]
 
-  SettingsDetailFrame(title = nativeString("About"), subtitle = nativeString("OpenClaw for Android."), icon = Icons.Default.Info, onBack = onBack) {
+  SettingsDetailFrame(title = nativeString("About"), subtitle = nativeString("OpenClaw for Android."), icon = SettingsRoute.About.icon, onBack = onBack) {
     AboutHeroPanel()
     AboutBuildIdentityPanel(
       versionName = BuildConfig.VERSION_NAME,
@@ -2555,7 +2550,7 @@ private fun LicensesSettingsScreen(onBack: () -> Unit) {
     title = nativeString("Licenses"),
     subtitle = if (selectedLicense == null) nativeString("OpenClaw appreciates its partners in the open-source community.") else "",
     subtitleTextAlign = TextAlign.Center,
-    icon = Icons.Default.Info,
+    icon = SettingsRoute.Licenses.icon,
     onBack = backToListOrSettings,
   ) {
     val selected = selectedLicense
@@ -2880,8 +2875,8 @@ private fun ApprovalListRow(toolCall: ChatPendingToolCall) {
   ClawListItem(
     title = approvalActionName(toolCall.name),
     subtitle = approvalSubtitle(toolCall, hasIssue),
-    leading = { ClawIconBadge(icon = Icons.Default.Lock) },
-    trailing = { ClawStatusPill(text = if (hasIssue) nativeString("Issue") else nativeString("Review"), status = if (hasIssue) ClawStatus.Warning else ClawStatus.Success) },
+    leading = { ClawIconBadge(icon = SettingsRoute.Approvals.icon) },
+    trailing = { ClawStatusPill(text = if (hasIssue) nativeString("Issue") else nativeString("Review"), status = ClawStatus.Warning) },
   )
 }
 
@@ -2910,7 +2905,7 @@ private fun CronJobListRow(
     title = job.name,
     subtitle = cronJobSubtitle(job),
     modifier = Modifier.clickable(onClickLabel = nativeString("Open automation detail"), onClick = onClick),
-    leading = { ClawIconBadge(icon = Icons.Default.Bolt) },
+    leading = { ClawIconBadge(icon = SettingsRoute.CronJobs.icon) },
     trailing = {
       Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         ClawStatusPill(text = cronJobStatusText(job.enabled, job.lastRunStatus), status = cronJobStatus(job))

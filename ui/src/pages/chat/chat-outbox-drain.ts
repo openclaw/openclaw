@@ -6,10 +6,8 @@ import {
   readStoredChatOutbox,
   type StoredChatOutbox,
 } from "../../lib/chat/outbox-store-projection.ts";
-import {
-  storedChatOutboxScopeKey,
-  type StoredChatOutboxScope,
-} from "../../lib/chat/outbox-store.ts";
+import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
+import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";

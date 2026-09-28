@@ -23,6 +23,8 @@ import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "./types.js";
 
+export { applyDefaultModel } from "./provider-model-primary.js";
+
 export function resolveProviderMatch(
   providers: ProviderPlugin[],
   rawProvider?: string,
@@ -369,52 +371,6 @@ export function restorePriorAgentsDefaultsModelUnlessOptIn(params: {
     agents: {
       ...params.cfg.agents,
       defaults,
-    },
-  };
-}
-
-export function applyDefaultModel(
-  cfg: OpenClawConfig,
-  model: string,
-  opts?: { preserveExistingPrimary?: boolean },
-): OpenClawConfig {
-  const normalizedModel = normalizeAgentModelRefForConfig(model);
-  const models = {
-    ...normalizeAgentModelMapForConfig(cfg.agents?.defaults?.models ?? {}),
-  };
-  models[normalizedModel] = models[normalizedModel] ?? {};
-
-  const existingModel = cfg.agents?.defaults?.model;
-  const existingPrimary =
-    typeof existingModel === "string"
-      ? existingModel
-      : existingModel && typeof existingModel === "object"
-        ? (existingModel as { primary?: string }).primary
-        : undefined;
-  const normalizedExistingPrimary = existingPrimary
-    ? normalizeAgentModelRefForConfig(existingPrimary)
-    : undefined;
-  const existingFallbacks =
-    existingModel && typeof existingModel === "object" && "fallbacks" in existingModel
-      ? (existingModel as { fallbacks?: string[] }).fallbacks?.map((fallback) =>
-          normalizeAgentModelRefForConfig(fallback),
-        )
-      : undefined;
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      defaults: {
-        ...cfg.agents?.defaults,
-        models,
-        model: {
-          ...(existingFallbacks ? { fallbacks: existingFallbacks } : undefined),
-          primary:
-            opts?.preserveExistingPrimary === true
-              ? (normalizedExistingPrimary ?? normalizedModel)
-              : normalizedModel,
-        },
-      },
     },
   };
 }

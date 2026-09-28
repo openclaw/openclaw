@@ -26,6 +26,18 @@ function validateBinding(agentId: string, entries?: Record<string, unknown>) {
 }
 
 describe("config schema regressions", () => {
+  it.each([true, false])("accepts and preserves gateway.uploads.enabled=%s", (enabled) => {
+    const result = validateConfigObject({ gateway: { uploads: { enabled } } });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.gateway?.uploads?.enabled).toBe(enabled);
+    }
+  });
+
+  it.each(["false", 0, null])("rejects invalid gateway.uploads.enabled=%s", (enabled) => {
+    expect(validateConfigObject({ gateway: { uploads: { enabled } } }).ok).toBe(false);
+  });
+
   it.each([true, false])("accepts and preserves gateway.cliAgents.enabled=%s", (enabled) => {
     const result = validateConfigObject({ gateway: { cliAgents: { enabled } } });
 

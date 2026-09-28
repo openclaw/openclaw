@@ -2,10 +2,12 @@ import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveShardPlans, runShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
 import { estimateCommandWorkerSeconds } from "../../scripts/lib/ci-command-test-plan.mts";
+import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
 import {
   createNodeTestShardBundles,
   createNodeTestShards,
 } from "../../scripts/lib/ci-node-test-plan.mts";
+import { refitTestTimings, type CiTimingRun } from "../../scripts/lib/ci-test-timings-refit.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
 import {
   createCompactSplitTimingGeneration,
@@ -126,6 +128,143 @@ describe("command CI ownership and parallel timing", () => {
       expect(estimateCommandWorkerSeconds(group, 120, 8, runnerBackend).seconds).toBe(45);
     },
   );
+
+  it("refits precise command selections independently by worker policy and retains exact prices", async () => {
+    const config = "test/vitest/vitest.commands.config.ts";
+    const owner = "agentic-commands-doctor-auth";
+    const files = [
+      "src/commands/doctor-auth.hints.test.ts",
+      "src/commands/doctor-auth.profile-health.test.ts",
+      "src/commands/doctor-auth.shared-health.test.ts",
+    ];
+    const targets = files.slice(0, 2);
+    const companion = {
+      name: "ordinary",
+      config: "fixture.config.ts",
+      projects: ["test/vitest/vitest.hooks.config.ts"],
+    };
+    const timings: Record<string, number> = { [owner]: 120, ordinary: 50 };
+    vi.resetModules();
+    vi.doMock("../../scripts/lib/list-test-files.mts", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../../scripts/lib/list-test-files.mts")>()),
+      listTrackedTestFiles: (root: string) => (root === "src/commands" ? files : []),
+    }));
+    vi.doMock("../vitest/vitest.test-shards.mjs", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../vitest/vitest.test-shards.mjs")>()),
+      fullSuiteVitestShards: [
+        { name: "agentic", config: "fixture.config.ts", projects: [config] },
+        companion,
+      ],
+    }));
+    vi.doMock("../vitest/vitest.unit-fast-paths.mjs", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../vitest/vitest.unit-fast-paths.mjs")>()),
+      getUnitFastTestFiles: () => [],
+      getUnitFastIsolatedTestFiles: () => [],
+      getUnitFastTimerTestFiles: () => [],
+      getUnitFastTestFilesForIncludePatterns: () => [],
+    }));
+    vi.doMock("../../scripts/lib/ci-test-timings.mts", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../../scripts/lib/ci-test-timings.mts")>()),
+      readCompactGroupTimings: () => timings,
+      readRuntimePlacementTimings: () => [],
+    }));
+    vi.doMock("../../scripts/lib/vitest-build-prerequisites.mts", async (importOriginal) => ({
+      ...(await importOriginal<
+        typeof import("../../scripts/lib/vitest-build-prerequisites.mts")
+      >()),
+      resolveVitestPretestBuildMode: () => undefined,
+    }));
+    try {
+      const { createSelectedNodeTestShardBundles: createSelected } =
+        await import("../../scripts/lib/ci-node-test-plan.mts");
+      const create = () => createSelected(targets, { runnerBackend: "blacksmith" })!;
+      const logs: CiTimingRun["logs"] = [];
+      const cells = [
+        { workers: 2, config: "test/vitest/vitest.hooks.config.ts", seconds: 240 },
+        { workers: 8, config: "test/vitest/vitest.gateway-core.config.ts", seconds: 180 },
+      ].map((cell) => {
+        companion.projects = [cell.config];
+        const jobs = create();
+        expect(jobs).toHaveLength(1);
+        const job = jobs[0]!;
+        expect(job.groups).toHaveLength(1);
+        const group = job.groups[0]!;
+        expect(group.includePatterns).toEqual(targets);
+        expect(group.configs).toEqual([config]);
+        expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS).toBeUndefined();
+        expect(job.planConcurrency).toBe(cell.workers === 2 ? 2 : 1);
+        return Object.assign({}, cell, { job, group });
+      });
+      vi.spyOn(os, "availableParallelism").mockReturnValue(8);
+      vi.spyOn(os, "totalmem").mockReturnValue(31 * 1024 ** 3);
+      for (const { workers, job, group, seconds } of cells) {
+        const env = {
+          CI: "true",
+          RUNNER_ENVIRONMENT: "self-hosted",
+          FROZEN_TARGET: "false",
+          OPENCLAW_VITEST_MAX_WORKERS: String(workers),
+          OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: String(job.planConcurrency),
+          OPENCLAW_NODE_TEST_ENV_JSON: JSON.stringify(job.env ?? {}),
+        };
+        await expect(
+          runShardPlans(
+            resolveShardPlans({ OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(job.groups) }),
+            {
+              env,
+              scratchDir: tempDirs.make("precise-command-workers-"),
+              runChild: async (_args, childEnv) => {
+                expect(childEnv.OPENCLAW_VITEST_MAX_WORKERS).toBe(String(workers));
+                return 0;
+              },
+            },
+          ),
+        ).resolves.toBe(0);
+        expect.soft(group.timing_key).toContain(`#file-parallel-${workers}#selector-`);
+        logs.push({
+          kind: "compact",
+          labels: ["blacksmith-32vcpu-ubuntu-2404"],
+          text: [
+            ...Object.entries(env).map(([key, value]) => `2026-09-27T00:00:00Z ${key}: ${value}`),
+            `2026-09-27T00:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups(job.groups)}`,
+            `2026-09-27T00:00:00Z [shard:resources] logicalCpuCount=8 totalMemoryBytes=${31 * 1024 ** 3} requested plans=${job.planConcurrency} admitted plans=1`,
+            `2026-09-27T00:00:00Z [shard:${group.timing_key}] begin`,
+            `${new Date(Date.parse("2026-09-27T00:00:00Z") + seconds * 1000).toISOString()} [shard:${group.timing_key}] end (exit 0)`,
+          ].join("\n"),
+        });
+      }
+      expect.soft(cells[0]!.group.timing_key).not.toBe(cells[1]!.group.timing_key);
+      const result = refitTestTimings(
+        [1, 2].map((id) => ({
+          id,
+          createdAt: `2026-09-${25 + id}T00:00:00Z`,
+          completeInventory: false,
+          pullRequestMergeRef: true,
+          logs,
+        })),
+      );
+      expect(result.rejectedWorkerKeys.blacksmith).toEqual([]);
+      for (const { config: companionConfig, group, job, seconds } of cells) {
+        const key = group.timing_key!;
+        expect(result.timings.compactGroupSeconds.blacksmith[key]).toBe(seconds);
+        companion.projects = [companionConfig];
+        timings[key] = 1;
+        expect(create()[0]!.predictedTestSeconds).toBe(job.predictedTestSeconds);
+        timings[key] = seconds;
+        const measured = create()[0]!;
+        expect(measured.predictedTestSeconds).toBe(seconds);
+        expect(measured.predictedSeconds).toBe(seconds);
+        expect(measured.groups).toEqual(job.groups);
+        expect(measured.planConcurrency).toBe(job.planConcurrency);
+      }
+    } finally {
+      vi.doUnmock("../../scripts/lib/list-test-files.mts");
+      vi.doUnmock("../vitest/vitest.test-shards.mjs");
+      vi.doUnmock("../vitest/vitest.unit-fast-paths.mjs");
+      vi.doUnmock("../../scripts/lib/ci-test-timings.mts");
+      vi.doUnmock("../../scripts/lib/vitest-build-prerequisites.mts");
+      vi.resetModules();
+    }
+  });
 
   it("projects serial timings once, retaining complete history and indivisible files", async () => {
     const config = "test/vitest/vitest.commands.config.ts";

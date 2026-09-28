@@ -1125,6 +1125,7 @@ src/plugins/provider-registry-shared.ts
 src/plugins/provider-thinking-catalog.ts
 src/plugins/public-surface-loader.ts
 src/plugins/public-surface-runtime.ts
+src/plugins/record-groups.ts
 src/plugins/registry-empty.ts
 src/plugins/registry-lifecycle.ts
 src/plugins/root-artifact-path.ts

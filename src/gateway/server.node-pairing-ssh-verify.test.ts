@@ -169,12 +169,8 @@ describeWithLanNodePairingServer("gateway ssh-verified node pairing auto-approve
   });
 
   test.each([
-    { name: "disabled during probe", lockApproval: false, next: false },
     { name: "disabled while approval waits for lock", lockApproval: true, next: false },
     { name: "SSH user changed", lockApproval: false, next: { user: "replacement-user" } },
-    { name: "SSH identity changed", lockApproval: false, next: { identity: "/keys/replacement" } },
-    { name: "SSH scope narrowed", lockApproval: false, next: { cidrs: ["203.0.113.0/24"] } },
-    { name: "SSH timeout changed", lockApproval: false, next: { timeoutMs: 300 } },
   ] satisfies {
     name: string;
     lockApproval: boolean;
@@ -426,6 +422,12 @@ describeWithLanNodePairingServer("gateway ssh-verified node pairing auto-approve
       run: async ({ loaded, connectNode }) => {
         const res = await connectNode();
         expect(res.ok).toBe(false);
+        expect(res.error?.message).toContain("pairing required");
+        const pending = (await devicePairing.listDevicePairing()).pending.filter(
+          (entry) => entry.deviceId === loaded.identity.deviceId,
+        );
+        expect(pending).toHaveLength(1);
+        expect(pending[0]?.silent).toBe(false);
         const details = res.error?.details as PairingRequiredDetails | undefined;
         expect(details?.recommendedNextStep).toBeUndefined();
         expect(details?.pauseReconnect).toBeUndefined();

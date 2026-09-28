@@ -22,7 +22,7 @@ permissions:
 
 jobs:
   qualify:
-    runs-on: xcode-27
+    runs-on: xcode-27-xlarge
     timeout-minutes: 240
     env:
       TARGET_SHA: ${{ inputs.target_sha || github.sha }}
@@ -73,7 +73,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
-          node-version: "24.19.0"
+          node-version: "24.21.0"
           install-bun: "false"
           cache-mode: "off"
 

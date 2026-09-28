@@ -60,6 +60,7 @@ async function mount(
     automaticallyFetchFavicons: false,
     communityInvite: false,
     terminalEnabled: false,
+    uploadsEnabled: true,
     pluginAssetsRequireAuth: true,
     pluginFrameGrants: [
       { pluginId: descriptor.pluginId, path: "/plugins/example", match: "prefix" },

@@ -71,7 +71,7 @@
 
 /* Reserve the collapsed card slot without delaying the real composer or transcript. */
 .agent-chat__progress-float--loading {
-  min-height: 44px;
+  min-height: var(--chat-stack-header-height, 40px);
 }
 
 .agent-chat__goal {
@@ -488,9 +488,11 @@
   border-color: color-mix(in srgb, var(--warn) 30%, var(--border));
 }
 
-.agent-chat__goal-float .agent-chat__goal-row {
-  min-height: 42px;
-  padding: 8px var(--chat-stack-trailing-inset) 8px var(--chat-stack-leading-inset);
+.agent-chat__goal-float .agent-chat__goal-row,
+.session-progress-card__summary {
+  /* The surrounding card supplies the two border pixels. */
+  min-height: calc(var(--chat-stack-header-height, 40px) - 2px);
+  padding: 6px var(--chat-stack-trailing-inset) 6px var(--chat-stack-leading-inset);
 }
 
 .session-progress-card__summary {
@@ -501,8 +503,6 @@
   gap: 12px;
   width: 100%;
   min-width: 0;
-  min-height: 42px;
-  padding: 8px var(--chat-stack-trailing-inset) 8px var(--chat-stack-leading-inset);
   border: 0;
   background: transparent;
   color: var(--text);

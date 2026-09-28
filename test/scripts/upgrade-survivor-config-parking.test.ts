@@ -237,6 +237,7 @@ update_candidate() {
   [ "$#" -eq 3 ] && [ "$1" = 1 ] && [ "$2" = "file:$RUNTIME_ROOT/future.tgz" ] && [ "$3" = 2100.1.0 ] || return 99
   printf 'update\\n' >>"$PROBE_EVENTS"
 }
+assert_managed_membership_warning() { printf 'membership-warning\\n' >>"$PROBE_EVENTS"; }
 node() {
   if [ "$#" -eq 3 ] && [ "$1" = scripts/e2e/lib/upgrade-survivor/assertions.mjs ] && [ "$2" = assert-restart-serving-turn ]; then
     printf 'serving-turn\\n' >>"$PROBE_EVENTS"
@@ -305,6 +306,7 @@ exit "$probe_status"
                   "readiness",
                   "authenticated",
                   "update",
+                  "membership-warning",
                   "serving-turn",
                   "assert-survival",
                   ...(scenario === "sqlite-volume" ? ["volume-doctor", "volume-state"] : []),
@@ -368,6 +370,7 @@ install_update_restart_systemctl_shim() { :; }
 run_update_restart_probe_gateway() { :; }
 check_gateway_status() { :; }
 update_candidate() { :; }
+assert_managed_membership_warning() { :; }
 node() { if [ "$#" -ge 2 ] && [ "$2" = "$PROBE_FAILURE" ]; then return 47; fi; }
 read_installed_version() { [ "$PROBE_FAILURE" != installed-version ] || return 47; printf '2026.9.3'; }
 assert_prepublish_plugin_install() { touch "$PROBE_SIDE_EFFECT"; }

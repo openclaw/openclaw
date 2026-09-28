@@ -1,9 +1,3 @@
-/**
- * Tool model config and auth helpers.
- *
- * Model-backed tools use this module to choose provider/model refs and check
- * whether candidate providers have usable auth before exposing defaults.
- */
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
@@ -67,14 +61,12 @@ export function applyAgentDefaultModelConfig(
   };
 }
 
-/** Returns whether a tool model config contains a primary or fallback model ref. */
 export function hasToolModelConfig(model: ToolModelConfig | undefined): boolean {
   return Boolean(
     model?.primary?.trim() || (model?.fallbacks ?? []).some((entry) => entry.trim().length > 0),
   );
 }
 
-/** Resolves the configured default model ref, falling back to OpenClaw defaults. */
 export function resolveDefaultModelRef(cfg?: OpenClawConfig): { provider: string; model: string } {
   if (cfg) {
     const resolved = resolveConfiguredModelRef({
@@ -87,7 +79,6 @@ export function resolveDefaultModelRef(cfg?: OpenClawConfig): { provider: string
   return { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL };
 }
 
-/** Returns whether a provider has env, profile, or external CLI auth available. */
 export function hasAuthForProvider(params: {
   provider: string;
   cfg?: OpenClawConfig;
@@ -125,7 +116,6 @@ export function hasAuthForProvider(params: {
   });
 }
 
-/** Returns whether an auth profile exists for a provider, optionally filtered by type. */
 export function hasAuthProfileForProvider(params: {
   provider: string;
   agentDir?: string;
@@ -170,7 +160,6 @@ export function hasAuthProfileForProvider(params: {
   });
 }
 
-/** Returns whether a provider can be used by a model-backed tool. */
 export function hasProviderAuthForTool(params: {
   provider: string;
   cfg?: OpenClawConfig;
@@ -215,15 +204,7 @@ export function hasProviderAuthForTool(params: {
   ) {
     return true;
   }
-  return hasAuthForProvider({
-    provider: params.provider,
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    agentDir: params.agentDir,
-    authStore: params.authStore,
-    runtimeLookup: params.runtimeLookup,
-    capability: params.capability,
-  });
+  return hasAuthForProvider(params);
 }
 
 function formatProviderModelRef(provider: string, model: string): string {
@@ -456,7 +437,6 @@ export function resolveOpenAiImageMediaCandidate(params: {
   return { kind: "drop" };
 }
 
-/** Normalizes agent tool model config into a compact runtime shape. */
 export function coerceToolModelConfig(model?: AgentToolModelConfig): ToolModelConfig {
   const primary = resolveAgentModelPrimaryValue(model);
   const fallbacks = resolveAgentModelFallbackValues(model);
@@ -468,7 +448,6 @@ export function coerceToolModelConfig(model?: AgentToolModelConfig): ToolModelCo
   };
 }
 
-/** Builds a tool model config from configured auth-aware candidate model refs. */
 export function buildToolModelConfigFromCandidates(params: {
   explicit: ToolModelConfig;
   cfg?: OpenClawConfig;

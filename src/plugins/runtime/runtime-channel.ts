@@ -239,5 +239,5 @@ export function createRuntimeChannel(options?: {
     runtimeContexts: createChannelRuntimeContextRegistry(),
   } satisfies PluginRuntime["channel"];
 
-  return channelRuntime as PluginRuntime["channel"];
+  return channelRuntime;
 }

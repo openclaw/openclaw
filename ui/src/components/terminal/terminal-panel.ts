@@ -4,15 +4,18 @@
 // tabs. Each tab hosts one libterminal Ghostty controller wired to a gateway PTY
 // session. The browser runtime is dynamically imported on first open so it
 // never weighs down the initial Control UI bundle.
+import { consume } from "@lit/context";
 import { initialState, Task, TaskStatus } from "@lit/task";
 import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { createRef } from "lit/directives/ref.js";
+import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
 import { scrollbarShadowStyles } from "../../lit/scrollbar-styles.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { DockLayoutController } from "../dock-layout-controller.ts";
 import { terminalPanelLayout, type DockPanelPlacement } from "../dock-panel-layout.ts";
 import { dockPanelStyles } from "../dock-panel-styles.ts";
@@ -58,6 +61,17 @@ const CATALOG_TERMINAL_READY_TIMEOUT_MS = 30_000;
 
 /** `<openclaw-terminal-panel>` — the dockable Control UI shell surface. */
 export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHostedTabsElement {
+  @consume({ context: applicationContext, subscribe: true })
+  private context?: ApplicationContext;
+
+  constructor() {
+    super();
+    new SubscriptionsController(this).watch(
+      () => this.context?.config,
+      (config, notify) => config.subscribe(notify),
+      () => this.terminalPanelUploadController.syncPolicy(),
+    );
+  }
   /** Gateway client used for terminal.* RPCs; null until connected. */
   @property({ attribute: false }) client: TerminalGatewayClient | null = null;
   /** Agent whose workspace and sandbox policy own newly opened sessions. */
@@ -110,6 +124,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
           tab.gatewaySessionId,
       ),
     client: () => this.client,
+    config: () => this.context?.config,
     isCurrent: (tab) =>
       this.terminalSessions.tabs.includes(tab as TerminalPanelSessionTab) && tab.status === "live",
     fileInput: () => this.renderRoot.querySelector<HTMLInputElement>(".tp-file-input"),
@@ -224,6 +239,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
       this.sessionPickerOpen,
       this.sessionPickerTask.status,
       this.pickerSessions.map((session) => session.sessionId),
+      this.terminalPanelUploadController.uploadsEnabled(),
       this.terminalPanelUploadController.hasPendingBatch(),
       this.terminalPanelUploadController.hasActiveTab(),
     ]);
@@ -261,17 +277,21 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
       <openclaw-tooltip .content=${t("terminal.sessions")}>
         ${renderTerminalSessionPickerTrigger(this.sessionPickerProps)}
       </openclaw-tooltip>
-      <openclaw-tooltip .content=${t("terminal.addFiles")}>
-        <button
-          class="rail-header__action"
-          type="button"
-          aria-label=${t("terminal.addFiles")}
-          ?disabled=${!upload.hasActiveTab() || upload.hasPendingBatch()}
-          @click=${upload.chooseFiles}
-        >
-          ${icons.paperclip}
-        </button>
-      </openclaw-tooltip>
+      ${
+        upload.uploadsEnabled()
+          ? html`<openclaw-tooltip .content=${t("terminal.addFiles")}>
+              <button
+                class="rail-header__action"
+                type="button"
+                aria-label=${t("terminal.addFiles")}
+                ?disabled=${!upload.hasActiveTab() || upload.hasPendingBatch()}
+                @click=${upload.chooseFiles}
+              >
+                ${icons.paperclip}
+              </button>
+            </openclaw-tooltip>`
+          : nothing
+      }
       <openclaw-tooltip .content=${t("terminal.dockBottom")}>
         <button
           class="rail-header__action"

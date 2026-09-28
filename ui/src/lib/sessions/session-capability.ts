@@ -81,6 +81,7 @@ export type SessionListOptions = {
   excludeSystem?: boolean;
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
+  includeOwnerSessionCounts?: boolean;
   archivedFilter?: SessionArchivedFilter;
   append?: boolean;
 };

@@ -119,10 +119,11 @@ describe("worker session placement moves", () => {
         .prepare("SELECT 1 AS ok FROM sqlite_schema WHERE type = 'table' AND name = ?")
         .get("worker_session_placement_moves"),
     ).toBeUndefined();
-    expect(store.listPlacementMoves()).toEqual([]);
     expect(await store.readProjection([SESSION.sessionId])).toEqual({
       placements: new Map(),
       moves: new Map(),
+      pendingResults: new Map(),
+      workspaceJournalOwnerSessionIds: new Set(),
       environments: new Map(),
       workspaceResultReconcilingSessionIds: new Set(),
       workspaceRecoveryPendingSessionIds: new Set(),
@@ -589,13 +590,13 @@ describe("worker session placement moves", () => {
       resolveDestination: vi.fn(),
     });
 
-    await moves.recoverAll();
+    await moves.recoverSession(await store.readProjection([active.sessionId], { current: true }));
 
     expect(store.get(active.sessionId)).toEqual(failed);
     expect(store.getPlacementMove(active.sessionId)?.lastError).toBe(
       "device teardown is still pending",
     );
-    await moves.recoverAll();
+    await moves.recoverSession(await store.readProjection([active.sessionId], { current: true }));
 
     expect(store.get(active.sessionId)).toMatchObject({
       sessionId: active.sessionId,
@@ -630,12 +631,12 @@ describe("worker session placement moves", () => {
       resolveDestination: vi.fn(),
     });
 
-    await moves.recoverAll();
+    await moves.recoverSession(await store.readProjection([active.sessionId], { current: true }));
 
     const recovered = store.get(active.sessionId);
     expect(recovered).toMatchObject({ state: "local", generation: reconciling.generation + 1 });
     expect(store.getPlacementMove(active.sessionId)).toBeUndefined();
-    await moves.recoverAll();
+    await moves.recoverSession(await store.readProjection([active.sessionId], { current: true }));
     expect(store.get(active.sessionId)).toEqual(recovered);
   });
 
@@ -690,7 +691,9 @@ describe("worker session placement moves", () => {
       },
     });
 
-    await moves.recoverAll();
+    await moves.recoverSession(
+      await restartedStore.readProjection([source.sessionId], { current: true }),
+    );
 
     expect(reclaimSource).not.toHaveBeenCalled();
     expect(dispatch).not.toHaveBeenCalled();

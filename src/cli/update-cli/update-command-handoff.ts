@@ -57,6 +57,7 @@ export function gatewayServiceMembershipBlock(
   pid: unknown,
   ancestry = inspectSelfAndAncestorPidsSync(undefined, { requireVerifiedParent: true }),
   systemdControlGroup?: string,
+  onAbsentSource?: () => void,
 ) {
   const gatewayPid = parsePositivePid(pid);
   if (gatewayPid === null) {
@@ -94,6 +95,9 @@ export function gatewayServiceMembershipBlock(
         (isGatewayServiceEnv(process.env) &&
           parsePositivePid(process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV]) === gatewayPid &&
           isPidAlive(gatewayPid)));
+    if (!unverified && membership === "absent") {
+      onAbsentSource?.();
+    }
     return unverified
       ? createUpdatePreflightFailure(
           "service-ancestry-unverified",
@@ -138,6 +142,7 @@ export function gatewayMaintenanceBlock(
   state: GatewayServiceState,
   root: string,
   operation: "stop" | "handoff" = "stop",
+  onAbsentSource?: () => void,
 ) {
   const ancestry = inspectSelfAndAncestorPidsSync(undefined, { requireVerifiedParent: true });
   const store = createManagedHandoffLeaseStore();
@@ -172,6 +177,7 @@ export function gatewayMaintenanceBlock(
         state.runtime?.pid,
         ancestry,
         state.runtime?.systemd?.controlGroup,
+        onAbsentSource,
       );
 }
 
