@@ -77,6 +77,8 @@ Local and data-URL agent avatars use [authenticated avatar URLs](/web/control-ui
 
 The Control UI ships a `manifest.webmanifest` and a service worker, so modern browsers can install it as a standalone PWA. Web Push lets the Gateway wake the installed PWA with notifications even when the tab or browser window is not open.
 
+On phones, Chat and New Session share ordinary side gutters inside the device's safe areas. The installed app uses a full standalone canvas; browser tabs follow the dynamic viewport. When the browser reports a keyboard-sized visual viewport reduction, the shell keeps the composer above it and restores the bottom safe area when the keyboard closes, even if the editor still has focus. Pinch zoom remains browser-controlled. Browsers without VisualViewport retain the CSS layout.
+
 Inside the macOS app, the Notifications settings page shows the app's native notification permission instead of browser push because the app delivers notifications natively.
 
 See [Notifications](/web/notifications) for the browser and macOS setup steps.

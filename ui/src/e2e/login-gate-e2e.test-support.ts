@@ -427,10 +427,13 @@ export async function renderLoginGate(
 async function mountLoginGate(page: Page, lastError: string | null): Promise<void> {
   await page.evaluate(async (failureMessage) => {
     await customElements.whenDefined("openclaw-login-gate");
-    const gate = document.createElement("openclaw-login-gate") as HTMLElement & {
-      props: Record<string, unknown>;
-      updateComplete: Promise<unknown>;
-    };
+    // Keep the production app wrapper: it owns the safe-area and viewport budget.
+    const gate = document.querySelector("openclaw-login-gate") as
+      | (HTMLElement & { props: Record<string, unknown>; updateComplete: Promise<unknown> })
+      | null;
+    if (!gate) {
+      throw new Error("Missing mounted login gate");
+    }
     document.body.dataset.connectCount = "0";
     gate.props = {
       resourceBasePath: "",
@@ -450,7 +453,6 @@ async function mountLoginGate(page: Page, lastError: string | null): Promise<voi
         document.body.dataset.connectCount = String(current + 1);
       },
     };
-    document.body.replaceChildren(gate);
     await gate.updateComplete;
   }, lastError);
 }

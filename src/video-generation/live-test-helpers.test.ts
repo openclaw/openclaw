@@ -14,6 +14,8 @@ describe("video-generation live-test helpers", () => {
     ["alibaba", "alibaba/wan2.6-t2v", "720P"],
     ["qwen", "qwen/wan2.6-t2v", "720P"],
     ["minimax", "minimax/MiniMax-Hailuo-2.3", "768P"],
+    ["novita", "novita/wan2.6-t2v", "720P"],
+    ["novita", "novita/minimax-hailuo-2.3-t2v", "768P"],
     ["pixverse", "pixverse/v6", "540P"],
     ["google", "google/veo-3.1-fast-generate-preview", "480P"],
   ] as const)("uses a supported %s live resolution", (providerId, modelRef, expected) => {
