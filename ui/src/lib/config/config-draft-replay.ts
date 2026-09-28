@@ -1,7 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import {
-  cloneConfigObject,
   isSensitiveLeafValue,
   REDACTED_SENTINEL,
   removePathValue,
@@ -16,7 +15,7 @@ export function replayConfigDraftEdits(
   if (!submitted || !current) {
     return null;
   }
-  const draft = cloneConfigObject(acknowledgedConfig);
+  const draft = structuredClone(acknowledgedConfig);
   const replay = (
     before: Record<string, unknown>,
     after: Record<string, unknown>,
@@ -30,7 +29,7 @@ export function replayConfigDraftEdits(
       } else if (isRecord(before[key]) && isRecord(after[key]) && isRecord(canonical[key])) {
         replay(before[key], after[key], canonical[key], nextPath);
       } else if (stableStringify(before[key]) !== stableStringify(after[key])) {
-        setPathValue(draft, nextPath, cloneConfigObject(after[key]));
+        setPathValue(draft, nextPath, structuredClone(after[key]));
       }
     }
   };

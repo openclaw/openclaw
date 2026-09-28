@@ -1,13 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { satisfies } from "semver";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { nodeRuntimeFailure } from "../../../node-sqlite.mjs";
 import { isSupportedOpenClawNodeVersion } from "../../../node-version.mjs";
 import { resolveNodeRuntimeInfo } from "../../daemon/runtime-paths.js";
 import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
 import { withTempDir } from "../../test-utils/temp-dir.js";
 import { quoteCliArg, quotePowerShellArg } from "../quote-cli-arg.js";
+import { resolveTargetNodeRuntime } from "./update-command-node-runtime-resolution.js";
 import {
   expectedPlainRecovery,
   expectedRuntimeSelectionCommand,
@@ -34,6 +35,9 @@ vi.mock("../../infra/container-environment.js", () => ({
   isContainerEnvironment: () => probeState.container,
 }));
 vi.mock("../../daemon/runtime-paths.js", () => ({ resolveNodeRuntimeInfo: vi.fn() }));
+vi.mock("./update-command-node-runtime-resolution.js", () => ({
+  resolveTargetNodeRuntime: vi.fn(),
+}));
 vi.mock("../../../node-sqlite.mjs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../node-sqlite.mjs")>();
   return {
@@ -49,12 +53,66 @@ vi.mock("../../../node-sqlite.mjs", async (importOriginal) => {
 });
 
 describe("package runtime compatibility guidance", () => {
+  beforeEach(() => {
+    vi.stubGlobal("process", {
+      ...process,
+      execPath: path.resolve("/fixture/node"),
+      versions: { ...process.versions, node: "24.16.0", bun: undefined },
+    });
+  });
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.useRealTimers();
     probeState.text = true;
     probeState.container = false;
     vi.mocked(resolveNodeRuntimeInfo).mockReset();
+    vi.mocked(resolveTargetNodeRuntime).mockReset();
+  });
+
+  it("retains the current Bun without Node engine checks or provisioning", async () => {
+    vi.stubGlobal("process", {
+      ...process,
+      execPath: path.resolve("/fixture/app-runtime"),
+      versions: { ...process.versions, bun: "1.4.3", node: "24.3.0" },
+    });
+    const result = await resolvePackageRuntimePreflight({
+      target: { version: "2027.1.0", nodeEngine: ">=90.0.0" },
+      shouldRestart: true,
+      service: refreshableService,
+      runtimeRecovery: { env: {}, installCommand: vi.fn() },
+    });
+    expect(result).toEqual({ ok: true, value: { targetVersion: "2027.1.0" } });
+    expect(resolveNodeRuntimeInfo).not.toHaveBeenCalled();
+    expect(resolveTargetNodeRuntime).not.toHaveBeenCalled();
+  });
+
+  it("does not offer the current Bun as a fallback for a managed Node service", async () => {
+    vi.stubGlobal("process", {
+      ...process,
+      execPath: path.resolve("/fixture/app-runtime"),
+      versions: { ...process.versions, bun: "1.4.3" },
+    });
+    vi.mocked(resolveNodeRuntimeInfo).mockResolvedValue(unsupportedServiceRuntimeFixture);
+    vi.mocked(resolveTargetNodeRuntime).mockResolvedValue("/recovered/node");
+    const result = await resolvePackageRuntimePreflight({
+      target: { version: "2027.1.0", nodeEngine: ">=24.16.0" },
+      nodeRunner: "/old/node",
+      shouldRestart: true,
+      alreadyCurrent: true,
+      service: refreshableService,
+      runtimeRecovery: { env: {} },
+    });
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        nodeRunner: "/recovered/node",
+        replacedNodeRunner: "/old/node",
+        targetVersion: "2027.1.0",
+      },
+    });
+    expect(vi.mocked(resolveNodeRuntimeInfo).mock.calls.map(([runner]) => runner)).toEqual([
+      "/old/node",
+    ]);
   });
 
   it.each([

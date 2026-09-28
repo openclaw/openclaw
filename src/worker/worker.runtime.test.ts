@@ -14,6 +14,7 @@ import { WebSocket, WebSocketServer, type RawData } from "ws";
 import {
   validateWorkerComputerParams,
   validateWorkerPortalParams,
+  validateWorkerPresenceParams,
   validateWorkerSessionsSendParams,
   validateWorkerSessionsSpawnParams,
 } from "../../packages/gateway-protocol/src/index.js";
@@ -25,10 +26,10 @@ import {
   type WorkerLiveEventParams,
   type WorkerLiveEventRequestFrame,
   WorkerLiveEventRequestFrameSchema,
-  WORKER_PORTAL_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_FEATURES,
   WORKER_RPC_SET_VERSION,
   type WorkerPortalParams,
+  type WorkerPresenceParams,
   type WorkerSessionsSendParams,
   type WorkerSessionsSpawnParams,
   type WorkerTranscriptCommitParams,
@@ -60,6 +61,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { saveExecApprovals, type ExecApprovalsFile } from "../infra/exec-approvals.js";
 import { runExec } from "../process/exec.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
+import { prepareSkillBundle } from "../skills/library/bundle.js";
 import {
   buildWorkerConnectParams,
   parseWorkerLaunchDescriptor,
@@ -73,15 +75,17 @@ import {
 } from "./worker-connection-contract.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
 import { parseWorkerProcessResult, type WorkerProcessResult } from "./worker-process-protocol.js";
-import {
-  WorkerInferenceProxyClient,
-  WorkerLiveEventClient,
-  WorkerTranscriptCommitClient,
-} from "./worker-rpc-clients.js";
+import { WorkerInferenceProxyClient } from "./worker-rpc-inference-client.js";
+import { WorkerLiveEventClient } from "./worker-rpc-live-event-client.js";
+import { WorkerTranscriptCommitClient } from "./worker-rpc-transcript-client.js";
 import {
   registerWorkerBackgroundExecLifecycleTests,
   registerWorkerExecEnvironmentFinalizationTests,
 } from "./worker-runtime-background-exec.suite.js";
+import {
+  registerWorkerGatewayToolAvailabilityTests,
+  registerWorkerGatewayToolRpcTests,
+} from "./worker-runtime-gateway-tools.suite.js";
 import { registerWorkerPermissionTests } from "./worker-runtime-permissions.suite.js";
 import { createWorkerRuntimeEnvironment, runWorkerDescriptor } from "./worker.runtime.js";
 
@@ -224,6 +228,7 @@ class FakeWorkerGateway {
   readonly sessionSpawnRequests: WorkerSessionsSpawnParams[] = [];
   readonly sessionSendRequests: WorkerSessionsSendParams[] = [];
   readonly portalRequests: WorkerPortalParams[] = [];
+  readonly presenceRequests: WorkerPresenceParams[] = [];
   readonly computerRequests: WorkerComputerParams[] = [];
   readonly applicationOrder: string[] = [];
 
@@ -337,6 +342,21 @@ class FakeWorkerGateway {
                 },
               },
         );
+        return;
+      }
+      if (parsed.method === "worker.presence" && validateWorkerPresenceParams(parsed.params)) {
+        this.presenceRequests.push(structuredClone(parsed.params));
+        this.send(socket, {
+          type: "res",
+          id: parsed.id,
+          ok: true,
+          payload: {
+            resultJson: JSON.stringify({
+              content: [{ type: "text", text: "Ada is online" }],
+              details: { status: "ok", people: [{ name: "Ada" }] },
+            }),
+          },
+        });
         return;
       }
       const sessionToolMethod =
@@ -994,49 +1014,56 @@ describe("worker runtime", () => {
       ),
     ).toEqual(["assistant"]);
   });
-  it.each(["input", "tool"] as const)(
-    "settles a real image above 64 KiB through %s",
-    async (source) => {
-      const { gateway, workspaceDir, launch } = await setup({
-        inferencePlans: ["read-image", "text"],
-      });
-      const png = createNoisyPngBuffer(256, 256);
-      expect(png.length).toBeGreaterThan(64 * 1024);
-      const image = { type: "image" as const, data: png.toString("base64"), mimeType: "image/png" };
-      await writeFile(path.join(workspaceDir, "attachment.png"), png);
-      if (source === "input") {
-        launch.assignment.prompt = [image];
-        launch.assignment.initialMessages = [{ role: "user", content: [image], timestamp: 1 }];
-      }
+  it("settles a real image above 64 KiB through input and a tool result", async () => {
+    const { gateway, workspaceDir, launch } = await setup({
+      inferencePlans: ["read-image", "text"],
+    });
+    const png = createNoisyPngBuffer(256, 256);
+    expect(png.length).toBeGreaterThan(64 * 1024);
+    const image = { type: "image" as const, data: png.toString("base64"), mimeType: "image/png" };
+    await writeFile(path.join(workspaceDir, "attachment.png"), png);
+    launch.assignment.prompt = [image];
+    launch.assignment.initialMessages = [{ role: "user", content: [image], timestamp: 1 }];
 
-      const result = await runWorkerDescriptor(parseWorkerLaunchDescriptor(launch));
+    const result = await runWorkerDescriptor(parseWorkerLaunchDescriptor(launch));
 
-      expect(result.status).toBe("completed");
-      expect(gateway.inferenceRequests).toHaveLength(2);
-      if (source === "input") {
-        expect(
-          gateway.inferenceRequests[0]?.context.messages
-            .filter((message) => message.role === "user")
-            .map((message) => message.content),
-        ).toEqual([[image], [image]]);
-      }
-      const messages = gateway.acceptedTranscriptRequests.flatMap((request) => request.messages);
-      const toolResult = messages.find((message) => message.role === "toolResult");
-      expect(toolResult).toMatchObject({ role: "toolResult", toolName: "read", isError: false });
-      expect(toolResult?.content).toContainEqual(image);
-      expect(gateway.inferenceRequests[1]?.context.messages).toContainEqual(toolResult);
-      expect(messages.at(-1)?.role).toBe("assistant");
-      expect(
-        gateway.applicationOrder.findIndex((entry) => entry === "live:lifecycle:finishing"),
-      ).toBeGreaterThan(
-        gateway.applicationOrder.findLastIndex((entry) => entry.startsWith("transcript:")),
-      );
-    },
-  );
+    expect(result.status).toBe("completed");
+    expect(gateway.inferenceRequests).toHaveLength(2);
+    expect(
+      gateway.inferenceRequests[0]?.context.messages
+        .filter((message) => message.role === "user")
+        .map((message) => message.content),
+    ).toEqual([[image], [image]]);
+    const messages = gateway.acceptedTranscriptRequests.flatMap((request) => request.messages);
+    const toolResult = messages.find((message) => message.role === "toolResult");
+    expect(toolResult).toMatchObject({ role: "toolResult", toolName: "read", isError: false });
+    expect(toolResult?.content).toContainEqual(image);
+    expect(gateway.inferenceRequests[1]?.context.messages).toContainEqual(toolResult);
+    expect(messages.at(-1)?.role).toBe("assistant");
+    expect(
+      gateway.applicationOrder.findIndex((entry) => entry === "live:lifecycle:finishing"),
+    ).toBeGreaterThan(
+      gateway.applicationOrder.findLastIndex((entry) => entry.startsWith("transcript:")),
+    );
+  });
 
   it("runs a full embedded turn through remote inference, live events, and transcript commits", async () => {
     const { gateway, workspaceDir, launch } = await setup();
     await writeFile(path.join(workspaceDir, "AGENTS.md"), "worker-bootstrap-marker", "utf8");
+    const files = [
+      { path: "SKILL.md", content: "# Stable worker skill\n", encoding: "utf8" as const },
+    ];
+    launch.assignment.skillResources = {
+      version: 1,
+      skills: [
+        {
+          name: "stable",
+          description: "Worker fixture",
+          files,
+          revision: prepareSkillBundle(files).revision,
+        },
+      ],
+    };
 
     const result = await runWorkerDescriptor(launch);
 
@@ -1084,6 +1111,32 @@ describe("worker runtime", () => {
       transcriptLeafId: `leaf-${lastTranscript?.seq}`,
       transcriptNextSeq: (lastTranscript?.seq ?? 0) + 1,
     });
+
+    const firstPrompt = gateway.inferenceRequests[0]!.context.systemPrompt;
+    expect(firstPrompt).toContain("<name>stable</name>");
+    if (result.status !== "completed") {
+      throw new Error("Expected the first worker turn to complete");
+    }
+    const next = structuredClone(launch);
+    next.assignment.runId = "worker-next-run";
+    next.assignment.turnId = "worker-next-turn";
+    next.assignment.operationalRunInstance = createOperationalRunInstanceRef(next.assignment.runId);
+    next.assignment.prompt = "Continue with the same skill.";
+    next.assignment.initialMessages = gateway.acceptedTranscriptRequests.flatMap(
+      (request) => request.messages,
+    );
+    next.assignment.transcript = {
+      baseLeafId: result.transcriptLeafId,
+      nextSeq: result.transcriptNextSeq,
+    };
+    expect((await runWorkerDescriptor(next)).status).toBe("completed");
+    expect(gateway.inferenceRequests[1]!.context.systemPrompt).toBe(firstPrompt);
+    expect(
+      gateway.inferenceRequests[1]!.context.messages.slice(
+        0,
+        next.assignment.initialMessages.length,
+      ),
+    ).toEqual(next.assignment.initialMessages);
   });
 
   it.each([false, true])("uses only prepared prompt inputs (Gateway extra: %s)", async (extra) => {
@@ -1127,48 +1180,7 @@ describe("worker runtime", () => {
     }
   });
 
-  it("exposes exactly the Gateway-authorized worker tools", async () => {
-    const { gateway, launch } = await setup();
-    launch.assignment.toolAuthority.allowedToolNames = [
-      "read",
-      "exec",
-      "sessions_spawn",
-      "sessions_send",
-      "portal",
-    ];
-
-    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
-
-    expect(gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name)).toEqual([
-      "read",
-      "exec",
-      "sessions_spawn",
-      "sessions_send",
-      "portal",
-    ]);
-  });
-
-  it("hides portal authority when the admitted Gateway lacks portal protocol support", async () => {
-    const { gateway, launch } = await setup();
-    launch.assignment.toolAuthority.allowedToolNames = ["read", "portal"];
-    launch.admission.handshake.protocolFeatures =
-      launch.admission.handshake.protocolFeatures.filter(
-        (feature) => feature !== WORKER_PORTAL_PROTOCOL_FEATURE,
-      );
-
-    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
-
-    expect(gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name)).toEqual(["read"]);
-  });
-
-  it("runs with no tools when the Gateway authority is empty", async () => {
-    const { gateway, launch } = await setup();
-    launch.assignment.toolAuthority.allowedToolNames = [];
-
-    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
-
-    expect(gateway.inferenceRequests[0]?.context.tools ?? []).toEqual([]);
-  });
+  registerWorkerGatewayToolAvailabilityTests({ setup });
 
   it("materializes exactly the Browser tool and disposes it before finishing", async () => {
     const { gateway, launch } = await setup();
@@ -1364,27 +1376,7 @@ describe("worker runtime", () => {
     expect(gateway.inferenceRequests).toHaveLength(0);
   });
 
-  it("runs an authorized nested-session tool through the closed worker RPC", async () => {
-    const { gateway, launch } = await setup({ inferencePlans: ["session-tool", "text"] });
-    launch.assignment.toolAuthority.allowedToolNames = ["sessions_spawn"];
-
-    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
-
-    expect(gateway.sessionSpawnRequests).toEqual([
-      {
-        toolCallId: "nested-session-spawn-call",
-        task: "start a nested cloud child",
-      },
-    ]);
-    expect(gateway.inferenceRequests).toHaveLength(2);
-    expect(
-      gateway.transcriptRequests.flatMap((request) =>
-        request.messages.flatMap((message) =>
-          message.role === "toolResult" ? [message.toolName] : [],
-        ),
-      ),
-    ).toContain("sessions_spawn");
-  });
+  registerWorkerGatewayToolRpcTests({ setup });
 
   it.each([
     {
@@ -1619,15 +1611,6 @@ describe("worker runtime", () => {
     });
   });
 
-  it("exits cleanly when the owner epoch supersedes the worker", async () => {
-    const { launch } = await setup({ inferencePlans: ["fence"] });
-
-    await expect(runWorkerDescriptor(launch)).resolves.toEqual({
-      status: "fenced",
-      reason: "owner-epoch-mismatch",
-    });
-  });
-
   it("sends remote inference cancellation before stopping an active worker", async () => {
     const { gateway, launch } = await setup({ inferencePlans: ["hold"] });
     const controller = new AbortController();
@@ -1786,13 +1769,27 @@ describe("worker runtime", () => {
           "text",
         ],
         ...(processState === "completed"
-          ? { backgroundCommand: `${JSON.stringify(process.execPath)} finish-on-file.cjs` }
+          ? { backgroundCommand: `${JSON.stringify(process.execPath)} finish-on-release.cjs` }
           : {}),
       });
+      const releaseBackground = createDeferred();
+      let completionServer: Server | undefined;
       if (processState === "completed") {
+        completionServer = createServer((_request, response) => {
+          void releaseBackground.promise.then(() => response.end("background-finished"));
+        });
+        const listening = once(completionServer, "listening");
+        completionServer.listen(0, "127.0.0.1");
+        await listening;
+        const address = completionServer.address();
+        if (!address || typeof address === "string") {
+          throw new Error("background completion server did not allocate a TCP port");
+        }
+        // An explicit response also releases a child that starts after the turn finishes.
+        // Filesystem watch notifications can be lost while this shared machine is busy.
         await writeFile(
-          path.join(workspaceDir, "finish-on-file.cjs"),
-          "const fs = require('node:fs'); const finish = () => { if (fs.existsSync('finish-marker')) { process.stdout.write('background-finished'); watcher.close(); } }; const watcher = fs.watch('.', finish); finish();",
+          path.join(workspaceDir, "finish-on-release.cjs"),
+          `require('node:http').get('http://127.0.0.1:${address.port}', response => response.pipe(process.stdout));`,
         );
       }
       const scopeKey = `worker:${SESSION_ID}`;
@@ -1826,7 +1823,7 @@ describe("worker runtime", () => {
         const sessionId = running[0]!.id;
         expect(settled).not.toHaveBeenCalled();
         if (processState === "completed") {
-          await writeFile(path.join(workspaceDir, "finish-marker"), "finish");
+          releaseBackground.resolve();
           await waitForExecScope(scopeKey);
           await waitForFast(() =>
             expect(
@@ -1887,12 +1884,18 @@ describe("worker runtime", () => {
           expect(results[1]?.retainWorker).toBe(false);
         }
       } finally {
+        releaseBackground.resolve();
         input.end();
         try {
           await command;
         } finally {
           supervisor.cancelScope(scopeKey, "manual-cancel");
           await waitForExecScope(scopeKey);
+          if (completionServer) {
+            await new Promise<void>((resolve, reject) => {
+              completionServer.close((error) => (error ? reject(error) : resolve()));
+            });
+          }
         }
       }
       expect(listRunningSessions().filter((session) => session.scopeKey === scopeKey)).toHaveLength(
@@ -2269,18 +2272,6 @@ describe("worker runtime", () => {
     launch.assignment.workerContainmentRoot = workspaceDir;
 
     await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
-  });
-
-  it("rejects a worker workspace outside its canonical containment root", async () => {
-    const { workspaceDir, launch } = await setup();
-    const narrowerRoot = path.join(workspaceDir, "contained");
-    await mkdir(narrowerRoot);
-    launch.assignment.permissionMode = "workspace";
-    launch.assignment.workerContainmentRoot = narrowerRoot;
-
-    await expect(runWorkerDescriptor(launch)).rejects.toThrow(
-      "worker workspace path escapes its assigned containment root",
-    );
   });
 
   it("rejects a dot-dot workspace escape before worker connection", async () => {

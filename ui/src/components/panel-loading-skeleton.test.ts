@@ -15,7 +15,6 @@ const variants = [
   "file-list",
   "files",
   "review",
-  "tasks",
   "terminal",
 ] satisfies PanelLoadingSkeletonVariant[];
 

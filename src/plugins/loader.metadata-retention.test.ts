@@ -7,7 +7,7 @@ import type { GatewayRequestHandlerOptions } from "../gateway/server-methods/typ
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
-import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store-write.js";
+import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import {
   extractPluginInstallRecordsFromInstalledPluginIndex,
   loadInstalledPluginIndex,
@@ -107,7 +107,7 @@ it.each(["global", "bundled", "bundled without package.json"] as const)(
     const caches: ReturnType<typeof createPluginCache>[] = [];
     try {
       await withEnvAsync(env, async () => {
-        writePersistedInstalledPluginIndexSync(
+        await writePersistedInstalledPluginIndex(
           loadInstalledPluginIndex({
             config,
             env,

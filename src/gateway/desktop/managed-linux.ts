@@ -100,10 +100,6 @@ function buildTigerVncArgv(resources: ManagedResources): string[] {
   ];
 }
 
-function buildDesktopSessionArgv(): string[] {
-  return ["startxfce4"];
-}
-
 function chooseDisplayNumber(socketNames: readonly string[]): number {
   const occupied = new Set(
     socketNames.flatMap((name) => {
@@ -119,10 +115,6 @@ function chooseDisplayNumber(socketNames: readonly string[]): number {
   throw new Error(
     `managed Linux desktop could not find an unused X display between :${MANAGED_DISPLAY_FIRST} and :${MANAGED_DISPLAY_LAST}`,
   );
-}
-
-function createVncPassword(random: Buffer): string {
-  return random.toString("base64url").slice(0, 8);
 }
 
 function appendTail(current: string, chunk: string): string {
@@ -274,7 +266,7 @@ export function createManagedLinuxDesktop(
     const plaintextFile = path.join(tempDir, "password.txt");
     const passwordFile = path.join(tempDir, "passwd");
     try {
-      const password = createVncPassword(randomBytes(12));
+      const password = randomBytes(12).toString("base64url").slice(0, 8);
       registerSecretValueForRedaction(password);
       await fs.writeFile(plaintextFile, password, { mode: 0o600, flag: "wx" });
       const passwordInput = await fs.readFile(plaintextFile);
@@ -509,7 +501,7 @@ export function createManagedLinuxDesktop(
       } finally {
         clearTimeout(busTimeout);
       }
-      const session = await spawnRun("startxfce4", buildDesktopSessionArgv(), activeEpoch, env);
+      const session = await spawnRun("startxfce4", ["startxfce4"], activeEpoch, env);
       const nextPair: ManagedPair = {
         current: true,
         vnc,

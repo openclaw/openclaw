@@ -40,13 +40,6 @@ type MutableExplanation = {
   remainingNodes: number;
 };
 
-type DynamicArgument = {
-  index: number;
-  text: string;
-  value: string;
-  span: SourceSpan;
-};
-
 type CommandArgument = {
   index: number;
   text: string;
@@ -58,7 +51,7 @@ type CommandArgument = {
 type CommandArgv = {
   argv: string[];
   arguments: CommandArgument[];
-  dynamicArguments: DynamicArgument[];
+  dynamicArguments: CommandArgument[];
 };
 
 type WalkState = {
@@ -538,60 +531,51 @@ function appendCommandArgument(node: TreeSitterNode, parsed: CommandArgv, state:
   const argument = argumentFromNode(parsed.argv.length, node, value, state.spanBase);
   parsed.arguments.push(argument);
   if (value.kind === "dynamic") {
-    parsed.dynamicArguments.push({
-      index: argument.index,
-      text: argument.text,
-      value: argument.value,
-      span: argument.span,
-    });
+    parsed.dynamicArguments.push(argument);
   }
   parsed.argv.push(value.value);
 }
 
 function argvFromCommand(
   node: TreeSitterNode,
-  nameNode: TreeSitterNode,
+  nameNode: TreeSitterNode | null,
   state: WalkState,
 ): CommandArgv | null {
-  if (hasEscapedLineContinuation(nameNode.text) || hasExecutableLineContinuation(node.text)) {
-    return null;
-  }
-  const executable = shellWordValue(nameNode);
-  if (executable.kind !== "literal") {
-    return null;
-  }
-
-  const argv = [executable.value];
-  const argumentsList: CommandArgument[] = [];
-  const dynamicArguments: DynamicArgument[] = [];
-  const parsed: CommandArgv = { argv, arguments: argumentsList, dynamicArguments };
-  for (const child of node.childrenForFieldName("argument")) {
-    if (!COMMAND_ARGUMENT_NODE_TYPES.has(child.type)) {
-      continue;
+  let executable: string;
+  if (node.type === "command") {
+    if (
+      !nameNode ||
+      hasEscapedLineContinuation(nameNode.text) ||
+      hasExecutableLineContinuation(node.text)
+    ) {
+      return null;
     }
-    appendCommandArgument(child, parsed, state);
+    const value = shellWordValue(nameNode);
+    if (value.kind !== "literal") {
+      return null;
+    }
+    executable = value.value;
+  } else if (node.type === "declaration_command") {
+    executable = node.text.trimStart().match(/^\S+/)?.[0] ?? "";
+  } else {
+    const trimmed = node.text.trimStart();
+    executable = trimmed.startsWith("[[") ? "[[" : trimmed.startsWith("[") ? "[" : "";
   }
-  return parsed;
-}
-
-function firstShellToken(text: string): string {
-  return text.trimStart().match(/^\S+/)?.[0] ?? "";
-}
-
-function argvFromDeclarationCommand(node: TreeSitterNode, state: WalkState): CommandArgv | null {
-  const executable = firstShellToken(node.text);
-  if (!executable) {
+  if (node.type !== "command" && !executable) {
     return null;
   }
-  const argv = [executable];
-  const argumentsList: CommandArgument[] = [];
-  const dynamicArguments: DynamicArgument[] = [];
-  const parsed: CommandArgv = { argv, arguments: argumentsList, dynamicArguments };
-  for (const child of node.namedChildren) {
-    if (!COMMAND_ARGUMENT_NODE_TYPES.has(child.type) && child.type !== "variable_assignment") {
-      continue;
+  const parsed: CommandArgv = { argv: [executable], arguments: [], dynamicArguments: [] };
+  const children =
+    node.type === "command" ? node.childrenForFieldName("argument") : node.namedChildren;
+  for (const child of children) {
+    if (node.type === "test_command") {
+      appendTestCommandArguments(child, parsed, state);
+    } else if (
+      COMMAND_ARGUMENT_NODE_TYPES.has(child.type) ||
+      (node.type === "declaration_command" && child.type === "variable_assignment")
+    ) {
+      appendCommandArgument(child, parsed, state);
     }
-    appendCommandArgument(child, parsed, state);
   }
   return parsed;
 }
@@ -618,22 +602,6 @@ function appendTestCommandArguments(
       }
     }
   }
-}
-
-function argvFromTestCommand(node: TreeSitterNode, state: WalkState): CommandArgv | null {
-  const trimmed = node.text.trimStart();
-  const executable = trimmed.startsWith("[[") ? "[[" : trimmed.startsWith("[") ? "[" : "";
-  if (!executable) {
-    return null;
-  }
-  const argv = [executable];
-  const argumentsList: CommandArgument[] = [];
-  const dynamicArguments: DynamicArgument[] = [];
-  const parsed: CommandArgv = { argv, arguments: argumentsList, dynamicArguments };
-  for (const child of node.namedChildren) {
-    appendTestCommandArguments(child, parsed, state);
-  }
-  return parsed;
 }
 
 function isCommandLikeNode(node: TreeSitterNode): boolean {
@@ -737,7 +705,7 @@ function canParseShellWrapperPayload(transportArgv: string[], commandFlag: strin
   return lowerFlag === "-c" || lowerFlag === "--command" || /^-[^-]*c[^-]*$/i.test(lowerFlag);
 }
 
-function isDynamicPayload(payload: string, dynamicArguments: DynamicArgument[]): boolean {
+function isDynamicPayload(payload: string, dynamicArguments: CommandArgument[]): boolean {
   return dynamicArguments.some((argument) => argument.value === payload);
 }
 
@@ -785,7 +753,7 @@ function payloadBaseFromArguments(
 function shellWrapperPayloadForParsing(
   argv: string[],
   argumentsList: CommandArgument[],
-  dynamicArguments: DynamicArgument[],
+  dynamicArguments: CommandArgument[],
 ): { command: string; spanBase: SpanBase } | null {
   const shellWrapper = extractShellWrapperCommand(argv);
   const payload = shellWrapper.command ?? extractShellWrapperInlineCommand(argv);
@@ -821,7 +789,7 @@ function recordInlineEvalRisk(
 
 function recordDynamicArgumentRisks(
   command: string,
-  dynamicArguments: DynamicArgument[],
+  dynamicArguments: CommandArgument[],
   output: MutableExplanation,
 ): void {
   for (const argument of dynamicArguments) {
@@ -837,7 +805,7 @@ function recordDynamicArgumentRisks(
 
 function recordCommandRisks(
   argv: string[],
-  dynamicArguments: DynamicArgument[],
+  dynamicArguments: CommandArgument[],
   text: string,
   span: SourceSpan,
   output: MutableExplanation,
@@ -962,20 +930,9 @@ async function visitNode(
     output.risks.push({ kind: "syntax-error", text: node.text, span });
   }
 
-  if (
-    node.type === "command" ||
-    node.type === "declaration_command" ||
-    node.type === "test_command"
-  ) {
+  if (isCommandLikeNode(node)) {
     const nameNode = node.type === "command" ? node.childForFieldName("name") : null;
-    const parsed =
-      node.type === "command"
-        ? nameNode
-          ? argvFromCommand(node, nameNode, state)
-          : null
-        : node.type === "declaration_command"
-          ? argvFromDeclarationCommand(node, state)
-          : argvFromTestCommand(node, state);
+    const parsed = argvFromCommand(node, nameNode, state);
     if (node.type === "command" && nameNode && !parsed) {
       output.risks.push({
         kind: "dynamic-executable",
@@ -1104,18 +1061,10 @@ function commandTopologyBuckets(commands: CommandStep[]): CommandTopologyBucket[
     buckets.set(key, newBucket);
   }
 
-  return Array.from(buckets.values()).map((bucket) => {
-    const sortedBucket: CommandTopologyBucket = {
-      context: bucket.context,
-      commands: bucket.commands.toSorted(
-        (left, right) => left.span.startIndex - right.span.startIndex,
-      ),
-    };
-    if (bucket.parentCommandId) {
-      sortedBucket.parentCommandId = bucket.parentCommandId;
-    }
-    return sortedBucket;
-  });
+  for (const bucket of buckets.values()) {
+    bucket.commands.sort((left, right) => left.span.startIndex - right.span.startIndex);
+  }
+  return Array.from(buckets.values());
 }
 
 type CommandSourceRange = {

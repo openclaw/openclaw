@@ -1,6 +1,7 @@
 import { execFile, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { formatByteSize } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -506,6 +507,7 @@ export function runSqliteReadOnlyWorkerSync(
   mode: "sync" | "content-version" = "sync",
 ): string {
   const { timeoutMs, size } = readSqliteInspectionBudget("read-only snapshot", pathname);
+  const started = log.isEnabled("trace") ? performance.now() : undefined;
   const result = spawnSync(
     process.execPath,
     sqliteReadOnlyWorkerArgv(pathname, { mode, stagingRoot }),
@@ -517,6 +519,9 @@ export function runSqliteReadOnlyWorkerSync(
       killSignal: "SIGKILL",
     },
   );
+  if (started !== undefined) {
+    log.trace(`SQLite read-only snapshot child durationMs=${performance.now() - started}`);
+  }
   const failure = result.error
     ? hasErrnoCode(result.error, "ETIMEDOUT")
       ? sqliteInspectionTimeoutError("read-only snapshot", pathname, timeoutMs, size).message

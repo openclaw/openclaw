@@ -8,6 +8,7 @@ import {
 } from "../../infra/outbound/agent-delivery.js";
 import { shouldDowngradeDeliveryToSessionOnly } from "../../infra/outbound/best-effort-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
@@ -57,13 +58,23 @@ export async function resolveAgentDeliveryPhase(params: {
   isWebchatConnect: GatewayRequestHandlerOptions["isWebchatConnect"];
   onRunObserved?: (runId: string) => void;
 }): Promise<AgentDeliveryPhaseResult | undefined> {
+  const isIncognito =
+    params.sessionEntry?.incognito === true || isIncognitoSessionKey(params.resolvedSessionKey);
+  const respond: typeof params.respond = (ok, payload, error) => {
+    if (isIncognito && error) {
+      // The caller retains the failure; response diagnostics must not retain its content.
+      params.respond(ok, payload, error, { errorMessage: "Incognito agent error." });
+      return;
+    }
+    params.respond(ok, payload, error);
+  };
   const activeSessionAgentId = params.resolvedSessionAgentId
     ? params.resolvedSessionAgentId
     : params.resolvedSessionKey
       ? resolveAgentIdFromSessionKey(params.resolvedSessionKey, params.agentId)
       : params.agentId;
   if (!activeSessionAgentId) {
-    params.respond(
+    respond(
       false,
       undefined,
       errorShape(ErrorCodes.INVALID_REQUEST, "agent selection is required for this session"),
@@ -141,7 +152,7 @@ export async function resolveAgentDeliveryPhase(params: {
           resolvedChannel,
         })
       ) {
-        params.respond(false, undefined, errorShapeFromError(ErrorCodes.INVALID_REQUEST, err));
+        respond(false, undefined, errorShapeFromError(ErrorCodes.INVALID_REQUEST, err));
         return undefined;
       }
       deliveryResolutionError = String(err);
@@ -149,7 +160,7 @@ export async function resolveAgentDeliveryPhase(params: {
   }
 
   if (wantsDelivery && deliveryTargetResolutionError && !params.bestEffortDeliver) {
-    params.respond(
+    respond(
       false,
       undefined,
       errorShapeFromError(ErrorCodes.INVALID_REQUEST, deliveryTargetResolutionError),
@@ -173,7 +184,7 @@ export async function resolveAgentDeliveryPhase(params: {
 
   if (wantsDelivery && isDeliverableMessageChannel(resolvedChannel) && !resolvedTo) {
     if (!params.bestEffortDeliver) {
-      params.respond(
+      respond(
         false,
         undefined,
         deliveryTargetResolutionError
@@ -186,7 +197,7 @@ export async function resolveAgentDeliveryPhase(params: {
       return undefined;
     }
     params.context.logGateway.info(
-      deliveryTargetResolutionError
+      deliveryTargetResolutionError && !isIncognito
         ? `agent delivery target missing (bestEffortDeliver): ${String(deliveryTargetResolutionError)}`
         : "agent delivery target missing (bestEffortDeliver): no deliverable target",
     );
@@ -200,7 +211,7 @@ export async function resolveAgentDeliveryPhase(params: {
         resolvedChannel,
       })
     ) {
-      params.respond(
+      respond(
         false,
         undefined,
         errorShape(
@@ -211,7 +222,7 @@ export async function resolveAgentDeliveryPhase(params: {
       return undefined;
     }
     params.context.logGateway.info(
-      deliveryResolutionError
+      deliveryResolutionError && !isIncognito
         ? `agent delivery unresolved (bestEffortDeliver); final delivery will report: ${deliveryResolutionError}`
         : "agent delivery unresolved (bestEffortDeliver); final delivery will report: no deliverable channel",
     );

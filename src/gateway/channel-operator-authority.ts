@@ -162,24 +162,34 @@ function captureLinkedOperatorAdmin(
   }
 }
 
+export type ResolvedChannelOperatorIdentity = {
+  identity: UserChannelIdentity;
+  prepared: Awaited<ReturnType<typeof prepareUserChannelIdentityAuthority>>;
+};
+
 export async function prepareChannelOperatorAdmin(
   cfg: OpenClawConfig,
-  identity: UserChannelIdentity | UserChannelAuthorizationReference,
+  input: UserChannelIdentity | UserChannelAuthorizationReference | ResolvedChannelOperatorIdentity,
   stateOptions: OpenClawStateDatabaseOptions = {},
 ) {
   if (!cfg.gateway?.roles && !cfg.gateway?.auth?.identityScopes) {
     return undefined;
   }
+  const identity = "identity" in input ? input.identity : input;
   const policy = resolveUserChannelAuthorizationPolicy(cfg.gateway);
   const reference =
     "version" in identity ? parseUserChannelAuthorizationReference(identity) : undefined;
   if ("version" in identity && !reference) {
     return undefined;
   }
-  const prepared = await prepareUserChannelIdentityAuthority(
-    "version" in identity ? { authorizationId: identity.id, policy } : identity,
-    stateOptions,
-  );
+  // An admitted ingress carries even an absent result; never reread an unlinked sender.
+  const prepared =
+    "identity" in input
+      ? input.prepared
+      : await prepareUserChannelIdentityAuthority(
+          "version" in identity ? { authorizationId: identity.id, policy } : identity,
+          stateOptions,
+        );
   if (!prepared) {
     return undefined;
   }
@@ -213,5 +223,18 @@ export async function prepareChannelOperatorAdmin(
         )
       : undefined);
   assertCurrent();
-  return { ...captured.authority, recoveryReference };
+  return {
+    ...captured.authority,
+    recoveryReference,
+    operatorProfile: {
+      profileId: prepared.linked.profileId,
+      assignedRole: prepared.linked.role,
+      scopes: resolveOperatorRolePolicyForAssignment(
+        prepared.linked.profileId,
+        prepared.linked.role,
+        cfg,
+      )?.scopes ?? ["operator.admin"],
+      gatewayAccessGrant: captured.grant,
+    },
+  };
 }

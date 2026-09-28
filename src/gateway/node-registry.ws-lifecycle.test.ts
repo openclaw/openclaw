@@ -7,7 +7,7 @@ import {
   WebSocket,
   WebSocketServer,
 } from "../../packages/gateway-client/src/websocket.test-support.js";
-import { setActiveNodeContext } from "../infra/active-node-context.js";
+import { setActiveNodeContexts } from "../infra/active-node-context.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
@@ -40,7 +40,7 @@ function createNodeClient(socket: WebSocket): GatewayWsClient {
 
 describe("NodeRegistry real WebSocket lifecycle", () => {
   afterEach(() => {
-    setActiveNodeContext(null);
+    setActiveNodeContexts([]);
   });
 
   it("rejects event and invoke delivery after a real socket leaves OPEN", async () => {
@@ -77,7 +77,6 @@ describe("NodeRegistry real WebSocket lifecycle", () => {
         timeoutMs: 0,
         onDispatchReady,
       });
-      const invokeErrorCode = invoke.ok ? null : invoke.error?.code;
 
       expect(closingState).toBe(WebSocket.CLOSING);
       expect(normalAccepted).toBe(false);
@@ -88,20 +87,6 @@ describe("NodeRegistry real WebSocket lifecycle", () => {
       });
       expect(onDispatchReady).not.toHaveBeenCalled();
       expect(frames).toHaveLength(frameCountAtClose);
-
-      console.log(
-        "[behavior-evidence] node-ws-open-admission",
-        JSON.stringify({
-          openState: WebSocket.OPEN,
-          closingState,
-          openFrameCount: frameCountAtClose,
-          closingNormalAccepted: normalAccepted,
-          closingRawAccepted: rawAccepted,
-          invokeErrorCode,
-          invokeDispatchReady: onDispatchReady.mock.calls.length,
-          framesAfterClosingAttempts: frames.length - frameCountAtClose,
-        }),
-      );
     } finally {
       registry.unregister("runtime-proof-conn");
       peer.terminate();

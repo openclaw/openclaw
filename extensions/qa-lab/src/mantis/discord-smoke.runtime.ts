@@ -67,20 +67,10 @@ type MantisDiscordSmokeSummary = {
     reportPath: string;
     summaryPath: string;
   };
-  bot?: {
-    id: string;
-    username?: string;
-  };
-  channel?: {
-    id: string;
-    name?: string;
-    type?: number;
-  };
+  bot?: DiscordUser;
+  channel?: Pick<DiscordChannel, "id" | "name" | "type">;
   finishedAt: string;
-  guild?: {
-    id: string;
-    name?: string;
-  };
+  guild?: DiscordGuild;
   message?: {
     id: string;
     posted: boolean;

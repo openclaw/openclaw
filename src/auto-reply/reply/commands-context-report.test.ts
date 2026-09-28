@@ -327,37 +327,40 @@ describe("buildContextReply", () => {
   });
 
   it("prefers the target session entry from sessionStore for cached context stats", async () => {
-    const params = makeParams("/context detail", false, {
-      contextTokens: 8_192,
-      totalTokens: 111,
-    });
-    const sessionEntry = {
-      ...params.sessionEntry,
-      sessionId: params.sessionEntry?.sessionId ?? "session-main",
-      updatedAt: params.sessionEntry?.updatedAt ?? 1,
-      totalTokens: 111,
-      totalTokensFresh: true,
-      totalTokensVersion: 1,
-      inputTokens: 100,
-      outputTokens: 11,
-    } satisfies SessionEntry;
-    params.sessionEntry = sessionEntry;
-    params.sessionStore = {
-      [params.sessionKey]: {
-        ...sessionEntry,
-        totalTokens: 900,
+    await withTranscript([{ role: "user", content: "cached context fixture" }], async (target) => {
+      const params = makeParams("/context detail", false, {
+        contextTokens: 8_192,
+        totalTokens: 111,
+        ...target,
+      });
+      const sessionEntry = {
+        ...params.sessionEntry,
+        sessionId: target.sessionId,
+        updatedAt: params.sessionEntry?.updatedAt ?? 1,
+        totalTokens: 111,
         totalTokensFresh: true,
         totalTokensVersion: 1,
-        inputTokens: 700,
-        outputTokens: 200,
-      },
-    };
+        inputTokens: 100,
+        outputTokens: 11,
+      } satisfies SessionEntry;
+      params.sessionEntry = sessionEntry;
+      params.sessionStore = {
+        [params.sessionKey]: {
+          ...sessionEntry,
+          totalTokens: 900,
+          totalTokensFresh: true,
+          totalTokensVersion: 1,
+          inputTokens: 700,
+          outputTokens: 200,
+        },
+      };
 
-    const result = await buildContextReply(params);
+      const result = await buildContextReply(params);
 
-    expect(result.text).toContain("Actual context usage (cached): 900 tok");
-    expect(result.text).toContain("Session tokens (cached): 900 total / ctx=8,192");
-    expect(result.text).not.toContain("Actual context usage (cached): 111 tok");
+      expect(result.text).toContain("Actual context usage (cached): 900 tok");
+      expect(result.text).toContain("Session tokens (cached): 900 total / ctx=8,192");
+      expect(result.text).not.toContain("Actual context usage (cached): 111 tok");
+    });
   });
 
   it("renders context map as sensitive local PNG media", async () => {

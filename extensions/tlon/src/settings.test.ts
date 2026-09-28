@@ -1,6 +1,6 @@
 // Tlon tests cover settings store behavior.
 import { describe, expect, it } from "vitest";
-import { createSettingsManager } from "./settings.js";
+import { createSettingsManager, type TlonSettingsStore } from "./settings.js";
 import type { UrbitSSEClient } from "./urbit/sse-client.js";
 
 type SubscriptionHandlers = {
@@ -40,11 +40,11 @@ describe("tlon settings store", () => {
     });
 
     const manager = createSettingsManager(api);
-    await manager.load();
+    const settings = await manager.load();
 
     // Regression: parseSettingsResponse previously read the dead `autoDiscover`
     // key, so the live `autoDiscoverChannels` override never reached the monitor.
-    expect(manager.current.autoDiscoverChannels).toBe(true);
+    expect(settings.autoDiscoverChannels).toBe(true);
   });
 
   it("applies live autoDiscoverChannels updates delivered over the subscription", async () => {
@@ -53,8 +53,9 @@ describe("tlon settings store", () => {
     });
 
     const manager = createSettingsManager(api);
-    await manager.load();
-    expect(manager.current.autoDiscoverChannels).toBeUndefined();
+    expect((await manager.load()).autoDiscoverChannels).toBeUndefined();
+    const updates: TlonSettingsStore[] = [];
+    manager.onChange((settings) => updates.push(settings));
 
     await manager.startSubscription();
     await emitSettingsEvent({
@@ -66,6 +67,6 @@ describe("tlon settings store", () => {
       },
     });
 
-    expect(manager.current.autoDiscoverChannels).toBe(false);
+    expect(updates).toEqual([expect.objectContaining({ autoDiscoverChannels: false })]);
   });
 });

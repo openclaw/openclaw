@@ -13,7 +13,6 @@ import {
   drainMatrixReconnect,
   matrixOutboundForQueueTest,
 } from "./deliver.queue-integration.test-support.js";
-import { SESSION_GENERATION_OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-namespaces.js";
 import { recoverPendingDeliveries } from "./delivery-queue-recovery.js";
 import { enqueueDeliveryOnce, loadPendingDelivery } from "./delivery-queue-storage.js";
 import { createRecoveryLog } from "./delivery-queue.test-helpers.js";
@@ -104,7 +103,7 @@ describe("generation-bound result delivery", () => {
           expect(send).not.toHaveBeenCalled();
           expect(
             getDeliveryQueueEntryStatus(
-              SESSION_GENERATION_OUTBOUND_DELIVERY_QUEUE_NAME,
+              "outbound-session-generation-v1",
               "sessions-send:held-result",
             ),
           ).toBe("failed");
@@ -241,10 +240,7 @@ describe("generation-bound result delivery", () => {
       await replay();
       expect(send).toHaveBeenCalledTimes(2);
       expect(
-        getDeliveryQueueEntryStatus(
-          SESSION_GENERATION_OUTBOUND_DELIVERY_QUEUE_NAME,
-          "sessions-send:revoked",
-        ),
+        getDeliveryQueueEntryStatus("outbound-session-generation-v1", "sessions-send:revoked"),
       ).toBe("failed");
     });
   });

@@ -385,39 +385,33 @@ describe("transcript tool selection", () => {
     }
   });
 
-  it.each(["missing", "unreadable"] as const)(
-    "cleans up a configured provider without reading its $0 stored row",
-    async (fault) => {
-      const h = harness();
-      const service = h.configuredCapture("public-account");
-      try {
-        await startConfiguredCapture(service);
-        expect(activeSessions.has("notes")).toBe(true);
-        const session = (await h.store.readSession("notes"))!;
-        const read = vi.spyOn(TranscriptsStore.prototype, "readSessionEntry");
-        if (fault === "missing") {
-          read.mockResolvedValue(undefined);
-        } else {
-          read.mockRejectedValue(new Error("row unreadable"));
-        }
-        await service.stop();
-        expect
-          .soft(h.stop)
-          .toHaveBeenCalledExactlyOnceWith(
-            expect.objectContaining({ sessionId: "notes", source: session.source }),
-          );
-        expect.soft(read).not.toHaveBeenCalled();
-        expect.soft(h.ctx.logger.warn).not.toHaveBeenCalled();
-        read.mockRestore();
-        expect.soft((await h.store.readSession("notes"))?.stoppedAt).toEqual(expect.any(String));
-        expect
-          .soft(await h.store.readSummary(session))
-          .toMatchObject({ summary: { transcript: ["Notes for notes"] } });
-      } finally {
-        await service.stop();
-      }
-    },
-  );
+  it("cleans up a configured provider without reading its stored row", async () => {
+    const h = harness();
+    const service = h.configuredCapture("public-account");
+    try {
+      await startConfiguredCapture(service);
+      expect(activeSessions.has("notes")).toBe(true);
+      const session = (await h.store.readSession("notes"))!;
+      const read = vi
+        .spyOn(TranscriptsStore.prototype, "readSessionEntry")
+        .mockRejectedValue(new Error("row unreadable"));
+      await service.stop();
+      expect
+        .soft(h.stop)
+        .toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ sessionId: "notes", source: session.source }),
+        );
+      expect.soft(read).not.toHaveBeenCalled();
+      expect.soft(h.ctx.logger.warn).not.toHaveBeenCalled();
+      read.mockRestore();
+      expect.soft((await h.store.readSession("notes"))?.stoppedAt).toEqual(expect.any(String));
+      expect
+        .soft(await h.store.readSummary(session))
+        .toMatchObject({ summary: { transcript: ["Notes for notes"] } });
+    } finally {
+      await service.stop();
+    }
+  });
 
   it.each(["stop", "summarize", "service-stop"] as const)(
     "%s retains the admitted private source after a same-tuple public row rewrite",

@@ -54,7 +54,7 @@ describe("cloud transcript write admission", () => {
   it.each(["current", "run", "claim", "environment", "missing", "writer", "lifecycle"] as const)(
     "checks %s authority after admitting the fallback user write",
     async (change) => {
-      seedActivePlacement();
+      await seedActivePlacement();
       const input = turn();
       await sessionAccess.patchSessionEntryCore(sessionTarget, () => ({
         activeWriterRunId: input.runId,
@@ -125,7 +125,7 @@ describe("cloud transcript write admission", () => {
           if (!claim) {
             throw new Error("expected current worker claim");
           }
-          placements.releaseTurn(claim);
+          await placements.releaseTurn(claim);
         } else if (change === "environment") {
           environment.ownerEpoch += 1;
         } else if (change === "missing") {
@@ -172,12 +172,12 @@ describe("cloud transcript write admission", () => {
   ] as const)(
     "checks $change settlement authority after admitting a workspace report (cleared: $cleared)",
     async ({ change, cleared }) => {
-      seedActivePlacement("remote-exec");
+      await seedActivePlacement("remote-exec");
       const placement = placements.get(SESSION_ID);
       if (placement?.state !== "active") {
         throw new Error("expected active placement");
       }
-      const turnClaim = placements.claimTurn({
+      const turnClaim = await placements.claimTurn({
         ...sessionTarget,
         owner: { kind: "local", environmentId: ENVIRONMENT_ID, ownerEpoch: OWNER_EPOCH },
         claimId: "report-claim",

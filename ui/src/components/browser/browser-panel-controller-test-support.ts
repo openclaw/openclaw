@@ -2,12 +2,13 @@ import type { GatewayClientRequestOptions } from "@openclaw/gateway-client";
 import type { ReactiveController } from "lit";
 import { afterEach, vi } from "vitest";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import type { BrowserInspectedNode } from "./browser-client.ts";
+import type { BrowserDashboardTarget, BrowserInspectedNode } from "./browser-client.ts";
 import {
   BrowserPanelController,
   type BrowserPanelControllerHost,
 } from "./browser-panel-controller.ts";
 import type { BrowserPanelView } from "./browser-panel-surface.ts";
+import type { BrowserTabTarget } from "./browser-target.ts";
 
 const BROWSER_PANEL_TEST_PAGE_TITLE = "Page";
 
@@ -18,6 +19,7 @@ export type BrowserRequestEnvelope = {
   node?: string;
   query?: Record<string, unknown>;
   body?: Record<string, unknown>;
+  tabScope?: { sessionKey: string; referencedTabs?: readonly BrowserTabTarget[] };
 };
 
 export function setupBrowserPanelTestCleanup(): void {
@@ -78,6 +80,8 @@ export class TestBrowserPanelHost implements BrowserPanelControllerHost {
   readonly resourceBasePath = "";
   readonly authToken = null;
   sessionKey = "";
+  sessionTabs: BrowserTabTarget[] = [];
+  dashboardTarget?: BrowserDashboardTarget;
   available = true;
   isConnected = true;
   open = true;

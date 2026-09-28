@@ -312,15 +312,15 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
             sessions: sessions)
     }
 
-    func listAgents() async throws -> OpenClawChatAgentsListResponse? {
-        OpenClawChatAgentsListResponse(
+    func loadAgents(onUpdate: @escaping OpenClawChatAgentCatalogUpdate) async throws {
+        await onUpdate(OpenClawChatAgentsListResponse(
             defaultId: self.fixture.defaultAgentID,
             agents: self.fixture.agents.map {
                 OpenClawChatAgentChoice(
                     id: $0.id,
                     name: $0.name,
                     workspaceGit: $0.workspacegit)
-            })
+            }))
     }
 
     func listChildSessions(parentKey: String) async throws -> [OpenClawChatSessionEntry] {

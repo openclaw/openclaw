@@ -17,8 +17,9 @@ import {
 } from "../../infra/diagnostic-events.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import { recoverStuckDiagnosticSession } from "../../logging/diagnostic-stuck-session-recovery.runtime.js";
-import { startDiagnosticHeartbeat } from "../../logging/diagnostic.js";
+import { startGatewayDiagnosticHeartbeat } from "../../logging/diagnostic.js";
 import { resetDiagnosticStateForTest } from "../../logging/diagnostic.test-support.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   prepareSystemAgentRunAdmission,
   type PreparedAgentRunAdmission,
@@ -121,7 +122,8 @@ describe("runtime-owned embedded liveness", () => {
     const unsubscribe = onDiagnosticEvent((event) => events.push(event));
     const recover = vi.fn(recoverStuckDiagnosticSession);
     try {
-      startDiagnosticHeartbeat(
+      startGatewayDiagnosticHeartbeat(
+        createTestGatewayScheduler("fake-timers"),
         { diagnostics: { enabled: true } },
         { recoverStuckSession: recover },
       );

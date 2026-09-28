@@ -35,28 +35,6 @@ function parsePositiveInteger(raw: string | undefined, label: string) {
   return parsed;
 }
 
-function positiveIntegerFlag(flag: string, key: "maxWorkers") {
-  return {
-    consume(argv: readonly string[], index: number) {
-      if (argv[index] !== flag) {
-        return null;
-      }
-      const rawValue = argv[index + 1];
-      if (!rawValue || rawValue.startsWith("--")) {
-        throw new Error(`${flag} requires a value`);
-      }
-      return {
-        flag,
-        nextIndex: index + 1,
-        repeatable: false,
-        apply(target: BenchOptions) {
-          target[key] = parsePositiveInteger(rawValue, flag);
-        },
-      };
-    },
-  };
-}
-
 export function parseArgs(argv: string[]): BenchOptions {
   const args = parseFlagArgs(
     argv,
@@ -69,7 +47,10 @@ export function parseArgs(argv: string[]): BenchOptions {
     [
       stringFlag("--cwd", "cwd"),
       stringFlag("--ref", "ref"),
-      positiveIntegerFlag("--max-workers", "maxWorkers"),
+      stringFlag("--max-workers", "maxWorkers", {
+        allowInline: false,
+        transform: (value) => parsePositiveInteger(value, "--max-workers"),
+      }),
     ],
     {
       onUnhandledArg(arg: string, target: BenchOptions) {
@@ -194,9 +175,7 @@ function runBenchCommand(params: BenchCommandParams) {
   });
   return {
     elapsedMs,
-    maxRssBytes: normalized.maxRssBytes,
-    status: normalized.status,
-    output: normalized.output,
+    ...normalized,
   };
 }
 

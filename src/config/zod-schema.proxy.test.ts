@@ -21,22 +21,15 @@ describe("ProxyConfigSchema", () => {
   });
 
   it("accepts a full valid config", () => {
-    const result = ProxyConfigSchema.parse({
-      enabled: true,
+    const config = {
+      enabled: false,
       proxyUrl: "http://127.0.0.1:3128",
       tls: {
         caFile: "/etc/openclaw/proxy-ca.pem",
       },
       loopbackMode: "gateway-only",
-    });
-    expect(result).toEqual({
-      enabled: true,
-      proxyUrl: "http://127.0.0.1:3128",
-      tls: {
-        caFile: "/etc/openclaw/proxy-ca.pem",
-      },
-      loopbackMode: "gateway-only",
-    });
+    };
+    expect(ProxyConfigSchema.parse(config)).toEqual(config);
   });
 
   it("accepts loopbackMode policy values", () => {
@@ -60,14 +53,6 @@ describe("ProxyConfigSchema", () => {
     expect(result?.proxyUrl).toBe("https://proxy.example.com:8443");
   });
 
-  it("does not expose bundled-proxy or unsupported upstream proxy keys", () => {
-    const keys = ProxyConfigSchema.unwrap().keyof().options;
-    expect(keys).not.toContain("binaryPath");
-    expect(keys).not.toContain("extraBlockedCidrs");
-    expect(keys).not.toContain("extraAllowedHosts");
-    expect(keys).not.toContain("userProxy");
-  });
-
   it("rejects proxyUrl values that are not HTTP forward proxies", () => {
     const socksIssues = expectProxyConfigFailure({
       proxyUrl: "socks5://127.0.0.1",
@@ -78,7 +63,7 @@ describe("ProxyConfigSchema", () => {
   });
 
   it("rejects unknown keys (strict)", () => {
-    const issues = expectProxyConfigFailure({ unknownKey: true });
+    const issues = expectProxyConfigFailure({ binaryPath: "/tmp/proxy" });
     expect(issues[0]?.code).toBe("unrecognized_keys");
   });
 
@@ -91,10 +76,5 @@ describe("ProxyConfigSchema", () => {
         },
       }),
     ).toThrow();
-  });
-
-  it("accepts enabled: false as an explicit opt-out", () => {
-    const result = ProxyConfigSchema.parse({ enabled: false });
-    expect(result?.enabled).toBe(false);
   });
 });

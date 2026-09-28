@@ -73,7 +73,9 @@ async function transcribeXaiAudio(
   }
 }
 
-export function buildXaiMediaUnderstandingProvider(): MediaUnderstandingProvider {
+export function buildXaiMediaUnderstandingProvider(): MediaUnderstandingProvider & {
+  transcribeAudio: typeof transcribeXaiAudio;
+} {
   // Auth is resolved by media-understanding core via resolveProviderExecutionContext
   // before transcribeAudio runs, so an OAuth profile (when configured) reaches
   // here as `params.apiKey` already. No plugin-side fallback required.

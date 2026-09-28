@@ -71,11 +71,6 @@ async function processDiscordQueuedMessage(params: {
   }
 }
 
-async function cleanupSkippedDiscordQueuedMessage(params: { job: DiscordInboundJob }) {
-  // A skipped job never reached reply-lane adoption; reopen its durable claim.
-  await params.job.ingressSettlement?.cancel();
-}
-
 export function createDiscordMessageRunQueue(
   params: DiscordMessageRunQueueParams,
 ): DiscordMessageRunQueue {
@@ -125,7 +120,8 @@ export function createDiscordMessageRunQueue(
       };
       const cleanupSkipped = async () => {
         try {
-          await cleanupSkippedDiscordQueuedMessage({ job });
+          // A skipped job never reached reply-lane adoption; reopen its durable claim.
+          await job.ingressSettlement?.cancel();
         } catch (error) {
           // Durable release is best-effort during shutdown. One failed claim
           // must not strand the remaining accepted jobs or their pending tasks.

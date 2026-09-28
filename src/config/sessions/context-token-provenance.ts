@@ -11,16 +11,18 @@ type SessionContextTokenOwner = Pick<
   | "modelSelectionLocked"
 >;
 
-function resolvePositiveContextTokens(value: number | null | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
-}
-
-function isExactProducerSelection(params: {
+type SessionContextSelection = {
   entry: SessionContextTokenOwner | undefined;
   provider: string | null | undefined;
   model: string | null | undefined;
   agentHarnessId: string | null | undefined;
-}): boolean {
+};
+
+function resolvePositiveContextTokens(value: number | null | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function isExactProducerSelection(params: SessionContextSelection): boolean {
   const entryProvider = normalizeLowercaseStringOrEmpty(params.entry?.modelProvider);
   const entryModel = normalizeLowercaseStringOrEmpty(params.entry?.model);
   const entryHarness = normalizeLowercaseStringOrEmpty(params.entry?.agentHarnessId);
@@ -31,9 +33,6 @@ function isExactProducerSelection(params: {
     entryProvider &&
     entryModel &&
     entryHarness &&
-    currentProvider &&
-    currentModel &&
-    currentHarness &&
     entryProvider === currentProvider &&
     entryModel === currentModel &&
     entryHarness === currentHarness,
@@ -41,12 +40,7 @@ function isExactProducerSelection(params: {
 }
 
 /** Returns a persisted effective resolution only for its exact producing selection. */
-function resolveMatchingPersistedResolution(params: {
-  entry: SessionContextTokenOwner | undefined;
-  provider: string | null | undefined;
-  model: string | null | undefined;
-  agentHarnessId: string | null | undefined;
-}): number | undefined {
+function resolveMatchingPersistedResolution(params: SessionContextSelection): number | undefined {
   if (params.entry?.contextTokensSource !== "resolved-v1") {
     return undefined;
   }
@@ -56,12 +50,9 @@ function resolveMatchingPersistedResolution(params: {
 }
 
 /** Returns persisted telemetry only when it belongs to the current producing selection. */
-export function resolveTrustedSessionContextTokens(params: {
-  entry: SessionContextTokenOwner | undefined;
-  provider: string | null | undefined;
-  model: string | null | undefined;
-  agentHarnessId: string | null | undefined;
-}): number | undefined {
+export function resolveTrustedSessionContextTokens(
+  params: SessionContextSelection,
+): number | undefined {
   const contextTokens = resolvePositiveContextTokens(params.entry?.contextTokens);
   if (contextTokens === undefined) {
     return undefined;
@@ -89,14 +80,12 @@ export function resolveTrustedSessionContextTokens(params: {
 }
 
 /** Projects the context window owned by the current session selection. */
-export function resolveProjectedSessionContextTokens(params: {
-  entry: SessionContextTokenOwner | undefined;
-  provider: string | null | undefined;
-  model: string | null | undefined;
-  agentHarnessId: string | null | undefined;
-  resolvedContextTokens: number | null | undefined;
-  authoredContextTokens?: number | null | undefined;
-}): number | undefined {
+export function resolveProjectedSessionContextTokens(
+  params: SessionContextSelection & {
+    resolvedContextTokens: number | null | undefined;
+    authoredContextTokens?: number | null | undefined;
+  },
+): number | undefined {
   const resolvedContextTokens = resolvePositiveContextTokens(params.resolvedContextTokens);
   const authoredContextTokens = resolvePositiveContextTokens(params.authoredContextTokens);
   const trustedContextTokens = resolveTrustedSessionContextTokens(params);

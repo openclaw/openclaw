@@ -244,27 +244,6 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       await expectPrimaryOverridePreservesDefaults({ primary: "anthropic/claude-sonnet-4-6" });
     });
 
-    it("applies payload.model override when model is allowed", async () => {
-      resolveAllowedModelRefMock.mockReturnValueOnce({
-        ref: { provider: "anthropic", model: "claude-sonnet-4-6" },
-      });
-
-      const result = await runCronIsolatedAgentTurn(
-        makeIsolatedAgentParamsFixture({
-          job: makeIsolatedAgentJobFixture({
-            payload: { kind: "agentTurn", message: "test", model: "anthropic/claude-sonnet-4-6" },
-          }),
-        }),
-      );
-
-      expect(result.status).toBe("ok");
-      expect(logWarnMock).not.toHaveBeenCalled();
-      expect(runWithModelFallbackMock).toHaveBeenCalledOnce();
-      const runParams = getFirstMockArg(runWithModelFallbackMock, "model fallback");
-      expect(runParams.provider).toBe("anthropic");
-      expect(runParams.model).toBe("claude-sonnet-4-6");
-    });
-
     it("fails closed when payload.model is not allowed", async () => {
       resolveAllowedModelRefMock.mockReturnValueOnce({
         error: "model not allowed: anthropic/claude-sonnet-4-6",

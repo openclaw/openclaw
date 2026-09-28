@@ -273,20 +273,14 @@ export function isCronRunMessage(message: Record<string, unknown>): boolean {
 }
 
 export function isForwardedUserMessage(message: Record<string, unknown>): boolean {
-  if (message.role !== "user") {
-    return false;
-  }
-  const provenance = normalizeInputProvenance(message.provenance);
-  return (
-    (provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send") ||
-    isCronRunMessage(message)
-  );
+  return message.role === "user" && hasForwardedMessageProvenance(message);
 }
 
 export function isProjectedForwardedMessage(message: Record<string, unknown>): boolean {
-  if (message.role !== "assistant") {
-    return false;
-  }
+  return message.role === "assistant" && hasForwardedMessageProvenance(message);
+}
+
+function hasForwardedMessageProvenance(message: Record<string, unknown>): boolean {
   const provenance = normalizeInputProvenance(message.provenance);
   return (
     (provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send") ||

@@ -1,8 +1,8 @@
 import { readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import * as fsSafe from "@openclaw/fs-safe/root";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import * as fsSafe from "../infra/fs-safe.js";
 import {
   beginAgentDeletionJournal,
   readAgentDeletionJournal,
@@ -15,6 +15,10 @@ import {
 import { quiescentClawMonitorGateway } from "./lifecycle-remove.test-support.js";
 import { applyClawRemovePlan, buildClawRemovePlan } from "./lifecycle-state.js";
 import { createClawRemoveTestFixtures } from "./lifecycle-state.test-helpers.js";
+
+vi.mock(import("@openclaw/fs-safe/root"), async (importOriginal) => ({
+  ...(await importOriginal()),
+}));
 
 let state: OpenClawTestState;
 beforeEach(async () => {

@@ -7,6 +7,7 @@ import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import { MEDIA_MAX_BYTES } from "./store.js";
 
 const MB = 1024 * 1024;
+const TELEGRAM_DEFAULT_MEDIA_MAX_MB = 100;
 type GeneratedMediaKind = Extract<MediaKind, "audio" | "image" | "video">;
 
 /** Returns the configured media cap, falling back to the media-core per-kind default. */
@@ -43,14 +44,18 @@ export function resolveChannelAccountMediaMaxMb(params: {
   return (typeof accountMediaMax === "number" ? accountMediaMax : undefined) ?? channelMediaMax;
 }
 
-/** Resolves the byte cap for staging an outbound reply's media: channel/account, then agent default. */
+/** Resolves the byte cap for staging an outbound reply's media from its configured channel/account, agent, or Telegram default. */
 export function resolveOutboundMediaMaxBytes(params: {
   cfg: OpenClawConfig;
   channel?: string | null;
   accountId?: string | null;
 }): number {
   const limitMb =
-    resolveChannelAccountMediaMaxMb(params) ?? params.cfg.agents?.defaults?.mediaMaxMb;
+    resolveChannelAccountMediaMaxMb(params) ??
+    params.cfg.agents?.defaults?.mediaMaxMb ??
+    (params.channel?.trim().toLowerCase() === "telegram"
+      ? TELEGRAM_DEFAULT_MEDIA_MAX_MB
+      : undefined);
   return typeof limitMb === "number" && Number.isFinite(limitMb) && limitMb > 0
     ? Math.floor(limitMb * MB)
     : MEDIA_MAX_BYTES;

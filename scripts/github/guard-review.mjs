@@ -11,6 +11,138 @@ import { securityReviewRollout } from "./security-review-rollout.mjs";
 
 const requestMarker = "<!-- openclaw:approval-request ";
 
+export const securityReviewContracts = {
+  dependency: {
+    context: "openclaw/dependency-review",
+    commentMarker: "<!-- openclaw:dependency-graph-guard -->",
+    approvalCommand: "/allow-dependencies-change",
+    success: {
+      clear: { description: "No dependency changes require review.", requiresApproval: false },
+      removals: { description: "Dependency removals are informational.", requiresApproval: false },
+      approved: {
+        description: "Dependency review requirements satisfied.",
+        requiresApproval: true,
+      },
+    },
+  },
+  sensitive: {
+    context: "openclaw/security-sensitive-review",
+    commentMarker: "<!-- openclaw:security-sensitive-guard -->",
+    approvalCommand: "/allow-security-sensitive-change",
+    success: {
+      clear: { description: "No sensitive product changes", requiresApproval: false },
+      approved: {
+        description: "Sensitive changes have maintainer authority",
+        requiresApproval: true,
+      },
+    },
+  },
+  combined: {
+    context: "openclaw/ci-gate",
+    success: "CI and applicable security review requirements passed",
+    failure: "CI must complete successfully; review updates automatically",
+    waiting: "Waiting for CI; review updates automatically",
+  },
+};
+
+// The caller authenticates the publisher's protected source and successful
+// enforcement step. These statuses are its decisions, not fresh approval authority.
+export async function revalidatePublishedSecurityClearance(review, statuses, publisher) {
+  const requireClearance = (condition, message) => {
+    if (!condition) {
+      throw new Error(`Published security clearance: ${message}`);
+    }
+  };
+  const started = Date.parse(publisher.startedAt);
+  const completed = Date.parse(publisher.completedAt);
+  requireClearance(
+    typeof publisher.url === "string" &&
+      publisher.url.length > 0 &&
+      Number.isFinite(started) &&
+      Number.isFinite(completed) &&
+      started <= completed,
+    "invalid publisher execution window",
+  );
+  requireClearance(
+    Array.isArray(statuses) && review.pullRequest.state === "open" && !review.pullRequest.draft,
+    "complete current statuses and an open, ready pull request are required",
+  );
+  const prefix = `PR #${review.pullRequest.number}: `;
+  const latest = (context) => {
+    const matches = statuses.filter((status) => status.context?.toLowerCase() === context);
+    requireClearance(matches.length <= 1, `ambiguous latest status for ${context}`);
+    return matches[0];
+  };
+  const inspect = (status, context, state) => {
+    const created = Date.parse(status?.created_at);
+    const updated = Date.parse(status?.updated_at);
+    requireClearance(
+      Number.isSafeInteger(status?.id) &&
+        status.id > 0 &&
+        status.context === context &&
+        status.state === state &&
+        status.creator?.login === "github-actions[bot]" &&
+        status.creator.type === "Bot" &&
+        status.target_url === publisher.url &&
+        typeof status.description === "string" &&
+        status.description.startsWith(prefix) &&
+        Number.isFinite(created) &&
+        Number.isFinite(updated) &&
+        started <= created &&
+        created <= updated &&
+        updated <= completed,
+      `untrusted, stale, or unsuccessful ${context} status`,
+    );
+    return status.description.slice(prefix.length);
+  };
+  const combined = latest(securityReviewContracts.combined.context);
+  const projection = new Map([
+    ["failure", securityReviewContracts.combined.failure],
+    ["success", securityReviewContracts.combined.success],
+    ["pending", securityReviewContracts.combined.waiting],
+  ]).get(combined?.state);
+  requireClearance(
+    projection &&
+      inspect(combined, securityReviewContracts.combined.context, combined.state) === projection,
+    "combined status is not solely the CI projection",
+  );
+  await assertGuardUnchanged(review);
+  const rollout = await securityReviewRollout(review);
+  const guardStatusIds = [];
+  const approvals = [];
+  for (const contract of [securityReviewContracts.dependency, securityReviewContracts.sensitive]) {
+    const status = latest(contract.context);
+    if (rollout.mode !== "enforced" && !status) {
+      continue;
+    }
+    if (
+      rollout.mode !== "enforced" &&
+      Date.parse(status.created_at) < started &&
+      Date.parse(status.updated_at) < started
+    ) {
+      continue;
+    }
+    const description = inspect(status, contract.context, "success");
+    const decision = Object.values(contract.success).find(
+      (value) => value.description === description,
+    );
+    requireClearance(
+      decision && Date.parse(status.updated_at) <= Date.parse(combined.created_at),
+      `unknown or out-of-order ${contract.context} clearance`,
+    );
+    guardStatusIds.push(status.id);
+    if (decision.requiresApproval) {
+      const approval = await findMaintainerApproval({ ...review, ...contract });
+      requireClearance(approval, `${contract.context} approval is no longer current`);
+      approvals.push({ context: contract.context, ...approval });
+    }
+  }
+  const currentRollout = await securityReviewRollout(review);
+  requireClearance(currentRollout.mode === rollout.mode, "rollout changed during admission");
+  await assertGuardUnchanged(review);
+  return { rollout, combinedStatusId: combined.id, guardStatusIds, approvals };
+}
+
 export class SupersededReviewError extends Error {
   constructor() {
     super(

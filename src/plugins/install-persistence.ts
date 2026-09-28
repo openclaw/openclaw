@@ -41,6 +41,7 @@ import { tracePluginLifecyclePhaseAsync } from "./plugin-lifecycle-trace.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
 import { applySlotSelectionForPlugin } from "./slot-selection.js";
+import { withPluginSourceCleanup } from "./source-cleanup.js";
 import { buildPluginSnapshotReport } from "./status.js";
 import { recordPluginPackageUninstallPlan } from "./uninstall-package-plan.js";
 import {
@@ -178,6 +179,7 @@ function resolveReplacedManagedInstallRemoval(params: {
 
 export async function persistPluginInstall(params: {
   snapshot: ConfigSnapshotForInstallPersist;
+  env?: NodeJS.ProcessEnv;
   pluginId: string;
   install: Omit<PluginInstallUpdate, "pluginId">;
   enable?: boolean;
@@ -430,7 +432,15 @@ export async function persistPluginInstall(params: {
         if (params.deferRuntime) {
           params.deferRuntime.deferCleanup(cleanup, replacedInstallRemoval.target);
         } else {
-          await cleanup(params.beforePersistentApply);
+          await withPluginSourceCleanup(
+            replacedInstallRemoval.target,
+            {
+              configPath: receipt.configWrite.path,
+              env: params.env,
+              assertCurrent: params.beforePersistentApply,
+            },
+            cleanup,
+          );
         }
       }
       await refreshPluginRegistryAfterConfigMutation({

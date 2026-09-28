@@ -4,7 +4,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { withWorktreeAllocationLease } from "./allocation.js";
 import { hasMissingManagedWorktreeGitdir } from "./checkout-inspection.js";
 import type { WorktreeGcProgress } from "./gc-progress.js";
-import { retireMissingRegistryWorktree } from "./registry-retirement.js";
+import { deferWorktreeCleanup, retireMissingRegistryWorktree } from "./registry-retirement.js";
 import {
   assertWorktreeRemovalClaim,
   getRegistryWorktree,
@@ -21,9 +21,22 @@ import type { ManagedWorktreeOwnerKind, ManagedWorktreeRecord } from "./types.js
 const log = createSubsystemLogger("agents/worktrees");
 
 export type WorktreeCleanupOwnerPolicy = {
+  retryDeferred?: boolean;
   shouldProtectOwner?: (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => boolean;
   shouldRemoveOwner?: (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => boolean;
 };
+
+export async function deferWorktreeGcRecord(
+  env: NodeJS.ProcessEnv,
+  record: ManagedWorktreeRecord,
+  reason: string | null,
+) {
+  if ((await deferWorktreeCleanup(env, { observed: record, reason })) && reason !== null) {
+    log.warn(
+      `cleanup deferred for ${record.id}: ${reason}; checkout preserved at ${record.path}. After repair, run openclaw worktrees gc to retry.`,
+    );
+  }
+}
 
 export function assertOwnerAllowsCleanup(
   env: NodeJS.ProcessEnv,
@@ -67,6 +80,9 @@ export function createWorktreeGcErrorHandler(context: {
       return;
     }
     let error = initialError;
+    if (error instanceof WorktreeBranchMovedError) {
+      await deferWorktreeGcRecord(env, record, "branch-moved");
+    }
     if (!(error instanceof WorktreeBranchMovedError)) {
       try {
         if (await hasMissingManagedWorktreeGitdir(record)) {
@@ -127,6 +143,13 @@ export function createWorktreeGcErrorHandler(context: {
         }
       }
       log.warn(`${stage} cleanup failed for ${record.id}: ${String(error)}`);
+      if (/not a git repository|^Git metadata is unavailable /u.test(formatErrorMessage(error))) {
+        await deferWorktreeGcRecord(
+          env,
+          record,
+          "Git metadata unavailable; repair and run openclaw worktrees gc",
+        );
+      }
     }
     progress.error(stage, error, record.id);
   };

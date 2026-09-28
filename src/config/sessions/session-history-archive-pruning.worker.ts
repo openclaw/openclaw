@@ -109,28 +109,32 @@ export function removeLegacySessionArchiveInDatabase(
   filePath: string,
   admit: (stage: "transaction" | "commit") => void,
 ): SessionLegacyArchiveRemovalResult {
-  return runOpenClawAgentWriteTransaction((transactionDb) => {
-    if (transactionDb.db !== database.db) {
-      throw new Error("SQLite archive pruning lost its database owner");
-    }
-    admit("transaction");
-    const db = getSessionKysely(transactionDb.db);
-    const owned =
-      tableExists(transactionDb.db, "session_transcript_archives") &&
-      executeSqliteQuerySync(
-        transactionDb.db,
-        db
-          .selectFrom("session_transcript_archives")
-          .select("archive_name")
-          .where("archive_name", "=", path.basename(filePath))
-          .limit(1),
-      ).rows.length > 0;
-    if (owned) {
-      admit("commit");
-      return "preserved";
-    }
-    return removeLegacyArchiveFile(filePath, () => admit("commit"));
-  }, options);
+  return runOpenClawAgentWriteTransaction(
+    (transactionDb) => {
+      if (transactionDb.db !== database.db) {
+        throw new Error("SQLite archive pruning lost its database owner");
+      }
+      admit("transaction");
+      const db = getSessionKysely(transactionDb.db);
+      const owned =
+        tableExists(transactionDb.db, "session_transcript_archives") &&
+        executeSqliteQuerySync(
+          transactionDb.db,
+          db
+            .selectFrom("session_transcript_archives")
+            .select("archive_name")
+            .where("archive_name", "=", path.basename(filePath))
+            .limit(1),
+        ).rows.length > 0;
+      if (owned) {
+        admit("commit");
+        return "preserved";
+      }
+      return removeLegacyArchiveFile(filePath, () => admit("commit"));
+    },
+    options,
+    { operationLabel: "session.archive.remove-legacy" },
+  );
 }
 
 export function deletePublishedSessionArchiveInDatabase(
@@ -139,32 +143,36 @@ export function deletePublishedSessionArchiveInDatabase(
   row: PublishedSessionTranscriptArchive,
   admit: (stage: "transaction" | "commit") => void,
 ): void {
-  runOpenClawAgentWriteTransaction((transactionDb) => {
-    if (transactionDb.db !== database.db) {
-      throw new Error("SQLite archive pruning lost its database owner");
-    }
-    admit("transaction");
-    const db = getSessionKysely(transactionDb.db);
-    // A peer or cold reopen may change publication while unlink is in flight.
-    const deletion = executeSqliteQuerySync(
-      transactionDb.db,
-      db
-        .deleteFrom("session_transcript_archives")
-        .where("session_id", "=", row.session_id)
-        .where("generation", "=", row.generation)
-        .where("archive_name", "=", row.archive_name)
-        .where("archive_sha256", "=", row.archive_sha256)
-        .where("created_at", "=", row.created_at)
-        .where("encoding", "=", row.encoding)
-        .where("reason", "=", row.reason)
-        .where("session_key", "=", row.session_key)
-        .where("published_at", "=", row.published_at),
-    );
-    if (deletion.numAffectedRows !== 1n) {
-      throw new Error("SQLite session archive changed during pruning; retry cleanup.");
-    }
-    admit("commit");
-  }, options);
+  runOpenClawAgentWriteTransaction(
+    (transactionDb) => {
+      if (transactionDb.db !== database.db) {
+        throw new Error("SQLite archive pruning lost its database owner");
+      }
+      admit("transaction");
+      const db = getSessionKysely(transactionDb.db);
+      // A peer or cold reopen may change publication while unlink is in flight.
+      const deletion = executeSqliteQuerySync(
+        transactionDb.db,
+        db
+          .deleteFrom("session_transcript_archives")
+          .where("session_id", "=", row.session_id)
+          .where("generation", "=", row.generation)
+          .where("archive_name", "=", row.archive_name)
+          .where("archive_sha256", "=", row.archive_sha256)
+          .where("created_at", "=", row.created_at)
+          .where("encoding", "=", row.encoding)
+          .where("reason", "=", row.reason)
+          .where("session_key", "=", row.session_key)
+          .where("published_at", "=", row.published_at),
+      );
+      if (deletion.numAffectedRows !== 1n) {
+        throw new Error("SQLite session archive changed during pruning; retry cleanup.");
+      }
+      admit("commit");
+    },
+    options,
+    { operationLabel: "session.archive.delete-published" },
+  );
 }
 
 export function reclaimSessionArchivePagesInWorker(

@@ -256,11 +256,9 @@ function compactTree(lines: readonly string[]) {
       return;
     }
     current.keep ||= current.hasRef;
-    if (current.hasRef && stack.length > 0) {
-      const parent = stack.at(-1);
-      if (parent !== undefined) {
-        parent.hasRef = true;
-      }
+    const parent = stack.at(-1);
+    if (current.hasRef && parent) {
+      parent.hasRef = true;
     }
   };
 

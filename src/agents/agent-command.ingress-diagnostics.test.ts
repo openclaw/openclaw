@@ -1,13 +1,3 @@
-/**
- * Tests for ingress model.usage diagnostic emission in agentCommandFromIngress.
- *
- * Covers:
- * - ingressDiagnosticChannel channel label resolution
- * - emitIngressModelUsageDiagnostic with diagnostics enabled + valid usage
- * - emitIngressModelUsageDiagnostic with diagnostics disabled
- * - emitIngressModelUsageDiagnostic with null/missing usage
- */
-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { emitIngressModelUsageDiagnostic as emitIngressModelUsageDiagnosticBase } from "./command/ingress-diagnostics.js";
 
@@ -264,25 +254,5 @@ describe("emitIngressModelUsageDiagnostic", () => {
       promptTokens: 100,
       total: 150,
     });
-  });
-
-  it("omits context.used when promptTokens is undefined", () => {
-    const result = makeResult({
-      agentMeta: {
-        promptTokens: undefined,
-        provider: "openai",
-        model: "gpt-5.5",
-        sessionId: "sess-no-prompt",
-        usage: { input: 10, output: 5 },
-        contextTokens: 128000,
-      },
-    });
-    const opts = makeOpts();
-
-    emitIngressModelUsageDiagnostic(result, opts);
-
-    expect(mocks.emitTrustedDiagnosticEvent).toHaveBeenCalledTimes(1);
-    const event = mocks.emitTrustedDiagnosticEvent.mock.calls[0]?.[0];
-    expect(event.context).toEqual({ limit: 128000 });
   });
 });

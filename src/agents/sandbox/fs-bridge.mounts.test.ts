@@ -22,82 +22,74 @@ import {
 } from "./fs-bridge.test-helpers.js";
 import { buildSandboxFsMounts, resolveWritableSandboxBindHostRoots } from "./fs-paths.js";
 
+function mountedSandbox(
+  workspaceDir: string,
+  docker: Partial<ReturnType<typeof createSandbox>["docker"]> = {},
+) {
+  return createSandbox({
+    workspaceDir,
+    agentWorkspaceDir: workspaceDir,
+    workspaceAccess: "rw",
+    docker: { ...createSandbox().docker, ...docker },
+  });
+}
+
 describe("sandbox effective filesystem mounts", () => {
   installFsBridgeTestHarness();
 
-  it.each(["rw", "ro"] as const)(
-    "uses the last global/agent /data bind with %s access",
-    async (mode) => {
-      await withTempDir("openclaw-effective-mounts-", async (workspaceDir) => {
-        for (const name of ["A", "B"]) {
-          await fs.mkdir(path.join(workspaceDir, name));
-          await fs.writeFile(path.join(workspaceDir, name, "marker"), name);
-        }
-        const docker = resolveSandboxDockerConfig({
-          scope: "agent",
-          globalDocker: { binds: [`${workspaceDir}/A:/data:${mode === "rw" ? "ro" : "rw"}`] },
-          agentDocker: { binds: [`${workspaceDir}/B:/data/:${mode}`] },
-        });
-        const sandbox = createSandbox({
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-          workspaceAccess: "rw",
-          docker,
-        });
-        const bridge = createSandboxFsBridge({ sandbox });
-        expect((await bridge.readFile({ filePath: "/data/marker" })).toString()).toBe("B");
-        expect(bridge.resolvePath({ filePath: "/data/marker" }).hostPath).toBe(
-          path.join(workspaceDir, "B/marker"),
-        );
-        expect(
-          buildSandboxFsMounts(sandbox).filter((mount) => mount.containerRoot === "/data"),
-        ).toHaveLength(1);
-        expect(resolveWritableSandboxBindHostRoots(docker.binds)).toEqual(
-          mode === "rw" ? [path.join(workspaceDir, "B")] : [],
-        );
-        if (mode === "ro") {
-          await expect(
-            bridge.writeFile({ filePath: "/data/marker", data: "changed" }),
-          ).rejects.toThrow("read-only");
-          expectOnlyCanonicalPathCommands();
-        }
-        expect(await fs.readFile(path.join(workspaceDir, "A/marker"), "utf8")).toBe("A");
+  it("uses the last global/agent /data bind and its read-only access", async () => {
+    await withTempDir("openclaw-effective-mounts-", async (workspaceDir) => {
+      for (const name of ["A", "B"]) {
+        await fs.mkdir(path.join(workspaceDir, name));
+        await fs.writeFile(path.join(workspaceDir, name, "marker"), name);
+      }
+      const docker = resolveSandboxDockerConfig({
+        scope: "agent",
+        globalDocker: { binds: [`${workspaceDir}/A:/data:rw`] },
+        agentDocker: { binds: [`${workspaceDir}/B:/data/:ro`] },
       });
-    },
-  );
+      const sandbox = mountedSandbox(workspaceDir, docker);
+      const bridge = createSandboxFsBridge({ sandbox });
+      expect((await bridge.readFile({ filePath: "/data/marker" })).toString()).toBe("B");
+      expect(bridge.resolvePath({ filePath: "/data/marker" }).hostPath).toBe(
+        path.join(workspaceDir, "B/marker"),
+      );
+      expect(
+        buildSandboxFsMounts(sandbox).filter((mount) => mount.containerRoot === "/data"),
+      ).toHaveLength(1);
+      expect(resolveWritableSandboxBindHostRoots(docker.binds)).toEqual([]);
+      await expect(bridge.writeFile({ filePath: "/data/marker", data: "changed" })).rejects.toThrow(
+        "read-only",
+      );
+      expectOnlyCanonicalPathCommands();
+      expect(await fs.readFile(path.join(workspaceDir, "A/marker"), "utf8")).toBe("A");
+    });
+  });
 
-  it.each(["/workspace", "/workspace/sub"])(
-    "remaps relative and host aliases through the %s override and guard",
-    async (target) => {
-      await withTempDir("openclaw-effective-mounts-", async (root) => {
-        const workspaceDir = path.join(root, "workspace");
-        const override = path.join(root, "override");
-        await fs.mkdir(path.join(workspaceDir, "sub"), { recursive: true });
-        await fs.mkdir(override);
-        await fs.writeFile(path.join(override, "marker"), "VISIBLE");
-        const relative = target === "/workspace" ? "marker" : "sub/marker";
-        await fs.writeFile(path.join(workspaceDir, relative), "HIDDEN");
-        const sandbox = createSandbox({
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-          workspaceAccess: "rw",
-          docker: { ...createSandbox().docker, binds: [`${override}:${target}:ro`] },
-        });
-        const bridge = createSandboxFsBridge({ sandbox });
-        for (const filePath of [
-          relative,
-          `/workspace/${relative}`,
-          path.join(workspaceDir, relative),
-        ]) {
-          expect((await bridge.readFile({ filePath })).toString()).toBe("VISIBLE");
-          await expect(bridge.writeFile({ filePath, data: "changed" })).rejects.toThrow(
-            "read-only",
-          );
-        }
-        expectOnlyCanonicalPathCommands();
+  it("remaps relative and host aliases through a nested override and guard", async () => {
+    await withTempDir("openclaw-effective-mounts-", async (root) => {
+      const workspaceDir = path.join(root, "workspace");
+      const override = path.join(root, "override");
+      await fs.mkdir(path.join(workspaceDir, "sub"), { recursive: true });
+      await fs.mkdir(override);
+      await fs.writeFile(path.join(override, "marker"), "VISIBLE");
+      const relative = "sub/marker";
+      await fs.writeFile(path.join(workspaceDir, relative), "HIDDEN");
+      const sandbox = mountedSandbox(workspaceDir, {
+        binds: [`${override}:/workspace/sub:ro`],
       });
-    },
-  );
+      const bridge = createSandboxFsBridge({ sandbox });
+      for (const filePath of [
+        relative,
+        `/workspace/${relative}`,
+        path.join(workspaceDir, relative),
+      ]) {
+        expect((await bridge.readFile({ filePath })).toString()).toBe("VISIBLE");
+        await expect(bridge.writeFile({ filePath, data: "changed" })).rejects.toThrow("read-only");
+      }
+      expectOnlyCanonicalPathCommands();
+    });
+  });
 
   it("refuses configured tmpfs and symlink aliases while allowing a deeper bind", async () => {
     await withTempDir("openclaw-effective-mounts-", async (workspaceDir) => {
@@ -106,15 +98,9 @@ describe("sandbox effective filesystem mounts", () => {
       await fs.writeFile(path.join(workspaceDir, "cache/marker"), "HIDDEN");
       await fs.writeFile(path.join(workspaceDir, "export/marker"), "VISIBLE");
       await fs.symlink("cache/marker", path.join(workspaceDir, "alias"));
-      const sandbox = createSandbox({
-        workspaceDir,
-        agentWorkspaceDir: workspaceDir,
-        workspaceAccess: "rw",
-        docker: {
-          ...createSandbox().docker,
-          tmpfs: ["/workspace/cache:rw"],
-          binds: [`${workspaceDir}/export:/workspace/cache/export:ro`],
-        },
+      const sandbox = mountedSandbox(workspaceDir, {
+        tmpfs: ["/workspace/cache:rw"],
+        binds: [`${workspaceDir}/export:/workspace/cache/export:ro`],
       });
       const bridge = createSandboxFsBridge({ sandbox });
       mockContainerCanonicalPaths({ "/workspace/alias": "/workspace/cache/marker" });
@@ -140,14 +126,8 @@ describe("sandbox effective filesystem mounts", () => {
         await fs.writeFile(path.join(workspaceDir, name, "marker"), name);
         await fs.symlink(`${name}/marker`, path.join(workspaceDir, `${name}-alias`));
       }
-      const sandbox = createSandbox({
-        workspaceDir,
-        agentWorkspaceDir: workspaceDir,
-        workspaceAccess: "rw",
-        docker: {
-          ...createSandbox().docker,
-          binds: [`${workspaceDir}/replacement:/workspace/data:ro`],
-        },
+      const sandbox = mountedSandbox(workspaceDir, {
+        binds: [`${workspaceDir}/replacement:/workspace/data:ro`],
       });
       const bridge = createSandboxFsBridge({ sandbox });
       mockContainerCanonicalPaths({
@@ -177,14 +157,8 @@ describe("sandbox effective filesystem mounts", () => {
         await fs.symlink("/data/hop", path.join(workspaceDir, "absolute-alias"));
         await fs.writeFile(path.join(replacement, "hop"), "B");
         const bridge = createSandboxFsBridge({
-          sandbox: createSandbox({
-            workspaceDir,
-            agentWorkspaceDir: workspaceDir,
-            workspaceAccess: "rw",
-            docker: {
-              ...createSandbox().docker,
-              binds: [`${replacement}:/workspace/cache:ro`, `${replacement}:/data:ro`],
-            },
+          sandbox: mountedSandbox(workspaceDir, {
+            binds: [`${replacement}:/workspace/cache:ro`, `${replacement}:/data:ro`],
           }),
         });
         mockContainerCanonicalPaths({
@@ -208,18 +182,17 @@ describe("sandbox effective filesystem mounts", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32").each([
-    { target: "value", other: "other" },
-    { target: "a\\b", other: "a/b" },
-  ])(
-    "closes the pinned descriptor if $target changes backing after container resolution",
-    async ({ target, other }) => {
+  it.runIf(process.platform !== "win32")(
+    "closes the pinned descriptor if a literal-backslash path changes backing after resolution",
+    async () => {
+      const target = "a\\b";
+      const other = "a/b";
       await withTempDir("openclaw-effective-mounts-", async (workspaceDir) => {
         await fs.mkdir(path.dirname(path.join(workspaceDir, other)), { recursive: true });
         await fs.writeFile(path.join(workspaceDir, target), "VISIBLE");
         await fs.writeFile(path.join(workspaceDir, other), "HIDDEN");
         const bridge = createSandboxFsBridge({
-          sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
+          sandbox: mountedSandbox(workspaceDir),
         });
         const open = mockedOpenRootFile.getMockImplementation()!;
         let fd: number | undefined;
@@ -266,7 +239,7 @@ describe("sandbox effective filesystem mounts", () => {
         await fs.writeFile(path.join(workspaceDir, "marker"), "LITERAL_ROOT");
         await fs.writeFile(path.join(decoy, "marker"), "SLASH_ROOT_DECOY");
         const bridge = createSandboxFsBridge({
-          sandbox: createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir }),
+          sandbox: mountedSandbox(workspaceDir),
         });
         expect((await bridge.readFile({ filePath: "marker" })).toString()).toBe("LITERAL_ROOT");
         expect(await resolveSandboxFileIdentity({ bridge, filePath: "marker" })).toBe(
@@ -282,10 +255,8 @@ describe("sandbox effective filesystem mounts", () => {
       await fs.mkdir(path.join(workspaceDir, "cache"));
       await fs.writeFile(path.join(workspaceDir, "cache/value"), "HIDDEN");
       const bridge = createSandboxFsBridge({
-        sandbox: createSandbox({
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-          docker: { ...createSandbox().docker, tmpfs: ["/workspace/cache"] },
+        sandbox: mountedSandbox(workspaceDir, {
+          tmpfs: ["/workspace/cache"],
         }),
       });
       mockContainerCanonicalPaths({
@@ -407,19 +378,13 @@ describe("sandbox effective filesystem mounts", () => {
         await fs.mkdir(replacement);
         await fs.writeFile(path.join(workspaceDir, "marker"), "HIDDEN");
         await fs.writeFile(path.join(replacement, "marker"), "VISIBLE");
-        const sandbox = createSandbox({
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-          workspaceAccess: "rw",
-          docker: {
-            ...createSandbox().docker,
-            binds: [
-              ...(source === "canonical"
-                ? []
-                : [`${source === "ancestor" ? `${root}/project` : actualWorkspace}:/data:rw`]),
-              `${replacement}:/workspace:ro`,
-            ],
-          },
+        const sandbox = mountedSandbox(workspaceDir, {
+          binds: [
+            ...(source === "canonical"
+              ? []
+              : [`${source === "ancestor" ? `${root}/project` : actualWorkspace}:/data:rw`]),
+            `${replacement}:/workspace:ro`,
+          ],
         });
         const bridge = createSandboxFsBridge({ sandbox });
         for (const filePath of [
@@ -452,14 +417,8 @@ describe("sandbox effective filesystem mounts", () => {
       await fs.writeFile(path.join(workspaceDir, "data/marker"), "VISIBLE");
       await fs.symlink("data", path.join(workspaceDir, "source-alias"), "dir");
       await fs.symlink("data/marker", path.join(workspaceDir, "read-alias"));
-      const sandbox = createSandbox({
-        workspaceDir,
-        agentWorkspaceDir: workspaceDir,
-        workspaceAccess: "rw",
-        docker: {
-          ...createSandbox().docker,
-          binds: [`${workspaceDir}/source-alias:/workspace/data:ro`],
-        },
+      const sandbox = mountedSandbox(workspaceDir, {
+        binds: [`${workspaceDir}/source-alias:/workspace/data:ro`],
       });
       const bridge = createSandboxFsBridge({ sandbox });
       mockContainerCanonicalPaths({ "/workspace/read-alias": "/workspace/data/marker" });
@@ -478,14 +437,8 @@ describe("sandbox effective filesystem mounts", () => {
           await fs.mkdir(path.join(workspaceDir, name));
           await fs.writeFile(path.join(workspaceDir, name, "marker"), name);
         }
-        const sandbox = createSandbox({
-          workspaceDir,
-          agentWorkspaceDir: workspaceDir,
-          workspaceAccess: "rw",
-          docker: {
-            ...createSandbox().docker,
-            binds: [`${workspaceDir}/A:/data:ro`, `${workspaceDir}/B :/data :rw`],
-          },
+        const sandbox = mountedSandbox(workspaceDir, {
+          binds: [`${workspaceDir}/A:/data:ro`, `${workspaceDir}/B :/data :rw`],
         });
         const bridge = createSandboxFsBridge({ sandbox });
         expect((await bridge.readFile({ filePath: "/data/marker" })).toString()).toBe("A");

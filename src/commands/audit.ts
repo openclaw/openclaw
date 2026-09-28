@@ -83,26 +83,14 @@ function parseAuditTimestamp(value: string | undefined, flag: string): number | 
   throw new Error(`${flag} must be an ISO timestamp or Unix milliseconds.`);
 }
 
-function parseAuditLimit(value: string | undefined): number {
+function parseAuditLimit(value: string | undefined, explain = false): number {
   if (value === undefined) {
-    return DEFAULT_AUDIT_LIMIT;
+    return explain ? DEFAULT_AUDIT_DECISION_LIMIT : DEFAULT_AUDIT_LIMIT;
   }
+  const max = explain ? MAX_AUDIT_DECISION_LIMIT : MAX_AUDIT_LIMIT;
   const parsed = parseStrictPositiveInteger(value);
-  if (parsed === undefined || parsed > MAX_AUDIT_LIMIT) {
-    throw new Error(`--limit must be between 1 and ${MAX_AUDIT_LIMIT}.`);
-  }
-  return parsed;
-}
-
-function parseAuditDecisionLimit(value: string | undefined): number {
-  if (value === undefined) {
-    return DEFAULT_AUDIT_DECISION_LIMIT;
-  }
-  const parsed = parseStrictPositiveInteger(value);
-  if (parsed === undefined || parsed > MAX_AUDIT_DECISION_LIMIT) {
-    throw new Error(
-      `--limit must be between 1 and ${String(MAX_AUDIT_DECISION_LIMIT)} with --explain.`,
-    );
+  if (parsed === undefined || parsed > max) {
+    throw new Error(`--limit must be between 1 and ${max}${explain ? " with --explain" : ""}.`);
   }
   return parsed;
 }
@@ -139,27 +127,17 @@ function formatAuditRows(events: readonly AuditCliEvent[]): string[] {
   return rows;
 }
 
-function isUnsupportedActivityMethodError(value: unknown): value is Error {
-  // Frozen shipped-gateway strings: pre-activity gateways answer unknown
-  // methods with "unknown method: ..." or fail closed to operator.admin. A
-  // current gateway registers audit.activity.list at operator.read, so it can
-  // never emit these for this method; matching them only triggers the legacy
-  // audit.list fallback.
+function isUnsupportedAuditMethodError(
+  value: unknown,
+  method: "audit.activity.list" | "audit.run.inspect",
+): value is Error {
+  // Older gateways reject unknown methods directly or require operator.admin.
+  // These frozen replies select the legacy list or unsupported-inspection result.
   return (
     value instanceof Error &&
     value.name === "GatewayClientRequestError" &&
     (value as Error & { gatewayCode?: unknown }).gatewayCode === "INVALID_REQUEST" &&
-    (value.message === "unknown method: audit.activity.list" ||
-      value.message === "missing scope: operator.admin")
-  );
-}
-
-function isUnsupportedRunInspectMethodError(value: unknown): value is Error {
-  return (
-    value instanceof Error &&
-    value.name === "GatewayClientRequestError" &&
-    (value as Error & { gatewayCode?: unknown }).gatewayCode === "INVALID_REQUEST" &&
-    (value.message === "unknown method: audit.run.inspect" ||
+    (value.message === `unknown method: ${method}` ||
       value.message === "missing scope: operator.admin")
   );
 }
@@ -236,7 +214,7 @@ async function queryAuditActivity(
       params,
     });
   } catch (error) {
-    if (!isUnsupportedActivityMethodError(error)) {
+    if (!isUnsupportedAuditMethodError(error, "audit.activity.list")) {
       throw formatAuditGatewayError(error);
     }
     if (hasMessageSpecificFilters(options)) {
@@ -281,7 +259,7 @@ async function queryAuditRunInspection(
   try {
     return await callGateway<AuditRunInspectResult>({ method: "audit.run.inspect", params });
   } catch (error) {
-    if (!isUnsupportedRunInspectMethodError(error)) {
+    if (!isUnsupportedAuditMethodError(error, "audit.run.inspect")) {
       throw formatAuditGatewayError(error);
     }
     return unsupportedRunInspection(
@@ -541,7 +519,7 @@ export async function auditListCommand(
         "--explain accepts only --run or --execution, plus --limit, --cursor, and --json; remove activity-list filters.",
       );
     }
-    const decisionLimit = parseAuditDecisionLimit(options.limit);
+    const decisionLimit = parseAuditLimit(options.limit, true);
     const cursor = options.cursor;
     const numericCursor = parsePositiveAuditCursor(cursor);
     const runExecutionCursor =

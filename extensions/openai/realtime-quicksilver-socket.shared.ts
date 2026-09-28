@@ -3,6 +3,7 @@ import type {
   RealtimeVoiceBridgeCreateRequest,
 } from "openclaw/plugin-sdk/realtime-voice";
 import type { ClientOptions, RawData } from "ws";
+import { OpenAIQuicksilverPendingAudio } from "./realtime-quicksilver-audio-buffer.js";
 
 export const QUICKSILVER_SOCKET_CONTROL_LIMIT = 128;
 export const QUICKSILVER_SOCKET_CONTROL_BYTES = 1024 * 1024;
@@ -81,48 +82,14 @@ export type QuicksilverSocketWorkerData = QuicksilverSocketMediaOptions & {
 };
 
 /** Bounded raw-byte tail: unlike PCM queues this must retain odd-length mu-law chunks. */
-export class QuicksilverSocketAudioQueue {
-  private storage: Buffer | undefined;
-  private offset = 0;
-  private bytes = 0;
-  constructor(private readonly limit = QUICKSILVER_SOCKET_AUDIO_BYTES) {}
-  get length(): number {
-    return this.bytes;
+export class QuicksilverSocketAudioQueue extends OpenAIQuicksilverPendingAudio {
+  constructor(limit = QUICKSILVER_SOCKET_AUDIO_BYTES) {
+    super(limit, 1);
   }
-  append(audio: Buffer): void {
-    const count = Math.min(audio.length, this.limit);
-    if (!count) {
-      return;
-    }
-    const storage = (this.storage ??= Buffer.alloc(this.limit));
-    const dropped = Math.max(0, this.bytes + count - this.limit);
-    this.offset = (this.offset + dropped) % this.limit;
-    this.bytes -= dropped;
-    const writeAt = (this.offset + this.bytes) % this.limit;
-    const first = Math.min(count, this.limit - writeAt);
-    const sourceAt = audio.length - count;
-    audio.copy(storage, writeAt, sourceAt, sourceAt + first);
-    if (first < count) {
-      audio.copy(storage, 0, sourceAt + first);
-    }
-    this.bytes += count;
-  }
-  take(limit = this.bytes): Buffer {
-    const output = Buffer.alloc(Math.min(limit, this.bytes));
-    if (output.length && this.storage) {
-      const first = Math.min(output.length, this.limit - this.offset);
-      this.storage.copy(output, 0, this.offset, this.offset + first);
-      if (first < output.length) {
-        this.storage.copy(output, first, 0, output.length - first);
-      }
-      this.offset = (this.offset + output.length) % this.limit;
-      this.bytes -= output.length;
-    }
+
+  take(limit = this.length): Buffer {
+    const output = Buffer.alloc(Math.min(limit, this.length));
+    this.readInto(output);
     return output;
-  }
-  clear(): void {
-    this.storage = undefined;
-    this.offset = 0;
-    this.bytes = 0;
   }
 }

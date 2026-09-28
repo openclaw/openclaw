@@ -30,9 +30,6 @@ vi.mock("../../../skills/loading/workspace-skill-prompt.js", () => ({
 }));
 
 vi.mock("../sandbox-skills.js", () => ({
-  createSandboxPromptEntryLoader: vi.fn(
-    ({ loadEntries }: { loadEntries: () => unknown[] }) => loadEntries,
-  ),
   resolveSandboxSkillRuntimeInputs: vi.fn(() => ({
     skillsEligibility: undefined,
     skillUsagePaths: [],

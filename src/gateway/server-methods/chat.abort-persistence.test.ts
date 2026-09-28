@@ -162,6 +162,29 @@ function appendTranscriptMessage(params: {
   expect(seeded).toMatchObject({ ok: true, value: { messageId: expect.any(String) } });
 }
 
+function seedCommittedReply(params: { sessionId: string; storePath: string; runId?: string }) {
+  const seeded = appendTranscriptMessageSync(
+    {
+      agentId: "main",
+      sessionId: params.sessionId,
+      sessionKey: "main",
+      storePath: params.storePath,
+    },
+    {
+      idempotencyLookup: "caller-checked",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Completed reply" }],
+        timestamp: Date.now(),
+        stopReason: "stop",
+        ...(params.runId ? { __openclaw: { runId: params.runId } } : {}),
+      },
+      now: 1,
+    },
+  );
+  expect(seeded).toMatchObject({ ok: true, value: { messageId: expect.any(String) } });
+}
+
 async function createMissingEntryFixture(prefix: string) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   fixtureDirs.add(dir);
@@ -456,21 +479,7 @@ describe("chat abort transcript persistence", () => {
     // The embedded agent loop persists its final assistant row without a
     // run-scoped idempotency key, so the store-level key dedupe cannot see
     // it; only the attached run identity can scope the skip to this run.
-    const seeded = appendTranscriptMessageSync(
-      { agentId: "main", sessionId, sessionKey: "main", storePath },
-      {
-        idempotencyLookup: "caller-checked",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "Completed reply" }],
-          timestamp: Date.now(),
-          stopReason: "stop",
-          __openclaw: { runId: "stalled-committed-run" },
-        },
-        now: 1,
-      },
-    );
-    expect(seeded).toMatchObject({ ok: true, value: { messageId: expect.any(String) } });
+    seedCommittedReply({ sessionId, storePath, runId: "stalled-committed-run" });
 
     // Settlement stall: the run committed its row but never emitted its
     // terminal lifecycle event, so the gateway still projects it active with
@@ -512,21 +521,7 @@ describe("chat abort transcript persistence", () => {
     );
     // An earlier run committed the identical reply. Text equality alone would
     // drop this run's abort partial, so the skip must be run-scoped.
-    const seeded = appendTranscriptMessageSync(
-      { agentId: "main", sessionId, sessionKey: "main", storePath },
-      {
-        idempotencyLookup: "caller-checked",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "Completed reply" }],
-          timestamp: Date.now(),
-          stopReason: "stop",
-          __openclaw: { runId: "settled-other-run" },
-        },
-        now: 1,
-      },
-    );
-    expect(seeded).toMatchObject({ ok: true, value: { messageId: expect.any(String) } });
+    seedCommittedReply({ sessionId, storePath, runId: "settled-other-run" });
 
     await persistAbortedPartials({
       context: { logGateway: { warn: vi.fn() } },
@@ -556,20 +551,7 @@ describe("chat abort transcript persistence", () => {
     const { transcriptPath, sessionId, storePath } = await createTranscriptFixture(
       "openclaw-chat-abort-legacy-row-",
     );
-    const seeded = appendTranscriptMessageSync(
-      { agentId: "main", sessionId, sessionKey: "main", storePath },
-      {
-        idempotencyLookup: "caller-checked",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "Completed reply" }],
-          timestamp: Date.now(),
-          stopReason: "stop",
-        },
-        now: 1,
-      },
-    );
-    expect(seeded).toMatchObject({ ok: true, value: { messageId: expect.any(String) } });
+    seedCommittedReply({ sessionId, storePath });
 
     // A row without a stored run identity cannot prove this run's reply is
     // committed; losing the abort record is worse than a duplicate reply.
@@ -601,21 +583,7 @@ describe("chat abort transcript persistence", () => {
     const { transcriptPath, sessionId, storePath } = await createTranscriptFixture(
       "openclaw-chat-abort-skip-decision-",
     );
-    const seeded = appendTranscriptMessageSync(
-      { agentId: "main", sessionId, sessionKey: "main", storePath },
-      {
-        idempotencyLookup: "caller-checked",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "Completed reply" }],
-          timestamp: Date.now(),
-          stopReason: "stop",
-          __openclaw: { runId: "stalled-placement-run" },
-        },
-        now: 1,
-      },
-    );
-    expect(seeded).toMatchObject({ ok: true, value: { messageId: expect.any(String) } });
+    seedCommittedReply({ sessionId, storePath, runId: "stalled-placement-run" });
 
     // The skip happens inside the writer queue after the append decision was
     // handed off, so it must not surface as a failed placement abandonment.

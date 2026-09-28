@@ -6,6 +6,7 @@ import {
   recordLegacyMigrationReceipt,
 } from "../infra/state-migrations.receipts.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import type { HeldAgentDatabase } from "./agent-deletion-journal.types.js";
 import { createOpenClawAgentDatabasePathMatcher } from "./openclaw-agent-db.paths.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 import {
@@ -18,7 +19,6 @@ import {
   resolveOpenClawRegisteredAgentDatabasePath,
 } from "./openclaw-state-db.paths.js";
 
-export type HeldAgentDatabase = { agentId: string; path: string };
 type RecoveryDatabase = Pick<OpenClawStateDatabase, "db" | "path">;
 type RecoveryReport = { description: string; held: HeldAgentDatabase[] };
 type RecoveryTables = Pick<DB, "migration_sources">;

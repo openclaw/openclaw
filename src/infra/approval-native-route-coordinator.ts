@@ -348,7 +348,7 @@ function resolveApprovalRouteNotice(params: {
       requestGateway,
       target,
       text: ambiguousOwner
-        ? resolveAmbiguousApprovalRouteNoticeText()
+        ? resolveAmbiguousApprovalRouteNoticeText(params.approvalKind)
         : resolveApprovalDeliveryFailedNoticeText({
             approvalId: params.request.id,
             approvalKind: params.approvalKind,

@@ -18,40 +18,6 @@ const ALLOWED_SVG_ELEMENTS = new Set([
   "svg",
   "title",
 ]);
-const ALLOWED_SVG_ATTRIBUTES = new Set([
-  "aria-hidden",
-  "aria-label",
-  "clip-rule",
-  "cx",
-  "cy",
-  "d",
-  "fill",
-  "fill-rule",
-  "focusable",
-  "height",
-  "opacity",
-  "points",
-  "preserveAspectRatio",
-  "r",
-  "role",
-  "rx",
-  "ry",
-  "stroke",
-  "stroke-linecap",
-  "stroke-linejoin",
-  "stroke-miterlimit",
-  "stroke-width",
-  "transform",
-  "viewBox",
-  "width",
-  "x",
-  "x1",
-  "x2",
-  "xmlns",
-  "y",
-  "y1",
-  "y2",
-]);
 const SVG_COLOR_VALUE_RE = /^(?:none|currentColor|#[0-9a-f]{3,8})$/iu;
 const SVG_NUMBER_VALUE_RE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/iu;
 const SVG_NUMBER_LIST_RE = /^[0-9eE+.,\s-]+$/u;
@@ -66,11 +32,7 @@ function parseSvgNumber(value: string): number | null {
 }
 
 function isSafeSvgAttribute(attribute: Attr): boolean {
-  if (
-    !ALLOWED_SVG_ATTRIBUTES.has(attribute.name) ||
-    /^on/iu.test(attribute.name) ||
-    (attribute.namespaceURI && attribute.name !== "xmlns")
-  ) {
+  if (attribute.namespaceURI && attribute.name !== "xmlns") {
     return false;
   }
   const value = attribute.value.trim();
@@ -158,29 +120,22 @@ async function loadSvgImage(url: string): Promise<HTMLImageElement> {
 
 function parseSvgDimensions(root: Element): { width: number; height: number } | null {
   const viewBox = root.getAttribute("viewBox");
+  let width: number | null | undefined;
+  let height: number | null | undefined;
   if (viewBox) {
     const values = viewBox
       .trim()
       .split(/[\s,]+/u)
       .map((value) => Number(value));
-    const width = values[2];
-    const height = values[3];
-    if (
-      values.length !== 4 ||
-      values.some((value) => !Number.isFinite(value)) ||
-      !width ||
-      !height ||
-      width <= 0 ||
-      height <= 0 ||
-      width > PLUGIN_ICON_SVG_MAX_SOURCE_DIMENSION ||
-      height > PLUGIN_ICON_SVG_MAX_SOURCE_DIMENSION
-    ) {
+    if (values.length !== 4 || values.some((value) => !Number.isFinite(value))) {
       return null;
     }
-    return { width, height };
+    width = values[2];
+    height = values[3];
+  } else {
+    width = parseSvgNumber(root.getAttribute("width") ?? "");
+    height = parseSvgNumber(root.getAttribute("height") ?? "");
   }
-  const width = parseSvgNumber(root.getAttribute("width") ?? "");
-  const height = parseSvgNumber(root.getAttribute("height") ?? "");
   if (
     !width ||
     !height ||

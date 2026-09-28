@@ -15,6 +15,7 @@ import { execSchema } from "../../src/agents/bash-tools.schemas.js";
 import { createCodeModeTools } from "../../src/agents/code-mode.js";
 import { writeJsonAtomic } from "../../src/infra/json-files.js";
 import { redactSensitiveText } from "../../src/logging/redact.js";
+import { wrapExternalContent } from "../../src/security/external-content.js";
 import { captureFullEnv } from "../../src/test-utils/env.js";
 import { createOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
 import { getFreePort } from "../../src/test-utils/ports.js";
@@ -679,6 +680,7 @@ describe("mock OpenAI response markers", () => {
   it("echoes dynamic OpenClaw E2E and update serving markers", async () => {
     await withMockServer(mockOpenAiPath, {}, async (baseUrl) => {
       const servingMarker = "update-verified-67a60fb5-203d-4d08-bfba-6f5a053af61b";
+      const servingPrompt = `This is an OpenClaw update serving check. Do not use tools. Reply with exactly: ${servingMarker}`;
       const cases = [
         ...["OPENCLAW_E2E_SEED_0_123", "OPENCLAW_E2E_ANDROID_OK"].map((marker) => ({
           marker,
@@ -686,7 +688,7 @@ describe("mock OpenAI response markers", () => {
         })),
         {
           marker: servingMarker,
-          prompt: `This is an OpenClaw update serving check. Do not use tools. Reply with exactly: ${servingMarker}`,
+          prompt: servingPrompt,
         },
       ];
       for (const { marker, prompt } of cases) {
@@ -702,6 +704,82 @@ describe("mock OpenAI response markers", () => {
 
         expect(response.status).toBe(200);
         expect(body.output?.[0]?.content?.[0]?.text).toBe(marker);
+      }
+
+      const currentMarker = "OPENCLAW_E2E_SEED_2_333";
+      const olderMarker = "OPENCLAW_E2E_SEED_1_222";
+      const toolMarker = "OPENCLAW_E2E_TOOL_RESULT";
+      const context = `<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nEarlier reply: ${olderMarker}\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>`;
+      for (const route of ["responses", "chat/completions"] as const) {
+        for (const stream of [false, true]) {
+          const user = (text: string) => ({
+            role: "user",
+            content: stream
+              ? [{ type: route === "responses" ? "input_text" : "text", text }]
+              : text,
+          });
+          const current = user(`Reply exactly with ${currentMarker}.`);
+          const toolOutput =
+            route === "responses"
+              ? { type: "function_call_output", call_id: "fixture-call", output: toolMarker }
+              : { role: "tool", tool_call_id: "fixture-call", content: toolMarker };
+          const markerCases = [
+            { messages: [current, user(context)], marker: currentMarker },
+            {
+              messages: [
+                current,
+                user(`<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nEarlier reply: ${olderMarker}`),
+              ],
+              marker: olderMarker,
+            },
+            {
+              messages: [current, { role: "assistant", content: olderMarker }, user(context)],
+              marker: olderMarker,
+            },
+            { messages: [current, toolOutput, user(context)], marker: toolMarker },
+            {
+              messages: [user(servingPrompt), toolOutput, user(context)],
+              marker: servingMarker,
+            },
+          ];
+          for (const { messages, marker } of markerCases) {
+            const response = await fetch(`${baseUrl}/v1/${route}`, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                [route === "responses" ? "input" : "messages"]: messages,
+                stream,
+              }),
+            });
+            expect(response.status).toBe(200);
+            if (stream) {
+              const events = (await response.text())
+                .split("\n\n")
+                .filter((line) => line.startsWith("data: ") && line !== "data: [DONE]")
+                .map((line) => JSON.parse(line.slice(6)));
+              const text =
+                route === "responses"
+                  ? events.find((event) => event.type === "response.completed")?.response.output[0]
+                      .content[0].text
+                  : events.map((event) => event.choices?.[0]?.delta?.content ?? "").join("");
+              expect(text).toBe(marker);
+            } else {
+              const body = await response.json();
+              expect(
+                route === "responses"
+                  ? body.output?.[0]?.content?.[0]?.text
+                  : body.choices?.[0]?.message?.content,
+              ).toBe(marker);
+            }
+          }
+        }
+        const malformed = await fetch(`${baseUrl}/v1/${route}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: `{"input":"${currentMarker}", broken`,
+        });
+        expect(malformed.status).toBe(200);
+        expect(await malformed.text()).toContain(currentMarker);
       }
     });
   });
@@ -1219,75 +1297,132 @@ describe("mock OpenAI response markers", () => {
     });
   });
 
-  it("drives the Agent Plugins bundle tool and validates its environment output", async () => {
+  it("discovers the Agent Plugins bundle tool and validates its target receipt", async () => {
     await withMockServer(mockOpenAiPath, {}, async (baseUrl) => {
-      const missingTool = await fetch(`${baseUrl}/v1/responses`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          input: [{ content: "agent plugin bundle qa check", role: "user" }],
-          stream: false,
-        }),
-      });
-      const missingToolBody = await missingTool.json();
-      expect(missingToolBody.output?.[0]?.content?.[0]?.text).toBe(
-        "AGENT_BUNDLE_MCP_FAIL tool-not-declared",
-      );
-
-      const first = await fetch(`${baseUrl}/v1/responses`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          input: [{ content: "agent plugin bundle qa check", role: "user" }],
-          stream: false,
-          tools: [
-            {
-              name: "weather-probe__weather_probe",
-              parameters: { type: "object" },
+      const runtimeContext = {
+        role: "user",
+        content:
+          "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nCurrent fixture context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      };
+      const input: unknown[] = [
+        { content: "agent plugin bundle qa check", role: "user" },
+        runtimeContext,
+      ];
+      const controls = ["tool_search", "tool_describe", "tool_call"];
+      const request = async (names = controls) => {
+        const response = await fetch(`${baseUrl}/v1/responses`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            input,
+            stream: false,
+            tools: names.map((name) => ({
               type: "function",
-            },
-          ],
-        }),
-      });
-      const firstBody = await first.json();
-      expect(firstBody.output?.[0]).toMatchObject({
-        arguments: "{}",
+              name,
+              parameters: { type: "object" },
+            })),
+          }),
+        });
+        expect(response.status).toBe(200);
+        return (await response.json()).output[0];
+      };
+      const appendResult = (call: { call_id: string }, output: unknown) =>
+        input.push(call, {
+          type: "function_call_output",
+          call_id: call.call_id,
+          output: wrapExternalContent(JSON.stringify(output), { source: "api" }),
+        });
+      expect((await request([])).content[0].text).toBe("AGENT_BUNDLE_MCP_FAIL tool-not-declared");
+      const target = {
+        id: "mcp:weather-probe:weather-probe__weather_probe",
         name: "weather-probe__weather_probe",
-        type: "function_call",
+        source: "mcp",
+      };
+      const search = await request();
+      expect(search).toMatchObject({ type: "function_call", name: "tool_search" });
+      expect(JSON.parse(search.arguments)).toEqual({ query: target.name, limit: 1 });
+      appendResult(search, [target]);
+      const description = await request();
+      expect(description).toMatchObject({ type: "function_call", name: "tool_describe" });
+      expect(JSON.parse(description.arguments)).toEqual({ id: target.id });
+      appendResult(description, {
+        ...target,
+        parameters: { type: "object", properties: {}, additionalProperties: false },
       });
-
-      const second = await fetch(`${baseUrl}/v1/responses`, {
+      const recap = await fetch(`${baseUrl}/v1/responses`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
+          model: "gpt-5.6-luna",
+          stream: true,
+          store: false,
+          max_output_tokens: 240,
           input: [
-            { content: "agent plugin bundle qa check", role: "user" },
             {
-              output: "probe ok; PLUGIN_ROOT=/tmp/plugin; PLUGIN_DATA=/tmp/plugin-data",
-              type: "function_call_output",
+              type: "message",
+              role: "system",
+              content: [
+                {
+                  type: "input_text",
+                  text: "Write an Activity recap for someone scanning their tasks: what was done here, and where it stands now.",
+                },
+              ],
+            },
+            {
+              type: "message",
+              role: "user",
+              content: [
+                {
+                  type: "input_text",
+                  text: JSON.stringify({
+                    previousRecap: "",
+                    messages: ["user: agent plugin bundle qa check"],
+                    omittedContent: false,
+                  }),
+                },
+              ],
             },
           ],
-          stream: false,
         }),
       });
-      const secondBody = await second.json();
-      expect(secondBody.output?.[0]?.content?.[0]?.text).toBe("AGENT_BUNDLE_MCP_OK");
-
-      const unexpectedOutput = await fetch(`${baseUrl}/v1/responses`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          input: [
-            { content: "agent plugin bundle qa check", role: "user" },
-            { output: "probe failed", type: "function_call_output" },
+      expect(recap.status).toBe(200);
+      const recapEvents = (await recap.text())
+        .split("\n\n")
+        .filter((line) => line.startsWith("data: ") && line !== "data: [DONE]")
+        .map((line) => JSON.parse(line.slice(6)));
+      expect(
+        recapEvents.find((event) => event.type === "response.completed").response.output,
+      ).toMatchObject([
+        { type: "message", content: [{ type: "output_text", text: "OPENCLAW_E2E_OK" }] },
+      ]);
+      const call = await request();
+      expect(call).toMatchObject({ type: "function_call", name: "tool_call" });
+      expect(JSON.parse(call.arguments)).toEqual({ id: target.id, args: {} });
+      appendResult(call, {
+        tool: target,
+        result: {
+          content: [
+            {
+              type: "text",
+              text: "probe ok; PLUGIN_ROOT=/tmp/plugin; PLUGIN_DATA=/tmp/plugin-data; PROBE_MODE=live",
+            },
           ],
-          stream: false,
-        }),
+          details: { mcpServer: "weather-probe", mcpTool: "weather_probe" },
+        },
       });
-      const unexpectedOutputBody = await unexpectedOutput.json();
-      expect(unexpectedOutputBody.output?.[0]?.content?.[0]?.text).toBe(
-        "AGENT_BUNDLE_MCP_FAIL unexpected-tool-output",
-      );
+      expect((await request()).content[0].text).toBe("AGENT_BUNDLE_MCP_OK");
+      input[input.length - 1] = {
+        type: "function_call_output",
+        call_id: call.call_id,
+        output: "probe failed",
+      };
+      const failed = await request();
+      expect(failed.content[0].text).toBe("AGENT_BUNDLE_MCP_FAIL unexpected-tool-output");
+      input.push(failed, { role: "user", content: "OPENCLAW_E2E_NEXT_TURN" }, runtimeContext);
+      expect(await request()).toMatchObject({
+        type: "message",
+        content: [{ type: "output_text", text: "OPENCLAW_E2E_NEXT_TURN" }],
+      });
     });
   });
 });

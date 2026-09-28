@@ -1,4 +1,3 @@
-// Openai plugin entrypoint registers its OpenClaw integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
@@ -19,7 +18,6 @@ import { OPENAI_QUICKSILVER_OFFER_PATH } from "./realtime-quicksilver-session.js
 import { buildOpenAIRealtimeTranscriptionProvider } from "./realtime-transcription-provider-factory.js";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider-factory.js";
 import { buildOpenAISpeechProvider } from "./speech-provider.js";
-import { buildOpenAIVideoGenerationProvider } from "./video-generation-provider.js";
 
 export default definePluginEntry({
   id: "openai",
@@ -29,9 +27,8 @@ export default definePluginEntry({
     const { ensureAuthProfileStore, listProfilesForProvider, isProviderApiKeyConfigured } =
       api.runtime.modelAuth;
     const openAIToolCompatHooks = buildProviderToolCompatFamilyHooks("openai");
-    const buildProviderWithPromptContribution = <T extends ReturnType<typeof buildOpenAIProvider>>(
-      provider: T,
-    ): T => ({
+    const provider = buildOpenAIProvider();
+    api.registerProvider({
       ...provider,
       ...openAIToolCompatHooks,
       resolveSystemPromptContribution: (ctx) => {
@@ -49,7 +46,6 @@ export default definePluginEntry({
         });
       },
     });
-    api.registerProvider(buildProviderWithPromptContribution(buildOpenAIProvider()));
     api.registerEmbeddingProvider(openAiMemoryEmbeddingProviderAdapter);
     api.registerImageGenerationProvider(
       buildOpenAIImageGenerationProvider({
@@ -95,8 +91,5 @@ export default definePluginEntry({
     });
     api.registerSpeechProvider(buildOpenAISpeechProvider());
     api.registerMediaUnderstandingProvider(openaiMediaUnderstandingProvider);
-    api.registerVideoGenerationProvider(
-      buildOpenAIVideoGenerationProvider({ isProviderApiKeyConfigured }),
-    );
   },
 });

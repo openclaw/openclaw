@@ -69,9 +69,7 @@ export class SessionOrganizerController {
       if (this.operationsLoad === load) {
         this.operationsLoad = null;
       }
-      if (this.host.sessionData.isSessionMutationScopeCurrent(scope)) {
-        this.host.sessionData.publishSessionMutationError(scope, error);
-      }
+      this.host.sessionData.publishSessionMutationError(scope, error);
       return null;
     }
   }
@@ -107,30 +105,9 @@ export class SessionOrganizerController {
     return operations.patchSession(this.host, session, patch, scope, options);
   };
 
-  async patchSessions(
-    rows: readonly SidebarRecentSession[],
-    patch: SidebarSessionPatch,
-    scope: SidebarSessionMutationScope | null = this.host.sessionData.beginSessionMutation(),
-  ): Promise<SidebarSessionMutationResult> {
-    if (!scope) {
-      return "stale";
-    }
-    const operations = await this.loadOperations(scope);
-    if (!operations) {
-      return this.host.sessionData.isSessionMutationScopeCurrent(scope) ? "failed" : "stale";
-    }
-    return operations.patchSessions(this.host, rows, patch, scope);
-  }
-
   async archiveSessionWithUndo(session: SidebarRecentSession): Promise<void> {
     await this.runOperation((operations, scope) =>
       operations.archiveSessionWithUndo(this.host, session, scope),
-    );
-  }
-
-  async deleteSessionsBatch(rows: readonly SidebarRecentSession[]): Promise<void> {
-    await this.runOperation((operations, scope) =>
-      operations.deleteSessionsBatch(this.host, rows, scope),
     );
   }
 
@@ -556,11 +533,7 @@ export class SessionOrganizerController {
   saveCollapsedSessionSections(sections: ReadonlySet<string>) {
     this.collapsedSessionSections = new Set(sections);
     this.host.requestUpdate();
-    try {
-      storeCollapsedSessionSections(sections);
-    } catch {
-      // Group membership and ordering remain usable without local persistence.
-    }
+    storeCollapsedSessionSections(sections);
   }
 
   toggleSection(sectionId: string) {
@@ -631,7 +604,6 @@ export class SessionOrganizerController {
       const bounds = (header ?? target).getBoundingClientRect();
       const position = event.clientY < bounds.top + bounds.height / 2 ? "before" : "after";
       this.sidebarSectionDropTarget = { sectionId, position };
-      this.host.requestUpdate();
       this.sessionDropTarget = null;
       this.host.requestUpdate();
       return;
@@ -653,7 +625,6 @@ export class SessionOrganizerController {
       dataTransfer.dropEffect = "move";
     }
     this.sessionDropTarget = sectionId;
-    this.host.requestUpdate();
     this.sidebarSectionDropTarget = null;
     this.host.requestUpdate();
   }
@@ -716,38 +687,22 @@ export class SessionOrganizerController {
 
   setSessionsGrouping(grouping: SidebarSessionsGrouping) {
     this.host.sessionsGrouping = grouping;
-    try {
-      storeSidebarSessionsGrouping(grouping);
-    } catch {
-      // Keep the in-memory preference when storage is unavailable.
-    }
+    storeSidebarSessionsGrouping(grouping);
   }
 
   setSessionsShowCron(show: boolean) {
     this.host.sessionsShowCron = show;
-    try {
-      storeSidebarSessionsShowCron(show);
-    } catch {
-      // Keep the in-memory preference when storage is unavailable.
-    }
+    storeSidebarSessionsShowCron(show);
   }
 
   setSessionsShowPreview(show: boolean) {
     this.host.sessionsShowPreview = show;
-    try {
-      storeSidebarSessionsShowPreview(show);
-    } catch {
-      // Keep the in-memory preference when storage is unavailable.
-    }
+    storeSidebarSessionsShowPreview(show);
   }
 
   setSessionsShowSystem(show: boolean) {
     this.host.sessionsShowSystem = show;
-    try {
-      storeSidebarSessionsShowSystem(show);
-    } catch {
-      // Keep the in-memory preference when storage is unavailable.
-    }
+    storeSidebarSessionsShowSystem(show);
   }
 
   setSessionsStatusFilter(statusFilter: SidebarSessionStatusFilter) {
@@ -757,11 +712,7 @@ export class SessionOrganizerController {
     this.host.sessionsStatusFilter = statusFilter;
     this.host.clearSessionSelection();
     this.host.sessionData.resetSessionList();
-    try {
-      storeSidebarSessionStatusFilter(statusFilter);
-    } catch {
-      // Keep the in-memory preference when storage is unavailable.
-    }
+    storeSidebarSessionStatusFilter(statusFilter);
     void this.host.sessionData.refreshSidebarSessions();
   }
 }

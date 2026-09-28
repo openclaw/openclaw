@@ -1,8 +1,7 @@
 # Evidence-Driven Backport Discovery
 
 Use this before selecting backports for any OpenClaw release line: regular
-beta/stable, extended-stable, alpha/nightly when it reuses an older release
-base, or a release-repair branch. It is an audit before the candidate is
+beta/stable, extended-stable, or a release-repair branch. It is an audit before the candidate is
 mutated, not a title search and not permission to expand a frozen release.
 
 ## Freeze the Audit

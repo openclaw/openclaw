@@ -26,22 +26,10 @@ type DescendantWakeDeps = {
 
 type UsableSessionEntryGuard = (entry: unknown) => entry is Record<string, unknown>;
 
-const WAKE_RUN_SUFFIX = ":wake";
-
-function stripWakeRunSuffixes(runId: string): string {
-  let next = runId.trim();
-  while (next.endsWith(WAKE_RUN_SUFFIX)) {
-    next = next.slice(0, -WAKE_RUN_SUFFIX.length);
-  }
-  return next || runId.trim();
-}
-
 function isWakeContinuation(runId: string): boolean {
   const trimmed = runId.trim();
-  if (!trimmed) {
-    return false;
-  }
-  return stripWakeRunSuffixes(trimmed) !== trimmed;
+  const rootRunId = trimmed.replace(/(?::wake)+$/u, "");
+  return rootRunId.length > 0 && rootRunId !== trimmed;
 }
 
 function buildDescendantWakeMessage(params: { findings: string; taskLabel: string }): string {
@@ -137,14 +125,8 @@ export async function runDescendantWake(params: {
     await terminateAcceptedCollectorRun({
       childSessionKey: params.childSessionKey,
       gatewayRunId: wakeRunId,
-      expectedSessionId:
-        typeof childEntry.sessionId === "string"
-          ? childEntry.sessionId.trim() || undefined
-          : undefined,
-      expectedLifecycleRevision:
-        typeof childEntry.lifecycleRevision === "string"
-          ? childEntry.lifecycleRevision.trim() || undefined
-          : undefined,
+      expectedSessionId: normalizeOptionalString(childEntry.sessionId),
+      expectedLifecycleRevision: normalizeOptionalString(childEntry.lifecycleRevision),
       timeoutMs: announceTimeoutMs,
       callGateway: params.deps.callGateway,
     });

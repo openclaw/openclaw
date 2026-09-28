@@ -12,9 +12,9 @@ import { resolveExecCode, resolveExecTitle } from "../../../../src/agents/tool-d
 import {
   buildWriteDiffLines,
   computeLineDiff,
-  countTextLines,
   joinDiffSections,
   parseDiffDetailsString,
+  splitDiffLines,
   type DiffLine,
   type DiffStat,
 } from "./tool-call-diff.ts";
@@ -86,7 +86,7 @@ function splitPathForDisplay(path: string): { base: string; dir?: string } {
 
 type EditPair = { oldText: string; newText: string };
 
-type ResolvedEditDiff = { lines: DiffLine[]; stat?: DiffStat };
+type ResolvedEditDiff = { diff: DiffLine[]; stat?: DiffStat };
 
 const MAX_LOCAL_DIFF_PAIRS = 8;
 const MAX_LOCAL_DIFF_INPUT_CHARS = 120_000;
@@ -131,23 +131,18 @@ function readDetailsDiff(details: unknown): ResolvedEditDiff | null {
     return null;
   }
   return {
-    lines: lines.lines,
+    diff: lines.lines,
     ...(lines.kind === "complete" ? { stat: lines.stat } : {}),
   };
 }
 
-function resolveEditDiff(source: ToolCallViewSource): ResolvedEditDiff | null {
-  const fromDetails = readDetailsDiff(source.details);
-  if (fromDetails) {
-    return fromDetails;
-  }
-  const args = asRecord(source.args);
+function resolveEditDiff(args: Record<string, unknown> | null): ResolvedEditDiff | null {
   if (!args) {
     return null;
   }
   const { pairs, truncated } = readEditPairs(args);
   if (pairs.length === 0) {
-    return truncated ? { lines: [{ kind: "skip", text: "" }] } : null;
+    return truncated ? { diff: [{ kind: "skip", text: "" }] } : null;
   }
   const sections = pairs.map((pair) => computeLineDiff(pair.oldText, pair.newText));
   const result = joinDiffSections(sections, { truncated });
@@ -155,27 +150,20 @@ function resolveEditDiff(source: ToolCallViewSource): ResolvedEditDiff | null {
     return null;
   }
   return {
-    lines: result.lines,
+    diff: result.lines,
     ...(result.kind === "complete" ? { stat: result.stat } : {}),
   };
 }
 
-function resolveInsertionDiff(
-  source: ToolCallViewSource,
-  args: Record<string, unknown> | null,
-): ResolvedEditDiff | null {
-  const fromDetails = readDetailsDiff(source.details);
-  if (fromDetails) {
-    return fromDetails;
-  }
-  const insertText = args ? readNonBlankString(args.insert_text) : undefined;
+function resolveInsertionDiff(args: Record<string, unknown> | null): ResolvedEditDiff | null {
+  const insertText = readNonBlankString(args?.insert_text);
   if (!insertText) {
     return null;
   }
   const lines = computeLineDiff("", insertText).lines;
   // The text is known, but its surrounding file context is not. Omit an exact
   // stat rather than implying this preview represents the final placement.
-  return lines.length > 0 ? { lines } : null;
+  return lines.length > 0 ? { diff: lines } : null;
 }
 
 function resolvePatchView(args: Record<string, unknown> | null): ToolCallView | null {
@@ -208,10 +196,6 @@ function resolvePatchView(args: Record<string, unknown> | null): ToolCallView | 
     target: pathParts?.base,
     targetDetail: pathParts?.dir,
   };
-}
-
-function normalizeKey(name: string): string {
-  return name.trim().toLowerCase();
 }
 
 function resolveToolCallKind(
@@ -269,14 +253,14 @@ const toolCallViewCache = new WeakMap<
 export function resolveToolCallView(source: ToolCallViewSource): ToolCallView {
   const args = asRecord(source.args);
   const cacheKey = args ?? asRecord(source.details);
-  const name = normalizeKey(source.name);
+  const name = source.name.trim().toLowerCase();
   if (cacheKey) {
     const cached = toolCallViewCache.get(cacheKey);
     if (cached && cached.details === source.details && cached.name === name) {
       return cached.view;
     }
   }
-  const view = buildToolCallView(source, args);
+  const view = buildToolCallView(source, args, name);
   if (cacheKey) {
     toolCallViewCache.set(cacheKey, { details: source.details, name, view });
   }
@@ -297,8 +281,8 @@ function unwrapShellWrapperCommand(command: string): string {
 function buildToolCallView(
   source: ToolCallViewSource,
   args: Record<string, unknown> | null,
+  key: string,
 ): ToolCallView {
-  const key = normalizeKey(source.name);
   const editorCommand = TEXT_EDITOR_TOOL_NAMES.has(key)
     ? readNonBlankString(args?.command)?.trim().toLowerCase()
     : undefined;
@@ -329,25 +313,18 @@ function buildToolCallView(
       return view;
     }
 
+    const authoritativeDiff = readDetailsDiff(source.details);
+    if (authoritativeDiff) {
+      return { ...view, ...authoritativeDiff };
+    }
     if (kind === "edit") {
       const diff =
         editorCommand === "insert"
-          ? resolveInsertionDiff(source, args)
+          ? resolveInsertionDiff(args)
           : editorCommand === "undo_edit"
-            ? readDetailsDiff(source.details)
-            : resolveEditDiff(source);
-      return {
-        ...view,
-        ...(diff ? { diff: diff.lines, ...(diff.stat ? { stat: diff.stat } : {}) } : {}),
-      };
-    }
-    const authoritativeDiff = readDetailsDiff(source.details);
-    if (authoritativeDiff) {
-      return {
-        ...view,
-        diff: authoritativeDiff.lines,
-        ...(authoritativeDiff.stat ? { stat: authoritativeDiff.stat } : {}),
-      };
+            ? null
+            : resolveEditDiff(args);
+      return { ...view, ...diff };
     }
     const details = asRecord(source.details);
     if (details?.changed === false) {
@@ -368,7 +345,7 @@ function buildToolCallView(
       // Present details need created=true before zero removals are authoritative.
       ...(details && details.created !== true
         ? {}
-        : { stat: { added: countTextLines(content), removed: 0 } }),
+        : { stat: { added: splitDiffLines(content).length, removed: 0 } }),
     };
   }
 

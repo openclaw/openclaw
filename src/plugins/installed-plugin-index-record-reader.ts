@@ -36,7 +36,7 @@ import {
   hasRetainedManagedNpmInstallMarker,
   resolveRetainedManagedNpmInstallPackageInfo,
 } from "./managed-npm-retention.js";
-import { listManagedPluginNpmProjectRootsSync } from "./npm-project-roots.js";
+import { listManagedPluginNpmProjectsSync } from "./npm-project-roots.js";
 import { getPluginCache } from "./plugin-cache.js";
 
 export { clearLoadInstalledPluginIndexInstallRecordsCache } from "./installed-plugin-index-record-cache.js";
@@ -132,10 +132,10 @@ function readManagedNpmInstallTimestampMs(params: {
 
 function buildRecoveredManagedNpmInstallCandidatesForRoot(params: {
   projectRoot: string;
+  rootManifest: Record<string, unknown> | null;
   sharedLegacyRoot: boolean;
 }): RecoveredManagedNpmInstallCandidate[] {
-  const rootManifest = readJsonObjectFileSync(path.join(params.projectRoot, "package.json"));
-  const dependencies = readStringRecord(rootManifest?.dependencies);
+  const dependencies = readStringRecord(params.rootManifest?.dependencies);
   const candidates: RecoveredManagedNpmInstallCandidate[] = [];
   for (const [packageName, dependencySpec] of Object.entries(dependencies)) {
     const packageDir = path.join(params.projectRoot, "node_modules", ...packageName.split("/"));
@@ -185,11 +185,13 @@ export function listRecoveredManagedNpmInstallCandidates(
   return [
     ...buildRecoveredManagedNpmInstallCandidatesForRoot({
       projectRoot: npmRoot,
+      rootManifest: readJsonObjectFileSync(path.join(npmRoot, "package.json")),
       sharedLegacyRoot: true,
     }),
-    ...listManagedPluginNpmProjectRootsSync(npmRoot).flatMap((projectRoot) =>
+    ...listManagedPluginNpmProjectsSync(npmRoot).flatMap(({ projectRoot, manifest }) =>
       buildRecoveredManagedNpmInstallCandidatesForRoot({
         projectRoot,
+        rootManifest: manifest,
         sharedLegacyRoot: false,
       }),
     ),

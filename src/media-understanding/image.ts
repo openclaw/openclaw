@@ -1,8 +1,6 @@
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-// Model-backed image understanding runtime for providers without a native media
-// provider hook.
 import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "../agents/minimax-vlm.js";
 import { requireApiKey, resolveApiKeyForProviderCore } from "../agents/model-auth.js";
@@ -201,11 +199,7 @@ async function describeImagesWithMinimax(params: {
 }): Promise<ImagesDescriptionResult> {
   const responses: string[] = [];
   // MiniMax VLM handles its own outbound fetch, so unwrap only at this final handoff.
-  const runtimeValue = unwrapSecretSentinelsForProviderEgress(
-    params.runtimeValue,
-    "MiniMax VLM request",
-  );
-  const apiKey = runtimeValue;
+  const apiKey = unwrapSecretSentinelsForProviderEgress(params.runtimeValue, "MiniMax VLM request");
   for (const [index, image] of params.images.entries()) {
     // One MiniMax request is issued per image, so cancellation must gate every
     // iteration or a dead run can continue buying calls after the first image.
@@ -333,10 +327,6 @@ async function resolveMinimaxVlmFallbackRuntime(params: {
   };
 }
 
-function resolveImageDescriptionTimeoutMs(timeoutMs: number | undefined) {
-  return clampPositiveTimerTimeoutMs(timeoutMs);
-}
-
 function buildImageDescriptionTimeoutError(params: {
   phase: "setup" | "request";
   timeoutMs: number;
@@ -427,7 +417,7 @@ async function describeImagesWithModelInternal(
     const requestSignal = params.signal
       ? AbortSignal.any([params.signal, controller.signal])
       : controller.signal;
-    const configuredTimeoutMs = resolveImageDescriptionTimeoutMs(params.timeoutMs);
+    const configuredTimeoutMs = clampPositiveTimerTimeoutMs(params.timeoutMs);
     const allowPrivateNetwork = resolveConfiguredProviderAllowPrivateNetwork(
       params.cfg,
       params.provider,

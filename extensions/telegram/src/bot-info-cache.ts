@@ -18,12 +18,6 @@ type CachedTelegramBotInfo = {
   fetchedAt: string;
 };
 
-type TelegramBotInfoCacheStore = {
-  register(key: string, value: TelegramBotInfoCacheState): Promise<void>;
-  lookup(key: string): Promise<TelegramBotInfoCacheState | undefined>;
-  delete(key: string): Promise<boolean>;
-};
-
 function fingerprintFromToken(botToken?: string): string | null {
   const trimmed = botToken?.trim();
   if (!trimmed) {
@@ -32,7 +26,7 @@ function fingerprintFromToken(botToken?: string): string | null {
   return fingerprintTelegramBotToken(trimmed);
 }
 
-function openBotInfoCacheStore(): TelegramBotInfoCacheStore {
+function openBotInfoCacheStore() {
   return getTelegramRuntime().state.openKeyedStore<TelegramBotInfoCacheState>({
     namespace: TELEGRAM_BOT_INFO_CACHE_NAMESPACE,
     maxEntries: TELEGRAM_BOT_INFO_CACHE_MAX_ENTRIES,

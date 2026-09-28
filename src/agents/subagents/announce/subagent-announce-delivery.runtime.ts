@@ -1,18 +1,12 @@
 /**
  * Runtime dependency owner for subagent announcement delivery.
  */
-import "../../../auto-reply/reply/queue.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../../config/legacy.default-agent-owner.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import { loadSessionEntryReadOnly as loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import "../../../infra/outbound/best-effort-delivery.js";
-import "../../../infra/outbound/bound-delivery-router.js";
-import "../../../infra/outbound/conversation-id.js";
-import { sendMessage } from "../../../infra/outbound/message.js";
-import "../../../plugins/hook-runner-global.js";
 import {
   normalizeAgentId,
   normalizeMainKey,
@@ -35,6 +29,8 @@ export { resolveExternalBestEffortDeliveryTarget } from "../../../infra/outbound
 export { createBoundDeliveryRouter } from "../../../infra/outbound/bound-delivery-router.js";
 export { resolveConversationIdFromTargets } from "../../../infra/outbound/conversation-id.js";
 export { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+export { getRuntimeConfig as getSubagentAnnounceRuntimeConfig } from "../../../config/config.js";
+export { sendMessage as sendSubagentAnnounceMessage } from "../../../infra/outbound/message.js";
 
 export { formatEmbeddedAgentQueueFailureSummary };
 
@@ -99,10 +95,6 @@ export function loadRequesterSessionEntry(
     clone: false,
   });
   return { cfg, entry, canonicalKey, agentId, storePath };
-}
-
-export function getSubagentAnnounceRuntimeConfig() {
-  return getRuntimeConfig();
 }
 
 export function getSubagentRequesterSessionActivity(
@@ -176,10 +168,4 @@ export async function dispatchSubagentAnnounceAgent(
   options: Parameters<typeof dispatchGatewayMethodInProcess>[2],
 ): Promise<unknown> {
   return await dispatchGatewayMethodInProcess("agent", agentParams, options);
-}
-
-export async function sendSubagentAnnounceMessage(
-  params: Parameters<typeof sendMessage>[0],
-): ReturnType<typeof sendMessage> {
-  return await sendMessage(params);
 }

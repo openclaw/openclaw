@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { enableConsoleCapture, routeLogsToStderr } from "../logging/console.js";
 import { signalProcessTree } from "../process/kill-tree.js";
 import { bindInheritedProcessLineageFds } from "../process/supervisor/inherited-process-lineage.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import type { WorkerBrowserRuntime } from "./browser-runtime.js";
 import {
   NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE,
@@ -46,16 +47,11 @@ function createWorkerIpcLifetime(): WorkerCommandLifetime {
   let started = false;
   let settled = false;
   let releaseLineage: (() => void) | undefined;
-  let resolveStarted!: (started: boolean) => void;
-  let rejectStarted!: (error: Error) => void;
-  const startedPromise = new Promise<boolean>((resolve, reject) => {
-    resolveStarted = resolve;
-    rejectStarted = reject;
-  });
+  const startResult = createDeferredCore<boolean>();
   const rejectOrAbort = (error: Error) => {
     if (!settled) {
       settled = true;
-      rejectStarted(error);
+      startResult.reject(error);
       return;
     }
     abortController.abort(error);
@@ -74,7 +70,7 @@ function createWorkerIpcLifetime(): WorkerCommandLifetime {
     }
     started = true;
     settled = true;
-    resolveStarted(true);
+    startResult.resolve(true);
   };
   const onDisconnect = () => {
     if (disposed) {
@@ -82,7 +78,7 @@ function createWorkerIpcLifetime(): WorkerCommandLifetime {
     }
     if (!settled) {
       settled = true;
-      resolveStarted(false);
+      startResult.resolve(false);
       return;
     }
     if (started) {
@@ -92,7 +88,7 @@ function createWorkerIpcLifetime(): WorkerCommandLifetime {
   process.on("message", onMessage);
   process.once("disconnect", onDisconnect);
   return {
-    started: startedPromise,
+    started: startResult.promise,
     signal: abortController.signal,
     reportConnectionFailure: (cause) => {
       if (disposed || !process.connected || typeof process.send !== "function") {

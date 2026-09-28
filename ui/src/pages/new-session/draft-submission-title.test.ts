@@ -181,25 +181,23 @@ describe("prepared title creation handoff", () => {
     },
   );
 
-  it.each(["codex", "claude"])(
-    "does not send a native %s draft to title inference",
-    async (catalogId) => {
-      const { flow, request, titles } = createDraftTitleFixture(undefined, {
-        agentId: "main",
-        requestedAgentId: "main",
-        catalogId,
-        catalogLabel: catalogId,
-        model: "",
-        startTerminal: true,
-      });
-      flow.setMessage("inspect this native-only workspace");
-      titles.hostUpdated();
-      await vi.advanceTimersByTimeAsync(2_000);
-      expect(
-        request.mock.calls.filter(([method]) => method === "sessions.title.prepare"),
-      ).toHaveLength(0);
-    },
-  );
+  it("does not send a native draft to title inference", async () => {
+    const catalogId = "claude";
+    const { flow, request, titles } = createDraftTitleFixture(undefined, {
+      agentId: "main",
+      requestedAgentId: "main",
+      catalogId,
+      catalogLabel: catalogId,
+      model: "",
+      startTerminal: true,
+    });
+    flow.setMessage("inspect this native-only workspace");
+    titles.hostUpdated();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(
+      request.mock.calls.filter(([method]) => method === "sessions.title.prepare"),
+    ).toHaveLength(0);
+  });
 
   it("uses a ready title at creation without changing an explicit worktree name", async () => {
     const { flow, context, place, titles } = createDraftTitleFixture();

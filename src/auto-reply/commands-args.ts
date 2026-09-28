@@ -16,9 +16,7 @@ function normalizeArgValue(value: unknown): string | undefined {
     text = normalizeOptionalString(value) ?? "";
   } else if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
     text = normalizeOptionalString(String(value)) ?? "";
-  } else if (typeof value === "symbol") {
-    text = normalizeOptionalString(value.toString()) ?? "";
-  } else if (typeof value === "function") {
+  } else if (typeof value === "symbol" || typeof value === "function") {
     text = normalizeOptionalString(value.toString()) ?? "";
   } else {
     // Objects and arrays are rare but preserve structured test values losslessly enough for text.

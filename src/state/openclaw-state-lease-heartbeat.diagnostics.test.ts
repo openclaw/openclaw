@@ -12,6 +12,7 @@ const fixture = vi.hoisted(() => ({
 vi.mock("node:worker_threads", async () => {
   const { EventEmitter } = await import("node:events");
   return {
+    isMainThread: false,
     get workerData() {
       return fixture.data;
     },
@@ -35,14 +36,11 @@ vi.mock("node:worker_threads", async () => {
     },
   };
 });
-vi.mock("../infra/state-database-coordinator.js", () => ({
-  StateDatabaseCoordinatorContentionError: class extends Error {},
-  acquireStateDatabaseCoordinator: () => ({ release() {} }),
-  acquireStateDatabaseHandleLease: () => ({ release() {} }),
-  retainHeldStateDatabaseCoordinator: () => undefined,
+vi.mock("../infra/gateway-state-owner.js", () => ({
+  assertStateDatabaseAccessAllowed() {},
 }));
-vi.mock("../infra/sqlite-coordinator.js", () => ({
-  runWithSqliteCoordinator: (_handle: unknown, _label: string, run: () => unknown) => run(),
+vi.mock("../infra/sqlite-worker-identity.js", () => ({
+  readDatabasePathIdentitySync: (canonicalPath: string) => ({ key: "file:12:34", canonicalPath }),
 }));
 vi.mock("../infra/sqlite-busy-timeout.js", () => ({
   runWithSqliteBusyTimeout: (_db: unknown, _ms: number, run: () => unknown) => run(),

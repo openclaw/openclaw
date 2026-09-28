@@ -1,13 +1,13 @@
 import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import type { ZoomMeetingsConfig, ZoomMeetingsMode } from "./config.js";
-import { assertZoomMeetingsAudioAvailable } from "./transports/chrome.js";
-import { ZOOM_MEETINGS_BROWSER_NODE_ADAPTER } from "./transports/zoom-meetings-platform-constants.js";
+import { zoomMeetingsChrome } from "./transports/chrome.js";
+import { ZOOM_MEETINGS_PLATFORM_ADAPTER } from "./transports/zoom-meetings-platform-adapter.js";
 
 export const getZoomMeetingsSetupStatus = MeetingPlatformAdapter.createRuntimeSetup<
   ZoomMeetingsConfig,
   ZoomMeetingsMode
 >({
-  assertAudioDeviceAvailable: assertZoomMeetingsAudioAvailable,
+  assertAudioDeviceAvailable: zoomMeetingsChrome.assertAudioDeviceAvailable,
   captionsMessage: (mode) =>
     mode === "transcribe"
       ? "Zoom live-caption capture is enabled and ready"
@@ -27,5 +27,5 @@ export const getZoomMeetingsSetupStatus = MeetingPlatformAdapter.createRuntimeSe
     };
   },
   missingNodeIdMessage: "Connected Zoom meetings node did not include a node id.",
-  nodeAdapter: ZOOM_MEETINGS_BROWSER_NODE_ADAPTER,
+  nodeAdapter: ZOOM_MEETINGS_PLATFORM_ADAPTER,
 });
