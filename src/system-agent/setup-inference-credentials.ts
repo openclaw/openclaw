@@ -329,7 +329,7 @@ export async function stageSavedAuthCandidate(
     if (storedConfig && !storedConfig.ok) {
       return {
         error:
-          "The saved connection settings are no longer valid. Choose the provider settings again.",
+          "The saved provider settings no longer match the current configuration. Open Model Setup and choose the provider, endpoint, and model again. Your saved sign-in is still available.",
       };
     }
     const config = applyProviderPluginAuthMethodResultConfig({
