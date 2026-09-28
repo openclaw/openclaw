@@ -571,7 +571,9 @@ export function buildCliRunResult(params: {
       ...(output.finalPromptText ? { finalPromptText: output.finalPromptText } : {}),
       ...(finalAssistantVisibleText ? { finalAssistantVisibleText } : {}),
       ...(rawText ? { finalAssistantRawText: rawText } : {}),
-      ...(rawFinalText && rawFinalText !== rawText
+      // An empty final message is recorded as "" so capture never falls back to
+      // the cumulative raw text.
+      ...(rawFinalText !== undefined && rawFinalText !== rawText
         ? { finalAssistantMessageRawText: rawFinalText }
         : {}),
       systemPromptReport: context.systemPromptReport,

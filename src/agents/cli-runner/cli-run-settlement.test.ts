@@ -259,6 +259,7 @@ it("captures only the last CLI result as the model's final message", async () =>
     output: transformCliResultText({
       text: "Checking now\nDone",
       textParts: ["Checking now", "Done"],
+      rawFinalText: "Done",
     }),
     usedHistoryPrompt: false,
     userTurnHandled: true,
@@ -267,6 +268,20 @@ it("captures only the last CLI result as the model's final message", async () =>
   });
   expect(result.meta.finalAssistantRawText).toBe("Checking now\nDone");
   expect(resolveDiagnosticModelResponse(result)).toBe("Done");
+});
+
+it("captures nothing when the CLI's final message was empty after narration", async () => {
+  const context = buildPreparedCliRunContext({ provider: "claude-cli" });
+  const result = buildCliRunResult({
+    context,
+    output: transformCliResultText({ text: "Checking now", rawFinalText: "" }),
+    usedHistoryPrompt: false,
+    userTurnHandled: true,
+    sessionBindingDisabled: true,
+    preparedContextAgentMeta: {},
+  });
+  expect(result.meta.finalAssistantRawText).toBe("Checking now");
+  expect(resolveDiagnosticModelResponse(result)).toBeUndefined();
 });
 
 it("never captures host-synthesized optional silence as model output", async () => {

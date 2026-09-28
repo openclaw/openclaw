@@ -460,6 +460,19 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
         ...(resumeCheckpointId ? { resumeCheckpointId } : {}),
         ...(diagnosticUsage ? { diagnosticUsage } : {}),
       };
+      // Diagnostics need the model's final message alone; `text` stays the
+      // cumulative delivery reply. The result envelope carries the final
+      // message; otherwise use the last streamed segment, which is empty when a
+      // new message began (or a tool call followed) without text.
+      const finalSegmentEmpty = pendingMessageSeparator || sawToolUseSinceText;
+      const finalMessageText =
+        stoppedTurn && !nextText
+          ? ""
+          : result.text?.trim() ||
+            (finalSegmentEmpty ? "" : assistantText.slice(currentMessageStart).trim());
+      if (finalMessageText !== output.text.trim()) {
+        output = { ...output, rawFinalText: finalMessageText };
+      }
       if (
         parsed.openclaw_interim_result === true &&
         completedText &&

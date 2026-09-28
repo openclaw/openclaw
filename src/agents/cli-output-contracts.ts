@@ -47,7 +47,11 @@ export type CliOutput = {
   /** Completed result boundaries, retained for independent delivery and retry. */
   textParts?: string[];
   rawText?: string;
-  /** Raw text of the last completed result when the turn produced several; rawText is cumulative. */
+  /**
+   * Raw text of the model's final message when it differs from the cumulative
+   * `text` (earlier results or pre-tool narration); empty when the final message
+   * had no text. Never plugin-transformed.
+   */
   rawFinalText?: string;
   sessionId?: string;
   /** Backend-owned assistant boundary that can safely anchor a later resumed fork. */

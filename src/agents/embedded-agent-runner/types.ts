@@ -215,7 +215,8 @@ export type EmbeddedAgentRunMeta = {
   finalAssistantRawTextIsFallback?: true;
   /**
    * Raw text of only the model's last message when finalAssistantRawText is
-   * cumulative across several results (CLI backends). Diagnostics prefer it.
+   * cumulative (CLI results or pre-tool narration); "" when that message had no
+   * text. Diagnostics prefer it over finalAssistantRawText.
    */
   finalAssistantMessageRawText?: string;
   replayInvalid?: boolean;

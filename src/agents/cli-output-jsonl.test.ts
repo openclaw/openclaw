@@ -120,6 +120,7 @@ describe("parseCliJsonl", () => {
 
     expect(result).toEqual({
       text: "Marker caribou-lampion-473 explanation.\n\nTEST DONE",
+      rawFinalText: "TEST DONE",
       sessionId: "session-reparse",
       usage: undefined,
     });

@@ -376,6 +376,27 @@ describe("createCliJsonlStreamingParser", () => {
     expect(parser.getOutput()).toEqual(expected);
   });
 
+  it("records an empty final message after pre-tool narration", () => {
+    const parser = createParser();
+
+    parser.push(
+      joinJsonlFrames(
+        JSON.stringify({ type: "init", session_id: "session-empty-final" }),
+        claudeMessageStart(),
+        claudeTextDelta("Checking now."),
+        claudeBlockStart({ type: "tool_use", id: "tool-1", name: "session_status" }),
+        claudeMessageStop(),
+        claudeMessageStart(),
+        claudeMessageStop(),
+        JSON.stringify({ type: "result", session_id: "session-empty-final", result: "" }),
+        "",
+      ),
+    );
+    parser.finish();
+
+    expect(parser.getOutput()?.rawFinalText).toBe("");
+  });
+
   it("keeps streamed pre-tool text when the result envelope carries only the final message", () => {
     const deltas: Array<{ text: string; delta?: string }> = [];
     const parser = createParser({
@@ -399,6 +420,7 @@ describe("createCliJsonlStreamingParser", () => {
 
     expect(parser.getOutput()).toEqual({
       text: "Marker caribou-lampion-473 explanation.\n\nTEST DONE",
+      rawFinalText: "TEST DONE",
       sessionId: "session-tool-split",
       usage: undefined,
     });
