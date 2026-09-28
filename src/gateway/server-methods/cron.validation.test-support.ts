@@ -16,6 +16,42 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
+export function callerClient(
+  agentId: string,
+  accountId?: string,
+  sessionKey?: string,
+  currentJobId?: string,
+  currentJobExpiresAtMs = Date.now() + 60_000,
+): GatewayClient {
+  const operationalRunInstance = createOperationalRunInstanceRef("run-cron-validation");
+  return {
+    connect: {} as GatewayClient["connect"],
+    internal: {
+      agentRuntimeIdentity: {
+        kind: "agentRuntime",
+        agentId,
+        sessionKey: sessionKey ?? `agent:${agentId}:main`,
+        operationalRunInstance,
+        delegatedAuthority: {
+          kind: "local",
+          operationalRunInstance,
+          lifecycleGeneration: "test-generation",
+          claimId: "test-claim",
+        },
+        ...(accountId ? { turnSourceAccountId: accountId } : {}),
+        ...(currentJobId
+          ? {
+              cronSelfManagementContext: {
+                jobId: currentJobId,
+                expiresAtMs: currentJobExpiresAtMs,
+              },
+            }
+          : {}),
+      },
+    },
+  };
+}
+
 function createPrefixOnlyChannelPlugin(
   id: string,
   targetPrefixes: readonly string[],
