@@ -33,7 +33,7 @@ import { isZaloExtensionRoot } from "../../test/vitest/vitest.extension-zalo-pat
 import { isSharedVitestExcludedPath } from "../../test/vitest/vitest.pattern-file.ts";
 import { isPluginControlUiPath } from "../../test/vitest/vitest.ui-paths.mjs";
 import { BUNDLED_PLUGIN_PATH_PREFIX, BUNDLED_PLUGIN_ROOT_DIR } from "./bundled-plugin-paths.mjs";
-import { listAvailableExtensionIds } from "./changed-extensions.mts";
+import { hasExtensionMetadata, listAvailableExtensionIds } from "./changed-extensions.mts";
 import { isRuntimePlacementIncludePatterns } from "./ci-test-timings-schema.mts";
 import { readCompactGroupTimings } from "./ci-test-timings.mts";
 import { GIT_LS_FILES_MAX_BUFFER_BYTES } from "./list-test-files.mts";
@@ -522,12 +522,12 @@ export function resolveExtensionTestConfig(target: string) {
 function resolveExtensionDirectory(targetArg: string | undefined, cwd = process.cwd()) {
   if (targetArg) {
     const asGiven = path.resolve(cwd, targetArg);
-    if (fs.existsSync(path.join(asGiven, "package.json"))) {
+    if (hasExtensionMetadata(asGiven)) {
       return asGiven;
     }
 
     const byName = path.join(repoRoot, BUNDLED_PLUGIN_ROOT_DIR, targetArg);
-    if (fs.existsSync(path.join(byName, "package.json"))) {
+    if (hasExtensionMetadata(byName)) {
       return byName;
     }
 
@@ -540,7 +540,7 @@ function resolveExtensionDirectory(targetArg: string | undefined, cwd = process.
   while (true) {
     if (
       normalizeRelative(path.relative(repoRoot, current)).startsWith(BUNDLED_PLUGIN_PATH_PREFIX) &&
-      fs.existsSync(path.join(current, "package.json"))
+      hasExtensionMetadata(current)
     ) {
       return current;
     }
