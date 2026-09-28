@@ -153,7 +153,7 @@ export function createPriorCiCandidateFactory(
     f.save(state);
     writeFileSync(
       join(f.worktree, ".local/gates.env"),
-      `GATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${f.head}\n`,
+      `PR_NUMBER=123\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${f.head}\n`,
     );
     const delta = f.git([
       "diff",
@@ -196,7 +196,7 @@ export function createPriorCiCandidateFactory(
       f.prepare(f.head, main);
       writeFileSync(
         join(f.worktree, ".local/gates.env"),
-        `GATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${f.head}\n`,
+        `PR_NUMBER=123\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${f.head}\n`,
       );
     }
     const state = f.state();

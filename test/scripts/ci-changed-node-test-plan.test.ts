@@ -1371,8 +1371,9 @@ describe("CI changed Node test plan", () => {
           expect(selectedJob?.runner).toBe(ownerJob?.runner);
           expect(selectedJob?.planConcurrency).toBe(ownerJob?.planConcurrency);
           expect(selectedJob?.pretestBuildMode).toBe(ownerJob?.pretestBuildMode);
+          // Repacked jobs combine owners and honor their own timing observations;
+          // an individual original owner's forecast is not their cost ceiling.
           expect(selectedJob?.predictedSeconds).toBeGreaterThan(0);
-          expect(selectedJob?.predictedSeconds).toBeLessThan(ownerJob!.predictedSeconds!);
           expect(selectedJob?.predictedSeconds).toBeLessThanOrEqual(300);
           expect(selectedJob?.timeoutMinutes).toBe(ownerJob?.timeoutMinutes);
         }

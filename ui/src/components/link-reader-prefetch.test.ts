@@ -38,15 +38,30 @@ class VisibilityObserver {
 const href = (number: number) => `https://github.com/openclaw/openclaw/issues/${number}`;
 let container: HTMLDivElement;
 let provider: HTMLElement;
+let idleCallbacks: Map<number, IdleRequestCallback>;
+let nextIdleHandle: number;
 
-async function show(links = [href(1)], session = "first", active = true, connected = true) {
+function renderLinks(links = [href(1)], session = "first", active = true, connected = true) {
   render(
     html`<div ${linkReaderPrefetch(session, active, connected)}>
       ${links.map((url) => html`<a class="markdown-github-link" href=${url}>Item</a>`)}
     </div>`,
     container,
   );
+}
+
+function flushIdleScans() {
+  const callbacks = [...idleCallbacks.values()];
+  idleCallbacks.clear();
+  for (const callback of callbacks) {
+    callback({ didTimeout: false, timeRemaining: () => 50 });
+  }
+}
+
+async function show(links = [href(1)], session = "first", active = true, connected = true) {
+  renderLinks(links, session, active, connected);
   await vi.advanceTimersByTimeAsync(0);
+  flushIdleScans();
   return [...container.querySelectorAll("a")];
 }
 
@@ -60,6 +75,14 @@ describe("GitHub preview warming", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.stubGlobal("IntersectionObserver", VisibilityObserver);
+    idleCallbacks = new Map();
+    nextIdleHandle = 0;
+    vi.stubGlobal("requestIdleCallback", (callback: IdleRequestCallback) => {
+      const handle = ++nextIdleHandle;
+      idleCallbacks.set(handle, callback);
+      return handle;
+    });
+    vi.stubGlobal("cancelIdleCallback", (handle: number) => idleCallbacks.delete(handle));
     VisibilityObserver.instances = [];
     prefetch.mockReset().mockResolvedValue(undefined);
     container = document.createElement("div");
@@ -68,6 +91,80 @@ describe("GitHub preview warming", () => {
     );
     provider.append(container);
     document.body.append(provider);
+  });
+
+  it("leaves the transcript unscanned until the browser has idle time", async () => {
+    renderLinks();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(VisibilityObserver.instances).toHaveLength(0);
+    expect(prefetch).not.toHaveBeenCalled();
+
+    flushIdleScans();
+    const links = [...container.querySelectorAll("a")];
+    expect(observer().targets.has(links[0]!)).toBe(true);
+    observer().intersect(links);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(prefetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not rescan unchanged links on unrelated parent renders", async () => {
+    await show();
+    // Bind the external provider after Lit connects the template's root.
+    await show();
+    const scan = vi.spyOn(container.firstElementChild!, "querySelectorAll");
+    await show();
+    expect(scan).not.toHaveBeenCalled();
+  });
+
+  it.each(["pane", "document", "disconnect"])(
+    "cancels unstarted discovery when hidden by %s",
+    async (hiddenBy) => {
+      renderLinks();
+      expect(idleCallbacks.size).toBe(1);
+      if (hiddenBy === "pane") {
+        renderLinks([href(1)], "first", false);
+      } else if (hiddenBy === "document") {
+        vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+        document.dispatchEvent(new Event("visibilitychange"));
+      } else {
+        render(nothing, container);
+      }
+      expect(idleCallbacks.size).toBe(0);
+      flushIdleScans();
+      expect(VisibilityObserver.instances).toHaveLength(0);
+    },
+  );
+
+  it.each(["session", "capabilities"])(
+    "replaces unstarted discovery when the %s changes",
+    async (changed) => {
+      renderLinks();
+      renderLinks();
+      const retiredHandle = [...idleCallbacks.keys()][0]!;
+      if (changed === "session") {
+        renderLinks([href(2)], "second");
+      } else {
+        provider.dispatchEvent(new Event("link-reader-capabilities-changed"));
+      }
+      expect(idleCallbacks.has(retiredHandle)).toBe(false);
+      expect(idleCallbacks.size).toBe(1);
+      flushIdleScans();
+      const links = [...container.querySelectorAll("a")];
+      observer().intersect(links);
+      await vi.advanceTimersByTimeAsync(200);
+      expect(prefetch).toHaveBeenCalledTimes(1);
+      expect(prefetch.mock.calls[0]![0].href).toBe(href(changed === "session" ? 2 : 1));
+    },
+  );
+
+  it("defers discovery with a timer when idle callbacks are unavailable", async () => {
+    vi.stubGlobal("requestIdleCallback", undefined);
+    renderLinks();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(VisibilityObserver.instances).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(500);
+    const links = [...container.querySelectorAll("a")];
+    expect(observer().targets.has(links[0]!)).toBe(true);
   });
 
   afterEach(() => {
@@ -105,6 +202,7 @@ describe("GitHub preview warming", () => {
 
     container.firstElementChild!.append(document.createTextNode("streaming delta"));
     await vi.advanceTimersByTimeAsync(0);
+    flushIdleScans();
     expect(resolve).not.toHaveBeenCalled();
     expect(gate).toHaveBeenCalledWith(links[0]);
     expect(gate).toHaveBeenCalledWith(links[2]);
@@ -113,6 +211,7 @@ describe("GitHub preview warming", () => {
 
     links[1]!.href = href(3);
     await vi.advanceTimersByTimeAsync(0);
+    flushIdleScans();
     expect(resolve).toHaveBeenCalledTimes(1);
     expect(resolve.mock.calls[0]![0]).toBe(href(3));
     observer().intersect(links);
@@ -133,6 +232,7 @@ describe("GitHub preview warming", () => {
     link.setAttribute(attribute, value);
     container.firstElementChild!.append(link);
     await vi.advanceTimersByTimeAsync(0);
+    flushIdleScans();
     expect(observer().targets.size).toBe(0);
     observer().intersect([link]);
     await vi.advanceTimersByTimeAsync(500);
@@ -145,11 +245,13 @@ describe("GitHub preview warming", () => {
     container.classList.add("chat-source-card");
     container.firstElementChild!.append(document.createTextNode("delta"));
     await vi.advanceTimersByTimeAsync(0);
+    flushIdleScans();
     expect(observer().targets.size).toBe(0);
     expect(resolve).not.toHaveBeenCalled();
     container.classList.remove("chat-source-card");
     container.firstElementChild!.append(document.createTextNode("delta"));
     await vi.advanceTimersByTimeAsync(0);
+    flushIdleScans();
     expect(observer().targets.has(link!)).toBe(true);
     expect(resolve).not.toHaveBeenCalled();
   });
@@ -182,6 +284,7 @@ describe("GitHub preview warming", () => {
     Object.assign(provider, { readers: [TEST_LINK_READER] });
     provider.dispatchEvent(new Event("link-reader-capabilities-changed"));
     await vi.advanceTimersByTimeAsync(0);
+    flushIdleScans();
     expect(observer().targets.has(link!)).toBe(true);
   });
 
@@ -195,14 +298,17 @@ describe("GitHub preview warming", () => {
     inner.append(link);
     container.firstElementChild!.append(inner);
     await vi.advanceTimersByTimeAsync(0);
+    flushIdleScans();
     expect(observer().targets.has(link)).toBe(true);
     Object.assign(inner, { readers: [] });
     container.firstElementChild!.append(document.createTextNode("delta"));
     await vi.advanceTimersByTimeAsync(0);
+    flushIdleScans();
     expect([...observer().targets]).toEqual([outer]);
     Object.assign(inner, { readers: [TEST_LINK_READER] });
     container.firstElementChild!.append(document.createTextNode("delta"));
     await vi.advanceTimersByTimeAsync(0);
+    flushIdleScans();
     expect(observer().targets.has(link)).toBe(true);
   });
 
@@ -283,11 +389,13 @@ describe("GitHub preview warming", () => {
     link.href = href(1);
     container.firstElementChild!.append(link);
     await vi.advanceTimersByTimeAsync(0);
+    flushIdleScans();
     expect(observer().targets.has(link)).toBe(true);
     observer().intersect([link]);
     await vi.advanceTimersByTimeAsync(200);
     link.href = href(2);
     await vi.advanceTimersByTimeAsync(0);
+    flushIdleScans();
     observer().intersect([link]);
     await vi.advanceTimersByTimeAsync(200);
     expect(prefetch).toHaveBeenCalledTimes(2);

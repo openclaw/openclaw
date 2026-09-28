@@ -176,6 +176,7 @@ export function createMergeOutcomeFixtureHarness() {
         merge_method: string;
         commit_message: string;
       },
+      restMergeRefusal: "",
       graphqlMergePayloads: [] as Array<{
         pullRequestId: string;
         expectedHeadOid: string;
@@ -195,11 +196,13 @@ export function createMergeOutcomeFixtureHarness() {
         advanceMain?: boolean;
         advanceAfterRead?: boolean;
         reportedMain?: string;
+        tamperProviderCapture?: boolean;
       }>,
       mainAdvances: [] as string[],
       calls: [] as string[][],
       nodeArgs: [] as string[],
       mutations: 0,
+      providerCaptureTampered: false,
       cancellations: 0,
       cancellation: "success",
       mergeBody: null as string | null,
@@ -526,6 +529,7 @@ else if(args[0]==="pr"&&args[1]==="view") {
     s.restMergePayload=JSON.parse(fs.readFileSync(0,"utf8"));
     if(s.restMergePayload.sha!==s.pr.headRefOid||s.restMergePayload.merge_method!=="squash") fail("unpinned REST merge request");
     s.mergeBody=s.restMergePayload.commit_message;
+    if(s.restMergeRefusal) {save();process.stdout.write(s.restMergeRefusal);process.exit(1);}
   }
   if(graphqlMerge) {
     const payload=JSON.parse(fs.readFileSync(0,"utf8"));
@@ -612,6 +616,11 @@ else if(args[0]==="pr"&&args[1]==="view") {
     if(s.pooledMergeBlocked&&!args.includes("--include")) pr.mergeStateStatus="BLOCKED";
     const repository={...s.repoGraphql,ref:{target:{oid:step?.reportedMain??main()}},pullRequest:pr};
     out({data:{repository}});
+    if(step?.tamperProviderCapture) {
+      const local=process.env.FIXTURE_REPO+"/.worktrees/pr-123/.local/";
+      for(const name of fs.readdirSync(local).filter(name=>/^merge-output\\..+\\.log$/.test(name))) fs.appendFileSync(local+name,"changed\\n");
+      s.providerCaptureTampered=true;
+    }
     if(step?.advanceAfterRead) advanceMain();
   }
 } else if(args.some(x=>x.includes("/comments"))) {
@@ -906,8 +915,8 @@ fi
         );
         return { ...result, output: result.stdout + result.stderr };
       },
-      adminPriorCi: (path: string, confirmed = true) =>
-        run(false, repo, "squash", "", "", "", "", "", false, "", false, path, confirmed),
+      adminPriorCi: (path: string, confirmed = true, recoveryOid = "") =>
+        run(false, repo, "squash", recoveryOid, "", "", "", "", false, "", false, path, confirmed),
       complete: (oid: string) => run(false, repo, "squash", "", "", "", oid),
       verify: () => run(false, repo, "squash", "", "", "", "", "", false, "", true),
       cancel: (oid: string) => run(false, repo, "squash", oid, "", "", "", "", true),

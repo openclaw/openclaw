@@ -63,7 +63,7 @@ afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
 function advanceToActive(executionMode: "worker-turn" | "remote-exec" = "worker-turn") {
-  return advancePlacementFixtureToActive(store, database, SESSION, executionMode);
+  return advancePlacementFixtureToActive(store, database, { ...SESSION, executionMode });
 }
 
 it.each([
