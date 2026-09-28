@@ -84,6 +84,18 @@ function assertPinnedPath(pinned: PinnedPath, allowMissing = false): boolean {
   return true;
 }
 
+/** Retain a planned cleanup leaf without following links or adopting a replacement. */
+export function capturePathRemovalGuard(filePath: string): (() => void) | undefined {
+  const stat = fsSync.lstatSync(filePath, { bigint: true, throwIfNoEntry: false });
+  if (!stat) {
+    return undefined;
+  }
+  const pinned = { path: filePath, stat };
+  return () => {
+    assertPinnedPath(pinned, true);
+  };
+}
+
 function assertPinnedDirectory(pinned: PinnedPath): void {
   if (!pinned.stat.isDirectory() || pinned.stat.isSymbolicLink()) {
     throw new FsSafeError("symlink", `removal parent is not a directory: ${pinned.path}`);
