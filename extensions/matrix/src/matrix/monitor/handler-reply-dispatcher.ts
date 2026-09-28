@@ -258,7 +258,7 @@ export function createMatrixReplyDispatcher(config: {
       )
         ? retainedDraftDelivery
         : undefined;
-      const result = mergeMatrixReplyDeliveryResults(
+      const mergedDelivery = mergeMatrixReplyDeliveryResults(
         [retainedDraft, deliveryResult].filter(
           (result): result is MatrixReplyDeliveryResult => result !== undefined,
         ),
@@ -267,7 +267,7 @@ export function createMatrixReplyDispatcher(config: {
         beginNextBlockDraft();
         await typingCallbacks.onReplyStart();
       }
-      return result;
+      return mergedDelivery;
     },
     onReplyError: (err: unknown, info: { kind: "tool" | "block" | "final" }) => {
       if (info.kind === "final") {
