@@ -253,6 +253,10 @@ export function createPluginNativeAdmission(
         if (!identity || (!sourceChanged && !captureChanged)) {
           continue;
         }
+        // Persisted receipts can outlive their captures; missing namespaces require fresh admission.
+        if (!fs.statSync(pluginNativeNamespaceDirectory(namespace), { throwIfNoEntry: false })) {
+          break;
+        }
         if (namespace !== previous || !captureChanged) {
           const capturedHash = hashPluginSourceFile(
             pluginNativeNamespaceMemberPath(namespace, relative),

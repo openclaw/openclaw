@@ -149,11 +149,14 @@ describe("message client attribution", () => {
     expect(groups[0]?.messages).toHaveLength(2);
   });
 
-  it("refreshes cached source attribution after an in-place history projection changes", () => {
+  it("refreshes cached source attribution after a history message is replaced", () => {
     const message = messageFrom([cli]);
     const initial = cachedGroups([message]);
-    message["__openclaw"].transport.clients = [web];
-    const refreshed = cachedGroups([message]);
+    const replacement = {
+      ...message,
+      __openclaw: { ...message["__openclaw"], transport: { clients: [web] } },
+    };
+    const refreshed = cachedGroups([replacement]);
     expect(initial[0]?.sourceClients).toEqual([cli]);
     expect(refreshed[0]?.sourceClients).toEqual([web]);
     expect(refreshed[0]).not.toBe(initial[0]);
@@ -313,9 +316,7 @@ describe("forwarded source-session grouping", () => {
   ])("refreshes cached attribution when the source changes to %o", (senderSession) => {
     const message = forwardedMessage("agent:main:main");
     const initial = cachedGroups([message]);
-    message.senderSession = senderSession;
-
-    const refreshed = cachedGroups([message]);
+    const refreshed = cachedGroups([{ ...message, senderSession }]);
 
     expect(refreshed[0]?.senderSession).toEqual(senderSession);
     expect(refreshed[0]).not.toBe(initial[0]);
@@ -336,8 +337,9 @@ describe("forwarded source-session grouping", () => {
       const initial = cachedGroups([message]);
       expect(initial[0]?.senderSession?.label).toBe("Daily report");
 
-      message.senderSession.label = label;
-      const refreshed = cachedGroups([message]);
+      const refreshed = cachedGroups([
+        { ...message, senderSession: { ...message.senderSession, label } },
+      ]);
 
       expect(refreshed[0]?.senderSession?.label).toBe(label);
       expect(refreshed[0]).not.toBe(initial[0]);
@@ -360,7 +362,7 @@ describe("cached group content classification", () => {
     },
   );
 
-  it("keeps media visible and folds commentary after the same message changes in place", () => {
+  it("keeps media visible and folds commentary after a message replacement", () => {
     const content: Record<string, unknown>[] = [
       { type: "image", url: "https://example.com/diagram.png" },
     ];
@@ -381,8 +383,8 @@ describe("cached group content classification", () => {
       },
       { role: "assistant", content: "Done", timestamp: 4 },
     ];
-    const project = () =>
-      collapseCompletedTurnWork(cachedGroups([...messages]), {
+    const project = (history = messages) =>
+      collapseCompletedTurnWork(cachedGroups(history), {
         sessionKey: "agent:target:dashboard:history",
         runWorking: false,
       });
@@ -394,13 +396,18 @@ describe("cached group content classification", () => {
       { kind: "group", role: "assistant" },
     ]);
 
-    preview.content.splice(0, 1, { type: "text", text: "Preparing a diagram" });
+    const replacement = {
+      ...preview,
+      content: [{ type: "text", text: "Preparing a diagram" }],
+    };
 
-    expect(project()).toMatchObject([
+    expect(
+      project(messages.map((message) => (message === preview ? replacement : message))),
+    ).toMatchObject([
       { kind: "group", role: "user" },
       {
         kind: "work-group",
-        groups: [{ role: "assistant", messages: [{ message: preview }] }, { role: "tool" }],
+        groups: [{ role: "assistant", messages: [{ message: replacement }] }, { role: "tool" }],
       },
       { kind: "group", role: "assistant" },
     ]);

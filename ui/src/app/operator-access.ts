@@ -12,6 +12,7 @@ type GatewayOperatorAccess = Readonly<{
 type OperatorAuth = { role?: string; scopes?: readonly string[] } | null;
 type OperatorScope =
   | "operator.read"
+  | "operator.sessions.read"
   | "operator.write"
   | "operator.admin"
   | "operator.pairing"
@@ -68,4 +69,8 @@ export function hasOperatorPairingAccess(auth: OperatorAuth): boolean {
 
 export function hasOperatorApprovalsAccess(auth: OperatorAuth): boolean {
   return hasOperatorScope(auth, "operator.approvals", false);
+}
+
+export function hasOperatorSelfReadAccess(auth: OperatorAuth): boolean {
+  return hasOperatorReadAccess(auth) || hasOperatorScope(auth, "operator.sessions.read", true);
 }

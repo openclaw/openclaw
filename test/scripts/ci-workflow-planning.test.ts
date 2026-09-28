@@ -11501,8 +11501,16 @@ describe("ci workflow guards", () => {
     for (const owner of ["guards", "planning", "evidence"]) {
       expect(runStep.run.split(`test/scripts/ci-workflow-${owner}.test.ts`)).toHaveLength(3);
     }
-    expect(runStep.run.match(/test\/scripts\/ci-changed-node-test-plan\.test\.ts/g)?.length).toBe(
-      2,
-    );
+    for (const file of [
+      "test/scripts/ci-changed-node-test-plan.test.ts",
+      "test/scripts/ci-changed-node-test-plan.config-fallback.test.ts",
+      "test/scripts/ci-changed-node-test-plan.dependency-hubs.test.ts",
+      "test/scripts/ci-changed-node-test-plan.dependency-inputs.test.ts",
+      "test/scripts/ci-changed-node-test-plan.policy.test.ts",
+      "test/scripts/ci-changed-node-test-plan.process-owners.test.ts",
+      "test/scripts/ci-changed-node-test-plan.source-owners.test.ts",
+    ]) {
+      expect(runStep.run.split(file)).toHaveLength(3);
+    }
   });
 });
