@@ -90,6 +90,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "session.suggestion": [SESSION_READ_SCOPE],
   "session.typing": [SESSION_READ_SCOPE],
   "session.tool": [SESSION_READ_SCOPE],
+  "session.redaction": [SESSION_READ_SCOPE],
   // Operator terminal byte/exit streams. Admin-gated to match the terminal.*
   // methods; also targeted to the owning connection at broadcast time.
   "terminal.data": [ADMIN_SCOPE],

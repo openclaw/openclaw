@@ -75,6 +75,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     'Console output format style: "pretty" or "json". Use json for machine parsing pipelines and pretty for human-first terminal workflows.',
   "logging.redactPatterns":
     "Custom regex strings replace the default string list for log/transcript output and add to safety-boundary UI/tool/diagnostic rules. Built-in form-body, structured-auth, and AWS bare-key protections always apply. Use this to mask deployment-specific tokens and identifiers.",
+  "logging.redactAllowPatterns":
+    "Custom regex strings; a candidate secret value that matches any of them is exempt from masking. Use this to stop a known false positive from repeatedly masking benign project values. Default: [] (no exemptions).",
   update:
     "Update-channel and startup-check behavior for keeping OpenClaw runtime versions current. Use conservative channels in production and more experimental channels only in controlled environments.",
   "update.channel":
