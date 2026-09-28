@@ -200,7 +200,7 @@
   display: flex;
   justify-content: flex-end;
   gap: 4px;
-  margin-bottom: 4px;
+  margin-top: 4px;
 }
 
 .markdown-table__actions button,
@@ -444,7 +444,7 @@
       }
 
       .markdown-table__actions {
-        margin-bottom: 0;
+        margin-top: 0;
       }
 
       .markdown-table__actions button {

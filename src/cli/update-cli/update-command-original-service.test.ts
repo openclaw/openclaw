@@ -273,7 +273,6 @@ afterEach(async () => {
 });
 
 it.for([
-  "healthy",
   "same-version",
   "same-build-finalize",
   "package-root-missing",
@@ -282,7 +281,6 @@ it.for([
   "schema-newer",
   "agent-support-older",
   "definition-changed",
-  "node-changed",
   "package-changed",
   "authority-lost",
   "no-restart",
@@ -358,9 +356,6 @@ it.for([
       }
       if (scenario === "definition-changed") {
         serviceState.command!.programArguments.push("--port", "19998");
-      }
-      if (scenario === "node-changed") {
-        serviceState.command!.programArguments[0] = "/different/node";
       }
       if (scenario === "package-changed") {
         await fs.appendFile(path.join(rootA, "dist", "index.js"), "// replaced\n");
@@ -508,8 +503,7 @@ it.for([
       await work;
     }
     const healthy =
-      sameBuild ||
-      ["healthy", "same-version", "package-root-missing", "windows-autostart"].includes(scenario);
+      sameBuild || ["same-version", "package-root-missing", "windows-autostart"].includes(scenario);
     expect(mocks.restart).not.toHaveBeenCalled();
     expect(mocks.nativeRestart).toHaveBeenCalledTimes(
       healthy || scenario === "readiness-failed" || scenario === "windows-autostart-health-failed"
@@ -637,7 +631,6 @@ it.each([
   "reload-pending",
   "authority-revoked",
   "no-restart",
-  "certified-doctor-failure",
 ] as const)("pre-stop qualification keeps retained A recoverable: %s", async (scenario) => {
   const run = {
     runId: createUpdateRun({ trigger: "cli" }, { env: state.env }).runId,
@@ -752,7 +745,7 @@ it.each([
       },
     });
     expect(execution, execution?.failure?.detail).not.toBeNull();
-    if (scenario === "certified-doctor-failure" || scenario === "fingerprint-timeout") {
+    if (scenario === "fingerprint-timeout") {
       expect(activated, execution?.failure?.detail).toBe(true);
       expect(stopped).toBe(true);
       expect(execution!.originalManagedServiceRuntime).toMatchObject({

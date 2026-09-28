@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { listAvailableExtensionIds } from "../../scripts/lib/changed-extensions.mts";
+import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
 import * as extensionTestPlan from "../../scripts/lib/extension-test-plan.mts";
 import { resolveBoundedVitestInvocations } from "../../scripts/run-vitest.mts";
 import {
@@ -20,6 +21,58 @@ const workerConfig = "test/vitest/vitest.extension-database-workers.config.ts";
 afterEach(() => vi.restoreAllMocks());
 
 describe("extension executable test plans", () => {
+  it("reuses singleton invocation costs across envelopes without pricing multi-file pools as serial", () => {
+    const files = ["extensions/telegram/src/one.test.ts", "extensions/telegram/src/two.test.ts"];
+    const added = "extensions/telegram/src/three.test.ts";
+    const key = extensionTestPlan.createExtensionTestTimingKey;
+    const timings: Record<string, number> = {
+      [key(workerConfig, [files[0]!], undefined, "singleton-invocation")!]: 10,
+      [key(workerConfig, [files[1]!], undefined, "singleton-invocation")!]: 21,
+      [key(workerConfig, [], undefined, "wrapper-overhead")!]: 3,
+    };
+    const samples = vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue(timings);
+    expect(extensionTestPlan.estimateExtensionTestCost(workerConfig, 2, files)).toBe(34);
+    expect(extensionTestPlan.estimateExtensionTestCost(workerConfig, 3, [...files, added])).toBe(
+      42,
+    );
+    expect(extensionTestPlan.estimateExtensionTestCost(workerConfig, 2, [files[1]!, added])).toBe(
+      32,
+    );
+    timings[key(workerConfig, files)!] = 60;
+    expect(extensionTestPlan.estimateExtensionTestCost(workerConfig, 2, files)).toBe(60);
+
+    samples.mockReturnValue({
+      [key(telegramConfig, [files[0]!], undefined, "singleton-invocation")!]: 100,
+      [key(telegramConfig, [files[1]!], undefined, "singleton-invocation")!]: 100,
+      [key(telegramConfig, [], undefined, "wrapper-overhead")!]: 20,
+    });
+    expect(extensionTestPlan.estimateExtensionTestCost(telegramConfig, 2, files)).toBe(9);
+    samples.mockReturnValue({
+      [key(
+        workerConfig,
+        [files[0]!],
+        { OPENCLAW_VITEST_MAX_WORKERS: "8" },
+        "singleton-invocation",
+      )!]: 100,
+      [key(
+        workerConfig,
+        [files[1]!],
+        { OPENCLAW_VITEST_MAX_WORKERS: "2", MODE: "other" },
+        "singleton-invocation",
+      )!]: 100,
+    });
+    expect(extensionTestPlan.estimateExtensionTestCost(workerConfig, 2, files)).toBe(16);
+    const only = [files[0]!];
+    samples.mockReturnValue({ [key(workerConfig, only)!]: 22 });
+    expect(extensionTestPlan.estimateExtensionTestCost(workerConfig, 1, only)).toBe(22);
+    samples.mockReturnValue({
+      [key(workerConfig, only)!]: 22,
+      [key(workerConfig, only, undefined, "singleton-invocation")!]: 20,
+      [key(workerConfig, [], undefined, "wrapper-overhead")!]: 2,
+    });
+    expect(extensionTestPlan.estimateExtensionTestCost(workerConfig, 1, only)).toBe(22);
+  });
+
   it.each(["git", "filesystem"])("reads each candidate checkout's %s plugin inventory", (kind) => {
     const root = "extensions/fixture";
     for (const snapshot of ["before", "after"]) {

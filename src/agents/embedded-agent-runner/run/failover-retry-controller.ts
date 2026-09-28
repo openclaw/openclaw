@@ -299,16 +299,8 @@ export function createEmbeddedRunFailoverRetryController(input: {
         recordDecision("rejected", "long_window_rate_limit");
         return false;
       }
-      // A 429 floor past the operator's maxRetryDelayMs is a usage window in
-      // everything but wording: Anthropic's session-window exhaustion answers
-      // with "try again later" and a Retry-After of hours, which matches no
-      // keyword pattern. The SDK already refused to wait that long under the
-      // same setting; sleeping it here instead holds the turn open until the
-      // run's own timeout kills it. With a fallback configured and an attempt
-      // that can still fail over, decline the wait now. Without either there is
-      // nothing to do but wait, so the floor is honored: after a replay-unsafe
-      // tool action neither profile rotation nor model fallback runs, so
-      // declining here would end the turn instead of continuing it.
+      // Honor the SDK's retry-delay cap when replay-safe fallback is available.
+      // Otherwise a long Retry-After must wait: declining would end the turn.
       const retryDelayCapMs =
         retry.maxRetryDelayMs !== undefined &&
         Number.isFinite(retry.maxRetryDelayMs) &&

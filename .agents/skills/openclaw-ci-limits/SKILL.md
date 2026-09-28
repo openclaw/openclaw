@@ -272,8 +272,13 @@ These are intentionally guarded by the `ci-workflow-guards`,
   lists and package commands; channel invocations retain four project slots and
   one worker per project. Any nonzero exit stops admission of the next envelope.
   Frozen targets retain their original separate rows.
-- CI matrix caps: fast/check lanes at 12, Node test shards at 96, Windows at 5,
-  and Android at 2. Every compact profile has an enforced 90-row budget, plugin
+- CI matrix caps: fast/check lanes at 12, Node test shards at 130 only for
+  trusted same-repository PR first attempts on a non-frozen Blacksmith or hybrid plan, and otherwise 96; Windows stays at 5 and Android at 2.
+  Hosted plans, RunsOn, forks, retries, main, and all manual/qualification dispatches
+  retain 96. This removes a second admission wave for 97–130-row PRs without
+  adding jobs or planned vCPU-minutes. Keep the 130/70/90 PR/main/compact row
+  caps and 5,110-registration arrival envelope; it already counts every PR row
+  inside five minutes. Actual provider capacity and the wall need native proof. Every compact profile has an enforced 90-row budget, plugin
   fallback has a 50-row budget, and the final Node matrix enforces 70 push or
   130 PR rows, including precise plans. Preflight reserves actual appended
   plugin Node rows in compact admission so existing hosted tooling compaction
@@ -400,6 +405,14 @@ These are intentionally guarded by the `ci-workflow-guards`,
   pins and complete timing-history floors; no blanket increase in sharding.
 - Blacksmith and hybrid compact bins with multiple ordinary groups request the
   existing 32-vCPU class and two child slots with a 360s aggregate budget.
+  Gateway-exclusive serial bins and native numbered tooling bins use a 300s test
+  budget. Ordinary self-hosted bins share promoted capacity across logical
+  classes; the existing group exchange fills stranded slots without raising caps.
+  Parallel admission also bounds the ordered two-slot queue at 300 test seconds;
+  matrix predictions use that same queue. Admission retains aggregate work caps
+  and separately charges the measured 60s runtime preparation.
+  Hosted hourly tooling retains its 720s total budget (660s work plus 60s setup)
+  with complete hosted file prices and no native wall observations.
   Compatible two-slot bins use the time budget without the ten-group cutoff;
   serial bins retain that cutoff. Blacksmith serial bins retain 200/276s, hybrid serial bins retain 210s,
   exclusive bins retain 150s by default, and groups above their serial cap stay alone.
@@ -413,7 +426,7 @@ These are intentionally guarded by the `ci-workflow-guards`,
   Prefer an exact measurement; otherwise use the maximum compatible contained
   workload as an advisory floor, never sum overlaps or treat globs as whole files.
   Whole pinned runtime groups may move to existing compatible ordinary jobs under
-  a 440s budget including the existing 100s build reserve. Keep runner anchors,
+  a 360s budget including the 60s build reserve. Keep runner anchors,
   test partitions, invocation counts and worker limits. An ordinary recipient
   becomes serial, explicitly retaining its old parallel groups' two-worker budget
   while preserving their prepared timing identities and complete parent
@@ -433,6 +446,10 @@ These are intentionally guarded by the `ci-workflow-guards`,
   The canonical shard executor admits two CI children only with at least eight
   available CPUs and 24 GiB actual memory; otherwise it admits one. Inner project
   parallelism stays one and each overlapping child keeps two Vitest workers.
+  Gateway methods use four workers in serial, non-frozen self-hosted jobs with
+  at least eight actual CPUs and 28 GiB memory, with the existing two-worker
+  fallback elsewhere. Keep its worker-specific timing identity and require
+  three original-shard replays plus sampled memory evidence when changing it.
   The measured Gateway server-isolated/database-worker family uses at most eight
   workers only in a serial, non-frozen self-hosted job with at least eight actual
   CPUs and 28 GiB memory. Its 20.70 GiB observed aggregate RSS leaves the existing
@@ -451,10 +468,10 @@ These are intentionally guarded by the `ci-workflow-guards`,
   current file costs by effective workers without dividing the longest file.
   Docker helper fixtures retain their separate serial config. This does not
   promote hosted or hybrid tooling; capacity alone is not a measured speedup.
-- Numbered tooling measurements are collected in `toolingFileSeconds` ahead of
-  planner activation, which remains blocked on hosted/hybrid row capacity. The daily refit samples the
-  newest five successful PR CI runs because main-push plans omit this family.
-  Those measurements describe the PR merge-ref and update only tooling files;
+- Numbered tooling measurements in `toolingFileSeconds` drive file packing with
+  native profile costs; a hosted fallback scales measured Blacksmith costs.
+  The daily refit samples the newest five contributing successful PR CI runs.
+  Those measurements describe the PR merge-ref and update exact compact and tooling identities;
   main compact and release sampling retain their existing provenance. Preserve
   independent-run medians, runner profiles and partial-plan history. An explicit
   `--tooling-run <id>` seed records its source and may use one successful run.

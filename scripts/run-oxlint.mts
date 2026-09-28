@@ -20,6 +20,7 @@ import {
   resolveRepoToolBinPath,
 } from "./lib/local-check-runtime.mts";
 import { createManagedCommandInvocation, runManagedCommand } from "./lib/managed-child-process.mts";
+import { readProcessMemoryCapacity } from "./lib/process-memory.mts";
 import { resolvePathEnvKey } from "./windows-cmd-helpers.mjs";
 
 const PREPARE_EXTENSION_BOUNDARY_ARGS = distArtifactEntryArgs(
@@ -454,6 +455,7 @@ async function runOxlint(
   const focusedConfig = argv.includes(OPENCLAW_FOCUSED_CONFIG_FLAG);
   const oxlintArgs = argv.filter((arg) => arg !== OPENCLAW_FOCUSED_CONFIG_FLAG);
   const localEnv = resolveLocalCheckEnv(runtimeEnv);
+  const memory = focusedConfig ? null : readProcessMemoryCapacity({});
   // Focused configs are syntax-only guards; keep wrapper process handling
   // without the broad type-aware policy or package artifact preparation.
   const { args: policyArgs, env } = focusedConfig
@@ -461,6 +463,10 @@ async function runOxlint(
     : applyLocalOxlintPolicy(oxlintArgs, localEnv, {
         logicalCpuCount: os.availableParallelism(),
         totalMemoryBytes: os.totalmem(),
+        memoryCapacityBytes: memory?.capacityBytes,
+        memoryLimitBytes:
+          memory?.usageKnown && memory.availableBytes !== null ? memory.limitBytes : null,
+        platform: process.platform,
       });
   const sparseTargets = filterSparseMissingOxlintTargets(policyArgs);
   const finalArgs = sparseTargets.args;

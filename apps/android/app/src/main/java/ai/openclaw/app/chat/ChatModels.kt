@@ -205,6 +205,7 @@ data class ChatToolActivity(
   val arguments: kotlinx.serialization.json.JsonObject? = null,
   @kotlinx.serialization.Transient val activity: ChatAgentActivity? = null,
   @kotlinx.serialization.Transient val activityPrepared: Boolean = false,
+  @kotlinx.serialization.Transient val browserTab: ChatBrowserTab? = null,
 )
 
 @Serializable

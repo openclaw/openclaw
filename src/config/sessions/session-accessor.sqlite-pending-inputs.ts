@@ -119,19 +119,23 @@ export function finishSessionPendingInputOwner(
   }
   const capturedOptions = { ...options, agentId: source.agentId, path: source.path };
   assertCapturedSessionEntryReadSource(source, getOpenClawAgentDatabaseIfOpen(capturedOptions));
-  runOpenClawAgentWriteTransaction((current) => {
-    assertCapturedSessionEntryReadSource(source, current);
-    executeSqliteQuerySync(
-      current.db,
-      getSessionKysely(current.db)
-        .updateTable("session_pending_inputs")
-        .set({ state: disposition })
-        .where("input_id", "=", owner.inputId)
-        .where("lifecycle_generation", "=", owner.lifecycleGeneration)
-        .where("state", "=", "queued")
-        .where("consumed_event_id", "is", null),
-    );
-  }, capturedOptions);
+  runOpenClawAgentWriteTransaction(
+    (current) => {
+      assertCapturedSessionEntryReadSource(source, current);
+      executeSqliteQuerySync(
+        current.db,
+        getSessionKysely(current.db)
+          .updateTable("session_pending_inputs")
+          .set({ state: disposition })
+          .where("input_id", "=", owner.inputId)
+          .where("lifecycle_generation", "=", owner.lifecycleGeneration)
+          .where("state", "=", "queued")
+          .where("consumed_event_id", "is", null),
+      );
+    },
+    capturedOptions,
+    { operationLabel: "session.pending-input.finish-owner" },
+  );
 }
 
 function assertPendingInputOwnerCurrent(owner: SessionPendingInputOwner): void {
@@ -603,4 +607,37 @@ export function deleteSessionPendingInputs(
         .where("session_key", "=", sessionKey),
     );
   }
+}
+
+/** Select bounded receipt correlations without loading accepted message bodies. */
+export function readSessionPendingInputReceipts(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  scope: Pick<ResolvedTranscriptScope, "sessionKey" | "sessionId">,
+  runIds: readonly string[],
+) {
+  const rows = executeSqliteQuerySync(
+    database.db,
+    getSessionKysely(database.db)
+      .selectFrom("session_pending_inputs")
+      .select(["run_id", "consumed_event_id"])
+      .where("session_key", "=", scope.sessionKey)
+      .where("session_id", "=", scope.sessionId)
+      .where("run_id", "in", runIds)
+      .orderBy("seq", "asc")
+      .limit(51),
+  ).rows;
+  // A run ID is correlation, not unique authority. Never retire an ambiguous
+  // provisional message when another source with that run is still pending.
+  if (rows.length > 50 || new Set(rows.map((row) => row.run_id)).size !== rows.length) {
+    throw new Error("Pending input receipt lookup has ambiguous source run IDs");
+  }
+  return rows.map((row) =>
+    row.consumed_event_id == null
+      ? { runId: row.run_id, state: "pending" as const }
+      : {
+          runId: row.run_id,
+          state: "consumed" as const,
+          consumedByEventId: row.consumed_event_id,
+        },
+  );
 }

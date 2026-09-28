@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -304,6 +305,17 @@ esac
       commandLabel: "openclaw config validate",
       shell: false,
     });
+  });
+
+  it("keeps every recipe file in the prepared test layout", () => {
+    // Prepared tooling workers copy only listed assets, but the recipe reads any section file by name.
+    const buildEntries = readFileSync("scripts/lib/vitest-worker-build-entries.mts", "utf8");
+    const recipeDirectory = "scripts/e2e/lib/upgrade-survivor/config-recipe";
+    const missing = readdirSync(recipeDirectory)
+      .filter((name) => name.endsWith(".json"))
+      .map((name) => `${recipeDirectory}/${name}`)
+      .filter((file) => !buildEntries.includes(JSON.stringify(file)));
+    expect(missing).toEqual([]);
   });
 
   it("adds the Codex allowlist survival scenario", () => {
@@ -651,7 +663,7 @@ esac
     { version: "2026.6.34", batched: true },
   ])("batches only supported final baselines: $version", ({ version, batched }) => {
     const steps = resolveUpgradeSurvivorConfigStepsForBaseline("base", version);
-    expect(steps).toHaveLength(batched ? 12 : 14);
+    expect(steps).toHaveLength(batched ? 13 : 15);
     expect(steps.filter((step) => step.argv[2] === "--batch-json")).toHaveLength(batched ? 1 : 0);
     expect(configLeafWrites(steps).filter((entry) => entry.path.startsWith("channels."))).toEqual([
       expect.objectContaining({ path: "channels.discord" }),
@@ -670,6 +682,7 @@ esac
       "discord-channel",
       "telegram-channel",
       "whatsapp-channel",
+      "tool-search",
       "logging",
       "logging",
       "validate",
@@ -758,6 +771,14 @@ esac
       expect(result.status, result.stdout + result.stderr).toBe(0);
       expect(summary.acceptedIntents).toContain("acpx-openclaw-tools-bridge");
       expect(summary.baselineVersion).toBe("2026.6.1");
+      expect(summary.acceptedIntents).toContain("tool-search");
+      expect(loggedArgs).toContainEqual([
+        "config",
+        "set",
+        "tools.toolSearch",
+        '{"mode":"code","codeTimeoutMs":5000}',
+        "--strict-json",
+      ]);
       expect(loggedArgs.at(-1)).toEqual(["config", "validate"]);
       expect(loggedArgs).toContainEqual(
         expect.arrayContaining([
@@ -786,6 +807,7 @@ esac
       "skills",
       "plugins",
       "channels",
+      "tools-tool-search",
       "plugins-configured-installs",
       "channels-whatsapp-unset",
       "channels-matrix",
@@ -809,6 +831,7 @@ esac
       "discord-channel",
       "telegram-channel",
       "whatsapp-channel",
+      "tool-search",
       "configured-plugin-installs",
       "validate",
     ]);

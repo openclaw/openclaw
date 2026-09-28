@@ -198,11 +198,7 @@ function collectQaSuitePluginIds(
   return [
     ...new Set(
       scenarios.flatMap((scenario) =>
-        Array.isArray(scenario.plugins)
-          ? scenario.plugins
-              .map((pluginId) => pluginId.trim())
-              .filter((pluginId) => pluginId.length > 0)
-          : [],
+        (scenario.plugins ?? []).map((pluginId) => pluginId.trim()).filter(Boolean),
       ),
     ),
   ];
@@ -357,7 +353,7 @@ function scenarioRequiresIsolatedQaSuiteWorker(scenario: QaSeedScenario) {
     scenario.execution.config?.agentE2e === true ||
     isRecord(scenario.gatewayConfigPatch) ||
     scenario.gatewayRuntime !== undefined ||
-    (Array.isArray(scenario.plugins) && scenario.plugins.length > 0) ||
+    (scenario.plugins?.length ?? 0) > 0 ||
     normalizeLowercaseStringOrEmpty(scenario.surface) === "memory" ||
     scenario.execution.config?.ensureImageGeneration === true ||
     flowContainsImplicitIsolationCall(scenario.execution.flow)
@@ -485,16 +481,13 @@ async function resolveQaSuiteOutputDir(repoRoot: string, outputDir?: string) {
   const targetDir = !outputDir
     ? path.join(repoRoot, ".artifacts", "qa-e2e", `suite-${createQaArtifactRunId()}`)
     : outputDir;
-  if (!path.isAbsolute(targetDir)) {
-    const resolved = resolveRepoRelativeOutputDir(repoRoot, targetDir);
-    if (!resolved) {
-      throw new Error("QA suite outputDir must be set.");
-    }
-    return await ensureRepoBoundDirectory(repoRoot, resolved, "QA suite outputDir", {
-      mode: 0o700,
-    });
+  const resolved = path.isAbsolute(targetDir)
+    ? targetDir
+    : resolveRepoRelativeOutputDir(repoRoot, targetDir);
+  if (!resolved) {
+    throw new Error("QA suite outputDir must be set.");
   }
-  return await ensureRepoBoundDirectory(repoRoot, targetDir, "QA suite outputDir", {
+  return await ensureRepoBoundDirectory(repoRoot, resolved, "QA suite outputDir", {
     mode: 0o700,
   });
 }

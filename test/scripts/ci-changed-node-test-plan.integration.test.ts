@@ -230,6 +230,8 @@ it("keeps UI fallback with its complete canonical owners beside precise core cha
     changedPaths: paths,
     compactMode: "pull-request",
     runnerBackend: "hybrid",
+    includeReleaseOnlyPluginShards: false,
+    includeReleaseOnlyToolingShards: true,
     includeReleaseOnlyRuntimeTests: false,
   });
   const uiOwners = full.filter((shard) =>
@@ -318,6 +320,8 @@ it("keeps UI fallback with its complete canonical owners beside precise core cha
       compactMode: "pull-request",
       runnerBackend: "hybrid",
       includeReleaseOnlyPluginShards: false,
+      includeReleaseOnlyToolingShards: true,
+      includeProofTests: false,
       includeReleaseOnlyRuntimeTests: true,
     });
   } finally {

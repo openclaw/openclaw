@@ -204,10 +204,7 @@ function collectPayloadOutcomeMediaUrls(
   const urls = new Set<string>();
   for (const outcome of outcomes) {
     const record = asOptionalRecord(outcome);
-    if (!record) {
-      continue;
-    }
-    if (!statuses(record)) {
+    if (!record || !statuses(record)) {
       continue;
     }
     const index =

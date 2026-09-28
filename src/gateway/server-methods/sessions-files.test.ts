@@ -456,6 +456,26 @@ describe("sessions.files RPC handlers", () => {
     expect(payload.browser.entries).toEqual([]);
   });
 
+  it.runIf(process.platform === "linux").each([
+    { operation: "browse", query: { path: "ui" } },
+    { operation: "search", query: { search: "vite" } },
+  ])("reports non-UTF-8 filenames during workspace $operation", async ({ query }) => {
+    const invalidPath = Buffer.concat([
+      Buffer.from(path.join(workspaceRoot, "ui") + path.sep),
+      Buffer.from([0xff]),
+    ]);
+    fs.writeFileSync(invalidPath, "unaddressable file");
+
+    await expect(listFiles(query)).rejects.toMatchObject({
+      code: "invalid-path",
+      message: 'Cannot list workspace directory "ui": directory entry name is not valid UTF-8',
+    });
+    expect(fs.readFileSync(path.join(workspaceRoot, "ui", "vite.config.ts"), "utf8")).toBe(
+      "export default {};\n",
+    );
+    expect(fs.readFileSync(invalidPath, "utf8")).toBe("unaddressable file");
+  });
+
   it("does not read absolute or parent-relative paths outside the configured workspace", async () => {
     const outsidePath = path.join(os.tmpdir(), `openclaw-outside-${Date.now()}.txt`);
     fs.writeFileSync(outsidePath, "outside\n", "utf8");

@@ -172,7 +172,7 @@ describe("hosted media provider live CLI", () => {
         providers: [],
         skippedReason: "no providers selected",
       },
-      { suite: MEDIA_SUITES.video, providers: ["openai"] },
+      { suite: MEDIA_SUITES.video, providers: [], skippedReason: "no providers selected" },
     ]);
 
     expect(skipped).toEqual([]);
@@ -228,17 +228,12 @@ describe("hosted media provider live CLI", () => {
       "vydra",
     ]);
     expect(requirePlanEntry(plan, "music").providers).toEqual(["fal", "google", "minimax"]);
-    expect(requirePlanEntry(plan, "video").providers).toEqual([
-      "google",
-      "minimax",
-      "openai",
-      "vydra",
-    ]);
+    expect(requirePlanEntry(plan, "video").providers).toEqual(["google", "minimax", "vydra"]);
   });
 
   it("supports suite-specific provider filters without auth narrowing", async () => {
     const plan = await buildRunPlan(
-      parseArgs(["video", "--video-providers", "fal,openai,runway", "--all-providers"]),
+      parseArgs(["video", "--video-providers", "fal,google,runway", "--all-providers"]),
       {
         collectProviderApiKeysImpl: collectProviderApiKeysMock,
         getProviderEnvVarsImpl: (provider) => [`TEST_AUTH_${provider.toUpperCase()}`],
@@ -249,7 +244,7 @@ describe("hosted media provider live CLI", () => {
     expect(plan).toHaveLength(1);
     const [entry] = plan;
     expect(entry?.suite.id).toBe("video");
-    expect(entry?.providers).toEqual(["fal", "openai", "runway"]);
+    expect(entry?.providers).toEqual(["fal", "google", "runway"]);
   });
 
   it("forwards quiet flags separately from passthrough args", () => {

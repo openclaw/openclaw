@@ -1,4 +1,3 @@
-/** Classifies terminal assistant visibility and provider retry eligibility. */
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
@@ -219,17 +218,13 @@ export function shouldApplyNonVisibleTurnRetryGuard(params: {
   modelApi?: string;
   executionContract?: string;
 }): boolean {
-  if (
+  // These guards use provider output structure, never user or assistant prose.
+  return (
     params.executionContract === "strict-agentic" ||
-    isIncompleteTurnRecoverySupportedProviderModel(params)
-  ) {
-    return true;
-  }
-  if (RETRY_GUARD_MODEL_APIS.has(normalizeLowercaseStringOrEmpty(params.modelApi ?? ""))) {
-    return true;
-  }
-  // This path uses provider output structure only: no user or assistant prose classification.
-  return isOllamaIncompleteTurnProvider(params.provider);
+    isIncompleteTurnRecoverySupportedProviderModel(params) ||
+    RETRY_GUARD_MODEL_APIS.has(normalizeLowercaseStringOrEmpty(params.modelApi ?? "")) ||
+    isOllamaIncompleteTurnProvider(params.provider)
+  );
 }
 
 function isIncompleteTurnRecoverySupportedProviderModel(params: {

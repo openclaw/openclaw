@@ -1546,6 +1546,11 @@ update_candidate() {
     "NODE_OPTIONS=$update_node_options"
   )
   local update_status=0
+  local update_phase="${CURRENT_PHASE:-}"
+  # Keep outer phase events unchanged; failed recovery exposes only fixed coordinates.
+  if [ "$after_repair" = "1" ]; then
+    CURRENT_PHASE="recovery-update-command"
+  fi
   update_outcome="failed"
   if [ "$SCENARIO" = "recovery-cleanup" ]; then
     # Keep sampler output outside the old updater's JSON and join its process group.
@@ -1561,6 +1566,10 @@ update_candidate() {
   # classifying the result; an unreadable package must not retain the baseline.
   installed_version="$(read_installed_version)" || installed_version=""
   update_exit_code="$update_status"
+  # A nonzero command never runs the JSON assertion and must not be labeled as one.
+  if [ "$after_repair" = "1" ] && [ "$update_status" -eq 0 ]; then
+    CURRENT_PHASE="recovery-update-result-assertion"
+  fi
   if [ "$after_repair" != "1" ] && [ "$update_status" -le 1 ] && node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
     assert-recoverable-update-json "$update_json" "$expected_version" "$observation_root" "$baseline_version" >"$ARTIFACT_ROOT/update-result-check.log" 2>&1; then
     update_repair_required="1"
@@ -1589,6 +1598,9 @@ update_candidate() {
     update_end="$(node -e "process.stdout.write(String(Date.now()))")"
     update_restart_seconds=$(((update_end - update_start + 999) / 1000))
     # Accepted plugin warnings do not waive this invocation's restart proof.
+    if [ "$after_repair" = "1" ]; then
+      CURRENT_PHASE="recovery-update-service-replacement"
+    fi
     assert_update_restart_service_replaced "$previous_service_pid" "$previous_systemctl_lines" || return 1
     update_restart_source="candidate-update"
     if [ "$SCENARIO" = "legacy-operator-state" ]; then
@@ -1599,10 +1611,14 @@ update_candidate() {
       update_restart_source="candidate-to-future"
     fi
   fi
+  if [ "$after_repair" = "1" ]; then
+    CURRENT_PHASE="recovery-update-version-match"
+  fi
   if [ "$installed_version" != "$expected_version" ]; then
     echo "update did not leave the selected target installed: $installed_version (expected $expected_version)" >&2
     return 1
   fi
+  CURRENT_PHASE="$update_phase"
 }
 
 assert_sibling_published_refusal() {

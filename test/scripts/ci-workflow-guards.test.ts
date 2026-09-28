@@ -2374,9 +2374,11 @@ AFTER_CD
     },
   );
 
-  it.skipIf(process.platform === "win32")(
-    "defers timing refits when only the runtime group codec changes on main",
-    () => {
+  it
+    .skipIf(process.platform === "win32")
+    .each(["scripts/lib/ci-node-test-groups-codec.mts", "scripts/lib/local-check-runtime.mts"])(
+    "defers timing refits when only %s changes on main",
+    (sourcePath) => {
       const workflow = readWorkflow(".github/workflows/ci-test-timings-refit.yml");
       const publisher = expectDefined(
         workflow.jobs.refit.steps.find(
@@ -2386,7 +2388,7 @@ AFTER_CD
       );
       const result = runGeneratedPublisherScenario(null, {
         invalidationPaths: publisher.with["invalidation-paths"],
-        updateSource: "scripts/lib/ci-node-test-groups-codec.mts",
+        updateSource: sourcePath,
       });
 
       expect(result.branchExists).toBe(false);
@@ -2397,6 +2399,79 @@ AFTER_CD
       );
     },
   );
+
+  it("preserves large timing refit reports outside generated PR environments", () => {
+    const workflow = readWorkflow(".github/workflows/ci-test-timings-refit.yml");
+    const steps: WorkflowStep[] = workflow.jobs.refit.steps;
+    const refit = expectDefined(
+      steps.find((step) => step.id === "refit"),
+      "refit step",
+    );
+    const root = tempDirs.make("openclaw-refit-report-");
+    const bin = path.join(root, "bin");
+    const source = path.join(root, "source.md");
+    const output = path.join(root, "github-output");
+    mkdirSync(bin);
+    writeExecutable(path.join(bin, "pnpm"), [
+      "#!/bin/sh",
+      'test "$*" = "--silent ci:timings:refit" || exit 64',
+      'cat "$REFIT_FIXTURE_REPORT"',
+    ]);
+    writeExecutable(path.join(bin, "git"), [
+      "#!/bin/sh",
+      'test "$*" = "diff --quiet -- config/ci-test-timings.json" || exit 64',
+      "exit 1",
+    ]);
+    const validIds = "36204091214, 36208949888";
+    const largeTable = "| fixture-test | 100 | 50 | -50% |\n".repeat(12_000);
+    for (const runIds of [
+      validIds,
+      "invalid",
+      Array.from({ length: 200 }, (_, index) => String(36_200_000_000 + index)).join(", "),
+    ]) {
+      const report = `Sampled CI and release-check runs with successful timing jobs: ${runIds}\n\n${largeTable}`;
+      writeFileSync(source, report);
+      writeFileSync(output, "");
+      const result = runWorkflowShellScript(expectDefined(refit.run, "refit body"), {
+        cwd: root,
+        env: {
+          ...process.env,
+          PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+          RUNNER_TEMP: root,
+          GITHUB_OUTPUT: output,
+          REFIT_FIXTURE_REPORT: source,
+        },
+      });
+      expect(readFileSync(path.join(root, "ci-test-timings-report.md"), "utf8")).toBe(report);
+      expect(Buffer.byteLength(readFileSync(output, "utf8"))).toBeLessThan(4096);
+      if (runIds === validIds) {
+        expect(result.status, result.stderr).toBe(0);
+        expect(readWorkflowOutputs(output)).toEqual({ run_ids: validIds, changed: "true" });
+      } else {
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("Missing or oversized sampled-run summary");
+        expect(readWorkflowOutputs(output)).toEqual({});
+      }
+    }
+    const upload = expectDefined(
+      steps.find((step) => step.id === "report"),
+      "report upload",
+    );
+    const publisher = expectDefined(
+      steps.find((step) => step.uses === "./.github/actions/publish-generated-pr"),
+      "refit publisher",
+    );
+    const uploadInputs = expectDefined(upload.with, "report upload inputs");
+    const publisherInputs = expectDefined(publisher.with, "refit publisher inputs");
+    expect(upload.uses).toBe(UPLOAD_ARTIFACT_V7);
+    expect(uploadInputs.path).toBe("${{ runner.temp }}/ci-test-timings-report.md");
+    expect(uploadInputs["if-no-files-found"]).toBe("error");
+    expect(upload.if).toBe("${{ !cancelled() && steps.refit.outcome != 'skipped' }}");
+    expect(steps.indexOf(upload)).toBeLessThan(steps.indexOf(publisher));
+    expect(publisherInputs["pr-body"]).toContain("${{ steps.refit.outputs.run_ids }}");
+    expect(publisherInputs["pr-body"]).toContain("${{ steps.report.outputs.artifact-url }}");
+    expect(publisherInputs["pr-body"]).not.toContain("${{ steps.refit.outputs.report }}");
+  });
 
   it
     .skipIf(process.platform === "win32")
@@ -2769,7 +2844,68 @@ AFTER_CD
       "github.event_name == 'pull_request'",
     );
     expect(workflow.jobs["checks-fast-core"].strategy["max-parallel"]).toBe(12);
-    expect(workflow.jobs["checks-node-core-test-nondist-shard"].strategy["max-parallel"]).toBe(96);
+    const nodeParallel =
+      workflow.jobs["checks-node-core-test-nondist-shard"].strategy["max-parallel"];
+    const canonicalNodePr = {
+      eventName: "pull_request" as const,
+      repository: "openclaw/openclaw",
+      headRepository: "openclaw/openclaw",
+      runAttempt: 1,
+      runnerProfile: "hybrid" as const,
+    };
+    for (const runnerBackend of ["", "blacksmith", "hybrid"] as const) {
+      for (const authorAssociation of ["OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR"]) {
+        expect(
+          evaluateWorkflowExpression(nodeParallel, {
+            ...canonicalNodePr,
+            runnerBackend,
+            runnerProfile: runnerBackend === "hybrid" ? "hybrid" : "blacksmith",
+            authorAssociation,
+          }),
+          `${runnerBackend || "default"}/${authorAssociation}`,
+        ).toBe(130);
+      }
+    }
+    const restrictedNodeContexts: Array<Partial<Parameters<typeof evaluateWorkflowExpression>[1]>> =
+      [
+        { eventName: "push" },
+        { eventName: "schedule" },
+        { eventName: "workflow_dispatch" },
+        {
+          eventName: "workflow_dispatch",
+          ciShape: "main",
+          preflightOutputs: { ci_qualification: "true", qualification_runner_backend: "hybrid" },
+        },
+        {
+          eventName: "workflow_dispatch",
+          ciShape: "default",
+          preflightOutputs: { ci_qualification: "true", qualification_runner_backend: "hybrid" },
+        },
+        { runnerBackend: "github" },
+        { runnerBackend: "runson" },
+        { preflightOutputs: { node_runner_backend: "runson" } },
+        { runnerProfile: "github" },
+        { runAttempt: 2 },
+        { frozenTarget: true },
+        { authorAssociation: "FIRST_TIME_CONTRIBUTOR" },
+        { authorAssociation: "FIRST_TIMER" },
+        { authorAssociation: "NONE" },
+        { authorAssociation: "MANNEQUIN" },
+        { headRepository: "contributor/openclaw" },
+        { headRepository: "" },
+        { repository: "contributor/openclaw" },
+      ];
+    for (const context of restrictedNodeContexts) {
+      expect(
+        evaluateWorkflowExpression(nodeParallel, {
+          ...canonicalNodePr,
+          runnerBackend: "hybrid",
+          authorAssociation: "CONTRIBUTOR",
+          ...context,
+        }),
+        JSON.stringify(context),
+      ).toBe(96);
+    }
     expect(workflow.jobs["checks-fast-plugin-contracts-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["checks-fast-channel-contracts-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["check-shard"].strategy["max-parallel"]).toBe(12);
@@ -12947,5 +13083,29 @@ describe("frozen CI compatibility contracts", () => {
     );
     expect(source).not.toContain('"control-ui-chat-flow-playwright",');
     expect(source).toContain("if (!source.includes(marker)) process.exit(0);");
+  });
+});
+
+describe("workflow file size", () => {
+  // GitHub refuses workflow files above 500 KiB: it creates a run named after
+  // the file that fails with no jobs, so CI stops without reporting a failure.
+  const GITHUB_WORKFLOW_MAX_BYTES = 512_000;
+  const WORKFLOW_SOFT_LIMIT_BYTES = 480_000;
+
+  it("keeps every workflow file well below GitHub's size limit", () => {
+    const oversized = readdirSync(".github/workflows")
+      .filter((name) => /\.ya?ml$/u.test(name))
+      .map((name) => `.github/workflows/${name}`)
+      .map((file) => ({ file, bytes: statSync(file).size }))
+      .filter(({ bytes }) => bytes > WORKFLOW_SOFT_LIMIT_BYTES)
+      .map(({ file, bytes }) => `${file}: ${bytes} bytes`);
+
+    expect(
+      oversized,
+      `Workflow files must stay at or below ${WORKFLOW_SOFT_LIMIT_BYTES} bytes. GitHub's hard limit is ` +
+        `${GITHUB_WORKFLOW_MAX_BYTES} bytes (500 KiB); above it, GitHub creates a run named after the ` +
+        `file that fails immediately with no jobs, so all PR and main CI silently stops. Shrink the file ` +
+        `(for example, YAML anchors/aliases for byte-identical expressions) before raising this limit.`,
+    ).toEqual([]);
   });
 });

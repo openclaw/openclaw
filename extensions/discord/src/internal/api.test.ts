@@ -2,10 +2,8 @@
 import { Routes } from "discord-api-types/v10";
 import { describe, expect, it } from "vitest";
 import {
-  createApplicationCommand,
   createChannelWebhook,
   createChannelMessage,
-  createInteractionCallback,
   createGuildBan,
   createGuildScheduledEvent,
   createOwnMessageReaction,
@@ -13,21 +11,14 @@ import {
   createUserDmChannel,
   deleteChannelMessage,
   deleteOwnMessageReaction,
-  deleteWebhookMessage,
-  editApplicationCommand,
-  editWebhookMessage,
   getCurrentUser,
   getChannelMessage,
   getUser,
-  getWebhookMessage,
-  createWebhookMessage,
   editChannelMessage,
   listMessageReactionUsers,
-  listApplicationCommands,
   listChannelMessages,
   listGuildChannels,
   listGuildEmojis,
-  overwriteApplicationCommands,
   pinChannelMessage,
   searchGuildMessages,
   sendChannelTyping,
@@ -122,21 +113,6 @@ describe("Discord REST API helpers", () => {
       (rest: ReturnType<typeof createFakeRestClient>) =>
         listMessageReactionUsers(rest, "c1", "..", "%E2%9C%85"),
     ],
-    [
-      "get webhook message",
-      (rest: ReturnType<typeof createFakeRestClient>) =>
-        getWebhookMessage(rest, "app1", "wtoken", ".."),
-    ],
-    [
-      "edit webhook message",
-      (rest: ReturnType<typeof createFakeRestClient>) =>
-        editWebhookMessage(rest, "app1", "wtoken", "..", { body: { content: "hello" } }),
-    ],
-    [
-      "delete webhook message",
-      (rest: ReturnType<typeof createFakeRestClient>) =>
-        deleteWebhookMessage(rest, "app1", "wtoken", ".."),
-    ],
   ])("rejects a malformed message ID before the %s request", async (_label, invoke) => {
     const rest = createFakeRestClient();
 
@@ -187,43 +163,6 @@ describe("Discord REST API helpers", () => {
     await expect(listGuildEmojis(createFakeRestClient([{ invalid: true }]), "g1")).rejects.toThrow(
       "Invalid Discord guild emoji response.",
     );
-  });
-
-  it("routes command helpers through the typed REST client", async () => {
-    const rest = createFakeRestClient([
-      [{ id: "cmd1" }],
-      { id: "cmd2" },
-      { id: "cmd3" },
-      undefined,
-    ]);
-
-    await expect(listApplicationCommands(rest, "app1")).resolves.toEqual([{ id: "cmd1" }]);
-    await expect(createApplicationCommand(rest, "app1", { name: "ping" })).resolves.toEqual({
-      id: "cmd2",
-    });
-    await expect(
-      editApplicationCommand(rest, "app1", "cmd2", { description: "Pong" }),
-    ).resolves.toEqual({ id: "cmd3" });
-    await overwriteApplicationCommands(rest, "app1", [{ name: "ping" }]);
-
-    expect(rest.calls).toEqual([
-      { method: "GET", path: Routes.applicationCommands("app1") },
-      {
-        method: "POST",
-        path: Routes.applicationCommands("app1"),
-        data: { body: { name: "ping" } },
-      },
-      {
-        method: "PATCH",
-        path: Routes.applicationCommand("app1", "cmd2"),
-        data: { body: { description: "Pong" } },
-      },
-      {
-        method: "PUT",
-        path: Routes.applicationCommands("app1"),
-        data: { body: [{ name: "ping" }] },
-      },
-    ]);
   });
 
   it("routes user helpers through the typed REST client", async () => {
@@ -288,56 +227,6 @@ describe("Discord REST API helpers", () => {
         path: Routes.channelWebhooks("c1"),
         data: { body: { name: "OpenClaw" } },
       },
-    ]);
-  });
-
-  it("routes interaction webhook helpers through the typed REST client", async () => {
-    const rest = createFakeRestClient([
-      { ok: true },
-      { id: "m1" },
-      { id: "m2" },
-      { id: "m3" },
-      undefined,
-    ]);
-    const query = { wait: "true" };
-    const originalResponseId = "@original";
-
-    await expect(createInteractionCallback(rest, "i1", "itoken", { type: 5 })).resolves.toEqual({
-      ok: true,
-    });
-    await expect(
-      createWebhookMessage(rest, "app1", "wtoken", { body: { content: "hello" } }, query),
-    ).resolves.toEqual({ id: "m1" });
-    await expect(getWebhookMessage(rest, "app1", "wtoken", originalResponseId)).resolves.toEqual({
-      id: "m2",
-    });
-    await expect(
-      editWebhookMessage(rest, "app1", "wtoken", originalResponseId, {
-        body: { content: "updated" },
-      }),
-    ).resolves.toEqual({ id: "m3" });
-    await expect(
-      deleteWebhookMessage(rest, "app1", "wtoken", originalResponseId),
-    ).resolves.toBeUndefined();
-    expect(rest.calls).toEqual([
-      {
-        method: "POST",
-        path: Routes.interactionCallback("i1", "itoken"),
-        data: { body: { type: 5 } },
-      },
-      {
-        method: "POST",
-        path: Routes.webhook("app1", "wtoken"),
-        data: { body: { content: "hello" } },
-        query,
-      },
-      { method: "GET", path: Routes.webhookMessage("app1", "wtoken", originalResponseId) },
-      {
-        method: "PATCH",
-        path: Routes.webhookMessage("app1", "wtoken", originalResponseId),
-        data: { body: { content: "updated" } },
-      },
-      { method: "DELETE", path: Routes.webhookMessage("app1", "wtoken", originalResponseId) },
     ]);
   });
 

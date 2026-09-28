@@ -30,6 +30,9 @@ Choose your OpenAI authentication method based on the access you need:
 | OpenAI-hosted plugins and connected apps through Codex | Not supported yet                                       | Requires connector scopes; device code lacks `api.connectors.invoke` | Not provided by API-key authentication                     |
 | OpenClaw tools and locally configured plugins          | Supported                                               | Supported                                                            | Supported                                                  |
 | Web search                                             | Supported                                               | Supported where enabled                                              | Supported where enabled                                    |
+| Image generation                                       | Not supported by this credential                        | Codex image generation, subject to account access                    | Images API, subject to project access                      |
+| Audio transcription                                    | Not supported by this credential                        | Subscription transcription route                                     | Audio API, subject to project access                       |
+| Memory embeddings and text-to-speech                   | Requires a separate compatible credential               | Requires a separate compatible credential                            | Supported APIs, subject to project access                  |
 | Monitoring and analytics                               | Usage tracking on each OpenClaw instance                | Codex usage and quota reporting                                      | Platform project usage and billing                         |
 | Permission control                                     | App-specific OAuth grants and workspace policy          | Codex product permissions and workspace policy                       | API-key and project permissions                            |
 | Default model endpoint                                 | `https://api.openai.com/v1/responses`                   | `https://chatgpt.com/backend-api/codex/responses`                    | `https://api.openai.com/v1/responses` for Responses models |
@@ -57,6 +60,16 @@ OpenClaw tools and locally configured plugins have their own permissions and
 external-service credentials. They can work with any of these model-auth methods.
 For example, a Slack integration configured in OpenClaw is separate from a
 Slack connected app hosted by OpenAI.
+
+SIWC model access does not make every OpenAI tool available. Image generation,
+audio transcription, speech synthesis, and memory embeddings
+need credentials that support those capabilities. You can keep SIWC for chat and
+configure another account or provider for those tools.
+
+During [agent bootstrapping](/start/bootstrapping), OpenClaw generates avatar
+choices only when image generation is available. With only SIWC connected, it
+continues with the agent's emoji; no generated avatar is required to finish.
+A separately configured image provider can still generate the avatar.
 
 ### Choose model access and harness separately
 

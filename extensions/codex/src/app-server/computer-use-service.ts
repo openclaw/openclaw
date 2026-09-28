@@ -122,7 +122,6 @@ export async function ensureCodexComputerUseServiceApp(params: {
     ownershipRoot,
     targetParent,
     targetPath,
-    platform,
     sourceAppCandidates: candidates,
   });
   const activeEntry = { syncKey, promise: install };
@@ -141,20 +140,25 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
   ownershipRoot: string;
   targetParent: string;
   targetPath: string;
-  platform: NodeJS.Platform;
   appServerCommand?: string;
-  sourceAppCandidates?: readonly string[];
+  sourceAppCandidates: readonly string[];
   copyServiceApp?: CopyServiceApp;
   inspectServiceApp?: InspectServiceApp;
   assertCurrent?: () => void;
 }): Promise<CodexComputerUseServiceStatus> {
   const inspectServiceApp = params.inspectServiceApp ?? inspectTrustedServiceApp;
-  const candidates = params.sourceAppCandidates ?? [];
-  const source = await findUsableServiceApp(candidates, inspectServiceApp);
+  const source = await findUsableServiceApp(params.sourceAppCandidates, inspectServiceApp);
   if (!source) {
     return { status: "source_missing", changed: false, targetPath: params.targetPath };
   }
   const { path: sourcePath, identity: sourceIdentity } = source;
+  const alreadyCurrent: CodexComputerUseServiceStatus = {
+    status: "already_current",
+    changed: false,
+    targetPath: params.targetPath,
+    sourcePath,
+    sourceBuild: sourceIdentity.build,
+  };
   const ownedParent = await prepareOwnedServiceParent({
     ownershipRoot: params.ownershipRoot,
     codexHome: params.codexHome,
@@ -164,13 +168,7 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
   await assertNotSymlink(operationTargetPath, "Computer Use service target");
   const initialTarget = await readServiceAppSnapshot(operationTargetPath, inspectServiceApp);
   if (initialTarget.identity && identitiesMatch(initialTarget.identity, sourceIdentity)) {
-    return {
-      status: "already_current",
-      changed: false,
-      targetPath: params.targetPath,
-      sourcePath,
-      sourceBuild: sourceIdentity.build,
-    };
+    return alreadyCurrent;
   }
 
   await assertOwnedServiceParentStable(ownedParent);
@@ -237,13 +235,7 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
         // Another runtime installed the selected signed generation while this
         // process was staging. Keep that winner rather than replacing it.
         await restoreBackup();
-        return {
-          status: "already_current",
-          changed: false,
-          targetPath: params.targetPath,
-          sourcePath,
-          sourceBuild: sourceIdentity.build,
-        };
+        return alreadyCurrent;
       }
       if (!snapshotsMatch(initialTarget, movedTarget)) {
         await restoreBackup();
@@ -271,13 +263,7 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
       if (backupCreated) {
         await removeBackup();
       }
-      return {
-        status: "already_current",
-        changed: false,
-        targetPath: params.targetPath,
-        sourcePath,
-        sourceBuild: sourceIdentity.build,
-      };
+      return alreadyCurrent;
     }
     await assertNotSymlink(operationTargetPath, "Installed Computer Use service app");
     const installedSnapshot = await readServiceAppSnapshot(operationTargetPath, inspectServiceApp);

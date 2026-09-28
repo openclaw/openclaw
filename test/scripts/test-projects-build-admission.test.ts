@@ -124,8 +124,10 @@ afterEach(() => {
 
 describe("CLI runtime admission", () => {
   const posixIt = process.platform === "win32" ? it.skip : it;
-  posixIt.for<[name: string, args: string[]]>([
+  posixIt.for<[name: string, args: string[], implicitRoot?: boolean]>([
     ["ordinary target", [ordinaryQa]],
+    ["implicit root ordinary directory", ["run", "src/utils"], true],
+    ["implicit root watch", ["watch", "src/config"], true],
     ["ordinary CLI config", ["--config", "test/vitest/vitest.cli.config.ts"]],
     [
       "CLI process runtime exclusions",
@@ -177,7 +179,7 @@ describe("CLI runtime admission", () => {
     ["native unknown option", ["--unknownOption"]],
   ])(
     "leaves direct $0 selection without runtime preparation",
-    async ([_name, args], { signal, onTestFinished }) => {
+    async ([_name, args, implicitRoot], { signal, onTestFinished }) => {
       const lifetime = createFixtureLifetime();
       onTestFinished(() => lifetime.cleanup());
       await lifetime.run(async () => {
@@ -192,9 +194,10 @@ cp.spawn = (bin, args, options) => spawn(process.execPath, ['-e',
   args.includes('scripts/run-node.mjs') ? 'process.exit(91)' : ''], options);
 syncFixtureBuiltinExports();\n`,
         );
-        const configArgs = args.includes("--config")
-          ? []
-          : ["--config", "test/vitest/vitest.extension-qa.config.ts"];
+        const configArgs =
+          implicitRoot || args.includes("--config")
+            ? []
+            : ["--config", "test/vitest/vitest.extension-qa.config.ts"];
         let child: ChildProcess | undefined;
         await lifetime.track(
           runCliCommand({
@@ -239,6 +242,7 @@ syncFixtureBuiltinExports();\n`,
       ["run", "--config=", "test/vitest/vitest.extension-qa.config.ts"],
     ],
     ["root config", "scripts/run-vitest.mts", ["run", "--config", "vitest.config.ts"]],
+    ["implicit root directory", "scripts/run-vitest.mts", ["run", "src/config"], "runtime"],
     [
       "CLI process",
       "scripts/run-vitest.mts",

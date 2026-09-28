@@ -159,11 +159,18 @@ describe("doctor legacy migration source contract", () => {
     },
   );
 
-  it("claims and restores the same inode when native helper is unavailable without cause", async () => {
+  it.each([
+    undefined,
+    Object.assign(new Error("Cannot find module @openclaw/fs-safe-platform"), {
+      code: "MODULE_NOT_FOUND",
+    }),
+    Object.assign(new Error("native helper could not load"), { code: "ERR_DLOPEN_FAILED" }),
+    new Error("Unsupported OS or architecture: freebsd-x64"),
+  ])("claims and restores the same inode when native helper loading fails: %s", async (cause) => {
     const { sourcePath, stateDir } = createSource();
     const stateRoot = await root(stateDir, { hardlinks: "reject", symlinks: "reject" });
     vi.spyOn(stateRoot, "move").mockRejectedValue(
-      new FsSafeError("helper-unavailable", "native no-replace move is unavailable"),
+      new FsSafeError("helper-unavailable", "native fs-safe helper is unavailable", { cause }),
     );
     const claim = createClaim(stateRoot, stateDir, sourcePath);
     const snapshot = await claim.read();
@@ -179,11 +186,41 @@ describe("doctor legacy migration source contract", () => {
     expect(fs.existsSync(claim.claimPath)).toBe(false);
   });
 
+  it.each(["EIO", "EACCES", "EPERM"])(
+    "preserves the source when native publication fails operationally: %s",
+    async (code) => {
+      const { sourcePath, stateDir } = createSource();
+      const stateRoot = await root(stateDir, { hardlinks: "reject", symlinks: "reject" });
+      const refusal = new FsSafeError(
+        "helper-unavailable",
+        "native no-replace move is unavailable",
+        {
+          cause: Object.assign(new Error("native operation failed"), { code }),
+        },
+      );
+      vi.spyOn(stateRoot, "move").mockRejectedValue(refusal);
+      const claim = createClaim(stateRoot, stateDir, sourcePath);
+      const snapshot = await claim.read();
+
+      await expect(claim.claim({ snapshot, mismatchMessage: "source changed" })).rejects.toBe(
+        refusal,
+      );
+
+      expect(fs.readFileSync(sourcePath)).toEqual(snapshot.buffer);
+      expect(fs.statSync(sourcePath).ino).toBe(snapshot.ino);
+      expect(fs.existsSync(claim.claimPath)).toBe(false);
+    },
+  );
+
   it("refuses portable publication and leaves source untouched when native mode is require", async () => {
     const { sourcePath, stateDir } = createSource();
     const stateRoot = await root(stateDir, { hardlinks: "reject", symlinks: "reject" });
     vi.spyOn(stateRoot, "move").mockRejectedValue(
-      new FsSafeError("helper-unavailable", "native no-replace move is unavailable"),
+      new FsSafeError("helper-unavailable", "native fs-safe helper is unavailable", {
+        cause: Object.assign(new Error("native helper could not load"), {
+          code: "ERR_DLOPEN_FAILED",
+        }),
+      }),
     );
     configureFsSafeNative({ mode: "require" });
     try {
@@ -191,7 +228,7 @@ describe("doctor legacy migration source contract", () => {
       const snapshot = await claim.read();
 
       await expect(claim.claim({ snapshot, mismatchMessage: "source changed" })).rejects.toThrow(
-        "native no-replace move is unavailable",
+        "native fs-safe helper is unavailable",
       );
 
       expect(fs.existsSync(sourcePath)).toBe(true);

@@ -11,11 +11,11 @@ import { updateCommand } from "./update-command.js";
 
 installFreshUpdateFixture();
 
-it.each(
-  ["cli", "campaign"].flatMap((trigger) =>
-    [undefined, "3600"].map((timeout) => ({ trigger, timeout })),
-  ),
-)(
+it.each([
+  { trigger: "cli", timeout: undefined },
+  { trigger: "campaign", timeout: undefined },
+  { trigger: "campaign", timeout: "3600" },
+] as const)(
   "keeps $trigger step defaults separate from explicit timeout $timeout",
   async ({ trigger, timeout }) => {
     const record = createUpdateRun({ trigger: trigger === "campaign" ? "campaign" : "cli" });

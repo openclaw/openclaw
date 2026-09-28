@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createQaBusState } from "./bus-state.js";
 import {
   getEffectiveQaEvidenceEntries,
   projectQaEvidenceScenarioOutcomes,
@@ -95,6 +96,7 @@ vi.mock("./suite.js", async (importOriginal) => ({
   createQaSuiteTransportAdapter: vi.fn(async () => ({
     adapter: {
       id: "qa-channel",
+      state: createQaBusState(),
       captureArtifacts: mocks.captureTransportArtifacts,
       createRuntimePreloads: mocks.createRuntimePreloads,
     },
@@ -406,14 +408,18 @@ describe("QA runtime parity scenario retry isolation", () => {
       ];
       const captured: QaEvidenceSummaryV3Json[] = [];
       const error = new Error("post-run probe failed");
-      if (probeStatus === "throws") {
-        mocks.runQaSuiteRoundTripProbe.mockRejectedValueOnce(error);
-      } else {
-        mocks.runQaSuiteRoundTripProbe.mockResolvedValueOnce({
+      let scenarioStartCursor: number | undefined;
+      mocks.runQaSuiteRoundTripProbe.mockImplementationOnce(async (params) => {
+        expect(params.scenarioStartCursor).toBe(scenarioStartCursor);
+        expect(params.transport.state.getSnapshot().cursor).toBeGreaterThan(scenarioStartCursor!);
+        if (probeStatus === "throws") {
+          throw error;
+        }
+        return {
           passed: probeStatus === "pass" ? 1 : 0,
           details: `probe ${probeStatus}`,
-        });
-      }
+        };
+      });
       const run = runQaFlowSuiteStandard(
         {
           lab: makeRetryTestLab(),
@@ -425,11 +431,19 @@ describe("QA runtime parity scenario retry isolation", () => {
             timeoutMs: 100,
             markerPrefix: "fixture",
             textPrefix: "fixture",
-            input: { conversation: { kind: "direct", id: "fixture" }, senderId: "fixture" },
+            input: { fromScenario: true, senderId: "primary" },
           },
         },
         context,
-        vi.fn<QaSuiteScenarioRunner>().mockResolvedValue(makeRetryTestResult("pass")),
+        vi.fn<QaSuiteScenarioRunner>().mockImplementation(async (env) => {
+          scenarioStartCursor = env.transport.state.getSnapshot().cursor;
+          await env.transport.state.addInboundMessage({
+            conversation: { kind: "direct", id: "fixture" },
+            senderId: "primary",
+            text: "scenario turn",
+          });
+          return makeRetryTestResult("pass");
+        }),
       );
       if (probeStatus === "throws") {
         await expect(run).rejects.toBe(error);

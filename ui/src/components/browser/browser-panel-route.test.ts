@@ -418,7 +418,17 @@ describe("browser panel route handoff", () => {
       await panel.updateComplete;
       const stage = panel.shadowRoot!.querySelector<HTMLElement>(".bp-stage")!;
       vi.spyOn(stage, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 100, 100));
+      const clickCompleted = createDeferred();
+      const respond = gateway.request.getMockImplementation()!;
+      gateway.request.mockImplementation(async (method, params, options) => {
+        const response = await respond(method, params, options);
+        if ((params as BrowserRequestEnvelope).body?.kind === "clickCoords") {
+          clickCompleted.resolve();
+        }
+        return response;
+      });
       controller.handleStageClick(new MouseEvent("click", { clientX: 10, clientY: 20 }));
+      await clickCompleted.promise;
       controller.setMode("inspect");
       controller.handleOverlayPointerMove(createPointer(10, 20));
       await waitForFast(() => expect(controller.inspected?.name).toBe("Selected"));

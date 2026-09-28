@@ -1274,7 +1274,6 @@ describe("runCodexAppServerAttempt", () => {
         "tool_call",
         "tool_describe",
         "tool_search",
-        "tool_search_code",
         "web_search",
         "message",
       ].map(createNamedDynamicTool),
@@ -1306,7 +1305,6 @@ describe("runCodexAppServerAttempt", () => {
       "tool_call",
       "tool_describe",
       "tool_search",
-      "tool_search_code",
     ]) {
       expect(dynamicToolNames).not.toContain(toolName);
     }

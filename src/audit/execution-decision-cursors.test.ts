@@ -43,6 +43,14 @@ function inspect(decisionCursor: string, executionId = "execution-local") {
   );
 }
 
+async function expectUnretained(decisionCursor: string, executionId?: string) {
+  const result = inspect(decisionCursor, executionId);
+  await expect(result).rejects.toBeInstanceOf(ExecutionDecisionCursorError);
+  await expect(result).rejects.toThrow(
+    "decision cursor is no longer retained; restart inspection without --cursor",
+  );
+}
+
 beforeAll(async () => {
   vi.spyOn(Date, "now").mockReturnValue(now);
   options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("decision-cursors-") } };
@@ -198,37 +206,33 @@ describe("inspection decision cursor rejection matrix", () => {
       expect(second.decisions[0]?.source.owner).toBe(owner);
       expect(second.decisions[0]?.receiptId).not.toBe(first.decisions[0]?.receiptId);
 
-      for (const suffix of [
-        "-1:1",
-        "1:-1",
-        "1.5:1",
-        "1:1.5",
-        "01:1",
-        "1:01",
-        "9007199254740992:1",
-        "1:9007199254740992",
-        "1",
-        "1:1:extra",
-      ]) {
-        await expect(inspect(`${prefix}:${suffix}`)).rejects.toThrow(
-          "invalid execution decision cursor",
-        );
+      // Syntax is parsed before dispatch to any owner.
+      if (prefix === "a") {
+        for (const suffix of [
+          "-1:1",
+          "1:-1",
+          "1.5:1",
+          "1:1.5",
+          "01:1",
+          "1:01",
+          "9007199254740992:1",
+          "1:9007199254740992",
+          "1",
+          "1:1:extra",
+        ]) {
+          await expect(inspect(`${prefix}:${suffix}`)).rejects.toThrow(
+            "invalid execution decision cursor",
+          );
+        }
       }
       const rowId = cursor.split(":")[2];
       for (const invalid of [
         `${prefix}:${now + 1}:${rowId}`,
         `${prefix}:${now}:9007199254740991`,
       ]) {
-        await expect(inspect(invalid)).rejects.toThrow(
-          "decision cursor is no longer retained; restart inspection without --cursor",
-        );
+        await expectUnretained(invalid);
       }
-      await expect(inspect(cursor, "execution-foreign")).rejects.toBeInstanceOf(
-        ExecutionDecisionCursorError,
-      );
-      await expect(inspect(cursor, "execution-foreign")).rejects.toThrow(
-        "decision cursor is no longer retained; restart inspection without --cursor",
-      );
+      await expectUnretained(cursor, "execution-foreign");
       if (prefix === "a") {
         // Approvals page the run correlation and expose a mismatched execution
         // only as unknown evidence; the other owners scope their cursor itself.
@@ -246,14 +250,10 @@ describe("inspection decision cursor rejection matrix", () => {
           missingEvidence: ["decision.execution_link"],
         });
       } else {
-        await expect(inspect(cursor, "execution-sibling")).rejects.toThrow(
-          "decision cursor is no longer retained; restart inspection without --cursor",
-        );
+        await expectUnretained(cursor, "execution-sibling");
       }
       removeAnchor[prefix]();
-      await expect(inspect(cursor)).rejects.toThrow(
-        "decision cursor is no longer retained; restart inspection without --cursor",
-      );
+      await expectUnretained(cursor);
       expect((await inspect(`${prefix}:0:0`)).decisions[0]?.receiptId).toBe(
         second.decisions[0]?.receiptId,
       );

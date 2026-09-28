@@ -1858,6 +1858,8 @@ export const en: TranslationMap & {
     uploadInvalidNativePath: "Cannot safely insert the uploaded native file path",
   },
   browser: {
+    unavailable:
+      "Browser control is unavailable for this connection. Reconnect with browser access.",
     nativeTab: "App tab",
     remoteTab: "Agent browser tab",
     stop: "Stop loading",
