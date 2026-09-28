@@ -24,6 +24,7 @@ import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
 import {
   classifyRateLimitWindow,
+  isRetryableProviderHttpStatus,
   shouldRetryFailoverSignal,
 } from "../../failover/retry-evidence.js";
 import {
@@ -177,6 +178,7 @@ export async function handleEmbeddedAssistantFailure(input: {
     assistantStatus !== undefined &&
     assistantStatus >= 400 &&
     assistantStatus < 500 &&
+    !isRetryableProviderHttpStatus(assistantStatus) &&
     !shouldRetryFailoverSignal({ classification: null, signal: assistantSignal });
   const replaySafeSilentErrorFailure =
     !authFailure &&

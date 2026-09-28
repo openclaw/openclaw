@@ -104,12 +104,21 @@ describe("silent assistant-error retry owner", () => {
     });
   });
 
-  it.each([400, 422])("surfaces a bodyless HTTP %s without replaying the request", async (status) => {
+  it.each([400, 422])("does not replay bodyless HTTP %s client errors", async (status) => {
     const assistant = makeAssistant({ errorMessage: `${status} status code (no body)` });
 
     expect(await handleEmbeddedAssistantFailure(makeInput({ assistant }))).toMatchObject({
       action: "proceed",
       emptyErrorRetries: 0,
+    });
+  });
+
+  it("preserves silent-error recovery for a bodyless HTTP 409 conflict", async () => {
+    const assistant = makeAssistant({ errorMessage: "409 status code (no body)" });
+
+    expect(await handleEmbeddedAssistantFailure(makeInput({ assistant }))).toMatchObject({
+      action: "retry",
+      emptyErrorRetries: 1,
     });
   });
 

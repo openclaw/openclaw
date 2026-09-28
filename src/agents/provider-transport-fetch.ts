@@ -27,6 +27,7 @@ import {
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
+import { isRetryableProviderHttpStatus } from "./failover/retry-evidence.js";
 import {
   ProviderHttpError,
   readResponseTextLimited,
@@ -429,8 +430,7 @@ function shouldBypassLongSdkRetry(response: Response): boolean {
   }
 
   const status = response.status;
-  const stainlessRetryable = status === 408 || status === 409 || status === 429 || status >= 500;
-  if (!stainlessRetryable) {
+  if (!isRetryableProviderHttpStatus(status)) {
     return false;
   }
 
