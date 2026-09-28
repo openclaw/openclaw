@@ -244,15 +244,11 @@ function isLocalGatewayRpcUnavailableError(error: unknown): boolean {
     return true;
   }
   // GatewayClient pending request failures are still plain Error instances.
-  return isPlainGatewayRequestCloseError(message) || isPlainGatewayRequestTimeoutError(message);
+  return isPlainGatewayRequestUnavailableError(message);
 }
 
-function isPlainGatewayRequestCloseError(message: string): boolean {
-  return message.startsWith("gateway closed (");
-}
-
-function isPlainGatewayRequestTimeoutError(message: string): boolean {
-  return /^gateway timeout after \d+ms\b/u.test(message);
+function isPlainGatewayRequestUnavailableError(message: string): boolean {
+  return message.startsWith("gateway closed (") || /^gateway timeout after \d+ms\b/u.test(message);
 }
 
 async function readSystemdJournalFallback(params: {
@@ -376,7 +372,7 @@ function isTransientFollowError(error: unknown): boolean {
   if (readConnectPairingRequiredMessage(message)) {
     return false;
   }
-  return isPlainGatewayRequestCloseError(message) || isPlainGatewayRequestTimeoutError(message);
+  return isPlainGatewayRequestUnavailableError(message);
 }
 
 function formatLogTimestamp(value?: string, mode: "pretty" | "plain" = "plain", localTime = true) {
@@ -409,7 +405,6 @@ function formatLogLine(
   const label = parsed.subsystem ?? parsed.module ?? parsed.plugin ?? "";
   const time = formatLogTimestamp(parsed.time, opts.pretty ? "pretty" : "plain", opts.localTime);
   const level = parsed.level ?? "";
-  const levelLabel = level.padEnd(5).trim();
   const message = parsed.message || parsed.raw;
 
   if (!opts.pretty) {
@@ -426,7 +421,7 @@ function formatLogLine(
         : level === "debug" || level === "trace"
           ? theme.muted
           : theme.info;
-  const levelValue = colorize(opts.rich, levelStyle, levelLabel);
+  const levelValue = colorize(opts.rich, levelStyle, level);
   const messageValue = colorize(opts.rich, levelStyle, message);
 
   const head = [timeLabel, levelValue, labelValue].filter(Boolean).join(" ");

@@ -128,20 +128,13 @@ export type { SetupInferenceFailureStatus };
 export type SetupInferenceStatus = "ok" | SetupInferenceFailureStatus;
 
 export type ActivateSetupInferenceResult =
-  | {
-      ok: true;
-      modelTarget?: "utility";
-      modelRef: string;
-      latencyMs: number;
+  | (Extract<VerifySetupInferenceResult, { ok: true }> & {
       lines: string[];
       gatewayRestartRequired?: true;
-    }
-  | {
-      ok: false;
-      status: SetupInferenceFailureStatus;
-      error: string;
+    })
+  | (Extract<VerifySetupInferenceResult, { ok: false }> & {
       disposition?: SetupInferenceActivationRejection["disposition"];
-    };
+    });
 
 /**
  * The config commit may have happened, so callers must verify current setup
@@ -178,18 +171,14 @@ export type VerifySetupInferenceResult =
     };
 
 export type CompleteSetupInferenceResult =
-  | { ok: true; modelRef: string; latencyMs: number; text: string }
-  | { ok: false; status: SetupInferenceFailureStatus; error: string };
+  | (Omit<Extract<VerifySetupInferenceResult, { ok: true }>, "modelTarget"> & { text: string })
+  | Extract<VerifySetupInferenceResult, { ok: false }>;
 
 export type BoundVerifySetupInferenceResult =
-  | {
-      ok: true;
-      modelTarget?: "utility";
-      modelRef: string;
-      latencyMs: number;
+  | (Extract<VerifySetupInferenceResult, { ok: true }> & {
       binding: SystemAgentVerifiedInferenceBinding;
-    }
-  | { ok: false; status: SetupInferenceFailureStatus; error: string };
+    })
+  | Extract<VerifySetupInferenceResult, { ok: false }>;
 
 export type ActivateSetupInferenceParams = {
   kind: SetupInferenceKind | "api-key" | "provider-auth";

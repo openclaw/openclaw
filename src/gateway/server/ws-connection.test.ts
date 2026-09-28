@@ -45,6 +45,7 @@ vi.mock("../../infra/device-pairing-node.js", () => ({
   recordPairedNodeDisconnection: recordPairedNodeDisconnectionMock,
 }));
 vi.mock("../../infra/system-presence.js", () => ({
+  commitPresence: vi.fn(),
   touchPresence: touchPresenceMock,
   upsertPresence: upsertPresenceMock,
 }));
