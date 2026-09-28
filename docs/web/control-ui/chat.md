@@ -643,7 +643,8 @@ Clicking a reply's quoted original opens its containing **Worked for…** group,
 scrolls to the original message, and briefly highlights it.
 
 On wide desktop panes, the conversation position rail provides keyboard shortcuts
-to messages. Tab enters at the current message, or the first marker if no message
+to messages. In right-to-left interface languages, the rail uses the right gutter
+and its previews open toward the conversation. Tab enters at the current message, or the first marker if no message
 is current. ArrowUp and ArrowDown move focus; Home and End go to the first and last
 markers. Enter or Space jumps to the focused message. Tab or Shift+Tab leaves the
 rail in one step, and Escape closes the preview and returns focus to the transcript.

@@ -121,8 +121,8 @@ function loadState(nowMs: number): DeviceBootstrapStateFile {
 
 function issueDeviceBootstrapTokenRecord(
   params: DeviceBootstrapOperations["bootstrap.issue"]["input"],
+  state = loadState(params.nowMs),
 ): { token: string; expiresAtMs: number } {
-  const state = loadState(params.nowMs);
   const token = generatePairingToken();
   const issuedAtMs = asDateTimestampMs(params.nowMs);
   const expiresAtMs =
@@ -132,12 +132,11 @@ function issueDeviceBootstrapTokenRecord(
   if (issuedAtMs === undefined || expiresAtMs === undefined) {
     throw new Error("Device bootstrap token expiry could not be resolved.");
   }
-  const profile = params.profile;
   state[token] = {
     token,
     ...(params.setupId ? { setupId: params.setupId } : {}),
     ts: issuedAtMs,
-    profile,
+    profile: params.profile,
     redeemedProfile: normalizeDeviceBootstrapProfile(undefined),
     issuedAtMs,
   };
@@ -171,25 +170,11 @@ function ensureDevicePairSetupBootstrapToken(
       setupId,
     };
   }
-  const issuedAtMs = asDateTimestampMs(params.nowMs);
-  const expiresAtMs =
-    issuedAtMs === undefined
-      ? undefined
-      : resolveExpiresAtMsFromDurationMs(DEVICE_BOOTSTRAP_TOKEN_TTL_MS, { nowMs: issuedAtMs });
-  if (issuedAtMs === undefined || expiresAtMs === undefined) {
-    throw new Error("Device bootstrap token expiry could not be resolved.");
-  }
-  const token = generatePairingToken();
-  state[token] = {
-    token,
+  return {
+    status: "pending",
+    ...issueDeviceBootstrapTokenRecord({ profile, setupId, nowMs: params.nowMs }, state),
     setupId,
-    ts: issuedAtMs,
-    profile,
-    redeemedProfile: normalizeDeviceBootstrapProfile(undefined),
-    issuedAtMs,
   };
-  persistState(state);
-  return { status: "pending", token, expiresAtMs, setupId };
 }
 
 /**

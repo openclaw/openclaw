@@ -274,7 +274,7 @@ describe("chat pane header", () => {
     expect(crumbs?.nextElementSibling?.getAttribute("data-slot")).toBe("placement");
   });
 
-  it("places visibility beside ownership while the face switch stays centered", () => {
+  it("places visibility in the owner slot while the face switch stays centered", () => {
     const { container } = mountHeader({
       placementControl: html`<span data-slot="placement"></span>`,
       presence: html`<span data-slot="presence"></span>`,
@@ -293,7 +293,7 @@ describe("chat pane header", () => {
     );
   });
 
-  it("keeps visibility beside ownership when the session has no face switch", () => {
+  it("keeps visibility in the owner slot when the session has no face switch", () => {
     const { container } = mountHeader({
       faceControl: nothing,
       sharingControl: html`<span data-slot="sharing"></span>`,
@@ -317,7 +317,7 @@ describe("chat pane header", () => {
     );
   });
 
-  it("keeps the header owner avatar when visibility is available", () => {
+  it("replaces the header owner avatar when visibility is available", () => {
     const actor = {
       type: "human" as const,
       id: "profile-ada",
@@ -330,7 +330,7 @@ describe("chat pane header", () => {
       sharingControl: html`<span data-slot="sharing"></span>`,
     });
 
-    expect(container.querySelector("openclaw-session-owner-chip")).not.toBeNull();
+    expect(container.querySelector("openclaw-session-owner-chip")).toBeNull();
     expect(container.querySelector('[data-slot="sharing"]')?.parentElement?.className).toBe(
       "chat-pane__header-leading",
     );

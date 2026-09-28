@@ -420,6 +420,8 @@ export async function tightenStateDirPermissionsIfNeeded(params: {
   }
 }
 
+export type ConfigFileRollbackPublication = (publish: () => void, didMutate: () => boolean) => void;
+
 export async function rollbackConfigFileWriteIfUnchanged(params: {
   configPath: string;
   previousSnapshot: Pick<ConfigFileSnapshot, "path" | "exists" | "raw" | "readError">;
@@ -430,6 +432,7 @@ export async function rollbackConfigFileWriteIfUnchanged(params: {
   fsModule: typeof fs;
   assertCurrent?: () => void;
   publicationIdentity?: ConfigFileWriteIdentity | null;
+  withPublication?: ConfigFileRollbackPublication;
 }): Promise<boolean> {
   // Restore the original target, even when another config path is now selected.
   // The captured owner and committed hash, not current selection, authorize compensation.
@@ -448,34 +451,50 @@ export async function rollbackConfigFileWriteIfUnchanged(params: {
   if (hashConfigRaw(currentRaw) !== params.committedHash) {
     return false;
   }
+  const previousRaw = params.previousSnapshot.exists ? params.previousSnapshot.raw : undefined;
+  if (params.previousSnapshot.exists && typeof previousRaw !== "string") {
+    return false;
+  }
+  let mutated = false;
   const guard = createConfigFileWriteGuard(params.configPath, params.fsModule, assertCurrent, {
     publicationIdentity: params.publicationIdentity,
     snapshot: { ...params.previousSnapshot, exists: currentRaw !== null, raw: currentRaw },
     includeGraph: { hashes: {}, targets: {} },
     preserveDirectoryMode: params.preserveDirectoryMode,
+    onRootPublished: () => {
+      mutated = true;
+    },
+    onRootRemoved: () => {
+      mutated = true;
+    },
   });
-  if (params.previousSnapshot.exists && typeof params.previousSnapshot.raw === "string") {
-    replaceFileAtomicSync({
-      filePath: params.configPath,
-      content: params.previousSnapshot.raw,
-      dirMode: 0o700,
-      mode: 0o600,
-      copyFallbackOnPermissionError: true,
-      syncTempFile: params.durable,
-      syncParentDir: params.durable,
-      destinationHardlinks: params.destinationHardlinks,
-      throwOnCleanupError: true,
-      fileSystem: guard.fileSystem,
-      assertBeforeMutation: guard.assertBeforeMutation,
-      onDestinationState: guard.onDestinationState,
-    });
-    return true;
+  const publish = () => {
+    if (typeof previousRaw === "string") {
+      replaceFileAtomicSync({
+        filePath: params.configPath,
+        content: previousRaw,
+        dirMode: 0o700,
+        mode: 0o600,
+        copyFallbackOnPermissionError: true,
+        syncTempFile: params.durable,
+        syncParentDir: params.durable,
+        destinationHardlinks: params.destinationHardlinks,
+        throwOnCleanupError: true,
+        fileSystem: guard.fileSystem,
+        assertBeforeMutation: guard.assertBeforeMutation,
+        onDestinationState: guard.onDestinationState,
+      });
+      return;
+    }
+    guard.assertBeforeMutation();
+    params.fsModule.rmSync(params.configPath, { force: true });
+    mutated = true;
+  };
+  if (params.withPublication) {
+    params.withPublication(publish, () => mutated);
+  } else {
+    publish();
   }
-  if (params.previousSnapshot.exists) {
-    return false;
-  }
-  guard.assertBeforeMutation();
-  params.fsModule.rmSync(params.configPath, { force: true });
   return true;
 }
 

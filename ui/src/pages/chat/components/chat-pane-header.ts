@@ -294,6 +294,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
   const drawerLabel = props.navDrawerOpen ? t("nav.collapse") : t("nav.expand");
   const compactSessionActions = props.narrow && props.sessionMenuAction !== nothing;
   const hasFaceControl = props.faceControl !== undefined && props.faceControl !== nothing;
+  const hasSharingControl = props.sharingControl !== undefined && props.sharingControl !== nothing;
 
   return html`
     <div
@@ -337,24 +338,28 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
             : nothing
         }
         ${renderIdentityCrumbs(props, copied, copyPathLabel, copyBranchLabel)}
-        ${props.publicAccessIndicator ?? nothing} ${props.sharingControl ?? nothing}
-        ${renderStandalonePersonLink(
-          renderSessionOwnerChip(
-            props.showOwnerChip ? props.session?.owner?.actor : undefined,
-            "header",
-            props.session?.owner?.assignedAt !== undefined ? "owned" : "created",
-            props.ownerViewing,
-          ),
-          props.showOwnerChip
-            ? personActivityLink(
-                props.session?.owner?.actor.identity?.type === "profile"
-                  ? props.session.owner.actor.identity.id
-                  : undefined,
-                props.personActivity,
-                props.session?.owner?.actor.label,
+        ${props.publicAccessIndicator ?? nothing}
+        ${
+          hasSharingControl
+            ? props.sharingControl
+            : renderStandalonePersonLink(
+                renderSessionOwnerChip(
+                  props.showOwnerChip ? props.session?.owner?.actor : undefined,
+                  "header",
+                  props.session?.owner?.assignedAt !== undefined ? "owned" : "created",
+                  props.ownerViewing,
+                ),
+                props.showOwnerChip
+                  ? personActivityLink(
+                      props.session?.owner?.actor.identity?.type === "profile"
+                        ? props.session.owner.actor.identity.id
+                        : undefined,
+                      props.personActivity,
+                      props.session?.owner?.actor.label,
+                    )
+                  : null,
               )
-            : null,
-        )}
+        }
         ${
           props.showOwnerChip && props.session?.participants?.length
             ? html`<openclaw-viewer-facepile

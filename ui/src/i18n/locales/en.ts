@@ -3187,6 +3187,7 @@ export const en: TranslationMap & {
       suggest: "Suggest",
       draft: "Draft",
       publishDraft: "Publish draft",
+      owner: "Owner",
       members: "Members",
       selected: "Member",
       noPeople: "No paired people found.",
@@ -4199,6 +4200,8 @@ export const en: TranslationMap & {
     workRun: {
       workedFor: "Worked for {duration}",
       worked: "Worked",
+      toolCallsOne: "1 tool call",
+      toolCallsMany: "{count} tool calls",
     },
     sessionDiff: {
       title: "Changes",
