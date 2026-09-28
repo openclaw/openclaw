@@ -202,7 +202,7 @@ function buildCronToolDescription(params: { triggersEnabled: boolean }): string 
 
 ACTIONS: status | list (summaries; follow nextOffset) | get jobId (full details) | add job | update jobId job (partial; null clears) | remove jobId (operator removal requests active-run cancellation) | run jobId (runMode:"force"=now; waits up to timeoutMs, default 60s; unfinished runs return runId) | runs jobId runId? (history) | next_check in:"30m" (own paced run) | wake text (caller-owned session; mode defaults to next-heartbeat). Check unfinished runs later with runs, never a scheduled verification job. wake has no delay; for a later resume use an at job below.
 
-SCOPE: Authenticated configured channel owners and Control UI administrators can manage any Gateway automation. Other turns see caller-visible jobs and scoped counts only: an empty list or failed list/get/update/remove (including not-found) does not establish global absence, even for IDs from your history. Never recreate or replace a known automation for update/remove/reconciliation based on these results; report the visibility limit and ask an authorized administrator to check through a fresh authenticated owner/administrator turn or the Automations page. New requested automations may still be created.
+SCOPE: Authenticated configured channel owner and Control UI administrator turns can list/get/update/run/remove any Gateway automation. Other turns see only caller-visible jobs; total, snapshotRevision, offset, limit, nextOffset, and hasMore describe that scoped view, not the complete Gateway inventory. In that restricted view, an empty list or failed list/get/update/remove (including not-found) does not establish global absence, whatever the source of a known job id (including your own history). Never recreate or replace a known automation to satisfy an update/remove or reconciliation request solely because of these results. Report that you cannot establish global absence and ask an authorized administrator to check through a fresh authenticated configured channel owner or Control UI administrator turn or the Automations page. Genuinely new, requested automations can still be created.
 
 ADD: job requires schedule+payload.
 
@@ -382,16 +382,26 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
               ? undefined
               : readNonNegativeIntegerParam(params, "offset");
             let useCompactList = true;
+            let useVisibilityMetadata = true;
             const requestListPage = async (pageParams: Record<string, unknown>) => {
               for (;;) {
                 try {
                   return await callGateway("cron.list", gatewayOpts, {
                     includeDisabled,
                     ...(useCompactList ? { compact: true } : {}),
+                    ...(useVisibilityMetadata ? { includeVisibility: true } : {}),
                     ...(listAgentId ? { agentId: listAgentId } : {}),
                     ...pageParams,
                   });
                 } catch (error) {
+                  if (
+                    useVisibilityMetadata &&
+                    isOlderGatewayRejectingParam(error, "cron.list", "includeVisibility")
+                  ) {
+                    // Older strict Gateway request schemas do not know this opt-in.
+                    useVisibilityMetadata = false;
+                    continue;
+                  }
                   if (
                     !useCompactList ||
                     !isOlderGatewayRejectingParam(error, "cron.list", "compact")

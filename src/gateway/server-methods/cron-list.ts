@@ -14,6 +14,7 @@ import {
 import { assertCronReadCurrent, respondInvalidCronParams } from "./cron-job-access.js";
 import { startCronListDiagnostics } from "./cron-list-diagnostics.js";
 import { projectCronListJobs } from "./cron-list-projection.js";
+import { markCronListPage } from "./cron-list-visibility.js";
 import {
   createCronSessionVisibility,
   cronJobIsVisible,
@@ -160,11 +161,17 @@ export const cronListHandler = createPreparedReadHandler((options) => {
         diagnostics?.setReturnedCount(page.jobs.length);
         diagnostics?.mark("projection");
         const jobs = projectCronListJobs(context.cron, page, p.compact === true);
+        const responsePage = await markCronListPage(Promise.resolve(page), {
+          callerScoped: Boolean(callerScope),
+          roleRestricted: Boolean(cronVisibility),
+          includeVisibility: p.includeVisibility === true,
+        });
+        assertPageCurrent();
         if (p.compact === true || p.includeDeliveryPreviews === false) {
           // Full job rows are the default because editors need their payloads. Delivery
           // previews are independently suppressible so list-only callers avoid per-job I/O
           // without weakening the shipped full-response default.
-          respond(true, { ...page, jobs }, undefined);
+          respond(true, { ...responsePage, jobs }, undefined);
           return;
         }
         diagnostics?.mark("previews");
@@ -174,7 +181,7 @@ export const cronListHandler = createPreparedReadHandler((options) => {
           jobs: page.jobs,
         });
         assertPageCurrent();
-        respond(true, { ...page, jobs, deliveryPreviews }, undefined);
+        respond(true, { ...responsePage, jobs, deliveryPreviews }, undefined);
       },
     };
   } catch (error) {
