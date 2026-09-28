@@ -2097,7 +2097,9 @@ function installControlUiMockGateway(
       case "artifacts.download":
         return null;
       case "sessions.resolve":
-        return sessions.resolve(isRecord(params) ? params : {});
+      case "sessions.describe":
+      case "session.members.listEvidence":
+        return sessions.query(method, params, scenario);
       case "chat.history":
       case "chat.startup": {
         const resolution =
@@ -2145,11 +2147,6 @@ function installControlUiMockGateway(
               }
             : {}),
         };
-      }
-      case "sessions.describe": {
-        const key =
-          isRecord(params) && typeof params.key === "string" ? params.key : scenario.sessionKey;
-        return { session: sessions.sessionInfo(key) ?? null };
       }
       case "chat.metadata":
         return {

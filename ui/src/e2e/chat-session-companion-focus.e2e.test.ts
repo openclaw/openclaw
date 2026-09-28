@@ -55,6 +55,7 @@ suite.define(() => {
       expect(await input.isVisible()).toBe(false);
       for (const draft of ["", "Keep this side draft"]) {
         await mainInput.fill(command);
+        await page.locator(".chat-send-btn--send:enabled").waitFor();
         await mainInput.press("Enter");
         await expect.poll(() => input.isVisible()).toBe(true);
         await expect
@@ -84,6 +85,7 @@ suite.define(() => {
           await page.goto(`${suite.server.baseUrl}chat`);
           const mainInput = page.locator(".agent-chat__composer-shell textarea");
           await mainInput.fill(command);
+          await page.locator(".chat-send-btn--send:enabled").waitFor();
           await mainInput.press("Enter");
           await held.request;
           const sideInput = page.getByRole("textbox", { name: "Ask in side chat", exact: true });
@@ -120,6 +122,7 @@ suite.define(() => {
           await page.goto(`${suite.server.baseUrl}chat`);
           const mainInput = page.locator(".agent-chat__composer-shell textarea");
           await mainInput.fill("/btw");
+          await page.locator(".chat-send-btn--send:enabled").waitFor();
           await mainInput.press("Enter");
           await held.request;
           const sideInput = page.getByRole("textbox", { name: "Ask in side chat", exact: true });
@@ -185,6 +188,7 @@ suite.define(() => {
         }
         const mainInput = page.locator(".agent-chat__composer-shell textarea");
         await mainInput.fill("/btw what is this?");
+        await page.locator(".chat-send-btn--send:enabled").waitFor();
         await mainInput.press("Enter");
         const request = await gateway.waitForRequest("sessions.companion.ask");
         expect(request.params).toMatchObject({ question: "what is this?" });
@@ -220,6 +224,7 @@ suite.define(() => {
         const firstInput = panes.first().locator(".agent-chat__composer-shell textarea");
         const secondInput = panes.last().locator(".agent-chat__composer-shell textarea");
         await firstInput.fill("/btw what is this?");
+        await panes.first().locator(".chat-send-btn--send:enabled").waitFor();
         await firstInput.press("Enter");
         await gateway.waitForRequest("sessions.companion.ask");
         const sideInput = panes
@@ -276,6 +281,7 @@ suite.define(() => {
       const mainInput = page.locator(".agent-chat__composer-shell textarea");
       const sideInput = page.locator(".chat-session-rail__input");
       await mainInput.fill("/btw what is this?");
+      await page.locator(".chat-send-btn--send:enabled").waitFor();
       await mainInput.press("Enter");
       const request = await gateway.waitForRequest("sessions.companion.ask");
       expect(request.params).toMatchObject({ agentId: "main", sessionKey: "global" });
@@ -334,6 +340,7 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat`);
         const mainInput = page.locator(".agent-chat__composer-shell textarea");
         await mainInput.fill("/btw what is this?");
+        await page.locator(".chat-send-btn--send:enabled").waitFor();
         await mainInput.press("Enter");
         await gateway.waitForRequest("sessions.companion.ask");
         const sideInput = page.locator(".chat-session-rail__input");

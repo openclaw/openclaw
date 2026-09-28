@@ -262,8 +262,12 @@ syncBuiltinESMExports();
       const root = tempDirs.make("oc-vt-preparation-");
       const receiptsPath = path.join(root, "events.jsonl");
       const pidPath = path.join(root, "builder.pid");
+      const declarationsReadyPath = path.join(root, "ai-declarations-ready");
       const executable = path.join(root, "command.mjs");
       const preload = path.join(root, "preload.mjs");
+      if (outcome === "prebuilt") {
+        fs.writeFileSync(declarationsReadyPath, "");
+      }
       fs.writeFileSync(
         executable,
         `import fs from "node:fs";
@@ -278,6 +282,9 @@ if (kind === "runtime" && ${JSON.stringify(outcome)} === "cancel") {
   fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
   setInterval(() => {}, 1000);
 } else {
+  if (kind === "ai" && ${JSON.stringify(outcome)} !== "ai-failure") {
+    fs.writeFileSync(${JSON.stringify(declarationsReadyPath)}, "");
+  }
   record("end");
   process.exit(${JSON.stringify(outcome)} === kind + "-failure" ? 7 : 0);
 }
@@ -288,7 +295,16 @@ if (kind === "runtime" && ${JSON.stringify(outcome)} === "cancel") {
       fs.writeFileSync(
         preload,
         `import cp from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 import { syncBuiltinESMExports } from "node:module";
+const aiRoot = ${JSON.stringify(path.join(repoRoot, "packages/ai"))};
+const manifest = JSON.parse(fs.readFileSync(path.join(aiRoot, "package.json"), "utf8"));
+const declarations = new Set([manifest.types, ...Object.values(manifest.exports).map(entry => entry.types)]
+  .map(entry => path.resolve(aiRoot, entry)));
+const existsSync = fs.existsSync;
+fs.existsSync = file => typeof file === "string" && declarations.has(path.resolve(file))
+  ? existsSync(${JSON.stringify(declarationsReadyPath)}) : existsSync(file);
 const spawn = cp.spawn;
 cp.spawn = (bin, args, options) => {
   const kind = args.includes("scripts/run-node.mjs") ? "runtime"

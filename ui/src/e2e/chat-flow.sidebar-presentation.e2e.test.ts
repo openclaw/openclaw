@@ -16,6 +16,7 @@ import {
   requireRecord,
 } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import { waitForSessionRosterHydration } from "./session-management.test-support.ts";
 import { closeSidebarMenu, openSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -208,6 +209,7 @@ suite.define(() => {
 
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
+      await waitForSessionRosterHydration(page);
       const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
       await row.getByText("Implementing the repair").waitFor();
       if (captureUiProofEnabled) {

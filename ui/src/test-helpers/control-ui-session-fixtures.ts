@@ -134,6 +134,9 @@ export function createControlUiSessionFixtures(
     ...row,
     snapshotAt: row.snapshotAt ?? now,
   });
+  // Unseeded wire-only fixtures have no canonical metadata to publish.
+  const sessionInfo = (key: string) =>
+    listed.has(canonicalKey(key)) ? sample(read(key), Date.now()) : undefined;
   const patch = (key: string, fields: Record<string, unknown>) => {
     const value = record(key);
     const next = { ...value.row };
@@ -495,10 +498,30 @@ export function createControlUiSessionFixtures(
   return {
     read,
     resolve,
-    // History publishes a full row replacement. An unseeded wire-only fixture
-    // has no canonical metadata to publish until its caller declares the row.
-    sessionInfo: (key: string) =>
-      listed.has(canonicalKey(key)) ? sample(read(key), Date.now()) : undefined,
+    sessionInfo,
+    query(
+      method: "sessions.resolve" | "sessions.describe" | "session.members.listEvidence",
+      params: unknown,
+      defaults: { sessionKey: string; allowedSessionVisibilities: readonly string[] },
+    ) {
+      const fields = isRecord(params) ? params : {};
+      if (method === "sessions.resolve") {
+        return resolve(fields);
+      }
+      const requestedKey = method === "sessions.describe" ? fields.key : fields.sessionKey;
+      const key = typeof requestedKey === "string" ? requestedKey : defaults.sessionKey;
+      if (method === "sessions.describe") {
+        return { session: sessionInfo(key) ?? null };
+      }
+      const row = read(key);
+      return {
+        sessionKey: row.key,
+        members: [],
+        identities: [],
+        role: row.sharingRole ?? "viewer",
+        allowedVisibilities: defaults.allowedSessionVisibilities,
+      };
+    },
     patch,
     abortRuns,
     trackRun,
