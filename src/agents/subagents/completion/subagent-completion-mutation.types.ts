@@ -13,7 +13,7 @@ export type BlockSubagentCompletionRequest = {
 };
 
 export type SubagentCompletionMutation =
-  | { kind: "settle"; expected: SubagentRunRecord; subagent: SubagentRunRecord }
+  | { kind: "settle"; queueId: string; expected: SubagentRunRecord; subagent: SubagentRunRecord }
   | { kind: "block"; params: BlockSubagentCompletionRequest; now: number }
   | { kind: "reconcileCancelled"; expected: SubagentRunRecord; now: number }
   | {

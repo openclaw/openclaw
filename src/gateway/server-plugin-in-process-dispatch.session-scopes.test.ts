@@ -322,7 +322,7 @@ describe("hosted session tool narrow scope projection", () => {
         const request = fixture.create({}, { inheritedPermissionMode: "full" });
         const rejected = expect(request).rejects.toThrow(
           source === "operator"
-            ? "operator execution authority is no longer active"
+            ? "original native source revoked"
             : "agent tool caller authority is no longer active",
         );
         try {

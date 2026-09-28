@@ -9,6 +9,7 @@ import {
   prepareOperatorModelPolicy,
   readOperatorModelPolicyMembership,
 } from "../agents/operator-model-policy.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { intersectOperatorScopes, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
@@ -90,6 +91,98 @@ function retainOperatorSource(
       }
     },
   };
+}
+
+function prepareRunRolePolicy(
+  role: ReturnType<typeof sourceRolePolicy>,
+): AdmittedRunOperatorAuthority["rolePolicy"] {
+  return role
+    ? {
+        sessionAccessCap: role.sessions.others,
+        sandboxRequired: role.sandbox === "required",
+        agents: role.agents,
+      }
+    : undefined;
+}
+
+/** Bridge a prepared linked principal while retaining its exact channel admission capability. */
+export function captureChannelOperatorRunAuthority(input: {
+  profileId: string;
+  assignedRole: string | null;
+  scopes: readonly string[];
+  gatewayAccessGrant: AdmittedRunOperatorAuthority["gatewayAccessGrant"];
+  getRuntimeConfig: () => OpenClawConfig;
+  assertCurrent: () => void;
+  signal?: AbortSignal;
+}): AdmittedRunOperatorAuthority {
+  const params = { ...input };
+  params.assertCurrent();
+  let modelPolicyConfig = params.getRuntimeConfig();
+  let modelPolicyMetadata = getProcessGatewayPluginMetadataSnapshot();
+  const prepareModelPolicy = (cfg: OpenClawConfig, metadata: typeof modelPolicyMetadata) =>
+    prepareOperatorModelPolicy({
+      cfg,
+      policy: resolveOperatorRolePolicyForAssignment(params.profileId, params.assignedRole, cfg)
+        ?.modelPolicy,
+      manifestPlugins: metadata ?? [],
+    });
+  const originalModelPolicy = prepareModelPolicy(modelPolicyConfig, modelPolicyMetadata);
+  let modelPolicy = originalModelPolicy;
+  return createAdmittedRunOperatorAuthority({
+    profileId: params.profileId,
+    scopes: params.scopes,
+    rolePolicy: prepareRunRolePolicy(
+      sourceRolePolicy(
+        resolveOperatorRolePolicyForAssignment(
+          params.profileId,
+          params.assignedRole,
+          modelPolicyConfig,
+        ),
+      ),
+    ),
+    gatewayAccessGrant: params.gatewayAccessGrant,
+    assertCurrent: params.assertCurrent,
+    readCurrentRoleAssignment: () => {
+      params.assertCurrent();
+      return params.assignedRole;
+    },
+    get modelPolicy() {
+      const cfg = params.getRuntimeConfig();
+      const metadata = getProcessGatewayPluginMetadataSnapshot();
+      if (cfg !== modelPolicyConfig || metadata !== modelPolicyMetadata) {
+        const current = prepareModelPolicy(cfg, metadata);
+        modelPolicy =
+          originalModelPolicy &&
+          current &&
+          readOperatorModelPolicyMembership(originalModelPolicy) !==
+            readOperatorModelPolicyMembership(current)
+            ? Object.freeze({
+                models: Object.freeze(current.models.filter(originalModelPolicy.allows)),
+                allows: (ref: Parameters<typeof originalModelPolicy.allows>[0]) =>
+                  originalModelPolicy.allows(ref) && current.allows(ref),
+              })
+            : (current ?? originalModelPolicy);
+        modelPolicyConfig = cfg;
+        modelPolicyMetadata = metadata;
+      }
+      return modelPolicy;
+    },
+    onModelPolicyChanged: (listener) => {
+      const releaseProfile = onUserProfilesChanged(listener);
+      const releasePolicy = onOperatorRolePolicyChanged((change) => {
+        if (change.kind === "config" || change.profileId === params.profileId) {
+          listener();
+        }
+      });
+      // Recheck through the channel assertion so cancellation keeps its revocation error.
+      params.signal?.addEventListener("abort", listener, { once: true });
+      return () => {
+        releaseProfile();
+        releasePolicy();
+        params.signal?.removeEventListener("abort", listener);
+      };
+    },
+  });
 }
 
 /** Transfers the original operator restriction into accepted work, independently of its request. */
@@ -409,6 +502,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
       authority: createAdmittedRunOperatorAuthority({
         profileId,
         scopes,
+        rolePolicy: prepareRunRolePolicy(capturedSourcePolicy),
         readCurrentRoleAssignment: () => {
           assertCurrent();
           return assertProfileCurrent().assignedRole;

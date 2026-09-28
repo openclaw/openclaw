@@ -1,10 +1,4 @@
 import type { GatewayClientRequestOptions } from "@openclaw/gateway-client";
-// Typed Control UI wrapper over the `browser.request` gateway method.
-//
-// The gateway method speaks an HTTP-shaped envelope ({method, path, body})
-// that is dispatched against the browser plugin's control routes, either
-// locally or via a browser-capable node. This module narrows the handful of
-// routes the browser panel needs and keeps route-path knowledge in one place.
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
@@ -22,6 +16,11 @@ import {
 registerBrowserEnglish();
 
 export type BrowserRequestClient = Pick<GatewayBrowserClient, "request">;
+
+type BrowserSessionTabScope = {
+  sessionKey: string;
+  referencedTabs: readonly BrowserTabTarget[];
+};
 
 export type BrowserDashboardTarget = {
   sessionKey: string;
@@ -167,12 +166,19 @@ function withoutBrowserTarget(value: unknown): Record<string, unknown> {
   return result;
 }
 
+export function browserRequestReferencedTabs(
+  tabs: readonly BrowserTabTarget[],
+): BrowserTabTarget[] {
+  return tabs.slice(-64);
+}
+
 /** Bind every browser operation to one route and one live panel scope. */
 export function bindBrowserRequestClient(
   client: BrowserRequestClient,
   route?: BrowserRoute,
   current: () => boolean = () => true,
   dashboard?: BrowserDashboardTarget,
+  tabScope?: () => BrowserSessionTabScope,
 ): BrowserRequestClient {
   return {
     async request<T>(
@@ -201,8 +207,9 @@ export function bindBrowserRequestClient(
           ? await client.request<T>("browser.dashboard.request", scopedParams, options)
           : await client.request<T>("browser.dashboard.request", scopedParams);
       }
+      const session = !dashboard && method === BROWSER_REQUEST_METHOD ? tabScope?.() : undefined;
       const routedParams =
-        route || dashboard
+        route || dashboard || session
           ? {
               ...envelope,
               ...(route
@@ -213,6 +220,16 @@ export function bindBrowserRequestClient(
                   }
                 : {}),
               ...(dashboard ? { dashboard } : {}),
+              ...(session
+                ? {
+                    tabScope: {
+                      sessionKey: session.sessionKey,
+                      ...(envelope?.method === "GET" && envelope.path === "/tabs"
+                        ? { referencedTabs: browserRequestReferencedTabs(session.referencedTabs) }
+                        : {}),
+                    },
+                  }
+                : {}),
             }
           : params;
       return options
@@ -510,13 +527,12 @@ export async function inspectBrowserElementAt(
 ): Promise<BrowserInspectedNode | null> {
   const x = Math.max(0, Math.round(params.x));
   const y = Math.max(0, Math.round(params.y));
-  const result = asRecord(
+  return readBrowserInspectedNode(
     await evaluateInBrowser(client, {
       targetId: params.targetId,
       fn: `() => { ${browserInspectScript}\nreturn openclawInspectBrowserElement(${x}, ${y}); }`,
     }),
   );
-  return readBrowserInspectedNode(result);
 }
 
 export function readBrowserInspectedNode(value: unknown): BrowserInspectedNode | null {

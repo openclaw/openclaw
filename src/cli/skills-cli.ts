@@ -1,4 +1,3 @@
-// Skills CLI for workspace status, install/update, ClawHub verification, and workshop proposals.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import {
@@ -515,9 +514,6 @@ async function readSkillProposalInput(options: {
   return { content: await readSkillProposalDraftFile(proposal!) };
 }
 
-/**
- * Register the skills CLI commands
- */
 export function registerSkillsCli(program: Command) {
   const skills = program
     .command("skills")
@@ -1209,7 +1205,6 @@ export function registerSkillsCli(program: Command) {
       );
     });
 
-  // Default action (no subcommand) - show list
   skills.action(async (opts: { agent?: string; json?: boolean }, command: Command) => {
     await runSkillsAction((report) => formatSkillsList(report, { json: hasJsonOutput(opts) }), {
       agentId: resolveAgentOption(command, opts),

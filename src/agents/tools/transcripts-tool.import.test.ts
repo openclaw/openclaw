@@ -11,10 +11,6 @@ import { createTranscriptsTool } from "./transcripts-tool.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function currentDateDir(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
 function storeFor(stateDir: string): TranscriptsStore {
   return new TranscriptsStore(path.join(stateDir, "transcripts"), {
     env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
@@ -50,21 +46,17 @@ describe("transcripts tool imports", () => {
     expect(result).toMatchObject({
       details: { sessionId: "design-review", utteranceCount: 2 },
     });
-    await expect(
-      fs.readFile(
-        path.join(stateDir, "transcripts", currentDateDir(), "design-review", "summary.md"),
-        "utf8",
-      ),
-    ).resolves.toContain("Sam: Action item: add Slack import later.");
-    await expect(
-      fs.readFile(
-        path.join(stateDir, "transcripts", currentDateDir(), "design-review", "summary.json"),
-        "utf8",
-      ),
-    ).resolves.toContain('"Alex: We decided to ship Discord first."');
-    const stored = await storeFor(stateDir).readSession("design-review");
+    const store = storeFor(stateDir);
+    const stored = await store.readSession("design-review");
     expect(stored).toBeDefined();
-    await expect(storeFor(stateDir).readUtterancesForSession(stored!)).resolves.toEqual([
+    const sessionDir = store.sessionDir(stored!);
+    await expect(fs.readFile(path.join(sessionDir, "summary.md"), "utf8")).resolves.toContain(
+      "Sam: Action item: add Slack import later.",
+    );
+    await expect(fs.readFile(path.join(sessionDir, "summary.json"), "utf8")).resolves.toContain(
+      '"Alex: We decided to ship Discord first."',
+    );
+    await expect(store.readUtterancesForSession(stored!)).resolves.toEqual([
       expect.objectContaining({ text: "We decided to ship Discord first." }),
       expect.objectContaining({ text: "Action item: add Slack import later." }),
     ]);
@@ -90,15 +82,13 @@ describe("transcripts tool imports", () => {
       vi.fn(),
     );
 
-    const summary = await fs.readFile(
-      path.join(stateDir, "transcripts", currentDateDir(), "long-meeting", "summary.md"),
-      "utf8",
-    );
+    const store = storeFor(stateDir);
+    const stored = await store.readSession("long-meeting");
+    expect(stored).toBeDefined();
+    const summary = await fs.readFile(path.join(store.sessionDir(stored!), "summary.md"), "utf8");
     expect(summary).not.toContain("transcript line 0\n");
     expect(summary).toContain("transcript line 2000");
-    const stored = await storeFor(stateDir).readSession("long-meeting");
-    expect(stored).toBeDefined();
-    const storedTranscript = await storeFor(stateDir).readUtterancesForSession(stored!);
+    const storedTranscript = await store.readUtterancesForSession(stored!);
     expect(storedTranscript[0]?.text).toContain("transcript line 0");
     expect(storedTranscript.at(-1)?.text).toContain("transcript line 2000");
   });

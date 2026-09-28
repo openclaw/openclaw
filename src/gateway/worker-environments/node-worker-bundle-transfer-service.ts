@@ -26,6 +26,7 @@ export function createNodeWorkerBundleTransferService(options: ArtifactTransferO
         ...params,
         artifactKey: params.artifact.bundleHash,
         ttlMs: workerBootstrapOperationTimeoutMs(params.artifact),
+        maxServes: 1,
       });
       return {
         token,

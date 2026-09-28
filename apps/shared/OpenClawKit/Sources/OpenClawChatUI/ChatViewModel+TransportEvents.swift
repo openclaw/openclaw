@@ -24,6 +24,10 @@ extension OpenClawChatViewModel {
 
     func handleTransportEvent(_ evt: OpenClawChatTransportEvent) {
         guard !self.isTransportDetached else { return }
+        if self.usesWebConversation {
+            self.handleWebConversationEvent(evt)
+            return
+        }
         switch evt {
         case let .health(ok):
             let reconnected = ok && !self.healthOK
@@ -116,7 +120,7 @@ extension OpenClawChatViewModel {
         }
     }
 
-    private func applySessionChangeProjection(
+    func applySessionChangeProjection(
         _ change: OpenClawChatSessionsChangedEvent,
         ownedSwarmActivityNote: Bool)
     {
@@ -1152,7 +1156,7 @@ extension OpenClawChatViewModel {
             return (lhs.agentID ?? "") < (rhs.agentID ?? "")
         }
         for target in sortedTargets {
-            let visibleRequest = matchesCurrentSessionKey(
+            let visibleRequest = !self.usesWebConversation && matchesCurrentSessionKey(
                 incoming: target.presentationSessionKey,
                 agentId: target.agentID,
                 current: self.sessionKey)
@@ -1189,6 +1193,7 @@ extension OpenClawChatViewModel {
         requireCurrentInvalidation: Bool = false) async
         -> RunHistoryRefreshResult
     {
+        guard !self.usesWebConversation else { return .failed }
         let request = request ?? self.beginHistoryRequest()
         do {
             let payload = try await transport.requestHistory(sessionKey: request.session.key)

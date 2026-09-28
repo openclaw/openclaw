@@ -56,7 +56,7 @@ import {
   normalizeFeaturedAt,
   firstPluginError,
   compareCatalogEntries,
-  deriveLegacyPluginCategory,
+  projectPluginCatalogCategoryFacts,
   resolveInstalledPluginPresentation,
   resolveInstalledHostedOfficialEntry,
   resolveOfficialEntryById,
@@ -316,8 +316,6 @@ export const listManagedPlugins = withManagedPluginCache(
       const configError = setup.mode === "invalid" ? setup.error : undefined;
       const error = firstPluginError(pluginDiagnostics, record.pluginId) ?? configError;
       const kind = normalizeKinds(manifest?.kind);
-      const categories = manifest?.categories;
-      const legacyCategory = deriveLegacyPluginCategory(manifest);
       // Only externally installed plugins (tracked install record, non-bundled) can be removed.
       const removable = record.origin !== "bundled" && Boolean(installOwner);
       const hostedListingAuthoritative =
@@ -344,6 +342,7 @@ export const listManagedPlugins = withManagedPluginCache(
         }),
         removable,
       };
+      Object.assign(plugin, projectPluginCatalogCategoryFacts(manifest, enabled));
       if (record.packageName) {
         plugin.packageName = record.packageName;
       }
@@ -399,12 +398,11 @@ export const listManagedPlugins = withManagedPluginCache(
       if (error) {
         plugin.error = error;
       }
-      if (legacyCategory) {
-        plugin.category = legacyCategory;
-      }
-      if (categories?.length) {
-        plugin.categories = [...categories];
-      } else if (record.origin !== "bundled" && installRecord?.source === "clawhub") {
+      if (
+        !plugin.categories?.length &&
+        record.origin !== "bundled" &&
+        installRecord?.source === "clawhub"
+      ) {
         const name = normalizeOptionalString(installRecord.clawhubPackage);
         const version = normalizeOptionalString(installRecord.version);
         if (name && version) {

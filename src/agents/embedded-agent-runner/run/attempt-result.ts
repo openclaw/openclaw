@@ -16,7 +16,6 @@ import { buildEmbeddedAgentHookContext } from "./agent-hook-context.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
 import { finalizeEmbeddedAttempt } from "./attempt-finalize.js";
 import type { EmbeddedAttemptPromptState } from "./attempt-prompt-phase.js";
-import { shouldRunLlmOutputHooksForAttempt } from "./attempt-run-decisions.js";
 import type { PreparedStreamRuntime } from "./attempt-stream-runtime.types.js";
 import type { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 import {
@@ -261,7 +260,7 @@ export function completeEmbeddedAttemptResult(
   if (
     attempt.operation !== "settled-tool-finalization" &&
     hookRunner?.hasHooks("llm_output") &&
-    shouldRunLlmOutputHooksForAttempt({ promptErrorSource: terminal.promptErrorSource })
+    terminal.promptErrorSource !== "hook:before_agent_run"
   ) {
     const contextWindow = {
       ...(attempt.contextWindowInfo?.tokens

@@ -22,6 +22,7 @@ import {
   runSqliteImmediateTransactionSync,
   type SqliteTransactionOptions,
 } from "./sqlite-transaction.js";
+import type { ManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-identity.js";
 import { quarantineManagedHandoffStore } from "./update-managed-service-handoff-store-repair.js";
 import { createPrivateWindowsFile } from "./windows-private-directory.js";
 
@@ -44,11 +45,7 @@ function initializeLeaseSchema(db: HandoffDatabase): void {
   );
 }
 
-export type ManagedUpdateLeaseDatabaseIdentity = Readonly<{
-  databasePath: string;
-  databaseIdentity: string;
-  parentIdentity: string;
-}>;
+export type { ManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-identity.js";
 
 function assertPath(stat: Stats | BigIntStats, kind: "directory" | "file") {
   if (
@@ -190,8 +187,8 @@ export function captureManagedUpdateLeaseDatabaseIdentity(
   databasePath: string,
 ): ManagedUpdateLeaseDatabaseIdentity {
   const canonical = fs.realpathSync(databasePath);
-  const file = fs.lstatSync(canonical);
-  const parent = fs.lstatSync(path.dirname(canonical));
+  const file = fs.lstatSync(canonical, { bigint: true });
+  const parent = fs.lstatSync(path.dirname(canonical), { bigint: true });
   assertPath(file, "file");
   assertPath(parent, "directory");
   return Object.freeze({

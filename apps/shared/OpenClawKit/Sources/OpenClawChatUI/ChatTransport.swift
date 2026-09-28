@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import OpenClawProtocol
 
 public enum OpenClawChatTransportEvent: Sendable {
@@ -817,6 +818,7 @@ public protocol OpenClawChatTransport: Sendable {
     /// gateway's advertised method set answers, nil when no catalog is known
     /// (disconnected, pre-catalog gateway, or non-gateway transport).
     func gatewayAdvertisesMethod(_ method: String) async -> Bool?
+    func attachmentLimits() async -> GatewayAttachmentLimits?
     func fetchProgressCard(sessionKey: String, agentID: String?) async throws -> ProgressCard?
     func requestFullMessage(sessionKey: String, messageID: String) async throws -> OpenClawChatMessage?
     func listModels(agentID: String?) async throws -> [OpenClawChatModelChoice]
@@ -938,6 +940,7 @@ public protocol OpenClawChatTransport: Sendable {
     func loadSourceContext() async -> OpenClawChatSourceContext?
     func loadSourceFavicon(host: String) async -> Data?
 
+    func releaseActiveSessionSubscription() async
     func setActiveSessionKey(_ sessionKey: String) async throws
     func resetSession(sessionKey: String) async throws
     func compactSession(sessionKey: String) async throws
@@ -975,6 +978,10 @@ extension OpenClawChatTransport {
     }
 
     public func gatewayAdvertisesMethod(_: String) async -> Bool? {
+        nil
+    }
+
+    public func attachmentLimits() async -> GatewayAttachmentLimits? {
         nil
     }
 
@@ -1182,6 +1189,7 @@ extension OpenClawChatTransport {
     }
 
     public func setActiveSessionKey(_: String) async throws {}
+    public func releaseActiveSessionSubscription() async {}
 
     public func waitForRunCompletion(runId _: String, timeoutMs _: Int) async -> OpenClawChatRunObservation {
         .unavailable

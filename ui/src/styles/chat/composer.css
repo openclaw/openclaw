@@ -204,7 +204,9 @@
 }
 
 .agent-chat__composer-controls .chat-controls__model-settings {
-  gap: 4px;
+  /* Keep the desktop seam, but honor the compact row's 2px chip rhythm so
+     independent 44px model/effort targets still fit the narrowest composer. */
+  gap: min(4px, var(--chat-composer-chip-gap));
 }
 
 .agent-chat__composer-run-status {
@@ -1217,7 +1219,9 @@
 
   .agent-chat__input .chat-controls__model-menu,
   .agent-chat__input .chat-controls__effort-menu {
-    width: calc(100vw - max(12px, var(--safe-area-left)) - max(12px, var(--safe-area-right)));
+    width: calc(
+      100vw - var(--safe-area-left) - var(--safe-area-right) - 2 * var(--shell-popup-inline-gutter)
+    );
     max-height: min(440px, var(--auto-size-available-height, calc(100dvh - 116px)));
   }
 }

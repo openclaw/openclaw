@@ -527,6 +527,8 @@ export function collectActiveSessionLifecycleMutationIdentities(scope: string): 
 export async function beginSessionWorkAdmission(params: {
   scope: string;
   identities: Iterable<string | undefined>;
+  /** Complete store keys read or written by final validation; omission keeps a store-wide barrier. */
+  storeWriterIdentities?: Iterable<string | undefined>;
   /** Stable process-wide identity for owners that must be observable while still pending. */
   owner?: symbol;
   resolveGatewayContext?: GatewayContextResolver;
@@ -656,7 +658,7 @@ export async function beginSessionWorkAdmission(params: {
             const revalidate = params.revalidateAllowed ?? (() => params.assertAllowed(signal));
             await lease.run(async () => await revalidate());
           },
-          { reentrant: true },
+          { reentrant: true, identities: params.storeWriterIdentities },
         );
         return lease;
       },

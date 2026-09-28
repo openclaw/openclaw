@@ -242,11 +242,10 @@ export async function createQaLabApp(root: HTMLDivElement) {
   let previousRunnerStatus: string | null = null;
   let currentUiVersion: string | null = null;
   let syncingCaptureTimelineScroll = false;
-  let sparklineSweepActive = false;
-  let sparklineSweepAnchorStartPct: number | null = null;
-  let sparklineSweepAnchorEndPct: number | null = null;
-  let sparklineSweepCurrentStartPct: number | null = null;
-  let sparklineSweepCurrentEndPct: number | null = null;
+  let sparklineSweep: {
+    anchor: { start: number; end: number };
+    current: { start: number; end: number };
+  } | null = null;
   let captureGlobalListenersBound = false;
 
   function isSelectOpen(): boolean {
@@ -1076,7 +1075,7 @@ export async function createQaLabApp(root: HTMLDivElement) {
       render();
     });
     bindValue("#capture-timeline-lane-search", "input", (value) => {
-      state.captureTimelineLaneSearch = value ?? "";
+      state.captureTimelineLaneSearch = value;
       render();
     });
     bindValue("#capture-timeline-zoom", "change", (value) => {
@@ -1181,11 +1180,11 @@ export async function createQaLabApp(root: HTMLDivElement) {
       state.capturePayloadEventSort = value === "name" || value === "size" ? value : "stream";
     });
     bindValue("#capture-payload-event-filter", "input", (value) => {
-      state.capturePayloadEventFilter = value ?? "";
+      state.capturePayloadEventFilter = value;
       render();
     });
     bindValue("#capture-search-filter", "input", (value) => {
-      state.captureSearchText = value ?? "";
+      state.captureSearchText = value;
       state.selectedCaptureEventKey = null;
       render();
     });
@@ -1264,30 +1263,22 @@ export async function createQaLabApp(root: HTMLDivElement) {
         if (!windowRange) {
           return;
         }
-        sparklineSweepActive = true;
-        sparklineSweepAnchorStartPct = windowRange.start;
-        sparklineSweepAnchorEndPct = windowRange.end;
-        sparklineSweepCurrentStartPct = windowRange.start;
-        sparklineSweepCurrentEndPct = windowRange.end;
+        sparklineSweep = { anchor: windowRange, current: windowRange };
         state.captureTimelineBrushAnchorPct = windowRange.start;
         state.captureTimelineBrushCurrentPct = windowRange.end;
         render();
       });
       node.addEventListener("mouseenter", () => {
-        if (!sparklineSweepActive) {
+        if (!sparklineSweep) {
           return;
         }
         const windowRange = readWindow();
         if (!windowRange) {
           return;
         }
-        sparklineSweepCurrentStartPct = windowRange.start;
-        sparklineSweepCurrentEndPct = windowRange.end;
-        const previewStart = Math.min(
-          sparklineSweepAnchorStartPct ?? windowRange.start,
-          windowRange.start,
-        );
-        const previewEnd = Math.max(sparklineSweepAnchorEndPct ?? windowRange.end, windowRange.end);
+        sparklineSweep.current = windowRange;
+        const previewStart = Math.min(sparklineSweep.anchor.start, windowRange.start);
+        const previewEnd = Math.max(sparklineSweep.anchor.end, windowRange.end);
         state.captureTimelineBrushAnchorPct = previewStart;
         state.captureTimelineBrushCurrentPct = previewEnd;
         render();
@@ -1357,31 +1348,13 @@ export async function createQaLabApp(root: HTMLDivElement) {
     if (!captureGlobalListenersBound) {
       captureGlobalListenersBound = true;
       window.addEventListener("mouseup", (event) => {
-        if (!sparklineSweepActive) {
+        if (!sparklineSweep) {
           return;
         }
-        const anchorStart = sparklineSweepAnchorStartPct;
-        const anchorEnd = sparklineSweepAnchorEndPct;
-        const currentStart = sparklineSweepCurrentStartPct;
-        const currentEnd = sparklineSweepCurrentEndPct;
-        sparklineSweepActive = false;
-        sparklineSweepAnchorStartPct = null;
-        sparklineSweepAnchorEndPct = null;
-        sparklineSweepCurrentStartPct = null;
-        sparklineSweepCurrentEndPct = null;
-        if (
-          anchorStart == null ||
-          anchorEnd == null ||
-          currentStart == null ||
-          currentEnd == null
-        ) {
-          state.captureTimelineBrushAnchorPct = null;
-          state.captureTimelineBrushCurrentPct = null;
-          render();
-          return;
-        }
-        const start = Math.min(anchorStart, currentStart);
-        const end = Math.max(anchorEnd, currentEnd);
+        const { anchor, current } = sparklineSweep;
+        sparklineSweep = null;
+        const start = Math.min(anchor.start, current.start);
+        const end = Math.max(anchor.end, current.end);
         const width = Math.max(0.01, end - start);
         const expand = event.shiftKey ? width : 0;
         state.captureTimelineWindowStartPct = Math.max(0, Math.min(100, start - expand));
@@ -1507,7 +1480,6 @@ export async function createQaLabApp(root: HTMLDivElement) {
     root.innerHTML = renderQaLabUi(state);
     bindEvents();
 
-    /* Restore composer text (since we re-rendered) */
     const textEl = root.querySelector<HTMLTextAreaElement>("#composer-text");
     if (textEl && composerText) {
       textEl.value = composerText;

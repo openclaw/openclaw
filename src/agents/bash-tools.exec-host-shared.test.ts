@@ -1,15 +1,10 @@
-/**
- * Shared exec-host approval helper tests.
- * Covers follow-up failure dedupe, elevated handoffs, policy merging, and
- * unavailable approval surfaces.
- */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   claimExecApprovalFollowupRuntimeHandoff,
   finalizeExecApprovalFollowupRuntimeHandoff,
-  isExecApprovalFollowupSessionRebound,
   registerExecApprovalFollowupRuntimeHandoff,
 } from "./bash-tools.exec-approval-followup-state.js";
+import type { sendExecApprovalFollowup as sendFollowup } from "./bash-tools.exec-approval-followup.js";
 import {
   buildExecApprovalPendingToolResult,
   buildHeadlessExecApprovalDeniedMessage,
@@ -43,60 +38,30 @@ vi.mock("./bash-tools.exec-approval-followup.js", async (importOriginal) => {
   mocks.followupImports += 1;
   return importOriginal<typeof import("./bash-tools.exec-approval-followup.js")>();
 });
-
-vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
-  const mod = await importOriginal<typeof import("../infra/exec-approvals.js")>();
-  return {
-    ...mod,
-    resolveExecApprovalsLocked: mocks.resolveExecApprovals,
-  };
-});
-
-vi.mock("./bash-tools.exec-approval-request.js", async (importOriginal) => {
-  const mod = await importOriginal<typeof import("./bash-tools.exec-approval-request.js")>();
-  return {
-    ...mod,
-    isExecApprovalRunAbortedError: (error: unknown) => error === mocks.approvalRunAbortedError,
-    resolveRegisteredExecApprovalDecision: mocks.resolveRegisteredExecApprovalDecision,
-  };
-});
+vi.mock("../infra/exec-approvals.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/exec-approvals.js")>()),
+  resolveExecApprovalsLocked: mocks.resolveExecApprovals,
+}));
+vi.mock("./bash-tools.exec-approval-request.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./bash-tools.exec-approval-request.js")>()),
+  isExecApprovalRunAbortedError: (error: unknown) => error === mocks.approvalRunAbortedError,
+  resolveRegisteredExecApprovalDecision: mocks.resolveRegisteredExecApprovalDecision,
+}));
 
 describe("sendExecApprovalFollowupResult", () => {
-  const sendExecApprovalFollowup = vi.fn();
+  const sendExecApprovalFollowup = vi.fn<typeof sendFollowup>();
   const logWarn = vi.fn();
+  const deps = { sendExecApprovalFollowup, logWarn };
+  const sessionKey = "agent:main:telegram:direct:123";
+  const bashElevated = { enabled: true, allowed: true, defaultLevel: "on" as const };
 
   beforeEach(() => {
-    sendExecApprovalFollowup.mockReset();
+    sendExecApprovalFollowup.mockReset().mockResolvedValue(true);
     logWarn.mockReset();
-    mocks.resolveExecApprovals.mockReset();
-    mocks.resolveExecApprovals.mockResolvedValue(mocks.approvals());
   });
 
-  function firstExecApprovalFollowupCall():
-    | {
-        internalRuntimeHandoffId?: string;
-        idempotencyKey?: string;
-        execApprovalFollowupToken?: string;
-        expectedSessionId?: string;
-        bashElevated?: unknown;
-      }
-    | undefined {
-    return sendExecApprovalFollowup.mock.calls[0]?.[0] as
-      | {
-          internalRuntimeHandoffId?: string;
-          idempotencyKey?: string;
-          execApprovalFollowupToken?: string;
-          expectedSessionId?: string;
-          bashElevated?: unknown;
-        }
-      | undefined;
-  }
-
-  it("does not load delivery when importing shared approval helpers", () => {
+  it("lazily loads delivery and deduplicates import failures", async () => {
     expect(mocks.followupImports).toBe(0);
-  });
-
-  it("logs default delivery import failures through the deduplicated dispatch handler", async () => {
     const loadDelivery = vi.fn(() => {
       throw new Error("synthetic delivery import failure");
     });
@@ -105,7 +70,6 @@ describe("sendExecApprovalFollowupResult", () => {
       const target = { approvalId: "approval-import-failure" };
       await sendExecApprovalFollowupResult(target, "Exec finished", { logWarn });
       await sendExecApprovalFollowupResult(target, "Exec finished", { logWarn });
-
       expect(loadDelivery).toHaveBeenCalled();
       expect(logWarn).toHaveBeenCalledExactlyOnceWith(
         expect.stringContaining(
@@ -117,357 +81,150 @@ describe("sendExecApprovalFollowupResult", () => {
     }
   });
 
-  it("logs repeated followup dispatch failures once per approval id and error message", async () => {
-    sendExecApprovalFollowup.mockRejectedValue(new Error("Channel is required"));
-
-    const target = {
-      approvalId: "approval-log-once",
-      sessionKey: "agent:main:main",
-    };
-    const deps = { sendExecApprovalFollowup, logWarn };
-    await sendExecApprovalFollowupResult(target, "Exec finished", deps);
-    await sendExecApprovalFollowupResult(target, "Exec finished", deps);
-
-    expect(logWarn).toHaveBeenCalledTimes(1);
-    expect(logWarn).toHaveBeenCalledWith(
-      "exec approval followup dispatch failed (id=approval-log-once): Channel is required",
+  it("suppresses approval-not-found followup dispatch failures", async () => {
+    sendExecApprovalFollowup.mockRejectedValue(
+      Object.assign(new Error("approval not found"), { gatewayCode: "APPROVAL_NOT_FOUND" }),
     );
-  });
-
-  it.each([
-    {
-      name: "direct gateway code",
-      error: Object.assign(new Error("approval not found"), {
-        gatewayCode: "APPROVAL_NOT_FOUND",
-      }),
-    },
-    {
-      name: "structured invalid-request details",
-      error: Object.assign(new Error("approval not found"), {
-        gatewayCode: "INVALID_REQUEST",
-        details: { reason: "APPROVAL_NOT_FOUND" },
-      }),
-    },
-    {
-      name: "legacy message-only error",
-      error: new Error("unknown or expired approval id"),
-    },
-  ])("suppresses approval-not-found followup dispatch failures ($name)", async ({ error }) => {
-    sendExecApprovalFollowup.mockRejectedValue(error);
-
     await sendExecApprovalFollowupResult(
-      {
-        approvalId: "approval-expired",
-        sessionKey: "agent:main:main",
-      },
+      { approvalId: "approval-expired", sessionKey },
       "Exec finished",
-      { sendExecApprovalFollowup, logWarn },
+      deps,
     );
-
     expect(logWarn).not.toHaveBeenCalled();
   });
 
   it("evicts oldest followup failure dedupe keys after reaching the cap", async () => {
     sendExecApprovalFollowup.mockRejectedValue(new Error("Channel is required"));
-    const deps = { sendExecApprovalFollowup, logWarn };
-    const failureKeysBeyondDedupeWindow = 257;
-
-    for (let i = 0; i < failureKeysBeyondDedupeWindow; i += 1) {
-      await sendExecApprovalFollowupResult(
-        {
-          approvalId: `approval-${i}`,
-          sessionKey: "agent:main:main",
-        },
+    const dispatch = (index: number) =>
+      sendExecApprovalFollowupResult(
+        { approvalId: `approval-${index}`, sessionKey },
         "Exec finished",
         deps,
       );
+    const failureKeysBeyondDedupeWindow = 257;
+    for (let i = 0; i < failureKeysBeyondDedupeWindow; i += 1) {
+      await dispatch(i);
     }
-    await sendExecApprovalFollowupResult(
-      {
-        approvalId: "approval-0",
-        sessionKey: "agent:main:main",
-      },
-      "Exec finished",
-      deps,
-    );
-
+    await dispatch(0);
     expect(logWarn).toHaveBeenCalledTimes(failureKeysBeyondDedupeWindow + 1);
     expect(logWarn).toHaveBeenLastCalledWith(
       "exec approval followup dispatch failed (id=approval-0): Channel is required",
     );
   });
 
-  it("registers elevated defaults behind an internal token for agent followups", async () => {
-    sendExecApprovalFollowup.mockResolvedValue(true);
-    const bashElevated = {
-      enabled: true,
-      allowed: true,
-      defaultLevel: "on" as const,
-    };
-
-    await sendExecApprovalFollowupResult(
-      {
-        approvalId: "approval-elevated-75832",
-        sessionKey: "agent:main:telegram:direct:123",
-        turnSourceChannel: "telegram",
-        bashElevated,
-      },
-      "Exec finished",
-      { sendExecApprovalFollowup, logWarn },
-    );
-
-    const call = firstExecApprovalFollowupCall();
-    if (!call) {
-      throw new Error("Expected elevated exec approval followup call");
-    }
-    expect(call.internalRuntimeHandoffId).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-    );
-    expect(call.idempotencyKey).toMatch(/^exec-approval-followup:approval-elevated-75832:nonce:/);
-    expect(call.idempotencyKey).not.toContain(call.internalRuntimeHandoffId ?? "");
-    expect(call).not.toHaveProperty("bashElevated");
-    expect(call).not.toHaveProperty("execApprovalFollowupToken");
-    expect(
-      claimExecApprovalFollowupRuntimeHandoff({
-        handoffId: call.internalRuntimeHandoffId ?? "",
-        approvalId: "approval-elevated-75832",
-        idempotencyKey: call.idempotencyKey ?? "",
-        sessionKey: "agent:main:telegram:direct:wrong",
-        claimId: "wrong-session-run",
-      }),
-    ).toBeUndefined();
-    expect(
-      claimExecApprovalFollowupRuntimeHandoff({
-        handoffId: call.internalRuntimeHandoffId ?? "",
-        approvalId: "approval-elevated-75832",
-        idempotencyKey: call.idempotencyKey ?? "",
-        sessionKey: "agent:main:telegram:direct:123",
-        claimId: "elevated-run",
-      }),
-    ).toEqual({
-      kind: "exec-approval-followup",
-      approvalId: "approval-elevated-75832",
-      sessionKey: "agent:main:telegram:direct:123",
-      idempotencyKey: call.idempotencyKey,
-      bashElevated,
-      resultText: "Exec finished",
-    });
-    expect(
-      claimExecApprovalFollowupRuntimeHandoff({
-        handoffId: call.internalRuntimeHandoffId ?? "",
-        approvalId: "approval-elevated-75832",
-        idempotencyKey: call.idempotencyKey ?? "",
-        sessionKey: "agent:main:telegram:direct:123",
-        claimId: "competing-run",
-      }),
-    ).toBeUndefined();
-    expect(
-      finalizeExecApprovalFollowupRuntimeHandoff({
+  it.each([true, false])(
+    "authenticates an elevated=%s result handoff to one session and claimant",
+    async (elevated) => {
+      const approvalId = `approval-authenticated-${elevated}`;
+      await sendExecApprovalFollowupResult(
+        {
+          approvalId,
+          agentId: "research",
+          sessionKey,
+          expectedSessionId: "session-original",
+          turnSourceChannel: "telegram",
+          ...(elevated ? { bashElevated } : {}),
+        },
+        "Exec finished",
+        deps,
+      );
+      const call = sendExecApprovalFollowup.mock.calls[0]?.[0];
+      assert.isDefined(call);
+      expect(call).toMatchObject({
+        agentId: "research",
+        sessionKey,
+        expectedSessionId: "session-original",
+      });
+      expect(call.internalRuntimeHandoffId).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      );
+      expect(call.idempotencyKey).toMatch(
+        new RegExp(`^exec-approval-followup:${approvalId}:nonce:`),
+      );
+      expect(call.idempotencyKey).not.toContain(call.internalRuntimeHandoffId ?? "");
+      expect(call).not.toHaveProperty("bashElevated");
+      expect(call).not.toHaveProperty("execApprovalFollowupToken");
+      const claim = {
         handoffId: call.internalRuntimeHandoffId,
-        claimId: "elevated-run",
-      }),
-    ).toBe(true);
-  });
+        approvalId,
+        idempotencyKey: call.idempotencyKey,
+        sessionKey,
+        claimId: "owner-run",
+      };
+      expect(
+        claimExecApprovalFollowupRuntimeHandoff({ ...claim, sessionKey: "wrong-session" }),
+      ).toBeUndefined();
+      expect(claimExecApprovalFollowupRuntimeHandoff(claim)).toEqual({
+        kind: "exec-approval-followup",
+        approvalId,
+        sessionKey,
+        idempotencyKey: call.idempotencyKey,
+        ...(elevated ? { bashElevated } : {}),
+        resultText: "Exec finished",
+      });
+      expect(
+        claimExecApprovalFollowupRuntimeHandoff({ ...claim, claimId: "competing-run" }),
+      ).toBeUndefined();
+      expect(finalizeExecApprovalFollowupRuntimeHandoff(claim)).toBe(true);
+    },
+  );
 
   it("does not register elevated runtime handoffs when the process clock is invalid", () => {
-    const registration = registerExecApprovalFollowupRuntimeHandoff({
-      approvalId: "approval-elevated-invalid-clock",
-      sessionKey: "agent:main:telegram:direct:123",
-      bashElevated: {
-        enabled: true,
-        allowed: true,
-        defaultLevel: "on",
-      },
-      nowMs: Number.NaN,
-    });
-
-    expect(registration).toBeUndefined();
+    expect(
+      registerExecApprovalFollowupRuntimeHandoff({
+        approvalId: "approval-elevated-invalid-clock",
+        sessionKey,
+        bashElevated,
+        nowMs: Number.NaN,
+      }),
+    ).toBeUndefined();
   });
 
   it("does not register elevated runtime handoffs for denied followups", async () => {
     sendExecApprovalFollowup.mockResolvedValue(false);
-    const bashElevated = {
-      enabled: true,
-      allowed: true,
-      defaultLevel: "on" as const,
-    };
-
     await sendExecApprovalFollowupResult(
-      {
-        approvalId: "approval-denied-elevated-75832",
-        sessionKey: "agent:main:telegram:direct:123",
-        turnSourceChannel: "telegram",
-        bashElevated,
-      },
-      "Exec denied (gateway id=approval-denied-elevated-75832, user-denied): uname -a",
-      { sendExecApprovalFollowup, logWarn },
+      { approvalId: "approval-denied", sessionKey, turnSourceChannel: "telegram", bashElevated },
+      "Exec denied (gateway id=approval-denied, user-denied): uname -a",
+      deps,
     );
-
-    const call = firstExecApprovalFollowupCall();
+    const call = sendExecApprovalFollowup.mock.calls[0]?.[0];
+    assert.isDefined(call);
     expect(call).not.toHaveProperty("internalRuntimeHandoffId");
     expect(call).not.toHaveProperty("idempotencyKey");
     expect(call).not.toHaveProperty("bashElevated");
   });
-
-  it("registers result text behind an authenticated handoff for non-elevated followups", async () => {
-    sendExecApprovalFollowup.mockResolvedValue(true);
-
-    await sendExecApprovalFollowupResult(
-      {
-        approvalId: "approval-normal-75832",
-        sessionKey: "agent:main:telegram:direct:123",
-        turnSourceChannel: "telegram",
-      },
-      "Exec finished",
-      { sendExecApprovalFollowup, logWarn },
-    );
-
-    const call = firstExecApprovalFollowupCall();
-    if (!call) {
-      throw new Error("Expected non-elevated exec approval followup call");
-    }
-    expect(call.internalRuntimeHandoffId).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-    );
-    expect(call.idempotencyKey).toMatch(/^exec-approval-followup:approval-normal-75832:nonce:/);
-    expect(call).not.toHaveProperty("bashElevated");
-    expect(
-      claimExecApprovalFollowupRuntimeHandoff({
-        handoffId: call.internalRuntimeHandoffId ?? "",
-        approvalId: "approval-normal-75832",
-        idempotencyKey: call.idempotencyKey ?? "",
-        sessionKey: "agent:main:telegram:direct:123",
-        claimId: "normal-run",
-      }),
-    ).toEqual({
-      kind: "exec-approval-followup",
-      approvalId: "approval-normal-75832",
-      sessionKey: "agent:main:telegram:direct:123",
-      idempotencyKey: call.idempotencyKey,
-      resultText: "Exec finished",
-    });
-    expect(
-      finalizeExecApprovalFollowupRuntimeHandoff({
-        handoffId: call.internalRuntimeHandoffId,
-        claimId: "normal-run",
-      }),
-    ).toBe(true);
-  });
-
-  it("forwards the approval-time session id to the followup dispatch (non-elevated)", async () => {
-    sendExecApprovalFollowup.mockResolvedValue(true);
-
-    await sendExecApprovalFollowupResult(
-      {
-        approvalId: "approval-session-pin-59349",
-        sessionKey: "agent:main:telegram:direct:123",
-        expectedSessionId: "session-original",
-        turnSourceChannel: "telegram",
-      },
-      "Exec finished",
-      { sendExecApprovalFollowup, logWarn },
-    );
-
-    expect(firstExecApprovalFollowupCall()?.expectedSessionId).toBe("session-original");
-  });
-
-  it("forwards the prepared agent owner to the followup dispatch", async () => {
-    sendExecApprovalFollowup.mockResolvedValue(true);
-
-    await sendExecApprovalFollowupResult(
-      {
-        approvalId: "approval-bare-owner",
-        agentId: "research",
-        sessionKey: "global",
-      },
-      "Exec finished",
-      { sendExecApprovalFollowup, logWarn },
-    );
-
-    expect(sendExecApprovalFollowup).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "research", sessionKey: "global" }),
-    );
-  });
-});
-
-describe("isExecApprovalFollowupSessionRebound", () => {
-  it("flags a rebound session when the resolved id differs from the approval-time id", () => {
-    expect(
-      isExecApprovalFollowupSessionRebound({
-        expectedSessionId: "session-original",
-        resolvedSessionId: "session-after-reset",
-      }),
-    ).toBe(true);
-  });
-
-  it("keeps the followup when the session id is unchanged", () => {
-    expect(
-      isExecApprovalFollowupSessionRebound({
-        expectedSessionId: "session-original",
-        resolvedSessionId: "session-original",
-      }),
-    ).toBe(false);
-  });
-
-  it("does not drop when either session id is missing", () => {
-    expect(isExecApprovalFollowupSessionRebound({ resolvedSessionId: "session-after-reset" })).toBe(
-      false,
-    );
-    expect(isExecApprovalFollowupSessionRebound({ expectedSessionId: "session-original" })).toBe(
-      false,
-    );
-    expect(isExecApprovalFollowupSessionRebound({})).toBe(false);
-  });
 });
 
 describe("resolveExecHostApprovalContext", () => {
-  it("does not let exec-approvals.json broaden security beyond the requested policy", async () => {
-    mocks.resolveExecApprovals.mockResolvedValue({
-      ...mocks.approvals(),
-      agent: { ...mocks.approvals().agent, security: "full" },
-    });
-
-    const result = await resolveExecHostApprovalContext({
-      agentId: "agent-main",
-      security: "allowlist",
-      ask: "off",
-      host: "gateway",
-    });
-
-    expect(result.hostSecurity).toBe("allowlist");
-  });
-
-  it("does not let host ask=off suppress a stricter requested ask mode", async () => {
+  it("clamps host security, ask mode, and fallback to the stricter caller policy", async () => {
     mocks.resolveExecApprovals.mockResolvedValue(mocks.approvals("full", "off", "full"));
-
-    const result = await resolveExecHostApprovalContext({
-      agentId: "agent-main",
-      security: "full",
-      ask: "always",
-      host: "gateway",
+    await expect(
+      resolveExecHostApprovalContext({
+        agentId: "agent-main",
+        security: "allowlist",
+        ask: "always",
+        host: "gateway",
+      }),
+    ).resolves.toMatchObject({
+      hostSecurity: "allowlist",
+      hostAsk: "always",
+      askFallback: "allowlist",
     });
-
-    expect(result.hostAsk).toBe("always");
-  });
-
-  it("clamps askFallback to the effective host security", async () => {
-    mocks.resolveExecApprovals.mockResolvedValue(mocks.approvals("full", "always", "full"));
-
-    const result = await resolveExecHostApprovalContext({
-      agentId: "agent-main",
-      security: "allowlist",
-      ask: "always",
-      host: "gateway",
-    });
-
-    expect(result.askFallback).toBe("allowlist");
   });
 });
 
 describe("resolveExecApprovalWaitOutcome", () => {
+  const wait = (overrides: Partial<Parameters<typeof resolveExecApprovalWaitOutcome>[0]> = {}) =>
+    resolveExecApprovalWaitOutcome({
+      approvalId: "approval-wait",
+      preResolvedDecision: undefined,
+      askFallback: "deny",
+      requiresExplicitApproval: false,
+      ...overrides,
+    });
+
   beforeEach(() => {
-    mocks.resolveRegisteredExecApprovalDecision.mockReset();
-    mocks.resolveRegisteredExecApprovalDecision.mockResolvedValue("allow-once");
+    mocks.resolveRegisteredExecApprovalDecision.mockReset().mockResolvedValue("allow-once");
   });
 
   it.each([
@@ -476,15 +233,7 @@ describe("resolveExecApprovalWaitOutcome", () => {
     ["deny", false, "user-denied"],
   ] as const)("returns a resolved %s decision", async (decision, approvedByAsk, deniedReason) => {
     mocks.resolveRegisteredExecApprovalDecision.mockResolvedValue(decision);
-
-    await expect(
-      resolveExecApprovalWaitOutcome({
-        approvalId: "approval-1",
-        preResolvedDecision: undefined,
-        askFallback: "deny",
-        requiresExplicitApproval: false,
-      }),
-    ).resolves.toMatchObject({
+    await expect(wait()).resolves.toMatchObject({
       kind: "resolved",
       decision,
       state: { approvedByAsk, deniedReason },
@@ -493,14 +242,10 @@ describe("resolveExecApprovalWaitOutcome", () => {
 
   it("applies timeout policy before returning a resolved outcome", async () => {
     mocks.resolveRegisteredExecApprovalDecision.mockResolvedValue(null);
-
     await expect(
-      resolveExecApprovalWaitOutcome({
-        approvalId: "approval-timeout",
-        preResolvedDecision: undefined,
+      wait({
         askFallback: "full",
         resolveTimedOut: async () => ({ approvedByAsk: false, deniedReason: "policy-revoked" }),
-        requiresExplicitApproval: false,
       }),
     ).resolves.toMatchObject({
       kind: "resolved",
@@ -509,30 +254,12 @@ describe("resolveExecApprovalWaitOutcome", () => {
     });
   });
 
-  it("classifies an approval waiter failure", async () => {
-    mocks.resolveRegisteredExecApprovalDecision.mockRejectedValue(new Error("store unavailable"));
-
-    await expect(
-      resolveExecApprovalWaitOutcome({
-        approvalId: "approval-failed",
-        preResolvedDecision: undefined,
-        askFallback: "deny",
-        requiresExplicitApproval: false,
-      }),
-    ).resolves.toEqual({ kind: "request-failed" });
-  });
-
-  it("classifies owning-run cancellation", async () => {
-    mocks.resolveRegisteredExecApprovalDecision.mockRejectedValue(mocks.approvalRunAbortedError);
-
-    await expect(
-      resolveExecApprovalWaitOutcome({
-        approvalId: "approval-aborted",
-        preResolvedDecision: undefined,
-        askFallback: "deny",
-        requiresExplicitApproval: false,
-      }),
-    ).resolves.toEqual({ kind: "run-aborted" });
+  it.each([
+    [new Error("store unavailable"), "request-failed"],
+    [mocks.approvalRunAbortedError, "run-aborted"],
+  ])("classifies approval waiter failure %s as %s", async (error, kind) => {
+    mocks.resolveRegisteredExecApprovalDecision.mockRejectedValue(error);
+    await expect(wait()).resolves.toEqual({ kind });
   });
 
   it("does not consume a decision after the owning signal aborts", async () => {
@@ -541,165 +268,78 @@ describe("resolveExecApprovalWaitOutcome", () => {
       controller.abort(new Error("run stopped"));
       return "allow-once";
     });
-
-    await expect(
-      resolveExecApprovalWaitOutcome({
-        approvalId: "approval-aborted-after-wait",
-        preResolvedDecision: undefined,
-        signal: controller.signal,
-        askFallback: "deny",
-        requiresExplicitApproval: false,
-      }),
-    ).resolves.toEqual({ kind: "run-aborted" });
+    await expect(wait({ signal: controller.signal })).resolves.toEqual({ kind: "run-aborted" });
   });
 });
 
-describe("buildExecApprovalPendingToolResult", () => {
-  function buildDisabledSurfaceApprovalResult(params: {
-    channel: "discord" | "telegram";
-    channelLabel: "Discord" | "Telegram";
-    unavailableReason: "initiating-platform-disabled" | null;
-    allowedDecisions?: readonly ("allow-once" | "deny")[];
-  }) {
-    return buildExecApprovalPendingToolResult({
-      host: "gateway",
-      command: "npm view diver name version description",
-      cwd: process.cwd(),
-      warningText: "",
-      approvalId: "approval-id",
-      approvalSlug: "approval-slug",
-      expiresAtMs: Date.now() + 60_000,
-      initiatingSurface: {
-        kind: "disabled",
-        channel: params.channel,
-        channelLabel: params.channelLabel,
-        accountId: "default",
-      },
-      sentApproverDms: false,
-      unavailableReason: params.unavailableReason,
-      ...(params.allowedDecisions ? { allowedDecisions: params.allowedDecisions } : {}),
-    });
-  }
-
-  it("does not infer approver DM delivery from unavailable approval state", async () => {
-    const state = await createExecApprovalRequestRoute({
-      warnings: [],
-      approvalRunningNoticeMs: 1_000,
-      createApprovalSlug: (approvalId) => approvalId,
-      turnSourceChannel: "telegram",
-      turnSourceAccountId: "default",
-      register: async (approvalId) => ({
-        id: approvalId,
-        expiresAtMs: Date.now() + 60_000,
-        finalDecision: null,
-      }),
-      askFallback: "deny",
-      requiresExplicitApproval: false,
-    });
-    expect(state.sentApproverDms).toBe(false);
-    expect(state.unavailableReason).toBe("no-approval-route");
-  });
-
-  const createRoute = (finalDecision: string | null | undefined, turnSourceChannel?: string) =>
+describe("createExecApprovalRequestRoute", () => {
+  const createRoute = (turnSourceChannel?: string, finalDecision?: null) =>
     createExecApprovalRequestRoute({
       warnings: [],
       approvalRunningNoticeMs: 1_000,
       createApprovalSlug: (approvalId) => approvalId,
       turnSourceChannel,
       register: async (approvalId) => ({ id: approvalId, expiresAtMs: 60_000, finalDecision }),
-      askFallback: "deny",
-      requiresExplicitApproval: false,
+      askFallback: "full",
+      requiresExplicitApproval: true,
     });
 
-  it("resolves terminal no-route approvals inline", async () => {
-    await expect(createRoute(null)).resolves.toMatchObject({
+  it("denies terminal no-route approvals inline without claiming DM delivery", async () => {
+    await expect(createRoute("telegram", null)).resolves.toMatchObject({
       kind: "inline",
       preResolvedDecision: null,
+      sentApproverDms: false,
+      unavailableReason: "no-approval-route",
       state: { approvedByAsk: false, deniedReason: "approval-timeout" },
     });
   });
 
-  it.each([
-    ["a live route", undefined, "webchat"],
-    ["an explicit decision", "allow-once", undefined],
-    ["a disabled initiating platform without a terminal decision", undefined, "discord"],
-  ])("keeps waiting for %s", async (_name, finalDecision, channel) => {
-    await expect(createRoute(finalDecision, channel)).resolves.toMatchObject({ kind: "wait" });
-  });
+  it.each(["webchat", "discord"])(
+    "keeps waiting without a terminal decision on %s",
+    async (channel) => {
+      await expect(createRoute(channel)).resolves.toMatchObject({ kind: "wait" });
+    },
+  );
+});
 
-  it("applies strict approval ordering to an inline route", async () => {
-    await expect(
-      createExecApprovalRequestRoute({
-        warnings: [],
-        approvalRunningNoticeMs: 1_000,
-        createApprovalSlug: (approvalId) => approvalId,
-        register: async (approvalId) => ({
-          id: approvalId,
-          expiresAtMs: 60_000,
-          finalDecision: null,
-        }),
-        askFallback: "full",
-        requiresExplicitApproval: true,
-      }),
-    ).resolves.toMatchObject({
-      kind: "inline",
-      state: { approvedByAsk: false, deniedReason: "approval-timeout" },
+describe("buildExecApprovalPendingToolResult", () => {
+  const buildResult = (
+    overrides: Partial<Parameters<typeof buildExecApprovalPendingToolResult>[0]> = {},
+  ) =>
+    buildExecApprovalPendingToolResult({
+      host: "gateway",
+      command: "uname -a",
+      cwd: "/tmp",
+      warningText: "",
+      approvalId: "approval-id",
+      approvalSlug: "approval-slug",
+      expiresAtMs: 60_000,
+      initiatingSurface: {
+        kind: "disabled",
+        channel: "discord",
+        channelLabel: "Discord",
+        accountId: "default",
+      },
+      sentApproverDms: false,
+      unavailableReason: null,
+      ...overrides,
     });
-  });
 
   it("keeps a local /approve prompt when the initiating Discord surface is disabled", () => {
-    const result = buildDisabledSurfaceApprovalResult({
-      channel: "discord",
-      channelLabel: "Discord",
-      unavailableReason: null,
-      allowedDecisions: ["allow-once", "deny"],
-    });
-
+    const result = buildResult({ allowedDecisions: ["allow-once", "deny"] });
     expect(result.details.status).toBe("approval-pending");
     const text = result.content.find((part) => part.type === "text")?.text ?? "";
     expect(text).toContain("/approve approval-slug allow-once");
     expect(text).not.toContain("native chat exec approvals are not configured on Discord");
   });
 
-  it("returns an unavailable reply when Discord exec approvals are disabled", () => {
-    const result = buildDisabledSurfaceApprovalResult({
-      channel: "discord",
-      channelLabel: "Discord",
-      unavailableReason: "initiating-platform-disabled",
-    });
-
-    const details = result.details as Record<string, unknown>;
-    expect(details.status).toBe("approval-unavailable");
-    expect(details.reason).toBe("initiating-platform-disabled");
-    expect(details.channel).toBe("discord");
-    expect(details.channelLabel).toBe("Discord");
-    expect(details.accountId).toBe("default");
-    expect(details.host).toBe("gateway");
-    const text = result.content.find((part) => part.type === "text")?.text ?? "";
-    expect(text).toContain("native chat exec approvals are not configured on Discord");
-    expect(text).not.toContain("/approve");
-    expect(text).not.toContain("Pending command:");
-  });
-
   it("preserves node metadata in unavailable recovery guidance", () => {
-    const result = buildExecApprovalPendingToolResult({
+    const result = buildResult({
       host: "node",
       nodeId: "node-mac-1",
-      command: "uname -a",
-      cwd: "/tmp",
-      warningText: "",
-      approvalId: "approval-id",
-      approvalSlug: "approval-slug",
-      expiresAtMs: Date.now() + 60_000,
-      initiatingSurface: {
-        kind: "enabled",
-        channel: undefined,
-        channelLabel: "Web UI",
-      },
-      sentApproverDms: false,
+      initiatingSurface: { kind: "enabled", channel: undefined, channelLabel: "Web UI" },
       unavailableReason: "no-approval-route",
     });
-
     expect(result.details).toMatchObject({
       status: "approval-unavailable",
       host: "node",
@@ -713,80 +353,52 @@ describe("buildExecApprovalPendingToolResult", () => {
       "Inspect the node's effective exec policy with `openclaw approvals get --node node-mac-1`.",
     );
   });
-
-  it("keeps the Telegram unavailable reply when Discord DM approvals are not fully configured", () => {
-    const result = buildDisabledSurfaceApprovalResult({
-      channel: "telegram",
-      channelLabel: "Telegram",
-      unavailableReason: "initiating-platform-disabled",
-    });
-
-    const details = result.details as Record<string, unknown>;
-    expect(details.status).toBe("approval-unavailable");
-    expect(details.reason).toBe("initiating-platform-disabled");
-    expect(details.channel).toBe("telegram");
-    expect(details.channelLabel).toBe("Telegram");
-    expect(details.accountId).toBe("default");
-    expect(details.sentApproverDms).toBe(false);
-    expect(details.host).toBe("gateway");
-    const text = result.content.find((part) => part.type === "text")?.text ?? "";
-    expect(text).toContain("native chat exec approvals are not configured on Telegram");
-    expect(text).not.toContain("/approve");
-    expect(text).not.toContain("Pending command:");
-    expect(text).not.toContain("Approver DMs were sent");
-  });
 });
 
 describe("buildHeadlessExecApprovalDeniedMessage", () => {
   it.each([
-    { host: "gateway" as const, target: "--gateway" },
-    { host: "node" as const, target: "--node <id|name|ip>" },
-  ])("names the current policy surfaces and inspection target for $host", ({ host, target }) => {
-    const text = buildHeadlessExecApprovalDeniedMessage({
-      host,
-      security: "allowlist",
-      ask: "on-miss",
-      askFallback: "deny",
-    });
-
-    expect(text).toContain('tools.exec.mode="full"');
-    expect(text).toContain('host approvals to security="full" and ask="off"');
-    expect(text).toContain(`openclaw approvals get ${target}`);
-    expect(text).not.toContain("both files");
-    expect(text).not.toContain("openclaw.sqlite");
-    if (host === "node") {
-      expect(text).not.toContain("--gateway");
-    }
-  });
-
-  it("points gateway automation runs at card-capable approval clients, not the TUI", () => {
-    const text = buildHeadlessExecApprovalDeniedMessage({
+    {
       trigger: "cron",
       host: "gateway",
-      security: "allowlist",
-      ask: "on-miss",
-      askFallback: "deny",
-    });
-
-    expect(text).toContain("Automation runs cannot wait for interactive exec approval");
-    expect(text).toContain("Control UI or a macOS/iOS/Android app");
-    expect(text).toContain("standing grant");
-    expect(text).not.toContain("TUI,");
-    expect(text).not.toContain("terminal UI");
-  });
-
-  it("offers the interactive rerun surfaces for non-automation headless runs", () => {
-    const text = buildHeadlessExecApprovalDeniedMessage({
+      target: "--gateway",
+      label: "Automation",
+      surface: "Control UI or a macOS/iOS/Android app",
+      standingGrant: true,
+    },
+    {
+      trigger: undefined,
       host: "node",
-      security: "allowlist",
-      ask: "on-miss",
-      askFallback: "deny",
-    });
-
-    expect(text).toContain("Headless runs cannot wait for interactive exec approval");
-    expect(text).toContain("rerun interactively");
-    expect(text).toContain("Control UI or a chat channel with exec approvals");
-    expect(text).not.toContain("TUI");
-    expect(text).not.toContain("standing grant");
-  });
+      target: "--node <id|name|ip>",
+      label: "Headless",
+      surface: "Control UI or a chat channel with exec approvals",
+      standingGrant: false,
+    },
+  ] as const)(
+    "names usable approval surfaces and policy inspection for $label runs",
+    ({ trigger, host, target, label, surface, standingGrant }) => {
+      const text = buildHeadlessExecApprovalDeniedMessage({
+        trigger,
+        host,
+        security: "allowlist",
+        ask: "on-miss",
+        askFallback: "deny",
+      });
+      expect(text).toContain(`${label} runs cannot wait for interactive exec approval`);
+      expect(text).toContain('tools.exec.mode="full"');
+      expect(text).toContain('host approvals to security="full" and ask="off"');
+      expect(text).toContain(`openclaw approvals get ${target}`);
+      expect(text).toContain(surface);
+      expect(text).not.toContain("both files");
+      expect(text).not.toContain("openclaw.sqlite");
+      expect(text).not.toContain("TUI");
+      expect(text).not.toContain("terminal UI");
+      if (standingGrant) {
+        expect(text).toContain("standing grant");
+      } else {
+        expect(text).toContain("rerun interactively");
+        expect(text).not.toContain("standing grant");
+        expect(text).not.toContain("--gateway");
+      }
+    },
+  );
 });

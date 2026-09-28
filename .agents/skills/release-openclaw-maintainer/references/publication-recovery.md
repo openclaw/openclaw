@@ -24,8 +24,6 @@ Extended-stable direct npm workflow recovery also uses a protected tooling tag;
 follow [trusted-main npm recovery](extended-stable-publish.md#trusted-main-npm-recovery)
 for plugin source inputs and the matching core evidence handoff. It does not use
 the shared publish parent or authorize ClawHub publication.
-The Tideclaw alpha branch route is currently blocked by the protected-tag
-publication contract; see its owning skill. Do not widen the environment policy.
 
 Publication promotes previously qualified bytes. Bind the successful Full
 Release Validation manifest, exact target SHA, successful attempt, and npm
@@ -134,7 +132,8 @@ Explicit ClawHub recovery uses `recovered_clawhub_run_id` and
 `recovered_clawhub_run_attempt` to name the original child. Keep the original
 parent's tooling, inputs, run ID, and attempt. Do not reuse an approval from another
 child. Docker-only recovery does not recover canceled ClawHub publication;
-verify and recover that surface separately.
+verify and recover that surface separately. Recover a failed Plugin ClawHub New
+bootstrap child through its [direct route](first-package.md), not a rerun.
 
 ## Registry selectors
 

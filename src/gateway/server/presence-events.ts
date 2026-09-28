@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { GatewayScheduledJob, GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { GatewayBroadcastFn } from "../server-broadcast-types.js";
@@ -7,24 +8,21 @@ const log = createSubsystemLogger("gateway/presence");
 
 /** One Gateway owns fixed publication windows; authoritative reads never wait for them. */
 export function createPresencePublisher(params: {
+  scheduler: GatewayScheduler;
   broadcast: GatewayBroadcastFn;
   incrementPresenceVersion: () => number;
   getHealthVersion: () => number;
   prepare: () => Promise<void> | undefined;
 }) {
-  let pending: ReturnType<typeof setTimeout> | undefined;
-  let flushing = false;
+  let pending: GatewayScheduledJob | undefined;
   let version = 0;
   let stopped = false;
   const schedule = () => {
-    if (!stopped && !pending && !flushing) {
-      pending = setTimeout(() => void flush(), 50);
-      pending.unref();
+    if (!stopped && !pending) {
+      pending = params.scheduler.schedule({ id: "presence/publication", delayMs: 200, run: flush });
     }
   };
   const flush = async () => {
-    pending = undefined;
-    flushing = true;
     let publishedVersion = version;
     try {
       for (let preparation = params.prepare(); preparation; preparation = params.prepare()) {
@@ -45,7 +43,7 @@ export function createPresencePublisher(params: {
     } catch (error) {
       log.warn(`Presence publication failed: ${formatErrorMessage(error)}`);
     } finally {
-      flushing = false;
+      pending = undefined;
       if (version !== publishedVersion) {
         schedule();
       }
@@ -60,7 +58,7 @@ export function createPresencePublisher(params: {
     },
     stop: () => {
       stopped = true;
-      clearTimeout(pending);
+      pending?.cancel();
       pending = undefined;
     },
   };

@@ -136,6 +136,12 @@ export const imageLightboxStyles = css`
     touch-action: none;
   }
 
+  .stage.stage--video {
+    padding: calc(76px + var(--safe-area-top, 0px)) calc(64px + var(--safe-area-right, 0px))
+      calc(76px + var(--safe-area-bottom, 0px)) calc(64px + var(--safe-area-left, 0px));
+    touch-action: pan-y;
+  }
+
   .slide {
     container-type: size;
     width: 100%;

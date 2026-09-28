@@ -49,21 +49,18 @@ type SignalIngressBody = Omit<SignalIngressPayload, "version">;
 
 export type SignalIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
 
-type SignalIngressDispatchResult = ChannelIngressMonitorDeliveryResult;
-
 type SignalIngressDispatch = (
   event: SignalSseEvent,
   lifecycle: SignalIngressLifecycle,
   parsedPayload: SignalReceivePayload,
-) => Promise<SignalIngressDispatchResult | void> | SignalIngressDispatchResult | void;
+) =>
+  | Promise<ChannelIngressMonitorDeliveryResult | void>
+  | ChannelIngressMonitorDeliveryResult
+  | void;
 
 const SignalIngressPermanentError = createChannelIngressError<
   "parse-error" | "missing-sender" | "missing-timestamp" | "unsupported-event"
 >("SignalIngressPermanentError", { withReason: true });
-
-function normalizeTimestamp(value: unknown): number | null {
-  return asPositiveSafeInteger(value) ?? null;
-}
 
 function parseReceivePayload(event: SignalSseEvent): SignalReceivePayload | null {
   if (event.event !== "receive" || !event.data) {
@@ -126,8 +123,8 @@ function inspectSignalIngressEvent(
     );
   }
   const timestamp =
-    normalizeTimestamp(envelope.timestamp) ?? normalizeTimestamp(dataMessage?.timestamp);
-  if (timestamp === null) {
+    asPositiveSafeInteger(envelope.timestamp) ?? asPositiveSafeInteger(dataMessage?.timestamp);
+  if (timestamp === undefined) {
     throw new SignalIngressPermanentError(
       "missing-timestamp",
       "Signal dispatchable envelope is missing a stable timestamp",
@@ -182,7 +179,7 @@ export async function startSignalIngressMonitor(params: {
     SignalIngressPayload
   >({
     queue: ingressQueue,
-    inspect: (prepared) => inspectSignalIngressEvent(prepared),
+    inspect: inspectSignalIngressEvent,
     payload: {
       version: 1,
       // Parsed JSON remains transient; durable rows retain the exact raw event shape.

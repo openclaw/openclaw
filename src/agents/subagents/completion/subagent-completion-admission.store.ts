@@ -227,6 +227,7 @@ export async function admitSubagentCompletionDelivery(params: {
 }
 
 type CompletionMutationOptions = {
+  context?: OpenClawStateWorkerContext;
   databaseOptions?: OpenClawStateDatabaseOptions;
   assertCurrent?: () => void;
 };
@@ -238,10 +239,12 @@ async function mutateCompletion(
 ): Promise<boolean | null> {
   const selected = entries.map((entry) => ({ entry, snapshot: structuredClone(entry) }));
   const runIds = selected.map(({ snapshot }) => snapshot.runId);
-  const context = captureOpenClawStateWorkerContext({
-    path: options.databaseOptions?.database?.path ?? options.databaseOptions?.path,
-    env: options.databaseOptions?.env,
-  });
+  const context =
+    options.context ??
+    captureOpenClawStateWorkerContext({
+      path: options.databaseOptions?.database?.path ?? options.databaseOptions?.path,
+      env: options.databaseOptions?.env,
+    });
   const input = structuredClone({ writeId: randomUUID(), mutation });
   const sourceIsCurrent = () =>
     selected.every(
@@ -324,6 +327,7 @@ async function mutateCompletion(
 export async function settleSubagentCompletionDelivery(
   params: {
     subagent: SubagentRunRecord;
+    queueId: string;
   } & CompletionMutationOptions,
 ): Promise<void> {
   const current = subagentRuns.get(params.subagent.runId);
@@ -333,7 +337,7 @@ export async function settleSubagentCompletionDelivery(
   const subagent = structuredClone(params.subagent);
   await mutateCompletion(
     [current],
-    { kind: "settle", expected: structuredClone(current), subagent },
+    { kind: "settle", queueId: params.queueId, expected: structuredClone(current), subagent },
     params,
   );
 }
@@ -347,7 +351,12 @@ export async function blockSubagentCompletionDelivery(
   if (params.storeReplaced) {
     subagentRuns.retireCompletionAuthority(params.subagent);
   }
-  const { databaseOptions: _databaseOptions, assertCurrent: _assertCurrent, ...request } = params;
+  const {
+    context: _context,
+    databaseOptions: _databaseOptions,
+    assertCurrent: _assertCurrent,
+    ...request
+  } = params;
   return (
     (await mutateCompletion(
       [params.subagent],

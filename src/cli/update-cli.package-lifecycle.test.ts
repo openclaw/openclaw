@@ -812,7 +812,7 @@ describe("update-cli", () => {
       suspendScheduledTaskAutoStartForUpdate.mockResolvedValue(true);
       resumeScheduledTaskAutoStartAfterUpdate.mockRejectedValue(new Error("task restore denied"));
       const root = await mockPackageInstallAtCaseDir("openclaw-update-autostart-restore-failure");
-      mockCurrentProcessFreshDoctor({ packageRoot: root, candidateAdmission: true });
+      mockCurrentProcessFreshDoctor({ packageRoot: root });
       mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
       mockFileBackedPathExists();
       setTty(true);

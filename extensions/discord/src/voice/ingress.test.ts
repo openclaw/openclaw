@@ -145,7 +145,7 @@ describe("Discord voice ingress execution correlation", () => {
       if (fail) {
         await expect(turn).rejects.toThrow("Agent turn failed");
       } else {
-        await expect(turn).resolves.toMatchObject({ text: "Voice changed." });
+        await expect(turn).resolves.toBe("Voice changed.");
       }
       expect(release).toHaveBeenCalledOnce();
     },

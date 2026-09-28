@@ -1,11 +1,9 @@
 // Session tool limit tests cover shared numeric normalization and byte-bounded
 // output tails for command-style tools.
 import { describe, expect, it } from "vitest";
-import {
-  appendBoundedTextTail,
-  normalizePositiveLimit,
-  SESSION_TOOL_STDERR_TAIL_BYTES,
-} from "./limits.js";
+import { appendBoundedTextTail, normalizePositiveLimit } from "./limits.js";
+
+const DEFAULT_STDERR_TAIL_BYTES = 64 * 1024;
 
 describe("session tool limits", () => {
   it.each([
@@ -47,9 +45,9 @@ describe("session tool limits", () => {
   );
 
   it("uses the session stderr tail limit by default", () => {
-    const output = appendBoundedTextTail("", "x".repeat(SESSION_TOOL_STDERR_TAIL_BYTES + 1));
+    const output = appendBoundedTextTail("", "x".repeat(DEFAULT_STDERR_TAIL_BYTES + 1));
 
-    expect(Buffer.byteLength(output.tail, "utf8")).toBe(SESSION_TOOL_STDERR_TAIL_BYTES);
+    expect(Buffer.byteLength(output.tail, "utf8")).toBe(DEFAULT_STDERR_TAIL_BYTES);
     expect(output.droppedBytes).toBe(1);
   });
 });

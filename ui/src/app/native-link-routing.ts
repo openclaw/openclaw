@@ -26,6 +26,7 @@ type NativeLinkRoutingOptions = {
   signal?: AbortSignal;
   onNativeUpdateDeclined?: () => void;
   shouldOpenInControlUiBrowser?: () => boolean;
+  shouldOpenExternally?: () => boolean;
   canPresentBrowserPanel?: () => boolean;
 };
 
@@ -179,8 +180,11 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
 
   const handleClick = (event: MouseEvent) => {
     const webLink = externalHttpLinkFromEvent(event);
-    // The reader's escape hatch must bypass both native and preferred in-app browsers.
-    if (webLink?.anchor.hasAttribute("data-link-reader-external")) {
+    // Explicit external intent bypasses native panels and the Gateway browser preference.
+    if (
+      webLink &&
+      (webLink.anchor.hasAttribute("data-link-reader-external") || options.shouldOpenExternally?.())
+    ) {
       if (
         postMessage &&
         shouldHandleNavigationClick(event) &&

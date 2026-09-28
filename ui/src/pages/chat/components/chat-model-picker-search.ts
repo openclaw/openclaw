@@ -161,7 +161,10 @@ export function updateModelSearch(input: HTMLInputElement, preserveHighlight = f
 
 export function resetModelSearch(details: HTMLDetailsElement): void {
   details.querySelectorAll("[data-chat-model-provider-toggle]").forEach((toggle) => {
-    toggle.setAttribute("aria-expanded", "false");
+    const selected = toggle
+      .closest("section")
+      ?.querySelector('[data-chat-model-option][aria-selected="true"]');
+    toggle.setAttribute("aria-expanded", String(Boolean(selected)));
   });
   const input = details.querySelector<HTMLInputElement>("[data-chat-model-search]");
   if (!input) {

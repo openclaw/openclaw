@@ -11,7 +11,7 @@ import {
   createBundledPluginBuildInventory,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
 import { createGatewayRunChunkMetadataPlugin } from "./scripts/lib/gateway-run-chunk-metadata.mts";
-import { createManagedHandoffBuildConfig } from "./scripts/lib/managed-handoff-build-config.mts";
+import { createManagedHandoffBuildConfigs } from "./scripts/lib/managed-handoff-build-config.mts";
 import { createPluginInventoryModuleRefsPlugin } from "./scripts/lib/plugin-inventory-module-refs.mts";
 import {
   buildPluginSdkEntrySources,
@@ -510,10 +510,10 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
     // Mounted Docker harnesses need stable package dist entries for asserted internal modules.
     "agents/agent-bundle-mcp-manager-api": "src/agents/agent-bundle-mcp-manager-api.ts",
     "agents/agent-bundle-mcp-materialize": "src/agents/agent-bundle-mcp-materialize.ts",
+    "agents/agent-tool-definition-adapter": "src/agents/agent-tool-definition-adapter.ts",
     "agents/conversation-capability-profile": "src/agents/conversation-capability-profile.ts",
     "agents/embedded-agent-runner/effective-tool-policy":
       "src/agents/embedded-agent-runner/effective-tool-policy.ts",
-    "agents/embedded-agent-runner/tool-split": "src/agents/embedded-agent-runner/tool-split.ts",
     "agents/embedded-agent-runner/run/runtime-context-prompt":
       "src/agents/embedded-agent-runner/run/runtime-context-prompt.ts",
     "auto-reply/reply/commands-system-agent": "src/auto-reply/reply/commands-system-agent.ts",
@@ -973,7 +973,9 @@ const configs: UserConfig[] = [
   workerDeployBuildConfig({
     "worker/sqlite-store.worker": "src/worker/worker-deploy-sqlite-store.ts",
   }),
-  { ...createManagedHandoffBuildConfig(), name: TSDOWN_UNIFIED_CONFIG_GROUP, env },
+  ...createManagedHandoffBuildConfigs().map((config) =>
+    Object.assign(config, { name: TSDOWN_UNIFIED_CONFIG_GROUP, env }),
+  ),
   nodeBuildConfig(
     {
       name: TSDOWN_UNIFIED_CONFIG_GROUP,

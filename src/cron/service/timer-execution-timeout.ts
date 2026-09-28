@@ -111,6 +111,7 @@ export type StartupDeferredJob = {
 };
 
 export type StartupCatchupPlan = {
+  lifecycleGeneration: number;
   candidates: StartupCatchupCandidate[];
   deferredJobs: StartupDeferredJob[];
 };

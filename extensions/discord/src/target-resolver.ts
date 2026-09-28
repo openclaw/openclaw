@@ -75,9 +75,7 @@ export async function parseAndResolveDiscordTarget(
   options: DirectoryConfigParams,
   parseOptions: DiscordTargetParseOptions = {},
 ): Promise<MessagingTarget> {
-  const resolved =
-    (await resolveDiscordTarget(raw, options, parseOptions)) ??
-    parseDiscordTarget(raw, parseOptions);
+  const resolved = await resolveDiscordTarget(raw, options, parseOptions);
   if (!resolved) {
     throw new Error("Recipient is required for Discord sends");
   }

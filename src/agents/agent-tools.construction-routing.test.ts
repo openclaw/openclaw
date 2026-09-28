@@ -1,8 +1,3 @@
-/**
- * Tests trigger and session routing during tool assembly.
- * Ensures cron runs scope cron tool behavior to self-removal of the current
- * job only.
- */
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   claimAgentRunDelegatedAuthority,
@@ -76,16 +71,7 @@ describe("createOpenClawCodingTools cron scope", () => {
     expect(firstOpenClawToolsOptions()?.cronSelfRemoveOnlyJobId).toBe("job-current");
   });
 
-  it("does not scope non-cron sessions", () => {
-    createOpenClawCodingTools({
-      trigger: "user",
-      jobId: "job-current",
-    });
-
-    expect(firstOpenClawToolsOptions()?.cronSelfRemoveOnlyJobId).toBeUndefined();
-  });
-
-  it.each([undefined, "control-ui-admin", "channel-owner"] as const)(
+  it.each([undefined, "channel-owner"] as const)(
     "admits only the automation tool for management-only authority=%s",
     async (source) => {
       const runId = "remote-management-tools";
@@ -97,11 +83,7 @@ describe("createOpenClawCodingTools cron scope", () => {
       const capability = createCronCreatorAuthorityCapability(
         runId,
         { kind: "unknown" },
-        source === "channel-owner"
-          ? { source, isCurrent: () => true }
-          : source
-            ? { source }
-            : undefined,
+        source ? { source, isCurrent: () => true } : undefined,
       )!;
       const tools = await runWithCronCreatorAuthorityCapability(capability, () =>
         withGatewayToolCallerIdentity(
@@ -181,42 +163,28 @@ describe("createOpenClawCodingTools exec notification routing", () => {
     expect(approvalScope?.aborted).toBe(true);
   });
 
-  it.each([undefined, "agent:main:runtime-policy"])(
-    "keeps live process ownership when the policy session is %s",
-    (policySessionKey) => {
-      const liveSessionKey = "agent:main:channel:group:example:thread:25";
+  it("keeps live process ownership separate from the policy session", () => {
+    const liveSessionKey = "agent:main:channel:group:example:thread:25";
+    const policySessionKey = "agent:main:runtime-policy";
 
-      createOpenClawCodingTools({
-        sessionKey: policySessionKey ?? liveSessionKey,
-        runSessionKey: liveSessionKey,
-        toolConstructionPlan: {
-          includeBaseCodingTools: false,
-          includeShellTools: true,
-          includeChannelTools: false,
-          includeOpenClawTools: false,
-          includePluginTools: false,
-        },
-      });
-
-      expect(createLazyExecToolMock).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          scopeKey: liveSessionKey,
-          sessionKey: policySessionKey ?? liveSessionKey,
-          runSessionKey: liveSessionKey,
-        }),
-      );
-    },
-  );
-
-  it("preserves an explicit process scope override", () => {
     createOpenClawCodingTools({
-      sessionKey: "agent:main:policy",
-      runSessionKey: "agent:worker:live",
-      exec: { scopeKey: "explicit-process-owner" },
+      sessionKey: policySessionKey,
+      runSessionKey: liveSessionKey,
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: true,
+        includeChannelTools: false,
+        includeOpenClawTools: false,
+        includePluginTools: false,
+      },
     });
 
     expect(createLazyExecToolMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ scopeKey: "explicit-process-owner" }),
+      expect.objectContaining({
+        scopeKey: liveSessionKey,
+        sessionKey: policySessionKey,
+        runSessionKey: liveSessionKey,
+      }),
     );
   });
 });

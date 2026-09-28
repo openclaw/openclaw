@@ -3,6 +3,11 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { MessageChannel, Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  acquireGatewayStateOwner,
+  assertStateDatabaseAccessAllowed,
+} from "./gateway-state-owner.js";
 import { withSqlitePostCommitPublications } from "./sqlite-post-commit.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import {
@@ -17,6 +22,7 @@ import {
 } from "./sqlite-worker-operation-admission.js";
 
 afterEach(() => vi.restoreAllMocks());
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 it.each(["grant", "revoke", "close", "self-fence", "request-revoke", "late-revoke"] as const)(
   "waits for the live owner's %s decision when host scheduling is delayed",
@@ -89,6 +95,46 @@ it.each(["grant", "revoke", "close", "self-fence", "request-revoke", "late-revok
     }
   },
 );
+
+it("rechecks database ownership after a worker request crosses the message port", () => {
+  const root = tempDirs.make("openclaw-worker-admission-maintenance-");
+  const databasePath = path.join(root, "state", "openclaw.sqlite");
+  const admit = vi.fn((_request: SqliteWorkerAdmissionRequest, grant: () => boolean) => grant());
+  const admission = createSqliteWorkerOperationAdmission(admit);
+  let maintenance: ReturnType<typeof acquireGatewayStateOwner> | undefined;
+  try {
+    admission.bindDatabaseAuthority({
+      databasePath,
+      assertAccess: () => assertStateDatabaseAccessAllowed(databasePath),
+      acquireSchema() {
+        throw new Error("Ordinary admission must not acquire schema authority");
+      },
+    });
+    const queueRequest = () => {
+      const decision = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+      admission.port.postMessage({ stage: "transaction", decision: decision.buffer }, []);
+      return decision;
+    };
+    const allowed = queueRequest();
+    admission.service();
+    expect(Atomics.load(allowed, 0)).toBe(1);
+    expect(admit).toHaveBeenCalledOnce();
+    admit.mockClear();
+
+    const pending = queueRequest();
+    maintenance = acquireGatewayStateOwner({ databasePath });
+    admission.service();
+    expect(Atomics.load(pending, 0)).toBe(2);
+    expect(admit).not.toHaveBeenCalled();
+    expect(admission.failure).toMatchObject({
+      message: expect.stringContaining("undergoing offline maintenance"),
+    });
+    expect(admission.failureSource).toBe("authority");
+  } finally {
+    admission.finish();
+    maintenance?.release();
+  }
+});
 
 it("retains exact-target schema authority until settlement and rechecks access for later grants", () => {
   const databasePath = path.resolve("synthetic-schema.sqlite");

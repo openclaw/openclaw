@@ -1,7 +1,8 @@
 import type { AssistantThreadStartedEvent } from "@slack/types";
 import type { Block, KnownBlock } from "@slack/web-api";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { buildSlackAssistantThreadMetadata, DEFAULT_SLACK_SUGGESTED_PROMPTS } from "../context.js";
+import { DEFAULT_SLACK_SUGGESTED_PROMPTS } from "../../channel-meta.js";
+import { buildSlackAssistantThreadMetadata } from "../context.js";
 import type { SlackMonitorContext, SlackAssistantThreadContext } from "../context.js";
 
 type SlackAssistantThreadPayload = {

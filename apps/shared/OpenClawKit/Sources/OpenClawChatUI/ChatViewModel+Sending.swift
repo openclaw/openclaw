@@ -12,7 +12,8 @@ private let chatSendingLogger = Logger(subsystem: "ai.openclaw", category: "Open
 
 extension OpenClawChatViewModel {
     public var canSend: Bool {
-        !isSubmittingDraft &&
+        !self.usesWebConversation &&
+            !isSubmittingDraft &&
             !isSending &&
             self.attachmentStagingCount == 0 &&
             !self.hasBlockingRunActivity &&
@@ -40,6 +41,7 @@ extension OpenClawChatViewModel {
     }
 
     public func send() {
+        guard !self.usesWebConversation else { return }
         logDiagnostic(
             "chat.ui send invoked sessionKey=\(sessionKey) "
                 + "inputLen=\(input.count) attachments=\(attachments.count) "
@@ -360,6 +362,7 @@ extension OpenClawChatViewModel {
         }
 
         guard await self.prepareLiveRoute(for: draft) else { return }
+        guard await self.validateAttachmentBudgetForSend(draft.attachments, session: draft.session) else { return }
         guard self.composerModelAvailabilityMessage == nil else {
             logDiagnostic("chat.ui send ignored reason=model-auth sessionKey=\(sessionKey)")
             return
@@ -597,6 +600,7 @@ extension OpenClawChatViewModel {
                     text: nil,
                     mimeType: payload.mimeType,
                     fileName: payload.fileName,
+                    sizeBytes: attachment.data.count,
                     durationSeconds: attachment.durationSeconds,
                     content: AnyCodable(payload.content)))
         }
@@ -732,7 +736,8 @@ extension OpenClawChatViewModel {
         if canPreserveInOutbox,
            let durableSessionSettingsExpectation,
            attempt.encodedAttachments.isEmpty,
-           !(error is GatewayResponseError)
+           !(error is GatewayResponseError),
+           !(error is OpenClawChatSendOwnershipError)
         {
             runMessageScopesByRunID.removeValue(forKey: attempt.runId)
             clearPendingRun(attempt.runId)

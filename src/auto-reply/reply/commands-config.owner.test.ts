@@ -113,7 +113,9 @@ const commands = [
 
 it.each(
   commands.flatMap((command) =>
-    [false, true].map((revoke) => Object.assign({}, command, { revoke })),
+    (command.command === "/mcp unset fixture" ? [true] : [false, true]).map((revoke) =>
+      Object.assign({}, command, { revoke }),
+    ),
   ),
 )(
   "preserves live owner authority through $command persistence (revoke=$revoke)",

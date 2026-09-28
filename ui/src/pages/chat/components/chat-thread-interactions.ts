@@ -35,7 +35,7 @@ import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts
 import type { TurnRecapWatch } from "../chat-progress.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
-import type { ChatTypingActorView } from "../chat-typing-presence.ts";
+import type { ChatTypingActorView, ChatTypingOverflow } from "../chat-typing-presence.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import type { ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { RealtimeTalkConversationEntry } from "../talk/conversation.ts";
@@ -79,6 +79,11 @@ export type ChatThreadState = {
   searchReturnFocusOwner: HTMLElement | null;
   transcriptRenderDependencies: readonly unknown[];
   transcriptRenderContext: {
+    onRequestUpdate?: () => void;
+    turnVideoMessages?: ReadonlyMap<
+      string,
+      readonly import("./chat-turn-video-gallery.ts").TurnVideoMessage[]
+    >;
     onSetReply?: (target: MessageReplyTarget) => void;
     onOpenReply?: (replyToId: string) => void;
     onAsyncQuestionDiscard?: (item: ChatQueueItem) => void;
@@ -172,6 +177,7 @@ export type ChatThreadProps = ChatSendStatusActions & {
   autoExpandToolCalls?: boolean;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
   typingActors?: readonly ChatTypingActorView[];
+  typingOverflow?: ChatTypingOverflow;
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   onOpenSessionLink?: (target: SessionLinkTarget) => void;

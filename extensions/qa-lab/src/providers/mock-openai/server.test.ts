@@ -5264,7 +5264,7 @@ Update and merge these partial structured summaries.`,
     });
   });
 
-  it("summarizes QA tool-search bridge outputs with the nested plugin result marker", async () => {
+  it("summarizes QA tool-search catalog outputs with the nested plugin result marker", async () => {
     const server = await startMockServer();
     const targetTool = "fake_plugin_tool_17";
 
@@ -5274,25 +5274,22 @@ Update and merge these partial structured summaries.`,
           `tool search qa check target=${targetTool}. Call exactly that tool once and then summarize.`,
         ),
         makeToolOutputWithCallId(
-          "call_tool_search_code_1",
+          "call_tool_call_1",
           JSON.stringify({
-            ok: true,
-            value: {
-              tool: {
-                id: `openclaw:tool-search-e2e-fixture:${targetTool}`,
-                source: "openclaw",
-                sourceName: "tool-search-e2e-fixture",
-                name: targetTool,
-                description: "x".repeat(260),
-              },
-              result: {
-                content: [
-                  {
-                    type: "text",
-                    text: `FAKE_PLUGIN_OK ${targetTool} {"marker":"code"}`,
-                  },
-                ],
-              },
+            tool: {
+              id: `openclaw:tool-search-e2e-fixture:${targetTool}`,
+              source: "openclaw",
+              sourceName: "tool-search-e2e-fixture",
+              name: targetTool,
+              description: "x".repeat(260),
+            },
+            result: {
+              content: [
+                {
+                  type: "text",
+                  text: `FAKE_PLUGIN_OK ${targetTool} {"marker":"tools"}`,
+                },
+              ],
             },
           }),
         ),
@@ -5321,14 +5318,11 @@ Update and merge these partial structured summaries.`,
           `tool search qa check target=${targetTool}. Call exactly that tool once and then summarize.`,
         ),
         makeToolOutputWithCallId(
-          "call_tool_search_code_1",
+          "call_tool_call_1",
           JSON.stringify({
-            ok: true,
-            value: {
-              tool: { name: targetTool },
-              result: {
-                content: [{ type: "text", text: `FAKE_PLUGIN_OK ${targetTool}` }],
-              },
+            tool: { name: targetTool },
+            result: {
+              content: [{ type: "text", text: `FAKE_PLUGIN_OK ${targetTool}` }],
             },
           }),
         ),
@@ -5520,7 +5514,7 @@ Update and merge these partial structured summaries.`,
     {
       label: "direct custom tools before tool search",
       declarations: {
-        tools: [{ type: "function", name: "tool_search_code" }, CODEX_CUSTOM_PATCH_NAMESPACE],
+        tools: [{ type: "function", name: "tool_search" }, CODEX_CUSTOM_PATCH_NAMESPACE],
       },
       additionalTools: undefined,
     },

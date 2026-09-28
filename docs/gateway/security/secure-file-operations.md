@@ -17,6 +17,8 @@ OpenClaw retains fs-safe's **auto** native mode on macOS, Linux, and Windows. Su
 
 No-clobber `Root.move()` calls, including the default and `{ overwrite: false }`, require native support for an atomic no-replace rename. With native mode `off`, or a missing or unsupported helper, moving to an absent destination fails with `helper-unavailable` and leaves the source in place. A collision returns `already-exists`, preserving both the source and competing destination. A failed identity check after dispatch can still reject after the move has completed.
 
+Doctor's legacy migration claims can use verified same-directory hardlink publication when the helper is unavailable, including native loading failures. This preserves the source identity and refuses an existing claim. Native mode `require` and mutation-specific Root policies prevent this fallback. Filesystem permission and I/O failures remain errors and do not trigger the fallback.
+
 On Windows, secure credential reads need the matching native helper to verify ownership and ACLs on the same open file descriptor that supplies the bytes.
 
 fs-safe publishes prebuilt native helpers as optional platform packages for Linux x64/arm64 (glibc and musl), macOS x64/arm64, and Windows x64. A normal package install selects the matching package without a compiler. OpenClaw loads it through fs-safe's own dependency scope, including nested pnpm installs. Windows secure reads fail with `permission-unverified` when the helper is missing, outdated, disabled, or unsupported; there is no pathname-based permission fallback. This includes installs that omit optional dependencies and native Windows ARM64 runtimes. File SecretRef providers and GitHub identity credentials require these secure reads.

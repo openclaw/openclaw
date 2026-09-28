@@ -73,6 +73,7 @@
     <string name="native_0728ba404eb8f8bd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway 已記錄單次核准。"</string>
     <string name="native_073c1634c496cdb6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"status"</string>
     <string name="native_074493326501c6f6" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s · %2$s/%3$s"</string>
+    <string name="native_07645a62056be5f1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"個人資料與外觀"</string>
     <string name="native_07bcb0f3c324a358" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw 只會在配對的 Gateway 要求時檢查位置。在下一個 Android 畫面上，選擇 %1$s，以允許應用程式在背景執行時進行檢查。"</string>
     <string name="native_0835c4a85f93dd32" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"已顯示行號"</string>
     <string name="native_084e990a49ba65e6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"拒絕"</string>
@@ -107,7 +108,6 @@
     <string name="native_0cf04463c4276a62" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"已晉升"</string>
     <string name="native_0d21bd52022ca7f7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"上線"</string>
     <string name="native_0d5644ff52ce2ba3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"範圍"</string>
-    <string name="native_0d70006b0444301b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"檢視機器畫面"</string>
     <string name="native_0db10f2c2f332cd2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"kick"</string>
     <string name="native_0db184f967e05413" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway 傳回了無效的自動化。"</string>
     <string name="native_0dc49fb52ef24934" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"執行個體 ID"</string>
@@ -161,9 +161,11 @@
     <string name="native_14638daf580b6ee0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Android 設定指南"</string>
     <string name="native_146c4d822cea4531" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"已封鎖轉送的應用程式：%1$s 個。"</string>
     <string name="native_1485bc093cdbef6d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"已配對的裝置"</string>
+    <string name="native_14910f2a5b135da8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"診斷與日誌"</string>
     <string name="native_14bd5cb7d035e354" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"隱藏搜尋"</string>
     <string name="native_1509f561f2416598" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"儲存"</string>
     <string name="native_1520b570498730a0" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s 個待處理"</string>
+    <string name="native_154bf57eb2583196" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"這支手機"</string>
     <string name="native_155106be1173d757" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"裝置名稱"</string>
     <string name="native_155f816c0407310c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"提交"</string>
     <string name="native_157dca92e4250458" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"save"</string>
@@ -197,7 +199,6 @@
     <string name="native_18f6e5973bc41268" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"喚醒詞或短語"</string>
     <string name="native_1906b261e6e0fdd0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway 需要裝置核准"</string>
     <string name="native_19408baaf5c2e446" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"外接麥克風"</string>
-    <string name="native_194a05367fb28913" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s/%2$s 個已就緒"</string>
     <string name="native_199e261f8ee0e97f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"已連線（操作員離線）"</string>
     <string name="native_19dd83f117525b93" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"黃色"</string>
     <string name="native_19fc7a47df16fb1f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"功能未核准"</string>
@@ -324,7 +325,6 @@
     <string name="native_2937013f21818106" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"update"</string>
     <string name="native_29887a5ff9846ccc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"分享"</string>
     <string name="native_29ac043e44bf74c7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Progress Card"</string>
-    <string name="native_29d5c526bab8bf50" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"相機已啟用"</string>
     <string name="native_2a1446dd9ce169e9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"完成設定後，Telegram、WhatsApp、電子郵件及其他頻道會顯示在這裡。"</string>
     <string name="native_2a33d984de881573" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"網路錯誤"</string>
     <string name="native_2ac86a8e8f1d6cfb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tidepooling"</string>
@@ -375,7 +375,6 @@
     <string name="native_31347fbd80416902" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"這看起來像設定代碼。請返回並選擇「設定 Gateway」，然後選擇「使用設定代碼」。"</string>
     <string name="native_3191b52693ec28b4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"✦"</string>
     <string name="native_3199f14286736527" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"預估費用"</string>
-    <string name="native_31b1b13bf090da01" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"代理程式與自動化"</string>
     <string name="native_31e23ff08451a6c9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"需要登入"</string>
     <string name="native_31e392d1c0378bec" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"套用"</string>
     <string name="native_31ee02ebfbe71531" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"已略過自動化執行。"</string>
@@ -432,7 +431,6 @@
     <string name="native_381428f5f251a764" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Conversation Send"</string>
     <string name="native_3824a9f4dafe92c6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"畫布"</string>
     <string name="native_3840d9d29421c46c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"預設模型"</string>
-    <string name="native_384ae4ab1a2830f9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1 個提供者"</string>
     <string name="native_385001409de8562a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"無法自動讀取 Gateway 憑證。請貼上從 Gateway 主機取得的 SHA-256 指紋。"</string>
     <string name="native_387b2569e440838c" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"傳送失敗：%1$s"</string>
     <string name="native_38d198cd5303680f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"傳送錯誤"</string>
@@ -505,6 +503,7 @@
     <string name="native_41df9f586511e084" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"手機可連線至 Gateway"</string>
     <string name="native_41ed52921661c7f0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway"</string>
     <string name="native_424a2551d356754c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"已過期"</string>
+    <string name="native_425a17115c34f942" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"裝置名稱與身分"</string>
     <string name="native_4265f793ee7f4af7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"無法繼續此工作階段。"</string>
     <string name="native_4287d54ad5e78985" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"來自 Gateway 的 OpenClaw 排程工作。"</string>
     <string name="native_4291b6972eb60f92" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"差異內容過大：此快照已省略部分檔案或修補內容。"</string>
@@ -573,6 +572,7 @@
     <string name="native_4ba5121d4d1be174" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"裝置"</string>
     <string name="native_4bc652d0bc018e69" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Android 版 OpenClaw。"</string>
     <string name="native_4bcf240ace02f19c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"功能核准待處理"</string>
+    <string name="native_4bd2d2d5866e6010" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"控制瀏覽器"</string>
     <string name="native_4bd86a1dee849d6e" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s 個問題需要回答"</string>
     <string name="native_4bebf9c0f53c98ff" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在準備附件…"</string>
     <string name="native_4c086c788ad0fdab" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"搜尋摘要"</string>
@@ -604,12 +604,10 @@
     <string name="native_5047cfb3b607e7d0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"連線至 Gateway 以載入節點和已配對的裝置。"</string>
     <string name="native_5051902c7b6a368b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"切換分支"</string>
     <string name="native_506ec35a250d7ff9" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"第 %1$s–%2$s 張圖片，共 %3$s 張"</string>
-    <string name="native_5083cd4b96b0d09d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"沒有 Skills"</string>
     <string name="native_50bae925225d054b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"大聲播放回覆"</string>
     <string name="native_50c8b81faf51e7d1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"標示為已讀"</string>
     <string name="native_50eeec67b7dae6d1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"節點核准待處理"</string>
     <string name="native_51391bf0ab33e827" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"wake"</string>
-    <string name="native_51ad891dd2c5d288" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s 個提案"</string>
     <string name="native_51bc9903f8056c05" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway 驗證需要處理。"</string>
     <string name="native_51bfffbcdbcfbc00" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"連線詳細資訊"</string>
     <string name="native_522ff63cdfa8c9a7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"毫秒"</string>
@@ -662,6 +660,7 @@
     <string name="native_57666930af1af35e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"使用設定代碼"</string>
     <string name="native_5771bc350e9c4cfd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"語音辨識連線已中斷。請點選麥克風再試一次。"</string>
     <string name="native_57c4b13a4c7335e7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"sticker"</string>
+    <string name="native_57c5ee46b3627d2e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"收合瀏覽器"</string>
     <string name="native_57efc4ebe625cab5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"使用安全的 wss:// 或 Tailscale Serve Gateway，在 Control UI 中或使用 openclaw qr 產生具完整存取權的設定代碼，然後在下方掃描或貼上該代碼並重新連線，以啟用設定和升級。"</string>
     <string name="native_57fce44d7c6df51a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"steer"</string>
     <string name="native_57fd7a0cf33f2666" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"已選取"</string>
@@ -723,7 +722,6 @@
     <string name="native_60acc53f13a5d1bf" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"深色"</string>
     <string name="native_60ea1847c2ba5446" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"回應已中止"</string>
     <string name="native_6105d6cc76af4003" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"圖片"</string>
-    <string name="native_614b8348a2dbe46b" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"已保留 %1$s 個"</string>
     <string name="native_614e83ef17c13f3c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"沒有符合的對話串"</string>
     <string name="native_6197595503f01ee2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"delete"</string>
     <string name="native_619837a134285528" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"版面配置：精簡"</string>
@@ -877,6 +875,7 @@
     <string name="native_74e492d5d0df0bab" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"開始之前"</string>
     <string name="native_74f0a5d234edc4af" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"無法載入 Skills。"</string>
     <string name="native_75081b593d15cf6e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"已停用"</string>
+    <string name="native_752253669f729e57" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"權限與共用功能"</string>
     <string name="native_752ae6f8d8349c75" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"仍在等待核准"</string>
     <string name="native_75573d44b7620f81" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"網頁摘錄"</string>
     <string name="native_757bfc36ce2e0428" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"檢查 OpenClaw 是否能在此手機上清楚發聲。"</string>
@@ -913,7 +912,6 @@
     <string name="native_79a7ab236717f90d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"在產生的技能提案成為正式技能前先行檢視。"</string>
     <string name="native_79b1916f9fedb270" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"原生 Codex 模型"</string>
     <string name="native_79d3a1f108e8d9c3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"隨附"</string>
-    <string name="native_79d3d8a05bab3172" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"有 %1$s 個可用"</string>
     <string name="native_7a1058bb81879dbd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway 待處理"</string>
     <string name="native_7a13d46682b4c94b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"連線至 Gateway 以開啟此工作階段。"</string>
     <string name="native_7a211017043ea5cb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"需要驗證身分"</string>
@@ -968,7 +966,6 @@
     <string name="native_822fd1874c0d1e32" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"更智慧"</string>
     <string name="native_825b9c75d7fed691" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"允許排程器執行此自動化。"</string>
     <string name="native_826590b6b7b23c46" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"儲存 API 金鑰"</string>
-    <string name="native_82990a093599a9bb" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"已套用 %1$s"</string>
     <string name="native_8340dad4f3be30a8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"尚無夢境日記。"</string>
     <string name="native_838337fd9ab30454" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"摘要近期討論串和後續步驟。"</string>
     <string name="native_83e2faed20a3cda4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw 顯示時會在裝置上執行。"</string>
@@ -982,7 +979,6 @@
     <string name="native_84a2e27466832efd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"未命名分支"</string>
     <string name="native_84aebc69a1bf739a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"已設定"</string>
     <string name="native_84db8228370efedd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"camera list"</string>
-    <string name="native_84f9cb5c5662fa3b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"已套用 1 個"</string>
     <string name="native_8581125e3bd6b2fe" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"原生語音對話：使用裝置的語音辨識功能與已設定的語音對話聲音。"</string>
     <string name="native_859270e63a2904d7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"camera clip"</string>
     <string name="native_85a39ab345d672ff" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"是"</string>
@@ -1001,6 +997,7 @@
     <string name="native_87b42e40c2a290e0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"已核准"</string>
     <string name="native_87bb59ba2f92f2a5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"工作區"</string>
     <string name="native_87bf2bc08589f0bd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"語音"</string>
+    <string name="native_881473f87df47f9c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"連線以管理頻道"</string>
     <string name="native_88296ab3d6665a8e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Subagents"</string>
     <string name="native_888d1f77d903b80b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"失敗：未偵測到安全 Gateway 端點。請啟用 Gateway TLS 或 Tailscale Serve，或選取 Unencrypted 並使用受信任的私人 LAN 位址。"</string>
     <string name="native_88b01c8a4bff9a08" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"訊號"</string>
@@ -1027,6 +1024,7 @@
     <string name="native_8ba5517fc10b3db5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"允許控制其他應用程式？"</string>
     <string name="native_8ba795822f1f7fe4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"回應更快速，但會消耗較多用量限額。"</string>
     <string name="native_8bb7ec15b1e350a5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在檢視"</string>
+    <string name="native_8bceb389ca3ed9c6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"代理程式瀏覽器"</string>
     <string name="native_8bf253a125f66985" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"掃描或貼上設定碼，以新增另一個 Gateway。"</string>
     <string name="native_8c13f73ba145c626" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"群體"</string>
     <string name="native_8c4a3896e8f06d27" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"TLS 逾時"</string>
@@ -1053,7 +1051,6 @@
     <string name="native_8e803d361324b459" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"系統事件文字"</string>
     <string name="native_8e9c32062fc9bc71" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"由 %1$s 更新"</string>
     <string name="native_8eb626078c16c726" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"排序：%1$s"</string>
-    <string name="native_8ee374b2023b7124" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s 個等待中"</string>
     <string name="native_8f39db4d7d02e57a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"無法使用圖表預覽"</string>
     <string name="native_8f4716e674b9f719" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Image Generation"</string>
     <string name="native_8f54b0d1e30092d5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"語音訊息"</string>
@@ -1099,7 +1096,6 @@
     <string name="native_942087cc2d41e013" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"重試"</string>
     <string name="native_943a630198a15ae2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"開始聊天後，進行中的 OpenClaw 對話將顯示在這裡。"</string>
     <string name="native_9446c09dff7cb76a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"無法載入自動化項目。"</string>
-    <string name="native_944946b3f36d1520" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"代理程式工作區中的 Shell"</string>
     <string name="native_947fd9b8681c972b" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s 個進行中"</string>
     <string name="native_948cff139c5c153d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"選擇裝置權限"</string>
     <string name="native_94b917998807d655" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"上次持續時間"</string>
@@ -1130,14 +1126,13 @@
     <string name="native_98a75b6c4b7f4dcf" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"登入狀態已重新整理。"</string>
     <string name="native_98d254a311d0e820" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"重新命名群組"</string>
     <string name="native_98ed7669b6d1be9b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Update Goal"</string>
+    <string name="native_9926428ed36a6d88" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"瀏覽器已離線。請重新連線以繼續使用此分頁。"</string>
     <string name="native_992a0f626b0714b9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"提供者可用性未知"</string>
     <string name="native_996c32b35f2182a9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"提供者"</string>
     <string name="native_996ee6f0d878196a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"刪除群組…"</string>
     <string name="native_99733344956dde48" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"承載資料"</string>
     <string name="native_997f6b92e1274e90" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"通話記錄"</string>
     <string name="native_9993673dd5851811" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Memory Search"</string>
-    <string name="native_999e5fee2f7c2856" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s 個提供者"</string>
-    <string name="native_99b6623213642793" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"手機情境與隱私權"</string>
     <string name="native_99f818dd50c0dd7c" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"已連線 %1$s/%2$s"</string>
     <string name="native_9a0019fcfaef0a49" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s  %2$s"</string>
     <string name="native_9a06e0f6dc47486e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"下一組圖片"</string>
@@ -1146,7 +1141,6 @@
     <string name="native_9a25e9ad380dafd4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"開啟自動化項目以檢查其設定與執行記錄。具管理員範圍的連線也可以執行、編輯、啟用、停用或刪除該項目。"</string>
     <string name="native_9aa95cab245f4330" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"提案已隔離。"</string>
     <string name="native_9ac97bafbb1dae00" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"已暫停自動化。"</string>
-    <string name="native_9adab9e889c70409" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw 行動版"</string>
     <string name="native_9b797864ba532a10" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway 無法使用"</string>
     <string name="native_9b9a8d05a7ec353b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Read"</string>
     <string name="native_9bb725005055412c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"變更前"</string>
@@ -1184,7 +1178,6 @@
     <string name="native_a02f1cea3c1d6c6e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"思考中…"</string>
     <string name="native_a05e2595b1680cfb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway 存取權需要審查"</string>
     <string name="native_a076f90e7a2e6bd3" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"將 %1$s 儲存為 %2$s"</string>
-    <string name="native_a0946d3da9c32dee" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"已保留 1 個"</string>
     <string name="native_a098de44336bcd3a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"無法重新整理模型。請點選「重新整理」再試一次。"</string>
     <string name="native_a09fc07b0ff5e7e7" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s 秒"</string>
     <string name="native_a0d36b5ded4ebcce" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"要套用提案嗎？"</string>
@@ -1199,16 +1192,18 @@
     <string name="native_a1a5936d3b0f8a69" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"最高"</string>
     <string name="native_a1bca979bc69befb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Cron 變更需要 operator.admin 存取權限。"</string>
     <string name="native_a20d12c5e9c428c3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"思考中"</string>
+    <string name="native_a21d23474ca7a4d5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"您目前的 Gateway 權限無法使用瀏覽器控制功能。"</string>
     <string name="native_a22ffaa738de25c6" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"聽寫失敗。請點一下麥克風再試一次。"</string>
     <string name="native_a23967c129397864" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"screen snapshot"</string>
+    <string name="native_a24b1588e1d076dd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"閱讀清單"</string>
     <string name="native_a29d2779acbc81f2" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"已觀察的節點：%1$s"</string>
     <string name="native_a2bbc7ffd69f9c49" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"找不到任何動作"</string>
     <string name="native_a2f29836cda5ceb1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"儲存並連線"</string>
     <string name="native_a330395cc0a53ad1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"list"</string>
     <string name="native_a34f54e488b48e66" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway 已記錄核准並儲存選擇。"</string>
     <string name="native_a37cf0a1111bf41c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"請輸入有效的手動端點以進行連線。"</string>
+    <string name="native_a37d740c59189c30" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"旅行檢查清單"</string>
     <string name="native_a4212f1e2fb0f506" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"儲存設定檔"</string>
-    <string name="native_a424e33d90931d1e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"已鎖定"</string>
     <string name="native_a450ea5e177b4787" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"編輯自動化"</string>
     <string name="native_a484bc216860979e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"使用相同的網路或安全的遠端 Gateway URL。"</string>
     <string name="native_a4a3dc943aa02669" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"密碼（選填）"</string>
@@ -1292,7 +1287,6 @@
     <string name="native_afc56755918ad9b2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"程式碼結尾"</string>
     <string name="native_afc798a41a0c1b60" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Code Execution"</string>
     <string name="native_afdab89aa01652b0" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"無法完成登入要求。請檢查連線後再試一次。"</string>
-    <string name="native_afe7b1f9c558450d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"沒有供應商使用量資料"</string>
     <string name="native_aff0766a5290e117" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"檢閱"</string>
     <string name="native_b0375de83dab3599" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"需要麥克風權限。"</string>
     <string name="native_b0eeb9e9e45398b5" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s 天"</string>
@@ -1309,10 +1303,12 @@
     <string name="native_b24d5be587b2d206" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"語音對話失敗：即時服務供應商意外關閉。"</string>
     <string name="native_b279302f400484ee" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw 時效性通知"</string>
     <string name="native_b2a96c3d3fc2b6ac" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"ban"</string>
+    <string name="native_b2b0fe8246144c77" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"連線以檢視核准請求"</string>
     <string name="native_b2b8db00243fa6ca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"工具活動"</string>
     <string name="native_b2d672f21eed539a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"需要 Gateway 權杖"</string>
     <string name="native_b2e5f1e45872f947" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"已配對的裝置"</string>
     <string name="native_b322b65227bc3ec9" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"已收合"</string>
+    <string name="native_b332c3492d5eb10a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"組態"</string>
     <string name="native_b3975aa73d16205c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"需要重新核准"</string>
     <string name="native_b3e24789bf8dc89b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"未排程"</string>
     <string name="native_b450645debe2cf0a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"聯絡人"</string>
@@ -1335,6 +1331,7 @@
     <string name="native_b7b89bf0fd930a9f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"沒有已設定的模型"</string>
     <string name="native_b7c397f33783abec" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway 會在下載前透過 ClawHub 驗證此確切版本。檢查結果會顯示在安裝結果中。遭封鎖的版本或無法進行安全性驗證時，將無法安裝。"</string>
     <string name="native_b7e3e4aa4257b9a1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"停用"</string>
+    <string name="native_b7f17f5b88bd83a7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"連線以管理裝置"</string>
     <string name="native_b82c89a18faf5200" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"無法停止回應。請重新整理後再試一次。"</string>
     <string name="native_b8352b44a588721c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"應用程式語言"</string>
     <string name="native_b8380b8a2317b9fb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"配對 Gateway"</string>
@@ -1357,6 +1354,7 @@
     <string name="native_bae9264d6d972b80" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"summarize"</string>
     <string name="native_baeefbad50a33e7c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"強調色"</string>
     <string name="native_bb4f2558e4333834" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"小工具圖片已儲存至「下載」"</string>
+    <string name="native_bb6eb9ff36718688" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"連線以管理供應商"</string>
     <string name="native_bbb4106e814467bd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在聆聽…"</string>
     <string name="native_bbe5fc3b9ef39f99" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在啟動…"</string>
     <string name="native_bc198f2a7e49ad71" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s 個詞元"</string>
@@ -1452,6 +1450,7 @@
     <string name="native_c7985fa72daa6ea4" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway 未回傳 %1$s 的設定資訊"</string>
     <string name="native_c7b6dfd5c3a183c3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"要忘記此 Gateway 嗎？"</string>
     <string name="native_c7b7b7f01360f6a5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"選填說明"</string>
+    <string name="native_c7dd4dc71a4977c5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"瀏覽器檢視無法使用。請更新 Gateway，並使用其隨附的 Control UI。"</string>
     <string name="native_c7e1091492cdd0d9" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"開啟 %1$s"</string>
     <string name="native_c7f32adc081d9303" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"權杖（選填）"</string>
     <string name="native_c82c37f336bc03f4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"夢境中"</string>
@@ -1606,6 +1605,7 @@
     <string name="native_dbb6cf817820de0b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"需要權限"</string>
     <string name="native_dbcd5e7bb7a0f538" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"淺色"</string>
     <string name="native_dc1c61f0f60f79a1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"檢視提供者的就緒狀態\n與已設定的模型。"</string>
+    <string name="native_dc273117482b4429" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"連線"</string>
     <string name="native_dc380888c4e2c776" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"載入中"</string>
     <string name="native_dc6409a0d1c41734" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"失敗警示"</string>
     <string name="native_dc72ce68e7c53d61" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"主題與已翻譯的 Android 文字。"</string>
@@ -1752,7 +1752,6 @@
     <string name="native_f113b3bd283e216c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"此 Gateway 連線需要 operator.admin 才能安裝 ClawHub Skills。"</string>
     <string name="native_f12b7a9412a51a7d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"提案已套用。"</string>
     <string name="native_f14751d33eb91e75" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"回覆已加入佇列"</string>
-    <string name="native_f14cc3ede97361fd" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s 個待處理"</string>
     <string name="native_f14cd8dd44162255" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s 小時前"</string>
     <string name="native_f15bf83677856dfa" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"讀取通話記錄"</string>
     <string name="native_f19611c61ca5f369" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"完整存取權"</string>
@@ -1763,7 +1762,6 @@
     <string name="native_f2000dce9b5d40c8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"已拒絕核准。"</string>
     <string name="native_f200366d0c4352cb" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"無法檢查 Skill Workshop 提案。"</string>
     <string name="native_f20c879465551f0d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"已釘選"</string>
-    <string name="native_f211f2bf832dda14" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"個人資料與裝置"</string>
     <string name="native_f2232e8ae9a9a953" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"無法取得你的位置。請檢查裝置的定位設定，然後再試一次。"</string>
     <string name="native_f2316e644b1d2621" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"無法將訊息排入佇列以供稍後傳送。"</string>
     <string name="native_f24a1d904fd1b482" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"隔離"</string>

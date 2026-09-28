@@ -12,13 +12,11 @@ type AttemptTrajectoryTerminalStatus = "success" | "error" | "interrupted";
 /** Terminal error marker for runs that produced no user-visible delivery or durable progress. */
 const NON_DELIVERABLE_TERMINAL_TURN_REASON = "non_deliverable_terminal_turn";
 
-/** Normalized terminal status recorded for an embedded run attempt trajectory. */
 type AttemptTrajectoryTerminal = {
   status: AttemptTrajectoryTerminalStatus;
   terminalError?: typeof NON_DELIVERABLE_TERMINAL_TURN_REASON;
 };
 
-/** Signals that decide whether a completed run attempt has deliverable output. */
 type ResolveAttemptTrajectoryTerminalParams = {
   failed: boolean;
   interrupted: boolean;

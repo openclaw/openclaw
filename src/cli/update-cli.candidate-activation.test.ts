@@ -332,7 +332,6 @@ describe("update-cli", () => {
       const root = await mockPackageInstallAtCaseDir("openclaw-update-startup-admission");
       mockCurrentProcessFreshDoctor({
         packageRoot: root,
-        candidateAdmission: mode !== "no-restart",
       });
       mockFileBackedPathExists();
       mockRunningManagedGateway([

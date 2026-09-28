@@ -190,7 +190,9 @@ async function readCredential(params: {
       tokenEndpoint: TOKEN_ENDPOINT,
       grantedScope: scope,
       authFlow: sharing ? TOKEN_SHARING_AUTH_FLOW : IDENTITY_AUTH_FLOW,
-      displayName: sharing ? "Sign in with ChatGPT" : "Sign in with ChatGPT (identity only)",
+      displayName: sharing
+        ? "Sign in with ChatGPT (Beta)"
+        : "Sign in with ChatGPT (Beta, identity only)",
     },
   };
 }
@@ -399,7 +401,7 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
             : []),
           ...(ctx.prompter.openUrl ? [] : [`Sign-in URL: ${url.toString()}`]),
         ].join("\n\n"),
-        "Sign in with ChatGPT",
+        "Sign in with ChatGPT (Beta)",
       ),
       owner.signal,
     );

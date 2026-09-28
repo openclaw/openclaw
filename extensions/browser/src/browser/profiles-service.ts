@@ -1,9 +1,3 @@
-/**
- * Browser profile service.
- *
- * Implements profile listing, creation, and deletion using browser config
- * mutation helpers and route context runtime state.
- */
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -15,7 +9,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { assertCdpEndpointAllowed, redactCdpUrl } from "./cdp.helpers.js";
 import { resolveOpenClawUserDataDir } from "./chrome.js";
-import type { BrowserDeleteProfileResult } from "./client.js";
+import type { BrowserCreateProfileResult, BrowserDeleteProfileResult } from "./client.js";
 import {
   createBrowserProfileConfig,
   deleteBrowserProfileConfig,
@@ -50,7 +44,6 @@ import {
 } from "./system-profiles.js";
 import { movePathToTrash } from "./trash.js";
 
-/** Input accepted when creating a browser profile. */
 type CreateProfileParams = {
   name: string;
   color?: string;
@@ -59,16 +52,8 @@ type CreateProfileParams = {
   driver?: "openclaw" | "existing-session";
 };
 
-/** Result returned after creating a browser profile. */
-type CreateProfileResult = {
-  ok: true;
-  profile: string;
+type CreateProfileResult = BrowserCreateProfileResult & {
   transport: "cdp" | "chrome-mcp";
-  cdpPort: number | null;
-  cdpUrl: string | null;
-  userDataDir: string | null;
-  color: string;
-  isRemote: boolean;
 };
 
 /** Create a profile service bound to one browser route context. */

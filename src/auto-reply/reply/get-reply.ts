@@ -214,7 +214,7 @@ export async function getReplyFromConfig(
   options?: GetReplyOptions,
   configOverride?: OpenClawConfig,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
-  const opts = prepareInternalGetReplyOptions(options);
+  const opts = prepareInternalGetReplyOptions(options, ctx);
   const isFastTestEnv = isFastTestRuntimeEnv();
   const preparedReplyDispatchRuntime = configOverride
     ? undefined

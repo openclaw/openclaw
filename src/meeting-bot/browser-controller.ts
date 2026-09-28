@@ -574,17 +574,8 @@ export async function recoverMeetingBrowserTab<
     };
   }
   return await inspectRecoverableTab({
-    adapter: params.adapter,
-    allowSessionAdoption: params.allowSessionAdoption,
-    autoJoin: params.autoJoin,
-    callBrowser: params.callBrowser,
-    captureCaptions: params.captureCaptions,
-    config: params.config,
+    ...params,
     ...(deadline === undefined ? {} : { deadline }),
-    meetingSessionId: params.meetingSessionId,
-    mode: params.mode,
-    readOnly: params.readOnly,
-    requestedMeetingUrl: params.requestedMeetingUrl,
     timeoutMs,
     tab,
     targetId,

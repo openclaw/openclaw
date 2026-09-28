@@ -28,9 +28,13 @@ export function normalizeGithubCopilotDomain(raw: string | undefined | null): st
 
 /** Normalize legacy OAuth URL/domain spellings without accepting unsupported tenants. */
 export function normalizeGithubCopilotOAuthScope(raw: string | undefined): string | undefined {
-  const trimmed = raw?.trim();
-  if (!trimmed) {
+  // Match credential formatting: absent/empty is public; whitespace-only is invalid.
+  if (!raw) {
     return PUBLIC_GITHUB_COPILOT_DOMAIN;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return undefined;
   }
   try {
     const hostname = new URL(trimmed.includes("://") ? trimmed : `https://${trimmed}`).hostname;

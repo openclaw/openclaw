@@ -158,7 +158,10 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
   "sessions.abort": async (options) => {
     const { params, respond, context, client, sessionMutationAuthorization } = options;
     const authority = readGatewayRequestMutationAuthority(options);
-    const narrow = authority.sessionScope === "operator.sessions.write";
+    const requester = resolveChatAbortRequester(client, sessionMutationAuthorization);
+    const narrow =
+      authority.sessionScope === "operator.sessions.write" ||
+      requester.sessionAuthority !== undefined;
     if (!assertValidParams(params, validateSessionsAbortParams, "sessions.abort", respond)) {
       return;
     }
@@ -359,6 +362,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
     const assertAbortCurrent = () => {
       authority.assertCurrent();
       sessionMutationAuthorization?.assertCurrent();
+      requester.sessionAuthority?.assertCurrent();
       assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
     };
     const queueKeys = [key, ...(requestedKeyAliases ?? []), canonicalKey, sessionEntry?.sessionId];
@@ -575,7 +579,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
       runId: requestedRunId,
       abortOrigin: "rpc",
       stopReason: "rpc",
-      requester: resolveChatAbortRequester(client),
+      requester,
       assertCurrent: assertAbortCurrent,
       onAuthorizedAfterQueuedAbort,
     });

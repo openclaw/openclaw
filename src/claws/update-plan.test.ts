@@ -151,7 +151,7 @@ describe("buildClawUpdatePlan", () => {
   it("plans missing package restoration without mutating state", async () => {
     const current = await fixture();
     const beforeConfig = structuredClone(current.config);
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
     const databasePath = resolveOpenClawStateSqlitePath(current.env);
     const beforeBytes = await readFile(databasePath);
     const beforeStat = await stat(databasePath);

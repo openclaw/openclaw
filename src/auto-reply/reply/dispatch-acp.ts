@@ -17,9 +17,7 @@ import {
 } from "../../acp/runtime/errors.js";
 import {
   closeAdmittedRunDelegatedAuthority,
-  createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
-  prepareAgentRunAdmission,
   type AdmittedRunContext,
 } from "../../agents/admitted-run-context.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agents/agent-run-terminal-outcome.js";
@@ -41,6 +39,7 @@ import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
+import { getGatewayLocalUserIngress } from "../../gateway/local-user-ingress.js";
 import { logVerbose } from "../../globals.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -72,7 +71,7 @@ import {
   resolveAgentTurnAttachments,
   resolveInlineAgentImageAttachments,
 } from "./agent-turn-attachments.js";
-import { consumeChannelRunAdmission } from "./channel-run-admission.js";
+import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import {
   createAcpDispatchDeliveryCoordinator,
   type AcpDispatchDeliveryCoordinator,
@@ -763,23 +762,14 @@ export async function tryDispatchAcpReplyCore(params: {
       logVerbose(`dispatch-acp: start reply lifecycle failed: ${formatErrorMessage(error)}`);
     }
 
-    const channelAdmission = consumeChannelRunAdmission(
-      readChannelContextAdmissionEvidence(params.ctx),
-    );
-    admittedRunContext = await prepareAgentRunAdmission({
+    admittedRunContext = await prepareChannelRunAdmission({
       cfg: params.cfg,
-      operationalRunInstance: createOperationalRunInstanceRef(requestId),
-      facts: {
-        runId: requestId,
-        agentId: acpAgentId,
-        ingress: {
-          kind: "acp",
-          boundary: "auto-reply.acp",
-          state: channelAdmission.ingressState,
-        },
-        ...channelAdmission.facts,
-      },
-      onAdmitted: channelAdmission.onAdmitted,
+      runId: requestId,
+      agentId: acpAgentId,
+      ingressKind: "acp",
+      boundary: "auto-reply.acp",
+      evidence: readChannelContextAdmissionEvidence(params.ctx),
+      gatewayLocalUserIngress: getGatewayLocalUserIngress(params.ctx),
     }).admit("acp");
     recordAcceptedSessionParticipantInput(params.ctx, participantTarget);
     const turnAdmission = admittedRunContext;

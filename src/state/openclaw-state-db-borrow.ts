@@ -4,6 +4,7 @@ import {
   getOpenClawDatabaseMaintenanceScope,
   isOpenClawDatabaseMaintenanceResourceOwned,
   observeOpenClawDatabaseMaintenanceResource,
+  type OpenClawDatabaseMaintenanceScope,
 } from "./openclaw-state-db-async-lifecycle.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 
@@ -27,17 +28,25 @@ export function createStateDatabaseRetainer(
     cachedDatabases: Map<string, OpenClawStateDatabase>;
   },
   operations: {
-    assertOpen(pathname: string): void;
+    assertOpen(pathname: string, ownership?: "cached-read"): void;
     capture(pathname: string): { assertCurrent(): void };
     retire(database: OpenClawStateDatabase, retireAdmission: boolean): void;
     retainFailed(database: OpenClawStateDatabase): void;
     touch(database: OpenClawStateDatabase): void;
   },
 ) {
-  const retain = (database: OpenClawStateDatabase, readOnly = false) => {
+  const admit = (pathname: string, ownership?: "cached-read") => {
     const scope = getOpenClawDatabaseMaintenanceScope();
     scope?.assertAdmission();
-    operations.assertOpen(database.path);
+    operations.assertOpen(pathname, ownership);
+    return scope;
+  };
+  // Only the synchronous entry points below can reach this already-admitted step.
+  const retain = (
+    database: OpenClawStateDatabase,
+    scope: OpenClawDatabaseMaintenanceScope | undefined,
+    readOnly = false,
+  ) => {
     operations.capture(database.path).assertCurrent();
     if (state.cachedDatabases.get(database.path) !== database || !database.db.isOpen) {
       throw new Error("OpenClaw state database borrow requires its current canonical handle");
@@ -77,14 +86,16 @@ export function createStateDatabaseRetainer(
     scope?.own(reference, "shared-references", () => reference.release());
     return reference;
   };
-  const findReadDatabase = (pathname: string) => {
-    getOpenClawDatabaseMaintenanceScope()?.assertAdmission();
-    operations.assertOpen(pathname);
+  const findReadDatabase = (pathname: string, ownership?: "cached-read") => {
+    const scope = admit(pathname, ownership);
     const database = state.cachedDatabases.get(path.resolve(pathname));
-    return database?.db.isOpen ? database : undefined;
+    return { database: database?.db.isOpen ? database : undefined, scope };
   };
-  const retainReadReference = (database: OpenClawStateDatabase) => {
-    const reference = retain(database, true);
+  const retainReadReference = (
+    database: OpenClawStateDatabase,
+    scope: OpenClawDatabaseMaintenanceScope | undefined,
+  ) => {
+    const reference = retain(database, scope, true);
     const assertCurrent = () => {
       if (state.cachedDatabases.get(database.path) !== database || !database.db.isOpen) {
         throw new Error("Shared-state read lost its original native owner");
@@ -104,20 +115,20 @@ export function createStateDatabaseRetainer(
     };
   };
   return {
-    retain: (database: OpenClawStateDatabase) => retain(database),
-    retainForIndependentRead(this: void, pathname: string) {
-      const database = findReadDatabase(pathname);
-      return database ? retainReadReference(database) : undefined;
+    retain: (database: OpenClawStateDatabase) => retain(database, admit(database.path)),
+    retainForIndependentRead(this: void, pathname: string, ownership?: "cached-read") {
+      const { database, scope } = findReadDatabase(pathname, ownership);
+      return database ? retainReadReference(database, scope) : undefined;
     },
-    borrowForRead(this: void, pathname: string) {
-      const database = findReadDatabase(pathname);
+    borrowForRead(this: void, pathname: string, ownership?: "cached-read") {
+      const { database, scope } = findReadDatabase(pathname, ownership);
       if (!database) {
         return undefined;
       }
       if (database.db.isTransaction) {
         throw new Error("Asynchronous shared-state reads cannot run inside a native transaction");
       }
-      return { database, ...retainReadReference(database) };
+      return { database, ...retainReadReference(database, scope) };
     },
   };
 }

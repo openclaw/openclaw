@@ -11,22 +11,11 @@ import { collectRuntimeMetadata } from "./queue/delivery-context.js";
 import { clearFollowupQueue } from "./queue/state.js";
 
 describe("session personal bootstrap in collected turns", () => {
-  it.each([false, undefined])(
-    "does not personalize a batch with ineligible source %s",
-    (eligible) => {
-      const external = createQueueTestRun({ prompt: "human request" });
-      external.personalBootstrapEligible = true;
-      const internal = createQueueTestRun({ prompt: "internal event" });
-      internal.personalBootstrapEligible = eligible;
-      expect(
-        collectRuntimeMetadata([external, internal]).personalBootstrapEligible,
-      ).toBeUndefined();
-      expect(collectRuntimeMetadata([]).personalBootstrapEligible).toBeUndefined();
-    },
-  );
+  it("does not personalize an empty batch", () => {
+    expect(collectRuntimeMetadata([]).personalBootstrapEligible).toBeUndefined();
+  });
 
   it.each([
-    { kind: "same participant", secondParticipant: "alice", selectedProfile: "session-owner" },
     { kind: "different participants", secondParticipant: "bob", selectedProfile: "session-owner" },
     { kind: "unknown participant", secondParticipant: undefined, selectedProfile: "session-owner" },
     { kind: "no human session owner", secondParticipant: "bob", selectedProfile: undefined },

@@ -22,12 +22,15 @@ import {
 } from "../process/gateway-work-admission.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
-import { IMAGE_ONLY_USER_MESSAGE } from "./agent-prompt.js";
 import {
   expectDeclaredHttpOwnerIdentity,
   expectHttpForeignSessionAuthority,
   expectSharedSecretHttpOwnerIdentity,
 } from "./http-authority.test-support.js";
+import {
+  registerOpenResponsesHttpUploadTests,
+  registerOpenResponsesHttpMediaInputTests,
+} from "./http-input-media.test-support.js";
 import {
   assistantSnapshotCases,
   streamingFailureCases,
@@ -46,6 +49,7 @@ import {
   parseSseData,
 } from "./http-stream.test-support.js";
 import type { ResponseResource } from "./open-responses.schema.js";
+import { registerOpenResponsesContinuationTests } from "./openresponses-http.continuation.test-support.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
   agentCommandMock,
@@ -76,19 +80,6 @@ installGatewayTestHooks({ scope: "suite" });
 let enabledServer: Awaited<ReturnType<typeof startServer>>;
 let enabledPort: number;
 let openResponsesTesting: {
-  resetResponseSessionState(): void;
-  storeResponseSessionAt(
-    responseId: string,
-    sessionKey: string,
-    now: number,
-    scope?: { authSubject: string; agentId: string; requestedSessionKey?: string },
-  ): void;
-  lookupResponseSessionAt(
-    responseId: string | undefined,
-    now: number,
-    scope?: { authSubject: string; agentId: string; requestedSessionKey?: string },
-  ): string | undefined;
-  getResponseSessionIds(): string[];
   resolveResponsesLimits(config: { maxUrlParts?: number } | undefined): { maxUrlParts: number };
 };
 
@@ -112,7 +103,6 @@ afterAll(async () => {
 });
 
 beforeEach(() => {
-  openResponsesTesting.resetResponseSessionState();
   fetchWithSsrFGuardMock.mockClear();
 });
 
@@ -309,6 +299,14 @@ async function expectInvalidRequest(
 }
 
 describe("OpenResponses HTTP API (e2e)", () => {
+  registerOpenResponsesHttpUploadTests({
+    getPort: () => enabledPort,
+    postResponses,
+    firstAgentOpts,
+    agentCommandMock,
+    fetchWithSsrFGuardMock,
+  });
+
   it("binds the Gateway lifecycle resolver to response runs", async () => {
     let resolveGatewayContext: ReturnType<typeof getGatewayContextResolver>;
     agentCommandMock.mockClear();
@@ -1746,30 +1744,6 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects resolved terminal agent failures without exposing provider details", async () => {
-    const privateDetail = "raw provider detail should stay private";
-    agentCommandMock.mockClear();
-    agentCommandMock.mockResolvedValueOnce(
-      recordAgentRunTerminalOutcome(
-        {
-          payloads: [{ text: "Command may have changed state", isError: true }],
-          meta: { error: { kind: "incomplete_turn", message: privateDetail } },
-        },
-        "failed",
-      ) as never,
-    );
-
-    const res = await postResponses(enabledPort, { model: "openclaw", input: "hi" });
-    const body = await res.text();
-    expect(res.status).toBe(500);
-    expect(JSON.parse(body)).toMatchObject({
-      status: "failed",
-      output: [],
-      error: { code: "api_error", message: "internal error" },
-    });
-    expect(body).not.toContain(privateDetail);
-  });
-
   it.each([
     ["error stop", { stopReason: "error" }, "failed", 500],
     [
@@ -2059,7 +2033,23 @@ describe("OpenResponses HTTP API (e2e)", () => {
             },
           );
           expect(allowed.status).toBe(200);
-          await ensureResponseConsumed(allowed);
+          const privateResponse = (await allowed.json()) as { id: string };
+          expect(agentCommandMock).toHaveBeenCalledTimes(1);
+
+          const privateContinuation = await postResponses(
+            port,
+            {
+              model: "openclaw",
+              input: "continue privately",
+              previous_response_id: privateResponse.id,
+            },
+            {
+              ...trustedProxyHeaders,
+              "x-openclaw-scopes": "operator.admin, operator.write",
+              "x-openclaw-session-key": "dashboard:incognito-openresponses-http",
+            },
+          );
+          await expectInvalidRequest(privateContinuation, /previous_response_id/);
           expect(agentCommandMock).toHaveBeenCalledTimes(1);
 
           agentCommandMock.mockClear();
@@ -2081,37 +2071,34 @@ describe("OpenResponses HTTP API (e2e)", () => {
             "Alice trusted-proxy response",
           );
 
-          const aliceContinuation = await postResponses(
-            port,
-            {
-              model: "openclaw",
-              user: "alice",
-              previous_response_id: aliceResponseId,
-              input: "continue alice history",
-            },
-            {
-              ...forwardedHeaders,
-              authorization: "Bearer different-forwarded-untrusted",
-              "x-forwarded-user": "Alice@example.com",
-            },
-          );
-          expect(aliceContinuation.status).toBe(200);
-          await ensureResponseConsumed(aliceContinuation);
-
-          const bobContinuation = await postResponses(
-            port,
-            {
-              model: "openclaw",
-              user: "bob",
-              previous_response_id: aliceResponseId,
-              input: "attempt alice history",
-            },
-            { ...forwardedHeaders, "x-forwarded-user": "bob@example.com" },
-          );
-          expect(bobContinuation.status).toBe(200);
-          await ensureResponseConsumed(bobContinuation);
-          expect(firstAgentOpts(2).sessionKey).not.toBe(aliceSessionKey);
-          expect(firstAgentOpts(1).sessionKey).toBe(aliceSessionKey);
+          for (const [user, previousId, expectedSession] of [
+            ["Alice@example.com", aliceResponseId, aliceSessionKey],
+            ["bob@example.com", aliceResponseId, undefined],
+            ["bob@example.com", "missing", undefined],
+          ] as const) {
+            agentCommandMock.mockClear();
+            const continuation = await postResponses(
+              port,
+              { model: "openclaw", previous_response_id: previousId, input: "continue history" },
+              {
+                ...forwardedHeaders,
+                authorization: "Bearer different-forwarded-untrusted",
+                "x-forwarded-user": user,
+              },
+            );
+            if (expectedSession) {
+              expect(continuation.status).toBe(200);
+              await ensureResponseConsumed(continuation);
+              expect(firstAgentOpts().sessionKey).toBe(expectedSession);
+            } else {
+              expect(await expectInvalidRequest(continuation, /previous_response_id/)).toEqual({
+                type: "invalid_request_error",
+                message:
+                  "Cannot resolve previous_response_id. Retry with full input context and omit previous_response_id.",
+              });
+              expect(agentCommandMock).not.toHaveBeenCalled();
+            }
+          }
 
           agentCommandMock.mockClear();
           const unauthorized = await postResponses(
@@ -3018,202 +3005,25 @@ describe("OpenResponses HTTP API (e2e)", () => {
     },
   );
 
-  it("reuses prior sessions across different user values when auth scope matches", async () => {
-    const port = enabledPort;
-    mockAgentOnce([{ text: "First turn." }]);
-
-    const firstResponse = await postResponses(port, {
-      stream: false,
-      model: "openclaw",
-      user: "alice",
-      input: "hello",
-    });
-    expect(firstResponse.status).toBe(200);
-    const firstJson = (await firstResponse.json()) as { id?: string };
-    const firstOpts = firstAgentOpts() as { sessionKey?: string } | undefined;
-    expect(firstOpts?.sessionKey ?? "").toContain("openresponses-user:alice");
-
-    agentCommandMock.mockResolvedValueOnce({
-      payloads: [{ text: "Second turn." }],
-    } as never);
-
-    const secondResponse = await postResponses(port, {
-      stream: false,
-      model: "openclaw",
-      user: "bob",
-      previous_response_id: firstJson.id,
-      input: "hello again",
-    });
-    expect(secondResponse.status).toBe(200);
-    const secondOpts = firstAgentOpts(1) as { sessionKey?: string } | undefined;
-    expect(secondOpts?.sessionKey).toBe(firstOpts?.sessionKey);
-    await ensureResponseConsumed(secondResponse);
+  registerOpenResponsesContinuationTests({
+    getPort: () => enabledPort,
+    postResponses,
+    mockAgentOnce,
+    firstAgentOpts,
+    expectInvalidRequest,
+    ensureResponseConsumed,
   });
 
-  it("stores response session mappings when the response is emitted", async () => {
-    const port = enabledPort;
-    agentCommandMock.mockClear();
-
-    let release: ((value: { payloads: Array<{ text: string }> }) => void) | undefined;
-    agentCommandMock.mockImplementationOnce(
-      () =>
-        new Promise<{ payloads: Array<{ text: string }> }>((resolve) => {
-          release = resolve;
-        }) as never,
-    );
-
-    const responsePromise = postResponses(port, {
-      stream: false,
-      model: "openclaw",
-      input: "delayed hello",
-    });
-
-    await vi.waitFor(() => {
-      expect(agentCommandMock.mock.calls).toHaveLength(1);
-    });
-    expect(openResponsesTesting.getResponseSessionIds()).toStrictEqual([]);
-
-    release?.({ payloads: [{ text: "hello" }] });
-
-    const res = await responsePromise;
-    expect(res.status).toBe(200);
-    const json = (await res.json()) as { id?: string };
-    expect(json.id).toMatch(/^resp_/);
-    expect(openResponsesTesting.getResponseSessionIds()).toEqual([json.id]);
-    await ensureResponseConsumed(res);
-  });
-
-  it("caps response session cache by evicting the oldest entries", () => {
-    for (let i = 0; i < 505; i += 1) {
-      openResponsesTesting.storeResponseSessionAt(`resp_${i}`, `session_${i}`, i);
-    }
-
-    expect(openResponsesTesting.getResponseSessionIds()).toHaveLength(500);
-    expect(openResponsesTesting.lookupResponseSessionAt("resp_0", 505)).toBeUndefined();
-    expect(openResponsesTesting.lookupResponseSessionAt("resp_4", 505)).toBeUndefined();
-    expect(openResponsesTesting.lookupResponseSessionAt("resp_5", 505)).toBe("session_5");
-    expect(openResponsesTesting.lookupResponseSessionAt("resp_504", 505)).toBe("session_504");
-  });
-
-  it("blocks unsafe URL-based file/image inputs", async () => {
-    const port = enabledPort;
-    agentCommandMock.mockClear();
-
-    const blockedPrivate = await postResponses(port, {
-      model: "openclaw",
-      input: buildUrlInputMessage({
-        kind: "input_file",
-        url: "http://127.0.0.1:6379/info",
-      }),
-    });
-    await expectInvalidRequest(blockedPrivate, /invalid request|private|internal|blocked/i);
-
-    const blockedMetadata = await postResponses(port, {
-      model: "openclaw",
-      input: buildUrlInputMessage({
-        kind: "input_image",
-        url: "http://metadata.google.internal/computeMetadata/v1",
-      }),
-    });
-    await expectInvalidRequest(blockedMetadata, /invalid request|blocked|metadata|internal/i);
-
-    const blockedScheme = await postResponses(port, {
-      model: "openclaw",
-      input: buildUrlInputMessage({
-        kind: "input_file",
-        url: "file:///etc/passwd",
-      }),
-    });
-    await expectInvalidRequest(blockedScheme, /invalid request|http or https/i);
-    expect(agentCommandMock).not.toHaveBeenCalled();
-  });
-
-  it("accepts image-only input without text, matching /v1/chat/completions", async () => {
-    const port = enabledPort;
-    // 1x1 PNG; same fixture used by the parity schema tests.
-    const pngBase64 =
-      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
-
-    mockAgentOnce([{ text: "ok" }]);
-
-    const res = await postResponses(port, {
-      model: "openclaw",
-      input: [
-        {
-          type: "message",
-          role: "user",
-          content: [
-            {
-              type: "input_image",
-              source: { type: "base64", media_type: "image/png", data: pngBase64 },
-            },
-          ],
-        },
-      ],
-    });
-
-    expect(res.status).toBe(200);
-    expect(agentCommandMock).toHaveBeenCalledTimes(1);
-    const opts = firstAgentOpts();
-    // Image-only turn carries a non-empty placeholder so the agent command runs,
-    // with the real image attached via `images` (parity with /v1/chat/completions).
-    expect((opts as { message?: string }).message ?? "").toBe(IMAGE_ONLY_USER_MESSAGE);
-    expect((opts as { images?: unknown[] }).images?.length).toBe(1);
-    await ensureResponseConsumed(res);
-  });
-
-  it("accepts file-only input without text, matching image-only", async () => {
-    const port = enabledPort;
-    mockAgentOnce([{ text: "ok" }]);
-
-    const res = await postResponses(port, {
-      model: "openclaw",
-      instructions: "Summarize the attached document.",
-      input: buildFileInputMessage("the quick brown fox", "doc.txt"),
-    });
-
-    expect(res.status).toBe(200);
-    expect(agentCommandMock).toHaveBeenCalledTimes(1);
-    const opts = firstAgentOpts();
-    expect((opts as { message?: string }).message ?? "").not.toBe("");
-    const extraSystemPrompt = (opts as { extraSystemPrompt?: string }).extraSystemPrompt ?? "";
-    expect(extraSystemPrompt).toContain('<file name="doc.txt">');
-    expect(extraSystemPrompt).toContain("the quick brown fox");
-    await ensureResponseConsumed(res);
-  });
-
-  it("keeps base64 input_file text truncation UTF-16 safe", async () => {
-    const port = enabledPort;
-    const text = `${"a".repeat(59_999)}😀tail`;
-    mockAgentOnce([{ text: "ok" }]);
-
-    const res = await postResponses(port, {
-      model: "openclaw",
-      input: buildFileInputMessage(text, "emoji-boundary.txt"),
-    });
-
-    expect(res.status).toBe(200);
-    expect(agentCommandMock).toHaveBeenCalledTimes(1);
-    const opts = firstAgentOpts();
-    const extraSystemPrompt = (opts as { extraSystemPrompt?: string }).extraSystemPrompt ?? "";
-    expect(extraSystemPrompt).toContain('<file name="emoji-boundary.txt">');
-    expect(extraSystemPrompt).toContain("a".repeat(59_999));
-    expect(extraSystemPrompt).not.toContain("😀");
-    expect(extraSystemPrompt).not.toMatch(/[\uD800-\uDFFF]/u);
-    await ensureResponseConsumed(res);
-  });
-
-  it("still rejects input with neither text nor image", async () => {
-    const port = enabledPort;
-    agentCommandMock.mockClear();
-
-    const res = await postResponses(port, {
-      model: "openclaw",
-      input: [{ type: "message", role: "user", content: [] }],
-    });
-
-    await expectInvalidRequest(res, /Missing user message/i);
-    expect(agentCommandMock).not.toHaveBeenCalled();
+  registerOpenResponsesHttpMediaInputTests({
+    getPort: () => enabledPort,
+    postResponses,
+    firstAgentOpts,
+    agentCommandMock,
+    mockAgentOnce,
+    ensureResponseConsumed,
+    expectInvalidRequest,
+    buildUrlInputMessage,
+    buildFileInputMessage,
   });
 
   it("enforces URL allowlist and URL part cap for responses inputs", async () => {

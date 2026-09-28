@@ -90,6 +90,8 @@ export async function probeFeishu(
 
   // Return cached result if still valid for this exact configured identity.
   const cacheKey = buildProbeCacheKey(creds);
+  const cacheError = (error: string) =>
+    setCachedProbeResult(cacheKey, { ok: false, appId: creds.appId, error }, PROBE_ERROR_TTL_MS);
   const cached = probeCache.get(cacheKey);
   if (cached) {
     const now = asDateTimestampMs(Date.now());
@@ -124,15 +126,7 @@ export async function probeFeishu(
       };
     }
     if (responseResult.status === "timeout") {
-      return setCachedProbeResult(
-        cacheKey,
-        {
-          ok: false,
-          appId: creds.appId,
-          error: `probe timed out after ${timeoutMs}ms`,
-        },
-        PROBE_ERROR_TTL_MS,
-      );
+      return cacheError(`probe timed out after ${timeoutMs}ms`);
     }
 
     const response = responseResult.value;
@@ -145,28 +139,12 @@ export async function probeFeishu(
     }
 
     if (response.code !== 0) {
-      return setCachedProbeResult(
-        cacheKey,
-        {
-          ok: false,
-          appId: creds.appId,
-          error: `API error: ${response.msg || `code ${response.code}`}`,
-        },
-        PROBE_ERROR_TTL_MS,
-      );
+      return cacheError(`API error: ${response.msg || `code ${response.code}`}`);
     }
 
     const botInfo = response.bot ?? response.data?.bot;
     if (!botInfo?.open_id) {
-      return setCachedProbeResult(
-        cacheKey,
-        {
-          ok: false,
-          appId: creds.appId,
-          error: "API response missing bot open_id",
-        },
-        PROBE_ERROR_TTL_MS,
-      );
+      return cacheError("API response missing bot open_id");
     }
     return setCachedProbeResult(
       cacheKey,
@@ -179,15 +157,7 @@ export async function probeFeishu(
       PROBE_SUCCESS_TTL_MS,
     );
   } catch (err) {
-    return setCachedProbeResult(
-      cacheKey,
-      {
-        ok: false,
-        appId: creds.appId,
-        error: formatErrorMessage(err),
-      },
-      PROBE_ERROR_TTL_MS,
-    );
+    return cacheError(formatErrorMessage(err));
   }
 }
 

@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
 import {
   captureGatewayToolCallerAssertion,
@@ -25,6 +24,11 @@ import {
 } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import {
+  readOperatorToolGatewayAuthority,
+  runWithOperatorToolGatewayAuthority,
+  runOutsideOperatorToolGatewayAuthority,
+} from "./operator-tool-gateway-authority.js";
+import {
   dispatchGatewayRequestInProcessRaw,
   type GatewayMethodDispatchResponse,
   throwIfGatewayDispatchAborted,
@@ -48,12 +52,6 @@ import {
   cancelSubagentCompletionToolHandoff,
   registerSubagentCompletionToolHandoff,
 } from "./subagent-completion-tool-handoff.js";
-
-const operatorToolGatewayAuthority = new AsyncLocalStorage<OperatorToolGatewayAuthority>();
-
-export function readOperatorToolGatewayAuthority(): OperatorToolGatewayAuthority | undefined {
-  return operatorToolGatewayAuthority.getStore();
-}
 
 /** Retains operator attribution and authority only for the awaited tool invocation. */
 export async function withOperatorToolGatewayAuthority<T>(
@@ -82,7 +80,7 @@ export async function withOperatorToolGatewayAuthority<T>(
   try {
     authority.assertCurrent?.();
     captured?.authority.assertCurrent();
-    return await operatorToolGatewayAuthority.run(
+    return await runWithOperatorToolGatewayAuthority(
       {
         ...authority,
         operatorRunAuthority: captured?.authority ?? authority.operatorRunAuthority,
@@ -109,7 +107,7 @@ export async function withOperatorToolGatewayAuthority<T>(
 
 /** Transfer bounded cleanup without retaining the finished operator invocation. */
 export function runWithOperatorToolGatewayCleanupContext<T>(run: () => T): T {
-  const authority = operatorToolGatewayAuthority.getStore();
+  const authority = readOperatorToolGatewayAuthority();
   if (!authority) {
     return run();
   }
@@ -130,7 +128,7 @@ export function runWithOperatorToolGatewayCleanupContext<T>(run: () => T): T {
           }
         : undefined),
   });
-  return operatorToolGatewayAuthority.exit(() =>
+  return runOutsideOperatorToolGatewayAuthority(() =>
     withPluginRuntimeGatewayRequestScope(
       { ...scope, client, isWebchatConnect: scope?.isWebchatConnect ?? (() => false) },
       run,
@@ -216,7 +214,7 @@ export function captureOperatorToolGatewayContinuationContext() {
         run<T>(run: () => T): T {
           assertCurrent();
           return withoutGatewayToolCallerIdentity(() =>
-            operatorToolGatewayAuthority.exit(() =>
+            runOutsideOperatorToolGatewayAuthority(() =>
               withPluginRuntimeGatewayRequestScope(continuationScope, run),
             ),
           );
@@ -250,7 +248,7 @@ function resolveInProcessGatewayDispatch(
   params: unknown,
   options?: DispatchGatewayMethodInProcessOptions,
 ): ResolvedInProcessGatewayDispatch {
-  const inheritedOperatorAuthority = operatorToolGatewayAuthority.getStore();
+  const inheritedOperatorAuthority = readOperatorToolGatewayAuthority();
   const scope = getPluginRuntimeGatewayRequestScope();
   const caller = getGatewayToolCallerIdentity();
   const operatorRunAuthority =
@@ -507,7 +505,7 @@ function resolveInProcessGatewayDispatch(
 /** Authorizes a sessionless agent execution against its captured Gateway and caller. */
 export async function prepareInProcessAgentExecution(input: PrepareInProcessAgentExecutionOptions) {
   const params = { ...input };
-  const inheritedAuthority = operatorToolGatewayAuthority.getStore();
+  const inheritedAuthority = readOperatorToolGatewayAuthority();
   const resolved = resolveInProcessGatewayDispatch(
     "agent",
     { agentId: params.agentId },
@@ -587,7 +585,7 @@ export async function prepareInProcessAgentExecution(input: PrepareInProcessAgen
     },
     run<T>(run: () => Promise<T>): Promise<T> {
       assertCurrent();
-      return operatorToolGatewayAuthority.exit(run);
+      return runOutsideOperatorToolGatewayAuthority(run);
     },
   };
 }
@@ -629,8 +627,8 @@ async function withInProcessGatewayDispatch<T>(
     }
     // A launched agent is autonomous; retaining tool-call AsyncLocalStorage would
     // leak the human authority into later model-selected work after closure.
-    return method === "agent" && operatorToolGatewayAuthority.getStore()
-      ? await operatorToolGatewayAuthority.exit(() => run(resolved))
+    return method === "agent" && readOperatorToolGatewayAuthority()
+      ? await runOutsideOperatorToolGatewayAuthority(() => run(resolved))
       : await run(resolved);
   } finally {
     releaseOperatorAuthority?.();
