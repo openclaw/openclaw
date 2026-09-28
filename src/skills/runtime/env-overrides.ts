@@ -67,12 +67,6 @@ function releaseActiveSkillEnvKey(key: string) {
   delete process.env[key];
 }
 
-type SanitizedSkillEnvOverrides = {
-  allowed: Record<string, string>;
-  blocked: string[];
-  warnings: string[];
-};
-
 function isAlwaysBlockedSkillEnvKey(key: string): boolean {
   return (
     isDangerousHostEnvVarName(key) ||
@@ -84,7 +78,7 @@ function isAlwaysBlockedSkillEnvKey(key: string): boolean {
 function sanitizeSkillEnvOverrides(params: {
   overrides: Record<string, string>;
   allowedSensitiveKeys: Set<string>;
-}): SanitizedSkillEnvOverrides {
+}): ReturnType<typeof sanitizeEnvVars> {
   if (Object.keys(params.overrides).length === 0) {
     return { allowed: {}, blocked: [], warnings: [] };
   }

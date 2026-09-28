@@ -124,12 +124,7 @@ function targetsRuntimeWebResolution(params: {
   targetIds: ReadonlySet<string>;
   allowedPaths?: ReadonlySet<string>;
 }): boolean {
-  for (const path of params.allowedPaths ?? params.targetIds) {
-    if (targetsRuntimeWebPath(path)) {
-      return true;
-    }
-  }
-  return false;
+  return [...(params.allowedPaths ?? params.targetIds)].some(targetsRuntimeWebPath);
 }
 
 function collectConfiguredTargetRefPaths(params: {
@@ -171,13 +166,6 @@ function classifyConfiguredTargetRefs(params: {
   hasUnknownConfiguredRef: boolean;
   diagnostics: string[];
 } {
-  if (params.configuredTargetRefPaths.size === 0) {
-    return {
-      hasActiveConfiguredRef: false,
-      hasUnknownConfiguredRef: false,
-      diagnostics: [],
-    };
-  }
   const context = createResolverContext({
     sourceConfig: params.config,
     env: process.env,
@@ -719,22 +707,27 @@ export async function resolveCommandSecretRefsViaGateway(params: {
       hadUnresolvedTargets: false,
     };
   }
-  const gatewayExecSecretRefCredentialPaths = resolutionPolicy.allowExecSecretRefs
-    ? []
-    : collectActiveGatewayExecSecretRefCredentialPaths(params.config);
-  if (gatewayExecSecretRefCredentialPaths.length > 0) {
-    const fallback = await resolveCommandSecretRefsLocally({
+  const resolveLocally = (
+    allowedPaths = params.allowedPaths,
+    preflightDiagnostics = preflight.diagnostics,
+  ) =>
+    resolveCommandSecretRefsLocally({
       config: params.config,
       commandName: params.commandName,
       targetIds: params.targetIds,
       agentId: params.agentId,
-      preflightDiagnostics: preflight.diagnostics,
+      preflightDiagnostics,
       mode,
-      allowedPaths: params.allowedPaths,
+      allowedPaths,
       forcedActivePaths: params.forcedActivePaths,
       optionalActivePaths: params.optionalActivePaths,
       resolutionPolicy,
     });
+  const gatewayExecSecretRefCredentialPaths = resolutionPolicy.allowExecSecretRefs
+    ? []
+    : collectActiveGatewayExecSecretRefCredentialPaths(params.config);
+  if (gatewayExecSecretRefCredentialPaths.length > 0) {
+    const fallback = await resolveLocally();
     return {
       ...fallback,
       diagnostics: normalizeUniqueStringEntries([
@@ -758,57 +751,31 @@ export async function resolveCommandSecretRefsViaGateway(params: {
         : {}),
     });
   } catch (err) {
-    let forcedActiveCompatFailure: Error | undefined;
+    const forcedActiveCompatFailure =
+      hasForcedActivePaths(params.forcedActivePaths) &&
+      isAllowedPathsSecretsResolveCompatError(err);
     try {
-      const fallback = await resolveCommandSecretRefsLocally({
-        config: params.config,
-        commandName: params.commandName,
-        targetIds: params.targetIds,
-        agentId: params.agentId,
-        preflightDiagnostics: preflight.diagnostics,
-        mode,
-        allowedPaths: params.allowedPaths,
-        forcedActivePaths: params.forcedActivePaths,
-        optionalActivePaths: params.optionalActivePaths,
-        resolutionPolicy,
-      });
+      const fallback = await resolveLocally();
       const recoveredLocally = Object.values(fallback.targetStatesByPath).some(
         (state) => state === "resolved_local",
       );
-      if (
-        hasForcedActivePaths(params.forcedActivePaths) &&
-        isAllowedPathsSecretsResolveCompatError(err) &&
-        (!recoveredLocally || fallback.hadUnresolvedTargets)
-      ) {
-        forcedActiveCompatFailure = new Error(
-          `${params.commandName}: active gateway does not support command-scoped secret resolution (${formatErrorMessage(err)}). Update the gateway or run this command where the configured SecretRefs can be resolved locally.`,
-          { cause: err },
-        );
-      } else {
+      if (!forcedActiveCompatFailure || (recoveredLocally && !fallback.hadUnresolvedTargets)) {
         const fallbackMessage =
           recoveredLocally && !fallback.hadUnresolvedTargets
             ? "resolved command secrets locally."
             : "attempted local command-secret resolution.";
         return {
-          resolvedConfig: fallback.resolvedConfig,
+          ...fallback,
           diagnostics: normalizeUniqueStringEntries([
             ...fallback.diagnostics,
             `${params.commandName}: gateway secrets.resolve unavailable (${formatErrorMessage(err)}); ${fallbackMessage}`,
           ]),
-          targetStatesByPath: fallback.targetStatesByPath,
-          hadUnresolvedTargets: fallback.hadUnresolvedTargets,
         };
       }
     } catch {
       // Fall through to original gateway-specific error reporting.
     }
     if (forcedActiveCompatFailure) {
-      throw forcedActiveCompatFailure;
-    }
-    if (
-      hasForcedActivePaths(params.forcedActivePaths) &&
-      isAllowedPathsSecretsResolveCompatError(err)
-    ) {
       throw new Error(
         `${params.commandName}: active gateway does not support command-scoped secret resolution (${formatErrorMessage(err)}). Update the gateway or run this command where the configured SecretRefs can be resolved locally.`,
         { cause: err },
@@ -883,18 +850,10 @@ export async function resolveCommandSecretRefsViaGateway(params: {
   });
   if (analyzed.unresolved.length > 0) {
     try {
-      const localFallback = await resolveCommandSecretRefsLocally({
-        config: params.config,
-        commandName: params.commandName,
-        targetIds: params.targetIds,
-        agentId: params.agentId,
-        preflightDiagnostics: [],
-        mode,
-        allowedPaths: new Set(analyzed.unresolved.map((entry) => entry.path)),
-        forcedActivePaths: params.forcedActivePaths,
-        optionalActivePaths: params.optionalActivePaths,
-        resolutionPolicy,
-      });
+      const localFallback = await resolveLocally(
+        new Set(analyzed.unresolved.map((entry) => entry.path)),
+        [],
+      );
       const handledPaths = new Set<string>();
       const locallyResolvedPaths = new Set<string>();
       for (const unresolved of analyzed.unresolved) {

@@ -66,6 +66,8 @@ export function beginDiagnosticRetryWait(params: {
   return close;
 }
 
+const FOREGROUND_AGENT_TOOL_NAMES = new Set(["Agent", "Task"]);
+
 /** Binds one backend attempt's quiet allowance to its exact live core owner. */
 export function beginDiagnosticBackendActivity(params: {
   owner: DiagnosticEmbeddedRunOwner;
@@ -73,6 +75,7 @@ export function beginDiagnosticBackendActivity(params: {
   assertCurrent: () => void;
 }): {
   observeOutput: (modelProgress: boolean) => boolean;
+  observeAttributedAgentProgress: (parentToolCallId: string) => boolean;
   setOutstandingWork: (active: boolean) => void;
   close: () => void;
 } {
@@ -103,6 +106,27 @@ export function beginDiagnosticBackendActivity(params: {
       }
       touchSessionActivity(activity, "model_call:stream_progress", now);
       return true;
+    },
+    observeAttributedAgentProgress: (parentToolCallId) => {
+      const activity = currentActivity();
+      const toolCallId = parentToolCallId.trim();
+      if (!activity || !toolCallId) {
+        return false;
+      }
+      for (const tool of activity.activeTools.values()) {
+        if (tool.toolCallId !== toolCallId) {
+          continue;
+        }
+        if (!FOREGROUND_AGENT_TOOL_NAMES.has(tool.toolName)) {
+          return false;
+        }
+        const now = Date.now();
+        backendActivity.deadlineAtMs = now + quietAllowanceMs;
+        tool.lastProgressAt = now;
+        touchSessionActivity(activity, `tool:${tool.toolName}:subagent_progress`, now);
+        return true;
+      }
+      return false;
     },
     setOutstandingWork: (active) => {
       if (!currentActivity()) {

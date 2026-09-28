@@ -104,20 +104,18 @@ async function stopBrowserRuntimeInternal(
     }
   }
 
-  if (!firstError) {
-    if (params.closeServer && current.server) {
-      await new Promise<void>((resolve) => {
-        current.server?.close(() => resolve());
-      });
-    }
-
-    params.clearState();
-    trackedTabCleanupDisposers.delete(current);
-    current.stopUnhandledRejectionHandler?.();
-  }
   if (firstError) {
     throw firstError;
   }
+  if (params.closeServer && current.server) {
+    await new Promise<void>((resolve) => {
+      current.server?.close(() => resolve());
+    });
+  }
+
+  params.clearState();
+  trackedTabCleanupDisposers.delete(current);
+  current.stopUnhandledRejectionHandler?.();
 }
 
 function toRuntimeLifecycleError(value: unknown, message: string): Error {

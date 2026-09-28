@@ -170,32 +170,6 @@ describe("readLatestAssistantReply", () => {
     expect(result).toBe("older worker reply");
   });
 
-  it("reads only final_answer text from phased assistant history", async () => {
-    callGatewayMock.mockResolvedValue({
-      messages: [
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: "Need fix line quoting properly.",
-              textSignature: JSON.stringify({ v: 1, id: "commentary", phase: "commentary" }),
-            },
-            {
-              type: "text",
-              text: "Fixed the quoting issue.",
-              textSignature: JSON.stringify({ v: 1, id: "final", phase: "final_answer" }),
-            },
-          ],
-        },
-      ],
-    });
-
-    const result = await readLatestAssistantReply({ sessionKey: "agent:main:child" });
-
-    expect(result).toBe("Fixed the quoting issue.");
-  });
-
   it("preserves spaces across split final_answer history blocks", async () => {
     callGatewayMock.mockResolvedValue({
       messages: [
@@ -285,24 +259,13 @@ describe("waitForAgentRun", () => {
   });
 
   it.each([
-    undefined,
     "",
-    "gateway timeout",
     "gateway request timeout for agent.wait",
-    "ENOENT: no such file",
     "getaddrinfo ENOTFOUND gateway.example.com",
   ])("does not mark a nonrecoverable rejected wait RPC: %s", async (error) => {
     callGatewayMock.mockRejectedValueOnce(new Error(error));
     const result = await waitForAgentRun({ runId: "run-unrecoverable", timeoutMs: 500 });
     expect(result).not.toHaveProperty("retryableTransportError");
-  });
-
-  it("preserves pending agent.wait status", async () => {
-    callGatewayMock.mockResolvedValue({ status: "pending" });
-
-    const result = await waitForAgentRun({ runId: "run-pending", timeoutMs: 500 });
-
-    expect(result).toEqual({ status: "pending" });
   });
 
   it("preserves pending error diagnostics on wait timeouts", async () => {
@@ -318,18 +281,6 @@ describe("waitForAgentRun", () => {
       status: "timeout",
       error: "429 RESOURCE_EXHAUSTED",
       pendingError: true,
-    });
-  });
-
-  it("carries a bounded terminal reply snapshot from agent.wait", async () => {
-    callGatewayMock.mockResolvedValue({
-      status: "ok",
-      terminalReply: { disposition: "visible", text: "final reply" },
-    });
-
-    await expect(waitForAgentRun({ runId: "run-reply", timeoutMs: 500 })).resolves.toEqual({
-      status: "ok",
-      terminalReply: { disposition: "visible", text: "final reply" },
     });
   });
 

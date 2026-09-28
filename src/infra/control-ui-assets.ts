@@ -72,11 +72,10 @@ function resolveControlUiRepoRoot(opts: {
 }
 
 async function resolveControlUiDistIndexPath(
-  argv1OrOpts?: string | { argv1?: string; moduleUrl?: string },
+  opts: ControlUiRootResolveOptions,
 ): Promise<string | null> {
-  const argv1 =
-    typeof argv1OrOpts === "string" ? argv1OrOpts : (argv1OrOpts?.argv1 ?? process.argv[1]);
-  const moduleUrl = typeof argv1OrOpts === "object" ? argv1OrOpts?.moduleUrl : undefined;
+  const argv1 = opts.argv1 ?? process.argv[1];
+  const moduleUrl = opts.moduleUrl;
   if (!argv1) {
     return null;
   }

@@ -1,4 +1,5 @@
 // Media and voice compatibility migrations retired from canonical runtime config.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getRecord } from "../../../config/legacy.shared.js";
 import { deleteRetiredPath, visitAgentConfigScopes } from "./legacy-config-record-shared.js";
 
@@ -312,11 +313,7 @@ export function consolidateMediaCapabilityConfig(
   if (!media) {
     return;
   }
-  const sharedModels = Array.isArray(media.models)
-    ? media.models.filter(
-        (value): value is Record<string, unknown> => getRecord(value) !== undefined,
-      )
-    : [];
+  const sharedModels = Array.isArray(media.models) ? media.models.filter(isRecord) : [];
   const migratedModels: Record<string, unknown>[] = [];
   let changed = false;
 
@@ -325,11 +322,7 @@ export function consolidateMediaCapabilityConfig(
     if (!config) {
       continue;
     }
-    const legacyModels = Array.isArray(config.models)
-      ? config.models.filter(
-          (value): value is Record<string, unknown> => getRecord(value) !== undefined,
-        )
-      : [];
+    const legacyModels = Array.isArray(config.models) ? config.models.filter(isRecord) : [];
     const migratedBySignature = new Map<string, Record<string, unknown>>();
     const eligibleLegacyModels = legacyModels.flatMap((legacyModel) => {
       const scoped = scopeLegacyMediaModel(legacyModel, capability);

@@ -652,29 +652,86 @@ suite.define(() => {
     }
   });
 
-  it("presents completed disclosure states and dismisses the card across reload", async () => {
-    const sessionKey = "agent:main:progress-complete";
-    const plan = [
-      { step: "Inspected owner", status: "completed" },
-      { step: "Implemented fix", status: "completed" },
-      { step: "Filed issue", status: "completed" },
-    ];
-
-    for (const colorScheme of ["light", "dark"] as const) {
+  it.each([
+    {
+      name: "completed",
+      colorScheme: "light" as const,
+      width: 560,
+      status: "completed",
+      active: false,
+    },
+    {
+      name: "paused",
+      colorScheme: "dark" as const,
+      width: 1280,
+      status: "in_progress",
+      active: false,
+    },
+    {
+      name: "active",
+      colorScheme: "dark" as const,
+      width: 560,
+      status: "in_progress",
+      active: true,
+    },
+    {
+      name: "note-only",
+      colorScheme: "light" as const,
+      width: 390,
+      status: undefined,
+      active: false,
+    },
+  ])(
+    "dismisses $name progress from expanded and collapsed headers",
+    async ({ name, colorScheme, width, status, active }) => {
+      const sessionKey = "agent:main:progress-dismiss";
+      const updatedAt = Date.now() - (active ? 60_000 : 22 * 60 * 60_000);
+      const plan = status
+        ? [
+            { step: "Inspect the workspace", status },
+            { step: "Verify the change", status: status === "completed" ? "completed" : "pending" },
+          ]
+        : undefined;
       await suite.withPage(
         {
           colorScheme,
           locale: "en-US",
           serviceWorkers: "block",
-          viewport: { height: 900, width: 560 },
+          viewport: { height: 900, width },
         },
         async ({ page }) => {
           const gateway = await installMockGateway(page, {
+            agentModel: "example/demo-model",
+            models: [
+              { id: "demo-model", name: "Demo model", provider: "example", contextWindow: 128000 },
+            ],
+            sessionInfo: {
+              key: sessionKey,
+              hasActiveRun: active,
+              startedAt: active ? updatedAt - 60_000 : undefined,
+              activeRunIds: active ? ["progress-run"] : [],
+            },
+            ...(active
+              ? { inFlightRun: { runId: "progress-run", text: "Checking the workspace." } }
+              : {}),
+            historyMessages: [
+              {
+                role: "user",
+                content: [{ type: "text", text: "Review the workspace and verify the change." }],
+              },
+              {
+                role: "assistant",
+                content: [
+                  { type: "text", text: "The task progress card tracks the workspace checks." },
+                ],
+              },
+            ],
             featureMethods: [
               "chat.metadata",
               "chat.startup",
               "progressCard.get",
               "progressCard.put",
+              "progressCard.refresh",
             ],
             methodResponses: {
               "progressCard.get": {
@@ -682,7 +739,8 @@ suite.define(() => {
                   revision: 3,
                   sessionKey,
                   steps: plan,
-                  updatedAt: 3,
+                  markdown: status ? undefined : "The workspace review is waiting for a decision.",
+                  updatedAt,
                 },
               },
               "progressCard.put": { card: null },
@@ -690,8 +748,10 @@ suite.define(() => {
                 {
                   key: sessionKey,
                   kind: "direct",
-                  label: "Completed progress",
-                  updatedAt: 3,
+                  label: "Workspace review",
+                  hasActiveRun: active,
+                  activeRunIds: active ? ["progress-run"] : [],
+                  updatedAt,
                 },
               ]),
             },
@@ -706,12 +766,15 @@ suite.define(() => {
             .locator(".agent-chat__composer-shell")
             .evaluate((node) => getComputedStyle(node, "::before").backgroundImage);
           expect(composerFade).toBe("none");
+          if (await card.evaluate((element) => (element as HTMLDetailsElement).open)) {
+            await card.locator("summary").click();
+          }
           const expectMarkerCentered = async () => {
             await expect
               .poll(async () => {
                 const summaryBounds = await card.locator("summary").boundingBox();
                 const markerBounds = await card
-                  .locator('.session-progress-card__current-marker[data-status="completed"]')
+                  .locator(".session-progress-card__current-marker")
                   .boundingBox();
                 if (!summaryBounds || !markerBounds) {
                   return Number.POSITIVE_INFINITY;
@@ -730,7 +793,9 @@ suite.define(() => {
           await expect
             .poll(() => card.locator(".session-progress-card__current-marker").isVisible())
             .toBe(false);
-          await captureProof(page, `completed-${colorScheme}-before.png`);
+          await captureProof(page, `dismiss-${name}-expanded.png`);
+          const dismiss = card.getByRole("button", { name: "Dismiss progress card" });
+          expect(await dismiss.isVisible()).toBe(true);
 
           await gateway.setMethodResponse("progressCard.put", {
             card: {
@@ -746,26 +811,36 @@ suite.define(() => {
           await expect.poll(() => card.isVisible()).toBe(true);
           await expect
             .poll(() => card.locator("time").getAttribute("datetime"))
-            .toBe(new Date(3).toISOString());
+            .toBe(new Date(updatedAt).toISOString());
 
+          expect(await card.evaluate((element) => (element as HTMLDetailsElement).open)).toBe(true);
+          await card.locator("summary").click();
+          await expect
+            .poll(() => card.evaluate((element) => (element as HTMLDetailsElement).open))
+            .toBe(false);
+          await captureProof(page, `dismiss-${name}-collapsed.png`);
+          expect(await dismiss.isVisible()).toBe(true);
           await gateway.setMethodResponse("progressCard.put", { card: null });
-          await card.getByRole("button", { name: "Dismiss progress card" }).click();
+          await dismiss.press("Enter");
           const dismissRequest = await gateway.waitForRequest("progressCard.put", { after: 1 });
           expect(dismissRequest.params).toEqual({ sessionKey, expectedRevision: 3 });
           await expect.poll(() => card.count()).toBe(0);
 
-          await page.locator("textarea").fill("rerender");
+          await page.getByRole("textbox", { name: "Chat composer", exact: true }).fill("rerender");
           await expect.poll(() => card.count()).toBe(0);
           await gateway.setMethodResponse("progressCard.get", { card: null });
           await page.reload();
-          await page.locator("textarea").waitFor({ state: "visible" });
+          await page
+            .getByRole("textbox", { name: "Chat composer", exact: true })
+            .waitFor({ state: "visible" });
           await expect.poll(() => card.count()).toBe(0);
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-          await captureProof(page, `completed-${colorScheme}-after.png`);
+          expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
+          await captureProof(page, `dismiss-${name}-cleared.png`);
         },
       );
-    }
-  });
+    },
+  );
 
   it("keeps dismissal unavailable to a restricted session viewer", async () => {
     const sessionKey = "agent:main:progress-viewer";

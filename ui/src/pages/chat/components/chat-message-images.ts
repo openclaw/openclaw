@@ -18,9 +18,15 @@ import {
   loadAssistantAttachmentAvailability,
   resolveAssistantAttachmentAvailability,
   retryAssistantAttachmentAvailability,
+  retainAssistantImage,
+  takeRetainedAssistantImage,
 } from "./chat-message-attachment-availability.ts";
 import { renderAssistantAttachmentStatusCard } from "./chat-message-attachment-status.ts";
-import { loadManagedImageBlob, resolveManagedImageResource } from "./chat-message-image-loading.ts";
+import {
+  loadManagedImageBlob,
+  readCachedManagedImageUrl,
+  resolveManagedImageResource,
+} from "./chat-message-image-loading.ts";
 import { openResolvedImage } from "./chat-message-image-open.ts";
 import {
   buildAssistantAttachmentUrl,
@@ -49,10 +55,15 @@ function isInlineImageSource(source: string | undefined): source is string {
   return source?.startsWith("data:image/") === true || source?.startsWith("blob:") === true;
 }
 
+function imageTitle(image: ImageBlock): string {
+  return image.alt?.trim() || image.fileName?.trim() || t("chat.imageLightbox.untitled");
+}
+
 class MessageImageResourceDirective extends AsyncDirective {
   private image: ImageBlock | undefined;
   private options: ImageRenderOptions | undefined;
   private element: HTMLImageElement | undefined;
+  private previewElement: HTMLImageElement | undefined;
   private managed = false;
   private pendingPreview: Promise<string | null> | undefined;
   private presentationKey = Symbol("image-presentation");
@@ -86,13 +97,12 @@ class MessageImageResourceDirective extends AsyncDirective {
       this.setValue(this.render(this.image, this.options));
     }
   };
-  private readonly onSettled = (event: Event, image: ImageBlock) => {
+  private readonly onSettled = (event: Event) => {
     // A removed IMG may finish after denial; it no longer owns displayed pixels.
     const element = event.currentTarget;
     if (
       !this.isConnected ||
-      this.image?.url !== image.url ||
-      this.image?.artifactId !== image.artifactId ||
+      element !== this.previewElement ||
       !(element instanceof HTMLImageElement) ||
       !element.isConnected
     ) {
@@ -137,6 +147,7 @@ class MessageImageResourceDirective extends AsyncDirective {
         isInlineImageSource(image.url);
       if (!this.retained && !inlineReplacement) {
         this.element = undefined;
+        this.previewElement = undefined;
         this.admitted = false;
         this.presentationKey = Symbol("image-presentation");
       }
@@ -148,6 +159,17 @@ class MessageImageResourceDirective extends AsyncDirective {
       this.releaseRetainedImage();
       releaseChatMediaResourceSubscriber(this.refreshImage);
       return noChange;
+    }
+    // A warm preview needs no network admission. Native images retain their
+    // decoded node only within the existing metadata cache and ticket lifetime.
+    if (!this.admitted) {
+      if (this.managed) {
+        this.admitted = Boolean(readCachedManagedImageUrl(image.url, options, image.artifactId));
+      } else if (image.url && !this.element) {
+        this.element = takeRetainedAssistantImage(image.url, options);
+        this.previewElement = this.element;
+        this.admitted = Boolean(this.element);
+      }
     }
     // Admit network work before resolving metadata, artifact tickets, or blobs.
     // Local bytes and a mounted decoded handoff never wait for the observer.
@@ -198,6 +220,7 @@ class MessageImageResourceDirective extends AsyncDirective {
           : undefined;
     if (!displayUrl || decodeFailed) {
       this.element = undefined;
+      this.previewElement = undefined;
       if (!decodeFailed) {
         this.releaseRetainedImage();
       }
@@ -289,7 +312,7 @@ class MessageImageResourceDirective extends AsyncDirective {
     previewUrl: string | undefined,
     opts: ImageRenderOptions | undefined,
   ) {
-    const title = img.alt?.trim() || t("chat.imageLightbox.untitled");
+    const title = imageTitle(img);
     return this.renderImageFrame(
       img,
       html`
@@ -310,16 +333,7 @@ class MessageImageResourceDirective extends AsyncDirective {
         >
           ${
             previewUrl
-              ? html`<img
-                  @load=${(event: Event) => this.onSettled(event, img)}
-                  @error=${(event: Event) => this.onSettled(event, img)}
-                  src=${previewUrl}
-                  alt=${title}
-                  referrerpolicy="no-referrer"
-                  class="chat-message-image"
-                  width=${img.width ?? nothing}
-                  height=${img.height ?? nothing}
-                />`
+              ? this.renderPreviewElement(img, previewUrl, title)
               : html`<span class="chat-image-skeleton skeleton" aria-hidden="true"></span>`
           }
         </button>
@@ -333,6 +347,28 @@ class MessageImageResourceDirective extends AsyncDirective {
       `,
       previewUrl ? undefined : "loading",
     );
+  }
+
+  private renderPreviewElement(image: ImageBlock, url: string, title: string) {
+    const element = (this.previewElement ??= document.createElement("img"));
+    // Rebind to this directive when a detached image is adopted by a new row.
+    element.addEventListener("load", this.onSettled);
+    element.addEventListener("error", this.onSettled);
+    element.alt = title;
+    element.className = "chat-message-image";
+    element.referrerPolicy = "no-referrer";
+    for (const name of ["width", "height"] as const) {
+      if (image[name] === undefined) {
+        element.removeAttribute(name);
+      } else {
+        element.setAttribute(name, String(image[name]));
+      }
+    }
+    // Assigning even an unchanged src can restart a no-cache native request.
+    if (element.getAttribute("src") !== url) {
+      element.setAttribute("src", url);
+    }
+    return element;
   }
 
   private renderImageFrame(
@@ -417,6 +453,16 @@ class MessageImageResourceDirective extends AsyncDirective {
   }
 
   protected override disconnected() {
+    if (this.previewElement) {
+      this.previewElement.removeEventListener("load", this.onSettled);
+      this.previewElement.removeEventListener("error", this.onSettled);
+      // Do not retain the removed row through the image's parent or listeners.
+      this.previewElement.remove();
+    }
+    if (this.element && this.image?.url) {
+      retainAssistantImage(this.image.url, this.element, this.options, this.image.fileName);
+    }
+    this.previewElement = undefined;
     this.stopObserving?.();
     this.stopObserving = undefined;
     this.admitted = false;
@@ -440,7 +486,7 @@ function openMessageImage(
   previewUrl: string,
   opts: ImageRenderOptions | undefined,
 ) {
-  const title = img.alt?.trim() || t("chat.imageLightbox.untitled");
+  const title = imageTitle(img);
   const requestVersion = opts?.onRequestOpenImage?.();
   const images = opts?.galleryImages;
   const index = images?.indexOf(img) ?? -1;
@@ -551,7 +597,7 @@ async function loadGalleryImage(
   }
   return {
     src: safeSrc,
-    title: image.alt?.trim() || t("chat.imageLightbox.untitled"),
+    title: imageTitle(image),
     width: image.width,
     height: image.height,
     release,

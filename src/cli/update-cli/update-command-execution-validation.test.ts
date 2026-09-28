@@ -25,15 +25,109 @@ import * as utils from "../../utils.js";
 import * as restartProbe from "../daemon-cli/restart-health-probe.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import { admitSourceUpdateArtifacts } from "./update-command-git-admission.js";
 import {
   gatewayServiceCommandUsesRoot,
   inspectManagedGatewayServiceBeforeUpdate,
 } from "./update-command-service-plan.js";
+import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
 
 const { executionParams, inspectOrStopService, mocks, schemaContext, successfulUpdate } =
   await import("./update-command-execution.test-support.js");
 
 describe("mutable update validation", () => {
+  it.each([
+    { owner: "dead", changed: false },
+    { owner: "live", changed: false },
+    { owner: "absent", changed: false },
+    { owner: "absent", changed: true },
+  ])(
+    "admits installed artifacts before Git mutation (owner=$owner, changed=$changed)",
+    async ({ owner, changed }) =>
+      withTestDir({ prefix: "source-artifact-admission-" }, async (root) => {
+        await fs.mkdir(path.join(root, ".git"));
+        await fs.mkdir(path.join(root, "scripts"));
+        await fs.writeFile(
+          path.join(root, "scripts", "stage-bundled-plugin-runtime.mts"),
+          `import fs from "node:fs";
+import path from "node:path";
+export function prepareBundledPluginRuntime({ repoRoot }) {
+  const stage = path.join(repoRoot, ".artifacts", "admission-stage");
+  fs.mkdirSync(stage);
+  return {
+    changed: ${changed},
+    publish: async () => { throw new Error("Admission must not publish runtime"); },
+    cleanup: async () => fs.rmSync(stage, { recursive: true }),
+  };
+}
+`,
+        );
+        const lock = path.join(root, ".artifacts", "dist-artifacts.lock");
+        const ownerFile = path.join(lock, "owner.json");
+        const pid = owner === "live" ? process.pid : 0x7fff_ffff;
+        const ownerRecord = JSON.stringify({
+          pid,
+          startedAt: "2026-09-20T01:00:00.000Z",
+          startIdentity: "fixture-build-owner",
+          heartbeatAt: "2026-09-20T01:01:00.000Z",
+        });
+        if (owner !== "absent") {
+          await fs.mkdir(lock, { recursive: true });
+          await fs.writeFile(ownerFile, ownerRecord);
+        }
+        const onActivation = vi.fn();
+        const env = { OPENCLAW_STATE_DIR: path.join(root, "state") };
+        const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+        const execution = await withUpdateCommandTerminalResult(async (registerRun) => {
+          registerRun(run);
+          const result = await executeMutableUpdate({
+            ...executionParams("git"),
+            root,
+            opts: { json: true, run },
+            onActivation,
+          });
+          if (owner === "absent") {
+            await expect(admitSourceUpdateArtifacts(root, run)).rejects.toThrow(
+              `retained by PID ${process.pid}`,
+            );
+          }
+          return result;
+        });
+
+        expect(mocks.serviceStopped).toBe(false);
+        expect(
+          mocks.maybeStopService.mock.calls.every(([params]) => params.phase === "inspect"),
+        ).toBe(true);
+        expect(mocks.prepareMutableUpdate).not.toHaveBeenCalled();
+        expect(onActivation).not.toHaveBeenCalled();
+        expect(execution?.mutationStarted).toBe(false);
+        if (owner !== "absent") {
+          expect(mocks.runGitUpdate).not.toHaveBeenCalled();
+          expect(execution?.result).toMatchObject({
+            status: "error",
+            reason: "source-artifact-ownership",
+          });
+          expect(execution?.failure?.detail).toContain(lock);
+          expect(execution?.failure?.detail).toContain(`retained by PID ${pid}`);
+          expect(execution?.failure?.detail).toContain("fixture-build-owner");
+          expect(execution?.failure?.detail).toContain("2026-09-20T01:01:00.000Z");
+          expect(execution?.failure?.detail).toContain("to release and retry");
+          expect(await fs.readFile(ownerFile, "utf8")).toBe(ownerRecord);
+        } else {
+          expect(execution?.result.status, execution?.failure?.detail).toBe("ok");
+          expect(mocks.runGitUpdate).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({ sourceRuntimePrepared: !changed }),
+          );
+          await expect(fs.stat(ownerFile)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+        await expect(
+          fs.stat(path.join(root, ".artifacts", "admission-stage")),
+        ).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      }),
+  );
+
   it.each(
     (["package", "git"] as const).flatMap((kind) =>
       [false, true].map((changed) => ({ kind, changed })),
@@ -96,69 +190,65 @@ describe("mutable update validation", () => {
     },
   );
 
-  it.each(["package", "git"] as const)(
-    "continues the %s update with the recorded readiness warning instead of inference repair",
-    async (kind) => {
-      const message =
-        "Readiness probe http://127.0.0.1:18789/readyz failed: HTTP 502. Check the configured proxy.";
-      const step: UpdateStepResult = {
-        name: "candidate-gateway-startup",
-        command: "gateway run",
-        cwd: "/candidate",
+  it("continues the update with the recorded readiness warning instead of inference repair", async () => {
+    const message =
+      "Readiness probe http://127.0.0.1:18789/readyz failed: HTTP 502. Check the configured proxy.";
+    const step: UpdateStepResult = {
+      name: "candidate-gateway-startup",
+      command: "gateway run",
+      cwd: "/candidate",
+      durationMs: 1,
+      exitCode: null,
+      advisory: { kind: "candidate-runtime-unavailable", message },
+      failureFacts: [{ check: "readyz", code: "candidate-readiness-probe-failed", message }],
+    };
+    mocks.validateCanary.mockImplementation(async ({ onStep }) => {
+      onStep(step);
+      return {
+        status: "ok",
+        phase: "readiness",
+        steps: [step],
         durationMs: 1,
-        exitCode: null,
-        advisory: { kind: "candidate-runtime-unavailable", message },
-        failureFacts: [{ check: "readyz", code: "candidate-readiness-probe-failed", message }],
+        logTail: [message],
       };
-      mocks.validateCanary.mockImplementation(async ({ onStep }) => {
-        onStep(step);
-        return {
-          status: "ok",
-          phase: "readiness",
-          steps: [step],
-          durationMs: 1,
-          logTail: [message],
-        };
-      });
-      const repair = await import("../../infra/update-repair-agent.js");
-      const runRepair = vi.spyOn(repair, "runUpdateRepairLoop");
-      const accepted = vi.fn();
-      const runStagedUpdate = async ({
-        validateCandidate,
-      }: {
-        validateCandidate?: (root: string) => Promise<unknown>;
-      }) => {
-        expect(validateCandidate).toBeTypeOf("function");
-        await validateCandidate?.("/candidate");
-        accepted();
-        return successfulUpdate;
-      };
-      mocks.runPackageUpdate.mockImplementation(runStagedUpdate);
-      mocks.runGitUpdate.mockImplementation(runStagedUpdate);
-      const onStepComplete = vi.fn<NonNullable<UpdateStepProgress["onStepComplete"]>>();
+    });
+    const repair = await import("../../infra/update-repair-agent.js");
+    const runRepair = vi.spyOn(repair, "runUpdateRepairLoop");
+    const accepted = vi.fn();
+    const runStagedUpdate = async ({
+      validateCandidate,
+    }: {
+      validateCandidate?: (root: string) => Promise<unknown>;
+    }) => {
+      expect(validateCandidate).toBeTypeOf("function");
+      await validateCandidate?.("/candidate");
+      accepted();
+      return successfulUpdate;
+    };
+    mocks.runPackageUpdate.mockImplementation(runStagedUpdate);
+    mocks.runGitUpdate.mockImplementation(runStagedUpdate);
+    const onStepComplete = vi.fn<NonNullable<UpdateStepProgress["onStepComplete"]>>();
 
-      const execution = await executeMutableUpdate({
-        ...executionParams(kind),
-        progress: { onStepComplete },
-      });
+    const execution = await executeMutableUpdate({
+      ...executionParams("git"),
+      progress: { onStepComplete },
+    });
 
-      expect(execution?.result.status).toBe("ok");
-      expect(accepted).toHaveBeenCalledOnce();
-      expect(runRepair).not.toHaveBeenCalled();
-      expect(onStepComplete).toHaveBeenCalledWith(expect.objectContaining(step));
-      const recorded = onStepComplete.mock.calls.flatMap(([completed]) =>
-        updateRunStepsFromResultStep(completed),
-      );
-      expect(updateRunWarningMessages(recorded)).toEqual([message]);
-      expect(recorded.every((entry) => entry.status === "completed")).toBe(true);
-    },
-  );
+    expect(execution?.result.status).toBe("ok");
+    expect(accepted).toHaveBeenCalledOnce();
+    expect(runRepair).not.toHaveBeenCalled();
+    expect(onStepComplete).toHaveBeenCalledWith(expect.objectContaining(step));
+    const recorded = onStepComplete.mock.calls.flatMap(([completed]) =>
+      updateRunStepsFromResultStep(completed),
+    );
+    expect(updateRunWarningMessages(recorded)).toEqual([message]);
+    expect(recorded.every((entry) => entry.status === "completed")).toBe(true);
+  });
 
-  it.each(
-    (["package", "git"] as const).flatMap((kind) =>
-      [undefined, 30_000, 600_000].map((timeoutMs) => ({ kind, timeoutMs })),
-    ),
-  )(
+  it.each([
+    { kind: "package", timeoutMs: undefined },
+    { kind: "git", timeoutMs: 600_000 },
+  ] as const)(
     "passes only the operator's $timeoutMs ms deadline to $kind candidate validation",
     async ({ kind, timeoutMs }) => {
       const runStagedUpdate = async ({

@@ -2,6 +2,7 @@ import { readFileSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isMainThread, Worker, workerData } from "node:worker_threads";
 
 const MAX_BYTES = 512 * 1024 * 1024;
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -47,12 +48,30 @@ export function resolveOpenClawCompileCacheDirectory({ installRoot, env = proces
 }
 
 export async function maintainOpenClawCompileCache(directory) {
+  // Node permission grants and later revocations do not extend to workers.
+  if (process.permission) {
+    return undefined;
+  }
   const owner = (globalThis[Symbol.for("openclaw.nodeCompileCacheBase")] ??= {});
   const pending = (owner.maintenance ??= new Map());
   if (pending.has(directory)) {
     return pending.get(directory);
   }
-  const task = maintain(directory)
+  const task = new Promise((resolve) => {
+    const worker = new Worker(new URL(import.meta.url), {
+      workerData: { openclawCompileCacheDirectory: directory },
+      // Maintenance must not replay CLI entry preloads or application loaders.
+      execArgv: [],
+      env: Object.fromEntries(
+        Object.entries(process.env).filter(([name]) => !/^(NODE_OPTIONS|BUN_OPTIONS)$/i.test(name)),
+      ),
+    });
+    worker.on("error", () => {});
+    worker.once("exit", () => resolve());
+    // Callers can await completed cleanup, but unawaited cache work must not
+    // extend a command's lifetime. A Promise alone does not keep Node alive.
+    worker.unref();
+  })
     .catch(() => {
       // Disposable bytecode must never prevent startup or command completion.
     })
@@ -81,11 +100,11 @@ async function maintain(directory) {
   }
   await fs.mkdir(directory, { recursive: true });
   let retired = false;
-  for (const version of await fs.readdir(root, { withFileTypes: true })) {
-    if (!version.isDirectory()) {
+  for (const entry of await fs.readdir(root, { withFileTypes: true })) {
+    if (!entry.isDirectory()) {
       continue;
     }
-    const versionRoot = path.join(root, version.name);
+    const versionRoot = path.join(root, entry.name);
     for (const build of await fs.readdir(versionRoot, { withFileTypes: true })) {
       const candidate = path.join(versionRoot, build.name);
       if (build.isDirectory() && candidate !== directory) {
@@ -125,4 +144,10 @@ async function maintain(directory) {
       bytes -= file.size;
     }
   }
+}
+
+if (!isMainThread && typeof workerData?.openclawCompileCacheDirectory === "string") {
+  void maintain(workerData.openclawCompileCacheDirectory).catch(() => {
+    // Disposable bytecode cleanup is best-effort inside the worker too.
+  });
 }

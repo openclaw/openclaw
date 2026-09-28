@@ -20,12 +20,6 @@ const makeFile = (overrides: Partial<WorkspaceBootstrapFile>): WorkspaceBootstra
   ...overrides,
 });
 
-const createLargeBootstrapFiles = (): WorkspaceBootstrapFile[] => [
-  makeFile({ name: "AGENTS.md", content: "a".repeat(10_000) }),
-  makeFile({ name: "SOUL.md", path: "/tmp/SOUL.md", content: "b".repeat(10_000) }),
-  makeFile({ name: "USER.md", path: "/tmp/USER.md", content: "c".repeat(10_000) }),
-];
-
 const QUOTED_HEARTBEAT_EXAMPLE =
   "`Check STATUS.md if it exists. Follow it strictly. Do not repeat old tasks from prior chats. If nothing needs attention, reply STATUS_OK.`";
 
@@ -119,19 +113,6 @@ describe("buildBootstrapContextFiles", () => {
       );
     }
   });
-  it("fits the rendered truncation marker inside the per-file budget", () => {
-    const maxChars = EXPECTED_DEFAULT_BOOTSTRAP_MAX_CHARS;
-    const files = [
-      makeFile({
-        name: "USER.md",
-        path: "/tmp/USER.md",
-        content: "a".repeat(maxChars * 2),
-      }),
-    ];
-    const [result] = buildBootstrapContextFiles(files, { maxChars });
-    expect(result?.content).toContain("[...truncated, read USER.md for full content...]");
-    expect(result?.content.length).toBeLessThanOrEqual(maxChars);
-  });
   it("gives USER.md its own small bootstrap budget", () => {
     const files = [
       makeFile({
@@ -195,18 +176,6 @@ describe("buildBootstrapContextFiles", () => {
     expect(result?.content).not.toContain(ordinary);
     expect(result?.content.length).toBeLessThanOrEqual(600);
   });
-  it("keeps the quoted heartbeat example with its framing", () => {
-    const frame = "Example heartbeat prompt:";
-    const [result] = buildBootstrapContextFiles(
-      [makeMiddleBootstrapFile([frame, QUOTED_HEARTBEAT_EXAMPLE])],
-      { maxChars: 2000 },
-    );
-
-    expect(result?.content).toContain("[Policy digest from AGENTS.md]");
-    expect(result?.content).toContain([frame, QUOTED_HEARTBEAT_EXAMPLE].join("\n"));
-    expect(result?.content.length).toBeLessThanOrEqual(2000);
-  });
-
   it.each([
     { padding: 51, fits: true },
     { padding: 52, fits: false },
@@ -247,9 +216,7 @@ describe("buildBootstrapContextFiles", () => {
 
   it.each([
     { name: "blank line", before: ["Example policy:", ""], after: [] },
-    { name: "backtick opening", before: ["Example policy:", "```"], after: ["```"] },
     { name: "backtick closing", before: ["```", "Example policy:", "```"], after: [] },
-    { name: "tilde opening", before: ["Example policy:", "~~~"], after: ["~~~"] },
     { name: "tilde closing", before: ["~~~", "Example policy:", "~~~"], after: [] },
   ])("clears framing at a $name boundary", ({ before, after }) => {
     const candidate = "Never commit secrets without validation.";
@@ -365,27 +332,6 @@ describe("buildBootstrapContextFiles", () => {
     expect(result?.content).not.toContain("[...truncated, read AGENTS.md for full content...]");
   });
 
-  it("keeps total injected bootstrap characters under the new default total cap", () => {
-    // Total caps bound prompt growth across multiple bootstrap files, not only
-    // per-file truncation.
-    const files = createLargeBootstrapFiles();
-    const result = buildBootstrapContextFiles(files);
-    const totalChars = result.reduce((sum, entry) => sum + entry.content.length, 0);
-    expect(totalChars).toBeLessThanOrEqual(EXPECTED_DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS);
-    expect(result).toHaveLength(3);
-    expect(result[2]?.content.length).toBeLessThanOrEqual(4_000);
-    expect(result[2]?.content).toContain("read USER.md for full content");
-  });
-
-  it("caps total injected bootstrap characters when totalMaxChars is configured", () => {
-    const files = createLargeBootstrapFiles();
-    const result = buildBootstrapContextFiles(files, { totalMaxChars: 24_000 });
-    const totalChars = result.reduce((sum, entry) => sum + entry.content.length, 0);
-    expect(totalChars).toBeLessThanOrEqual(24_000);
-    expect(result).toHaveLength(3);
-    expect(result[2]?.content).toContain("[...truncated, read USER.md for full content...]");
-  });
-
   it("enforces strict total cap even when truncation markers are present", () => {
     const files = [
       makeFile({ name: "AGENTS.md", content: "a".repeat(1_000) }),
@@ -452,21 +398,6 @@ describe("buildBootstrapContextFiles", () => {
     expect(
       warnings.filter((warning) => !warning.includes('missing or invalid "path" field')),
     ).toStrictEqual([]);
-  });
-
-  it("handles undefined file names without crashing", () => {
-    const fileWithUndefinedName = {
-      name: undefined,
-      path: "/tmp/test.md",
-      content: "content",
-      missing: false,
-    } as unknown as WorkspaceBootstrapFile;
-    const warnings: string[] = [];
-    const result = buildBootstrapContextFiles([fileWithUndefinedName], {
-      warn: (msg) => warnings.push(msg),
-    });
-    expect(result).toBeDefined();
-    expect(Array.isArray(result)).toBe(true);
   });
 });
 

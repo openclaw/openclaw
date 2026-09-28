@@ -14,7 +14,6 @@
     "../../ui/src/css.d.ts",
     "../../ui/src/i18n/virtual-locale.d.ts",
     "../../ui/src/markdown-it-emoji.d.ts",
-    "../../ui/src/markdown-it-task-lists.d.ts",
     "../../ui/src/types/highlight-js-subpaths.d.ts",
     "../../ui/src/types/novnc.d.ts"
   ],

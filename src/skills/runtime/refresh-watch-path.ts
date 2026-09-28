@@ -84,18 +84,12 @@ function shouldIgnoreSkillsWatchPath(
   if (DEFAULT_SKILLS_WATCH_IGNORED.some((re) => re.test(watchPath))) {
     return true;
   }
-  if (stats?.isDirectory?.() || stats?.isSymbolicLink?.()) {
-    return false;
-  }
-  if (!stats) {
-    return false;
-  }
-  if (usePolling && isSkillDiscoveryFileWatchPath(watchPath)) {
+  if (!stats || stats.isDirectory?.() || stats.isSymbolicLink?.()) {
     return false;
   }
   // Regular files are surfaced through raw directory events below. Letting
   // chokidar include discovery files here registers per-file watchers and leaks FDs.
-  return true;
+  return !usePolling || !isSkillDiscoveryFileWatchPath(watchPath);
 }
 
 export function isSkillDiscoveryFileWatchPath(watchPath: string): boolean {
@@ -114,14 +108,8 @@ export function getRawWatchedPath(details: unknown): string | undefined {
 }
 
 export function rawPathToString(rawPath: unknown): string | undefined {
-  if (typeof rawPath === "string") {
-    return rawPath || undefined;
-  }
-  if (Buffer.isBuffer(rawPath)) {
-    const decoded = rawPath.toString();
-    return decoded || undefined;
-  }
-  return undefined;
+  const decoded = Buffer.isBuffer(rawPath) ? rawPath.toString() : rawPath;
+  return typeof decoded === "string" ? decoded || undefined : undefined;
 }
 
 export function resolveRawSkillsWatchPath(rawPath: string, details: unknown): string | undefined {

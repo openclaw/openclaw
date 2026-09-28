@@ -1,8 +1,8 @@
-.content:has(openclaw-logs-page) {
+main.content:where(.content--logs-page) {
   overflow: hidden;
 }
 
-.content:has(openclaw-logs-page) > openclaw-router-outlet {
+main.content:where(.content--logs-page) > openclaw-router-outlet {
   display: flex;
   flex-direction: column;
   margin-top: 0;
@@ -15,7 +15,7 @@ openclaw-logs-page {
   display: contents;
 }
 
-.content:has(openclaw-logs-page) .content-header {
+main.content:where(.content--logs-page) .content-header {
   flex: 0 0 auto;
 }
 

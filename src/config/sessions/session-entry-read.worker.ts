@@ -16,11 +16,18 @@ import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-age
 import { SessionMetadataUnavailableError } from "../../state/session-metadata-unavailable-error.js";
 import { readSessionActivitySummary } from "./activity-summary.js";
 import { resolveSessionLifecycleTimestamps } from "./lifecycle.js";
+import { hasPendingSessionTranscriptArchives } from "./session-accessor.sqlite-archive-store-kernel.js";
 import { readSessionCreationSnapshotInDatabase } from "./session-accessor.sqlite-creation-read.js";
 import { readExactSessionEntryCandidatesInDatabase } from "./session-accessor.sqlite-entry-cache.js";
+import { readSelectedSessionEntriesInDatabase } from "./session-accessor.sqlite-entry-list.read.js";
+import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import { participantRecordsBySessionKey } from "./session-accessor.sqlite-participant-projection.js";
-import { readTranscriptHeaderFromDatabase } from "./session-accessor.sqlite-read.js";
+import {
+  readLatestAssistantTextFromDatabase,
+  readTranscriptHeaderFromDatabase,
+} from "./session-accessor.sqlite-read.js";
 import { readSessionEntryReplacementState } from "./session-accessor.sqlite-replacement-read.js";
+import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
 import { readSessionBackingFactsInDatabase } from "./session-backing-facts.js";
 import {
@@ -29,9 +36,12 @@ import {
   canonicalSessionKeyMigrationRequiredError,
   readWithCanonicalSessionReaderContinuation,
 } from "./session-canonical-key.js";
+import { boundSessionDiagnosticText } from "./session-diagnostic-text.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
+import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import {
   MAX_SESSION_ROW_FACTS_KEYS,
+  type SessionDiagnosticTextWorkerInput,
   type SessionExactEntriesWorkerInput,
   type SessionExactEntriesWorkerResult,
   type SessionRowDatabaseFacts,
@@ -39,27 +49,77 @@ import {
   type SessionRowFactsWorkerResult,
 } from "./session-transcript-worker.types.js";
 
+/** Current identity and assistant bytes come from one existing-only read snapshot. */
+export function readSessionDiagnosticText(request: SessionDiagnosticTextWorkerInput) {
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) =>
+      readWithCanonicalSessionReaderContinuation(database, request.continuation, () =>
+        runSqliteDeferredTransactionSync(database.db, () => {
+          const identity = readOpenClawAgentDatabaseIdentity(database);
+          if (
+            typeof identity.identity !== "string" ||
+            !isOpenClawAgentDatabasePathCurrent(database)
+          ) {
+            throw new Error("Session diagnostic read requires its current durable owner");
+          }
+          const source = {
+            agentId: database.agentId,
+            path: database.path,
+            databaseIdentity: identity.identity,
+            databaseBirthtime: identity.birthtime,
+          };
+          const scope = {
+            agentId: request.scope.agentId,
+            sessionKey: resolveSqliteSessionKey(request.scope.sessionKey, request.scope.agentId),
+            sessionId: request.scope.sessionId,
+          };
+          const entry = readSessionEntryRow(database, scope.sessionKey, "list")?.entry;
+          if (entry?.sessionId !== scope.sessionId || entry.incognito === true) {
+            return { text: undefined, source };
+          }
+          const latest = runWithSessionTranscriptReadFence(request.admission, () =>
+            readLatestAssistantTextFromDatabase(database, scope),
+          );
+          return { text: latest ? boundSessionDiagnosticText(latest.text) : undefined, source };
+        }),
+      ),
+    { ...request.database, env: request.scope.env },
+  );
+  if (!result.found && result.reason !== "database-missing") {
+    throw new SessionMetadataUnavailableError(result.reason);
+  }
+  return {
+    kind: "session-diagnostic-text" as const,
+    ...(result.found ? result.value : { text: undefined }),
+  };
+}
+
 /** Full rows share a snapshot with lifecycle fallback; backing reads retain listing admission. */
 export function readExactSessionEntriesWithLifecycle(
   request: SessionExactEntriesWorkerInput,
 ): SessionExactEntriesWorkerResult {
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) =>
-      request.projection === "backing"
+      request.projection === "backing" || request.projection === "list"
         ? {
             kind: "session-exact-entries" as const,
-            entries: readSessionBackingFactsInDatabase(
-              database,
-              request.sessionKeys,
-              request.continuation,
-            ),
+            entries:
+              request.projection === "list"
+                ? readSelectedSessionEntriesInDatabase(database, request.sessionKeys, {
+                    continuation: request.continuation,
+                  })
+                : readSessionBackingFactsInDatabase(
+                    database,
+                    request.sessionKeys,
+                    request.continuation,
+                  ),
             lifecycleTimestamps: {},
           }
         : withSqlitePostCommitPublications(database.db, () =>
             runSqliteDeferredTransactionSync(database.db, () => {
               assertCanonicalSqliteSessionKeysCurrent(database);
               if (request.projection === "creation") {
-                const identity = readOpenClawAgentDatabaseIdentity(database).identity;
+                const { identity, filename } = readOpenClawAgentDatabaseIdentity(database);
                 const sessionKey = request.sessionKeys[0];
                 if (
                   typeof identity !== "string" ||
@@ -75,8 +135,13 @@ export function readExactSessionEntriesWithLifecycle(
                   entries: [],
                   lifecycleTimestamps: {},
                   creation: {
-                    ...readSessionCreationSnapshotInDatabase(database, sessionKey),
+                    ...readSessionCreationSnapshotInDatabase(
+                      database,
+                      sessionKey,
+                      request.creationLabel,
+                    ),
                     databaseIdentity: identity,
+                    databasePath: filename,
                   },
                 };
               }
@@ -200,6 +265,9 @@ export function readExactSessionEntriesWithLifecycle(
                   : {}),
                 kind: "session-exact-entries" as const,
                 entries: selected.value,
+                ...(request.projection === "lifecycle"
+                  ? { pendingArchives: hasPendingSessionTranscriptArchives(database) }
+                  : {}),
                 lifecycleTimestamps: resolveSessionLifecycleTimestamps({
                   entry,
                   agentId: database.agentId,
@@ -217,7 +285,12 @@ export function readExactSessionEntriesWithLifecycle(
   if (result.reason !== "database-missing") {
     throw new SessionMetadataUnavailableError(result.reason);
   }
-  return { kind: "session-exact-entries", entries: [], lifecycleTimestamps: {} };
+  return {
+    kind: "session-exact-entries",
+    entries: [],
+    lifecycleTimestamps: {},
+    ...(request.projection === "lifecycle" ? { pendingArchives: false } : {}),
+  };
 }
 
 /** Entry, board presence, and summary validity describe one committed snapshot. */

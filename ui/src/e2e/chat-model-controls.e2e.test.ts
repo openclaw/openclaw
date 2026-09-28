@@ -609,7 +609,7 @@ suite.define(() => {
         const composer = page.locator(".agent-chat__input").first();
         const model = composer.locator('[data-chat-model-select="true"]');
         const effort = composer.locator('[data-chat-thinking-select="true"]');
-        await expect.poll(() => model.getAttribute("title")).toBe(longName);
+        await expect.poll(() => model.getAttribute("aria-label")).toContain(longName);
         await expect.poll(() => effort.isVisible()).toBe(true);
         for (const width of [320, 375, 393, 430, 560, 768, 1280]) {
           await page.setViewportSize({ width, height: 900 });

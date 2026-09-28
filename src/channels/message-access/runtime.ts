@@ -8,6 +8,8 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
+import { DEFAULT_ACCOUNT_ID } from "../../routing/account-id.js";
+import { prepareUserChannelIdentityAuthority } from "../../state/user-channel-identity-operations.js";
 import { recordChannelIngressResolution } from "./admission-evidence.js";
 import { decideChannelIngress } from "./decision.js";
 import { resolveChannelIngressEffectiveAllowFromLists } from "./effective-allow-from.js";
@@ -312,19 +314,6 @@ function commandOwnerAllowFrom(params: {
   return params.command?.groupOwnerAllowFrom === "none" ? [] : params.configuredAllowFrom;
 }
 
-function commandGroupAllowFrom(params: {
-  command?: ChannelMessageIngressCommandInput;
-  isGroup: boolean;
-  effectiveCommandGroupAllowFrom: string[];
-}): Array<string | number> {
-  if (params.isGroup) {
-    return params.effectiveCommandGroupAllowFrom;
-  }
-  return params.command?.directGroupAllowFrom === "effective"
-    ? params.effectiveCommandGroupAllowFrom
-    : [];
-}
-
 function accessGroupMatchedEntry(params: ResolveChannelMessageIngressParams): string | null {
   const entry = params.accessGroupMatchedAllowFromEntry ?? params.subject.stableId;
   return entry == null ? null : String(entry);
@@ -443,11 +432,10 @@ async function resolveChannelMessageIngressForOwner(
         configuredAllowFrom: rawAllowFrom,
         effectiveAllowFrom: rawEffective.effectiveAllowFrom,
       }),
-      commandGroup: commandGroupAllowFrom({
-        command: params.command,
-        isGroup,
-        effectiveCommandGroupAllowFrom: rawCommandGroup.effectiveGroupAllowFrom,
-      }),
+      commandGroup:
+        isGroup || params.command?.directGroupAllowFrom === "effective"
+          ? rawCommandGroup.effectiveGroupAllowFrom
+          : [],
     },
   });
   const ingress = decideChannelIngress(state, policy);
@@ -494,16 +482,19 @@ async function resolveChannelMessageIngressForOwner(
       subject.identifiers[0]?.value
         ? {
             channelId,
-            accountId: params.accountId ?? "default",
+            accountId: params.accountId ?? DEFAULT_ACCOUNT_ID,
             senderId: subject.identifiers[0].value,
           }
+        : undefined;
+    const requester =
+      verifiedPrincipal && participantGatewayContext
+        ? await prepareUserChannelIdentityAuthority(verifiedPrincipal)
         : undefined;
     const commandOwnerAuthority =
       verifiedPrincipal && participantGatewayContext
         ? await prepareCommandOwnerAuthority(participantGatewayContext.getRuntimeConfig(), {
-            channel: verifiedPrincipal.channelId,
-            accountId: verifiedPrincipal.accountId,
-            senderId: verifiedPrincipal.senderId,
+            identity: verifiedPrincipal,
+            prepared: requester,
           })
         : undefined;
     participantInput = {
@@ -524,6 +515,14 @@ async function resolveChannelMessageIngressForOwner(
           },
       binding: participantBinding,
       verifiedPrincipal,
+      requesterProfile:
+        requester && ownerIsCurrent()
+          ? {
+              id: requester.linked.profileId,
+              displayName: requester.linked.displayName,
+              isCurrent: requester.isCurrent,
+            }
+          : undefined,
       commandOwnerAuthority: ownerIsCurrent() ? commandOwnerAuthority : undefined,
       promptedAt,
       owner: participantOwner,

@@ -88,42 +88,7 @@ function sandboxPostureFindingsForRule(
       evidence,
       evidenceFilter,
     ),
-    ...sandboxContainerHostNetworkFindings(
-      sandboxPolicy,
-      policyDocName,
-      requirementBase,
-      evidence,
-      evidenceFilter,
-    ),
-    ...sandboxContainerNamespaceJoinFindings(
-      sandboxPolicy,
-      policyDocName,
-      requirementBase,
-      evidence,
-      evidenceFilter,
-    ),
-    ...sandboxContainerMountModeFindings(
-      sandboxPolicy,
-      policyDocName,
-      requirementBase,
-      evidence,
-      evidenceFilter,
-    ),
-    ...sandboxContainerRuntimeSocketMountFindings(
-      sandboxPolicy,
-      policyDocName,
-      requirementBase,
-      evidence,
-      evidenceFilter,
-    ),
-    ...sandboxContainerUnconfinedProfileFindings(
-      sandboxPolicy,
-      policyDocName,
-      requirementBase,
-      evidence,
-      evidenceFilter,
-    ),
-    ...sandboxBrowserCdpSourceRangeFindings(
+    ...sandboxBooleanPostureFindings(
       sandboxPolicy,
       policyDocName,
       requirementBase,
@@ -292,151 +257,94 @@ function sandboxContainerPostureUnobservableFindings(
     );
 }
 
-function sandboxContainerHostNetworkFindings(
+function sandboxBooleanPostureFindings(
   sandboxPolicy: Record<string, unknown>,
   policyDocName: string,
   requirementBase: string,
   evidence: PolicyEvidence,
   evidenceFilter: (entry: PolicySandboxPostureEvidence) => boolean,
 ): readonly HealthFinding[] {
-  if (readPolicyBoolean(sandboxPolicy, ["containers", "denyHostNetwork"]) !== true) {
-    return [];
-  }
-  return sandboxPostureEntries(evidence, "containerNetwork")
-    .filter(evidenceFilter)
-    .filter((entry) => typeof entry.value === "string" && entry.value.toLowerCase() === "host")
-    .map((entry) =>
-      sandboxPostureFinding(entry, {
-        checkId: CHECK_IDS.policySandboxContainerHostNetworkDenied,
-        message: `${sandboxPostureLabel(entry)} uses host container network mode.`,
-        requirement: `oc://${policyDocName}/${requirementBase}/containers/denyHostNetwork`,
-        fixHint: "Change the container network mode or update policy after review.",
-      }),
-    );
-}
-
-function sandboxContainerNamespaceJoinFindings(
-  sandboxPolicy: Record<string, unknown>,
-  policyDocName: string,
-  requirementBase: string,
-  evidence: PolicyEvidence,
-  evidenceFilter: (entry: PolicySandboxPostureEvidence) => boolean,
-): readonly HealthFinding[] {
-  if (readPolicyBoolean(sandboxPolicy, ["containers", "denyContainerNamespaceJoin"]) !== true) {
-    return [];
-  }
-  const containerNamespacePrefix = "container:";
-  return sandboxPostureEntries(evidence, "containerNetwork")
-    .filter(evidenceFilter)
-    .filter(
-      (entry) =>
-        typeof entry.value === "string" &&
-        entry.value.toLowerCase().startsWith(containerNamespacePrefix),
-    )
-    .map((entry) =>
-      sandboxPostureFinding(entry, {
-        checkId: CHECK_IDS.policySandboxContainerNamespaceJoinDenied,
-        message: `${sandboxPostureLabel(entry)} joins another container network namespace '${entry.value ?? ""}'.`,
-        requirement: `oc://${policyDocName}/${requirementBase}/containers/denyContainerNamespaceJoin`,
-        fixHint: "Change the container network mode or update policy after review.",
-      }),
-    );
-}
-
-function sandboxContainerMountModeFindings(
-  sandboxPolicy: Record<string, unknown>,
-  policyDocName: string,
-  requirementBase: string,
-  evidence: PolicyEvidence,
-  evidenceFilter: (entry: PolicySandboxPostureEvidence) => boolean,
-): readonly HealthFinding[] {
-  if (readPolicyBoolean(sandboxPolicy, ["containers", "requireReadOnlyMounts"]) !== true) {
-    return [];
-  }
-  return sandboxPostureEntries(evidence, "containerMount")
-    .filter(evidenceFilter)
-    .filter((entry) => entry.bindMode !== "ro")
-    .map((entry) =>
-      sandboxPostureFinding(entry, {
-        checkId: CHECK_IDS.policySandboxContainerMountModeRequired,
-        message: `${sandboxPostureLabel(entry)} has container mount '${entry.bind ?? ""}' with mode '${entry.bindMode ?? "unknown"}'.`,
-        requirement: `oc://${policyDocName}/${requirementBase}/containers/requireReadOnlyMounts`,
-        fixHint: "Set the mount mode to read-only or update policy after review.",
-      }),
-    );
-}
-
-function sandboxContainerRuntimeSocketMountFindings(
-  sandboxPolicy: Record<string, unknown>,
-  policyDocName: string,
-  requirementBase: string,
-  evidence: PolicyEvidence,
-  evidenceFilter: (entry: PolicySandboxPostureEvidence) => boolean,
-): readonly HealthFinding[] {
-  if (
-    readPolicyBoolean(sandboxPolicy, ["containers", "denyContainerRuntimeSocketMounts"]) !== true
-  ) {
-    return [];
-  }
-  return sandboxPostureEntries(evidence, "containerMount")
-    .filter(evidenceFilter)
-    .filter((entry) => bindHostLooksLikeContainerRuntimeSocket(entry.bindHost))
-    .map((entry) =>
-      sandboxPostureFinding(entry, {
-        checkId: CHECK_IDS.policySandboxContainerRuntimeSocketMount,
-        message: `${sandboxPostureLabel(entry)} binds host container runtime socket '${entry.bindHost ?? ""}'.`,
-        requirement: `oc://${policyDocName}/${requirementBase}/containers/denyContainerRuntimeSocketMounts`,
-        fixHint: "Remove the container runtime socket bind or update policy after review.",
-      }),
-    );
-}
-
-function sandboxContainerUnconfinedProfileFindings(
-  sandboxPolicy: Record<string, unknown>,
-  policyDocName: string,
-  requirementBase: string,
-  evidence: PolicyEvidence,
-  evidenceFilter: (entry: PolicySandboxPostureEvidence) => boolean,
-): readonly HealthFinding[] {
-  if (readPolicyBoolean(sandboxPolicy, ["containers", "denyUnconfinedProfiles"]) !== true) {
-    return [];
-  }
-  return sandboxPostureEntries(evidence, "containerSecurityProfile")
-    .filter(evidenceFilter)
-    .filter(
-      (entry) => typeof entry.value === "string" && entry.value.toLowerCase() === "unconfined",
-    )
-    .map((entry) =>
-      sandboxPostureFinding(entry, {
-        checkId: CHECK_IDS.policySandboxContainerUnconfinedProfile,
-        message: `${sandboxPostureLabel(entry)} sets container ${entry.profile ?? "security"} profile to unconfined.`,
-        requirement: `oc://${policyDocName}/${requirementBase}/containers/denyUnconfinedProfiles`,
-        fixHint: "Remove the unconfined container profile or update policy after review.",
-      }),
-    );
-}
-
-function sandboxBrowserCdpSourceRangeFindings(
-  sandboxPolicy: Record<string, unknown>,
-  policyDocName: string,
-  requirementBase: string,
-  evidence: PolicyEvidence,
-  evidenceFilter: (entry: PolicySandboxPostureEvidence) => boolean,
-): readonly HealthFinding[] {
-  if (readPolicyBoolean(sandboxPolicy, ["browser", "requireCdpSourceRange"]) !== true) {
-    return [];
-  }
-  return sandboxPostureEntries(evidence, "browserCdpSourceRange")
-    .filter(evidenceFilter)
-    .filter((entry) => entry.value === undefined)
-    .map((entry) =>
-      sandboxPostureFinding(entry, {
-        checkId: CHECK_IDS.policySandboxBrowserCdpSourceRangeMissing,
-        message: `${sandboxPostureLabel(entry)} enables sandbox browser without cdpSourceRange.`,
-        requirement: `oc://${policyDocName}/${requirementBase}/browser/requireCdpSourceRange`,
-        fixHint: "Set agents.*.sandbox.browser.cdpSourceRange or update policy after review.",
-      }),
-    );
+  // Rule order is part of the policy attestation.
+  const rules = [
+    {
+      path: ["containers", "denyHostNetwork"],
+      kind: "containerNetwork",
+      violates: (entry) => typeof entry.value === "string" && entry.value.toLowerCase() === "host",
+      checkId: CHECK_IDS.policySandboxContainerHostNetworkDenied,
+      message: (entry) => `${sandboxPostureLabel(entry)} uses host container network mode.`,
+      fixHint: "Change the container network mode or update policy after review.",
+    },
+    {
+      path: ["containers", "denyContainerNamespaceJoin"],
+      kind: "containerNetwork",
+      violates: (entry) =>
+        typeof entry.value === "string" && entry.value.toLowerCase().startsWith("container:"),
+      checkId: CHECK_IDS.policySandboxContainerNamespaceJoinDenied,
+      message: (entry) =>
+        `${sandboxPostureLabel(entry)} joins another container network namespace '${entry.value ?? ""}'.`,
+      fixHint: "Change the container network mode or update policy after review.",
+    },
+    {
+      path: ["containers", "requireReadOnlyMounts"],
+      kind: "containerMount",
+      violates: (entry) => entry.bindMode !== "ro",
+      checkId: CHECK_IDS.policySandboxContainerMountModeRequired,
+      message: (entry) =>
+        `${sandboxPostureLabel(entry)} has container mount '${entry.bind ?? ""}' with mode '${entry.bindMode ?? "unknown"}'.`,
+      fixHint: "Set the mount mode to read-only or update policy after review.",
+    },
+    {
+      path: ["containers", "denyContainerRuntimeSocketMounts"],
+      kind: "containerMount",
+      violates: (entry) => bindHostLooksLikeContainerRuntimeSocket(entry.bindHost),
+      checkId: CHECK_IDS.policySandboxContainerRuntimeSocketMount,
+      message: (entry) =>
+        `${sandboxPostureLabel(entry)} binds host container runtime socket '${entry.bindHost ?? ""}'.`,
+      fixHint: "Remove the container runtime socket bind or update policy after review.",
+    },
+    {
+      path: ["containers", "denyUnconfinedProfiles"],
+      kind: "containerSecurityProfile",
+      violates: (entry) =>
+        typeof entry.value === "string" && entry.value.toLowerCase() === "unconfined",
+      checkId: CHECK_IDS.policySandboxContainerUnconfinedProfile,
+      message: (entry) =>
+        `${sandboxPostureLabel(entry)} sets container ${entry.profile ?? "security"} profile to unconfined.`,
+      fixHint: "Remove the unconfined container profile or update policy after review.",
+    },
+    {
+      path: ["browser", "requireCdpSourceRange"],
+      kind: "browserCdpSourceRange",
+      violates: (entry) => entry.value === undefined,
+      checkId: CHECK_IDS.policySandboxBrowserCdpSourceRangeMissing,
+      message: (entry) =>
+        `${sandboxPostureLabel(entry)} enables sandbox browser without cdpSourceRange.`,
+      fixHint: "Set agents.*.sandbox.browser.cdpSourceRange or update policy after review.",
+    },
+  ] satisfies readonly {
+    path: readonly string[];
+    kind: PolicySandboxPostureEvidence["kind"];
+    violates: (entry: PolicySandboxPostureEvidence) => boolean;
+    checkId: Parameters<typeof sandboxPostureFinding>[1]["checkId"];
+    message: (entry: PolicySandboxPostureEvidence) => string;
+    fixHint: string;
+  }[];
+  return rules.flatMap((rule) => {
+    if (readPolicyBoolean(sandboxPolicy, rule.path) !== true) {
+      return [];
+    }
+    return sandboxPostureEntries(evidence, rule.kind)
+      .filter(evidenceFilter)
+      .filter(rule.violates)
+      .map((entry) =>
+        sandboxPostureFinding(entry, {
+          checkId: rule.checkId,
+          message: rule.message(entry),
+          requirement: `oc://${policyDocName}/${requirementBase}/${rule.path.join("/")}`,
+          fixHint: rule.fixHint,
+        }),
+      );
+  });
 }
 
 function sandboxPostureEntries(

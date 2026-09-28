@@ -1,4 +1,3 @@
-// Qa Lab helper module supports qa gateway config behavior.
 import { OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
@@ -193,7 +192,8 @@ export function buildQaGatewayConfig(params: {
   const gatewayModels: ReturnType<typeof provider.buildGatewayModels> =
     usesCodexMockAppServer && codexMockOpenAiCatalog
       ? {
-          mode: "merge" as const,
+          // Synthetic credentials must not enter live provider catalog discovery.
+          mode: "replace" as const,
           providers: {
             openai: {
               ...codexMockOpenAiCatalog,

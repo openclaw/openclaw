@@ -1,4 +1,3 @@
-// Xai provider module implements model/runtime integration.
 import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -18,6 +17,7 @@ import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-co
 import type {
   VideoGenerationProvider,
   VideoGenerationRequest,
+  VideoGenerationSourceAsset,
 } from "openclaw/plugin-sdk/video-generation";
 import {
   DEFAULT_XAI_VIDEO_BASE_URL,
@@ -39,33 +39,10 @@ const XAI_VIDEO_DEFAULT_DURATION_SECONDS = 8;
 const XAI_VIDEO_DEFAULT_ASPECT_RATIO = "16:9";
 const XAI_VIDEO_DEFAULT_RESOLUTION = "480p";
 
-type XaiVideoCreateResponse = {
-  request_id?: string;
-  error?: {
-    code?: string;
-    message?: string;
-  } | null;
-};
-
 type XaiVideoStatusResponse = {
-  request_id?: string;
-  // Free-form: xAI returns whatever string it wants here. The caller decides
-  // which strings are terminal vs continue-polling.
   status: string;
-  video?: {
-    url?: string;
-  } | null;
-  error?: {
-    code?: string;
-    message?: string;
-  } | null;
-};
-
-type VideoGenerationSourceInput = {
-  url?: string;
-  buffer?: Buffer;
-  mimeType?: string;
-  role?: string;
+  videoUrl?: string;
+  errorMessage?: string;
 };
 
 async function readXaiVideoJson(response: Response): Promise<Record<string, unknown>> {
@@ -95,30 +72,19 @@ function xaiErrorMessage(payload: Record<string, unknown>): string | undefined {
   return normalizeOptionalString(error.message);
 }
 
-function readXaiCreateResponse(payload: Record<string, unknown>): XaiVideoCreateResponse {
-  return {
-    request_id: normalizeOptionalString(payload.request_id),
-    error: xaiErrorMessage(payload) ? { message: xaiErrorMessage(payload) } : null,
-  };
-}
-
 function readXaiStatusResponse(payload: Record<string, unknown>): XaiVideoStatusResponse {
   const video = payload.video;
   if (video !== undefined && video !== null && !isRecord(video)) {
     throw new Error(XAI_VIDEO_MALFORMED_RESPONSE);
   }
   return {
-    request_id: normalizeOptionalString(payload.request_id),
     status: normalizeOptionalString(payload.status) ?? "",
-    video: isRecord(video) ? { url: normalizeOptionalString(video.url) } : null,
-    error: xaiErrorMessage(payload) ? { message: xaiErrorMessage(payload) } : null,
+    videoUrl: isRecord(video) ? normalizeOptionalString(video.url) : undefined,
+    errorMessage: xaiErrorMessage(payload),
   };
 }
 
-function resolveImageUrl(input: VideoGenerationSourceInput | undefined): string | undefined {
-  if (!input) {
-    return undefined;
-  }
+function resolveImageUrl(input: VideoGenerationSourceAsset): string {
   const inputUrl = normalizeOptionalString(input.url);
   if (inputUrl) {
     return inputUrl;
@@ -129,19 +95,11 @@ function resolveImageUrl(input: VideoGenerationSourceInput | undefined): string 
   return toImageDataUrl({ ...input, buffer: input.buffer, defaultMimeType: "image/png" });
 }
 
-function resolveRequiredImageUrl(input: VideoGenerationSourceInput): string {
-  const imageUrl = resolveImageUrl(input);
-  if (!imageUrl) {
-    throw new Error("xAI image-to-video input is missing image data.");
-  }
-  return imageUrl;
-}
-
-function isReferenceImage(input: VideoGenerationSourceInput): boolean {
+function isReferenceImage(input: VideoGenerationSourceAsset): boolean {
   return normalizeOptionalString(input.role)?.toLowerCase() === "reference_image";
 }
 
-function isFirstFrameImage(input: VideoGenerationSourceInput): boolean {
+function isFirstFrameImage(input: VideoGenerationSourceAsset): boolean {
   const role = normalizeOptionalString(input.role)?.toLowerCase();
   return role === undefined || role === "first_frame";
 }
@@ -163,7 +121,7 @@ function validateXaiVideo15Request(req: VideoGenerationRequest): void {
   }
 }
 
-function resolveInputVideoUrl(input: VideoGenerationSourceInput | undefined): string | undefined {
+function resolveInputVideoUrl(input: VideoGenerationSourceAsset | undefined): string | undefined {
   if (!input) {
     return undefined;
   }
@@ -266,17 +224,20 @@ function buildCreateBody(req: VideoGenerationRequest): Record<string, unknown> {
     prompt: req.prompt,
   };
 
-  if (mode === "generate") {
-    const isVideo15 = isXaiVideo15Model(req.model);
-    const imageUrl = resolveImageUrl(req.inputImages?.[0]);
-    if (imageUrl) {
+  if (mode === "generate" || mode === "referenceToVideo") {
+    const isVideo15 = mode === "generate" && isXaiVideo15Model(req.model);
+    const inputImage = mode === "generate" ? inputImages[0] : undefined;
+    const imageUrl = inputImage ? resolveImageUrl(inputImage) : undefined;
+    if (mode === "referenceToVideo") {
+      body.reference_images = inputImages.map((image) => ({ url: resolveImageUrl(image) }));
+    } else if (imageUrl) {
       body.image = { url: imageUrl };
     }
     body.duration =
       resolveDurationSeconds({
         durationSeconds: req.durationSeconds,
         min: 1,
-        max: 15,
+        max: mode === "generate" ? 15 : 10,
       }) ?? XAI_VIDEO_DEFAULT_DURATION_SECONDS;
     const aspectRatio = resolveAspectRatio(req.aspectRatio);
     // Image-to-video inherits the source frame's ratio when callers omit it;
@@ -286,19 +247,6 @@ function buildCreateBody(req: VideoGenerationRequest): Record<string, unknown> {
     }
     body.resolution =
       resolveResolution(req.resolution, { allow1080p: isVideo15 }) ?? XAI_VIDEO_DEFAULT_RESOLUTION;
-    return body;
-  }
-
-  if (mode === "referenceToVideo") {
-    body.reference_images = inputImages.map((image) => ({ url: resolveRequiredImageUrl(image) }));
-    body.duration =
-      resolveDurationSeconds({
-        durationSeconds: req.durationSeconds,
-        min: 1,
-        max: 10,
-      }) ?? XAI_VIDEO_DEFAULT_DURATION_SECONDS;
-    body.aspect_ratio = resolveAspectRatio(req.aspectRatio) ?? XAI_VIDEO_DEFAULT_ASPECT_RATIO;
-    body.resolution = resolveResolution(req.resolution) ?? XAI_VIDEO_DEFAULT_RESOLUTION;
     return body;
   }
 
@@ -383,13 +331,11 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
       });
       try {
         await assertOkOrThrowHttpError(response, "xAI video generation failed");
-        const submitted = readXaiCreateResponse(await readXaiVideoJson(response));
+        const submitted = await readXaiVideoJson(response);
+        const submitError = xaiErrorMessage(submitted);
         const requestId = normalizeOptionalString(submitted.request_id);
         if (!requestId) {
-          throw new Error(
-            normalizeOptionalString(submitted.error?.message) ??
-              "xAI video generation response missing request_id",
-          );
+          throw new Error(submitError ?? "xAI video generation response missing request_id");
         }
         const pollDeadline = createProviderOperationDeadline({
           timeoutMs: resolveProviderOperationTimeoutMs({
@@ -435,12 +381,11 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
           getFailureMessage: (payload) => {
             const status = payload.status.toLowerCase();
             return XAI_VIDEO_TERMINAL_FAILURE_STATUSES.has(status)
-              ? (normalizeOptionalString(payload.error?.message) ??
-                  `xAI video generation ${status}`)
+              ? (payload.errorMessage ?? `xAI video generation ${status}`)
               : undefined;
           },
         });
-        const videoUrl = normalizeOptionalString(completed.video?.url);
+        const videoUrl = completed.videoUrl;
         if (!videoUrl) {
           throw new Error(XAI_VIDEO_MALFORMED_RESPONSE);
         }

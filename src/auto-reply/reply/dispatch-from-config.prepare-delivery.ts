@@ -1,6 +1,6 @@
 import { isParentOwnedBackgroundAcpSession } from "@openclaw/acp-core/session-interaction-mode";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
+import { readAcpSessionEntryAsync } from "../../acp/runtime/session-meta.js";
 import { logVerbose } from "../../globals.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
@@ -36,16 +36,22 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     sessionStoreEntry,
     turnLedger,
   } = state;
+  const assertPreparationCurrent = () => {
+    state.getPreDispatchAbortSignal()?.throwIfAborted();
+    state.params.replyOptions?.operatorAuthority?.assertCurrent();
+  };
   // Gather awaits runtime preparation after its first row read. Reread ACP
   // metadata with the same owner to preserve current lifecycle fences and
   // recovery from an earlier store-read failure.
   const currentAcpSession = sessionStoreEntry.sessionKey
-    ? readAcpSessionEntry({
+    ? await readAcpSessionEntryAsync({
         cfg,
         agentId: sessionStoreEntry.agentId,
         sessionKey: sessionStoreEntry.sessionKey,
+        assertCurrent: assertPreparationCurrent,
       })
     : undefined;
+  assertPreparationCurrent();
   const sessionEntryWithAcp = currentAcpSession?.entry
     ? { ...currentAcpSession.entry, acp: currentAcpSession.acp }
     : undefined;
@@ -214,12 +220,6 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
   const isRoutedReplyDelivered = (result: { delivered: boolean; ambiguous?: boolean }) =>
     result.delivered && result.ambiguous !== true;
 
-  /**
-   * Helper to send a payload via route-reply (async).
-   * Only used when actually routing to a different provider.
-   * Note: Only called when shouldRouteToOriginating is true, so
-   * routeReplyChannel and routeReplyTo are guaranteed to be defined.
-   */
   const sendReplyOperationAsync = async (
     operation: ReplyDispatchOperation,
     abortSignal?: AbortSignal,
@@ -228,8 +228,6 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     deliveryIntentId?: string,
   ) => {
     const payload = operation.kind === "prepared" ? operation.plan.payload : operation.payload;
-    // Keep the runtime guard explicit because this helper is called from nested
-    // reply callbacks where TypeScript cannot narrow shouldRouteToOriginating.
     if (!routeReplyRuntime && !deliveryIntentId) {
       return null;
     }
@@ -245,8 +243,10 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     });
     if (result && !result.ok) {
       logVerbose(`dispatch-from-config: route-reply failed: ${result.error ?? "unknown error"}`);
-      if (deliveryIntentId) {
-        throw new Error(result.error ?? "durable block reply delivery failed");
+      if (deliveryIntentId && result.queueCustody !== "held") {
+        throw new Error(result.error ?? "durable block reply delivery failed", {
+          cause: result.cause,
+        });
       }
     }
     if (hasAskUserPayload(payload) && !effectiveAbortSignal?.aborted && !result?.delivered) {
@@ -299,9 +299,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
       return result.delivered || result.suppressed === true;
     }
     markInboundDedupeReplayUnsafe();
-    return mode === "additive"
-      ? turnLedger.sendQueued("tool", bindingPayload).queued
-      : turnLedger.sendQueued("final", bindingPayload).queued;
+    return turnLedger.sendQueued(mode === "additive" ? "tool" : "final", bindingPayload).queued;
   };
   const nextState = Object.assign(state, {
     suppressAcpChildUserDelivery,
@@ -324,8 +322,6 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
   return { status: "ready" as const, state: nextState };
 }
 
-type PrepareDispatchDeliveryResult = Awaited<ReturnType<typeof prepareDispatchDelivery>>;
-export type PrepareDispatchDeliveryReadyState = Extract<
-  PrepareDispatchDeliveryResult,
-  { status: "ready" }
+export type PrepareDispatchDeliveryReadyState = Awaited<
+  ReturnType<typeof prepareDispatchDelivery>
 >["state"];

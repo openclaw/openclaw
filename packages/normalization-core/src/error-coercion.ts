@@ -90,19 +90,7 @@ function formatStatusAndCode(value: unknown): string | undefined {
 }
 
 function stringifyUnknown(value: unknown): string {
-  if (value === null) {
-    return "null";
-  }
-  if (value === undefined) {
-    return "undefined";
-  }
-  if (
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean" ||
-    typeof value === "bigint" ||
-    typeof value === "symbol"
-  ) {
+  if (value === null || (typeof value !== "object" && typeof value !== "function")) {
     return String(value);
   }
   try {

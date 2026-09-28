@@ -82,33 +82,6 @@ function stableFingerprintValue(value: unknown): string {
   return fingerprint;
 }
 
-function createPluginAutoEnableCacheEntry(params: {
-  discovery: PluginDiscoveryResult;
-  manifestRegistry: PluginManifestRegistry;
-  result: PluginAutoEnableResult;
-  ambientEnvTriggers: AmbientEnvTriggerPolicy;
-}): PluginAutoEnableCacheEntry {
-  return {
-    discoveryFingerprint: stableFingerprintValue(params.discovery.candidates),
-    registryFingerprint: stableFingerprintValue(params.manifestRegistry.plugins),
-    ambientEnvTriggers: params.ambientEnvTriggers,
-    result: params.result,
-  };
-}
-
-function isPluginAutoEnableCacheEntryFresh(params: {
-  entry: PluginAutoEnableCacheEntry;
-  discovery: PluginDiscoveryResult;
-  manifestRegistry: PluginManifestRegistry;
-  ambientEnvTriggers: AmbientEnvTriggerPolicy;
-}): boolean {
-  return (
-    params.entry.discoveryFingerprint === stableFingerprintValue(params.discovery.candidates) &&
-    params.entry.registryFingerprint === stableFingerprintValue(params.manifestRegistry.plugins) &&
-    params.entry.ambientEnvTriggers === params.ambientEnvTriggers
-  );
-}
-
 /** Applies already detected plugin auto-enable candidates to config. */
 export function materializePluginAutoEnableCandidates(params: {
   config?: OpenClawConfig;
@@ -148,9 +121,10 @@ export function applyPluginAutoEnable(params: {
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }): PluginAutoEnableResult {
   const config = params.config;
+  const ambientEnvTriggers = params.ambientEnvTriggers ?? "allow";
+  let discoveryCache: PluginAutoEnableDiscoveryCache | undefined;
   if (config && typeof config === "object" && params.manifestRegistry && params.discovery) {
     const env = params.env ?? process.env;
-    const ambientEnvTriggers = params.ambientEnvTriggers ?? "allow";
     const envCache = getOrCreateWeakMap(
       (sameTurnApplyCache ??= new WeakMap()),
       config,
@@ -161,7 +135,7 @@ export function applyPluginAutoEnable(params: {
       env,
       () => new WeakMap<object, PluginAutoEnableDiscoveryCache>(),
     );
-    const discoveryCache = getOrCreateWeakMap(
+    discoveryCache = getOrCreateWeakMap(
       registryCache,
       params.manifestRegistry,
       () => new WeakMap<object, PluginAutoEnableCacheEntry>(),
@@ -169,40 +143,29 @@ export function applyPluginAutoEnable(params: {
     const cached = discoveryCache.get(params.discovery);
     if (
       cached &&
-      isPluginAutoEnableCacheEntryFresh({
-        entry: cached,
-        discovery: params.discovery,
-        manifestRegistry: params.manifestRegistry,
-        ambientEnvTriggers,
-      })
+      cached.discoveryFingerprint === stableFingerprintValue(params.discovery.candidates) &&
+      cached.registryFingerprint === stableFingerprintValue(params.manifestRegistry.plugins) &&
+      cached.ambientEnvTriggers === ambientEnvTriggers
     ) {
       return cached.result;
     }
-    const candidates = detectPluginAutoEnableCandidates(params);
-    const result = materializePluginAutoEnableCandidates({
-      config,
-      candidates,
-      env: params.env,
-      manifestRegistry: params.manifestRegistry,
-    });
-    discoveryCache.set(
-      params.discovery,
-      createPluginAutoEnableCacheEntry({
-        discovery: params.discovery,
-        manifestRegistry: params.manifestRegistry,
-        result,
-        ambientEnvTriggers,
-      }),
-    );
-    scheduleSameTurnApplyCacheClear();
-    return result;
   }
 
   const candidates = detectPluginAutoEnableCandidates(params);
-  return materializePluginAutoEnableCandidates({
-    config: params.config,
+  const result = materializePluginAutoEnableCandidates({
+    config,
     candidates,
     env: params.env,
     manifestRegistry: params.manifestRegistry,
   });
+  if (discoveryCache && params.discovery && params.manifestRegistry) {
+    discoveryCache.set(params.discovery, {
+      discoveryFingerprint: stableFingerprintValue(params.discovery.candidates),
+      registryFingerprint: stableFingerprintValue(params.manifestRegistry.plugins),
+      ambientEnvTriggers,
+      result,
+    });
+    scheduleSameTurnApplyCacheClear();
+  }
+  return result;
 }

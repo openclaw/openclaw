@@ -18,7 +18,6 @@ import {
   A2aSendMessageParamsSchema,
   A2aTaskRequestParamsSchema,
   extractA2aMessageText,
-  isA2aContextId,
   resolveA2aRpcMethod,
 } from "./protocol.js";
 import type { A2aTaskStore } from "./task-store.js";
@@ -227,10 +226,6 @@ export function createA2aHttpHandler(params: A2aHttpHandlerParams) {
           throw new A2aProtocolError(-32602, "Message must contain at least one usable text part");
         }
         const contextId = message.contextId ?? `ctx-${randomUUID()}`;
-        if (!isA2aContextId(contextId)) {
-          throw new A2aProtocolError(-32602, "Invalid message contextId");
-        }
-
         const task = params.taskStore.create(contextId, peerName);
         params.taskStore.start(task.id);
         // Reserved synchronously while this request is still admitted: a
@@ -343,6 +338,7 @@ export function createA2aHttpHandler(params: A2aHttpHandlerParams) {
       return true;
     }
 
+    let result: A2aRpcResponse | A2aRpcResponse[] | undefined;
     if (Array.isArray(payload)) {
       if (payload.length === 0) {
         writeJsonResponse(response, 200, createRpcError(null, -32600, "Invalid JSON-RPC request"));
@@ -362,16 +358,10 @@ export function createA2aHttpHandler(params: A2aHttpHandlerParams) {
       const responses = (
         await Promise.all(payload.map((entry) => processRpcRequest(entry, peerName)))
       ).filter((entry): entry is A2aRpcResponse => entry !== undefined);
-      if (responses.length > 0) {
-        writeRpcResponse(response, responses);
-      } else {
-        response.statusCode = 200;
-        response.end();
-      }
-      return true;
+      result = responses.length > 0 ? responses : undefined;
+    } else {
+      result = await processRpcRequest(payload, peerName);
     }
-
-    const result = await processRpcRequest(payload, peerName);
     if (result) {
       writeRpcResponse(response, result);
     } else {

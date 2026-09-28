@@ -1,9 +1,7 @@
 import {
   activeDurableStorageKeys,
-  normalizeBrowserSessionKey,
   readColdNativeActivity,
   volatileSessionTabTargetKey,
-  volatileTabsBySession,
   type VolatileSessionTab,
 } from "./session-tab-process-state.js";
 import { browserSessionTabNativeIdentity } from "./session-tab-store.js";
@@ -19,18 +17,14 @@ function trackedTabIdentity(tab: TrackedTab): string {
 
 export function selectTrackedTabsForSessions(params: {
   durable: DurableTab[];
-  sessionKeys: Array<string | undefined>;
+  volatile: ReadonlyMap<string, readonly VolatileSessionTab[]>;
+  sessionKeys: ReadonlySet<string>;
 }): TrackedTab[] {
-  const sessionKeys = new Set(
-    params.sessionKeys
-      .map((key) => normalizeBrowserSessionKey(key))
-      .filter((key) => key !== undefined),
-  );
   const volatile: VolatileSessionTab[] = [];
-  for (const sessionKey of sessionKeys) {
-    volatile.push(...(volatileTabsBySession().get(sessionKey)?.values() ?? []));
+  for (const sessionKey of params.sessionKeys) {
+    volatile.push(...(params.volatile.get(sessionKey) ?? []));
   }
-  return [...params.durable.filter((tab) => sessionKeys.has(tab.sessionKey)), ...volatile];
+  return [...params.durable.filter((tab) => params.sessionKeys.has(tab.sessionKey)), ...volatile];
 }
 
 export function selectStaleTrackedTabs(params: {

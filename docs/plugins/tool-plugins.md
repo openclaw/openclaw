@@ -207,6 +207,16 @@ the existing authenticated grant or loopback-runtime lifetime.
 Metadata-only catalog construction does not grant invocation authority. A retained
 versioned tool without an admitted invocation fails when its guard is called.
 
+Client-input tools may also receive `assertInputCommitAllowed`. Carry this
+host-bound, synchronous policy callback to the storage owner's final admission
+guard when persisting client-supplied bytes. Calling it checks the current upload
+policy even for custom tool names the Gateway cannot classify. Do not call it for
+text-only actions that do not upload bytes. It performs no database reads, so
+it can run inside worker-backed write admission. It does not replace invocation
+or mutation authority. Preserve it across awaited preparation, but do not apply
+it to already accepted results or compensating cleanup. Agent-generated input
+does not require this client-upload policy callback.
+
 Legacy function and static-tool registrations remain supported with their existing
 direct-turn context; this change introduces no removal date or shortened
 compatibility window. They do **not** receive continued owner identity. Opt-in

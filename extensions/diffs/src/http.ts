@@ -1,4 +1,3 @@
-// Diffs plugin module implements http behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -210,10 +209,6 @@ function normalizeRemoteClientKey(remoteAddress: string | undefined): string {
   return normalized.startsWith("::ffff:") ? normalized.slice("::ffff:".length) : normalized;
 }
 
-function isLoopbackClientIp(clientIp: string): boolean {
-  return isLoopbackHost(clientIp);
-}
-
 function hasProxyForwardingHints(req: IncomingMessage): boolean {
   const headers = req.headers ?? {};
   return Boolean(
@@ -248,7 +243,7 @@ function resolveViewerAccess(
       : req.socket?.remoteAddress;
   const remoteKey = normalizeRemoteClientKey(clientIp ?? req.socket?.remoteAddress);
   const localRequest =
-    !proxyHintsPresent && typeof clientIp === "string" && isLoopbackClientIp(remoteKey);
+    !proxyHintsPresent && typeof clientIp === "string" && isLoopbackHost(remoteKey);
   return { remoteKey, localRequest };
 }
 

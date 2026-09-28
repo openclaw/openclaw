@@ -8,7 +8,6 @@ import { t } from "../../i18n/index.ts";
 import { registerDesktopEnglish } from "../../i18n/locales/en-desktop.ts";
 import { icons } from "../icons.ts";
 import { renderPanelLoadingSkeleton } from "../panel-loading-skeleton.ts";
-import { desktopAppIcon, desktopAppLabel } from "./desktop-app-presentation.ts";
 import type { DesktopSizingMode } from "./desktop-client.ts";
 import type { DesktopPanelState } from "./desktop-panel-state.ts";
 import { desktopSourceForEnvironment } from "./desktop-source.ts";
@@ -296,7 +295,7 @@ export function renderDesktopConnection(options: {
           ? html`<div class="desktop-apps">
               ${options.desktopApps.map((app) => {
                 const launching = options.launchingApp === app;
-                const label = desktopAppLabel(app);
+                const label = app === "browser" ? t("browser.title") : t("terminal.title");
                 return html`<button
                   class="desktop-app-button"
                   type="button"
@@ -312,7 +311,7 @@ export function renderDesktopConnection(options: {
                     }"
                     aria-hidden="true"
                   >
-                    ${desktopAppIcon(app)}
+                    ${app === "browser" ? icons.chrome : icons.terminal}
                   </span>
                   <span>${label}</span>
                 </button>`;

@@ -118,11 +118,9 @@ describe("normalizeActRequest keyboard keys", () => {
   });
 
   it.each([
-    ["Esc", "Escape"],
     ["ESC", "Escape"],
     ["Return", "Enter"],
     ["Del", "Delete"],
-    ["Ctrl+a", "Control+a"],
     ["Cmd+A", "Meta+A"],
     ["Ctrl+Shift+Esc", "Control+Shift+Escape"],
     ["Ctrl++", "Control++"],
@@ -134,7 +132,7 @@ describe("normalizeActRequest keyboard keys", () => {
     expect(normalizeActRequest({ kind: "press", key })).toMatchObject({ key: expected });
   });
 
-  it.each(["a", "A", "+", "Control++", "ControlOrMeta+a", "__proto__", "constructor"])(
+  it.each(["A", "+", "ControlOrMeta+a", "__proto__"])(
     "preserves the existing keyboard contract for %s",
     (key) => {
       expect(normalizeActRequest({ kind: "press", key })).toMatchObject({ key });

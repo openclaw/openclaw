@@ -8,6 +8,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
+import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   getChatAttachmentDataUrl,
@@ -33,10 +34,9 @@ import {
 } from "./chat-send-composer.ts";
 import { ChatStateController } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import {
-  renderAttachmentPreview,
-  renderChatAttachmentInputs,
-} from "./components/chat-attachments.ts";
+import { renderChatAttachmentInputs } from "./components/chat-attachment-inputs.ts";
+import { renderAttachmentPreview } from "./components/chat-attachments.ts";
+import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.ts";
 import {
   ChatComposerPersistence,
   CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
@@ -92,7 +92,7 @@ describe("cross-region Home composer ownership", () => {
     agentId = "main",
   ) {
     if (!context.chatAttachmentHandoff) {
-      const stagedHandoff = createChatAttachmentHandoff();
+      const stagedHandoff = createChatAttachmentHandoff(createApplicationGateway().gateway);
       Object.assign(context, { chatAttachmentHandoff: stagedHandoff });
       disposals.push(() => stagedHandoff.dispose());
     }
@@ -394,7 +394,9 @@ describe("cross-region Home composer ownership", () => {
   });
 
   it("releases only unreferenced command payloads after every presentation unmounts", () => {
-    const context = { chatAttachmentHandoff: createChatAttachmentHandoff() } as ApplicationContext;
+    const context = {
+      chatAttachmentHandoff: createChatAttachmentHandoff(createApplicationGateway().gateway),
+    } as ApplicationContext;
     const owner = { recoveryScope: "profile-a" } as GatewayBrowserClient;
     const page = presentation(context, owner, "page");
     const staged = storedAttachment("staged-command", "text/plain");
@@ -759,7 +761,7 @@ describe("staged chat attachment pane handoff", () => {
   it("keeps plain staged attachments across a gateway client rotation", () => {
     const previousOwner = {} as GatewayBrowserClient;
     const nextOwner = {} as GatewayBrowserClient;
-    const handoff = createChatAttachmentHandoff();
+    const handoff = createChatAttachmentHandoff(createApplicationGateway().gateway);
     const context = { chatAttachmentHandoff: handoff } as unknown as ApplicationContext;
     const plainImage = storedAttachment("rotation-image");
     const plainFile = storedAttachment("rotation-file", "application/pdf");
@@ -790,7 +792,7 @@ describe("staged chat attachment pane handoff", () => {
   it("restores a mixed package only to the exact mounted owner", () => {
     const owner = {} as GatewayBrowserClient;
     const otherOwner = {} as GatewayBrowserClient;
-    const handoff = createChatAttachmentHandoff();
+    const handoff = createChatAttachmentHandoff(createApplicationGateway().gateway);
     const context = { chatAttachmentHandoff: handoff } as unknown as ApplicationContext;
     const image = storedAttachment("image");
     const file = storedAttachment("file", "application/pdf");
@@ -817,7 +819,7 @@ describe("staged chat attachment pane handoff", () => {
   it("rejects every part of an evicted composer after a newer split edit", () => {
     vi.stubGlobal("sessionStorage", createStorageMock());
     const owner = {} as GatewayBrowserClient;
-    const handoff = createChatAttachmentHandoff();
+    const handoff = createChatAttachmentHandoff(createApplicationGateway().gateway);
     const context = { chatAttachmentHandoff: handoff } as unknown as ApplicationContext;
     const older = state([]);
     older.chatMessage = "";
@@ -867,7 +869,7 @@ describe("staged chat attachment pane handoff", () => {
     const storage = createStorageMock();
     vi.stubGlobal("sessionStorage", storage);
     const owner = {} as GatewayBrowserClient;
-    const handoff = createChatAttachmentHandoff();
+    const handoff = createChatAttachmentHandoff(createApplicationGateway().gateway);
     const context = { chatAttachmentHandoff: handoff } as unknown as ApplicationContext;
     const source = state([]);
     source.chatMessage = "";
@@ -921,12 +923,13 @@ describe("staged chat attachment pane handoff", () => {
 
   it("releases a restored fallback displaced by mounted state", () => {
     const owner = {} as GatewayBrowserClient;
-    const handoff = createChatAttachmentHandoff();
+    const handoff = createChatAttachmentHandoff(createApplicationGateway().gateway);
     const context = { chatAttachmentHandoff: handoff } as unknown as ApplicationContext;
     const displaced = storedAttachment("displaced");
     const mounted = storedAttachment("mounted");
     const remount = state([]);
     handoff.prepare({
+      reviewPrivateDraft: reviewPrivateComposerDraft,
       owner,
       paneId: "p1",
       scopeKey: storedChatOutboxScopeKey(

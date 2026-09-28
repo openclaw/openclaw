@@ -6,7 +6,11 @@ import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { isBunRuntime, isNodeRuntime } from "../daemon/runtime-binary.js";
+import {
+  isBunRuntime,
+  isNodeRuntime,
+  resolveRuntimeScriptPosition,
+} from "../daemon/runtime-binary.js";
 import { isLegacyPluginSourceCaptureName } from "../plugins/plugin-source-capture-path.js";
 import { getRootOptionAwareCommandPath } from "./cli-root-options.js";
 import type { GatewayOwnerLeaseIdentity } from "./gateway-owner-lease.js";
@@ -26,7 +30,11 @@ const ENTRY_CANDIDATES = [
 ] as const;
 
 export type OpenClawArgvClassification =
-  | { kind: "openclaw"; entryIndex?: number }
+  | {
+      kind: "openclaw";
+      entryIndex?: number;
+      packageIdentity?: { root: string; entrypoint: string };
+    }
   | { kind: "other" }
   | { kind: "unclassified"; reason: string };
 
@@ -38,6 +46,8 @@ type ClassificationOptions = {
   cwd?: string;
   pid?: number;
   additionalEntrypoints?: readonly string[];
+  /** Mutation admission needs package evidence, rather than executable-name hints. */
+  requirePackageIdentity?: boolean;
 };
 
 function readProcessWorkingDirectory(pid: number): string | undefined {
@@ -70,102 +80,22 @@ function readProcessWorkingDirectory(pid: number): string | undefined {
   return undefined;
 }
 
-const RUNTIME_VALUE_OPTIONS = new Set([
-  "-r",
-  "-C",
-  "--env-file",
-  "--env-file-if-exists",
-  "--tsconfig",
-  "--cwd",
-  "--preload",
-  "--require",
-  "--import",
-  "--loader",
-  "--experimental-loader",
-  "--conditions",
-  "--icu-data-dir",
-  "--openssl-config",
-  "--title",
-  "--disable-warning",
-  "--disable-proto",
-  "--cpu-prof-name",
-  "--max-old-space-size",
-]);
-const RUNTIME_BOOLEAN_OPTIONS = new Set([
-  "--inspect",
-  "--inspect-brk",
-  "--inspect-wait",
-  "--expose-gc",
-  "--jitless",
-  "--no-opt",
-  "--experimental-strip-types",
-  "--bun",
-]);
-
-function runtimeScript(args: string[]): number | OpenClawArgvClassification {
-  const executable = args[0] ?? "";
-  const basename = normalizeProcArg(executable).split("/").at(-1);
-  const bun = isBunRuntime(executable);
-  const tsx = basename === "tsx" || basename === "tsx.cmd";
-  let consumedSubcommand = false;
-  if (!isNodeRuntime(executable) && !bun && !tsx) {
-    return { kind: "other" };
-  }
-  for (let index = 1; index < args.length; index++) {
-    const arg = args[index]!;
-    if (arg === "--") {
-      return args[index + 1] ? index + 1 : { kind: "other" };
-    }
-    if (
-      arg === "-e" ||
-      arg === "--eval" ||
-      arg === "-p" ||
-      arg === "--print" ||
-      arg === "--run" ||
-      /^(?:--eval|--print|--run)=/.test(arg)
-    ) {
-      return { kind: "other" };
-    }
-    if (RUNTIME_VALUE_OPTIONS.has(arg)) {
-      index++;
-    } else if (arg.startsWith("-")) {
-      // A negated spelling proves a boolean; its absence never proves a value option.
-      const negated = `--no-${arg.replace(/^--(?:no-)?/, "")}`;
-      if (
-        RUNTIME_BOOLEAN_OPTIONS.has(arg) ||
-        /^--[^=]+=/.test(arg) ||
-        (process.allowedNodeEnvironmentFlags.has(arg) &&
-          process.allowedNodeEnvironmentFlags.has(negated))
-      ) {
-        continue;
-      }
-      return { kind: "unclassified", reason: `unsupported runtime option ${arg}` };
-    } else if (!consumedSubcommand && ((bun && arg === "run") || (tsx && arg === "watch"))) {
-      consumedSubcommand = true;
-      continue;
-    } else {
-      return index;
-    }
-  }
-  return { kind: "other" };
-}
-
 /** Generic script names identify OpenClaw only inside a verified package root. */
 function classifyEntrypoint(
   args: string[],
   opts: ClassificationOptions = {},
 ): OpenClawArgvClassification {
   const exe = normalizeProcArg(args[0] ?? "").replace(/\.(bat|cmd|exe)$/i, "");
-  if (exe.endsWith("/openclaw") || exe === "openclaw") {
+  if (!opts.requirePackageIdentity && (exe.endsWith("/openclaw") || exe === "openclaw")) {
     return { kind: "openclaw", entryIndex: 0 };
   }
-  const entryIndex = /(?:^|\/)openclaw\.mjs$/.test(exe) ? 0 : runtimeScript(args);
+  const entryIndex = /(?:^|\/)openclaw\.mjs$/.test(exe) ? 0 : resolveRuntimeScriptPosition(args);
   if (typeof entryIndex !== "number") {
-    return entryIndex;
+    return entryIndex.kind === "not-runtime" ? { kind: "other" } : entryIndex;
   }
   const script = args[entryIndex]!;
   const normalized = normalizeProcArg(script);
-  if (/(?:^|\/)openclaw\.mjs$/.test(normalized)) {
+  if (!opts.requirePackageIdentity && /(?:^|\/)openclaw\.mjs$/.test(normalized)) {
     return { kind: "openclaw", entryIndex };
   }
   const entrypoints = [...ENTRY_CANDIDATES, ...(opts.additionalEntrypoints ?? [])];
@@ -181,6 +111,9 @@ function classifyEntrypoint(
   let resolved: string;
   try {
     resolved = fs.realpathSync(scriptPath);
+    if (opts.requirePackageIdentity && !fs.statSync(resolved).isFile()) {
+      return { kind: "unclassified", reason: `entrypoint is not a regular file: ${script}` };
+    }
   } catch {
     return { kind: "unclassified", reason: `could not resolve script ${script}` };
   }
@@ -197,7 +130,13 @@ function classifyEntrypoint(
     return { kind: "unclassified", reason: `could not read package identity for ${script}` };
   }
   return isRecord(manifest) && manifest.name === "openclaw"
-    ? { kind: "openclaw", entryIndex }
+    ? {
+        kind: "openclaw",
+        entryIndex,
+        ...(opts.requirePackageIdentity
+          ? { packageIdentity: { root: path.resolve(root), entrypoint: resolved } }
+          : {}),
+      }
     : { kind: "other" };
 }
 
@@ -212,6 +151,7 @@ export function classifyOpenClawArgv(
 ): OpenClawArgvClassification {
   const { command, owner, pid, port } = opts;
   if (
+    !opts.requirePackageIdentity &&
     command === "gateway" &&
     owner?.pid === pid &&
     owner?.state === "live" &&
@@ -224,7 +164,7 @@ export function classifyOpenClawArgv(
       .split("/")
       .at(-1)
       ?.replace(/\.(exe|cmd|bat)$/, "") ?? "";
-  if (/^openclaw-[a-z0-9-]+$/.test(executable)) {
+  if (!opts.requirePackageIdentity && /^openclaw-[a-z0-9-]+$/.test(executable)) {
     return !command || executable === `openclaw-${command}`
       ? { kind: "openclaw" }
       : { kind: "other" };
@@ -240,7 +180,10 @@ export function classifyOpenClawArgv(
   }
   if (
     identity.kind === "openclaw" ||
-    args.some((arg) => arg.replaceAll("\\", "/").split("/").some(isLegacyPluginSourceCaptureName))
+    (!opts.requirePackageIdentity &&
+      args.some((arg) =>
+        arg.replaceAll("\\", "/").split("/").some(isLegacyPluginSourceCaptureName),
+      ))
   ) {
     return identity.kind === "openclaw" ? identity : { kind: "openclaw" };
   }
@@ -263,5 +206,5 @@ export function classifyOpenClawArgv(
       };
     }
   }
-  return marker === "openclaw" ? { kind: "openclaw" } : identity;
+  return !opts.requirePackageIdentity && marker === "openclaw" ? { kind: "openclaw" } : identity;
 }

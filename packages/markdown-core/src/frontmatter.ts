@@ -81,8 +81,11 @@ function parseLineFrontmatter(block: string): ParsedFrontmatter {
 
 const FREEFORM_TEXT_FIELDS = new Set(["description", "read_when", "summary"]);
 
-function normalizeFreeformFieldAtError(block: string): string {
-  const doc = parseDocument(block, { schema: "core", prettyErrors: false });
+function normalizeFreeformFieldAtError(
+  block: string,
+  document?: ReturnType<typeof parseDocument>,
+): string {
+  const doc = document ?? parseDocument(block, { schema: "core", prettyErrors: false });
   if (!isMap(doc.contents)) {
     return block;
   }
@@ -124,31 +127,36 @@ function normalizeFreeformFieldAtError(block: string): string {
   return `${block.slice(0, lineStart)}${replacement}${block.slice(end)}`;
 }
 
+type ParsedYamlFrontmatterAttempt = {
+  result: ParsedFrontmatterBlockResult;
+  document: ReturnType<typeof parseDocument> | undefined;
+};
+
 function parseYamlFrontmatterOnce(
   block: string,
   fallback: ParsedFrontmatter,
-): ParsedFrontmatterBlockResult {
+): ParsedYamlFrontmatterAttempt {
+  let doc: ReturnType<typeof parseDocument> | undefined;
+  const failed = (issues: FrontmatterParseIssue[]): ParsedYamlFrontmatterAttempt => ({
+    document: doc,
+    result: { frontmatter: fallback, issues },
+  });
   try {
-    const doc = parseDocument(block, { schema: "core", prettyErrors: false });
+    doc = parseDocument(block, { schema: "core", prettyErrors: false });
     if (doc.errors.length > 0 || !isMap(doc.contents)) {
-      return {
-        frontmatter: fallback,
-        issues:
-          doc.errors.length > 0
-            ? doc.errors.map((error) => ({
-                code: error.code ?? error.name,
-                message: error.message,
-              }))
-            : [{ code: "INVALID_ROOT", message: "frontmatter must be a YAML mapping" }],
-      };
+      return failed(
+        doc.errors.length > 0
+          ? doc.errors.map((error) => ({
+              code: error.code ?? error.name,
+              message: error.message,
+            }))
+          : [{ code: "INVALID_ROOT", message: "frontmatter must be a YAML mapping" }],
+      );
     }
 
     const parsed = doc.toJS() as unknown;
     if (!isRecord(parsed)) {
-      return {
-        frontmatter: fallback,
-        issues: [{ code: "INVALID_ROOT", message: "frontmatter must be a YAML mapping" }],
-      };
+      return failed([{ code: "INVALID_ROOT", message: "frontmatter must be a YAML mapping" }]);
     }
 
     const inlineColonKeys = new Set<string>();
@@ -169,7 +177,7 @@ function parseYamlFrontmatterOnce(
     }
 
     const result: ParsedFrontmatter = {};
-    for (const [rawKey, value] of Object.entries(parsed as Record<string, unknown>)) {
+    for (const [rawKey, value] of Object.entries(parsed)) {
       const key = rawKey.trim();
       const coerced = key ? coerceYamlFrontmatterValue(value) : undefined;
       if (!coerced) {
@@ -187,13 +195,10 @@ function parseYamlFrontmatterOnce(
         result[key] = value;
       }
     }
-    return { frontmatter: result, issues: [] };
+    return { document: doc, result: { frontmatter: result, issues: [] } };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return {
-      frontmatter: fallback,
-      issues: [{ code: "YAML_EXCEPTION", message }],
-    };
+    return failed([{ code: "YAML_EXCEPTION", message }]);
   }
 }
 
@@ -203,15 +208,15 @@ function parseYamlFrontmatter(block: string): ParsedFrontmatterBlockResult {
   // Recover one error-located field per iteration, retrying parse each time,
   // so multiple colon-rich fields are fixed without rewriting valid siblings.
   let recoveredBlock = block;
-  for (let i = 0; i < FREEFORM_TEXT_FIELDS.size && parsed.issues.length > 0; i += 1) {
-    const next = normalizeFreeformFieldAtError(recoveredBlock);
+  for (let i = 0; i < FREEFORM_TEXT_FIELDS.size && parsed.result.issues.length > 0; i += 1) {
+    const next = normalizeFreeformFieldAtError(recoveredBlock, parsed.document);
     if (next === recoveredBlock) {
       break;
     }
     recoveredBlock = next;
     parsed = parseYamlFrontmatterOnce(recoveredBlock, fallback);
   }
-  return parsed;
+  return parsed.result;
 }
 
 export type ExtractedFrontmatterBlock = {

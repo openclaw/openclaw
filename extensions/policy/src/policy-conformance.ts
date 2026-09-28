@@ -1,4 +1,3 @@
-// Policy plugin module implements policy conformance behavior.
 import { promises as fs } from "node:fs";
 import { basename, isAbsolute, resolve } from "node:path";
 import JSON5 from "json5";
@@ -112,12 +111,6 @@ export async function buildPolicyConformanceReport(params: {
       .filter((claim) => !policyRuleValueIsValid(claim.metadata, claim.value))
       .map((claim) => invalidConformanceFinding(claim, policy.displayName)),
   ]);
-  const validBaselineClaims = baselineClaims.filter((claim) =>
-    policyRuleValueIsValid(claim.metadata, claim.value),
-  );
-  const validCandidateClaims = candidateClaims.filter((claim) =>
-    policyRuleValueIsValid(claim.metadata, claim.value),
-  );
   if (invalidFindings.length > 0) {
     return {
       ok: false,
@@ -127,15 +120,15 @@ export async function buildPolicyConformanceReport(params: {
       findings: invalidFindings,
     };
   }
-  const findings = validBaselineClaims
-    .map((claim) => conformanceFinding(claim, validCandidateClaims, policy.displayName))
+  const findings = baselineClaims
+    .map((claim) => conformanceFinding(claim, candidateClaims, policy.displayName))
     .filter((finding): finding is PolicyConformanceFinding => finding !== undefined);
   return {
-    ok: invalidFindings.length === 0 && findings.length === 0,
+    ok: findings.length === 0,
     baselinePath: baseline.displayName,
     policyPath: policy.displayName,
-    rulesChecked: validBaselineClaims.length,
-    findings: [...invalidFindings, ...findings],
+    rulesChecked: baselineClaims.length,
+    findings,
   };
 }
 

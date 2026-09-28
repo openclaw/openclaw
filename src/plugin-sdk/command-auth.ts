@@ -221,36 +221,22 @@ export async function resolveSenderCommandAuthorization(
   let configuredGroupAllowFrom = params.configuredGroupAllowFrom ?? [];
   let dmStoreAllowFrom = storeAllowFrom;
   if (channel) {
-    [configuredAllowFrom, configuredGroupAllowFrom] = await Promise.all([
+    const expand = (allowFrom: string[]) =>
       expandAllowFromWithAccessGroups({
         cfg: params.cfg,
-        allowFrom: params.configuredAllowFrom,
-        channel,
-        accountId,
-        senderId: params.senderId,
-        isSenderAllowed: params.isSenderAllowed,
-        resolveMembership: params.resolveAccessGroupMembership,
-      }),
-      expandAllowFromWithAccessGroups({
-        cfg: params.cfg,
-        allowFrom: params.configuredGroupAllowFrom ?? [],
-        channel,
-        accountId,
-        senderId: params.senderId,
-        isSenderAllowed: params.isSenderAllowed,
-        resolveMembership: params.resolveAccessGroupMembership,
-      }),
-    ]);
-    if (!params.isGroup) {
-      dmStoreAllowFrom = await expandAllowFromWithAccessGroups({
-        cfg: params.cfg,
-        allowFrom: storeAllowFrom,
+        allowFrom,
         channel,
         accountId,
         senderId: params.senderId,
         isSenderAllowed: params.isSenderAllowed,
         resolveMembership: params.resolveAccessGroupMembership,
       });
+    [configuredAllowFrom, configuredGroupAllowFrom] = await Promise.all([
+      expand(params.configuredAllowFrom),
+      expand(params.configuredGroupAllowFrom ?? []),
+    ]);
+    if (!params.isGroup) {
+      dmStoreAllowFrom = await expand(storeAllowFrom);
     }
   }
   const access = resolveDmGroupAccessWithLists({
@@ -264,7 +250,6 @@ export async function resolveSenderCommandAuthorization(
   });
   const effectiveAllowFrom = access.effectiveAllowFrom;
   const effectiveGroupAllowFrom = access.effectiveGroupAllowFrom;
-  const useAccessGroups = true;
   const senderAllowedForCommands = params.isSenderAllowed(
     params.senderId,
     params.isGroup ? effectiveGroupAllowFrom : effectiveAllowFrom,
@@ -273,7 +258,7 @@ export async function resolveSenderCommandAuthorization(
   const groupAllowedForCommands = params.isSenderAllowed(params.senderId, effectiveGroupAllowFrom);
   const commandAuthorized = shouldComputeAuth
     ? (params.resolveCommandAuthorizedFromAuthorizers?.({
-        useAccessGroups,
+        useAccessGroups: true,
         authorizers: [
           { configured: effectiveAllowFrom.length > 0, allowed: ownerAllowedForCommands },
           { configured: effectiveGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },

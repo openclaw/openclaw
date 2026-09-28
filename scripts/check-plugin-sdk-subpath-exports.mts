@@ -32,12 +32,6 @@ type PluginSdkViolation = {
   specifier: string;
   subpath: string;
 };
-type ModuleSpecifierVisit = {
-  kind: string;
-  node: ts.Node;
-  specifier: string;
-  specifierNode: ts.Node;
-};
 
 function readPackageExports(): Set<string> {
   const packageJson = JSON.parse(readFileSync(path.join(repoRoot, "package.json"), "utf8")) as {
@@ -173,7 +167,7 @@ async function collectViolations(): Promise<PluginSdkViolation[]> {
 
     visitModuleSpecifiers(
       sourceFile,
-      ({ kind, node, specifier, specifierNode }: ModuleSpecifierVisit) => {
+      ({ kind, node, specifier, specifierNode }) => {
         push(kind, node, specifierNode, specifier);
       },
       { includeCommonJs: true, includeImportTypes: true },

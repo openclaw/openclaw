@@ -33,7 +33,7 @@ import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
-import { buildDashboardSessionKey } from "./session-create-service.js";
+import { buildDashboardSessionKey } from "./session-create-key.js";
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
 import { buildRestartRecoverySuccessorEntry } from "./session-recovery-entry.js";
 import { invalidSessionRequest } from "./session-request-error.js";

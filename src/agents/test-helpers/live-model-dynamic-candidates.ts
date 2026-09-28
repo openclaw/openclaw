@@ -51,7 +51,7 @@ const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "xai/grok-4.5",
   "xai/grok-4.20-0309-reasoning",
   "zai/glm-5.1",
-  "fireworks/accounts/fireworks/routers/glm-5p2-fast",
+  "fireworks/accounts/fireworks/routers/glm-5p3-fast",
   "minimax-portal/minimax-m3",
 ] as const;
 

@@ -17,12 +17,11 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { resolveControlUiSessionUrl } from "../../config/control-ui-link-base.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ADMIN_SCOPE } from "../../gateway/method-scopes.js";
 import { resolveWorkspacePathContainment } from "../../gateway/server-methods/workspace-path-containment.js";
 import { loadGatewayModelCatalogSnapshot } from "../../gateway/server-model-catalog.js";
-import { resolveGatewaySessionStoreTarget } from "../../gateway/session-utils-store-lookup.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
 import { resolveWorkerPlacementDestination } from "../../gateway/worker-environments/placement-destination.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import {
@@ -58,10 +57,7 @@ import {
   resolveSubagentModelAndThinkingPlan,
   splitModelRef,
 } from "../subagents/spawn/subagent-spawn-plan.js";
-import {
-  readRequesterModel,
-  readRequesterThinkingLevel,
-} from "../subagents/spawn/subagent-spawn-requester-prefs.js";
+import { readRequesterPreferences } from "../subagents/spawn/subagent-spawn-requester-prefs.js";
 import { buildSubagentTaskMessage } from "../subagents/spawn/subagent-system-prompt.js";
 import { resolveSubagentTargetPolicy } from "../subagents/spawn/subagent-target-policy.js";
 import {
@@ -354,16 +350,18 @@ export async function maybeSpawnVisibleSession(params: {
     agentSessionKey: params.options?.agentSessionKey,
     completionOwnerKey: params.options?.completionOwnerKey,
   });
-  const requesterTarget = resolveGatewaySessionStoreTarget({
+  const assertActive =
+    params.options?.assertActive ?? (() => params.options?.signal?.throwIfAborted());
+  const requesterTarget = await resolveGatewaySessionStoreTargetInWorker({
     cfg,
     key: ownership.completionRequesterSessionKey,
     agentId: params.options?.requesterAgentIdOverride,
+    assertActive,
   });
-  const completionRequesterSessionId = loadSessionEntryReadOnly({
-    storePath: requesterTarget.storePath,
-    sessionKey: requesterTarget.canonicalKey,
-    clone: false,
-  })?.sessionId;
+  assertActive();
+  const requesterEntry = requesterTarget.store[requesterTarget.canonicalKey];
+  const completionRequesterSessionId = requesterEntry?.sessionId;
+  const completionRequesterLifecycleRevision = requesterEntry?.lifecycleRevision;
   const requesterKey = ownership.controllerSessionKey;
   const callerDepth = getSubagentDepthFromSessionStore(requesterKey, {
     cfg,
@@ -464,6 +462,17 @@ export async function maybeSpawnVisibleSession(params: {
     };
   }
 
+  const requesterPreferences =
+    params.options?.requesterThinkingLevel === undefined ||
+    (targetAgentId === requesterAgentId && !params.options?.requesterModel)
+      ? await readRequesterPreferences({
+          cfg,
+          requesterInternalKey: requesterKey,
+          requesterAgentId,
+          assertActive,
+        })
+      : undefined;
+  assertActive();
   const modelPlan = await resolveSubagentModelAndThinkingPlan({
     cfg,
     targetAgentId,
@@ -472,22 +481,13 @@ export async function maybeSpawnVisibleSession(params: {
     modelOverride,
     workspaceDir: spawnedWorkspaceDir,
     callerThinkingRaw:
-      params.options?.requesterThinkingLevel ??
-      readRequesterThinkingLevel({
-        cfg,
-        requesterInternalKey: requesterKey,
-        requesterAgentId,
-      }),
+      params.options?.requesterThinkingLevel ?? requesterPreferences?.thinkingLevel,
     inheritedModel:
       targetAgentId === requesterAgentId
-        ? (params.options?.requesterModel ??
-          readRequesterModel({
-            cfg,
-            requesterInternalKey: requesterKey,
-            requesterAgentId,
-          }))
+        ? (params.options?.requesterModel ?? requesterPreferences?.model)
         : undefined,
   });
+  assertActive();
   if (modelPlan.status === "error") {
     return { status: "error", error: modelPlan.error };
   }
@@ -503,6 +503,7 @@ export async function maybeSpawnVisibleSession(params: {
           hasFallbackOrigin: initialSessionPatch.modelOverrideFallbackOriginModel !== undefined,
         }
       : undefined;
+  assertActive();
   const reservation = reserveChildAdmissionSlot({
     controllerSessionKey: requesterKey,
     resolveAdmission: (pendingChildren) => {
@@ -586,6 +587,9 @@ export async function maybeSpawnVisibleSession(params: {
             actor: { type: "agent", id: requesterAgentId },
             requesterSessionKey: requesterKey,
             completionOwnerSessionKey: ownership.completionRequesterSessionKey,
+            ...(params.options?.sessionPermissionPolicy
+              ? { inheritedPermissionMode: params.options.sessionPermissionPolicy.mode }
+              : {}),
             ...(spawnModelAutoSelection ? { spawnModelAutoSelection } : {}),
             inheritedToolPolicy: {
               version: 1,
@@ -629,9 +633,6 @@ export async function maybeSpawnVisibleSession(params: {
         // Declared spawn lineage: without it the child persists as a depth-0 root
         // and could spawn past maxSpawnDepth.
         spawnDepth: callerDepth + 1,
-        ...(params.options?.sessionPermissionPolicy
-          ? { permissionMode: params.options.sessionPermissionPolicy.mode }
-          : {}),
         ...(params.raw.context === "fork" ? { fork: true } : {}),
         ...(spawnedCwd ? { cwd: spawnedCwd } : {}),
         ...(projectId ? { projectId } : {}),
@@ -786,6 +787,7 @@ export async function maybeSpawnVisibleSession(params: {
           controllerSessionKey: ownership.controllerSessionKey,
           requesterSessionKey: ownership.completionRequesterSessionKey,
           completionRequesterSessionId,
+          completionRequesterLifecycleRevision,
           requesterOrigin: normalizeDeliveryContext({
             channel: params.options?.agentChannel,
             accountId: params.options?.agentAccountId,

@@ -1,4 +1,4 @@
-import "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeUniqueTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { matchesBoardFilter } from "./board-filter.ts";
 import type {
@@ -10,7 +10,6 @@ import type {
   WorkboardTemplateId,
   WorkboardUiState,
 } from "./types.ts";
-export { normalizeNullableString as normalizeString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const WORKBOARD_STALE_SESSION_MS = 30 * 60 * 1000;
 
@@ -120,14 +119,9 @@ export function replaceCard(state: WorkboardUiState, card: WorkboardCard) {
 }
 
 function parentDependencyIds(card: WorkboardCard): string[] {
-  const ids: string[] = [];
-  for (const link of card.metadata?.links ?? []) {
-    const id = link.type === "parent" ? link.targetCardId?.trim() : "";
-    if (id && !ids.includes(id)) {
-      ids.push(id);
-    }
-  }
-  return ids;
+  return normalizeUniqueTrimmedStringList(
+    card.metadata?.links?.filter((link) => link.type === "parent").map((link) => link.targetCardId),
+  );
 }
 
 export function getWorkboardDependencyState(
@@ -198,17 +192,7 @@ export function resetDraftState(state: WorkboardUiState) {
 }
 
 export function normalizeDraftLabels(value: string): string[] {
-  const labels: string[] = [];
-  for (const label of value.split(",")) {
-    const trimmed = label.trim();
-    if (trimmed && !labels.includes(trimmed)) {
-      labels.push(trimmed);
-    }
-    if (labels.length >= 12) {
-      break;
-    }
-  }
-  return labels;
+  return normalizeUniqueTrimmedStringList(value.split(",")).slice(0, 12);
 }
 
 export function draftPayload(state: WorkboardUiState) {

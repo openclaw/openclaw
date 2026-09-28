@@ -20,7 +20,6 @@ export function renderCaptureTimeline(model: CaptureViewModel): string {
     renderTimelineWindow,
     timelineAxisTicks,
     renderLaneSparkline,
-    describeLaneSeverity,
     timelineLanes,
     previousLanePosition,
     collapsedLaneIds,
@@ -66,9 +65,7 @@ export function renderCaptureTimeline(model: CaptureViewModel): string {
                         ? '<div class="empty-state" style="padding:20px">No timeline lanes match the current lane search.</div>'
                         : visibleTimelineLanes
                             .map((lane) => {
-                              const laneErrorCount = lane.events.filter(
-                                (event) => Boolean(event.errorText) || (event.status ?? 0) >= 400,
-                              ).length;
+                              const laneErrorCount = lane.errorCount;
                               const laneRequestCount = lane.events.filter(
                                 (event) => event.kind === "request",
                               ).length;
@@ -139,7 +136,6 @@ export function renderCaptureTimeline(model: CaptureViewModel): string {
                                   ? Math.round((laneFocusedEventCount / lane.events.length) * 100)
                                   : 0;
                               const laneSelected = selectedLaneEvent != null;
-                              const laneSeverity = describeLaneSeverity(lane.events);
                               const laneMeetsThreshold = focusSelectedFlow
                                 ? laneMeetsFocusedThreshold(
                                     laneFocusedEventCount,
@@ -155,9 +151,7 @@ export function renderCaptureTimeline(model: CaptureViewModel): string {
                                   ? `${laneFocusedPercent}% focus${laneBackgroundEventCount > 0 ? ` · ${laneBackgroundEventCount} bg` : ""}`
                                   : null,
                                 laneErrorCount > 0 ? `${laneErrorCount} err` : null,
-                                state.captureTimelineLaneSort === "severity"
-                                  ? laneSeverity.summary
-                                  : null,
+                                state.captureTimelineLaneSort === "severity" ? lane.summary : null,
                                 autoCollapsed ? "auto-collapsed" : null,
                               ].filter((value): value is string => Boolean(value));
                               const previousIndex = previousLanePosition.get(lane.id);
@@ -235,56 +229,32 @@ export function renderCaptureTimeline(model: CaptureViewModel): string {
                                   const dimmed =
                                     focusSelectedFlow && event.flowId !== selectedFlowIdLocal;
                                   const paired = pairedEventKey != null && key === pairedEventKey;
-                                  const label = [
-                                    formatTime(event.ts),
-                                    event.provider,
-                                    event.model,
-                                    event.kind,
-                                    event.method,
-                                    event.host,
-                                    event.path,
-                                    event.status ? `status ${event.status}` : "",
-                                    event.errorText ?? "",
-                                  ]
+                                  const label = (
+                                    laneIsCollapsed
+                                      ? [formatTime(event.ts), event.kind, event.host, event.path]
+                                      : [
+                                          formatTime(event.ts),
+                                          event.provider,
+                                          event.model,
+                                          event.kind,
+                                          event.method,
+                                          event.host,
+                                          event.path,
+                                          event.status ? `status ${event.status}` : "",
+                                          event.errorText ?? "",
+                                        ]
+                                  )
                                     .filter(Boolean)
                                     .join(" · ");
                                   return `<button
-                              class="capture-timeline-marker ${kindClass}${selected ? " selected" : ""}${dimmed ? " dimmed" : ""}${paired ? " paired" : ""}"
+                              class="capture-timeline-marker${laneIsCollapsed ? " capture-timeline-marker-mini" : ""} ${kindClass}${selected ? " selected" : ""}${dimmed ? " dimmed" : ""}${paired ? " paired" : ""}"
                               data-capture-event="${esc(key)}"
                               type="button"
-                              style="left:${leftPct.toFixed(2)}%;top:${topPx}px"
+                              style="left:${leftPct.toFixed(2)}%;top:${laneIsCollapsed ? baselineTopPx : topPx}px"
                               title="${esc(label)}"
                             ></button>`;
                                 })
                                 .join("");
-                              const collapsedMarkers = laneIsCollapsed
-                                ? packedMarkers
-                                    .map(({ event, key, leftPct }) => {
-                                      const selected =
-                                        selectedEventKey != null && key === selectedEventKey;
-                                      const kindClass = `capture-timeline-marker-${event.kind
-                                        .replace(/[^a-z0-9]+/gi, "-")
-                                        .toLowerCase()}`;
-                                      const dimmed =
-                                        focusSelectedFlow && event.flowId !== selectedFlowIdLocal;
-                                      const paired =
-                                        pairedEventKey != null && key === pairedEventKey;
-                                      return `<button
-                                  class="capture-timeline-marker capture-timeline-marker-mini ${kindClass}${
-                                    selected ? " selected" : ""
-                                  }${dimmed ? " dimmed" : ""}${paired ? " paired" : ""}"
-                                  data-capture-event="${esc(key)}"
-                                  type="button"
-                                  style="left:${leftPct.toFixed(2)}%;top:${baselineTopPx}px"
-                                  title="${esc(
-                                    [formatTime(event.ts), event.kind, event.host, event.path]
-                                      .filter(Boolean)
-                                      .join(" · "),
-                                  )}"
-                                ></button>`;
-                                    })
-                                    .join("")
-                                : "";
                               const selectedLaneLeft =
                                 selectedLaneEvent == null
                                   ? 50
@@ -406,7 +376,7 @@ export function renderCaptureTimeline(model: CaptureViewModel): string {
                                 }
                                 ${
                                   state.captureTimelineLaneSort === "severity"
-                                    ? `<span class="capture-chip capture-chip-severity capture-timeline-inline-chip">severity ${laneSeverity.score.toFixed(1)}</span>`
+                                    ? `<span class="capture-chip capture-chip-severity capture-timeline-inline-chip">severity ${lane.score.toFixed(1)}</span>`
                                     : ""
                                 }
                                 ${
@@ -452,7 +422,7 @@ export function renderCaptureTimeline(model: CaptureViewModel): string {
                                           }`
                                     }${
                                       state.captureTimelineLaneSort === "severity"
-                                        ? esc(laneSeverity.summary)
+                                        ? esc(lane.summary)
                                         : ""
                                     }</div>`
                                   : ""
@@ -466,7 +436,7 @@ export function renderCaptureTimeline(model: CaptureViewModel): string {
                                 <div class="capture-timeline-track-line" style="top:${baselineTopPx}px"></div>
                                 ${flowLinks}
                                 ${quickPreview}
-                                ${laneIsCollapsed ? collapsedMarkers : markers}
+                                ${markers}
                               </div>
                             </div>
                           </div>`;

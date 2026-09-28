@@ -23,11 +23,12 @@ describe("resolveSlackUserAllowlist", () => {
     const fixture = "lookup-fixture";
     slackClientMocks.usersList.mockResolvedValue({ members: [] });
 
-    await resolveSlackUserAllowlist({
+    const result = await resolveSlackUserAllowlist({
       token: fixture,
       entries: ["@missing-user"],
     });
 
+    expect(result).toEqual([{ input: "@missing-user", resolved: false }]);
     expect(slackClientMocks.createSlackLookupClient).toHaveBeenCalledOnce();
     expect(slackClientMocks.createSlackLookupClient).toHaveBeenCalledWith(fixture);
     expect(slackClientMocks.usersList).toHaveBeenCalledOnce();
@@ -118,20 +119,4 @@ describe("resolveSlackUserAllowlist", () => {
       expect(slackClientMocks.usersList).toHaveBeenCalledTimes(resolved ? 0 : 1);
     },
   );
-
-  it("keeps unresolved users", async () => {
-    const client = {
-      users: {
-        list: vi.fn().mockResolvedValue({ members: [] }),
-      },
-    };
-
-    const res = await resolveSlackUserAllowlist({
-      token: "xoxb-test",
-      entries: ["@missing-user"],
-      client: client as never,
-    });
-
-    expect(res[0]).toEqual({ input: "@missing-user", resolved: false });
-  });
 });

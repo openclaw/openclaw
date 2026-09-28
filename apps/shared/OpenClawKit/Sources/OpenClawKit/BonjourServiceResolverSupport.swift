@@ -8,8 +8,7 @@ public enum BonjourServiceResolverSupport {
     }
 
     public static func normalizeHost(_ raw: String?) -> String? {
-        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !trimmed.isEmpty else { return nil }
+        guard let trimmed = raw?.trimmedNonEmpty else { return nil }
         return trimmed.hasSuffix(".") ? String(trimmed.dropLast()) : trimmed
     }
 }

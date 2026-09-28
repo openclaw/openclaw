@@ -89,15 +89,19 @@ afterEach(async () => {
   );
 });
 
+function createResumableStore() {
+  return createPiStoreFixture(
+    temporaryDirectories,
+    "hi",
+    "Pi catalog session",
+    { command: "pwd" },
+    true,
+  );
+}
+
 describe("Pi session catalog continuation", () => {
   it("projects only adopted Pi rows with their OpenClaw session key", async () => {
-    await createPiStoreFixture(
-      temporaryDirectories,
-      "hi",
-      "Pi catalog session",
-      { command: "pwd" },
-      true,
-    );
+    await createResumableStore();
     await installFakePiFixture(temporaryDirectories, originalPath);
     const { entries, provider } = capturePiContinuationCatalog();
     const sessionEntries = { entriesForAgent: () => entries } as never;
@@ -118,13 +122,7 @@ describe("Pi session catalog continuation", () => {
   });
 
   it("adopts once with the native ACP binding and an exact file baseline", async () => {
-    const sessionDirectory = await createPiStoreFixture(
-      temporaryDirectories,
-      "hi",
-      "Pi catalog session",
-      { command: "pwd" },
-      true,
-    );
+    const sessionDirectory = await createResumableStore();
     await installFakePiFixture(temporaryDirectories, originalPath);
     const { createSessionEntry, provider } = capturePiContinuationCatalog();
 
@@ -180,13 +178,7 @@ describe("Pi session catalog continuation", () => {
   });
 
   it("rolls adoption back when transcript import fails", async () => {
-    await createPiStoreFixture(
-      temporaryDirectories,
-      "hi",
-      "Pi catalog session",
-      { command: "pwd" },
-      true,
-    );
+    await createResumableStore();
     await installFakePiFixture(temporaryDirectories, originalPath);
     transcriptMocks.failAfter = 2;
     const { entries, provider } = capturePiContinuationCatalog();
@@ -199,13 +191,7 @@ describe("Pi session catalog continuation", () => {
   });
 
   it("rejects paired-node and unknown session continuation", async () => {
-    await createPiStoreFixture(
-      temporaryDirectories,
-      "hi",
-      "Pi catalog session",
-      { command: "pwd" },
-      true,
-    );
+    await createResumableStore();
     await installFakePiFixture(temporaryDirectories, originalPath);
     const { createSessionEntry, provider } = capturePiContinuationCatalog();
 
@@ -219,13 +205,7 @@ describe("Pi session catalog continuation", () => {
   });
 
   it("keeps legacy-session adoption successful when a safe baseline is unavailable", async () => {
-    const sessionDirectory = await createPiStoreFixture(
-      temporaryDirectories,
-      "hi",
-      "Pi catalog session",
-      { command: "pwd" },
-      true,
-    );
+    const sessionDirectory = await createResumableStore();
     const sessionFile = path.join(sessionDirectory, "session.jsonl");
     const content = await fs.readFile(sessionFile, "utf8");
     await fs.writeFile(sessionFile, content.replace('"version":3', '"version":2'));

@@ -1,4 +1,5 @@
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { collectBaseArrayPaths } from "../../../../src/config/patch-replace-paths.js";
 import { t } from "../../i18n/index.ts";
@@ -109,12 +110,7 @@ export function parseMcpTarget(
   transport: McpServerTransport,
 ): Record<string, unknown> | null {
   if (transport !== "stdio") {
-    try {
-      const protocol = new URL(target).protocol;
-      return protocol === "http:" || protocol === "https:" ? { url: target, transport } : null;
-    } catch {
-      return null;
-    }
+    return isHttpUrl(target) ? { url: target, transport } : null;
   }
   if (/^https?:\/\//i.test(target)) {
     return null;

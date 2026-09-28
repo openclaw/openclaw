@@ -114,25 +114,17 @@ export class SessionManagerBranching extends SessionManagerMetadata {
       parentSession: persistenceTarget ? previousSessionId : undefined,
     };
     const pathEntryIds = new Set(branchPath.entries.map((entry) => entry.id));
-    const labelsToWrite: Array<{ targetId: string; label: string; timestamp: string }> = [];
-    for (const [targetId, label] of this.labelsById) {
-      if (pathEntryIds.has(targetId)) {
-        labelsToWrite.push({
-          targetId,
-          label,
-          timestamp: this.labelTimestampsById.get(targetId)!,
-        });
-      }
-    }
-
     const labelEntries: LabelEntry[] = [];
     let parentId = branchPath.tailId;
-    for (const { targetId, label, timestamp: labelTimestamp } of labelsToWrite) {
+    for (const [targetId, label] of this.labelsById) {
+      if (!pathEntryIds.has(targetId)) {
+        continue;
+      }
       const labelEntry: LabelEntry = {
         type: "label",
         id: generateSessionEntryId(),
         parentId,
-        timestamp: labelTimestamp,
+        timestamp: this.labelTimestampsById.get(targetId)!,
         targetId,
         label,
       };

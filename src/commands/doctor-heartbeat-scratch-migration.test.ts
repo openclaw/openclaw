@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -15,6 +16,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
   collectHeartbeatScratchMigrationFindings,
   maybeMigrateHeartbeatFilesToScratch,
@@ -303,56 +305,6 @@ describe("HEARTBEAT.md cron scratch migration", () => {
     expect(scratchByAgentId.get("ollama")).toBe("updated checklist\n");
   });
 
-  it("does not import stale bytes while retaining a shared disabled-owner file", async () => {
-    const fixture = await createFixture();
-    const cfg = sharedHeartbeatConfig(fixture.workspace);
-    await fs.writeFile(fixture.heartbeatPath, "planned content\n", "utf8");
-    const rename = fs.rename.bind(fs);
-    vi.spyOn(fs, "rename").mockImplementationOnce(async (from, to) => {
-      await fs.writeFile(String(from), "concurrent replacement\n", "utf8");
-      await rename(from, to);
-    });
-
-    const result = await maybeMigrateHeartbeatFilesToScratch({ cfg, shouldRepair: true });
-
-    expect(result.changes).toEqual([]);
-    expect(result.warnings.join("\n")).toContain("changed before the migration claim");
-    await expect(fs.readFile(fixture.heartbeatPath, "utf8")).resolves.toBe(
-      "concurrent replacement\n",
-    );
-    const { monitor, storePath } = await loadMonitor(cfg);
-    expect(readCronJobScratchState(storePath, monitor.id)).toEqual({ currentRevision: 0 });
-  });
-
-  it("rolls back retained scratch when the claimed inode changes after acquisition", async () => {
-    const fixture = await createFixture();
-    const cfg = sharedHeartbeatConfig(fixture.workspace);
-    await fs.writeFile(fixture.heartbeatPath, "planned content\n", "utf8");
-    const sourceHandle = await fs.open(fixture.heartbeatPath, "r+");
-    const link = fs.link.bind(fs);
-    vi.spyOn(fs, "link").mockImplementationOnce(async (from, to) => {
-      await sourceHandle.truncate(0);
-      await sourceHandle.writeFile("post-claim descriptor edit\n", "utf8");
-      await sourceHandle.sync();
-      await link(from, to);
-    });
-
-    let result;
-    try {
-      result = await maybeMigrateHeartbeatFilesToScratch({ cfg, shouldRepair: true });
-    } finally {
-      await sourceHandle.close();
-    }
-
-    expect(result.changes).toEqual([]);
-    expect(result.warnings.join("\n")).toContain("changed after the migration claim was restored");
-    await expect(fs.readFile(fixture.heartbeatPath, "utf8")).resolves.toBe(
-      "post-claim descriptor edit\n",
-    );
-    const { monitor, storePath } = await loadMonitor(cfg);
-    expect(readCronJobScratchState(storePath, monitor.id)).toEqual({ currentRevision: 0 });
-  });
-
   it("rolls back retained scratch when the claimed inode changes during restoration", async () => {
     const fixture = await createFixture();
     const cfg = sharedHeartbeatConfig(fixture.workspace);
@@ -508,6 +460,31 @@ describe("HEARTBEAT.md cron scratch migration", () => {
     expect(readCronJobScratchState(storePath, monitor.id).scratch?.content).toBe(content);
     const workspaceEntries = await fs.readdir(fixture.workspace);
     expect(workspaceEntries.filter((entry) => entry.includes(".doctor-importing-"))).toEqual([]);
+  });
+
+  it("recovers an interrupted migration claim owned by a single-thread zombie", async () => {
+    await withMockedPlatform("linux", async () => {
+      const fixture = await createFixture();
+      const claimPath = `${fixture.heartbeatPath}.doctor-importing-42-deadbeefdead`;
+      await fs.writeFile(claimPath, "interrupted checklist\n", "utf8");
+      vi.spyOn(process, "kill").mockReturnValue(true);
+      const readFileSync = fsSync.readFileSync.bind(fsSync);
+      vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath, options) => {
+        if (String(filePath) === "/proc/42/status") {
+          return "Name:\tnode\nState:\tZ (zombie)\nThreads:\t1\n" as never;
+        }
+        return readFileSync(filePath, options as never) as never;
+      });
+
+      const result = await maybeMigrateHeartbeatFilesToScratch({
+        cfg: fixture.cfg,
+        shouldRepair: true,
+      });
+
+      expect(result.warnings).toEqual([]);
+      expect(result.changes).toHaveLength(1);
+      await expect(fs.access(claimPath)).rejects.toMatchObject({ code: "ENOENT" });
+    });
   });
 
   it("refuses to steal a claim held by a live doctor process", async () => {

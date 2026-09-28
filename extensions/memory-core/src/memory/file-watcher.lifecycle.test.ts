@@ -7,7 +7,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MemoryFileWatcher } from "./file-watcher.js";
+import { MemoryFileWatcher, type MemoryFileWatcherOptions } from "./file-watcher.js";
 import { advanceWatchSync } from "./watcher-test-support.js";
 
 const BUILT_IN_WATCH_DEBOUNCE_MS = 1_500;
@@ -22,10 +22,15 @@ describe("memory file watcher lifecycle", () => {
   let originalPlatform: NodeJS.Platform;
   const helperWatchers: MemoryFileWatcher[] = [];
 
-  beforeEach(() => {
+  beforeEach(async () => {
     originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
     vi.clearAllMocks();
+    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-watch-lifecycle-"));
+    extraDir = path.join(workspaceDir, "extra");
+    await fs.mkdir(path.join(workspaceDir, "memory"));
+    await fs.mkdir(extraDir);
+    await fs.writeFile(path.join(extraDir, "notes.md"), "hello");
   });
 
   afterEach(async () => {
@@ -46,14 +51,6 @@ describe("memory file watcher lifecycle", () => {
     Reflect.deleteProperty(globalThis, Symbol.for("openclaw.test.memoryNativeWatchFactory"));
   });
 
-  async function setupWatcherWorkspace(seedFile: { name: string; contents: string }) {
-    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-watch-lifecycle-"));
-    extraDir = path.join(workspaceDir, "extra");
-    await fs.mkdir(path.join(workspaceDir, "memory"));
-    await fs.mkdir(extraDir);
-    await fs.writeFile(path.join(extraDir, seedFile.name), seedFile.contents);
-  }
-
   function createWatcherConfig(overrides?: Partial<MemorySearchConfig>): OpenClawConfig {
     return {
       plugins: { enabled: false },
@@ -71,23 +68,28 @@ describe("memory file watcher lifecycle", () => {
     };
   }
 
-  async function startDirectWatcher() {
-    const sync = vi.fn();
+  function createWatcher(overrides: Partial<MemoryFileWatcherOptions> = {}) {
     const fileWatcher = new MemoryFileWatcher({
       workspaceDir,
       agentId: "main",
       settings: resolveMemorySearchConfig(createWatcherConfig({ extraPaths: [] }), "main")!,
-      onChange: sync,
+      onChange: vi.fn(),
       onUnavailable: vi.fn(),
+      ...overrides,
     });
     helperWatchers.push(fileWatcher);
+    return fileWatcher;
+  }
+
+  async function startDirectWatcher() {
+    const sync = vi.fn();
+    const fileWatcher = createWatcher({ onChange: sync });
     await fileWatcher.start();
     return { fileWatcher, sync };
   }
 
   async function setupParentWatchLifecycle(platform: NodeJS.Platform) {
     Object.defineProperty(process, "platform", { value: platform, configurable: true });
-    await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
     const { sync } = await startDirectWatcher();
     const dir = path.join(workspaceDir, "memory");
     const main = createdNativeWatchers.find((watcher) => watcher.dir === dir);
@@ -100,7 +102,6 @@ describe("memory file watcher lifecycle", () => {
   }
 
   it("uses native Memory coverage and settling without creating an index manager", async () => {
-    await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
     const settings = resolveMemorySearchConfig(createWatcherConfig(), "main");
     if (!settings) {
       throw new Error("memory settings missing");
@@ -108,9 +109,7 @@ describe("memory file watcher lifecycle", () => {
     const onChange = vi.fn();
     const onDirty = vi.fn();
     const onUnavailable = vi.fn();
-    const fileWatcher = new MemoryFileWatcher({
-      workspaceDir,
-      agentId: "main",
+    const fileWatcher = createWatcher({
       settings,
       onChange,
       onDirty,
@@ -143,7 +142,6 @@ describe("memory file watcher lifecycle", () => {
     "covers root replacement during %s parent admission",
     async (platform) => {
       Object.defineProperty(process, "platform", { value: platform, configurable: true });
-      await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
       const root = path.join(workspaceDir, "memory");
       const entered = Promise.withResolvers<void>();
       const resume = Promise.withResolvers<void>();
@@ -161,13 +159,7 @@ describe("memory file watcher lifecycle", () => {
           return result;
         });
       const onChange = vi.fn();
-      const fileWatcher = new MemoryFileWatcher({
-        workspaceDir,
-        agentId: "main",
-        settings: resolveMemorySearchConfig(createWatcherConfig({ extraPaths: [] }), "main")!,
-        onChange,
-        onUnavailable: vi.fn(),
-      });
+      const fileWatcher = createWatcher({ onChange });
       vi.useFakeTimers();
       const starting = fileWatcher.start();
       try {
@@ -193,7 +185,6 @@ describe("memory file watcher lifecycle", () => {
   );
 
   it("schedules retained facts once after slow indexing instead of polling a zero debounce", async () => {
-    await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
     const entered = Promise.withResolvers<void>();
     const resume = Promise.withResolvers<void>();
     const onChange = vi.fn(async () => {
@@ -201,12 +192,9 @@ describe("memory file watcher lifecycle", () => {
       await resume.promise;
     });
     const settings = resolveMemorySearchConfig(createWatcherConfig(), "main")!;
-    const fileWatcher = new MemoryFileWatcher({
-      workspaceDir,
-      agentId: "main",
+    const fileWatcher = createWatcher({
       settings: { ...settings, sync: { watchDebounceMs: 0 } },
       onChange,
-      onUnavailable: vi.fn(),
     });
     await fileWatcher.start();
     vi.useFakeTimers();
@@ -239,7 +227,6 @@ describe("memory file watcher lifecycle", () => {
     "revokes pending $platform startup probes after $code exhausts watcher capacity",
     async ({ platform, code }) => {
       Object.defineProperty(process, "platform", { value: platform, configurable: true });
-      await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
       const entered = Promise.withResolvers<void>();
       const resume = Promise.withResolvers<void>();
       const original = fs.stat.bind(fs);
@@ -256,9 +243,7 @@ describe("memory file watcher lifecycle", () => {
       const onChange = vi.fn();
       const onDirty = vi.fn();
       const onUnavailable = vi.fn();
-      const fileWatcher = new MemoryFileWatcher({
-        workspaceDir,
-        agentId: "main",
+      const fileWatcher = createWatcher({
         settings: resolveMemorySearchConfig(createWatcherConfig(), "main")!,
         onChange,
         onDirty,
@@ -296,68 +281,57 @@ describe("memory file watcher lifecycle", () => {
     },
   );
 
-  it.each(["darwin", "linux"] as const)(
-    "restores coverage when the %s parent fails during a missing-root probe",
-    async (platform) => {
-      Object.defineProperty(process, "platform", { value: platform, configurable: true });
-      await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
-      const root = path.join(workspaceDir, "memory");
-      const onChange = vi.fn();
-      const fileWatcher = new MemoryFileWatcher({
-        workspaceDir,
-        agentId: "main",
-        settings: resolveMemorySearchConfig(createWatcherConfig({ extraPaths: [] }), "main")!,
-        onChange,
-        onUnavailable: vi.fn(),
+  it("restores coverage when the parent fails during a missing-root probe", async () => {
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    const root = path.join(workspaceDir, "memory");
+    const onChange = vi.fn();
+    const fileWatcher = createWatcher({ onChange });
+    await fileWatcher.start();
+    const main = createdNativeWatchers.find((watcher) => watcher.dir === root)!;
+    const parent = createdNativeWatchers.find((watcher) => watcher.dir === workspaceDir)!;
+    const fallback = createdChokidarWatchers[0]!;
+    const entered = Promise.withResolvers<void>();
+    const resume = Promise.withResolvers<void>();
+    const original = fs.stat.bind(fs);
+    const probe = vi
+      .spyOn(fs, "stat")
+      .mockImplementation(async (...args: Parameters<typeof fs.stat>) => {
+        if (String(args[0]) === root) {
+          entered.resolve();
+          await resume.promise;
+        }
+        return original(...args);
       });
-      await fileWatcher.start();
-      const main = createdNativeWatchers.find((watcher) => watcher.dir === root)!;
-      const parent = createdNativeWatchers.find((watcher) => watcher.dir === workspaceDir)!;
-      const fallback = createdChokidarWatchers[0]!;
-      const entered = Promise.withResolvers<void>();
-      const resume = Promise.withResolvers<void>();
-      const original = fs.stat.bind(fs);
-      const probe = vi
-        .spyOn(fs, "stat")
-        .mockImplementation(async (...args: Parameters<typeof fs.stat>) => {
-          if (String(args[0]) === root) {
-            entered.resolve();
-            await resume.promise;
-          }
-          return original(...args);
-        });
-      vi.useFakeTimers();
-      try {
-        await fs.rmdir(root);
-        const pending = parent.emit("rename", "memory");
-        await entered.promise;
-        parent.emitError(Object.assign(new Error("parent watch failed"), { code: "EIO" }));
-        expect(parent.close).toHaveBeenCalledOnce();
-        expect(main.close).not.toHaveBeenCalled();
-        resume.resolve();
-        await pending;
-        expect(main.close).toHaveBeenCalledOnce();
-        expect(parent.close).toHaveBeenCalledOnce();
-        expect(fallback.add).toHaveBeenCalledExactlyOnceWith(root);
-        await advanceWatchSync(onChange);
-        onChange.mockClear();
-        await fs.mkdir(root);
-        const note = path.join(root, "fresh.md");
-        await fs.writeFile(note, "fresh");
-        fallback.emit("add", note, await fs.stat(note));
-        await advanceWatchSync(onChange);
-        expect(onChange).toHaveBeenCalledOnce();
-      } finally {
-        resume.resolve();
-        await fileWatcher.close();
-        probe.mockRestore();
-      }
-    },
-  );
+    vi.useFakeTimers();
+    try {
+      await fs.rmdir(root);
+      const pending = parent.emit("rename", "memory");
+      await entered.promise;
+      parent.emitError(Object.assign(new Error("parent watch failed"), { code: "EIO" }));
+      expect(parent.close).toHaveBeenCalledOnce();
+      expect(main.close).not.toHaveBeenCalled();
+      resume.resolve();
+      await pending;
+      expect(main.close).toHaveBeenCalledOnce();
+      expect(parent.close).toHaveBeenCalledOnce();
+      expect(fallback.add).toHaveBeenCalledExactlyOnceWith(root);
+      await advanceWatchSync(onChange);
+      onChange.mockClear();
+      await fs.mkdir(root);
+      const note = path.join(root, "fresh.md");
+      await fs.writeFile(note, "fresh");
+      fallback.emit("add", note, await fs.stat(note));
+      await advanceWatchSync(onChange);
+      expect(onChange).toHaveBeenCalledOnce();
+    } finally {
+      resume.resolve();
+      await fileWatcher.close();
+      probe.mockRestore();
+    }
+  });
 
   it("joins a pending Linux startup scan on close without installing late watchers", async () => {
     Object.defineProperty(process, "platform", { value: "linux", configurable: true });
-    await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
     const root = path.join(workspaceDir, "memory");
     await fs.mkdir(path.join(root, "nested"));
     const entered = Promise.withResolvers<void>();
@@ -373,13 +347,7 @@ describe("memory file watcher lifecycle", () => {
         }
         return entries;
       });
-    const fileWatcher = new MemoryFileWatcher({
-      workspaceDir,
-      agentId: "main",
-      settings: resolveMemorySearchConfig(createWatcherConfig({ extraPaths: [] }), "main")!,
-      onChange: vi.fn(),
-      onUnavailable: vi.fn(),
-    });
+    const fileWatcher = createWatcher();
     const starting = fileWatcher.start();
     try {
       await entered.promise;
@@ -406,27 +374,18 @@ describe("memory file watcher lifecycle", () => {
 
   it.each([
     { platform: "darwin", eventSource: "file" },
-    { platform: "darwin", eventSource: "parent" },
     { platform: "linux", eventSource: "file" },
     { platform: "linux", eventSource: "parent" },
   ] as const)(
     "shares one completion across a held $platform $eventSource burst and joins it on close",
     async ({ platform, eventSource }) => {
       Object.defineProperty(process, "platform", { value: platform, configurable: true });
-      await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
       const root = path.join(workspaceDir, "memory");
       const note = path.join(root, "notes.md");
       await fs.writeFile(note, "note");
       const onDirty = vi.fn();
       const onChange = vi.fn();
-      const fileWatcher = new MemoryFileWatcher({
-        workspaceDir,
-        agentId: "main",
-        settings: resolveMemorySearchConfig(createWatcherConfig({ extraPaths: [] }), "main")!,
-        onChange,
-        onDirty,
-        onUnavailable: vi.fn(),
-      });
+      const fileWatcher = createWatcher({ onChange, onDirty });
       await fileWatcher.start();
       const entered = Promise.withResolvers<void>();
       const resume = Promise.withResolvers<void>();
@@ -483,20 +442,13 @@ describe("memory file watcher lifecycle", () => {
 
   it("coalesces an overflowing Linux event generation into directory reconciliation", async () => {
     Object.defineProperty(process, "platform", { value: "linux", configurable: true });
-    await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
     const root = path.join(workspaceDir, "memory");
     const note = path.join(root, "notes.md");
     await fs.writeFile(note, "note");
     const removed = path.join(root, "removed-directory");
     await fs.mkdir(removed);
     const onChange = vi.fn();
-    const fileWatcher = new MemoryFileWatcher({
-      workspaceDir,
-      agentId: "main",
-      settings: resolveMemorySearchConfig(createWatcherConfig({ extraPaths: [] }), "main")!,
-      onChange,
-      onUnavailable: vi.fn(),
-    });
+    const fileWatcher = createWatcher({ onChange });
     await fileWatcher.start();
     const removedWatcher = createdNativeWatchers.find((watcher) => watcher.dir === removed)!;
     expect(removedWatcher).toBeDefined();
@@ -601,7 +553,6 @@ describe("memory file watcher lifecycle", () => {
 
   it("retains a replacement Linux child's queued event after a late callback from its closed predecessor", async () => {
     Object.defineProperty(process, "platform", { value: "linux", configurable: true });
-    await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
     const root = path.join(workspaceDir, "memory");
     const topic = path.join(root, "topic");
     await fs.mkdir(topic);

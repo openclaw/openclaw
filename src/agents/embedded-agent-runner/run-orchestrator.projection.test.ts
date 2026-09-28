@@ -16,10 +16,14 @@ import * as reconciliation from "../../config/sessions/session-transcript-reconc
 import { useReconcileWorkerObserver } from "../../config/sessions/session-transcript-reconcile.test-support.js";
 import type { SessionTranscriptReconcileWorkerMessage } from "../../config/sessions/session-transcript-reconcile.worker.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import {
   buildEmbeddedRunnerAssistant,
@@ -69,10 +73,13 @@ beforeAll(async () => {
       admission.close();
     }
   };
-});
+  // Preserve the embedded project's cold-import budget after moving to host-process tests.
+}, 600_000);
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();

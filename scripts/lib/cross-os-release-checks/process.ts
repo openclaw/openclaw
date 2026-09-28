@@ -32,7 +32,7 @@ import {
   CROSS_OS_PROCESS_TREE_KILL_AFTER_MS,
 } from "./config.ts";
 import { readLogTextSince } from "./logs.ts";
-import { formatError, sleep, toLintErrorObject, trimForSummary } from "./shared.ts";
+import { formatError, sleep, trimForSummary } from "./shared.ts";
 
 const CROSS_OS_SIGNAL_EXIT_CODES: Partial<Record<NodeJS.Signals, number>> = {
   SIGHUP: 129,
@@ -124,6 +124,39 @@ export async function canConnectToLoopbackPort(port: number, timeoutMs = 1_000) 
 
 export function hasChildExited(child: ChildProcess) {
   return child.exitCode !== null || (child.signalCode ?? null) !== null;
+}
+
+export function captureGatewayProcess(
+  child: ChildProcess,
+  gatewayLog: WriteStream,
+  log: Pick<GatewayHandle, "logPath" | "launchLogOffset">,
+  onClose?: () => void,
+): GatewayHandle {
+  for (const stream of [child.stdout, child.stderr]) {
+    stream?.on("data", (chunk) => {
+      gatewayLog.write(chunk);
+    });
+  }
+  let resolveChildClose: () => void;
+  const childClosePromise = new Promise<void>((resolvePromise) => {
+    resolveChildClose = resolvePromise;
+  });
+  let closeLogPromise: Promise<void> | undefined;
+  const closeLog = () => {
+    closeLogPromise ??= new Promise<void>((resolvePromise) => {
+      gatewayLog.once("error", () => resolvePromise());
+      gatewayLog.end(() => resolvePromise());
+    });
+    return closeLogPromise;
+  };
+  const close = () => {
+    resolveChildClose();
+    onClose?.();
+    void closeLog();
+  };
+  child.once("close", close);
+  child.once("error", close);
+  return { child, closeLog, ...log, waitForClose: () => childClosePromise };
 }
 
 export async function waitForGatewayWithStartupMigrationRestart(params: {
@@ -619,25 +652,19 @@ export function resolveStaticFileContentType(filePath: string) {
 }
 
 export async function withAllocatedGatewayPort<T>(lane: LaneState, callback: () => Promise<T>) {
-  let lastError = null;
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
+  for (let attempt = 1; ; attempt += 1) {
     const reservation = await reservePort();
     lane.gatewayPort = reservation.port;
     await reservation.release();
     try {
       return await callback();
     } catch (error) {
-      lastError = error;
       if (!isAddressInUseError(error) || attempt === 3) {
         throw error;
       }
       await sleep(250 * attempt);
     }
   }
-  throw toLintErrorObject(
-    lastError ?? new Error("Failed to allocate a gateway port."),
-    "Non-Error thrown",
-  );
 }
 
 export async function reserveGatewayPortForLane(lane: LaneState) {

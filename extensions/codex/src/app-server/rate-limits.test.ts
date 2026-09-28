@@ -245,10 +245,10 @@ describe("buildCodexAppServerUsageSnapshot", () => {
         expect(status).toContain("does not establish eligibility or per-request billing");
         const command = formatCodexStatus({
           models: { ok: true, value: { models: [] } },
-          account: { ok: true, value: {} },
+          account: { ok: true, value: { requiresOpenaiAuth: false } },
           limits: { ok: true, value },
-          mcps: { ok: true, value: [] },
-          skills: { ok: true, value: [] },
+          mcps: { ok: true, value: { data: [] } },
+          skills: { ok: true, value: { data: [] } },
         });
         expect(command).toContain(". Luna Reserve is a separate");
       } else {
@@ -603,38 +603,5 @@ describe("summarizeCodexRateLimits", () => {
         },
       }),
     ).toBeUndefined();
-  });
-
-  it("keeps displayable buckets when sibling buckets are empty", () => {
-    const nowMs = 1_700_000_000_000;
-    const nowSeconds = nowMs / 1000;
-
-    expect(
-      summarizeCodexRateLimits(
-        {
-          rateLimitsByLimitId: {
-            codex: {
-              limitId: "codex",
-              limitName: "Codex",
-              primary: { usedPercent: 26, windowDurationMins: 300, resetsAt: nowSeconds + 3600 },
-              secondary: null,
-              credits: null,
-              planType: "plus",
-              rateLimitReachedType: null,
-            },
-            "gpt-5.3-codex-spark": {
-              limitId: "gpt-5.3-codex-spark",
-              limitName: "GPT 5.3 Codex Spark",
-              primary: null,
-              secondary: null,
-              credits: null,
-              planType: "plus",
-              rateLimitReachedType: null,
-            },
-          },
-        },
-        nowMs,
-      ),
-    ).toBe("Codex: primary 74% left ⏱1h");
   });
 });

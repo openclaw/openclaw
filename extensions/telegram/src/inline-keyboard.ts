@@ -7,20 +7,15 @@ function toInlineKeyboardButton(
   if (!button?.text) {
     return undefined;
   }
+  const label = { text: button.text, ...(button.style ? { style: button.style } : {}) };
   if (button.url) {
-    return button.style
-      ? { text: button.text, url: button.url, style: button.style }
-      : { text: button.text, url: button.url };
+    return { ...label, url: button.url };
   }
   if (button.callback_data) {
-    return button.style
-      ? { text: button.text, callback_data: button.callback_data, style: button.style }
-      : { text: button.text, callback_data: button.callback_data };
+    return { ...label, callback_data: button.callback_data };
   }
   if (button.web_app?.url) {
-    return button.style
-      ? { text: button.text, web_app: { url: button.web_app.url }, style: button.style }
-      : { text: button.text, web_app: { url: button.web_app.url } };
+    return { ...label, web_app: { url: button.web_app.url } };
   }
   return undefined;
 }

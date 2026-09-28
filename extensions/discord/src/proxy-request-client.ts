@@ -10,7 +10,6 @@ export function createDiscordRequestClient(
     return new RequestClient(token, options);
   }
   return new RequestClient(token, {
-    runtimeProfile: "persistent",
     maxQueueSize: 1000,
     timeout: DISCORD_REST_TIMEOUT_MS,
     ...options,

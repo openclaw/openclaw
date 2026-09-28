@@ -1,12 +1,7 @@
 import path from "node:path";
 import { createZstdDecompress } from "node:zlib";
 import { root as openSafeFilesystemRoot } from "openclaw/plugin-sdk/file-access-runtime";
-import {
-  isJsonObject,
-  type CodexThread,
-  type JsonObject,
-  type JsonValue,
-} from "./app-server/protocol.js";
+import { isJsonObject, type CodexThread, type JsonObject } from "./app-server/protocol.js";
 import type { CodexCatalogPageDiagnostics } from "./session-catalog-diagnostics.js";
 
 const MAX_SESSION_META_BYTES = 1024 * 1024;
@@ -18,12 +13,8 @@ const provenanceByPath = new Map<string, boolean>();
 function cacheProvenance(key: string, value: boolean): void {
   provenanceByPath.delete(key);
   provenanceByPath.set(key, value);
-  while (provenanceByPath.size > MAX_PROVENANCE_CACHE_ENTRIES) {
-    const oldest = provenanceByPath.keys().next().value;
-    if (oldest === undefined) {
-      break;
-    }
-    provenanceByPath.delete(oldest);
+  if (provenanceByPath.size > MAX_PROVENANCE_CACHE_ENTRIES) {
+    provenanceByPath.delete(provenanceByPath.keys().next().value!);
   }
 }
 
@@ -80,13 +71,7 @@ export async function readCodexSessionMeta(
       if (!line) {
         continue;
       }
-      let parsed: JsonValue;
-      try {
-        // SAFETY: JSON.parse without a reviver returns JSON shapes; envelope/id checks follow.
-        parsed = JSON.parse(line) as JsonValue;
-      } catch {
-        continue;
-      }
+      const parsed: unknown = JSON.parse(line);
       if (
         !isJsonObject(parsed) ||
         parsed.type !== "session_meta" ||

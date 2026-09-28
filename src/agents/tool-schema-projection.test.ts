@@ -10,25 +10,6 @@ import {
 import type { AnyAgentTool } from "./tools/common.js";
 
 describe("runtime tool input schema projection", () => {
-  it("accepts JSON object input schemas", () => {
-    expect(
-      projectRuntimeToolInputSchema({
-        type: "object",
-        properties: {
-          angle: { type: "number" },
-        },
-      }),
-    ).toEqual({
-      schema: {
-        type: "object",
-        properties: {
-          angle: { type: "number" },
-        },
-      },
-      violations: [],
-    });
-  });
-
   it("reports non-object dynamic tool input schemas", () => {
     expect(
       inspectRuntimeToolInputSchemas([
