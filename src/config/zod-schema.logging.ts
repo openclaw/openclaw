@@ -59,6 +59,8 @@ export const LoggingConfigSchema = z
     consoleStyle: z.union([z.literal("pretty"), z.literal("json")]).optional(),
     /** Regex patterns used to redact sensitive tokens from logs and transcripts. */
     redactPatterns: z.array(z.string()).optional(),
+    /** Regex patterns; a candidate secret value matching any of them is exempt from masking. Default: []. */
+    redactAllowPatterns: z.array(z.string()).optional(),
     /** Metadata-only agent activity audit ledger settings. */
     audit: z
       .strictObject({
