@@ -3,8 +3,8 @@ import {
   identityHasStableSessionId,
   resolveSessionIdentityFromMeta,
 } from "@openclaw/acp-core/runtime/session-identity";
-import { logVerbose } from "../../globals.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { logVerbose } from "../../globals.js";
 import { toAcpRuntimeError } from "../runtime/errors.js";
 import { matchesAcpSessionControlBinding } from "../runtime/session-control-owner.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
