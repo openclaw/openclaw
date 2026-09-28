@@ -182,13 +182,25 @@ function parametersAreForwarded(
   });
 }
 
-function isAwaitedZeroArgumentCall(expression: ts.Expression) {
+function isAwaitedModuleLoad(expression: ts.Expression) {
   const unwrapped = unwrapExpression(expression);
   if (!ts.isAwaitExpression(unwrapped)) {
     return false;
   }
   const awaited = unwrapExpression(unwrapped.expression);
-  return ts.isCallExpression(awaited) && awaited.arguments.length === 0;
+  if (!ts.isCallExpression(awaited)) {
+    return false;
+  }
+  // Literal imports and zero-argument loaders acquire the same lazy boundary;
+  // forwarding its unchanged arguments does not define a second behavior.
+  const [specifier] = awaited.arguments;
+  return (
+    awaited.arguments.length === 0 ||
+    (awaited.expression.kind === ts.SyntaxKind.ImportKeyword &&
+      awaited.arguments.length === 1 &&
+      specifier !== undefined &&
+      ts.isStringLiteral(specifier))
+  );
 }
 
 function returnCall(statement: ts.Statement | undefined) {
@@ -225,7 +237,7 @@ function isLazyModuleForwarderCall(
   if (moduleObjectName) {
     return ts.isIdentifier(target) && target.text === moduleObjectName;
   }
-  return isAwaitedZeroArgumentCall(target);
+  return isAwaitedModuleLoad(target);
 }
 
 function isForwardingOnlyFunction(
@@ -256,7 +268,7 @@ function isForwardingOnlyFunction(
         !loaded ||
         !ts.isIdentifier(loaded.name) ||
         !loaded.initializer ||
-        !isAwaitedZeroArgumentCall(loaded.initializer)
+        !isAwaitedModuleLoad(loaded.initializer)
       ) {
         return false;
       }

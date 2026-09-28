@@ -36,8 +36,7 @@ const MAX_PACKAGE_ZIP_BYTES = 130 * 1024 * 1024;
 const SHA = /^[a-f0-9]{40}$/u;
 const DIGEST = /^[a-f0-9]{64}$/u;
 const ARTIFACT = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$/u;
-const VERSION =
-  /^[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(?:-(?:alpha|beta)\.[1-9][0-9]*|-[1-9][0-9]*)?$/u;
+const VERSION = /^[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(?:-beta\.[1-9][0-9]*|-[1-9][0-9]*)?$/u;
 const PRODUCER_KEYS =
   "repository runId runAttempt workflowPath workflowEvent workflowHeadBranch workflowSha".split(
     " ",
@@ -121,6 +120,9 @@ function validateDescriptor(value, toolingSha) {
   return value;
 }
 function selectionEntry(entry) {
+  if (entry.version?.includes("-alpha.") || entry.publishTag === "alpha") {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
   matches(entry.packageName, /^@openclaw\/[a-z0-9][a-z0-9._-]*$/u, "Prepared ClawHub package name");
   matches(
     entry.packageDir,
@@ -128,7 +130,7 @@ function selectionEntry(entry) {
     "Prepared ClawHub package directory",
   );
   matches(entry.version, VERSION, "Prepared ClawHub package version");
-  matches(entry.publishTag, /^(alpha|beta|latest)$/u, "Prepared ClawHub publication tag");
+  matches(entry.publishTag, /^(beta|latest)$/u, "Prepared ClawHub publication tag");
   return pick(entry, ["packageName", "packageDir", "version", "publishTag"]);
 }
 function validatePackage(entry) {

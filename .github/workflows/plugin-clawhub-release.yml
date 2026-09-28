@@ -131,6 +131,11 @@ jobs:
           workspace = os.environ["GITHUB_WORKSPACE"]
           release_tag = os.environ["RELEASE_TAG"]
           target_ref = os.environ["TARGET_REF"]
+          if any("-alpha." in value or "tideclaw/alpha/" in value for value in (
+              release_tag, target_ref, os.environ.get("GITHUB_REF", ""),
+          )):
+              print("Alpha releases are retired; use a beta prerelease.", file=sys.stderr)
+              raise SystemExit(1)
 
           def resolve(ref):
               try:
@@ -159,7 +164,7 @@ jobs:
           )
           if release_tag:
               if not re.fullmatch(
-                  r"v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?",
+                  r"v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-beta\.[1-9][0-9]*)|(-[1-9][0-9]*))?",
                   release_tag,
               ):
                   print(f"Invalid ClawHub release tag: {release_tag}", file=sys.stderr)
@@ -262,6 +267,10 @@ jobs:
                       return False
                   raise
 
+          if "tideclaw/alpha/" in os.environ["TRUSTED_PUBLISH_BRANCH"]:
+              print("Alpha releases are retired; use a beta prerelease.", file=sys.stderr)
+              raise SystemExit(1)
+
           if is_ancestor("origin/main"):
               raise SystemExit(0)
           release_refs = git_output(
@@ -272,25 +281,8 @@ jobs:
           ).splitlines()
           if any(is_ancestor(ref) for ref in release_refs):
               raise SystemExit(0)
-          trusted_branch = os.environ["TRUSTED_PUBLISH_BRANCH"]
-          if re.fullmatch(
-              r"tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z",
-              trusted_branch,
-          ):
-              run_git(
-                  workspace,
-                  "fetch",
-                  "--no-tags",
-                  "origin",
-                  f"+refs/heads/{trusted_branch}:refs/remotes/origin/{trusted_branch}",
-                  timeout=120,
-                  reclaim_locks=True,
-              )
-              if is_ancestor(f"refs/remotes/origin/{trusted_branch}"):
-                  raise SystemExit(0)
           print(
-              "Plugin ClawHub publishes must target a commit reachable from main, release/*, "
-              "or the matching Tideclaw alpha branch.",
+              "Plugin ClawHub publishes must target a commit reachable from main or release/*.",
               file=sys.stderr,
           )
           raise SystemExit(1)
@@ -391,6 +383,11 @@ jobs:
             node --import tsx .release-tooling/scripts/plugin-clawhub-release-plan.ts > .local/plugin-clawhub-release-plan.json
           fi
 
+          if jq -e '(.all[]?, .candidates[]?, .bootstrapCandidates[]?, .missingTrustedPublisher[]?) | select(.publishTag == "alpha" or .channel == "alpha" or ((.version // "") | contains("-alpha.")))' .local/plugin-clawhub-release-plan.json >/dev/null; then
+            echo "Alpha releases are retired; use a beta prerelease." >&2
+            exit 1
+          fi
+
           cat .local/plugin-clawhub-release-plan.json
           jq -r '.warnings[]? | "- Warning: \(.)"' .local/plugin-clawhub-release-plan.json >> "$GITHUB_STEP_SUMMARY"
 
@@ -474,23 +471,6 @@ jobs:
         run: |
           echo "::error::One or more selected plugin versions already exist on ClawHub. Bump the version before running a real publish."
           exit 1
-
-      - name: Validate Tideclaw alpha plugin channels
-        env:
-          TRUSTED_PUBLISH_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}
-        run: |
-          set -euo pipefail
-          if [[ ! "${TRUSTED_PUBLISH_BRANCH}" =~ ^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
-            exit 0
-          fi
-          invalid="$(
-            jq -r '.candidates[]? | select(.publishTag != "alpha" or .channel != "alpha") | "- \(.packageName)@\(.version) [\(.publishTag)]"' .local/plugin-clawhub-release-plan.json
-          )"
-          if [[ -n "${invalid}" ]]; then
-            echo "Tideclaw alpha ClawHub publishes may only publish alpha plugin versions." >&2
-            printf '%s\n' "${invalid}" >&2
-            exit 1
-          fi
 
   validate_release_publish_approval:
     name: Validate release publish approval

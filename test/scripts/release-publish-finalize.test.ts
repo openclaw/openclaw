@@ -103,7 +103,6 @@ describe("release publish finalization", () => {
   it.each([
     { tag: "v2026.9.6", distTag: "latest", prerelease: false, madeLatest: true },
     { tag: "v2026.9.7-beta.1", distTag: "beta", prerelease: true, madeLatest: false },
-    { tag: "v2026.9.7-alpha.1", distTag: "alpha", prerelease: true, madeLatest: false },
     { tag: "v2026.8.33", distTag: "extended-stable", prerelease: false, madeLatest: false },
   ])("records verified public $tag without rewriting it", ({ madeLatest, ...options }) => {
     const result = fixture(options);
