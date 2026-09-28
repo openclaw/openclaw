@@ -1,3 +1,4 @@
+import type { LitElement } from "lit";
 import { expect, vi } from "vitest";
 import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { patchSettings } from "../../app/settings.ts";
@@ -9,6 +10,7 @@ import {
   type SidebarLifecycleState,
 } from "../app-sidebar.ts";
 import { createGatewayRequestMock, createTestGatewayClient } from "../gateway-client.ts";
+import { settleLitElement, settleLitElements } from "../lit-settle.ts";
 
 export const roster: AgentsListResult = {
   defaultId: "main",
@@ -137,6 +139,13 @@ export async function mountRoster(
   mounted.sidebar.connected = true;
   await mounted.sidebar.updateComplete;
   return { ...mounted, sessions, request, gatewayHarness, result };
+}
+
+export async function settleRoster(sidebar: SidebarLifecycleState) {
+  await sidebar.updateComplete;
+  await vi.dynamicImportSettled();
+  await settleLitElements(sidebar.querySelectorAll<LitElement>("openclaw-sidebar-agent-roster"));
+  await settleLitElement(sidebar);
 }
 
 export function agentIds(sidebar: HTMLElement) {

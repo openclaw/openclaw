@@ -117,7 +117,9 @@
   --accent-subtle: rgba(31, 31, 31, 0.07);
   --accent-glow: rgba(31, 31, 31, 0.12);
   --primary: #1f1f1f;
+  --primary-hover: var(--accent-hover);
   --primary-foreground: #ffffff;
+  --accent-foreground: #ffffff;
 
   --bg: #f5f5f4;
   --bg-accent: #ededed;

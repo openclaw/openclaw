@@ -89,6 +89,63 @@ describe("renderChatComposer controls", () => {
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(props.draft);
   });
 
+  it.each([
+    { followUpMode: "queue" as const, draft: "Keep this draft", attachments: [] },
+    { followUpMode: "steer" as const, draft: "Keep this draft", attachments: [] },
+    {
+      followUpMode: "queue" as const,
+      draft: "",
+      attachments: [{ id: "attachment", mimeType: "image/png", fileName: "proof.png" }],
+    },
+  ])(
+    "keeps Stop beside a ready $followUpMode follow-up",
+    ({ followUpMode, draft, attachments }) => {
+      const onAbort = vi.fn();
+      const onSend = vi.fn();
+      const onDraftChange = vi.fn();
+      const onToggleRealtimeTalk = vi.fn();
+      const { container } = renderComposer({
+        canAbort: true,
+        draft,
+        attachments,
+        followUpMode,
+        onAbort,
+        onSend,
+        onDraftChange,
+        onToggleRealtimeTalk,
+      });
+      const stop = button(container, t("chat.runControls.stopGenerating"));
+      const followUp = button(
+        container,
+        t(followUpMode === "steer" ? "chat.followUpModeSteer" : "chat.runControls.queueMessage"),
+      );
+      expect(stop.disabled).toBe(false);
+      expect(followUp.disabled).toBe(false);
+      expect(container.querySelectorAll(".chat-send-btn--stop")).toHaveLength(1);
+      expect(
+        stop.closest(".chat-mobile-primary-action.chat-desktop-primary-action"),
+      ).not.toBeNull();
+      stop.click();
+      expect(onAbort).toHaveBeenCalledOnce();
+      expect(onSend).not.toHaveBeenCalled();
+      expect(onToggleRealtimeTalk).not.toHaveBeenCalled();
+      expect(onDraftChange).not.toHaveBeenCalled();
+      expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(draft);
+      followUp.click();
+      expect(onSend).toHaveBeenCalledOnce();
+      expect(onAbort).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("retains the same Stop button while a draft becomes sendable and clears", () => {
+    const { container, props } = renderComposer({ canAbort: true, onAbort: vi.fn() });
+    const stop = button(container, t("chat.runControls.stopGenerating"));
+    for (const draft of ["x", ""]) {
+      render(renderChatComposer({ ...props, draft }), container);
+      expect(button(container, t("chat.runControls.stopGenerating"))).toBe(stop);
+    }
+  });
+
   it.each([true, false])(
     "keeps command submission gated while history is pending: %s",
     (pending) => {

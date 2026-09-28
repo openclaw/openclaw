@@ -17,6 +17,7 @@ export const uiNodeDrivenBrowserTestFiles = [
   "ui/src/styles/chat-file-link-presentation.browser.test.ts",
   "ui/src/styles/chat-github-link-presentation.browser.test.ts",
   "ui/src/styles/shimmer.browser.test.ts",
+  "ui/src/styles/forced-colors-indicators.browser.test.ts",
   "ui/src/styles/sr-only.browser.test.ts",
 ];
 

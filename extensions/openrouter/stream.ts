@@ -5,6 +5,7 @@ import {
   composeProviderStreamWrappers,
   createPayloadPatchStreamWrapper,
   normalizeOpenAICompatibleReasoningReplay,
+  stripTrailingAssistantPrefillMessages,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { asNonArrayRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -77,50 +78,6 @@ function createOpenRouterAuthHeaderWrapper(
 
 function assistantMessageHasOpenAIToolCalls(message: Record<string, unknown>): boolean {
   return Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
-}
-
-function isAnthropicToolCallContentBlock(value: unknown): boolean {
-  return (
-    value !== null &&
-    typeof value === "object" &&
-    ((value as { type?: unknown }).type === "tool_use" ||
-      (value as { type?: unknown }).type === "toolCall")
-  );
-}
-
-function assistantMessageHasAnthropicToolUse(message: Record<string, unknown>): boolean {
-  const content = message.content;
-  return Array.isArray(content) && content.some(isAnthropicToolCallContentBlock);
-}
-
-function shouldStripOpenRouterTrailingMessage(value: unknown): boolean {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const message = value as Record<string, unknown>;
-  return (
-    message.role === "assistant" &&
-    !assistantMessageHasOpenAIToolCalls(message) &&
-    !assistantMessageHasAnthropicToolUse(message)
-  );
-}
-
-function stripTrailingOpenRouterAssistantPrefillMessages(payload: Record<string, unknown>): number {
-  const messages = payload.messages;
-  if (!Array.isArray(messages)) {
-    return 0;
-  }
-
-  let keep = messages.length;
-  while (keep > 0 && shouldStripOpenRouterTrailingMessage(messages[keep - 1])) {
-    keep -= 1;
-  }
-  if (keep === messages.length) {
-    return 0;
-  }
-  const stripped = messages.length - keep;
-  messages.splice(keep);
-  return stripped;
 }
 
 function isEnabledReasoningValue(value: unknown): boolean {
@@ -198,7 +155,7 @@ function createOpenRouterAnthropicPrefillWrapper(
       if (!isOpenRouterReasoningPayloadEnabled(payload)) {
         return;
       }
-      const stripped = stripTrailingOpenRouterAssistantPrefillMessages(payload);
+      const stripped = stripTrailingAssistantPrefillMessages(payload);
       if (stripped > 0) {
         log.warn(
           `removed ${stripped} trailing assistant prefill message${stripped === 1 ? "" : "s"} because OpenRouter-routed Anthropic reasoning requires conversations to end with a user turn`,

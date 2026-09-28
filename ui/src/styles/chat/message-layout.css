@@ -33,7 +33,7 @@
 .chat-position-rail__track {
   position: absolute;
   top: 0;
-  left: 10px;
+  inset-inline-start: 10px;
   width: 44px;
   height: var(--chat-position-rail-height);
 }
@@ -111,7 +111,7 @@
 
 .chat-position-rail__marker {
   position: absolute;
-  left: 0;
+  inset-inline-start: 0;
   z-index: 1;
   display: flex;
   align-items: center;
@@ -179,7 +179,7 @@
 .chat-position-rail__preview {
   position: absolute;
   top: var(--chat-position-preview);
-  left: 100%;
+  inset-inline-start: 100%;
   display: grid;
   width: 200px;
   gap: 4px;
