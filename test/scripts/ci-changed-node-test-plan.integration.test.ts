@@ -8,6 +8,7 @@ import {
 } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import {
   createNodeTestShardBundles,
+  createSelectedNodeTestShardBundles,
   createUiTestShardGroups,
   resolveCanonicalNodeTestConfig,
   type CompactNodeTestShard,
@@ -425,10 +426,30 @@ it("keeps UI and core changes with exact owners and direct consumers", () => {
   } finally {
     placement.mockRestore();
   }
+  // Precise tooling is repacked without unrelated compiler fixtures whose full
+  // inventory promotes their shared job. Compare against the same selected owner.
+  const toolingTargets = (shards ?? []).flatMap((job) =>
+    (job.groups ?? []).flatMap((group) =>
+      group.configs.includes("test/vitest/vitest.tooling.config.ts")
+        ? (group.includePatterns ?? [])
+        : [],
+    ),
+  );
+  const canonicalTooling = expectDefined(
+    createSelectedNodeTestShardBundles(toolingTargets, {
+      runnerBackend: "hybrid",
+      includeReleaseOnlyRuntimeTests: true,
+      includePrExemptRuntimeTests: true,
+    }),
+    "canonical selected tooling owners",
+  );
   for (const job of shards ?? []) {
     for (const group of job.groups ?? []) {
+      const owners = group.configs.includes("test/vitest/vitest.tooling.config.ts")
+        ? canonicalTooling
+        : canonical;
       const ownerJob = expectDefined(
-        canonical.find((candidate) =>
+        owners.find((candidate) =>
           candidate.groups.some((owner) => owner.shard_name === group.shard_name),
         ),
         `canonical UI consumer job for ${group.shard_name}`,

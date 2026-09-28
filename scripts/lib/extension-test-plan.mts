@@ -38,6 +38,7 @@ import { isRuntimePlacementIncludePatterns } from "./ci-test-timings-schema.mts"
 import { readCompactGroupTimings } from "./ci-test-timings.mts";
 import { GIT_LS_FILES_MAX_BUFFER_BYTES } from "./list-test-files.mts";
 import { parsePositiveInt } from "./numeric-options.mjs";
+import { resolveVitestPretestBuildMode } from "./vitest-build-prerequisites.mts";
 import { createCompactSplitTimingGeneration } from "./vitest-shard-metadata.mts";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
@@ -350,6 +351,24 @@ export function splitExtensionTestProcessTargets(config: string, targets: string
     : [uniqueSortedTargets(targets)];
 }
 
+/** Only the qualified Telegram native-worker cohort may overlap singleton processes. */
+export function canOverlapTelegramSingletonProcesses(
+  config: string,
+  files: readonly string[] | null | undefined,
+): boolean {
+  if (
+    config !== DATABASE_WORKER_CONFIG ||
+    !isRuntimePlacementIncludePatterns(files) ||
+    files.length < 2 ||
+    !files.every((file) => file.startsWith("extensions/telegram/")) ||
+    resolveVitestPretestBuildMode([{ configs: [config], includePatterns: files }]) !== undefined
+  ) {
+    return false;
+  }
+  const processes = splitExtensionTestProcessTargets(config, [...files]);
+  return processes.length === files.length && processes.every((process) => process.length === 1);
+}
+
 /** Split an extension config's test files into CI envelopes without changing process lifetime. */
 export function splitExtensionTestJobTargets(config: string, targets: string[]) {
   if (config === DATABASE_WORKER_CONFIG) {
@@ -438,9 +457,13 @@ export function createExtensionTestTimingKey(
   ) {
     return undefined;
   }
+  const timingEnv: Record<string, string> = { ...env };
+  if (timingEnv.OPENCLAW_TEST_PROJECTS_PARALLEL === "1") {
+    delete timingEnv.OPENCLAW_TEST_PROJECTS_PARALLEL;
+  }
   return createCompactSplitTimingGeneration({
     configs: [config],
-    env,
+    env: timingEnv,
     parentShardName: `extension-test:${config}#workers-${env.OPENCLAW_VITEST_MAX_WORKERS}${kind === "envelope" ? "" : `#${kind}`}`,
     stripes: [files],
   }).timingKeys[0];
@@ -450,7 +473,19 @@ export function estimateExtensionTestCost(
   config: string,
   testFileCount: number,
   files: readonly string[] = [],
+  env: Readonly<Record<string, string>> = { OPENCLAW_VITEST_MAX_WORKERS: "2" },
 ) {
+  if (env.OPENCLAW_TEST_PROJECTS_PARALLEL === "2") {
+    const key =
+      files.length === testFileCount ? createExtensionTestTimingKey(config, files, env) : undefined;
+    const measured = key ? readCompactGroupTimings("blacksmith")[key] : undefined;
+    if (measured !== undefined) {
+      return Math.max(1, Math.ceil(measured));
+    }
+    // Retain the serial estimate until this policy has an exact measurement.
+    const { OPENCLAW_TEST_PROJECTS_PARALLEL: _parallel, ...serialEnv } = env;
+    return estimateExtensionTestCost(config, testFileCount, files, serialEnv);
+  }
   const serialReference = EXTENSION_TEST_SERIAL_REFERENCE_COST_MULTIPLIERS[config];
   const multiplier =
     serialReference !== undefined && testFileCount <= 1
@@ -467,7 +502,7 @@ export function estimateExtensionTestCost(
       ? files.filter((file) => file.startsWith("extensions/codex/src/app-server/")).length
       : 0;
   const key =
-    files.length === testFileCount ? createExtensionTestTimingKey(config, files) : undefined;
+    files.length === testFileCount ? createExtensionTestTimingKey(config, files, env) : undefined;
   const timings = readCompactGroupTimings("blacksmith");
   const measured = key ? timings[key] : undefined;
   const processes = key ? splitExtensionTestProcessTargets(config, [...files]) : [];
@@ -475,12 +510,7 @@ export function estimateExtensionTestCost(
   if (processes.length === files.length && processes.every((process) => process.length === 1)) {
     let observed = false;
     for (const file of files) {
-      const fileKey = createExtensionTestTimingKey(
-        config,
-        [file],
-        undefined,
-        "singleton-invocation",
-      )!;
+      const fileKey = createExtensionTestTimingKey(config, [file], env, "singleton-invocation")!;
       const fileSeconds = timings[fileKey];
       observed ||= fileSeconds !== undefined;
       singletonSeconds += Math.max(
@@ -490,7 +520,7 @@ export function estimateExtensionTestCost(
           : multiplier,
       );
     }
-    const overheadKey = createExtensionTestTimingKey(config, [], undefined, "wrapper-overhead");
+    const overheadKey = createExtensionTestTimingKey(config, [], env, "wrapper-overhead");
     singletonSeconds = observed
       ? singletonSeconds + (overheadKey ? (timings[overheadKey] ?? 0) : 0)
       : 0;

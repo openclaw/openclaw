@@ -532,6 +532,10 @@ export async function runTestProjects(
       targetArgs.length === 0 &&
       changedTargetArgs === null &&
       !runSpecs.some((spec) => spec.watchMode);
+    const focusedCiShard =
+      !isFullSuiteRun &&
+      isCiLikeEnv(baseEnv) &&
+      Boolean(baseEnv.OPENCLAW_VITEST_SHARD_NAME?.trim());
     const isExplicitParallelMultiConfigRun =
       Boolean(baseEnv.OPENCLAW_TEST_PROJECTS_PARALLEL) &&
       runSpecs.length > 1 &&
@@ -560,6 +564,9 @@ export async function runTestProjects(
       : isParallelShardRun
         ? resolveParallelFullSuiteConcurrency(runSpecs.length, baseEnv)
         : 1;
+    if (focusedCiShard) {
+      console.error(`[test] inner parallelism ${concurrency}`);
+    }
     if (automatic) {
       console.error(
         `[test] running ${runSpecs.length} exact-target plans with parallelism ${concurrency} and joined exclusive barriers`,
@@ -595,9 +602,7 @@ export async function runTestProjects(
       termination,
       automatic,
       baseEnv.OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE === "1",
-      !isFullSuiteRun &&
-        isCiLikeEnv(baseEnv) &&
-        Boolean(baseEnv.OPENCLAW_VITEST_SHARD_NAME?.trim()),
+      focusedCiShard,
     );
     if (concurrency === 1 && termination.signal) {
       return;
