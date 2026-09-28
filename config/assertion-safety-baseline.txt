@@ -444,13 +444,10 @@ extensions/google/transport-stream.ts	13
 extensions/google/vertex-adc.ts	4
 extensions/google/video-generation-provider.ts	13
 extensions/googlechat/src/accounts.ts	1
-extensions/googlechat/src/actions.ts	1
 extensions/googlechat/src/approval-card-actions.ts	1
 extensions/googlechat/src/approval-handler.runtime.ts	1
-extensions/googlechat/src/google-auth.runtime.ts	5
-extensions/googlechat/src/monitor-access.ts	1
+extensions/googlechat/src/google-auth.runtime.ts	4
 extensions/googlechat/src/monitor-event.ts	2
-extensions/googlechat/src/secret-contract.ts	3
 extensions/googlechat/src/setup-core.ts	1
 extensions/groq/index.ts	2
 extensions/huggingface/index.ts	1
@@ -1082,7 +1079,7 @@ extensions/tlon/src/tlon-api.ts	2
 extensions/tlon/src/types.ts	3
 extensions/tlon/src/urbit/sse-client.ts	4
 extensions/tokenjuice/tool-result-middleware.ts	1
-extensions/twitch/src/config.ts	10
+extensions/twitch/src/config.ts	6
 extensions/twitch/src/outbound.ts	2
 extensions/twitch/src/resolver.ts	1
 extensions/twitch/src/setup-surface.ts	1
@@ -1187,7 +1184,6 @@ extensions/zalo/src/webhook-spool.ts	1
 extensions/zalouser/src/accounts.ts	1
 extensions/zalouser/src/group-policy.ts	2
 extensions/zalouser/src/ingress.ts	2
-extensions/zalouser/src/monitor.ts	1
 extensions/zalouser/src/security-audit.ts	1
 extensions/zalouser/src/session-state.ts	2
 extensions/zalouser/src/setup-surface.ts	4
@@ -1195,7 +1191,7 @@ extensions/zalouser/src/text-styles-inline.ts	1
 extensions/zalouser/src/text-styles-ranges.ts	1
 extensions/zalouser/src/text-styles-source.ts	1
 extensions/zalouser/src/tool.ts	1
-extensions/zalouser/src/zalo-js.ts	14
+extensions/zalouser/src/zalo-js.ts	11
 extensions/zalouser/src/zca-client.ts	2
 packages/acp-core/src/runtime/errors.ts	6
 packages/acp-core/src/types.ts	2

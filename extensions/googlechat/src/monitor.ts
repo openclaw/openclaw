@@ -414,11 +414,7 @@ export async function startGoogleChatMonitor(
   options: GoogleChatMonitorOptions,
 ): Promise<() => Promise<void>> {
   const core = getGoogleChatRuntime();
-  const webhookPath = resolveWebhookPath({
-    webhookPath: options.webhookPath,
-    webhookUrl: options.webhookUrl,
-    defaultPath: "/googlechat",
-  });
+  const webhookPath = resolveGoogleChatWebhookPath(options);
   if (!webhookPath) {
     options.runtime.error?.(`[${options.account.accountId}] invalid webhook path`);
     return async () => {};
@@ -484,15 +480,14 @@ export async function startGoogleChatMonitor(
   };
 }
 
-// Null keeps the same meaning it has in startGoogleChatMonitor above: the
-// configured webhookUrl does not parse, so no route is ever bound. Falling back
-// to the default path here would report a route the monitor never registers.
-export function resolveGoogleChatWebhookPath(params: {
-  account: ResolvedGoogleChatAccount;
-}): string | null {
+// Invalid webhook URLs stay null so status never advertises an unbound default route.
+export function resolveGoogleChatWebhookPath({
+  webhookPath,
+  webhookUrl,
+}: Pick<GoogleChatMonitorOptions, "webhookPath" | "webhookUrl">): string | null {
   return resolveWebhookPath({
-    webhookPath: params.account.config.webhookPath,
-    webhookUrl: params.account.config.webhookUrl,
+    webhookPath,
+    webhookUrl,
     defaultPath: "/googlechat",
   });
 }
