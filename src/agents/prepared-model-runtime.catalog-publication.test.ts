@@ -392,16 +392,21 @@ describe("catalog publication session rows", () => {
         await settleCatalog();
         const result = await list();
         expect(rows.dirtyRowCount).toBe(0);
-        expect(readCatalog.mock.calls.length).toBeGreaterThan(reads);
+        // A partial refresh that re-discovers rotated auth without changing model facts keeps
+        // the published catalog identity stable: the rotation is already live on the shared
+        // snapshot, so the republication must not fake a facts change and churn the projection
+        // into a pointless re-read. Only a real facts change (the rotated context window) does.
         expect(publication).toHaveBeenCalledWith({
           phase: "catalog-published",
-          modelFactsChanged: true,
+          modelFactsChanged: kind === "token",
           refreshStatusChanged: true,
         });
         if (kind === "oauth") {
+          expect(readCatalog.mock.calls.length).toBe(reads);
           expect(result.sessions).toEqual(initial.sessions);
           expect(rows.materializedCount).toBe(before);
         } else {
+          expect(readCatalog.mock.calls.length).toBeGreaterThan(reads);
           expect(result.sessions.every((row) => row.contextTokens === 64_000)).toBe(true);
           expect(rows.materializedCount - before).toBe(rowCount);
         }
