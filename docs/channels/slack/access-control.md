@@ -241,6 +241,9 @@ restart the Slack monitor. The Gateway remains running.
 
     `allowBots` defaults to `true`. Bot-authored messages follow the same channel access and mention rules as other messages; messages from this bot are always ignored. Set `allowBots: false` to prevent other bots from triggering turns, or `allowBots: "mentions"` to require a mention even in rooms with `requireMention: false`. Room settings override account settings, which override `channels.slack.allowBots`. Existing explicit `false` values remain disabled after an update.
 
+    <a id="allow-bots-mentions" />
+    In `"mentions"` mode, a bot-authored room message needs an explicit mention: a native `<@bot>` mention, an `app_mention` event, a user-group mention that includes the bot, or a configured mention pattern. Implicit mentions (`implicitMentions.replyToBot` and `implicitMentions.threadParticipation`) do not admit bot-authored messages, so two bots sharing a thread cannot wake each other without tagging. Human thread follow-ups keep their implicit mentions.
+
     Bot-authored room messages also require either the sending bot to be explicitly listed in that room's `users` allowlist, or at least one explicit Slack owner ID from `channels.slack.allowFrom` to be a current room member. Wildcards and display-name owner entries do not satisfy owner presence. Owner presence uses Slack `conversations.members`; make sure the app has the matching read scope for the room type (`channels:read` for public channels, `groups:read` for private channels). If the member lookup fails, OpenClaw drops the bot-authored room message.
 
     `allowBots` controls incoming turns, not context visibility. A human request can still include accessible bot-authored room history and thread context when `allowBots: false`; the configured `contextVisibility` and sender allowlist rules still apply.

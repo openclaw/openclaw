@@ -1137,8 +1137,10 @@ export async function prepareSlackMessage(params: {
     wasMentioned,
   });
 
+  // Implicit thread facts (replies to this bot, threads it joined) keep human
+  // follow-ups untagged, but would let two bots wake each other indefinitely.
   if (isBotMessage && allowBotsMode === "mentions") {
-    const botMentioned = isDirectMessage || effectiveWasMentioned || shouldBypassMention;
+    const botMentioned = isDirectMessage || wasMentioned || shouldBypassMention;
     if (!botMentioned) {
       return drop("bot-missing-mention");
     }

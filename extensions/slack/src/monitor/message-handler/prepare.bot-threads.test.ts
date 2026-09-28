@@ -295,6 +295,48 @@ describe("Slack bot-thread mention configuration", () => {
   );
 
   it.each([
+    { kind: "reply_to_bot", parentUserId: "B1", participated: false },
+    { kind: "bot_thread_participant", parentUserId: "U_ROOT", participated: true },
+  ])(
+    "requires an explicit mention from bots despite $kind when allowBots is mentions",
+    async (scenario) => {
+      const test = fixture({
+        slack: {
+          allowBots: "mentions",
+          implicitMentions: { replyToBot: true, threadParticipation: true },
+          channels: { C123: { users: ["U1"] } },
+        },
+      });
+      test.message.bot_id = "B_OTHER";
+      test.message.subtype = "bot_message";
+      test.message.parent_user_id = scenario.parentUserId;
+      if (scenario.participated) {
+        recordSlackThreadParticipation(test.accountId, "C123", test.threadTs);
+      }
+
+      expect(await test.prepare()).toBeNull();
+      expect(test.info).toHaveBeenCalledWith(
+        expect.objectContaining({ reason: "bot-missing-mention" }),
+        expect.any(String),
+      );
+
+      test.message.text = "<@B1> Continue here";
+      expect((await test.prepare())?.ctxPayload.MentionSource).toBe("explicit_bot");
+    },
+  );
+
+  it("keeps implicit thread mentions for human replies when allowBots is mentions", async () => {
+    const test = fixture({
+      slack: {
+        allowBots: "mentions",
+        implicitMentions: { replyToBot: true, threadParticipation: true },
+      },
+    });
+
+    expect((await test.prepare())?.ctxPayload.ImplicitMentionKinds).toEqual(["reply_to_bot"]);
+  });
+
+  it.each([
     { reason: "channel-not-allowed", slack: { channels: { C123: { enabled: false } } } },
     { reason: "unauthorized-sender", slack: { channels: { C123: { users: ["U_ALLOWED"] } } } },
     { reason: "bot-disabled", slack: { allowBots: false }, bot: true },
