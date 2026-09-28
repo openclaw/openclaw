@@ -343,7 +343,7 @@
       "appGuidedAuth": "oauth",
       "credentialOnly": true,
       "choiceLabel": "Sign in with ChatGPT (Beta)",
-      "choiceHint": "Use your Codex allowance with per-instance usage tracking and token limits",
+      "choiceHint": "Authorize OpenClaw for eligible Responses models using your Codex allowance",
       "docsUrl": "https://docs.openclaw.ai/providers/openai/authentication",
       "assistantPriority": 0,
       "groupId": "openai",

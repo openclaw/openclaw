@@ -158,7 +158,7 @@ describe("OpenAI plugin manifest", () => {
     );
     expect(signInWithChatGpt?.choiceLabel).toBe("Sign in with ChatGPT (Beta)");
     expect(signInWithChatGpt?.choiceHint).toBe(
-      "Use your Codex allowance with per-instance usage tracking and token limits",
+      "Authorize OpenClaw for eligible Responses models using your Codex allowance",
     );
     expect(
       choices
