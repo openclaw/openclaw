@@ -5,6 +5,7 @@ import { imessageDmPolicy } from "./setup-core.js";
 import { parseIMessageAllowFromEntries } from "./setup-surface.js";
 import {
   formatIMessageChatTarget,
+  formatIMessageGroupTarget,
   inferIMessageTargetChatType,
   isAllowedIMessageReplyContextSender,
   isAllowedIMessageSender,
@@ -153,6 +154,44 @@ describe("imessage targets", () => {
   it("formats chat targets", () => {
     expect(formatIMessageChatTarget(42)).toBe("chat_id:42");
     expect(formatIMessageChatTarget(undefined)).toBe("");
+  });
+
+  it("formats group targets from whichever anchor is available", () => {
+    expect(
+      formatIMessageGroupTarget({
+        chatId: 42,
+        chatGuid: "iMessage;+;chat42",
+        chatIdentifier: "chat42",
+      }),
+    ).toBe("chat_id:42");
+    expect(
+      formatIMessageGroupTarget({
+        chatId: 0,
+        chatGuid: "iMessage;+;chat42",
+        chatIdentifier: "chat42",
+      }),
+    ).toBe("chat_guid:iMessage;+;chat42");
+    expect(
+      formatIMessageGroupTarget({
+        chatId: -1,
+        chatGuid: "iMessage;+;chat42",
+        chatIdentifier: "chat42",
+      }),
+    ).toBe("chat_guid:iMessage;+;chat42");
+    expect(
+      formatIMessageGroupTarget({
+        chatId: 0,
+        chatGuid: "  ",
+        chatIdentifier: "chat42",
+      }),
+    ).toBe("chat_identifier:chat42");
+    expect(
+      formatIMessageGroupTarget({
+        chatId: 0,
+        chatGuid: "",
+        chatIdentifier: "",
+      }),
+    ).toBe("");
   });
 
   it("only treats explicit chat targets as immediate ids", () => {

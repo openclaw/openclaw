@@ -13,6 +13,7 @@ export {
   matchIMessageAcpConversation,
   normalizeIMessageAcpConversationId,
   resolveIMessageConversationIdFromTarget,
+  resolveIMessageGroupAnchorId,
   resolveIMessageInboundConversationId,
 } from "./src/conversation-id.js";
 export {
@@ -43,6 +44,7 @@ export {
 } from "openclaw/plugin-sdk/channel-targets";
 export {
   formatIMessageChatTarget,
+  formatIMessageGroupTarget,
   type IMessageAllowTarget,
   type IMessageService,
   type IMessageTarget,

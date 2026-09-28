@@ -15,7 +15,9 @@ export async function resolveIMessageConversationRoute(params: {
   isGroup: boolean;
   peerId: string;
   sender: string;
-  chatId?: number;
+  chatId?: number | null;
+  chatGuid?: string | null;
+  chatIdentifier?: string | null;
 }): Promise<ConfiguredBindingRouteResult> {
   const routeInput = {
     channel: "imessage",
@@ -30,6 +32,8 @@ export async function resolveIMessageConversationRoute(params: {
     isGroup: params.isGroup,
     sender: params.sender,
     chatId: params.chatId,
+    chatGuid: params.chatGuid,
+    chatIdentifier: params.chatIdentifier,
   });
   if (!conversationId) {
     return {

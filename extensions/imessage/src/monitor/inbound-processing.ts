@@ -35,6 +35,7 @@ import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveIMessageDirectChatService } from "../chat-context.js";
+import { resolveIMessageGroupAnchorId } from "../conversation-id.js";
 import { resolveIMessageConversationRoute } from "../conversation-route.js";
 import { resolveIMessageGroupSystemPrompt } from "../group-policy.js";
 import {
@@ -45,6 +46,7 @@ import {
 import { getIMessageRuntime } from "../runtime.js";
 import {
   formatIMessageChatTarget,
+  formatIMessageGroupTarget,
   isAllowedIMessageReplyContextSender,
   normalizeIMessageHandle,
   parseIMessageAllowTarget,
@@ -398,7 +400,7 @@ export async function resolveIMessageInboundDecision(params: {
   const mediaFacts = params.mediaFacts ?? [];
   const reactionContext = resolveIMessageReactionContext(params.message, bodyText || messageText);
 
-  const groupIdCandidate = chatId !== undefined ? String(chatId) : undefined;
+  const groupIdCandidate = resolveIMessageGroupAnchorId({ chatId, chatGuid, chatIdentifier });
   const groupAllowFromWithLegacyChatTargets = mergeIMessageGroupAllowFromWithLegacyChatTargets({
     groupAllowFrom: params.groupAllowFrom,
     allowFrom: params.allowFrom,
@@ -477,8 +479,8 @@ export async function resolveIMessageInboundDecision(params: {
       return { kind: "drop", reason: "from me" };
     }
   }
-  if (isGroup && !chatId) {
-    return { kind: "drop", reason: "group without chat_id" };
+  if (isGroup && !groupIdCandidate) {
+    return { kind: "drop", reason: "group without usable anchor" };
   }
 
   const groupId = isGroup ? groupIdCandidate : undefined;
@@ -490,9 +492,11 @@ export async function resolveIMessageInboundDecision(params: {
     cfg: params.cfg,
     accountId: params.accountId,
     isGroup,
-    peerId: isGroup ? String(chatId ?? "unknown") : senderNormalized,
+    peerId: isGroup ? (groupIdCandidate ?? "unknown") : senderNormalized,
     sender,
     chatId,
+    chatGuid,
+    chatIdentifier,
   });
   const ingressResolver = getIMessageRuntime().channel.inbound.ingress.createResolver({
     channelId: "imessage",
@@ -513,7 +517,7 @@ export async function resolveIMessageInboundDecision(params: {
       },
       conversation: {
         kind: isGroup ? "group" : "direct",
-        id: chatId != null ? String(chatId) : sender,
+        id: isGroup ? (groupIdCandidate ?? sender) : chatId != null ? String(chatId) : sender,
       },
       contextBinding,
       dmPolicy: normalizeDmPolicy(params.dmPolicy),
@@ -733,9 +737,7 @@ export async function resolveIMessageInboundDecision(params: {
       `imessage: drop reply context (mode=${contextVisibilityMode}, sender_allowed=${replySenderAllowed ? "yes" : "no"})`,
     );
   }
-  const historyKey = isGroup
-    ? String(chatId ?? chatGuid ?? chatIdentifier ?? "unknown")
-    : undefined;
+  const historyKey = isGroup ? (groupIdCandidate ?? "unknown") : undefined;
 
   const mentioned = isGroup ? matchesMentionPatterns(messageText, mentionRegexes) : true;
   const { requireMention, implicitMentionKinds, enforceMentionRequirement } =
@@ -860,8 +862,22 @@ export async function buildIMessageInboundContext(params: {
   const envelopeOptions = params.envelopeOptions ?? resolveEnvelopeFormatOptions(params.cfg);
   const { decision } = params;
   const chatId = decision.chatId;
+  const groupAnchorId = decision.isGroup
+    ? (decision.groupId ??
+      resolveIMessageGroupAnchorId({
+        chatId: decision.chatId,
+        chatGuid: decision.chatGuid,
+        chatIdentifier: decision.chatIdentifier,
+      }))
+    : undefined;
   const chatTarget =
-    decision.isGroup && chatId != null ? formatIMessageChatTarget(chatId) : undefined;
+    decision.isGroup && groupAnchorId
+      ? formatIMessageGroupTarget({
+          chatId: decision.chatId,
+          chatGuid: decision.chatGuid,
+          chatIdentifier: decision.chatIdentifier,
+        })
+      : undefined;
   const messageGuid = normalizeReplyField(params.message.guid);
   const rememberedMessage = messageGuid
     ? await rememberIMessageReplyCache({
@@ -900,7 +916,7 @@ export async function buildIMessageInboundContext(params: {
   const fromLabel = formatInboundFromLabel({
     isGroup: decision.isGroup,
     groupLabel: params.message.chat_name ?? undefined,
-    groupId: chatId !== undefined ? String(chatId) : "unknown",
+    groupId: groupAnchorId ?? "unknown",
     groupFallback: "Group",
     directLabel: directConversationName,
     directId: decision.sender,
@@ -947,7 +963,9 @@ export async function buildIMessageInboundContext(params: {
     : `${directService}:${decision.sender}`;
   // Async follow-ups need a service-qualified durable origin. Immediate direct replies use the
   // provider's exact chat ID instead, so service auto-detection cannot erase the current binding.
-  const imessageFrom = decision.isGroup ? `imessage:group:${chatId ?? "unknown"}` : imessageTo;
+  const imessageFrom = decision.isGroup
+    ? `imessage:group:${groupAnchorId ?? "unknown"}`
+    : imessageTo;
   const replyTarget = decision.isGroup
     ? imessageTo
     : chatId != null
@@ -999,13 +1017,19 @@ export async function buildIMessageInboundContext(params: {
     },
     conversation: {
       kind: decision.isGroup ? "group" : "direct",
-      id: chatId != null ? String(chatId) : decision.sender,
-      ...(decision.isGroup && chatId == null
+      id: decision.isGroup
+        ? (groupAnchorId ?? decision.sender)
+        : chatId != null
+          ? String(chatId)
+          : decision.sender,
+      ...(decision.isGroup && !groupAnchorId
         ? {}
         : {
             routePeer: {
               kind: decision.isGroup ? ("group" as const) : ("direct" as const),
-              id: decision.isGroup ? String(chatId) : decision.senderNormalized,
+              id: decision.isGroup
+                ? (groupAnchorId ?? decision.senderNormalized)
+                : decision.senderNormalized,
             },
           }),
       label: conversationName,

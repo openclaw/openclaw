@@ -279,6 +279,87 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     expect(decision.kind).toBe("dispatch");
   });
 
+  it.each([
+    {
+      name: "chat_guid only",
+      message: {
+        id: 9101,
+        chat_id: 0,
+        chat_guid: "iMessage;+;chat349",
+        chat_identifier: "chat349",
+        sender: "+15555550123",
+        text: "hi from a guid-anchored group",
+        is_group: true,
+      },
+      expectedGroupId: "iMessage;+;chat349",
+    },
+    {
+      name: "chat_identifier only",
+      message: {
+        id: 9102,
+        chat_id: 0,
+        chat_guid: "",
+        chat_identifier: "chat349",
+        sender: "+15555550123",
+        text: "hi from an identifier-anchored group",
+        is_group: true,
+      },
+      expectedGroupId: "chat349",
+    },
+    {
+      name: "missing chat_id with chat_guid",
+      message: {
+        id: 9103,
+        chat_guid: "iMessage;+;chat349",
+        chat_identifier: "chat349",
+        sender: "+15555550123",
+        text: "hi from a guid-anchored group without chat_id",
+        is_group: true,
+      },
+      expectedGroupId: "iMessage;+;chat349",
+    },
+    {
+      name: "negative chat_id with chat_guid",
+      message: {
+        id: 9105,
+        chat_id: -1,
+        chat_guid: "iMessage;+;chat349",
+        chat_identifier: "chat349",
+        sender: "+15555550123",
+        text: "hi from a guid-anchored group with a negative chat_id",
+        is_group: true,
+      },
+      expectedGroupId: "iMessage;+;chat349",
+    },
+  ])(
+    "dispatches a group inbound anchored only by $name instead of dropping it",
+    async ({ message, expectedGroupId }) => {
+      const decision = await resolveDecision({ message });
+
+      expect(decision.kind).toBe("dispatch");
+      if (decision.kind !== "dispatch") {
+        return;
+      }
+      expect(decision.groupId).toBe(expectedGroupId);
+    },
+  );
+
+  it("drops a group inbound that has no usable anchor at all", async () => {
+    const decision = await resolveDecision({
+      message: {
+        id: 9104,
+        chat_id: 0,
+        chat_guid: "",
+        chat_identifier: "",
+        sender: "+15555550123",
+        text: "hi from an anchorless group",
+        is_group: true,
+      },
+    });
+
+    expect(decision).toEqual({ kind: "drop", reason: "group without usable anchor" });
+  });
+
   it("sanitizes reflected duplicate previews before logging", async () => {
     const selfChatCache = createSelfChatCache();
     const logVerbose = vi.fn();
@@ -722,6 +803,75 @@ describe("buildIMessageInboundContext", () => {
     expect(ctxPayload.Body).toContain("current");
     expect(ctxPayload.InboundHistory).toEqual([{ sender: "+15555550123", body: "previous" }]);
     expect(inboundHistory).toEqual([{ sender: "+15555550123", body: "previous" }]);
+  });
+
+  it("addresses group replies through chat_guid when chat_id is missing", async () => {
+    const message = {
+      id: 12349,
+      guid: "p:0/GUID-group-guid-anchor",
+      chat_id: 0,
+      chat_guid: "iMessage;+;chat349",
+      chat_identifier: "chat349",
+      chat_name: "Project group",
+      sender: "+15555550123",
+      text: "hi group",
+      is_from_me: false,
+      is_group: true,
+    };
+    const decision = await resolveDecision({ message });
+    expect(decision.kind).toBe("dispatch");
+    if (decision.kind !== "dispatch") {
+      return;
+    }
+
+    const { ctxPayload, imessageTo } = await buildIMessageInboundContext({
+      cfg: {} as OpenClawConfig,
+      accountService: undefined,
+      decision,
+      message,
+      historyLimit: 0,
+      groupHistories: new Map(),
+    });
+
+    expect(imessageTo).toBe("chat_guid:iMessage;+;chat349");
+    expect(ctxPayload.To).toBe("chat_guid:iMessage;+;chat349");
+    expect(ctxPayload.ChatId).toBe("iMessage;+;chat349");
+    expect(ctxPayload.ConversationRoutePeerId).toBe("iMessage;+;chat349");
+    expect(ctxPayload.From).toBe("imessage:group:iMessage;+;chat349");
+  });
+
+  it("addresses group replies through chat_guid when chat_id is negative", async () => {
+    const message = {
+      id: 12350,
+      guid: "p:0/GUID-group-negative-chat-id",
+      chat_id: -1,
+      chat_guid: "iMessage;+;chat349",
+      chat_identifier: "chat349",
+      chat_name: "Project group",
+      sender: "+15555550123",
+      text: "hi group",
+      is_from_me: false,
+      is_group: true,
+    };
+    const decision = await resolveDecision({ message });
+    expect(decision.kind).toBe("dispatch");
+    if (decision.kind !== "dispatch") {
+      return;
+    }
+
+    const { ctxPayload, imessageTo } = await buildIMessageInboundContext({
+      cfg: {} as OpenClawConfig,
+      accountService: undefined,
+      decision,
+      message,
+      historyLimit: 0,
+      groupHistories: new Map(),
+    });
+
+    expect(decision.groupId).toBe("iMessage;+;chat349");
+    expect(imessageTo).toBe("chat_guid:iMessage;+;chat349");
+    expect(ctxPayload.To).toBe("chat_guid:iMessage;+;chat349");
+    expect(ctxPayload.ChatId).toBe("iMessage;+;chat349");
   });
 
   it("uses the monitor's prepared account service without re-reading channel config", async () => {

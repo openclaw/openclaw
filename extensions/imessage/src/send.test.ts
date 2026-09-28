@@ -9,6 +9,7 @@ import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IMessageRpcClient } from "./client.js";
 import { resolveIMessageRemoteHost } from "./remote-host.js";
+import { formatIMessageGroupTarget } from "./targets.js";
 import {
   createIMessageOutboundRpcFixture,
   entitySeparator,
@@ -3125,6 +3126,35 @@ describe("sendMessageIMessage receipts", () => {
     expect(getClientMocks(createdClient).stop).toHaveBeenCalledOnce();
     expect(result.receipt.platformMessageIds).toEqual(["p:0/dm-media-guid", "p:0/caption-guid"]);
     expect(result.receipt.parts.map((part) => part.kind)).toEqual(["media", "text"]);
+  });
+
+  it("sends group replies to chat_guid when the inbound chat_id is negative", async () => {
+    const client = createClient({ guid: "p:0/imsg-guid-reply" });
+    const to = formatIMessageGroupTarget({
+      chatId: -1,
+      chatGuid: "iMessage;+;chat349",
+      chatIdentifier: "chat349",
+    });
+
+    await sendMessageIMessage(to, "hello group", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+    });
+
+    expect(to).toBe("chat_guid:iMessage;+;chat349");
+    expect(client["request"]).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({
+        chat_guid: "iMessage;+;chat349",
+        text: "hello group",
+      }),
+      expect.any(Object),
+    );
+    expect(client["request"]).not.toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({ chat_id: -1 }),
+      expect.any(Object),
+    );
   });
 
   it("preserves literal media placeholder text when no attachment is sent", async () => {
