@@ -8,7 +8,6 @@ function normalizeMarkerIds(value: string): string {
 
 function wrapExpected(content: string): string {
   return [
-    "",
     '<<<EXTERNAL_UNTRUSTED_CONTENT id="<id>">>>',
     "Source: Channel metadata",
     "---",

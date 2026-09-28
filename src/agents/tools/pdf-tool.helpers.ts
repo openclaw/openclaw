@@ -151,7 +151,7 @@ export function buildPdfExtractionContext(
     if (extraction.text.trim() || notice) {
       const label = extractions.length > 1 ? `[PDF ${i + 1} text]\n` : "[PDF text]\n";
       const text = extraction.text.trim()
-        ? wrapExternalContent(extraction.text, { source: "unknown", includeWarning: false })
+        ? wrapExternalContent(extraction.text, { source: "unknown" })
         : undefined;
       content.push({
         type: "text",

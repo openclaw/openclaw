@@ -867,10 +867,9 @@ describe("web_fetch extraction fallbacks", () => {
       truncated?: boolean;
       spill?: { path: string };
     };
-    expect(details.text).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
     expect(details.text).toContain("Source: Web Fetch");
     expect(details.text).toContain("a".repeat(100));
-    expect(details.text?.split("<<<EXTERNAL_UNTRUSTED_CONTENT")[0]?.trim()).not.toBe("");
+    expect(details.text).toMatch(/^<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
     expect(details.text).toMatch(/<<<END_EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
     expect(details.text?.length).toBeLessThanOrEqual(10_000);
     expect(details.length).toBe(details.text?.length);

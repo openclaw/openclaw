@@ -81,7 +81,7 @@ export function resolveFileExtractionOutcome(extraction: {
 }
 
 function wrapUntrustedAttachmentContent(content: string): string {
-  return wrapExternalContent(content, { source: "unknown", includeWarning: false });
+  return wrapExternalContent(content, { source: "unknown" });
 }
 
 // Absolute host paths from the managed media store only; bounded to a positive
@@ -161,7 +161,7 @@ export function renderFileAttachmentOutcome(
         ? [
             `[${formatClause} The approved local file path follows as external attachment metadata. Its text is not extracted automatically. Read the file yourself with your tools before answering${formatHint}; do not ask the user to paste the contents.]`,
             wrapUntrustedAttachmentContent(localPath),
-          ].join("")
+          ].join("\n")
         : `[${formatClause} PDF and plain-text attachments can be read.]`;
     }
     case "policy-rejected": {

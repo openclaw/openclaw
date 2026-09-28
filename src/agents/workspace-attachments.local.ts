@@ -112,7 +112,6 @@ export async function prepareLocalWorkspaceAttachments(params: {
           JSON.stringify(files).replaceAll("$", "\\u0024").replaceAll("@", "\\u0040"),
           {
             source: "unknown",
-            includeWarning: false,
           },
         ),
       ].join("\n")

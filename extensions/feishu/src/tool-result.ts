@@ -10,7 +10,6 @@ export function feishuExternalToolResult<TDetails>(details: TDetails) {
         type: "text" as const,
         text: wrapExternalContent(JSON.stringify(details, null, 2), {
           source: "api",
-          includeWarning: false,
         }),
       },
     ],

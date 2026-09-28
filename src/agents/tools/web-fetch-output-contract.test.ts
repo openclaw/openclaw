@@ -103,6 +103,9 @@ describe("web_fetch output contract", () => {
 
     expectContract(details);
     expect(details.length).toBe((details.text as string).length);
+    expect(details.text).toMatch(
+      /^<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>\nSource: Web Fetch\n---\ndirect body\n<<<END_EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>$/,
+    );
     expect(Object.hasOwn(details, "title")).toBe(false);
     expect(Object.hasOwn(details, "warning")).toBe(false);
     expect(Object.hasOwn(details, "spill")).toBe(false);
@@ -199,7 +202,7 @@ describe("web_fetch output contract", () => {
       definition: {
         execute: async () => ({
           text: "Useful provider body.",
-          [field]: wrapExternalContent(prose, { source: "web_fetch", includeWarning: false }),
+          [field]: wrapExternalContent(prose, { source: "web_fetch" }),
         }),
       },
     });
@@ -342,7 +345,7 @@ describe("web_fetch output contract", () => {
     expect(details.spill.chars).toBe(fullText.length);
     expect(details.spill.truncated).toBeUndefined();
     const spilledText = await readFile(details.spill.path, "utf8");
-    expect(spilledText).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
+    expect(spilledText).toMatch(/^<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
     expect(spilledText).toContain(fullText);
   });
 

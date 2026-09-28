@@ -67,7 +67,7 @@ function savedDirectoryText(rootDir: string, files: UnpackedFileEntry[]): string
       source: "unknown",
     });
     // Keep complete, exact local paths: the security wrapper can rewrite reserved
-    // markers, and its warning and escaping must fit inside the same byte budget.
+    // markers, and its framing and escaping must fit inside the same byte budget.
     return wrapped.includes(manifest) &&
       Buffer.byteLength(wrapped, "utf8") <= DIRECTORY_TEXT_MAX_BYTES
       ? wrapped

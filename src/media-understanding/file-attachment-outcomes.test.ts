@@ -14,7 +14,6 @@ const ooxmlGuidance =
 
 function expectedUntrustedContent(text: string): string {
   return [
-    "",
     '<<<EXTERNAL_UNTRUSTED_CONTENT id="<id>">>>',
     "Source: External",
     "---",
@@ -115,7 +114,7 @@ describe("renderFileAttachmentOutcome", () => {
     "fences approved path $localPath separately from guidance",
     ({ localPath, mime, guidance }) => {
       expect(render({ kind: "unsupported-format", localPath, mime })).toBe(
-        guidance + expectedUntrustedContent(localPath),
+        `${guidance}\n${expectedUntrustedContent(localPath)}`,
       );
     },
   );

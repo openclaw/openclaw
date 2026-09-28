@@ -343,7 +343,7 @@ export async function runTavilyExtract(
     } else {
       remainingErrorChars -= bounded.text.length;
     }
-    return wrapExternalContent(bounded.text, { source: "web_fetch", includeWarning: false });
+    return wrapExternalContent(bounded.text, { source: "web_fetch" });
   };
   const results = rawResults.slice(0, TAVILY_EXTRACT_MAX_RESULTS).flatMap((entry: unknown) => {
     if (!isRecord(entry)) {
@@ -356,9 +356,7 @@ export async function runTavilyExtract(
     const rawImages = Array.isArray(entry.images) ? entry.images : undefined;
     const images = rawImages?.slice(0, remainingImages).flatMap((image: unknown) => {
       const imageUrl = normalizeTavilyResultUrl(image);
-      return imageUrl
-        ? [wrapExternalContent(imageUrl, { source: "web_fetch", includeWarning: false })]
-        : [];
+      return imageUrl ? [wrapExternalContent(imageUrl, { source: "web_fetch" })] : [];
     });
     if (rawImages && images) {
       truncated ||= rawImages.length > remainingImages;

@@ -154,7 +154,6 @@ export async function executeScreenshotAction({
         neutralizeMediaDirectives(described.text.trim()),
         {
           source: "browser",
-          includeWarning: true,
         },
       );
       const text = `[analyzed by ${analyzedBy}]\n${wrappedDescription}\n${shareHint}`;
@@ -182,7 +181,6 @@ export async function executeScreenshotAction({
     const rawReason = err instanceof Error ? err.message : String(err);
     const reason = wrapExternalContent(neutralizeMediaDirectives(rawReason), {
       source: "browser",
-      includeWarning: false,
     });
     extraText = `[browser screenshot vision failed: ${reason}]\n${shareHint}`;
   }

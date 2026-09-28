@@ -593,11 +593,10 @@ export function parseFirecrawlScrapePayload(params: {
     const bounded = truncateSanitizedExternalContent(value, remainingMetadataChars);
     truncated ||= bounded.truncated;
     remainingMetadataChars -= bounded.text.length;
-    return wrapExternalContent(bounded.text, { source: "web_fetch", includeWarning: false });
+    return wrapExternalContent(bounded.text, { source: "web_fetch" });
   };
   const wrappedText = wrapExternalContent(boundedText.text, {
     source: "web_fetch",
-    includeWarning: false,
   });
   const title =
     typeof metadata?.title === "string" && metadata.title

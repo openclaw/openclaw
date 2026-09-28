@@ -30,7 +30,7 @@ The trust boundaries and data flows these threats cross are defined in the [thre
 | **Description**         | Attacker embeds malicious instructions in fetched content                                                                                                                                                          |
 | **Attack vector**       | Malicious URLs, poisoned emails, compromised webhooks                                                                                                                                                              |
 | **Affected components** | `web_fetch`, email ingestion, external data sources                                                                                                                                                                |
-| **Current mitigations** | Content wrapping with random-boundary XML-style markers, homoglyph/special-token normalization, a security notice, and frontier-model robustness (see T-EXEC-001)                                                  |
+| **Current mitigations** | Content wrapping with random-boundary XML-style markers, homoglyph/special-token normalization, and frontier-model robustness (see T-EXEC-001)                                                                     |
 | **Residual risk**       | Model-tier dependent - recommended frontier models largely hold the wrapper boundary, but it remains soft guidance an adaptive attacker can erode; scope tool policy and sandboxing to the blast radius you accept |
 | **Recommendations**     | Separate execution contexts for wrapped content                                                                                                                                                                    |
 

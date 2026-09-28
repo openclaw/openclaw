@@ -61,14 +61,12 @@ function truncateBrowserToolText(value: string, marker: string, maxChars: number
 export function wrapBrowserExternalText(params: {
   value: string;
   marker: string;
-  includeWarning: boolean;
   maxChars?: number;
   prefix?: string;
 }) {
   const wrap = (value: string) =>
     wrapExternalContent(value, {
       source: "browser",
-      includeWarning: params.includeWarning,
     });
   const prefix = params.prefix ? `${params.prefix}\n` : "";
   const wrapperOverhead = prefix.length + wrap("").length;
@@ -94,7 +92,6 @@ export function wrapBrowserExternalText(params: {
 export function wrapBrowserExternalJson(params: {
   kind: BrowserExternalJsonKind;
   payload: unknown;
-  includeWarning?: boolean;
 }): { wrappedText: string; truncated: boolean; safeDetails: Record<string, unknown> } {
   const serialized =
     JSON.stringify(
@@ -108,7 +105,6 @@ export function wrapBrowserExternalJson(params: {
   const wrapped = wrapBrowserExternalText({
     value: serialized,
     marker: BROWSER_EXTERNAL_JSON_TRUNCATION_MARKERS[params.kind],
-    includeWarning: params.includeWarning ?? true,
   });
   return {
     wrappedText: wrapped.text,
@@ -146,7 +142,6 @@ export function formatBrowserDebugLogResult(
     wrapBrowserExternalJson({
       kind,
       payload: { ...details(), [kind]: records },
-      includeWarning: false,
     });
   let wrapped = wrap();
   // Whole JSON records have independent serialized and sanitized lengths, so
@@ -333,7 +328,6 @@ export async function executeSnapshotAction(params: {
       value: matchedText,
       marker: BROWSER_EXTERNAL_JSON_TRUNCATION_MARKERS.snapshot,
       maxChars: maxChars ?? DEFAULT_AI_SNAPSHOT_MAX_CHARS,
-      includeWarning: true,
       prefix: summary,
     });
     const snapshotRefs =
@@ -380,7 +374,6 @@ export async function executeSnapshotAction(params: {
     const boundedSnapshot = wrapBrowserExternalText({
       value: snapshot.snapshot ?? "",
       marker: BROWSER_EXTERNAL_JSON_TRUNCATION_MARKERS.snapshot,
-      includeWarning: true,
     });
     return await finishSnapshot(boundedSnapshot.text, {
       ok: true,
@@ -465,7 +458,6 @@ export async function appendNavigatedPageState(params: {
       params.result,
       wrapExternalContent(neutralizeMediaDirectives(formatErrorMessage(err)), {
         source: "browser",
-        includeWarning: false,
       }),
     );
   }

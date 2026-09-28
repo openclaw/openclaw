@@ -44,7 +44,6 @@ export function buildChannelMetadata(params: {
 
   return wrapExternalContent(truncated, {
     source: "channel_metadata",
-    includeWarning: false,
   });
 }
 

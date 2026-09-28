@@ -119,7 +119,6 @@ function formatTabsToolResult(result: {
   const wrapped = wrapBrowserExternalJson({
     kind: "tabs",
     payload: { running: result.running, tabs: formattedTabs },
-    includeWarning: false,
   });
   const content: AgentToolResult<unknown>["content"] = [
     { type: "text", text: wrapped.wrappedText },
@@ -143,7 +142,6 @@ export function formatBrowserExternalToolResult(params: {
   const wrapped = wrapBrowserExternalJson({
     kind: params.kind,
     payload: params.payload,
-    includeWarning: false,
   });
   // The Browser tool already marks the turn as network-tainted, and replay
   // strips details; changing this public structured payload breaks callers.
@@ -161,7 +159,6 @@ function formatConsoleToolResult(result: {
   const wrapped = wrapBrowserExternalJson({
     kind: "console",
     payload: result,
-    includeWarning: false,
   });
   return {
     content: [{ type: "text" as const, text: wrapped.wrappedText }],
@@ -333,7 +330,6 @@ export async function executeTextAction(
   const wrapped = wrapBrowserExternalText({
     value: result.text,
     marker: "\n[truncated — retry with a narrower selector]",
-    includeWarning: true,
     maxChars,
     prefix: result.truncated
       ? "Page text was truncated. Retry with a narrower selector."

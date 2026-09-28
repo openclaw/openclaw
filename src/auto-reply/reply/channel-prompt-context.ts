@@ -7,9 +7,9 @@ import { normalizeInboundTextNewlines } from "./inbound-text.js";
 
 /**
  * The fixed marker lets strippers recognize OpenClaw-injected context; it is not
- * a trust guardrail. Trust guidance travels with each entry instead
- * (`buildChannelMetadata` wraps entries in `wrapExternalContent`, whose SECURITY
- * NOTICE carries the do-not-obey clause).
+ * a trust guardrail. `buildChannelMetadata` wraps each entry with a source label,
+ * randomized boundaries, and marker/special-token sanitization; those markers
+ * do not grant authority to instructions inside the content.
  */
 export function appendChannelPromptContext(base: string, channelPromptContext?: string[]): string {
   if (!Array.isArray(channelPromptContext) || channelPromptContext.length === 0) {

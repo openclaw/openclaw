@@ -154,7 +154,6 @@ export async function copySessionCatalogToGateway(params: {
                 ? Object.assign({}, item, {
                     text: wrapExternalContent(item.text, {
                       source: "unknown",
-                      includeWarning: false,
                     }),
                   })
                 : item,

@@ -254,11 +254,7 @@ function redactUrlForDebugLog(rawUrl: string): string {
   }
 }
 
-const WEB_FETCH_WRAPPER_WITH_WARNING_OVERHEAD = wrapWebContent("", "web_fetch").length;
-const WEB_FETCH_WRAPPER_NO_WARNING_OVERHEAD = wrapExternalContent("", {
-  source: "web_fetch",
-  includeWarning: false,
-}).length;
+const WEB_FETCH_WRAPPER_OVERHEAD = wrapWebContent("", "web_fetch").length;
 
 function formatTerminalWebFetchOrigin(value: unknown): string | undefined {
   if (typeof value !== "string" || !value.trim()) {
@@ -300,24 +296,12 @@ function wrapWebFetchContent(value: string, maxChars: number): WebFetchWrappedCo
   if (maxChars <= 0) {
     return { text: "", truncated: true, rawLength: value.length, length: 0 };
   }
-  // Keep framing from outweighing source content in truncated previews. Short
-  // sources can still retain the warning when both fit in full.
-  const includeWarning =
-    maxChars >=
-    WEB_FETCH_WRAPPER_WITH_WARNING_OVERHEAD +
-      Math.min(value.length, WEB_FETCH_WRAPPER_WITH_WARNING_OVERHEAD);
-  const wrapperOverhead = includeWarning
-    ? WEB_FETCH_WRAPPER_WITH_WARNING_OVERHEAD
-    : WEB_FETCH_WRAPPER_NO_WARNING_OVERHEAD;
-  const maxInner = Math.max(0, maxChars - wrapperOverhead);
+  const maxInner = Math.max(0, maxChars - WEB_FETCH_WRAPPER_OVERHEAD);
   // Charge sanitizer expansion before wrapping; clipping a later marker can
   // increase output size, so a second raw-length adjustment is not sufficient.
   const truncated = truncateSanitizedExternalContent(value, maxInner);
   // Tiny budgets may be shorter than the boundary markers themselves.
-  const wrapped = truncateWebFetchText(
-    wrapExternalContent(truncated.text, { source: "web_fetch", includeWarning }),
-    maxChars,
-  );
+  const wrapped = truncateWebFetchText(wrapWebContent(truncated.text, "web_fetch"), maxChars);
 
   return {
     text: wrapped.text,
@@ -483,7 +467,7 @@ async function buildWebFetchPayload(params: {
     if (typeof value !== "string" || !value) {
       return undefined;
     }
-    const maxInner = Math.max(0, remainingMetadataChars - WEB_FETCH_WRAPPER_NO_WARNING_OVERHEAD);
+    const maxInner = Math.max(0, remainingMetadataChars - WEB_FETCH_WRAPPER_OVERHEAD);
     const bounded = truncateSanitizedExternalContent(
       value,
       Math.min(WEB_FETCH_FIELD_MAX_CHARS, maxInner),
@@ -494,7 +478,6 @@ async function buildWebFetchPayload(params: {
     }
     const wrapped = wrapExternalContent(bounded.text, {
       source: "web_fetch",
-      includeWarning: false,
     });
     remainingMetadataChars -= wrapped.length;
     return wrapped;

@@ -87,7 +87,6 @@ describe("web_fetch provider fallback normalization", () => {
     const providerVisibleText = providerRawText.slice(0, 1200);
     const providerWrappedText = wrapExternalContent(providerVisibleText, {
       source: "web_fetch",
-      includeWarning: false,
     });
     resolveWebFetchDefinitionMock.mockReturnValue({
       provider: { id: "firecrawl" },
