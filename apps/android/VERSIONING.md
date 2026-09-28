@@ -133,6 +133,15 @@ Do not infer the source from the latest internal upload. When a form factor has
 no public release, generated notes summarize capabilities supported by the
 selected source instead.
 
+For each audience, the shared generator shortlists up to ten changed files from
+a compact inventory and commit subjects, then drafts highlights from focused
+endpoint diffs. Current source and Play flavor configuration check availability.
+A separate factual review can request one correction. Each stage reports
+progress, with at most five model requests per audience and a five-minute budget
+for the complete generation. Exhausted budgets or unapproved notes stop
+preparation before upload. Retrying a saved, valid artifact reuses its exact text
+without another model call.
+
 If Play accepted an upload but recording its v2 ref failed, the next run stops on
 the unmapped codes. Preserve `android-plan.json`, the notes, and both uploaded
 AABs. Inspect the exact AAB codes and SHA256 hashes against Play's bundle records
