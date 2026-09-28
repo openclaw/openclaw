@@ -55,6 +55,7 @@ when preserving announce delivery. `openclaw doctor --fix` strips a leftover
       after: 2,
       cooldownMs: 3600000,
       includeSkipped: false,
+      notifyOnRecovery: true,
       mode: "announce",
       channel: "last",
       to: "channel:C1234567890",
@@ -75,6 +76,7 @@ activates/tunes the policy even when no route existed. The retired
 - `after`: consecutive failures before an alert fires (positive integer, min: `1`; default: `2`).
 - `cooldownMs`: minimum milliseconds between repeated alerts for the same job (non-negative integer; default: `3600000`).
 - `includeSkipped`: count consecutive skipped runs toward the alert threshold (default: `false`). Skipped runs are tracked separately and do not affect execution-error backoff.
+- `notifyOnRecovery`: send a recovery message after a reported incident resolves (default: `true`). Set `false` to suppress recovery messages globally, including jobs with their own failure-alert route. Incidents still close, and a new failure can alert normally.
 - `mode`: delivery mode - `"announce"` sends via a channel message; `"webhook"` posts to the target in `to`. Defaults to `"announce"` when enough target data exists.
 - `channel`: channel override for announce delivery. `"last"` reuses the last known delivery channel.
 - `to`: explicit announce target or webhook URL. Required for webhook mode.

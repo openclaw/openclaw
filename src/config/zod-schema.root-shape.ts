@@ -407,6 +407,7 @@ export const OpenClawSchemaShape = {
           after: z.number().int().min(1).optional(),
           cooldownMs: z.number().int().min(0).optional(),
           includeSkipped: z.boolean().optional(),
+          notifyOnRecovery: z.boolean().optional(),
           mode: z.enum(["announce", "webhook"]).optional(),
           accountId: z.string().optional(),
           channel: z.string().optional(),

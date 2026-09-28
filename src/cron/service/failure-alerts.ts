@@ -193,6 +193,7 @@ export function resolveFailureAlert(
     accountId,
     threadId: primaryRouteMatches ? primaryAnnounceRoute.threadId : undefined,
     includeSkipped: jobConfig?.includeSkipped ?? globalConfig?.includeSkipped ?? false,
+    notifyOnRecovery: globalConfig?.notifyOnRecovery ?? true,
     alternateRoute: alternateRoute !== null && !primaryRouteMatches,
   };
 }
@@ -391,6 +392,7 @@ export function maybeEmitFailureRecovery(params: {
   const route = params.alertConfig;
   if (
     params.replay ||
+    route?.notifyOnRecovery === false ||
     !incident.signature ||
     !route ||
     (params.job.delivery?.bestEffort === true && !params.job.failureAlert)

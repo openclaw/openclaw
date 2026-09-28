@@ -41,6 +41,7 @@ export type ResolvedFailureAlert = CronFailureAlertRoute & {
   after: number;
   cooldownMs: number;
   includeSkipped: boolean;
+  notifyOnRecovery: boolean;
 };
 
 export type CronNotificationIntent =
