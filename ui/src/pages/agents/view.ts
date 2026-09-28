@@ -1,11 +1,14 @@
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import type { AgentIdentityResult, AgentsListResult } from "../../api/types.ts";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { handleCopyButton } from "../../components/copy-button.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import {
+  renderLearnMoreLink,
   renderSettingsEmpty,
   renderSettingsNavRow,
   renderSettingsSection,
@@ -32,6 +35,8 @@ import { renderAgentSkills } from "./panels-skills.ts";
 import { renderAgentChannels, renderAgentCron } from "./panels-status-files.ts";
 import { renderAgentTools } from "./panels-tools-skills.ts";
 import type { AgentSkillsState } from "./skills.ts";
+
+const AGENTS_DOCS_URL = "https://docs.openclaw.ai/concepts/multi-agent";
 
 type AgentsProps = {
   access: {
@@ -139,6 +144,19 @@ type AgentsProps = {
   onAgentSkillsDisableAll: (agentId: string) => void;
   onSetDefault: (agentId: string) => void;
 };
+
+export function renderAgentsPageHeader() {
+  return html`
+    <section class="content-header" ${shellLayoutTraits({ toolbarHeader: true })}>
+      <div>
+        <div class="page-title">${titleForRoute("agents")}</div>
+        <div class="page-subtitle">
+          ${subtitleForRoute("agents")} ${renderLearnMoreLink(AGENTS_DOCS_URL)}
+        </div>
+      </div>
+    </section>
+  `;
+}
 
 export function renderAgents(props: AgentsProps) {
   const config = currentConfigObject(props.config);

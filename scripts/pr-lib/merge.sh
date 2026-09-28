@@ -215,6 +215,18 @@ mainline_drift_requires_sync() (
   return 1
 )
 
+verify_merge_candidate_tree() {
+  local main="$1" head="$2" tree main_tree
+  tree=$(pr_git merge-tree --write-tree "$main" "$head") || {
+    merge_outcome_stop "cannot establish prepared-head merge tree (conflict or unavailable objects)"; return 1;
+  }
+  main_tree=$(pr_git rev-parse "$main^{tree}") || return 1
+  if [ "$tree" = "$main_tree" ]; then
+    echo "NO NET CHANGE: squash produces the current main tree. PR lifecycle is unresolved; no merge, comment, or cleanup. Inspect main history and PR intent."
+    return 1
+  fi
+}
+
 merge_verify() {
   if [ "$#" -ne 2 ]; then
     echo "merge_verify requires a PR number and verification options." >&2
@@ -533,7 +545,7 @@ prepare_squash_merge_body() {
 # Recovery approval names a reviewed head, not permission to reuse another
 # head's artifacts. Subshell isolation prevents sourced stamps from changing admission.
 verify_merge_recovery_artifacts() (
-  local pr="$1" head="$2" qualified_refusal="${3:-false}"
+  local pr="$1" head="$2" qualified_pending_recovery="${3:-false}"
   local HOSTED_GATES_TARGET_HEAD_SHA=""
   local PREP_REVIEW_MODE=""
   source .local/prep-context.env || return 1
@@ -564,7 +576,7 @@ verify_merge_recovery_artifacts() (
   PR_NUMBER=""
   source .local/gates.env || return 1
   [ "$PR_NUMBER" = "$pr" ] || return 1
-  if [ "$qualified_refusal" = true ] && [ "$GATES_MODE" = github_pending ]; then
+  if [ "$qualified_pending_recovery" = true ] && [ "$GATES_MODE" = github_pending ]; then
     [ "$HOSTED_GATES_TARGET_HEAD_SHA" = "$head" ]
     return
   fi
@@ -585,12 +597,13 @@ merge_run() {
   local legacy_directory="${6:-}" legacy_refusal="" legacy_captures=()
   local cancel_auto="${7:-false}"
   local refusal_directory="${8:-}" refusal="" qualified_refusal=false
+  local provider_rejection="" qualified_pending_recovery=false
   local MERGE_REFUSAL_DIRECTORY=""
   local MERGE_ADMIN_EVIDENCE="${9:-}" confirmed_admin="${10:-false}" MERGE_PRIOR_CI_PROOF=""
   local MERGE_USE_PRIOR_CI_ADMIN=false
   if [ -n "$MERGE_ADMIN_EVIDENCE" ] || [ "$confirmed_admin" = true ]; then
     [ -n "$MERGE_ADMIN_EVIDENCE" ] && [ "$confirmed_admin" = true ] && [ "$auto_merge_requested" = false ] &&
-      [ -z "$recovery_oid$replacement_head$legacy_directory$refusal_directory" ] && [ "$cancel_auto" = false ] &&
+      [ -z "$replacement_head$legacy_directory$refusal_directory" ] && [ "$cancel_auto" = false ] &&
       [ "${OPENCLAW_PR_MERGE_METHOD:-squash}" = squash ] || return 2
     MERGE_ADMIN_EVIDENCE=$(node -e 'process.stdout.write(require("node:path").resolve(process.argv[1]))' -- "$MERGE_ADMIN_EVIDENCE") || return 1
     MERGE_USE_PRIOR_CI_ADMIN=true
@@ -616,12 +629,18 @@ merge_run() {
     }
   elif [ -n "$recovery_oid" ]; then
     if [ "$recovery_oid" != "$MERGE_OUTCOME_OID" ] ||
-      ! printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e --arg refusal "$refusal_directory" '
+      ! printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e --arg refusal "$refusal_directory" --argjson admin "$MERGE_USE_PRIOR_CI_ADMIN" '
         .phase == "intent" and
-        ((.accepted == false and (.route == "immediate" or ($refusal != "" and .route == "auto" and .method == "squash"))) or
-         (.route == "auto" and .cancellation.state == "confirmed"))
+        (if $admin then .accepted == false and .route == "admin" and .method == "squash" and
+          .priorCiAdmin.dispatchTransport == "rest"
+         else (.accepted == false and (.route == "immediate" or ($refusal != "" and .route == "auto" and .method == "squash"))) or
+          (.route == "auto" and .cancellation.state == "confirmed") end)
       ' >/dev/null; then
-      merge_outcome_stop "operator recovery requires the exact unaccepted immediate intent or confirmed auto cancellation; no attempt was authorized"
+      if [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
+        merge_outcome_stop "operator recovery requires the exact unaccepted prior-CI REST admin squash intent; no attempt was authorized"
+      else
+        merge_outcome_stop "operator recovery requires the exact unaccepted immediate intent or confirmed auto cancellation; no attempt was authorized"
+      fi
       return 1
     fi
     recovery_record="$MERGE_OUTCOME_RECORD"
@@ -656,11 +675,18 @@ merge_run() {
     [ -z "$legacy_directory" ] || return 2
     refusal=$(node "$script_parent_dir/pr-lib/merge-pre-dispatch-refusal.mjs" "$refusal_directory" "$recovery_oid" "$recovery_record") || return 1
     qualified_refusal=true
+    qualified_pending_recovery=true
     MERGE_REFUSAL_DIRECTORY="$refusal_directory"
     MERGE_TRANSPORT=graphql
     if [ -z "$recovery_artifact_head" ]; then
       recovery_artifact_head=$(printf '%s\n' "$recovery_record" | jq -er .head) || return 1
     fi
+  fi
+
+  if [ -n "$recovery_oid" ] && [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
+    provider_rejection=$(node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" provider-rejection "$recovery_record" .local) || return 1
+    recovery_artifact_head=$(printf '%s\n' "$recovery_record" | jq -er .head) || return 1
+    qualified_pending_recovery=true
   fi
 
   local required required_artifacts=(
@@ -683,7 +709,7 @@ merge_run() {
     require_artifact "$required" || return 1
   done
 
-  if [ -n "$replacement_head" ]; then
+  if [ -n "$replacement_head$provider_rejection" ]; then
     local capture
     for capture in .local/merge-output.log .local/merge-output.*.log; do
       [ -e "$capture" ] || [ -L "$capture" ] || continue
@@ -694,7 +720,7 @@ merge_run() {
   fi
   if [ -n "$recovery_artifact_head" ]; then
     recovery_artifacts=$(pr_git hash-object --no-filters -- "${required_artifacts[@]}") || return 1
-    if ! verify_merge_recovery_artifacts "$pr" "$recovery_artifact_head" "$qualified_refusal"; then
+    if ! verify_merge_recovery_artifacts "$pr" "$recovery_artifact_head" "$qualified_pending_recovery"; then
       merge_outcome_stop "recovery requires matching PR, freshly reviewed prepare context, prepared tree, and valid gate bindings; re-run review and prepare"
       return 1
     fi
@@ -816,9 +842,9 @@ merge_run() {
       merge_outcome_stop "require OPEN, exact prepared head, main base, non-draft, no conflicts, and no existing auto/queue request; inspect current PR state"
       return 1
     fi
-    if [ -n "$previous_observation" ] && ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --argjson previous "$previous_observation" --argjson admin "$MERGE_USE_CRABBOX_ADMIN_BYPASS" --argjson priorCi "$MERGE_USE_PRIOR_CI_ADMIN" '
+    if [ -n "$previous_observation" ] && ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --argjson previous "$previous_observation" --argjson admin "$MERGE_USE_CRABBOX_ADMIN_BYPASS" '
       def facts: del(.pr.mergeable,.pr.mergeStateStatus) |
-        if $admin or $priorCi then . else del(.main) end;
+        if $admin then . else del(.main) end;
       (if .transport != $previous.transport then
          (facts | del(.transport,.restPolicy)) == ($previous | facts | del(.transport,.restPolicy))
        else facts == ($previous | facts) end) and
@@ -833,6 +859,11 @@ merge_run() {
       merge_outcome_diagnose "$pr" "$MERGE_OBSERVATION" "$pinned_observation"
       merge_outcome_stop "PR or main changed while waiting for mergeability; stopped before intent/dispatch"
       return 1
+    fi
+    if [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ] && [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = false ]; then
+      verify_prior_ci_main_advance \
+        "$(printf '%s\n' "${previous_observation:-$MERGE_OBSERVATION}" | jq -r .main)" \
+        "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)" || return 1
     fi
     if printf '%s\n' "$MERGE_OBSERVATION" | jq -e '.pr.mergeable != "UNKNOWN" and .pr.mergeStateStatus != "UNKNOWN"' >/dev/null; then
       break
@@ -889,7 +920,8 @@ merge_run() {
     merge_outcome_stop "--body-file requires a non-queue PR"
     return 1
   fi
-  if [ -n "$recovery_oid" ] && [ "$route" != immediate ]; then
+  if [ -n "$recovery_oid" ] && [ "$route" != immediate ] &&
+    { [ "$route" != admin ] || [ -z "$provider_rejection" ]; }; then
     merge_outcome_stop "operator recovery requires current immediate admission without admin, auto, or queue routing"
     return 1
   fi
@@ -912,16 +944,10 @@ merge_run() {
     merge_outcome_stop "selected merge route is blocked by policy, branch drift, or a dirty merge projection; inspect current PR state"
     return 1
   fi
-  local observed_main candidate_tree
+  local observed_main
   observed_main=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)
   if [ "$merge_method" = squash ] && [ "$route" != queue ]; then
-    candidate_tree=$(pr_git merge-tree --write-tree "$observed_main" "$PREP_HEAD_SHA") || {
-      merge_outcome_stop "cannot establish prepared-head merge tree (conflict or unavailable objects)"; return 1;
-    }
-    if [ "$candidate_tree" = "$(pr_git rev-parse "$observed_main^{tree}")" ]; then
-      echo "NO NET CHANGE: squash produces the current main tree. PR lifecycle is unresolved; no merge, comment, or cleanup. Inspect main history and PR intent."
-      return 1
-    fi
+    verify_merge_candidate_tree "$observed_main" "$PREP_HEAD_SHA" || return 1
   fi
   if [ -n "$recovery_oid" ]; then
     recovery_actor=$(pr_gh_writer_login "$MERGE_REPO_HOST") || return 1
@@ -945,13 +971,6 @@ merge_run() {
     return 1
   fi
   validate_clawsweeper_review_comments "$pr" "$PREP_HEAD_SHA" || return 1
-  if [ -n "$recovery_artifact_head" ]; then
-    if [ "$recovery_artifacts" != "$(pr_git hash-object --no-filters -- "${required_artifacts[@]}")" ]; then
-      merge_outcome_stop "recovery artifacts changed during admission"
-      return 1
-    fi
-    verify_prep_branch_matches_prepared_head "$pr" "$LOCAL_PREP_HEAD_SHA" || return 1
-  fi
   if [ -n "$merge_body_snapshot" ] &&
     [ "$merge_body_snapshot" != "$(snapshot_merge_body "$merge_body_file")" ]; then
     merge_outcome_stop "merge body changed during admission; no request was dispatched"
@@ -992,12 +1011,26 @@ merge_run() {
     require_correction_publication_gates "$pr" "$(pr_git rev-parse HEAD)" || return 1
   fi
   if [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
-    verify_prior_ci_admin "$pr" "$PREP_HEAD_SHA" || return 1
+    # Materialize forward main before the last live authority verification.
     merge_outcome_stable "$pr" || return 1
+    verify_prior_ci_admin "$pr" "$PREP_HEAD_SHA" || return 1
+    # A later main may reuse local objects, never start another lazy/explicit fetch.
+    GIT_NO_LAZY_FETCH=1 merge_outcome_stable "$pr" true || return 1
     # No awaited operation may replace the operator's bytes after validation.
     node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" unchanged \
       "$MERGE_ADMIN_EVIDENCE" "$(printf '%s\n' "$MERGE_PRIOR_CI_PROOF" | jq -r .evidenceSha256)" >/dev/null || return 1
     crabbox_final_main_sha="$observed_main"
+  fi
+  if [ -n "$provider_rejection" ] &&
+    [ "$provider_rejection" != "$(node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" provider-rejection "$recovery_record" .local)" ]; then
+    merge_outcome_stop "provider rejection evidence changed during admission"; return 1
+  fi
+  if [ -n "$recovery_artifact_head" ]; then
+    if [ "$recovery_artifacts" != "$(pr_git hash-object --no-filters -- "${required_artifacts[@]}")" ]; then
+      merge_outcome_stop "recovery artifacts changed during admission"
+      return 1
+    fi
+    GIT_NO_LAZY_FETCH=1 verify_prep_branch_matches_prepared_head "$pr" "$LOCAL_PREP_HEAD_SHA" || return 1
   fi
   local intent attempt
   attempt=$(node -e 'process.stdout.write(require("node:crypto").randomUUID())') || return 1
@@ -1016,8 +1049,8 @@ merge_run() {
   if [ -n "$legacy_directory" ]; then
     intent=$(printf '%s\n' "$intent" | jq -c --argjson legacy "$legacy_refusal" --arg actor "$recovery_actor" '.legacyRefusal=($legacy + {actor:$actor})') || return 1
   elif [ -n "$recovery_oid" ]; then
-    # This records a new operator decision, not proof that the prior request failed.
-    # The outcome CAS consumes that exact decision and retains the old intent as a parent.
+    # The CAS consumes this explicit operator decision and retains the old intent.
+    # A separately qualified provider rejection never authorizes automatic retries.
     intent=$(printf '%s\n' "$intent" | jq -c --arg outcome "$recovery_oid" \
       --argjson previous "$recovery_record" --arg actor "$recovery_actor" --arg replacement "$replacement_head" \
       '.recovery=({outcome:$outcome,attempt:$previous.attempt,actor:$actor,reason:"explicit-operator-recovery"} +
@@ -1025,6 +1058,9 @@ merge_run() {
   fi
   if [ -n "$refusal" ]; then
     intent=$(printf '%s\n' "$intent" | jq -c --argjson refusal "$refusal" '.recovery.preDispatchRefusal=$refusal') || return 1
+  fi
+  if [ -n "$provider_rejection" ]; then
+    intent=$(printf '%s\n' "$intent" | jq -c --argjson rejection "$provider_rejection" '.recovery.providerRejection=$rejection') || return 1
   fi
   mark_pr_operation_side_effects_started
   MERGE_ADMISSION_ACTIVE=false

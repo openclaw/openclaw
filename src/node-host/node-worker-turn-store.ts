@@ -1,9 +1,9 @@
 import type { NodeWorkerSupervisorIdentity } from "../worker/node-supervisor-protocol.js";
+import { nodeWorkerTurnMatchesIdentity } from "../worker/node-supervisor-protocol.js";
 import type { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
-import {
-  nodeWorkerTurnMatchesIdentity,
-  type NodeWorkerJournalAuthority,
-  type NodeWorkerTurnReceipt,
+import type {
+  NodeWorkerJournalAuthority,
+  NodeWorkerTurnReceipt,
 } from "./node-worker-journal.types.js";
 import type { NodeWorkerTurnKernel } from "./node-worker-turn-store.kernel.js";
 

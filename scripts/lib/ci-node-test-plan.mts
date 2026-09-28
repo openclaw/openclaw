@@ -74,7 +74,11 @@ import {
   isReleaseOnlyRuntimeTestFile,
 } from "./ci-proof-test-inventory.mts";
 import { rebalanceRuntimeTestJobs } from "./ci-runtime-test-placement.mts";
-import { isRuntimePlacementIncludePatterns } from "./ci-test-timings-schema.mts";
+import {
+  NATIVE_SOLO_TIMING_PROFILE,
+  createNativeSoloTimingKey,
+  isRuntimePlacementIncludePatterns,
+} from "./ci-test-timings-schema.mts";
 import {
   readCompactGroupTimings,
   readCompleteSplitGenerationSeconds,
@@ -2601,7 +2605,6 @@ type CanonicalTargetInventory = {
   configsByFile: Map<string, Set<string>>;
   configs: Set<string>;
   completeConfigs: Set<string>;
-  releaseOnlyConfigs: Set<string>;
 };
 const canonicalTargetInventories = new Map<
   (typeof canonicalNodeTestOwners)[number] | undefined,
@@ -2624,18 +2627,11 @@ function resolveCanonicalTargetInventory(requestedConfig?: string) {
   const configsByFile = new Map<string, Set<string>>();
   const configs = new Set<string>();
   const incompleteConfigs = new Set<string>();
-  const releaseOnlyConfigs = new Set<string>();
   for (const shard of createNodeTestShardsForOwners(owner ? [owner] : canonicalNodeTestOwners, {
     includeReleaseOnlyPluginShards: true,
     includeReleaseOnlyToolingShards: true,
     includeProofTests: false,
   })) {
-    if (RELEASE_ONLY_PLUGIN_SHARDS.has(shard.shardName)) {
-      for (const config of shard.configs) {
-        releaseOnlyConfigs.add(config);
-      }
-      continue;
-    }
     const envelope = shard.includePatterns ?? listWholeConfigFiles(shard.shardName);
     const included = envelope ? new Set(envelope) : undefined;
     for (const config of shard.configs) {
@@ -2660,7 +2656,6 @@ function resolveCanonicalTargetInventory(requestedConfig?: string) {
     configsByFile,
     configs,
     completeConfigs: new Set([...configs].filter((config) => !incompleteConfigs.has(config))),
-    releaseOnlyConfigs,
   };
   canonicalTargetInventories.set(owner, inventory);
   return inventory;
@@ -2697,7 +2692,6 @@ export function resolveCanonicalNodeTestConfig(
     return owners.values().next().value;
   }
   if (
-    inventory.releaseOnlyConfigs.has(config) ||
     EXCLUDED_PROJECT_CONFIGS.has(config) ||
     canonicalNodeTestOwners.some(
       (owner) => EXCLUDED_FULL_SUITE_SHARDS.has(owner.config) && owner.projects.includes(config),
@@ -3167,6 +3161,39 @@ function listCompactToolingTestFiles(): string[] {
   );
 }
 
+function applyNativeSoloTimings(
+  jobs: CompactNodeTestShard[],
+  runnerBackend: string | undefined,
+): CompactNodeTestShard[] {
+  if (runnerBackend !== undefined && !["blacksmith", "hybrid", "runson"].includes(runnerBackend)) {
+    return jobs;
+  }
+  const timings = readCompactGroupTimings("blacksmith");
+  return jobs.map((job) => {
+    if (
+      job.runner !== NATIVE_SOLO_TIMING_PROFILE.runner ||
+      job.planConcurrency !== 1 ||
+      job.groups.length !== 1 ||
+      job.requiresDist ||
+      job.pretestBuildMode !== undefined ||
+      Object.entries(job.env ?? {}).some(
+        ([key, value]) =>
+          key !== "OPENCLAW_VITEST_MAX_WORKERS" ||
+          value !== String(NATIVE_SOLO_TIMING_PROFILE.maxWorkers),
+      )
+    ) {
+      return job;
+    }
+    const key = createNativeSoloTimingKey(job.groups[0]!);
+    const seconds = key === undefined ? undefined : timings[key];
+    // Solo measurements price only the final allocation. Feeding them into
+    // packing would let an unqualified shared row spend the solo discount.
+    return seconds === undefined
+      ? job
+      : { ...job, predictedSeconds: seconds, predictedTestSeconds: seconds };
+  });
+}
+
 /**
  * Collapse split include-pattern shards into bounded jobs for normal CI.
  * The base plan remains unchanged for release and coverage consumers.
@@ -3185,12 +3212,15 @@ export function createNodeTestShardBundles(
   const compactMode =
     options.compactMode ?? (options.compact === true ? "pull-request" : undefined);
   if (compactMode !== undefined) {
-    return createCompactNodeTestShardBundles(
-      // Keep complete owners for cost admission; compact projection below gives
-      // a reduced tooling selection its own timing identity.
-      createNodeTestShards({ ...options, includeReleaseOnlyToolingShards: true }),
-      { ...options, compactMode },
-      compactMode,
+    return applyNativeSoloTimings(
+      createCompactNodeTestShardBundles(
+        // Keep complete owners for cost admission; compact projection below gives
+        // a reduced tooling selection its own timing identity.
+        createNodeTestShards({ ...options, includeReleaseOnlyToolingShards: true }),
+        { ...options, compactMode },
+        compactMode,
+      ),
+      options.runnerBackend,
     );
   }
 
@@ -4115,7 +4145,13 @@ export function createSelectedNodeTestShardBundles(
   const tooling = new Set([...selected].filter((target) => configs.get(target) === TOOLING_CONFIG));
   const shards = createNodeTestShardsForOwners(
     fullSuiteVitestShards,
-    { ...options, includeReleaseOnlyPluginShards: false, includeProofTests: false },
+    {
+      ...options,
+      // Exact selection opts into its existing owner, not the unrelated plugin sweep.
+      changedPaths: [...selected],
+      includeReleaseOnlyPluginShards: false,
+      includeProofTests: false,
+    },
     tooling.size === selected.size,
   );
   const owners = new Set<NodeTestShard>();
@@ -4246,17 +4282,25 @@ export function createSelectedNodeTestShardBundles(
         ]
       : [];
   });
-  return [
-    ...(tooling.size
-      ? createCompactNodeTestShardBundles(
-          shards.filter((shard) => owners.has(shard)),
-          options,
-          "pull-request",
-          tooling,
-        )
-      : []),
-    ...packSelectedNodeTestJobs(projected, options.runnerBackend, canonicalFamilies, groupSeconds),
-  ];
+  return applyNativeSoloTimings(
+    [
+      ...(tooling.size
+        ? createCompactNodeTestShardBundles(
+            shards.filter((shard) => owners.has(shard)),
+            options,
+            "pull-request",
+            tooling,
+          )
+        : []),
+      ...packSelectedNodeTestJobs(
+        projected,
+        options.runnerBackend,
+        canonicalFamilies,
+        groupSeconds,
+      ),
+    ],
+    options.runnerBackend,
+  );
 }
 
 function compactPreparationSeconds(

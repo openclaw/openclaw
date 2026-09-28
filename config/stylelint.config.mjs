@@ -2,6 +2,9 @@
 // components (postcss-lit). Error-class rules only — oxfmt owns formatting.
 const selectorFunction = String.raw`\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)`;
 const selectorTail = String.raw`(?:[^([]|${selectorFunction}|\[[^\]]*\])*`;
+const selectorCompound = String.raw`(?:[^\s>+~(),[\]]|${selectorFunction}|\[[^\]]*\])*`;
+const appAncestor = String.raw`(?:\.(?:shell|content|chat-thread|chat-split-view)(?:--[\w-]+)?|:root|(?<![.#\w-])(?:html|body))(?![\w-])`;
+const ancestorHas = String.raw`(?::(?:not|is|where)\(\s*)*:has`;
 
 export default {
   extends: "stylelint-config-recommended",
@@ -22,6 +25,10 @@ export default {
         new RegExp(`:has${selectorFunction}${selectorTail}[\\s>+~]${selectorTail}::`, "i"),
         new RegExp(`:has${selectorFunction}${selectorTail}::placeholder(?![\\w-])`, "i"),
         new RegExp(`:has(?=\\(\\s*[+~])${selectorFunction}${selectorTail}[\\s>+~]`, "i"),
+        // An ancestor subject schedules global :has invalidation on every insertion
+        // below it. The rule sees raw selectors; nested & forms remain policy-owned.
+        new RegExp(`${appAncestor}${selectorCompound}${ancestorHas}\\(`, "i"),
+        new RegExp(`${ancestorHas}${selectorFunction}\\)*${selectorCompound}${appAncestor}`, "i"),
       ],
       { splitList: true },
     ],

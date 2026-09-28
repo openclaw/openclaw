@@ -9,7 +9,11 @@ import {
   resolveWindowsConsoleEncoding,
 } from "../infra/windows-encoding.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { releaseChildProcessOutputAfterExit } from "./child-process.js";
+import {
+  EXIT_STDIO_GRACE_MS,
+  hasChildProcessExited,
+  releaseChildProcessOutputAfterExit,
+} from "./child-process.js";
 import {
   appendCapturedOutput,
   appendPreservedOutputLines,
@@ -19,8 +23,7 @@ import {
   MAX_PRESERVED_PENDING_LINE_BYTES,
   resolveMaxOutputBytes,
   resolveOutputCapture,
-  shouldTerminateOnOutputError,
-  shouldTerminateOnOutputLimit,
+  shouldTerminateOnOutput,
   type CapturedOutputBuffers,
   type CommandOutputCaptureMode,
   type CommandOutputCaptureOption,
@@ -45,6 +48,7 @@ import {
   waitForCommandSpawn,
 } from "./exec-spawn.js";
 import { createCommandTerminationController } from "./exec-termination.js";
+import { setProcessTimeout } from "./process-deadline.js";
 
 const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
 const WINDOWS_CLOSE_STATE_POLL_MS = 10;
@@ -217,7 +221,8 @@ async function runCommandWithOutputEncoding(
   const outputBytesByStream = { stdout: 0, stderr: 0 };
   const combinedCapturedBytesByStream = { stdout: 0, stderr: 0 };
   const combinedTailChunks: Array<{ stream: CommandOutputStream; buffer: Buffer }> = [];
-  let noOutputTimer: NodeJS.Timeout | undefined;
+  let noOutputTimer: ReturnType<typeof setProcessTimeout> | undefined;
+  let eofGraceTimer: ReturnType<typeof setProcessTimeout> | undefined;
   let outputObserverError: unknown;
   let outputErrorStream: CommandOutputStream | undefined;
   let terminatingOutputError: Error | undefined;
@@ -229,6 +234,7 @@ async function runCommandWithOutputEncoding(
     cwd,
     detached: Boolean(killProcessTree && process.platform !== "win32"),
     encoding: "buffer",
+    executionTimeoutMs: resolvedTimeoutMs,
     baseEnv,
     env,
     forceKillAfterDelay: resolvedKillGraceMs,
@@ -297,7 +303,7 @@ async function runCommandWithOutputEncoding(
     }
   });
 
-  const cancel = (reason: Exclude<CommandTerminationReason, "exit">) => {
+  const cancel = (reason: Exclude<CommandTerminationReason, "exit">, eofGraceElapsed = false) => {
     // Failed roots already own a drain; later deadlines must preserve their exit result.
     // Successful POSIX roots retain deadline ownership of inherited descendants.
     // Output caps remain meaningful for bytes drained after either exit.
@@ -310,6 +316,26 @@ async function runCommandWithOutputEncoding(
     ) {
       return;
     }
+    if (
+      (reason === "timeout" || reason === "no-output-timeout") &&
+      (childExitState || hasChildProcessExited(nodeChild))
+    ) {
+      if (!ownsOutputDeadline || (childExitState?.code ?? nodeChild.exitCode) !== 0) {
+        return;
+      }
+      if (
+        (!nodeChild.stdout || nodeChild.stdout.readableEnded) &&
+        (!nodeChild.stderr || nodeChild.stderr.readableEnded)
+      ) {
+        return;
+      }
+      if (!eofGraceElapsed) {
+        // EOF can follow root exit by a poll turn; bound that grace without renewing the command deadline.
+        eofGraceTimer ??= setProcessTimeout(() => cancel(reason, true), EXIT_STDIO_GRACE_MS);
+        return;
+      }
+    }
+    eofGraceTimer?.clear();
     termination = reason;
     if (waitingForSpawn) {
       startupCanceled.resolve(reason);
@@ -332,23 +358,27 @@ async function runCommandWithOutputEncoding(
     ) {
       return;
     }
-    noOutputTimer =
-      noOutputTimer?.refresh() ??
-      setTimeout(() => cancel("no-output-timeout"), resolvedNoOutputTimeoutMs);
+    if (noOutputTimer) {
+      noOutputTimer.refresh();
+    } else {
+      noOutputTimer = setProcessTimeout(
+        () => cancel("no-output-timeout"),
+        resolvedNoOutputTimeoutMs,
+      );
+    }
   };
 
   const timeoutTimer =
     resolvedTimeoutMs === undefined
       ? undefined
-      : setTimeout(() => cancel("timeout"), resolvedTimeoutMs);
+      : setProcessTimeout(() => cancel("timeout"), resolvedTimeoutMs);
   const onAbort = () => cancel("signal");
   signal?.addEventListener("abort", onAbort, { once: true });
   armNoOutputTimer();
   const clearTimers = () => {
-    if (timeoutTimer) {
-      clearTimeout(timeoutTimer);
-    }
-    clearTimeout(noOutputTimer);
+    timeoutTimer?.clear();
+    noOutputTimer?.clear();
+    eofGraceTimer?.clear();
     noOutputTimer = undefined;
     signal?.removeEventListener("abort", onAbort);
   };
@@ -400,10 +430,7 @@ async function runCommandWithOutputEncoding(
     const streamLimitExceeded = outputBytesByStream[stream] > maxBytes;
     if (maxCombinedOutputBytes === undefined) {
       appendCapturedOutput(capture, buffer, maxBytes, captureMode);
-      if (
-        streamLimitExceeded &&
-        shouldTerminateOnOutputLimit(options.terminateOnOutputLimit, stream)
-      ) {
+      if (streamLimitExceeded && shouldTerminateOnOutput(options.terminateOnOutputLimit, stream)) {
         cancel("output-limit");
       }
       return;
@@ -449,8 +476,8 @@ async function runCommandWithOutputEncoding(
     }
     if (
       (combinedLimitExceeded &&
-        shouldTerminateOnOutputLimit(options.terminateOnOutputLimit, "combined")) ||
-      (streamLimitExceeded && shouldTerminateOnOutputLimit(options.terminateOnOutputLimit, stream))
+        shouldTerminateOnOutput(options.terminateOnOutputLimit, "combined")) ||
+      (streamLimitExceeded && shouldTerminateOnOutput(options.terminateOnOutputLimit, stream))
     ) {
       cancel("output-limit");
     }
@@ -477,7 +504,7 @@ async function runCommandWithOutputEncoding(
     if (
       termination ||
       options.tolerateOutputError?.[stream] === true ||
-      !shouldTerminateOnOutputError(options.terminateOnOutputError, stream)
+      !shouldTerminateOnOutput(options.terminateOnOutputError, stream)
     ) {
       return;
     }
@@ -541,6 +568,9 @@ async function runCommandWithOutputEncoding(
     clearTimers();
     releaseOutput?.();
   });
+  if (result.timedOut) {
+    termination ??= "timeout";
+  }
   let cleanup = await processCleanup;
   const resolvedSignal = result.signal ?? childExitState?.signal ?? nodeChild.signalCode ?? null;
   if (cleanup === "normal" && resolvedSignal) {

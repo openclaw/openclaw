@@ -37,69 +37,13 @@
       }
     },
     {
-      "id": "computer-control",
-      "origin": "known-blocker",
-      "feature": "Gateway computer control",
-      "owner": "Computer control on Bun task (src/gateway/desktop/computer-process.ts)",
-      "callSite": "src/gateway/desktop/computer-process.ts",
-      "step": null,
-      "notExercisedReason": "Linux lane has no explicitly enabled desktop computer provider."
-    },
-    {
-      "id": "chrome-mcp-user-profile",
-      "origin": "known-blocker",
-      "feature": "Managed Chrome MCP",
-      "owner": "Chrome MCP on Bun task (extensions/browser/src/browser/chrome-mcp-options.ts)",
-      "callSite": "extensions/browser/src/browser/chrome-mcp-options.ts",
-      "step": "browser",
-      "evidence": [
-        "spawn",
-        "failure"
-      ],
-      "failure": "Chrome MCP requires a Node.js executable on PATH",
-      "match": {
-        "stack": [
-          "normalizeChromeMcpOptions"
-        ]
-      }
-    },
-    {
-      "id": "tool-search-code-probe",
-      "origin": "known-blocker",
-      "feature": "Tool Search code mode",
-      "owner": "tool_search_code on Bun task (src/agents/tool-search-code-mode.ts)",
-      "callSite": "src/agents/tool-search-config.ts isToolSearchCodeModeSupported, reached from agent tool-surface preparation and Doctor collectAgentRuntimeToolSchemaFindings",
-      "step": "agent",
-      "evidence": "spawn",
-      "match": {
-        "stack": [
-          "isToolSearchCodeModeSupported"
-        ],
-        "argv": [
-          "const requiredFlag=\"--permission\""
-        ]
-      }
-    },
-    {
-      "id": "node-host-auto-update-discovery",
+      "id": "node-host-auto-update-install",
       "origin": "known-blocker",
       "feature": "Node host updater",
-      "owner": "Updater steps on Bun task (src/node-host/auto-update.ts)",
-      "callSite": "src/node-host/auto-update.ts -> src/infra/update-check-package-target.ts fetchNpmPackageTargetStatus",
-      "step": "node-host",
-      "evidence": "spawn",
-      "match": {
-        "stack": [
-          "fetchNpmPackageTargetStatus"
-        ],
-        "argv": [
-          "view",
-          "openclaw@latest",
-          "engines.node",
-          "openclaw.schemaVersions",
-          "--global"
-        ]
-      }
+      "owner": "Unowned: needs an owner (src/node-host/auto-update-install.ts)",
+      "callSite": "src/node-host/auto-update-install.ts prepareNodeRuntimeUpdate -> npm view, npm pack, and npm global install into the private runtime prefix",
+      "step": null,
+      "notExercisedReason": "The candidate is newer than every published release, so the node host never prepares an update."
     }
   ]
 }

@@ -220,7 +220,7 @@ export function projectChatTranscript(
       toolCardId,
       !(expanded ?? expandedToolCards.get(toolCardId) ?? false),
     );
-    requestUpdate();
+    state.transcriptRenderContext.onRequestUpdate?.();
   };
   const toggleAssistantMessageExpanded = (messageId: string) => {
     const key = recoveryKey(messageId);
@@ -651,6 +651,8 @@ export function projectChatTranscript(
     props.replyMessageAccess?.navigationId ?? "",
     turnRecap === null ? "" : `${turnRecap.runtimeMs}:${turnRecap.outputTokens ?? ""}`,
   ]);
+  // Rebind disclosures to the current pane without repainting unchanged rows.
+  state.transcriptRenderContext.onRequestUpdate = props.onRequestUpdate;
   state.transcriptRenderContext.turnVideoMessages = projectTurnVideoMessages(
     chatItems,
     searchFiltering ? chatItemsInput : undefined,
@@ -686,6 +688,7 @@ export function projectChatTranscript(
         props.announceTranscript !== false && !state.searchOpen && !props.loading,
         overlay,
         header,
+        Boolean(replyNavigationId),
       ),
   };
 }

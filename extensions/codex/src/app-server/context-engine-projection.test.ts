@@ -385,13 +385,14 @@ describe("projectContextEngineAssemblyForCodex", () => {
   it.each(["elide", "preserve"] as const)(
     "applies %s to canonical tool results without exposing media bytes",
     async (toolPayloadMode) => {
+      const toolText = `OPENAI_API_KEY=sk-1234567890abcdef\nstatus ok\n${"x".repeat(6_000)} tool tail`;
       const message: AgentMessage = {
         role: "toolResult",
         toolCallId: "call-1",
         toolName: "exec",
         isError: false,
         content: [
-          { type: "text", text: "OPENAI_API_KEY=sk-1234567890abcdef\nstatus ok" },
+          { type: "text", text: toolText },
           { type: "image", data: "private-image-bytes", mimeType: "image/png" },
         ],
         timestamp: 2,
@@ -405,34 +406,63 @@ describe("projectContextEngineAssemblyForCodex", () => {
       expect(result.promptText).toContain("tool result: call-1");
       expect(result.promptText).not.toContain("sk-1234567890abcdef");
       expect(result.promptText).not.toContain("private-image-bytes");
+      expect(result.promptText).not.toContain("tool tail");
       if (toolPayloadMode === "preserve") {
         expect(result.promptText).toContain("status ok");
         expect(result.promptText).toContain("tool result: call-1 (exec)");
+        expect(result.promptText).toContain("[truncated ");
       } else {
         expect(result.promptText).toContain("[content omitted]");
         expect(result.promptText).not.toContain("status ok");
       }
       expect(message.content[0]).toEqual({
         type: "text",
-        text: "OPENAI_API_KEY=sk-1234567890abcdef\nstatus ok",
+        text: toolText,
       });
     },
   );
 
-  it.each(["assistant", "compaction", "branch_summary"] as const)(
-    "reports the exact text dropped when a %s boundary crosses an emoji",
+  it.each(["user", "assistant", "compaction", "branch_summary"] as const)(
+    "retains complete %s text that fits the continuity window without a runtime budget",
     async (type) => {
-      const prefix = "x".repeat(5_999);
-      const text = `${prefix}😀tail`;
+      const text = `${"x".repeat(5_999)}😀${" café 雪".repeat(240)}\n80. Check every record.`;
       const result = await projectContextEngineAssemblyForCodex({
         assembledMessages:
-          type === "assistant" ? [textMessage("assistant", text)] : summaryMessages(type, text),
+          type === "user"
+            ? [{ role: "user", content: text, timestamp: 1 }]
+            : type === "assistant"
+              ? [textMessage("assistant", text)]
+              : summaryMessages(type, text),
         prompt: "next",
+        maxRenderedContextChars: resolveCodexContinuityProjectionMaxChars({}),
       });
 
-      expect(result.promptText).toContain(`\n${prefix}\n[truncated 6 chars]`);
+      expect(result.promptText).toContain(`\n${text}\n</conversation_context>`);
+      expect(result.promptText).not.toContain("[truncated ");
+      expect(result.promptContextRange!.end - result.promptContextRange!.start).toBeLessThanOrEqual(
+        24_000,
+      );
     },
   );
+
+  it("retains the newest text of an oversized answer within the default history window", async () => {
+    const tail = "80. Check every café record, including 雪 and 🦞.";
+    const result = await projectContextEngineAssemblyForCodex({
+      assembledMessages: [
+        textMessage("assistant", `Discard this older prefix. ${"x".repeat(24_000)}\n${tail}`),
+      ],
+      prompt: "Quote the final checklist item.",
+    });
+    const context = result.promptText.slice(
+      result.promptContextRange!.start,
+      result.promptContextRange!.end,
+    );
+
+    expect(context.length).toBeLessThanOrEqual(24_000);
+    expect(context).toMatch(/^\[truncated \d+ chars from older context\]\n/u);
+    expect(context).not.toContain("Discard this older prefix.");
+    expect(context.endsWith(tail)).toBe(true);
+  });
 
   it("keeps recent context when the rendered conversation overflows", async () => {
     const result = await projectContextEngineAssemblyForCodex({

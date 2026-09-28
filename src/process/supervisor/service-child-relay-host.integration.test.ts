@@ -197,6 +197,7 @@ it("counts raw-only construction activity without renewing the original overall 
     f.child.stdout?.emit("data", Buffer.from([0x82]));
     expect(f.killMock).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(20);
+    await vi.advanceTimersToNextTimerAsync();
     const run = await f.starting;
     expect((await run.wait()).reason).toBe("overall-timeout");
     await expect(f.closeScope()).rejects.toThrow("construction aborted");
@@ -237,6 +238,7 @@ it.each(["cancel", "deadline", "shutdown"] as const)(
     try {
       if (action === "deadline") {
         await vi.advanceTimersByTimeAsync(10);
+        await vi.advanceTimersToNextTimerAsync();
       }
       await nextTurn();
       expect(observed).toBeInstanceOf(Error);

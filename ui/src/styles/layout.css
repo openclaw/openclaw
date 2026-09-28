@@ -36,7 +36,7 @@
   );
   --shell-focus-duration: 200ms;
   --shell-focus-ease: var(--ease-out);
-  height: 100vh;
+  height: var(--shell-content-height);
   display: grid;
   grid-template-columns: var(--shell-nav-width) minmax(0, 1fr);
   grid-template-rows: var(--shell-topbar-height) 1fr;
@@ -88,12 +88,6 @@
 
 .shell-skip-link:focus {
   transform: translate(-50%, 0);
-}
-
-@supports (height: 100dvh) {
-  .shell {
-    height: 100dvh;
-  }
 }
 
 .shell--chat {
@@ -186,7 +180,7 @@
   stroke-linejoin: round;
 }
 
-.shell:has(.shell-chrome-controls__home) {
+.shell.shell--home-control {
   --shell-controls-width: 140px;
 }
 
@@ -1082,7 +1076,7 @@ openclaw-settings-save-indicator:empty {
   z-index: 20;
 }
 
-.shell:has(.sidebar-resizer.dragging) {
+.shell.shell--nav-resizing {
   transition: grid-template-rows var(--shell-focus-duration) var(--shell-focus-ease);
 }
 
@@ -4085,7 +4079,7 @@ button.gateway-status:focus-visible {
   background: var(--bg);
 }
 
-.shell:not(.shell--mobile-nav):has(> .shell-connection-status) {
+.shell:not(.shell--mobile-nav).shell--connection-status {
   grid-template-rows: var(--shell-topbar-height) minmax(0, 1fr) auto;
   grid-template-areas:
     "nav topbar"
@@ -4528,7 +4522,7 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
 }
 
 /* The separate status row owns bottom-dock clearance while navigation is hidden. */
-.shell:not(.shell--mobile-nav):has(> .shell-connection-status) > .content {
+.shell:not(.shell--mobile-nav).shell--connection-status > .content {
   margin-bottom: 0;
 }
 
@@ -4542,11 +4536,11 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   margin-top: 20px;
 }
 
-.shell--settings .content:has(> .connection-action-block) {
+.shell--settings .content.content--actions-blocked {
   padding-top: 0;
 }
 
-.shell--settings .content:has(> .connection-action-block) > openclaw-router-outlet {
+.shell--settings .content.content--actions-blocked > openclaw-router-outlet {
   display: block;
   margin-top: 0;
   padding-top: var(--settings-content-block-start-padding);
@@ -4646,7 +4640,7 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
 }
 
 /* Embedded pages own their spacing and scrolling inside the frame. */
-.content:has(.plugin-tab-embed) {
+.content.content--plugin-embed {
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -4654,9 +4648,8 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   gap: 0;
 }
 
-/* Name the children: a universal subject under this :has() restyles the whole
-   document on every insertion inside .content, including each chat row. */
-.content:has(.plugin-tab-embed)
+/* The embed owner reports when its authenticated frame actually renders. */
+.content.content--plugin-embed
   > :is(
     .connection-action-block,
     openclaw-sidebar-attention,
@@ -4668,7 +4661,7 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   margin-top: 0;
 }
 
-.content:has(.plugin-tab-embed) > openclaw-router-outlet {
+.content.content--plugin-embed > openclaw-router-outlet {
   display: flex;
   flex: 1 1 0;
   min-width: 0;
@@ -4715,7 +4708,7 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   --page-toolbar-clearance: 0px;
   --page-toolbar-reserve: 0px;
 
-  &:has(.content-header:not(.content-header--stacked)):not(:has(> .connection-action-block)) {
+  &.content--toolbar-header:not(.content--actions-blocked) {
     padding-top: 0;
   }
 
@@ -4829,7 +4822,7 @@ html.openclaw-native-desktop
   }
 
   /* Stacked headers and pages without a toolbar clear floating chrome with padding. */
-  &:not(:has(.content-header:not(.content-header--stacked), > .connection-action-block)) {
+  &:not(.content--toolbar-header, .content--actions-blocked) {
     padding-top: calc(var(--page-toolbar-height) + var(--page-toolbar-clearance) + 16px);
   }
 }

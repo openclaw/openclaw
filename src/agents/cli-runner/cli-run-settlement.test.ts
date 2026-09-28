@@ -277,7 +277,7 @@ describe("CLI MCP retirement", () => {
   let manager: ReturnType<typeof createSessionMcpRuntimeManager>;
   let previous: PropertyDescriptor | undefined;
   beforeEach(() => {
-    manager = createSessionMcpRuntimeManager({ enableIdleSweepTimer: false });
+    manager = createSessionMcpRuntimeManager();
     previous = Object.getOwnPropertyDescriptor(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
     Object.defineProperty(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY, {
       configurable: true,

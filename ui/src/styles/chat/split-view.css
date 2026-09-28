@@ -1,10 +1,10 @@
-.chat-split-view:has(> .chat-split-view__column > .chat-split-view__cell--active)
+.chat-split-view.chat-split-view--active-cell
   > .chat-split-view__column
   > .chat-split-view__cell:not(.chat-split-view__cell--active) {
   filter: saturate(0.45);
 }
 
-.chat-split-view:has(> .chat-split-view__column > .chat-split-view__cell--active)
+.chat-split-view.chat-split-view--active-cell
   > .chat-split-view__column
   > .chat-split-view__cell:not(.chat-split-view__cell--active)
   .chat-pane__header

@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { bindTestChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import { resolveSessionStorePathForAcp } from "../../acp/runtime/session-meta-store.js";
@@ -112,7 +112,8 @@ vi.mock("../../acp/runtime/registry.js", () => ({
   getAcpRuntimeBackend: (id?: string) => hoisted.getAcpRuntimeBackendMock(id),
 }));
 
-vi.mock("../../acp/runtime/session-meta.js", () => ({
+vi.mock("../../acp/runtime/session-meta.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../acp/runtime/session-meta.js")>()),
   listAcpSessionEntries: (args: unknown) => hoisted.listAcpSessionEntriesMock(args),
   readAcpSessionEntry: (args: unknown) => hoisted.readAcpSessionEntryMock(args),
   readAcpSessionEntryAsync: hoisted.readAcpSessionEntryAsyncMock,
@@ -749,8 +750,6 @@ describe("/acp command", () => {
       },
     });
   });
-
-  afterEach(() => {});
 
   it("returns null when the message is not /acp", async () => {
     const result = await runDiscordAcpCommand("/status");

@@ -14,7 +14,7 @@ export function assertAcpSessionMutationEntry(
   entry: SessionEntry | undefined,
   expected: AcpSessionEntryExpectation,
   control: AcpSessionControlBinding | undefined,
-  phase: "entry mutation" | "metadata preparation" | "legacy source consumption",
+  phase: "entry mutation" | "metadata preparation" | "legacy source consumption" | "control read",
 ): void {
   const matches =
     expected === null

@@ -93,7 +93,7 @@ function readJson(path, maxBytes = MAX_MANIFEST_BYTES) {
 }
 
 function writeJson(path, value) {
-  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+  writeFileSync(path, `${JSON.stringify(value)}\n`);
 }
 
 function same(left, right, label) {

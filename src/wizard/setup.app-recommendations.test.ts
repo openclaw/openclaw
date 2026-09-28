@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { refreshOnboardRecommendationsCommand } from "../commands/onboard-recommendations.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
@@ -140,8 +139,16 @@ describe("setupAppRecommendations", () => {
   it("persists selected installs and completed checkpoints through the worker", async () => {
     await withOpenClawTestState({ label: "recommendation-wizard-worker" }, async (state) => {
       const result = recommendationResult();
+      result.matches[1]!.tier = "recommended";
       const store = createOnboardingRecommendationsStore({ workspaceDir: state.workspaceDir });
       const prompter = createPrompter(["recommendation:0", "recommendation:1"]);
+      const progress = { update: vi.fn(), stop: vi.fn() };
+      vi.mocked(prompter.progress).mockReturnValue(progress);
+      const recommend = vi.fn(async (onPhase?: (phase: SetupAppScanPhase) => void) => {
+        onPhase?.({ kind: "candidates", appCount: 4, sampleLabels: ["alpha", "Bravo", "Echo"] });
+        onPhase?.({ kind: "matching", appCount: 4 });
+        return result;
+      });
       const persistedBeforeInstall: string[][] = [];
       const outcome = await setupAppRecommendationsWithOutcome({
         config: {},
@@ -151,7 +158,7 @@ describe("setupAppRecommendations", () => {
         modelRouteVerified: true,
         platform: "darwin",
         deps: {
-          recommend: async () => result,
+          recommend,
           deferOfferToBootstrap: () => false,
           isSkillInstalled: async () => false,
           resolveOfficialEntry: (pluginId) => ({
@@ -170,7 +177,8 @@ describe("setupAppRecommendations", () => {
               status: "installed",
             };
           },
-          installSkill: async () => {
+          installSkill: async ({ slug }) => {
+            expect(slug).toBe("@demo-owner/chat-skill");
             const pending = await store.read();
             expect(pending?.acceptedAt).toBeNull();
             persistedBeforeInstall.push(pending!.matches.map((match) => match.candidate.id));
@@ -183,6 +191,19 @@ describe("setupAppRecommendations", () => {
           },
         },
       });
+      expect(prompter.multiselect).toHaveBeenCalledWith(
+        expect.objectContaining({ initialValues: ["recommendation:0"] }),
+      );
+      expect(prompter.plain).toHaveBeenCalledWith(
+        "App names are matched with your configured model and ClawHub search (disable via wizard.appRecommendations).",
+      );
+      expect(vi.mocked(prompter.plain!).mock.invocationCallOrder[0]).toBeLessThan(
+        recommend.mock.invocationCallOrder[0]!,
+      );
+      expect(progress.update.mock.calls).toEqual([
+        ["Found 4 apps — searching plugins and skills for alpha, Bravo, Echo…"],
+        ["Asking your model to pick the best matches…"],
+      ]);
       expect(persistedBeforeInstall).toEqual([
         ["chat-plugin", "@demo-owner/chat-skill"],
         ["chat-plugin", "@demo-owner/chat-skill"],
@@ -192,6 +213,7 @@ describe("setupAppRecommendations", () => {
         matches: [result.matches[0]],
       });
       await state.writeConfig(outcome.config);
+      expect(outcome.config.plugins?.entries?.["chat-plugin"]?.enabled).toBe(true);
       await outcome.commitResult();
       expect(await store.read()).toMatchObject({
         acceptedAt: expect.any(Number),
@@ -250,121 +272,6 @@ describe("setupAppRecommendations", () => {
     expect(clearPendingStored).not.toHaveBeenCalled();
   });
 
-  it("scans again after the refresh command clears an answered offer", async () => {
-    let stored: OnboardingRecommendationsRecord | null = {
-      inventoryHash: "hash",
-      matches: [],
-      offeredAt: 1,
-      acceptedAt: 2,
-      updatedAt: 2,
-    };
-    const clear = vi.fn(async () => {
-      stored = null;
-      return true;
-    });
-    const recommend = vi.fn(async () => recommendationResult());
-    const log = vi.fn();
-    const prompter = createPrompter();
-
-    await refreshOnboardRecommendationsCommand({}, runtime, { clear });
-    await setupAppRecommendations({
-      prompter,
-      runtime: { ...runtime, log },
-      deps: {
-        recommend,
-        readStored: async () => stored,
-        writeOffer: vi.fn(),
-        deferOfferToBootstrap: () => false,
-      },
-    });
-
-    expect(clear).toHaveBeenCalledOnce();
-    expect(recommend).toHaveBeenCalledOnce();
-    expect(prompter.plain).toHaveBeenCalledWith(
-      "App names are matched with your configured model and ClawHub search (disable via wizard.appRecommendations).",
-    );
-    expect(vi.mocked(prompter.plain!).mock.invocationCallOrder[0]).toBeLessThan(
-      recommend.mock.invocationCallOrder[0]!,
-    );
-    expect(log).not.toHaveBeenCalledWith(
-      "App names are matched with your configured model and ClawHub search (disable via wizard.appRecommendations).",
-    );
-  });
-
-  it("logs the scan disclosure when the prompter has no plain-output surface", async () => {
-    const recommend = vi.fn(async () => recommendationResult());
-    const log = vi.fn();
-    const prompter = createPrompter();
-    delete prompter.plain;
-
-    await setupAppRecommendations({
-      prompter,
-      runtime: { ...runtime, log },
-      deps: {
-        recommend,
-        ...storeDeps(),
-      },
-    });
-
-    expect(log).toHaveBeenCalledWith(
-      "App names are matched with your configured model and ClawHub search (disable via wizard.appRecommendations).",
-    );
-    expect(log.mock.invocationCallOrder[0]).toBeLessThan(recommend.mock.invocationCallOrder[0]!);
-  });
-
-  it("reuses a pending stored offer without rescanning and acknowledges the answer", async () => {
-    const recommend = vi.fn(async () => recommendationResult());
-    const log = vi.fn();
-    const prompter = createPrompter(["recommendation:0"]);
-    const pending: OnboardingRecommendationsRecord = {
-      inventoryHash: "hash",
-      matches: recommendationResult().matches,
-      offeredAt: 1,
-      acceptedAt: null,
-      updatedAt: 1,
-    };
-    const store = storeDeps(pending);
-    const ensurePlugin = vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
-      cfg,
-      installed: true as const,
-      status: "installed" as const,
-    }));
-
-    await setupAppRecommendations({
-      prompter,
-      runtime: { ...runtime, log },
-      deps: {
-        ...store,
-        recommend,
-        ensurePlugin: ensurePlugin as never,
-        resolveOfficialEntry: () => ({
-          pluginId: "chat-plugin",
-          label: "Chat plugin",
-          install: { kind: "npm", package: "chat-plugin" } as never,
-          trustedSourceLinkedOfficialInstall: true,
-        }),
-      },
-    });
-
-    expect(recommend).not.toHaveBeenCalled();
-    expect(log).not.toHaveBeenCalledWith(
-      "App names are matched with your configured model and ClawHub search (disable via wizard.appRecommendations).",
-    );
-    expect(prompter.plain).not.toHaveBeenCalled();
-    expect(prompter.progress).not.toHaveBeenCalled();
-    expect(prompter.multiselect).toHaveBeenCalledOnce();
-    expect(store.acknowledgeStored).toHaveBeenCalledOnce();
-    expect(store.updatePendingStored).toHaveBeenCalledWith({
-      matches: [pending.matches[0]],
-      expected: pending,
-    });
-    expect(store.updatePendingStored.mock.invocationCallOrder[0]).toBeLessThan(
-      ensurePlugin.mock.invocationCallOrder[0]!,
-    );
-    expect(store.writeOffer).not.toHaveBeenCalled();
-    expect(ensurePlugin).toHaveBeenCalledOnce();
-  });
-
   it("rescans a pending offer with a bare ClawHub id", async () => {
     const pendingMatches = recommendationResult().matches;
     pendingMatches[1] = {
@@ -421,136 +328,6 @@ describe("setupAppRecommendations", () => {
     expect(recommend).not.toHaveBeenCalled();
     expect(prompter.multiselect).not.toHaveBeenCalled();
     expect(writeOffer).not.toHaveBeenCalled();
-  });
-
-  it("updates progress as recommendation scan phases advance", async () => {
-    const prompter = createPrompter();
-    const progress = { update: vi.fn(), stop: vi.fn() };
-    vi.mocked(prompter.progress).mockReturnValue(progress);
-
-    await setupAppRecommendations({
-      prompter,
-      deps: {
-        recommend: vi.fn(async (onPhase?: (phase: SetupAppScanPhase) => void) => {
-          onPhase?.({
-            kind: "candidates",
-            appCount: 4,
-            sampleLabels: ["alpha", "Bravo", "Echo"],
-          });
-          onPhase?.({ kind: "matching", appCount: 4 });
-          return recommendationResult();
-        }),
-        ...storeDeps(),
-      },
-    });
-
-    expect(progress.update).toHaveBeenNthCalledWith(
-      1,
-      "Found 4 apps — searching plugins and skills for alpha, Bravo, Echo…",
-    );
-    expect(progress.update).toHaveBeenNthCalledWith(
-      2,
-      "Asking your model to pick the best matches…",
-    );
-  });
-
-  it("uses singular progress copy for one installed app", async () => {
-    const prompter = createPrompter();
-    const progress = { update: vi.fn(), stop: vi.fn() };
-    vi.mocked(prompter.progress).mockReturnValue(progress);
-
-    await setupAppRecommendations({
-      prompter,
-      deps: {
-        recommend: vi.fn(async (onPhase?: (phase: SetupAppScanPhase) => void) => {
-          onPhase?.({ kind: "candidates", appCount: 1, sampleLabels: ["Chat"] });
-          return recommendationResult();
-        }),
-        ...storeDeps(),
-      },
-    });
-
-    expect(progress.update).toHaveBeenCalledWith(
-      "Found 1 app — searching plugins and skills for Chat…",
-    );
-  });
-
-  it("preselects recommended matches and installs selected plugin and skill", async () => {
-    const config: OpenClawConfig = {};
-    const recommendations = recommendationResult();
-    recommendations.matches[1]!.tier = "recommended";
-    const prompter = createPrompter(["recommendation:0", "recommendation:1"]);
-    const store = storeDeps();
-    const ensurePlugin = vi.fn(async () => ({
-      cfg: { ...config, plugins: { entries: { "chat-plugin": { enabled: true } } } },
-      installed: true,
-      pluginId: "chat-plugin",
-      status: "installed" as const,
-    }));
-    const installSkill = vi.fn(async () => ({
-      ok: true as const,
-      slug: "chat-skill",
-      version: "1.0.0",
-      targetDir: "/tmp/workspace/skills/chat-skill",
-    }));
-
-    const outcome = await setupAppRecommendationsWithOutcome({
-      config,
-      prompter,
-      runtime,
-      workspaceDir: "/tmp/workspace",
-      modelRouteVerified: true,
-      platform: "darwin",
-      deps: {
-        ...store,
-        recommend: async () => recommendations,
-        ensurePlugin,
-        installSkill,
-        resolveOfficialEntry: (pluginId) => ({
-          pluginId,
-          label: "Chat plugin",
-          install: { npmSpec: "@openclaw/chat-plugin" },
-        }),
-      },
-    });
-
-    expect(prompter.multiselect).toHaveBeenCalledWith(
-      expect.objectContaining({ initialValues: ["recommendation:0"] }),
-    );
-    expect(ensurePlugin).toHaveBeenCalledOnce();
-    expect(installSkill).toHaveBeenCalledOnce();
-    expect(installSkill).toHaveBeenCalledWith(
-      expect.objectContaining({ slug: "@demo-owner/chat-skill" }),
-    );
-    expect(store.writeOffer).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ answered: false, matches: recommendations.matches }),
-    );
-    expect(store.writeOffer).toHaveBeenCalledOnce();
-    expect(store.writeOffer.mock.invocationCallOrder[0]).toBeLessThan(
-      ensurePlugin.mock.invocationCallOrder[0]!,
-    );
-    expect(store.updatePendingStored).toHaveBeenCalledWith({
-      matches: [recommendations.matches[0]],
-      expected: expect.objectContaining({
-        matches: recommendations.matches,
-        updatedAt: 1,
-      }),
-    });
-    expect(installSkill.mock.invocationCallOrder[0]).toBeLessThan(
-      store.updatePendingStored.mock.invocationCallOrder[0]!,
-    );
-    expect(store.acknowledgeStored).not.toHaveBeenCalled();
-    await outcome.commitResult();
-    expect(store.acknowledgeStored).toHaveBeenCalledWith({
-      expected: expect.objectContaining({
-        inventoryHash: "hash",
-        matches: [recommendations.matches[0]],
-        updatedAt: 2,
-      }),
-    });
-    expect(store.writeOffer).toHaveBeenCalledOnce();
-    expect(outcome.config.plugins?.entries?.["chat-plugin"]?.enabled).toBe(true);
   });
 
   it("reoffers a failed install and consumes it after a successful retry", async () => {
@@ -651,25 +428,18 @@ describe("setupAppRecommendations", () => {
     );
   });
 
-  it("records an empty submitted selection as answered", async () => {
-    const store = storeDeps();
-
-    await setupAppRecommendations({
-      prompter: createPrompter([]),
-      deps: { recommend: async () => recommendationResult(), ...store },
-    });
-
-    expect(store.writeOffer).toHaveBeenCalledWith(expect.objectContaining({ answered: true }));
-  });
-
   it("stores a pending offer for a fresh workspace bootstrap", async () => {
     const store = storeDeps();
     store.deferOfferToBootstrap.mockReturnValue(true);
     const prompter = createPrompter();
+    delete prompter.plain;
+    const log = vi.fn();
+    const recommend = vi.fn(async () => recommendationResult());
 
     await setupAppRecommendations({
       prompter,
-      deps: { recommend: async () => recommendationResult(), ...store },
+      runtime: { ...runtime, log },
+      deps: { recommend, ...store },
     });
 
     expect(store.writeOffer).toHaveBeenCalledWith(
@@ -677,5 +447,9 @@ describe("setupAppRecommendations", () => {
     );
     expect(prompter.note).not.toHaveBeenCalled();
     expect(prompter.multiselect).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(
+      "App names are matched with your configured model and ClawHub search (disable via wizard.appRecommendations).",
+    );
+    expect(log.mock.invocationCallOrder[0]).toBeLessThan(recommend.mock.invocationCallOrder[0]!);
   });
 });

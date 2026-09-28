@@ -94,13 +94,8 @@ final class StatusMenuSessions: NSObject {
     }
 
     private func compactError(_ error: Error) -> String {
-        if let loadError = error as? SessionLoadError {
-            switch loadError {
-            case .gatewayUnavailable:
-                return String(localized: "No connection to gateway")
-            case .decodeFailed:
-                return String(localized: "Sessions unavailable")
-            }
+        if case .gatewayUnavailable = error as? SessionLoadError {
+            return String(localized: "No connection to gateway")
         }
         return String(localized: "Sessions unavailable")
     }

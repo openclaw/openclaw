@@ -1,7 +1,7 @@
 // Plugin Prerelease Test Plan tests cover plugin prerelease test plan script behavior.
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join, matchesGlob, resolve } from "node:path";
 import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
@@ -9,7 +9,10 @@ import { parse } from "yaml";
 import { listAvailableExtensionIds } from "../../scripts/lib/changed-extensions.mts";
 import { findLaneByName } from "../../scripts/lib/docker-e2e-plan.mts";
 import { BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS } from "../../scripts/lib/docker-e2e-scenarios.mts";
-import { resolveExtensionTestPlan } from "../../scripts/lib/extension-test-plan.mts";
+import {
+  resolveExtensionTestPlan,
+  resolveExtensionTestConfig,
+} from "../../scripts/lib/extension-test-plan.mts";
 import {
   assertPluginPrereleaseTestPlanComplete,
   createPluginPrereleaseTestPlan,
@@ -1185,6 +1188,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       task: string;
       extensions_csv: string;
       includePatterns?: string[];
+      exclusion_configs: { config: string; includePatterns: string[] }[];
       requires_bun?: boolean;
       test_runtime_policy?: string;
     }[] = JSON.parse(
@@ -1207,7 +1211,21 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       .filter((row) => row.task === "extension-file-shard")
       .flatMap((row) => row.includePatterns ?? []);
     expect(new Set(fileTargets).size).toBe(fileTargets.length);
-    expect(fileTargets).toContain("extensions/device-pair/doctor-contract-api.test.ts");
+    const sourceOnlyFile = "extensions/device-pair/doctor-contract-api.test.ts";
+    expect(fileTargets).not.toContain(sourceOnlyFile);
+    for (const file of [sourceOnlyFile, "extensions/plugin-entry.cli-laziness.test.ts"]) {
+      const config = resolveExtensionTestConfig(file);
+      expect(
+        rows.filter((row) =>
+          row.exclusion_configs.some(
+            (group) =>
+              group.config === config &&
+              group.includePatterns.some((pattern) => matchesGlob(file, pattern)),
+          ),
+        ),
+        file,
+      ).toHaveLength(1);
+    }
     expect(
       rows.filter((row) =>
         row.includePatterns?.includes("extensions/plugin-entry.cli-laziness.test.ts"),
@@ -1291,7 +1309,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(releaseChecksWorkflow.concurrency).toEqual({
       group:
         "openclaw-release-checks-${{ inputs.expected_sha || inputs.ref }}-${{ github.sha }}-${{ inputs.rerun_group }}-${{ inputs.phase }}-${{ inputs.release_profile == 'minimum' && 'beta' || inputs.release_profile }}-${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}",
-      "cancel-in-progress": "${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}",
+      "cancel-in-progress": false,
     });
     expect(readPluginPrereleaseWorkflow().concurrency).toEqual({
       group:
@@ -1360,7 +1378,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       "ubuntu-24.04",
     );
     for (const jobName of [
-      "docker_runtime_assets_preflight",
       "normal_ci",
       "plugin_prerelease_independent",
       "plugin_prerelease_candidate",
@@ -1383,25 +1400,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(fullReleaseWorkflow.jobs.normal_ci.if).toContain(
       "needs.evidence_reuse.outputs.reuse != 'true'",
     );
-    expect(fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.if).toBe(
-      "${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('[\"success\",\"skipped\"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('[\"success\",\"skipped\"]'), needs.evidence_reuse.result) && inputs.rerun_group == 'all' && contains(needs.resolve_target.outputs.target_version, '-alpha.') && needs.evidence_reuse.outputs.reuse != 'true' }}",
-    );
-    expect(fullReleaseWorkflow.jobs.docker_runtime_assets_preflight["timeout-minutes"]).toBe(20);
-    const dockerPreflightStep = fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.steps.find(
-      (step: WorkflowStep) => step.name === "Verify Docker runtime-assets prune path",
-    );
-    expect(dockerPreflightStep).toBeDefined();
-    expect(dockerPreflightStep?.run).toContain("docker build");
-    expect(dockerPreflightStep?.run).toContain("--target runtime-assets");
-    expect(dockerPreflightStep?.run).toContain("timeout --kill-after=30s 15m docker build");
-    expect(dockerPreflightStep?.run).toContain(
-      '--build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,codex"',
-    );
-    expect(
-      fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.steps.some(
-        (step: WorkflowStep) => step.name === "Build and smoke test final Docker runtime image",
-      ),
-    ).toBe(false);
     for (const jobName of [
       "plugin_prerelease_independent",
       "plugin_prerelease_candidate",
@@ -1495,7 +1493,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(captureInputs?.run).toContain('RELEASE_REF_INPUT" == "refs/heads/main"');
     expect(captureInputs?.run).toContain("release/[0-9]{4}");
     expect(captureInputs?.run).toContain("extended-stable/[0-9]{4}");
-    expect(captureInputs?.run).toContain("tideclaw/alpha/");
     expect(captureInputs?.run).toContain("refs/tags/");
     expect(captureInputs?.run).toContain("RELEASE_ALLOW_UNRELEASED_CHANGELOG_INPUT");
     expect(captureInputs?.run).toContain("allow_unreleased_changelog=false");

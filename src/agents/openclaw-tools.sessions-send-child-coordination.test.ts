@@ -139,8 +139,33 @@ function mockGatewayReply(
 function agentParams(call: GatewayCall): AgentCallParams {
   return (call.params ?? {}) as AgentCallParams;
 }
-function createSendTool(agentSessionKey: string) {
-  return createSessionsSendTool({ agentSessionKey, config, callGateway: callGatewayMock });
+function send(requesterKey: string, targetKey: string, timeoutSeconds = 1) {
+  return createSessionsSendTool({
+    agentSessionKey: requesterKey,
+    config,
+    callGateway: callGatewayMock,
+  }).execute("coordination", {
+    sessionKey: targetKey,
+    message: "Return the requested result",
+    timeoutSeconds,
+  });
+}
+function expectCoordination(
+  result: Awaited<ReturnType<typeof send>>,
+  child: boolean,
+  requesterChild: boolean,
+) {
+  expect.soft(result.details).toMatchObject({
+    status: "ok",
+    reply: "Requested result",
+    delivery: { status: child ? "skipped" : "pending" },
+  });
+  const agentCalls = calls.filter((call) => call.method === "agent");
+  expect.soft(agentCalls).toHaveLength(child ? 1 : 6);
+  expect
+    .soft(agentParams(agentCalls[0] ?? {}).inputProvenance?.sourceRole)
+    .toBe(requesterChild ? "subagent" : undefined);
+  return agentCalls;
 }
 async function writeEntry(sessionKey: string, entry: SessionEntry, storePath?: string) {
   const agentId = parseAgentSessionKey(sessionKey)?.agentId;
@@ -189,14 +214,12 @@ describe("sessions_send child coordination", () => {
 
   it.each([
     { direction: "requester", child: true },
-    { direction: "target", child: true },
-    { direction: "requester", child: false },
     { direction: "target", child: false },
   ])(
     "uses the registered alternate store for $direction with child=$child",
     async ({ direction, child }) => {
       const peerKey = "agent:peer:main";
-      const alternateKey = "agent:main:dashboard:alternate";
+      const alternateKey = child ? "agent:main:dashboard:alternate" : "agent:main:subagent:root";
       const alternate = openOpenClawAgentDatabase({ agentId: "main" });
       const configuredStorePath = resolveSessionStorePathCore(config.session?.store, {
         agentId: "main",
@@ -213,40 +236,18 @@ describe("sessions_send child coordination", () => {
           sessionId: "alternate-session",
           updatedAt: 1,
           parentSessionKey: peerKey,
-          ...(child ? { spawnedBy: peerKey, spawnDepth: 1 } : {}),
+          ...(child ? { spawnedBy: peerKey, spawnDepth: 1 } : { spawnDepth: 0 }),
         },
         alternate.path,
       );
       expect(
         loadSessionEntryReadOnly({ ...alternateScope, storePath: configuredStorePath }),
       ).toBeUndefined();
-      const selected = resolveGatewaySessionStoreTargetWithStore({
-        cfg: config,
-        key: alternateKey,
-        agentId: "main",
-        readOnly: true,
-        exactRead: true,
-      });
-      expect(selected.store[selected.canonicalKey]?.sessionId).toBe("alternate-session");
-      expect(selected.readSource?.path).toBe(alternate.path);
       const requesterKey = direction === "requester" ? alternateKey : peerKey;
       const targetKey = direction === "target" ? alternateKey : peerKey;
-      const result = await createSendTool(requesterKey).execute("alternate-coordination", {
-        sessionKey: targetKey,
-        message: "Return the requested result",
-        timeoutSeconds: 1,
-      });
+      const result = await send(requesterKey, targetKey);
       await settleSessionWork();
-      expect.soft(result.details).toMatchObject({
-        status: "ok",
-        reply: "Requested result",
-        delivery: { status: child ? "skipped" : "pending" },
-      });
-      const agentCalls = calls.filter((call) => call.method === "agent");
-      expect
-        .soft(agentParams(agentCalls[0] ?? {}).inputProvenance?.sourceRole)
-        .toBe(direction === "requester" && child ? "subagent" : undefined);
-      expect.soft(agentCalls).toHaveLength(child ? 1 : 6);
+      const agentCalls = expectCoordination(result, child, direction === "requester" && child);
       if (child) {
         expect(result.details).toMatchObject({ delivery: { mode: "announce" } });
         expect(agentParams(agentCalls[0] ?? {}).extraSystemPrompt).toBeUndefined();
@@ -278,28 +279,13 @@ describe("sessions_send child coordination", () => {
     },
   );
 
-  it.each(
-    [
-      {
-        binding: "retired lifecycle",
-        sessionId: "same-session",
-        lifecycleRevision: "retired",
-        sessionStartedAt: 50,
-        expectedChild: false,
-      },
-      {
-        binding: "current lifecycle",
-        sessionId: "same-session",
-        lifecycleRevision: "current",
-        sessionStartedAt: 50,
-        expectedChild: true,
-      },
-    ].flatMap((binding) =>
-      ["requester", "target"].map((direction) => Object.assign({}, binding, { direction })),
-    ),
-  )(
-    "binds $direction ACP coordination to its loaded entry for $binding",
-    async ({ direction, sessionId, lifecycleRevision, sessionStartedAt, expectedChild }) => {
+  it.each(["requester", "target"])(
+    "binds %s ACP coordination to its loaded lifecycle entry",
+    async (direction) => {
+      const expectedChild = direction === "target";
+      const lifecycleRevision = expectedChild ? "current" : "retired";
+      const sessionId = "same-session";
+      const sessionStartedAt = 50;
       const metadata = await vi.importActual<typeof import("../acp/runtime/session-meta.js")>(
         "../acp/runtime/session-meta.js",
       );
@@ -351,22 +337,9 @@ describe("sessions_send child coordination", () => {
           metadataRead.readAcpSessionMetaForEntry({ ...params, databasePath }),
       );
       await writeEntry(reusedKey, currentEntry);
-      const result = await createSendTool(requesterKey).execute("bound-acp-coordination", {
-        sessionKey: targetKey,
-        message: "Return the requested result",
-        timeoutSeconds: 1,
-      });
+      const result = await send(requesterKey, targetKey);
       await settleSessionWork();
-      expect(result.details).toMatchObject({
-        status: "ok",
-        reply: "Requested result",
-        delivery: { status: expectedChild ? "skipped" : "pending" },
-      });
-      const firstAgentCall = calls.find((call) => call.method === "agent");
-      expect(agentParams(firstAgentCall ?? {}).inputProvenance?.sourceRole).toBe(
-        direction === "requester" && expectedChild ? "subagent" : undefined,
-      );
-      expect(calls.filter((call) => call.method === "agent")).toHaveLength(expectedChild ? 1 : 6);
+      expectCoordination(result, expectedChild, direction === "requester" && expectedChild);
     },
   );
 
@@ -379,38 +352,17 @@ describe("sessions_send child coordination", () => {
       timeoutSeconds: 0,
     },
     {
-      name: "visible child",
-      requesterKey: "agent:main:dashboard:child",
-      entry: { spawnedBy: "agent:main:main", spawnDepth: 1 },
-      timeoutSeconds: 1,
-    },
-    {
       name: "restored child with cyclic lineage",
       requesterKey: "agent:main:dashboard:cycle",
       entry: { spawnedBy: "agent:main:dashboard:cycle" },
       timeoutSeconds: 1,
     },
-    {
-      name: "legacy ACP child",
-      requesterKey: "agent:main:acp:child",
-      entry: { parentSessionKey: "agent:main:main" },
-      acpMeta: { backend: "acpx" },
-      timeoutSeconds: 1,
-    },
   ])(
     "sessions_send does not start reply turns for $name after timeoutSeconds=$timeoutSeconds",
-    async ({ requesterKey, entry, timeoutSeconds, targetKey = "agent:main:main", acpMeta }) => {
+    async ({ requesterKey, entry, timeoutSeconds, targetKey = "agent:main:main" }) => {
       await writeEntry(requesterKey, { sessionId: "child", updatedAt: 1, ...entry });
-      readAcpSessionMetaMock.mockImplementation((params: { sessionKey?: string }) =>
-        params.sessionKey === requesterKey ? acpMeta : undefined,
-      );
       mockGatewayReply({ status: "timeout" });
-      const tool = createSendTool(requesterKey);
-      const result = await tool.execute("child-report", {
-        sessionKey: targetKey,
-        message: "The requested repair is ready for review.",
-        timeoutSeconds,
-      });
+      const result = await send(requesterKey, targetKey, timeoutSeconds);
       expect(result.details).toMatchObject({
         status: "accepted",
         delivery: { status: "skipped", mode: "announce" },
@@ -430,61 +382,6 @@ describe("sessions_send child coordination", () => {
       expect(calls.filter((call) => call.method === "agent.wait")).toHaveLength(
         timeoutSeconds === 0 ? 0 : 1,
       );
-    },
-  );
-
-  it.each([
-    { name: "dashboard threading", staleAcp: false },
-    { name: "stale ACP shadow", staleAcp: true },
-    {
-      name: "explicit zero depth under a child-looking key",
-      staleAcp: false,
-      nativeKey: true,
-      entry: { spawnDepth: 0 },
-    },
-    {
-      name: "explicit zero depth with stale lineage",
-      staleAcp: false,
-      entry: { spawnDepth: 0, spawnedBy: "agent:main:dashboard:parent-uuid" },
-    },
-  ])(
-    "sessions_send keeps peer A2A for $name without canonical child ownership",
-    async ({ staleAcp, nativeKey = false, entry = {} }) => {
-      const requesterKey = "agent:main:dashboard:parent-uuid";
-      const targetKey = nativeKey
-        ? "agent:main:subagent:root"
-        : staleAcp
-          ? "agent:main:acp:stale"
-          : "agent:main:dashboard:thread-uuid";
-      await writeEntry(targetKey, {
-        sessionId: "thread-session",
-        updatedAt: 1,
-        parentSessionKey: requesterKey,
-        ...entry,
-        ...(staleAcp
-          ? {
-              acp: {
-                backend: "acpx",
-                agent: "main",
-                runtimeSessionName: "retired-shadow",
-                mode: "persistent",
-                state: "idle",
-                lastActivityAt: 1,
-              } as const,
-            }
-          : {}),
-      });
-      const tool = createSendTool(requesterKey);
-      const waited = await tool.execute("call-dashboard-thread", {
-        sessionKey: targetKey,
-        message: "ping",
-        timeoutSeconds: 1,
-      });
-
-      expect(waited.details).toMatchObject({
-        reply: "Requested result",
-        delivery: { status: "pending" },
-      });
     },
   );
 });

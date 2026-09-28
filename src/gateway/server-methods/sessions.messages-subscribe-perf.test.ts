@@ -142,6 +142,7 @@ it("shares approval replay across 64 subscribers during unrelated approval activ
         {
           subscribed: true,
           key: sessionKey,
+          agentId: "main",
           approvalReplay: {
             sessionKey,
             updatedAtMs: 5000,

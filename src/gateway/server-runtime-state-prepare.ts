@@ -422,6 +422,7 @@ export async function prepareGatewayKernelState(params: {
     () => import("./server-channels.js"),
   );
   const channelManager = createChannelManager({
+    scheduler,
     getRuntimeConfig,
     channelLogs,
     channelRuntimeEnvs,
@@ -479,6 +480,7 @@ export async function prepareGatewayKernelState(params: {
   );
   const transportBridge = createGatewayTransportBridge();
   const presencePublisher = createPresencePublisher({
+    scheduler,
     broadcast: connectionState.broadcast,
     incrementPresenceVersion,
     getHealthVersion,
