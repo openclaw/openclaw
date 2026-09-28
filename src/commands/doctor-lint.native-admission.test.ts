@@ -188,9 +188,14 @@ export default {
             .split("\t");
           expect(bytes).toBe("native fixture bytes");
           expect(privateStateDir).not.toBe(state.stateDir);
-          expect(binary.startsWith(`${privateStateDir}${path.sep}`)).toBe(true);
+          expect(
+            binary.startsWith(
+              `${path.join(fs.realpathSync(state.stateDir), "tmp", "plugin-captures")}${path.sep}`,
+            ),
+          ).toBe(true);
+          expect(binary.startsWith(`${privateStateDir}${path.sep}`)).toBe(false);
           expect(fs.existsSync(privateStateDir)).toBe(false);
-          expect(fs.existsSync(binary)).toBe(false);
+          expect(fs.readFileSync(binary, "utf8")).toBe("native fixture bytes");
           expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
 
           // Retirement retries pending receipts after lint has restored the caller's state view.

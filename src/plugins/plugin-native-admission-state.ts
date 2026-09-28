@@ -1,5 +1,4 @@
 import path from "node:path";
-import { resolveStateDir } from "../config/state-dir.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import { isArtifactPreservingStateRead } from "../state/openclaw-state-db-readonly.js";
@@ -23,6 +22,7 @@ import {
   createPluginNativeCaptureRoot,
   retainPluginNativeCapturePath,
 } from "./plugin-source-capture-directory.js";
+import { resolvePluginSourceCaptureStateDir } from "./plugin-source-capture-state-dir.js";
 
 type NativeSnapshot = ReturnType<typeof createPluginNativeCaptureRoot>;
 export type AdmissionState = {
@@ -142,7 +142,7 @@ export function nativeAdmissionStateFor(cache = getPluginCache()): AdmissionStat
     bindAdmissionState(cache, {
       viewKey,
       // Deferred publication and disposal can run after the caller restores its environment.
-      captureStateDir: resolveStateDir(),
+      captureStateDir: resolvePluginSourceCaptureStateDir(),
       publicationStateDir: resolveActivePluginInstallRoots().stateDir,
       artifactPreservingReadOnly,
       preparedIndexes: new WeakSet(),
