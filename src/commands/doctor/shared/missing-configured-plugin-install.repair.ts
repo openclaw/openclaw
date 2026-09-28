@@ -1,6 +1,7 @@
-import { lstatSync } from "node:fs";
+import { lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { assertDirectoryIdentitySync } from "@openclaw/fs-safe/advanced";
+import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { stripAnsi } from "../../../../packages/terminal-core/src/ansi.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
@@ -643,8 +644,13 @@ async function repairMissingPluginInstallsWithLease(
     // can be reused before the index commits; cleanup must never adopt that replacement.
     const assertRemovalPath = removalPath ? capturePathRemovalGuard(removalPath) : undefined;
     const removalParent = removalPath ? path.dirname(removalPath) : undefined;
-    const removalParentIdentity =
-      assertRemovalPath && removalParent ? lstatSync(removalParent, { bigint: true }) : undefined;
+    const assertRemovalParent =
+      assertRemovalPath && removalParent ? capturePathRemovalGuard(removalParent) : undefined;
+    const removalParentReal =
+      assertRemovalParent && removalParent ? realpathSync(removalParent) : undefined;
+    const removalParentIdentity = removalParentReal
+      ? lstatSync(removalParentReal, { bigint: true })
+      : undefined;
     const previousRecords = nextRecords;
     const installed = await installCandidate(
       copyPluginInstallTransactionRequest(params, {
@@ -670,13 +676,25 @@ async function repairMissingPluginInstallsWithLease(
         removalPath &&
         assertRemovalPath &&
         removalParent &&
+        assertRemovalParent &&
+        removalParentReal &&
         removalParentIdentity &&
         (!installedRecord?.installPath ||
           !installPathsEqual(resolveUserPath(installedRecord.installPath, env), removalPath))
       ) {
         const assertRetirementOwned = retainMutationAuthority(() => {
           assertCurrent();
-          assertDirectoryIdentitySync(removalParent, removalParentIdentity);
+          // Operators may link the extensions root. Keep both that alias and
+          // its canonical directory pinned so retirement cannot adopt a replacement.
+          assertRemovalParent();
+          if (realpathSync(removalParent) !== removalParentReal) {
+            throw new FsSafeError("path-mismatch", "plugin retirement parent changed");
+          }
+          assertDirectoryIdentitySync(removalParentReal, {
+            dev: removalParentIdentity.dev,
+            ino: removalParentIdentity.ino,
+            realPath: removalParentReal,
+          });
           assertRemovalPath();
         });
         // The old path is outside the replacement transaction. Retire it only
@@ -692,7 +710,7 @@ async function repairMissingPluginInstallsWithLease(
                 assertRetirementOwned();
                 try {
                   await removePathWithinRoot({
-                    rootDir: removalParent,
+                    rootDir: removalParentReal,
                     relativePath: path.basename(removalPath),
                     recursive: true,
                     force: true,

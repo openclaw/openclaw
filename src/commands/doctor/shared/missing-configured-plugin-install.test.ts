@@ -4161,6 +4161,9 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     "path-replaced",
     "symlink-success",
     "symlink-replaced",
+    "parent-symlink-success",
+    "parent-symlink-replaced",
+    "parent-target-replaced",
   ] as const)(
     "settles an alternate-path repair before retiring the old payload: %s",
     async (phase) => {
@@ -4179,6 +4182,19 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         installPath: installDir,
       };
       mocks.resolveDefaultPluginExtensionsDir.mockReturnValue(extensionsDir);
+      const linkedParent =
+        phase === "parent-symlink-success" ||
+        phase === "parent-symlink-replaced" ||
+        phase === "parent-target-replaced";
+      const replacedParent =
+        phase === "parent-symlink-replaced" || phase === "parent-target-replaced";
+      const realExtensionsDir = path.join(root, "real-extensions");
+      const foreignExtensionsDir = path.join(root, "foreign-extensions");
+      const retainedParent = path.join(root, "retained-extensions");
+      if (linkedParent) {
+        fs.mkdirSync(realExtensionsDir);
+        fs.symlinkSync(realExtensionsDir, extensionsDir, "junction");
+      }
       const linked = phase === "symlink-success" || phase === "symlink-replaced";
       const oldTarget = linked ? path.join(root, "old-link-target") : installDir;
       const foreignTarget = path.join(root, "foreign-link-target");
@@ -4223,6 +4239,20 @@ describe("repairMissingConfiguredPluginInstalls", () => {
           }
           const receipt = await writeIndex(records, options);
           indexCommitted = true;
+          if (replacedParent) {
+            fs.renameSync(
+              phase === "parent-symlink-replaced" ? extensionsDir : realExtensionsDir,
+              retainedParent,
+            );
+            if (phase === "parent-symlink-replaced") {
+              fs.mkdirSync(foreignExtensionsDir);
+              fs.symlinkSync(foreignExtensionsDir, extensionsDir, "junction");
+            } else {
+              fs.mkdirSync(realExtensionsDir);
+            }
+            fs.mkdirSync(installDir, { recursive: true });
+            fs.writeFileSync(oldPayload, "foreign payload");
+          }
           if (phase === "path-replaced" || phase === "symlink-replaced") {
             fs.renameSync(installDir, retainedPath);
             if (linked) {
@@ -4321,7 +4351,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
             }
           },
         });
-        if (phase === "path-replaced" || phase === "symlink-replaced") {
+        if (phase === "path-replaced" || phase === "symlink-replaced" || replacedParent) {
           await expect(operation).rejects.toBeInstanceOf(AggregateError);
         } else if (phase === "index-failure" || phase === "cleanup-refusal") {
           await expect(operation).rejects.toBe(failure);
@@ -4358,13 +4388,25 @@ describe("repairMissingConfiguredPluginInstalls", () => {
             newManifest,
           );
           expect(effects).toEqual(
-            phase === "cleanup-refusal" || phase === "path-replaced" || phase === "symlink-replaced"
+            phase === "cleanup-refusal" ||
+              phase === "path-replaced" ||
+              phase === "symlink-replaced" ||
+              replacedParent
               ? ["index", "package-commit"]
               : ["index", "package-commit", "retire"],
           );
         }
-        if (phase === "success" || phase === "symlink-success") {
+        if (
+          phase === "success" ||
+          phase === "symlink-success" ||
+          phase === "parent-symlink-success"
+        ) {
           expect(fs.lstatSync(installDir, { throwIfNoEntry: false })).toBeUndefined();
+        } else if (replacedParent) {
+          expect(fs.readFileSync(oldPayload, "utf8")).toBe("foreign payload");
+          expect(fs.readFileSync(path.join(retainedParent, "brave", "index.ts"), "utf8")).toBe(
+            "export const retained = true;\n",
+          );
         } else if (phase === "path-replaced" || phase === "symlink-replaced") {
           expect(fs.readFileSync(oldPayload, "utf8")).toBe("foreign payload");
           expect(fs.readFileSync(path.join(retainedPath, "index.ts"), "utf8")).toBe(
@@ -4384,6 +4426,14 @@ describe("repairMissingConfiguredPluginInstalls", () => {
               "foreign payload",
             );
           }
+        }
+        if (linkedParent) {
+          expect(fs.lstatSync(extensionsDir).isSymbolicLink()).toBe(true);
+          expect(fs.realpathSync(extensionsDir)).toBe(
+            fs.realpathSync(
+              phase === "parent-symlink-replaced" ? foreignExtensionsDir : realExtensionsDir,
+            ),
+          );
         }
         expect(onWarning).toHaveBeenCalledTimes(phase === "cleanup-failure" ? 1 : 0);
       } finally {
