@@ -589,7 +589,10 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       query: this.query,
       searchQuery: this.searchQuery,
       searchDebouncing: this.composing || this.query !== this.searchQuery,
-      onFlushSearch: () => this.scheduleSessionSearch(this.query, true),
+      onFlushSearch: () => {
+        this.scheduleSessionSearch(this.query, true);
+        this.inputElement?.focus({ preventScroll: true });
+      },
       promptMode: this.promptMode,
       mentionMenu: this.mentionMenu,
       mentionHost: this.mentionHost,

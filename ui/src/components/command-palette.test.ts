@@ -867,7 +867,7 @@ describe("CommandPalette search", () => {
     await palette.updateComplete;
 
     expect(list).toHaveBeenCalledOnce();
-    expect(palette.textContent).toContain("Chat search failed");
+    expect(palette.textContent).toContain("Session search unavailable");
     expect(palette.textContent).not.toContain("No results");
     if (query === "plugins") {
       expect(findPaletteOption(palette, "Plugins")).toBeDefined();
@@ -885,7 +885,7 @@ describe("CommandPalette search", () => {
     input.value = "zz";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     await palette.updateComplete;
-    expect(palette.textContent).not.toContain("Chat search failed");
+    expect(palette.textContent).not.toContain("Session search unavailable");
     await vi.advanceTimersByTimeAsync(200);
     await palette.updateComplete;
     expect(palette.textContent).toContain("Recovered chat");

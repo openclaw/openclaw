@@ -370,7 +370,10 @@ hints. The input stays anchored in place. Search returns when the text is
 single-line and shortened to 50 characters or fewer, or cleared. Between 51 and
 59 characters, the palette keeps its current mode to avoid flickering while you
 edit. Counts exclude leading and trailing whitespace. Session-creation errors and
-recovery actions remain visible in either mode.
+recovery actions remain visible in either mode. If session or message search is
+unavailable, choose **Retry** to search the same text again. When no results are
+available, the failure appears in one compact row instead of empty filters and
+keyboard hints; it never reports a failed search as “No results found.”
 
 Pasted images appear as small, removable thumbnails below the text. Pasting or
 removing them leaves the input, **New session** action, and settings control in

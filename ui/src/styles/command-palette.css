@@ -333,6 +333,10 @@
 }
 
 .cmd-palette__source-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   flex: 0 1 auto;
   min-height: 0;
   overflow-y: auto;
@@ -340,6 +344,14 @@
   padding: 10px 20px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.cmd-palette__source-error--standalone {
+  border-top: 0;
+}
+
+.cmd-palette__retry {
+  flex-shrink: 0;
 }
 
 .cmd-palette__creation-error {

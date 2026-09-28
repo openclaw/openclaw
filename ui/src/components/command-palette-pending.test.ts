@@ -237,7 +237,7 @@ describe("CommandPalette pending searches", () => {
         expect(empty.textContent).toContain("to start a new session.");
         expect(empty.querySelector("button")).toBeNull();
       } else {
-        expect(palette.textContent).toContain("Chat search failed");
+        expect(palette.textContent).toContain("Session search unavailable");
         expect(palette.textContent).not.toContain("No results");
       }
     },
@@ -316,7 +316,7 @@ describe("CommandPalette pending searches", () => {
   });
 
   it.each([
-    { name: "partial", result: {}, notice: "Transcript search unavailable" },
+    { name: "partial", result: {}, notice: "Message search unavailable" },
     {
       name: "indexing",
       result: { indexing: true },

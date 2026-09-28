@@ -177,11 +177,68 @@ describe("CommandPalette session search", () => {
     expect(metadataItem?.textContent).toContain("Needle planning");
     metadataItem?.click();
     expect(palette.onSelectSession).toHaveBeenCalledWith("agent:main:metadata");
-    expect(palette.textContent).toContain(
-      "Transcript search unavailable — showing chat titles and metadata",
-    );
-    expect(palette.textContent).not.toContain("Chat search failed");
+    expect(palette.textContent).toContain("Message search unavailable.");
+    expect(palette.textContent).not.toContain("Session search unavailable");
+    expect(palette.querySelector(".cmd-palette__filters")).not.toBeNull();
   });
+
+  it.each(["messages", "sessions"])(
+    "keeps unavailable %s search compact and retries the unchanged query",
+    async (source) => {
+      const empty = { ...createSessionResult("agent:main:metadata", "Unused"), sessions: [] };
+      let unavailable = true;
+      const list = vi.fn<ApplicationContext["sessions"]["list"]>(async () => {
+        if (unavailable && source === "sessions") {
+          throw new Error("session source unavailable");
+        }
+        return empty;
+      });
+      const notice =
+        source === "messages" ? "Message search unavailable" : "Session search unavailable";
+      const request = vi.fn(async (method: string) => {
+        if (method !== "sessions.search") {
+          return { models: [] };
+        }
+        if (unavailable && source === "messages") {
+          throw new Error("transcript index unavailable");
+        }
+        return { results: [], sessions: [] };
+      });
+      const { gateway } = createGateway(true, {
+        methods: ["sessions.search", "sessions.create", "sessions.dispatch"],
+        request,
+      });
+      const { palette } = await mountPalette(createContext(gateway, list));
+      const query = "we have a nasty bug where";
+      await enterQuery(palette, query);
+      await vi.advanceTimersByTimeAsync(200);
+      await palette.updateComplete;
+
+      expect(palette.textContent).toContain(notice);
+      expect(palette.querySelector(".cmd-palette__filters")).toBeNull();
+      expect(palette.querySelector(".cmd-palette__no-results")).toBeNull();
+      expect(palette.querySelector(".cmd-palette__footer")).toBeNull();
+      const input = palette.querySelector<HTMLTextAreaElement>(".cmd-palette__input")!;
+      expect(input.hasAttribute("aria-describedby")).toBe(false);
+      const retry = palette.querySelector<HTMLButtonElement>(".cmd-palette__retry");
+      expect(retry?.textContent).toContain("Retry");
+
+      unavailable = false;
+      retry!.focus();
+      retry!.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await palette.updateComplete;
+      expect(request.mock.calls.filter(([method]) => method === "sessions.search")).toHaveLength(2);
+      expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ search: query }));
+      expect(input.value).toBe(query);
+      expect(document.activeElement).toBe(input);
+      expect(palette.textContent).not.toContain(notice);
+      expect(palette.querySelector(".cmd-palette__no-results")?.textContent).toContain(
+        "No results found",
+      );
+      expect(palette.isOpen).toBe(true);
+    },
+  );
 
   it.each([
     {

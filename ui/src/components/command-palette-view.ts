@@ -261,6 +261,12 @@ export function renderCommandPalette(readProps: () => CommandPaletteProps) {
   const mentionListboxId = paneDomId(props.mentionHost.paneId, "mention-menu-listbox");
   const mentionAnnouncementId = paneDomId(props.mentionHost.paneId, "mention-announcement");
   const { hideSearch, matches, grouped, items, activeIndex } = resolvePaletteResults(props);
+  const canRetrySearch = props.sessionSearchFailed || props.sessionSearchPartial;
+  const compactSearchFailure =
+    canRetrySearch &&
+    matches.length === 0 &&
+    !props.sessionSearchPending &&
+    !props.catalogSearchPending;
   const notices = [
     props.sessionSearchFailed
       ? t("palette.searchFailed")
@@ -341,7 +347,7 @@ export function renderCommandPalette(readProps: () => CommandPaletteProps) {
             : activeOptionId,
           describedBy: mentionsOpen
             ? mentionAnnouncementId
-            : hideSearch
+            : hideSearch || compactSearchFailure
               ? undefined
               : "cmd-palette-keys",
           actions: html`
@@ -402,7 +408,7 @@ export function renderCommandPalette(readProps: () => CommandPaletteProps) {
                 ? noChange
                 : html`
                     ${
-                      props.searchQuery.trim() && props.onSelectSession
+                      props.searchQuery.trim() && props.onSelectSession && !compactSearchFailure
                         ? html`<div
                             class="cmd-palette__filters"
                             role="group"
@@ -465,7 +471,26 @@ export function renderCommandPalette(readProps: () => CommandPaletteProps) {
                       )}
                     </div>
                     ${props.modelSearchError ? html`<div class="cmd-palette__source-error" role="status">${props.modelSearchError}</div>` : nothing}
-                    ${notices.map((notice) => html`<div class="cmd-palette__source-error" role="status">${notice}</div>`)}
+                    ${notices.map(
+                      (notice, index) => html`<div
+                        class="cmd-palette__source-error ${compactSearchFailure ? "cmd-palette__source-error--standalone" : ""}"
+                        role="status"
+                      >
+                        <span>${notice}</span>
+                        ${
+                          index === 0 && canRetrySearch
+                            ? html`<button
+                                type="button"
+                                class="btn btn--sm cmd-palette__retry"
+                                ?disabled=${props.searchDebouncing || props.draft.submitting || props.composing}
+                                @click=${props.onFlushSearch}
+                              >
+                                ${t("palette.searchRetry")}
+                              </button>`
+                            : nothing
+                        }
+                      </div>`,
+                    )}
                     ${
                       items.length === 0 && searchSettled
                         ? html`<div class="cmd-palette__no-results" role="status">
@@ -477,18 +502,24 @@ export function renderCommandPalette(readProps: () => CommandPaletteProps) {
                           </div>`
                         : nothing
                     }
-                    <div id="cmd-palette-keys" class="cmd-palette__footer">
-                      ${
-                        items.length > 0 && !props.query.includes("\n")
-                          ? html`<span><kbd>↑↓</kbd> ${t("palette.footer.navigate")}</span>
-                              <span><kbd>↵</kbd> ${t("palette.footer.select")}</span>`
-                          : nothing
-                      }
-                      <span
-                        ><kbd>${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.newline)}</kbd>
-                        ${t("palette.footer.newline")}</span
-                      >
-                    </div>
+                    ${
+                      compactSearchFailure
+                        ? nothing
+                        : html`<div id="cmd-palette-keys" class="cmd-palette__footer">
+                            ${
+                              items.length > 0 && !props.query.includes("\n")
+                                ? html`<span><kbd>↑↓</kbd> ${t("palette.footer.navigate")}</span>
+                                    <span><kbd>↵</kbd> ${t("palette.footer.select")}</span>`
+                                : nothing
+                            }
+                            <span
+                              ><kbd
+                                >${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.newline)}</kbd
+                              >
+                              ${t("palette.footer.newline")}</span
+                            >
+                          </div>`
+                    }
                   `
             }
           </div>

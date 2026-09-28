@@ -23,9 +23,10 @@ const enCommandPalette = {
     escapeKey: "esc",
     filterLabel: "Filter search results",
     filters: { all: "All", sessions: "Sessions", messages: "Messages" },
-    searchFailed: "Chat search failed — check the gateway logs and retry",
+    searchFailed: "Session search unavailable.",
     modelSearchFailed: "Model search unavailable. Change your search to retry.",
-    searchPartial: "Transcript search unavailable — showing chat titles and metadata",
+    searchPartial: "Message search unavailable.",
+    searchRetry: "Retry",
     searchIndexing: "Indexing older messages — search again shortly.",
     categories: {
       search: "Search",
