@@ -116,7 +116,18 @@ export function parsePhaseEEvidence(value: string, mode: PhaseEMode): PhaseEEvid
     evidence.mode !== mode ||
     !validModes.has(evidence.mode) ||
     !Number.isInteger(evidence.legacyAccountCount) ||
+    evidence.legacyAccountCount < 0 ||
     !Number.isInteger(evidence.manifestGeneration) ||
+    evidence.manifestGeneration < 0 ||
+    ![
+      "PREFLIGHT_OK",
+      "SETUP_COMPLETE",
+      "REPAIR_COMPLETE",
+      "ROLLBACK_COMPLETE",
+      "TEARDOWN_COMPLETE",
+      "BLOCKED",
+    ].includes(evidence.outcome) ||
+    !["RUNNING", "SETUP_REQUIRED", "UNKNOWN"].includes(evidence.seclogon) ||
     !Array.isArray(evidence.canonicalAccounts) ||
     evidence.canonicalAccounts.some(
       (a) =>
@@ -127,6 +138,7 @@ export function parsePhaseEEvidence(value: string, mode: PhaseEMode): PhaseEEvid
     ) ||
     !evidence.maintainer ||
     !Number.isInteger(evidence.maintainer.pid) ||
+    evidence.maintainer.pid <= 0 ||
     typeof evidence.maintainer.creationTime !== "string"
   )
     throw new PhaseEMaintainerError("PHASE_E_INVALID_EVIDENCE");

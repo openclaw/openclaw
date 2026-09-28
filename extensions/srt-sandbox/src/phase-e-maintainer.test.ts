@@ -68,6 +68,21 @@ describe("Phase E maintainer policy", () => {
         "preflight",
       ),
     ).toThrow("INVALID_EVIDENCE");
+    expect(() =>
+      parsePhaseEEvidence(
+        JSON.stringify({ ...JSON.parse(valid), outcome: "password=hunter2" }),
+        "preflight",
+      ),
+    ).toThrow("INVALID_EVIDENCE");
+    expect(() =>
+      parsePhaseEEvidence(
+        JSON.stringify({
+          ...JSON.parse(valid),
+          canonicalAccounts: [{ name: "srt-w0-01", sid: 9 }],
+        }),
+        "preflight",
+      ),
+    ).toThrow("INVALID_EVIDENCE");
   });
   it("proves the maintainer source has no delegated execution surface", async () => {
     const source = await import("node:fs/promises").then((fs) =>
