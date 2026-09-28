@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { CliToolResultDelta, CliToolUseStartDelta } from "./cli-output-contracts.js";
-import { createToolUseTracker, dispatchClaudeCliStreamingToolEvent } from "./cli-output-events.js";
+import { dispatchClaudeCliStreamingToolEvent } from "./cli-output-events.js";
 import { CLI_STREAM_JSON_OUTPUT_LIMITS } from "./cli-output-stream-limits.js";
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
+import { createToolUseTracker } from "./cli-output-tool-tracker.js";
 
 const PARENT_TOOL_CALL_ID = "toolu_parent_agent";
 
@@ -301,6 +302,116 @@ describe("tool use tracker retention bounds", () => {
     ]);
     expect(tracker.pendingByIndex.size).toBe(0);
     expect(tracker.pendingInputChars).toBe(0);
+  });
+
+  it("bounds start snapshots retained by pending tool blocks", () => {
+    const tracker = createToolUseTracker();
+    const starts: CliToolUseStartDelta[] = [];
+    const blocks = 16; // ~16 MiB of decoded start input against an 8 MiB bound.
+
+    for (let index = 0; index < blocks; index += 1) {
+      dispatchToTracker(tracker, {
+        type: "stream_event",
+        event: {
+          type: "content_block_start",
+          index,
+          content_block: {
+            type: "tool_use",
+            id: `toolu_snapshot_${index}`,
+            name: "Write",
+            // Distinct per block, so retention is real rather than a shared ref.
+            input: { content: `${index}`.padEnd(1024 * 1024, "a") },
+          },
+        },
+      });
+    }
+
+    const retainedSnapshotChars = [...tracker.pendingByIndex.values()].reduce(
+      (sum, pending) => sum + (pending.blockInput ? JSON.stringify(pending.blockInput).length : 0),
+      0,
+    );
+    expect(retainedSnapshotChars).toBeLessThanOrEqual(8 * 1024 * 1024);
+    expect(retainedSnapshotChars).toBeLessThan(blocks * 1024 * 1024);
+    // The aggregate counter measures the snapshots, so the two agree exactly.
+    expect(tracker.pendingInputChars).toBe(retainedSnapshotChars);
+    // Only the oversized input was dropped; every block is still tracked.
+    expect(tracker.pendingByIndex.size).toBe(blocks);
+
+    // The bound costs the arguments, never the progress signal: a block whose
+    // snapshot was refused still settles into a start when its stop arrives.
+    dispatchToTracker(
+      tracker,
+      { type: "stream_event", event: { type: "content_block_stop", index: blocks - 1 } },
+      { onToolUseStart: (tool) => starts.push(tool) },
+    );
+    expect(starts).toHaveLength(1);
+    expect(starts[0]?.toolCallId).toBe(`toolu_snapshot_${blocks - 1}`);
+    expect(starts[0]?.name).toBe("Write");
+    expect(starts[0]?.args).toEqual({});
+  });
+
+  it("refunds exactly what each pending block charged", () => {
+    const tracker = createToolUseTracker();
+    const begin = (index: number, input?: Record<string, unknown>) =>
+      dispatchToTracker(tracker, {
+        type: "stream_event",
+        event: {
+          type: "content_block_start",
+          index,
+          content_block: {
+            type: "tool_use",
+            id: `toolu_mixed_${index}`,
+            name: "Bash",
+            ...(input ? { input } : {}),
+          },
+        },
+      });
+    const appendInput = (index: number, partialJson: string) =>
+      dispatchToTracker(tracker, {
+        type: "stream_event",
+        event: {
+          type: "content_block_delta",
+          index,
+          delta: { type: "input_json_delta", partial_json: partialJson },
+        },
+      });
+    const stop = (index: number) =>
+      dispatchToTracker(tracker, {
+        type: "stream_event",
+        event: { type: "content_block_stop", index },
+      });
+
+    begin(0, { command: "echo one" }); // start snapshot only
+    begin(1); // neither snapshot nor fragments
+    begin(2, { command: "echo three" }); // snapshot superseded by fragments
+    appendInput(2, '{"command":');
+    appendInput(2, '"echo three"}');
+    appendInput(1, '{"command":"echo two"}');
+
+    const retainedChars = [...tracker.pendingByIndex.values()].reduce(
+      (sum, pending) =>
+        sum +
+        (pending.blockInput ? JSON.stringify(pending.blockInput).length : 0) +
+        pending.inputJsonParts.reduce((parts, part) => parts + part.length, 0),
+      0,
+    );
+    expect(retainedChars).toBeGreaterThan(0);
+    expect(tracker.pendingInputChars).toBe(retainedChars);
+
+    // Releasing every block returns the counter to zero: no leak, no over-refund.
+    stop(0);
+    stop(1);
+    stop(2);
+    expect(tracker.pendingByIndex.size).toBe(0);
+    expect(tracker.pendingInputChars).toBe(0);
+
+    // Re-beginning an index releases the previous entry's charge first, so a
+    // backend that restarts a block cannot accumulate a phantom balance.
+    begin(3, { command: "echo again" });
+    const chargedOnce = tracker.pendingInputChars;
+    expect(chargedOnce).toBeGreaterThan(0);
+    begin(3, { command: "echo again" });
+    expect(tracker.pendingInputChars).toBe(chargedOnce);
   });
 
   it("bounds pending tool blocks that never stop", () => {

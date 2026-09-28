@@ -27,11 +27,18 @@
  *                       tool id per iteration plus one tool block whose
  *                       `content_block_stop` never arrives. Pins that the bound
  *                       holds and that it does not cost the progress signal.
- *  5. subagent-exempt — 3x both budgets streamed as forwarded subagent traffic
+ *  5. start-snapshot-bound — 240 tool blocks (under the 256-block cap, so only
+ *                       the character bound can hold) each opened past
+ *                       exhaustion with a complete 512 KiB `content_block_start`
+ *                       input and never stopped. Pins that the decoded start
+ *                       snapshots are bounded in aggregate, that the blocks with
+ *                       room keep their input, and that a block past the bound
+ *                       still reports a tool start.
+ *  6. subagent-exempt — 3x both budgets streamed as forwarded subagent traffic
  *                       (`parent_tool_use_id` set), which the parent lane
  *                       discards. Pins that no budget is spent and the parent's
  *                       own answer is still assembled normally.
- *  6. progress-past-budget — after the budget IS spent by parent traffic, the
+ *  7. progress-past-budget — after the budget IS spent by parent traffic, the
  *                       parser still emits tool start, tool result and
  *                       attributed subagent progress. Pins the liveness facts
  *                       the gateway's stall detector reads once a tool is
@@ -277,6 +284,101 @@ function unfinishedToolStartFrame(): string {
   });
 }
 
+/**
+ * One `content_block_start` carrying the COMPLETE tool input, as the backends
+ * documented on `PendingToolUse.blockInput` send it — no `input_json_delta`
+ * follows and no `content_block_stop` ever arrives, so the decoded snapshot is
+ * retained for the life of the turn. Each block's payload is distinct, so the
+ * measurement below observes real retention rather than one shared string.
+ */
+function largeStartSnapshotFrame(index: number, inputChars: number): string {
+  return JSON.stringify({
+    type: "stream_event",
+    parent_tool_use_id: null,
+    session_id: SESSION_ID,
+    event: {
+      type: "content_block_start",
+      index,
+      content_block: {
+        type: "tool_use",
+        id: `toolu_proof_snapshot_${index}`,
+        name: "Write",
+        input: { content: `${index}`.padEnd(inputChars, "s") },
+      },
+    },
+  });
+}
+
+function blockStopFrame(index: number): string {
+  return JSON.stringify({
+    type: "stream_event",
+    parent_tool_use_id: null,
+    session_id: SESSION_ID,
+    event: { type: "content_block_stop", index },
+  });
+}
+
+function scenarioStartSnapshotBound(): void {
+  const starts: CliToolUseStartDelta[] = [];
+  const parser = createCliJsonlStreamingParser({
+    backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+    providerId: "claude-cli",
+    onAssistantDelta: () => {},
+    onToolUseStart: (tool) => starts.push(tool),
+  });
+  retainedForMeasurement.push(parser);
+  overflowRawCharBudget(parser);
+  forceGarbageCollection();
+  const heapAtOverflow = process.memoryUsage().heapUsed;
+
+  // Deliberately under the 256-block cap, so the block COUNT cannot be what
+  // bounds this: only the aggregate character bound on retained start snapshots
+  // can, which is the path the review flagged.
+  const blocks = 240;
+  const snapshotChars = 512 * 1024;
+  let streamedAfter = 0;
+  for (let index = 0; index < blocks; index += 1) {
+    const line = `${largeStartSnapshotFrame(index, snapshotChars)}\n`;
+    streamedAfter += line.length;
+    parser.push(line);
+  }
+  forceGarbageCollection();
+  const heapGrowth = process.memoryUsage().heapUsed - heapAtOverflow;
+
+  const snapshotCharsStreamed = blocks * snapshotChars;
+  assert(
+    blocks < 256,
+    `start-snapshot-bound: ${blocks} blocks reaches the pending-block cap, so the character bound was not what held`,
+  );
+  assert(
+    snapshotCharsStreamed > CLI_STREAM_JSON_OUTPUT_LIMITS.maxTurnRawChars,
+    `start-snapshot-bound: only ${snapshotCharsStreamed} snapshot chars streamed; the aggregate bound never engaged`,
+  );
+  assert(
+    heapGrowth < streamedAfter / 8,
+    `start-snapshot-bound: heap grew ${heapGrowth} bytes while streaming ${snapshotCharsStreamed} chars of start-snapshot input across ${blocks} never-stopping tool blocks past exhaustion; the snapshots are not bounded`,
+  );
+
+  // The bound costs the arguments of the blocks that overran it, never the
+  // progress signal: both the first block (snapshot kept) and the last (snapshot
+  // refused) still settle into a tool start when their stop finally arrives.
+  parser.push(`${blockStopFrame(0)}\n${blockStopFrame(blocks - 1)}\n`);
+  const firstStart = starts.find((tool) => tool.toolCallId === "toolu_proof_snapshot_0");
+  const lastStart = starts.find((tool) => tool.toolCallId === `toolu_proof_snapshot_${blocks - 1}`);
+  assert(
+    typeof firstStart?.args.content === "string" &&
+      (firstStart.args.content as string).length === snapshotChars,
+    "start-snapshot-bound: the first block lost its start snapshot, so the bound is discarding input it had room for",
+  );
+  assert(
+    lastStart !== undefined && Object.keys(lastStart.args).length === 0,
+    "start-snapshot-bound: the block past the bound did not settle into a start with empty args",
+  );
+  console.log(
+    `[start-snapshot-bound] ${snapshotCharsStreamed} chars of start-snapshot input across ${blocks} never-stopping tool blocks past exhaustion; heap delta ${heapGrowth} bytes against ${streamedAfter} streamed; first block kept its ${snapshotChars}-char snapshot, the block past the bound still reported a start`,
+  );
+}
+
 function scenarioRetentionFlat(): void {
   let assistantDeltaCount = 0;
   let toolStartCount = 0;
@@ -507,9 +609,11 @@ function scenarioProgressPastBudget(): void {
   );
 }
 
-// Retention runs first: a heap baseline taken after the other scenarios carries
-// their transient graphs and can mask the growth this measures.
+// The two retention scenarios run first: a heap baseline taken after the other
+// scenarios carries their transient graphs and can mask the growth these
+// measure.
 scenarioRetentionFlat();
+scenarioStartSnapshotBound();
 scenarioRecovered("recovered-raw", overflowRawCharBudget);
 scenarioRecovered("recovered-lines", overflowLineBudget);
 scenarioUnknowable();

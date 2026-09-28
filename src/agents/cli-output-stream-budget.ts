@@ -22,13 +22,11 @@ import type {
   CliToolResultDelta,
   CliToolUseStartDelta,
 } from "./cli-output-contracts.js";
-import {
-  type createToolUseTracker,
-  dispatchClaudeCliStreamingToolEvent,
-} from "./cli-output-events.js";
+import { dispatchClaudeCliStreamingToolEvent } from "./cli-output-events.js";
 import { isClaudeSubagentJsonlLine } from "./cli-output-jsonl-scan.js";
 import { decodeCliRecords, readClaudeAttributedSubagentProgressId } from "./cli-output-records.js";
 import { streamJsonOutputLimitErrorText } from "./cli-output-stream-limits.js";
+import type { createToolUseTracker } from "./cli-output-tool-tracker.js";
 
 function streamJsonOutputTruncationText(kind: "raw" | "lines", limit: number): string {
   const measure = kind === "lines" ? `${limit} lines` : `${limit} characters`;

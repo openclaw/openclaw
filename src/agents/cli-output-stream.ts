@@ -16,7 +16,6 @@ import type { CliEventProjectionState } from "./cli-output-events.js";
 import {
   createLeadingTaggedReasoningRouter,
   createThinkingTracker,
-  createToolUseTracker,
   dispatchClaudeCliStreamingToolEvent,
   dispatchClaudeCliThinking,
   dispatchGeminiCliStreamingToolEvent,
@@ -55,6 +54,7 @@ import {
   frameBoundedCliJsonlChunk,
   streamJsonOutputLimitErrorText,
 } from "./cli-output-stream-limits.js";
+import { createToolUseTracker } from "./cli-output-tool-tracker.js";
 export const CLI_STREAM_JSON_MISSING_RESULT_ERROR =
   "CLI stream-json output ended without a result event.";
 const CLAUDE_SYNTHETIC_NO_RESPONSE_ERROR = "Claude CLI returned a synthetic no-response result.";
