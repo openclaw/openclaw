@@ -209,21 +209,12 @@ export function retainSqliteReader(
 function diagnostics(readers: Iterable<ActiveReader>): SqliteReaderDiagnostic[] {
   const now = Date.now();
   return [...readers]
-    .map((reader) => {
-      const diagnostic: SqliteReaderDiagnostic = {
-        operation: reader.operation,
-        ownerKind: reader.ownerKind,
-        kind: reader.kind,
-        connectionId: reader.connectionId,
-        threadId: reader.threadId,
-        ageMs: Math.max(0, now - reader.startedAtMs),
-        idleMs: Math.max(0, now - reader.lastProgressAtMs),
-      };
-      if (reader.actorId !== undefined) {
-        diagnostic.actorId = reader.actorId;
-      }
-      return diagnostic;
-    })
+    .map(({ startedAtMs, lastProgressAtMs, ...reader }) =>
+      Object.assign(reader, {
+        ageMs: Math.max(0, now - startedAtMs),
+        idleMs: Math.max(0, now - lastProgressAtMs),
+      }),
+    )
     .toSorted((left, right) => right.ageMs - left.ageMs)
     .slice(0, 8);
 }
