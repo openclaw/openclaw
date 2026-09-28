@@ -21,7 +21,7 @@ import {
 } from "./update-command-service.js";
 
 export async function prepareUpdateRestart(
-  params: UpdateRestartParams,
+  params: UpdateRestartParams & { assertCurrent: () => void },
   restartConfigSnapshot: ConfigFileSnapshot,
 ) {
   let refreshGatewayServiceEnv = false;
@@ -58,6 +58,7 @@ export async function prepareUpdateRestart(
         resolveGatewayService(),
         serviceStateReadEnv,
         params.updateStepTimeoutMs,
+        { managerUid: serviceManagerUid, assertCurrent: params.assertCurrent },
       );
       serviceUpdateVerdict = await revalidateManagedGatewayServiceAfterUpdate({
         state: serviceState,

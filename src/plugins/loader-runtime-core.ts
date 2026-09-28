@@ -3,6 +3,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentToolResultMiddlewareRuntimeIds } from "./agent-tool-result-middleware.js";
 import { createUnavailableRuntime } from "./api-builder.js";
 import { resolvePluginCandidateInstallOwner } from "./candidate-install-owner.js";
+import type { PluginCapabilityCatalogHostContext } from "./capability-catalog-context.types.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import { isPluginRegistryCacheEnabled } from "./loader-cache.js";
@@ -94,7 +95,7 @@ function createDeferredGatewayNodesRuntime(runtime: PluginRuntime): PluginRuntim
 }
 
 export type NativePluginLoadBindings = Pick<PluginRuntime, "modelAuth" | "modelConfig"> & {
-  capabilityCatalogContext: NonNullable<PluginLoadOptions["capabilityCatalogContext"]>;
+  capabilityCatalogContext: PluginCapabilityCatalogHostContext;
 };
 
 function createCapabilityCatalogContextResolver(
@@ -284,11 +285,16 @@ export function loadOpenClawPluginsCore(
         context.normalized.entries[normalizePluginPolicyId(manifest.id)] ?? {};
       const preparedConfig: PreparedPluginConfig = { input: JSON.stringify(pluginConfig) };
       const degradedPlugin = findActiveDegradedPlugin(manifest.id);
+      // Control UI builds apply through the UI-only plugins.controlUi.reload owner. An in-place
+      // `openclaw plugins build` rewrites controlUi paths and the byte-derived schemaCacheKey, which
+      // must not force an unrelated backend replacement. Declaration presence still decides
+      // whether the browser catalog serves this record, and configSchema is compared by value.
+      const { controlUi, schemaCacheKey: _schemaCacheKey, ...runtimeManifest } = manifest;
       const signatureInputs = [
         candidate.source,
         candidate.origin,
         [installOwner, installOwner ? context.installRecords[installOwner] : undefined],
-        manifest,
+        { ...runtimeManifest, controlUi: controlUi !== undefined },
         activation,
         entryPolicy,
         degradedPlugin && degradedPluginMatchesRoot(degradedPlugin, candidate.rootDir)

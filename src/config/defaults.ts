@@ -4,7 +4,10 @@ import {
   collectManifestModelIdNormalizationPolicies,
   normalizeConfiguredProviderCatalogModelId,
 } from "@openclaw/model-catalog-core/provider-model-id-normalization";
-import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asFiniteNumber,
+  asPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
@@ -117,16 +120,13 @@ type SessionDefaultsOptions = {
 
 export function applyMessageDefaults(cfg: OpenClawConfig): OpenClawConfig {
   const messages = cfg.messages;
-  const hasAckScope = messages?.ackReactionScope !== undefined;
-  if (hasAckScope) {
+  if (messages?.ackReactionScope !== undefined) {
     return cfg;
   }
 
-  const nextMessages = messages ? { ...messages } : {};
-  nextMessages.ackReactionScope = "group-mentions";
   return {
     ...cfg,
-    messages: nextMessages,
+    messages: { ...messages, ackReactionScope: "group-mentions" },
   };
 }
 
@@ -263,8 +263,7 @@ export function applyModelDefaults(
       }
       const providerApi = normalizedProvider.api;
       const providerMaxTokens = asPositiveFiniteNumber(normalizedProvider.maxTokens);
-      const nextProvider = normalizedProvider;
-      if (nextProvider !== provider) {
+      if (normalizedProvider !== provider) {
         mutated = true;
       }
       let providerMutated = false;
@@ -358,14 +357,12 @@ export function applyModelDefaults(
         ) as ModelDefinitionConfig;
       });
 
-      if (!providerMutated) {
-        if (nextProvider !== provider) {
-          nextProviders[providerId] = nextProvider;
-        }
-        continue;
+      if (providerMutated) {
+        nextProviders[providerId] = { ...normalizedProvider, models: nextModels };
+        mutated = true;
+      } else if (normalizedProvider !== provider) {
+        nextProviders[providerId] = normalizedProvider;
       }
-      nextProviders[providerId] = { ...nextProvider, models: nextModels };
-      mutated = true;
     }
 
     if (mutated) {
@@ -483,14 +480,9 @@ export function applyModelDefaults(
 export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
   const agents = cfg.agents;
   const defaults = agents?.defaults;
-  const hasMax =
-    typeof defaults?.maxConcurrent === "number" && Number.isFinite(defaults.maxConcurrent);
-  const hasSubMax =
-    typeof defaults?.subagents?.maxConcurrent === "number" &&
-    Number.isFinite(defaults.subagents.maxConcurrent);
-  const hasSubArchive =
-    typeof defaults?.subagents?.archiveAfterMinutes === "number" &&
-    Number.isFinite(defaults.subagents.archiveAfterMinutes);
+  const hasMax = asFiniteNumber(defaults?.maxConcurrent) !== undefined;
+  const hasSubMax = asFiniteNumber(defaults?.subagents?.maxConcurrent) !== undefined;
+  const hasSubArchive = asFiniteNumber(defaults?.subagents?.archiveAfterMinutes) !== undefined;
   if (hasMax && hasSubMax && hasSubArchive) {
     return cfg;
   }
@@ -557,15 +549,13 @@ export function applyContextPruningDefaults(
   if (!hasAnthropicDefaultSignal(cfg, env)) {
     return cfg;
   }
-  return (
-    applyProviderConfigDefaultsForConfig({
-      provider: "anthropic",
-      config: cfg,
-      env,
-      manifestRegistry: options.manifestRegistry,
-      loadManifestRegistry: options.loadManifestRegistry,
-    }) ?? cfg
-  );
+  return applyProviderConfigDefaultsForConfig({
+    provider: "anthropic",
+    config: cfg,
+    env,
+    manifestRegistry: options.manifestRegistry,
+    loadManifestRegistry: options.loadManifestRegistry,
+  });
 }
 
 export function applyCompactionDefaults(cfg: OpenClawConfig): OpenClawConfig {

@@ -229,96 +229,85 @@ export function providerManualItems(
     const baseUrlConfig = readProviderBaseUrl(raw, env);
     const baseUrl = baseUrlConfig.baseUrl ?? resolveHermesImplicitBaseUrl(id);
     const headerConfig = readProviderHeaders(raw, env, includeSecrets);
-    if (transport && !HERMES_TRANSPORTS[transport]) {
+    const add = (suffix: string, itemSource: string, message: string, recommendation: string) => {
       items.push(
         createMigrationManualItem({
-          id: `manual:model-provider-transport:${sanitizeName(id)}`,
-          source: `${source}.transport`,
-          message: `Hermes provider "${id}" uses unsupported transport "${transport}".`,
-          recommendation:
-            "Configure an equivalent OpenClaw provider plugin or API adapter manually.",
+          id: `manual:model-provider-${suffix}:${sanitizeName(id)}`,
+          source: itemSource,
+          message,
+          recommendation,
         }),
+      );
+    };
+    if (transport && !HERMES_TRANSPORTS[transport]) {
+      add(
+        "transport",
+        `${source}.transport`,
+        `Hermes provider "${id}" uses unsupported transport "${transport}".`,
+        "Configure an equivalent OpenClaw provider plugin or API adapter manually.",
       );
     } else if (baseUrlConfig.unresolved) {
-      items.push(
-        createMigrationManualItem({
-          id: `manual:model-provider-endpoint-env:${sanitizeName(id)}`,
-          source,
-          message: `Hermes provider "${id}" references an endpoint environment variable that was not present in the Hermes .env file.`,
-          recommendation: "Configure the provider endpoint manually after migration.",
-        }),
+      add(
+        "endpoint-env",
+        source,
+        `Hermes provider "${id}" references an endpoint environment variable that was not present in the Hermes .env file.`,
+        "Configure the provider endpoint manually after migration.",
       );
     } else if (!baseUrl) {
-      items.push(
-        createMigrationManualItem({
-          id: `manual:model-provider-endpoint:${sanitizeName(id)}`,
-          source,
-          message: `Hermes provider "${id}" has no explicit endpoint to import safely.`,
-          recommendation: "Configure the provider endpoint manually after migration.",
-        }),
+      add(
+        "endpoint",
+        source,
+        `Hermes provider "${id}" has no explicit endpoint to import safely.`,
+        "Configure the provider endpoint manually after migration.",
       );
     }
     const inlineKey = raw.api_key ?? raw.apiKey;
     if (normalizeOptionalString(inlineKey) && !readEnvReference(inlineKey)) {
-      items.push(
-        createMigrationManualItem({
-          id: `manual:model-provider-inline-key:${sanitizeName(id)}`,
-          source: `${source}.api_key`,
-          message: `Hermes provider "${id}" contains an inline API key that was not copied into OpenClaw config.`,
-          recommendation: "Move the key to an environment variable or OpenClaw secret provider.",
-        }),
+      add(
+        "inline-key",
+        `${source}.api_key`,
+        `Hermes provider "${id}" contains an inline API key that was not copied into OpenClaw config.`,
+        "Move the key to an environment variable or OpenClaw secret provider.",
       );
     }
     if (headerConfig.blocked) {
-      items.push(
-        createMigrationManualItem({
-          id: `manual:model-provider-headers:${sanitizeName(id)}`,
-          source: `${source}.extra_headers`,
-          message: `Hermes provider "${id}" has literal request headers that require secret migration consent.`,
-          recommendation: "Rerun with --include-secrets or configure the headers manually.",
-        }),
+      add(
+        "headers",
+        `${source}.extra_headers`,
+        `Hermes provider "${id}" has literal request headers that require secret migration consent.`,
+        "Rerun with --include-secrets or configure the headers manually.",
       );
     } else if (headerConfig.unresolved) {
-      items.push(
-        createMigrationManualItem({
-          id: `manual:model-provider-headers-env:${sanitizeName(id)}`,
-          source: `${source}.extra_headers`,
-          message: `Hermes provider "${id}" has request header environment references that could not be resolved.`,
-          recommendation: "Configure the provider headers manually after migration.",
-        }),
+      add(
+        "headers-env",
+        `${source}.extra_headers`,
+        `Hermes provider "${id}" has request header environment references that could not be resolved.`,
+        "Configure the provider headers manually after migration.",
       );
     }
     if (headerConfig.invalid) {
-      items.push(
-        createMigrationManualItem({
-          id: `manual:model-provider-headers-invalid:${sanitizeName(id)}`,
-          source: `${source}.extra_headers`,
-          message: `Hermes provider "${id}" has non-scalar request header values that were not imported.`,
-          recommendation: "Configure valid string header values manually after migration.",
-        }),
+      add(
+        "headers-invalid",
+        `${source}.extra_headers`,
+        `Hermes provider "${id}" has non-scalar request header values that were not imported.`,
+        "Configure valid string header values manually after migration.",
       );
     }
     if (isRecord(raw.extra_body) && Object.keys(raw.extra_body).length > 0) {
-      items.push(
-        createMigrationManualItem({
-          id: `manual:model-provider-extra-body:${sanitizeName(id)}`,
-          source: `${source}.extra_body`,
-          message: `Hermes provider "${id}" adds request body fields that OpenClaw cannot import generically.`,
-          recommendation:
-            "Configure an equivalent provider plugin or supported request option manually.",
-        }),
+      add(
+        "extra-body",
+        `${source}.extra_body`,
+        `Hermes provider "${id}" adds request body fields that OpenClaw cannot import generically.`,
+        "Configure an equivalent provider plugin or supported request option manually.",
       );
     }
     const apiKeyEnv = readProviderApiKeyEnv(raw);
     if (apiKeyEnv && !env[apiKeyEnv]?.trim()) {
-      items.push(
-        createMigrationManualItem({
-          id: `manual:model-provider-key-env:${sanitizeName(id)}`,
-          source: `${source}.key_env`,
-          message: `Hermes provider "${id}" references ${apiKeyEnv}, but that value was not present in the Hermes .env file.`,
-          recommendation:
-            "Configure an OpenClaw auth profile for this provider or expose the variable to the OpenClaw runtime.",
-        }),
+      add(
+        "key-env",
+        `${source}.key_env`,
+        `Hermes provider "${id}" references ${apiKeyEnv}, but that value was not present in the Hermes .env file.`,
+        "Configure an OpenClaw auth profile for this provider or expose the variable to the OpenClaw runtime.",
       );
     }
   }

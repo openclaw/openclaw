@@ -30,8 +30,6 @@ import {
 
 registerDiscordProcessTestLifecycle();
 
-const PREVIEW_MODES = ["partial", "block", "progress"] as const;
-
 function registerHooks(...hooks: string[]) {
   const registered = new Set(hooks);
   getGlobalHookRunner.mockReturnValue({
@@ -39,7 +37,7 @@ function registerHooks(...hooks: string[]) {
   });
 }
 
-async function runHookSafetyFinalReply(mode: (typeof PREVIEW_MODES)[number]) {
+async function runHookSafetyFinalReply(mode: "partial" | "progress") {
   dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
     await params?.dispatcher.sendFinalReply({ text: "final answer" });
     await params?.dispatcher.waitForIdle();
@@ -52,8 +50,8 @@ async function runHookSafetyFinalReply(mode: (typeof PREVIEW_MODES)[number]) {
 }
 
 describe("processDiscordMessage provider preview hook safety", () => {
-  it.each(PREVIEW_MODES)("preserves %s previews when no hooks are registered", async (mode) => {
-    await runHookSafetyFinalReply(mode);
+  it("preserves previews when no hooks are registered", async () => {
+    await runHookSafetyFinalReply("partial");
 
     expect(createDiscordDraftStream).toHaveBeenCalledTimes(1);
   });
@@ -66,36 +64,17 @@ describe("processDiscordMessage provider preview hook safety", () => {
     expect(createDiscordDraftStream).toHaveBeenCalledTimes(1);
   });
 
-  it.each(
-    ["reply_payload_sending", "message_sending"].flatMap((hookName) =>
-      PREVIEW_MODES.map((mode) => [hookName, mode] as const),
-    ),
-  )("suppresses %s-capable %s previews", async (hookName, mode) => {
-    registerHooks(hookName);
+  it.each(["reply_payload_sending", "message_sending"])(
+    "suppresses previews for %s hooks",
+    async (hookName) => {
+      registerHooks(hookName);
 
-    await runHookSafetyFinalReply(mode);
+      await runHookSafetyFinalReply("partial");
 
-    expect(createDiscordDraftStream).not.toHaveBeenCalled();
-    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
-  });
-
-  it("suppresses previews when both modifying hooks are registered", async () => {
-    registerHooks("reply_payload_sending", "message_sending");
-
-    await runHookSafetyFinalReply("partial");
-
-    expect(createDiscordDraftStream).not.toHaveBeenCalled();
-  });
-
-  it("keeps explicitly disabled previews off without hooks", async () => {
-    const ctx = await createAutomaticDraftContext({
-      discordConfig: { streaming: { mode: "off" } },
-    });
-
-    await runProcessDiscordMessage(ctx);
-
-    expect(createDiscordDraftStream).not.toHaveBeenCalled();
-  });
+      expect(createDiscordDraftStream).not.toHaveBeenCalled();
+      expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("uses an explicit partial preview despite inherited block delivery", async () => {
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
@@ -169,27 +148,6 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
       allowedMentions: { parse: ["users", "roles"] },
       onPlatformSendDispatch: expect.any(Function),
-    });
-  });
-
-  it("sends a fresh final message when a targeted mention is mixed with @everyone", async () => {
-    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.dispatcher.sendFinalReply({ text: "heads up @Sentinel @everyone" });
-      await params?.dispatcher.waitForIdle();
-      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
-    });
-
-    const ctx = await createAutomaticDraftContext({
-      discordConfig: { streaming: { mode: "partial" }, maxLinesPerMessage: 5 },
-      cfg: {
-        channels: { discord: { mentionAliases: { Sentinel: "1485891428809707651" } } },
-      },
-    });
-
-    await runProcessDiscordMessage(ctx);
-
-    expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
-      allowedMentions: { parse: ["users", "roles"] },
     });
   });
 

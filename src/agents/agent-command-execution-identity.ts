@@ -227,6 +227,10 @@ export function sanitizePublicAgentCommandIngressOpts(
   return withoutAgentCommandExecutionIdentitySpawnFacts({
     ...opts,
     authProfileId: undefined,
+    clientCaps: undefined,
+    gatewayUiCommandTarget: undefined,
+    toolBindings: undefined,
+    taskSuggestionDeliveryMode: undefined,
     runtimeContextFragments: undefined,
     senderIsOwner: false,
     outputJsonSchema: undefined,
@@ -238,6 +242,7 @@ export function sanitizePublicAgentCommandIngressOpts(
     operationalRunInstance: undefined,
     assertSourceCurrent: undefined,
     operatorAuthority: undefined,
+    skillLibraryAuthoring: undefined,
     cronCreatorAuthorityCapability: undefined,
     onAdmittedRunContext: undefined,
     onPostAdmittedRunContext: undefined,

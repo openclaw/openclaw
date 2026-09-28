@@ -91,6 +91,7 @@ it.each([
   { scenario: "base", mode: "auto-auth" },
   { scenario: "mobile-pairing-reconnect", mode: "auto-auth" },
 ])("binds the current registry before $scenario service start ($mode)", ({ scenario, mode }) => {
+  const nativeEnabled = scenario === "legacy-operator-state" && mode === "manual";
   const source = readFileSync(runner, "utf8");
   const routing = source.slice(
     source.indexOf("companion_survivor_scenario()"),
@@ -108,7 +109,11 @@ it.each([
 source scripts/e2e/lib/upgrade-survivor/missing-load-path.sh
 SCENARIO="$1"
 UPDATE_RESTART_MODE="$2"
-baseline_version=2026.8.1
+baseline_version=${nativeEnabled ? "2026.9.4" : "2026.8.1"}
+native_assignment_enabled=${nativeEnabled ? "1" : "0"}
+legacy_seeded=0
+CANDIDATE_SPEC=synthetic-candidate.tgz
+package_root() { printf /synthetic/published-package; }
 COMMAND_TIMEOUT=1
 plugin_registry_pid=synthetic
 NPM_CONFIG_REGISTRY=initial-registry
@@ -118,6 +123,14 @@ openclaw_e2e_stop_process() { :; }
 configure_plugin_registry() {
   NPM_CONFIG_REGISTRY="\${1:-candidate}-registry"
   printf 'registry=%s\\n' "$NPM_CONFIG_REGISTRY"
+}
+seed_legacy_operator_gateway() { legacy_seeded=1; }
+start_native_assignment_fixture() {
+  if [ "$legacy_seeded" != "1" ]; then
+    echo "native agent makes the ownerless Cron roster ambiguous" >&2
+    return 92
+  fi
+  [ "$NPM_CONFIG_REGISTRY" = baseline-registry ]
 }
 prepare_schema_expectation() { printf 'schema-snapshot\\n'; }
 install_update_restart_systemctl_shim() {
@@ -135,7 +148,7 @@ run_update_restart_probe_gateway() {
 phase() {
   shift
   case "$1" in
-    configure_plugin_registry|prepare_schema_expectation|install_update_restart_systemctl_shim|run_update_restart_probe_gateway) "$@" ;;
+    configure_plugin_registry|prepare_schema_expectation|install_update_restart_systemctl_shim|run_update_restart_probe_gateway|seed_legacy_operator_gateway|start_native_assignment_fixture) "$@" ;;
     *) : ;;
   esac
 }
@@ -324,7 +337,7 @@ ${phases}
 
 const assertions = resolve("scripts/e2e/lib/upgrade-survivor/assertions.mjs");
 
-it("authors the default cron job before adding ops and retains both CLI creation receipts", () => {
+it.each(["2026.9.2", "2026.9.4"])("preserves Cron ownership on %s", (version) => {
   const root = tempDirs.make("survivor-operator-lifecycle-");
   const bin = join(root, "bin");
   const artifacts = join(root, "artifacts");
@@ -336,6 +349,12 @@ it("authors the default cron job before adding ops and retains both CLI creation
   mkdirSync(artifacts);
   mkdirSync(state);
   writeFileSync(configPath, "{}");
+  if (version === "2026.9.4") {
+    writeFileSync(
+      join(artifacts, "native-assignment-eligibility.json"),
+      JSON.stringify({ status: "required" }),
+    );
+  }
   const cliPath = join(bin, "openclaw");
   // Model the shipped API boundary: ownerless creation needs an unambiguous
   // roster, an explicit owner must exist, and global listing may fail later.
@@ -357,6 +376,10 @@ if (args[0] === "--help") {
 } else if (args[0] === "setup") {
   cfg.agents = { entries: { main: {} }, defaults: {} };
   fs.writeFileSync(configPath, JSON.stringify(cfg));
+} else if (args[0] === "plugins" && args[1] === "list") {
+  process.stdout.write(JSON.stringify({ plugins: [
+    { id: "device-pair", enabled: true }, { id: "webhooks", enabled: false },
+  ] }));
 } else if (args[0] === "config" && args[1] === "set") {
   const keys = args[2].split(".");
   let target = cfg;
@@ -403,6 +426,7 @@ if (args[0] === "--help") {
       env: {
         PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
         OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "legacy-operator-state",
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION: version,
         OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: artifacts,
         OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE: "baseline",
         OPENCLAW_UPGRADE_SURVIVOR_MOCK_PORT: "44081",
@@ -439,5 +463,10 @@ if (args[0] === "--help") {
       },
     },
   });
+  const approvals = JSON.parse(readFileSync(ledgerPath, "utf8")).approvals;
+  expect(approvals.defaults).toEqual({ security: "allowlist", ask: "off", askFallback: "deny" });
+  expect(approvals.agents["native-proof"]).toEqual(
+    version === "2026.9.4" ? { security: "full", ask: "off", askFallback: "deny" } : undefined,
+  );
   expect(JSON.parse(readFileSync(configPath, "utf8")).agents.defaults.systemAgent).toBeUndefined();
 });

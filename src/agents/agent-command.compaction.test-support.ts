@@ -173,7 +173,7 @@ vi.mock("./auth-profiles/store-runtime.js", async () => {
 
 vi.mock("../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: () => ({
-    resolveSession: () => null,
+    resolveSessionAsync: async () => null,
   }),
 }));
 

@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { danger, logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import {
   ChannelType,
@@ -24,14 +24,11 @@ import { runDiscordListenerWithSlowLog, type DiscordListenerLogger } from "./lis
 import type { DiscordLivePolicyReader } from "./live-policy.js";
 import { resolveFetchedDiscordThreadLikeChannelContext } from "./thread-channel-context.js";
 
-type LoadedConfig = OpenClawConfig;
-type RuntimeEnv = import("openclaw/plugin-sdk/runtime-env").RuntimeEnv;
-
 type DiscordReactionEvent = Parameters<MessageReactionAddListener["handle"]>[0];
 
 type DiscordReactionListenerParams = {
   readPolicy?: DiscordLivePolicyReader;
-  cfg: LoadedConfig;
+  cfg: OpenClawConfig;
   runtime: RuntimeEnv;
   logger: DiscordListenerLogger;
   onEvent?: () => void;
@@ -115,29 +112,17 @@ async function runDiscordReactionHandler(initialParams: {
     event: params.event,
     run: async () =>
       handleDiscordReactionEvent({
+        ...params.handlerParams,
         data: params.data,
         client: params.client,
         action: params.action,
-        cfg: params.handlerParams.cfg,
-        isPolicyCurrent: params.handlerParams.isPolicyCurrent,
-        accountId: params.handlerParams.accountId,
-        botUserId: params.handlerParams.botUserId,
-        dmEnabled: params.handlerParams.dmEnabled,
-        groupDmEnabled: params.handlerParams.groupDmEnabled,
-        groupDmChannels: params.handlerParams.groupDmChannels,
-        dmPolicy: params.handlerParams.dmPolicy,
-        allowFrom: params.handlerParams.allowFrom,
-        groupPolicy: params.handlerParams.groupPolicy,
-        allowNameMatching: params.handlerParams.allowNameMatching,
-        guildEntries: params.handlerParams.guildEntries,
-        logger: params.handlerParams.logger,
       }),
   });
 }
 
 type DiscordReactionIngressAuthorizationParams = {
   isPolicyCurrent?: () => boolean;
-  cfg: LoadedConfig;
+  cfg: OpenClawConfig;
   accountId: string;
   user: User;
   memberRoleIds: string[];
@@ -279,7 +264,7 @@ async function handleDiscordReactionEvent(
     data: DiscordReactionEvent;
     client: Client;
     action: "added" | "removed";
-    cfg: LoadedConfig;
+    cfg: OpenClawConfig;
     logger: DiscordListenerLogger;
   } & DiscordReactionRoutingParams,
 ) {

@@ -1,4 +1,3 @@
-import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ChannelOutboundTargetMode,
@@ -142,6 +141,8 @@ export function createCurrentRunDeliveryPreparer(params: {
   getOpts: () => AgentCommandOpts;
   assertCurrent: () => void;
   onWarning: (message: string) => void;
+  /** Formats preflight failures for logs; incognito runs must not echo error content. */
+  formatError: (error: unknown) => string;
   onPrepared: (delivery: PreparedCurrentRunDelivery, opts: AgentCommandOpts) => void;
 }) {
   let currentRunDeliveryPrepared = false;
@@ -165,7 +166,7 @@ export function createCurrentRunDeliveryPreparer(params: {
         throw error;
       }
       params.onWarning(
-        `delivery preflight failed; continuing model run with requested delivery intent because bestEffortDeliver is enabled: ${coerceErrorMessage(error)}`,
+        `delivery preflight failed; continuing model run with requested delivery intent because bestEffortDeliver is enabled: ${params.formatError(error)}`,
       );
     }
     params.assertCurrent();

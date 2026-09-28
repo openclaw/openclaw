@@ -1,5 +1,6 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
+import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import {
   asNullableObjectRecord as readRecord,
   asNullableRecord,
@@ -7,7 +8,6 @@ import {
 } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-// Control UI chat domain owns pure tool-card extraction rules.
 import {
   extractCanvasFromDetails,
   extractCanvasFromText,
@@ -81,15 +81,7 @@ function coerceArgs(value: unknown): unknown {
 }
 
 function parseJsonRecord(value: string): Record<string, unknown> | null {
-  const trimmed = value.trim();
-  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
-    return null;
-  }
-  try {
-    return readRecord(JSON.parse(trimmed));
-  } catch {
-    return null;
-  }
+  return safeParseJsonRecord(value.trim()) ?? null;
 }
 
 function extractToolText(item: Record<string, unknown>): string | undefined {
@@ -126,6 +118,9 @@ function readToolExitCode(...values: unknown[]): number | undefined {
 }
 
 export function isToolCardSkipped(card: ToolCard): boolean {
+  if (card.activity) {
+    return card.activity.status === "skipped";
+  }
   const details = readRecord(card.details);
   return (
     (card.live !== true || card.completed === true) &&
@@ -248,14 +243,6 @@ function resolveToolName(item: Record<string, unknown>, message: Record<string, 
     (typeof message.tool_name === "string" && message.tool_name.trim()) ||
     "tool"
   );
-}
-
-function resolveToolCardId(
-  item: Record<string, unknown>,
-  message: Record<string, unknown>,
-  index: number,
-): string {
-  return resolveToolCallId(item, message) ?? `${resolveToolName(item, message)}:${index}`;
 }
 
 function serializeToolInput(args: unknown): string | undefined {
@@ -397,13 +384,14 @@ function extractToolCards(message: unknown): ToolCard[] {
     if (isToolCallContentBlock(item)) {
       const args = coerceArgs(item.arguments ?? item.args ?? item.input);
       const callId = resolveToolCallId(item, m);
+      const name = resolveToolName(item, m);
       const details = item.details ?? m.details;
       cards.push({
-        id: resolveToolCardId(item, m, index),
+        id: callId ?? `${name}:${index}`,
         ...(callId ? { callId } : {}),
         ...(runId ? { runId } : {}),
         ...(parentToolCallId ? { parentToolCallId } : {}),
-        name: resolveToolName(item, m),
+        name,
         args,
         inputText: serializeToolInput(args),
         ...(details !== undefined ? { details } : {}),
@@ -418,8 +406,8 @@ function extractToolCards(message: unknown): ToolCard[] {
 
     if (isToolResultContentType(item.type)) {
       const name = resolveToolName(item, m);
-      const cardId = resolveToolCardId(item, m, index);
       const callId = resolveToolCallId(item, m);
+      const cardId = callId ?? `${name}:${index}`;
       const existing =
         cards.find((card) => card.id === cardId) ??
         cards.find(
@@ -511,7 +499,7 @@ function extractToolCards(message: unknown): ToolCard[] {
     const callId = resolveToolCallId({}, m);
     const exitCode = readToolExitCode(m, m.details, text ? parseJsonRecord(text) : undefined);
     cards.push({
-      id: resolveToolCardId({}, m, 0),
+      id: callId ?? `${resolveToolName({}, m)}:0`,
       ...(callId ? { callId } : {}),
       ...(messageRunId ? { runId: messageRunId } : {}),
       name,
@@ -560,5 +548,27 @@ export function extractToolCardsCached(message: unknown): ToolCard[] {
   }
   const cards = extractToolCards(message);
   toolCardsByMessage.set(message, cards);
+  return cards;
+}
+
+const toolCardsByBlock = new WeakMap<object, WeakMap<object, ToolCard[]>>();
+
+// Messages and blocks are immutable snapshots, including live stream updates.
+// Key block projections by their source identities, never a temporary envelope.
+export function extractToolBlockCardsCached(
+  message: Record<string, unknown>,
+  block: Record<string, unknown>,
+): ToolCard[] {
+  let byBlock = toolCardsByBlock.get(message);
+  const cached = byBlock?.get(block);
+  if (cached) {
+    return cached;
+  }
+  const cards = extractToolCards({ ...message, content: [block] });
+  if (!byBlock) {
+    byBlock = new WeakMap();
+    toolCardsByBlock.set(message, byBlock);
+  }
+  byBlock.set(block, cards);
   return cards;
 }

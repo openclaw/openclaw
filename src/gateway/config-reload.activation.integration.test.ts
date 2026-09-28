@@ -31,6 +31,7 @@ import {
   commitSetupInferenceActivation,
   type SetupInferenceConfigTarget,
 } from "../system-agent/setup-inference-transition.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -141,6 +142,7 @@ describe("setup activation reload ownership", () => {
         return "applied";
       };
       const reloader = startGatewayConfigReloader({
+        scheduler: createTestGatewayScheduler("fake-timers"),
         initialConfig: initial.config,
         initialCompareConfig: initial.sourceConfig,
         initialSnapshotRawHash: initial.hash ?? null,

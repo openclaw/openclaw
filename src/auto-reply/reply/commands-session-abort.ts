@@ -12,7 +12,7 @@ import { abortSessionRunTargetWithOutcome, stopSubagentsForRequester } from "./a
 import { setAbortMemory } from "./abort-primitives.js";
 import { isAbortTrigger } from "./abort-trigger-text.js";
 import { formatAbortReplyText } from "./abort.js";
-import { defineAuthorizedTextCommand } from "./command-gates.js";
+import { commandReply, defineAuthorizedTextCommand } from "./command-gates.js";
 import {
   persistAbortTargetEntry,
   resolveCommandSessionEntryForKey,
@@ -198,19 +198,14 @@ function stopSupervisedTarget(params: Parameters<CommandHandler>[0], target: Abo
 function tryStopSupervisedTarget(params: Parameters<CommandHandler>[0], target: AbortTarget) {
   return stopSupervisedTarget(params, target)?.catch(
     () =>
-      "Supervised task cancellation could not be confirmed; it may still be running. Retry /stop or inspect Tasks.",
+      "Supervised task cancellation could not be confirmed; it may still be running. Retry /stop.",
   );
 }
 
 export const handleStopCommand: CommandHandler = defineAuthorizedTextCommand(
   { label: "/stop", match: (body) => (body === "/stop" ? true : null) },
   async (params) => {
-    const abortTarget = resolveAbortTarget({
-      ctx: params.ctx,
-      sessionKey: params.sessionKey,
-      sessionEntry: params.sessionEntry,
-      sessionStore: params.sessionStore,
-    });
+    const abortTarget = resolveAbortTarget(params);
     const supervisedStop = tryStopSupervisedTarget(params, abortTarget);
     const supervised = supervisedStop ? await supervisedStop : undefined;
     let abortOutcome = { active: false, aborted: false };
@@ -245,14 +240,11 @@ export const handleStopCommand: CommandHandler = defineAuthorizedTextCommand(
 
     const rejectionReason =
       abortOutcome.active && !abortOutcome.aborted ? ("finalizing" as const) : undefined;
-    return {
-      shouldContinue: false,
-      reply: {
-        text: [formatAbortReplyText(stopped, rejectionReason, failed), supervised]
-          .filter(Boolean)
-          .join("\n"),
-      },
-    };
+    return commandReply(
+      [formatAbortReplyText(stopped, rejectionReason, failed), supervised]
+        .filter(Boolean)
+        .join("\n"),
+    );
   },
 );
 
@@ -262,24 +254,14 @@ export const handleAbortTrigger: CommandHandler = defineAuthorizedTextCommand(
     match: (_body, params) => (isAbortTrigger(params.command.rawBodyNormalized) ? true : null),
   },
   async (params) => {
-    const abortTarget = resolveAbortTarget({
-      ctx: params.ctx,
-      sessionKey: params.sessionKey,
-      sessionEntry: params.sessionEntry,
-      sessionStore: params.sessionStore,
-    });
+    const abortTarget = resolveAbortTarget(params);
     const supervisedStop = tryStopSupervisedTarget(params, abortTarget);
     const supervised = supervisedStop ? await supervisedStop : undefined;
     const abortOutcome = await applyAbortTarget(buildAbortTargetApplyParams(params, abortTarget));
     const rejectionReason =
       abortOutcome.active && !abortOutcome.aborted ? ("finalizing" as const) : undefined;
-    return {
-      shouldContinue: false,
-      reply: {
-        text: [formatAbortReplyText(undefined, rejectionReason), supervised]
-          .filter(Boolean)
-          .join("\n"),
-      },
-    };
+    return commandReply(
+      [formatAbortReplyText(undefined, rejectionReason), supervised].filter(Boolean).join("\n"),
+    );
   },
 );

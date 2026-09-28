@@ -44,13 +44,18 @@ export function resolveRuntimeWorkerUrl(params: {
   return new URL(`./${params.sourceWorkerName}${extension}`, params.currentModuleUrl);
 }
 
+function isBunWorkerRuntime(execPath: string): boolean {
+  // Current runtime metadata also identifies renamed binaries; foreign paths keep their own selection.
+  return execPath === process.execPath ? Boolean(process.versions.bun) : isBunRuntime(execPath);
+}
+
 export function resolveRuntimeWorkerArgv(url: URL, execPath = process.execPath): string[] {
   const entry = fileURLToPath(url);
   // Source workers may run in isolated workspaces without node_modules. Resolve
   // the trusted loader from this installation, never from the worker's cwd.
   // For ESM workers, do not install tsx's CJS hook: it rewrites compiled plugin
   // imports to require(), breaking dependencies with import-only exports.
-  if (!/\.[cm]?ts$/.test(entry) || isBunRuntime(execPath)) {
+  if (!/\.[cm]?ts$/.test(entry) || isBunWorkerRuntime(execPath)) {
     return [entry];
   }
   if (entry.endsWith(".cts")) {
@@ -74,7 +79,7 @@ export function resolveRuntimeWorkerThreadExecArgv(
   if (url.protocol !== "file:") {
     return [];
   }
-  return /\.[cm]?ts$/.test(fileURLToPath(url)) && !isBunRuntime(execPath)
+  return /\.[cm]?ts$/.test(fileURLToPath(url)) && !isBunWorkerRuntime(execPath)
     ? ["--import", import.meta.resolve("tsx/esm")]
     : [];
 }

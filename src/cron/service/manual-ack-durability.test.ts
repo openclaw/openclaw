@@ -11,12 +11,14 @@ import { runCommandBuffered } from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateDirForDatabasePath } from "../../state/openclaw-state-db.paths.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { createCronMutationCompletion } from "../mutation-completion.js";
 import { cronOwnerHardeningEntrypoints } from "../owner-hardening-runtime.test-support.js";
 import { CronService } from "../service.js";
 import { createCronStoreHarness, createNoopLogger } from "../service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../store.js";
+import { cronStoreKey } from "../store/key.js";
 import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
 import type { CronJob } from "../types.js";
 
@@ -40,6 +42,7 @@ it("records the exact acknowledged manual run after SIGKILL before command-lane 
   };
   await saveCronStore(storePath, { version: 1, jobs: [job] });
   const serviceUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.service);
+  const schedulerClockUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.schedulerClock);
   const queueUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.commandQueue);
   const stateDir = resolveOpenClawStateDirForDatabasePath(openOpenClawStateDatabase().path);
   const node = resolveTestNodeExecPath();
@@ -53,8 +56,10 @@ it("records the exact acknowledged manual run after SIGKILL before command-lane 
         `
           import { writeSync } from "node:fs";
           import { CronService } from ${JSON.stringify(serviceUrl.href)};
+          import { createTestGatewayScheduler } from ${JSON.stringify(schedulerClockUrl.href)};
           import { setCommandLaneConcurrency } from ${JSON.stringify(queueUrl.href)};
           const cron = new CronService({
+            scheduler: createTestGatewayScheduler(),
             storePath: ${JSON.stringify(storePath)},
             cronEnabled: true,
             defaultAgentId: "main",
@@ -118,6 +123,7 @@ it.each(["cleared", "write-failed"] as const)(
     const finished = createDeferredCore();
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       cronEnabled: false,
       log: createNoopLogger(),
@@ -137,7 +143,9 @@ it.each(["cleared", "write-failed"] as const)(
       throw new Error("Expected cron mutation completion");
     }
     if (failure === "write-failed") {
-      database.exec(`CREATE TEMP TRIGGER reject_manual_receipt BEFORE INSERT ON cron_run_receipts
+      database.exec(`CREATE TRIGGER reject_manual_receipt BEFORE INSERT ON cron_run_receipts
+        WHEN NEW.store_key = '${cronStoreKey(storePath).replaceAll("'", "''")}'
+          AND NEW.job_id = '${job.id}'
         BEGIN SELECT RAISE(ABORT, 'manual receipt unavailable'); END;`);
     }
     try {

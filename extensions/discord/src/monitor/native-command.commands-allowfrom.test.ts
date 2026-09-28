@@ -234,18 +234,6 @@ describe("Discord native slash commands with commands.allowFrom", () => {
     expectNotUnauthorizedReply(interaction);
   });
 
-  it("authorizes guild slash commands when commands.useAccessGroups is false and commands.allowFrom.discord matches the sender", async () => {
-    const { dispatchSpy, interaction } = await runGuildSlashCommand({
-      mutateConfig: (cfg) => {
-        cfg.commands = {
-          ...cfg.commands,
-        };
-      },
-    });
-    expect(dispatchSpy).toHaveBeenCalledTimes(1);
-    expectNotUnauthorizedReply(interaction);
-  });
-
   it("tolerates partial guild channels whose name getter throws", async () => {
     const { dispatchSpy, interaction } = await runGuildSlashCommand({
       mutateInteraction: (currentInteraction) => {
@@ -480,19 +468,6 @@ describe("Discord native slash commands with commands.allowFrom", () => {
   it("rejects guild slash commands when commands.allowFrom.discord does not match the sender", async () => {
     const { dispatchSpy, interaction } = await runGuildSlashCommand({
       userId: "999999999999999999",
-    });
-    expect(dispatchSpy).not.toHaveBeenCalled();
-    expectUnauthorizedReply(interaction);
-  });
-
-  it("rejects guild slash commands when commands.useAccessGroups is false and commands.allowFrom.discord does not match the sender", async () => {
-    const { dispatchSpy, interaction } = await runGuildSlashCommand({
-      userId: "999999999999999999",
-      mutateConfig: (cfg) => {
-        cfg.commands = {
-          ...cfg.commands,
-        };
-      },
     });
     expect(dispatchSpy).not.toHaveBeenCalled();
     expectUnauthorizedReply(interaction);

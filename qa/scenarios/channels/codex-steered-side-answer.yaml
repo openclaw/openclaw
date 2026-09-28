@@ -1,0 +1,252 @@
+title: Codex delivers a side answer while a host audit continues
+
+scenario:
+  id: codex-steered-side-answer
+  surface: channels
+  coverage:
+    primary:
+      - channels.message-final-reply
+    secondary:
+      - openai.codex-harness
+  plugins: [codex]
+  objective: A naturally steered native Codex turn must deliver the answer to a side question and the original task result with streaming and verbose output disabled.
+  successCriteria:
+    - The selected real Discord or Slack plugin receives the side question while the original host audit is demonstrably running.
+    - The live OpenAI model chooses how to answer; the fixture does not prescribe a message tool call or inject an assistant event.
+    - The review list reaches the original conversation while the audit is still held; both it and the completed audit arrive exactly once.
+    - Routine commentary remains absent from channel output.
+  docsRefs:
+    - docs/concepts/qa-e2e-automation.md
+    - docs/channels/discord.md
+    - docs/channels/slack.md
+    - docs/plugins/codex-harness.md
+  codeRefs:
+    - src/auto-reply/source-reply-delivery-mode.ts
+    - src/auto-reply/reply/reply-delivery.ts
+    - extensions/codex/src/app-server/event-projector-assistant.ts
+    - extensions/discord/src/monitor/message-run-queue.ts
+    - extensions/slack/src/monitor/message-handler/prepare-routing.ts
+  gatewayConfigPatch:
+    tools:
+      alsoAllow: [message]
+    agents:
+      defaults:
+        verboseDefault: "off"
+        blockStreamingDefault: "off"
+    messages:
+      visibleReplies: automatic
+      groupChat:
+        visibleReplies: automatic
+      queue:
+        mode: steer
+    channels:
+      discord:
+        joinIntro: false
+        streaming:
+          mode: "off"
+      slack:
+        joinIntro: false
+        replyToMode: "off"
+        streaming:
+          mode: "off"
+  execution:
+    kind: flow
+    channels: [discord, slack]
+    runtime: codex
+    providerMode: live-frontier
+    suiteIsolation: isolated
+    isolationReason: Owns one native Codex session and a gated workspace audit process so the side question arrives during the original turn.
+    retryCount: 0
+    timeoutMs: 300000
+    summary: Run with `pnpm openclaw qa suite --provider-mode live-frontier --channel discord --channel-driver crabline --model openai/gpt-5.6-sol --alt-model openai/gpt-5.6-sol --thinking medium --scenario codex-steered-side-answer`; use `--channel slack` for the Slack sibling. Compare the same fixture on baseline and candidate; this live behavioral probe is separate from deterministic native async-event coverage.
+    config:
+      requiredProviderMode: live-frontier
+      requiredProvider: openai
+      requiredModel: gpt-5.6-sol
+      requiredChannelDriver: crabline
+      channelFixtures:
+        discord:
+          conversationId: "123456789012345679"
+          senderId: driver
+        slack:
+          conversationId: C1234567890
+          senderId: U1234567890
+      names: [Alice Chen, Bruno Diaz, Casey Rao]
+      finalMarker: Audit complete
+
+flow:
+  steps:
+    - name: starts the native Codex host audit and steers a natural side question
+      actions:
+        - assert:
+            expr: "env.runtimeId === 'codex' && env.providerMode === config.requiredProviderMode && env.primaryModel === `${config.requiredProvider}/${config.requiredModel}`"
+            message: This proof requires native Codex and the pinned live OpenAI model.
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - resetTransport: true
+        - set: channel
+          value:
+            expr: "transport.requiredPluginIds.find((id) => Object.hasOwn(config.channelFixtures, id))"
+        - assert:
+            expr: "Boolean(channel)"
+            message: The selected Crabline transport must own Discord or Slack.
+        - set: route
+          value:
+            expr: config.channelFixtures[channel]
+        - set: sessionKey
+          value:
+            expr: "`agent:qa:${channel}:channel:${route.conversationId.toLowerCase()}`"
+        - set: auditDir
+          value:
+            expr: "path.join(env.gateway.workspaceDir, 'host-audit')"
+        - call: fs.mkdir
+          args: [{ ref: auditDir }, { recursive: true }]
+        - call: fs.writeFile
+          args:
+            - expr: "path.join(auditDir, 'review-list.txt')"
+            - expr: config.names.join('\n') + '\n'
+        - call: fs.writeFile
+          args:
+            - expr: "path.join(auditDir, 'hosts.json')"
+            - '[{"host":"cedar","restartRequired":false},{"host":"birch","restartRequired":true},{"host":"maple","restartRequired":false}]'
+        - call: fs.writeFile
+          args:
+            - expr: "path.join(auditDir, 'audit.mjs')"
+            - |-
+              import fs from 'node:fs';
+              import path from 'node:path';
+              import { fileURLToPath } from 'node:url';
+              const root = path.dirname(fileURLToPath(import.meta.url));
+              const hosts = JSON.parse(fs.readFileSync(path.join(root, 'hosts.json'), 'utf8'));
+              const release = path.join(root, 'audit-release');
+              await new Promise((resolve) => {
+                const watcher = fs.watch(root, () => {
+                  if (fs.existsSync(release)) { watcher.close(); resolve(); }
+                });
+                fs.writeFileSync(path.join(root, 'audit-started'), 'running');
+                console.log('Host checks are running. Waiting for the audit collector.');
+                if (fs.existsSync(release)) { watcher.close(); resolve(); }
+              });
+              const result = `${hosts.length} hosts checked; ${hosts.filter((host) => host.restartRequired).length} requires a restart.`;
+              fs.writeFileSync(path.join(root, 'audit-result.txt'), result);
+              console.log(result);
+        - set: sideObserved
+          value: false
+        - set: mainInbound
+          value: null
+        - set: sideInbound
+          value: null
+        - set: historyBeforeSide
+          value: null
+        - set: outboundBeforeSide
+          value: []
+        - set: outboundBeforeReleaseCount
+          value: 0
+        - set: sideObservationError
+          value: null
+        - try:
+            actions:
+              - sendInbound:
+                  conversation:
+                    id: { ref: route.conversationId }
+                    kind: group
+                  senderId: { ref: route.senderId }
+                  senderName: Morgan
+                  text: "@openclaw Please audit the hosts in host-audit/hosts.json. Read the review list in host-audit/review-list.txt first, then run node host-audit/audit.mjs and wait for its collector to finish. Leave the collector and its files alone while it runs. When it finishes, report the host count and how many need a restart in one sentence starting with 'Audit complete'."
+                saveAs: mainInbound
+              - call: waitForCondition
+                args:
+                  - lambda:
+                      async: true
+                      expr: "fs.readFile(path.join(auditDir, 'audit-started'), 'utf8').then((text) => text === 'running' ? true : undefined).catch(() => undefined)"
+                  - 120000
+              - set: historyBeforeSide
+                value:
+                  expr: "await env.gateway.call('chat.history', { sessionKey, limit: 100 })"
+              - set: outboundBeforeSide
+                value:
+                  expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').map((message) => message.id)"
+              - sendInbound:
+                  conversation:
+                    id: { ref: route.conversationId }
+                    kind: group
+                  senderId: { ref: route.senderId }
+                  senderName: Morgan
+                  text: "@openclaw Quick question while that runs: who is on the review list? Please answer that now, then keep going with the audit."
+                saveAs: sideInbound
+              - call: waitForCondition
+                saveAs: sideObserved
+                args:
+                  - lambda:
+                      async: true
+                      expr: |-
+                        state.getSnapshot().messages.some((message) =>
+                          message.direction === 'outbound' && message.conversation.id === route.conversationId && !message.deleted &&
+                          message.timestamp >= sideInbound.timestamp &&
+                          !outboundBeforeSide.includes(message.id) &&
+                          config.names.every((name) => String(message.text ?? '').includes(name))) || undefined
+                  - 90000
+            catchAs: sideObservationError
+            catch: []
+            finally:
+              - set: outboundBeforeReleaseCount
+                value:
+                  expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+              - call: fs.writeFile
+                args:
+                  - expr: "path.join(auditDir, 'audit-release')"
+                  - collector finished
+        - call: waitForCondition
+          args:
+            - lambda:
+                async: true
+                expr: "fs.readFile(path.join(auditDir, 'audit-result.txt'), 'utf8').then((text) => text === '3 hosts checked; 1 requires a restart.' ? true : undefined).catch(() => undefined)"
+            - 30000
+        - set: auditCompletedAt
+          value:
+            expr: "Math.floor((await fs.stat(path.join(auditDir, 'audit-result.txt'))).mtimeMs)"
+        - waitForOutbound:
+            conversation:
+              id: { ref: route.conversationId }
+              kind: group
+            textIncludes: { ref: config.finalMarker }
+            sinceIndex: { ref: outboundBeforeReleaseCount }
+            timeoutMs: 90000
+          saveAs: finalOutbound
+        - call: readSessionTranscriptSummary
+          saveAs: transcript
+          args: [{ ref: env }, { ref: sessionKey }]
+        - set: history
+          value:
+            expr: "await env.gateway.call('chat.history', { sessionKey, limit: 100 })"
+        - set: outbound
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === route.conversationId && !message.deleted)"
+        - call: fs.writeFile
+          args:
+            - expr: "path.join(env.outputDir, 'codex-steered-side-answer.json')"
+            - expr: "JSON.stringify({ model: env.primaryModel, runtime: env.runtimeId, channel, sessionKey, mainInbound, sideInbound, sideObserved, sideObservationError: sideObservationError ? String(sideObservationError) : undefined, outboundBeforeSide, outboundBeforeReleaseCount, auditCompletedAt, historyBeforeSide, history, transcript, outbound }, null, 2)"
+        - assert:
+            expr: "sideObserved === true"
+            message:
+              expr: "`The model did not answer the side question while its original audit was held: ${String(sideObservationError ?? '')}`"
+        - assert:
+            expr: "(transcript.assistantMirrors ?? []).filter((mirror) => mirror.identity.endsWith(':assistant')).length === 1"
+            message: Expected one native Codex App Server turn, with the side question steered into the original run.
+        - assert:
+            expr: "config.names.every((name) => outbound.filter((message) => String(message.text ?? '').includes(name)).length === 1)"
+            message:
+              expr: "`Expected each review-list name in exactly one delivered answer; outbound=${JSON.stringify(outbound)}`"
+        - assert:
+            expr: |-
+              outbound.filter((message) => String(message.text ?? '').includes(config.finalMarker)).length === 1 &&
+              finalOutbound.timestamp >= auditCompletedAt &&
+              /3\s+hosts/i.test(finalOutbound.text) && /\b1\b[^.]*restart/i.test(finalOutbound.text)
+            message: The original audit must finish with a new accurate visible result after its collector completes.
+        - assert:
+            expr: "outbound.every((message) => String(message.text ?? '').includes(config.finalMarker) || config.names.every((name) => String(message.text ?? '').includes(name)))"
+            message:
+              expr: "`Routine commentary leaked with streaming and verbose off: ${JSON.stringify(outbound)}`"
+      detailsExpr: "`Native Codex ${env.primaryModel}; channel=${channel}; side observed during audit=${sideObserved}; visible messages=${outbound.length}; tools=${JSON.stringify(transcript.assistantToolCallCounts)}; evidence=codex-steered-side-answer.json`"

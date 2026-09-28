@@ -24,6 +24,22 @@ export type SessionAttentionClassification =
       recoveryEligible: true;
     };
 
+export function isRepeatedModelRequestStalled(
+  activity: DiagnosticSessionActivitySnapshot,
+  abortThresholdMs: number,
+): boolean {
+  const now = Date.now();
+  return (
+    activity.hasActiveEmbeddedRun === true &&
+    (activity.repeatedRequestNoProgressAgeMs ?? 0) >=
+      Math.max(abortThresholdMs, activity.activeModelCallRequestTimeoutMs ?? 0) &&
+    (activity.activeRetryWaitDeadlineAtMs === undefined ||
+      now >= activity.activeRetryWaitDeadlineAtMs) &&
+    (activity.activeToolRecoveryDeadlineAtMs === undefined ||
+      now >= activity.activeToolRecoveryDeadlineAtMs)
+  );
+}
+
 export function classifySessionAttention(params: {
   state?: "idle" | "processing" | "waiting";
   queueDepth: number;

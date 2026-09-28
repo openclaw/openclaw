@@ -176,7 +176,7 @@ private fun WorkspaceDirectoryScreen(
           Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
             Text(
               text = if (path.isEmpty()) nativeString("Files") else path.substringAfterLast('/'),
-              style = ClawTheme.type.display.copy(fontSize = 24.sp, lineHeight = 28.sp),
+              style = ClawTheme.type.display,
               color = ClawTheme.colors.text,
             )
             if (path.isNotEmpty()) {
@@ -354,7 +354,7 @@ private fun WorkspaceFilePreview(
         ClawPlainIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = nativeString("Back"), onClick = onBack)
         Text(
           text = path.substringAfterLast('/'),
-          style = ClawTheme.type.display.copy(fontSize = 20.sp, lineHeight = 24.sp, lineBreak = androidx.compose.ui.text.style.LineBreak.Heading),
+          style = ClawTheme.type.display.copy(lineHeight = 24.sp, lineBreak = androidx.compose.ui.text.style.LineBreak.Heading),
           color = ClawTheme.colors.text,
           softWrap = true,
           modifier = Modifier.weight(1f),

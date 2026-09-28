@@ -15,20 +15,27 @@ import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { buildMediaGenerationRequestKey } from "../media-generation-task-status-shared.js";
 import { getCustomProviderApiKey } from "../model-auth.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
-import { ToolInputError, readNumberParam, readToolStringParam } from "./common.js";
+import {
+  ToolInputError,
+  readNumberParam,
+  readToolStringParam,
+  type AnyAgentTool,
+} from "./common.js";
 import {
   hasSnapshotCapabilityProviderAvailability,
   loadCapabilityMetadataSnapshot,
 } from "./manifest-capability-availability.js";
-import { createDefaultMediaGenerateBackgroundScheduler } from "./media-generate-background-shared.js";
+import {
+  createDefaultMediaGenerateBackgroundScheduler,
+  type MediaGenerationTaskHandle,
+} from "./media-generate-background-shared.js";
 import {
   prepareMediaGenerationTask,
   resolveMediaGenerateToolContext,
   type MediaGenerateToolOptions,
   videoGenerationTaskLifecycle,
-  type VideoGenerationTaskHandle,
 } from "./media-generate-background.js";
-import { acquireVideoGenerationToolProviders } from "./media-generation-tool-providers.js";
+import { acquireMediaGenerationToolProviders } from "./media-generation-tool-providers.js";
 import {
   buildMediaReferenceDetails,
   normalizeMediaReferenceInputs,
@@ -41,7 +48,6 @@ import {
   coerceToolModelConfig,
   type ToolModelConfig,
 } from "./model-config.helpers.js";
-import type { AnyAgentTool } from "./tool-runtime.helpers.js";
 import {
   createVideoGenerateDuplicateGuardResult,
   createVideoGenerateListActionResult,
@@ -362,7 +368,7 @@ export function createVideoGenerateTool(options?: MediaGenerateToolOptions): Any
         findDuplicate: createVideoGenerateDuplicateGuardResult,
         acquire: async (config) =>
           options?.preparedModelRuntime?.acquireMediaCapabilityProviders
-            ? acquireVideoGenerationToolProviders({
+            ? acquireMediaGenerationToolProviders("videoGenerationProviders", {
                 cfg: config,
                 prepared: options.preparedModelRuntime,
               })
@@ -537,7 +543,6 @@ export function createVideoGenerateTool(options?: MediaGenerateToolOptions): Any
               prompt,
               requestKey,
               providerId: selectedProvider?.id,
-              config: effectiveCfg,
               scheduleBackgroundWork,
               onAsyncTaskStarted: options?.onAsyncTaskStarted,
               onFailure: (message: string, meta?: Record<string, unknown>) =>
@@ -566,7 +571,7 @@ export function createVideoGenerateTool(options?: MediaGenerateToolOptions): Any
                 ...(filename ? { filename } : {}),
                 ...(timeoutMs !== undefined ? { timeoutMs } : {}),
               },
-              run: (taskHandle: VideoGenerationTaskHandle | null) =>
+              run: (taskHandle: MediaGenerationTaskHandle | null) =>
                 executeVideoGenerationJob({
                   effectiveCfg,
                   prompt,

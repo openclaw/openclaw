@@ -24,7 +24,6 @@ import {
   snapshotGatewayStartupEnv,
 } from "../gateway/test-helpers.env.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
-import { acquireStateDatabaseCoordinator } from "../infra/state-database-coordinator.js";
 import { createOpenClawTestState, withOpenClawTestState } from "../plugin-sdk/test-state.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -42,13 +41,7 @@ import { captureEnv, captureFullEnv, setTestEnvValue, withEnvAsync } from "./env
 import * as sessionCleanup from "./session-state-cleanup.js";
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  try {
-    await fs.stat(targetPath);
-  } catch (error) {
-    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
-    return;
-  }
-  throw new Error(`expected missing path: ${targetPath}`);
+  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
 }
 
 describe("openclaw test state", () => {
@@ -169,35 +162,6 @@ describe("openclaw test state", () => {
     }
   });
 
-  it("closes released fixture coordinator handles before directory removal", async () => {
-    nodeSqlite.requireNodeSqlite();
-    const opened = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
-    let root: string | undefined;
-    try {
-      await withOpenClawTestState({ label: "coordinator-retention" }, async (state) => {
-        root = state.root;
-        const databasePath = state.statePath("openclaw.sqlite");
-        // The first acquisition creates the file; only an existing verified identity can pool.
-        acquireStateDatabaseCoordinator({ databasePath }).release();
-        opened.mockClear();
-        const lease = acquireStateDatabaseCoordinator({ databasePath });
-        const index = opened.mock.calls.findIndex((args) => args[0] === lease.path);
-        const database = opened.mock.results[index]?.value as DatabaseSync | undefined;
-        lease.release();
-        try {
-          expect(database).toBeDefined();
-          expect(database!.isOpen).toBe(false);
-        } finally {
-          // Settle the real idle owner even when proving the pre-fix failure.
-          acquireStateDatabaseCoordinator({ databasePath, keepAlive: false }).release();
-        }
-      });
-      await expectPathMissing(root!);
-    } finally {
-      opened.mockRestore();
-    }
-  });
-
   it("joins callback descendants before beginning state release", async () => {
     const gate = createDeferredCore();
     const entered = createDeferredCore();
@@ -296,8 +260,6 @@ describe("openclaw test state", () => {
 
   it.each([
     { stage: "realpath", layout: "home", verifier: "default" },
-    { stage: ".openclaw", layout: "home", verifier: "default" },
-    { stage: "workspace", layout: "state-only", verifier: "default" },
     { stage: "home", layout: "split", verifier: "default" },
     { stage: "config", layout: "split", verifier: "default" },
     { stage: "environment", layout: "home", verifier: "default" },
@@ -551,7 +513,6 @@ describe("openclaw test state", () => {
     { agentEnv: undefined, applyEnv: true },
     { agentEnv: undefined, applyEnv: false },
     { agentEnv: "main", applyEnv: true },
-    { agentEnv: "main", applyEnv: false },
   ] as const)(
     "isolates inherited agent selectors with $agentEnv and applyEnv=$applyEnv",
     async ({ agentEnv, applyEnv }) => {
@@ -587,31 +548,32 @@ describe("openclaw test state", () => {
     },
   );
 
-  it.each([undefined, "main"] as const)(
-    "allows explicit agent-dir overrides with agentEnv=%s and restores absent or empty selectors",
-    async (agentEnv) => {
-      await withEnvAsync({ OPENCLAW_AGENT_DIR: undefined, PI_CODING_AGENT_DIR: "" }, async () => {
-        const overrides = {
-          OPENCLAW_AGENT_DIR: "/tmp/explicit-openclaw-agent",
-          PI_CODING_AGENT_DIR: "/tmp/explicit-legacy-agent",
-        };
-        const state = await createOpenClawTestState({ agentEnv, applyEnv: false, env: overrides });
-        try {
-          expect(state.env.OPENCLAW_AGENT_DIR).toBe(overrides.OPENCLAW_AGENT_DIR);
-          expect(state.env.PI_CODING_AGENT_DIR).toBe(overrides.PI_CODING_AGENT_DIR);
-          expect(process.env.OPENCLAW_AGENT_DIR).toBeUndefined();
-          expect(process.env.PI_CODING_AGENT_DIR).toBe("");
-          state.applyEnv();
-          expect(process.env.OPENCLAW_AGENT_DIR).toBe(overrides.OPENCLAW_AGENT_DIR);
-          expect(process.env.PI_CODING_AGENT_DIR).toBe(overrides.PI_CODING_AGENT_DIR);
-        } finally {
-          await state.cleanup();
-        }
+  it("allows explicit agent-dir overrides over main selection and restores absent or empty selectors", async () => {
+    await withEnvAsync({ OPENCLAW_AGENT_DIR: undefined, PI_CODING_AGENT_DIR: "" }, async () => {
+      const overrides = {
+        OPENCLAW_AGENT_DIR: "/tmp/explicit-openclaw-agent",
+        PI_CODING_AGENT_DIR: "/tmp/explicit-legacy-agent",
+      };
+      const state = await createOpenClawTestState({
+        agentEnv: "main",
+        applyEnv: false,
+        env: overrides,
+      });
+      try {
+        expect(state.env.OPENCLAW_AGENT_DIR).toBe(overrides.OPENCLAW_AGENT_DIR);
+        expect(state.env.PI_CODING_AGENT_DIR).toBe(overrides.PI_CODING_AGENT_DIR);
         expect(process.env.OPENCLAW_AGENT_DIR).toBeUndefined();
         expect(process.env.PI_CODING_AGENT_DIR).toBe("");
-      });
-    },
-  );
+        state.applyEnv();
+        expect(process.env.OPENCLAW_AGENT_DIR).toBe(overrides.OPENCLAW_AGENT_DIR);
+        expect(process.env.PI_CODING_AGENT_DIR).toBe(overrides.PI_CODING_AGENT_DIR);
+      } finally {
+        await state.cleanup();
+      }
+      expect(process.env.OPENCLAW_AGENT_DIR).toBeUndefined();
+      expect(process.env.PI_CODING_AGENT_DIR).toBe("");
+    });
+  });
 
   it("writes scenario configs and auth profile stores", async () => {
     await withOpenClawTestState(

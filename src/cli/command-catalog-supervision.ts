@@ -4,7 +4,7 @@ import type { CliCommandCatalogEntry } from "./command-catalog-types.js";
 // Activate configured policy hooks and normal execution bootstrap before custody.
 export const supervisedTaskCommandEntries: readonly CliCommandCatalogEntry[] = ["run", "work"].map(
   (action): CliCommandCatalogEntry => ({
-    commandPath: ["tasks", "supervise", action],
+    commandPath: ["sessions", "supervise", action],
     exact: true,
     policy: {
       configGuard: "run",

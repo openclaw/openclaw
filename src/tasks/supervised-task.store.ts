@@ -141,7 +141,9 @@ export function createSupervisedTask(
   return write((db) => {
     const flowId = input.flowId ?? randomUUID();
     if (!supervisorCurrent(db, ownerId, now, flowId)) {
-      throw new Error("No current supervisor accepted custody; start tasks supervise work first");
+      throw new Error(
+        "No current supervisor accepted custody; start `openclaw sessions supervise work` first",
+      );
     }
     if (input.policy.deadlineAt <= now) {
       throw new Error("Task deadline must be in the future");

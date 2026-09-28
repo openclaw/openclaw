@@ -46,6 +46,10 @@ export {
 } from "./schema/sessions-row.js";
 export * from "./schema/session-classification.js";
 export * from "./schema/session-participant.js";
+export {
+  SessionOwnerSessionCountSchema,
+  type SessionOwnerSessionCount,
+} from "./schema/sessions-list.js";
 export * from "./schema/sessions-suggestions.js";
 export * from "./schema/sessions-activity-summary.js";
 export * from "./schema/sessions-delete.js";
@@ -55,7 +59,6 @@ export {
   SESSION_CREATE_IDEMPOTENCY_RETENTION_MS,
   SESSION_CREATE_RETRY_WINDOW_MS,
 } from "./schema/sessions-create.js";
-export { TASKS_LIST_CURSOR_MAX_LENGTH } from "./schema/tasks.js";
 export * from "./schema/projects.js";
 export * from "./migration-api.js";
 export * from "./restart-unavailable.js";

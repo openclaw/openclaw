@@ -2,6 +2,7 @@
 export {
   createNativeSessionBindingLifecycle,
   type NativeSessionBindingLeaseOptions,
+  type NativeSessionBindingStateStore,
 } from "../agents/harness/native-session/binding-lifecycle.js";
 export {
   captureNativeSessionGenerationAuthority,

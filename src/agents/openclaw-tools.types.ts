@@ -87,6 +87,8 @@ export type OpenClawSharedToolsOptions = {
   swarmOutputSchema?: Record<string, unknown>;
   /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
   enableHeartbeatTool?: boolean;
+  /** Host-only observation after a canonical progress-card replacement commits. */
+  onProgressCardPlanSaved?: (unfinished: boolean) => void;
   onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
   claimYieldCompletion?: () => boolean | Promise<boolean>;
   /** Records hot-path tool-prep stages for reply startup diagnostics. */
@@ -102,6 +104,7 @@ export type OpenClawToolsOptions = {
   agentChannel?: string;
   /** Host-bound standalone request/grant authority, never supplied by tool arguments. */
   assertInvocationCurrent?: () => void;
+  assertInputCommitAllowed?: () => void;
   /** Exact admitted session policy shared with terminal-input authorization. */
   execSession?: ExecSessionDefaults;
   /** Effective run-local exec overrides, including prepared permission mode. */

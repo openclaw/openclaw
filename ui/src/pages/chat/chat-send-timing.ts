@@ -1,4 +1,5 @@
 import { asNonNegativeFiniteNumber as readChatSendTimingNumber } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { visibleSessionMatches, type SessionScopeHost } from "../../lib/sessions/index.ts";
 import { readChatQueueForScope } from "./chat-queue.ts";
@@ -16,12 +17,7 @@ type ChatSendTimingPhase =
   | "pending-painted"
   | "request-start"
   | "ack"
-  | "server-dispatch-started"
-  | "server-model-selected"
-  | "server-agent-run-started"
-  | "server-first-assistant-event"
-  | "server-dispatch-completed"
-  | "server-post-dispatch-completed"
+  | `server-${ChatSendServerTimingPhase}`
   | "queued-busy"
   | "waiting-model"
   | "waiting-reconnect"
@@ -36,22 +32,15 @@ type ChatSendTimingHost = SessionScopeHost & {
   renderLifecycle?: RenderLifecycle;
 };
 
-type ChatSendServerTimingPhase =
-  | "dispatch-started"
-  | "model-selected"
-  | "agent-run-started"
-  | "first-assistant-event"
-  | "dispatch-completed"
-  | "post-dispatch-completed";
-
-const CHAT_SEND_SERVER_TIMING_PHASES = new Set<ChatSendServerTimingPhase>([
+const CHAT_SEND_SERVER_TIMING_PHASES = [
   "dispatch-started",
   "model-selected",
   "agent-run-started",
   "first-assistant-event",
   "dispatch-completed",
   "post-dispatch-completed",
-]);
+] as const;
+type ChatSendServerTimingPhase = (typeof CHAT_SEND_SERVER_TIMING_PHASES)[number];
 const CHAT_SEND_SLOW_FIRST_ASSISTANT_MS = 1_500;
 
 export function recordChatSendTiming(
@@ -68,7 +57,7 @@ export function recordChatSendTiming(
     return;
   }
   recordControlUiPerformanceEvent(
-    host as Parameters<typeof recordControlUiPerformanceEvent>[0],
+    host,
     "control-ui.chat.send",
     {
       phase,
@@ -84,20 +73,13 @@ export function recordChatSendTiming(
   );
 }
 
-function readChatSendServerTimingPhase(value: unknown): ChatSendServerTimingPhase | null {
-  return typeof value === "string" &&
-    (CHAT_SEND_SERVER_TIMING_PHASES as ReadonlySet<string>).has(value)
-    ? (value as ChatSendServerTimingPhase)
-    : null;
-}
-
 export function recordChatSendServerTiming(host: ChatSendTimingHost, payload: unknown) {
   if (!payload || typeof payload !== "object") {
     return;
   }
   const record = payload as Record<string, unknown>;
-  const phase = readChatSendServerTimingPhase(record.phase);
-  const runId = typeof record.runId === "string" && record.runId.trim() ? record.runId.trim() : "";
+  const phase = CHAT_SEND_SERVER_TIMING_PHASES.find((candidate) => candidate === record.phase);
+  const runId = normalizeOptionalString(record.runId);
   if (!phase || !runId) {
     return;
   }
@@ -115,23 +97,22 @@ export function recordChatSendServerTiming(host: ChatSendTimingHost, payload: un
     return;
   }
   const slow = phase === "first-assistant-event" && durationMs >= CHAT_SEND_SLOW_FIRST_ASSISTANT_MS;
+  const identity: Record<string, string> = {};
+  for (const key of ["provider", "model", "agentRunId"] as const) {
+    const value = normalizeOptionalString(record[key]);
+    if (value) {
+      identity[key] = value;
+    }
+  }
   recordControlUiPerformanceEvent(
-    host as Parameters<typeof recordControlUiPerformanceEvent>[0],
+    host,
     "control-ui.chat.send",
     {
       phase: `server-${phase}`,
       durationMs,
       runId,
-      sessionKey:
-        entry?.sessionKey ??
-        (typeof record.sessionKey === "string" && record.sessionKey.trim()
-          ? record.sessionKey.trim()
-          : undefined),
-      agentId:
-        entry?.agentId ??
-        (typeof record.agentId === "string" && record.agentId.trim()
-          ? record.agentId.trim()
-          : undefined),
+      sessionKey: entry?.sessionKey ?? normalizeOptionalString(record.sessionKey),
+      agentId: entry?.agentId ?? normalizeOptionalString(record.agentId),
       sendAttempts: entry?.sendAttempts ?? 0,
       sendState: entry?.sendState,
       ackStatus: entry?.ackStatus,
@@ -140,15 +121,7 @@ export function recordChatSendServerTiming(host: ChatSendTimingHost, payload: un
       ...(serverReceivedToPhaseMs !== undefined ? { serverReceivedToPhaseMs } : {}),
       ...(serverDispatchStartedToPhaseMs !== undefined ? { serverDispatchStartedToPhaseMs } : {}),
       ...(serverPostDispatchMs !== undefined ? { serverPostDispatchMs } : {}),
-      ...(typeof record.provider === "string" && record.provider.trim()
-        ? { provider: record.provider.trim() }
-        : {}),
-      ...(typeof record.model === "string" && record.model.trim()
-        ? { model: record.model.trim() }
-        : {}),
-      ...(typeof record.agentRunId === "string" && record.agentRunId.trim()
-        ? { agentRunId: record.agentRunId.trim() }
-        : {}),
+      ...identity,
       ...(slow ? { slow: true } : {}),
     },
     { console: slow, warn: slow, maxBufferedEventsForType: 40 },

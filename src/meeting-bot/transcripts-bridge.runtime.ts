@@ -18,6 +18,7 @@ import type {
 import { sanitizeTranscriptSourceLocator } from "../transcripts/source-locator.js";
 import { TranscriptsSummaryChangedError } from "../transcripts/store-errors.js";
 import { TranscriptsStore } from "../transcripts/store.js";
+import { normalizeMeetingObservationProvenance } from "./observation-provenance.js";
 import { MeetingTranscriptDeliveryError } from "./session-transcript-store.js";
 import type { MeetingSessionRecord, MeetingTranscriptLine } from "./session-types.js";
 import type {
@@ -75,6 +76,7 @@ function descriptorForSession(
 
 function utteranceFromLine(params: {
   line: MeetingTranscriptLine;
+  providerId: string;
   session: MeetingSessionRecord;
   sequence: number;
 }): TranscriptUtterance {
@@ -88,6 +90,18 @@ function utteranceFromLine(params: {
     metadata: {
       agentId: params.session.agentId,
       meetingSessionId: params.session.id,
+      ...(params.line.provenance !== undefined
+        ? {
+            meetingObservationProvenance: normalizeMeetingObservationProvenance(
+              params.line.provenance,
+              {
+                observer: params.providerId,
+                observedAt: params.line.at,
+                speaker: params.line.speaker,
+              },
+            ),
+          }
+        : {}),
     },
   };
 }
@@ -223,6 +237,7 @@ export function createMeetingDurableTranscriptBridge<
           const sequence = active.utteranceCount;
           const utterance = utteranceFromLine({
             line,
+            providerId: params.options.providerId,
             session,
             sequence,
           });
@@ -236,6 +251,7 @@ export function createMeetingDurableTranscriptBridge<
             }
             const subscriberUtterance = {
               ...utterance,
+              metadata: structuredClone(utterance.metadata),
               id: `${subscriberSessionId}:${utterance.id ?? sequence}`,
               sessionId: subscriberSessionId,
             };

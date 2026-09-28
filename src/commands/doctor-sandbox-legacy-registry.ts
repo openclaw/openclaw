@@ -258,28 +258,19 @@ async function migrateShardedIfNeeded(
     return { kind: target.kind, status: "missing" };
   }
   const { entries, invalidFiles } = await readShardedEntriesDetailed(target.shardedDir);
-  if (invalidFiles.length > 0) {
-    for (const entry of entries) {
-      await writeLegacyEntryIfMissing(context, target.kind, entry);
-    }
-    const quarantinePath = await quarantineInvalidShards(target.shardedDir, invalidFiles);
-    await fs.rm(target.shardedDir, { recursive: true, force: true });
-    return {
-      kind: target.kind,
-      status: "quarantined-invalid",
-      path: target.shardedDir,
-      quarantinePath,
-    };
-  }
-  if (entries.length === 0) {
-    await fs.rm(target.shardedDir, { recursive: true, force: true });
-    return { kind: target.kind, status: "removed-empty" };
-  }
   for (const entry of entries) {
     await writeLegacyEntryIfMissing(context, target.kind, entry);
   }
+  const quarantinePath =
+    invalidFiles.length > 0
+      ? await quarantineInvalidShards(target.shardedDir, invalidFiles)
+      : undefined;
   await fs.rm(target.shardedDir, { recursive: true, force: true });
-  return { kind: target.kind, status: "migrated", entries: entries.length };
+  return quarantinePath
+    ? { kind: target.kind, status: "quarantined-invalid", path: target.shardedDir, quarantinePath }
+    : entries.length > 0
+      ? { kind: target.kind, status: "migrated", entries: entries.length }
+      : { kind: target.kind, status: "removed-empty" };
 }
 
 function combineMigrationResults(

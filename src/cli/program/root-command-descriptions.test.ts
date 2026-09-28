@@ -100,7 +100,7 @@ const JSON_NOT_APPLICABLE = {
       "models auth",
       "models auth order",
       "skills workshop",
-      "tasks supervise",
+      "sessions supervise",
     ],
   },
   interactive: {
@@ -143,7 +143,7 @@ const JSON_NOT_APPLICABLE = {
       "webhooks gmail run",
       "hooks relay",
       "sessions tail",
-      "tasks supervise work",
+      "sessions supervise work",
     ],
   },
   mutations: {
@@ -164,11 +164,6 @@ const JSON_NOT_APPLICABLE = {
       "mcp unset",
       "onboard recommendations acknowledge",
       "onboard recommendations refresh",
-      "tasks notify",
-      "tasks cancel",
-      "tasks retry",
-      "tasks dismiss",
-      "tasks flow cancel",
       "models set",
       "models set-image",
       "models aliases add",
@@ -326,6 +321,7 @@ describe("root command descriptions", () => {
       }
     }
 
+    expect(registeredCommands.has("tasks")).toBe(false);
     expect(missing, "catalog entries with no registered command or alias").toEqual([]);
     expect(mismatches, "root help vs registered command description drift").toEqual([]);
   });

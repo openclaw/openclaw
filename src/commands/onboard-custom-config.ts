@@ -4,6 +4,7 @@
  * Interactive and non-interactive setup share this module so validation,
  * endpoint probing, and config mutation stay in one command boundary.
  */
+import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -543,8 +544,11 @@ export function parseNonInteractiveCustomApiFlags(
 /** Applies custom provider config and optionally makes its model the primary model. */
 export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): CustomApiResult {
   const baseUrl = normalizeOptionalString(params.baseUrl) ?? "";
-  if (!URL.canParse(baseUrl)) {
-    throw new CustomApiError("invalid_base_url", "Custom provider base URL must be a valid URL.");
+  if (!isHttpUrl(baseUrl)) {
+    throw new CustomApiError(
+      "invalid_base_url",
+      "Custom provider base URL must be a valid HTTP or HTTPS URL.",
+    );
   }
 
   if (

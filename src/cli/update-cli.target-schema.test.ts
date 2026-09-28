@@ -652,7 +652,7 @@ describe("update-cli", () => {
 
     const logs = getLogOutput();
     expect(logs).toContain(
-      "could not inspect state database /tmp/openclaw/state/openclaw.sqlite: database busy; retry once the gateway releases it",
+      "could not inspect state database /tmp/openclaw/state/openclaw.sqlite: database busy; check database access and free disk space, then retry the update",
     );
   });
 

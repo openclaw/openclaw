@@ -9,8 +9,10 @@ import { invokeNodeWorkerSupervisorCommand } from "../../node-host/node-worker-s
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { createSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
@@ -43,9 +45,10 @@ import type {
   WorkerWorkspaceCommand,
   WorkerWorkspaceReconcileRequest,
 } from "../worker-environments/tunnel-contract.js";
+import { captureWorkspaceManifest } from "../worker-environments/workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "../worker-environments/workspace-manifest.js";
 import { createWorkerWorkspaceOperationCoordinator } from "../worker-environments/workspace-operation-coordinator.js";
-import { readActualWorkspaceManifest } from "../worker-environments/workspace-reconcile-core.js";
+import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
 import { loadSessionDiff } from "./sessions-diff.js";
 import { resolveLocalSessionWorkspaceRoot, sessionsFilesHandlers } from "./sessions-files.js";
 import {
@@ -56,7 +59,6 @@ import {
   hashContent,
   removeWorkspaceFixture,
 } from "./sessions-files.test-support.js";
-import { WORKSPACE_PREVIEW_MAX_BYTES } from "./workspace-fs.js";
 
 const mocks = vi.hoisted(() => ({
   load: vi.fn(),
@@ -204,7 +206,7 @@ beforeEach(async () => {
     url: "https://example.test/repository.git",
     assertCurrent: () => {},
   });
-  const base = await readActualWorkspaceManifest({
+  const base = await captureWorkspaceManifest({
     root: workspace,
     baseCommit: git("rev-parse", "HEAD"),
   });
@@ -250,8 +252,8 @@ beforeEach(async () => {
   context = requestContext();
 });
 
-afterEach(() => {
-  closeOpenClawStateDatabaseByPath(path.join(gatewayRoot, "state.sqlite"));
+afterEach(async () => {
+  await closeOpenClawStateDatabaseByPathAsync(path.join(gatewayRoot, "state.sqlite"));
   removeWorkspaceFixture(nodeRoot);
   removeWorkspaceFixture(gatewayRoot);
 });
@@ -264,7 +266,7 @@ async function withCheckpointAcceptance(failCapture = false) {
     sessionId: identity.sessionId,
     ownerEpoch: identity.generation,
   });
-  let placement = placements.startDispatch({
+  let placement = await placements.startDispatch({
     sessionId: identity.sessionId,
     sessionKey,
     agentId: "main",
@@ -289,7 +291,7 @@ async function withCheckpointAcceptance(failCapture = false) {
     });
   }
   generation = placement.generation;
-  const base = await readActualWorkspaceManifest({
+  const base = await captureWorkspaceManifest({
     root: workspace,
     baseCommit: source.baseCommit,
   });
@@ -315,7 +317,7 @@ async function withCheckpointAcceptance(failCapture = false) {
         if (request.source.kind !== "repository") {
           throw new Error("expected repository capture");
         }
-        const current = await readActualWorkspaceManifest({
+        const current = await captureWorkspaceManifest({
           root: workspace,
           baseCommit: source.baseCommit,
         });
@@ -346,7 +348,7 @@ async function withCheckpointAcceptance(failCapture = false) {
           verifyStable: async () => {
             expect(
               (
-                await readActualWorkspaceManifest({
+                await captureWorkspaceManifest({
                   root: workspace,
                   baseCommit: source.baseCommit,
                 })
@@ -593,7 +595,7 @@ it.each(["stop", "reset"])(
 );
 
 it("keeps stopped inspection limited to verified changed artifacts", async () => {
-  const base = await readActualWorkspaceManifest({
+  const base = await captureWorkspaceManifest({
     root: workspace,
     baseCommit: source.baseCommit,
   });
@@ -603,7 +605,7 @@ it("keeps stopped inspection limited to verified changed artifacts", async () =>
     path.join(workspace, "oversized.txt"),
     Buffer.alloc(WORKSPACE_PREVIEW_MAX_BYTES + 1, 97),
   );
-  const current = await readActualWorkspaceManifest({
+  const current = await captureWorkspaceManifest({
     root: workspace,
     baseCommit: source.baseCommit,
   });

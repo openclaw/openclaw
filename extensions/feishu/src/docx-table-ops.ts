@@ -1,19 +1,8 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
-/**
- * Table utilities and row/column manipulation operations for Feishu documents.
- *
- * Combines:
- * - Adaptive column width calculation (content-proportional, CJK-aware)
- * - Block cleaning for Descendant API (removes read-only fields)
- * - Table row/column insert, delete, and merge operations
- */
 import { assertFeishuApiSuccess } from "./api-response.js";
 import type { FeishuDocParams } from "./doc-schema.js";
-import type { FeishuBlockTable, FeishuDocxBlock } from "./docx-types.js";
+import type { FeishuDocxBlock } from "./docx-types.js";
 
-// ============ Table Utilities ============
-
-// Feishu table constraints
 const MIN_COLUMN_WIDTH = 50; // Feishu API minimum
 const MAX_COLUMN_WIDTH = 400; // Reasonable maximum for readability
 const DEFAULT_TABLE_WIDTH = 730; // Approximate Feishu page content width
@@ -25,32 +14,11 @@ function normalizeChildBlockIds(children: string[] | string | undefined): string
   return typeof children === "string" ? [children] : [];
 }
 
-function omitParentId(block: FeishuDocxBlock): FeishuDocxBlock {
-  const cleanBlock = { ...block };
-  delete cleanBlock.parent_id;
-  return cleanBlock;
-}
-
-function createDescendantTable(
-  table: FeishuBlockTable,
-  adaptiveWidths: number[] | undefined,
-): FeishuBlockTable {
-  const { row_size, column_size } = table.property || {};
-  return {
-    property: {
-      row_size,
-      column_size,
-      ...(adaptiveWidths?.length ? { column_width: adaptiveWidths } : {}),
-    },
-  };
-}
-
 function calculateAdaptiveColumnWidths(
   blocks: FeishuDocxBlock[],
   tableBlockId: string,
   getBlockMap: () => ReadonlyMap<string, FeishuDocxBlock>,
 ): number[] {
-  // Find the table block
   const tableBlock = blocks.find((b) => b.block_id === tableBlockId && b.block_type === 31);
 
   if (!tableBlock?.table?.property) {
@@ -71,7 +39,6 @@ function calculateAdaptiveColumnWidths(
 
   const blockMap = getBlockMap();
 
-  // Extract text content from a table cell
   function getCellText(cellId: string): string {
     const cell = blockMap.get(cellId);
     let text = "";
@@ -90,7 +57,6 @@ function calculateAdaptiveColumnWidths(
     return text;
   }
 
-  // Calculate weighted length (CJK chars count as 2)
   // CJK (Chinese/Japanese/Korean) characters render ~2x wider than ASCII
   function getWeightedLength(text: string): number {
     let length = 0;
@@ -107,7 +73,6 @@ function calculateAdaptiveColumnWidths(
     return length;
   }
 
-  // Find max content length per column
   const maxLengths = Array.from({ length: column_size }, () => 0);
 
   for (let row = 0; row < row_size; row++) {
@@ -134,25 +99,21 @@ function calculateAdaptiveColumnWidths(
     return Array.from({ length: column_size }, () => equalWidth);
   }
 
-  // Calculate proportional widths
-  let widths = maxLengths.map((len) => {
-    const proportion = len / totalLength;
-    return Math.round(proportion * totalWidth);
-  });
-
-  // Apply min/max constraints
-  widths = widths.map((w) => Math.max(MIN_COLUMN_WIDTH, Math.min(MAX_COLUMN_WIDTH, w)));
+  const widths = maxLengths.map((length) =>
+    Math.max(
+      MIN_COLUMN_WIDTH,
+      Math.min(MAX_COLUMN_WIDTH, Math.round((length / totalLength) * totalWidth)),
+    ),
+  );
 
   // Redistribute remaining space to fill total width
   let remaining = totalWidth - widths.reduce((a, b) => a + b, 0);
   while (remaining > 0) {
-    // Find columns that can still grow (not at max)
     const growable = widths.map((w, i) => (w < MAX_COLUMN_WIDTH ? i : -1)).filter((i) => i >= 0);
     if (growable.length === 0) {
       break;
     }
 
-    // Distribute evenly among growable columns
     const perColumn = Math.floor(remaining / growable.length);
     if (perColumn === 0) {
       break;
@@ -172,17 +133,7 @@ function calculateAdaptiveColumnWidths(
   return widths;
 }
 
-/**
- * Clean blocks for Descendant API with adaptive column widths.
- *
- * - Removes parent_id from all blocks
- * - Fixes children type (string → array) for TableCell blocks
- * - Removes merge_info (read-only, causes API error)
- * - Calculates and applies adaptive column_width for tables
- *
- * @param blocks - Array of blocks from Convert API
- * @returns Cleaned blocks ready for Descendant API
- */
+// Descendant creation rejects parent/merge metadata and needs normalized cell children.
 export function cleanBlocksForDescendant(blocks: FeishuDocxBlock[]): FeishuDocxBlock[] {
   // Each batch owns its lookup; later conversions may reuse IDs with different content.
   let blockMap: Map<string, FeishuDocxBlock> | undefined;
@@ -197,7 +148,6 @@ export function cleanBlocksForDescendant(blocks: FeishuDocxBlock[]): FeishuDocxB
     }
     return blockMap;
   };
-  // Pre-calculate adaptive widths for all tables
   const tableWidths = new Map<string, number[]>();
   for (const block of blocks) {
     if (block.block_type === 31 && block.block_id) {
@@ -207,24 +157,29 @@ export function cleanBlocksForDescendant(blocks: FeishuDocxBlock[]): FeishuDocxB
   }
 
   return blocks.map((block) => {
-    const cleanBlock = omitParentId(block);
+    const cleanBlock = { ...block };
+    delete cleanBlock.parent_id;
 
     // Fix: Convert API sometimes returns children as string for TableCell
     if (cleanBlock.block_type === 32 && typeof cleanBlock.children === "string") {
       cleanBlock.children = [cleanBlock.children];
     }
 
-    // Clean table blocks
     if (cleanBlock.block_type === 31 && cleanBlock.table) {
       const adaptiveWidths = block.block_id ? tableWidths.get(block.block_id) : undefined;
-      cleanBlock.table = createDescendantTable(cleanBlock.table, adaptiveWidths);
+      const { row_size, column_size } = cleanBlock.table.property || {};
+      cleanBlock.table = {
+        property: {
+          row_size,
+          column_size,
+          ...(adaptiveWidths?.length ? { column_width: adaptiveWidths } : {}),
+        },
+      };
     }
 
     return cleanBlock;
   });
 }
-
-// ============ Table Row/Column Operations ============
 
 type TableAction = Extract<
   FeishuDocParams,

@@ -1,7 +1,3 @@
-/**
- * Timeout, terminal-release, and diagnostic helpers for Codex dynamic tool
- * calls.
- */
 import {
   embeddedAgentLog,
   formatToolExecutionErrorMessage,
@@ -40,9 +36,7 @@ import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reaso
 
 export { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 
-/** Default timeout for Codex dynamic tool calls. */
 const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 90_000;
-/** Hard cap for ordinary per-call Codex dynamic tool timeout overrides. */
 const CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
 // timeoutSeconds is an inner tool budget. Keep enough outer-watchdog headroom
 // for bounded setup RPCs and the tool's structured timeout result to complete.
@@ -50,9 +44,7 @@ const CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS = 30_000;
 const CODEX_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS = 120_000;
 const CODEX_DYNAMIC_COMPUTER_GATEWAY_TIMEOUT_MS = 30_000;
 const CODEX_DYNAMIC_COMPUTER_COMPLETION_GRACE_MS = 30_000;
-/** Timeout for image-understanding style dynamic tool calls. */
 const CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
-/** Timeout for message-delivery dynamic tool calls. */
 const CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS = 600_000;
 /** Outer default for collector waits: full swarm budget plus completion grace. */
 const CODEX_DYNAMIC_AGENTS_WAIT_TOOL_TIMEOUT_MS =
@@ -429,7 +421,6 @@ type TerminalDynamicToolReleaseState = {
   pendingOpenClawDynamicToolCompletionIdsCount: number;
 };
 
-/** Decides whether a terminal dynamic tool response can release the Codex turn. */
 export function shouldReleaseTurnAfterTerminalDynamicTool(
   state: TerminalDynamicToolReleaseState,
 ): boolean {
@@ -444,14 +435,12 @@ export function shouldReleaseTurnAfterTerminalDynamicTool(
   );
 }
 
-/** Returns true when a non-async result should block terminal-release shortcuts. */
 export function shouldBlockTerminalReleaseForNonTerminalDynamicToolResult(
   response: CodexDynamicToolRuntimeResponse,
 ): boolean {
   return response.asyncStarted !== true;
 }
 
-/** Action chosen after checking terminal dynamic-tool diagnostics. */
 type TerminalDynamicToolBatchAction =
   | "idle"
   | "wait"
@@ -466,7 +455,6 @@ type TerminalDynamicToolBatchState = {
   hasPendingTerminalDynamicToolRelease: boolean;
 };
 
-/** Resolves whether terminal diagnostic state should release, wait, or stay idle. */
 export function resolveTerminalDynamicToolBatchAction(
   state: TerminalDynamicToolBatchState,
 ): TerminalDynamicToolBatchAction {
@@ -486,7 +474,6 @@ export function resolveTerminalDynamicToolBatchAction(
   return "idle";
 }
 
-/** Returns true for diagnostic events that terminate a dynamic tool call. */
 export function isDynamicToolTerminalDiagnosticEvent(
   event: DiagnosticEventPayload,
 ): event is TerminalToolExecutionDiagnostic {
@@ -497,7 +484,6 @@ export function isDynamicToolTerminalDiagnosticEvent(
   );
 }
 
-/** Matches terminal diagnostics to a specific dynamic tool call id/name. */
 export function isMatchingDynamicToolTerminalDiagnostic(params: {
   event: TerminalToolExecutionDiagnostic;
   call: CodexDynamicToolCallParams;
@@ -527,7 +513,6 @@ export function isMatchingDynamicToolTerminalDiagnostic(params: {
   );
 }
 
-/** Checks pending diagnostics for a terminal event matching a tool call. */
 export function hasPendingDynamicToolTerminalDiagnostic(params: {
   call: CodexDynamicToolCallParams;
   runId?: string;
@@ -548,7 +533,6 @@ export function hasPendingDynamicToolTerminalDiagnostic(params: {
   });
 }
 
-/** Resolves per-tool timeout, applying media/message defaults and hard caps. */
 export function resolveDynamicToolCallTimeoutMs(params: {
   call: CodexDynamicToolCallParams;
   config: EmbeddedRunAttemptParams["config"];
@@ -594,28 +578,13 @@ export function resolveDynamicToolCallTimeoutMs(params: {
   if (params.call.tool === "message") {
     return CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS;
   }
-  if (params.call.tool === "agents_wait") {
-    // Collector waits default to the full swarm budget, but an operator's
-    // configured per-tool timeout still wins over that default. The outer
-    // watchdog must outlive the tool's own 600s deadline (cap + grace) so a
-    // full-budget wait returns its structured timeout result instead of
-    // being aborted by the harness first.
-    const requestedMs =
-      readDynamicToolCallTimeoutMs(params.call.arguments) ??
-      readConfiguredDynamicToolTimeoutMs(params.call.tool, params.config) ??
-      CODEX_DYNAMIC_AGENTS_WAIT_TOOL_TIMEOUT_MS;
-    return Math.max(
-      1,
-      Math.min(
-        CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS + CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS,
-        Math.floor(requestedMs),
-      ),
-    );
-  }
+  // Collector waits need the full swarm budget plus grace for their structured timeout.
+  const isCollectorWait = params.call.tool === "agents_wait";
   return clampDynamicToolTimeoutMs(
     readDynamicToolCallTimeoutMs(params.call.arguments) ??
       readConfiguredDynamicToolTimeoutMs(params.call.tool, params.config) ??
-      CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
+      (isCollectorWait ? CODEX_DYNAMIC_AGENTS_WAIT_TOOL_TIMEOUT_MS : CODEX_DYNAMIC_TOOL_TIMEOUT_MS),
+    isCollectorWait ? CODEX_DYNAMIC_AGENTS_WAIT_TOOL_TIMEOUT_MS : CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS,
   );
 }
 
@@ -723,6 +692,9 @@ function readPositiveFiniteTimeoutMs(value: unknown): number | undefined {
     : undefined;
 }
 
-function clampDynamicToolTimeoutMs(timeoutMs: number): number {
-  return Math.max(1, Math.min(CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS, Math.floor(timeoutMs)));
+function clampDynamicToolTimeoutMs(
+  timeoutMs: number,
+  maximum = CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS,
+): number {
+  return Math.max(1, Math.min(maximum, Math.floor(timeoutMs)));
 }

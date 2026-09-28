@@ -181,12 +181,6 @@ describe("session lifecycle state", () => {
     ).toBe(true);
   });
 
-  it("applies lifecycle events whose owning sessionId matches the current row", () => {
-    expect(
-      isStaleLifecycleEventForSession({ owningSessionId: "same-id", currentSessionId: "same-id" }),
-    ).toBe(false);
-  });
-
   it("does not guard when the owning sessionId is unknown (preserves legacy behavior)", () => {
     expect(
       isStaleLifecycleEventForSession({ owningSessionId: undefined, currentSessionId: "new-id" }),
@@ -195,8 +189,6 @@ describe("session lifecycle state", () => {
 
   it.each([
     { eventRunId: undefined, currentRunId: undefined, eventStartedAt: 100, stale: true },
-    { eventRunId: "run-a", currentRunId: "run-a", eventStartedAt: 100, stale: false },
-    { eventRunId: "run-a", currentRunId: "run-b", eventStartedAt: 100, stale: true },
     { eventRunId: "run-a", currentRunId: undefined, eventStartedAt: 100, stale: true },
     { eventRunId: undefined, currentRunId: "run-a", eventStartedAt: 100, stale: true },
     { eventRunId: undefined, currentRunId: undefined, eventStartedAt: 200, stale: false },

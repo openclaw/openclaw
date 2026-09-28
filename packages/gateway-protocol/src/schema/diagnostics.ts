@@ -9,8 +9,18 @@ const DiagnosticsHeapProfileParamsSchema = Type.Object(
     samplingIntervalBytes: Type.Optional(
       Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
     ),
+    includeObjectsCollectedByMajorGC: Type.Optional(Type.Boolean()),
+    includeObjectsCollectedByMinorGC: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
 export type DiagnosticsHeapProfileParams = Static<typeof DiagnosticsHeapProfileParamsSchema>;
 export const validateDiagnosticsHeapProfileParams = lazyCompile(DiagnosticsHeapProfileParamsSchema);
+
+const DiagnosticsHeapSnapshotParamsSchema = Type.Object(
+  { reason: Type.Optional(Type.String({ maxLength: 256 })) },
+  { additionalProperties: false },
+);
+export const validateDiagnosticsHeapSnapshotParams = lazyCompile(
+  DiagnosticsHeapSnapshotParamsSchema,
+);

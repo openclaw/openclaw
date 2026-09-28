@@ -1,5 +1,9 @@
 // Canonical append-only method table; derived lookup and dispatch policy lives in core-method-policy.ts.
-import type { GatewayMethodScope, GatewayMethodSessionAccess } from "./descriptor.js";
+import type {
+  GatewayMethodDescriptor,
+  GatewayMethodScope,
+  GatewayMethodSessionAccess,
+} from "./descriptor.js";
 
 export type CoreGatewayMethodSpec = {
   name: string;
@@ -8,6 +12,7 @@ export type CoreGatewayMethodSpec = {
   since?: string;
   advertise?: false;
   startup?: true;
+  lifetime?: GatewayMethodDescriptor["lifetime"];
   controlPlaneWrite?: true;
   compatibilityRestored?: true;
   description?: string;
@@ -18,6 +23,7 @@ type CoreGatewayMethodPolicy = Pick<
   CoreGatewayMethodSpec,
   | "advertise"
   | "startup"
+  | "lifetime"
   | "controlPlaneWrite"
   | "compatibilityRestored"
   | "description"
@@ -73,18 +79,30 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["exec.approval.get", null, "operator.approvals", "<=2026.7"],
   ["exec.approval.list", null, "operator.approvals", "<=2026.7"],
   ["exec.approval.request", null, "operator.approvals", "<=2026.7"],
-  ["exec.approval.waitDecision", null, "operator.approvals", "<=2026.7"],
+  [
+    "exec.approval.waitDecision",
+    null,
+    "operator.approvals",
+    "<=2026.7",
+    { lifetime: "observation" },
+  ],
   ["exec.approval.resolve", null, "operator.approvals", "<=2026.7"],
   ["exec.approval.grants.list", null, "operator.approvals", "2026.8"],
   ["exec.approval.grants.revoke", null, "operator.approvals", "2026.8"],
   ["question.request", null, "operator.questions", "2026.7"],
-  ["question.waitAnswer", null, "operator.questions", "2026.7"],
+  ["question.waitAnswer", null, "operator.questions", "2026.7", { lifetime: "observation" }],
   ["question.resolve", null, "operator.questions", "2026.7"],
   ["question.get", null, "operator.questions", "2026.7"],
   ["question.list", null, "operator.questions", "2026.7"],
   ["plugin.approval.list", null, "operator.approvals", "<=2026.7"],
   ["plugin.approval.request", null, "operator.approvals", "<=2026.7"],
-  ["plugin.approval.waitDecision", null, "operator.approvals", "<=2026.7"],
+  [
+    "plugin.approval.waitDecision",
+    null,
+    "operator.approvals",
+    "<=2026.7",
+    { lifetime: "observation" },
+  ],
   ["plugin.approval.resolve", null, "operator.approvals", "<=2026.7"],
   ["plugins.uiDescriptors", "plugin-host-hooks", "operator.read", "<=2026.7"],
   ["plugins.sessionAction", "plugin-host-hooks", "dynamic", "<=2026.7"],
@@ -158,9 +176,6 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["users.authConnect.status", "users", "operator.write", "2026.8"],
   ["users.authConnect.cancel", "users", "operator.write", "2026.8"],
   ["users.authConnect.catalog", "users", "operator.write", "2026.8"],
-  ["tasks.list", "tasks", "operator.read", "<=2026.7"],
-  ["tasks.get", "tasks", "operator.read", "<=2026.7"],
-  ["tasks.cancel", "tasks", "operator.write", "<=2026.7"],
   ["taskSuggestions.list", "task-suggestions", "operator.read", "<=2026.7"],
   ["taskSuggestions.create", "task-suggestions", "operator.write", "<=2026.7"],
   ["taskSuggestions.accept", "task-suggestions", "operator.admin", "<=2026.7"],
@@ -345,7 +360,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   // Params-aware: ordinary turns need write; /new and /reset mutate lifecycle state as admin.
   ["agent", "agent", "dynamic", "<=2026.7", { startup: true }],
   ["agent.identity.get", "agent-identity", "operator.read", "<=2026.7"],
-  ["agent.wait", "agent", "operator.write", "<=2026.7", { startup: true }],
+  ["agent.wait", "agent", "operator.write", "<=2026.7", { startup: true, lifetime: "observation" }],
   ["chat.history", "chat", "operator.read", "<=2026.7", { startup: true }],
   ["chat.startup", "chat", "operator.read", "<=2026.7", { startup: true }],
   ["chat.metadata", "chat", "operator.read", "<=2026.7", { startup: true }],
@@ -514,9 +529,6 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["skills.proposals.evaluate", "skills", "operator.admin", "2026.7", CONTROL_PLANE_WRITE],
   // Additive hook status RPC appends so older advertised method indices stay stable.
   ["hooks.status", "hooks-status", "operator.read", "2026.7"],
-  // Additive task recovery RPCs append so older advertised method indices stay stable.
-  ["tasks.retry", "tasks", "operator.write", "2026.7"],
-  ["tasks.dismiss", "tasks", "operator.write", "2026.7"],
   // Additive audit inspection appends so older advertised method indices stay stable.
   ["audit.run.inspect", "audit", "operator.read", "2026.7"],
   ["sessions.patchMany", "sessions-mutations", "dynamic", "2026.8"],
@@ -549,7 +561,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["desktop.launch", "environments", "operator.admin", "2026.8", { startup: true }],
   // Live device scope upgrades are additive so every older advertised index stays stable.
   ["device.scopes.requestUpgrade", "devices", "operator.read", "2026.8"],
-  ["device.scopes.waitUpgrade", "devices", "operator.read", "2026.8"],
+  ["device.scopes.waitUpgrade", "devices", "operator.read", "2026.8", { lifetime: "observation" }],
   ["portal.list", "portals", "operator.read", "2026.8"],
   ["portal.open", "portals", "operator.write", "2026.8", CONTROL_PLANE_WRITE],
   ["portal.close", "portals", "operator.write", "2026.8", CONTROL_PLANE_WRITE],
@@ -658,7 +670,6 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["plugins.catalog.browse", "plugins", "operator.read", "2026.9"],
   ["plugins.catalog.categories", "plugins", "operator.read", "2026.9"],
   ["plugins.catalog.get", "plugins", "operator.read", "2026.9"],
-  ["tasks.history", "tasks", "operator.read", "2026.9"],
   [
     "environments.prepare",
     "environments",
@@ -677,10 +688,10 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["computer.status", "computer", "operator.read", "2026.9"],
   ["computer.invoke", "computer", "operator.write", "2026.9"],
   ["sessions.activitySummary.ensure", "session-activity-summary", "operator.write", "2026.9"],
-  ["tasks.supervision.list", "tasks", "operator.read", "2026.9"],
-  ["tasks.supervision.artifact", "tasks", "operator.read", "2026.9"],
-  ["tasks.supervision.get", "tasks", "operator.read", "2026.9"],
-  ["tasks.supervision.control", "tasks", "operator.write", "2026.9"],
+  ["sessions.supervision.list", "sessions-supervision", "operator.read", "2026.9"],
+  ["sessions.supervision.artifact", "sessions-supervision", "operator.read", "2026.9"],
+  ["sessions.supervision.get", "sessions-supervision", "operator.read", "2026.9"],
+  ["sessions.supervision.control", "sessions-supervision", "operator.write", "2026.9"],
   ["controlUi.sessionPullRequests.checks", "control-ui", "operator.read", "2026.9"],
   ["diagnostics.cpuProfile", "diagnostics", "operator.admin", "2026.9"],
   ["talk.voice.get", "talk", "operator.talk", "2026.9"],
@@ -747,4 +758,10 @@ export const CORE_GATEWAY_METHOD_SPECS = [
     "2026.9",
     { sessionAccess: { mode: "write", allowOwnSessionScope: true, requiredTool: "portal" } },
   ],
+  ["cron.history", "cron", "operator.read", "2026.9"],
+  ["presence.activity", "system", "operator.read", "2026.9"],
+  ["presence.query", "presence", "operator.read", "2026.9"],
+  ["users.merge", "users", "operator.admin", "2026.9"],
+  ["gateway.stop.request", "restart", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["diagnostics.heapSnapshot", "diagnostics", "operator.admin", "2026.9"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

@@ -1,9 +1,21 @@
-import { describe, expect, it } from "vitest";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { CoreTsgoGraph } from "../../scripts/check-tsgo-core-boundary.mts";
 import {
   selectChangedCiTsgoGraphs,
   resolveCiTsgoGraphs,
   TSGO_CI_GRAPHS,
 } from "../../scripts/lib/tsgo-core-test-shards.mts";
+import { createChangedCiTypeCheckPlan } from "../../scripts/run-tsgo-core-test-shards.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const inspectGraphs = vi.hoisted(() => vi.fn<() => Promise<CoreTsgoGraph[]>>());
+vi.mock("../../scripts/check-tsgo-core-boundary.mts", () => ({
+  inspectCiTsgoCheckGraphs: inspectGraphs,
+}));
+afterEach(() => inspectGraphs.mockReset());
 
 describe("changed CI compiler graph selection", () => {
   const sharedType = "packages/example/src/types.ts";
@@ -67,8 +79,47 @@ describe("changed CI compiler graph selection", () => {
     ["unclassified/module.ts"],
     ["docs/plugins/sdk-subpaths.md", "ui/src/styles/chat.css"],
     [sharedType, "src/config/catalog.json"],
-  ])("retains all compilers for uncertain input %j", (paths) => {
+  ])("retains all compilers without discovery for uncertain input %j", async (paths) => {
     expect(selectChangedCiTsgoGraphs(paths, graphs())).toBeUndefined();
+    inspectGraphs.mockRejectedValue(new Error("Full plans must not enumerate compiler inputs"));
+    expect(await createChangedCiTypeCheckPlan(paths)).toEqual({
+      mode: "full",
+      graphs: TSGO_CI_GRAPHS,
+    });
+    expect(inspectGraphs).not.toHaveBeenCalled();
+  });
+
+  it("retains full planning for deleted paths alongside existing source", async () => {
+    const cwd = tempDirs.make("ci-type-deleted-");
+    mkdirSync(join(cwd, "src"));
+    writeFileSync(join(cwd, "src/value.ts"), "export type Value = number;\n");
+    inspectGraphs.mockRejectedValue(new Error("Deleted inputs must not enumerate compilers"));
+    for (const deleted of ["src/deleted.ts", "docs/deleted.md", "ui/deleted.css"]) {
+      expect(await createChangedCiTypeCheckPlan(["src/value.ts", deleted], { cwd })).toEqual({
+        mode: "full",
+        graphs: TSGO_CI_GRAPHS,
+      });
+    }
+    expect(inspectGraphs).not.toHaveBeenCalled();
+  });
+
+  it("still discovers compiler consumers for existing source-only changes", async () => {
+    const cwd = tempDirs.make("ci-type-source-");
+    mkdirSync(join(cwd, "src"));
+    writeFileSync(join(cwd, "src/value.ts"), "export type Value = number;\n");
+    inspectGraphs.mockResolvedValue(
+      graphs().map(({ name, config }) => ({
+        name,
+        config,
+        roots: [],
+        files: name === "ui" ? ["src/value.ts"] : [],
+      })),
+    );
+    expect(await createChangedCiTypeCheckPlan(["src/value.ts"], { cwd })).toEqual({
+      mode: "changed",
+      graphs: [{ name: "ui", config: "tsconfig.ui.json" }],
+    });
+    expect(inspectGraphs).toHaveBeenCalledOnce();
   });
 
   it.each(["missing", "duplicate"])("refuses an incomplete %s compiler inventory", (kind) => {

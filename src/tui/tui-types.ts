@@ -5,6 +5,15 @@ import type { SessionGoal } from "../config/sessions/types.js";
 import type { GatewayAgentRuntime } from "../shared/session-types.js";
 import type { TuiPendingSubmit } from "./tui-submit-state.js";
 
+/** Exact pre-probed Gateway target and its selection provenance for an in-process handoff. */
+export type TuiBoundGateway = {
+  url: string;
+  configuredRemote?: boolean;
+  token?: string;
+  password?: string;
+  tlsFingerprint?: string;
+};
+
 export type TuiOptions = {
   local?: boolean;
   url?: string;
@@ -24,6 +33,14 @@ export type TuiOptions = {
    * process out if imported runtime handles keep the event loop alive.
    */
   forceProcessExitOnReturn?: boolean;
+};
+
+export type TuiGatewayConnectionOptions = Pick<
+  TuiOptions,
+  "url" | "token" | "password" | "tlsFingerprint"
+> & {
+  allowConfiguredAuthForExactTarget?: boolean;
+  suppressEnvAuthFallback?: boolean;
 };
 
 type TuiExitReason = "exit" | "return-to-system-agent";
@@ -49,6 +66,8 @@ export type ChatEvent = {
   seq?: number;
   state: "delta" | "final" | "aborted" | "error";
   message?: unknown;
+  deltaText?: string;
+  replace?: boolean;
   errorMessage?: string;
 };
 

@@ -311,7 +311,7 @@ describe("authorizeGatewayHttpRequestOrReply", () => {
       try {
         await expect(
           authorizeGatewayHttpRequestOrReply({
-            req: createReq(),
+            req: createReq({ authorization: "Bearer upstream-idp-token" }),
             res: {} as ServerResponse,
             auth: {
               mode: "trusted-proxy",

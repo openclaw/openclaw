@@ -16,10 +16,6 @@ import type { BranchSummaryEntry } from "./session-manager.js";
 import { recordSessionModelUsage } from "./session-model-usage.js";
 
 export abstract class AgentSessionTree extends AgentSessionExecution {
-  // =========================================================================
-  // Tree Navigation
-  // =========================================================================
-
   /**
    * Navigate to a different node in the session tree.
    * Unlike fork() which creates a new session file, this stays in the same file.
@@ -47,12 +43,10 @@ export abstract class AgentSessionTree extends AgentSessionExecution {
   }> {
     const oldLeafId = this.sessionManager.getLeafId();
 
-    // No-op if already at target
     if (targetId === oldLeafId) {
       return { cancelled: false };
     }
 
-    // Model required for summarization
     if (options.summarize && !this.model) {
       throw new Error("No model available for summarization");
     }
@@ -62,7 +56,6 @@ export abstract class AgentSessionTree extends AgentSessionExecution {
       throw new Error(`Entry ${targetId} not found`);
     }
 
-    // Collect entries to summarize (from old leaf to common ancestor)
     const { entries: entriesToSummarize, commonAncestorId } = oldLeafId
       ? collectEntriesForBranchSummaryFromBranches(
           this.sessionManager.getBranch(oldLeafId),
@@ -86,7 +79,6 @@ export abstract class AgentSessionTree extends AgentSessionExecution {
       label,
     };
 
-    // Set up abort controller for summarization
     const abortController = new AbortController();
     this.branchSummaryAbortController = abortController;
 
@@ -94,7 +86,6 @@ export abstract class AgentSessionTree extends AgentSessionExecution {
       let extensionSummary: { summary: string; details?: unknown } | undefined;
       let fromExtension = false;
 
-      // Emit session_before_tree event
       if (this.currentExtensionRunner.hasHandlers("session_before_tree")) {
         const result = await this.currentExtensionRunner.emit({
           type: "session_before_tree",
@@ -123,7 +114,6 @@ export abstract class AgentSessionTree extends AgentSessionExecution {
         }
       }
 
-      // Run default summarizer if needed
       let summaryText: string | undefined;
       let summaryDetails: unknown;
       if (options.summarize && entriesToSummarize.length > 0 && !extensionSummary) {
@@ -161,7 +151,6 @@ export abstract class AgentSessionTree extends AgentSessionExecution {
         summaryDetails = extensionSummary.details;
       }
 
-      // Determine the new leaf position based on target type
       let newLeafId: string | null;
       let editorText: string | undefined;
 
@@ -216,7 +205,6 @@ export abstract class AgentSessionTree extends AgentSessionExecution {
       }
       const { summaryEntry } = navigation;
 
-      // Emit session_tree event
       await this.currentExtensionRunner.emit({
         type: "session_tree",
         newLeafId: this.sessionManager.getLeafId(),
@@ -224,8 +212,6 @@ export abstract class AgentSessionTree extends AgentSessionExecution {
         summaryEntry,
         fromExtension: summaryText ? fromExtension : undefined,
       });
-
-      // Emit to custom tools
 
       return { editorText, cancelled: false, summaryEntry };
     } finally {
@@ -239,29 +225,14 @@ export abstract class AgentSessionTree extends AgentSessionExecution {
    * Get all user messages from session for fork selector.
    */
   getUserMessagesForForking(): Array<{ entryId: string; text: string }> {
-    const entries = this.sessionManager.getEntries();
-    const result: Array<{ entryId: string; text: string }> = [];
-
-    for (const entry of entries) {
-      if (entry.type !== "message") {
-        continue;
+    return this.sessionManager.getEntries().flatMap((entry) => {
+      if (entry.type !== "message" || entry.message.role !== "user") {
+        return [];
       }
-      if (entry.message.role !== "user") {
-        continue;
-      }
-
       const text = extractTextContent(entry.message.content);
-      if (text) {
-        result.push({ entryId: entry.id, text });
-      }
-    }
-
-    return result;
+      return text ? [{ entryId: entry.id, text }] : [];
+    });
   }
-
-  // =========================================================================
-  // Extension System
-  // =========================================================================
 
   createReplacedSessionContext(): ReplacedSessionContext {
     const context = Object.defineProperties(

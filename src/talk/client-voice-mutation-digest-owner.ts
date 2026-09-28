@@ -88,6 +88,7 @@ export async function deliverClientVoiceMutationDigest(
       writeVoiceSessionRecordInTransaction(database, current);
     },
     { agentId: record.agentId },
+    { operationLabel: "voice.mutation-digest.delivered" },
   );
 }
 

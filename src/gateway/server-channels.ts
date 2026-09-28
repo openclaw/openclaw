@@ -38,6 +38,7 @@ import {
 } from "../infra/channel-runtime-context.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatGatewayCrashLoopManualChannelStartHint } from "../infra/gateway-boot-lifecycle.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import {
   createSubsystemLogger,
@@ -174,18 +175,8 @@ type GatewayStartupTrace = {
   measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
 };
 
-function createRuntimeStore(): ChannelRuntimeStore {
-  return {
-    lifetimes: new Map(),
-    routeHandoffs: new Map(),
-    starting: new Map(),
-    stops: new Map(),
-    tasks: new Map(),
-    runtimes: new Map(),
-  };
-}
-
 type ChannelManagerOptions = {
+  scheduler: GatewayScheduler;
   getRuntimeConfig: () => OpenClawConfig;
   getPluginRegistry: () => PluginRegistry;
   channelLogs: Partial<Record<ChannelId, SubsystemLogger>>;
@@ -372,15 +363,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     );
     const channelOverride = channelConfig?.healthMonitor?.enabled;
 
-    if (typeof accountOverride === "boolean") {
-      return accountOverride;
-    }
-
-    if (typeof channelOverride === "boolean") {
-      return channelOverride;
-    }
-
-    return true;
+    return accountOverride ?? (typeof channelOverride === "boolean" ? channelOverride : true);
   };
 
   const getStore = (channelId: ChannelId): ChannelRuntimeStore => {
@@ -388,7 +371,14 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     if (existing) {
       return existing;
     }
-    const next = createRuntimeStore();
+    const next: ChannelRuntimeStore = {
+      lifetimes: new Map(),
+      routeHandoffs: new Map(),
+      starting: new Map(),
+      stops: new Map(),
+      tasks: new Map(),
+      runtimes: new Map(),
+    };
     channelStores.set(channelId, next);
     return next;
   };
@@ -860,6 +850,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               `channels.${channelId}.approval-bootstrap`,
               () =>
                 startChannelApprovalHandlerBootstrap({
+                  scheduler: opts.scheduler,
                   plugin,
                   cfg,
                   accountId: id,
@@ -1479,8 +1470,6 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     }
   };
 
-  const startChannels = async () => await startChannelsWithOptions();
-
   const recoverAutostartSuppression = async (): Promise<boolean> => {
     if (
       !autostartSuppression ||
@@ -1660,18 +1649,6 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     return { channels, channelAccounts, reloadingChannels };
   };
 
-  const isManuallyStoppedFlag = (channelId: ChannelId, accountId: string): boolean => {
-    return manuallyStopped.has(restartKey(channelId, accountId));
-  };
-
-  const isAutoRestartScheduled = (channelId: ChannelId, accountId: string): boolean => {
-    return pendingAutoRestarts.has(restartKey(channelId, accountId));
-  };
-
-  const resetRestartAttempts = (channelId: ChannelId, accountId: string): void => {
-    restarts.delete(restartKey(channelId, accountId));
-  };
-
   return {
     getRuntimeSnapshot,
     pauseChannelStarts: (channelIds) =>
@@ -1679,7 +1656,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         const plugin = getChannelPlugin(channelId);
         return plugin ? captureChannelSnapshot(plugin) : undefined;
       }),
-    startChannels,
+    startChannels: () => startChannelsWithOptions(),
     startChannel: startChannelInternal,
     stopChannel,
     releaseChannelRouteHandoffs,
@@ -1695,7 +1672,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     isAmbientAutostartSuppressed: (channelId) =>
       ambientAutostartSuppressedChannelIds.has(channelId),
     markChannelLoggedOut,
-    isManuallyStopped: isManuallyStoppedFlag,
+    isManuallyStopped: (channelId, accountId) =>
+      manuallyStopped.has(restartKey(channelId, accountId)),
     hasCurrentAccountTask: (channelId, accountId) => {
       const store = channelStores.get(channelId);
       const lifetime = store?.lifetimes.get(accountId);
@@ -1728,8 +1706,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       );
       return matches.length === 1 ? matches[0] : undefined;
     },
-    isAutoRestartScheduled,
-    resetRestartAttempts,
+    isAutoRestartScheduled: (channelId, accountId) =>
+      pendingAutoRestarts.has(restartKey(channelId, accountId)),
+    resetRestartAttempts: (channelId, accountId) => {
+      restarts.delete(restartKey(channelId, accountId));
+    },
     isHealthMonitorEnabled,
   };
 }

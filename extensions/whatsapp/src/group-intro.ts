@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements group mention normalization.
 export function resolveWhatsAppMentionStripRegexes(ctx: { To?: string | null }): RegExp[] {
   const selfE164 = (ctx.To ?? "").replace(/^whatsapp:/i, "");
   if (!selfE164) {

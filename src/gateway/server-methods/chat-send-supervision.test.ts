@@ -10,11 +10,11 @@ import {
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   appendTranscriptMessage,
+  listSessionPendingInputReceipts,
   listSessionPendingInputs,
   loadSessionEntry,
   patchSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { listSessionPendingInputReceipts } from "../../config/sessions/session-accessor.pending-inputs.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { registerSupervisedTaskAdmissionOwner } from "../../tasks/supervised-task.admission-owner.js";

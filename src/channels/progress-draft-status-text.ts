@@ -8,6 +8,8 @@ import { stripInlineDirectiveTagsForDelivery } from "../utils/directive-tags.js"
 
 const REASONING_PROGRESS_TAG_RE =
   /<\s*(\/?)\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/giu;
+const REASONING_PROGRESS_HEADING_RE =
+  /^\s*(?:>\s*)?(?:Reasoning:\s*(?:\r?\n|\r)\s*|Thinking\.{0,3}\s*(?:\r?\n|\r)\s*(?:\r?\n|\r)\s*)/i;
 const REASONING_PROGRESS_TAG_NAMES = [
   "think",
   "thinking",
@@ -31,10 +33,7 @@ function normalizeReasoningProgressLine(text: string): string {
     return "";
   }
   return stripReasoningProgressTagsOutsideCode(reasoningText)
-    .replace(
-      /^\s*(?:>\s*)?(?:Reasoning:\s*(?:\r?\n|\r)\s*|Thinking\.{0,3}\s*(?:\r?\n|\r)\s*(?:\r?\n|\r)\s*)/i,
-      "",
-    )
+    .replace(REASONING_PROGRESS_HEADING_RE, "")
     .replace(/\s{2,}|[^\S ]/g, " ")
     .trim();
 }
@@ -170,7 +169,7 @@ function mergeReasoningProgressText(
   }
   if (
     options?.snapshot === true ||
-    isReasoningSnapshotText(incoming) ||
+    REASONING_PROGRESS_HEADING_RE.test(incoming) ||
     (normalizedCurrent && normalizedIncoming.startsWith(normalizedCurrent))
   ) {
     // Snapshot-style providers resend the full reasoning text. Replace the
@@ -178,12 +177,6 @@ function mergeReasoningProgressText(
     return incoming;
   }
   return `${current}${incoming}`;
-}
-
-function isReasoningSnapshotText(text: string): boolean {
-  return /^\s*(?:>\s*)?(?:Reasoning:\s*(?:\r?\n|\r)\s*|Thinking\.{0,3}\s*(?:\r?\n|\r)\s*(?:\r?\n|\r)\s*)/i.test(
-    text,
-  );
 }
 
 function shouldAppendEmptyReasoningProgressDelta(current: string, incoming: string): boolean {

@@ -70,7 +70,7 @@ function requireSupervisor(): string {
   const ownerId = findCurrentTaskSupervisor(Date.now());
   if (!ownerId) {
     throw new Error(
-      "No supervisor is armed. Start `openclaw tasks supervise work`, or use `run` for foreground supervision.",
+      "No supervisor is armed. Start `openclaw sessions supervise work`, or use `run` for foreground supervision.",
     );
   }
   return ownerId;

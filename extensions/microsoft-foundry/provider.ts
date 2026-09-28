@@ -1,4 +1,3 @@
-// Microsoft Foundry provider module implements model/runtime integration.
 import type { ProviderNormalizeResolvedModelContext } from "openclaw/plugin-sdk/core";
 import {
   resolveClaudeThinkingProfile,
@@ -13,10 +12,10 @@ import {
   PROVIDER_ID,
   applyFoundryProfileBinding,
   applyFoundryProviderConfig,
+  buildFoundryModelConfig,
   buildFoundryProviderBaseUrl,
   extractFoundryEndpoint,
   isFoundryProviderApi,
-  mergeFoundryCanonicalModelParams,
   normalizeFoundryEndpoint,
   resolveFoundryModelCapabilities,
   resolveFoundryTargetProfileId,
@@ -110,10 +109,7 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
           baseUrl: selectedModelBaseUrl,
           reasoning: selectedModelCapabilities.reasoning || model.reasoning,
           thinkingLevelMap: selectedModelCapabilities.thinkingLevelMap ?? model.thinkingLevelMap,
-          params: mergeFoundryCanonicalModelParams(
-            model.params,
-            selectedModelCapabilities.modelName,
-          ),
+          params: { ...model.params, canonicalModelId: selectedModelCapabilities.modelName },
           input: selectedModelCapabilities.input,
         });
         if (selectedModelCapabilities.compat) {
@@ -145,27 +141,9 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
         return nextModel;
       });
       if (!nextModels.some((model) => model.id === selectedModelId)) {
-        nextModels.push({
-          id: selectedModelId,
-          name: selectedModelCapabilities.modelName,
-          api: selectedModelCapabilities.api,
-          baseUrl: buildFoundryProviderBaseUrl(
-            providerEndpoint,
-            selectedModelId,
-            selectedModelCapabilities.modelName,
-            selectedModelCapabilities.api,
-          ),
-          reasoning: selectedModelCapabilities.reasoning,
-          ...(selectedModelCapabilities.thinkingLevelMap
-            ? { thinkingLevelMap: selectedModelCapabilities.thinkingLevelMap }
-            : {}),
-          params: mergeFoundryCanonicalModelParams(undefined, selectedModelCapabilities.modelName),
-          input: selectedModelCapabilities.input,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: selectedModelCapabilities.contextWindow,
-          maxTokens: selectedModelCapabilities.maxTokens,
-          ...(selectedModelCapabilities.compat ? { compat: selectedModelCapabilities.compat } : {}),
-        });
+        nextModels.push(
+          buildFoundryModelConfig(providerEndpoint, selectedModelId, selectedModelCapabilities),
+        );
       }
       const nextProviderConfig: ModelProviderConfig = {
         ...providerConfig,
@@ -235,7 +213,7 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
         api: capabilities.api,
         reasoning: capabilities.reasoning || model.reasoning,
         thinkingLevelMap: capabilities.thinkingLevelMap ?? model.thinkingLevelMap,
-        params: mergeFoundryCanonicalModelParams(model.params, capabilities.modelName),
+        params: { ...model.params, canonicalModelId: capabilities.modelName },
         input: capabilities.input,
         baseUrl: buildFoundryProviderBaseUrl(
           endpoint,

@@ -422,11 +422,9 @@ describe("gateway agent handler", () => {
         ],
       },
       {
-        client: {
-          internal: {
-            delegatedToolPolicyHandoffId: handoffId,
-          },
-        } as never,
+        client: createSyntheticPluginRuntimeClient({
+          delegatedToolPolicyHandoffId: handoffId,
+        }),
       },
     );
 

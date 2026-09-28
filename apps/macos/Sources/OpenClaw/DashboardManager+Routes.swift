@@ -143,7 +143,7 @@ extension DashboardManager {
 
 extension DashboardManager {
     func immediateWindowConfiguration()
-        -> (AppState.ConnectionMode, URL, DashboardWindowAuth, GatewayTLSParams?)?
+        -> (configuration: WindowConfiguration, endpoint: GatewayConnection.EndpointSnapshot)?
     {
         let mode = AppStateStore.shared.connectionMode
         guard mode == .local,
@@ -158,7 +158,9 @@ extension DashboardManager {
             gatewayUrl: Self.websocketURLString(for: url),
             token: config.token,
             password: (config.password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty))
-        return auth.hasCredential ? (mode, url, auth, endpoint.tls?.params) : nil
+        guard auth.hasCredential else { return nil }
+        return (WindowConfiguration(
+            url: url, auth: auth, tlsParams: endpoint.tls?.params, mode: mode, displayName: "OpenClaw"), endpoint)
     }
 }
 

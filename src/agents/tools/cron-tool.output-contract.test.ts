@@ -10,6 +10,7 @@ import type { CronJob } from "../../cron/types.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import { compactCronListJob } from "../../gateway/server-methods/cron-list-projection.js";
 import { claimAgentRunContext, clearAgentRunContext } from "../../infra/agent-run-registry.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { applyCodeModeCatalog } from "../code-mode.js";
 import {
   createCodeModeHarness,
@@ -111,6 +112,16 @@ describe("automations output contract", () => {
     },
     { name: "job details", args: { action: "get", jobId: job.id }, reply: job },
     {
+      // The scheduler reports scheduleErrorCount in state once a job has
+      // schedule-computation errors; the read schema must accept it (#157477).
+      name: "job details with scheduler diagnostics",
+      args: { action: "get", jobId: job.id },
+      reply: {
+        ...job,
+        state: { scheduleErrorCount: 3, lastError: "schedule error: bad cron expr" },
+      },
+    },
+    {
       name: "creation",
       args: { action: "add", job: createJob },
       reply: { ...job, deliveryPreview },
@@ -170,6 +181,8 @@ describe("automations output contract", () => {
       onTestFinished(resetCodeModeTestState);
       const { storePath } = await makeStorePath();
       const cron = new CronService({
+        scheduler: createTestGatewayScheduler(),
+        nowMs: () => Date.now(),
         storePath,
         cronEnabled: true,
         defaultAgentId: "main",

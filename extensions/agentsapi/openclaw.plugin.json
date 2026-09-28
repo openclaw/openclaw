@@ -1,7 +1,7 @@
 {
   "id": "agentsapi",
   "name": "OpenAI Agents API",
-  "description": "OpenAI Agents API harness and hosted sessions.",
+  "description": "OpenAI Agents API harness with hosted or self-hosted sessions.",
   "categories": ["agent-runtimes"],
   "activation": {
     "onStartup": false,
@@ -10,6 +10,20 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "environment": {
+        "type": "string",
+        "enum": ["openai_hosted", "self_hosted"],
+        "default": "openai_hosted",
+        "description": "Execution environment for new sessions. Self-hosted uses the prepared OpenClaw workspace and requires an externally connected executor. Reset existing sessions after changing this setting."
+      },
+      "hostExecutorSkillDirectories": {
+        "type": "array",
+        "maxItems": 32,
+        "uniqueItems": true,
+        "items": { "type": "string", "pattern": "^(?:(?![\\s\\S]*/\\.{1,2}(?:/|(?![\\s\\S])))/|(?![\\s\\S]*[\\\\/]\\.{1,2}(?:[\\\\/]|(?![\\s\\S])))(?:[A-Za-z]:[\\\\/]|\\\\\\\\[^\\\\/]+[\\\\/][^\\\\/]+))" },
+        "description": "Unique absolute paths without . or .. path segments on the executor host machine that already contain the skill files and are available to the Agents API harness. OpenClaw does not copy or install these files. Gateway skill eligibility filters do not apply to these directories. Reset existing sessions after changing this list."
+      }
+    }
   }
 }

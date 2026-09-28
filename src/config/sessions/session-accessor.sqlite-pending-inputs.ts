@@ -119,19 +119,23 @@ export function finishSessionPendingInputOwner(
   }
   const capturedOptions = { ...options, agentId: source.agentId, path: source.path };
   assertCapturedSessionEntryReadSource(source, getOpenClawAgentDatabaseIfOpen(capturedOptions));
-  runOpenClawAgentWriteTransaction((current) => {
-    assertCapturedSessionEntryReadSource(source, current);
-    executeSqliteQuerySync(
-      current.db,
-      getSessionKysely(current.db)
-        .updateTable("session_pending_inputs")
-        .set({ state: disposition })
-        .where("input_id", "=", owner.inputId)
-        .where("lifecycle_generation", "=", owner.lifecycleGeneration)
-        .where("state", "=", "queued")
-        .where("consumed_event_id", "is", null),
-    );
-  }, capturedOptions);
+  runOpenClawAgentWriteTransaction(
+    (current) => {
+      assertCapturedSessionEntryReadSource(source, current);
+      executeSqliteQuerySync(
+        current.db,
+        getSessionKysely(current.db)
+          .updateTable("session_pending_inputs")
+          .set({ state: disposition })
+          .where("input_id", "=", owner.inputId)
+          .where("lifecycle_generation", "=", owner.lifecycleGeneration)
+          .where("state", "=", "queued")
+          .where("consumed_event_id", "is", null),
+      );
+    },
+    capturedOptions,
+    { operationLabel: "session.pending-input.finish-owner" },
+  );
 }
 
 function assertPendingInputOwnerCurrent(owner: SessionPendingInputOwner): void {

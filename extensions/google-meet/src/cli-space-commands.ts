@@ -18,11 +18,11 @@ import {
 } from "./cli-shared.js";
 import { hasCreateSpaceConfigInput, resolveCreateSpaceConfig } from "./create.js";
 import {
-  buildGoogleMeetPreflightReport,
   createGoogleMeetSpace,
   endGoogleMeetActiveConference,
   fetchLatestGoogleMeetConferenceRecord,
-} from "./meet.js";
+} from "./meet-api.js";
+import { buildGoogleMeetPreflightReport } from "./meet.js";
 import {
   resolveGoogleMeetTokenFromParams,
   resolveMeetingFromParams,
@@ -114,15 +114,7 @@ export function registerGoogleMeetCreateCommands(context: GoogleMeetCliCommandCo
           timeoutMs: operationTimeoutMs,
         });
         if (delegated.ok) {
-          const payload = delegated.payload as {
-            browser?: { nodeId?: string };
-            joined?: boolean;
-            join?: { session?: { id?: string } };
-            meetingUri?: string;
-            source?: string;
-            space?: { name?: string; meetingCode?: string };
-            tokenSource?: string;
-          };
+          const payload = delegated.payload as GoogleMeetCreateOutput;
           writeGoogleMeetCreateOutput(payload, options.json);
           return;
         }

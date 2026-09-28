@@ -10,8 +10,8 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
 import { buildRunUserTurnIdempotencyKey } from "../../sessions/user-turn-transcript.js";
-import { getOwedHarnessCompletionTask } from "../../tasks/agent-harness-completion-recovery.js";
 import { readSupervisedSourceHandoff } from "../../tasks/supervised-task.source.js";
+import { getOwedHarnessCompletionTask } from "../agent-harness-completion-recovery.js";
 import {
   getTranscriptMessageRole as getMessageRole,
   isTerminalSilentAssistantMessage,
@@ -85,42 +85,34 @@ function findSourceTurnRange(params: {
   const continuationTurnId = params.continuationRunId
     ? buildRunUserTurnIdempotencyKey(params.continuationRunId)
     : undefined;
-  for (let index = params.messages.length - 1; index >= 0; index -= 1) {
-    const message = params.messages[index];
-    if (
+  const startIndex = params.messages.findLastIndex(
+    (message) =>
       getMessageRole(message) === "user" &&
-      message &&
+      Boolean(message) &&
       typeof message === "object" &&
       sourceTurnIds.has(
         normalizeOptionalString((message as { idempotencyKey?: unknown }).idempotencyKey) ?? "",
-      )
-    ) {
-      let endIndex = params.messages.length;
-      for (let nextIndex = index + 1; nextIndex < params.messages.length; nextIndex += 1) {
-        const nextMessage = params.messages[nextIndex];
-        if (getMessageRole(nextMessage) !== "user") {
-          continue;
-        }
-        const nextIdempotencyKey =
-          nextMessage && typeof nextMessage === "object"
-            ? normalizeOptionalString((nextMessage as { idempotencyKey?: unknown }).idempotencyKey)
-            : undefined;
-        // Late media and the exact restart continuation extend the same logical source turn.
-        if (
-          nextIdempotencyKey === `${params.sourceTurnId}:late-media` ||
-          nextIdempotencyKey === continuationTurnId ||
-          (continuationTurnId !== undefined &&
-            nextIdempotencyKey === `${continuationTurnId}:late-media`)
-        ) {
-          continue;
-        }
-        endIndex = nextIndex;
-        break;
-      }
-      return { startIndex: index, endIndex };
-    }
+      ),
+  );
+  if (startIndex === -1) {
+    return undefined;
   }
-  return undefined;
+  const endIndex = params.messages.findIndex((message, index) => {
+    if (index <= startIndex || getMessageRole(message) !== "user") {
+      return false;
+    }
+    const idempotencyKey =
+      message && typeof message === "object"
+        ? normalizeOptionalString((message as { idempotencyKey?: unknown }).idempotencyKey)
+        : undefined;
+    // Late media and the exact restart continuation extend the same logical source turn.
+    return !(
+      idempotencyKey === `${params.sourceTurnId}:late-media` ||
+      idempotencyKey === continuationTurnId ||
+      (continuationTurnId !== undefined && idempotencyKey === `${continuationTurnId}:late-media`)
+    );
+  });
+  return { startIndex, endIndex: endIndex === -1 ? params.messages.length : endIndex };
 }
 
 function readToolCallId(message: Record<string, unknown>): string | undefined {
@@ -199,19 +191,6 @@ function findSuccessfulMessageToolResultIndex(params: {
   return undefined;
 }
 
-function isSafeTerminalDeliveryTailMessage(params: {
-  message: unknown;
-  sourceTurnId: string;
-  toolCallId: string;
-}): boolean {
-  const mirror = readTerminalSourceReplyDeliveryMirror(params.message);
-  if (mirror?.sourceTurnId === params.sourceTurnId && mirror.toolCallId === params.toolCallId) {
-    return true;
-  }
-  // An empty provider abort is restart lifecycle noise. Partial output remains unsafe.
-  return isRestartAbortTailArtifact(params.message);
-}
-
 function canReconcileTerminalDeliveryAtSourceTurnTail(params: {
   messages: readonly unknown[];
   sourceTurnId: string;
@@ -240,22 +219,17 @@ function canReconcileTerminalDeliveryAtSourceTurnTail(params: {
     ) {
       continue;
     }
-    if (
-      isSafeTerminalDeliveryTailMessage({
-        message,
-        sourceTurnId: params.sourceTurnId,
-        toolCallId: params.toolCallId,
-      })
-    ) {
+    const mirror = readTerminalSourceReplyDeliveryMirror(message);
+    if (mirror?.sourceTurnId === params.sourceTurnId && mirror.toolCallId === params.toolCallId) {
+      continue;
+    }
+    // An empty provider abort is restart lifecycle noise. Partial output remains unsafe.
+    if (isRestartAbortTailArtifact(message)) {
       continue;
     }
     return false;
   }
   return true;
-}
-
-function buildRecoveryToolResultIdempotencyKey(sourceTurnId: string, toolCallId: string): string {
-  return `restart-recovery:message-tool-result:${sourceTurnId}:${toolCallId}`;
 }
 
 type RecoveryCheckpointCompletion =
@@ -390,7 +364,7 @@ export async function markSessionCompletedAfterRecoveryCheckpoint(params: {
   }
   const recoveryToolResultIdempotencyKey =
     toolCallId && sourceTurnId
-      ? buildRecoveryToolResultIdempotencyKey(sourceTurnId, toolCallId)
+      ? `restart-recovery:message-tool-result:${sourceTurnId}:${toolCallId}`
       : undefined;
   const successfulToolResultIndex =
     toolCallId && sourceTurnRange && messageToolCallIndex !== undefined

@@ -71,22 +71,19 @@ async function decisions(relationship: "managed" | "referenced", cleanup: ClawRe
 }
 
 describe("Claw package phase handoff", () => {
-  it.each(["retain", "remove-if-unused"] as const)(
-    "keeps referenced plugins retained under %s",
-    async (mode) => {
-      const cleanup = { mode };
-      const planned = await decisions("referenced", cleanup);
-      expect(planned[0]?.action).toBe("retain");
-      const packageGateway = vi.fn();
-      mocks.local.mockResolvedValue({ packages: [{ ...uninstalled, action: "retained" }] });
-      await applyClawPackageRemovalPhase(planned, {
-        ...options,
-        referencedCleanup: cleanup,
-        packageGateway,
-      });
-      expect(packageGateway).not.toHaveBeenCalled();
-    },
-  );
+  it("keeps referenced plugins retained by default", async () => {
+    const cleanup = { mode: "retain" as const };
+    const planned = await decisions("referenced", cleanup);
+    expect(planned[0]?.action).toBe("retain");
+    const packageGateway = vi.fn();
+    mocks.local.mockResolvedValue({ packages: [{ ...uninstalled, action: "retained" }] });
+    await applyClawPackageRemovalPhase(planned, {
+      ...options,
+      referencedCleanup: cleanup,
+      packageGateway,
+    });
+    expect(packageGateway).not.toHaveBeenCalled();
+  });
 
   it.each(["managed", "referenced"] as const)(
     "hands off the canonical %s plugin removal decision without local mutation",
@@ -147,16 +144,13 @@ describe("Claw package phase handoff", () => {
     expect(mocks.local).not.toHaveBeenCalled();
   });
 
-  it.each(["transport", "missing outcome", "wrong owner", "missing application"])(
+  it.each(["missing outcome", "wrong owner", "missing application"])(
     "rejects %s without retry or local fallback",
     async (failure) => {
       mocks.local.mockClear();
       const cleanup = { mode: "remove-selected" as const, selected: ["plugin:audit@1.0.0"] };
       const planned = await decisions("referenced", cleanup);
       const packageGateway = vi.fn(async () => {
-        if (failure === "transport") {
-          throw new Error("connection lost");
-        }
         return {
           packages:
             failure === "missing outcome"

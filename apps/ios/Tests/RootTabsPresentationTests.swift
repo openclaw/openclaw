@@ -418,11 +418,6 @@ struct RootTabsPresentationTests {
         #expect(RootTabs.initialDestination(arguments: ["OpenClaw", "--openclaw-initial-tab", "settings"]) == .settings)
     }
 
-    @Test func `chat header follows the agent badge presentation`() {
-        #expect(ChatProTab.defaultHeaderTitle(showsAgentBadge: true, agentDisplayName: "OpenClaw") == "OpenClaw")
-        #expect(ChatProTab.defaultHeaderTitle(showsAgentBadge: false, agentDisplayName: "OpenClaw") == "Chat")
-    }
-
     @Test func `chat transport identity distinguishes unresolved and resolved agents`() {
         #expect(IOSChatViewModelOwner.transportAgentID(nil).isEmpty)
         #expect(IOSChatViewModelOwner.transportAgentID("   ").isEmpty)

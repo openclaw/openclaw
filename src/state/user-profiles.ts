@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-// Durable user profiles plus typed login identities in the shared state DB.
 import type { DatabaseSync } from "node:sqlite";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -7,6 +6,7 @@ import { sql } from "kysely";
 import {
   GATEWAY_OWNER_PROFILE_ID,
   type UserProfile as UserProfileListItem,
+  type UsersMergeResult,
 } from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
@@ -19,6 +19,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
+import { CHANNEL_IDENTITY_PROVIDER } from "./user-channel-identities.js";
 import { ensureUserPreferencesSchema } from "./user-preferences.store.js";
 import {
   ensureProfileForEmailInDatabase,
@@ -38,10 +39,11 @@ import {
 import {
   insertUserProfile,
   requireResolvedUserProfileMetadataById,
+  selectUserProfileEmailAlias,
   selectResolvedUserProfileMetadataById,
+  selectUserProfileEmails,
   setUserProfileEmailBinding,
   toUserProfile,
-  type UserProfile,
   userProfileAvatarPresence,
   userProfilesDb,
 } from "./user-profiles-internal.js";
@@ -55,6 +57,7 @@ import {
   ensureUserProfilesSchema,
   hasEnsuredUserProfileRoleSchema,
   UserProfileNotFoundError,
+  UserProfileMergeError,
   UserProfileOwnerError,
 } from "./user-profiles-schema.js";
 import {
@@ -63,10 +66,11 @@ import {
 } from "./user-profiles-tailscale-login.js";
 import {
   MAX_USER_PROFILE_DISPLAY_NAME_LENGTH,
+  type UserProfile,
   type UserProfileAvatarMime,
 } from "./user-profiles.types.js";
 
-export { formatUserProfileAvatarEtag, getProfileAvatar } from "./user-profiles-internal.js";
+export { formatUserProfileAvatarEtag } from "./user-profiles-internal.js";
 export {
   getUserProfileDisplay,
   readUserProfileAliases,
@@ -112,17 +116,9 @@ function selectUserProfileListItemById(db: DatabaseSync, profileId: string): Use
   if (!profile) {
     throw new UserProfileNotFoundError(profileId);
   }
-  const emails = executeSqliteQuerySync(
-    db,
-    kysely
-      .selectFrom("user_profile_emails")
-      .select("email")
-      .where("profile_id", "=", profileId)
-      .orderBy("email", "asc"),
-  ).rows;
   return {
     ...toUserProfile(profile),
-    emails: emails.map((alias) => alias.email),
+    emails: selectUserProfileEmails(db, profileId),
     githubIdentity: selectUserProfileGitHubIdentities(db, [profileId]).get(profileId) ?? null,
     hasAvatar: profile.has_avatar === 1,
   };
@@ -203,13 +199,7 @@ function ensureProfileForEmailWithInitialName(
   ensureUserProfilesSchema(options);
   const { db: reader } = openOpenClawStateDatabase(options);
   const selectExistingProfile = (database: DatabaseSync) => {
-    const alias = executeSqliteQueryTakeFirstSync(
-      database,
-      userProfilesDb(database)
-        .selectFrom("user_profile_emails")
-        .select("profile_id")
-        .where("email", "=", normalizedEmail),
-    );
+    const alias = selectUserProfileEmailAlias(database, normalizedEmail);
     return alias
       ? toUserProfile(requireResolvedUserProfileMetadataById(database, alias.profile_id))
       : undefined;
@@ -407,6 +397,85 @@ export function ensureProfileForTailscaleIdentity(
   return adoptDisplayNameIfEmpty(resolved.id, displayName, options);
 }
 
+/** Explicit administration keeps both selected IDs exact; only an exact repeat may follow a tombstone. */
+export function mergeProfiles(
+  sourceProfileId: string,
+  targetProfileId: string,
+  options: UserProfileMutationOptions = {},
+): UsersMergeResult {
+  ensureUserProfilesSchema(options);
+  return runUserProfileWriteTransaction(
+    ({ db }) => {
+      const source = requireResolvedUserProfileMetadataById(db, sourceProfileId);
+      const target = requireResolvedUserProfileMetadataById(db, targetProfileId);
+      if (
+        [sourceProfileId, targetProfileId, source.id, target.id].includes(GATEWAY_OWNER_PROFILE_ID)
+      ) {
+        throw new UserProfileOwnerError("merge");
+      }
+      if (sourceProfileId === targetProfileId) {
+        throw new UserProfileMergeError("source and target profiles must differ");
+      }
+      if (target.id !== targetProfileId) {
+        throw new UserProfileMergeError(
+          `target profile ${targetProfileId} is merged into ${target.id}; choose the current merge head`,
+        );
+      }
+      if (source.id !== sourceProfileId) {
+        if (source.id === target.id) {
+          return { profile: selectUserProfileListItemById(db, target.id), movedAliasKinds: [] };
+        }
+        throw new UserProfileMergeError(
+          `source profile ${sourceProfileId} is already merged into ${source.id}`,
+        );
+      }
+      const kysely = userProfilesDb(db);
+      const cohort = kysely
+        .selectFrom("user_profiles")
+        .select("id")
+        .where((eb) => eb.or([eb("id", "=", source.id), eb("merged_into", "=", source.id)]));
+      const email = executeSqliteQueryTakeFirstSync(
+        db,
+        kysely
+          .selectFrom("user_profile_emails")
+          .select("email")
+          .where("profile_id", "in", cohort)
+          .limit(1),
+      );
+      const identities = executeSqliteQuerySync(
+        db,
+        kysely
+          .selectFrom("user_profile_identities")
+          .select((eb) =>
+            eb
+              .case()
+              .when("provider", "=", CHANNEL_IDENTITY_PROVIDER)
+              .then("channel" as const)
+              .else("provider" as const)
+              .end()
+              .as("kind"),
+          )
+          .distinct()
+          .where("profile_id", "in", cohort),
+      ).rows;
+      const movedAliasKinds: UsersMergeResult["movedAliasKinds"] = [];
+      if (email) {
+        movedAliasKinds.push("email");
+      }
+      for (const kind of ["provider", "channel"] as const) {
+        if (identities.some((identity) => identity.kind === kind)) {
+          movedAliasKinds.push(kind);
+        }
+      }
+      mergeUserProfiles(db, source.id, target.id, Date.now(), options.mutation);
+      publishUserProfilesChange(db, target.id);
+      return { profile: selectUserProfileListItemById(db, target.id), movedAliasKinds };
+    },
+    options,
+    { operationLabel: "user-profiles.merge" },
+  );
+}
+
 /** Links an email to a profile and retains an aliasless prior profile as a merge tombstone. */
 export function linkEmail(
   email: string,
@@ -423,60 +492,46 @@ export function linkEmail(
       if (targetProfileId === GATEWAY_OWNER_PROFILE_ID || target.id === GATEWAY_OWNER_PROFILE_ID) {
         throw new UserProfileOwnerError("merge");
       }
-      const existingAlias = executeSqliteQueryTakeFirstSync(
-        db,
-        kysely
-          .selectFrom("user_profile_emails")
-          .select("profile_id")
-          .where("email", "=", normalizedEmail),
-      );
+      const existingAlias = selectUserProfileEmailAlias(db, normalizedEmail);
       if (existingAlias?.profile_id === GATEWAY_OWNER_PROFILE_ID) {
         throw new UserProfileOwnerError("merge");
       }
-      if (!existingAlias) {
-        options.mutation?.before(db, target.id);
-        setUserProfileEmailBinding(db, normalizedEmail, target.id, now);
-        executeSqliteQuerySync(
-          db,
-          kysely.updateTable("user_profiles").set({ updated_at: now }).where("id", "=", target.id),
-        );
-        options.mutation?.authority(target.id);
-        publishUserProfileAuthorityChange(db, target.id);
-        options.mutation?.publish(target.id);
-        publishUserProfilesChange(db, target.id);
+      if (existingAlias?.profile_id === target.id) {
         return selectUserProfileListItemById(db, target.id);
       }
-      if (existingAlias.profile_id === target.id) {
-        return selectUserProfileListItemById(db, target.id);
-      }
-      options.mutation?.before(db, target.id, existingAlias.profile_id);
+      const changedIds = [target.id, ...(existingAlias ? [existingAlias.profile_id] : [])];
+      options.mutation?.before(db, ...changedIds);
       setUserProfileEmailBinding(db, normalizedEmail, target.id, now);
-      const remainingAliases = executeSqliteQuerySync(
-        db,
-        kysely
-          .selectFrom("user_profile_emails")
-          .select("email")
-          .where("profile_id", "=", existingAlias.profile_id),
-      ).rows;
+      const remainingAliases = existingAlias
+        ? executeSqliteQuerySync(
+            db,
+            kysely
+              .selectFrom("user_profile_emails")
+              .select("email")
+              .where("profile_id", "=", existingAlias.profile_id),
+          ).rows
+        : [];
       executeSqliteQuerySync(
         db,
         kysely.updateTable("user_profiles").set({ updated_at: now }).where("id", "=", target.id),
       );
-      if (remainingAliases.length === 0) {
-        mergeUserProfiles(db, existingAlias.profile_id, target.id, now, options.mutation);
-      } else {
-        executeSqliteQuerySync(
-          db,
-          kysely
-            .updateTable("user_profiles")
-            .set({ updated_at: now })
-            .where("id", "=", existingAlias.profile_id),
-        );
+      if (existingAlias) {
+        if (remainingAliases.length === 0) {
+          mergeUserProfiles(db, existingAlias.profile_id, target.id, now, options.mutation);
+        } else {
+          executeSqliteQuerySync(
+            db,
+            kysely
+              .updateTable("user_profiles")
+              .set({ updated_at: now })
+              .where("id", "=", existingAlias.profile_id),
+          );
+        }
       }
-      options.mutation?.authority(target.id, existingAlias.profile_id);
-      publishUserProfileAuthorityChange(db, target.id, existingAlias.profile_id);
-      options.mutation?.publish(target.id, existingAlias.profile_id);
-      publishUserProfilesChange(db, target.id, existingAlias.profile_id);
+      options.mutation?.authority(...changedIds);
+      publishUserProfileAuthorityChange(db, ...changedIds);
+      options.mutation?.publish(...changedIds);
+      publishUserProfilesChange(db, ...changedIds);
       return selectUserProfileListItemById(db, target.id);
     },
     options,

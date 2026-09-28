@@ -1,13 +1,12 @@
 // Formats detailed subagent run information for the info action.
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { sanitizeRunStatusText } from "../../../agents/run-status-text.js";
 import { resolveSubagentDisplayStatus } from "../../../agents/subagents/registry/subagent-session-metrics.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
 import { formatTimeAgo } from "../../../infra/format-time/format-relative.ts";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
-import { findTaskByRunIdForOwner } from "../../../tasks/task-owner-access.js";
-import { sanitizeTaskStatusText } from "../../../tasks/task-status.js";
 import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import { formatRunLabel } from "../subagents-utils.js";
@@ -39,7 +38,7 @@ function loadSubagentSessionEntry(params: SubagentsCommandContext["params"], chi
 }
 
 export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): CommandHandlerResult {
-  const { params, requesterKey, readContext, restTokens } = ctx;
+  const { params, readContext, restTokens } = ctx;
   const target = restTokens[0];
   if (!target) {
     return commandReply("ℹ️ Usage: /subagents info <id|#>");
@@ -57,22 +56,16 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
       ? (formatDurationCompact((run.execution.endedAt ?? Date.now()) - run.execution.startedAt) ??
         "n/a")
       : "n/a";
-  const outcomeError = sanitizeTaskStatusText(run.execution.outcome?.error, { errorContext: true });
+  const outcomeError = sanitizeRunStatusText(run.execution.outcome?.error, { errorContext: true });
   const outcome = run.execution.outcome
     ? `${run.execution.outcome.status}${outcomeError ? ` (${outcomeError})` : ""}`
     : "n/a";
-  const linkedTask = findTaskByRunIdForOwner({
-    runId: run.runId,
-    callerOwnerKey: requesterKey,
-    callerAgentId: params.agentId,
-    config: params.cfg,
-  });
-  const taskText = sanitizeTaskStatusText(run.task) || "n/a";
-  const progressText = sanitizeTaskStatusText(linkedTask?.progressSummary);
-  const taskSummaryText = sanitizeTaskStatusText(linkedTask?.terminalSummary, {
+  const taskText = sanitizeRunStatusText(run.task) || "n/a";
+  const progressText = sanitizeRunStatusText(run.completion?.resultText);
+  const taskSummaryText = sanitizeRunStatusText(run.delivery?.lastError, {
     errorContext: true,
   });
-  const taskErrorText = sanitizeTaskStatusText(linkedTask?.error, { errorContext: true });
+  const taskErrorText = sanitizeRunStatusText(run.execution.outcome?.error, { errorContext: true });
 
   const lines = [
     "ℹ️ Subagent info",
@@ -80,8 +73,6 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
     `Label: ${formatRunLabel(run)}`,
     `Task: ${taskText}`,
     `Run: ${run.runId}`,
-    linkedTask ? `TaskId: ${linkedTask.taskId}` : undefined,
-    linkedTask ? `TaskStatus: ${linkedTask.status}` : undefined,
     `Session: ${run.childSessionKey}`,
     `SessionId: ${sessionEntry?.sessionId ?? "n/a"}`,
     `Runtime: ${runtime}`,
@@ -95,9 +86,7 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
     progressText ? `Progress: ${progressText}` : undefined,
     taskSummaryText ? `Task summary: ${taskSummaryText}` : undefined,
     taskErrorText ? `Task error: ${taskErrorText}` : undefined,
-    linkedTask || run.delivery
-      ? `Delivery: ${linkedTask?.deliveryStatus ?? run.delivery?.status}`
-      : undefined,
+    run.delivery ? `Delivery: ${run.delivery.status}` : undefined,
     run.delivery?.discardReason ? `Delivery disposition: ${run.delivery.discardReason}` : undefined,
     run.delivery?.discardedAt
       ? `Delivery retired: ${formatTimestampWithAge(run.delivery.discardedAt)}`

@@ -1,4 +1,3 @@
-// Slack plugin module owns durable Agent View mode state.
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getOptionalSlackRuntime } from "../runtime.js";
 import { writeLruMapEntry } from "./lru-map-cache.js";

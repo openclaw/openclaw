@@ -173,17 +173,19 @@ describe("Code Mode preflight repair", () => {
   it.each([
     {
       label: "guest failure after a successful call",
+      phase: "guest",
       execute: async () => jsonResult({ ok: true }),
       code: 'await fake_post_dispatch({}); throw new Error("after dispatch");',
     },
     {
       label: "ToolInputError after implementation start",
+      phase: "bridge",
       execute: async () => {
         throw new ToolInputError("implementation already started");
       },
       code: "await fake_post_dispatch({});",
     },
-  ])("keeps $label non-retryable", async ({ execute, code }) => {
+  ])("keeps $label non-retryable", async ({ execute, code, phase }) => {
     const target = pluginToolWithExecute("fake_post_dispatch", "Post-dispatch failure", execute);
 
     const details = await runCode(code, [target]);
@@ -191,8 +193,9 @@ describe("Code Mode preflight repair", () => {
     expect(target.execute).toHaveBeenCalledOnce();
     expect(details).toMatchObject({
       status: "failed",
-      failurePhase: "bridge",
+      failurePhase: phase,
       bridgeDispatchStarted: true,
+      replaySafe: false,
     });
   });
 });

@@ -4,12 +4,12 @@ import {
   prepareCurrentGitHubPublicationIdentity,
 } from "../gateway/github-publication-availability.js";
 import {
+  githubPublicationApiArgs,
   githubPublicationPushArgs,
   githubPublicationRemoteHeadArgs,
   requirePublicationCommand,
   runPublicationCommand,
 } from "../gateway/github-publication-git-transport.js";
-import { githubPublicationCreatePullRequestArgs } from "../gateway/github-publication-pull-requests.js";
 import {
   getSupervisedOperation,
   observeSupervisedPublication,
@@ -204,16 +204,19 @@ export async function runSupervisedPublication(params: {
   if (!pull) {
     const env = await refresh();
     reserveSupervisedPublicationAction(execution, "create", Date.now(), options);
-    await runPublicationCommand(githubPublicationCreatePullRequestArgs(profile.repository), {
-      env,
-      input: JSON.stringify({
-        title: profile.title,
-        body: `${profile.body}\n\n${marker}`,
-        head: `${profile.pushRepository.split("/")[0]}:${profile.branch}`,
-        base: profile.baseBranch,
-        draft: true,
-      }),
-    });
+    await runPublicationCommand(
+      githubPublicationApiArgs(`repos/${profile.repository}/pulls`, "POST"),
+      {
+        env,
+        input: JSON.stringify({
+          title: profile.title,
+          body: `${profile.body}\n\n${marker}`,
+          head: `${profile.pushRepository.split("/")[0]}:${profile.branch}`,
+          base: profile.baseBranch,
+          draft: true,
+        }),
+      },
+    );
     pull = await lookup();
     if (!pull) {
       throw new Error("PR creation has not yet been observed; reconcile the exact marker");

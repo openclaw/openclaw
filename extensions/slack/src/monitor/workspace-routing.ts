@@ -1,4 +1,3 @@
-// Slack plugin module keeps Enterprise Grid routing identities workspace-qualified.
 import type { SlackEventScope } from "./event-scope.js";
 
 export function resolveSlackEnterpriseMainDmSessionKey(params: {

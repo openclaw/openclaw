@@ -18,7 +18,7 @@ import {
   resolveConfiguredScopeHash,
   type MemoryIndexMeta,
 } from "./manager-reindex-state.js";
-import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
+import { MemorySyncTestHarness } from "./manager-sync-ops.test-support.js";
 
 type MemoryIndexEntry = {
   path: string;
@@ -95,7 +95,7 @@ export function emitSessionTranscriptUpdate(update: MemorySessionTranscriptUpdat
   transcriptUpdateListener?.(update);
 }
 
-export class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
+export class SessionStartupCatchupHarness extends MemorySyncTestHarness {
   protected readonly createProvider = (): never => {
     throw new Error("Startup catch-up harness does not acquire embedding providers");
   };

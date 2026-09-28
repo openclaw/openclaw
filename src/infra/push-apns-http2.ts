@@ -12,6 +12,7 @@ import {
   type ActiveManagedProxyUrl,
 } from "./net/proxy/active-proxy-state.js";
 import type { ManagedProxyTlsOptions } from "./net/proxy/proxy-tls.js";
+import { apnsSendInvalidatedError } from "./push-apns-send-current.js";
 
 const APNS_DEFAULT_PORT = "443";
 
@@ -55,10 +56,6 @@ type ProbeApnsHttp2ReachabilityViaProxyResult = {
   /** Raw response headers from APNs. Includes apns-id when the connection was truly tunneled to Apple. */
   responseHeaders: Record<string, string>;
 };
-
-function apnsAbortError(signal: AbortSignal): Error {
-  return signal.reason instanceof Error ? signal.reason : new Error("APNs send invalidated");
-}
 
 function assertApnsAuthority(authority: string): ApnsAuthority {
   let parsed: URL;
@@ -128,7 +125,7 @@ async function openApnsTlsTunnel(params: {
   const abortController = new AbortController();
   const abortFromCaller = () => {
     if (params.signal) {
-      abortController.abort(apnsAbortError(params.signal));
+      abortController.abort(apnsSendInvalidatedError(params.signal));
     }
   };
   params.signal?.addEventListener("abort", abortFromCaller, { once: true });
@@ -196,7 +193,7 @@ async function openProxiedApnsHttp2Session(params: {
 
   if (params.signal?.aborted) {
     tlsSocket.destroy();
-    throw apnsAbortError(params.signal);
+    throw apnsSendInvalidatedError(params.signal);
   }
 
   // The CONNECT helper already completed the target TLS handshake; reuse that
@@ -215,7 +212,7 @@ export async function connectApnsHttp2Session(
   const proxyUrl = getActiveManagedProxyUrl();
   if (!proxyUrl) {
     if (params.signal?.aborted) {
-      throw apnsAbortError(params.signal);
+      throw apnsSendInvalidatedError(params.signal);
     }
     return http2.connect(authority);
   }

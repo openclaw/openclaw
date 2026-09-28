@@ -9,6 +9,9 @@ const COMMITTING = 3;
 const SETTLED = 4;
 const REQUESTED = 5;
 
+/** A refused request may reuse its connection only after native rollback is confirmed. */
+export class SqliteReclamationRequestRefusedError extends Error {}
+
 /** Preserve the reclamation owner's context when an unrelated synchronous writer helps. */
 export async function withSqliteReclamationAuthorization<T>(
   buffer: SharedArrayBuffer,
@@ -74,13 +77,15 @@ export function waitForSqliteReclamationCommit(
 ): void {
   const shared = new Int32Array(buffer);
   if (Atomics.compareExchange(shared, 0, WAITING, REQUESTED) !== WAITING) {
-    throw new Error("SQLite session reclamation commit was revoked");
+    throw new SqliteReclamationRequestRefusedError("SQLite session reclamation commit was revoked");
   }
   request();
   Atomics.wait(shared, 0, REQUESTED, COMMIT_DECISION_TIMEOUT_MS);
   if (Atomics.load(shared, 0) !== COMMITTING) {
     rejectCommit(shared);
-    throw new Error("SQLite session reclamation commit was not authorized");
+    throw new SqliteReclamationRequestRefusedError(
+      "SQLite session reclamation commit was not authorized",
+    );
   }
 }
 

@@ -189,8 +189,8 @@ private actor HistoryRecoveryPresentationTransport: OpenClawChatTransport {
         false
     }
 
-    func listAgents() async throws -> OpenClawChatAgentsListResponse? {
-        .init(defaultId: "main", agents: [.init(id: "main", name: "Assistant", emoji: "🦞")])
+    func loadAgents(onUpdate: @escaping OpenClawChatAgentCatalogUpdate) async throws {
+        await onUpdate(.init(defaultId: "main", agents: [.init(id: "main", name: "Assistant", emoji: "🦞")]))
     }
 
     func listModels(agentID _: String?) async throws -> [OpenClawChatModelChoice] {

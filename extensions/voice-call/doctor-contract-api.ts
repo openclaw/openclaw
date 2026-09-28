@@ -2,7 +2,6 @@
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
-import path from "node:path";
 // Doctor enumeration cold-loads this closure; the state-DB helpers stay behind a
 // lazy doctor-repair-runtime import so enumeration never pulls the kysely/state-db graph.
 import type { OpenClawStateDatabaseSchemaMigration } from "openclaw/plugin-sdk/doctor-repair-runtime";
@@ -29,6 +28,7 @@ import {
   resolveVoiceCallLegacyCallLogPath,
 } from "./src/manager/store.js";
 import { resolveDefaultVoiceCallStoreDir } from "./src/store-path.js";
+import { resolveUserPath } from "./src/utils.js";
 
 // Doctor state migration for Voice Call legacy JSONL call logs.
 
@@ -39,23 +39,6 @@ type PreparedLegacyCallRecord = {
   chunks: CallRecordEventChunk[];
   meta: CallRecordEventMeta;
 };
-
-/** Resolve home from doctor env with OS fallback. */
-function resolveHome(env: NodeJS.ProcessEnv): string {
-  return env.HOME?.trim() || os.homedir();
-}
-
-/** Resolve config paths, including "~", against the doctor env home. */
-function resolveUserPath(input: string, env: NodeJS.ProcessEnv): string {
-  const trimmed = input.trim();
-  if (!trimmed) {
-    return trimmed;
-  }
-  if (trimmed.startsWith("~")) {
-    return path.resolve(trimmed.replace(/^~(?=$|[\\/])/, () => resolveHome(env)));
-  }
-  return path.resolve(trimmed);
-}
 
 /** Read the configured voice-call store path from either package id. */
 function getVoiceCallConfigStore(config: PluginDoctorStateMigrationParams["config"]): string {
@@ -107,7 +90,7 @@ function resolveVoiceCallStorePath(params: {
 }): string {
   const configuredStore = getVoiceCallConfigStore(params.config);
   if (configuredStore) {
-    return resolveUserPath(configuredStore, params.env);
+    return resolveUserPath(configuredStore, () => params.env.HOME?.trim() || os.homedir());
   }
   return resolveDefaultVoiceCallStoreDir(params.env);
 }

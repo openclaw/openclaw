@@ -6,6 +6,7 @@ import type {
   DiscordGatewayAdapterImplementerMethods,
 } from "@discordjs/voice";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   restoreDiscordAudioError,
@@ -76,22 +77,14 @@ export class DiscordAudioTransport extends EventEmitter<{
   private stopping = false;
   private terminal = false;
   private adapterDestroyed = false;
-  private readyResolve!: () => void;
-  private readyReject!: (error: Error) => void;
-  readonly ready: Promise<void>;
+  private readonly readiness = createDeferred<void>();
+  readonly ready = this.readiness.promise;
   private readonly exited: Promise<void>;
   private stopTask?: Promise<void>;
-  private physicalStopResolve!: () => void;
-  private readonly physicalStopped = new Promise<void>((resolve) => {
-    this.physicalStopResolve = resolve;
-  });
+  private readonly physicalStopped = createDeferred<void>();
 
   constructor(options: DiscordAudioWorkerOptions, adapterCreator: DiscordGatewayAdapterCreator) {
     super();
-    this.ready = new Promise((resolve, reject) => {
-      this.readyResolve = resolve;
-      this.readyReject = reject;
-    });
     // Preserve rejection for the join caller without an unhandled startup rejection.
     void this.ready.catch(() => {});
     this.worker = createDiscordAudioWorkerThread(options);
@@ -250,7 +243,7 @@ export class DiscordAudioTransport extends EventEmitter<{
     })();
     // Old decoders may still own admitted recording bytes after sockets close.
     // A replacement must wait for the final gateway leave, not the recorder.
-    this.stopTask = Promise.race([this.physicalStopped, drained]);
+    this.stopTask = Promise.race([this.physicalStopped.promise, drained]);
     return this.stopTask;
   }
 
@@ -266,10 +259,10 @@ export class DiscordAudioTransport extends EventEmitter<{
         break;
       case "gateway-destroy":
         this.destroyAdapter();
-        this.physicalStopResolve();
+        this.physicalStopped.resolve();
         break;
       case "ready":
-        this.readyResolve();
+        this.readiness.resolve();
         break;
       case "stopped":
         this.finish(new Error("Discord voice session stopped."), true);
@@ -339,7 +332,7 @@ export class DiscordAudioTransport extends EventEmitter<{
         break;
       }
       case "error":
-        this.readyReject(restoreDiscordAudioError(event.error));
+        this.readiness.reject(restoreDiscordAudioError(event.error));
         logger.warn("discord voice: " + event.error.message);
         break;
       case "log":
@@ -380,7 +373,7 @@ export class DiscordAudioTransport extends EventEmitter<{
     this.terminal = true;
     this.connectionStatus = "destroyed";
     this.playerStatus = "idle";
-    this.readyReject(error);
+    this.readiness.reject(error);
     this.destroyAdapter();
     this.speakingUsers.clear();
     for (const capture of this.captures.values()) {
@@ -401,11 +394,4 @@ export class DiscordAudioTransport extends EventEmitter<{
     this.files.clear();
     this.emit("stopped");
   }
-}
-
-export function createDiscordAudioTransport(
-  options: DiscordAudioWorkerOptions,
-  adapterCreator: DiscordGatewayAdapterCreator,
-): DiscordAudioTransport {
-  return new DiscordAudioTransport(options, adapterCreator);
 }

@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginRuntimeCapabilityLease } from "../../plugins/capability-lease.js";
 import { createPluginServiceGatewayEvents } from "../../plugins/gateway-events.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { createGatewayConnectionState } from "../server-connection-state.js";
@@ -41,14 +42,18 @@ it.each(["capture", "preparation", "canonical deferral"] as const)(
         },
       );
       const projection = await createSessionRowProjection({ cfg });
-      const connection = createGatewayConnectionState({ bootId: "fallback-proof", cfg });
+      const connection = createGatewayConnectionState({
+        scheduler: createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
+        bootId: "fallback-proof",
+        cfg,
+      });
       const detach = connection.attachSessionRowProjection(projection);
       const request = vi.fn(async () => sessionsResult([], 1));
       const client = createTestGatewayClient(request);
       const { sessions, emitEvent } = createSessionCapabilityHarness(client.request.bind(client));
       const frames: unknown[] = [];
-      const send = vi.fn((frame: string) => {
-        const decoded = JSON.parse(frame);
+      const send = vi.fn((frame: string | Buffer) => {
+        const decoded = JSON.parse(frame.toString());
         frames.push(decoded);
         emitEvent(decoded);
       });

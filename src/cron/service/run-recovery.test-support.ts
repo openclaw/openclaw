@@ -6,11 +6,10 @@ import {
 } from "../../process/gateway-work-admission.js";
 import * as stateRead from "../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { cronStoreKey } from "../store/key.js";
-import {
-  claimCronRunReceiptInDatabase,
-  prepareCronRunReceiptClaim,
-} from "../store/run-receipt-store.js";
+import { prepareCronRunReceiptClaim } from "../store/run-receipt-store.js";
+import { claimCronRunReceiptInDatabaseForTest } from "../store/run-receipt-store.test-support.js";
 import type { CronRunRecoveryProposal } from "../store/run-recovery-read.types.js";
 import type { CronRunRecoveryResult } from "../store/run-recovery.types.js";
 import type { CronJob } from "../types.js";
@@ -73,6 +72,7 @@ export function makeCronRecoveryState(
   overrides: RecoveryStateOverrides = {},
 ) {
   return createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
     storePath,
     cronEnabled: true,
     log,
@@ -84,18 +84,24 @@ export function makeCronRecoveryState(
   });
 }
 
-export function claimCronRecoveryReceipt(storePath: string, job: CronJob, startedAtMs: number) {
+export function claimCronRecoveryReceipt(
+  storePath: string,
+  job: CronJob,
+  startedAtMs: number,
+  defaultAgentId = "alpha",
+) {
   const prepared = prepareCronRunReceiptClaim({
+    observed: undefined,
     storePath,
     job,
-    agentId: job.agentId ?? "alpha",
+    agentId: job.agentId ?? defaultAgentId,
     startedAtMs,
   });
   return runOpenClawStateWriteTransaction(({ db }) =>
-    claimCronRunReceiptInDatabase({
+    claimCronRunReceiptInDatabaseForTest({
       database: db,
       prepared,
-      resolveAgentId: (current) => current.agentId ?? "alpha",
+      resolveAgentId: (current) => current.agentId ?? defaultAgentId,
     }),
   );
 }

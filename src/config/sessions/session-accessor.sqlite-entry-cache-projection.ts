@@ -27,31 +27,23 @@ export function loadSessionEntrySnapshot(
   database: SessionEntryCacheDatabase,
   projection: "full" | "list" = "list",
   prepared?: ValidatedSessionMetadata,
-  fullEntryKeys?: ReadonlySet<string>,
   retainFullEntry?: (sessionKey: string, entry: SessionEntry) => boolean,
   deferParticipants = false,
 ): SessionEntryCacheSnapshot {
   // Validation lends complete parsed facts only within this read. A concurrent external commit
   // requires the ordinary fresh SELECT, never a stale snapshot stamped with its newer version.
   const metadata =
-    !fullEntryKeys && prepared && prepared.dataVersion === readSqliteDataVersion(database.db)
-      ? prepared
-      : undefined;
+    prepared && prepared.dataVersion === readSqliteDataVersion(database.db) ? prepared : undefined;
   const parsedEntries = metadata?.entries ?? new Map<string, SessionEntry>();
   const keys = metadata?.keys ?? [];
   // Stream raw JSON so a full read never holds both serialized and parsed store-wide payloads.
   if (!metadata) {
     for (const row of iterateSqliteQuerySync(
       database.db,
-      selectSessionEntryRows(database, projection, fullEntryKeys ? [...fullEntryKeys] : [])
-        .select("updated_at")
-        .orderBy("session_key"),
+      selectSessionEntryRows(database, projection).select("updated_at").orderBy("session_key"),
     )) {
       keys.push(row.session_key);
-      const entry = parseSessionEntryJson(
-        row,
-        fullEntryKeys?.has(row.session_key) ? "full" : projection,
-      );
+      const entry = parseSessionEntryJson(row, projection);
       if (entry) {
         if (retainFullEntry && !retainFullEntry(row.session_key, entry)) {
           delete entry.skillsSnapshot;

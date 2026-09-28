@@ -303,7 +303,10 @@ function assertCorruptPluginPolicyPreserved(configPath, pluginId) {
 
 const [command, arg, arg2] = process.argv.slice(2);
 const commands = {
-  consent: () => runConsentScenario(arg, arg2),
+  consent: () =>
+    runConsentScenario(arg, arg2, {
+      coreUpdateConsent: process.env.OPENCLAW_E2E_CORE_UPDATE_CONSENT !== "0",
+    }),
   seed: seedInstallState,
   "wait-registry": waitRegistry,
   snapshot: () => process.stdout.write(JSON.stringify(pluginRecordSnapshot(), null, 2)),

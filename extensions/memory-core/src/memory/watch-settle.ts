@@ -38,11 +38,7 @@ function snapshotsMatch(left: WatchPathSnapshot | null, right: WatchPathSnapshot
 
 async function snapshotPath(filePath: string): Promise<WatchPathSnapshot | null> {
   try {
-    const stats = await fs.stat(filePath);
-    if (stats.isDirectory()) {
-      return null;
-    }
-    return { size: stats.size, mtimeMs: stats.mtimeMs };
+    return snapshotFromStats(await fs.stat(filePath));
   } catch {
     return null;
   }

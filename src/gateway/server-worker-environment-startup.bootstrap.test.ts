@@ -18,6 +18,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import * as version from "../version.js";
 import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
 import {
@@ -115,6 +116,7 @@ describe("cloud bootstrap plugin generations", () => {
         const start = async (environmentId: string) => {
           const startup = await loadGatewayWorkerEnvironmentStartupState();
           const runtime = await createGatewayWorkerEnvironmentRuntime({
+            scheduler: createTestGatewayScheduler(),
             getPluginRegistry: () => registry,
             getPortalRuntime: () => undefined,
             resolveGatewayContext: () => undefined,
@@ -287,6 +289,7 @@ describe("cloud bootstrap plugin generations", () => {
       setRuntimeConfigSnapshot({ gateway: { publicOrigin: "https://gateway.example.test" } });
       const startup = await loadGatewayWorkerEnvironmentStartupState();
       const runtime = await createGatewayWorkerEnvironmentRuntime({
+        scheduler: createTestGatewayScheduler(),
         getPluginRegistry: () => registry,
         getPortalRuntime: () => undefined,
         resolveGatewayContext: () => undefined,

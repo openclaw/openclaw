@@ -27,13 +27,10 @@ export default defineSingleProviderPluginEntry({
     },
     catalog: {
       run: async (ctx) => {
-        const pluginEntry = ctx.config?.plugins?.entries?.[PROVIDER_ID];
-        const pluginConfig =
-          pluginEntry && typeof pluginEntry === "object" && pluginEntry.config
-            ? (pluginEntry.config as HuggingFacePluginConfig)
-            : undefined;
-        const discoveryEnabled = pluginConfig?.discovery?.enabled;
-        if (discoveryEnabled === false) {
+        const pluginConfig = ctx.config?.plugins?.entries?.[PROVIDER_ID]?.config as
+          | HuggingFacePluginConfig
+          | undefined;
+        if (pluginConfig?.discovery?.enabled === false) {
           return null;
         }
         const { apiKey, discoveryApiKey, profileId } = ctx.resolveProviderApiKey(PROVIDER_ID);

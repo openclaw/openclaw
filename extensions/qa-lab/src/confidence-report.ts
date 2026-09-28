@@ -10,6 +10,7 @@ import {
   formatGatewayLogSentinelSummary,
   type GatewayLogSentinelFinding,
 } from "./gateway-log-sentinel.js";
+import { escapeTableCell } from "./report.js";
 import {
   findQaSuiteSummaryAccountingError,
   findQaSuiteSummaryCompletionError,
@@ -776,14 +777,6 @@ export async function buildQaConfidenceReport(params: {
   };
 }
 
-function formatVerdict(lane: QaConfidenceLaneResult): string {
-  return lane.verdict ?? "unclassified";
-}
-
-export function escapeTableCell(value: string): string {
-  return value.replace(/\\/gu, "\\\\").replace(/\|/gu, "\\|").replace(/\s+/gu, " ").trim();
-}
-
 export function renderQaConfidenceMarkdownReport(report: QaConfidenceReport): string {
   const lines = [
     `# OpenClaw QA Confidence Report - ${report.profile}`,
@@ -801,7 +794,7 @@ export function renderQaConfidenceMarkdownReport(report: QaConfidenceReport): st
   ];
   for (const lane of report.lanes) {
     lines.push(
-      `| ${escapeTableCell(lane.id)} | ${lane.status} | ${formatVerdict(lane)} | ${escapeTableCell(lane.productImpact ?? "")} | ${escapeTableCell(lane.qaImpact ?? "")} | ${escapeTableCell(lane.details)} |`,
+      `| ${escapeTableCell(lane.id)} | ${lane.status} | ${lane.verdict ?? "unclassified"} | ${escapeTableCell(lane.productImpact ?? "")} | ${escapeTableCell(lane.qaImpact ?? "")} | ${escapeTableCell(lane.details)} |`,
     );
   }
   if (report.failures.length > 0) {

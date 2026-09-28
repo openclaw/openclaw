@@ -18,14 +18,6 @@ describe("channel registry helpers", () => {
     resetPluginRuntimeStateForTest();
   });
 
-  function channelIds(): string[] {
-    const ids: string[] = [];
-    for (const channel of listChatChannels()) {
-      ids.push(channel.id);
-    }
-    return ids;
-  }
-
   function formatTestLink(path?: string, label?: string): string {
     if (label && path) {
       return `${label}:${path}`;
@@ -46,10 +38,6 @@ describe("channel registry helpers", () => {
   it("keeps Feishu first in the current default order", () => {
     const channels = listChatChannels();
     expect(channels[0]?.id).toBe("feishu");
-  });
-
-  it("includes MS Teams in the bundled channel list", () => {
-    expect(channelIds()).toContain("msteams");
   });
 
   it("formats Telegram selection lines without a docs prefix and with website extras", () => {

@@ -6,12 +6,12 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { captureWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
 import {
   serializeWorkerWorkspaceManifest,
   type WorkerWorkspaceManifest,
 } from "../gateway/worker-environments/workspace-manifest.js";
 import * as workspaceReconcile from "../gateway/worker-environments/workspace-reconcile-core.js";
-import { readActualWorkspaceManifest } from "../gateway/worker-environments/workspace-reconcile.js";
 import * as processExec from "../process/exec.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -92,7 +92,7 @@ async function fixture(setupWrites = false, setupPath = "source.txt") {
     "prepared source",
   );
   const baseCommit = await git("rev-parse", "HEAD");
-  const { manifestRef: sourceManifestRef, manifest } = await readActualWorkspaceManifest({
+  const { manifestRef: sourceManifestRef, manifest } = await captureWorkspaceManifest({
     root: workspaceDir,
     baseCommit,
   });
@@ -112,7 +112,7 @@ async function fixture(setupWrites = false, setupPath = "source.txt") {
     await fsp.writeFile(path.join(workspaceDir, setupPath), "setup changed source\n");
     await fsp.writeFile(path.join(workspaceDir, "setup-output.txt"), "eligible setup output\n");
   }
-  const prepared = await readActualWorkspaceManifest({ root: workspaceDir, baseCommit });
+  const prepared = await captureWorkspaceManifest({ root: workspaceDir, baseCommit });
   await fsp.writeFile(
     path.join(manifests, `${prepared.manifestRef.slice(7)}.json`),
     serializeWorkerWorkspaceManifest(prepared.manifest),
@@ -674,7 +674,7 @@ describe("prepared node workspace ownership", () => {
       await fsp.mkdir(preparedSource);
       await fsp.writeFile(path.join(preparedSource, "generated.txt"), "replaced setup child\n");
     }
-    const prepared = await readActualWorkspaceManifest({
+    const prepared = await captureWorkspaceManifest({
       root: f.workspaceDir,
       baseCommit: f.baseCommit,
     });
@@ -690,7 +690,7 @@ describe("prepared node workspace ownership", () => {
     );
     await f.runtime.prepare(f.registration);
     await f.runtime.prepare(binding);
-    const incoming = await readActualWorkspaceManifest({
+    const incoming = await captureWorkspaceManifest({
       root: gatewayRoot,
       baseCommit: f.baseCommit,
     });

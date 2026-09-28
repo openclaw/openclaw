@@ -5,7 +5,11 @@ import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatSlackFileReferenceList } from "../file-reference.js";
 import type { SlackAttachment, SlackFile } from "../types.js";
 import {
@@ -15,7 +19,6 @@ import {
   resolveSlackMessageText as resolveSharedSlackMessageText,
 } from "./block-text.js";
 import { resolveSlackTimestampMs } from "./message-handler/timestamp.js";
-import { logVerbose } from "./thread.runtime.js";
 
 export type SlackThreadStarter = {
   text: string;
@@ -59,17 +62,11 @@ function pushUniqueText(
   options: { preserveWhitespace?: boolean } = {},
 ): void {
   const text = options.preserveWhitespace
-    ? typeof value === "string" && value.trim().length > 0
-      ? value
-      : undefined
+    ? readNonBlankString(value)
     : normalizeOptionalString(value);
   if (text && !parts.includes(text)) {
     parts.push(text);
   }
-}
-
-function resolveSlackBlocksFallbackText(blocks: unknown[] | undefined): string | undefined {
-  return resolveSlackBlocksText(blocks)?.text;
 }
 
 function resolveSlackAttachmentFallbackText(
@@ -97,14 +94,12 @@ function resolveSlackAttachmentFallbackText(
       pushUniqueText(parts, field.title);
       pushUniqueText(parts, field.value);
     }
-    pushUniqueText(parts, resolveSlackBlocksFallbackText(fallbackBlocks(attachment.blocks)), {
+    pushUniqueText(parts, resolveSlackBlocksText(fallbackBlocks(attachment.blocks))?.text, {
       preserveWhitespace: true,
     });
-    pushUniqueText(
-      parts,
-      resolveSlackBlocksFallbackText(fallbackBlocks(attachment.message_blocks)),
-      { preserveWhitespace: true },
-    );
+    pushUniqueText(parts, resolveSlackBlocksText(fallbackBlocks(attachment.message_blocks))?.text, {
+      preserveWhitespace: true,
+    });
   }
   return parts.length > 0 ? parts.join("\n") : undefined;
 }
@@ -195,8 +190,6 @@ export async function resolveSlackThreadStarter(params: {
   }
 }
 
-type SlackThreadMessage = SlackThreadStarter;
-
 type SlackRepliesPageMessage = NonNullable<ConversationsRepliesResponse["messages"]>[number];
 
 const SLACK_THREAD_HISTORY_MAX_PAGES = 3;
@@ -218,7 +211,7 @@ export async function resolveSlackThreadHistory(params: {
   excludedMessageIds?: ReadonlySet<string>;
   onOmission?: (reason: string) => void;
   assertCurrent?: () => void;
-}): Promise<SlackThreadMessage[]> {
+}): Promise<SlackThreadStarter[]> {
   const maxMessages = params.limit ?? 20;
   if (!Number.isFinite(maxMessages) || maxMessages <= 0) {
     return [];

@@ -81,7 +81,6 @@ export function createCandidateAdmissionFixtures(f: CandidateAdmissionFixture) {
     marker: boolean;
     verdict: UpdateAdmissionVerdict;
     exitCode?: number;
-    installed?: boolean;
     pendingLifecycle?: boolean;
     nodeEngine?: string;
   }) => {
@@ -135,7 +134,6 @@ export function createCandidateAdmissionFixtures(f: CandidateAdmissionFixture) {
     });
     mockCurrentProcessFreshDoctor({
       packageRoot: pkgRoot,
-      candidateAdmission: params.marker && !params.installed,
     });
     readPackageVersion.mockImplementation(async (root) =>
       String(JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8")).version),

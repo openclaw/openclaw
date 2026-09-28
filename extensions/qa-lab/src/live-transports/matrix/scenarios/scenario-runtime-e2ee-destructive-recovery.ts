@@ -1,13 +1,14 @@
 // QA Lab Matrix destructive E2EE CLI recovery helpers.
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
-import { createMatrixQaClient } from "../substrate/client.js";
 import {
   createMatrixQaOpenClawCliRuntime,
-  redactMatrixQaCliOutput,
   type MatrixQaCliRunResult,
 } from "./scenario-runtime-cli.js";
-import { parseMatrixQaCliJson } from "./scenario-runtime-e2ee-cli-shared.js";
+import { buildMatrixQaCliE2eeAccountConfig } from "./scenario-runtime-e2ee-cli-config.js";
+import {
+  loginMatrixQaCliDevice,
+  parseMatrixQaCliJson,
+  writeMatrixQaCliOutputArtifacts,
+} from "./scenario-runtime-e2ee-cli-shared.js";
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 
 export type MatrixQaCliRuntime = Awaited<ReturnType<typeof createMatrixQaOpenClawCliRuntime>>;
@@ -76,15 +77,19 @@ export async function createMatrixQaRecoveryCliRuntime(params: {
   userId: string;
 }) {
   return await createMatrixQaOpenClawCliRuntime({
-    accountId: params.accountId,
-    accessToken: params.accessToken,
     artifactLabel: params.label,
-    baseUrl: params.context.baseUrl,
-    deviceId: params.deviceId,
-    displayName: `Matrix QA ${params.label}`,
+    initialConfig: buildMatrixQaCliE2eeAccountConfig({
+      accountId: params.accountId,
+      accessToken: params.accessToken,
+      baseUrl: params.context.baseUrl,
+      deviceId: params.deviceId,
+      encryption: true,
+      initialSyncLimit: 0,
+      name: `Matrix QA ${params.label}`,
+      userId: params.userId,
+    }),
     outputDir: requireMatrixQaE2eeOutputDir(params.context),
     runtimeEnv: requireMatrixQaCliRuntimeEnv(params.context),
-    userId: params.userId,
   });
 }
 
@@ -99,35 +104,12 @@ export async function loginMatrixQaRecoveryDevice(params: {
   password?: string;
   userId: string;
 }> {
-  const loginClient = createMatrixQaClient({ baseUrl: params.context.baseUrl });
-  const device = await loginClient.loginWithPassword({
-    deviceName: params.deviceName,
-    password: params.password,
-    userId: params.userId,
-  });
-  if (!device.deviceId) {
-    throw new Error(`Matrix destructive recovery login did not return a device id`);
-  }
-  return {
-    ...device,
-    deviceId: device.deviceId,
-  };
-}
-
-async function writeMatrixQaCliArtifacts(params: {
-  label: string;
-  result: MatrixQaCliRunResult;
-  runtime: MatrixQaCliRuntime;
-}) {
-  await mkdir(params.runtime.artifactDir, { mode: 0o700, recursive: true });
-  const safe = params.label.replace(/[^A-Za-z0-9_-]/g, "-");
-  const stdoutPath = path.join(params.runtime.artifactDir, `${safe}.stdout.txt`);
-  const stderrPath = path.join(params.runtime.artifactDir, `${safe}.stderr.txt`);
-  await Promise.all([
-    writeFile(stdoutPath, redactMatrixQaCliOutput(params.result.stdout), { mode: 0o600 }),
-    writeFile(stderrPath, redactMatrixQaCliOutput(params.result.stderr), { mode: 0o600 }),
-  ]);
-  return { stderrPath, stdoutPath };
+  return await loginMatrixQaCliDevice(
+    params.context.baseUrl,
+    params,
+    params.deviceName,
+    "Matrix destructive recovery",
+  );
 }
 
 export async function runMatrixQaCliJson<T>(params: {
@@ -144,10 +126,10 @@ export async function runMatrixQaCliJson<T>(params: {
     stdin: params.stdin,
     timeoutMs: params.timeoutMs,
   });
-  const artifacts = await writeMatrixQaCliArtifacts({
+  const artifacts = await writeMatrixQaCliOutputArtifacts({
     label: params.label,
     result,
-    runtime: params.runtime,
+    rootDir: params.runtime.artifactDir,
   });
   const parsed = parseMatrixQaCliJson(result);
   return {
@@ -255,29 +237,4 @@ export function isMatrixQaDeletedDeviceStatus(params: {
     deviceMissing,
     invalidated: authInvalidated || deviceMissing,
   };
-}
-
-export async function runMatrixQaExternalKeyRestore(params: {
-  accountId: string;
-  context: MatrixQaScenarioContext;
-  deviceName: string;
-  label: string;
-  password: string;
-  userId: string;
-}) {
-  const device = await loginMatrixQaRecoveryDevice({
-    context: params.context,
-    deviceName: params.deviceName,
-    password: params.password,
-    userId: params.userId,
-  });
-  const cli = await createMatrixQaRecoveryCliRuntime({
-    accountId: params.accountId,
-    accessToken: device.accessToken,
-    context: params.context,
-    deviceId: device.deviceId,
-    label: params.label,
-    userId: device.userId,
-  });
-  return { cli, device };
 }
