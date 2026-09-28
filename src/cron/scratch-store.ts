@@ -1,7 +1,7 @@
 /** Database-backed per-job scratch storage, kept outside public cron job state. */
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import { executeSqliteQuerySync, prepareSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
@@ -148,6 +148,53 @@ export function readHeartbeatMonitorScratchReadOnly(
   );
 }
 
+type ScratchWriteKey = { storeKey: string; jobId: string };
+type ScratchWriteGuard = {
+  revision: number | null;
+  updated_at_ms: number | null;
+  job_id: string | null;
+};
+
+function prepareScratchWriteGuard(db: DatabaseSync) {
+  const cronDb = getCronStoreKysely(db);
+  return prepareSqliteQueryTakeFirstSync<ScratchWriteKey, ScratchWriteGuard>(db, (parameter) =>
+    cronDb
+      // The singleton preserves orphan revisions and the no-scratch state.
+      .selectFrom(cronDb.selectNoFrom((eb) => eb.lit(1).as("one")).as("current"))
+      .leftJoin("cron_job_scratch as scratch", (join) =>
+        join
+          .on(
+            "scratch.store_key",
+            "=",
+            parameter((key) => key.storeKey),
+          )
+          .on(
+            "scratch.job_id",
+            "=",
+            parameter((key) => key.jobId),
+          ),
+      )
+      .leftJoin("cron_jobs as job", (join) =>
+        join
+          .on(
+            "job.store_key",
+            "=",
+            parameter((key) => key.storeKey),
+          )
+          .on(
+            "job.job_id",
+            "=",
+            parameter((key) => key.jobId),
+          ),
+      )
+      // Keep timestamp decoding so out-of-range stored integers still refuse the write.
+      .select(["scratch.revision", "scratch.updated_at_ms", "job.job_id"]),
+  );
+}
+
+// Cache query compilation per connection; every transaction still reads fresh guard rows.
+const scratchWriteGuards = new WeakMap<DatabaseSync, ReturnType<typeof prepareScratchWriteGuard>>();
+
 /** Writes, clears, or compare-and-swaps one scratch row. */
 export function writeCronJobScratch(params: {
   storePath: string;
@@ -166,19 +213,17 @@ export function writeCronJobScratch(params: {
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const cronDb = getCronStoreKysely(db);
-      const { currentRevision } = readScratchStateFromDatabase(db, storeKey, params.jobId);
-      const owningJob = executeSqliteQuerySync(
-        db,
-        cronDb
-          .selectFrom("cron_jobs")
-          .select("job_id")
-          .where("store_key", "=", storeKey)
-          .where("job_id", "=", params.jobId),
-      ).rows[0];
+      let readGuard = scratchWriteGuards.get(db);
+      if (!readGuard) {
+        readGuard = prepareScratchWriteGuard(db);
+        scratchWriteGuards.set(db, readGuard);
+      }
+      const current = readGuard({ storeKey, jobId: params.jobId });
+      const currentRevision = current?.revision ?? 0;
       // Job ownership and scratch revision are one CAS boundary. A heartbeat
       // finishing after durable job deletion must not recreate orphan scratch.
       if (
-        !owningJob ||
+        current?.job_id == null ||
         (params.expectedRevision !== undefined && params.expectedRevision !== currentRevision)
       ) {
         return { ok: false, reason: "revision-conflict", currentRevision } as const;
@@ -247,13 +292,21 @@ export function deleteCronJobScratch(
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const storeKey = cronStoreKey(storePath);
+      const cronDb = getCronStoreKysely(db);
       if (guard) {
-        const { currentRevision } = readScratchStateFromDatabase(db, storeKey, jobId);
+        const row = executeSqliteQuerySync(
+          db,
+          cronDb
+            .selectFrom("cron_job_scratch")
+            .select(["revision", "updated_at_ms"])
+            .where("store_key", "=", storeKey)
+            .where("job_id", "=", jobId),
+        ).rows[0];
+        const currentRevision = row?.revision ?? 0;
         if (currentRevision !== guard.expectedRevision) {
           return false;
         }
       }
-      const cronDb = getCronStoreKysely(db);
       executeSqliteQuerySync(
         db,
         cronDb

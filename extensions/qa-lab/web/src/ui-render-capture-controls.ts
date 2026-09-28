@@ -130,9 +130,12 @@ export function renderCaptureControls(model: CaptureViewModel): string {
                           class="capture-selected-session-chip"
                           data-capture-session-remove="${esc(session.id)}"
                           title="Remove ${esc(new Date(session.startedAt).toLocaleString())}"
+                          aria-label="Remove ${esc(new Date(session.startedAt).toLocaleString())}"
                         >
                           <span class="capture-selected-session-chip-label">${esc(new Date(session.startedAt).toLocaleString())}</span>
-                          <span class="capture-selected-session-chip-x">×</span>
+                          <svg class="capture-selected-session-chip-x" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                            <path d="m6 6 12 12M6 18 18 6" />
+                          </svg>
                         </button>`,
                       )
                       .join("")}

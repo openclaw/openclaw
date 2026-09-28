@@ -3,11 +3,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../helpers/openclaw-test-instance.js";
 
+const nodeExecPath = resolveTestNodeExecPath();
 const instances: OpenClawTestInstance[] = [];
 afterEach(async () => {
   await Promise.all(instances.splice(0).map((instance) => instance.cleanup()));
@@ -46,7 +48,9 @@ it("recovers legacy dist/index.js Doctor before refusing its unsupported Node", 
   );
   instance.env.NODE_OPTIONS = `--import=${pathToFileURL(preload).href}`;
   delete instance.env.OPENCLAW_NODE_UPDATE_RESPAWNED;
-  const result = await instance.cli(["doctor", "--non-interactive", "--fix"]);
+  const result = await instance.cli(["doctor", "--non-interactive", "--fix"], {
+    execPath: nodeExecPath,
+  });
   expect(result.code, result.stdout + result.stderr).toBe(23);
   expect(JSON.parse(await fs.readFile(calls, "utf8"))).toMatchObject({
     command: node,
@@ -126,7 +130,7 @@ it.each([
      syncBuiltinESMExports();`,
     );
     const result = spawnSync(
-      process.execPath,
+      nodeExecPath,
       [
         "--import",
         pathToFileURL(preload).href,

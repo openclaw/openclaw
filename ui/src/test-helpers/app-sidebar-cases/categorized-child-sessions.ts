@@ -5,6 +5,50 @@ import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar categorized child sessions", () => {
+  it.each(["panel", "drawer"] as const)(
+    "shows a categorized Discord-spawned dashboard session on a cold %s without its parent",
+    async (variant) => {
+      const officeKey = "agent:main:dashboard:office-ha";
+      const wakeKey = "agent:main:dashboard:wake-word";
+      const archivedKey = "agent:main:dashboard:archived";
+      const parentKey = "agent:main:discord:channel:parent";
+      const harness = createSessionsHarness("main", [officeKey, wakeKey, archivedKey]);
+      const rows = harness.sessions.state.result!.sessions;
+      Object.assign(rows[0]!, {
+        label: "OFFICE HA",
+        category: "HOME ASSISTANT",
+        archived: false,
+        spawnedBy: parentKey,
+        parentSessionKey: parentKey,
+        createdVia: "spawn",
+        createdActor: { type: "agent" },
+      });
+      Object.assign(rows[1]!, {
+        label: "Wake-word training",
+        category: "HOME ASSISTANT",
+        archived: false,
+      });
+      Object.assign(rows[2]!, {
+        label: "Archived conversation",
+        category: "HOME ASSISTANT",
+        archived: true,
+      });
+      harness.publish({ groups: ["HOME ASSISTANT"] });
+      const { sidebar } = await mountSidebar(
+        createGateway({} as GatewayBrowserClient),
+        harness.sessions,
+        variant,
+      );
+      sidebar.sessionKey = wakeKey;
+      await sidebar.updateComplete;
+      const group = sidebar.querySelector('[data-session-section="category:HOME ASSISTANT"]');
+      expect(group?.querySelectorAll(`[data-session-key="${officeKey}"]`)).toHaveLength(1);
+      expect(group?.querySelectorAll(`[data-session-key="${wakeKey}"]`)).toHaveLength(1);
+      expect(sidebar.querySelector(`[data-session-key="${archivedKey}"]`)).toBeNull();
+      expect(sidebar.querySelector(`[data-session-key="${parentKey}"]`)).toBeNull();
+    },
+  );
+
   it("promotes a categorized child loaded through the expanded-parent cache", async () => {
     const parentKey = "agent:main:parent";
     const categorizedKey = "agent:main:cached-categorized-child";

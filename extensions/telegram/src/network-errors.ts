@@ -212,10 +212,6 @@ export function isSafeToRetrySendError(err: unknown): boolean {
   return false;
 }
 
-export function shouldRetryTelegramSendError(err: unknown): boolean {
-  return isSafeToRetrySendError(err) || isTelegramRateLimitError(err);
-}
-
 function hasTelegramErrorCode(err: unknown, matches: (code: number) => boolean): boolean {
   for (const candidate of collectTelegramErrorCandidates(err)) {
     if (!candidate || typeof candidate !== "object" || !("error_code" in candidate)) {

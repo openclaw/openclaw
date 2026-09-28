@@ -1,4 +1,3 @@
-// Imessage plugin module implements conversation id behavior.
 import "./conversation-id-core.js";
 import { normalizeIMessageHandle } from "./targets.js";
 export {

@@ -5,7 +5,6 @@ import "../test-helpers/load-styles.ts";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { owner, other, key, mount, settled, geometry } from "../test-helpers/sidebar-stress.ts";
 setupSidebarTest();
-const captureDirectory = "../../../.openclaw/tmp/sidebar-stress-" + crypto.randomUUID();
 afterEach(async () => {
   document.documentElement.removeAttribute("data-theme-mode");
   document.documentElement.removeAttribute("dir");
@@ -157,13 +156,6 @@ describe.runIf("__vitest_browser__" in globalThis)("full sidebar state stress", 
           issues.push(row.key + " title has no space");
         }
       }
-      if (grouping === "person" && width === 280 && !preview && !rtl) {
-        const image = await page.screenshot({
-          element: sidebar,
-          path: captureDirectory + "/person-" + theme + "-no-viewer.png",
-        });
-        console.info("SIDEBAR_STRESS_CAPTURE", image);
-      }
       gateway.publishEvent("presence", {
         presence: [
           {
@@ -231,20 +223,6 @@ describe.runIf("__vitest_browser__" in globalThis)("full sidebar state stress", 
             getComputedStyle(trace.querySelector(".session-glyph__trace-track")!).display,
           ).not.toBe("none");
         }
-      }
-      // Preserve diagnostic captures for the explicitly requested local stress audit.
-      if (width === 280 && !preview && !rtl) {
-        for (const ring of sidebar.querySelectorAll(".session-glyph__ring")) {
-          for (const animation of ring.getAnimations()) {
-            animation.pause();
-            animation.currentTime = 0;
-          }
-        }
-        const image = await page.screenshot({
-          element: sidebar,
-          path: captureDirectory + "/" + grouping + "-" + theme + ".png",
-        });
-        console.info("SIDEBAR_STRESS_CAPTURE", image);
       }
       expect(issues).toEqual([]);
     },

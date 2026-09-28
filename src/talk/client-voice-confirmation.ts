@@ -365,14 +365,13 @@ function resolveClientVoiceToolConfirmationPolicy(
   }
   const state = getPrunedConfirmationScope(scopeKey, now) ?? getOrCreateConfirmationScope(scopeKey);
   const pending = state.pending;
-  const existing =
-    pending && pending.runId === params.runId && pending.fingerprint === fingerprint
-      ? pending
-      : undefined;
+  // A retry is a new run, not a new action. Keep the exact pending challenge
+  // without extending its expiry or granting execution to the retry.
+  const existing = pending?.fingerprint === fingerprint ? pending : undefined;
   if (!existing) {
     clearPendingConfirmation(state);
   }
-  const confirmation =
+  const confirmation: PendingVoiceConfirmation =
     existing ??
     ({
       confirmationId: randomUUID(),
@@ -381,20 +380,23 @@ function resolveClientVoiceToolConfirmationPolicy(
       createdAt: now,
       expiresAt: now + CONFIRMATION_TTL_MS,
       changed: createDeferredCore(),
-      ...(params.runId &&
-      params.toolCallId &&
-      params.runId.length <= 256 &&
-      params.toolCallId.length <= 256 &&
-      params.toolName.length <= 128
-        ? {
-            blockedCall: {
-              runId: params.runId,
-              toolCallId: params.toolCallId,
-              toolName: params.toolName,
-            },
-          }
-        : {}),
     } satisfies PendingVoiceConfirmation);
+  if (params.runId) {
+    confirmation.runId = params.runId;
+  }
+  if (
+    params.runId &&
+    params.toolCallId &&
+    params.runId.length <= 256 &&
+    params.toolCallId.length <= 256 &&
+    params.toolName.length <= 128
+  ) {
+    confirmation.blockedCall = {
+      runId: params.runId,
+      toolCallId: params.toolCallId,
+      toolName: params.toolName,
+    };
+  }
   state.pending = confirmation;
   const observation = params.runId ? state.observationsByRun.get(params.runId) : undefined;
   if (observation) {
@@ -481,7 +483,7 @@ export function observeClientVoiceConfirmationRun(params: {
   const observation = new Map<string, string>();
   state.observationsByRun.set(params.runId, observation);
   return {
-    readReply(): string | undefined {
+    readReply(options?: { includeConfirmationId?: boolean }): string | undefined {
       if (observation.size === 0) {
         return undefined;
       }
@@ -491,7 +493,11 @@ export function observeClientVoiceConfirmationRun(params: {
         observation.get(pending.fingerprint) === pending.confirmationId &&
         pending.expiresAt >= Date.now()
       ) {
-        return 'One pending action has not run. Say "yes" to confirm that action or "no" to cancel it.';
+        const speech =
+          'One pending action has not run. Say "yes" to confirm that action or "no" to cancel it.';
+        return options?.includeConfirmationId
+          ? `VOICE_CONFIRMATION_REQUIRED:${pending.confirmationId} ${speech} After spoken confirmation, call openclaw_agent_consult with this confirmationId.`
+          : speech;
       }
       return "An action in that request was not run because its spoken confirmation is no longer current. Make a new request if you still want it.";
     },

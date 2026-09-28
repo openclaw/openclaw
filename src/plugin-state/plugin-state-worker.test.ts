@@ -1,18 +1,27 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { serialize } from "node:v8";
+import { deserialize, serialize } from "node:v8";
+import { threadId, Worker } from "node:worker_threads";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  trackSqliteStatementExecutions,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { SQLITE_WORKER_MAX_RESULT_BYTES } from "../infra/sqlite-worker-contract.js";
+import { holdForeignWriter } from "../infra/sqlite-worker-shared-state-admission.test-support.js";
 import {
   appendMemoryHostEvent,
   readMemoryHostEventRecords,
 } from "../plugin-sdk/memory-host-events.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { VERSION } from "../version.js";
 import {
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
@@ -21,6 +30,7 @@ import {
 } from "./plugin-state-store.js";
 import { seedPluginStateEntriesForTests } from "./plugin-state-store.test-helpers.js";
 import { PluginStateStoreError } from "./plugin-state-store.types.js";
+import { sweepExpiredPluginStateEntriesInWorker } from "./plugin-state-worker-client.js";
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -28,6 +38,177 @@ afterEach(async () => {
 });
 
 describe("worker plugin state", () => {
+  it.each(["register", "delete"] as const)(
+    "revalidates caller authority after asynchronous worker admission for %s",
+    async (operation) => {
+      await withOpenClawTestState({ label: "plugin-state-current-owner" }, async (state) => {
+        const store = createPluginStateKeyedStore<string>("device-pair", {
+          namespace: "owner-admission",
+          maxEntries: 10,
+          env: state.env,
+        });
+        await store.register("subscription", "original");
+        let current = true;
+        const assertCurrent = () => {
+          if (!current) {
+            throw new Error("command owner revoked");
+          }
+        };
+        const pending =
+          operation === "register"
+            ? store.register("subscription", "replacement", { assertCurrent })
+            : store.delete("subscription", { assertCurrent });
+        current = false;
+        await expect(pending).rejects.toThrow("plugin state");
+        expect(await store.lookup("subscription")).toBe("original");
+      });
+    },
+  );
+
+  it("opens cold state and sweeps reopened state without host data SQL", async () => {
+    await withOpenClawTestState({ label: "plugin-state-worker-sweep" }, async (state) => {
+      const databasePath = resolveOpenClawStateSqlitePath(state.env);
+      const observation = observeHostDataSql();
+      try {
+        expect(existsSync(databasePath)).toBe(false);
+        expect(await sweepExpiredPluginStateEntriesInWorker({ env: state.env })).toBe(0);
+        expect(existsSync(databasePath)).toBe(true);
+        for (const method of observation.calls) {
+          expect(method).not.toHaveBeenCalled();
+        }
+
+        const now = Date.now();
+        seedPluginStateEntriesForTests([
+          {
+            pluginId: "fixture-plugin",
+            namespace: "sweep",
+            key: "expired",
+            value: { expired: true },
+            expiresAt: now - 1,
+          },
+          {
+            pluginId: "fixture-plugin",
+            namespace: "sweep",
+            key: "live",
+            value: { live: true },
+            expiresAt: now + 86_400_000,
+          },
+        ]);
+        await closeOpenClawStateDatabaseAsync();
+        for (const method of observation.calls) {
+          method.mockClear();
+        }
+        expect(await sweepExpiredPluginStateEntriesInWorker({ env: state.env })).toBe(1);
+        expect(await sweepExpiredPluginStateEntriesInWorker({ env: state.env })).toBe(0);
+        for (const method of observation.calls) {
+          expect(method).not.toHaveBeenCalled();
+        }
+      } finally {
+        observation.restore();
+      }
+      const persisted = createPluginStateSyncKeyedStore("fixture-plugin", {
+        namespace: "sweep",
+        maxEntries: 10,
+        env: state.env,
+      });
+      expect(persisted.lookup("expired")).toBeUndefined();
+      expect(persisted.lookup("live")).toEqual({ live: true });
+    });
+  });
+
+  it.each(["observe", "compareDelete"] as const)(
+    "revalidates %s authority after native writer contention and releases refused transactions",
+    async (operation) => {
+      await withOpenClawTestState({ label: "plugin-state-native-contention" }, async (state) => {
+        let current = true;
+        const revoked = new Error("plugin owner revoked after dispatch");
+        const store = createPluginStateKeyedStore<string>(
+          "memory-core",
+          {
+            namespace: "writer-contention",
+            retention: "retained",
+            env: state.env,
+          },
+          () => {
+            if (!current) {
+              throw revoked;
+            }
+          },
+        );
+        const messages = vi.spyOn(Worker.prototype, "postMessage");
+        await store.register("workspace", "owner");
+        const worker = messages.mock.contexts[0];
+        messages.mockRestore();
+        if (!(worker instanceof Worker)) {
+          throw new Error("Expected the shared-state worker");
+        }
+        const observation = await store.observe("workspace");
+        const captured = captureOpenClawStateWorkerContext({ env: state.env });
+        const foreign = holdForeignWriter(captured);
+        const posted = createDeferredCore();
+        const nativePost = worker.postMessage.bind(worker);
+        const dispatch = vi
+          .spyOn(worker, "postMessage")
+          .mockImplementation((message, transferList) => {
+            const request = asOptionalRecord(message);
+            nativePost(message, transferList);
+            if (
+              request?.type === "execute" &&
+              request.input instanceof Uint8Array &&
+              asOptionalRecord(deserialize(request.input))?.type === "pluginState." + operation
+            ) {
+              posted.resolve();
+            }
+          });
+        const execute = () =>
+          operation === "observe"
+            ? store.observe("workspace")
+            : store.compareAndApply("workspace", observation.comparison, {
+                operation: "delete",
+                action: "delete",
+              });
+        const pending = execute().then(
+          (value) => ({ ok: true, value }) as const,
+          (error: unknown) => ({ ok: false, error }) as const,
+        );
+        try {
+          await Promise.race([
+            posted.promise,
+            pending.then(() => {
+              throw new Error("Plugin operation settled before worker dispatch");
+            }),
+          ]);
+          // The dispatched operation must revalidate authority after acquiring the native writer.
+          current = false;
+          foreign.release();
+          await expect(pending).resolves.toMatchObject({
+            ok: false,
+            error: {
+              code:
+                operation === "observe" ? "PLUGIN_STATE_READ_FAILED" : "PLUGIN_STATE_WRITE_FAILED",
+              cause: revoked,
+            },
+          });
+        } finally {
+          dispatch.mockRestore();
+          foreign.close();
+          await pending;
+          current = true;
+        }
+        expect(await store.lookup("workspace")).toBe("owner");
+        // Claim the actual writer lock before closing the worker to prove refusal rolled back.
+        const nextOwner = holdForeignWriter(captured);
+        nextOwner.close();
+        if (operation === "observe") {
+          await expect(execute()).resolves.toMatchObject({ value: "owner" });
+        } else {
+          await expect(execute()).resolves.toEqual({ status: "applied" });
+        }
+        expect(await store.lookup("workspace")).toBe(operation === "observe" ? "owner" : undefined);
+      });
+    },
+  );
+
   it("appends and reads the memory journal off-thread with unchanged persisted bytes", async () => {
     await withOpenClawTestState({ label: "memory-journal-worker" }, async (state) => {
       const workspaceDir = state.workspaceDir;
@@ -38,14 +219,8 @@ describe("worker plugin state", () => {
         resultCount: 0,
         results: [],
       };
-      const native = requireNodeSqlite();
-      const sql = [
-        vi.spyOn(native.DatabaseSync.prototype, "prepare"),
-        vi.spyOn(native.DatabaseSync.prototype, "exec"),
-        ...(["get", "all", "run", "iterate"] as const).map((method) =>
-          vi.spyOn(native.StatementSync.prototype, method),
-        ),
-      ];
+      const observation = observeHostDataSql();
+      const sql = observation.calls;
       const timings: Record<string, number> = {};
       try {
         expect(await readMemoryHostEventRecords({ workspaceDir, env: state.env })).toEqual([]);
@@ -76,7 +251,7 @@ describe("worker plugin state", () => {
           expect(method).not.toHaveBeenCalled();
         }
       } finally {
-        sql.forEach((method) => method.mockRestore());
+        observation.restore();
       }
       const { db } = openOpenClawStateDatabase({ env: state.env });
       const rows = db
@@ -152,13 +327,8 @@ describe("worker plugin state", () => {
         maxEntries: 10,
         overflowPolicy: "reject-new" as const,
       };
-      const native = requireNodeSqlite();
-      const prepare = vi.spyOn(native.DatabaseSync.prototype, "prepare");
-      const exec = vi.spyOn(native.DatabaseSync.prototype, "exec");
-      const statements = (["get", "all", "run", "iterate"] as const).map((method) =>
-        vi.spyOn(native.StatementSync.prototype, method),
-      );
-      const sql = [prepare, exec, ...statements];
+      const observation = observeHostDataSql();
+      const sql = observation.calls;
       try {
         const store = createPluginStateKeyedStore<number>("slack", options);
         const legacy = createPluginStateSyncKeyedStore<number>("slack", options);
@@ -218,7 +388,7 @@ describe("worker plugin state", () => {
           expect(method).not.toHaveBeenCalled();
         }
       } finally {
-        sql.forEach((method) => method.mockRestore());
+        observation.restore();
       }
       const persisted = createPluginStateSyncKeyedStore<number>("slack", options);
       expect(persisted.lookup("legacy")).toBe(1);
@@ -482,7 +652,9 @@ describe("worker plugin state", () => {
         operation: "delete",
         path,
         cause: expect.any(SyntaxError),
+        owner: { pid: process.pid, threadId: expect.any(Number), version: VERSION },
       });
+      expect(corrupt).not.toHaveProperty("owner.threadId", threadId);
     });
   });
 });

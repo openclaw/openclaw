@@ -1,6 +1,10 @@
 import type { WorkerInferenceTerminalOutcome } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import type { AssistantMessage, Usage } from "../../llm/types.js";
 import {
+  projectWorkerAssistantContent,
+  projectWorkerTokenUsage,
+} from "../../worker/assistant-message-projection.js";
+import {
   projectWorkerProviderReplay,
   type WorkerMessageProjection,
 } from "../../worker/transcript-message.js";
@@ -41,50 +45,22 @@ export function projectWorkerInferenceTerminalMessage(params: {
   modelIdentity: WorkerInferenceModelIdentity;
   stopReason: Extract<AssistantMessage["stopReason"], "stop" | "length" | "toolUse">;
 }): WorkerMessageProjection<Extract<WorkerInferenceTerminalOutcome, { type: "done" }>["message"]> {
-  const content = params.message.content.map((part) => {
-    switch (part.type) {
-      case "text":
-        return {
-          type: part.type,
-          text: part.text,
-          ...(part.textSignature ? { textSignature: part.textSignature } : {}),
-        };
-      case "thinking":
-        return {
-          type: part.type,
-          thinking: part.thinking,
-          ...(part.thinkingSignature ? { thinkingSignature: part.thinkingSignature } : {}),
-          ...(part.redacted !== undefined ? { redacted: part.redacted } : {}),
-        };
-      case "toolCall":
-        return {
-          type: part.type,
-          id: part.id,
-          name: part.name,
-          arguments: structuredClone(part.arguments),
-          ...(part.thoughtSignature ? { thoughtSignature: part.thoughtSignature } : {}),
-          ...(part.executionMode ? { executionMode: part.executionMode } : {}),
-        };
-      default:
-        throw new Error("Unsupported assistant terminal content");
-    }
-  });
   const usage = params.message.usage;
   const projected: Extract<WorkerInferenceTerminalOutcome, { type: "done" }>["message"] = {
     role: "assistant",
-    // Provider adapters may retain transport scratch fields. Project the exact
-    // closed worker schema so those fields cannot invalidate the terminal frame.
-    content,
+    content: params.message.content.map((part) => {
+      if (part.type !== "text" && part.type !== "thinking" && part.type !== "toolCall") {
+        throw new Error("Unsupported assistant terminal content");
+      }
+      return projectWorkerAssistantContent(part);
+    }),
     api: params.modelIdentity.api,
     provider: params.modelIdentity.provider,
     model: params.modelIdentity.model,
     ...(params.message.responseModel ? { responseModel: params.message.responseModel } : {}),
     ...(params.message.responseId ? { responseId: params.message.responseId } : {}),
     usage: {
-      input: usage.input,
-      output: usage.output,
-      cacheRead: usage.cacheRead,
-      cacheWrite: usage.cacheWrite,
+      ...projectWorkerTokenUsage(usage),
       ...(usage.contextUsage?.state === "available"
         ? {
             contextUsage: {
@@ -96,15 +72,6 @@ export function projectWorkerInferenceTerminalMessage(params: {
         : usage.contextUsage?.state === "unavailable"
           ? { contextUsage: { state: usage.contextUsage.state } }
           : {}),
-      totalTokens: usage.totalTokens,
-      cost: {
-        input: usage.cost.input,
-        output: usage.cost.output,
-        cacheRead: usage.cost.cacheRead,
-        cacheWrite: usage.cost.cacheWrite,
-        total: usage.cost.total,
-        ...(usage.cost.totalOrigin ? { totalOrigin: usage.cost.totalOrigin } : {}),
-      },
     },
     stopReason: params.stopReason,
     timestamp: params.message.timestamp,

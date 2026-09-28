@@ -41,12 +41,15 @@ const sendMocks = vi.hoisted(() => ({
 }));
 export function createMockDraftStream() {
   let messageId: string | undefined = "preview-1";
+  let text = "";
   return {
-    update: vi.fn<(text: string) => void>(() => {
+    update: vi.fn<(next: string) => void>((next) => {
+      text = next;
       messageId ??= "preview-next";
     }),
     flush: vi.fn(async () => {}),
     messageId: vi.fn(() => messageId),
+    lastDeliveredText: vi.fn(() => text),
     clear: vi.fn(async () => {
       messageId = undefined;
     }),
@@ -60,19 +63,12 @@ export function createMockDraftStream() {
     cleanupPendingMessages: vi.fn(async () => {}),
     forceNewMessage: vi.fn(() => {
       messageId = undefined;
+      text = "";
     }),
   };
 }
 
 const deliveryMocks = vi.hoisted(() => ({
-  editMessageDiscord: vi.fn<
-    (
-      channelId: string,
-      messageId: string,
-      payload: unknown,
-      opts?: unknown,
-    ) => Promise<import("discord-api-types/v10").APIMessage>
-  >(async () => ({ id: "m1" }) as import("discord-api-types/v10").APIMessage),
   deliverDiscordReply: vi.fn<(params: unknown) => Promise<{ visibleReplySent: boolean }>>(
     async () => ({
       visibleReplySent: true,
@@ -82,7 +78,6 @@ const deliveryMocks = vi.hoisted(() => ({
     () => createMockDraftStream(),
   ),
 }));
-export const editMessageDiscord = deliveryMocks.editMessageDiscord;
 export const deliverDiscordReply = deliveryMocks.deliverDiscordReply;
 export const createDiscordDraftStream = deliveryMocks.createDiscordDraftStream;
 
@@ -136,11 +131,6 @@ const discordTargetMocks = vi.hoisted(() => ({
 vi.mock("../send.shared.js", () => ({
   resolveDiscordTargetChannelId: (target: string, opts: unknown) =>
     discordTargetMocks.resolveDiscordTargetChannelId(target, opts),
-}));
-
-vi.mock("../send.messages.js", () => ({
-  editMessageDiscord: (channelId: string, messageId: string, payload: unknown, opts?: unknown) =>
-    deliveryMocks.editMessageDiscord(channelId, messageId, payload, opts),
 }));
 
 vi.mock("../draft-stream.js", () => ({
@@ -516,7 +506,7 @@ export function registerDiscordProcessTestLifecycle() {
     ({ discordInboundEventDelivery } = await import("../inbound-event-delivery.js"));
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.useRealTimers();
     runtimeEnvMocks.logVerbose.mockReset();
     runtimeEnvMocks.sleepWithAbort.mockReset().mockResolvedValue(undefined);
@@ -525,7 +515,6 @@ export function registerDiscordProcessTestLifecycle() {
     typingMocks.sendTyping.mockClear();
     typingMocks.sendTyping.mockResolvedValue(undefined);
     discordTargetMocks.resolveDiscordTargetChannelId.mockClear();
-    editMessageDiscord.mockClear();
     deliverDiscordReply.mockClear();
     createDiscordDraftStream.mockClear();
     dispatchInboundMessage.mockClear();
@@ -544,10 +533,10 @@ export function registerDiscordProcessTestLifecycle() {
     readLatestAssistantTextByIdentity.mockResolvedValue(undefined);
     resolveStorePath.mockReturnValue("/tmp/openclaw-discord-process-test-sessions.json");
     getGlobalHookRunner.mockReturnValue(null);
-    resetThreadBindingsForTests();
+    await resetThreadBindingsForTests();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
   });
 }

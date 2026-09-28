@@ -10,6 +10,11 @@ sidebarTitle: "Approval and sandbox"
 
 The approval and sandbox posture of a Codex turn, and where native execution runs. Part of the [Codex harness reference](/plugins/codex-harness-reference); [Where each section moved](/plugins/codex-harness-reference#where-each-section-moved) lists every section.
 
+For native plugin/app tools, also follow the
+[app approval decision order](/plugins/codex-native-plugins#approval-decision-order).
+App admission, tool enablement, per-tool approval modes, and OpenClaw's
+elicitation response are separate from the general presets below.
+
 ## Approval and sandbox modes
 
 Local stdio app-server sessions default to YOLO mode:
@@ -82,7 +87,7 @@ The stable default is fail-closed: active OpenClaw sandboxing disables native
 Codex execution surfaces that would otherwise run from the Codex app-server
 host. Use `appServer.experimental.sandboxExecServer: true` only when you want
 to try Codex's remote environment support with OpenClaw's sandbox backend.
-This preview path uses the pinned Codex `0.154.0` app-server.
+This preview path uses the pinned Codex `0.155.1` app-server.
 
 ```json5
 {

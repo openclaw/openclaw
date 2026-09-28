@@ -1,9 +1,7 @@
-// Discord plugin module implements agent components guild auth behavior.
 import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/command-auth-native";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
-import type { DiscordComponentEntry } from "../components.js";
 import { resolveDiscordChannelContext } from "./agent-components-context.js";
 import { resolveInteractionContextWithDmAuth } from "./agent-components-dm-auth.js";
 import { resolveAgentComponentPolicyContext } from "./agent-components-live-policy.js";
@@ -123,8 +121,8 @@ async function ensureGuildComponentMemberAllowed(params: {
   return false;
 }
 
-export async function ensureComponentUserAllowed(params: {
-  entry: DiscordComponentEntry;
+async function ensureComponentUserAllowed(params: {
+  allowedUsers: string[];
   interaction: AgentComponentInteraction;
   user: DiscordUser;
   replyOpts: { ephemeral?: boolean };
@@ -132,11 +130,7 @@ export async function ensureComponentUserAllowed(params: {
   unauthorizedReply: string;
   allowNameMatching: boolean;
 }) {
-  const allowList = normalizeDiscordAllowList(params.entry.allowedUsers, [
-    "discord:",
-    "user:",
-    "pk:",
-  ]);
+  const allowList = normalizeDiscordAllowList(params.allowedUsers, ["discord:", "user:", "pk:"]);
   if (!allowList) {
     return true;
   }
@@ -217,6 +211,7 @@ export async function resolveAuthorizedComponentInteraction(params: {
   label: string;
   componentLabel: string;
   unauthorizedReply: string;
+  allowedUsers?: string[];
   defer?: boolean;
 }) {
   const ctx = await resolveAgentComponentPolicyContext(params);
@@ -285,6 +280,18 @@ export async function resolveAuthorizedComponentInteraction(params: {
     });
     return null;
   }
+  if (
+    params.allowedUsers !== undefined &&
+    !(await ensureComponentUserAllowed({
+      ...params,
+      allowedUsers: params.allowedUsers,
+      user,
+      replyOpts,
+      allowNameMatching,
+    }))
+  ) {
+    return null;
+  }
   return {
     ctx,
     interactionCtx,
@@ -331,17 +338,12 @@ export async function resolveComponentCommandAuthorized(params: {
     },
     allowNameMatching: params.allowNameMatching,
   });
-  const useAccessGroups = true;
-  const authorizers = useAccessGroups
-    ? [
-        { configured: ownerAllowList != null, allowed: ownerOk },
-        { configured: hasAccessRestrictions, allowed: memberAllowed },
-      ]
-    : [{ configured: hasAccessRestrictions, allowed: memberAllowed }];
-
   return resolveCommandAuthorizedFromAuthorizers({
-    useAccessGroups,
-    authorizers,
+    useAccessGroups: true,
+    authorizers: [
+      { configured: ownerAllowList != null, allowed: ownerOk },
+      { configured: hasAccessRestrictions, allowed: memberAllowed },
+    ],
     modeWhenAccessGroupsOff: "configured",
   });
 }

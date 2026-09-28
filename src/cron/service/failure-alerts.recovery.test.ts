@@ -6,14 +6,16 @@ import {
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { markCronJobActive } from "../active-jobs.js";
+import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import { cronScriptFailureMetadata } from "../script-failure.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import { readCronTaskRunHistoryPage } from "../task-run-history.js";
 import type { CronJob, CronRunOutcome } from "../types.js";
+import { applyJobResultAndDrainNotifications } from "./notification.test-helpers.js";
 import { restoreFinalizedStartupRun } from "./startup-run-repair.js";
+import type { DeferredCronNotifications } from "./state.js";
 import { finalizeCompletedCronRunOutcomes } from "./timer-outcome-finalization.js";
-import { applyJobResult, applyTriggerNoFireResult } from "./timer-outcomes.js";
+import { applyTriggerNoFireResult } from "./timer-outcomes.js";
 import { authorCronRunCompletion } from "./timer.js";
 
 const fixtures = setupCronRegressionFixtures({ prefix: "cron-failure-alert-recovery-" });
@@ -83,7 +85,7 @@ describe("cron failure incident startup recovery", () => {
     } finally {
       database.exec("DROP TRIGGER IF EXISTS reject_recovered_cron_row");
     }
-    const entry = readCronTaskRunHistoryPage({
+    const entry = readCronRunHistoryPageForTests({
       storeKey: cronStoreKey(store.storePath),
       jobId: pendingJob.id,
       status: "ok",
@@ -94,7 +96,7 @@ describe("cron failure incident startup recovery", () => {
     const staleJob = (await loadCronStore(store.storePath)).jobs[0]!;
     expect(staleJob.state.failureAlertIncident?.signature).toBeDefined();
     expect(sendCronFailureAlert).toHaveBeenCalledOnce();
-    const notifications: Array<() => void> = [];
+    const notifications: DeferredCronNotifications = [];
     restoreFinalizedStartupRun({
       state,
       job: staleJob,
@@ -117,14 +119,14 @@ describe("cron failure incident startup recovery", () => {
     "reconciles a quiet startup check after a %s failure without historical notifications",
     (source) => {
       const { state, job, clock, sendCronFailureAlert } = createFixture();
-      applyJobResult(state, job, {
+      applyJobResultAndDrainNotifications(state, job, {
         status: "error",
         error: "plugin refresh failed",
         ...cronScriptFailureMetadata(source, "plugin_reload_failed"),
         startedAt: clock.now,
         endedAt: clock.now,
       });
-      const notifications: Array<() => void> = [];
+      const notifications: DeferredCronNotifications = [];
       restoreFinalizedStartupRun({
         state,
         job,
@@ -147,14 +149,14 @@ describe("cron failure incident startup recovery", () => {
 
   it("keeps a replayed failure without script detail unresolved through a quiet trigger check", () => {
     const { state, job, clock, sendCronFailureAlert } = createFixture();
-    applyJobResult(state, job, {
+    applyJobResultAndDrainNotifications(state, job, {
       status: "error",
       error: "plugin refresh failed",
       ...cronScriptFailureMetadata("trigger", "plugin_reload_failed"),
       startedAt: clock.now,
       endedAt: clock.now,
     });
-    const notifications: Array<() => void> = [];
+    const notifications: DeferredCronNotifications = [];
     restoreFinalizedStartupRun({
       state,
       job,

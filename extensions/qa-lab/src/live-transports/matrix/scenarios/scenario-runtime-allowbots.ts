@@ -1,4 +1,3 @@
-// QA Lab Matrix plugin module implements scenario runtime allowbots behavior.
 import { MATRIX_QA_BOT_DM_ROOM_KEY, resolveMatrixQaScenarioRoomId } from "./scenario-contract.js";
 import {
   buildExactMarkerPrompt,

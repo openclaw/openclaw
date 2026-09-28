@@ -2,15 +2,24 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
+import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import type { GatewayActiveWorkInspectors } from "./gateway-active-work.js";
+import {
+  createGatewayUpdateLifecycle,
+  type UpdateCheckLifecycle,
+} from "./update-check-lifecycle.js";
 import type { UpdateCheckResult } from "./update-check.js";
+import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 import { getUpdateRun, listUpdateRuns } from "./update-run-ledger.js";
 import { renderUpdateRunReport } from "./update-run-report.js";
 import { readUpdateRunStatus } from "./update-run-status.js";
-import { getUpdateSchedule } from "./update-status-state.js";
+import { getUpdateSchedule, resetUpdateStatusState } from "./update-status-state.js";
 
 const { fault } = vi.hoisted(
   (): {
@@ -83,8 +92,9 @@ function idleActiveWorkInspectors(): GatewayActiveWorkInspectors {
     getEmbeddedRuns: () => 0,
     getBackgroundExecSessions: () => 0,
     getCronRuns: () => 0,
-    getActiveTasks: () => 0,
-    getTaskBlockers: () => [],
+    getAgentRuns: () => 0,
+    getAcpRuns: () => 0,
+    getMediaRuns: () => 0,
     getRootRequests: () => 0,
     getSessionAdmissions: () => 0,
     getSessionMutations: () => 0,
@@ -97,10 +107,13 @@ function idleActiveWorkInspectors(): GatewayActiveWorkInspectors {
 
 describe("update campaign apply exception boundary", () => {
   let testState: OpenClawTestState;
+  let clock: ReturnType<typeof createGatewaySchedulerClock>;
+  let lifecycle: UpdateCheckLifecycle;
 
   beforeEach(async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-17T10:00:00Z"));
+    clock = createGatewaySchedulerClock(Date.parse("2026-01-17T10:00:00Z"));
+    vi.spyOn(Date, "now").mockImplementation(clock.clock.now);
+    lifecycle = createGatewayUpdateLifecycle(createTestGatewayScheduler(clock.clock));
     testState = await createOpenClawTestState({
       layout: "state-only",
       prefix: "openclaw-update-campaign-apply-",
@@ -117,9 +130,10 @@ describe("update campaign apply exception boundary", () => {
   afterEach(async () => {
     delete fault.at;
     delete fault.error;
-    const { resetUpdateAvailableStateForTest } = await import("./update-startup.js");
-    resetUpdateAvailableStateForTest();
-    vi.useRealTimers();
+    await lifecycle.stop();
+    await lifecycle.scheduler.stop();
+    resetUpdateStatusState();
+    vi.restoreAllMocks();
     closeOpenClawStateDatabaseForTest();
     await testState.cleanup();
   });
@@ -166,16 +180,23 @@ describe("update campaign apply exception boundary", () => {
     fault.at = at;
     fault.error = Object.assign(new Error(message), { code });
 
-    await vi.advanceTimersByTimeAsync(60_000);
+    await clock.advanceBy(60_000);
 
     const runId = listUpdateRuns()[0]?.runId ?? "";
     const run = getUpdateRun(runId);
+    const diagnostic = code ? `${message} | ${code}` : message;
     expect(run).toMatchObject({
       status: "failed",
       reason: code ?? "unexpected-error",
       steps: expect.arrayContaining([
-        expect.objectContaining({ status: "failed", detail: message }),
+        expect.objectContaining({
+          status: "failed",
+          detail: diagnostic,
+          failureFacts: [expect.objectContaining({ code: code ?? "Error", message: diagnostic })],
+        }),
       ]),
+      target: { kind: "git", installationMethod: "git-checkout" },
+      verification: { rollbackOutcome: { status: "not-attempted" } },
     });
     const runStatus = readUpdateRunStatus();
     assert(!("runStatusError" in runStatus));
@@ -186,6 +207,20 @@ describe("update campaign apply exception boundary", () => {
     expect(report.headline).toContain(code ?? "unexpected-error");
     expect(report.markdown).toContain(message);
     expect(report.markdown.length).toBeLessThanOrEqual(1500);
+    const prepared = await prepareUpdateFailureReport({
+      attemptId: lastRun.runId,
+      recordedRun: lastRun,
+      result: {
+        status: "error",
+        mode: "git",
+        reason: lastRun.reason ?? undefined,
+        steps: [],
+        durationMs: 0,
+      },
+    });
+    expect(prepared.body).toContain(message);
+    expect(prepared.body).toContain("git-checkout");
+    expect(prepared.body).toContain("startup campaign does not roll back");
     expect(runAutoUpdate).not.toHaveBeenCalled();
     expect(getUpdateSchedule()?.campaign).toBeUndefined();
     const failureLog = log.info.mock.calls.find(([line]) => String(line).includes(message));

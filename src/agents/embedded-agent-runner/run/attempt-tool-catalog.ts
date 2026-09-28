@@ -1,6 +1,3 @@
-/**
- * Prepares the attempt-local tool catalog, schema projection, and diagnostics.
- */
 import {
   isCodeModeDiagnosticEnabled,
   logCodeModeDiagnostic,
@@ -11,19 +8,13 @@ import {
   markAgentToolExecutionUnavailable,
 } from "../../agent-tool-availability.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
-import {
-  CODE_MODE_EXEC_TOOL_NAME,
-  CODE_MODE_WAIT_TOOL_NAME,
-  createCodeModeTools,
-} from "../../code-mode.js";
-import { filterLocalModelLeanTools } from "../../local-model-lean.js";
+import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "../../code-mode.js";
 import { logAgentRuntimeToolDiagnostics } from "../../runtime-plan/tools.js";
 import { buildEmptyExplicitToolAllowlistError } from "../../tool-allowlist-guard.js";
 import {
   createToolExecutionMatcher,
   TOOL_EXECUTION_GATED_MESSAGE,
 } from "../../tool-policy-shared.js";
-import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
 import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-types.js";
 import {
@@ -32,7 +23,6 @@ import {
   TOOL_SEARCH_RAW_TOOL_NAME,
   type ToolSearchCatalogToolExecutor,
 } from "../../tool-search.js";
-import { applyAgentToolSurfaceCatalog } from "../../tool-surface-plan.js";
 import type { AnyAgentTool } from "../../tools/common.js";
 import { log } from "../logger.js";
 import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
@@ -63,7 +53,6 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
       runtimeCapabilityProfile,
       toolSearchConfig,
       toolSearchControlsEnabledForRun,
-      toolSearchRuntimeConfig,
       toolsEnabled,
     } = preparedToolBase;
     const { clientTools, uncompactedEffectiveTools } = input.bundleTools;
@@ -76,62 +65,27 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
       ? gateToolExecution(uncompactedEffectiveTools, attempt.toolExecutionAllow)
       : uncompactedEffectiveTools;
     const catalogToolHookContext = preparedToolBase.toolHookContext;
-    const codeModeTools = codeModeControlsEnabledForRun
-      ? createCodeModeTools({
-          config: attempt.config,
-          runtimeConfig: attempt.config,
-          modelContextWindowTokens: attempt.contextTokenBudget ?? attempt.model.contextWindow,
-          agentId: input.setup.sessionAgentId,
-          sessionKey: input.setup.sandboxSessionKey,
-          sessionId: attempt.sessionId,
-          runId: attempt.runId,
-          catalogRef: preparedToolBase.toolSearchCatalogRef,
-          abortSignal,
-          forceRestartSafeTools: attempt.forceRestartSafeTools,
-          toolExecutionAllow: attempt.toolExecutionAllow,
-          executeTool: input.executeCodeModeTool,
-          codeModeSkills,
-        })
-      : [];
-    const toolSearch = applyAgentToolSurfaceCatalog({
-      // `codeModeTools` is empty unless code-mode controls are on, so this stays
-      // exactly `effectiveTools` for the tool-search branches.
-      tools: [...codeModeTools, ...effectiveTools],
-      config: attempt.config,
-      toolSearchRuntimeConfig,
-      codeModeControlsEnabled: codeModeControlsEnabledForRun,
-      toolSearchConfig,
-      forceDirectMessageTool: preparedToolBase.forceDirectMessageTool,
-      sessionId: attempt.sessionId,
-      sessionKey: input.setup.sandboxSessionKey,
-      agentId: input.setup.sessionAgentId,
-      runId: attempt.runId,
-      catalogRef: preparedToolBase.toolSearchCatalogRef,
-      toolHookContext: catalogToolHookContext,
-      toolExecutionAllow: attempt.toolExecutionAllow,
-      codeModeSkills,
+    const compacted = preparedToolBase.toolSurfaceRuntime.compactTools(effectiveTools, {
+      hookContext: catalogToolHookContext,
+      prepared: {
+        abortSignal,
+        forceRestartSafeTools: attempt.forceRestartSafeTools,
+        toolExecutionAllow: attempt.toolExecutionAllow,
+        executeTool: input.executeCodeModeTool,
+        codeModeSkills,
+        preserveToolNames: localModelLeanPreserveToolNames,
+      },
     });
-    const projectedToolSearchTools = filterLocalModelLeanTools({
-      tools: toolSearch.tools,
-      config: attempt.config,
-      agentId: input.setup.sessionAgentId,
-      preserveToolNames: localModelLeanPreserveToolNames,
-    });
-    const toolSearchSchemaProjection = filterRuntimeCompatibleTools(projectedToolSearchTools);
+    const toolSearch = compacted.catalog;
     logRuntimeToolSchemaQuarantine({
-      diagnostics: toolSearchSchemaProjection.diagnostics,
-      tools: projectedToolSearchTools,
+      diagnostics: compacted.diagnostics,
+      tools: compacted.projectedTools,
       runId: attempt.runId,
       agentId: input.setup.sessionAgentId,
       sessionKey: attempt.sessionKey,
       sessionId: attempt.sessionId,
     });
-    if (!toolSearch.catalogRegistered) {
-      finalizeAgentToolAvailability(toolSearchSchemaProjection.tools, {
-        toolExecutionAllow: attempt.toolExecutionAllow,
-      });
-    }
-    effectiveTools = toolSearchSchemaProjection.tools.map((tool) =>
+    effectiveTools = compacted.tools.map((tool) =>
       wrapEmbeddedAttemptToolWithActivity(
         wrapToolWithAbortSignal(tool, abortSignal),
         attempt.runId,

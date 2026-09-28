@@ -19,12 +19,22 @@ type ExecutionScope = {
   schedule: CatalogSchedule;
   exclusive: boolean;
   active: boolean;
+  settlement?: Promise<void>;
   parent?: ExecutionScope;
 };
 
 // Refs survive client-tool append and are shared by every cell in an admitted run.
 const schedules = new WeakMap<ToolSearchCatalogRef, CatalogSchedule>();
 const executionScope = new AsyncLocalStorage<ExecutionScope>();
+
+/** Observer cancellation must not release a slot still owned by implementation work. */
+export function retainToolSearchImplementation<T>(implementation: Promise<T>): Promise<T> {
+  const scope = executionScope.getStore();
+  if (scope?.active) {
+    scope.settlement = Promise.allSettled([scope.settlement, implementation]).then(() => undefined);
+  }
+  return implementation;
+}
 
 function createSchedule(owner: ToolSearchCatalogRef): CatalogSchedule {
   const closed = new AbortController();
@@ -113,20 +123,31 @@ export async function runScheduledToolSearchCall<T>(params: {
     // finalization own release, not an observer that stops waiting early.
     return await executionScope.run(scope, () => params.execute(current, signal));
   } finally {
-    scope.active = false;
-    if (admission.started) {
-      schedule.active -= 1;
-      if (exclusive) {
-        schedule.exclusive = false;
+    const release = () => {
+      scope.active = false;
+      if (admission.started) {
+        schedule.active -= 1;
+        if (exclusive) {
+          schedule.exclusive = false;
+        }
+      } else {
+        schedule.queue.splice(schedule.queue.indexOf(admission), 1);
       }
-    } else {
-      schedule.queue.splice(schedule.queue.indexOf(admission), 1);
-    }
-    drainSchedule(schedule);
-    if (schedule.active === 0 && schedule.queue.length === 0) {
-      if (schedules.get(owner) === schedule) {
+      drainSchedule(schedule);
+      if (
+        schedule.active === 0 &&
+        schedule.queue.length === 0 &&
+        schedules.get(owner) === schedule
+      ) {
         schedules.delete(owner);
       }
+    };
+    // Return cancellation promptly, but keep FIFO exclusion until the producer
+    // settles. A late completion only releases its own catalog generation.
+    if (scope.settlement) {
+      void scope.settlement.then(release);
+    } else {
+      release();
     }
   }
 }

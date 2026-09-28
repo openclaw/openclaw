@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { getRuntimeConfig } from "../../../config/config.js";
 import { LegacyContextEngine } from "../../../context-engine/legacy.js";
 import {
   registerContextEngineInRegistry,
@@ -9,17 +10,27 @@ import type { ContextEngine } from "../../../context-engine/types.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../../../plugins/registry-inspection-resources.js";
 import { retireInspectionInstances } from "../../../plugins/registry-inspection.test-support.js";
+import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
-import {
-  resetSubagentRegistryRuntimeLoadersForTests,
-  setSubagentRegistryDepsForTest,
-  subagentRegistryDeps,
-} from "./subagent-registry-deps.js";
+import { resetSubagentRegistryRuntimeLoadersForTests } from "./subagent-registry-deps.js";
+
+vi.mock("../../../config/config.js", { spy: true });
+vi.mock("../../../context-engine/registry.js", { spy: true });
+vi.mock("../../../context-engine/init.js", () => ({ ensureContextEnginesInitialized: vi.fn() }));
+vi.mock("../../runtime-plugins.js", () => ({
+  loadAgentRuntimePluginRegistryHandle: vi.fn<typeof loadAgentRuntimePluginRegistryHandle>(),
+}));
+
+const { resolveContextEngine: actualResolveContextEngine } = await vi.importActual<
+  typeof import("../../../context-engine/registry.js")
+>("../../../context-engine/registry.js");
 
 describe("subagent registry context cleanup", () => {
   afterEach(() => {
-    setSubagentRegistryDepsForTest();
+    vi.mocked(getRuntimeConfig).mockReset();
+    vi.mocked(resolveContextEngine).mockReset();
+    vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
     resetSubagentRegistryRuntimeLoadersForTests();
   });
 
@@ -56,19 +67,15 @@ describe("subagent registry context cleanup", () => {
       registerContextEngineInRegistry(registry, "legacy", () => raw, "core");
       let engine: ContextEngine | undefined;
       let current = true;
-      setSubagentRegistryDepsForTest({
-        getRuntimeConfig: () => ({}),
-        loadAgentRuntimePluginRegistryHandle: () => registry,
-        ensureContextEnginesInitialized: vi.fn(),
-        resolveContextEngine: async (cfg, options) => {
-          engine = await resolveContextEngine(cfg, options);
-          resolutionStarted.resolve();
-          await resolutionGate.promise;
-          return engine;
-        },
+      vi.mocked(getRuntimeConfig).mockReturnValue({});
+      vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReturnValue(registry);
+      vi.mocked(resolveContextEngine).mockImplementation(async (cfg, options) => {
+        engine = await actualResolveContextEngine(cfg, options);
+        resolutionStarted.resolve();
+        await resolutionGate.promise;
+        return engine;
       });
       const cleanup = createSubagentRegistryContextCleanup({
-        deps: () => subagentRegistryDeps,
         persist: vi.fn(),
         warn: vi.fn(),
       });
@@ -110,16 +117,13 @@ describe("subagent registry context cleanup", () => {
 
   it("completes ended-hook cleanup when the plugin runtime loader rejects", async () => {
     const error = new Error("plugin runtime import failed");
-    setSubagentRegistryDepsForTest({
-      getRuntimeConfig: () => ({}),
-      loadAgentRuntimePluginRegistryHandle: () => {
-        throw error;
-      },
+    vi.mocked(getRuntimeConfig).mockReturnValue({});
+    vi.mocked(loadAgentRuntimePluginRegistryHandle).mockImplementation(() => {
+      throw error;
     });
     const warn = vi.fn();
     const persist = vi.fn();
     const cleanup = createSubagentRegistryContextCleanup({
-      deps: () => subagentRegistryDeps,
       persist,
       warn,
     });

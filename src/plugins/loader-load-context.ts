@@ -30,7 +30,8 @@ import {
 } from "./plugin-runtime-artifact-selection.js";
 import { normalizePluginIdScope } from "./plugin-scope.js";
 import { getPluginLoaderCacheState } from "./registry-lifecycle.js";
-import { getPluginRegistryForContext } from "./runtime.js";
+import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
+import { getActivePluginRegistry, getPluginRegistryForContext } from "./runtime.js";
 import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
 
 const runtimeBindingCacheIds = new WeakMap<object, number>();
@@ -47,17 +48,6 @@ function resolveRuntimeBindingCacheId(value: object | undefined): number | undef
   const id = nextRuntimeBindingCacheId++;
   runtimeBindingCacheIds.set(value, id);
   return id;
-}
-
-function resolveRuntimeBindingCacheIdentity(options: PluginLoadOptions): string {
-  const { runtimeOptions } = options;
-  return JSON.stringify({
-    capabilityCatalogContext: resolveRuntimeBindingCacheId(options.capabilityCatalogContext),
-    modelAuth: resolveRuntimeBindingCacheId(runtimeOptions?.modelAuth),
-    modelConfig: resolveRuntimeBindingCacheId(runtimeOptions?.modelConfig),
-    nodes: resolveRuntimeBindingCacheId(runtimeOptions?.nodes),
-    subagent: resolveRuntimeBindingCacheId(runtimeOptions?.subagent),
-  });
 }
 
 function buildActivationMetadataHash(params: {
@@ -227,8 +217,9 @@ function resolveCoreGatewayMethodNames(options: PluginLoadOptions): string[] {
   for (const name of Object.keys(options.coreGatewayHandlers ?? {})) {
     names.add(name);
   }
-  // oxlint-disable-next-line unicorn/no-array-sort -- Array.from creates a private array.
-  return Array.from(names).sort();
+  const methodNames = Array.from(names);
+  methodNames.sort();
+  return methodNames;
 }
 
 function mergePluginTrustList(runtimeList: string[], sourceList: readonly string[]): string[] {
@@ -309,6 +300,15 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     options.preferBuiltPluginArtifacts,
   );
   const runtimeSubagentMode = resolveRuntimeSubagentMode(options.runtimeOptions);
+  const activeRegistry =
+    runtimeSubagentMode === "gateway-bindable" &&
+    options.mode !== "cli-metadata" &&
+    (!options.runtimeOptions?.nodes || !options.runtimeOptions?.subagent)
+      ? getActivePluginRegistry()
+      : undefined;
+  const borrowedGatewayRuntime = activeRegistry
+    ? getPluginRegistryRuntime(activeRegistry)
+    : undefined;
   const coreGatewayMethodNames = resolveCoreGatewayMethodNames(options);
   // Config identity cannot prove a custom profile's environment. Only borrow
   // the process-owned generation; full snapshots cover narrower loads, while
@@ -387,7 +387,17 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
       : undefined,
     loadModules: options.loadModules,
     runtimeSubagentMode,
-    runtimeBindingIdentity: resolveRuntimeBindingCacheIdentity(options),
+    runtimeBindingIdentity: JSON.stringify({
+      capabilityCatalogContext: resolveRuntimeBindingCacheId(options.capabilityCatalogContext),
+      modelAuth: resolveRuntimeBindingCacheId(options.runtimeOptions?.modelAuth),
+      modelConfig: resolveRuntimeBindingCacheId(options.runtimeOptions?.modelConfig),
+      nodes: resolveRuntimeBindingCacheId(options.runtimeOptions?.nodes),
+      subagent: resolveRuntimeBindingCacheId(options.runtimeOptions?.subagent),
+      // Root publication becomes the next donor; only caller-owned handles track donor changes.
+      borrowedGatewayRuntime: shouldActivate
+        ? undefined
+        : resolveRuntimeBindingCacheId(borrowedGatewayRuntime),
+    }),
     pluginSdkResolution: options.pluginSdkResolution,
     coreGatewayMethodNames,
     allowProcessHomeSessionCatalogs: options.allowProcessHomeSessionCatalogs,
@@ -415,6 +425,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     runtimeSideEffects,
     shouldLoadModules: options.loadModules !== false,
     runtimeSubagentMode,
+    borrowedGatewayRuntime,
     installRecords,
     devSourceRoot: discoveryContext.devSourceRoot,
     cacheKey,

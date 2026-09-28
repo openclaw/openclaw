@@ -128,7 +128,8 @@ parameters. Choosing **All boards** returns to `/workboard`.
 A board can store an `automationJobId` reference to the automation job that
 owns its AI-categorization prompt, model, schedule, and run history. The board
 page shows an **Automation** link when that reference is present. Matching
-session events nudge the attached automation to run immediately, with events
+session events nudge the attached automation through the active Workboard service's
+scheduler authority, including after the worker's tool authority closes, with events
 for the same board coalesced for 60 seconds. The automation's schedule remains
 the backstop. Disabled and auto-disabled automations are never nudged. Deleting
 the board does not delete or otherwise mutate the
@@ -151,13 +152,11 @@ Unlinked cards without an active or unresolved task association can start work d
 
 Autonomous starts use the Gateway's task-tracked agent run path (default agent
 and model unless Claude/OpenAI is chosen explicitly). Workboard then links the
-resulting task, run id, and session key back onto the card. Each linked
+resulting run id and session key back onto the card. Each linked
 execution also records an attempt summary (engine, mode, model, run id,
 timestamps, status, rolling failure count) so repeated failures stay visible.
 
-The Control UI refreshes task status from the Gateway task ledger for its
-lifecycle display, matching tasks to cards by task id, run id, or an exact
-linked session. Card status changes are persisted by the Gateway-side Workboard
+The Control UI reads lifecycle from the card's linked session. Card status changes are persisted by the Gateway-side Workboard
 plugin using the linked run and session lifecycle (see
 [Session lifecycle sync](#session-lifecycle-sync)).
 

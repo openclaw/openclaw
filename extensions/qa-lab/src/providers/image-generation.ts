@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements image generation behavior.
 import {
   normalizeTrimmedStringList,
   uniqueStrings,
@@ -30,12 +29,9 @@ function uniqueNonEmpty(values: readonly (string | null | undefined)[]) {
 
 export function buildQaImageGenerationConfigPatch(input: QaImageGenerationPatchInput) {
   const provider = getQaProvider(input.providerMode);
-  const usesOpenAiMockImageProvider = input.providerMode === "mock-openai";
-  const imageModelRef = usesOpenAiMockImageProvider
-    ? "openai/gpt-image-1"
-    : provider.defaultImageGenerationModel({
-        modelProviderIds: provider.defaultImageGenerationProviderIds,
-      });
+  const imageModelRef = provider.defaultImageGenerationModel({
+    modelProviderIds: provider.defaultImageGenerationProviderIds,
+  });
   if (!imageModelRef) {
     throw new Error(
       `QA provider "${input.providerMode}" does not expose an image generation model`,
@@ -94,14 +90,7 @@ export function buildQaImageGenerationConfigPatch(input: QaImageGenerationPatchI
           }
         : {}),
     },
-    ...(modelPatch
-      ? {
-          models: {
-            mode: modelPatch.mode,
-            providers: modelPatch.providers,
-          },
-        }
-      : {}),
+    ...(modelPatch ? { models: modelPatch } : {}),
     agents: {
       defaults: {
         mediaModels: {

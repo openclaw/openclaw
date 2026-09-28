@@ -1,21 +1,5 @@
+import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { GithubCounts, GithubItemKind, PersonReport } from "../types.js";
-
-export function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (character) => {
-    switch (character) {
-      case "&":
-        return "&amp;";
-      case "<":
-        return "&lt;";
-      case ">":
-        return "&gt;";
-      case '"':
-        return "&quot;";
-      default:
-        return "&#39;";
-    }
-  });
-}
 
 export function renderAvatar(
   login: string,

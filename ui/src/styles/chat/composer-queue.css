@@ -1,7 +1,6 @@
-/* Queued turns sit behind the composer's rounded top edge. The inset keeps the
-   queue visibly subordinate; only its protected bottom space may underlap. */
 .agent-chat__composer-shell {
   --chat-queue-divider: color-mix(in srgb, var(--text-strong) 6%, transparent);
+  --chat-stack-header-height: 40px;
   --chat-stack-icon-size: 14px;
   --chat-stack-leading-inset: 13px;
   --chat-stack-trailing-control-size: 24px;
@@ -9,44 +8,32 @@
 }
 
 .chat-queue {
-  --chat-queue-underlap: 18px;
   --chat-queue-row-height: 42px;
 
   position: relative;
-  z-index: 0;
   box-sizing: border-box;
   min-width: 0;
   width: 100%;
   margin-inline: 0;
-  margin-bottom: calc(0px - var(--chat-composer-shell-gap) - var(--chat-queue-underlap));
   padding-bottom: 0;
   overflow: hidden;
   border: 1px solid var(--chat-composer-hairline);
-  border-bottom: 0;
-  border-radius: calc(20px * var(--openclaw-corner-radius-scale))
-    calc(20px * var(--openclaw-corner-radius-scale)) 0 0;
+  border-radius: calc(20px * var(--openclaw-corner-radius-scale));
   corner-shape: superellipse(1.5);
   background: var(--composer-attached-surface, var(--chat-composer-surface));
   -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
 }
 
-.chat-queue + .agent-chat__goal-float .agent-chat__goal {
-  border-top: 1px solid var(--chat-queue-divider);
-  border-radius: 0;
-}
-
-.chat-queue + .agent-chat__goal-float,
-.chat-queue + :is(.agent-chat__composer-errors, .agent-chat__input),
-.agent-chat__progress-float + .chat-queue {
-  position: relative;
-  z-index: 1;
-}
-
 .chat-queue__scroll {
+  --chat-queue-fade-in:
+    transparent 2px, rgb(0 0 0 / 12%) 6px, rgb(0 0 0 / 50%) 12px, rgb(0 0 0 / 88%) 18px, black 24px;
+  --chat-queue-fade-out:
+    black calc(100% - 24px), rgb(0 0 0 / 88%) calc(100% - 18px), rgb(0 0 0 / 50%) calc(100% - 12px),
+    rgb(0 0 0 / 12%) calc(100% - 6px), transparent calc(100% - 2px);
+
   box-sizing: border-box;
   min-width: 0;
-  padding-bottom: var(--chat-queue-underlap);
   overflow: hidden;
   scrollbar-color: color-mix(in srgb, var(--muted) 34%, transparent) transparent;
   scrollbar-width: thin;
@@ -75,26 +62,15 @@
 }
 
 .chat-queue__scroll[data-scrollable="true"][data-at-start="true"][data-at-end="false"] {
-  mask-image: linear-gradient(
-    to bottom,
-    rgb(0 0 0) 0,
-    rgb(0 0 0) calc(100% - 22px),
-    transparent 100%
-  );
+  mask-image: linear-gradient(to bottom, var(--chat-queue-fade-out));
 }
 
 .chat-queue__scroll[data-scrollable="true"][data-at-start="false"][data-at-end="true"] {
-  mask-image: linear-gradient(to bottom, transparent 0, rgb(0 0 0) 16px, rgb(0 0 0) 100%);
+  mask-image: linear-gradient(to bottom, var(--chat-queue-fade-in));
 }
 
 .chat-queue__scroll[data-scrollable="true"][data-at-start="false"][data-at-end="false"] {
-  mask-image: linear-gradient(
-    to bottom,
-    transparent 0,
-    rgb(0 0 0) 16px,
-    rgb(0 0 0) calc(100% - 22px),
-    transparent 100%
-  );
+  mask-image: linear-gradient(to bottom, var(--chat-queue-fade-in), var(--chat-queue-fade-out));
 }
 
 .chat-queue__scroll::-webkit-scrollbar {
@@ -108,24 +84,6 @@
 .chat-queue__scroll::-webkit-scrollbar-thumb {
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--muted) 34%, transparent);
-}
-
-:root[data-theme-mode="light"] .chat-queue {
-  border-color: transparent;
-  box-shadow:
-    0 0 0 1px var(--chat-composer-light-outline),
-    0 1px 2px -1px var(--chat-composer-light-outline),
-    0 2px 4px rgb(0 0 0 / 4%);
-}
-
-/* Connected rows share one outline contract. An opaque Goal border or a
-   side-only shadow makes its edge read independently from the queue above. */
-:root[data-theme-mode="light"]
-  :is(.chat-queue, .agent-chat__progress-float)
-  + .agent-chat__goal-float
-  .agent-chat__goal--active {
-  border-color: transparent;
-  box-shadow: 0 0 0 1px var(--chat-composer-light-outline);
 }
 
 .chat-queue__item {
@@ -148,18 +106,6 @@
 
 .chat-queue__item:last-child {
   border-bottom: 0;
-}
-
-/* The neighboring layer, not the page, paints the rounded cutout exposed by
-   the next card. The final row carries its state surface into the underlap. */
-.chat-queue__item:last-child::after {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  left: 0;
-  height: var(--chat-queue-underlap);
-  background: var(--chat-queue-row-surface);
-  content: "";
 }
 
 .chat-queue__item--no-avatar {

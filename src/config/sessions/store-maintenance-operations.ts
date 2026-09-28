@@ -1,6 +1,7 @@
 // Storage-neutral session maintenance operations for the file-backed session store.
 import path from "node:path";
-import { enforceSessionDiskBudget, type SessionDiskBudgetSweepResult } from "./disk-budget.js";
+import { enforceSessionDiskBudget } from "./disk-budget.js";
+import type { SessionDiskBudgetSweepResult } from "./disk-budget.types.js";
 import { planSessionEntryMaintenance } from "./store-maintenance-plan.js";
 import { collectSessionMaintenancePreserveKeysForStore } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
@@ -71,35 +72,12 @@ type FileBackedSessionStoreMaintenanceResult = {
   changedStore: boolean;
 };
 
-function resolveMaintenanceForOperation(
-  params: Pick<
-    FileBackedSessionStoreMaintenanceParams,
-    "maintenanceConfig" | "maintenanceOverride"
-  >,
-): ResolvedSessionMaintenanceConfig {
-  return params.maintenanceConfig
-    ? {
-        ...normalizeResolvedMaintenanceConfigInput(params.maintenanceConfig),
-        ...params.maintenanceOverride,
-      }
-    : { ...resolveMaintenanceConfig(), ...params.maintenanceOverride };
-}
-
 function collectReferencedSessionIds(store: Record<string, SessionEntry>): Set<string> {
   return new Set(
     Object.values(store)
       .map((entry) => entry?.sessionId)
       .filter((id): id is string => Boolean(id)),
   );
-}
-
-function rememberRemovedSessionFile(
-  removedSessionFiles: RemovedSessionFiles,
-  entry: SessionEntry,
-): void {
-  if (!removedSessionFiles.has(entry.sessionId)) {
-    removedSessionFiles.set(entry.sessionId, undefined);
-  }
 }
 
 async function applyWarnOnlyMaintenance(params: {
@@ -226,7 +204,9 @@ async function applyEnforcedMaintenance(params: {
       store: params.operation.store,
       maxEntries: params.maintenance.maxEntries,
     }),
-    onRemoved: ({ entry }) => rememberRemovedSessionFile(removedSessionFiles, entry),
+    onRemoved: ({ entry }) => {
+      removedSessionFiles.set(entry.sessionId, undefined);
+    },
   });
   const referencedSessionIds = collectReferencedSessionIds(params.operation.store);
   await cleanupRemovedSessionArtifacts({
@@ -279,7 +259,12 @@ async function applyEnforcedMaintenance(params: {
 export async function applyFileBackedSessionStoreMaintenance(
   params: FileBackedSessionStoreMaintenanceParams,
 ): Promise<FileBackedSessionStoreMaintenanceResult> {
-  const maintenance = resolveMaintenanceForOperation(params);
+  const maintenance = {
+    ...(params.maintenanceConfig
+      ? normalizeResolvedMaintenanceConfigInput(params.maintenanceConfig)
+      : resolveMaintenanceConfig()),
+    ...params.maintenanceOverride,
+  };
   const beforeCount = Object.keys(params.store).length;
   const beforeUnarchivedCount = countUnarchivedSessionEntries(params.store);
   const forceMaintenance = params.maintenanceOverride !== undefined;

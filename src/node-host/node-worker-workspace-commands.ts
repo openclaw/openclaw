@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import {
   MAX_WORKSPACE_HASH_MEMO_BYTES,
   parseRemoteWorkspaceManifestEnvelope,
@@ -5,6 +7,7 @@ import {
   serializeRemoteWorkspaceHashMemo,
   type WorkspaceHashMemo,
 } from "../gateway/worker-environments/workspace-hash-memo.js";
+import { parseWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "../gateway/worker-environments/workspace-sync-scripts.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -12,10 +15,30 @@ import { runCommandWithTimeout } from "../process/exec.js";
 export const TRANSFER_TIMEOUT_MS = 10 * 60_000;
 const commandLog = createSubsystemLogger("node-host/worker-workspace");
 
+export async function readWorkspaceManifest(
+  homeDir: string,
+  manifestRef: string,
+  signal?: AbortSignal,
+) {
+  const raw = await fs.readFile(
+    path.join(
+      homeDir,
+      ".openclaw-worker",
+      "manifests",
+      `${manifestRef.slice("sha256:".length)}.json`,
+    ),
+    "utf8",
+  );
+  return { raw, manifest: await parseWorkspaceManifest(raw, manifestRef, signal) };
+}
+
 /** Environment for node-owned workspace commands: pinned HOME, no credential prompts. */
-export function workspaceCommandEnv(homeDir: string): NodeJS.ProcessEnv {
+export function workspaceCommandEnv(
+  homeDir: string,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
   return {
-    ...process.env,
+    ...baseEnv,
     HOME: homeDir,
     ...(process.platform === "win32" ? { USERPROFILE: homeDir } : {}),
     GCM_INTERACTIVE: "Never",

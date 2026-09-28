@@ -1,10 +1,6 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import {
-  cleanupPreparedModelRuntimeHarness,
-  getPreparedModelRuntimeMocks,
-  resetPreparedModelRuntimeHarness,
-} from "./prepared-model-runtime.test-harness.js";
+import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveModelFallbackOptions } from "../auto-reply/reply/agent-runner-run-params.js";
 import { runPreparedReply } from "../auto-reply/reply/get-reply-run.js";
@@ -18,10 +14,6 @@ import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { recordAgentDatabaseAdmissions } from "../state/agent-database-admission.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
 import * as agentScope from "./agent-scope.js";
 import {
   resolveAgentRuntimePluginLoadPlan,
@@ -47,13 +39,10 @@ vi.mock("../auto-reply/reply/get-reply-run-execute.js", () => ({
   executePreparedReplyRun: reply.execute,
 }));
 
-const mocks = getPreparedModelRuntimeMocks();
-let state: OpenClawTestState;
+const { mocks } = usePreparedModelRuntimeHarness();
 
 describe("prepared reply fallback ownership", () => {
   beforeEach(async () => {
-    state = await createOpenClawTestState({ label: "prepared-model-runtime" });
-    await resetPreparedModelRuntimeHarness(state);
     vi.clearAllMocks();
     const actual = await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js");
     vi.spyOn(agentScope, "resolveAgentConfig").mockImplementation(actual.resolveAgentConfig);
@@ -265,8 +254,4 @@ describe("prepared reply fallback ownership", () => {
       expect(reply.execute).toHaveBeenCalledOnce();
     },
   );
-});
-
-afterEach(async ({ task }) => {
-  await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
 });

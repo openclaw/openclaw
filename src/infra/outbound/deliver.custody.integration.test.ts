@@ -25,6 +25,7 @@ import {
   installDeliveryQueueTmpDirHooks,
   loadPendingDeliveries,
   readQueuedEntry,
+  setQueuedEntryState,
 } from "./delivery-queue.test-helpers.js";
 
 vi.mock("../../agents/runtime-plan/build.js", () => ({
@@ -302,7 +303,7 @@ describe("retired caller delivery settlement", () => {
             : { error: { message: expect.stringContaining("message caller retired") } },
         );
         expect(compaction).toHaveBeenCalledOnce();
-        expect(queueStorage.findDeliveryIntentOwner(queueId, stateDir)).toMatchObject({
+        expect(await queueStorage.findDeliveryIntentOwner(queueId, stateDir)).toMatchObject({
           status: "failed",
           settlementPending: true,
         });
@@ -369,15 +370,29 @@ describe("retired caller delivery settlement", () => {
           }),
         ]);
         await Promise.race([adapter.prepared, outcome]);
-        const firstWrite = vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction");
+        const { db } = stateDatabase.openOpenClawStateDatabase({
+          env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+        });
         const stage = queueStorage.stageDeliveryFailureSettlement;
         const staging = vi
           .spyOn(queueStorage, "stageDeliveryFailureSettlement")
-          .mockImplementationOnce((...args) => {
-            firstWrite.mockImplementationOnce(() => {
-              throw new Error("first settlement write interrupted");
-            });
-            return stage(...args);
+          .mockImplementationOnce(async (...args) => {
+            // A schema trigger reaches the worker's existing connection and real transaction.
+            db.exec(`
+              CREATE TRIGGER main.reject_first_failure_settlement
+              BEFORE UPDATE ON delivery_queue_entries
+              WHEN OLD.queue_name = '${OUTBOUND_DELIVERY_QUEUE_NAME}'
+                AND OLD.id = '${queueId.replaceAll("'", "''")}'
+                AND NEW.recovery_state = 'settlement_pending'
+              BEGIN
+                SELECT RAISE(ABORT, 'first settlement write interrupted');
+              END;
+            `);
+            try {
+              return await stage(...args);
+            } finally {
+              db.exec("DROP TRIGGER IF EXISTS main.reject_first_failure_settlement");
+            }
           });
         caller.abort(new Error("message caller retired"));
         adapter.release();
@@ -391,9 +406,10 @@ describe("retired caller delivery settlement", () => {
         expect(staging.mock.calls[0]?.[0].platformSendAttemptId).toBeUndefined();
         expect(staging.mock.calls[0]?.[0].platformSendStartedAt).toBeUndefined();
         expect(staging.mock.calls[0]?.[0].deliveryCompletion).toBeUndefined();
-        expect(firstWrite.mock.results.filter((result) => result.type === "throw")).toHaveLength(1);
+        await expect(staging.mock.results[0]?.value).rejects.toThrow(
+          "first settlement write interrupted",
+        );
         expect(adapter.send).not.toHaveBeenCalled();
-        firstWrite.mockRestore();
         staging.mockRestore();
         stateDatabase.closeOpenClawStateDatabaseForTest();
         vi.setSystemTime(Date.now() + 60_001);
@@ -414,8 +430,7 @@ describe("retired caller delivery settlement", () => {
   );
 
   it("does not project rejection or alter a replacement producer after caller retirement", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-09-15T12:00:00.000Z"));
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const stateDir = fixtures.tmpDir();
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const completion = await import("./delivery-completion.js");
@@ -451,7 +466,7 @@ describe("retired caller delivery settlement", () => {
       await adapter.prepared;
       const originalClaim = readQueuedEntry(stateDir, queueId).producerClaimId;
       // Expire the lease without running its heartbeat so the queue CAS owns the rejection.
-      vi.setSystemTime(Date.now() + 60_001);
+      setQueuedEntryState(stateDir, queueId, { retryCount: 0, availableAt: Date.now() - 1 });
       const replacementClaim = await queueStorage.claimDeliveryPlatformSendAttempt(
         queueId,
         stateDir,

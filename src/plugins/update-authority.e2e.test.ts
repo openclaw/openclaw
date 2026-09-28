@@ -8,7 +8,7 @@ import {
   releaseUpdateCommandPreflightForHandoff,
   withUpdateCommandExecutor,
 } from "../cli/update-cli/update-command-executor.js";
-import { UpdateCommandRecoveryPendingError } from "../cli/update-cli/update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "../cli/update-cli/update-command-recovery-error.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isNotFoundPathError } from "../infra/path-guards.js";
 import * as temporaryState from "../infra/tmp-openclaw-dir.js";

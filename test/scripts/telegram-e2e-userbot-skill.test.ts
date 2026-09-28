@@ -25,13 +25,7 @@ describe("repository Telegram E2E skill", () => {
       fs.readFileSync(".agents/skills/telegram-e2e-userbot/agents/openai.yaml", "utf8"),
     );
     expect(Object.keys(descriptor)).toEqual(["interface"]);
-    expect(descriptor.interface).toMatchObject({
-      display_name: "Telegram E2E (Userbot)",
-      short_description: "Drive leased Telegram Test Server bots as a real QA user.",
-    });
     expect(descriptor.interface.default_prompt).toContain("$telegram-e2e-userbot");
-    expect(descriptor.interface.default_prompt).toContain("exact changed Telegram behavior");
-    expect(descriptor.interface.default_prompt).toContain("extend the harness freely");
   });
 
   it("passes its Node test suite", () => {

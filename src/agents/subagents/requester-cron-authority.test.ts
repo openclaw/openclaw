@@ -7,7 +7,12 @@ import {
   registerAgentRunContext,
   releaseAgentRunDelegatedAuthority,
   rotateAgentRunRegistryLifecycleGeneration,
+  validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import {
+  createAdmittedRunOperatorAuthority,
+  type AdmittedRunOperatorAuthority,
+} from "../admitted-run-context.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import {
   createCronCreatorAuthorityCapability,
@@ -93,6 +98,8 @@ async function inAdminRun<T>(
     channel?: string;
     accountId?: string;
   },
+  operatorAuthority?: AdmittedRunOperatorAuthority,
+  includeCron = true,
 ) {
   const { operationalRunInstance } = createTestAdmittedRunContext(runId);
   const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
@@ -110,17 +117,21 @@ async function inAdminRun<T>(
     requesterOwner,
   )!;
   try {
-    return await runWithCronCreatorAuthorityCapability(capability, () =>
+    const withCaller = () =>
       withGatewayToolCallerIdentity(
         {
           agentId: "main",
           sessionKey: SESSION,
           operationalRunInstance,
           approvalAuthority: authority,
+          operatorAuthority,
+          receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
         },
         run,
-      ),
-    );
+      );
+    return await (includeCron
+      ? runWithCronCreatorAuthorityCapability(capability, withCaller)
+      : withCaller());
   } finally {
     releaseAgentRunDelegatedAuthority(authority);
     clearAgentRunContext(runId);
@@ -190,6 +201,101 @@ function consume(batch: SubagentRunRecord[], runId = "continuation") {
 }
 
 describe("requester cron authority lifetime", () => {
+  it.each([
+    "complete",
+    "source revoked",
+    "source revoked during dispatch",
+    "session reset",
+    "failed persistence",
+  ])(
+    "holds an operator-only source through yield until %s without granting Cron management",
+    async (outcome) => {
+      let holds = 1;
+      let revoked = false;
+      const assertSourceCurrent = () => {
+        if (revoked || holds === 0) {
+          throw new Error("source retired");
+        }
+      };
+      const source = createAdmittedRunOperatorAuthority({
+        profileId: "requester-profile",
+        scopes: ["operator.read"],
+        assertCurrent: assertSourceCurrent,
+        retain: () => {
+          assertSourceCurrent();
+          holds += 1;
+          let released = false;
+          return () => {
+            if (!released) {
+              released = true;
+              holds -= 1;
+            }
+          };
+        },
+      });
+      const batch = createBatch("operator-only");
+      if (outcome === "failed persistence") {
+        await inAdminRun(
+          "operator-only",
+          async () => {
+            expect(() =>
+              mark(batch, () => {
+                throw new Error("persist refused");
+              }),
+            ).toThrow("persist refused");
+          },
+          undefined,
+          undefined,
+          undefined,
+          source,
+          false,
+        );
+        holds -= 1;
+        expect(holds).toBe(0);
+        expect(() => source.assertCurrent()).toThrow();
+        return;
+      }
+      await inAdminRun(
+        "operator-only",
+        async () => expect(mark(batch)).toBe(1),
+        undefined,
+        undefined,
+        undefined,
+        source,
+        false,
+      );
+      holds -= 1;
+      expect(holds).toBe(1);
+      expect(settle(batch)).toBe(true);
+      if (outcome === "source revoked") {
+        revoked = true;
+      }
+      if (outcome === "session reset") {
+        fixture.session.lifecycleRevision = "replacement";
+      }
+      if (outcome === "source revoked during dispatch") {
+        queueMicrotask(() => {
+          revoked = true;
+        });
+      }
+      const work = vi.fn(async () => {
+        expect(() => source.assertCurrent()).not.toThrow();
+        expect(consume(batch)).toBeUndefined();
+      });
+      if (outcome === "complete") {
+        await dispatch(batch, work);
+        expect(work).toHaveBeenCalledOnce();
+        revokeRequesterCronAuthority(SESSION);
+      } else {
+        await expect(dispatch(batch, work)).rejects.toThrow("no longer current");
+        await expect(dispatch(batch, work)).rejects.toThrow("no longer current");
+        expect(work).not.toHaveBeenCalled();
+      }
+      expect(holds).toBe(0);
+      expect(() => source.assertCurrent()).toThrow();
+    },
+  );
+
   it("carries separately admitted owner identity through explicit yield and expires retained bindings", async () => {
     let current = true;
     const owner = {

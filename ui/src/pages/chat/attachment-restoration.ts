@@ -25,6 +25,9 @@ export function restoreChatApiAttachments(attachments?: readonly unknown[]): Cha
         id: generateUUID(),
         dataUrl: `data:${mimeType};base64,${content}`,
         mimeType,
+        ...(attachment.origin === "paste" || attachment.origin === "file"
+          ? { origin: attachment.origin }
+          : {}),
         fileName: typeof attachment.fileName === "string" ? attachment.fileName : undefined,
       },
     ];

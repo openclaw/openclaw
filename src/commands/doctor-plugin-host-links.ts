@@ -93,7 +93,7 @@ export async function listPluginOpenClawHostLinkIssues(
   };
 }
 
-/** Relinks registry-owned plugin packages to the current OpenClaw host package. */
+/** Relinks registered plugin packages to the current OpenClaw host package. */
 export async function maybeRepairPluginOpenClawHostLinks(
   params: PluginHostLinkDoctorParams,
 ): Promise<boolean> {
@@ -147,10 +147,10 @@ export async function maybeRepairPluginOpenClawHostLinks(
     return false;
   }
 
-  const messages: { level: "info" | "warn"; message: string }[] = [];
+  const warnings: string[] = [];
   const logger = {
-    info: (message: string) => messages.push({ level: "info" as const, message }),
-    warn: (message: string) => messages.push({ level: "warn" as const, message }),
+    info() {},
+    warn: (message: string) => warnings.push(`- ${message}`),
   };
   const results = await Promise.all(
     npmRoots.map((npmRoot) =>
@@ -191,9 +191,6 @@ export async function maybeRepairPluginOpenClawHostLinks(
       "Plugin registry",
     );
   }
-  const warnings = messages
-    .filter((message) => message.level === "warn")
-    .map((message) => `- ${message.message}`);
   if (warnings.length > 0) {
     note(
       ["Could not repair all managed OpenClaw host peer links:", ...warnings].join("\n"),

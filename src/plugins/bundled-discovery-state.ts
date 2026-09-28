@@ -75,7 +75,11 @@ export function readBundledDiscoveryMode(
 const discoveryState = resolveGlobalSingleton<{
   generation: object;
   memoized?: { key: string; value: BundledDiscoveryMode };
-}>(Symbol.for("openclaw.bundledDiscoveryMode"), () => ({ generation: {} }));
+  snapshotModes: WeakMap<object, { value: BundledDiscoveryMode }>;
+}>(Symbol.for("openclaw.bundledDiscoveryMode"), () => ({
+  generation: {},
+  snapshotModes: new WeakMap(),
+}));
 
 registerPluginMetadataProcessMemoLifecycleClear(() => {
   clearBundledDiscoveryModeMemo();
@@ -99,15 +103,23 @@ export function readBundledDiscoveryModeMemoized(
   readPreparedValue?: (databasePath: string) => unknown,
 ): "compat" | "allowlist" | undefined {
   const options = env === process.env ? {} : { env };
-  if (
-    behavior.artifactPreservingReadOnly ||
-    (isArtifactPreservingStateRead() &&
-      readBundledDiscoveryFact(() =>
-        getActiveOpenClawStateDatabaseReadSnapshot(resolveBundledDiscoveryOptions(options)),
-      ))
-  ) {
-    // Snapshot policy and inventory must share private bytes without replacing the live memo.
-    return readBundledDiscoveryMode(options, behavior);
+  const snapshot =
+    behavior.artifactPreservingReadOnly || isArtifactPreservingStateRead()
+      ? readBundledDiscoveryFact(() =>
+          getActiveOpenClawStateDatabaseReadSnapshot(resolveBundledDiscoveryOptions(options)),
+        )
+      : undefined;
+  if (snapshot || behavior.artifactPreservingReadOnly) {
+    // Reuse policy only for these private bytes; it must never replace the live memo.
+    const prepared = snapshot && discoveryState.snapshotModes.get(snapshot);
+    if (prepared) {
+      return prepared.value;
+    }
+    const value = readBundledDiscoveryMode(options, behavior);
+    if (snapshot) {
+      discoveryState.snapshotModes.set(snapshot, { value });
+    }
+    return value;
   }
   const key = resolveBundledDiscoveryMemoKey(env);
   if (discoveryState.memoized?.key !== key) {
@@ -209,6 +221,7 @@ export async function prepareBundledDiscoveryMode(
  */
 export function clearBundledDiscoveryModeMemo(): void {
   discoveryState.memoized = undefined;
+  discoveryState.snapshotModes = new WeakMap();
   discoveryState.generation = {};
   for (const cache of new Set([getPluginCache(), getProcessPluginCache()])) {
     cache.preparedBundledDiscoveryModes.clear();

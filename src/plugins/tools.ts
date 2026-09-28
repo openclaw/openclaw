@@ -15,6 +15,7 @@ import {
   registrationIncludesHostRestrictedConversationReadTool,
 } from "./compat/conversation-read-tools.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
+import type { PluginMetadataSnapshotScopeRunner } from "./current-plugin-metadata-snapshot.js";
 import { createInstalledPluginEnabledPredicate } from "./installed-plugin-index.js";
 import {
   acquirePluginRegistryForInspection,
@@ -25,14 +26,18 @@ import {
   isManifestPluginAvailableForControlPlane,
   loadManifestContractSnapshot,
 } from "./manifest-contract-eligibility.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import { hasManifestToolAvailability } from "./manifest-tool-availability.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import type { PluginMetadataManifestView } from "./plugin-metadata-snapshot.types.js";
 import { capturePluginLifecycleAuthority } from "./registry-lifecycle.js";
 import type { PluginRegistry, PluginToolRegistration } from "./registry-types.js";
-import { buildPluginRuntimeLoadOptions } from "./runtime/load-context.js";
+import {
+  buildPluginRuntimeLoadOptions,
+  setPluginRuntimeLoadContext,
+  type PluginRuntimeLoadContext,
+} from "./runtime/load-context.js";
 import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
-import { findUndeclaredPluginToolNames } from "./tool-contracts.js";
 import {
   createPluginToolFactoryContext,
   type PluginToolOwnerContinuation,
@@ -302,6 +307,103 @@ function recordToolDiagnostic(
   }
 }
 
+export type PluginToolInspectionScope = Omit<
+  Parameters<typeof resolvePluginToolLoadState>[0],
+  "preparedRuntime"
+>;
+
+const inspectionToolOwners = new WeakMap<
+  PluginRegistry,
+  { manifests: ReadonlyMap<string, PluginManifestRecord>; assertCurrent: () => void }
+>();
+
+function samePluginToolSource(
+  left: PluginManifestRecord | undefined,
+  right: PluginManifestRecord | undefined,
+): boolean {
+  return Boolean(
+    left &&
+    right &&
+    left.origin === right.origin &&
+    left.rootDir === right.rootDir &&
+    left.source === right.source &&
+    left.setupSource === right.setupSource &&
+    (left.sourcePreferred === true) === (right.sourcePreferred === true) &&
+    (left.packageManifest?.build?.bundledDist === false) ===
+      (right.packageManifest?.build?.bundledDist === false),
+  );
+}
+
+/** One inspection owns registration; each selected agent still invokes its own tool factories. */
+export async function acquirePluginToolInspectionRegistry(params: {
+  loadContext: PluginRuntimeLoadContext;
+  scopes: readonly PluginToolInspectionScope[];
+  runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
+}): Promise<{ registry?: PluginRegistry; release: () => Promise<void> }> {
+  const inventory = new Map(
+    (params.loadContext.manifestRegistry?.plugins ?? []).map((plugin) => [plugin.id, plugin]),
+  );
+  const selected = new Map<string, PluginManifestRecord>();
+  for (const scope of params.scopes) {
+    const select = () => resolvePluginToolLoadState({ ...scope, env: params.loadContext.env });
+    const state = params.runWithPluginMetadataSnapshot
+      ? params.runWithPluginMetadataSnapshot(
+          {
+            config: scope.context.config ?? params.loadContext.rawConfig,
+            workspaceDir: scope.context.workspaceDir,
+          },
+          select,
+        )
+      : select();
+    for (const id of state?.onlyPluginIds ?? []) {
+      const manifest = inventory.get(id);
+      if (!manifest || !samePluginToolSource(manifest, state?.snapshot.byPluginId.get(id))) {
+        throw new Error(`Plugin tool inspection has conflicting source ownership for ${id}`);
+      }
+      selected.set(id, manifest);
+    }
+  }
+  if (selected.size === 0) {
+    return { release: async () => {} };
+  }
+  const acquisition = await acquirePluginRegistryForInspection(
+    buildPluginRuntimeLoadOptions(params.loadContext, {
+      onlyPluginIds: [...selected.keys()].toSorted(),
+      toolDiscovery: true,
+      runtimeSideEffects: false,
+      ...(params.scopes.some((scope) => scope.allowGatewaySubagentBinding)
+        ? { runtimeOptions: { allowGatewaySubagentBinding: true } }
+        : {}),
+    }),
+  );
+  try {
+    setPluginRuntimeLoadContext(acquisition.registry, params.loadContext);
+    const current = capturePluginLifecycleAuthority(acquisition.registry, undefined, {
+      scopedRuntime: true,
+    });
+    inspectionToolOwners.set(acquisition.registry, {
+      manifests: selected,
+      assertCurrent: () => {
+        if (!current?.()) {
+          throw new Error("Plugin tool inspection has been released");
+        }
+      },
+    });
+    return acquisition;
+  } catch (error) {
+    try {
+      await acquisition.release();
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "Plugin tool inspection setup and cleanup failed",
+        { cause: cleanupError },
+      );
+    }
+    throw error;
+  }
+}
+
 export type PluginToolRegistryAcquisition = {
   registry?: PluginRegistry;
   resolveTools: () => AnyAgentTool[];
@@ -360,6 +462,8 @@ function resolvePluginToolsFromRegistry(
       ? params.preparedRuntime.registry
       : params.runtimeRegistry) ??
     getLoadedRuntimePluginRegistry({ workspaceDir: context.workspaceDir });
+  const inspection = runtimeRegistry && inspectionToolOwners.get(runtimeRegistry);
+  inspection?.assertCurrent();
   // A supplied generation keeps its covered owners even when another plugin must
   // load. Registry caching owns reuse; every assembly calls current-context factories.
   const toolOwners = new Map<
@@ -381,7 +485,12 @@ function resolvePluginToolsFromRegistry(
       toolOwners.set(pluginId, { registry: runtimeRegistry, tools: [] });
     }
   }
-  const missingPluginIds = onlyPluginIds.filter((pluginId) => !toolOwners.has(pluginId));
+  // Failed registrations are settled facts of this inspection, not new cold-load requests.
+  const missingPluginIds = onlyPluginIds.filter(
+    (pluginId) =>
+      !toolOwners.has(pluginId) &&
+      !samePluginToolSource(inspection?.manifests.get(pluginId), snapshot.byPluginId.get(pluginId)),
+  );
   if (missingPluginIds.length > 0) {
     const registry = loadPluginRegistryHandle({
       ...loadState.loadOptions,
@@ -411,6 +520,7 @@ function resolvePluginToolsFromRegistry(
     }
     toolOwners.delete(pluginId);
     const { registry, tools: registrations } = owner;
+    let trustedLocalMediaNames: Set<string> | undefined;
     const reportError = (entry: PluginToolRegistration, message: string) => {
       context.logger.error(message);
       recordToolDiagnostic(registry, {
@@ -453,7 +563,7 @@ function resolvePluginToolsFromRegistry(
       const manifestPlugin = snapshot.byPluginId.get(entry.pluginId);
       const declaredNames = entry.names ?? [];
       const availabilityNames =
-        declaredNames.length > 0 ? declaredNames : (entry.declaredNames ?? []);
+        declaredNames.length > 0 ? declaredNames : Array.from(entry.declaredNames ?? []);
       const allowlistNames = manifestPlugin
         ? filterManifestToolNamesForAvailability({
             plugin: manifestPlugin,
@@ -570,14 +680,8 @@ function resolvePluginToolsFromRegistry(
           continue;
         }
         const tool = inspected.tool;
-        const undeclared = entry.declaredNames
-          ? findUndeclaredPluginToolNames({
-              declaredNames: entry.declaredNames,
-              toolNames: [name],
-            })
-          : [];
-        if (undeclared.length > 0) {
-          const message = `plugin tool is undeclared (${entry.pluginId}): ${undeclared.join(", ")}`;
+        if (entry.declaredNames && !entry.declaredNames.has(toolName)) {
+          const message = `plugin tool is undeclared (${entry.pluginId}): ${toolName}`;
           reportError(entry, message);
           continue;
         }
@@ -600,7 +704,7 @@ function resolvePluginToolsFromRegistry(
           sideEffecting: metadata?.sideEffecting === true,
           trustedLocalMedia:
             manifestPlugin?.origin === "bundled" &&
-            manifestPlugin.contracts?.tools?.includes(name) === true,
+            (trustedLocalMediaNames ??= new Set(manifestPlugin.contracts?.tools)).has(name),
         });
         tools.push(tool);
       }

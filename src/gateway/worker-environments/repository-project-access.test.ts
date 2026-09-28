@@ -36,11 +36,11 @@ describe("prepared repository source access", () => {
         owner: { agent: { agentId: "main", provenance: null }, identity: { source: "anonymous" } },
       },
     };
-    const record = fixture.attach(
-      fixture.ready(fixture.seed("repository", { repository: project })),
+    const record = await fixture.attach(
+      await fixture.ready(await fixture.seed("repository", { repository: project })),
     );
     if (scenario === "reopened store") {
-      fixture.reopenStore();
+      await fixture.reopenStore();
     }
     let callerCurrent = true;
     let identityCurrent = true;
@@ -90,6 +90,7 @@ describe("prepared repository source access", () => {
     });
     const access = createWorkerEnvironmentAccess({
       store: fixture.store,
+      getCleanupError: () => undefined,
       getConfig: () => fixture.config,
       projectNamespace: "gateway",
       bindPreparedWorkspace: bind,

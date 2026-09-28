@@ -1,7 +1,10 @@
 // Pure deterministic mascot motion model. Times are seconds.
 import {
   clampMascotPose,
+  clampMascotValue as clamp,
   createMascotPose,
+  mascotBell as bell,
+  mascotEaseInOut as easeInOut,
   type MascotMood,
   type MascotPose,
 } from "./mascot-pose.ts";
@@ -23,23 +26,9 @@ const TAU = Math.PI * 2;
 const BLINK_DURATION = 0.16;
 const CATCH_DURATION = 0.8;
 
-function clamp(value: number, min = 0, max = 1): number {
-  return Math.min(Math.max(value, min), max);
-}
-
 function cyclePhase(time: number, period: number): number {
   const normalized = (time / period) % 1;
   return normalized < 0 ? normalized + 1 : normalized;
-}
-
-function easeInOut(value: number): number {
-  const t = clamp(value);
-  return t * t * (3 - 2 * t);
-}
-
-function bell(value: number): number {
-  const t = clamp(value);
-  return easeInOut(t < 0.5 ? t * 2 : (1 - t) * 2);
 }
 
 function plateau(value: number, attack: number, release: number): number {
@@ -53,26 +42,28 @@ function plateau(value: number, attack: number, release: number): number {
   return 1;
 }
 
-function gestureDuration(gesture: Gesture): number {
-  switch (gesture) {
-    case "wave":
-      return 1.5;
-    case "hop":
-      return 0.7;
-    case "celebrate":
-      return 2.4;
-    case "sigh":
-      return 1.8;
-    case "yawn":
-    case "wipeBrow":
-      return 2;
-    case "clawSnap":
-      return 0.6;
-    case "donHardHat":
-      return 1;
-  }
-  return 0;
-}
+const GESTURE_DURATION: Record<Gesture, number> = {
+  wave: 1.5,
+  hop: 0.7,
+  celebrate: 2.4,
+  sigh: 1.8,
+  yawn: 2,
+  wipeBrow: 2,
+  clawSnap: 0.6,
+  donHardHat: 1,
+};
+
+const ENTRANCE_GESTURE: Record<MascotMood, Gesture | null> = {
+  idle: null,
+  curious: null,
+  thinking: null,
+  attentive: null,
+  happy: "hop",
+  celebrating: "celebrate",
+  sad: "sigh",
+  sleepy: "yawn",
+  working: "donHardHat",
+};
 
 class SeededGenerator {
   private state: bigint;
@@ -134,7 +125,7 @@ export class MascotAnimator {
     this.pendingGesture = null;
     this.activeGesture = null;
     this.rescheduleMoodBeat(time);
-    const entrance = this.entranceGesture(mood);
+    const entrance = ENTRANCE_GESTURE[mood];
     if (entrance) {
       this.startGesture(entrance, time);
     }
@@ -162,7 +153,7 @@ export class MascotAnimator {
     this.applyBlinks(pose, time);
 
     if (this.activeGesture) {
-      const progress = (time - this.activeGestureStart) / gestureDuration(this.activeGesture);
+      const progress = (time - this.activeGestureStart) / GESTURE_DURATION[this.activeGesture];
       if (progress >= 1) {
         this.activeGesture = null;
       } else {
@@ -489,27 +480,6 @@ export class MascotAnimator {
         break;
       }
     }
-  }
-
-  private entranceGesture(mood: MascotMood): Gesture | null {
-    switch (mood) {
-      case "happy":
-        return "hop";
-      case "celebrating":
-        return "celebrate";
-      case "sad":
-        return "sigh";
-      case "sleepy":
-        return "yawn";
-      case "working":
-        return "donHardHat";
-      case "idle":
-      case "curious":
-      case "thinking":
-      case "attentive":
-        return null;
-    }
-    return null;
   }
 
   private startGesture(gesture: Gesture, time: number): void {

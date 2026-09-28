@@ -6,6 +6,49 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 
 export { estimateToolResultTextChars };
 
+// Reuse scans across guard passes; the block owns the lifetime and text is its revision.
+const toolResultTextEstimates = new WeakMap<
+  object,
+  { text: string; minimumRawWeight: number; chars: number }
+>();
+
+export function readPreparedToolResultTextChars(
+  block: object,
+  text: string,
+  minimumRawWeight: number,
+): number | undefined {
+  const cached = toolResultTextEstimates.get(block);
+  return cached?.text === text && cached.minimumRawWeight === minimumRawWeight
+    ? cached.chars
+    : undefined;
+}
+
+export function prepareToolResultTextChars(
+  block: object,
+  text: string,
+  minimumRawWeight: number,
+): number {
+  const cached = readPreparedToolResultTextChars(block, text, minimumRawWeight);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const chars = estimateToolResultTextChars(text, { minimumRawWeight });
+  toolResultTextEstimates.set(block, { text, minimumRawWeight, chars });
+  return chars;
+}
+
+export function isToolResultTextBlock(
+  block: unknown,
+): block is { type: "text" | "toolResult"; text: string; content?: unknown } {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const type: unknown = Reflect.get(block, "type");
+  return (
+    (type === "text" || type === "toolResult") && typeof Reflect.get(block, "text") === "string"
+  );
+}
+
 function sliceToolResultTextBudget(
   text: string,
   maxChars: number,

@@ -19,62 +19,46 @@ function registerServices(pluginConfig: Record<string, unknown>) {
       registerService,
     }),
   );
-  return registerService;
+  return registerService.mock.calls.map(([service]) => service);
+}
+
+function registeredService(id: string, stoppable = true) {
+  return expect.objectContaining({
+    id,
+    start: expect.any(Function),
+    ...(stoppable ? { stop: expect.any(Function) } : {}),
+  });
 }
 
 describe("Codex plugin services", () => {
   it("proactively monitors an explicitly configured remote websocket app-server", () => {
-    const registerService = registerServices({
+    const services = registerServices({
       appServer: { transport: "websocket", url: "ws://127.0.0.1:39175" },
     });
 
-    expect(registerService).toHaveBeenCalledTimes(4);
-    expect(registerService.mock.calls.map(([service]) => service)).toContainEqual(
-      expect.objectContaining({
-        id: "codex-session-catalog",
-        start: expect.any(Function),
-        stop: expect.any(Function),
-      }),
-    );
-    expect(registerService.mock.calls.map(([service]) => service)).toContainEqual(
-      expect.objectContaining({
-        id: "codex-app-server-process-reaper",
-        start: expect.any(Function),
-      }),
-    );
-    expect(registerService.mock.calls.map(([service]) => service)).toContainEqual(
-      expect.objectContaining({
-        id: "codex-app-server-connection-health",
-        start: expect.any(Function),
-        stop: expect.any(Function),
-      }),
+    expect(services).toEqual(
+      expect.arrayContaining([
+        registeredService("codex-session-catalog"),
+        registeredService("codex-app-server-process-reaper", false),
+        registeredService("codex-app-server-connection-health"),
+      ]),
     );
   });
 
   it("does not start remote connection monitoring for local Codex transports", () => {
     for (const appServer of [undefined, { transport: "stdio" }, { transport: "unix" }]) {
-      const registerService = registerServices(appServer ? { appServer } : {});
+      const services = registerServices(appServer ? { appServer } : {});
 
-      expect(registerService).toHaveBeenCalledTimes(3);
-      expect(registerService.mock.calls.map(([service]) => service)).toContainEqual(
-        expect.objectContaining({
-          id: "codex-session-catalog",
-          start: expect.any(Function),
-          stop: expect.any(Function),
-        }),
-      );
-      expect(registerService.mock.calls.map(([service]) => service.id)).not.toContain(
+      expect(services.map((service) => service.id)).not.toContain(
         "codex-app-server-connection-health",
       );
-      expect(registerService.mock.calls[0]?.[0]).toMatchObject({
-        id: "codex-desktop-generation",
-        start: expect.any(Function),
-        stop: expect.any(Function),
-      });
-      expect(registerService.mock.calls[1]?.[0]).toMatchObject({
-        id: "codex-app-server-process-reaper",
-        start: expect.any(Function),
-      });
+      expect(services).toEqual(
+        expect.arrayContaining([
+          registeredService("codex-session-catalog"),
+          registeredService("codex-desktop-generation"),
+          registeredService("codex-app-server-process-reaper", false),
+        ]),
+      );
     }
   });
 });

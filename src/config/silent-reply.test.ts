@@ -1,21 +1,21 @@
 // Covers silent-reply config normalization and policy behavior.
 import { describe, expect, it } from "vitest";
-import { resolveSilentReplyPolicy } from "./silent-reply.js";
+import { resolveSilentReplySettings } from "./silent-reply.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 describe("silent reply config resolution", () => {
   it("uses the default direct/group/internal policy", () => {
-    expect(resolveSilentReplyPolicy({ surface: "webchat" })).toBe("disallow");
+    expect(resolveSilentReplySettings({ surface: "webchat" }).policy).toBe("disallow");
     expect(
-      resolveSilentReplyPolicy({
+      resolveSilentReplySettings({
         sessionKey: "agent:main:telegram:group:123",
         surface: "telegram",
-      }),
-    ).toBe("allow");
+      }).policy,
+    ).toBe("disallow");
     expect(
-      resolveSilentReplyPolicy({
+      resolveSilentReplySettings({
         sessionKey: "agent:main:subagent:abc",
-      }),
+      }).policy,
     ).toBe("allow");
   });
 
@@ -31,13 +31,13 @@ describe("silent reply config resolution", () => {
       },
     };
 
-    expect(resolveSilentReplyPolicy({ cfg, surface: "webchat" })).toBe("disallow");
+    expect(resolveSilentReplySettings({ cfg, surface: "webchat" }).policy).toBe("disallow");
     expect(
-      resolveSilentReplyPolicy({
+      resolveSilentReplySettings({
         cfg,
         sessionKey: "agent:main:discord:group:123",
         surface: "discord",
-      }),
+      }).policy,
     ).toBe("disallow");
   });
 
@@ -61,11 +61,11 @@ describe("silent reply config resolution", () => {
     };
 
     expect(
-      resolveSilentReplyPolicy({
+      resolveSilentReplySettings({
         cfg,
         sessionKey: "agent:main:telegram:group:123",
         surface: "telegram",
-      }),
+      }).policy,
     ).toBe("disallow");
   });
 });

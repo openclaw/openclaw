@@ -20,6 +20,27 @@ export async function createServiceChildRelayAdapter(
   return adapter;
 }
 
+export function createWritableRelayChild() {
+  const stub = createStubChild();
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  stub.child.stdout = stdout;
+  stub.child.stderr = stderr;
+  const control = new Duplex({
+    autoDestroy: false,
+    read() {},
+    write(_chunk, _encoding, callback) {
+      callback();
+    },
+  });
+  const lineage = new PassThrough();
+  Object.defineProperty(stub.child, "stdio", {
+    value: [stub.child.stdin, stub.child.stdout, stub.child.stderr, control, lineage],
+    configurable: true,
+  });
+  return { ...stub, control, lineage, stdout, stderr };
+}
+
 export async function createRelayFixture(
   platform: "linux" | "darwin" | "win32",
   retainLineage: boolean,
@@ -32,13 +53,15 @@ export async function createRelayFixture(
   const stub = createStubChild();
   const cancellations: Array<(error: Error) => void> = [];
   const acknowledgements: ServiceChildControlMessage[] = [];
+  // The simulated peer must stay outside spies on the host's incoming decoder.
+  const parseControlMessage = JSON.parse;
   // Keep channel closure independently controlled from cancellation write completion.
   const control = new Duplex({
     autoDestroy: false,
     read() {},
     write(chunk: Buffer, _encoding, callback) {
       // SAFETY: this exact adapter is the sole writer on its private control channel.
-      const message = JSON.parse(chunk.toString()) as ServiceChildControlMessage;
+      const message = parseControlMessage(chunk.toString()) as ServiceChildControlMessage;
       if (message.type === "cancel") {
         cancellations.push(callback);
       } else {

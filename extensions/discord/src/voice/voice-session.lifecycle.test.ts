@@ -14,7 +14,6 @@ defineDiscordVoiceTests(
     mockCall,
     lastMockCall,
     createConnectionMock,
-    getVoiceConnectionMock,
     joinVoiceChannelMock,
     entersStateMock,
     createAudioPlayerMock,
@@ -108,18 +107,56 @@ defineDiscordVoiceTests(
       await manager.destroy();
     });
 
-    it("destroys stale tracked voice connections before joining", async () => {
-      const staleConnection = createConnectionMock();
-      const connection = createConnectionMock();
-      getVoiceConnectionMock.mockReturnValueOnce(staleConnection);
-      joinVoiceChannelMock.mockReturnValueOnce(connection);
+    it.each(["leave", "destroy"] as const)(
+      "does not spawn a replacement worker after %s wins socket shutdown",
+      async (boundary) => {
+        const manager = createManager();
+        const entered = createDeferred<void>();
+        const release = createDeferred<void>();
+        const stop = vi
+          .spyOn(manager["voiceSessions"], "stopTransport")
+          .mockImplementationOnce(async () => {
+            entered.resolve();
+            await release.promise;
+          });
+        const joining = manager.join({ guildId: "g1", channelId: "1001" });
+        await entered.promise;
+        if (boundary === "leave") {
+          await manager.leave({ guildId: "g1" });
+        } else {
+          await manager.destroy();
+        }
+        release.resolve();
+        expect((await joining).ok).toBe(false);
+        expect(joinVoiceChannelMock).not.toHaveBeenCalled();
+        expect(createAudioPlayerMock).not.toHaveBeenCalled();
+        stop.mockRestore();
+      },
+    );
+
+    it("keeps a departing worker as the join barrier until physical shutdown settles", async () => {
       const manager = createManager();
-
       await manager.join({ guildId: "g1", channelId: "1001" });
-
-      expect(getVoiceConnectionMock).toHaveBeenCalledWith("g1", "openclaw:default");
-      expect(staleConnection.destroy).toHaveBeenCalledTimes(1);
-      expectConnectedStatus(manager, "1001");
+      const entry = getSessionEntry(manager);
+      const release = createDeferred<void>();
+      const originalStop = entry.audio.stop.bind(entry.audio);
+      const physicalStop = release.promise.then(originalStop);
+      vi.spyOn(entry.audio, "stop").mockReturnValue(physicalStop);
+      const leaving = manager.leave({ guildId: "g1" });
+      const joining = manager.join({ guildId: "g1", channelId: "1002" });
+      try {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
+        release.resolve();
+        await leaving;
+        expect((await joining).ok).toBe(true);
+        expectConnectedStatus(manager, "1002");
+      } finally {
+        release.resolve();
+        await Promise.allSettled([leaving, joining]);
+      }
     });
 
     it("isolates voice connections by Discord account", async () => {
@@ -129,8 +166,6 @@ defineDiscordVoiceTests(
       await firstManager.join({ guildId: "g1", channelId: "1001" });
       await secondManager.join({ guildId: "g1", channelId: "1002" });
 
-      expect(getVoiceConnectionMock).toHaveBeenNthCalledWith(1, "g1", "openclaw:first");
-      expect(getVoiceConnectionMock).toHaveBeenNthCalledWith(2, "g1", "openclaw:second");
       expect(joinVoiceChannelMock).toHaveBeenNthCalledWith(
         1,
         expect.objectContaining({ group: "openclaw:first" }),
@@ -520,20 +555,6 @@ defineDiscordVoiceTests(
       expect(joinOptions.decryptionFailureTolerance).toBe(8);
     });
 
-    it("uses the default timeout for initial voice connection readiness", async () => {
-      const connection = createConnectionMock();
-      joinVoiceChannelMock.mockReturnValueOnce(connection);
-      const manager = createManager();
-
-      await manager.join({ guildId: "g1", channelId: "1001" });
-
-      const readyCall = entersStateMock.mock.calls[0];
-      expect(readyCall?.[0]).toBe(connection);
-      expect(readyCall?.[1]).toBe("ready");
-      expect(readyCall?.[2]).toBeGreaterThanOrEqual(29_900);
-      expect(readyCall?.[2]).toBeLessThanOrEqual(30_000);
-    });
-
     it("deduplicates concurrent joins for the same guild and channel", async () => {
       const connection = createConnectionMock();
       const waiting = createDeferred<void>();
@@ -841,63 +862,6 @@ defineDiscordVoiceTests(
       expect(secondConnection.destroy).not.toHaveBeenCalled();
     });
 
-    it("uses configured voice connection and reconnect timeouts", async () => {
-      const connection = createConnectionMock();
-      joinVoiceChannelMock.mockReturnValueOnce(connection);
-      const manager = createManager({
-        voice: {
-          connectTimeoutMs: 45_000,
-          reconnectGraceMs: 20_000,
-        },
-      });
-
-      await manager.join({ guildId: "g1", channelId: "1001" });
-
-      const readyCall = entersStateMock.mock.calls[0];
-      expect(readyCall?.[0]).toBe(connection);
-      expect(readyCall?.[1]).toBe("ready");
-      expect(readyCall?.[2]).toBeGreaterThanOrEqual(44_900);
-      expect(readyCall?.[2]).toBeLessThanOrEqual(45_000);
-
-      entersStateMock.mockClear();
-      entersStateMock.mockRejectedValueOnce(new Error("still disconnected"));
-      entersStateMock.mockRejectedValueOnce(new Error("still disconnected"));
-
-      const disconnected = connection.handlers.get("disconnected");
-      expect(disconnected).toBeTypeOf("function");
-      await disconnected?.();
-
-      expect(entersStateMock).toHaveBeenCalledWith(connection, "signalling", 20_000);
-      expect(entersStateMock).toHaveBeenCalledWith(connection, "connecting", 20_000);
-      await vi.waitFor(() => expect(connection.destroy).toHaveBeenCalledTimes(1));
-      await vi.waitFor(() => expect(manager.status()).toStrictEqual([]));
-    });
-
-    it("uses the default reconnect grace before destroying disconnected sessions", async () => {
-      const connection = createConnectionMock();
-      joinVoiceChannelMock.mockReturnValueOnce(connection);
-      const manager = createManager();
-
-      await manager.join({ guildId: "g1", channelId: "1001" });
-      connection.handlers.get("disconnected")?.();
-      await vi.waitFor(() =>
-        expect(entersStateMock).toHaveBeenCalledWith(connection, "connecting", 15_000),
-      );
-
-      entersStateMock.mockClear();
-      entersStateMock.mockRejectedValueOnce(new Error("still disconnected"));
-      entersStateMock.mockRejectedValueOnce(new Error("still disconnected"));
-
-      const disconnected = connection.handlers.get("disconnected");
-      expect(disconnected).toBeTypeOf("function");
-      await disconnected?.();
-
-      expect(entersStateMock).toHaveBeenCalledWith(connection, "signalling", 15_000);
-      expect(entersStateMock).toHaveBeenCalledWith(connection, "connecting", 15_000);
-      await vi.waitFor(() => expect(connection.destroy).toHaveBeenCalledTimes(1));
-      await vi.waitFor(() => expect(manager.status()).toStrictEqual([]));
-    });
-
     it("closes realtime sessions when disconnected recovery destroys the connection", async () => {
       const connection = createConnectionMock();
       joinVoiceChannelMock.mockReturnValueOnce(connection);
@@ -923,6 +887,8 @@ defineDiscordVoiceTests(
 
       const destroyed = connection.handlers.get("destroyed");
       expect(destroyed).toBeTypeOf("function");
+      // The SDK publishes terminal state before notifying Destroyed listeners.
+      connection.state.status = "destroyed";
       destroyed?.();
 
       expect(realtimeSessionMock.close).toHaveBeenCalledTimes(1);

@@ -41,10 +41,12 @@ describe("native hook relay gateway method", () => {
       const release = createDeferredCore();
       const cancelled = createDeferredCore();
       const onResolution = vi.fn(() => cancelled.resolve());
+      const admitExecution = vi.fn();
       const relay = registerOwnedNativeHookRelay({
         provider: "codex",
         sessionId: "gateway-disconnect",
         runId: "gateway-disconnect",
+        executionAdmission: { toolNames: ["exec"], admit: admitExecution },
         runBeforeToolCall: async ({ signal }) => {
           entered.resolve(signal);
           await release.promise;
@@ -80,6 +82,7 @@ describe("native hook relay gateway method", () => {
         release.resolve();
         await cancelled.promise;
         expect(onResolution).toHaveBeenCalledExactlyOnceWith("cancelled");
+        expect(admitExecution).not.toHaveBeenCalled();
         expect(
           nativeHookRelayState.pendingPreToolUseApprovals.has(
             JSON.stringify([relay.relayId, "disconnected-call"]),

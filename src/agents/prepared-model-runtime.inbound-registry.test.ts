@@ -1,14 +1,12 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import {
-  cleanupPreparedModelRuntimeHarness,
-  getPreparedModelRuntimeMocks,
+  usePreparedModelRuntimeHarness,
   getPreparedModelRuntimeTestApi,
-  resetPreparedModelRuntimeHarness,
 } from "./prepared-model-runtime.test-harness.js";
 import { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import {
@@ -22,10 +20,6 @@ import { PluginRegistryInspectionResources } from "../plugins/registry-inspectio
 import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-scope.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
 import type { DiscoverAuthStorageOptions } from "./agent-auth-discovery.js";
 import { withPreparedModelRuntimePluginGenerationScope } from "./prepared-model-runtime-generation-scope.js";
 import { prepareWorkspaceBuildGroup } from "./prepared-model-runtime.facts.js";
@@ -37,15 +31,10 @@ import {
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
 
-const mocks = getPreparedModelRuntimeMocks();
-let state: OpenClawTestState;
+const fixture = usePreparedModelRuntimeHarness({ label: "prepared-model-runtime" });
+const { mocks } = fixture;
 
 describe("prepared reply dispatch runtime", () => {
-  beforeEach(async () => {
-    state = await createOpenClawTestState({ label: "prepared-model-runtime" });
-    await resetPreparedModelRuntimeHarness(state);
-  });
-
   it("returns undefined while the Gateway lifecycle is inactive", async () => {
     await expect(
       loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
@@ -54,7 +43,7 @@ describe("prepared reply dispatch runtime", () => {
   });
 
   it("holds inspected input through accepted preparation and refuses a retired result", async () => {
-    const database = new DatabaseSync(state.path("prepared-registration.sqlite"));
+    const database = new DatabaseSync(fixture.state.path("prepared-registration.sqlite"));
     database.exec(
       "CREATE TABLE observations (value INTEGER); INSERT INTO observations VALUES (42)",
     );
@@ -89,9 +78,9 @@ describe("prepared reply dispatch runtime", () => {
       [
         {
           config,
-          agentDir: state.agentDir("default"),
-          workspaceDir: state.workspaceDir,
-          env: state.env,
+          agentDir: fixture.state.agentDir("default"),
+          workspaceDir: fixture.state.workspaceDir,
+          env: fixture.state.env,
           skipCredentials: true,
         },
       ],
@@ -422,10 +411,7 @@ describe("prepared reply dispatch runtime", () => {
       pluginMetadataSnapshot: mocks.pluginMetadataSnapshot as never,
     });
     const input = {
-      agentId: "default",
-      agentDir: state.agentDir("default"),
-      inheritedAuthDir: state.agentDir("default"),
-      config: firstConfig,
+      ...fixture.agentInput("default", firstConfig),
       workspaceDir: "/tmp/unused-workspace",
       allowGatewaySubagentBinding: true,
     };
@@ -433,7 +419,7 @@ describe("prepared reply dispatch runtime", () => {
     const firstRuntime = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
     expect(firstRuntime).toMatchObject({
       agentId: "default",
-      agentDir: state.agentDir("default"),
+      agentDir: fixture.state.agentDir("default"),
       workspaceDir: "/tmp/unused-workspace",
       config: firstConfig,
       modelCatalog: firstSnapshot?.modelCatalog,
@@ -476,7 +462,7 @@ describe("prepared reply dispatch runtime", () => {
       const replacementRuntime = await read;
       expect(replacementRuntime).toMatchObject({
         agentId: "default",
-        agentDir: state.agentDir("default"),
+        agentDir: fixture.state.agentDir("default"),
         workspaceDir: "/tmp/unused-workspace",
         config: replacementConfig,
         inboundPluginRegistry: replacementRegistry,
@@ -500,10 +486,7 @@ describe("prepared reply dispatch runtime", () => {
       defaultWorkspaceDir: "/tmp/gateway-launch-workspace",
     });
     const published = getPreparedModelRuntimeSnapshot({
-      agentId: "default",
-      agentDir: state.agentDir("default"),
-      inheritedAuthDir: state.agentDir("default"),
-      config,
+      ...fixture.agentInput("default", config),
       workspaceDir: "/tmp/gateway-launch-workspace",
       allowGatewaySubagentBinding: true,
     });
@@ -557,10 +540,7 @@ describe("prepared reply dispatch runtime", () => {
       throw new Error("expected configured reply runtime");
     }
     const configuredInput = {
-      agentId: "default",
-      agentDir: state.agentDir("default"),
-      inheritedAuthDir: state.agentDir("default"),
-      config,
+      ...fixture.agentInput("default", config),
       workspaceDir: "/tmp/unused-workspace",
     };
     const configuredSelectedBefore =
@@ -598,7 +578,7 @@ describe("prepared reply dispatch runtime", () => {
     unregister();
 
     expect(mocks.discoverAuthStorage.mock.calls.length - authStorageCallsBeforeAuth).toBe(2);
-    expect(mocks.discoverModels.mock.calls.length - modelCallsBeforeAuth).toBe(2);
+    expect(mocks.discoverModels.mock.calls.length - modelCallsBeforeAuth).toBe(1);
     expect(mocks.prepareStaticCatalog.mock.calls.length - staticCatalogCallsBeforeAuth).toBe(0);
     const configuredRuntimeAfter = await loadPublishedGatewayReplyDispatchRuntime({
       agentId: "default",
@@ -632,7 +612,7 @@ describe("prepared reply dispatch runtime", () => {
     });
 
     mocks.mutationListener?.({
-      agentDir: state.agentDir("worker"),
+      agentDir: fixture.state.agentDir("worker"),
       affectsInheritedStores: false,
     });
 
@@ -647,7 +627,7 @@ describe("prepared reply dispatch runtime", () => {
     const refreshedWorker = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "worker" });
     expect(refreshedWorker).toMatchObject({
       agentId: "worker",
-      agentDir: state.agentDir("worker"),
+      agentDir: fixture.state.agentDir("worker"),
       workspaceDir: "/tmp/workspace-worker",
     });
     expect(refreshedWorker).not.toBe(workerRuntime);
@@ -674,7 +654,7 @@ describe("prepared reply dispatch runtime", () => {
     });
 
     mocks.mutationListener?.({
-      agentDir: state.agentDir("worker"),
+      agentDir: fixture.state.agentDir("worker"),
       affectsInheritedStores: false,
     });
     await refreshFailed.promise;
@@ -693,7 +673,7 @@ describe("prepared reply dispatch runtime", () => {
     const config = {};
     const input = {
       agentId: "default",
-      agentDir: state.agentDir("default"),
+      agentDir: fixture.state.agentDir("default"),
       config,
       workspaceDir: "/tmp/dynamic-workspace",
     };
@@ -738,8 +718,4 @@ describe("prepared reply dispatch runtime", () => {
       ]);
     }
   });
-});
-
-afterEach(async ({ task }) => {
-  await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
 });

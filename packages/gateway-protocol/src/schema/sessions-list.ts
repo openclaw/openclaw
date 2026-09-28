@@ -8,6 +8,10 @@ export const SessionsListParamsSchema = closedObject({
   offset: Type.Optional(Type.Integer({ minimum: 0 })),
   /** Activity age for sortBy: "activity"; otherwise metadata update age. */
   activeMinutes: Type.Optional(Type.Integer({ minimum: 1 })),
+  /** Epoch ms of the caller's local midnight; returns an hourly activity pulse from that instant. */
+  activityPulseSince: Type.Optional(Type.Number({ minimum: 0 })),
+  /** Epoch ms of the caller's next local midnight; bounds `activityPulse` to the civil day. */
+  activityPulseUntil: Type.Optional(Type.Number({ minimum: 0 })),
   /** Select sessions with current direct running or queued work before pagination. */
   activeOnly: Type.Optional(Type.Boolean()),
   /** Require a real user/channel interaction; excludes synthetic isolated heartbeat rows. */
@@ -23,6 +27,10 @@ export const SessionsListParamsSchema = closedObject({
   includeUnknown: Type.Optional(Type.Boolean()),
   /** Exclude subagent sessions before facets and pagination. */
   excludeSubagents: Type.Optional(Type.Boolean()),
+  /** Exclude automation roots as well as individual cron runs. */
+  excludeCron: Type.Optional(Type.Boolean()),
+  /** Exclude machine-created probe/system sessions using recorded provenance. */
+  excludeSystem: Type.Optional(Type.Boolean()),
   /** Limit agent-scoped rows to agents currently present in config. */
   configuredAgentsOnly: Type.Optional(Type.Boolean()),
   /**
@@ -73,6 +81,12 @@ export const SessionsListParamsSchema = closedObject({
   involvingProfileId: Type.Optional(NonEmptyString),
   /** Include a bounded people facet over visible matching sessions before the profile filter. */
   includePeople: Type.Optional(Type.Boolean()),
+  /**
+   * Include complete per-profile ownership counts over caller-visible matching sessions before
+   * pagination. Open counts only unarchived sessions; running excludes queued and descendant work.
+   * All list filters still apply; omit agentId for a cross-agent summary.
+   */
+  includeOwnerSessionCounts: Type.Optional(Type.Boolean()),
   spawnedBy: Type.Optional(NonEmptyString),
   agentId: Type.Optional(NonEmptyString),
   search: Type.Optional(Type.String()),
@@ -84,3 +98,12 @@ export const SessionsListParamsSchema = closedObject({
 });
 
 export type SessionsListParams = Static<typeof SessionsListParamsSchema>;
+
+/** One canonical profile owner with at least one visible, matching unarchived session. */
+export const SessionOwnerSessionCountSchema = closedObject({
+  profileId: NonEmptyString,
+  open: Type.Integer({ minimum: 1 }),
+  running: Type.Integer({ minimum: 0 }),
+});
+
+export type SessionOwnerSessionCount = Static<typeof SessionOwnerSessionCountSchema>;

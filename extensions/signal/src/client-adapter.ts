@@ -1,11 +1,3 @@
-/**
- * Signal client adapter - unified interface for both native signal-cli and bbernhard container.
- *
- * This adapter provides a single API that routes to the concrete account transport.
- * Exports mirror client.ts names so consumers
- * only need to change their import path.
- */
-
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { SignalTransportConfig } from "./account-types.js";
 import { containerCheck, containerRpcRequest, streamContainerEvents } from "./client-container.js";
@@ -25,14 +17,6 @@ export type SignalSseEvent = {
 
 export type SignalTransportKind = SignalTransportConfig["kind"];
 
-function usesContainer(kind: SignalTransportKind | undefined): boolean {
-  return kind === "container";
-}
-
-/**
- * Drop-in replacement for native signalRpcRequest.
- * Routes to native JSON-RPC or container REST based on config.
- */
 export async function signalRpcRequest<T = unknown>(
   method: string,
   params: Record<string, unknown> | undefined,
@@ -42,21 +26,18 @@ export async function signalRpcRequest<T = unknown>(
     maxAttachmentBytes?: number;
   },
 ): Promise<T> {
-  return usesContainer(opts.transportKind)
+  return opts.transportKind === "container"
     ? containerRpcRequest<T>(method, params, opts)
     : nativeRpcRequest<T>(method, params, opts);
 }
 
-/**
- * Drop-in replacement for native signalCheck.
- */
 export async function signalCheck(
   baseUrl: string,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   options: { transportKind?: SignalTransportKind; account?: string } = {},
 ): Promise<{ ok: boolean; status?: number | null; error?: string | null }> {
   try {
-    return usesContainer(options.transportKind)
+    return options.transportKind === "container"
       ? await containerCheck(baseUrl, timeoutMs, options.account)
       : await nativeCheck(baseUrl, timeoutMs);
   } catch (error) {
@@ -64,10 +45,6 @@ export async function signalCheck(
   }
 }
 
-/**
- * Drop-in replacement for native streamSignalEvents.
- * Container mode uses WebSocket; native uses SSE.
- */
 export async function streamSignalEvents(params: {
   baseUrl: string;
   account?: string;
@@ -79,24 +56,12 @@ export async function streamSignalEvents(params: {
   logger?: { log?: (msg: string) => void; error?: (msg: string) => void };
   transportKind?: SignalTransportKind;
 }): Promise<void> {
-  if (usesContainer(params.transportKind)) {
+  if (params.transportKind === "container") {
     return streamContainerEvents({
-      baseUrl: params.baseUrl,
-      account: params.account,
-      abortSignal: params.abortSignal,
-      timeoutMs: params.timeoutMs,
+      ...params,
       onEvent: (event) => params.onEvent({ event: "receive", data: JSON.stringify(event) }),
-      onStreamOpen: params.onStreamOpen,
-      logger: params.logger,
     });
   }
 
-  return nativeStreamEvents({
-    baseUrl: params.baseUrl,
-    account: params.account,
-    abortSignal: params.abortSignal,
-    timeoutMs: params.timeoutMs,
-    onEvent: (event) => params.onEvent(event),
-    onStreamOpen: params.onStreamOpen,
-  });
+  return nativeStreamEvents(params);
 }

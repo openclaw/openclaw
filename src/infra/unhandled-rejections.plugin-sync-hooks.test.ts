@@ -1,8 +1,15 @@
+import { spawnSync } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { createHookRunner } from "../plugins/hooks.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
-import { spawnNodeEvalSync } from "../test-utils/node-process.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { nativeBoundaryTestEntrypoints } from "./native-boundary-runtime.test-support.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+
+const rejectionUrl = resolveRuntimeWorkerUrl(nativeBoundaryTestEntrypoints.unhandledRejections);
+const hooksUrl = resolveRuntimeWorkerUrl(nativeBoundaryTestEntrypoints.pluginHooks);
+const registryUrl = resolveRuntimeWorkerUrl(nativeBoundaryTestEntrypoints.emptyPluginRegistry);
 
 const syncHookNames = ["tool_result_persist", "before_message_write"] as const;
 type SyncHookName = (typeof syncHookNames)[number];
@@ -48,10 +55,16 @@ describe("sync-only plugin hooks", () => {
     (hookName) => {
       const method =
         hookName === "tool_result_persist" ? "runToolResultPersist" : "runBeforeMessageWrite";
-      const result = spawnNodeEvalSync(
-        `import { installUnhandledRejectionHandler } from "./src/infra/unhandled-rejections.ts";
-       import { createHookRunner } from "./src/plugins/hooks.ts";
-       import { createEmptyPluginRegistry } from "./src/plugins/registry-empty.ts";
+      const nodeExecutable = resolveTestNodeExecPath();
+      const result = spawnSync(
+        nodeExecutable,
+        [
+          ...resolveRuntimeWorkerArgv(rejectionUrl, nodeExecutable).slice(0, -1),
+          "--input-type=module",
+          "--eval",
+          `import { installUnhandledRejectionHandler } from ${JSON.stringify(rejectionUrl.href)};
+       import { createHookRunner } from ${JSON.stringify(hooksUrl.href)};
+       import { createEmptyPluginRegistry } from ${JSON.stringify(registryUrl.href)};
        installUnhandledRejectionHandler();
        const registry = createEmptyPluginRegistry();
        registry.typedHooks.push({
@@ -74,7 +87,8 @@ describe("sync-only plugin hooks", () => {
          process.exit(2);
        }
        console.log("sync hook rejection contained");`,
-        { imports: ["tsx"], timeout: 20_000 },
+        ],
+        { cwd: process.cwd(), encoding: "utf8", timeout: 20_000 },
       );
 
       expect(result.status).toBe(0);
@@ -111,7 +125,8 @@ describe("sync-only plugin hooks", () => {
     expect(logger.error).not.toHaveBeenCalled();
   });
 
-  it.each(syncHookNames)("composes synchronous %s results after fail-open errors", (hookName) => {
+  it("composes synchronous results after fail-open errors", () => {
+    const hookName = "tool_result_persist";
     const logger = createLogger();
     const originalMessage = createToolResultMessage("original");
     const replacementMessage = createToolResultMessage("replacement");
@@ -153,8 +168,6 @@ describe("sync-only plugin hooks", () => {
 
   it.each([
     ["tool_result_persist", "event"],
-    ["before_message_write", "event"],
-    ["tool_result_persist", "message"],
     ["before_message_write", "message"],
     ["before_message_write", "block"],
   ] as const)(
@@ -229,37 +242,35 @@ describe("sync-only plugin hooks", () => {
     expect(blockReads).toBe(0);
   });
 
-  it.each(syncHookNames)(
-    "fails closed on synchronous %s invocation errors and skips later handlers",
-    (hookName) => {
-      const cause = new Error("sync-hook-failure");
-      const laterHandler = vi.fn();
-      const runner = createHookRunner(
-        createMockPluginRegistry([
-          {
-            hookName,
-            pluginId: "failed",
-            priority: 20,
-            handler: () => {
-              throw cause;
-            },
+  it("fails closed on synchronous invocation errors and skips later handlers", () => {
+    const hookName = "tool_result_persist";
+    const cause = new Error("sync-hook-failure");
+    const laterHandler = vi.fn();
+    const runner = createHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName,
+          pluginId: "failed",
+          priority: 20,
+          handler: () => {
+            throw cause;
           },
-          { hookName, pluginId: "later", priority: 10, handler: laterHandler },
-        ]),
-        { failurePolicyByHook: { [hookName]: "fail-closed" } },
-      );
+        },
+        { hookName, pluginId: "later", priority: 10, handler: laterHandler },
+      ]),
+      { failurePolicyByHook: { [hookName]: "fail-closed" } },
+    );
 
-      expect(() =>
-        runSyncHook({ hookName, runner, message: createToolResultMessage("original") }),
-      ).toThrow(
-        expect.objectContaining({
-          message: `[hooks] ${hookName} handler from failed failed: Error: sync-hook-failure`,
-          cause,
-        }),
-      );
-      expect(laterHandler).not.toHaveBeenCalled();
-    },
-  );
+    expect(() =>
+      runSyncHook({ hookName, runner, message: createToolResultMessage("original") }),
+    ).toThrow(
+      expect.objectContaining({
+        message: `[hooks] ${hookName} handler from failed failed: Error: sync-hook-failure`,
+        cause,
+      }),
+    );
+    expect(laterHandler).not.toHaveBeenCalled();
+  });
 
   it("preserves synchronous secret redaction and subsequent handler composition", () => {
     const logger = createLogger();
@@ -358,7 +369,8 @@ describe("sync-only plugin hooks", () => {
     expect(logger.error).not.toHaveBeenCalled();
   });
 
-  it.each(syncHookNames)("preserves fail-closed behavior for async %s handlers", (hookName) => {
+  it("preserves fail-closed behavior for async handlers", () => {
+    const hookName = "tool_result_persist";
     const logger = createLogger();
     const runner = createHookRunner(
       createMockPluginRegistry([

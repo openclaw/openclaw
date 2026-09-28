@@ -7,10 +7,12 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { CronService } from "./service.js";
 import { createNoopLogger } from "./service.test-harness.js";
 import { saveCronJobsStoreWithRevisionNative } from "./store.js";
+import { deleteStaleCronJobFamilyRows, type CronJobFamilyIdentity } from "./store/row-codec.js";
 import type { CronStoredJob } from "./types.js";
 
 const family = {
@@ -52,6 +54,10 @@ async function withFamilyStore(
     db: DatabaseSync;
     activeStore: string;
     staleStore: string;
+    removeFamilyNative: (
+      family: CronJobFamilyIdentity,
+      opts?: { beforeTransaction?: () => void },
+    ) => Promise<number>;
   }) => Promise<void>,
 ) {
   await withOpenClawTestState({ label: "cron-stale-family" }, async (state) => {
@@ -94,6 +100,7 @@ async function withFamilyStore(
       }
     });
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
       storePath: activeStore,
       cronEnabled: false,
       log: createNoopLogger(),
@@ -106,7 +113,18 @@ async function withFamilyStore(
       expect((await cron.list({ includeDisabled: true })).map((job) => job.id)).toEqual([
         active.id,
       ]);
-      await run({ cron, db: openOpenClawStateDatabase().db, activeStore, staleStore });
+      await run({
+        cron,
+        db: openOpenClawStateDatabase().db,
+        activeStore,
+        staleStore,
+        removeFamilyNative: async (identity, opts) => {
+          opts?.beforeTransaction?.();
+          return runOpenClawStateWriteTransaction(({ db }) =>
+            deleteStaleCronJobFamilyRows(db, activeStore, identity),
+          );
+        },
+      });
     } finally {
       cron.stop();
       await closeOpenClawStateDatabaseAsync();
@@ -130,29 +148,34 @@ describe("Cron stale-family cleanup", () => {
   it.each([
     { label: "ordinary", ...ordinary },
     { label: "description-rich", unrelatedCount: 32, descriptionBytes: 128 * 1024 },
-  ])("preserves unrelated $label jobs without fetching their descriptions", async (workload) => {
-    await withFamilyStore(workload, async ({ cron, db, staleStore }) => {
-      const expected = withoutJobs(readDurableRows(db), staleStore, ["z-declared", "a-legacy"]);
-      const counter = trackSqliteStatementExecutions(db, ["familyRows"], (sql) =>
-        /^select\b/i.test(sql) && sql.includes('"cron_jobs"') ? "familyRows" : null,
-      );
-      const commitGuard = vi.fn();
-      try {
-        await expect(cron.removeStaleJobFamily(family, { commitGuard })).resolves.toBe(2);
-        expect(commitGuard).toHaveBeenCalledOnce();
-      } finally {
-        counter.restore();
-      }
-      expect(readDurableRows(db)).toEqual(expected);
-      await closeOpenClawStateDatabaseAsync();
-      expect(readDurableRows(openOpenClawStateDatabase().db)).toEqual(expected);
-      await expect(cron.removeStaleJobFamily(family)).resolves.toBe(0);
-      expect(readDurableRows(openOpenClawStateDatabase().db)).toEqual(expected);
-      expect(counter.counts.familyRows).toBeGreaterThan(0);
-      expect(counter.rowCounts.familyRows).toBeGreaterThan(0);
-      expect(counter.textBytes.familyRows).toBeLessThan(16 * 1024);
-    });
-  });
+  ])(
+    "preserves unrelated $label jobs in the row kernel without fetching their descriptions",
+    async (workload) => {
+      await withFamilyStore(workload, async ({ removeFamilyNative, db, staleStore }) => {
+        const expected = withoutJobs(readDurableRows(db), staleStore, ["z-declared", "a-legacy"]);
+        const counter = trackSqliteStatementExecutions(db, ["familyRows"], (sql) =>
+          /^select\b/i.test(sql) && sql.includes('"cron_jobs"') ? "familyRows" : null,
+        );
+        const commitGuard = vi.fn();
+        try {
+          await expect(
+            removeFamilyNative(family, { beforeTransaction: commitGuard }),
+          ).resolves.toBe(2);
+          expect(commitGuard).toHaveBeenCalledOnce();
+        } finally {
+          counter.restore();
+        }
+        expect(readDurableRows(db)).toEqual(expected);
+        await closeOpenClawStateDatabaseAsync();
+        expect(readDurableRows(openOpenClawStateDatabase().db)).toEqual(expected);
+        await expect(removeFamilyNative(family)).resolves.toBe(0);
+        expect(readDurableRows(openOpenClawStateDatabase().db)).toEqual(expected);
+        expect(counter.counts.familyRows).toBeGreaterThan(0);
+        expect(counter.rowCounts.familyRows).toBeGreaterThan(0);
+        expect(counter.textBytes.familyRows).toBeLessThan(16 * 1024);
+      });
+    },
+  );
 
   it("preserves decoded Unicode, malformed TEXT, and embedded NUL identities", async () => {
     await withFamilyStore(ordinary, async ({ cron, db, staleStore }) => {
@@ -204,7 +227,7 @@ describe("Cron stale-family cleanup", () => {
   });
 
   it("preserves the first deletion error and scratch rollback with extra indexes", async () => {
-    await withFamilyStore(ordinary, async ({ cron, db, activeStore }) => {
+    await withFamilyStore(ordinary, async ({ removeFamilyNative, db, activeStore }) => {
       const before = readDurableRows(db);
       for (const indexes of ["canonical", "separate", "covering"]) {
         if (indexes === "separate") {
@@ -233,8 +256,8 @@ describe("Cron stale-family cleanup", () => {
           expect(first).toBeDefined();
           try {
             await expect(
-              cron.removeStaleJobFamily(family, {
-                commitGuard: () => {
+              removeFamilyNative(family, {
+                beforeTransaction: () => {
                   db.exec(`CREATE TEMP TRIGGER refuse_family_delete BEFORE DELETE ON main.cron_jobs
               BEGIN SELECT RAISE(ABORT, 'refused:' || OLD.job_id); END;`);
                 },
@@ -253,13 +276,13 @@ describe("Cron stale-family cleanup", () => {
   });
 
   it("retains column authorization and needs no SQL function authorization", async () => {
-    await withFamilyStore(ordinary, async ({ cron, db, staleStore }) => {
+    await withFamilyStore(ordinary, async ({ removeFamilyNative, db, staleStore }) => {
       const before = readDurableRows(db);
       for (const column of ["store_key", "job_id", "declaration_key", "name", "description"]) {
         try {
           await expect(
-            cron.removeStaleJobFamily(family, {
-              commitGuard: () => {
+            removeFamilyNative(family, {
+              beforeTransaction: () => {
                 db.setAuthorizer((action, table, readColumn) =>
                   action === constants.SQLITE_READ && table === "cron_jobs" && readColumn === column
                     ? constants.SQLITE_DENY
@@ -275,8 +298,8 @@ describe("Cron stale-family cleanup", () => {
       }
       try {
         await expect(
-          cron.removeStaleJobFamily(family, {
-            commitGuard: () => {
+          removeFamilyNative(family, {
+            beforeTransaction: () => {
               db.setAuthorizer((action, table, column) =>
                 action === constants.SQLITE_READ &&
                 table === "cron_jobs" &&
@@ -293,8 +316,8 @@ describe("Cron stale-family cleanup", () => {
       expect(readDurableRows(db)).toEqual(withoutJobs(before, staleStore, ["z-declared"]));
       try {
         await expect(
-          cron.removeStaleJobFamily(family, {
-            commitGuard: () => {
+          removeFamilyNative(family, {
+            beforeTransaction: () => {
               db.setAuthorizer((action) =>
                 action === constants.SQLITE_FUNCTION ? constants.SQLITE_DENY : constants.SQLITE_OK,
               );

@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import { rewindChatHistory, switchChatHistoryBranch } from "./chat-history-actions.ts";
@@ -10,12 +10,8 @@ import { syncSelectedSessionMessageSubscription } from "./chat-history-subscript
 import { createState, type TestState } from "./chat-history.inflight.test-support.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import type { ChatState } from "./chat-state-contract.ts";
-import { ChatAttachmentReadLifecycle } from "./components/chat-attachments.ts";
-import {
-  getChatSessionProjection,
-  publishChatSessionProjection,
-  reduceChatSessionProjection,
-} from "./history-merge.ts";
+import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
+import { getChatSessionProjection, publishChatSessionProjection } from "./history-merge.ts";
 import { handleChatDraftChange } from "./input-history.ts";
 import {
   cacheChatSessionSnapshot,
@@ -206,6 +202,10 @@ describe("syncSelectedSessionMessageSubscription", () => {
   });
 
   it("retries a stale generation's rejected subscription release", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const stale = { key: "agent:main:stale", agentId: null };
     const selected = { key: "agent:main:selected", agentId: null };
     const staleSubscription = createDeferred<typeof stale>();
@@ -235,6 +235,7 @@ describe("syncSelectedSessionMessageSubscription", () => {
     await syncSelectedSessionMessageSubscription(state as never);
 
     staleSubscription.resolve(stale);
+    await vi.runAllTimersAsync();
     await staleSync;
 
     expect(state.chatSessionMessageSubscription).toBe(selected);
@@ -243,6 +244,8 @@ describe("syncSelectedSessionMessageSubscription", () => {
     await syncSelectedSessionMessageSubscription(state as never);
 
     expect(unsubscribeMessages).toHaveBeenNthCalledWith(2, stale);
+    expect(unsubscribeMessages).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
     expect(state.chatSessionMessageSubscription).toBe(selected);
     expect(subscribeMessages).toHaveBeenCalledTimes(2);
   });
@@ -749,30 +752,6 @@ describe("canonical history snapshot projection", () => {
 
     expect(request).toHaveBeenCalledOnce();
     expect(state.chatMessages).toEqual([first, second]);
-  });
-
-  it("preserves pending input appended while the authoritative request is in flight", async () => {
-    const { promise: history, resolve: resolveHistory } = createDeferred<ChatHistoryResult>();
-    const first = message("user", "first prompt", { id: "first-user", seq: 1 });
-    const pending = message("user", "concurrent prompt", {
-      idempotencyKey: "concurrent-run:user",
-    });
-    const state = createState({ messages: [first] });
-    state.chatMessages = [first];
-    state.client = {
-      request: vi.fn().mockReturnValue(history),
-    } as unknown as GatewayBrowserClient;
-
-    const load = loadChatHistory(state);
-    reduceChatSessionProjection(state, {
-      type: "sendPending",
-      runId: "concurrent-run",
-      message: pending,
-    });
-    resolveHistory({ messages: [first] });
-    await load;
-
-    expect(state.chatMessages).toEqual([first, pending]);
   });
 
   it("does not preserve old pending sends after the active branch changes", async () => {

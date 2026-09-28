@@ -1,6 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
@@ -11,6 +11,37 @@ import {
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+
+async function scrollTranscriptUp(page: Page, thread: Locator, distance: number) {
+  const before = await thread.evaluate((element) => element.scrollTop);
+  const wheel = await thread.evaluateHandle((element) => {
+    const controller = new AbortController();
+    return {
+      // Layout can move the offset before Chromium delivers the wheel event.
+      delivered: new Promise<void>((resolve) => {
+        element.addEventListener("wheel", () => resolve(), {
+          once: true,
+          passive: true,
+          signal: controller.signal,
+        });
+      }),
+      cancel: () => controller.abort(),
+    };
+  });
+  try {
+    await page.mouse.wheel(0, -distance);
+    await wheel.evaluate((state) => state.delivered);
+    await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBeLessThan(before);
+    return {
+      requested: distance,
+      before,
+      after: await thread.evaluate((element) => element.scrollTop),
+    };
+  } finally {
+    await wheel.evaluate((state) => state.cancel());
+    await wheel.dispose();
+  }
+}
 
 async function installProgressGateway(page: Page, sessionKey: string, canonicalKey = sessionKey) {
   const session = {
@@ -77,35 +108,7 @@ suite.define(() => {
         if (index) {
           await page.waitForTimeout(201); // Distinct user gestures, beyond the 200 ms burst boundary.
         }
-        const before = await thread.evaluate((element) => element.scrollTop);
-        const wheel = await thread.evaluateHandle((element) => {
-          const controller = new AbortController();
-          return {
-            delivered: new Promise<void>((resolve) => {
-              element.addEventListener("wheel", () => resolve(), {
-                once: true,
-                passive: true,
-                signal: controller.signal,
-              });
-            }),
-            cancel: () => controller.abort(),
-          };
-        });
-        try {
-          await page.mouse.wheel(0, -distance);
-          await wheel.evaluate((state) => state.delivered);
-        } finally {
-          await wheel.evaluate((state) => state.cancel());
-          await wheel.dispose();
-        }
-        await expect
-          .poll(() => thread.evaluate((element) => element.scrollTop))
-          .toBeLessThan(before);
-        gestureOffsets.push({
-          requested: distance,
-          before,
-          after: await thread.evaluate((element) => element.scrollTop),
-        });
+        gestureOffsets.push(await scrollTranscriptUp(page, thread, distance));
       }
       await waitForChatScrollIdle(page);
     };
@@ -121,7 +124,7 @@ suite.define(() => {
       await expect.poll(open).toBe(false);
       const retainedCard = await card.elementHandle();
       await gateway.setOnline(false);
-      const offline = page.locator('.agent-chat__composer-underlaps[data-tone="warn"]');
+      const offline = page.locator(".agent-chat__input--offline");
       await offline.waitFor();
       expect(await retainedCard?.evaluate((element) => element.isConnected)).toBe(true);
       expect(await open()).toBe(false);
@@ -131,6 +134,16 @@ suite.define(() => {
       expect(await open()).toBe(false);
       await page.locator('.chat-scroll-to-bottom[data-visible="true"]').click();
       await waitForChatScrollIdle(page);
+      expect(await open()).toBe(false);
+      await gateway.emitChatFinal({
+        sessionKey,
+        runId: "progress-run",
+        text: "Progress is complete.",
+      });
+      await page
+        .locator(".chat-bubble")
+        .getByText("Progress is complete.", { exact: true })
+        .waitFor();
       expect(await open()).toBe(false);
       await card.locator("summary").press("Enter");
       expect(await open()).toBe(true);
@@ -252,17 +265,13 @@ suite.define(() => {
           const box = await thread.boundingBox();
           await page.mouse.move(box!.x + box!.width / 2, box!.y + 80);
           for (let index = 0; index < 2; index++) {
-            const before = await thread.evaluate((element) => element.scrollTop);
-            await page.mouse.wheel(0, -320);
-            await expect
-              .poll(() => thread.evaluate((element) => element.scrollTop))
-              .toBeLessThan(before);
+            await scrollTranscriptUp(page, thread, 320);
             await page.waitForTimeout(201); // Separate native gestures beyond the 200 ms burst window.
           }
           await expect.poll(open).toBe(false);
         }
         await gateway.setOnline(false);
-        await pane.locator('.agent-chat__composer-underlaps[data-tone="warn"]').waitFor();
+        await pane.locator(".agent-chat__input--offline").waitFor();
         if (choice === "manual") {
           await card.locator("summary").press("Enter");
           expect(
@@ -274,9 +283,7 @@ suite.define(() => {
         await page.screenshot({ path: path.join(artifactDir, "disconnected.png") });
         expect(await open()).toBe(false);
         await gateway.setOnline(true);
-        await pane
-          .locator('.agent-chat__composer-underlaps[data-tone="warn"]')
-          .waitFor({ state: "hidden" });
+        await pane.locator(".agent-chat__input--offline").waitFor({ state: "hidden" });
         await page.screenshot({ path: path.join(artifactDir, "reconnected.png") });
         expect(await open()).toBe(false);
       } finally {

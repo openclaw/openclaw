@@ -294,41 +294,35 @@ describe("Chrome navigation event access", () => {
     });
   });
 
-  it.each(
-    (["all", "selected"] as const).flatMap((mode) =>
-      [
-        "http://destination.example/",
-        "https://destination.example/",
-        "data:text/html,proof",
-        "blob:https://destination.example/document",
-        "file:///tmp/openclaw-navigation-proof.html",
-      ].map((url) => ({ mode, url })),
-    ),
-  )("preserves ordered navigation events in $mode mode for $url", async ({ mode, url }) => {
-    const harness = await createNavigationHarness(mode);
-    const releaseLookup = harness.deferLookup();
-    try {
-      harness.update({ url });
-      harness.emitNavigation();
+  it.each(["all", "selected"] as const)(
+    "preserves ordered navigation events in %s mode",
+    async (mode) => {
+      const url = "https://destination.example/";
+      const harness = await createNavigationHarness(mode);
+      const releaseLookup = harness.deferLookup();
+      try {
+        harness.update({ url });
+        harness.emitNavigation();
 
-      expect(harness.send.mock.calls.map(([frame]) => frame)).toEqual(
-        navigationEvents.map((event) => ({ type: "cdpEvent", tabId: 7, ...event })),
-      );
-      await expect(harness.policy.requireTab(7, harness.attachmentEpoch)).rejects.toThrow(
-        "access was revoked",
-      );
+        expect(harness.send.mock.calls.map(([frame]) => frame)).toEqual(
+          navigationEvents.map((event) => ({ type: "cdpEvent", tabId: 7, ...event })),
+        );
+        await expect(harness.policy.requireTab(7, harness.attachmentEpoch)).rejects.toThrow(
+          "access was revoked",
+        );
 
-      harness.send.mockClear();
-      harness.update({ url: `${url}next` });
-      harness.emitNavigation();
-      expect(harness.send.mock.calls.map(([frame]) => frame.method)).toEqual(
-        navigationEvents.map((event) => event.method),
-      );
-    } finally {
-      await releaseLookup();
-    }
-    expect(harness.detachDebugger).not.toHaveBeenCalled();
-  });
+        harness.send.mockClear();
+        harness.update({ url: `${url}next` });
+        harness.emitNavigation();
+        expect(harness.send.mock.calls.map(([frame]) => frame.method)).toEqual(
+          navigationEvents.map((event) => event.method),
+        );
+      } finally {
+        await releaseLookup();
+      }
+      expect(harness.detachDebugger).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     "restricted committed URL",

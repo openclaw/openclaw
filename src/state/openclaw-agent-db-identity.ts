@@ -11,7 +11,12 @@ const identities = resolveGlobalSingleton(
   () =>
     new WeakMap<
       DatabaseSync,
-      { identity: OpenClawAgentDatabaseIdentity; incarnation: string; filename: string }
+      {
+        identity: OpenClawAgentDatabaseIdentity;
+        birthtime: string | undefined;
+        incarnation: string;
+        filename: string;
+      }
     >(),
 );
 
@@ -20,7 +25,12 @@ export function registerOpenClawAgentDatabaseIdentity(db: DatabaseSync): void {
   const filename = db.location() ?? "";
   const file = filename ? statSync(filename, { bigint: true }) : undefined;
   const identity = file ? `${file.dev}:${file.ino}` : Symbol("incognito-agent-database");
-  identities.set(db, { identity, incarnation: randomUUID(), filename });
+  identities.set(db, {
+    identity,
+    birthtime: file?.birthtimeNs.toString(),
+    incarnation: randomUUID(),
+    filename,
+  });
 }
 
 /** Reuse facts captured at open; aliases must never be resolved again at a handoff. */

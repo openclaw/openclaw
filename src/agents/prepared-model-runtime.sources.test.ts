@@ -11,7 +11,10 @@ import type { PreparedProviderStaticCatalog } from "../plugins/provider-discover
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "./plugin-model-catalog.js";
 import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
-import { prepareConfiguredRuntimeFactsBatch } from "./prepared-model-runtime.facts.js";
+import {
+  prepareConfiguredRuntimeFactsBatch,
+  type PreparedConfiguredModelRegistries,
+} from "./prepared-model-runtime.facts.js";
 import {
   createPreparedModelRuntimeSnapshot,
   prepareFullCatalogFacts,
@@ -197,11 +200,14 @@ describe("prepared catalog source composition", () => {
         generation,
         catalogFacts,
         {
+          initialAuth: { authStore: facts.authStore, authModes: {}, providerAuthLabels: new Map() },
           isCurrent: () => true,
           withRefreshStatus: (catalog) => catalog,
           readFullModelCatalog: () => undefined,
+          refreshExpiredModelCatalog: () => {},
           readPublishedModels: () => undefined,
           loadFullModelCatalog: async () => catalogFacts.modelCatalog,
+          loadNativeModelCatalog: async () => catalogFacts.modelCatalog,
           loadAuth: async () => ({ authStore: facts.authStore, authModes: {}, credentials: {} }),
         },
       );
@@ -266,6 +272,74 @@ describe("prepared catalog source composition", () => {
       result.catalogs.get(sibling.input)!.templateModelRegistry.find(providerId, "configured-only"),
     ).toBeUndefined();
   });
+
+  it.each(["same", "static route", "credentials", "metadata"] as const)(
+    "shares captured registries across workspaces only for equivalent sources: %s",
+    async (difference) => {
+      const { facts, generation, staticConfig, modelsJsonContents } = fixture();
+      const registries: PreparedConfiguredModelRegistries = new Map();
+      const first = await prepareConfiguredRuntimeFactsBatch({
+        agentFacts: [facts],
+        pluginGeneration: generation,
+        registries,
+      });
+      const agentDir = tempDirs.make("openclaw-prepared-sibling-");
+      fs.writeFileSync(path.join(agentDir, "models.json"), modelsJsonContents);
+      const credentials: PreparedModelRuntimeAgentFacts["credentials"] =
+        difference === "credentials"
+          ? { [providerId]: { type: "api_key" as const, key: "sibling-key" } }
+          : {};
+      const sibling = {
+        ...facts,
+        input: { ...facts.input, agentDir, workspaceDir: path.join(agentDir, "workspace") },
+        credentials,
+        templateAuthStorage: AuthStorage.inMemory(credentials),
+      };
+      const siblingEndpoint = "https://sibling.example.invalid/v1";
+      const siblingStaticConfig = { ...staticConfig, baseUrl: siblingEndpoint };
+      const siblingGeneration = {
+        ...generation,
+        ...(difference === "static route"
+          ? {
+              preparedStaticProviderCatalog: {
+                ...generation.preparedStaticProviderCatalog,
+                entries: generation.preparedStaticProviderCatalog.entries.map((entry) =>
+                  Object.assign({}, entry, {
+                    result: { provider: siblingStaticConfig },
+                    providerConfigs: { [providerId]: siblingStaticConfig },
+                  }),
+                ),
+              },
+            }
+          : {}),
+        ...(difference === "metadata"
+          ? {
+              pluginMetadataSnapshot: createPluginMetadataSnapshotFixture({
+                plugins: [{ id: pluginId, providers: [providerId] }],
+              }),
+            }
+          : {}),
+      };
+      const second = await prepareConfiguredRuntimeFactsBatch({
+        agentFacts: [sibling],
+        pluginGeneration: siblingGeneration,
+        registries,
+      });
+      expect(first.registryCount).toBe(1);
+      expect(second.registryCount).toBe(difference === "same" ? 0 : 1);
+      const firstRegistry = first.catalogs.get(facts.input)!.templateModelRegistry;
+      const secondRegistry = second.catalogs.get(sibling.input)!.templateModelRegistry;
+      const firstModel = firstRegistry.find(providerId, "curated-only")!;
+      const secondModel = secondRegistry.find(providerId, "curated-only")!;
+      expect(firstModel.baseUrl).toBe(endpoint);
+      expect(secondModel.baseUrl).toBe(difference === "static route" ? siblingEndpoint : endpoint);
+      expect(firstRegistry.hasConfiguredAuth(firstModel)).toBe(false);
+      expect(secondRegistry.hasConfiguredAuth(secondModel)).toBe(difference === "credentials");
+      expect(secondRegistry.getProviderMetadataOwners()).toBe(
+        siblingGeneration.pluginMetadataSnapshot.owners,
+      );
+    },
+  );
 
   it("keeps an authored route when the prepared static catalog is empty", async () => {
     const { facts, generation, configured } = fixture();
@@ -349,46 +423,7 @@ describe("prepared catalog source composition", () => {
     },
   );
 
-  it("composes captured generated inventory without restoring its request authority", async () => {
-    const { facts, configured, staticConfig, modelsJsonContents } = fixture();
-    const registry = ModelRegistry.create(AuthStorage.inMemory({}), "captured:models.json", {
-      config: facts.input.config,
-      modelsJsonContents,
-      pluginMetadataSnapshot: metadata,
-      staticProviderConfigs: { [providerId]: staticConfig },
-      pluginCatalogs: [
-        {
-          pluginId,
-          contents: JSON.stringify({
-            generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-            providers: {
-              [providerId]: {
-                ...configured,
-                apiKey: "discarded-cache-key",
-                headers: { Authorization: "discarded-cache-header" },
-                models: [model("generated-only")],
-              },
-            },
-          }),
-        },
-      ],
-    });
-    expect(
-      registry
-        .getAll()
-        .map((entry) => entry.id)
-        .toSorted(),
-    ).toEqual(["authored-only", "configured-only", "curated-only", "generated-only", "shared"]);
-    const generated = registry.find(providerId, "generated-only")!;
-    expect(generated).toMatchObject({ maxTokensSource: "discovered" });
-    await expect(registry.getApiKeyAndHeaders(generated)).resolves.toEqual({
-      ok: true,
-      apiKey: undefined,
-      headers: undefined,
-    });
-  });
-
-  it("replaces stale root request settings while keeping request-local forks isolated", async () => {
+  it("replaces stale root request settings with current configuration", async () => {
     const { facts, configured } = fixture();
     const registry = ModelRegistry.create(AuthStorage.inMemory({}), "captured:models.json", {
       config: facts.input.config,
@@ -411,19 +446,6 @@ describe("prepared catalog source composition", () => {
       apiKey: undefined,
       headers: undefined,
     });
-    const fork = registry.fork(
-      AuthStorage.inMemory({ [providerId]: { type: "api_key", key: "current-request-key" } }),
-    );
-    await expect(fork.getApiKeyAndHeaders(selected)).resolves.toEqual({
-      ok: true,
-      apiKey: "current-request-key",
-      headers: undefined,
-    });
-    await expect(registry.getApiKeyAndHeaders(selected)).resolves.toEqual({
-      ok: true,
-      apiKey: undefined,
-      headers: undefined,
-    });
   });
 
   it.each([
@@ -433,7 +455,6 @@ describe("prepared catalog source composition", () => {
       storeKey: "current-store-key",
       expectedKey: "current-store-key",
     },
-    { sourceKey: undefined, storeKey: "current-store-key", expectedKey: "current-store-key" },
     { sourceKey: undefined, storeKey: undefined, expectedKey: undefined },
   ])(
     "uses current request authority for accepted routes ($sourceKey, $storeKey)",

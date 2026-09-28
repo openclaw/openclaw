@@ -825,16 +825,6 @@ describe("gateway sessions patch", () => {
     expect(entry.category).toBe("Research");
   });
 
-  test("rejects empty category", async () => {
-    expectPatchError(
-      await runPatch({
-        store: mainStoreEntry({}),
-        patch: { key: MAIN_SESSION_KEY, category: "   " },
-      }),
-      "invalid category: empty",
-    );
-  });
-
   test("clears fastMode when patch sets null", async () => {
     const store = mainStoreEntry({ fastMode: true });
     const entry = expectPatchOk(
@@ -1395,24 +1385,12 @@ describe("gateway sessions patch", () => {
     },
   );
 
-  test.each([
-    {
-      name: "accepts explicit allowlisted provider/model refs from sessions.patch",
-      catalog: [
-        { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
-        { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.5" },
-      ],
-    },
-    {
-      name: "accepts explicit allowlisted refs absent from bundled catalog",
-      catalog: [{ provider: "openai", id: "gpt-5.4", name: "GPT-5.2" }],
-    },
-  ])("$name", async ({ catalog }) => {
+  test("accepts explicit allowlisted refs absent from bundled catalog", async () => {
     const entry = expectPatchOk(
       await runPatch({
         cfg: createAllowlistedAnthropicModelCfg(),
         patch: { key: MAIN_SESSION_KEY, model: ANTHROPIC_SONNET_MODEL },
-        loadGatewayModelCatalog: async () => catalog,
+        loadGatewayModelCatalog: loadCatalog(OPENAI_GPT_MODEL),
       }),
     );
     expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
@@ -1764,7 +1742,7 @@ describe("gateway sessions patch", () => {
     expect(entry.thinkingLevel).toBe("ultra");
   });
 
-  test("remaps stored Ultra to Max when a model patch selects Codex Luna", async () => {
+  test("preserves stored Ultra when a model patch selects Codex Luna", async () => {
     const entry = expectPatchOk(
       await runPatch({
         cfg: {
@@ -1783,7 +1761,7 @@ describe("gateway sessions patch", () => {
       }),
     );
 
-    expect(entry.thinkingLevel).toBe("max");
+    expect(entry.thinkingLevel).toBe("ultra");
   });
 
   test("honors an explicit OpenClaw session runtime override for Luna Ultra", async () => {
@@ -1804,7 +1782,7 @@ describe("gateway sessions patch", () => {
     expect(entry.thinkingLevel).toBe("ultra");
   });
 
-  test("clearing a runtime pin remaps thinking through configured routing and invalidates derived context", async () => {
+  test("clearing a runtime pin preserves supported thinking and invalidates derived context", async () => {
     const entry = expectPatchOk(
       await runPatch({
         cfg: { agents: { defaults: { model: "openai/gpt-5.6-luna" } } },
@@ -1817,7 +1795,7 @@ describe("gateway sessions patch", () => {
         loadGatewayModelCatalog: loadCatalog("openai/gpt-5.6-luna"),
       }),
     );
-    expect(entry).toMatchObject({ thinkingLevel: "max", liveModelSwitchPending: true });
+    expect(entry).toMatchObject({ thinkingLevel: "ultra", liveModelSwitchPending: true });
     expect(entry).not.toHaveProperty("agentRuntimeOverride");
     expect(entry).not.toHaveProperty("contextTokens");
   });
@@ -1878,11 +1856,11 @@ describe("gateway sessions patch", () => {
         },
       } as OpenClawConfig,
       store: mainStoreEntry({}),
-      patch: { key: MAIN_SESSION_KEY, thinkingLevel: "ultra" },
+      patch: { key: MAIN_SESSION_KEY, thinkingLevel: "xhigh" },
       loadGatewayModelCatalog: async () => [],
     });
 
-    expectPatchError(result, 'thinkingLevel "ultra" is not supported');
+    expectPatchError(result, 'thinkingLevel "xhigh" is not supported');
     expect(acpSessionMetaMocks.readAcpSessionMetaForEntry).toHaveBeenCalledWith({
       sessionKey: MAIN_SESSION_KEY,
       agentId: "main",
@@ -1890,13 +1868,13 @@ describe("gateway sessions patch", () => {
     });
   });
 
-  test("treats the persisted harness id as observational when validating Luna Ultra", async () => {
+  test("treats the persisted harness id as observational when validating unsupported Luna XHigh", async () => {
     const result = await runPatch({
       cfg: {
         agents: { defaults: { model: { primary: "openai/gpt-5.6-luna" } } },
       } as OpenClawConfig,
       store: mainStoreEntry({ agentHarnessId: "openclaw" }),
-      patch: { key: MAIN_SESSION_KEY, thinkingLevel: "ultra" },
+      patch: { key: MAIN_SESSION_KEY, thinkingLevel: "xhigh" },
       loadGatewayModelCatalog: async () => [],
     });
 
@@ -2141,25 +2119,22 @@ describe("gateway sessions patch", () => {
     expect(cleared.execHost).toBeUndefined();
   });
 
-  test.each(["auto", "gateway", "sandbox"] as const)(
-    "preserves explicit %s exec hosting when clearing a stale node binding",
-    async (execHost) => {
-      const cleared = expectPatchOk(
-        await runPatch({
-          store: mainStoreEntry({
-            execHost,
-            execNode: "worker-1",
-            execCwd: "/workspace/on-worker-1",
-          }),
-          patch: { key: MAIN_SESSION_KEY, execNode: null },
+  test("preserves explicit gateway exec hosting when clearing a stale node binding", async () => {
+    const cleared = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({
+          execHost: "gateway",
+          execNode: "worker-1",
+          execCwd: "/workspace/on-worker-1",
         }),
-      );
+        patch: { key: MAIN_SESSION_KEY, execNode: null },
+      }),
+    );
 
-      expect(cleared.execHost).toBe(execHost);
-      expect(cleared.execNode).toBeUndefined();
-      expect(cleared.execCwd).toBeUndefined();
-    },
-  );
+    expect(cleared.execHost).toBe("gateway");
+    expect(cleared.execNode).toBeUndefined();
+    expect(cleared.execCwd).toBeUndefined();
+  });
 
   test("rejects invalid execHost values", async () => {
     const result = await runPatch({

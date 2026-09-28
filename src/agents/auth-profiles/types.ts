@@ -154,6 +154,7 @@ export type PersistedAuthProfileStoreInspection =
 export type AuthProfileRowRead = {
   store: PersistedAuthProfileStoreInspection;
   state: PersistedAuthProfileStoreInspection;
+  cacheable: boolean;
 };
 
 /** Persisted credential payload without runtime-only selection state. */

@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_WEBHOOK_MAX_BODY_BYTES } from "../infra/http-body.js";
 import { drainSystemEvents, peekSystemEventEntries } from "../infra/system-events.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -599,103 +600,56 @@ describe("gateway hook admission", () => {
     });
   });
 
-  test("shares one pending persistent dispatch without losing its session target", async () => {
-    testState.hooksConfig = {
-      enabled: true,
-      token: HOOK_TOKEN,
-      allowRequestSessionKey: true,
-      allowedSessionKeyPrefixes: ["hook:"],
-    };
-    await withGatewayServer(async ({ port }) => {
-      const runnerAdmission = createDeferred();
-      cronIsolatedRun.mockClear();
-      cronIsolatedRun.mockImplementationOnce(async (params: unknown) => {
-        expect((params as { job?: { sessionTarget?: string } }).job?.sessionTarget).toBe(
-          "session:hook:admission:shared",
-        );
-        await runnerAdmission.promise;
-        (params as { onExecutionStarted?: () => void }).onExecutionStarted?.();
-        return { status: "ok", summary: "done" };
-      });
-      const request = () =>
-        postHook(
-          port,
-          "/hooks/agent",
+  test.each<{
+    name: string;
+    config: NonNullable<OpenClawConfig["hooks"]>;
+    path: string;
+    body: Record<string, unknown>;
+    sessionTarget?: string;
+  }>([
+    {
+      name: "persistent",
+      config: { allowRequestSessionKey: true, allowedSessionKeyPrefixes: ["hook:"] },
+      path: "/hooks/agent",
+      body: {
+        message: "Dispatch",
+        sessionKey: "hook:admission:shared",
+        sessionMode: "persistent",
+      },
+      sessionTarget: "session:hook:admission:shared",
+    },
+    { name: "direct", config: {}, path: "/hooks/agent", body: { message: "Dispatch" } },
+    {
+      name: "mapped",
+      config: {
+        mappings: [
           {
-            message: "Dispatch",
-            sessionKey: "hook:admission:shared",
-            sessionMode: "persistent",
+            match: { path: "mapped-pending" },
+            action: "agent",
+            messageTemplate: "Mapped: {{payload.subject}}",
           },
-          "pending-persistent-idem",
-        );
-
-      const firstResponse = request();
-      await waitForCronIsolatedRuns(1);
-      const duplicateResponse = request();
-      await waitForDuplicateRequest();
-      expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
-      runnerAdmission.resolve();
-
-      const [first, duplicate] = await Promise.all([firstResponse, duplicateResponse]);
-      expect(first.status).toBe(200);
-      expect(duplicate.status).toBe(200);
-      const firstBody = (await first.json()) as { runId?: string };
-      const duplicateBody = (await duplicate.json()) as { runId?: string };
-      expect(duplicateBody.runId).toBe(firstBody.runId);
-    });
-  });
-
-  test("shares one pending direct dispatch across simultaneous duplicates", async () => {
-    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+        ],
+      },
+      path: "/hooks/mapped-pending",
+      body: { subject: "Email" },
+    },
+  ])("shares one pending $name dispatch across simultaneous duplicates", async (scenario) => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN, ...scenario.config };
     await withGatewayServer(async ({ port }) => {
       const runnerAdmission = createDeferred();
       cronIsolatedRun.mockClear();
       cronIsolatedRun.mockImplementationOnce(async (params: unknown) => {
+        if (scenario.sessionTarget) {
+          expect((params as { job?: { sessionTarget?: string } }).job?.sessionTarget).toBe(
+            scenario.sessionTarget,
+          );
+        }
         await runnerAdmission.promise;
         (params as { onExecutionStarted?: () => void }).onExecutionStarted?.();
         return { status: "ok", summary: "done" };
       });
       const request = () =>
-        postHook(port, "/hooks/agent", { message: "Dispatch" }, "pending-direct-idem");
-
-      const firstResponse = request();
-      await waitForCronIsolatedRuns(1);
-      const duplicateResponse = request();
-      await waitForDuplicateRequest();
-      expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
-      runnerAdmission.resolve();
-
-      const [first, duplicate] = await Promise.all([firstResponse, duplicateResponse]);
-      expect(first.status).toBe(200);
-      expect(duplicate.status).toBe(200);
-      const firstBody = (await first.json()) as { runId?: string };
-      const duplicateBody = (await duplicate.json()) as { runId?: string };
-      expect(duplicateBody.runId).toBe(firstBody.runId);
-    });
-  });
-
-  test("shares one pending mapped dispatch across simultaneous duplicates", async () => {
-    testState.hooksConfig = {
-      enabled: true,
-      token: HOOK_TOKEN,
-      mappings: [
-        {
-          match: { path: "mapped-pending" },
-          action: "agent",
-          messageTemplate: "Mapped: {{payload.subject}}",
-        },
-      ],
-    };
-    await withGatewayServer(async ({ port }) => {
-      const runnerAdmission = createDeferred();
-      cronIsolatedRun.mockClear();
-      cronIsolatedRun.mockImplementationOnce(async (params: unknown) => {
-        await runnerAdmission.promise;
-        (params as { onExecutionStarted?: () => void }).onExecutionStarted?.();
-        return { status: "ok", summary: "done" };
-      });
-      const request = () =>
-        postHook(port, "/hooks/mapped-pending", { subject: "Email" }, "pending-mapped-idem");
+        postHook(port, scenario.path, scenario.body, `pending-${scenario.name}-idem`);
 
       const firstResponse = request();
       await waitForCronIsolatedRuns(1);

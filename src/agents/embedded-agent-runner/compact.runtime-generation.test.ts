@@ -1,11 +1,12 @@
 import { realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   acquireAgentRunPreparedModelRuntimeMock,
   contextEngineCompactMock,
+  enqueueCommandInLaneMock,
   loadCompactHooksHarness,
   resetCompactHooksHarnessMocks,
   resolveContextEngineMock,
@@ -13,6 +14,11 @@ import {
 } from "./compact.hooks.harness.js";
 
 const { compactEmbeddedAgentSession } = await loadCompactHooksHarness();
+const [laneRuntime, actualLaneRuntime] = await Promise.all([
+  import("./lanes.js"),
+  vi.importActual<typeof import("./lanes.js")>("./lanes.js"),
+]);
+vi.mocked(laneRuntime.resolveGlobalLane).mockImplementation(actualLaneRuntime.resolveGlobalLane);
 const { AsyncWorkScope } = await import("../../shared/async-work-scope.js");
 const [{ upsertSessionEntryCore }, { closeOpenClawAgentDatabasesForTest }] = await Promise.all([
   import("../../config/sessions/session-accessor.js"),
@@ -25,7 +31,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-it("uses the admitted config and agent storage throughout queued compaction", async () => {
+it("uses the admitted config, storage, and persisted parent budget throughout queued compaction", async () => {
   const workspaceDir = await realpath(tempDirs.make("openclaw-compaction-generation-"));
   resetCompactHooksHarnessMocks(workspaceDir);
   const sessionTarget = {
@@ -34,7 +40,12 @@ it("uses the admitted config and agent storage throughout queued compaction", as
     sessionKey: "agent:main:compaction-generation",
     storePath: join(workspaceDir, "sessions.sqlite"),
   };
-  await upsertSessionEntryCore(sessionTarget, { sessionId: sessionTarget.sessionId, updatedAt: 1 });
+  const spawningSessionKey = "agent:main:compaction-parent";
+  await upsertSessionEntryCore(sessionTarget, {
+    sessionId: sessionTarget.sessionId,
+    spawnedBy: spawningSessionKey,
+    updatedAt: 1,
+  });
   const admittedAgentDir = join(workspaceDir, "admitted-agent");
   const requestedConfig = {
     agents: { defaults: { compaction: { model: "openai/requested-model" } } },
@@ -63,7 +74,7 @@ it("uses the admitted config and agent storage throughout queued compaction", as
         provider: "openai",
         model: "gpt-5.6-luna",
         config: requestedConfig,
-        enqueue: async (task) => await task(),
+        lane: "subagent",
       }),
     );
   } finally {
@@ -74,6 +85,11 @@ it("uses the admitted config and agent storage throughout queued compaction", as
   }
 
   expect(result).toMatchObject({ ok: true, compacted: true });
+  expect(enqueueCommandInLaneMock).toHaveBeenCalledWith(
+    `subagent:${spawningSessionKey}`,
+    expect.any(Function),
+    expect.any(Object),
+  );
   const { snapshot, [Symbol.asyncDispose]: release } = await expectDefined(
     acquireAgentRunPreparedModelRuntimeMock.mock.results[0]?.value,
     "admitted runtime lease",

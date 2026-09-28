@@ -12,6 +12,10 @@ import type { AgentRunTerminalReplySnapshot } from "../../agents/agent-run-termi
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent-runner/run.js";
 import { resolveModelFallbackError } from "../../agents/failover-error.js";
+import {
+  getGeneratedMediaTaskIdsForSessionKey,
+  hasNewGeneratedMediaTaskForSessionKey,
+} from "../../agents/media-generation-activity.js";
 import { runWithModelFallback } from "../../agents/model-fallback-runner.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
@@ -19,10 +23,7 @@ import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../../infra/agent-run-registry.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import {
-  getGeneratedMediaTaskIdsForSessionKey,
-  hasNewGeneratedMediaTaskForSessionKey,
-} from "../../tasks/task-status-access.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { NodeWorkerWorkspaceTransferError } from "../../worker/node-workspace-transfer-protocol.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { hashWorkerCredential } from "./credential.js";
@@ -38,6 +39,9 @@ import {
   WorkerWorkspaceReconciliationError,
 } from "./worker-turn-failure.js";
 import {
+  createWorkerTurnTunnel,
+  reconcileUnchangedLocalWorkspace,
+  acknowledgeCompletedWorkerTurn,
   ENVIRONMENT_ID,
   MANIFEST_REF,
   OWNER_EPOCH,
@@ -47,7 +51,6 @@ import {
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   credential,
-  measureLaunchTurn,
   openSessionManager,
   placements,
   root,
@@ -63,15 +66,15 @@ import {
 describe("worker finishing admission", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
-  it("revalidates a credential replaced during synchronous live publication before terminal ACK", async () => {
+  it("revalidates a credential replaced during live publication before terminal ACK", async () => {
     const { apply, liveEvents } = support.sequencedLiveEvents();
-    const { identity, placementStore, workerService } = support.placementHarness(
+    const { identity, placementStore, workerService } = await support.placementHarness(
       "worker-live-reentrant-credential",
       "session-live-reentrant-credential",
       { liveEvents },
     );
     apply.mockImplementationOnce(async () => {
-      support.testState.store.renewCredential({
+      await support.testState.store.renewCredential({
         environmentId: identity.environmentId,
         expectedOwnerEpoch: identity.ownerEpoch,
         sessionId: identity.sessionId,
@@ -116,22 +119,17 @@ describe("worker turn launcher terminal results", () => {
     "retains the ACKed finishing outcome after assistant $stopReason (reconciliation fails: $reconciliationFails; cleanup: $cleanupFailure; provider fallback: $providerFailure)",
     async ({ stopReason, reconciliationFails, cleanupFailure, providerFailure }) => {
       const outerFallback = cleanupFailure !== undefined || providerFailure === true;
-      seedActivePlacement();
+      await seedActivePlacement();
       const grant = credential();
       const environment = attachedEnvironment();
       const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
       const gate = createWorkerSessionPlacementGate(placements);
       const getConfig = () => ({ session: { store: sessionTarget.storePath } });
-      const liveEvents = createWorkerLiveEventReceiver({
-        getConfig,
-        startupBindings: [
-          { environmentId: ENVIRONMENT_ID, runEpoch: OWNER_EPOCH, sessionId: SESSION_ID },
-        ],
-        startupOwners: new Map([[ENVIRONMENT_ID, OWNER_EPOCH]]),
-      });
+      const liveEvents = createWorkerLiveEventReceiver();
       const service = createWorkerEnvironmentService({
+        scheduler: createTestGatewayScheduler(),
         store: {
-          ...createWorkerEnvironmentStore({ database }),
+          ...(await createWorkerEnvironmentStore({ database })),
           get: () => environment,
           getCredential: () => ({
             environmentId: ENVIRONMENT_ID,
@@ -149,7 +147,7 @@ describe("worker turn launcher terminal results", () => {
         prepareInstallation: vi.fn(),
         bootstrapWorker: vi.fn(),
         executeInference: vi.fn(),
-        inferenceStore: createWorkerInferenceStore({ database }),
+        inferenceStore: createWorkerInferenceStore({ path: database.path }),
         placementStore: gate,
         liveEvents,
       });
@@ -178,15 +176,7 @@ describe("worker turn launcher terminal results", () => {
       }
       const workerTurn = turn(runId);
       let identity: WorkerConnectionIdentity;
-      const tunnel = {
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
-        quiesceWorkspace: vi.fn(async () => ({
-          assertActive: vi.fn(async () => {}),
-          resume: vi.fn(async () => {}),
-        })),
-        runWorkspaceCommand: vi.fn(),
-        measureLaunchTurn,
+      const tunnel = createWorkerTurnTunnel({
         launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
           request.onDispatchReady?.();
           launchedModels.push(request.plan.assignment.modelRef.model);
@@ -291,8 +281,7 @@ describe("worker turn launcher terminal results", () => {
             verifyLocalStable: async () => {},
           };
         }),
-        stop: vi.fn(async () => {}),
-      } satisfies WorkerTunnelHandle;
+      }) satisfies WorkerTunnelHandle;
       const environments: WorkerTurnEnvironmentService = {
         ...unusedEnvironments(),
         get: vi.fn(() => environment),
@@ -301,7 +290,7 @@ describe("worker turn launcher terminal results", () => {
           grant.deliveryId = hashWorkerCredential(grant.credential, claim);
           return grant;
         }),
-        acknowledgeCredentialDelivery: vi.fn(() => true),
+        acknowledgeCredentialDelivery: vi.fn(async () => true),
         startTunnel: vi.fn(async () => tunnel),
         destroy: vi.fn(async () => environment),
       };
@@ -467,20 +456,12 @@ describe("worker turn launcher terminal results", () => {
   );
 
   it("requests immediate recovery when reconciliation fails after worker finishing", async () => {
-    seedActivePlacement();
+    await seedActivePlacement();
     const destroy = vi.fn(async () => attachedEnvironment());
     const tunnelFailure = new NodeWorkerWorkspaceTransferError(
       "workspace-transfer-failed: gateway TLS fingerprint mismatch",
     );
-    const tunnel: WorkerTunnelHandle = {
-      environmentId: ENVIRONMENT_ID,
-      ownerEpoch: OWNER_EPOCH,
-      quiesceWorkspace: vi.fn(async () => ({
-        assertActive: vi.fn(async () => {}),
-        resume: vi.fn(async () => {}),
-      })),
-      runWorkspaceCommand: vi.fn(),
-      measureLaunchTurn,
+    const tunnel: WorkerTunnelHandle = createWorkerTurnTunnel({
       launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
         request.onDispatchReady?.();
         const completed = openSessionManager();
@@ -490,37 +471,17 @@ describe("worker turn launcher terminal results", () => {
             timestamp: 21,
           }),
         );
-        createWorkerSessionPlacementGate(placements).updateAckCursors({
-          claim: request.turnClaim,
-          transcriptSeq: 2,
-          liveSeq: 1,
-        });
-        return {
-          stdout: JSON.stringify({
-            status: "completed",
-            transcriptLeafId: leafId,
-            transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
-          }),
-          stderr: "",
-          code: 0,
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
-      }),
-      syncWorkspace: vi.fn(async () => {
-        throw new Error("unexpected workspace sync");
+        return acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
       }),
       reconcileWorkspace: vi.fn(async () => {
         throw tunnelFailure;
       }),
-      stop: vi.fn(async () => {}),
-    };
+    });
     const environments: WorkerTurnEnvironmentService = {
       ...unusedEnvironments(),
       get: vi.fn(() => attachedEnvironment()),
       acquireTurnCredential: vi.fn(async () => credential()),
-      acknowledgeCredentialDelivery: vi.fn(() => true),
+      acknowledgeCredentialDelivery: vi.fn(async () => true),
       startTunnel: vi.fn(async () => tunnel),
       destroy,
     };
@@ -626,99 +587,62 @@ describe("worker turn launcher terminal results", () => {
       terminalReply,
       costs = { first: 0, last: 0, total: 0 },
     }) => {
-      seedActivePlacement();
+      await seedActivePlacement();
       const environments: WorkerTurnEnvironmentService = {
         get: vi.fn(() => attachedEnvironment()),
         acquireTurnCredential: vi.fn(async () => credential()),
-        acknowledgeCredentialDelivery: vi.fn(() => true),
-        startTunnel: vi.fn(async () => ({
-          environmentId: ENVIRONMENT_ID,
-          ownerEpoch: OWNER_EPOCH,
-          quiesceWorkspace: vi.fn(async () => ({
-            assertActive: vi.fn(async () => {}),
-            resume: vi.fn(async () => {}),
-          })),
-          runWorkspaceCommand: vi.fn(),
-          measureLaunchTurn,
-          launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
-            request.onDispatchReady?.();
-            const completed = openSessionManager();
-            completed.appendMessage(
-              makeAgentAssistantMessage({
-                content: [{ type: "toolCall", id: "call-usage", name: "read", arguments: {} }],
-                provider: "openai",
-                model: "gpt-first-call",
-                stopReason: "toolUse",
-                timestamp: 21,
-                usage: {
-                  input: 100,
-                  output: 10,
-                  cacheRead: 20,
-                  cacheWrite: 5,
-                  totalTokens: 135,
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: costs.first },
-                },
-              }),
-            );
-            completed.appendMessage(
-              makeTextToolResult("call-usage", "read", "usage result", false, 22),
-            );
-            const leafId = completed.appendMessage(
-              makeAgentAssistantMessage({
-                content,
-                provider: "anthropic",
-                model: "claude-reported",
-                timestamp: 23,
-                usage: {
-                  input: 200,
-                  output: 30,
-                  cacheRead: 40,
-                  cacheWrite: 0,
-                  contextUsage: {
-                    state: "available",
-                    promptTokens: 240,
-                    totalTokens: 270,
+        acknowledgeCredentialDelivery: vi.fn(async () => true),
+        startTunnel: vi.fn(async () =>
+          createWorkerTurnTunnel({
+            launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
+              request.onDispatchReady?.();
+              const completed = openSessionManager();
+              completed.appendMessage(
+                makeAgentAssistantMessage({
+                  content: [{ type: "toolCall", id: "call-usage", name: "read", arguments: {} }],
+                  provider: "openai",
+                  model: "gpt-first-call",
+                  stopReason: "toolUse",
+                  timestamp: 21,
+                  usage: {
+                    input: 100,
+                    output: 10,
+                    cacheRead: 20,
+                    cacheWrite: 5,
+                    totalTokens: 135,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: costs.first },
                   },
-                  totalTokens: 270,
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: costs.last },
-                },
-              }),
-            );
-            createWorkerSessionPlacementGate(placements).updateAckCursors({
-              claim: request.turnClaim,
-              transcriptSeq: 2,
-              liveSeq: 1,
-            });
-            return {
-              stdout: JSON.stringify({
-                status: "completed",
-                transcriptLeafId: leafId,
-                transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
-              }),
-              stderr: "",
-              code: 0,
-              signal: null,
-              killed: false,
-              termination: "exit",
-            };
+                }),
+              );
+              completed.appendMessage(
+                makeTextToolResult("call-usage", "read", "usage result", false, 22),
+              );
+              const leafId = completed.appendMessage(
+                makeAgentAssistantMessage({
+                  content,
+                  provider: "anthropic",
+                  model: "claude-reported",
+                  timestamp: 23,
+                  usage: {
+                    input: 200,
+                    output: 30,
+                    cacheRead: 40,
+                    cacheWrite: 0,
+                    contextUsage: {
+                      state: "available",
+                      promptTokens: 240,
+                      totalTokens: 270,
+                    },
+                    totalTokens: 270,
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: costs.last },
+                  },
+                }),
+              );
+              return acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
+            }),
+            reconcileWorkspace: vi.fn(reconcileUnchangedLocalWorkspace),
           }),
-          syncWorkspace: vi.fn(async () => {
-            throw new Error("unexpected workspace sync");
-          }),
-          reconcileWorkspace: vi.fn(async (request) => {
-            if (request.source.kind !== "local") {
-              throw new Error("expected a local workspace source");
-            }
-            request.source.journal.commit(MANIFEST_REF);
-            return {
-              manifestRef: MANIFEST_REF,
-              changed: false,
-              verifyStable: async () => {},
-              verifyLocalStable: async () => {},
-            };
-          }),
-          stop: vi.fn(async () => {}),
-        })),
+        ),
         stopTunnel: vi.fn(async () => {}),
         destroy: vi.fn(async () => attachedEnvironment()),
       };

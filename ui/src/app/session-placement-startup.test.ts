@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../api/gateway.ts";
@@ -5,11 +6,12 @@ import type { GatewaySessionRow } from "../api/types.ts";
 import { sessionPlacementRecoveryExactStorageKey } from "../lib/sessions/session-placement-recovery-storage-key.ts";
 import {
   readSessionPlacementRecovery,
+  pauseSessionPlacementRecovery,
   type SessionPlacementRecovery,
   writeSessionPlacementRecovery,
 } from "../lib/sessions/session-placement-recovery.ts";
 import { makeChatHost } from "../pages/chat/chat-host.test-support.ts";
-import { applyChatPendingInputs } from "../pages/chat/chat-pending-inputs.ts";
+import { applyChatPendingInputs, getChatPendingInputs } from "../pages/chat/chat-pending-inputs.ts";
 import { admitChatSubmission, reduceChatSessionProjection } from "../pages/chat/history-merge.ts";
 import {
   createPlacementStartupHarness,
@@ -465,13 +467,14 @@ describe("application session placement startup", () => {
         },
       });
       const handoff = chatSubmissions.readInitial(input.recovery.sessionKey, client)!;
-      expect(handoff.message["__openclaw"]).not.toHaveProperty("seq");
+      const handoffMessage = expectDefined(handoff.message, "pending initial display");
+      expect(handoffMessage["__openclaw"]).not.toHaveProperty("seq");
       const pane = makeChatHost({
         sessionKey: input.recovery.sessionKey,
         chatSubmissions,
         client: client as never,
       });
-      admitChatSubmission(pane);
+      admitChatSubmission(pane, getChatPendingInputs(pane)?.page.items);
       expect(pane.chatMessages).toHaveLength(1);
       applyChatPendingInputs(pane, {
         total: 1,
@@ -481,7 +484,7 @@ describe("application session placement startup", () => {
             runId: input.recovery.messageId,
             acceptedAt: 1000,
             state: "queued",
-            message: handoff.message,
+            message: handoffMessage,
           },
         ],
       });
@@ -491,7 +494,7 @@ describe("application session placement startup", () => {
         { type: "snapshotLoaded", messages: [] },
         { runActive: true },
       );
-      expect(admitChatSubmission(pane)).toBe(false);
+      expect(admitChatSubmission(pane, getChatPendingInputs(pane)?.page.items)).toBe(false);
       expect(pane.chatMessages).toEqual([]);
       expect(sessions.invalidate).not.toHaveBeenCalled();
       startup.dispose();
@@ -920,75 +923,103 @@ describe("application session placement startup", () => {
     startup.dispose();
   });
 
-  it("reclaims the worker and deletes the session when incognito startup is interrupted", async () => {
-    const dispatch = createDeferred<{ placement: ReturnType<typeof createStartupPlacement> }>();
-    const request = vi.fn((method: string) => {
-      if (method === "sessions.dispatch") {
-        return dispatch.promise;
-      }
-      if (method === "sessions.describe") {
-        return Promise.resolve({
-          session: {
-            sessionId: "session-cloud-startup",
-            placement: createStartupPlacement("active", 2),
+  it.each(["client replacement", "transport reconnect"])(
+    "reclaims the worker and deletes incognito startup after %s",
+    async (interruption) => {
+      const dispatch = createDeferred<{ placement: ReturnType<typeof createStartupPlacement> }>();
+      const request = vi.fn((method: string) => {
+        if (method === "sessions.dispatch") {
+          return dispatch.promise;
+        }
+        if (method === "sessions.describe") {
+          return Promise.resolve({
+            session: {
+              sessionId: "session-cloud-startup",
+              placement: createStartupPlacement("active", 2),
+            },
+          });
+        }
+        if (method === "sessions.delete") {
+          return Promise.resolve({ ok: true, deleted: true });
+        }
+        if (method === "sessions.reclaim" || method === "sessions.patch") {
+          return Promise.resolve({ ok: true });
+        }
+        throw new Error(`unexpected method ${method}`);
+      });
+      const { startup, input, gateway } = createPlacementStartupHarness(request);
+      sessionStorage.clear();
+      startup.start({ ...input, persistRecovery: false });
+      await vi.waitFor(() => {
+        expect(request).toHaveBeenCalledWith("sessions.dispatch", expect.anything());
+      });
+
+      if (interruption === "transport reconnect") {
+        gateway.snapshot.phase = "reconnecting";
+        vi.mocked(gateway.subscribe).mock.calls[0]?.[0](gateway.snapshot);
+        gateway.snapshot.phase = "connected";
+        vi.mocked(gateway.subscribe).mock.calls[0]?.[0](gateway.snapshot);
+      } else {
+        const nextSnapshot = {
+          ...gateway.snapshot,
+          client: {
+            request: vi.fn(),
+            recoveryScope: "principal-a",
+            recoveryScopeReady: true,
           },
+        };
+        (gateway as unknown as { snapshot: typeof nextSnapshot }).snapshot = nextSnapshot;
+        vi.mocked(gateway.subscribe).mock.calls[0]?.[0](nextSnapshot as never);
+      }
+      dispatch.resolve({ placement: createStartupPlacement("active", 2) });
+
+      await vi.waitFor(() => {
+        expect(request).toHaveBeenCalledWith("sessions.reclaim", {
+          key: input.recovery.sessionKey,
+          agentId: input.recovery.agentId,
         });
-      }
-      if (method === "sessions.delete") {
-        return Promise.resolve({ ok: true, deleted: true });
-      }
-      if (method === "sessions.reclaim" || method === "sessions.patch") {
-        return Promise.resolve({ ok: true });
-      }
-      throw new Error(`unexpected method ${method}`);
-    });
-    const { startup, input, gateway } = createPlacementStartupHarness(request);
-    sessionStorage.clear();
-    startup.start({ ...input, persistRecovery: false });
-    await vi.waitFor(() => {
-      expect(request).toHaveBeenCalledWith("sessions.dispatch", expect.anything());
-    });
-
-    const nextSnapshot = {
-      ...gateway.snapshot,
-      client: {
-        request: vi.fn(),
-        recoveryScope: "principal-a",
-        recoveryScopeReady: true,
-      },
-    };
-    (gateway as unknown as { snapshot: typeof nextSnapshot }).snapshot = nextSnapshot;
-    vi.mocked(gateway.subscribe).mock.calls[0]?.[0](nextSnapshot as never);
-    dispatch.resolve({ placement: createStartupPlacement("active", 2) });
-
-    await vi.waitFor(() => {
-      expect(request).toHaveBeenCalledWith("sessions.reclaim", {
-        key: input.recovery.sessionKey,
-        agentId: input.recovery.agentId,
+        expect(request).toHaveBeenCalledWith("sessions.patch", {
+          key: input.recovery.sessionKey,
+          agentId: input.recovery.agentId,
+          archived: true,
+          expectedSessionId: "session-cloud-startup",
+        });
+        expect(request).toHaveBeenCalledWith("sessions.delete", {
+          key: input.recovery.sessionKey,
+          agentId: input.recovery.agentId,
+          deleteTranscript: true,
+          expectedSessionId: "session-cloud-startup",
+          archivedOnly: true,
+        });
+        expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(false);
       });
-      expect(request).toHaveBeenCalledWith("sessions.patch", {
-        key: input.recovery.sessionKey,
-        agentId: input.recovery.agentId,
-        archived: true,
-        expectedSessionId: "session-cloud-startup",
+      expect(startup.get(input.recovery.sessionKey)).toMatchObject({
+        phase: "cancelled",
+        retryable: false,
+        initialTurn: { text: input.recovery.message, sendState: "failed" },
+        error: expect.stringContaining("Session setup was interrupted"),
       });
-      expect(request).toHaveBeenCalledWith("sessions.delete", {
-        key: input.recovery.sessionKey,
-        agentId: input.recovery.agentId,
-        deleteTranscript: true,
-        expectedSessionId: "session-cloud-startup",
-        archivedOnly: true,
+      expect(request).not.toHaveBeenCalledWith(
+        "sessions.patch",
+        expect.objectContaining({ archived: false }),
+      );
+      expect(request).not.toHaveBeenCalledWith("sessions.abort", expect.anything());
+      expect(request).not.toHaveBeenCalledWith("environments.destroy", expect.anything());
+      expect(sessionStorage.length).toBe(0);
+      const completedRequests = request.mock.calls.length;
+      startup.retry(input.recovery.sessionKey);
+      startup.pause(input.recovery.sessionKey, "late pause", {
+        readSessionPlacementRecovery,
+        pauseSessionPlacementRecovery,
       });
-      expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(false);
-    });
-    expect(startup.get(input.recovery.sessionKey)).toBeNull();
-    expect(request).not.toHaveBeenCalledWith(
-      "sessions.patch",
-      expect.objectContaining({ archived: false }),
-    );
-    expect(request).not.toHaveBeenCalledWith("sessions.abort", expect.anything());
-    expect(request).not.toHaveBeenCalledWith("environments.destroy", expect.anything());
-    expect(sessionStorage.length).toBe(0);
-    startup.dispose();
-  });
+      startup.resumeRecovery();
+      startup.start({ ...input, persistRecovery: false });
+      await flushStartupMicrotasks();
+      expect(request).toHaveBeenCalledTimes(completedRequests);
+      expect(startup.get(input.recovery.sessionKey)?.phase).toBe("cancelled");
+      Object.assign(gateway, { connectionRevision: gateway.connectionRevision + 1 });
+      expect(startup.get(input.recovery.sessionKey)).toBeNull();
+      startup.dispose();
+    },
+  );
 });

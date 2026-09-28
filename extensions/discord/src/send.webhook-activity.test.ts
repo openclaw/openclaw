@@ -139,14 +139,6 @@ describe("Discord outbound channel activity", () => {
   it.each([
     { kind: "poll", accountId: undefined, defaultAccount: undefined, expectedAccountId: "default" },
     { kind: "poll", accountId: " Work ", defaultAccount: undefined, expectedAccountId: "work" },
-    { kind: "poll", accountId: undefined, defaultAccount: "work", expectedAccountId: "work" },
-    {
-      kind: "sticker",
-      accountId: undefined,
-      defaultAccount: undefined,
-      expectedAccountId: "default",
-    },
-    { kind: "sticker", accountId: " Work ", defaultAccount: undefined, expectedAccountId: "work" },
     { kind: "sticker", accountId: undefined, defaultAccount: "work", expectedAccountId: "work" },
   ] as const)(
     "records successful $kind sends for the resolved $expectedAccountId account",

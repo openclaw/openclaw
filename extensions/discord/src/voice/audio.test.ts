@@ -17,8 +17,8 @@ vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawn: spawnMock,
 }));
-vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
+vi.mock("openclaw/plugin-sdk/media-ffmpeg", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-ffmpeg")>()),
   resolveFfmpegBin: () => "ffmpeg",
 }));
 vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => {

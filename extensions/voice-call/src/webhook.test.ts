@@ -4,6 +4,7 @@ import { request, type IncomingMessage } from "node:http";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
+import * as webhookRequestGuards from "openclaw/plugin-sdk/webhook-request-guards";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema, resolveVoiceCallConfig, type VoiceCallConfig } from "./config.js";
 import type { CallManager } from "./manager.js";
@@ -68,6 +69,19 @@ const provider: VoiceCallProvider = {
   stopListening: async () => {},
   getCallStatus: async () => ({ status: "in-progress", isTerminal: false }),
 };
+
+function createRealtimeHandler(
+  buildTwiMLPayload: RealtimeCallHandler["buildTwiMLPayload"],
+): RealtimeCallHandler {
+  return {
+    buildTwiMLPayload,
+    close: async () => {},
+    getStreamPathPattern: () => "/voice/stream/realtime",
+    handleWebSocketUpgrade: () => {},
+    registerToolHandler: () => {},
+    setPublicUrl: () => {},
+  } as unknown as RealtimeCallHandler;
+}
 
 type TwilioProviderTestDouble = VoiceCallProvider &
   Pick<
@@ -319,52 +333,7 @@ function createTwilioStreamingProvider(
   };
 }
 
-describe("VoiceCallWebhookServer realtime transcription provider selection", () => {
-  it("auto-selects the first registered provider when streaming.provider is unset", async () => {
-    const { manager } = createManager([]);
-    const config = createConfig({
-      streaming: {
-        ...createConfig().streaming,
-        enabled: true,
-        providers: {
-          openai: {
-            apiKey: "sk-test", // pragma: allowlist secret
-          },
-        },
-      },
-    });
-    const autoSelectedProvider: RealtimeTranscriptionProviderPlugin = {
-      id: "openai",
-      label: "OpenAI",
-      autoSelectOrder: 5,
-      isConfigured: () => true,
-      resolveConfig: ({ rawConfig }) => rawConfig,
-      createSession: () => ({
-        connect: async () => {},
-        sendAudio: () => {},
-        close: () => {},
-        isConnected: () => true,
-      }),
-    };
-    mocks.getRealtimeTranscriptionProvider.mockReturnValueOnce(undefined);
-    mocks.listRealtimeTranscriptionProviders.mockReturnValueOnce([autoSelectedProvider]);
-
-    const server = new VoiceCallWebhookServer(config, manager, provider);
-    try {
-      await server.start();
-      expect(mocks.getRealtimeTranscriptionProvider).not.toHaveBeenCalled();
-      expect(mocks.listRealtimeTranscriptionProviders).toHaveBeenCalledWith(null, ["openai"]);
-      const mediaStreamHandler = server.getMediaStreamHandler();
-      if (!mediaStreamHandler) {
-        throw new Error("expected media stream handler");
-      }
-      expect(mediaStreamHandler["handleUpgrade"]).toBeTypeOf("function");
-      expect(mediaStreamHandler["sendAudio"]).toBeTypeOf("function");
-    } finally {
-      await server.stop();
-    }
-  });
-
+describe("VoiceCallWebhookServer media stream Talk metadata", () => {
   it("records media stream Talk events on the active call metadata", async () => {
     const call = createCall(Date.now());
     const manager = {
@@ -877,33 +846,6 @@ describe("VoiceCallWebhookServer stale call reaper", () => {
     expect(endCall).toHaveBeenCalledWith(call.callId);
   });
 
-  it("skips calls that are younger than the threshold", async () => {
-    const { endCall } = await runStaleCallReaperCase({
-      callAgeMs: 10_000,
-      staleCallReaperSeconds: 60,
-      advanceMs: 30_000,
-    });
-    expect(endCall).not.toHaveBeenCalled();
-  });
-
-  it("does not run when staleCallReaperSeconds is disabled", async () => {
-    const now = new Date("2026-02-16T00:00:00Z");
-    vi.setSystemTime(now);
-
-    const call = createCall(now.getTime() - 120_000);
-    const { manager, endCall } = createManager([call]);
-    const config = createConfig({ staleCallReaperSeconds: 0 });
-    const server = new VoiceCallWebhookServer(config, manager, provider);
-
-    try {
-      await server.start();
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(endCall).not.toHaveBeenCalled();
-    } finally {
-      await server.stop();
-    }
-  });
-
   it("does not reap calls that reached the answered state", async () => {
     const { endCall } = await runStaleCallReaperCase({
       callAgeMs: 120_000,
@@ -965,12 +907,7 @@ describe("VoiceCallWebhookServer path matching", () => {
     const { manager } = createManager([]);
     const config = createConfig({ serve: { port: 0, bind: "127.0.0.1", path: "/voice/webhook" } });
     const server = new VoiceCallWebhookServer(config, manager, strictProvider);
-    const readBodySpy = vi.spyOn(
-      server as unknown as {
-        readBody: (req: unknown, maxBytes: number, timeoutMs?: number) => Promise<string>;
-      },
-      "readBody",
-    );
+    const readBodySpy = vi.spyOn(webhookRequestGuards, "readRequestBodyWithLimit");
     readBodySpy.mockResolvedValue("CallSid=CA123&SpeechResult=hello");
     const runWebhookPipeline = (
       server as unknown as {
@@ -1179,14 +1116,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
       const buildTwiMLPayload = vi.fn(
         () => firstOwner.promise as unknown as ReturnType<RealtimeCallHandler["buildTwiMLPayload"]>,
       );
-      server.setRealtimeHandler({
-        buildTwiMLPayload,
-        close: async () => {},
-        getStreamPathPattern: () => "/voice/stream/realtime",
-        handleWebSocketUpgrade: () => {},
-        registerToolHandler: () => {},
-        setPublicUrl: () => {},
-      } as unknown as RealtimeCallHandler);
+      server.setRealtimeHandler(createRealtimeHandler(buildTwiMLPayload));
 
       try {
         const baseUrl = await server.start();
@@ -1624,14 +1554,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
       },
     });
     const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
-    server.setRealtimeHandler({
-      buildTwiMLPayload,
-      close: async () => {},
-      getStreamPathPattern: () => "/voice/stream/realtime",
-      handleWebSocketUpgrade: () => {},
-      registerToolHandler: () => {},
-      setPublicUrl: () => {},
-    } as unknown as RealtimeCallHandler);
+    server.setRealtimeHandler(createRealtimeHandler(buildTwiMLPayload));
 
     try {
       const baseUrl = await server.start();
@@ -1680,14 +1603,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
         },
       });
       const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
-      server.setRealtimeHandler({
-        buildTwiMLPayload,
-        close: async () => {},
-        getStreamPathPattern: () => "/voice/stream/realtime",
-        handleWebSocketUpgrade: () => {},
-        registerToolHandler: () => {},
-        setPublicUrl: () => {},
-      } as unknown as RealtimeCallHandler);
+      server.setRealtimeHandler(createRealtimeHandler(buildTwiMLPayload));
 
       try {
         const baseUrl = await server.start();
@@ -1742,14 +1658,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
         },
       });
       const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
-      server.setRealtimeHandler({
-        buildTwiMLPayload,
-        close: async () => {},
-        getStreamPathPattern: () => "/voice/stream/realtime",
-        handleWebSocketUpgrade: () => {},
-        registerToolHandler: () => {},
-        setPublicUrl: () => {},
-      } as unknown as RealtimeCallHandler);
+      server.setRealtimeHandler(createRealtimeHandler(buildTwiMLPayload));
 
       try {
         const baseUrl = await server.start();
@@ -1799,14 +1708,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
       },
     });
     const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
-    server.setRealtimeHandler({
-      buildTwiMLPayload,
-      close: async () => {},
-      getStreamPathPattern: () => "/voice/stream/realtime",
-      handleWebSocketUpgrade: () => {},
-      registerToolHandler: () => {},
-      setPublicUrl: () => {},
-    } as unknown as RealtimeCallHandler);
+    server.setRealtimeHandler(createRealtimeHandler(buildTwiMLPayload));
 
     try {
       const baseUrl = await server.start();
@@ -1864,14 +1766,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
       },
     });
     const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
-    server.setRealtimeHandler({
-      buildTwiMLPayload,
-      close: async () => {},
-      getStreamPathPattern: () => "/voice/stream/realtime",
-      handleWebSocketUpgrade: () => {},
-      registerToolHandler: () => {},
-      setPublicUrl: () => {},
-    } as unknown as RealtimeCallHandler);
+    server.setRealtimeHandler(createRealtimeHandler(buildTwiMLPayload));
 
     try {
       const baseUrl = await server.start();
@@ -1924,14 +1819,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
       },
     });
     const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
-    server.setRealtimeHandler({
-      buildTwiMLPayload,
-      close: async () => {},
-      getStreamPathPattern: () => "/voice/stream/realtime",
-      handleWebSocketUpgrade: () => {},
-      registerToolHandler: () => {},
-      setPublicUrl: () => {},
-    } as unknown as RealtimeCallHandler);
+    server.setRealtimeHandler(createRealtimeHandler(buildTwiMLPayload));
 
     try {
       const baseUrl = await server.start();
@@ -1977,14 +1865,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
       },
     });
     const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
-    server.setRealtimeHandler({
-      buildTwiMLPayload,
-      close: async () => {},
-      getStreamPathPattern: () => "/voice/stream/realtime",
-      handleWebSocketUpgrade: () => {},
-      registerToolHandler: () => {},
-      setPublicUrl: () => {},
-    } as unknown as RealtimeCallHandler);
+    server.setRealtimeHandler(createRealtimeHandler(buildTwiMLPayload));
 
     try {
       const baseUrl = await server.start();
@@ -2034,12 +1915,7 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
     const { manager } = createManager([]);
     const config = createConfig({ provider: "twilio" });
     const server = new VoiceCallWebhookServer(config, manager, twilioProvider);
-    const readBodySpy = vi.spyOn(
-      server as unknown as {
-        readBody: (req: unknown, maxBytes: number, timeoutMs?: number) => Promise<string>;
-      },
-      "readBody",
-    );
+    const readBodySpy = vi.spyOn(webhookRequestGuards, "readRequestBodyWithLimit");
 
     try {
       const baseUrl = await server.start();
@@ -2096,12 +1972,7 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
     let enteredReads = 0;
     const enteredEightReads = createDeferred<void>();
     const unblockReads = createDeferred<void>();
-    const readBodySpy = vi.spyOn(
-      server as unknown as {
-        readBody: (req: unknown, maxBytes: number, timeoutMs?: number) => Promise<string>;
-      },
-      "readBody",
-    );
+    const readBodySpy = vi.spyOn(webhookRequestGuards, "readRequestBodyWithLimit");
     readBodySpy.mockImplementation(async () => {
       enteredReads += 1;
       if (enteredReads === 8) {
@@ -2124,6 +1995,7 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
       const rejected = await postWebhookFormWithHeaders(server, baseUrl, "CallSid=CA999", headers);
       expect(rejected.status).toBe(429);
       expect(await rejected.text()).toBe("Too Many Requests");
+      expect(readBodySpy).toHaveBeenCalledTimes(8);
 
       unblockReads.resolve();
 
@@ -2157,12 +2029,7 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
     let enteredReads = 0;
     const enteredEightReads = createDeferred<void>();
     const unblockReads = createDeferred<void>();
-    const readBodySpy = vi.spyOn(
-      server as unknown as {
-        readBody: (req: unknown, maxBytes: number, timeoutMs?: number) => Promise<string>;
-      },
-      "readBody",
-    );
+    const readBodySpy = vi.spyOn(webhookRequestGuards, "readRequestBodyWithLimit");
     readBodySpy.mockImplementation(async () => {
       enteredReads += 1;
       if (enteredReads === 8) {

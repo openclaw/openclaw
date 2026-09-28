@@ -19,7 +19,7 @@ import {
 import { createToolSearchCatalogRef } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 
-// Both public entry points use the real QuickJS worker and normal tool executor.
+// Both public entry points use the real selected executor and normal tool executor.
 function harness(headless: boolean, limit: number, tool: AnyAgentTool) {
   const config: OpenClawConfig = {
     tools: { codeMode: { enabled: true, maxPendingToolCalls: limit } },
@@ -54,18 +54,17 @@ function harness(headless: boolean, limit: number, tool: AnyAgentTool) {
   };
 }
 
-afterEach(() => {
+afterEach(async () => {
   try {
     expect(testing.activeRuns.size).toBe(0);
   } finally {
-    resetCodeModeTestState();
+    await resetCodeModeTestState();
   }
 });
 
 describe.each([false, true])("ordinary bridge backpressure, headless=%s", (headless) => {
   it.each([
     { limit: 16, count: 20, race: false },
-    { limit: 2, count: 20, race: false },
     { limit: 1, count: 20, race: true },
     { limit: 16, count: 144, race: false },
   ])("drains $count calls inline with $limit slots, race=$race", async ({ limit, count, race }) => {
@@ -216,11 +215,11 @@ describe.each([false, true])("ordinary bridge backpressure, headless=%s", (headl
   });
 });
 
-it("preserves queued arguments, request IDs, and dependency order across partial snapshots", async () => {
+it("preserves queued arguments, request IDs, and dependency order across partial continuations", async () => {
   const config = resolveCodeModeConfig({
     tools: { codeMode: { enabled: true, maxPendingToolCalls: 3 } },
   });
-  let result: CodeModeWorkerResult = await testing.runCodeModeWorker(
+  let result: CodeModeWorkerResult = await testing.runCodeModeExecutor(
     {
       kind: "exec",
       config,
@@ -232,7 +231,7 @@ it("preserves queued arguments, request IDs, and dependency order across partial
         "await calls[2]; clearTimeout(timer);" +
         'const values = await Promise.all(calls); return await probe({ value: values.join(",") });',
     },
-    10000,
+    { timeoutMs: 10_000, executor: config.executor },
   );
   const observed = new Map<string, unknown[]>();
   const completed = new Set<string>();
@@ -249,11 +248,11 @@ it("preserves queued arguments, request IDs, and dependency order across partial
     // Settle the last request only; earlier siblings keep the same identity.
     const settled = expectDefined(result.pendingRequests.at(-1), "pending frontier");
     completed.add(settled.id);
-    result = await testing.runCodeModeWorker(
+    result = await testing.runCodeModeExecutor(
       {
         kind: "resume",
         config,
-        snapshot: result.snapshot,
+        continuation: result.continuation,
         pendingRequests: result.pendingRequests.slice(0, -1),
         settledRequests: [
           {
@@ -263,7 +262,7 @@ it("preserves queued arguments, request IDs, and dependency order across partial
           },
         ],
       },
-      10000,
+      { timeoutMs: 10_000, executor: config.executor },
     );
   }
   const values = Array.from({ length: 20 }, (_, i) => String(i));

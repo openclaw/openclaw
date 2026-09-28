@@ -13,8 +13,8 @@ import { buildTestCtx } from "./test-ctx.js";
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 let createReplyOperation: typeof import("./reply-run-registry.js").createReplyOperation;
-let expireStaleReplyOperation: typeof import("./reply-run-registry.js").expireStaleReplyOperation;
-let REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS: typeof import("./reply-run-registry.js").REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS;
+let expireStaleReplyOperation: typeof import("./reply-run-registry.state.js").expireStaleReplyOperation;
+let REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS: typeof import("./reply-run-registry.contracts.js").REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS;
 let replyRunRegistry: typeof import("./reply-run-registry.js").replyRunRegistry;
 let replyRunTesting: typeof import("./reply-run-registry.test-support.js").testing;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
@@ -48,12 +48,9 @@ function createVisibleDispatchParams(
 describe("dispatchReplyFromConfig stale visible admission recovery", () => {
   beforeAll(async () => {
     ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
-    ({
-      createReplyOperation,
-      expireStaleReplyOperation,
-      REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS,
-      replyRunRegistry,
-    } = await import("./reply-run-registry.js"));
+    ({ createReplyOperation, replyRunRegistry } = await import("./reply-run-registry.js"));
+    ({ expireStaleReplyOperation } = await import("./reply-run-registry.state.js"));
+    ({ REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS } = await import("./reply-run-registry.contracts.js"));
     ({ testing: replyRunTesting } = await import("./reply-run-registry.test-support.js"));
     ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
   });

@@ -279,7 +279,7 @@ describe("node-host worker manifest", () => {
     expect(createNodeWorkerSupervisor).toHaveBeenCalledOnce();
     expect(onRunnerCapacityChanged).not.toHaveBeenCalled();
     await runtime.invoke({ id: "after-mismatch", nodeId: "node-1", command: "system.which" });
-    expect(runtime.tryPauseForUpdate()).toBe(false);
+    expect(await runtime.tryPauseForUpdate()).toBe(false);
     await runtime.close();
     expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
   });
@@ -307,7 +307,7 @@ describe("node-host worker manifest", () => {
       );
       expect(mocks.initializeWorkerSupervisor).toHaveBeenCalledTimes(2);
       expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
-      expect(runtime.tryPauseForUpdate()).toBe(false);
+      expect(await runtime.tryPauseForUpdate()).toBe(false);
       if (closeFails) {
         retired.reject(new Error("container cleanup failed"));
       } else {
@@ -315,7 +315,7 @@ describe("node-host worker manifest", () => {
       }
       await runtime.invoke({ id: "after-retirement", nodeId: "node-1", command: "system.which" });
       expect(mocks.handleInvoke).toHaveBeenCalledOnce();
-      expect(runtime.tryPauseForUpdate()).toBe(false);
+      expect(await runtime.tryPauseForUpdate()).toBe(false);
       await runtime.close();
       expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
     },

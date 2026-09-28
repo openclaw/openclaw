@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createChannelIngressMonitor } from "./ingress-monitor.js";
 import { createChannelIngressQueue } from "./ingress-queue.js";
@@ -16,6 +17,56 @@ afterEach(() => {
 });
 
 describe("channel ingress monitor admission", () => {
+  it.each(["direct", "wrapped"] as const)(
+    "does not replay or acknowledge an append with a %s unknown native outcome",
+    async (envelope) => {
+      const queue = createChannelIngressQueue<StoredEvent>({
+        channelId: "test",
+        stateDir: tempDirs.make("openclaw-ingress-unknown-"),
+      });
+      const unknown = new SqliteWorkerError("Synthetic lost native outcome", "outcome-unknown");
+      const failure =
+        envelope === "direct"
+          ? unknown
+          : new Error("Synthetic cleanup failure", { cause: new AggregateError([unknown]) });
+      const append = queue.enqueue.bind(queue);
+      let attempted = false;
+      const enqueue = vi.spyOn(queue, "enqueue").mockImplementation(async (...args) => {
+        const result = await append(...args);
+        if (!attempted) {
+          attempted = true;
+          throw failure;
+        }
+        return result;
+      });
+      const acknowledged = vi.fn();
+      const monitor = createChannelIngressMonitor<RawEvent, string, StoredEvent>({
+        queue,
+        inspect: (raw) => ({ eventId: raw.id, laneKey: "lane:a" }),
+        payload: {
+          storage: "raw-event",
+          version: 1,
+          serialize: (raw) => JSON.stringify(raw),
+          deserialize: (body) => JSON.parse(body) as RawEvent,
+          createClaimError: (kind) => new Error(kind),
+        },
+        deliver: vi.fn(),
+        onDurableAdmission: acknowledged,
+        appendRetryDelaysMs: [0, 0, 0],
+        pollIntervalMs: 60_000,
+        retention: { pruneIntervalMs: 60_000 },
+      });
+      try {
+        await expect(monitor.admit({ id: "unknown", text: "one" })).rejects.toBe(failure);
+        expect(enqueue).toHaveBeenCalledOnce();
+        expect(acknowledged).not.toHaveBeenCalled();
+        expect((await queue.listPending()).map((row) => row.id)).toEqual(["unknown"]);
+      } finally {
+        await monitor.stop();
+      }
+    },
+  );
+
   it("keeps delayed inspection in FIFO admission and joins it on stop", async () => {
     const queue = createChannelIngressQueue<StoredEvent>({
       channelId: "test",
@@ -74,12 +125,17 @@ describe("channel ingress monitor admission", () => {
     expect(stopped).toBe(true);
   });
 
-  it("reports whether each durable admission inserted a new row", async () => {
+  it("retries a known append failure and reports whether each admission inserted a new row", async () => {
     const queue = createChannelIngressQueue<StoredEvent>({
       channelId: "test",
       accountId: "a",
       stateDir: tempDirs.make("openclaw-ingress-monitor-admission-"),
     });
+    const append = queue.enqueue.bind(queue);
+    const enqueue = vi
+      .spyOn(queue, "enqueue")
+      .mockRejectedValueOnce(new Error("Synthetic transient append failure"))
+      .mockImplementation(append);
     const admissions: boolean[] = [];
     const monitor = createChannelIngressMonitor<RawEvent, string, StoredEvent>({
       queue,
@@ -93,6 +149,7 @@ describe("channel ingress monitor admission", () => {
       },
       deliver: vi.fn(),
       pollIntervalMs: 10,
+      appendRetryDelaysMs: [0, 0],
       retention: { pruneIntervalMs: 60_000 },
       onDurableAdmission: (_raw, { isNew }) => {
         admissions.push(isNew);
@@ -103,6 +160,7 @@ describe("channel ingress monitor admission", () => {
       await monitor.admit({ id: "event-one", text: "hello" });
       await monitor.admit({ id: "event-one", text: "hello" });
       expect(admissions).toEqual([true, false]);
+      expect(enqueue).toHaveBeenCalledTimes(3);
     } finally {
       await monitor.stop();
     }

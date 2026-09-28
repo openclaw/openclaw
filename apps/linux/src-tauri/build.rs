@@ -13,6 +13,7 @@ fn main() {
         "gateway_action",
         "install_cli",
         "native_browser_request",
+        "native_device_settings_request",
         "open_release_page",
         "relaunch",
         "updater_ready",

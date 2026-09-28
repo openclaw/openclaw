@@ -57,8 +57,8 @@ async function finishReply(harness: ReturnType<typeof createTtsHarness>, text = 
 }
 
 describe("Code Mode nested TTS delivery", () => {
-  afterEach(() => {
-    resetCodeModeTestState();
+  afterEach(async () => {
+    await resetCodeModeTestState();
     vi.restoreAllMocks();
   });
 

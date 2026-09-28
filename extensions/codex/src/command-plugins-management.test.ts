@@ -155,11 +155,71 @@ describe("Codex /codex plugins subcommand", () => {
         pluginName: "google-calendar",
       },
     });
-    const ctx = { ...fakeCtx, senderIsOwner: false, gatewayClientScopes: ["operator.admin"] };
+    const ctx = {
+      ...fakeCtx,
+      senderIsOwner: false,
+      gatewayClientScopes: ["operator.admin"],
+      assertOwnerCurrent: () => {
+        throw new Error("Caller is not a channel owner");
+      },
+    };
 
     const result = await handleCodexPluginsSubcommand(ctx, ["disable", "google-calendar"], io);
     expect(result.text).toContain("disabled");
     expect(io.current()["google-calendar"]?.enabled).toBe(false);
+  });
+
+  it("blocks a plugin policy commit after owner revocation while waiting for config IO", async () => {
+    const io = inMemoryIO({ calendar: { enabled: true } });
+    let ownerCurrent = true;
+    const ctx = {
+      ...fakeCtx,
+      assertOwnerCurrent: () => {
+        if (!ownerCurrent) {
+          throw new Error("Command owner was revoked");
+        }
+      },
+    };
+    await expect(
+      handleCodexPluginsSubcommand(ctx, ["disable", "calendar"], {
+        ...io,
+        mutate: async (update, assertCurrent) => {
+          ownerCurrent = false;
+          ctx.assertOwnerCurrent = () => {};
+          await io.mutate(update, assertCurrent);
+        },
+      }),
+    ).rejects.toThrow("Command owner was revoked");
+    expect(io.current().calendar?.enabled).toBe(true);
+  });
+
+  it("keeps a completed native install but blocks new policy authorization after revocation", async () => {
+    const io = inMemoryIO();
+    let ownerCurrent = true;
+    const runtime = pluginRuntime({
+      marketplacePath: "/repo/company/.agents/plugins/marketplace.json",
+      install: async () => {
+        ownerCurrent = false;
+        return { authPolicy: "ON_USE", appsNeedingAuth: [] };
+      },
+    });
+    const result = await handleCodexPluginsSubcommand(
+      {
+        ...fakeCtx,
+        assertOwnerCurrent: () => {
+          if (!ownerCurrent) {
+            throw new Error("Command owner was revoked");
+          }
+        },
+      },
+      ["install", "security-review@company-tools"],
+      io,
+      runtime,
+    );
+    expect(runtime.install).toHaveBeenCalledOnce();
+    expect(result.text).toContain("was installed in Codex but could not be authorized in OpenClaw");
+    expect(result.text).toContain("Command owner was revoked");
+    expect(io.current()).toEqual({});
   });
 
   it("lists workspace-scoped marketplaces and escapes untrusted plugin descriptions", async () => {

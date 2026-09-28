@@ -1,20 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createAgentRegistry, createFileSessionStore } from "acpx/runtime";
+import type { AcpSessionStore } from "acpx/runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, expect, it, vi } from "vitest";
 import { acpxOperationScope } from "./runtime-session-store.js";
-import {
-  AcpxRuntime,
-  createAgentRegistry,
-  createFileSessionStore,
-  type AcpSessionStore,
-} from "./runtime.js";
+import { AcpxRuntime } from "./runtime.js";
 
 type RuntimeOptions = ConstructorParameters<typeof AcpxRuntime>[0];
 type RuntimeHandle = Awaited<ReturnType<AcpxRuntime["ensureSession"]>>;
-const peer = fileURLToPath(new URL("../test/fixtures/owner-agent.mjs", import.meta.url));
+const peer = fileURLToPath(new URL("../../../test/fixtures/acp/owner-agent.mjs", import.meta.url));
 const target = { sessionKey: "admission-project", agentId: "main" };
 const input = { ...target, agent: "fixture", mode: "persistent" as const };
 

@@ -150,13 +150,14 @@ it.each(["root", "scoped", "replacement"] as const)(
   async (mode) => {
     useNoBundledPlugins();
     const sessionKey = `preparation-${mode}`;
+    const queueKey = `agent:main:${sessionKey}`;
     const event = `plugin-preparation-${mode}`;
     const late = createDeferredCore<Array<{ phase: string; ok: boolean }>>();
     const receive = (observed: Array<{ phase: string; ok: boolean }>) => late.resolve(observed);
     process.once(event, receive);
     onTestFinished(() => {
       process.off(event, receive);
-      drainSystemEvents(sessionKey);
+      drainSystemEvents(queueKey);
     });
     const plugin = writePlugin({
       id: "preparation-probe",
@@ -208,7 +209,7 @@ it.each(["root", "scoped", "replacement"] as const)(
         { phase: "service", ok: mode !== "replacement" },
         { phase: "late", ok: mode !== "replacement" },
       ]);
-      expect(drainSystemEvents(sessionKey)).toEqual(
+      expect(drainSystemEvents(queueKey)).toEqual(
         mode === "replacement" ? [] : ["registration", "service", "late"],
       );
       if (mode === "replacement") {
@@ -220,7 +221,7 @@ it.each(["root", "scoped", "replacement"] as const)(
         throw new Error("Expected the registered preparation probe");
       }
       await tool.execute("published", {});
-      expect(drainSystemEvents(sessionKey)).toEqual(["published"]);
+      expect(drainSystemEvents(queueKey)).toEqual(["published"]);
     } finally {
       await services.stop();
       await disposePluginRegistryInstances(registry);

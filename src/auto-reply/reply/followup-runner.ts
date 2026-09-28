@@ -4,6 +4,7 @@ import {
   classifyAgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
 import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
+import type { ProgressContinuationCapability } from "../../channels/progress-continuation.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -11,13 +12,14 @@ import {
   withPluginRuntimeGatewayContextResolver,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime } from "../../runtime.js";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
 import { accountFollowupTurn } from "./agent-runner-result-accounting.js";
 import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
+import { settleQueuedFollowupPresentation } from "./followup-presentation.js";
 import {
   admitFollowupTurn,
-  settleQueuedFollowupPresentation,
   type AdmittedFollowupTurn,
   type FollowupRunnerParams,
 } from "./followup-turn-admission.js";
@@ -27,7 +29,7 @@ import {
   FollowupRunDeferredError,
   type FollowupRun,
 } from "./queue.js";
-import type { QueuedFollowupReplyBatch } from "./queue/types.js";
+import { isFollowupRunAborted, type QueuedFollowupReplyBatch } from "./queue/types.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 
 type FollowupDrainDisposition =
@@ -98,11 +100,11 @@ export function createFollowupRunner(
     let admittedRunId: string | undefined;
     let admittedTurn: AdmittedFollowupTurn | undefined;
     let terminalPayloads: ReplyPayload[] = [];
+    let progressContinuation: ProgressContinuationCapability | undefined;
     const admissionNotices: ReplyPayload[] = [];
     let completion: QueuedFollowupReplyBatch["completion"] = { kind: "completed" };
     let queuedFollowupAdmitted = false;
-    const initiallyAborted =
-      queued.abortSignal?.aborted === true || queued.queueAbortSignal?.aborted === true;
+    const initiallyAborted = isFollowupRunAborted(queued);
     const endDeliveryCorrelations = initiallyAborted
       ? []
       : (queued.deliveryCorrelations ?? [])
@@ -219,12 +221,20 @@ export function createFollowupRunner(
         ...defaults.opts,
         commentaryPayloadsEnabled: execution.commentaryPayloadsEnabled,
       };
-      const decision = resolveFollowupDeliveryDecision({
+      const decision = await resolveFollowupDeliveryDecision({
         turn,
         execution: execution.execution,
         accounting,
         opts: deliveryOpts,
       });
+      if (decision.kind === "deliver") {
+        for (const payload of decision.payloads) {
+          progressContinuation = getReplyPayloadMetadata(payload)?.progressContinuation;
+          if (progressContinuation) {
+            break;
+          }
+        }
+      }
       if (
         completion.kind === "completed" &&
         decision.kind === "suppress" &&
@@ -242,7 +252,18 @@ export function createFollowupRunner(
       // Source recovery has its own queued callback; this execution still closes once.
       terminalPayloads = delivery.kind === "completed" ? delivery.payloads : [];
     } catch (error) {
-      if (error instanceof FollowupRunDeferredError) {
+      let operatorAuthorityLost = false;
+      try {
+        queued.operatorAuthority?.assertCurrent();
+      } catch {
+        operatorAuthorityLost = true;
+      }
+      if (operatorAuthorityLost) {
+        // Revoked input is terminal; retrying it would hold the queue indefinitely.
+        disposition = { kind: "consumed" };
+        completion = { kind: "aborted" };
+        defaultRuntime.error?.("followup queue: canceled input after loss of operator authority");
+      } else if (error instanceof FollowupRunDeferredError) {
         disposition = { kind: "deferred", reason: error.message };
       } else if (
         operation?.result?.kind === "aborted" &&
@@ -281,8 +302,12 @@ export function createFollowupRunner(
           operation?.fail("run_failed", error);
         }
       }
-      if (queuedFollowupAdmitted) {
-        await settleQueuedFollowupPresentation(defaults);
+      try {
+        if (queuedFollowupAdmitted) {
+          await settleQueuedFollowupPresentation(defaults.opts?.onQueuedFollowupSettled);
+        }
+      } finally {
+        progressContinuation?.close();
       }
       for (const end of endDeliveryCorrelations.toReversed()) {
         try {

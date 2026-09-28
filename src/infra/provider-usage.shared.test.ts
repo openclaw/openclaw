@@ -57,10 +57,10 @@ describe("provider-usage.shared", () => {
     },
   ])("$name", async ({ promise, expected, error }) => {
     if (error) {
-      await expect(raceUsageTimeout(promise(), 100, "fallback")).rejects.toThrow(error);
+      await expect(raceUsageTimeout(promise, 100, "fallback")).rejects.toThrow(error);
       return;
     }
-    await expect(raceUsageTimeout(promise(), 100, "fallback")).resolves.toBe(expected);
+    await expect(raceUsageTimeout(promise, 100, "fallback")).resolves.toBe(expected);
   });
 
   it("returns fallback when timeout wins", async () => {
@@ -68,7 +68,7 @@ describe("provider-usage.shared", () => {
     const late = new Promise<string>((resolve) => {
       setTimeout(() => resolve("late"), 50);
     });
-    const result = raceUsageTimeout(late, 1, "fallback");
+    const result = raceUsageTimeout(() => late, 1, "fallback");
     await vi.advanceTimersByTimeAsync(1);
     await expect(result).resolves.toBe("fallback");
   });
@@ -78,7 +78,7 @@ describe("provider-usage.shared", () => {
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
 
     const result = raceUsageTimeout(
-      new Promise<string>(() => {}),
+      () => new Promise<string>(() => {}),
       Number.MAX_SAFE_INTEGER,
       "fallback",
     );
@@ -92,7 +92,7 @@ describe("provider-usage.shared", () => {
   it("clears the timeout after successful work", async () => {
     const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
 
-    await expect(raceUsageTimeout(Promise.resolve("ok"), 100, "fallback")).resolves.toBe("ok");
+    await expect(raceUsageTimeout(async () => "ok", 100, "fallback")).resolves.toBe("ok");
 
     expect(clearTimeoutSpy).toHaveBeenCalledTimes(1);
   });

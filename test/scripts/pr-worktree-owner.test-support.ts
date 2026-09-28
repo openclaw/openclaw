@@ -3,6 +3,8 @@ import { chmodSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { delimiter, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect } from "vitest";
+import { exitedDescendantReaper } from "./exited-descendant-reaper.test-support.js";
+import { createProvisionIsolationFixture } from "./pr-provision-isolation.test-support.js";
 
 export function createProvisionOwnerFixture(
   directory: string,
@@ -17,8 +19,9 @@ export function createProvisionOwnerFixture(
   for (const dir of [canonical, home, bin]) {
     mkdirSync(dir);
   }
+  const isolation = createProvisionIsolationFixture(root, canonical);
   const env: NodeJS.ProcessEnv = {
-    PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
+    PATH: isolation.path(`${bin}${delimiter}${process.env.PATH ?? ""}`),
     HOME: home,
     TMPDIR: root,
     XDG_CONFIG_HOME: join(home, ".config"),
@@ -35,8 +38,8 @@ export function createProvisionOwnerFixture(
     gh,
     `#!/bin/sh
 [ "$1" != auth ] || exit 1
-[ "$1" = api ] && [ "$2" = graphql ] || exit 2
-printf 'HTTP/2.0 200 OK\\r\\n\\r\\n{"data":{"viewer":{"login":"fixture"}}}\\n'
+[ "$*" = 'api user --include' ] || exit 2
+printf 'HTTP/2.0 200 OK\\r\\n\\r\\n{"login":"fixture"}\\n'
 `,
   );
   chmodSync(gh, 0o755);
@@ -88,23 +91,29 @@ fi
     env,
     main,
     git,
-    run(action = "entry", owner = "") {
-      return spawnSync(
-        process.execPath,
-        [
-          resolve(source, "scripts/pr-lib/process-group-runner.mjs"),
-          canonical,
-          process.platform === "darwin" ? "/bin/bash" : "bash",
-          "-c",
-          script,
-          "provision-owner-fixture",
-          canonical,
-          source,
-          action,
-          owner,
-        ],
-        { cwd: canonical, env, encoding: "utf8" },
-      );
+    isolation,
+    run(action = "entry", owner = "", options: { holdExitedDescendants?: boolean } = {}) {
+      const args = [
+        ...isolation.nodeArgs,
+        resolve(source, "scripts/pr-lib/process-group-runner.mjs"),
+        canonical,
+        process.platform === "darwin" ? "/bin/bash" : "bash",
+        "-c",
+        script,
+        "provision-owner-fixture",
+        canonical,
+        source,
+        action,
+        owner,
+      ];
+      if (options.holdExitedDescendants) {
+        args.unshift("-c", exitedDescendantReaper, process.execPath);
+      }
+      return spawnSync(options.holdExitedDescendants ? "python3" : process.execPath, args, {
+        cwd: canonical,
+        env,
+        encoding: "utf8",
+      });
     },
   };
 }

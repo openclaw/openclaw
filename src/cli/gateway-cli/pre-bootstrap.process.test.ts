@@ -34,6 +34,82 @@ function stateManifest(root: string): Record<string, string> {
 }
 
 describe("Gateway config selection before migration admission", () => {
+  it("accepts a Doctor-repaired escaped reference and refuses later config drift", async () => {
+    const root = fs.realpathSync(tempDirs.make("openclaw-startup-reference-repair-"));
+    const runtimeRoot = createSourceRuntime(runtimeParent);
+    const stateDir = path.join(root, "state");
+    fs.mkdirSync(stateDir);
+    const configPath = path.join(stateDir, "openclaw.json");
+    const apiKey = "$${STARTUP_MEMORY_KEY}";
+    const original = JSON.stringify({
+      agents: { defaults: { memorySearch: { remote: { apiKey } } } },
+      gateway: { mode: "local" },
+      plugins: { enabled: false },
+    });
+    fs.writeFileSync(configPath, original);
+    const result = await runIsolatedModuleScript(
+      {
+        PATH: process.env.PATH,
+        TMPDIR: childTempDir,
+        TEMP: childTempDir,
+        TMP: childTempDir,
+        HOME: root,
+        USERPROFILE: root,
+        OPENCLAW_HOME: root,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_WORKSPACE_DIR: path.join(root, "workspace"),
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "bundled"),
+        STARTUP_MEMORY_KEY: "fixture-memory-key",
+      },
+      `
+      import fs from "node:fs";
+      const { selectGatewayRunEnvironment, prepareGatewayRunBootstrap, recheckGatewayRunBootstrap } = await import("./src/cli/gateway-cli/pre-bootstrap.ts");
+      const { runDoctorConfigPreflight } = await import("./src/commands/doctor-config-preflight.ts");
+      const { readConfigFileSnapshot } = await import("./src/config/config.ts");
+      const { ExitError } = await import("./src/runtime.ts");
+      const runtime = { log() {}, error: console.error, exit(code) { throw new ExitError(code); } };
+      const params = { opts: {}, runtime };
+      await runDoctorConfigPreflight({ repairPrefixedConfig: true, doctorOnlyStateMigrations: true });
+      const repairedBytes = fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8");
+      if (!await selectGatewayRunEnvironment(params)) throw new Error("selection refused");
+      if (!await prepareGatewayRunBootstrap(params)) throw new Error("preparation refused");
+      const admitted = await recheckGatewayRunBootstrap(params);
+      const selected = await readConfigFileSnapshot();
+      const selectedBytes = fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8");
+      const raw = JSON.parse(selectedBytes);
+      raw.gateway.mode = "remote";
+      fs.writeFileSync(process.env.OPENCLAW_CONFIG_PATH, JSON.stringify(raw));
+      let driftRefused = false;
+      try {
+        await recheckGatewayRunBootstrap(params);
+      } catch (error) {
+        if (!(error instanceof ExitError)) throw error;
+        driftRefused = error.code === 1;
+      }
+      console.log("__RESULT__" + JSON.stringify({
+        admitted, driftRefused,
+        configUnchanged: selectedBytes === repairedBytes,
+        apiKey: selected.sourceConfig.memory.search.remote.apiKey,
+        authoredApiKey: raw.memory.search.remote.apiKey,
+      }));
+      `,
+      { runtimeRoot, timeoutMs: 60_000 },
+    );
+    const output = `${result.stdout}\n${result.stderr}`;
+    const line = result.stdout.split("\n").find((entry) => entry.startsWith("__RESULT__"));
+    expect(line, output).toBeDefined();
+    expect(JSON.parse(line!.slice("__RESULT__".length)), output).toEqual({
+      admitted: true,
+      driftRefused: true,
+      configUnchanged: true,
+      apiKey: "${STARTUP_MEMORY_KEY}",
+      authoredApiKey: apiKey,
+    });
+    expect(fs.readFileSync(`${configPath}.bak`, "utf8")).toBe(original);
+  }, 75_000);
+
   it.each([
     { name: "managed template", apiKey: "${REPRO_PROVIDER_KEY}", managed: true, included: false },
     {

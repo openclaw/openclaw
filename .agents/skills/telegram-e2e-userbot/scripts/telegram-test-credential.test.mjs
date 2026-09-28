@@ -218,3 +218,52 @@ test("failed broker release retains only the private handle for same-owner recov
     fs.rmSync(fixture, { recursive: true, force: true });
   }
 });
+
+test("validates optional forum and distinct participant fixtures without echoing private fields", () => {
+  const base = {
+    schemaVersion: 1,
+    environment: "test",
+    groupId: "-1001",
+    sutToken: "synthetic-token",
+    sutUsername: "sut_bot",
+    sutBotId: "200",
+    testerUserId: "100",
+    tdlibArchiveBase64: "YQ==",
+    tdlibArchiveSha256: "a".repeat(64),
+    tdlibVersion: "1.8.67",
+  };
+  const second = {
+    alias: "second",
+    testerUserId: "101",
+    tdlibArchiveBase64: "Yg==",
+    tdlibArchiveSha256: "b".repeat(64),
+    tdlibVersion: "1.8.67",
+  };
+  assert.deepEqual(
+    parseTelegramTestCredential({
+      ...base,
+      forumGroupId: "-1002",
+      forumTopicId: 42,
+      participants: [second],
+    }).participants,
+    [second],
+  );
+  for (const patch of [
+    { participants: [second, second] },
+    { participants: [{ ...second, testerUserId: "100" }] },
+    { participants: [{ ...second, alias: "primary" }] },
+    { participants: [{ ...second, tdlibArchiveBase64: "private-invalid-value" }] },
+    { participants: [{ ...second, tdlibArchiveSha256: "private-invalid-value" }] },
+    { forumGroupId: "1002" },
+    { forumTopicId: 0 },
+  ]) {
+    assert.throws(
+      () => parseTelegramTestCredential({ ...base, ...patch }),
+      (error) => {
+        assert.equal(error.message.includes("private-invalid-value"), false);
+        assert.equal(error.message.includes(base.sutToken), false);
+        return true;
+      },
+    );
+  }
+});

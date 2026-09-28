@@ -6,7 +6,6 @@ import type {
   SessionTranscriptRawDeltaLimits,
   SessionTranscriptReadScope,
 } from "./session-accessor.sqlite-contract.js";
-import { resolveVisibleHistoryEventCount } from "./session-accessor.sqlite-history-projection.js";
 import {
   readTranscriptDisplayDeltaFromProjection,
   readRecentSessionTranscriptHistoryEventsFromProjection,
@@ -42,6 +41,7 @@ export function readSessionTranscriptHistoryEventPage(
     offset: number;
     beforeSeq?: number;
     maxBytes?: number;
+    allowOversizedFirst?: boolean;
     readOnly?: boolean;
     recentAtHead?: TranscriptRecentReadLimits;
   } & TranscriptReadWindowOptions,
@@ -51,8 +51,4 @@ export function readSessionTranscriptHistoryEventPage(
     (projection) => readSessionTranscriptHistoryEventPageFromProjection(projection, options),
     options,
   );
-}
-
-export function readSessionTranscriptHistoryEventCount(scope: SessionTranscriptReadScope): number {
-  return withCurrentProjectionSnapshot(scope, resolveVisibleHistoryEventCount);
 }

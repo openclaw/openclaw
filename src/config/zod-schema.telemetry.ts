@@ -1,7 +1,6 @@
 // Defines anonymous feature-usage consent and its generated field metadata.
 import { z } from "zod";
-import { type ConfigSchemaShape, projectConfigFieldMetadata } from "./schema.field-metadata.js";
-import type { TelemetryConfig } from "./types.telemetry.js";
+import { projectConfigFieldMetadata } from "./schema.field-metadata.js";
 import { configUiMetadata } from "./zod-schema.sensitive.js";
 
 const TelemetryConfigShape = {
@@ -13,7 +12,7 @@ const TelemetryConfigShape = {
     label: "Feature Statistics Consent Timestamp",
     help: "ISO timestamp recording when the operator accepted or declined anonymous feature statistics. Prevents the setup wizard from asking again.",
   }),
-} satisfies ConfigSchemaShape<TelemetryConfig>;
+};
 
 export const TelemetryConfigSchema = z.object(TelemetryConfigShape).strict().optional();
 

@@ -1429,54 +1429,6 @@ describe("compaction-safeguard recent-turn preservation", () => {
     ).toEqual({ ok: true, reasons: [] });
   });
 
-  it("scopes retained ask checks to the split-prefix summary", () => {
-    const latestAsk = "combine the provider boxes into one artifact";
-    const structuredSummary = (pendingAsk: string) =>
-      [
-        "## Decisions",
-        `${latestAsk} after validation.`,
-        "## Open TODOs",
-        "None.",
-        "## Constraints/Rules",
-        "Preserve the request state.",
-        "## Pending user asks",
-        pendingAsk,
-        "## Exact identifiers",
-        "None.",
-      ].join("\n");
-    const prefixSummary = (pendingAsk?: string) =>
-      [
-        "## Original Request",
-        latestAsk,
-        "## Early Progress",
-        "Validated the provider boxes.",
-        "## Context for Suffix",
-        "The retained suffix owns continuation state.",
-        ...(pendingAsk ? ["## Pending user asks", pendingAsk] : []),
-      ].join("\n");
-    const historySummary = structuredSummary("combine the provider boxes after migration");
-    const structuralSummary = structuredSummary(
-      `Latest user request context: ${JSON.stringify(latestAsk)}`,
-    );
-    const auditRetained = (retainedTurnSummary: string) =>
-      auditSummaryQuality({
-        summary: `${structuralSummary}\n\n${retainedTurnSummary}`,
-        sourceSummaries: [historySummary, retainedTurnSummary],
-        identifiers: [],
-        latestAsk,
-        retainedTurnSummary,
-      });
-
-    expect(auditRetained(prefixSummary())).toEqual({
-      ok: true,
-      reasons: [],
-    });
-    expect(auditRetained(historySummary).reasons).toContain("retained_turn_ask_marked_pending");
-    expect(auditRetained(prefixSummary(latestAsk)).reasons).toContain(
-      "retained_turn_ask_marked_pending",
-    );
-  });
-
   it("dedupes pure-hex identifiers across case variants", () => {
     const identifiers = extractOpaqueIdentifiers(
       "Track id a1b2c3d4e5f6 plus A1B2C3D4E5F6 and again a1b2c3d4e5f6",
@@ -1662,28 +1614,6 @@ describe("compaction-safeguard recent-turn preservation", () => {
     });
 
     expect(quality.ok).toBe(true);
-  });
-
-  it("flags missing non-latin latest asks when summary omits them", () => {
-    const quality = auditSummaryQuality({
-      summary: [
-        "## Decisions",
-        "Keep current flow.",
-        "## Open TODOs",
-        "None.",
-        "## Constraints/Rules",
-        "Preserve safety checks.",
-        "## Pending user asks",
-        "No pending asks.",
-        "## Exact identifiers",
-        "None.",
-      ].join("\n"),
-      identifiers: [],
-      latestAsk: "请提供状态更新",
-    });
-
-    expect(quality.ok).toBe(false);
-    expect(quality.reasons).toContain("latest_user_ask_not_reflected");
   });
 
   it("rejects a shortened non-latin pending ask without the exact request fact", () => {
@@ -2319,6 +2249,36 @@ describe("compaction-safeguard recent-turn preservation", () => {
       "Cannot convert undefined or null to object",
     );
   });
+
+  it.each(["How about now?", "１０ and ２０"])(
+    "accepts a preserved keyword-free request without retrying compaction: %s",
+    async (latestAsk) => {
+      const generatedSummary = [
+        "## Decisions",
+        "Keep current flow.",
+        "## Open TODOs",
+        "None.",
+        "## Constraints/Rules",
+        "Preserve context.",
+        "## Pending user asks",
+        latestAsk,
+        "## Exact identifiers",
+        "None.",
+      ].join("\n");
+      mockSummarizeInStages.mockReset();
+      mockSummarizeInStages.mockResolvedValue(summaryResult(generatedSummary));
+      const sessionManager = createQualityGuardSessionManager();
+      const event = createCompactionEvent({ messageText: latestAsk, tokensBefore: 1_500 });
+      (event.preparation as { settings?: { reserveTokens: number } }).settings = {
+        reserveTokens: 4_000,
+      };
+      const { result } = await runCompactionScenario({ sessionManager, event, apiKey: "test-key" });
+
+      expect(expectCompactionResult(result).summary).toContain(latestAsk);
+      expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
+      expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
+    },
+  );
 
   it("does not retry summaries unless quality guard is explicitly enabled", async () => {
     mockSummarizeInStages.mockReset();

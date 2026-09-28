@@ -17,6 +17,10 @@ const CI_PARALLEL_MIN_CPUS = 8;
 export const CI_PARALLEL_MIN_MEMORY_BYTES = 24 * GIB;
 
 const EXCLUSIVE_CI_TEST_CONFIGS = new Set([
+  "vitest.config.ts",
+  "test/vitest/vitest.config.ts",
+  "test/vitest/vitest.full-agentic.config.ts",
+  "test/vitest/vitest.gateway.config.ts",
   "test/vitest/vitest.gateway-core.config.ts",
   "test/vitest/vitest.gateway-database-workers.config.ts",
   "test/vitest/vitest.gateway-methods.config.ts",
@@ -33,6 +37,9 @@ type Env = NodeJS.ProcessEnv;
 type Resources = {
   logicalCpuCount: number;
   totalMemoryBytes: number;
+  memoryCapacityBytes?: number | null;
+  memoryLimitBytes?: number | null;
+  platform?: NodeJS.Platform;
 };
 
 type LocalCheckMode = "auto" | "full" | "throttled";
@@ -76,6 +83,46 @@ export function resolveLocalCheckEnv(env: Env = process.env) {
   };
 }
 
+const withinRoot = (root: string, file: string) => {
+  const relative = path.relative(root, file);
+  return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+};
+
+export function createDeclarationInputBoundary(cwd: string) {
+  const declared = path.resolve(cwd);
+  const prefixes = [declared];
+  if (fs.lstatSync(declared).isSymbolicLink()) {
+    prefixes.push(path.resolve(path.dirname(declared), fs.readlinkSync(declared)));
+  }
+  prefixes.push(fs.realpathSync(declared));
+  const root = fs.realpathSync.native(declared);
+  // Runtimes differ on whether realpath preserves a case-only symlink target.
+  // Translate only declared checkout spellings; never canonicalize outside candidates into scope.
+  const resolve = (file: string) => {
+    const absolute = path.resolve(declared, file);
+    const prefix = prefixes.find((candidate) => withinRoot(candidate, absolute));
+    return prefix ? path.resolve(root, path.relative(prefix, absolute)) : absolute;
+  };
+  return {
+    root,
+    resolve,
+    assert(file: string) {
+      const absolute = resolve(file);
+      // Generated declaration IDs do not exist yet, but their source directory does.
+      let existing = absolute;
+      while (!fs.existsSync(existing) && path.dirname(existing) !== existing) {
+        existing = path.dirname(existing);
+      }
+      const real = fs.realpathSync.native(existing);
+      if (!withinRoot(root, absolute) || !withinRoot(root, real)) {
+        const diagnosis = `Keep declaration dependencies and compiler files physically inside ${root}; shared installs and external symlinks are unsupported. Inspect the reported path and dependency links; this error alone does not establish a missing or undeclared dependency.`;
+        throw new Error(`Declaration input escapes checkout: ${absolute} -> ${real}. ${diagnosis}`);
+      }
+      return absolute;
+    },
+  };
+}
+
 /** Resolve a repo tool from this worktree or the primary checkout's installed toolchain. */
 export function resolveRepoToolBinPath(
   toolName: string,
@@ -86,17 +133,11 @@ export function resolveRepoToolBinPath(
   }: RepoToolOptions = {},
 ) {
   if (toolName === "tsgo") {
-    // TypeScript 6 owns the in-process compiler API; CLI checks use the stable
-    // native compiler explicitly, independent of either package's tsc bin link.
+    // Resolve this checkout's native compiler independently of the ambient tsc bin link.
     const require = createRequire(import.meta.url);
-    const {
-      createDeclarationInputBoundary,
-    }: typeof import("./tsdown-declaration-boundary.mts") = require("./tsdown-declaration-boundary.mts");
     const inputs = createDeclarationInputBoundary(cwd);
     const fromCheckout = createRequire(path.join(inputs.root, "package.json"));
-    const nativeRoot = path.dirname(
-      inputs.assert(fromCheckout.resolve("typescript-native/package.json")),
-    );
+    const nativeRoot = path.dirname(inputs.assert(fromCheckout.resolve("typescript/package.json")));
     const getExePath: { default: () => string } = require(
       inputs.assert(path.join(nativeRoot, "lib/getExePath.js")),
     );
@@ -234,7 +275,40 @@ export function applyLocalOxlintPolicy(args: string[], env: Env, hostResources: 
     insertBeforeSeparator(nextArgs, "--format", "stylish");
   }
 
-  if (
+  const options = nextArgs.slice(0, nextArgs.includes("--") ? nextArgs.indexOf("--") : undefined);
+  const option = (name: string) => {
+    const index = options.findIndex((arg) => arg === name || arg.startsWith(`${name}=`));
+    return index < 0 ? undefined : (options[index]!.split("=")[1] ?? options[index + 1]);
+  };
+  const threads = option("--threads");
+  const extensionShard = option("--tsconfig") === "extensions/tsconfig.json";
+  const balancedCiShard =
+    isCiLikeEnv(nextEnv) &&
+    !isLocalCheckEnabled(nextEnv) &&
+    isConstrainedCiCheckHost(hostResources) &&
+    nextEnv.OPENCLAW_OXLINT_BATCH_CONCURRENCY === "1" &&
+    nextEnv.OPENCLAW_OXLINT_BOUNDED_SHARD_ARGS === JSON.stringify(args) &&
+    hostResources.platform === "linux" &&
+    hostResources.logicalCpuCount >= 4 &&
+    Math.min(hostResources.totalMemoryBytes, hostResources.memoryCapacityBytes ?? 0) >= 15 * GIB &&
+    (hostResources.memoryLimitBytes ?? 0) >= (extensionShard ? 10 : 14) * GIB &&
+    ["config/tsconfig/oxlint.core.json", "extensions/tsconfig.json"].includes(
+      option("--tsconfig") ?? "",
+    ) &&
+    ((!hasFlag(nextArgs, "--threads") && threads === undefined) ||
+      threads === "1" ||
+      threads === "2");
+  if (balancedCiShard) {
+    // The batch owner admits only bounded targets and one checker child.
+    // A 3-GiB Go target repeatedly collects a larger live graph; keep one child
+    // and give its compiler four CPUs instead of duplicating it in parallel.
+    if (!hasFlag(nextArgs, "--threads")) {
+      insertBeforeSeparator(nextArgs, "--threads=2");
+    }
+    nextEnv.GOMAXPROCS ||= "4";
+    nextEnv.GOGC ||= "100";
+    nextEnv.GOMEMLIMIT ||= "8GiB";
+  } else if (
     shouldThrottleLocalChecks(nextEnv, hostResources) ||
     (isCiLikeEnv(nextEnv) && isConstrainedCiCheckHost(hostResources))
   ) {

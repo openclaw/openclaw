@@ -1,7 +1,9 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
 import {
   objectFieldEquals,
   readFixtureLog,
@@ -79,23 +81,27 @@ describe.each([
         ? Array.from({ length: 11 }, (_, index) => `line-${index}`).join("\n")
         : "newer suffix";
       const preservedDraft = `overlap during reset\n${newerDraft}`;
-      const run = await startRuntimePty(process.execPath, ["--import", "tsx", scriptPath], {
-        cwd: process.cwd(),
-        env: {
-          OPENCLAW_THEME: "dark",
-          OPENCLAW_TUI_PTY_LOG_PATH: logPath,
-          OPENCLAW_TUI_PTY_RESET_RELEASE_PATH: resetReleasePath,
-          OPENCLAW_TUI_PTY_SUBMIT_BURST_WINDOW_MS: nativePaste ? undefined : "1000",
-          OPENCLAW_TUI_PTY_TYPE_CHUNK_SIZE: "1",
-          OPENCLAW_TUI_PTY_TYPE_DELAY_MS: "2",
-          // Emulate iTerm for Darwin's default coalescing, without Apple Terminal's
-          // host modifier-state lookup for synthetic Return.
-          TERM_PROGRAM: nativePaste ? "iTerm.app" : undefined,
-          NO_COLOR: undefined,
+      const run = await startRuntimePty(
+        process.execPath,
+        resolveRuntimeWorkerArgv(pathToFileURL(scriptPath)),
+        {
+          cwd: process.cwd(),
+          env: {
+            OPENCLAW_THEME: "dark",
+            OPENCLAW_TUI_PTY_LOG_PATH: logPath,
+            OPENCLAW_TUI_PTY_RESET_RELEASE_PATH: resetReleasePath,
+            OPENCLAW_TUI_PTY_SUBMIT_BURST_WINDOW_MS: nativePaste ? undefined : "1000",
+            OPENCLAW_TUI_PTY_TYPE_CHUNK_SIZE: "1",
+            OPENCLAW_TUI_PTY_TYPE_DELAY_MS: "2",
+            // Emulate iTerm for Darwin's default coalescing, without Apple Terminal's
+            // host modifier-state lookup for synthetic Return.
+            TERM_PROGRAM: nativePaste ? "iTerm.app" : undefined,
+            NO_COLOR: undefined,
+          },
+          exitTimeoutMs: EXIT_TIMEOUT_MS,
+          outputTimeoutMs: OUTPUT_TIMEOUT_MS,
         },
-        exitTimeoutMs: EXIT_TIMEOUT_MS,
-        outputTimeoutMs: OUTPUT_TIMEOUT_MS,
-      });
+      );
 
       try {
         const waitForLogEntry = async (predicate: Parameters<typeof waitForFixtureLogEntry>[1]) =>

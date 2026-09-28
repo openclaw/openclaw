@@ -57,12 +57,17 @@ export const handleSubagentsCommand: CommandHandler = defineAuthorizedTextComman
           : action === "info"
             ? (await actionInfoLoader.load()).handleSubagentsInfoAction
             : (await actionLogLoader.load()).handleSubagentsLogAction;
-    const { listControlledSubagentRuns } = await controlRuntimeLoader.load();
+    const { buildControlledSubagentRunsReadContext } = await controlRuntimeLoader.load();
+    const readContext = await buildControlledSubagentRunsReadContext(
+      requesterKey,
+      params.agentId,
+      params.cfg,
+    );
 
     return await actionHandler({
       params,
       requesterKey,
-      runs: listControlledSubagentRuns(requesterKey, params.agentId, params.cfg),
+      readContext,
       restTokens,
     });
   },

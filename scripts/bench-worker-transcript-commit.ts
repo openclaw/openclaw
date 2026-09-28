@@ -240,6 +240,7 @@ async function runSample(shape: typeof fixture, profilePath?: string) {
           const outcome = await committer.commit({
             identity,
             request,
+            sessionTarget: target,
             assertCurrent: () => undefined,
           });
           durationsMs.push(performance.now() - start);
@@ -282,6 +283,7 @@ async function runSample(shape: typeof fixture, profilePath?: string) {
           await committer.commit({
             identity,
             request: lastRequest,
+            sessionTarget: target,
             assertCurrent: () => undefined,
           }),
           lastOutcome,

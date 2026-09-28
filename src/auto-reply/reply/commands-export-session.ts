@@ -88,13 +88,7 @@ function isBackendDelegatedSession(
   );
 }
 
-type SessionExportEventWarning = {
-  code: "invalid-session-row";
-  row: number;
-};
-
 type SessionExportWarningSummary = {
-  code: "invalid-session-json" | "invalid-session-row";
   count: number;
   rows: number[];
 };
@@ -202,44 +196,6 @@ async function generateHtml(sessionData: SessionData): Promise<string> {
   );
 }
 
-function filterSessionEntriesWithWarnings(events: unknown[]): {
-  entries: SessionFileEntry[];
-  warnings: SessionExportEventWarning[];
-} {
-  const entries: SessionFileEntry[] = [];
-  const warnings: SessionExportEventWarning[] = [];
-  for (const [index, event] of events.entries()) {
-    if (isSessionFileEntry(event)) {
-      entries.push(event);
-      continue;
-    }
-    warnings.push({ code: "invalid-session-row", row: index + 1 });
-  }
-  return { entries, warnings };
-}
-
-function summarizeSessionExportWarnings(
-  warnings: SessionExportEventWarning[],
-): SessionExportWarningSummary[] {
-  const summaries = new Map<SessionExportEventWarning["code"], SessionExportWarningSummary>();
-  for (const warning of warnings) {
-    const summary = summaries.get(warning.code);
-    if (summary) {
-      summary.count += 1;
-      if (summary.rows.length < 20) {
-        summary.rows.push(warning.row);
-      }
-      continue;
-    }
-    summaries.set(warning.code, {
-      code: warning.code,
-      count: 1,
-      rows: [warning.row],
-    });
-  }
-  return [...summaries.values()];
-}
-
 function formatSkippedRows(count: number): string {
   return `${count.toLocaleString()} malformed transcript ${count === 1 ? "row" : "rows"}`;
 }
@@ -249,17 +205,9 @@ function formatSessionExportWarning(summary: SessionExportWarningSummary): strin
     summary.rows.length > 0
       ? ` rows ${summary.rows.join(", ")}${summary.count > summary.rows.length ? ", …" : ""}`
       : "";
-  const verb = summary.count === 1 ? "was" : "were";
-  switch (summary.code) {
-    case "invalid-session-json":
-      return `⚠️ Skipped ${formatSkippedRows(summary.count)} that ${verb} not valid JSON.${rows}`;
-    case "invalid-session-row":
-      return summary.count === 1
-        ? `⚠️ Skipped ${formatSkippedRows(summary.count)} that was not a session entry.${rows}`
-        : `⚠️ Skipped ${formatSkippedRows(summary.count)} that were not session entries.${rows}`;
-  }
-  const unreachable: never = summary.code;
-  return unreachable;
+  return summary.count === 1
+    ? `⚠️ Skipped ${formatSkippedRows(summary.count)} that was not a session entry.${rows}`
+    : `⚠️ Skipped ${formatSkippedRows(summary.count)} that were not session entries.${rows}`;
 }
 
 async function readSessionDataFromIdentity(params: {
@@ -275,20 +223,18 @@ async function readSessionDataFromIdentity(params: {
   warnings: SessionExportWarningSummary[];
 }> {
   const events = await loadTranscriptEvents(params);
-  const { entries, warnings } = filterSessionEntriesWithWarnings(events);
-  return readSessionDataFromEntries(entries, summarizeSessionExportWarnings(warnings));
-}
-
-function readSessionDataFromEntries(
-  fileEntries: SessionFileEntry[],
-  warnings: SessionExportWarningSummary[],
-): {
-  header: SessionHeader | null;
-  entries: AgentSessionEntry[];
-  leafId: string | null;
-  hasLeafControl: boolean;
-  warnings: SessionExportWarningSummary[];
-} {
+  const fileEntries: SessionFileEntry[] = [];
+  const skippedRows: SessionExportWarningSummary = { count: 0, rows: [] };
+  for (const [index, event] of events.entries()) {
+    if (isSessionFileEntry(event)) {
+      fileEntries.push(event);
+    } else {
+      skippedRows.count += 1;
+      if (skippedRows.rows.length < 20) {
+        skippedRows.rows.push(index + 1);
+      }
+    }
+  }
   migrateSessionEntries(fileEntries);
   const header =
     fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
@@ -310,7 +256,7 @@ function readSessionDataFromEntries(
     entries,
     leafId: tree.leafId,
     hasLeafControl,
-    warnings,
+    warnings: skippedRows.count > 0 ? [skippedRows] : [],
   };
 }
 

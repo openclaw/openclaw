@@ -1,4 +1,3 @@
-// Google provider module implements model/runtime integration.
 import type { EmbeddingInput } from "openclaw/plugin-sdk/embedding-providers";
 import {
   buildRemoteBaseUrlPolicy,

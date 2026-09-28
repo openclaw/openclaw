@@ -9,10 +9,6 @@ export type PluginRegistryIdNormalizerOptions = {
   lookUpTable?: Pick<{ manifestRegistry: PluginManifestRegistry }, "manifestRegistry">;
 };
 
-function collectObjectKeys(value: Record<string, unknown> | undefined): readonly string[] {
-  return value ? Object.keys(value) : [];
-}
-
 function listPluginRegistryNormalizerAliases(plugin: PluginManifestRecord): readonly string[] {
   return [
     plugin.id,
@@ -21,9 +17,9 @@ function listPluginRegistryNormalizerAliases(plugin: PluginManifestRecord): read
     ...(plugin.setup?.providers?.map((provider) => provider.id) ?? []),
     ...(plugin.cliBackends ?? []),
     ...(plugin.setup?.cliBackends ?? []),
-    ...collectObjectKeys(plugin.modelCatalog?.providers),
-    ...collectObjectKeys(plugin.modelCatalog?.aliases),
-    ...collectObjectKeys(plugin.providerAuthAliases),
+    ...Object.keys(plugin.modelCatalog?.providers ?? {}),
+    ...Object.keys(plugin.modelCatalog?.aliases ?? {}),
+    ...Object.keys(plugin.providerAuthAliases ?? {}),
     ...(plugin.legacyPluginIds ?? []),
   ];
 }

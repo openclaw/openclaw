@@ -9,6 +9,7 @@ export type PluginCapabilityCatalogContext = {
   resolveProviderRequestHeaders: typeof import("../agents/provider-request-config.js").resolveProviderRequestHeaders;
   resolveProviderAuthProfileApiKey: typeof import("./provider-auth-availability.js").resolveProviderAuthProfileApiKey;
   resolveApiKeyForProvider: typeof import("./runtime/runtime-model-auth.runtime.js").resolveProviderRuntimeApiKey;
+  /** @deprecated Use the host context's captureWsEventAsync; retained for shipped plugins. */
   captureWsEvent: typeof import("../proxy-capture/runtime.js").captureWsEvent;
   createDebugProxyWebSocketAgent: typeof import("../proxy-capture/env.js").createDebugProxyWebSocketAgent;
   resolveDebugProxySettings: typeof import("../proxy-capture/env.js").resolveDebugProxySettings;
@@ -24,3 +25,12 @@ export type PluginCapabilityCatalogContext = {
 export type PluginCapabilityCatalogEntry =
   | PluginCapabilityCatalog
   | ((context: PluginCapabilityCatalogContext) => PluginCapabilityCatalog);
+
+/** Native hosts supply asynchronous capture while preserving the legacy plugin context. */
+export type PluginCapabilityCatalogHostContext = PluginCapabilityCatalogContext & {
+  captureWsEventAsync: typeof import("../proxy-capture/runtime.js").captureWsEventAsync;
+};
+
+export type PluginCapabilityCatalogHostEntry =
+  | PluginCapabilityCatalog
+  | ((context: PluginCapabilityCatalogHostContext) => PluginCapabilityCatalog);

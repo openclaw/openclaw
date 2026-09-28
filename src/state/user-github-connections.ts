@@ -18,6 +18,7 @@ import {
   githubOAuthDeviceFields,
   validGitHubDeviceTiming,
 } from "../shared/github-oauth-values.js";
+import { registerListener } from "../shared/listeners.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 import {
@@ -26,7 +27,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
 import { selectResolvedUserProfileMetadataById } from "./user-profiles-internal.js";
-import type { UserProfilesDatabase } from "./user-profiles-schema.js";
+import type { UserProfilesDatabase } from "./user-profiles.types.js";
 
 const tokenPair = z.strictObject({
   accessToken: secret,
@@ -106,10 +107,7 @@ const retirementObservers = new Set<(profileIds: readonly string[]) => void>();
 export function observeUserGitHubProfileRetirement(
   observer: (profileIds: readonly string[]) => void,
 ): () => void {
-  retirementObservers.add(observer);
-  return () => {
-    retirementObservers.delete(observer);
-  };
+  return registerListener(retirementObservers, observer);
 }
 
 function retireAfterCommit(db: DatabaseSync, ids: string[]): void {

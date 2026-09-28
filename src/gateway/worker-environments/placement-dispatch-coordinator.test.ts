@@ -27,7 +27,7 @@ describe("worker placement dispatch coordinator", () => {
     { kind: "move", blocker: "sweep", cancellation: "admission" },
     { kind: "move", blocker: "dispatch", cancellation: "admission" },
   ] as const)(
-    "$cancellation cancels queued $kind without releasing the unrelated $blocker fence",
+    "$cancellation cancels queued $kind while preserving earlier $blocker work",
     async ({ kind, blocker, cancellation }) => {
       const entered = createDeferredCore();
       const release = createDeferredCore();
@@ -86,7 +86,7 @@ describe("worker placement dispatch coordinator", () => {
         expect(outcome).toMatchObject({ name: "AbortError" });
         expect(move).not.toHaveBeenCalled();
         expect(dispatch.mock.calls.map(([request]) => request.sessionId)).toEqual(
-          blocker === "dispatch" ? ["blocker"] : [],
+          blocker === "dispatch" ? ["blocker", "later"] : [],
         );
       } finally {
         release.resolve();
@@ -665,8 +665,10 @@ describe("worker placement dispatch coordinator", () => {
       const releaseEnvironmentGuard = createDeferredCore();
       const environmentGuardEntered = createDeferredCore();
       const fullSweepJoinedEnvironmentPass = createDeferredCore();
+      const recoveryStarted = createDeferredCore();
       const recoveryCore = vi.fn(async () => {});
       const resumeProvisioning = vi.fn(async (_placement, reconcileCore) => {
+        recoveryStarted.resolve();
         await reconcileCore();
       });
       const dispatch = vi.fn(async () => {
@@ -706,12 +708,12 @@ describe("worker placement dispatch coordinator", () => {
         kind === "full" ? coordinated.reconcile() : coordinated.reconcileActive("worker-target");
       releaseEnvironmentGuard.resolve();
       await environmentGuardEntered.promise;
-      await Promise.resolve();
+      await setImmediatePromise();
       expect(resumeProvisioning).not.toHaveBeenCalled();
       releaseDispatch.resolve();
       await dispatching;
       await fullSweepJoinedEnvironmentPass.promise;
-      await Promise.resolve();
+      await recoveryStarted.promise;
 
       expect(resumeProvisioning).toHaveBeenCalledOnce();
       await Promise.all([externalEnvironmentPass, fullSweep]);

@@ -1,7 +1,7 @@
 import { appendFileSync, readFileSync } from "node:fs";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import { DatabaseSync } from "node:sqlite";
-import { classifyQuotaRefreshCaller } from "./quota-reset-diagnostics.mjs";
+import { createQuotaNativeAuthObserver } from "./quota-reset-diagnostics.mjs";
 
 // Test-only transport routing; provider responses and auth-state mutation remain real.
 const options = new URL(import.meta.url).searchParams;
@@ -80,6 +80,37 @@ if (fixture.protocol !== "http:" || fixture.hostname !== "127.0.0.1" || !clockFi
 }
 
 const realNow = Date.now.bind(Date);
+const refreshReceipt = options.get("refreshReceipt");
+let authEventCount = 0;
+const recordAuth = (event) => {
+  if (!refreshReceipt || authEventCount > 256) return;
+  appendFileSync(
+    refreshReceipt,
+    `${JSON.stringify({
+      atMs: realNow(),
+      ...(authEventCount++ === 256 ? { kind: "truncated" } : event),
+    })}\n`,
+  );
+};
+if (refreshReceipt) {
+  const childProcess = createRequire(import.meta.url)("node:child_process");
+  const spawn = childProcess.spawn;
+  childProcess.spawn = function (...args) {
+    const child = Reflect.apply(spawn, this, args);
+    if (!Array.isArray(args[1]) || !args[1].includes("app-server") || !child.stdout) return child;
+    recordAuth({ kind: "native-observer" });
+    const observe = createQuotaNativeAuthObserver(recordAuth);
+    const emit = child.stdout.emit;
+    // Observe only delivery to the existing consumer; adding a data listener
+    // here would start flowing before the production transport is attached.
+    child.stdout.emit = function (event, ...values) {
+      if (event === "data") observe(values[0]);
+      return Reflect.apply(emit, this, [event, ...values]);
+    };
+    return child;
+  };
+  syncBuiltinESMExports();
+}
 Date.now = () => {
   const offset = Number(readFileSync(clockFile, "utf8"));
   if (!Number.isSafeInteger(offset) || offset < 0) {
@@ -104,15 +135,8 @@ globalThis.fetch = (input, init) => {
   if (!route) {
     return originalFetch(input, init);
   }
-  const refreshReceipt = options.get("refreshReceipt");
-  if (route === "/oauth/token" && refreshReceipt) {
-    appendFileSync(
-      refreshReceipt,
-      `${JSON.stringify({
-        atMs: realNow(),
-        caller: classifyQuotaRefreshCaller(new Error().stack),
-      })}\n`,
-    );
+  if (route === "/oauth/token") {
+    recordAuth({ kind: "oauth-token" });
   }
   const target = new URL(route, fixture);
   const fixtureInit = { ...init };

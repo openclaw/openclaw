@@ -5,111 +5,16 @@
  * tool to choose CDP, Playwright, or Chrome MCP behavior.
  */
 import type { ResolvedBrowserProfile } from "./config.js";
+import { resolveBrowserEngine } from "./engines/registry.js";
+import type { BrowserProfileCapabilities } from "./engines/types.js";
 
-type BrowserProfileMode =
-  | "local-managed"
-  | "local-existing-session"
-  | "local-extension"
-  | "remote-cdp";
+export type { BrowserProfileCapabilities } from "./engines/types.js";
 
-export type BrowserProfileCapabilities = {
-  mode: BrowserProfileMode;
-  isRemote: boolean;
-  /** Browser process reads paths from the same filesystem as OpenClaw. */
-  browserFilesystemLocal: boolean;
-  /** Profile uses the Chrome DevTools MCP server (existing-session driver). */
-  usesChromeMcp: boolean;
-  usesPersistentPlaywright: boolean;
-  supportsPerTabWs: boolean;
-  supportsJsonTabEndpoints: boolean;
-  supportsReset: boolean;
-  supportsManagedTabLimit: boolean;
-  supportsBatchActions: boolean;
-  supportsDownloads: boolean;
-  supportsPdf: boolean;
-  supportsRequests: boolean;
-  supportsErrors: boolean;
-  supportsPageText: boolean;
-  supportsEmulation: boolean;
-  requiresCompleteTargetEnumeration: boolean;
-};
-
-/** Return feature capabilities for a resolved browser profile. */
+/** Resolve capabilities through the selected engine inside the Browser plugin. */
 export function getBrowserProfileCapabilities(
   profile: ResolvedBrowserProfile,
 ): BrowserProfileCapabilities {
-  const driverCapabilities = {
-    supportsBatchActions: profile.driver !== "existing-session",
-    supportsDownloads: profile.driver !== "existing-session",
-    supportsPdf: profile.driver !== "existing-session",
-    supportsRequests: profile.driver !== "existing-session",
-    supportsErrors: profile.driver !== "existing-session",
-    supportsPageText: profile.driver !== "existing-session",
-    supportsEmulation: profile.driver !== "existing-session",
-    requiresCompleteTargetEnumeration: profile.driver === "extension",
-  };
-  if (profile.driver === "existing-session") {
-    return {
-      ...driverCapabilities,
-      mode: "local-existing-session",
-      isRemote: false,
-      browserFilesystemLocal: false,
-      usesChromeMcp: true,
-      usesPersistentPlaywright: false,
-      supportsPerTabWs: false,
-      supportsJsonTabEndpoints: false,
-      supportsReset: false,
-      supportsManagedTabLimit: false,
-    };
-  }
-
-  // Extension relay profiles drive the user's signed-in browser through the
-  // paired Chrome extension. Ops run over persistent Playwright exactly like
-  // remote CDP, but the endpoint is the loopback relay server.
-  if (profile.driver === "extension") {
-    return {
-      ...driverCapabilities,
-      mode: "local-extension",
-      isRemote: false,
-      browserFilesystemLocal: true,
-      usesChromeMcp: false,
-      usesPersistentPlaywright: true,
-      supportsPerTabWs: false,
-      supportsJsonTabEndpoints: false,
-      supportsReset: false,
-      supportsManagedTabLimit: false,
-    };
-  }
-
-  if (!profile.cdpIsLoopback) {
-    return {
-      ...driverCapabilities,
-      mode: "remote-cdp",
-      isRemote: true,
-      browserFilesystemLocal: false,
-      usesChromeMcp: false,
-      usesPersistentPlaywright: true,
-      supportsPerTabWs: false,
-      supportsJsonTabEndpoints: false,
-      supportsReset: false,
-      supportsManagedTabLimit: false,
-    };
-  }
-
-  return {
-    ...driverCapabilities,
-    mode: "local-managed",
-    isRemote: false,
-    // A loopback attach-only endpoint can terminate in Docker or a tunnel.
-    // Only an OpenClaw-owned browser is known to share this filesystem.
-    browserFilesystemLocal: !profile.attachOnly,
-    usesChromeMcp: false,
-    usesPersistentPlaywright: false,
-    supportsPerTabWs: true,
-    supportsJsonTabEndpoints: true,
-    supportsReset: true,
-    supportsManagedTabLimit: true,
-  };
+  return resolveBrowserEngine(profile.engine).capabilities(profile);
 }
 
 /** Resolve the default snapshot format for a profile and available drivers. */

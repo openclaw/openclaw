@@ -6,6 +6,10 @@ export type CommandLaneSnapshot = {
   queuedCount: number;
   activeCount: number;
   maxConcurrent: number;
+  /** Capacity applies independently to each session or swarm group. */
+  concurrencyScope?: "session" | "swarm";
+  swarmGroupKey?: string;
+  saturatedLaneCount?: number;
   draining: boolean;
   generation: number;
   /** Group this lane belongs to, if any. */
@@ -33,6 +37,15 @@ export type CommandQueueTaskDeadline =
   | { kind: "unlimited" };
 
 export type CommandQueueEnqueueOptions = {
+  /** Enqueue-time provenance for diagnostics only; never used for admission. */
+  taskIdentity?: Readonly<{
+    taskKind: string;
+    sessionKey?: string;
+    runId?: string;
+    requesterSessionKey?: string;
+  }>;
+  /** Owner-resolved capacity, installed atomically with this enqueue. */
+  maxConcurrent?: number;
   /** Cancels queued admission; the task owns cancellation after it starts. */
   abortSignal?: AbortSignal;
   /** Called only when this entry remains queued after immediate lane admission. */

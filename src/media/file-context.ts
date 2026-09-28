@@ -1,6 +1,6 @@
+import { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 // File context helpers build user-visible context for media file references.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
 
 const XML_ESCAPE_MAP: Record<string, string> = {
   "<": "&lt;",

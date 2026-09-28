@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { execFileUtf8 } from "./exec-file.js";
+import { ServiceOwnershipRefusalError } from "./service-inspection-error.js";
 import { openSystemdBroker, openSystemdPrivatePeer } from "./systemd-peer-native.js";
 import { admitSystemdServiceReadBinding } from "./systemd-peer.js";
 import { systemdManagerVersionProbe } from "./systemd-user-bus.test-support.js";
@@ -141,10 +142,51 @@ it("disposes the peer if the original manager changes before admission completes
     .mockResolvedValueOnce([[1000]])
     .mockResolvedValueOnce([[1234]])
     .mockResolvedValueOnce([[":1.1"]]);
-  expect(await admitSystemdServiceReadBinding(env, performance.now() + 1000)).toBeUndefined();
+  await expect(admitSystemdServiceReadBinding(env, performance.now() + 1000)).rejects.toMatchObject(
+    {
+      reason: "systemd-manager-changed",
+    },
+  );
   expect(closePeer).toHaveBeenCalledOnce();
   expect(closeBroker).toHaveBeenCalledOnce();
 });
+
+it.each(["account", "process", "native peer"])(
+  "preserves a definite %s refusal instead of admitting a fallback",
+  async (changed) => {
+    if (changed === "account") {
+      query.mockResolvedValueOnce([[":1.0"]]).mockResolvedValueOnce([[2001]]);
+    } else if (changed === "process") {
+      query
+        .mockResolvedValueOnce([[":1.0"]])
+        .mockResolvedValueOnce([[1000]])
+        .mockResolvedValueOnce([[1234]])
+        .mockResolvedValueOnce([[":1.0"]])
+        .mockResolvedValueOnce([[4321]]);
+    } else {
+      vi.mocked(openSystemdPrivatePeer).mockRejectedValueOnce(
+        new ServiceOwnershipRefusalError("systemd-manager-changed"),
+      );
+    }
+    await expect(
+      admitSystemdServiceReadBinding(env, performance.now() + 1000),
+    ).rejects.toMatchObject({
+      reason: "systemd-manager-changed",
+    });
+    expect(openSystemdBroker).toHaveBeenCalledOnce();
+    expect(closeBroker).toHaveBeenCalledOnce();
+  },
+);
+
+it.each([null, -1, 0xffffffff, 1000.5, "1000"])(
+  "keeps malformed manager UID %j diagnostic",
+  async (uid) => {
+    query.mockResolvedValueOnce([[":1.0"]]).mockResolvedValueOnce([[uid]]);
+    expect(await admitSystemdServiceReadBinding(env, performance.now() + 1000)).toBeUndefined();
+    expect(openSystemdPrivatePeer).not.toHaveBeenCalled();
+    expect(closeBroker).toHaveBeenCalledOnce();
+  },
+);
 
 it.each([
   "unixexec:path=/usr/bin/helper",

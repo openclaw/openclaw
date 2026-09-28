@@ -123,13 +123,16 @@ function collectPreflightErrorCauseChain(error: unknown): unknown[] {
   return chain;
 }
 
-function formatPreflightError(error: unknown): string {
-  const causeChain = collectPreflightErrorCauseChain(error);
-  const causeDetails = formatErrorMessageWithCode(error);
+function isPreflightTimeout(error: unknown): boolean {
   // fetchWithSsrFGuard propagates only its owned deadline as TimeoutError.
-  const classified = causeChain.some(
+  return collectPreflightErrorCauseChain(error).some(
     (candidate) => readErrorProperty(candidate, "name") === "TimeoutError",
-  )
+  );
+}
+
+function formatPreflightError(error: unknown): string {
+  const causeDetails = formatErrorMessageWithCode(error);
+  const classified = isPreflightTimeout(error)
     ? `Local provider preflight exceeded its configured ${PREFLIGHT_TIMEOUT_MS}ms deadline | ${causeDetails}`
     : causeDetails;
   return classified.length <= MAX_PREFLIGHT_ERROR_CHARS
@@ -240,7 +243,9 @@ export async function preflightCronModelProvider(params: {
   } catch (error) {
     result = { status: "unavailable", error };
   }
-  preflightCache.set(cacheKey, { checkedAtMs: nowMs, result });
+  if (result.status === "available" || !isPreflightTimeout(result.error)) {
+    preflightCache.set(cacheKey, { checkedAtMs: nowMs, result });
+  }
   if (result.status === "available") {
     return { status: "available" };
   }

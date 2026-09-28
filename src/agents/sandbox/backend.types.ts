@@ -40,6 +40,8 @@ export type CreateSandboxBackendParams = {
   /** Synchronously recheck this generation immediately before runtime side effects. */
   assertRuntimeCurrent?: () => void;
   workspaceDir: string;
+  /** Prepared managed projection; retain its exact mount owner before allocation. */
+  workspaceSource?: "managed-worktree";
   agentWorkspaceDir: string;
   skillsWorkspaceDir?: string;
   readOnlyResourceMounts?: Array<{ hostPath: string; containerPath: string }>;

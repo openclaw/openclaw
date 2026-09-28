@@ -9,7 +9,7 @@ import type {
   ChannelMessageReceiveAdapterShape,
 } from "./types.js";
 
-const defaultManualReceiveAdapter = {
+export const defaultManualReceiveAdapter = {
   defaultAckPolicy: "manual",
   supportedAckPolicies: ["manual"],
 } as const satisfies ChannelMessageReceiveAdapterShape;

@@ -7,10 +7,20 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 /** Applies a primary model to agent defaults while preserving model fallback metadata. */
 export function applyPrimaryModel(cfg: OpenClawConfig, model: string): OpenClawConfig {
+  return applyDefaultModel(cfg, model);
+}
+
+export function applyDefaultModel(
+  cfg: OpenClawConfig,
+  model: string,
+  opts?: { preserveExistingPrimary?: boolean },
+): OpenClawConfig {
   const normalizedModel = normalizeAgentModelRefForConfig(model);
   const defaults = cfg.agents?.defaults;
   const existingModel = defaults?.model;
   const existingModels = normalizeAgentModelMapForConfig(defaults?.models ?? {});
+  const existingPrimary =
+    typeof existingModel === "string" ? existingModel : existingModel?.primary;
   const fallbacks =
     typeof existingModel === "object" && existingModel !== null && "fallbacks" in existingModel
       ? (existingModel as { fallbacks?: string[] }).fallbacks?.map((fallback) =>
@@ -25,7 +35,10 @@ export function applyPrimaryModel(cfg: OpenClawConfig, model: string): OpenClawC
         ...defaults,
         model: {
           ...(fallbacks ? { fallbacks } : undefined),
-          primary: normalizedModel,
+          primary:
+            opts?.preserveExistingPrimary === true && existingPrimary
+              ? normalizeAgentModelRefForConfig(existingPrimary)
+              : normalizedModel,
         },
         models: {
           ...existingModels,

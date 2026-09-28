@@ -23,9 +23,6 @@ import type {
   RouteGateFacts,
 } from "./types.js";
 
-/** Normalized allowlist entry material produced by a channel identity adapter. */
-export type ChannelIngressAdapterEntry = InternalNormalizedEntry;
-
 /** Adapter used by the ingress resolver to normalize entries and match subjects. */
 export type ChannelIngressAdapter = InternalChannelIngressAdapter;
 
@@ -71,7 +68,7 @@ export type ChannelIngressIdentityDescriptor = {
   /** Optional custom match hook for platform-specific identity equivalence. */
   matchEntry?: (params: {
     subject: InternalChannelIngressSubject;
-    entry: ChannelIngressAdapterEntry;
+    entry: InternalNormalizedEntry;
     context: "dm" | "group" | "route" | "command";
   }) => boolean | undefined;
   /** Generates stable redacted entry ids for diagnostics. */
@@ -150,9 +147,9 @@ export type ChannelIngressContextBinding = {
   agentId: string;
   /** Final dispatch or route session selected by the channel producer. */
   sessionKey: string;
-  /** Stable transport message id when the event has one. */
+  /** Final message id used by the host context, after any transport ID mapping. */
   messageId?: string;
-  /** Native transport conversation id when it differs from the canonical conversation id. */
+  /** Match the host context's reply or conversation nativeChannelId, including when it equals id. */
   nativeChannelId?: string;
   /** Final inbound event classification used by the host context. */
   inboundEventKind: InboundEventKind;

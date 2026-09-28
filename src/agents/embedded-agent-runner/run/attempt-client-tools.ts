@@ -6,6 +6,7 @@ import {
   createClientToolNameConflictError,
   findClientToolNameConflicts,
   toClientToolDefinitions,
+  toToolDefinitions,
 } from "../../agent-tool-definition-adapter.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { resolveToolLoopDetectionConfig } from "../../agent-tools.js";
@@ -30,17 +31,15 @@ import {
   collectRegisteredToolNames,
   toSessionToolAllowlist,
 } from "../tool-name-allowlist.js";
-import { splitSdkTools } from "../tool-split.js";
 import type { EmbeddedAttemptClientToolCallSlot, EmbeddedRunAttemptParams } from "./types.js";
 
 export function prepareEmbeddedAttemptClientTools(params: {
   attempt: EmbeddedRunAttemptParams;
-  catalogToolHookContext: Parameters<typeof splitSdkTools>[0]["toolHookContext"];
+  catalogToolHookContext: Parameters<typeof toToolDefinitions>[1];
   codeModeControlsEnabledForRun: boolean;
   deferredDirectoryToolsCallable: boolean;
   effectiveTools: AgentTool[];
   replaySafetyOptions: Parameters<typeof isAgentToolReplaySafe>[1];
-  sandboxEnabled: boolean;
   sandboxSessionKey?: string;
   sessionAgentId: string;
   toolSearchCatalogRef?: ToolSearchCatalogRef;
@@ -51,17 +50,15 @@ export function prepareEmbeddedAttemptClientTools(params: {
 }) {
   // Reserve synchronously so parallel client-tool batches preserve assistant source order.
   const clientToolCallSlots: EmbeddedAttemptClientToolCallSlot[] = [];
-  const clientToolCallSlotIndexes = new Map<string, number>();
+  const clientToolCallSlotsById = new Map<string, EmbeddedAttemptClientToolCallSlot>();
   const reserveClientToolCallSlot = (toolCallId: string, toolName: string) => {
-    if (clientToolCallSlotIndexes.has(toolCallId)) {
-      return;
+    let slot = clientToolCallSlotsById.get(toolCallId);
+    if (!slot) {
+      slot = { toolCallId, name: toolName, completed: false };
+      clientToolCallSlotsById.set(toolCallId, slot);
+      clientToolCallSlots.push(slot);
     }
-    clientToolCallSlotIndexes.set(toolCallId, clientToolCallSlots.length);
-    clientToolCallSlots.push({
-      toolCallId,
-      name: toolName,
-      completed: false,
-    });
+    return slot;
   };
   const clientToolLoopDetection = resolveToolLoopDetectionConfig({
     cfg: params.attempt.config,
@@ -73,25 +70,13 @@ export function prepareEmbeddedAttemptClientTools(params: {
         {
           reserve: reserveClientToolCallSlot,
           complete: (toolCallId, toolName, toolParams) => {
-            reserveClientToolCallSlot(toolCallId, toolName);
-            const slotIndex = clientToolCallSlotIndexes.get(toolCallId);
-            if (slotIndex === undefined) {
-              return;
-            }
-            const slot = clientToolCallSlots[slotIndex];
-            if (!slot) {
-              return;
-            }
+            const slot = reserveClientToolCallSlot(toolCallId, toolName);
             slot.name = toolName;
             slot.params = toolParams;
             slot.completed = true;
           },
           discard: (toolCallId) => {
-            const slotIndex = clientToolCallSlotIndexes.get(toolCallId);
-            if (slotIndex === undefined) {
-              return;
-            }
-            const slot = clientToolCallSlots[slotIndex];
+            const slot = clientToolCallSlotsById.get(toolCallId);
             if (slot) {
               slot.completed = false;
               slot.params = undefined;
@@ -197,12 +182,11 @@ export function prepareEmbeddedAttemptClientTools(params: {
       );
     }
 
-    const { customTools } = splitSdkTools({
-      tools: params.effectiveTools,
-      sandboxEnabled: params.sandboxEnabled,
-      toolHookContext: params.catalogToolHookContext,
-      abortSignal: params.getToolAbortSignal?.(),
-    });
+    const customTools = toToolDefinitions(
+      params.effectiveTools,
+      params.catalogToolHookContext,
+      params.getToolAbortSignal?.(),
+    );
     const allCustomTools = [...customTools, ...clientToolDefs];
     const sessionToolAllowlist = toSessionToolAllowlist(collectRegisteredToolNames(allCustomTools));
     return {

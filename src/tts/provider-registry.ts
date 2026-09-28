@@ -7,34 +7,19 @@ import {
 } from "../plugins/capability-provider-runtime.js";
 import { buildCapabilityProviderIndex } from "../plugins/provider-registry-shared.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
-import {
-  createSpeechProviderRegistry,
-  type SpeechProviderRegistryResolver,
-} from "./provider-registry-core.js";
+import { createSpeechProviderRegistry } from "./provider-registry-core.js";
 export { normalizeSpeechProviderId } from "./provider-registry-core.js";
 
-/** Resolve speech providers from configured plugin capabilities. */
-function resolveSpeechProviderPluginEntries(cfg?: OpenClawConfig): SpeechProviderPlugin[] {
-  return resolvePluginCapabilityProviders({
-    key: "speechProviders",
-    cfg,
-  });
-}
-
-const defaultSpeechProviderRegistryResolver: SpeechProviderRegistryResolver = {
+/** Config-aware registry used by setup/status/runtime paths before plugins are loaded. */
+const defaultSpeechProviderRegistry = createSpeechProviderRegistry({
   getProvider: (providerId, cfg) =>
     resolvePluginCapabilityProvider({
       key: "speechProviders",
       providerId,
       cfg,
     }),
-  listProviders: resolveSpeechProviderPluginEntries,
-};
-
-/** Config-aware registry used by setup/status/runtime paths before plugins are loaded. */
-const defaultSpeechProviderRegistry = createSpeechProviderRegistry(
-  defaultSpeechProviderRegistryResolver,
-);
+  listProviders: (cfg) => resolvePluginCapabilityProviders({ key: "speechProviders", cfg }),
+});
 
 /** List configured speech providers using manifest/capability discovery. */
 export const listSpeechProviders = defaultSpeechProviderRegistry.listSpeechProviders;

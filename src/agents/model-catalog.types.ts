@@ -57,6 +57,10 @@ export type ModelCatalogSnapshot = {
   routeVariants: ModelCatalogEntry[];
   /** Provider-owned outcome of each live catalog request in this generation. */
   providerOutcomes?: readonly ProviderCatalogOutcome[];
+  /** Native discovery facts belong to their harness, independently of API-provider auth. */
+  nativeProviderOutcomes?: Readonly<Record<string, readonly ProviderCatalogOutcome[]>>;
+  /** Untagged harness observations, before API donor enrichment; each runtime owns its scope. */
+  nativeHostRows?: Readonly<Record<string, readonly ModelCatalogEntry[]>>;
   /** The current acquisition failed while this published inventory remained available. */
   refreshFailed?: boolean;
   /** Provider discovery is in progress; existing rows remain usable. */

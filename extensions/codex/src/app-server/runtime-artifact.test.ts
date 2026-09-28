@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import {
@@ -98,6 +98,35 @@ async function createNpmLauncherFixture(root: string) {
 }
 
 describe("Codex app-server runtime artifact", () => {
+  it("rejects cancellation while opening an empty runtime artifact", async () => {
+    await withTempDir("openclaw-codex-runtime-abort-", async (root) => {
+      const command = path.join(root, "codex");
+      await fs.writeFile(command, "");
+      const options = startOptions(command);
+      const controller = new AbortController();
+      const reason = new Error("Runtime capture canceled");
+      const open = fs.open.bind(fs);
+      const opened = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        if (args[0] === command && typeof args[1] === "number") {
+          controller.abort(reason);
+        }
+        return handle;
+      });
+      try {
+        await expect(
+          captureCodexAppServerRuntimeArtifactBeforeStart({
+            startOptions: options,
+            spawnIdentity: spawnIdentity(options),
+            signal: controller.signal,
+          }),
+        ).rejects.toBe(reason);
+      } finally {
+        opened.mockRestore();
+      }
+    });
+  });
+
   it("binds a native executable and its adjacent code-mode host", async () => {
     await withTempDir("openclaw-codex-runtime-artifact-", async (root) => {
       const command = path.join(root, "codex");
@@ -369,18 +398,21 @@ describe("Codex app-server runtime artifact", () => {
     });
   });
 
-  it("fails closed for remote WebSocket runtimes", async () => {
-    const options = startOptions("codex", {
-      transport: "websocket",
-      url: "ws://127.0.0.1:1234",
-    });
-    await expect(
-      captureCodexAppServerRuntimeArtifactBeforeStart({
-        startOptions: options,
-        spawnIdentity: spawnIdentity(options),
-      }),
-    ).rejects.toThrow("WebSocket attestation is unsupported");
-  });
+  it.each(["websocket", "unix"] as const)(
+    "verifies a configured %s service without a local executable",
+    async (transport) => {
+      const options = startOptions("codex", {
+        transport,
+        url: transport === "websocket" ? "ws://127.0.0.1:1234" : "unix:///tmp/codex.sock",
+      });
+      const { binding, client } = await captureBinding({ options });
+      expect(readCodexAppServerClientRuntimeArtifact(client)).toEqual(binding);
+      await expect(
+        validateCodexAppServerRuntimeArtifact(binding, undefined, options),
+      ).resolves.toBe(true);
+      await expect(validateCodexAppServerRuntimeArtifact(binding)).resolves.toBe(false);
+    },
+  );
 
   it.each([
     { name: "default socket", args: ["app-server", "proxy"] },

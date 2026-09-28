@@ -3,14 +3,13 @@ import { execFileSync } from "node:child_process";
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { safeStatSync } from "@openclaw/fs-safe/path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { UPDATE_NETWORK_TIMEOUT_MS } from "./update-network-budget.js";
 
 /** Options that scope npm config and cache paths for project-local installs. */
-export type NpmProjectInstallEnvOptions = {
+export type NpmProjectInstallEnvOptions = NpmConfigScope & {
   cacheDir?: string;
-  npmConfigCwd?: string;
-  npmConfigPrefix?: string | null;
 };
 
 const NPM_CONFIG_SCRIPT_SHELL_KEYS = ["NPM_CONFIG_SCRIPT_SHELL", "npm_config_script_shell"];
@@ -174,12 +173,8 @@ function buildNpmGlobalConfigPathCacheKey(env: NodeJS.ProcessEnv, scope: NpmConf
 }
 
 function readFileSignature(filePath: string): string {
-  try {
-    const stat = fsSync.statSync(filePath);
-    return `${stat.mtimeMs}:${stat.size}`;
-  } catch {
-    return "missing";
-  }
+  const stat = safeStatSync(filePath);
+  return stat ? `${stat.mtimeMs}:${stat.size}` : "missing";
 }
 
 function safeCwd(): string {
@@ -191,16 +186,8 @@ function safeCwd(): string {
 }
 
 function resolveScopedProjectNpmrc(scope: NpmConfigScope): string | null {
-  const scopedCwd = scope.npmConfigCwd?.trim();
-  if (scopedCwd) {
-    return path.join(scopedCwd, ".npmrc");
-  }
-  try {
-    const cwd = process.cwd();
-    return cwd ? path.join(cwd, ".npmrc") : null;
-  } catch {
-    return null;
-  }
+  const cwd = scope.npmConfigCwd?.trim() || safeCwd();
+  return cwd ? path.join(cwd, ".npmrc") : null;
 }
 
 function resolveScopedGlobalNpmrc(scope: NpmConfigScope): string | null {
@@ -325,11 +312,6 @@ export function createNpmProjectInstallEnv(
   return installEnv;
 }
 
-/** Returns true when caller env already pins npm's lifecycle script shell. */
-function hasNpmScriptShellSetting(env: NodeJS.ProcessEnv): boolean {
-  return NPM_CONFIG_SCRIPT_SHELL_KEYS.some((key) => Boolean(env[key]?.trim()));
-}
-
 /** Resolves an absolute POSIX shell for npm lifecycle scripts when one is available. */
 function resolvePosixNpmScriptShell(env: NodeJS.ProcessEnv): string | null {
   if (process.platform === "win32") {
@@ -344,7 +326,7 @@ function resolvePosixNpmScriptShell(env: NodeJS.ProcessEnv): string | null {
 
 /** Sets npm's script-shell env only when the caller has not configured one. */
 export function applyPosixNpmScriptShellEnv(env: NodeJS.ProcessEnv): void {
-  if (hasNpmScriptShellSetting(env)) {
+  if (NPM_CONFIG_SCRIPT_SHELL_KEYS.some((key) => Boolean(env[key]?.trim()))) {
     return;
   }
   const scriptShell = resolvePosixNpmScriptShell(env);

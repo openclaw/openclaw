@@ -187,7 +187,7 @@ describe("config form scalar integrity", () => {
     );
     expect(textInput.value).toBe("");
     expect(textInput.placeholder).toBe("Default: balanced");
-    expect(container.textContent).toContain("Using default: balanced");
+    expect(container.textContent).not.toContain("Using default:");
     expect(onPatch).not.toHaveBeenCalled();
     expect(onRemove).not.toHaveBeenCalled();
 
@@ -204,7 +204,7 @@ describe("config form scalar integrity", () => {
     );
     expect(numberInput.value).toBe("");
     expect(numberInput.placeholder).toBe("Default: 3");
-    expect(container.textContent).toContain("Using default: 3");
+    expect(container.textContent).not.toContain("Using default:");
 
     const arrowUp = new KeyboardEvent("keydown", {
       bubbles: true,
@@ -500,38 +500,43 @@ describe("config form scalar integrity", () => {
     expect(container.textContent).not.toContain("inherited");
   });
 
-  it("never reveals a server-redacted sentinel and keeps the input readonly", () => {
-    const container = document.createElement("div");
+  it.each([false, true])(
+    "keeps a server-redacted sentinel readonly (maskSensitive=%s)",
+    (maskSensitive) => {
+      const container = document.createElement("div");
 
-    renderTextInputFixture(container, {
-      schema: { type: "string" },
-      value: "__OPENCLAW_REDACTED__",
-      path: ["secret"],
-      hints: { secret: { sensitive: true } },
-      inputType: "text",
-      // Even with reveal forced on, the sentinel is not the stored value;
-      // showing it editable would let a stray edit overwrite the credential.
-      revealSensitive: true,
-      onToggleSensitivePath: vi.fn(),
-      onPatch: vi.fn(),
-      onRemove: vi.fn(),
-    });
+      renderTextInputFixture(container, {
+        schema: { type: "string" },
+        value: "__OPENCLAW_REDACTED__",
+        path: ["secret"],
+        hints: { secret: { sensitive: true } },
+        inputType: "text",
+        // Even with reveal forced on, the sentinel is not the stored value;
+        // showing it editable would let a stray edit overwrite the credential.
+        revealSensitive: !maskSensitive,
+        maskSensitive,
+        onToggleSensitivePath: vi.fn(),
+        onPatch: vi.fn(),
+        onRemove: vi.fn(),
+      });
 
-    const input = expectElement(
-      container.querySelector<HTMLInputElement>("input"),
-      "sentinel secret input",
-    );
-    expect(input.value).not.toContain("__OPENCLAW_REDACTED__");
-    expect(input.readOnly).toBe(true);
-    const eye = expectElement(
-      container.querySelector<HTMLButtonElement>(".settings-secret__toggle"),
-      "stored secret reveal toggle",
-    );
-    expect(eye.disabled).toBe(true);
-    expect(eye.getAttribute("aria-label")).toBe(
-      "Stored secrets are never sent to the browser; enter a new value to replace it",
-    );
-  });
+      const input = expectElement(
+        container.querySelector<HTMLInputElement>("input"),
+        "sentinel secret input",
+      );
+      expect(input.value).not.toContain("__OPENCLAW_REDACTED__");
+      expect(input.readOnly).toBe(true);
+      if (maskSensitive) {
+        expect(input.placeholder).toBe("••••••••");
+      }
+      const eye = expectElement(
+        container.querySelector<HTMLButtonElement>(".settings-secret__toggle"),
+        "stored secret reveal toggle",
+      );
+      expect(eye.disabled).toBe(true);
+      expect(eye.getAttribute("aria-label")).toBe("This editor cannot reveal the stored value.");
+    },
+  );
 
   it("preserves string and false edits through the analyzer path", () => {
     const container = document.createElement("div");

@@ -11,6 +11,7 @@ import {
 } from "./openclaw-state-db-additive-columns.js";
 import {
   FIRST_USE_STATE_INDEXES,
+  DOCTOR_OWNED_STATE_TABLES,
   FIRST_USE_STATE_TABLES,
   LAZY_ADDITIVE_STATE_INDEXES,
   LAZY_ADDITIVE_STATE_TABLES,
@@ -44,6 +45,8 @@ const CLAW_STARTUP_ADDITIVE_STATE_TABLES = [
 const CLAW_STARTUP_ADDITIVE_STATE_TABLE_SET = new Set<string>(CLAW_STARTUP_ADDITIVE_STATE_TABLES);
 const CLAW_READONLY_OPTIONAL_STATE_INDEXES = [
   "idx_operator_approvals_source_run_resolved",
+  "idx_task_runs_requester_session_key",
+  "idx_worker_session_placements_environment",
 ] as const;
 let openClawStateCanonicalNamedIndexSet: ReadonlySet<string> | undefined;
 
@@ -54,21 +57,24 @@ function getOpenClawStateCanonicalNamedIndexSet(): ReadonlySet<string> {
   return openClawStateCanonicalNamedIndexSet;
 }
 
-const runtimeSchemaCache = new Map<boolean, string>();
+const runtimeSchemaCache = new Map<string, string>();
 
 /** Project canonical SQL to the tables the shared runtime may create during this open. */
 export function getOpenClawStateRuntimeSchema(options: {
   includeVersionLazyAdditiveTables: boolean;
+  includeAgentDeletionJournal?: boolean;
 }): string {
-  const { includeVersionLazyAdditiveTables } = options;
-  const cached = runtimeSchemaCache.get(includeVersionLazyAdditiveTables);
+  const { includeVersionLazyAdditiveTables, includeAgentDeletionJournal = true } = options;
+  const key = `${includeVersionLazyAdditiveTables}:${includeAgentDeletionJournal}`;
+  const cached = runtimeSchemaCache.get(key);
   if (cached !== undefined) {
     return cached;
   }
   let schema = OPENCLAW_STATE_SCHEMA_SQL;
-  const omittedTables = includeVersionLazyAdditiveTables
-    ? FIRST_USE_STATE_TABLES
-    : LAZY_ADDITIVE_STATE_TABLES;
+  const omittedTables = [
+    ...(includeVersionLazyAdditiveTables ? FIRST_USE_STATE_TABLES : LAZY_ADDITIVE_STATE_TABLES),
+    ...(includeAgentDeletionJournal ? [] : DOCTOR_OWNED_STATE_TABLES),
+  ];
   const omittedIndexes = includeVersionLazyAdditiveTables
     ? FIRST_USE_STATE_INDEXES
     : LAZY_ADDITIVE_STATE_INDEXES;
@@ -91,12 +97,13 @@ export function getOpenClawStateRuntimeSchema(options: {
     }
     schema = `${schema.slice(0, start)}${schema.slice(end + 1)}`;
   }
-  runtimeSchemaCache.set(includeVersionLazyAdditiveTables, schema);
+  runtimeSchemaCache.set(key, schema);
   return schema;
 }
 
 export const STATE_PERSISTENT_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {
   allowCompatibleAdditiveColumns: true,
+  allowedMissingTables: DOCTOR_OWNED_STATE_TABLES,
   allowedMissingColumns: CLAW_FIRST_USE_ADDITIVE_STATE_COLUMNS,
   allowedColumnDefinitions: {
     "diagnostic_events.sequence": ["sequence INTEGER NOT NULL DEFAULT 0"],
@@ -123,7 +130,11 @@ export const STATE_PERSISTENT_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = 
 
 export const OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY: SqliteSchemaCompatibility = {
   ...STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
-  allowedMissingTables: [...LAZY_ADDITIVE_STATE_TABLES, ...CLAW_STARTUP_ADDITIVE_STATE_TABLES],
+  allowedMissingTables: [
+    ...LAZY_ADDITIVE_STATE_TABLES,
+    ...CLAW_STARTUP_ADDITIVE_STATE_TABLES,
+    ...DOCTOR_OWNED_STATE_TABLES,
+  ],
   allowedMissingIndexes: CLAW_READONLY_OPTIONAL_STATE_INDEXES,
   allowedMissingColumns: CLAW_LAZY_ADDITIVE_STATE_COLUMNS,
 };

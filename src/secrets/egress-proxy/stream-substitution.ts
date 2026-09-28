@@ -113,8 +113,15 @@ export function substituteSecretEgressBody(
 export function createSecretEgressBodyTransform(params: {
   onSubstitution: () => void;
   resolveSentinel: (sentinel: string) => string | undefined;
+  isActive?: () => boolean;
 }): Transform {
   let pending: Buffer = Buffer.alloc(0);
+  const push = (stream: Transform, output: Buffer) => {
+    if (params.isActive && !params.isActive()) {
+      throw new SecretEgressSubstitutionError("unresolved-sentinel");
+    }
+    stream.push(output);
+  };
   return new Transform({
     transform(chunk: Buffer | string, _encoding: BufferEncoding, callback: TransformCallback) {
       try {
@@ -124,7 +131,7 @@ export function createSecretEgressBodyTransform(params: {
           flush: false,
           onSubstitution: params.onSubstitution,
           resolveSentinel: params.resolveSentinel,
-          push: (output) => this.push(output),
+          push: (output) => push(this, output),
         });
         callback();
       } catch (error) {
@@ -142,7 +149,7 @@ export function createSecretEgressBodyTransform(params: {
           flush: true,
           onSubstitution: params.onSubstitution,
           resolveSentinel: params.resolveSentinel,
-          push: (output) => this.push(output),
+          push: (output) => push(this, output),
         });
         callback();
       } catch (error) {

@@ -44,7 +44,7 @@ export const pluginCredentialHandlers: GatewayRequestHandlers = {
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          "Current administrator access is required to inspect credential references.",
+          "Current administrator access is required to inspect plugin credentials.",
         ),
       );
     if (!authorized()) {
@@ -53,8 +53,8 @@ export const pluginCredentialHandlers: GatewayRequestHandlers = {
     }
     try {
       const snapshot = await readConfigFileSnapshot();
-      // Reference metadata is private authoring data. Recheck the admitted connection
-      // after I/O, before reading any pointer from the unredacted snapshot.
+      // Both references and revealed literals are private authoring data. Recheck
+      // the admitted connection after I/O, before reading the unredacted snapshot.
       if (!authorized()) {
         denied();
         return;
@@ -77,7 +77,7 @@ export const pluginCredentialHandlers: GatewayRequestHandlers = {
       const manifest = metadata.byPluginId.get(params.pluginId);
       const descriptor =
         manifest &&
-        resolvePluginCredentialDescriptors(context.getRuntimeConfig(), manifest).find(
+        resolvePluginCredentialDescriptors(manifest).find(
           (field) => JSON.stringify(field.path) === JSON.stringify(params.path),
         );
       if (!descriptor) {
@@ -95,7 +95,12 @@ export const pluginCredentialHandlers: GatewayRequestHandlers = {
         true,
         {
           baseHash,
-          credential: inspectPluginCredentialValue(snapshot.sourceConfig, descriptor, process.env),
+          credential: inspectPluginCredentialValue(
+            snapshot.sourceConfig,
+            descriptor,
+            process.env,
+            params.reveal === true,
+          ),
         },
         undefined,
       );

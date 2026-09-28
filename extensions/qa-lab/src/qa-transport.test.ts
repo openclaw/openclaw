@@ -70,6 +70,7 @@ describe("createQaStateBackedTransportAdapter", () => {
     const captureArtifacts = vi.fn(async () => ({
       artifacts: [{ kind: "channel-driver-smoke" as const, path: "readiness.json" }],
     }));
+    const createRuntimePreloads = vi.fn(() => ["file:///qa-preload.mjs"]);
     const adapter = createQaStateBackedTransportAdapter(state, {
       id: "live",
       label: "Live",
@@ -79,6 +80,7 @@ describe("createQaStateBackedTransportAdapter", () => {
       supportedActions: [],
       resetTransport,
       captureArtifacts,
+      createRuntimePreloads,
       sendInbound: async (input) => state.addInboundMessage(input),
       createGatewayConfig: () => ({}),
       waitReady: async () => undefined,
@@ -100,6 +102,8 @@ describe("createQaStateBackedTransportAdapter", () => {
       artifacts: [{ kind: "channel-driver-smoke", path: "readiness.json" }],
     });
     expect(captureArtifacts).toHaveBeenCalledWith({ outputDir: "/qa-output" });
+    expect(adapter.createRuntimePreloads?.()).toEqual(["file:///qa-preload.mjs"]);
+    expect(createRuntimePreloads).toHaveBeenCalledOnce();
     expect(state.getSnapshot().messages).toHaveLength(0);
   });
 

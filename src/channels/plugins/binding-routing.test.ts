@@ -6,10 +6,14 @@ import {
   type SessionBindingAdapter,
   type SessionBindingRecord,
 } from "../../infra/outbound/session-binding-service.js";
-import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
+import { resolveAgentRoute, type ResolvedAgentRoute } from "../../routing/resolve-route.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { readConversationBindingRouteFacts } from "../conversation-binding-route-facts.js";
 import {
   ensureConfiguredBindingRouteReady,
   resolveRuntimeConversationBindingRoute,
+  resolveRuntimeConversationBindingRouteAsync,
+  inspectRuntimeConversationBindingRoute,
   type RuntimeConversationBindingRouteResult,
 } from "./binding-routing.js";
 import { registerStatefulBindingTargetDriver } from "./stateful-target-drivers.js";
@@ -63,6 +67,137 @@ describe("runtime conversation binding route", () => {
     testing.resetSessionBindingAdaptersForTests();
   });
 
+  it.each([
+    { targetSessionKey: "agent:review:home", metadata: { agentId: "other" } },
+    { targetSessionKey: "global", metadata: { agentId: "review" } },
+  ])("constructs the bound owner's route before roster selection ($targetSessionKey)", (target) => {
+    const binding = createBinding(target);
+    registerAdapter(binding);
+    const session = { mainKey: "home", groupScope: "main" as const };
+    const result = resolveRuntimeConversationBindingRoute({
+      conversation: binding.conversation,
+      resolveRoute: ({ boundAgentId }) =>
+        resolveAgentRoute({
+          cfg: boundAgentId
+            ? { session }
+            : { session, agents: { ownership: "explicit", entries: { main: {}, review: {} } } },
+          defaultAgentId: boundAgentId,
+          channel: "demo",
+          peer: { kind: "group", id: "room-1" },
+        }),
+    });
+    expect(result.route).toMatchObject({
+      agentId: "review",
+      sessionKey: target.targetSessionKey,
+      mainSessionKey: "agent:review:home",
+      groupScope: "main",
+      lastRoutePolicy: target.targetSessionKey === "global" ? "session" : "main",
+    });
+    expect(readConversationBindingRouteFacts(result.route)).toMatchObject({
+      kind: "agent",
+      agentId: "review",
+      observedAgentId: "review",
+      bindingId: binding.bindingId,
+    });
+  });
+
+  it.each([
+    null,
+    createBinding({ targetSessionKey: "agent:review:cron:job:run:finished" }),
+    createBinding({
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "demo",
+        pluginRoot: "/synthetic/demo",
+      },
+    }),
+    createBinding({ targetSessionKey: "global" }),
+  ])("does not invent an agent for a binding without an agent owner (%j)", (binding) => {
+    registerAdapter(binding);
+    expect(() =>
+      resolveRuntimeConversationBindingRoute({
+        conversation: { channel: "demo", accountId: "default", conversationId: "room-1" },
+        resolveRoute: ({ boundAgentId }) =>
+          resolveAgentRoute({
+            cfg: { agents: { ownership: "explicit", entries: { main: {}, review: {} } } },
+            channel: "demo",
+            defaultAgentId: boundAgentId,
+          }),
+      }),
+    ).toThrow(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
+  });
+
+  it.each(["main", "home"])(
+    "projects the bound agent's main session from a completed ordinary route (%s)",
+    (mainKey) => {
+      const ordinaryRoute = resolveAgentRoute({
+        cfg: {
+          agents: { list: [{ id: "main" }, { id: "review" }] },
+          bindings: [{ agentId: "main", match: { channel: "demo" } }],
+          session: { mainKey },
+        },
+        channel: "demo",
+        peer: { kind: "group", id: "room-1" },
+      });
+      const result = inspectRuntimeConversationBindingRoute({
+        route: ordinaryRoute,
+        inspection: {
+          status: "available",
+          binding: createBinding({ targetSessionKey: `agent:review:${mainKey}` }),
+        },
+      });
+
+      expect(result.route).toMatchObject({
+        agentId: "review",
+        sessionKey: `agent:review:${mainKey}`,
+        mainSessionKey: `agent:review:${mainKey}`,
+        lastRoutePolicy: "main",
+        matchedBy: "binding.channel",
+      });
+      expect(ordinaryRoute).toMatchObject({
+        agentId: "main",
+        sessionKey: "agent:main:demo:group:room-1",
+        mainSessionKey: `agent:main:${mainKey}`,
+        lastRoutePolicy: "session",
+      });
+    },
+  );
+
+  it("rechecks the binding after awaiting activity persistence and keeps inspection pure", async () => {
+    let binding = createBinding();
+    const gate = createDeferredCore();
+    const touchAsync = vi.fn(() => gate.promise);
+    const touch = vi.fn();
+    registerSessionBindingAdapter({
+      channel: "demo",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation: () => binding,
+      touch,
+      touchAsync,
+    });
+    const params = { route: createRoute(), conversation: binding.conversation };
+    expect(
+      inspectRuntimeConversationBindingRoute({
+        route: params.route,
+        inspection: { status: "available", binding },
+      }).boundSessionKey,
+    ).toBe(binding.targetSessionKey);
+    expect(touchAsync).not.toHaveBeenCalled();
+    expect(touch).not.toHaveBeenCalled();
+    let settled = false;
+    const pending = resolveRuntimeConversationBindingRouteAsync(params).then((result) => {
+      settled = true;
+      return result;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    binding = createBinding({ targetSessionKey: "agent:replacement:acp:session-2" });
+    gate.resolve();
+    expect((await pending).boundSessionKey).toBe(binding.targetSessionKey);
+    expect(touch).not.toHaveBeenCalled();
+  });
+
   it("keeps the stable runtime-route result structurally assignable", () => {
     const result: RuntimeConversationBindingRouteResult = {
       bindingRecord: null,
@@ -70,6 +205,65 @@ describe("runtime conversation binding route", () => {
     };
 
     expect(result.bindingOwnerAvailable).toBeUndefined();
+  });
+
+  it.each([
+    { mode: "stable", change: { bindingId: "binding-2" }, label: "new ID" },
+    { mode: "churn", change: { bindingId: "binding-2" }, label: "repeated replacement" },
+    { mode: "stable", change: { boundAt: 2 }, label: "reused ID with new creation time" },
+    {
+      mode: "stable",
+      change: { targetSessionKey: "agent:replacement:main" },
+      label: "reused ID with new target",
+    },
+    { mode: "stable", change: { targetKind: "subagent" }, label: "reused ID with new kind" },
+  ] as const)("settles replacement activity before routing ($label)", async ({ mode, change }) => {
+    let binding = createBinding();
+    const entered = createDeferredCore();
+    const firstTouch = createDeferredCore();
+    const touchAsync = vi
+      .fn(async (_bindingId: string) => {
+        binding =
+          mode === "churn"
+            ? createBinding({ bindingId: "binding-3" })
+            : { ...binding, metadata: { lastActivityAt: 1234 } };
+      })
+      .mockImplementationOnce(async () => {
+        entered.resolve();
+        await firstTouch.promise;
+      });
+    registerSessionBindingAdapter({
+      channel: "demo",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation: () => binding,
+      inspectByConversationAsync: async () => binding,
+      touchAsync,
+    });
+    const pending = resolveRuntimeConversationBindingRouteAsync({
+      route: createRoute(),
+      conversation: binding.conversation,
+    });
+    const failure =
+      mode === "churn" ? expect(pending).rejects.toThrow(/changed.*activity/) : undefined;
+    await entered.promise;
+    const replacement = createBinding({
+      ...change,
+      metadata: { lastActivityAt: 1 },
+    });
+    binding = replacement;
+    firstTouch.resolve();
+    if (failure) {
+      await failure;
+    } else {
+      const result = await pending;
+      expect(result.boundSessionKey).toBe(replacement.targetSessionKey);
+      expect(result.bindingRecord?.metadata?.lastActivityAt).toBe(1234);
+    }
+    expect(touchAsync.mock.calls.map(([bindingId]) => bindingId)).toEqual([
+      "binding-1",
+      replacement.bindingId,
+    ]);
   });
 
   it("rewrites the route and touches only the owning channel account's binding", () => {
@@ -104,12 +298,12 @@ describe("runtime conversation binding route", () => {
     }
     expect(result.boundSessionKey).toBe("agent:review:acp:session-1");
     expect(result.boundAgentId).toBe("review");
-    expect(result.route).toEqual({
+    expect(Object.fromEntries(Object.entries(result.route))).toEqual({
       agentId: "review",
       accountId: "default",
       channel: "demo",
       sessionKey: "agent:review:acp:session-1",
-      mainSessionKey: "agent:main:main",
+      mainSessionKey: "agent:review:main",
       lastRoutePolicy: "session",
       matchedBy: "binding.channel",
     });
@@ -138,7 +332,10 @@ describe("runtime conversation binding route", () => {
     expect(touch).toHaveBeenCalledWith("binding-1", undefined);
     expect(result.bindingRecord).toBe(binding);
     expect(result.boundSessionKey).toBeUndefined();
-    expect(result.route).toBe(route);
+    expect(Object.fromEntries(Object.entries(result.route))).toEqual(route);
+    expect(readConversationBindingRouteFacts(route)).toBeUndefined();
+    expect(Object.isFrozen(readConversationBindingRouteFacts(result.route))).toBe(true);
+    expect(readConversationBindingRouteFacts(result.route)?.kind).toBe("plugin");
   });
 
   it.each([
@@ -214,7 +411,10 @@ describe("runtime conversation binding route", () => {
     expect(touch).not.toHaveBeenCalled();
     expect(result.bindingRecord).toBeNull();
     expect(result.boundSessionKey).toBeUndefined();
-    expect(result.route).toBe(route);
+    expect(Object.fromEntries(Object.entries(result.route))).toEqual(route);
+    expect(readConversationBindingRouteFacts(route)).toBeUndefined();
+    expect(Object.isFrozen(readConversationBindingRouteFacts(result.route))).toBe(true);
+    expect(readConversationBindingRouteFacts(result.route)?.kind).toBe("none");
   });
 });
 

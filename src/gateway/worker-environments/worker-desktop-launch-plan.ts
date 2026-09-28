@@ -64,6 +64,7 @@ export async function prepareWorkerDesktopLaunchPlan(params: {
           browser: {
             cdpUrl: `http://127.0.0.1:${browserApp.cdpPort}`,
             launcherPath: browserApp.executablePath,
+            ...(browserApp.args ? { launcherArgs: [...browserApp.args] } : {}),
           },
         }
       : {}),

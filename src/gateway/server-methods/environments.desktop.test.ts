@@ -153,7 +153,7 @@ describe("desktop gateway methods", () => {
     expect(error).toEqual({
       code: ErrorCodes.INVALID_REQUEST,
       message:
-        "gateway host desktop is disabled; enable the Desktop lab (config: desktop.host.enabled=true), then restart the gateway",
+        "gateway host desktop is disabled; enable the Desktop lab (config: desktop.host.enabled=true)",
     });
   });
 
@@ -193,7 +193,7 @@ describe("desktop gateway methods", () => {
       { source: { kind: "host" }, control: true },
       {
         getRuntimeConfig: () => ({ desktop: { host: config } }),
-        hostDesktopService: createHostDesktopService({ config, registry }),
+        hostDesktopService: createHostDesktopService({ getConfig: () => config, registry }),
       },
       client,
     );
@@ -205,7 +205,7 @@ describe("desktop gateway methods", () => {
     });
     expect(result.wsPath).toMatch(/^\/desktop\/observe\?token=[a-f0-9]{48}$/u);
     const requester = mint.mock.calls[0]?.[0].requester;
-    expect(requester?.signal).toBe(controller.signal);
+    expect(requester?.signal?.aborted).toBe(false);
     expect(requester?.isCurrent()).toBe(true);
     client.invalidated = true;
     expect(requester?.isCurrent()).toBe(false);

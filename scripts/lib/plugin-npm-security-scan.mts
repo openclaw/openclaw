@@ -95,6 +95,14 @@ const MAX_SCANNABLE_FILE_BYTES = 1024 * 1024;
 const MAX_SCANNABLE_TOTAL_BYTES_PER_PACKAGE = 64 * 1024 * 1024;
 const PACKAGE_SCAN_CONCURRENCY = 4;
 const CANONICAL_NPM_PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u;
+const PLUGIN_TARBALL_INSPECTION_LIMITS = {
+  maxArchiveBytes: MAX_PLUGIN_TARBALL_BYTES,
+  maxEntries: MAX_PACKED_FILES_PER_PACKAGE,
+  maxEntryBytes: MAX_PACKED_FILE_BYTES,
+  maxExpandedBytes: MAX_PACKED_TOTAL_BYTES_PER_PACKAGE,
+  maxPathBytes: 4 * 1024 * 1024,
+  maxTotalFileBytes: MAX_PACKED_TOTAL_BYTES_PER_PACKAGE,
+};
 
 const RELEASE_2026_9_1_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
   ["@openclaw/acpx:dangerous-exec:src/codex-auth-bridge.ts", 1],
@@ -117,11 +125,20 @@ const RELEASE_2026_9_2_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string,
 
 // The bounded async Codex version probe no longer produces this syntactic finding.
 // Keep shipped inventories intact; a new direct call must be reviewed again.
-const CURRENT_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map(
+const RELEASE_2026_9_5_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map(
   [...RELEASE_2026_9_2_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS].filter(
     ([key]) => key !== "@openclaw/codex:dangerous-exec:src/doctor.ts",
   ),
 );
+
+// Runtime launches added after 9.5: FaceTime starts its own staged capture
+// helper with no arguments and a sanitized env, and ONNX forks its bundled
+// worker entry from process.execPath.
+const CURRENT_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
+  ...RELEASE_2026_9_5_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+  ["@openclaw/facetime:dangerous-exec:src/audio-pump.ts", 1],
+  ["@openclaw/onnx:dangerous-exec:src/worker-client.ts", 1],
+]);
 
 type ReviewedReleaseLayout = {
   id: string;
@@ -237,6 +254,34 @@ for (const [key, count] of [
   CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(key, count);
 }
 
+const RELEASE_2026_9_5_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS = new Map(
+  CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+);
+// The post-9.5 lifecycle fixtures forward spawn and run an owned temporary
+// descendant to prove output drainage and failed-spawn settlement. Freeze 9.5
+// before admitting their exact test-only sites.
+CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(
+  "@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server.exit.test.ts",
+  2,
+);
+CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(
+  "@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server.spawn-error.test.ts",
+  1,
+);
+// The stabilized startup retry race fixtures (#155612) launch two fewer
+// bounded children; the acpx fixture pipes JSON-RPC frames through its own
+// checked-in app-server stub, and the node exec proof runs process.execPath
+// with an inline script under the exec server's owned workspace. The Codex
+// launcher-failure matcher launches nothing: its `spawn(` is a regex literal.
+for (const [key, count] of [
+  ["@openclaw/acpx:dangerous-exec:test/codex-app-server.test.ts", 1],
+  ["@openclaw/codex:dangerous-exec:src/app-server/attempt-startup-retry.test.ts", 4],
+  ["@openclaw/codex:dangerous-exec:src/app-server/managed-launcher-failure.ts", 1],
+  ["@openclaw/codex:dangerous-exec:src/node-exec-server.test.ts", 1],
+] as const) {
+  CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(key, count);
+}
+
 const CURRENT_SECURITY_INVENTORY_POLICY: PluginSecurityInventoryPolicy = {
   layout: CURRENT_REVIEWED_RELEASE_LAYOUT,
   optionalPackedFindingCounts: CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
@@ -293,6 +338,14 @@ const FROZEN_EXTENDED_STABLE_2026_7_33_LAYOUT = {
   findings: FROZEN_EXTENDED_STABLE_2026_6_33_LAYOUT.findings,
 };
 
+const FROZEN_EXTENDED_STABLE_2026_8_33_LAYOUT = {
+  id: "extended-stable-2026.8.33",
+  findings: new Map<string, number>([
+    ["@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/sandbox-child.ts", 1],
+    ["@openclaw/codex:dangerous-exec:src/app-server/transport-process-snapshot.ts", 1],
+  ]),
+};
+
 const FROZEN_RELEASE_SECURITY_INVENTORY_POLICIES = new Map<string, PluginSecurityInventoryPolicy>([
   [
     "release/2026.9.1",
@@ -315,6 +368,7 @@ const FROZEN_RELEASE_SECURITY_INVENTORY_POLICIES = new Map<string, PluginSecurit
     {
       ...CURRENT_SECURITY_INVENTORY_POLICY,
       optionalPackedFindingCounts: FROZEN_RELEASE_2026_9_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+      requiredSourceFindingCounts: RELEASE_2026_9_5_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
     },
   ],
   [
@@ -322,9 +376,18 @@ const FROZEN_RELEASE_SECURITY_INVENTORY_POLICIES = new Map<string, PluginSecurit
     {
       ...CURRENT_SECURITY_INVENTORY_POLICY,
       optionalPackedFindingCounts: RELEASE_2026_9_4_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+      requiredSourceFindingCounts: RELEASE_2026_9_5_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
     },
   ],
-  ["release/2026.9.5", CURRENT_SECURITY_INVENTORY_POLICY],
+  [
+    "release/2026.9.5",
+    {
+      ...CURRENT_SECURITY_INVENTORY_POLICY,
+      optionalPackedFindingCounts: RELEASE_2026_9_5_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+      requiredSourceFindingCounts: RELEASE_2026_9_5_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+    },
+  ],
+  ["release/2026.9.6", CURRENT_SECURITY_INVENTORY_POLICY],
   [
     "extended-stable/2026.6.33",
     {
@@ -342,6 +405,14 @@ const FROZEN_RELEASE_SECURITY_INVENTORY_POLICIES = new Map<string, PluginSecurit
       requiredSourceFindingCounts: FROZEN_RELEASE_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
     },
   ],
+  [
+    "extended-stable/2026.8.33",
+    {
+      layout: FROZEN_EXTENDED_STABLE_2026_8_33_LAYOUT,
+      optionalPackedFindingCounts: FROZEN_RELEASE_2026_9_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+      requiredSourceFindingCounts: RELEASE_2026_9_1_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+    },
+  ],
 ]);
 
 function selectPluginSecurityInventoryPolicy(
@@ -355,6 +426,7 @@ function selectPluginSecurityInventoryPolicy(
 const REVIEWED_LAYOUT_FINDING_COUNTS = new Map<string, number>([
   ...CURRENT_REVIEWED_RELEASE_LAYOUT.findings,
   ...FROZEN_EXTENDED_STABLE_2026_6_33_LAYOUT.findings,
+  ...FROZEN_EXTENDED_STABLE_2026_8_33_LAYOUT.findings,
 ]);
 
 function expandFindingCounts(counts: ReadonlyMap<string, number>): string[] {
@@ -366,7 +438,7 @@ function compareCodeUnits(left: string, right: string): number {
 }
 
 function sortStrings(values: readonly string[]): string[] {
-  return [...values].toSorted(compareCodeUnits);
+  return values.toSorted(compareCodeUnits);
 }
 
 function arraysEqual(left: readonly string[], right: readonly string[]): boolean {
@@ -571,17 +643,16 @@ function parseExpectedPackages(value: unknown): PublishablePluginPackage[] {
     throw new Error("Expected plugin package inventory is invalid.");
   }
   const packages = value.map((entry, index) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    if (!isRecord(entry)) {
       throw new Error(`Expected plugin package entry ${index} is invalid.`);
     }
-    const candidate = entry as Record<string, unknown>;
-    const extensionId = candidate.extensionId;
-    const packageDir = candidate.packageDir;
+    const extensionId = entry.extensionId;
+    const packageDir = entry.packageDir;
     const packageName = assertCanonicalNpmPackageName(
-      candidate.packageName,
+      entry.packageName,
       `Expected plugin package entry ${index}`,
     );
-    const packageVersion = candidate.packageVersion;
+    const packageVersion = entry.packageVersion;
     if (
       typeof extensionId !== "string" ||
       !/^[a-z0-9][a-z0-9._-]*$/u.test(extensionId) ||
@@ -700,14 +771,7 @@ function readPluginSecurityArtifact(
   });
   let inspection: ReturnType<typeof inspectPackageTarballBytes>;
   try {
-    inspection = inspectPackageTarballBytes(tarballBytes, {
-      maxArchiveBytes: MAX_PLUGIN_TARBALL_BYTES,
-      maxEntries: MAX_PACKED_FILES_PER_PACKAGE,
-      maxEntryBytes: MAX_PACKED_FILE_BYTES,
-      maxExpandedBytes: MAX_PACKED_TOTAL_BYTES_PER_PACKAGE,
-      maxPathBytes: 4 * 1024 * 1024,
-      maxTotalFileBytes: MAX_PACKED_TOTAL_BYTES_PER_PACKAGE,
-    });
+    inspection = inspectPackageTarballBytes(tarballBytes, PLUGIN_TARBALL_INSPECTION_LIMITS);
   } catch {
     throw new Error("Plugin security artifact tarball structure is invalid.");
   }
@@ -863,20 +927,6 @@ export function loadPluginNpmSecurityArtifacts(params: {
   };
 }
 
-export function listPluginNpmSecurityArtifacts(params: {
-  artifactRoot: string;
-  candidateSha: string;
-  expectedPackages: unknown;
-  limits?: PluginNpmSecurityArtifactLimits;
-  toolingSha: string;
-}): PluginNpmSecurityArtifact[] {
-  const result = loadPluginNpmSecurityArtifacts(params);
-  if (result.ingestionErrors.length > 0) {
-    throw new Error(result.ingestionErrors.join("\n"));
-  }
-  return result.artifacts;
-}
-
 export function stageScannerRelevantPluginTarballFiles(tarballPath: string): {
   directlyScannedFileCount: number;
   directlyScannedFindings: SkillScanFinding[];
@@ -901,14 +951,10 @@ export function stageScannerRelevantPluginTarballFiles(tarballPath: string): {
       label: "Plugin security tarball",
       maxBytes: MAX_PLUGIN_TARBALL_BYTES,
     });
-    const inspection = inspectPackageTarballBytes(tarballBytes, {
-      maxArchiveBytes: MAX_PLUGIN_TARBALL_BYTES,
-      maxEntries: MAX_PACKED_FILES_PER_PACKAGE,
-      maxEntryBytes: MAX_PACKED_FILE_BYTES,
-      maxExpandedBytes: MAX_PACKED_TOTAL_BYTES_PER_PACKAGE,
-      maxPathBytes: 4 * 1024 * 1024,
-      maxTotalFileBytes: MAX_PACKED_TOTAL_BYTES_PER_PACKAGE,
-    }) as {
+    const inspection = inspectPackageTarballBytes(
+      tarballBytes,
+      PLUGIN_TARBALL_INSPECTION_LIMITS,
+    ) as {
       inventory: Array<{ path: string; sizeBytes: number; type: string }>;
       packageManifest: Record<string, unknown>;
       tarballSha256: string;
@@ -927,12 +973,7 @@ export function stageScannerRelevantPluginTarballFiles(tarballPath: string): {
       packedFiles,
     );
     inspectPackageTarballBytes(tarballBytes, {
-      maxArchiveBytes: MAX_PLUGIN_TARBALL_BYTES,
-      maxEntries: MAX_PACKED_FILES_PER_PACKAGE,
-      maxEntryBytes: MAX_PACKED_FILE_BYTES,
-      maxExpandedBytes: MAX_PACKED_TOTAL_BYTES_PER_PACKAGE,
-      maxPathBytes: 4 * 1024 * 1024,
-      maxTotalFileBytes: MAX_PACKED_TOTAL_BYTES_PER_PACKAGE,
+      ...PLUGIN_TARBALL_INSPECTION_LIMITS,
       onFile: ({ content, path }: { content: Uint8Array; path: string }) => {
         if (!path.startsWith("package/")) {
           throw new Error("Plugin tarball file escaped package/.");

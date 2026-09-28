@@ -128,9 +128,7 @@ function normalizeDeliveryThreadId(threadId: string | number | undefined): strin
   return stringifyRouteThreadId(threadId)?.trim() || undefined;
 }
 
-function extractTopicThreadId(targetTo: string): string | undefined {
-  return targetTo.match(/:topic:(\d+)$/i)?.[1];
-}
+const TOPIC_THREAD_SUFFIX = /:topic:(\d+)$/i;
 
 /** Compares a message-tool target with the required source delivery target. */
 export function sourceDeliveryTargetsMatch(
@@ -148,14 +146,21 @@ export function sourceDeliveryTargetsMatch(
   if (delivery.accountId && target.accountId && target.accountId !== delivery.accountId) {
     return false;
   }
-  // Strip :topic:NNN from message targets and normalize Feishu/Lark prefixes on
-  // both sides so source-delivery suppression compares canonical IDs.
-  if (!deliveryTargetsMatch(channel, target.to.replace(/:topic:\d+$/, ""), delivery.to)) {
+  const targetTo = target.to.trim();
+  const deliveryTo = delivery.to.trim();
+  const targetTopic = TOPIC_THREAD_SUFFIX.exec(targetTo);
+  const deliveryTopic = TOPIC_THREAD_SUFFIX.exec(deliveryTo);
+  if (
+    !deliveryTargetsMatch(
+      channel,
+      targetTopic ? targetTo.slice(0, targetTopic.index) : targetTo,
+      deliveryTopic ? deliveryTo.slice(0, deliveryTopic.index) : deliveryTo,
+    )
+  ) {
     return false;
   }
-  const deliveryThreadId = normalizeDeliveryThreadId(delivery.threadId);
-  const targetThreadId =
-    normalizeDeliveryThreadId(target.threadId) ?? extractTopicThreadId(target.to);
+  const deliveryThreadId = normalizeDeliveryThreadId(delivery.threadId) ?? deliveryTopic?.[1];
+  const targetThreadId = normalizeDeliveryThreadId(target.threadId) ?? targetTopic?.[1];
   if (!deliveryThreadId && !targetThreadId) {
     return true;
   }

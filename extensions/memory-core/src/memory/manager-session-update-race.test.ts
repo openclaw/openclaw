@@ -8,6 +8,7 @@ import {
   listSessionTranscriptCorpusEntriesForAgent,
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
+  encodeMemoryEmbedding,
   MEMORY_CHUNKING_VERSION,
   type MemorySessionSyncTarget,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -21,16 +22,15 @@ import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runti
 import { appendSqliteSessionTranscriptEventForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it, vi } from "vitest";
-import {
-  recordMemoryEntryOrigins,
-  recordMemorySessionTombstones,
-} from "../memory-entry-origins.js";
+import { recordMemoryEntryOrigins } from "../memory-entry-origins.js";
 import { forgetMemoryEntries } from "../memory-forget.js";
+import { seedMemoryForgetTombstones } from "../test-helpers.js";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import {
   createManagerIndexFixture,
   readPublishedSessionIndex,
 } from "./manager-index.test-support.js";
+import type { MemoryTargetedSessionSyncQueue } from "./manager-sync-control.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 
@@ -51,12 +51,15 @@ describe("memory session update sync", () => {
       .prepare(
         "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, 'sessions', 1, 1, ?, ?, ?, ?, ?)",
       )
-      .run(sessionPath, sessionPath, "stale-chunk", "fts-only", text, "[]", 10);
-    database
-      .prepare(
-        "INSERT INTO memory_index_chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, 'sessions', ?, 1, 1)",
-      )
-      .run(text, sessionPath, sessionPath, "fts-only");
+      .run(
+        sessionPath,
+        sessionPath,
+        "stale-chunk",
+        "fts-only",
+        text,
+        encodeMemoryEmbedding([]),
+        10,
+      );
     database
       .prepare(
         "INSERT INTO memory_index_chunk_provenance (chunk_id, origin_class, session_kind, observed_at) VALUES (?, 'system', 'subagent', ?)",
@@ -306,7 +309,7 @@ describe("memory session update sync", () => {
       "cli",
     );
     const owner = manager as unknown as {
-      queuedSessionSync: Promise<void> | null;
+      sessionSyncQueue: MemoryTargetedSessionSyncQueue;
       sessionPendingTargets: Map<string, MemorySessionSyncTarget>;
       sessionsDirty: boolean;
       sessionsReconcileDirty: boolean;
@@ -350,7 +353,7 @@ describe("memory session update sync", () => {
       });
       owner.sessionPendingTargets.set(sessionKey, { agentId: "main", sessionId, sessionKey });
       await owner.processSessionUpdateBatch();
-      const queuedSessionSync = owner.queuedSessionSync;
+      const queuedSessionSync = owner.sessionSyncQueue.pending;
       expect(queuedSessionSync).not.toBeNull();
 
       releaseActiveSync();
@@ -526,12 +529,19 @@ describe("memory session update sync", () => {
   it("never reindexes a tombstoned session while preserving its source transcript", async () => {
     const sessionId = "forgotten-transcript";
     const sessionKey = `agent:main:chat:${sessionId}`;
+    const decoyId = "unselected-transcript";
+    const decoyKey = `agent:main:chat:${decoyId}`;
     await seedSessionTranscript({
       sessionId,
       sessionKey,
       messages: [
         { role: "user", timestamp: Date.now(), content: "Previously indexed violet fragment." },
       ],
+    });
+    await seedSessionTranscript({
+      sessionId: decoyId,
+      sessionKey: decoyKey,
+      messages: [{ role: "user", timestamp: 1, content: "Previously indexed amber fragment." }],
     });
     const manager = await getFreshManager(
       createConfig({ provider: "none", sources: ["sessions"], sessionMemory: true }),
@@ -544,7 +554,7 @@ describe("memory session update sync", () => {
       database.prepare("SELECT path FROM memory_index_chunks WHERE path = ?").get(sessionPath),
     ).toEqual({ path: sessionPath });
 
-    recordMemorySessionTombstones({ agentId: "main", sessionIds: [sessionId] });
+    seedMemoryForgetTombstones({ agentId: "main", sessionIds: [sessionId] });
     await manager.sync({ reason: "forced-reindex-after-forget", force: true });
 
     expectSessionIndexRemoved(database, sessionPath);
@@ -553,11 +563,42 @@ describe("memory session update sync", () => {
         .prepare("SELECT session_id FROM session_windows WHERE session_id = ?")
         .get(sessionId),
     ).toEqual({ session_id: sessionId });
+    const decoyPath = `sessions/main/${decoyId}.jsonl`;
+    const decoyBefore = readPublishedSessionIndex(database, decoyPath, "amber");
+    expect(decoyBefore.chunks).toHaveLength(1);
+    await seedSessionTranscript({
+      sessionId: decoyId,
+      sessionKey: decoyKey,
+      messages: [{ role: "assistant", timestamp: 2, content: "Unselected new amber response." }],
+    });
+    const selectedId = "selected-transcript";
+    const selectedKey = `agent:main:chat:${selectedId}`;
+    await seedSessionTranscript({
+      sessionId: selectedId,
+      sessionKey: selectedKey,
+      messages: [{ role: "user", timestamp: 1, content: "Selected new violet fragment." }],
+    });
     await manager.sync({
       reason: "targeted-update-after-forget",
-      sessions: [{ agentId: "main", sessionId, sessionKey }],
+      sessions: [
+        { agentId: "main", sessionId, sessionKey },
+        { agentId: "main", sessionId: selectedId, sessionKey: selectedKey },
+        { agentId: "main", sessionId: decoyId, sessionKey: "wrong-session-key" },
+        { agentId: "other", sessionId: decoyId, sessionKey: decoyKey },
+        { sessionId: selectedId },
+        { sessionId: " " },
+      ],
     });
     expectSessionIndexRemoved(database, sessionPath);
+    expect(readPublishedSessionIndex(database, decoyPath, "amber")).toEqual(decoyBefore);
+    const selected = readPublishedSessionIndex(
+      database,
+      `sessions/main/${selectedId}.jsonl`,
+      "violet",
+    );
+    expect(selected.chunks).toHaveLength(1);
+    expect(selected.search).toHaveLength(1);
+    expect(selected.chunks[0]?.text).toContain("Selected new violet fragment.");
   });
 
   it.each([
@@ -652,7 +693,7 @@ describe("memory session update sync", () => {
     if (repeatPurge) {
       // An earlier purge persisted its tombstone but failed before rewriting
       // this previously unindexed file. Retrying must fence a completed shadow.
-      recordMemorySessionTombstones({ agentId: "main", sessionIds: [sessionId] });
+      seedMemoryForgetTombstones({ agentId: "main", sessionIds: [sessionId] });
     }
     const manager = await getFreshManager(cfg, "cli", true);
     let releaseEmbedding = () => {};

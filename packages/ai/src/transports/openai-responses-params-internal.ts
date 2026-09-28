@@ -1,12 +1,15 @@
 import type { Context, Model } from "@openclaw/llm-core";
+import { resolveOpenAIThinkingApi } from "@openclaw/model-catalog-core/model-catalog-types";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   ResponseFormatTextConfig,
   ResponseInput,
 } from "openai/resources/responses/responses.js";
+import { getAiTransportHost } from "../host.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
 import { resolveOpenAIPromptCacheParams } from "../providers/openai-prompt-cache.js";
 import {
+  isOpenAIGpt6Model,
   supportsOpenAITemperature,
   type OpenAIApiReasoningEffort,
 } from "../providers/openai-reasoning-effort.js";
@@ -17,7 +20,6 @@ import {
 import { prepareResponsesTools } from "../providers/openai-responses-tools.js";
 import { reconcileOpenAIResponsesToolChoice } from "../providers/openai-tool-projection.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
-import { resolveOpenAIStrictToolSetting } from "./host-policy.js";
 import { usesNativeOpenAICodexResponsesBackend } from "./openai-completions-compat.js";
 import type { OpenAIResponsesReplayMode } from "./openai-responses-compaction-replay.js";
 import {
@@ -262,8 +264,11 @@ export function buildOpenAIResponsesParams(
   if (options?.temperature !== undefined && supportsOpenAITemperature(model)) {
     params.temperature = options.temperature;
   }
-  // Astra rejects top_p independently of the temperature compatibility setting.
-  if (options?.topP !== undefined && model.id !== "gpt-6-astra") {
+  // Native GPT-6 rejects top_p; Azure deployments retain their configured sampling.
+  if (
+    options?.topP !== undefined &&
+    (!isOpenAIGpt6Model(model) || resolveOpenAIThinkingApi(model.api) === "azure-openai-responses")
+  ) {
     params.top_p = options.topP;
   }
   if (options?.responseFormat !== undefined) {
@@ -277,7 +282,7 @@ export function buildOpenAIResponsesParams(
   }
   if (context.tools) {
     const tools = context.tools;
-    const strict = resolveOpenAIStrictToolSetting(model as OpenAIModeModel, {
+    const strict = getAiTransportHost().resolveOpenAIStrictToolSetting(model as OpenAIModeModel, {
       transport: "stream",
       supportsStrictMode: compat.supportsStrictMode,
     });

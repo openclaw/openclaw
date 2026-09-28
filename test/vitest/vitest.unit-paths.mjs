@@ -3,6 +3,8 @@ import path from "node:path";
 import { BUNDLED_PLUGIN_ROOT_DIR } from "../../scripts/lib/bundled-plugin-paths.mjs";
 import { cliProcessTestFiles } from "./vitest.cli-process-paths.mjs";
 import { databaseWorkerCoreTestFiles } from "./vitest.database-worker-core-paths.mjs";
+import { filterFilesByPatterns, isPlainRepoRelativePath } from "./vitest.include-patterns.ts";
+import { isSharedVitestExcludedPath } from "./vitest.pattern-file.ts";
 
 export const unitTestIncludePatterns = [
   "src/**/*.test.ts",
@@ -19,13 +21,13 @@ export const boundaryTestFiles = [
   "src/infra/package-json.test.ts",
   "src/infra/path-env.test.ts",
   "src/infra/stable-node-path.test.ts",
+  "test/control-ui-import-boundary.test.ts",
   "test/extension-import-boundaries.test.ts",
   "test/extension-test-boundary.test.ts",
   "test/plugin-extension-import-boundary.test.ts",
 ];
 
 export const bundledPluginDependentUnitTestFiles = [
-  "src/infra/matrix-plugin-helper.test.ts",
   "src/plugin-sdk/facade-runtime.test.ts",
   "src/plugins/loader.test.ts",
 ];
@@ -53,7 +55,6 @@ export const unitTestAdditionalExcludePatterns = [
   "src/process/**",
   "src/secrets/**",
   "src/shared/**",
-  "src/tasks/**",
   "src/media-understanding/**",
   "src/logging/**",
   "src/tui/**",
@@ -78,28 +79,32 @@ export const unitTestAdditionalExcludePatterns = [
   "src/config/schema.help.quality.test.ts",
 ];
 
-const sharedBaseExcludePatterns = [
-  "dist/**",
-  "apps/macos/**",
-  "apps/macos/.build/**",
-  "**/node_modules/**",
-  "**/vendor/**",
-  "dist/OpenClaw.app/**",
-  "**/*.live.test.ts",
-  "**/*.e2e.test.ts",
-];
-
 const normalizeRepoPath = (value) => value.split(path.sep).join("/");
 
-const matchesAny = (file, patterns) => patterns.some((pattern) => path.matchesGlob(file, pattern));
+export function filterUnitConfigTestFiles(files) {
+  let candidates = files.map(normalizeRepoPath);
+  let exclude = unitTestAdditionalExcludePatterns;
+  // Keep singleton routing cheap and use equality only for proven Node/Linux paths.
+  if (
+    candidates.length > 1 &&
+    process.platform === "linux" &&
+    !process.versions.bun &&
+    candidates.every(isPlainRepoRelativePath)
+  ) {
+    const literalExcludes = new Set(exclude.filter(isPlainRepoRelativePath));
+    candidates = candidates.filter((file) => !literalExcludes.has(file));
+    exclude = exclude.filter((pattern) => !literalExcludes.has(pattern));
+  }
+  const selected = new Set(
+    filterFilesByPatterns(candidates, unitTestIncludePatterns, exclude, path.matchesGlob).filter(
+      (file) => !isSharedVitestExcludedPath(file),
+    ),
+  );
+  return files.filter((file) => selected.has(normalizeRepoPath(file)));
+}
 
 export function isUnitConfigTestFile(file) {
-  const normalizedFile = normalizeRepoPath(file);
-  return (
-    matchesAny(normalizedFile, unitTestIncludePatterns) &&
-    !matchesAny(normalizedFile, sharedBaseExcludePatterns) &&
-    !matchesAny(normalizedFile, unitTestAdditionalExcludePatterns)
-  );
+  return filterUnitConfigTestFiles([file]).length > 0;
 }
 
 export function isBundledPluginDependentUnitTestFile(file) {

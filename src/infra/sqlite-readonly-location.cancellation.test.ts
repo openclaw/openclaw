@@ -118,11 +118,13 @@ describe("SQLite read-only worker cancellation", () => {
     vi.spyOn(workerUrls, "resolveRuntimeWorkerUrl").mockReturnValue(pathToFileURL(worker));
     let inspectionFinished = false;
     const schedule = globalThis.setTimeout;
-    const timers = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockImplementation((callback, delay, ...args) =>
-        schedule(callback, inspectionFinished && delay === 300_000 ? 1 : delay, ...args),
-      );
+    const shutdownTimeouts: Array<number | undefined> = [];
+    vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
+      if (inspectionFinished) {
+        shutdownTimeouts.push(delay);
+      }
+      return schedule(callback, inspectionFinished && delay === 300_000 ? 1 : delay, ...args);
+    });
     await withSqliteReadOnlyWorkerScope(async () => {
       const prepared = await prepareSqliteReadOnlyLocation(path.join(fixture, "unused.sqlite"), {
         preserveSourceArtifacts: true,
@@ -130,7 +132,7 @@ describe("SQLite read-only worker cancellation", () => {
       expect(await prepared.cleanupAsync()).toBe(true);
       inspectionFinished = true;
     });
-    expect(timers.mock.calls.filter((call) => call[1] === 300_000)).toHaveLength(2);
+    expect(shutdownTimeouts).toEqual([300_000]);
     expect(inspectionChild("session")?.signalCode).toBe("SIGKILL");
     expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
   });

@@ -1,6 +1,10 @@
 import { managedWorktrees } from "../agents/worktrees/service.js";
+import type {
+  GitHubPublicationExecutionRow,
+  GitHubPublicationRow,
+} from "../state/github-publication-read.types.js";
+import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import { recoverGitHubPublicationBranchAndIndex } from "./github-publication-git-index.js";
-import type { GitHubPublicationExecutionRow } from "./github-publication-store.js";
 
 type PublicationRow = GitHubPublicationExecutionRow;
 type GitCommandOptions = { cwd?: string; env?: NodeJS.ProcessEnv; input?: string };
@@ -8,7 +12,7 @@ type GitCommandOptions = { cwd?: string; env?: NodeJS.ProcessEnv; input?: string
 export async function recoverGitHubPublicationWorkspace(
   row: PublicationRow,
   run: (argv: string[], options?: GitCommandOptions) => Promise<string>,
-  assertCurrent: () => void,
+  assertCustody: () => void,
 ): Promise<void> {
   const worktree = managedWorktrees.findLiveById(row.worktree_id);
   if (
@@ -25,7 +29,55 @@ export async function recoverGitHubPublicationWorkspace(
     branch: row.branch,
     sourceHeadCommit: row.source_head_commit,
     workspaceTree: row.workspace_tree,
-    assertCurrent,
+    assertCustody,
     run,
   });
+}
+
+export async function readKnownGitHubPublicationPullRequestUrls(
+  row: GitHubPublicationExecutionRow,
+): Promise<string[]> {
+  const {
+    worktree_id,
+    repository_fingerprint,
+    repository,
+    branch,
+    base_branch,
+    identity_account_id,
+    pull_request_url,
+  } = row;
+  const result = await executeExistingOpenClawStateRead(
+    {},
+    {
+      type: "githubPublication.knownPullRequestUrls",
+      input: {
+        worktree_id,
+        repository_fingerprint,
+        repository,
+        branch,
+        base_branch,
+        identity_account_id,
+        pull_request_url,
+      },
+    },
+    { current: true },
+  );
+  if (!result?.ok || result.type !== "githubPublication.knownPullRequestUrls") {
+    throw new Error("GitHub publication receipt history is unavailable.");
+  }
+  return result.urls;
+}
+
+export async function readGitHubPublicationRequestInWorker(
+  requestId: string,
+): Promise<GitHubPublicationRow | undefined> {
+  const result = await executeExistingOpenClawStateRead(
+    {},
+    { type: "githubPublication.request", requestId },
+    { current: true },
+  );
+  if (!result?.ok || result.type !== "githubPublication.request") {
+    throw new Error("GitHub publication receipt is unavailable.");
+  }
+  return result.row;
 }

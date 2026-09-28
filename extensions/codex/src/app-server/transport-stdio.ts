@@ -4,6 +4,7 @@
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
 import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
@@ -11,8 +12,11 @@ import {
 } from "openclaw/plugin-sdk/windows-spawn";
 import type { CodexAppServerStartOptions } from "./config.js";
 import { normalizeCodexAppServerArgs } from "./launch-args.js";
+import { resolveManagedCodexNativeCommand } from "./managed-binary.js";
+import { observeManagedCodexLauncherFailure } from "./managed-launcher-failure.js";
+import { getCodexAppServerSpawnFailure, recordCodexAppServerSpawnFailure } from "./spawn-error.js";
 import { prepareCodexAppServerProcessRegistration } from "./transport-process-registration.js";
-import { closeCodexAppServerTransportAndWait } from "./transport.js";
+import { closeCodexAppServerTransportAndWait, type CodexAppServerTransport } from "./transport.js";
 
 const UNSAFE_ENVIRONMENT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 const RUNTIME_INJECTION_ENVIRONMENT_KEYS = new Set([
@@ -41,13 +45,12 @@ export function resolveCodexAppServerSpawnInvocation(
   const args = normalizeCodexAppServerArgs(options.args);
   const resolved = materializeWindowsSpawnProgram(program, args);
   if (
-    typeof process.versions.bun === "string" &&
     options.commandSource === "resolved-managed" &&
     resolved.resolution === "direct" &&
     [".cjs", ".js", ".mjs"].includes(path.extname(resolved.command).toLowerCase())
   ) {
-    // The managed package launcher owns package selection, environment markers, signals, and
-    // exit status. Run that exact launcher with Bun when a child-only PATH has no Node binary.
+    // Keep upstream's package/architecture selection and environment markers, but
+    // never let its env shebang choose another Node architecture from PATH.
     return {
       ...resolved,
       command: process.execPath,
@@ -67,7 +70,7 @@ export function resolveCodexAppServerSpawnEnv(
   const env = Object.create(null) as NodeJS.ProcessEnv;
   copySafeEnvironmentEntries(env, baseEnv);
   copySafeEnvironmentEntries(env, options.env ?? {});
-  const keysToClear = normalizedEnvironmentKeys(options.clearEnv ?? []);
+  const keysToClear = (options.clearEnv ?? []).map((key) => key.trim()).filter(Boolean);
   if (platform === "win32") {
     const lowerCaseKeysToClear = new Set(keysToClear.map((key) => key.toLowerCase()));
     for (const candidate of Object.keys(env)) {
@@ -95,25 +98,6 @@ function isCodexRuntimeInjectionEnvironmentKey(rawKey: string): boolean {
   return RUNTIME_INJECTION_ENVIRONMENT_KEYS.has(key) || key.startsWith("DYLD_");
 }
 
-/** Keeps QA-owned app-server processes inside the gateway process-group cleanup boundary. */
-function resolveCodexAppServerDetachedMode(
-  env: NodeJS.ProcessEnv,
-  platform: NodeJS.Platform = process.platform,
-): boolean {
-  return platform !== "win32" && !env[QA_PARENT_PID_ENV]?.trim();
-}
-
-function normalizedEnvironmentKeys(rawKeys: readonly string[]): string[] {
-  const keys: string[] = [];
-  for (const rawKey of rawKeys) {
-    const key = rawKey.trim();
-    if (key.length > 0) {
-      keys.push(key);
-    }
-  }
-  return keys;
-}
-
 function copySafeEnvironmentEntries(
   target: NodeJS.ProcessEnv,
   source: NodeJS.ProcessEnv | Record<string, string | undefined>,
@@ -135,19 +119,52 @@ export async function createStdioTransport(
 ): Promise<ChildProcessWithoutNullStreams> {
   const env = resolveCodexAppServerSpawnEnv(options, baseEnv);
   const invocation = resolveCodexAppServerSpawnInvocation(options, env);
+  const nativeCommand =
+    options.commandSource === "resolved-managed"
+      ? resolveManagedCodexNativeCommand(options.command, { pathExists: () => true })
+      : undefined;
+  const launchKey = JSON.stringify([
+    invocation.command,
+    options.cwd ?? process.cwd(),
+    nativeCommand ?? null,
+    path.isAbsolute(invocation.command) ? null : (env.PATH ?? env.Path),
+  ]);
+  const previousFailure =
+    getCodexAppServerSpawnFailure(launchKey) ??
+    (nativeCommand ? getCodexAppServerSpawnFailure(nativeCommand) : undefined);
+  if (previousFailure) {
+    throw previousFailure;
+  }
   const register = await prepareCodexAppServerProcessRegistration();
   assertCurrent?.();
-  const child = spawn(invocation.command, invocation.argv, {
-    // Preserve the shipped Supervisor endpoint contract: relative commands and
-    // config discovery may depend on the endpoint's process working directory.
-    ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
-    env,
-    detached: resolveCodexAppServerDetachedMode(env),
-    shell: invocation.shell,
-    stdio: ["pipe", "pipe", "pipe"],
-    windowsHide: invocation.windowsHide,
+  embeddedAgentLog.debug("Codex app-server spawn", {
+    command: invocation.command,
+    launcher: options.command,
+    ...(options.cwd ? { cwd: options.cwd } : {}),
+    ...(nativeCommand ? { nativeCommand } : {}),
+    platform: process.platform,
+    arch: process.arch,
   });
+  let child: ChildProcessWithoutNullStreams & Pick<CodexAppServerTransport, "startupFailure">;
   try {
+    child = spawn(invocation.command, invocation.argv, {
+      // Preserve the shipped Supervisor endpoint contract: relative commands and
+      // config discovery may depend on the endpoint's process working directory.
+      ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
+      env,
+      // QA children stay inside the Gateway's process-group cleanup boundary.
+      detached: process.platform !== "win32" && !env[QA_PARENT_PID_ENV]?.trim(),
+      shell: invocation.shell,
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: invocation.windowsHide,
+    });
+  } catch (error) {
+    throw recordCodexAppServerSpawnFailure(error, invocation.command, launchKey);
+  }
+  try {
+    if (nativeCommand && invocation.resolution === "node-entrypoint") {
+      observeManagedCodexLauncherFailure(child, nativeCommand);
+    }
     // Attach lifecycle observers before inspection can yield to an early exit.
     onSpawn?.(child);
     await register(child);
@@ -156,6 +173,9 @@ export async function createStdioTransport(
   } catch (error) {
     await closeCodexAppServerTransportAndWait(child, { drainStdio: true });
     assertCurrent?.();
-    throw error;
+    throw (
+      child.startupFailure?.error ??
+      recordCodexAppServerSpawnFailure(error, invocation.command, launchKey)
+    );
   }
 }

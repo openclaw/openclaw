@@ -107,14 +107,18 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  await flushLogger();
-  expect(vi.getTimerCount()).toBe(0);
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-  setDiagnosticsEnabledForProcess(diagnosticsWereEnabled);
-  setLoggerOverride(null);
-  resetLogger();
-  fs.rmSync(directory, { recursive: true, force: true });
+  try {
+    await flushLogger();
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    // A failed leak assertion must still release this fixture's process-wide state.
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    setDiagnosticsEnabledForProcess(diagnosticsWereEnabled);
+    setLoggerOverride(null);
+    resetLogger();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 it("reports the current holder after turnover and preserves the waiter's trace and FIFO order", async () => {

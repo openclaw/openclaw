@@ -72,7 +72,8 @@ export function createProviderRegistryResolver(dependencies: {
     },
     manifestRegistry: NonNullable<PluginLoadOptions["manifestRegistry"]>,
     declaredOwners: DeclaredProviderOwnerIndex,
-    normalizedConfig: NormalizedPluginsConfig | undefined,
+    getNormalizedConfig: () => NormalizedPluginsConfig,
+    retained: boolean,
   ) {
     const apiOwnerHint = resolveProviderConfigApiOwnerHint(params);
     const ownerRef = declaredOwners.has(normalizeProviderId(params.provider))
@@ -86,18 +87,21 @@ export function createProviderRegistryResolver(dependencies: {
           provider: ownerRef,
           manifestRegistry,
         }) ?? []);
-    // Activation helpers still run beside a declared receiver. Their triggers do
-    // not confer ownership of another provider's executable hooks.
-    const runtimePluginIds = sortUniqueStrings(
-      [params.provider, ...(apiOwnerHint ? [apiOwnerHint] : [])].flatMap((provider) =>
-        resolveManifestActivationPluginIds({
-          ...params,
-          trigger: { kind: "provider", provider },
-          manifestRecords: manifestRegistry.plugins,
-          normalizedConfig,
-        }),
-      ),
-    );
+    // Retained generations project resolved owners without loading or checking
+    // activation helpers. Unowned refs still need those ids for their projection.
+    const runtimePluginIds =
+      retained && ownerIds.length > 0
+        ? []
+        : sortUniqueStrings(
+            [params.provider, ...(apiOwnerHint ? [apiOwnerHint] : [])].flatMap((provider) =>
+              resolveManifestActivationPluginIds({
+                ...params,
+                trigger: { kind: "provider", provider },
+                manifestRecords: manifestRegistry.plugins,
+                normalizedConfig: getNormalizedConfig(),
+              }),
+            ),
+          );
     return {
       provider: params.provider,
       ownerPluginIds: ownerIds,
@@ -110,11 +114,11 @@ export function createProviderRegistryResolver(dependencies: {
     params: ProviderResolutionInputs,
     manifestRegistry?: PluginLoadOptions["manifestRegistry"],
     declaredProviderOwners = buildDeclaredProviderOwnerIndex(manifestRegistry?.plugins ?? []),
+    retained = false,
   ) {
-    const normalizedConfig =
-      manifestRegistry && params.providerRefs?.length
-        ? normalizePluginsConfig(params.config?.plugins)
-        : undefined;
+    let normalizedConfig: NormalizedPluginsConfig | undefined;
+    const getNormalizedConfig = () =>
+      (normalizedConfig ??= normalizePluginsConfig(params.config?.plugins));
     const providerOwners = manifestRegistry
       ? (params.providerRefs ?? []).map((provider) =>
           resolveProviderOwnerSelection(
@@ -126,7 +130,8 @@ export function createProviderRegistryResolver(dependencies: {
             },
             manifestRegistry,
             declaredProviderOwners,
-            normalizedConfig,
+            getNormalizedConfig,
+            retained,
           ),
         )
       : [];
@@ -208,7 +213,12 @@ export function createProviderRegistryResolver(dependencies: {
         : resolvePluginMetadataSnapshot({ config: params.config ?? {}, env, workspaceDir }));
     const inputs = { ...sourceParams, env, workspaceDir };
     const selection = snapshot
-      ? prepareProviderSelection(inputs, snapshot.manifestRegistry, snapshot.declaredProviderOwners)
+      ? prepareProviderSelection(
+          inputs,
+          snapshot.manifestRegistry,
+          snapshot.declaredProviderOwners,
+          retained,
+        )
       : undefined;
     const loadOptions =
       snapshot && selection && !retained
@@ -514,6 +524,7 @@ export function createProviderRegistryResolver(dependencies: {
             inputs,
             context?.manifestRegistry,
             context?.declaredProviderOwners,
+            Boolean(generationRegistry),
           );
         const { lookup, aliasOwners } = prepareRegistry(registry, selection);
         if (

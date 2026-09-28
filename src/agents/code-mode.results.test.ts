@@ -225,7 +225,7 @@ it.each(["replacement", "restriction", "clear", "abort", "run", "session"] as co
   },
 );
 
-it("preserves results through client append and wait, and exposes canonical TypeScript declarations", async () => {
+it("preserves results when client tools append while parked", async () => {
   const h = createCodeModeHarness();
   const collision = pluginToolWithExecute("results", "A tool named results", async () =>
     jsonResult("tool"),
@@ -234,8 +234,6 @@ it("preserves results through client append and wait, and exposes canonical Type
   try {
     const saved = resultDetails(
       await h.tools[0]!.execute("save", {
-        language: "typescript",
-        typecheck: true,
         code: 'const ref = await results.save({name:"sample"}); return {id:ref.id, count:ref.count};',
       }),
     );
@@ -244,25 +242,27 @@ it("preserves results through client append and wait, and exposes canonical Type
       value: { id: expect.any(String), count: 1 },
     });
     const id = (saved.value as { id: string }).id;
-    addClientToolsToToolCatalog({
-      ...h.ctx,
-      enabled: true,
-      tools: [
-        {
-          name: "client_fixture",
-          label: "Client fixture",
-          description: "Fixture",
-          parameters: { type: "object", properties: {} },
-          execute: async () => jsonResult(true),
-        },
-      ],
-    });
+    const appendClient = () =>
+      addClientToolsToToolCatalog({
+        ...h.ctx,
+        enabled: true,
+        tools: [
+          {
+            name: "client_fixture",
+            label: "Client fixture",
+            description: "Fixture",
+            parameters: { type: "object", properties: {} },
+            execute: async () => jsonResult(true),
+          },
+        ],
+      });
     const parked = resultDetails(
       await h.tools[0]!.execute("wait", {
-        code: `const value = await results.load(${JSON.stringify(id)}); await yield_control(); return {value, tool: await (await catalog.search("results"))[0]({}), declarations:(await API.read("results.d.ts")).content};`,
+        code: `await yield_control(); const value = await results.load(${JSON.stringify(id)}); const copy = await results.save(value); await results.delete(copy.id); return {value, tool: await (await catalog.search("results"))[0]({}), declarations:(await API.read("results.d.ts")).content};`,
       }),
     );
     expect(parked.status).toBe("waiting");
+    appendClient();
     expect(
       resultDetails(await h.tools[1]!.execute("resume", { runId: parked.runId })),
     ).toMatchObject({

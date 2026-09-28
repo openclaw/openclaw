@@ -20,6 +20,7 @@ import { resolveCronAgentSessionKey } from "../../cron/isolated-agent/session-ke
 import type { CronExecutionIdentityAdmission } from "../../cron/service/state.js";
 import type { CronJob } from "../../cron/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import { requestHeartbeat } from "../../infra/heartbeat-wake.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
@@ -40,8 +41,8 @@ import {
 } from "../hooks.js";
 import type { HookAgentCompletion, HookAgentDispatchResult } from "../hooks.types.js";
 import {
+  createScheduledGatewayRunner,
   fenceScheduledGatewayContextResolver,
-  runWithScheduledGatewayContext,
 } from "../scheduled-run-gateway-context.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
@@ -188,10 +189,10 @@ function createSessionKeyedHookDispatchQueue() {
   };
 }
 
-function validateHookAgentDeliveryAccount(params: {
+async function validateHookAgentDeliveryAccount(params: {
   cfg: OpenClawConfig;
   value: HookAgentDispatchPayload;
-}): HookAgentDispatchPayload {
+}): Promise<HookAgentDispatchPayload> {
   // Mapped hooks can defer partial/last targets to cron and cannot select an account.
   // Bind only direct hook announces whose destination is already complete.
   if (
@@ -202,7 +203,7 @@ function validateHookAgentDeliveryAccount(params: {
     return params.value;
   }
   const accountId = params.value.delivery.accountId
-    ? validateExplicitMessageAccountSelection({
+    ? await validateExplicitMessageAccountSelection({
         cfg: params.cfg,
         channel: params.value.delivery.channel,
         accountId: params.value.delivery.accountId,
@@ -251,6 +252,7 @@ export function createGatewayHookDispatcher(params: {
   } = params;
   const scheduledGatewayContextResolver =
     fenceScheduledGatewayContextResolver(resolveGatewayContext);
+  const runScheduledHook = createScheduledGatewayRunner(scheduledGatewayContextResolver);
   const enqueueHookAgentDispatch = createSessionKeyedHookDispatchQueue();
   let isolatedAgentModulePromise:
     | Promise<typeof import("../../cron/isolated-agent.js")>
@@ -383,41 +385,50 @@ export function createGatewayHookDispatcher(params: {
       });
       return undefined;
     };
-    const reportHookFailure = (err: unknown) => {
-      completion.resolve(logHookRunTerminal({ status: "error", error: String(err) }));
-      const eventTarget =
-        hookEventTarget ??
-        resolveHookEventTarget({
-          cfg: getRuntimeConfig(),
-          resolvedAgentId: value.effectiveAgentId,
-        });
+    const announceHookEvent = (
+      eventTarget: HookEventTarget,
+      text: string,
+      status: string,
+      reason: string,
+    ) => {
       const eventSessionKey = eventTarget.eventSessionKey;
       const isGlobalEvent = isUnscopedSessionKeySentinel(eventSessionKey);
-      let heartbeatTarget: HookEventTarget["heartbeatTarget"];
+      let heartbeatTarget = eventTarget.heartbeatTarget;
       if (isGlobalEvent && hookEventTarget) {
-        const globalTerminalAgentId = resolveGlobalTerminalAgentId("error");
+        const globalTerminalAgentId = resolveGlobalTerminalAgentId(status);
         if (!globalTerminalAgentId) {
           return;
         }
         heartbeatTarget = { agentId: globalTerminalAgentId };
-      } else {
-        heartbeatTarget = eventTarget.heartbeatTarget;
       }
-      const failureEventOptions = { sessionKey: eventSessionKey };
+      const eventOptions = { sessionKey: eventSessionKey };
       enqueueSystemEvent(
-        `Hook ${safeName} (error): ${String(err)}`,
+        text,
         isGlobalEvent && heartbeatTarget.agentId
-          ? withSystemEventOwner(failureEventOptions, heartbeatTarget.agentId)
-          : failureEventOptions,
+          ? withSystemEventOwner(eventOptions, heartbeatTarget.agentId)
+          : eventOptions,
       );
       if (value.wakeMode === "now") {
         requestHeartbeat({
           source: "hook",
           intent: "immediate",
-          reason: `hook:${jobId}:error`,
+          reason,
           ...heartbeatTarget,
         });
       }
+    };
+    const reportHookFailure = (err: unknown) => {
+      completion.resolve(logHookRunTerminal({ status: "error", error: String(err) }));
+      announceHookEvent(
+        hookEventTarget ??
+          resolveHookEventTarget({
+            cfg: getRuntimeConfig(),
+            resolvedAgentId: value.effectiveAgentId,
+          }),
+        `Hook ${safeName} (error): ${String(err)}`,
+        "error",
+        `hook:${jobId}:error`,
+      );
     };
     let dispatchCfg: OpenClawConfig;
     try {
@@ -431,7 +442,7 @@ export function createGatewayHookDispatcher(params: {
     }
     let acceptedValue: HookAgentDispatchPayload;
     try {
-      acceptedValue = validateHookAgentDeliveryAccount({ cfg: dispatchCfg, value });
+      acceptedValue = await validateHookAgentDeliveryAccount({ cfg: dispatchCfg, value });
       job.delivery = acceptedValue.delivery;
     } catch (err) {
       return {
@@ -501,7 +512,7 @@ export function createGatewayHookDispatcher(params: {
           try {
             const cfg = getRuntimeConfig();
             try {
-              validateHookAgentDeliveryAccount({ cfg, value: acceptedValue });
+              await validateHookAgentDeliveryAccount({ cfg, value: acceptedValue });
             } catch (err) {
               settleAdmission({
                 ok: false,
@@ -509,6 +520,9 @@ export function createGatewayHookDispatcher(params: {
                 error: formatErrorMessage(err),
                 runId,
               });
+              return;
+            }
+            if (startupAbortController.signal.aborted) {
               return;
             }
             // The accepted agent is the stable owner. Global scope stays global;
@@ -562,12 +576,7 @@ export function createGatewayHookDispatcher(params: {
                 },
                 onExecutionStarted: settleSuccessfulAdmission,
               });
-            const result = await runWithScheduledGatewayContext({
-              ...(scheduledGatewayContextResolver
-                ? { resolveGatewayContext: scheduledGatewayContextResolver }
-                : {}),
-              run: runHookIsolatedTurn,
-            });
+            const result = await runScheduledHook(runHookIsolatedTurn);
             if (admissionTimedOut) {
               return;
             }
@@ -587,32 +596,12 @@ export function createGatewayHookDispatcher(params: {
             const shouldAnnounce = shouldAnnounceHookRunResult({ deliver: value.deliver, result });
             completion.resolve(logHookRunTerminal(result));
             if (shouldAnnounce) {
-              const eventSessionKey = eventTarget.eventSessionKey;
-              const isGlobalEvent = isUnscopedSessionKeySentinel(eventSessionKey);
-              let announceEventOptions = { sessionKey: eventSessionKey };
-              let heartbeatTarget: HookEventTarget["heartbeatTarget"];
-              if (isGlobalEvent) {
-                const globalTerminalAgentId = resolveGlobalTerminalAgentId(result.status);
-                if (!globalTerminalAgentId) {
-                  return;
-                }
-                announceEventOptions = withSystemEventOwner(
-                  announceEventOptions,
-                  globalTerminalAgentId,
-                );
-                heartbeatTarget = { agentId: globalTerminalAgentId };
-              } else {
-                heartbeatTarget = eventTarget.heartbeatTarget;
-              }
-              enqueueSystemEvent(`${prefix}: ${summary}`.trim(), announceEventOptions);
-              if (value.wakeMode === "now") {
-                requestHeartbeat({
-                  source: "hook",
-                  intent: "immediate",
-                  reason: `hook:${jobId}`,
-                  ...heartbeatTarget,
-                });
-              }
+              announceHookEvent(
+                eventTarget,
+                `${prefix}: ${summary}`.trim(),
+                result.status,
+                `hook:${jobId}`,
+              );
             }
           } catch (err) {
             if (admissionTimedOut) {
@@ -739,6 +728,7 @@ export type GatewayHookDispatcher = ReturnType<typeof createGatewayHookDispatche
 
 /** Creates the HTTP handler used by gateway hook endpoints. */
 export function createGatewayHooksRequestHandler(params: {
+  scheduler: GatewayScheduler;
   deps: CliDeps;
   getHooksConfig: () => HooksConfigResolved | null;
   getClientIpConfig: () => HookClientIpConfig;
@@ -753,6 +743,7 @@ export function createGatewayHooksRequestHandler(params: {
   const { dispatchAgentHook, dispatchWakeHook } =
     params.dispatcher ?? createGatewayHookDispatcher(params);
   return createHooksRequestHandler({
+    scheduler: params.scheduler,
     getHooksConfig,
     bindHost,
     port,
