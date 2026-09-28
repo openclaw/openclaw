@@ -3,6 +3,7 @@ package ai.openclaw.app
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatTranscriptCache
+import ai.openclaw.app.gateway.DeviceAuthPayload
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GATEWAY_CONNECT_TIMEOUT_MS
@@ -56,6 +57,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
@@ -523,55 +525,186 @@ class GatewayBootstrapAuthTest {
   }
 
   @Test
-  fun controlPageDistinguishesStoredDeviceAuthFromSharedCredentials() =
+  fun controlPageUsesCurrentNativeOperatorGrantAndRetiresAfterDisconnect() =
     runBlocking {
       val (app, prefs, runtime) = gatewayFixture()
       neutralizeColdStartAutoConnect(runtime)
       prefs.setManualTls(false)
-      val endpoint = GatewayEndpoint.manual("127.0.0.1", 1, false)
-      val deviceId = DeviceIdentityStore.withPrefs(app, prefs).loadOrCreate().deviceId
-      val authStore = DeviceAuthStore(prefs)
-      authStore.saveToken(endpoint.stableId, deviceId, "operator", "stored-token")
-      for ((suppliedAuth, usesDeviceToken) in listOf(auth() to true, auth(token = "shared-token") to false, auth(password = "password") to false)) {
-        assertTrue(runtime.connectSwitchingGateway(endpoint, suppliedAuth))
-        assertEquals(usesDeviceToken, runtime.gatewayControlPage.value?.usesStoredDeviceToken)
+      val endpoint = gatewayEndpoint()
+      installControlPageGateway(authMethod = "device-token")
+      assertTrue(runtime.connectSwitchingGateway(endpoint, auth(token = "setup-shared-secret")))
+      val page =
+        withTimeout(5_000) {
+          runtime.gatewayControlPage.first { page ->
+            page?.connectAuth?.let { runCatching { it("browser-challenge", 1700000000123) }.isSuccess } == true
+          }
+        }!!
+      val identityStore = DeviceIdentityStore.withPrefs(app, prefs)
+      val identity = identityStore.loadOrCreate()
+      val tokens = DeviceAuthStore(prefs)
+      for (token in listOf("native-operator-token", "rotated-operator-token")) {
+        tokens.saveToken(endpoint.stableId, identity.deviceId, "operator", token, listOf("operator.read"))
+        val result = requireNotNull(page.connectAuth).invoke("browser-challenge", 1700000000123)
+        assertTrue("A scoped device token must never enter the legacy shared-auth fields", requireNotNull(page.legacySharedAuth).invoke().isEmpty())
+        val client = result.getValue("client").jsonObject
+        val scopes = result.getValue("scopes").jsonArray.map { it.jsonPrimitive.content }
+        assertEquals(listOf("operator.read"), scopes)
+        assertEquals("openclaw-android", client.getValue("id").jsonPrimitive.content)
+        assertEquals(
+          token,
+          result
+            .getValue("auth")
+            .jsonObject
+            .getValue("deviceToken")
+            .jsonPrimitive.content,
+        )
+        val payload = DeviceAuthPayload.buildV3(identity.deviceId, "openclaw-android", "ui", "operator", scopes, 1700000000123, token, "browser-challenge", "android", "Android")
+        assertTrue(
+          identityStore.verifySelfSignature(
+            payload,
+            result
+              .getValue("device")
+              .jsonObject
+              .getValue("signature")
+              .jsonPrimitive.content,
+            identity,
+          ),
+        )
       }
-      authStore.clearToken(endpoint.stableId, deviceId, "operator")
-      assertTrue(runtime.connectSwitchingGateway(endpoint, auth()))
-      assertEquals(false, runtime.gatewayControlPage.value?.usesStoredDeviceToken)
+      tokens.clearToken(endpoint.stableId, identity.deviceId, "operator")
+      assertTrue("Revoked native authority cannot install a legacy startup payload", runCatching { requireNotNull(page.legacySharedAuth).invoke() }.isFailure)
+      assertTrue("A node token or shared setup secret cannot replace revoked operator access", runCatching { requireNotNull(page.connectAuth).invoke("revoked-challenge", 1700000000123) }.isFailure)
+      runtime.disconnect()
+      assertTrue(runCatching { requireNotNull(page.connectAuth).invoke("late-challenge", 1700000000123) }.isFailure)
+      assertTrue(runtime.connectSwitchingGateway(endpoint, auth(token = "setup-shared-secret")))
+      val replacement =
+        withTimeout(5_000) {
+          runtime.gatewayControlPage.first { candidate ->
+            candidate !== page && candidate?.connectAuth?.let { runCatching { it("fresh-challenge", 1700000000123) }.isSuccess } == true
+          }
+        }
+      assertNotNull(replacement)
+      assertTrue("Reconnecting the same route must not revive an old page", runCatching { requireNotNull(page.connectAuth).invoke("late-challenge", 1700000000123) }.isFailure)
+      assertTrue(runCatching { requireNotNull(page.legacySharedAuth).invoke() }.isFailure)
     }
 
   @Test
-  fun resolveGatewayControlPageAuthFallsBackToStoredOperatorToken() {
-    val resolved =
-      resolveGatewayControlPageAuth(
-        auth = auth(bootstrapToken = "bootstrap-1"),
-        storedOperatorToken = " stored-token ",
-      )
-
-    assertEquals(
-      auth(token = "stored-token"),
-      resolved,
-    )
-  }
+  fun controlPagePreservesAcceptedSharedAuthenticationAndLegacyHello() =
+    runBlocking {
+      for ((field, configuredAuth) in listOf("token" to auth(token = "accepted-shared-token"), "password" to auth(password = "accepted-password"))) {
+        for (method in listOf(field, null)) {
+          val (app, prefs, runtime) = gatewayFixture()
+          neutralizeColdStartAutoConnect(runtime)
+          prefs.setManualTls(false)
+          val endpoint = gatewayEndpoint()
+          val operatorConnect = CompletableDeferred<JsonObject>()
+          installControlPageGateway(method) { operatorConnect.complete(it) }
+          assertTrue(runtime.connectSwitchingGateway(endpoint, configuredAuth))
+          val page =
+            withTimeout(5_000) {
+              runtime.gatewayControlPage.first { page ->
+                page?.connectAuth?.let { runCatching { it("browser-challenge", 1700000000123) }.isSuccess } == true
+              }
+            }!!
+          val expectedCredential = if (field == "token") "accepted-shared-token" else "accepted-password"
+          val nativeAuth = withTimeout(5_000) { operatorConnect.await() }.getValue("auth").jsonObject
+          assertEquals(expectedCredential, nativeAuth.getValue(field).jsonPrimitive.content)
+          val identityStore = DeviceIdentityStore.withPrefs(app, prefs)
+          val identity = identityStore.loadOrCreate()
+          // An issued device token is not a substitute for the accepted user-level method.
+          DeviceAuthStore(prefs).clearToken(endpoint.stableId, identity.deviceId, "operator")
+          val result = requireNotNull(page.connectAuth).invoke("browser-challenge", 1700000000123)
+          assertEquals(nativeAuth, result.getValue("auth").jsonObject)
+          assertEquals(nativeAuth, requireNotNull(page.legacySharedAuth).invoke())
+          assertEquals(setOf(field), result.getValue("auth").jsonObject.keys)
+          val scopes = result.getValue("scopes").jsonArray.map { it.jsonPrimitive.content }
+          assertEquals(listOf("operator.read"), scopes)
+          val payload = DeviceAuthPayload.buildV3(identity.deviceId, "openclaw-android", "ui", "operator", scopes, 1700000000123, if (field == "token") expectedCredential else null, "browser-challenge", "android", "Android")
+          assertTrue(
+            identityStore.verifySelfSignature(
+              payload,
+              result
+                .getValue("device")
+                .jsonObject
+                .getValue("signature")
+                .jsonPrimitive.content,
+              identity,
+            ),
+          )
+          runtime.disconnect()
+          assertTrue(runCatching { requireNotNull(page.connectAuth).invoke("late-challenge", 1700000000123) }.isFailure)
+          assertTrue(runCatching { requireNotNull(page.legacySharedAuth).invoke() }.isFailure)
+        }
+      }
+    }
 
   @Test
-  fun resolveGatewayControlPageAuthPrefersExplicitSharedAuth() {
-    assertEquals(
-      auth(token = "shared-token"),
-      resolveGatewayControlPageAuth(
-        auth = auth(token = " shared-token ", bootstrapToken = "bootstrap-1", password = "shared-password"),
-        storedOperatorToken = "stored-token",
-      ),
-    )
-    assertEquals(
-      auth(password = "shared-password"),
-      resolveGatewayControlPageAuth(
-        auth = auth(bootstrapToken = "bootstrap-1", password = " shared-password "),
-        storedOperatorToken = "stored-token",
-      ),
-    )
-  }
+  fun controlPagePreservesAcceptedCredentialFreeConnections() =
+    runBlocking {
+      for (method in listOf("none", "trusted-proxy", "tailscale", null)) {
+        val (app, prefs, runtime) = gatewayFixture()
+        neutralizeColdStartAutoConnect(runtime)
+        prefs.setManualTls(false)
+        val endpoint = gatewayEndpoint()
+        installControlPageGateway(method, issueDeviceToken = false)
+        assertTrue(runtime.connectSwitchingGateway(endpoint, auth()))
+        val page =
+          withTimeout(5_000) {
+            runtime.gatewayControlPage.first { page ->
+              page?.connectAuth?.let { runCatching { it("browser-challenge", 1700000000123) }.isSuccess } == true
+            }
+          }!!
+        val identityStore = DeviceIdentityStore.withPrefs(app, prefs)
+        val identity = identityStore.loadOrCreate()
+        assertNull(DeviceAuthStore(prefs).loadToken(endpoint.stableId, identity.deviceId, "operator"))
+        val result = requireNotNull(page.connectAuth).invoke("browser-challenge", 1700000000123)
+        assertTrue(result.getValue("auth").jsonObject.isEmpty())
+        assertTrue(requireNotNull(page.legacySharedAuth).invoke().isEmpty())
+        val scopes = result.getValue("scopes").jsonArray.map { it.jsonPrimitive.content }
+        assertEquals(listOf("operator.read"), scopes)
+        val payload = DeviceAuthPayload.buildV3(identity.deviceId, "openclaw-android", "ui", "operator", scopes, 1700000000123, null, "browser-challenge", "android", "Android")
+        assertTrue(
+          identityStore.verifySelfSignature(
+            payload,
+            result
+              .getValue("device")
+              .jsonObject
+              .getValue("signature")
+              .jsonPrimitive.content,
+            identity,
+          ),
+        )
+        runtime.disconnect()
+        assertTrue(runCatching { requireNotNull(page.connectAuth).invoke("late-challenge", 1700000000123) }.isFailure)
+      }
+    }
+
+  @Test
+  fun controlPageNeverReusesRejectedSharedTokenAfterLegacyDeviceRetry() =
+    runBlocking {
+      val (app, prefs, runtime) = gatewayFixture()
+      neutralizeColdStartAutoConnect(runtime)
+      prefs.setManualTls(false)
+      val endpoint = gatewayEndpoint()
+      val identity = DeviceIdentityStore.withPrefs(app, prefs).loadOrCreate()
+      DeviceAuthStore(prefs).saveToken(endpoint.stableId, identity.deviceId, "operator", "stored-operator-token", listOf("operator.read"))
+      val acceptedConnect = CompletableDeferred<JsonObject>()
+      installControlPageGateway(authMethod = null, rejectSharedToken = true) { acceptedConnect.complete(it) }
+      assertTrue(runtime.connectSwitchingGateway(endpoint, auth(token = "rejected-shared-token")))
+      val page =
+        withTimeout(10_000) {
+          runtime.gatewayControlPage.first { page ->
+            page?.connectAuth?.let { runCatching { it("browser-challenge", 1700000000123) }.isSuccess } == true
+          }
+        }!!
+      val acceptedAuth = withTimeout(5_000) { acceptedConnect.await() }.getValue("auth").jsonObject
+      assertEquals("rejected-shared-token", acceptedAuth.getValue("token").jsonPrimitive.content)
+      assertEquals("stored-operator-token", acceptedAuth.getValue("deviceToken").jsonPrimitive.content)
+      val resultAuth = requireNotNull(page.connectAuth).invoke("browser-challenge", 1700000000123).getValue("auth").jsonObject
+      assertEquals(setOf("deviceToken"), resultAuth.keys)
+      assertEquals("native-operator-token", resultAuth.getValue("deviceToken").jsonPrimitive.content)
+      assertTrue("Never project the shared token rejected before the accepted device retry", requireNotNull(page.legacySharedAuth).invoke().isEmpty())
+    }
 
   @Test
   fun operatorConnectScopesForAuthUsesNativeScopesWhenNoStoredOperatorMetadata() {
@@ -2687,6 +2820,58 @@ class GatewayBootstrapAuthTest {
       }
     writeField(session, "webSocketFactory", factory)
     return stalled
+  }
+
+  private fun installControlPageGateway(
+    authMethod: String?,
+    rejectSharedToken: Boolean = false,
+    issueDeviceToken: Boolean = true,
+    onOperatorConnect: (JsonObject) -> Unit = {},
+  ) {
+    gatewayServer.dispatcher =
+      object : Dispatcher() {
+        override fun dispatch(request: RecordedRequest): MockResponse =
+          MockResponse().withWebSocketUpgrade(
+            object : WebSocketListener() {
+              override fun onOpen(
+                webSocket: WebSocket,
+                response: Response,
+              ) {
+                webSocket.send("""{"type":"event","event":"connect.challenge","payload":{"nonce":"native-challenge","ts":1700000000123}}""")
+              }
+
+              override fun onMessage(
+                webSocket: WebSocket,
+                text: String,
+              ) {
+                val frame = Json.parseToJsonElement(text).jsonObject
+                val id = frame["id"]?.jsonPrimitive?.content ?: return
+                val payload =
+                  if (frame["method"]?.jsonPrimitive?.content == "connect") {
+                    val role =
+                      frame
+                        .getValue("params")
+                        .jsonObject
+                        .getValue("role")
+                        .jsonPrimitive.content
+                    val params = frame.getValue("params").jsonObject
+                    if (role == "operator" && rejectSharedToken && params["auth"]?.jsonObject?.containsKey("deviceToken") != true) {
+                      webSocket.send("""{"type":"res","id":"$id","ok":false,"error":{"code":"UNAUTHORIZED","message":"Shared token rejected","details":{"code":"AUTH_TOKEN_MISMATCH","canRetryWithDeviceToken":true}}}""")
+                      return
+                    }
+                    if (role == "operator") onOperatorConnect(params)
+                    val methodField = authMethod?.let { "\"method\":\"$it\"," }.orEmpty()
+                    val scopes = if (role == "operator") "[\"operator.read\"]" else "[]"
+                    val tokenField = if (issueDeviceToken) "\"deviceToken\":\"native-$role-token\"," else ""
+                    """{"auth":{$methodField$tokenField"role":"$role","scopes":$scopes},"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}"""
+                  } else {
+                    "{}"
+                  }
+                webSocket.send("""{"type":"res","id":"$id","ok":true,"payload":$payload}""")
+              }
+            },
+          )
+      }
   }
 
   private fun gatewayFixture(

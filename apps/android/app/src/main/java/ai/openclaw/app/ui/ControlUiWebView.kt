@@ -10,11 +10,14 @@ import ai.openclaw.app.ui.design.ClawTheme
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.res.Configuration
+import android.graphics.Bitmap
 import android.view.ContextThemeWrapper
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.InputMethodManager
 import android.webkit.RenderProcessGoneDetail
+import android.webkit.WebMessage
+import android.webkit.WebMessagePort
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -51,11 +54,20 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.net.toUri
+import androidx.webkit.ScriptHandler
+import androidx.webkit.WebMessageCompat
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okio.ByteString.Companion.toByteString
 
 @Composable
@@ -128,79 +140,78 @@ internal fun ControlUiWebView(
   val focusManager = LocalFocusManager.current
   val darkAppearance = LocalResolvedAppearanceIsDark.current
   var rendererGeneration by remember { mutableIntStateOf(0) }
-  var currentUrl by rememberSaveable(page.baseUrl, url) { mutableStateOf(url) }
   val currentExternalLink by rememberUpdatedState(onExternalLink)
+  val unavailableMessage = nativeString("Reconnect the app to reopen this gateway page.")
+  var currentUrl by rememberSaveable(page.baseUrl, url) { mutableStateOf(url) }
 
-  Column(modifier = modifier) {
-    if (page.usesStoredDeviceToken) {
-      Text(
-        text = nativeString("If this page asks for a token or password, enter the Gateway credentials in Settings → Gateway → Manual Gateway, then choose Save & Connect."),
-        style = ClawTheme.type.caption,
-        color = ClawTheme.colors.textMuted,
-        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-      )
-    }
-    // A WebView reads prefers-color-scheme from the Context it was built with, so an appearance
-    // flip has to rebuild it; keying on the resolved boolean keeps that to real dark/light changes.
-    // The reload is safe because both Control UI surfaces reattach to server-side state: the shell
-    // outlives the page, and the desktop session lingers on the Gateway long enough to re-observe.
-    key(page, darkAppearance, rendererGeneration) {
-      AndroidView(
-        modifier = Modifier.fillMaxWidth().weight(1f),
-        factory = {
-          val webView =
-            object : WebView(controlUiWebViewContext(context, darkAppearance)) {
-              override fun onDetachedFromWindow() {
-                releaseControlUiInputFocus(this, focusManager)
-                super.onDetachedFromWindow()
-              }
+  // A WebView reads prefers-color-scheme from the Context it was built with, so an appearance
+  // flip has to rebuild it; keying on the resolved boolean keeps that to real dark/light changes.
+  // The reload is safe because both Control UI surfaces reattach to server-side state: the shell
+  // outlives the page, and the desktop session lingers on the Gateway long enough to re-observe.
+  key(page, darkAppearance, rendererGeneration) {
+    AndroidView(
+      modifier = modifier,
+      factory = {
+        val webView =
+          object : WebView(controlUiWebViewContext(context, darkAppearance)) {
+            override fun onDetachedFromWindow() {
+              releaseControlUiInputFocus(this, focusManager)
+              super.onDetachedFromWindow()
             }
-          // WRAP_CONTENT forces a zero-height CSS viewport even when Compose measures the view exactly.
-          webView.layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-          val webSettings = webView.settings
-          webSettings.setAllowContentAccess(false)
-          webSettings.setAllowFileAccess(false)
-          webSettings.setAllowFileAccessFromFileURLs(false)
-          webSettings.setAllowUniversalAccessFromFileURLs(false)
-          webSettings.setSafeBrowsingEnabled(true)
-          webSettings.javaScriptEnabled = true
-          webSettings.domStorageEnabled = true
-          webSettings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-          webSettings.builtInZoomControls = false
-          webSettings.displayZoomControls = false
-          webSettings.setSupportZoom(false)
-          if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
-            WebSettingsCompat.setAlgorithmicDarkeningAllowed(webSettings, false)
           }
-          webView.overScrollMode = View.OVER_SCROLL_NEVER
-          // The native gateway connection already established this route's trust.
-          // Reuse only that exact accepted fingerprint; every other SSL error cancels.
-          // The same client protects both terminal and dashboard pages.
-          webView.webViewClient =
-            ControlUiWebViewClient(
-              page = page,
-              navigationUrl = url.takeIf { onExternalLink != null },
-              onExternalLink = { currentExternalLink?.invoke(it) },
-              onRendererGone = { rendererGeneration += 1 },
-              onUrlChanged = { currentUrl = it },
-            )
-          installControlUiAuthScript(webView, page)
-          val origin = controlUiOriginRule(page.baseUrl)
-          val restoredUrl = currentUrl.takeIf { origin != null && controlUiOriginRule(it) == origin && (onExternalLink == null || it == url) }
-          webView.loadUrl(restoredUrl ?: url)
-          webView
-        },
-        update = { webView ->
-          if (!interactive) releaseControlUiInputFocus(webView, focusManager)
-          webView.importantForAccessibility = if (interactive) View.IMPORTANT_FOR_ACCESSIBILITY_AUTO else View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
-          webView.isFocusable = interactive
-          webView.isFocusableInTouchMode = interactive
-        },
-        onRelease = { webView ->
-          (webView.webViewClient as? ControlUiWebViewClient)?.release(webView)
-        },
-      )
-    }
+        // WRAP_CONTENT forces a zero-height CSS viewport even when Compose measures the view exactly.
+        webView.layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        val webSettings = webView.settings
+        webSettings.setAllowContentAccess(false)
+        webSettings.setAllowFileAccess(false)
+        webSettings.setAllowFileAccessFromFileURLs(false)
+        webSettings.setAllowUniversalAccessFromFileURLs(false)
+        webSettings.setSafeBrowsingEnabled(true)
+        webSettings.javaScriptEnabled = true
+        webSettings.domStorageEnabled = true
+        webSettings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+        webSettings.builtInZoomControls = false
+        webSettings.displayZoomControls = false
+        webSettings.setSupportZoom(false)
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
+          WebSettingsCompat.setAlgorithmicDarkeningAllowed(webSettings, false)
+        }
+        webView.overScrollMode = View.OVER_SCROLL_NEVER
+        // The native gateway connection already established this route's trust.
+        // Reuse only that exact accepted fingerprint; every other SSL error cancels.
+        // The same client protects both terminal and dashboard pages.
+        val client =
+          ControlUiWebViewClient(
+            page = page,
+            navigationUrl = url.takeIf { onExternalLink != null },
+            onExternalLink = { currentExternalLink?.invoke(it) },
+            onNavigate = { nextUrl ->
+              currentUrl = nextUrl
+              rendererGeneration += 1
+            },
+            onRendererGone = { rendererGeneration += 1 },
+            onUrlChanged = { currentUrl = it },
+          )
+        webView.webViewClient = client
+        val restoredUrl = currentUrl.takeIf { client.isGatewayPage(it) && (onExternalLink == null || it == url || it == client.authenticatedUrl(url)) } ?: url
+        if (client.isGatewayPage(restoredUrl) && client.installAuth(webView)) {
+          webView.loadUrl(client.authenticatedUrl(restoredUrl))
+        } else {
+          // Never silently create a separately paired browser identity for an invalid route.
+          webView.loadData(unavailableMessage, "text/plain", "UTF-8")
+        }
+        webView
+      },
+      update = { webView ->
+        if (!interactive) releaseControlUiInputFocus(webView, focusManager)
+        webView.importantForAccessibility = if (interactive) View.IMPORTANT_FOR_ACCESSIBILITY_AUTO else View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+        webView.isFocusable = interactive
+        webView.isFocusableInTouchMode = interactive
+      },
+      onRelease = { webView ->
+        (webView.webViewClient as? ControlUiWebViewClient)?.release(webView)
+      },
+    )
   }
 }
 
@@ -229,48 +240,25 @@ private fun controlUiWebViewContext(
   return ContextThemeWrapper(context.createConfigurationContext(configuration), R.style.Theme_OpenClawNode)
 }
 
-/**
- * Hands gateway credentials through the origin-restricted native startup contract,
- * keeping them out of page URLs and WebView history.
- */
-private fun installControlUiAuthScript(
-  webView: WebView,
-  page: NodeRuntime.GatewayControlPage,
-) {
-  if (page.token == null && page.password == null) return
-  if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) return
-  // Document-start rules are origins (scheme://host[:port]); a base-path URL
-  // is an invalid rule and throws while constructing the WebView.
-  val originRule = controlUiOriginRule(page.baseUrl) ?: return
-  val gatewayUrl = page.baseUrl.replaceFirst("http", "ws")
-  val payload =
-    buildJsonObject {
-      put("gatewayUrl", gatewayUrl)
-      page.token?.let { put("token", it) }
-      page.password?.let { put("password", it) }
-    }
-  val script =
-    """
-    (() => {
-      try {
-        Object.defineProperty(window, "__OPENCLAW_NATIVE_CONTROL_AUTH__", {
-          value: $payload,
-          configurable: true,
-        });
-      } catch (e) {}
-    })();
-    """.trimIndent()
-  WebViewCompat.addDocumentStartJavaScript(webView, script, setOf(originRule))
-}
+private const val NATIVE_GATEWAY_AUTH_BRIDGE = "OpenClawNativeGatewayAuth"
 
 /** scheme://host[:port] origin for WebView script rules; brackets IPv6 hosts. */
 internal fun controlUiOriginRule(baseUrl: String): String? {
   val uri = baseUrl.toUri()
-  val scheme = uri.scheme ?: return null
-  val host = uri.host ?: return null
+  val scheme = uri.scheme?.lowercase(java.util.Locale.US)?.takeIf { it == "http" || it == "https" } ?: return null
+  val host = uri.host?.lowercase(java.util.Locale.US) ?: return null
   val hostPart = if (host.contains(":") && !host.startsWith("[")) "[$host]" else host
   val port = if (uri.port != -1) ":${uri.port}" else ""
   return "$scheme://$hostPart$port"
+}
+
+private fun sameControlUiOrigin(
+  left: String,
+  right: String,
+): Boolean {
+  val first = left.toHttpUrlOrNull() ?: return false
+  val second = right.toHttpUrlOrNull() ?: return false
+  return first.scheme == second.scheme && first.host == second.host && first.port == second.port
 }
 
 private const val X509_CERTIFICATE_BUNDLE_KEY = "x509-certificate"
@@ -281,10 +269,171 @@ private class ControlUiWebViewClient(
   private val page: NodeRuntime.GatewayControlPage,
   private val navigationUrl: String? = null,
   private val onExternalLink: (String) -> Unit = {},
+  private val onNavigate: (String) -> Unit,
   private val onRendererGone: () -> Unit,
-  private val onUrlChanged: (String) -> Unit = {},
+  private val onUrlChanged: (String) -> Unit,
 ) : WebViewClient() {
   private var released = false
+  private var navigationRetired = false
+  private var authInstalled = false
+  private var documentStarted = false
+  private var authScript: ScriptHandler? = null
+  private var usesMessagePort = false
+  private var authPort: WebMessagePort? = null
+  private val gatewayUrl = page.baseUrl.replaceFirst("http", "ws")
+
+  fun isGatewayPage(url: String?): Boolean {
+    val candidate = url?.toUri() ?: return false
+    if (!sameControlUiOrigin(url, page.baseUrl)) return false
+    val root =
+      page.baseUrl
+        .toUri()
+        .path
+        .orEmpty()
+        .trimEnd('/')
+    val path = candidate.path.orEmpty()
+    return path == root || path.startsWith("$root/")
+  }
+
+  fun authenticatedUrl(url: String): String {
+    if (!usesMessagePort) return url
+    val uri = url.toUri()
+    val fields =
+      uri.encodedFragment
+        .orEmpty()
+        .split('&')
+        .filter { it.isNotEmpty() && it.substringBefore('=') != "nativeControlAuth" }
+    // Public startup metadata selects native auth before any browser handshake.
+    // Unlike a JavaScript interface, the message port below is sent only to the main frame.
+    return uri
+      .buildUpon()
+      .encodedFragment((fields + "nativeControlAuth=${android.net.Uri.encode(gatewayUrl)}").joinToString("&"))
+      .build()
+      .toString()
+  }
+
+  fun installAuth(view: WebView): Boolean {
+    val origin = controlUiOriginRule(page.baseUrl) ?: return false
+    if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+      val legacySharedAuth =
+        try {
+          page.legacySharedAuth?.invoke()
+        } catch (_: IllegalStateException) {
+          retireAuth(view)
+          return false
+        }
+      if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+        WebViewCompat.addWebMessageListener(view, NATIVE_GATEWAY_AUTH_BRIDGE, setOf(origin)) { source, message, sourceOrigin, isMainFrame, reply ->
+          if (message.type != WebMessageCompat.TYPE_STRING || !isActiveDocument(view) || source !== view || !isMainFrame ||
+            !sameControlUiOrigin(sourceOrigin.toString(), page.baseUrl)
+          ) {
+            return@addWebMessageListener
+          }
+          val response = respondToChallenge(message.data) ?: return@addWebMessageListener
+          if (isActiveDocument(view) && WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+            reply.postMessage(response)
+          }
+        }
+        authInstalled = true
+      } else {
+        // Platform WebMessagePort is available since API 23, below our minimum SDK.
+        usesMessagePort = true
+      }
+      val payload =
+        buildJsonObject {
+          put("gatewayUrl", gatewayUrl)
+          put("nativeConnectAuth", true)
+          // Published Gateway UIs consume shared fields; native-aware UIs ignore them.
+          // Retain until the supported Gateway window understands native challenge signing.
+          put("token", legacySharedAuth?.get("token") ?: JsonNull)
+          legacySharedAuth?.get("password")?.let { put("password", it) }
+        }
+      authScript =
+        WebViewCompat.addDocumentStartJavaScript(
+          view,
+          """
+          (() => {
+            if (window.top !== window) return;
+            Object.defineProperty(window, "__OPENCLAW_NATIVE_CONTROL_AUTH__", {
+              value: $payload,
+              configurable: true,
+            });
+          })();
+          """.trimIndent(),
+          setOf(origin),
+        )
+      return true
+    }
+    usesMessagePort = true
+    return true
+  }
+
+  private fun isActiveDocument(view: WebView): Boolean = !released && !navigationRetired && isGatewayPage(view.url)
+
+  private fun respondToChallenge(data: String?): String? {
+    val request = runCatching { Json.parseToJsonElement(data.orEmpty()) as? JsonObject }.getOrNull()
+    val id = (request?.get("id") as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+    if (id.isNullOrBlank() || id.length > 128) return null
+    return buildJsonObject {
+      put("id", id)
+      try {
+        require(request.keys == setOf("id", "nonce", "signedAt")) { "Invalid native connect request" }
+        val nonce = (request["nonce"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+        val signedAt = (request["signedAt"] as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull
+        require(nonce != null && signedAt != null) { "Invalid gateway challenge" }
+        val sign = checkNotNull(page.connectAuth) { "Reconnect the app to authenticate this page" }
+        put("result", sign(nonce, signedAt))
+      } catch (error: IllegalArgumentException) {
+        put("error", "Invalid gateway challenge")
+      } catch (error: IllegalStateException) {
+        put("error", "Reconnect the app to authenticate this page")
+      }
+    }.toString()
+  }
+
+  override fun onPageFinished(
+    view: WebView,
+    url: String?,
+  ) {
+    if (!usesMessagePort || !documentStarted || !isActiveDocument(view) || !isGatewayPage(url) || authPort != null) return
+    val origin = controlUiOriginRule(page.baseUrl)?.toUri() ?: return
+    val ports = view.createWebMessageChannel()
+    val nativePort = ports[0]
+    authPort = nativePort
+    nativePort.setWebMessageCallback(
+      object : WebMessagePort.WebMessageCallback() {
+        override fun onMessage(
+          port: WebMessagePort,
+          message: WebMessage,
+        ) {
+          if (port !== authPort || !isActiveDocument(view)) return
+          val response = respondToChallenge(message.data) ?: return
+          if (port === authPort && isActiveDocument(view)) port.postMessage(WebMessage(response))
+        }
+      },
+    )
+    val payload =
+      buildJsonObject {
+        put("type", "openclaw.native-control-auth")
+        put("gatewayUrl", gatewayUrl)
+      }
+    // Page scripts have installed their listener by onPageFinished. The platform
+    // transfers only to this main-frame origin, never to subframes or a wildcard.
+    // The transferred end now belongs to JavaScript; retirement closes our end.
+    view.postWebMessage(WebMessage(payload.toString(), arrayOf(ports[1])), origin)
+  }
+
+  private fun retireAuth(view: WebView) {
+    navigationRetired = true
+    authPort?.close()
+    authPort = null
+    authScript?.remove()
+    authScript = null
+    if (authInstalled && WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+      WebViewCompat.removeWebMessageListener(view, NATIVE_GATEWAY_AUTH_BRIDGE)
+    }
+    authInstalled = false
+  }
 
   override fun doUpdateVisitedHistory(
     view: WebView,
@@ -292,28 +441,53 @@ private class ControlUiWebViewClient(
     isReload: Boolean,
   ) {
     super.doUpdateVisitedHistory(view, url, isReload)
-    if (released || url == null || (navigationUrl != null && url != navigationUrl)) return
-    val origin = controlUiOriginRule(page.baseUrl) ?: return
-    if (controlUiOriginRule(url) == origin) onUrlChanged(url)
+    if (released || navigationRetired || url == null || !isGatewayPage(url)) return
+    if (navigationUrl != null && url != navigationUrl && url != authenticatedUrl(navigationUrl)) return
+    onUrlChanged(url)
   }
 
   override fun shouldOverrideUrlLoading(
     view: WebView,
     request: WebResourceRequest,
   ): Boolean {
-    val expected = navigationUrl ?: return false
+    if (released || navigationRetired) return true
     if (!request.isForMainFrame) return false
-    if (request.url.toString() == expected) return false
-    // The remote page is streamed, not navigated into this credential-bearing host.
-    if (request.hasGesture() && request.url.scheme in setOf("http", "https")) {
-      onExternalLink(request.url.toString())
+    val nextUrl = request.url.toString()
+    navigationUrl?.let { expected ->
+      if (nextUrl == expected || nextUrl == authenticatedUrl(expected)) return false
+      // A streamed page stays mounted; an external link must not retire its auth bridge.
+      if (request.hasGesture() && request.url.scheme in setOf("http", "https")) {
+        onExternalLink(nextUrl)
+      }
+      return true
     }
+    if (!isGatewayPage(nextUrl)) return true
+    retireAuth(view)
+    onNavigate(nextUrl)
     return true
+  }
+
+  override fun onPageStarted(
+    view: WebView,
+    url: String?,
+    favicon: Bitmap?,
+  ) {
+    if (!isGatewayPage(url)) {
+      retireAuth(view)
+    } else if (documentStarted && !released && !navigationRetired) {
+      // Full document navigation/reload gets a fresh bridge, unlike SPA history changes.
+      // Queued callbacks from the old document retain only the retired listener.
+      retireAuth(view)
+      view.stopLoading()
+      onNavigate(checkNotNull(url))
+    }
+    documentStarted = true
   }
 
   fun release(view: WebView) {
     if (released) return
     released = true
+    retireAuth(view)
     view.stopLoading()
     view.destroy()
   }
@@ -324,6 +498,7 @@ private class ControlUiWebViewClient(
   ): Boolean {
     if (released) return true
     released = true
+    retireAuth(view)
     // The renderer cannot be reused. Detach and destroy this instance before
     // advancing the Compose key so the authenticated page gets a fresh process.
     (view.parent as? ViewGroup)?.removeView(view)

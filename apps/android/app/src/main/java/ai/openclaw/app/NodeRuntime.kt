@@ -45,8 +45,10 @@ import ai.openclaw.app.gateway.GatewayTlsProbeResult
 import ai.openclaw.app.gateway.GatewayTlsProbeRunner
 import ai.openclaw.app.gateway.GatewayTlsTrustDecision
 import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
+import ai.openclaw.app.gateway.NativeControlUiCredential
 import ai.openclaw.app.gateway.NetworkMonitor
 import ai.openclaw.app.gateway.NodeEventSendOutcome
+import ai.openclaw.app.gateway.buildNativeControlUiConnectAuth
 import ai.openclaw.app.gateway.decideGatewayTlsTrust
 import ai.openclaw.app.gateway.formatGatewayAuthority
 import ai.openclaw.app.gateway.gatewayNetworkConnectError
@@ -1098,17 +1100,13 @@ class NodeRuntime private constructor(
     val bootstrapHandoff: ai.openclaw.app.gateway.GatewayBootstrapHandoff? = null,
   )
 
-  /**
-   * HTTP(S) page origin plus shared credentials for gateway-served Control UI pages.
-   * The values come from the same endpoint and auth material that the WS sessions use.
-   */
+  /** Gateway page route and auth adapters owned by its native operator connection. */
   data class GatewayControlPage(
     val baseUrl: String,
-    val token: String?,
-    val password: String?,
     val tlsFingerprintSha256: String?,
+    val connectAuth: ((nonce: String, signedAt: Long) -> JsonObject)? = null,
     val browserFocusAvailable: Boolean = false,
-    val usesStoredDeviceToken: Boolean = false,
+    val legacySharedAuth: (() -> JsonObject)? = null,
   )
 
   private val appContext = context.applicationContext
@@ -1676,7 +1674,10 @@ class NodeRuntime private constructor(
           // device-owned session without changing the shipped key or its existing transcript.
           chat.onGatewayConnected(mainSessionBinding(mainSessionKey))
         }
-        refreshGatewayControlPage(browserFocusAvailable = hello.capabilities?.contains("control-ui-browser-focus") == true)
+        refreshGatewayControlPage(
+          operatorReady = true,
+          browserFocusAvailable = hello.capabilities?.contains("control-ui-browser-focus") == true,
+        )
         updateStatus {
           operatorConnectionProblem = null
           operatorConnected = true
@@ -3228,8 +3229,6 @@ class NodeRuntime private constructor(
     _gatewayControlPage.value =
       GatewayControlPage(
         baseUrl = AndroidScreenshotFixture.controlUiBaseUrl,
-        token = null,
-        password = null,
         tlsFingerprintSha256 = null,
         browserFocusAvailable = AndroidScreenshotFixture.browserFocusAvailable,
       )
@@ -4927,7 +4926,7 @@ class NodeRuntime private constructor(
       connection.attempt?.operatorReady?.value = null
       val tls = connectionManager.resolveTlsParams(endpoint)
       val storedOperatorEntry = loadStoredRoleDeviceAuthEntry(endpoint, "operator")
-      refreshGatewayControlPage(endpoint, auth, storedOperatorEntry?.token)
+      refreshGatewayControlPage(endpoint)
       val usesStoredOperatorDeviceToken =
         operatorSessionUsesStoredDeviceToken(auth, storedOperatorEntry?.token)
       val operatorAuth =
@@ -5182,25 +5181,74 @@ class NodeRuntime private constructor(
 
   private fun refreshGatewayControlPage(
     endpoint: GatewayEndpoint? = connectedEndpoint,
-    auth: GatewayConnectAuth? = activeGatewayConnection?.auth,
-    storedOperatorToken: String? = endpoint?.let { loadStoredRoleDeviceAuthEntry(it, "operator")?.token },
+    operatorReady: Boolean = false,
     browserFocusAvailable: Boolean = false,
   ) {
     if (endpoint == null) {
       _gatewayControlPage.value = null
       return
     }
-    val connectAuth = auth ?: resolveGatewayConnectAuth(endpoint)
-    val pageAuth = resolveGatewayControlPageAuth(connectAuth, storedOperatorToken)
-    _gatewayControlPage.value =
+    val connection = activeGatewayConnection
+    val gatewayScope = captureGatewayDataScope()
+    val lease = if (operatorReady) operatorSession.captureRequestLease(endpoint.stableId) else null
+    val grantedScopes = _operatorScopes.value
+    val client = connectionManager.buildOperatorConnectOptions().client
+    lateinit var page: GatewayControlPage
+
+    fun withCurrentCredential(encode: (NativeControlUiCredential) -> JsonObject): JsonObject {
+      val currentLease = checkNotNull(lease) { "Reconnect the app to authenticate this page" }
+      var result: JsonObject? = null
+      // Both wire adapters consume this live owner. Keep session -> runtime lock order;
+      // a retired socket/page cannot publish a signature or legacy shared credentials.
+      val committed =
+        currentLease.commitIfCurrent {
+          synchronized(gatewayDataScopeLock) {
+            val isCurrentPage = {
+              connection != null && activeGatewayConnection === connection &&
+                gatewayScope != null && isGatewayDataScopeCurrent(gatewayScope) &&
+                _gatewayControlPage.value === page && _operatorScopes.value == grantedScopes
+            }
+            check(isCurrentPage()) { "Reconnect the app to authenticate this page" }
+            val currentCredential = {
+              currentLease.controlUiCredential ?: NativeControlUiCredential.DeviceToken(
+                checkNotNull(loadStoredRoleDeviceAuthEntry(endpoint, "operator")?.token) {
+                  "Reconnect the app to restore its paired device access"
+                },
+              )
+            }
+            val credential = currentCredential()
+            val encoded = encode(credential)
+            check(isCurrentPage() && currentCredential() == credential) { "Native device access changed; reconnect" }
+            result = encoded
+          }
+        }
+      check(committed) { "Reconnect the app to authenticate this page" }
+      return checkNotNull(result)
+    }
+
+    page =
       GatewayControlPage(
         baseUrl = gatewayControlPageBaseUrl(endpoint),
-        token = pageAuth.token,
-        password = pageAuth.password,
-        usesStoredDeviceToken = operatorSessionUsesStoredDeviceToken(connectAuth, storedOperatorToken),
         tlsFingerprintSha256 = gatewayControlPageTlsFingerprint(prefs, endpoint),
+        connectAuth = { nonce, signedAt ->
+          withCurrentCredential { credential ->
+            buildNativeControlUiConnectAuth(identityStore, client, grantedScopes, credential, nonce, signedAt)
+          }
+        },
+        legacySharedAuth = {
+          withCurrentCredential { credential ->
+            buildJsonObject {
+              when (credential) {
+                is NativeControlUiCredential.Token -> put("token", JsonPrimitive(credential.value))
+                is NativeControlUiCredential.Password -> put("password", JsonPrimitive(credential.value))
+                is NativeControlUiCredential.DeviceToken, NativeControlUiCredential.None -> Unit
+              }
+            }
+          }
+        },
         browserFocusAvailable = browserFocusAvailable,
       )
+    _gatewayControlPage.value = page
   }
 
   private fun connectAfterTlsCheckLocked(
@@ -9532,44 +9580,6 @@ internal fun resolveOperatorSessionConnectAuth(
   val explicitBootstrapToken = auth.bootstrapToken?.trim()?.takeIf { it.isNotEmpty() }
   if (explicitBootstrapToken != null) {
     return null
-  }
-
-  return NodeRuntime.GatewayConnectAuth(
-    token = null,
-    bootstrapToken = null,
-    password = null,
-  )
-}
-
-internal fun resolveGatewayControlPageAuth(
-  auth: NodeRuntime.GatewayConnectAuth,
-  storedOperatorToken: String?,
-): NodeRuntime.GatewayConnectAuth {
-  val explicitToken = auth.token?.trim()?.takeIf { it.isNotEmpty() }
-  if (explicitToken != null) {
-    return NodeRuntime.GatewayConnectAuth(
-      token = explicitToken,
-      bootstrapToken = null,
-      password = null,
-    )
-  }
-
-  val explicitPassword = auth.password?.trim()?.takeIf { it.isNotEmpty() }
-  if (explicitPassword != null) {
-    return NodeRuntime.GatewayConnectAuth(
-      token = null,
-      bootstrapToken = null,
-      password = explicitPassword,
-    )
-  }
-
-  val storedToken = storedOperatorToken?.trim()?.takeIf { it.isNotEmpty() }
-  if (storedToken != null) {
-    return NodeRuntime.GatewayConnectAuth(
-      token = storedToken,
-      bootstrapToken = null,
-      password = null,
-    )
   }
 
   return NodeRuntime.GatewayConnectAuth(

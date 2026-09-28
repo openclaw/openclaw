@@ -406,6 +406,7 @@ class GatewaySession(
     private val isCurrentImpl: () -> Boolean = { true },
     private val commitIfCurrentImpl: ((block: () -> Unit) -> Boolean)? = null,
     private val advertisedMethods: Set<String> = emptySet(),
+    val controlUiCredential: NativeControlUiCredential? = null,
     private val requestImpl: suspend (method: String, paramsJson: String?, timeoutMs: Long, withEnqueue: (() -> Unit) -> Unit) -> String,
   ) {
     fun isCurrent(): Boolean = isCurrentImpl()
@@ -890,6 +891,7 @@ class GatewaySession(
       RequestLease(
         endpointStableId = conn.target.endpoint.stableId,
         advertisedMethods = conn.advertisedMethods,
+        controlUiCredential = conn.controlUiCredential,
         isCurrentImpl = { currentConnection === conn && conn.isReady() },
         commitIfCurrentImpl = { block ->
           synchronized(lifecycleLock) {
@@ -1010,6 +1012,9 @@ class GatewaySession(
     val target: DesiredConnection,
   ) {
     var advertisedMethods: Set<String> = emptySet()
+      private set
+
+    var controlUiCredential: NativeControlUiCredential? = null
       private set
 
     private val connectionJob = SupervisorJob(scope.coroutineContext[Job])
@@ -1777,6 +1782,28 @@ class GatewaySession(
           ?.mapNotNull { it.asStringOrNull()?.trim()?.takeIf { capability -> capability.isNotEmpty() } }
           ?.toSet()
       val authObj = obj["auth"].asObjectOrNull()
+      val acceptedMethod = authObj?.get("method").asStringOrNull()
+      // Legacy hello omits method, so use the exact accepted selection. A device-token
+      // retry must never reuse the rejected shared token still present in that request.
+      controlUiCredential =
+        when {
+          acceptedMethod in setOf("none", "trusted-proxy", "tailscale") ||
+            (acceptedMethod == null && selectedAuth.authSource == GatewayConnectAuthSource.NONE) -> {
+            NativeControlUiCredential.None
+          }
+
+          (acceptedMethod == "token" || acceptedMethod == null) && selectedAuth.authSource == GatewayConnectAuthSource.SHARED_TOKEN -> {
+            selectedAuth.authToken?.let { NativeControlUiCredential.Token(it) }
+          }
+
+          (acceptedMethod == "password" || acceptedMethod == null) && selectedAuth.authSource == GatewayConnectAuthSource.PASSWORD -> {
+            selectedAuth.authPassword?.let { NativeControlUiCredential.Password(it) }
+          }
+
+          else -> {
+            null
+          } // Device/bootstrap/other methods use the current scoped device grant.
+        }
       val deviceToken = authObj?.get("deviceToken").asStringOrNull()
       val authRole = authObj?.get("role").asStringOrNull() ?: target.options.role
       controlUiReadCredentials =

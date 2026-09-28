@@ -33,6 +33,7 @@ import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Rect
+import android.net.Uri
 import android.provider.Settings
 import android.view.ViewGroup
 import android.view.inspector.WindowInspector
@@ -254,7 +255,7 @@ class SidebarGatewayPickerTest {
 
   @Test
   @Config(sdk = [31], qualifiers = "w412dp-h820dp-mdpi")
-  fun dualCatalogTerminalActionOffersPairedGatewaySignInRecovery() = assertNativeCatalogStart(dualCapability = true)
+  fun dualCatalogTerminalActionPreservesChatWhileOpeningNativeSetup() = assertNativeCatalogStart(dualCapability = true)
 
   private fun assertNativeCatalogStart(dualCapability: Boolean) {
     model.enterScreenshotFixtureMode(AndroidScreenshotScene.CompletedWork)
@@ -272,7 +273,7 @@ class SidebarGatewayPickerTest {
     }
     val originalSession = model.chatSessionKey.value
     val controlPage = ReflectionHelpers.getField<MutableStateFlow<NodeRuntime.GatewayControlPage?>>(runtime, "_gatewayControlPage")
-    val page = requireNotNull(controlPage.value).copy(usesStoredDeviceToken = dualCapability)
+    val page = requireNotNull(controlPage.value)
     controlPage.value = null
     showSidebarAndComposer(dark = false, showShell = true)
     composeRule.onNodeWithContentDescription("Show Sidebar").performClick()
@@ -282,9 +283,7 @@ class SidebarGatewayPickerTest {
     capture("catalog-plus")
     composeRule.onNodeWithContentDescription("New terminal session — Codex").assertIsEnabled().performClick()
     composeRule.onNodeWithText("Terminal").assertIsDisplayed()
-    val recovery = composeRule.onNodeWithText("If this page asks for a token or password, enter the Gateway credentials in Settings → Gateway → Manual Gateway, then choose Save & Connect.")
-    capture(if (dualCapability) "paired-terminal-recovery" else "native-terminal-setup")
-    if (dualCapability) recovery.assertIsDisplayed() else recovery.assertDoesNotExist()
+    capture("native-terminal-setup")
     composeRule.runOnIdle {
       val webView =
         WindowInspector
@@ -294,7 +293,15 @@ class SidebarGatewayPickerTest {
           .flatMap { it.descendants }
           .filterIsInstance<WebView>()
           .single()
-      assertEquals("${AndroidScreenshotFixture.controlUiBaseUrl}/new?agent=main&catalog=codex", shadowOf(webView).lastLoadedUrl)
+      assertEquals(
+        "${AndroidScreenshotFixture.controlUiBaseUrl}/new?agent=main&catalog=codex",
+        Uri
+          .parse(shadowOf(webView).lastLoadedUrl)
+          .buildUpon()
+          .fragment(null)
+          .build()
+          .toString(),
+      )
       assertEquals(originalSession, model.chatSessionKey.value)
       assertFalse(model.chatSessionCreating.value)
       webView.webViewClient.doUpdateVisitedHistory(webView, "${AndroidScreenshotFixture.controlUiBaseUrl}/terminal/native-session", false)
@@ -309,7 +316,15 @@ class SidebarGatewayPickerTest {
           .flatMap { it.descendants }
           .filterIsInstance<WebView>()
           .single()
-      assertEquals("${AndroidScreenshotFixture.controlUiBaseUrl}/terminal/native-session", shadowOf(restored).lastLoadedUrl)
+      assertEquals(
+        "${AndroidScreenshotFixture.controlUiBaseUrl}/terminal/native-session",
+        Uri
+          .parse(shadowOf(restored).lastLoadedUrl)
+          .buildUpon()
+          .fragment(null)
+          .build()
+          .toString(),
+      )
     }
   }
 

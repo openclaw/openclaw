@@ -36,7 +36,7 @@ class ControlUiWebViewTest {
   @Config(sdk = [31], qualifiers = "notnight")
   fun catalogTerminalNavigationSurvivesWebViewReplacement() {
     val controller = Robolectric.buildActivity(ComponentActivity::class.java).setup()
-    val page = NodeRuntime.GatewayControlPage("https://gateway.example.test", null, null, null)
+    val page = NodeRuntime.GatewayControlPage("https://gateway.example.test", null)
     var mode by mutableStateOf(AppearanceThemeMode.Light)
     var startUrl by mutableStateOf("${page.baseUrl}/new?agent=main&catalog=codex")
     controller.get().setContent {
@@ -54,19 +54,43 @@ class ControlUiWebViewTest {
       idleMainLooper()
       val themed = requireNotNull(findWebView(controller.get().window.decorView))
       assertNotSame(initial, themed)
-      assertEquals(terminalUrl, shadowOf(themed).lastLoadedUrl)
+      assertEquals(
+        terminalUrl,
+        Uri
+          .parse(shadowOf(themed).lastLoadedUrl)
+          .buildUpon()
+          .fragment(null)
+          .build()
+          .toString(),
+      )
 
       themed.webViewClient.onRenderProcessGone(themed, CrashedRenderProcessDetail)
       idleMainLooper()
       val recovered = requireNotNull(findWebView(controller.get().window.decorView))
       assertNotSame(themed, recovered)
-      assertEquals(terminalUrl, shadowOf(recovered).lastLoadedUrl)
+      assertEquals(
+        terminalUrl,
+        Uri
+          .parse(shadowOf(recovered).lastLoadedUrl)
+          .buildUpon()
+          .fragment(null)
+          .build()
+          .toString(),
+      )
 
       startUrl = "${page.baseUrl}/new?agent=research&catalog=claude"
       idleMainLooper()
       val nextStart = requireNotNull(findWebView(controller.get().window.decorView))
       assertNotSame(recovered, nextStart)
-      assertEquals(startUrl, shadowOf(nextStart).lastLoadedUrl)
+      assertEquals(
+        startUrl,
+        Uri
+          .parse(shadowOf(nextStart).lastLoadedUrl)
+          .buildUpon()
+          .fragment(null)
+          .build()
+          .toString(),
+      )
     } finally {
       controller.pause().stop().destroy()
       idleMainLooper()
@@ -83,7 +107,7 @@ class ControlUiWebViewTest {
     controller.get().setContent {
       OpenClawTheme(themeMode = AppearanceThemeMode.System) {
         ControlUiWebView(
-          page = NodeRuntime.GatewayControlPage("https://gateway.example.test", null, null, null),
+          page = NodeRuntime.GatewayControlPage("https://gateway.example.test", null),
           url = url,
           interactive = interactive,
           onExternalLink = external::add,
@@ -332,8 +356,6 @@ private fun TestControlUiWebView() {
     page =
       NodeRuntime.GatewayControlPage(
         baseUrl = "http://127.0.0.1",
-        token = null,
-        password = null,
         tlsFingerprintSha256 = null,
       ),
     url = "about:blank",
