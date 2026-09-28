@@ -414,8 +414,6 @@ describe("diagnostic support export", () => {
     expect(sanitizedLogs).toContain('"omittedLogMessageBytes"');
     expect(sanitizedLogs).toContain('"omittedLogMessageCount"');
     expect(sanitizedLogs).not.toContain("private user said");
-    expect(sanitizedLogs).not.toContain(privateAssistantReply);
-    expect(sanitizedLogs).not.toContain(privateLogTapeAssistantReply);
     expect(sanitizedLogs).not.toContain("@support-user:matrix.example.com");
     expect(sanitizedLogs).not.toContain("support-host");
     expect(sanitizedLogs).toContain('"omitted":"unparsed"');

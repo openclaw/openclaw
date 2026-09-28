@@ -47,8 +47,6 @@ describe("redactSensitiveText token ordering", () => {
     const jwt = `eyJheaderabcd.${jwtSegment}.signatureabcd123456`;
     const output = redactSensitiveText(`jwt ${jwt}`, { mode: "tools" });
 
-    expect(output).not.toContain(jwtSegment);
-    expect(output).not.toContain("signatureabcd123456");
     expect(output).toBe("jwt eyJhea…3456");
   });
 
@@ -79,8 +77,6 @@ describe("redactSensitiveText token ordering", () => {
     const output = redactSensitiveText(`provider ${token}`, { mode: "tools" });
 
     expect(output).toBe("provider FlyV1 …tail");
-    expect(output).not.toContain(token);
-    expect(output).not.toContain("_tailtail");
   });
 
   it("does not mask AWS-shaped chunks inside longer base64-like payloads", () => {

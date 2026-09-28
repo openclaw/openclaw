@@ -72,7 +72,6 @@ describe("resolveConfiguredLogFilePath", () => {
     });
 
     expect(path.basename(first)).toMatch(/^openclaw--3[a-f0-9]{64}-2026-07-22\.log$/u);
-    expect(path.basename(first).length).toBeLessThanOrEqual(255);
     expect(first).not.toBe(second);
   });
 
