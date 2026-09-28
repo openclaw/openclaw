@@ -227,7 +227,9 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLed
     resolveTerminalDelivery: () => terminalDelivery,
     onVisibleDelivery(listener) {
       visibleDeliveryListeners.add(listener);
-      return () => visibleDeliveryListeners.delete(listener);
+      return (): void => {
+        visibleDeliveryListeners.delete(listener);
+      };
     },
   };
 }
