@@ -1,4 +1,4 @@
-import { nothing, type ReactiveController } from "lit";
+import { html, nothing, type ReactiveController } from "lit";
 import {
   cancelRoutePreload,
   scheduleRoutePreload,
@@ -538,34 +538,21 @@ export class SidebarMenusController implements ReactiveController {
     this.closePositionedMenu("identity", options);
   }
 
-  renderCustomizeMenu() {
-    return this.menuRenderer?.renderSidebarCustomizeMenuForController(this) ?? nothing;
-  }
-
-  renderAgentMenu() {
-    return this.agentMenuAvatars.withActiveRoutes(
-      () => this.menuRenderer?.renderSidebarAgentMenuForController(this) ?? nothing,
-    );
-  }
-
-  renderIdentityMenu() {
-    return this.menuRenderer?.renderSidebarIdentityMenuForController(this) ?? nothing;
-  }
-
-  renderSessionMenu() {
-    return this.menuRenderer?.renderSidebarSessionMenuForController(this) ?? nothing;
-  }
-
-  renderSessionGroupMenu() {
-    return this.menuRenderer?.renderSidebarSessionGroupMenuForController(this) ?? nothing;
-  }
-
-  renderSessionSortMenu() {
-    return this.menuRenderer?.renderSidebarSessionSortMenuForController(this) ?? nothing;
-  }
-
-  renderCatalogViewMenu() {
-    return this.menuRenderer?.renderSidebarCatalogViewMenuForController(this) ?? nothing;
+  render() {
+    const renderer = this.menuRenderer;
+    return html`
+      ${renderer?.renderSidebarCustomizeMenuForController(this) ?? nothing}
+      ${renderer?.renderSidebarMoreMenuForController(this) ?? nothing}
+      ${this.agentMenuAvatars.withActiveRoutes(
+        () => renderer?.renderSidebarAgentMenuForController(this) ?? nothing,
+      )}
+      ${renderer?.renderSidebarIdentityMenuForController(this) ?? nothing}
+      ${renderer?.renderSidebarSessionMenuForController(this) ?? nothing}
+      ${this.catalogMenu.render()}
+      ${renderer?.renderSidebarSessionGroupMenuForController(this) ?? nothing}
+      ${renderer?.renderSidebarSessionSortMenuForController(this) ?? nothing}
+      ${renderer?.renderSidebarCatalogViewMenuForController(this) ?? nothing}
+    `;
   }
 
   renderRoute(routeId: NavigationRouteId) {
@@ -588,9 +575,5 @@ export class SidebarMenusController implements ReactiveController {
       onPreload: (event, immediate) => this.preloadRoute(routeId, event, immediate),
       onCancelPreload: this.cancelPreload,
     });
-  }
-
-  renderMoreMenu() {
-    return this.menuRenderer?.renderSidebarMoreMenuForController(this) ?? nothing;
   }
 }

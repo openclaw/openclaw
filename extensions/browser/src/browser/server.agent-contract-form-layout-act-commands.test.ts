@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -920,6 +921,18 @@ describe("browser control server", () => {
   );
 
   it("download accepts in-root relative output path", async () => {
+    const contender = createServer();
+    const bindError = await new Promise<Error | null>((resolve) => {
+      contender.once("error", resolve);
+      contender.listen(state.testPort, "127.0.0.1", () => resolve(null));
+    });
+    if (contender.listening) {
+      await new Promise<void>((resolve, reject) => {
+        contender.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+    expect(bindError).toMatchObject({ code: "EADDRINUSE" });
+
     const base = await startServerAndBase();
     const res = await postJson<{ ok?: boolean; download?: { path?: string } }>(`${base}/download`, {
       ref: "e12",

@@ -3970,7 +3970,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         expect(new Set(names).size).toBe(names.length);
         expect(new Set(plan.map((shard) => shard.checkName)).size).toBe(plan.length);
         expect(new Set(plan.map((shard) => shard.shardName)).size).toBe(plan.length);
-        expect(plan.length, `${profile.name} row budget`).toBeLessThanOrEqual(90);
+        expect(plan.length, `${profile.name} row budget`).toBeLessThanOrEqual(
+          profile.name === "GitHub-hosted" ? 96 : 90,
+        );
       }
     }
     expect(compact.every((shard) => Array.isArray(shard.groups))).toBe(true);
@@ -5034,27 +5036,37 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       }
     }
 
-    const sdkFixture = "test/scripts/write-plugin-sdk-entry-dts.test.ts";
-    for (const runnerBackend of ["blacksmith", "hybrid", "github"]) {
-      const sdkJobs = createSelectedNodeTestShardBundles([sdkFixture], { runnerBackend });
-      const fullOwner = getCommittedCompactPlan("pull-request", runnerBackend).find((job) =>
-        job.groups.some((group) => group.includePatterns?.includes(sdkFixture)),
-      );
-      const selectedOwner = sdkJobs?.find((job) =>
-        job.groups.some((group) => group.includePatterns?.includes(sdkFixture)),
-      );
-      for (const owner of [fullOwner, selectedOwner]) {
-        expect(owner?.runner, runnerBackend).toBe(
-          runnerBackend === "github" ? BUNDLED_NODE_TEST_RUNNER : EXTRA_LARGE_NODE_TEST_RUNNER,
+    for (const { file, profiles } of [
+      {
+        file: "test/scripts/write-plugin-sdk-entry-dts.test.ts",
+        profiles: ["blacksmith", "hybrid", "github"],
+      },
+      {
+        file: "test/scripts/vitest-worker-artifacts.ci.test.ts",
+        profiles: ["blacksmith", "hybrid"],
+      },
+    ]) {
+      for (const runnerBackend of profiles) {
+        const selectedJobs = createSelectedNodeTestShardBundles([file], { runnerBackend });
+        const fullOwner = getCommittedCompactPlan("pull-request", runnerBackend).find((job) =>
+          job.groups.some((group) => group.includePatterns?.includes(file)),
         );
-        expect(owner?.planConcurrency).toBe(1);
+        const selectedOwner = selectedJobs?.find((job) =>
+          job.groups.some((group) => group.includePatterns?.includes(file)),
+        );
+        for (const owner of [fullOwner, selectedOwner]) {
+          expect(owner?.runner, runnerBackend).toBe(
+            runnerBackend === "github" ? BUNDLED_NODE_TEST_RUNNER : EXTRA_LARGE_NODE_TEST_RUNNER,
+          );
+          expect(owner?.planConcurrency).toBe(1);
+        }
+        expect(selectedOwner?.groups).toEqual([
+          expect.objectContaining({
+            includePatterns: [file],
+            env: expect.objectContaining({ OPENCLAW_VITEST_MAX_WORKERS: "2" }),
+          }),
+        ]);
       }
-      expect(selectedOwner?.groups).toEqual([
-        expect.objectContaining({
-          includePatterns: [sdkFixture],
-          env: expect.objectContaining({ OPENCLAW_VITEST_MAX_WORKERS: "2" }),
-        }),
-      ]);
     }
 
     const stripes = toolingShards.filter((shard) => /^core-tooling-\d+$/u.test(shard.shardName));
@@ -5197,14 +5209,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const selected = tooling
       .flatMap((shard) => shard.includePatterns ?? [])
       .filter((file) => !isCiProofTestFile(file))
-      .slice(0, 96);
-    expect(selected).toHaveLength(96);
+      .slice(0, 102);
+    expect(selected).toHaveLength(102);
     vi.spyOn(testTimings, "readToolingFileTimings").mockReturnValue({});
     vi.spyOn(shardMetadata, "estimateVitestToolingFileSeconds").mockReturnValue(20_000);
     // Every selected file is now indivisible above the admission cap. Overflow
-    // must retain these 96 files without adding unrelated dist owners or the full suite.
+    // must retain these 102 files without adding unrelated dist owners or the full suite.
     expect(() => createSelectedNodeTestShardBundles(selected, { runnerBackend: "github" })).toThrow(
-      "exceeds 90 jobs (96 planned)",
+      "exceeds 96 jobs (102 planned)",
     );
   });
 
@@ -5725,7 +5737,12 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     try {
       const { createNodeTestShardBundles: createPlan } =
         await import("../../scripts/lib/ci-node-test-plan.mts");
-      return createPlan(params.options);
+      // These fixtures exercise a caller's 90-row reservation independently
+      // of the profile ceiling; explicit tighter reservations remain authoritative.
+      return createPlan({
+        ...params.options,
+        compactNodeJobCap: params.options.compactNodeJobCap ?? 90,
+      });
     } finally {
       vi.doUnmock("../../scripts/lib/list-test-files.mts");
       vi.doUnmock("../../scripts/lib/ci-test-timings.mts");
@@ -6469,7 +6486,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       }
       expect(actual.toSorted()).toEqual(expected.toSorted());
       expect(new Set(actual).size).toBe(actual.length);
-      expect(plan.length).toBeLessThanOrEqual(90);
+      expect(plan.length).toBeLessThanOrEqual(runnerBackend === "github" ? 96 : 90);
       const config = createInfraVitestConfig({});
       expect(config.test?.fileParallelism).toBe(sharedVitestConfig.test.fileParallelism);
       expect(config.test?.maxWorkers).toBe(sharedVitestConfig.test.maxWorkers);
@@ -7997,7 +8014,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
                 shard.runner === EXTRA_LARGE_NODE_TEST_RUNNER)),
         ),
       ).toBe(true);
-      expect(after.length).toBeLessThanOrEqual(90);
+      expect(after.length).toBeLessThanOrEqual(runnerBackend === "github" ? 96 : 90);
     },
   );
 

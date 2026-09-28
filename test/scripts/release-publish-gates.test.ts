@@ -21,6 +21,19 @@ const manifest = {
   validationInputs: { coveragePolicy: "full" },
 };
 
+it.each([
+  { releaseTag: "v2026.9.5-alpha.1", npmDistTag: "beta" },
+  { releaseTag: "v2026.9.5", npmDistTag: "alpha" },
+])("rejects retired alpha gate input %j", (input) => {
+  const result = evaluateReleasePublishGates({ ...input, manifest: {}, consumer: "publisher" });
+  expect(result).toContainEqual(
+    expect.objectContaining({
+      status: "FAIL",
+      message: "Alpha releases are retired; use a beta prerelease instead.",
+    }),
+  );
+});
+
 describe("release publication control admission", () => {
   it("rejects stable bootstrap approval that cannot cover the candidate package version", () => {
     const input = {

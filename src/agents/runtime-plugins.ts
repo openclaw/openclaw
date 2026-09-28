@@ -228,7 +228,7 @@ function bindAdmittingGateway(registry: PluginRegistry): PluginRegistry {
   const requestRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
   const admittingGateway = requestRegistry && getPluginRegistryGatewayOwner(requestRegistry);
   if (admittingGateway) {
-    bindPluginRegistryGatewayOwner(registry, admittingGateway);
+    bindPluginRegistryGatewayOwner(registry, admittingGateway, requestRegistry);
   }
   return registry;
 }

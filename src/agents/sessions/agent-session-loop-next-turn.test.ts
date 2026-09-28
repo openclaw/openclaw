@@ -567,40 +567,58 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     expect(scenario.messages(session)).toEqual([""]);
   });
 
-  it("cancels only an uncommitted steering confirmation after an aborted turn", async () => {
-    const { executeTool, requests, tool } = mockAbortableQueuedRun();
-    const { session } = await createTestSession({ customTools: [tool] });
-    const prompt = session.prompt("wait for operator cancellation");
-    await vi.waitFor(() => expect(requests).toHaveLength(1));
+  it.each([true, false])(
+    "cancels only an uncommitted steer after an aborted turn (wait: %s)",
+    async (waitForTranscriptCommit) => {
+      const { executeTool, requests, tool } = mockAbortableQueuedRun();
+      const { session } = await createTestSession({ customTools: [tool] });
+      const prompt = session.prompt("wait for operator cancellation");
+      await vi.waitFor(() => expect(requests).toHaveLength(1));
 
-    await session.steer("keep unrelated steering");
-    await session.followUp("keep unrelated follow-up");
-    const delivery = steerActiveSessionWithOptionalDeliveryWait(
-      session,
-      "cancel only this steering",
-      { deliveryTimeoutMs: 10_000, waitForTranscriptCommit: true },
-    ).then(
-      () => "committed",
-      (error: unknown) => (error instanceof Error ? error.message : String(error)),
-    );
-    await vi.waitFor(() =>
-      expect(session.getSteeringMessages()).toEqual([
-        "keep unrelated steering",
+      await session.steer("keep unrelated steering");
+      await session.followUp("keep unrelated follow-up");
+      const delivery = steerActiveSessionWithOptionalDeliveryWait(
+        session,
         "cancel only this steering",
-      ]),
-    );
+        { deliveryTimeoutMs: 10_000, waitForTranscriptCommit },
+      ).then(
+        () => (waitForTranscriptCommit ? "committed" : "admitted"),
+        (error: unknown) => (error instanceof Error ? error.message : String(error)),
+      );
+      await vi.waitFor(() =>
+        expect(session.getSteeringMessages()).toEqual([
+          "keep unrelated steering",
+          "cancel only this steering",
+        ]),
+      );
 
-    await Promise.all([session.abort(), prompt]);
+      if (!waitForTranscriptCommit) {
+        await expect(delivery).resolves.toBe("admitted");
+      }
+      await Promise.all([session.abort(), prompt]);
 
-    await expect(delivery).resolves.toBe(
-      "active session ended before queued steering message was committed to the transcript",
-    );
-    expect(requests).toHaveLength(1);
-    expect(executeTool).not.toHaveBeenCalled();
-    expect(session.getSteeringMessages()).toEqual(["keep unrelated steering"]);
-    expect(session.getFollowUpMessages()).toEqual(["keep unrelated follow-up"]);
-    expect(session.agent.hasQueuedMessages()).toBe(true);
-  });
+      await expect(delivery).resolves.toBe(
+        waitForTranscriptCommit
+          ? "active session ended before queued steering message was committed to the transcript"
+          : "admitted",
+      );
+      expect(requests).toHaveLength(1);
+      expect(executeTool).not.toHaveBeenCalled();
+      expect(session.getSteeringMessages()).toEqual(["keep unrelated steering"]);
+      expect(session.getFollowUpMessages()).toEqual(["keep unrelated follow-up"]);
+      expect(session.agent.hasQueuedMessages()).toBe(true);
+      const nextRequests: Context[] = [];
+      streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
+        nextRequests.push(context);
+        return createAssistantResultStream(
+          createAssistant(model, [{ type: "text", text: "next answer" }]),
+        );
+      });
+      await session.prompt("new legitimate turn");
+      expect(nextRequests.length).toBeGreaterThan(0);
+      expect(JSON.stringify(nextRequests)).not.toContain("cancel only this steering");
+    },
+  );
 
   it("cancels a steering confirmation after the runtime drains it", async () => {
     const requests: Context[] = [];
