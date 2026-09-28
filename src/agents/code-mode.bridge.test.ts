@@ -180,6 +180,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
   });
 
   it("yields nested exec before the Code Mode deadline when continuation args are omitted", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
     const { tools: codeModeTools, register } = createBridgeHarness({ timeoutMs: 10_000 });
     const shell = pluginToolWithExecute("exec", "Run shell", async (_toolCallId, input) =>
       jsonResult(input),
@@ -207,7 +208,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
     expect(details).toMatchObject({
       status: "completed",
       value: [
-        { command: "default", yieldMs: 1_000 },
+        { command: "default", yieldMs: 9_750 },
         { command: "explicit", yieldMs: 4_000 },
         { command: "background", background: true },
       ],
@@ -250,7 +251,7 @@ describe("Code Mode bridge settlement and cancellation", () => {
 
     expect(details).toMatchObject({
       status: "completed",
-      value: { command: "late", yieldMs: 100 },
+      value: { command: "late", yieldMs: 150 },
     });
     expect(consumeBudget.execute).toHaveBeenCalledOnce();
     expect(shell.execute).toHaveBeenCalledOnce();
