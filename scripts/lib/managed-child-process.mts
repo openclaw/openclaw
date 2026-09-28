@@ -8,6 +8,7 @@ import type {
   StdioOptions,
 } from "node:child_process";
 import { constants as osConstants, tmpdir } from "node:os";
+import path from "node:path";
 import { Writable, type Readable } from "node:stream";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../windows-cmd-helpers.mjs";
 import type { ManagedWindowsJob } from "./managed-windows-job.mts";
@@ -74,7 +75,9 @@ type ManagedCommandOptions = {
   comSpec?: string;
 };
 
-type RunManagedCommandOptions = ManagedCommandOptions & {
+export type RunManagedCommandOptions = ManagedCommandOptions & {
+  memoryLimitBytes?: number;
+  memoryScope?: string;
   timeoutMs?: number;
   timeoutKillGraceMs?: number;
   signalKillGraceMs?: number;
@@ -101,7 +104,7 @@ const windowsJobs = new WeakMap<object, ManagedWindowsJob>();
 const windowsTerminations = new WeakMap<object, ManagedChildTermination>();
 
 /** Resolve platform code before spawning so callers can attach listeners synchronously. */
-export function loadManagedChildSpawner(platform = process.platform) {
+export function loadManagedChildSpawner(platform = process.platform, memoryLimitBytes?: number) {
   if (platform !== "win32") {
     return spawn;
   }
@@ -121,8 +124,11 @@ export function loadManagedChildSpawner(platform = process.platform) {
       args: string[],
       options: SpawnOptions,
     ): ChildProcess {
-      const owned = spawnWindowsJobChild(command, args, options);
+      const owned = spawnWindowsJobChild(command, args, options, undefined, memoryLimitBytes);
       if (!owned) {
+        if (memoryLimitBytes !== undefined) {
+          throw new Error("Required Windows Job memory containment is unavailable");
+        }
         return spawn(command, args, options);
       }
       windowsJobs.set(owned.child, owned.job);
@@ -450,22 +456,81 @@ export async function waitForManagedProcessGroupExit(
 }
 
 /** Run a child command while forwarding termination signals to its process group. */
-export async function runManagedCommand({
-  stdio = "inherit",
-  platform = process.platform,
-  timeoutMs,
-  timeoutKillGraceMs,
-  signalKillGraceMs,
-  timeoutForceKillOnLeaderExit = false,
-  requireProcessTreeExit = false,
-  runTaskkill = spawnSync,
-  onReady,
-  signal,
-  abortKillGraceMs,
-  cleanupDrainTimeoutMs,
-  onSignal,
-  ...commandOptions
-}: RunManagedCommandOptions) {
+export async function runManagedCommand(options: RunManagedCommandOptions): Promise<number> {
+  const { memoryLimitBytes } = options;
+  if (memoryLimitBytes !== undefined) {
+    if (!Number.isSafeInteger(memoryLimitBytes) || memoryLimitBytes <= 0) {
+      throw new Error("Managed command memory limit must be a positive integer");
+    }
+    const platform = options.platform ?? process.platform;
+    if (platform === "linux") {
+      if (
+        Array.isArray(options.stdio) &&
+        (options.stdio.length > 3 || options.stdio.includes("ipc"))
+      ) {
+        throw new Error(
+          "Linux memory-limited commands do not support IPC or extra stdio descriptors",
+        );
+      }
+      // Preserve spawn's input snapshot while the Linux containment module loads.
+      const command = {
+        ...options,
+        args: options.args?.slice(),
+        cwd: path.resolve(options.cwd ?? process.cwd()),
+        env: { ...(options.env ?? process.env) },
+        stdio: Array.isArray(options.stdio) ? [...options.stdio] : options.stdio,
+      };
+      const { runLinuxMemoryCommand } = await import("./managed-memory.mts");
+      // The cgroup owner can prove extinction after a process-group cleanup failure.
+      // Its resource claim therefore outlives the inner runner's weaker observation.
+      const env = command.env;
+      const releaseClaim = findVitestResourceOwner(
+        env.TMPDIR || env.TMP || env.TEMP || tmpdir(),
+      )?.claim();
+      let joined = true;
+      try {
+        return await runLinuxMemoryCommand(command, (command) =>
+          runManagedCommandInner(command, false),
+        );
+      } catch (error) {
+        joined = !hasUnjoinedWork(error);
+        throw error;
+      } finally {
+        if (joined) {
+          releaseClaim?.();
+        }
+      }
+    }
+    if (platform !== "win32") {
+      throw new Error(
+        "Semantic checks require a kernel memory limit. Run this command through Crabbox or a memory-limited VM; native macOS cannot enforce a process-tree memory cap.",
+      );
+    }
+  }
+  return await runManagedCommandInner(options);
+}
+
+async function runManagedCommandInner(
+  {
+    stdio = "inherit",
+    platform = process.platform,
+    memoryLimitBytes,
+    memoryScope: _memoryScope,
+    timeoutMs,
+    timeoutKillGraceMs,
+    signalKillGraceMs,
+    timeoutForceKillOnLeaderExit = false,
+    requireProcessTreeExit = false,
+    runTaskkill = spawnSync,
+    onReady,
+    signal,
+    abortKillGraceMs,
+    cleanupDrainTimeoutMs,
+    onSignal,
+    ...commandOptions
+  }: RunManagedCommandOptions,
+  claimResources = true,
+) {
   if (platform === "win32" && requireProcessTreeExit) {
     throw Object.assign(
       new Error("Strict managed process-tree verification is not supported on Windows"),
@@ -503,12 +568,14 @@ export async function runManagedCommand({
     stdio: managedStdio,
     platform,
   });
-  const loading = loadManagedChildSpawner(platform);
+  const loading = loadManagedChildSpawner(platform, memoryLimitBytes);
   const spawnManagedChild = typeof loading === "function" ? loading : await loading;
   signal?.throwIfAborted();
-  let releaseClaim = findVitestResourceOwner(
-    commandEnv.TMPDIR || commandEnv.TMP || commandEnv.TEMP || tmpdir(),
-  )?.claim();
+  let releaseClaim = claimResources
+    ? findVitestResourceOwner(
+        commandEnv.TMPDIR || commandEnv.TMP || commandEnv.TEMP || tmpdir(),
+      )?.claim()
+    : undefined;
   const releaseOwnership = () => {
     releaseClaim?.();
     releaseClaim = undefined;

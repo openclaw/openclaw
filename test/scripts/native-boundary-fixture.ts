@@ -5,6 +5,24 @@ import path from "node:path";
 
 const require = createRequire(import.meta.url);
 
+/** Availability only; integration assertions still verify the actual kernel scope. */
+export function hasSemanticTestBackend(): boolean {
+  if (process.platform === "win32") return true;
+  if (process.platform !== "linux") return false;
+  try {
+    return (
+      fs
+        .readFileSync("/sys/fs/cgroup/cgroup.controllers", "utf8")
+        .split(/\s+/u)
+        .includes("memory") &&
+      spawnSync("systemctl", ["--user", "show", "--property=Version"], { timeout: 5_000 })
+        .status === 0
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** Native receipts and default libraries must belong to the fixture's own install. */
 export function materializeNativeCompiler(rootDir: string) {
   const root = fs.realpathSync.native(rootDir);
