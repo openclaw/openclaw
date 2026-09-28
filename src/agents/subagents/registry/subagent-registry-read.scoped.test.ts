@@ -376,14 +376,6 @@ describe("subagent registry scoped reads", () => {
     expect(mod.countActiveDescendantRuns(root, "main")).toBe(1);
     expect(mod.countPendingDescendantRuns(root)).toBe(4);
     expect(mod.hasDescendantRunAwaitingSettle(root, pendingRun.runId)).toBe(true);
-    expect(mod.listDescendantRunsForRequester(root)).toEqual([
-      freshTerminal,
-      parentRun,
-      foreignActive,
-      pendingRun,
-      settledRun,
-      suspendedRun,
-    ]);
     expect(mod.getSubagentRunByChildSessionKey(reusedChild)).toBe(oldActive);
     expect(mod.getLatestSubagentRunByChildSessionKey(reusedChild)).toBe(freshTerminal);
     expect(mod.buildSubagentSessionListReadIndex(now).getDisplaySubagentRun(reusedChild)).toBe(

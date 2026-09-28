@@ -524,6 +524,16 @@ retaining rows protected by current job or receipt ownership. Reconciled legacy
 rows remain history; they do not recreate a task runtime or linked-flow publication
 owner. This changes no schema, retention policy, or update step.
 
+Cron execution, descendant follow-up, and delivery observations use the existing
+subagent registry worker snapshot. Descendant closure selection and the existing
+query policies run in its consuming frame, including the paired fresh/active
+execution facts. Run draining awaits a fresh observation at each refresh, so a
+successor admitted while a wait settles is not lost. Failed or replaced read
+admission is not an empty descendant set. The obsolete internal synchronous
+descendant-list adapter is removed. The reaper/continuation deletion guards remain
+coupled to the outstanding lifecycle writer migration, not a permanent
+main-thread exception. This changes no schema, retention, or update behavior.
+
 Cron retention discovery uses a separate, single-worker maintenance lane within the
 same session database lifecycle owner. Foreground history and exact-entry reads
 keep their own queue while full-store validation runs. Both lanes retain the same

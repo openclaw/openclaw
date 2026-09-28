@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
@@ -162,8 +163,14 @@ function preparePlacementProjection(
   return { update, snapshot };
 }
 
-beforeEach(() => {
+let restorePerformanceClock: () => void;
+
+beforeEach((context) => {
   vi.useFakeTimers();
+  // Publication budgets must advance on the same clock as debounce timers.
+  const clock = vi.spyOn(performance, "now").mockImplementation(() => Date.now());
+  restorePerformanceClock = () => clock.mockRestore();
+  context.onTestFinished(restorePerformanceClock);
   mocks.invalidate();
   mocks.invalidate.mockClear();
   mocks.loadRow.mockReset().mockImplementation((key: string) => ({
@@ -583,6 +590,7 @@ describe("sessions.changed coalescing", () => {
 
   it("keeps persisted replacement identity through recipient projection", async () => {
     vi.useRealTimers();
+    restorePerformanceClock();
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const config = { agents: { entries: { main: {} } } };
       const sessionKey = "agent:main:replacement";

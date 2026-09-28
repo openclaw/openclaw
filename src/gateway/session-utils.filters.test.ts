@@ -328,6 +328,18 @@ it("keeps system provenance and named conversations distinct in projected lists"
       visible: false,
     },
     { key: "agent:main:legacy", fields: {}, visible: true },
+    { key: "agent:main:main", fields: {}, visible: true },
+    {
+      key: "agent:main:main:heartbeat",
+      fields: { heartbeatIsolatedBaseSessionKey: "agent:main:main" },
+      visible: false,
+    },
+    {
+      key: "agent:main:ops:heartbeat",
+      fields: { heartbeatIsolatedBaseSessionKey: "agent:main:ops", label: "Named lane" },
+      visible: true,
+    },
+    { key: "agent:main:alerts:heartbeat", fields: { label: "My heartbeat" }, visible: true },
     {
       key: "agent:main:cron:nightly",
       fields: { createdVia: "internal", createdActor: { type: "system" } },

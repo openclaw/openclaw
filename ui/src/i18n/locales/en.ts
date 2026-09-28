@@ -23,6 +23,7 @@ export const en: TranslationMap & {
         | "showLess"
         | "showMore"
         | "tooLargeToDisplay"
+        | "unattributedSender"
         | "toolSender"
         | "errorSender",
         string
@@ -3186,7 +3187,6 @@ export const en: TranslationMap & {
       suggest: "Suggest",
       draft: "Draft",
       publishDraft: "Publish draft",
-      owner: "Owner",
       members: "Members",
       selected: "Member",
       noPeople: "No paired people found.",
@@ -3727,6 +3727,7 @@ export const en: TranslationMap & {
       showLess: "Show less",
       showMore: "Show more",
       tooLargeToDisplay: "This message is too large to display here.",
+      unattributedSender: "Message",
       toolSender: "Tool",
       errorSender: "Error",
     },

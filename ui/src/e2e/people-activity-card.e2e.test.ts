@@ -592,7 +592,7 @@ suite.define(() => {
             animations: "disabled",
           });
         }
-        expect(await page.locator(".sidebar-online__person").count()).toBe(2);
+        expect(await page.locator(".sidebar-online__person").count()).toBe(3);
         const rawButton = page.getByRole("button", {
           name: "Details for Unqualified sender",
           exact: true,
@@ -703,7 +703,7 @@ suite.define(() => {
               exact: true,
             })
             .waitFor({ state: "visible" });
-          expect(await page.locator(".sidebar-online__person").count()).toBe(1);
+          expect(await page.locator(".sidebar-online__person").count()).toBe(2);
           await expect
             .poll(() =>
               page.locator(".chat-pane__presence [data-viewer-id]").getAttribute("aria-label"),

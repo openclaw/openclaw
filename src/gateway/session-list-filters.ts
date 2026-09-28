@@ -130,6 +130,8 @@ export function* filterSessionCandidateEntries(
           label: entry.label,
           displayName: entry.displayName,
           subject: entry.subject,
+          // Same provenance fact sessionClassificationForRow projects to clients.
+          classification: entry.heartbeatIsolatedBaseSessionKey ? "heartbeat" : undefined,
         })) ||
       (opts.excludeSubagents === true && selection.isSubagent) ||
       (!includeGlobal && storeKey === "global") ||
