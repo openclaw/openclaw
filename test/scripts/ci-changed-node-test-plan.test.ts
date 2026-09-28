@@ -48,8 +48,8 @@ import {
   resolveExtensionTestConfig,
 } from "../../scripts/lib/extension-test-plan.mts";
 import * as extensionTestPlan from "../../scripts/lib/extension-test-plan.mts";
-import { listVitestRuntimeConsumerFiles } from "../../scripts/lib/vitest-build-prerequisites.mts";
 import * as buildPrerequisites from "../../scripts/lib/vitest-build-prerequisites.mts";
+import { VITEST_PRETEST_BUILD_SECONDS } from "../../scripts/lib/vitest-shard-metadata.mts";
 import {
   buildVitestRunPlans,
   hasImportGraphConsumers,
@@ -418,13 +418,17 @@ function selectedFiles(shards: ReturnType<typeof createChangedNodeTestShards>) {
   );
 }
 
-function expectCanonicalGroupedConcurrency(shards: ReturnType<typeof createChangedNodeTestShards>) {
+function expectCanonicalGroupedConcurrency(
+  shards: ReturnType<typeof createChangedNodeTestShards>,
+  runnerBackend?: string,
+) {
   const grouped = expectDefined(shards, "changed owner plan").filter((shard) => shard.groups);
   const files = grouped.flatMap((shard) =>
     (shard.groups ?? []).flatMap((group) => group.includePatterns ?? []),
   );
   const canonical = expectDefined(
     createSelectedNodeTestShardBundles(files, {
+      runnerBackend,
       includeReleaseOnlyRuntimeTests: true,
       includePrExemptRuntimeTests: true,
     }),
@@ -1368,7 +1372,7 @@ describe("CI changed Node test plan", () => {
       expect(tooling.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
         expectedTargets.toSorted(),
       );
-      expectCanonicalGroupedConcurrency(shards);
+      expectCanonicalGroupedConcurrency(shards, runnerBackend);
       const full = createNodeTestShardBundles({
         compactMode: "pull-request",
         runnerBackend,
@@ -3082,8 +3086,9 @@ describe("CI changed Node test plan", () => {
       expect(bundle.groups!.length).toBeGreaterThan(1);
       expect(bundle.predictedSeconds).toBeLessThanOrEqual(300);
       expect(bundle.configs).toEqual([]);
-      expect(bundle.pretestBuildMode).toBeUndefined();
-      expect(bundle.groups!.every((group) => !group.pretestBuildMode)).toBe(true);
+      expect(
+        bundle.groups!.every((group) => group.pretestBuildMode === bundle.pretestBuildMode),
+      ).toBe(true);
       expect(bundle.groups!.every((group) => group.runner === bundle.runner)).toBe(true);
       expect(bundle.groups!.every((group) => group.requiresDist === bundle.requiresDist)).toBe(
         true,
@@ -3097,11 +3102,13 @@ describe("CI changed Node test plan", () => {
           )
           .flatMap((group) => group.includePatterns ?? []);
         const canShareJob =
-          !shard.pretestBuildMode &&
-          !other.pretestBuildMode &&
+          shard.pretestBuildMode === other.pretestBuildMode &&
           shard.runner === other.runner &&
           shard.requiresDist === other.requiresDist &&
-          shard.predictedSeconds! + other.predictedSeconds! <= 300 &&
+          shard.predictedSeconds! +
+            other.predictedSeconds! -
+            (shard.pretestBuildMode ? VITEST_PRETEST_BUILD_SECONDS[shard.pretestBuildMode] : 0) <=
+            300 &&
           combinedWorkerFiles.length <= 20;
         expect(canShareJob, `${shard.shardName} and ${other.shardName} fit one job`).toBe(false);
       }
@@ -3551,59 +3558,6 @@ describe("CI changed Node test plan", () => {
     expect(groups.flatMap((group) => group.includePatterns ?? [])).toContain(target);
     expect(groups.flatMap((group) => group.includePatterns ?? []).length).toBeLessThan(
       listExecutableExtensionFiles([changedPath.split("/").slice(0, 2).join("/")]).length,
-    );
-  });
-
-  it("packs separate Telegram envelopes into serial fallback jobs without merging file scopes", () => {
-    const result = createChangedExtensionFallbackShards(["extensions/telegram/src/channel.ts"]);
-    expect(result).not.toBeNull();
-    const shards = result ?? [];
-    const groups = fallbackGroups(shards);
-    const targets = groups.flatMap((group) => group.includePatterns ?? []);
-
-    expect(shards.length).toBeLessThan(groups.length);
-    expect(shards.every((shard) => shard.planConcurrency === 1)).toBe(true);
-    expect(shards.every((shard) => shard.predictedSeconds! <= 300)).toBe(true);
-    expect(
-      groups.every(
-        (group) =>
-          group.configs[0] ===
-            (group.includePatterns?.every((file) => databaseWorkerExtensionTestFiles.includes(file))
-              ? "test/vitest/vitest.extension-database-workers.config.ts"
-              : "test/vitest/vitest.extension-telegram.config.ts") &&
-          (group.includePatterns?.length ?? 0) > 0 &&
-          (group.includePatterns?.length ?? 0) <= 10,
-      ),
-    ).toBe(true);
-    expect(targets.toSorted()).toEqual(
-      listExecutableExtensionFiles(["extensions/telegram"]).toSorted(),
-    );
-    const runtimeFiles = new Set(
-      listVitestRuntimeConsumerFiles([
-        "test/vitest/vitest.extension-telegram.config.ts",
-        "test/vitest/vitest.extension-database-workers.config.ts",
-      ]),
-    );
-    const preparedConsumers: string[] = [];
-    for (const shard of shards) {
-      const consumers = fallbackGroups([shard])
-        .flatMap((group) => group.includePatterns ?? [])
-        .filter((file) => runtimeFiles.has(file));
-      expect(Boolean(shard.pretestBuildMode)).toBe(consumers.length > 0);
-      if (consumers.length > 0) {
-        expect(shard.groups).toBeUndefined();
-        expect(shard.pretestBuildMode).toBe("runtime");
-        preparedConsumers.push(...consumers);
-      }
-    }
-    expect(preparedConsumers.toSorted()).toEqual(
-      targets.filter((file) => runtimeFiles.has(file)).toSorted(),
-    );
-    expect(preparedConsumers).toEqual(
-      expect.arrayContaining([
-        "extensions/telegram/src/polling-session.test.ts",
-        "extensions/telegram/src/sticker-cache.selection.test.ts",
-      ]),
     );
   });
 

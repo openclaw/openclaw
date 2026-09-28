@@ -48,6 +48,7 @@ it("revokes restoration while its ownership inspection is pending", async () => 
   await restored;
   await settled;
   await recovery.restore(true);
+  expect(() => recovery.assertRecoveryCurrent()).toThrow("authority has closed or transferred");
   expect(dispatched).toEqual([]);
   expect(suspendScheduledTaskAutoStartForUpdate).not.toHaveBeenCalled();
 });
@@ -90,6 +91,22 @@ it("drains a dispatched enable before compensating failed verification", async (
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+
+it("refuses caller recovery after transferring native task ownership", async () => {
+  vi.mocked(suspendScheduledTaskAutoStartForUpdate).mockClear();
+  const recovery = createWindowsTaskAutoStartRecovery({
+    serviceEnv: {},
+    alreadySuspended: true,
+  });
+  try {
+    recovery.assertRecoveryCurrent();
+    recovery.handoff(async () => {});
+    expect(() => recovery.assertRecoveryCurrent()).toThrow("authority has closed or transferred");
+  } finally {
+    await recovery.complete(true);
+  }
+  expect(suspendScheduledTaskAutoStartForUpdate).not.toHaveBeenCalled();
+});
 
 it("refuses native compensation after its original live executor changes during inspection", async () => {
   const root = dirs.make("windows-compensation-owner-");
@@ -141,6 +158,7 @@ it("refuses native compensation after its original live executor changes during 
         } catch (error) {
           failure = error;
         }
+        expect(() => recovery.assertRecoveryCurrent()).toThrow(/executor/);
       } finally {
         await recovery.complete(false);
       }

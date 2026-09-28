@@ -6603,7 +6603,22 @@ server.listen(0, "127.0.0.1", () => {
           for (const step of [buildStep, boundaryCleanupStep]) {
             expect(evaluateWorkflowExpression(step.if, context), step.name).toBe(full);
           }
-          for (const step of [boundaryPrepareStep, bunSetup, warmStep]) {
+          for (const step of [boundaryRestoreStep, boundaryPrepareStep, boundarySaveStep]) {
+            expect(
+              evaluateWorkflowExpression(step.if, {
+                ...context,
+                runnerEnvironment: expectedRunner.startsWith("blacksmith-")
+                  ? "self-hosted"
+                  : "github-hosted",
+                steps: {
+                  "setup-node-env": { outputs: { "cache-mode": "read-write" } },
+                  "extension-package-boundary-cache": { outputs: { "cache-hit": "false" } },
+                },
+              }),
+              step.name,
+            ).toBe(expectedRunner !== "ubuntu-24.04");
+          }
+          for (const step of [bunSetup, warmStep]) {
             expect(step.if, step.name).toBeUndefined();
           }
           expect(evaluateWorkflowExpression(warmAssertionStep.if, context)).toBe(true);
