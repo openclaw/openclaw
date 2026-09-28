@@ -12,6 +12,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
+import { containsModelVisibleRedaction } from "../logging/redact.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import type { SessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
@@ -581,6 +582,19 @@ async function handleTranscriptUpdateBroadcast(
       });
       if (projected.payload) {
         params.broadcastToConnIds("session.message", projected.payload, connIds);
+        if (containsModelVisibleRedaction(projected.payload)) {
+          // The message carried a model-visible redaction marker/notice; tell session
+          // subscribers so the Control UI can raise a notification panel.
+          params.broadcastToConnIds(
+            "session.redaction",
+            {
+              sessionKey,
+              ...(eventAgentId ? { agentId: eventAgentId } : {}),
+              ts: Date.now(),
+            },
+            connIds,
+          );
+        }
         return;
       }
 
