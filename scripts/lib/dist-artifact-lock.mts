@@ -10,17 +10,30 @@ import type { WithDistArtifactOwnership } from "./runtime-artifact-contract.js";
 
 const DIST_ARTIFACT_LOCK_PATH = ".artifacts/dist-artifacts.lock";
 const LOCK_POLL_MS = 500;
-let inheritedOwnershipPath: string | undefined;
+type ArtifactOwner = { directory: string; unjoinedError?: unknown };
+let inheritedOwner: ArtifactOwner | undefined;
 
 export function resolveDistArtifactLockPath(rootDir: string) {
   // Subdirectories share checkout ownership; standalone work owns its directory.
   return path.join(findRepoRoot(rootDir) ?? rootDir, DIST_ARTIFACT_LOCK_PATH);
 }
 
-function retainUnjoinedDistArtifactWork(directory: string, error: unknown) {
+function retainUnjoinedDistArtifactWork(owner: ArtifactOwner, error: unknown) {
+  if (owner.unjoinedError !== undefined) return owner.unjoinedError;
   if (hasUnjoinedWork(error)) {
-    fs.writeFileSync(path.join(directory, "unjoined"), "Child cleanup was not verified.\n");
+    // Latch before I/O: a full disk must not turn uncertain cleanup into permission to release.
+    owner.unjoinedError = error;
+    try {
+      fs.writeFileSync(path.join(owner.directory, "unjoined"), "Child cleanup was not verified.\n");
+    } catch (writeError) {
+      owner.unjoinedError = new AggregateError(
+        [error, writeError],
+        "Could not record unjoined artifact work",
+      );
+    }
+    return owner.unjoinedError;
   }
+  return error;
 }
 
 export async function runOwnedDistArtifactEntry(script: string, args: string[]) {
@@ -28,16 +41,19 @@ export async function runOwnedDistArtifactEntry(script: string, args: string[]) 
   const claim = path.join(directory, `child-${process.pid}`);
   // A surviving wrapper claim retains ownership for possibly detached compilers.
   fs.writeFileSync(claim, "Awaiting child completion.\n", { flag: "wx" });
-  inheritedOwnershipPath = directory;
+  const owner: ArtifactOwner = { directory };
+  inheritedOwner = owner;
   process.argv = [process.execPath, fileURLToPath(script), ...args];
   try {
     await import(script);
   } catch (error) {
-    retainUnjoinedDistArtifactWork(directory, error);
-    throw error;
+    throw retainUnjoinedDistArtifactWork(owner, error);
   } finally {
-    inheritedOwnershipPath = undefined;
-    fs.unlinkSync(claim);
+    inheritedOwner = undefined;
+    // The pre-existing claim is the durable fence if recording uncertainty failed.
+    if (owner.unjoinedError === undefined || fs.existsSync(path.join(directory, "unjoined"))) {
+      fs.unlinkSync(claim);
+    }
   }
 }
 
@@ -153,19 +169,27 @@ export const withDistArtifactOwnership: WithDistArtifactOwnership = async (
   signal,
 ) => {
   const directory = resolveDistArtifactLockPath(fs.realpathSync(rootDir));
-  if (directory === inheritedOwnershipPath) {
+  if (directory === inheritedOwner?.directory) {
+    if (inheritedOwner.unjoinedError !== undefined) throw inheritedOwner.unjoinedError;
     signal?.throwIfAborted();
-    return await run();
+    try {
+      return await run();
+    } catch (error) {
+      // A CLI can turn this error into an exit status before the entry launcher sees it.
+      // Record uncertain cleanup at the ownership boundary so the parent retains the lock.
+      throw retainUnjoinedDistArtifactWork(inheritedOwner, error);
+    }
   }
   const lock = await acquireDistArtifactOwnership(rootDir, true, signal);
+  const owner: ArtifactOwner = { directory };
   try {
     signal?.throwIfAborted();
     return await run();
   } catch (error) {
-    retainUnjoinedDistArtifactWork(directory, error);
-    throw error;
+    throw retainUnjoinedDistArtifactWork(owner, error);
   } finally {
     if (
+      owner.unjoinedError !== undefined ||
       fs.readdirSync(directory).some((name) => name === "unjoined" || name.startsWith("child-"))
     ) {
       console.error(`[dist artifacts] child cleanup unverified; retained ${directory}`);
