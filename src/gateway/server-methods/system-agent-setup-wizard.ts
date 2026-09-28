@@ -97,9 +97,8 @@ async function createSetupActivationSession(
     if (session && session !== "superseded") {
       void whenAdmittedWizardSessionSettled(session.session).then(release, release);
       return session.sessionId === params.sessionId ? session.session : undefined;
-    } else {
-      release();
     }
+    release();
     return session;
   } catch (error) {
     release();
