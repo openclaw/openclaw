@@ -541,8 +541,10 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
       },
       { allowDependencyLinks: false, allowArchivedAt: false },
     );
+    // Resolved before the attempt sync so attempt ids can be scoped to this card.
+    const cardId = options.cardId ?? randomUUID();
     const syncedMetadata = trimMetadataToBudget(
-      syncExecutionAttemptMetadata(metadata, execution, now),
+      syncExecutionAttemptMetadata(metadata, execution, now, cardId),
     );
     const boardId = syncedMetadata.automation?.boardId ?? "default";
     const position = Number.isFinite(normalizedPosition)
@@ -554,7 +556,7 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
             .map((card) => card.position),
         ) + POSITION_STEP;
     let card: WorkboardCard = {
-      id: options.cardId ?? randomUUID(),
+      id: cardId,
       title: normalizeTitle(input.title),
       status,
       priority: normalizePriority(input.priority, "normal"),
@@ -808,7 +810,7 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
       ...(completedAt ? { completedAt } : {}),
     });
     next.metadata = trimMetadataToBudget(
-      syncExecutionAttemptMetadata(next.metadata ?? {}, execution, now),
+      syncExecutionAttemptMetadata(next.metadata ?? {}, execution, now, next.id),
       options,
     );
     next.events = appendEvent(
