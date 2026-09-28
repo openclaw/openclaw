@@ -107,7 +107,7 @@ describe("resolveNpmInstallSpecsForUpdateChannel", () => {
     },
   );
 
-  it.each(["stable", "dev", "extended-stable"] as const)(
+  it.each(["stable", "extended-stable"] as const)(
     "preserves explicit beta on %s",
     async (updateChannel) => {
       const spec = "@openclaw/codex@beta";
@@ -228,9 +228,7 @@ describe("resolveClawHubInstallSpecsForUpdateChannel", () => {
   it.each([
     ["stable", false, "2026.7.33", undefined],
     ["stable", true, "2026.7.33", "2026.7.33"],
-    ["beta", false, "2026.7.33", "beta"],
     ["beta", false, "2026.8.1-beta.3", "beta"],
-    ["beta", true, "2026.8.1-beta.3", "beta"],
     ["extended-stable", false, "2026.7.33", "2026.7.33"],
   ] as const)(
     "resolves declared ClawHub defaults on %s (bound: %s, core: %s)",

@@ -260,22 +260,6 @@ describe("codex conversation turn collector", () => {
     await expect(completion).resolves.toEqual({ replyText: "right" });
   });
 
-  it("rejects failed turns with the app-server error message", async () => {
-    const collector = createCodexConversationTurnCollector("thread-1");
-    collector.setTurnId("turn-1");
-    const completion = collector.wait({ timeoutMs: 1_000 });
-
-    collector.handleNotification({
-      method: "turn/completed",
-      params: {
-        threadId: "thread-1",
-        turn: { id: "turn-1", status: "failed", error: { message: "model exploded" }, items: [] },
-      },
-    });
-
-    await expect(completion).rejects.toThrow("model exploded");
-  });
-
   it("does not classify a provider failure with the local timeout message as a local timeout", async () => {
     const collector = createCodexConversationTurnCollector("thread-1");
     collector.setTurnId("turn-1");

@@ -161,27 +161,6 @@ function resolveCursorAgentDirs(raw: Record<string, unknown>, rootDir: string): 
   return resolveBundleComponentPaths(raw.subagents ?? raw.agents, rootDir, [".cursor/agents"]);
 }
 
-function hasCursorHookCapability(raw: Record<string, unknown>, rootDir: string): boolean {
-  return (
-    hasInlineCapabilityValue(raw.hooks) ||
-    pluginCacheExistsSync(path.join(rootDir, ".cursor", "hooks.json"))
-  );
-}
-
-function hasCursorRulesCapability(raw: Record<string, unknown>, rootDir: string): boolean {
-  return (
-    hasInlineCapabilityValue(raw.rules) ||
-    pluginCacheExistsSync(path.join(rootDir, ".cursor", "rules"))
-  );
-}
-
-function hasCursorMcpCapability(raw: Record<string, unknown>, rootDir: string): boolean {
-  return (
-    hasInlineCapabilityValue(raw.mcpServers) ||
-    pluginCacheExistsSync(path.join(rootDir, ".mcp.json"))
-  );
-}
-
 function resolveBundleComponentPaths(
   value: unknown,
   rootDir: string,
@@ -192,29 +171,6 @@ function resolveBundleComponentPaths(
     pluginCacheExistsSync(path.join(rootDir, candidate)),
   );
   return mergeBundlePathLists(existingDefaults, declared);
-}
-
-function buildCodexCapabilities(raw: Record<string, unknown>, rootDir: string): string[] {
-  const capabilities: string[] = [];
-  if (resolveCodexComponentDirs(raw, rootDir, "skills").length > 0) {
-    capabilities.push("skills");
-  }
-  if (resolveCodexComponentDirs(raw, rootDir, "hooks").length > 0) {
-    capabilities.push("hooks");
-  }
-  if (
-    hasInlineCapabilityValue(raw.mcpServers) ||
-    pluginCacheExistsSync(path.join(rootDir, ".mcp.json"))
-  ) {
-    capabilities.push("mcpServers");
-  }
-  if (
-    hasInlineCapabilityValue(raw.apps) ||
-    pluginCacheExistsSync(path.join(rootDir, ".app.json"))
-  ) {
-    capabilities.push("apps");
-  }
-  return capabilities;
 }
 
 function buildCursorCapabilities(raw: Record<string, unknown>, rootDir: string): string[] {
@@ -228,14 +184,17 @@ function buildCursorCapabilities(raw: Record<string, unknown>, rootDir: string):
   if (resolveCursorAgentDirs(raw, rootDir).length > 0) {
     capabilities.push("agents");
   }
-  if (hasCursorHookCapability(raw, rootDir)) {
-    capabilities.push("hooks");
-  }
-  if (hasCursorRulesCapability(raw, rootDir)) {
-    capabilities.push("rules");
-  }
-  if (hasCursorMcpCapability(raw, rootDir)) {
-    capabilities.push("mcpServers");
+  for (const [capability, defaultPath] of [
+    ["hooks", ".cursor/hooks.json"],
+    ["rules", ".cursor/rules"],
+    ["mcpServers", ".mcp.json"],
+  ] as const) {
+    if (
+      hasInlineCapabilityValue(raw[capability]) ||
+      pluginCacheExistsSync(path.join(rootDir, defaultPath))
+    ) {
+      capabilities.push(capability);
+    }
   }
   return capabilities;
 }
@@ -246,17 +205,6 @@ function resolveAgentSkillDirs(rootDir: string): string[] {
   } catch {
     return [];
   }
-}
-
-function buildAgentCapabilities(rootDir: string): string[] {
-  const capabilities: string[] = [];
-  if (resolveAgentSkillDirs(rootDir).length > 0) {
-    capabilities.push("skills");
-  }
-  if (pluginCacheExistsSync(path.join(rootDir, "mcp.json"))) {
-    capabilities.push("mcpServers");
-  }
-  return capabilities;
 }
 
 function resolveAgentActivation(
@@ -349,13 +297,30 @@ export function loadBundleManifest(params: {
     }
     manifest.skills = resolveAgentSkillDirs(params.rootDir);
     manifest.activation = resolveAgentActivation(raw, loaded.manifestPath);
-    manifest.capabilities = buildAgentCapabilities(params.rootDir);
+    manifest.capabilities = [
+      ...(manifest.skills.length > 0 ? ["skills"] : []),
+      ...(pluginCacheExistsSync(path.join(params.rootDir, "mcp.json")) ? ["mcpServers"] : []),
+    ];
   } else {
     manifest.activation = normalizeManifestActivation(raw.activation);
     if (params.bundleFormat === "codex") {
       manifest.skills = resolveCodexComponentDirs(raw, params.rootDir, "skills");
       manifest.hooks = resolveCodexComponentDirs(raw, params.rootDir, "hooks");
-      manifest.capabilities = buildCodexCapabilities(raw, params.rootDir);
+      manifest.capabilities = [
+        ...(manifest.skills.length > 0 ? ["skills"] : []),
+        ...(manifest.hooks.length > 0 ? ["hooks"] : []),
+      ];
+      for (const [capability, defaultPath] of [
+        ["mcpServers", ".mcp.json"],
+        ["apps", ".app.json"],
+      ] as const) {
+        if (
+          hasInlineCapabilityValue(raw[capability]) ||
+          pluginCacheExistsSync(path.join(params.rootDir, defaultPath))
+        ) {
+          manifest.capabilities.push(capability);
+        }
+      }
     } else if (params.bundleFormat === "cursor") {
       manifest.skills = resolveCursorSkillDirs(raw, params.rootDir);
       manifest.capabilities = buildCursorCapabilities(raw, params.rootDir);

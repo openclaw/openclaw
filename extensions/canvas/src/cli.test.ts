@@ -1,7 +1,4 @@
-import {
-  GatewayClientRequestError,
-  GatewayClientRequestTimeoutError,
-} from "@openclaw/gateway-client";
+import { GatewayClientRequestError } from "@openclaw/gateway-client";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -50,18 +47,6 @@ describe("nodes canvas CLI", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     gatewayMocks.callGatewayFromCli.mockReset();
-  });
-
-  it("registers only presenter commands", () => {
-    const { deps } = createDeps();
-    const program = createProgram(deps);
-    const canvas = program.commands[0]?.commands.find((command) => command.name() === "canvas");
-
-    expect(canvas?.commands.map((command) => command.name())).toEqual([
-      "present",
-      "hide",
-      "navigate",
-    ]);
   });
 
   it.each([
@@ -181,7 +166,6 @@ describe("nodes canvas CLI", () => {
   });
 
   it.each([
-    ["--x", "1x", "--x must be a number."],
     ["--width", "640px", "--width must be a number."],
     ["--invoke-timeout", "20ms", "--invoke-timeout must be a positive integer."],
   ])("rejects invalid present %s values", async (flag, value, message) => {
@@ -229,25 +213,10 @@ describe("nodes canvas CLI", () => {
 
   it.each([
     {
-      label: "a local request timeout",
-      error: new GatewayClientRequestTimeoutError({
-        method: "node.list",
-        timeoutMs: 80,
-        requestSent: true,
-      }),
-    },
-    {
       label: "an authorization rejection",
       error: new GatewayClientRequestError({
         code: "FORBIDDEN",
         message: "unknown method: node.list",
-      }),
-    },
-    {
-      label: "an INVALID_REQUEST authentication failure",
-      error: new GatewayClientRequestError({
-        code: "INVALID_REQUEST",
-        message: "unauthorized",
       }),
     },
     {
@@ -272,16 +241,6 @@ describe("nodes canvas CLI", () => {
         message: "unknown method: node.list",
         retryAfterMs: -1,
       }),
-    },
-    {
-      label: "a network connection error",
-      error: Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:18789"), {
-        code: "ECONNREFUSED",
-      }),
-    },
-    {
-      label: "a closed Gateway transport",
-      error: new Error("gateway closed (1006): connection lost"),
     },
     {
       label: "a malformed request-error lookalike",

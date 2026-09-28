@@ -143,18 +143,14 @@ function catalogRowRef(
   };
 }
 
-function renderSessionRunSpinner(showTitle = true) {
-  return html`<span
-    class="session-run-spinner"
-    role="img"
-    aria-label=${t("sessionsView.activeRun")}
-    title=${showTitle ? t("sessionsView.activeRun") : nothing}
-  ></span>`;
-}
-
 function renderCatalogHeaderStatus(hasActiveRun: boolean, hasUnread: boolean) {
   if (hasActiveRun) {
-    return renderSessionRunSpinner();
+    return html`<span
+      class="session-run-spinner"
+      role="img"
+      aria-label=${t("sessionsView.activeRun")}
+      title=${t("sessionsView.activeRun")}
+    ></span>`;
   }
   return hasUnread
     ? html`<span

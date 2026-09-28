@@ -48,7 +48,7 @@ import type { SlackSendIdentity, SlackSendResult } from "./send.js";
 import { parseSlackTarget } from "./target-parsing.js";
 import { resolveSlackThreadTsValue } from "./thread-ts.js";
 
-type SlackSendFn = typeof import("./send.runtime.js").sendMessageSlack;
+type SlackSendFn = typeof import("./send.js").sendMessageSlack;
 
 function toSlackOutboundResult<T extends { channelId?: string }>(result: T) {
   const { channelId, ...delivery } = result;
@@ -103,7 +103,7 @@ function readSlackRenderedPresentation(
   }
 }
 
-const loadSlackSendRuntime = createLazyRuntimeModule(() => import("./send.runtime.js"));
+const loadSlackSendRuntime = createLazyRuntimeModule(() => import("./send.js"));
 
 function resolveSlackSendIdentity(identity?: OutboundIdentity): SlackSendIdentity | undefined {
   if (!identity) {

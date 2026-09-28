@@ -10,10 +10,20 @@ const catalogCaptures = new WeakMap<
   {
     models: ReadonlyMap<string, readonly Model[]> | undefined;
     catalog: ModelCatalogSnapshot | undefined;
-    nativeSnapshot: PreparedModelRuntimeSnapshot;
+    admittedCatalog: ModelCatalogSnapshot;
+    capturedSnapshot: PreparedModelRuntimeSnapshot;
     memo: Map<string, Promise<Model>>;
   }
 >();
+
+const admittedCatalogs = new WeakMap<PreparedModelRuntimeSnapshot, ModelCatalogSnapshot>();
+
+/** Passive inventory captured at admission; the caller must hold the matching turn lease. */
+export function readCapturedPreparedModelRuntimeCatalog(
+  snapshot: PreparedModelRuntimeSnapshot,
+): ModelCatalogSnapshot | undefined {
+  return admittedCatalogs.get(snapshot);
+}
 
 /** Captures published executable and native model facts without changing any open lease. */
 export function capturePreparedModelRuntimeCatalog(
@@ -28,20 +38,37 @@ export function capturePreparedModelRuntimeCatalog(
       catalog &&
       (catalog.entries.some((entry) => entry.nativeRuntime) ||
         catalog.routeVariants.some((entry) => entry.nativeRuntime));
+    const hasCatalogFacts =
+      catalog &&
+      (catalog.entries.length > 0 ||
+        catalog.routeVariants.length > 0 ||
+        snapshot.modelCatalog.entries.length > 0 ||
+        snapshot.modelCatalog.routeVariants.length > 0);
     cached = {
       models,
       catalog,
-      nativeSnapshot: nativeCatalog
+      admittedCatalog: nativeCatalog
+        ? mergePreparedNativeCatalog(catalog, {
+            ...catalog,
+            entries: [...catalog.entries, ...snapshot.modelCatalog.entries],
+            routeVariants: [...catalog.routeVariants, ...snapshot.modelCatalog.routeVariants],
+          })
+        : (catalog ?? snapshot.modelCatalog),
+      // Preserve bare configured owners when there are no capability rows to capture.
+      capturedSnapshot: hasCatalogFacts
         ? Object.freeze({
             ...snapshot,
-            modelCatalog: mergePreparedNativeCatalog(catalog, snapshot.modelCatalog),
+            ...(nativeCatalog
+              ? { modelCatalog: mergePreparedNativeCatalog(catalog, snapshot.modelCatalog) }
+              : {}),
           })
         : snapshot,
       memo: cached && cached.models === models ? cached.memo : new Map(),
     };
     catalogCaptures.set(snapshot, cached);
   }
-  const capturedNative = cached.nativeSnapshot;
+  const capturedNative = cached.capturedSnapshot;
+  admittedCatalogs.set(capturedNative, cached.admittedCatalog);
   if (!models?.size) {
     if (capturedNative !== snapshot) {
       copyPreparedModelRuntimeAuthBindings(snapshot, capturedNative);
@@ -61,5 +88,6 @@ export function capturePreparedModelRuntimeCatalog(
     },
   });
   copyPreparedModelRuntimeAuthBindings(snapshot, captured);
+  admittedCatalogs.set(captured, cached.admittedCatalog);
   return captured;
 }

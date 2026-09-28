@@ -1,8 +1,3 @@
-/**
- * Channel setup config mutation helpers.
- *
- * Applies account names and validates setup results for channel onboarding adapters.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveChannelAccountKey,
@@ -316,30 +311,6 @@ export function patchScopedAccountConfig(params: {
   });
 }
 
-function moveSingleAccountKeysIntoAccount(params: {
-  cfg: OpenClawConfig;
-  channelKey: string;
-  channel: ChannelSectionBase;
-  accounts: Record<string, Record<string, unknown>>;
-  keysToMove: string[];
-  targetAccountId: string;
-  baseAccount?: Record<string, unknown>;
-}): OpenClawConfig {
-  const nextAccount: Record<string, unknown> = { ...params.baseAccount };
-  const nextChannel: ChannelSectionBase = { ...params.channel };
-  for (const key of params.keysToMove) {
-    if (!(key in nextAccount)) {
-      const value = params.channel[key];
-      nextAccount[key] = value && typeof value === "object" ? structuredClone(value) : value;
-    }
-    delete nextChannel[key];
-  }
-  return writeChannelSection(params.cfg, params.channelKey, {
-    ...nextChannel,
-    accounts: { ...params.accounts, [params.targetAccountId]: nextAccount },
-  });
-}
-
 function resolveSingleAccountPromotionTarget(params: {
   channelKey: string;
   channel: ChannelSectionBase;
@@ -410,13 +381,17 @@ export function moveSingleAccountChannelSectionToDefaultAccount(params: {
         setupSurface: params.setupSurface,
       })
     : DEFAULT_ACCOUNT_ID;
-  return moveSingleAccountKeysIntoAccount({
-    cfg: params.cfg,
-    channelKey: params.channelKey,
-    channel: base,
-    accounts,
-    keysToMove,
-    targetAccountId: targetAccountKey,
-    baseAccount: accounts[targetAccountKey],
+  const nextAccount: Record<string, unknown> = { ...accounts[targetAccountKey] };
+  const nextChannel = { ...base };
+  for (const key of keysToMove) {
+    if (!(key in nextAccount)) {
+      const value = base[key];
+      nextAccount[key] = value && typeof value === "object" ? structuredClone(value) : value;
+    }
+    delete nextChannel[key];
+  }
+  return writeChannelSection(params.cfg, params.channelKey, {
+    ...nextChannel,
+    accounts: { ...accounts, [targetAccountKey]: nextAccount },
   });
 }

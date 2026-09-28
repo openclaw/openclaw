@@ -7,10 +7,8 @@ import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import {
-  openOpenClawStateDatabase,
-  closeOpenClawStateDatabaseForTest,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createGatewayWorkerDispatchAdmission } from "./server-worker-placement-dispatch-admission.js";
 import { createGatewayWorkerPlacementMoveBarrier } from "./server-worker-placement-move-barrier.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
@@ -35,7 +33,7 @@ vi.mock("../config/config.js", async (importOriginal) => ({
 const roots: string[] = [];
 afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   lookup.value = undefined;
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
@@ -484,7 +482,7 @@ it.each(["missing", "local", "reclaimed"] as const)(
   async (state) => {
     const f = await cancellationLoadFixture();
     if (state === "local") {
-      const requested = f.placements.startDispatch(REQUEST);
+      const requested = await f.placements.startDispatch(REQUEST);
       const failed = f.placements.fail({
         sessionId: REQUEST.sessionId,
         expectedGeneration: requested.generation,
@@ -726,7 +724,7 @@ it.each(
       expect(f.harness.environments.destroy).toHaveBeenCalledOnce();
       const cancellations = f.cancellationStarted.mock.calls.length;
       if (change === "replacement") {
-        f.placements.startDispatch(REQUEST);
+        await f.placements.startDispatch(REQUEST);
       } else if (change === "incarnation") {
         f.entry.lifecycleRevision = "replacement";
       }
@@ -979,7 +977,7 @@ it.each([
         expect.soft(await moving).toMatchObject({ state: "local" });
       }
       if (advance === "replacement") {
-        f.placements.startDispatch(REQUEST);
+        await f.placements.startDispatch(REQUEST);
       }
       f.loaded.resolve();
       if (advance !== "replacement") {

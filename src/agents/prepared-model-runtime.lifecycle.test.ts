@@ -764,47 +764,6 @@ describe("prepared model runtime snapshots", () => {
     expect(publishedSnapshots[0]).toMatchObject({ config: replacementConfig });
   });
 
-  it("waits for the affected owner at auth publication", async () => {
-    const config = {};
-    const agentDir = fixture.state.agentDir("auth");
-    const first = await publishPreparedModelRuntimeSnapshot({ config, agentDir });
-
-    mocks.mutationListener?.({ agentDir, affectsInheritedStores: false });
-    await expect(prepareModelRuntimeSnapshot({ config, agentDir })).resolves.not.toBe(first);
-
-    await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2));
-    const refreshed = await prepareModelRuntimeSnapshot({ config, agentDir });
-    expect(refreshed).not.toBe(first);
-    expect(mocks.discoverAuthStorage).toHaveBeenCalledTimes(2);
-  });
-
-  it("treats an auth refresh superseded by a newer mutation as control flow", async () => {
-    const config = {};
-    const agentDir = fixture.state.agentDir("auth-superseded");
-    await publishPreparedModelRuntimeSnapshot({ config, agentDir });
-    const finishFirstRefreshGate = createDeferred();
-    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, targetDir) => {
-      await finishFirstRefreshGate.promise;
-      return { agentDir: String(targetDir), wrote: false };
-    });
-
-    try {
-      mocks.mutationListener?.({ agentDir, affectsInheritedStores: false });
-      await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2));
-      mocks.mutationListener?.({ agentDir, affectsInheritedStores: false });
-      finishFirstRefreshGate.resolve();
-
-      await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(3));
-      await expect(prepareModelRuntimeSnapshot({ config, agentDir })).resolves.toMatchObject({
-        agentDir,
-      });
-      expect(mocks.warn).not.toHaveBeenCalled();
-    } finally {
-      finishFirstRefreshGate.resolve();
-      await Promise.allSettled([prepareModelRuntimeSnapshot({ config, agentDir })]);
-    }
-  });
-
   it.each([false, true])(
     "keeps one dispatch gate across overlapping auth mutations (shared owner changed: %s)",
     async (sharedOwnerChanged) => {

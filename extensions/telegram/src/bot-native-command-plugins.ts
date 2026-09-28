@@ -40,12 +40,6 @@ function resolveTelegramNativeReplyChannelData(
   return result.channelData?.telegram as TelegramNativeReplyChannelData | undefined;
 }
 
-function normalizeTelegramNativeReplyPayload(
-  result: TelegramNativeReplyPayload | null | undefined,
-): TelegramNativeReplyPayload {
-  return result && typeof result === "object" ? result : {};
-}
-
 function hasTelegramNativeReplyReaction(result: TelegramNativeReplyPayload): boolean {
   const reactionEmoji = resolveTelegramNativeReplyChannelData(result)?.reaction?.emoji;
   return typeof reactionEmoji === "string" && reactionEmoji.trim().length > 0;
@@ -188,26 +182,24 @@ export async function executeTelegramPluginCommand(
     agentId: dispatch.route.agentId,
     sessionKey: dispatch.targetSessionKey,
   });
-  const result = normalizeTelegramNativeReplyPayload(
-    await pluginCommandDispatch.execute({
-      senderId: dispatch.senderId,
-      channel: "telegram",
-      isAuthorizedSender: dispatch.commandAuthorized,
-      senderIsOwner: dispatch.senderIsOwner,
-      assertOwnerCurrent: dispatch.assertOwnerCurrent,
-      agentId: dispatch.route.agentId,
-      sessionKey: dispatch.targetSessionKey,
-      sessionId: transcriptContext.sessionId,
-      sessionFile: transcriptContext.sessionFile,
-      authProfileId: transcriptContext.authProfileId ?? targetSessionEntry?.authProfileOverride,
-      commandBody,
-      config: dispatch.runtimeCfg,
-      from,
-      to,
-      accountId: dispatch.accountId,
-      messageThreadId: dispatch.threadSpec.id,
-    }),
-  );
+  const result = await pluginCommandDispatch.execute({
+    senderId: dispatch.senderId,
+    channel: "telegram",
+    isAuthorizedSender: dispatch.commandAuthorized,
+    senderIsOwner: dispatch.senderIsOwner,
+    assertOwnerCurrent: dispatch.assertOwnerCurrent,
+    agentId: dispatch.route.agentId,
+    sessionKey: dispatch.targetSessionKey,
+    sessionId: transcriptContext.sessionId,
+    sessionFile: transcriptContext.sessionFile,
+    authProfileId: transcriptContext.authProfileId ?? targetSessionEntry?.authProfileOverride,
+    commandBody,
+    config: dispatch.runtimeCfg,
+    from,
+    to,
+    accountId: dispatch.accountId,
+    messageThreadId: dispatch.threadSpec.id,
+  });
   const suppressReply =
     shouldSuppressLocalTelegramExecApprovalPrompt({
       cfg: dispatch.runtimeCfg,

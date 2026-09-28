@@ -1,4 +1,5 @@
 /** Coordinates plugin metadata snapshot and process memo cache lifecycle resets. */
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   clearCurrentPluginMetadataSnapshot,
@@ -21,16 +22,14 @@ import {
 } from "./plugin-cache.js";
 import { retainPluginMetadataSnapshotReaders } from "./plugin-metadata-snapshot-readers.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
-import {
-  retainPluginSourceCaptureInstance,
-  sweepPluginSourceCaptureDirectories,
-} from "./plugin-source-capture-directory.js";
+import { retainPluginSourceCaptureInstance } from "./plugin-source-capture-directory.js";
 import { PluginRuntimeCloseRetainedError } from "./runtime-close-error.js";
 
 const pluginMetadataProcessMemoClears = new Map<() => void, "process" | "operation">();
 type GatewayMetadataOwner = {
   cache?: PluginCache;
   phase: "booting" | "active" | "closing";
+  prelude?: Promise<void>;
   closing?: Promise<PluginHostCleanupResult>;
   retirements: Set<{
     cache: PluginCache;
@@ -49,7 +48,11 @@ function hasClosingGateway(): boolean {
 }
 
 /** The kernel owns bootstrap acquisition, published inventory, and unfinished retirement. */
-export function retainGatewayPluginMetadata() {
+export function retainGatewayPluginMetadata(
+  scheduler: GatewayScheduler,
+  onAllGatewaysClosing?: () => Promise<void>,
+) {
+  scheduler.signal.throwIfAborted();
   const bootstrapCache = getPluginCache();
   if (hasClosingGateway() || bootstrapCache.retirement) {
     throw new Error(
@@ -57,8 +60,8 @@ export function retainGatewayPluginMetadata() {
     );
   }
   const sourceCaptures = retainPluginSourceCaptureInstance();
+  const sourceSweep = sourceCaptures.startMaintenance(scheduler);
   const releaseReaders = retainPluginMetadataSnapshotReaders();
-  void sweepPluginSourceCaptureDirectories();
   const owner: GatewayMetadataOwner = {
     cache: bootstrapCache,
     phase: "booting",
@@ -142,8 +145,20 @@ export function retainGatewayPluginMetadata() {
       ...(deferredPluginIds.length ? { deferredPluginIds } : {}),
     };
   };
-  const beginClose = () => {
+  const beginClose = (): void | Promise<void> => {
+    if (!gatewayMetadataOwners.has(owner)) {
+      return;
+    }
     owner.phase = "closing";
+    if (!owner.prelude && [...gatewayMetadataOwners].every((entry) => entry.phase === "closing")) {
+      const prelude = Promise.resolve().then(onAllGatewaysClosing);
+      // Overlapping closes share one stop, including when the final bootstrap fails.
+      for (const entry of gatewayMetadataOwners) {
+        entry.prelude = prelude;
+      }
+      void prelude.catch(() => {});
+    }
+    return owner.prelude;
   };
   return {
     // Fence admission before teardown can fail, without retiring a live sibling's inventory.
@@ -189,7 +204,7 @@ export function retainGatewayPluginMetadata() {
       onFinal?: (retire: () => Promise<PluginHostCleanupResult>) => void | Promise<void>,
       retireRegistry?: () => Promise<void | PluginHostCleanupResult>,
     ): Promise<PluginHostCleanupResult> {
-      beginClose();
+      const prelude = beginClose();
       if (owner.closing) {
         return owner.closing;
       }
@@ -225,6 +240,7 @@ export function retainGatewayPluginMetadata() {
         }));
       owner.closing = Promise.resolve().then(async () => {
         try {
+          await prelude;
           // Keep the final cache bound until model publication has joined through onFinal.
           if (final) {
             await onFinal?.(retire);
@@ -233,6 +249,7 @@ export function retainGatewayPluginMetadata() {
           if (final) {
             clearPluginMetadataCaches();
           }
+          await sourceSweep;
           await sourceCaptures.releaseAsync();
           gatewayMetadataOwners.delete(owner);
           releaseReaders();

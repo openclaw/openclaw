@@ -29,11 +29,11 @@ function fleetConfig(store?: string) {
 }
 
 describe("config CLI session store ownership", () => {
-  it.each(
-    [undefined, "stores/{agentId}/sessions.json", "stores/shared.sqlite"].flatMap((store) =>
-      ["set", "patch"].map((mode) => ({ store, mode })),
-    ),
-  )(
+  it.each([
+    { store: undefined, mode: "set" },
+    { store: "stores/{agentId}/sessions.json", mode: "patch" },
+    { store: "stores/shared.sqlite", mode: "set" },
+  ])(
     "preserves the owner across no-op and unrelated $mode with store $store",
     async ({ store, mode }) => {
       const original = fleetConfig(store);

@@ -3,6 +3,8 @@
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { getPreparedModelRuntimeStartupStatus } from "../../agents/prepared-model-runtime.startup-status.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import { readChildRuntimeViability } from "../../infra/child-runtime-viability.js";
+import { formatErrorMessage as formatError } from "../../infra/errors.js";
 import { readGatewayMaintenanceWork } from "../../infra/gateway-active-work.js";
 import { getStatusSummary } from "../../status/summary.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
@@ -13,7 +15,6 @@ import { createGatewayServerActiveWorkInspectors } from "../server-active-work.j
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
 import type { GatewayShutdownStatus } from "../server-public.js";
-import { formatError } from "../server-utils.js";
 import { shouldScheduleBackgroundHealthRefresh } from "../server/health-refresh-admission.js";
 import { readGatewayProcessVitals, readGatewayWorkerPoolFacts } from "../server/process-vitals.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
@@ -150,11 +151,15 @@ export const healthHandlers: GatewayRequestHandlers = {
     ) {
       respond(
         true,
-        await mergeCachedHealthRuntimeState({
-          cached,
-          getEventLoopHealth: context.getEventLoopHealth,
-          configReloadHotReloadStatus: context.getConfigReloaderHotReloadStatus?.(),
-        }),
+        {
+          ...(await mergeCachedHealthRuntimeState({
+            cached,
+            getEventLoopHealth: context.getEventLoopHealth,
+            configReloadHotReloadStatus: context.getConfigReloaderHotReloadStatus?.(),
+          })),
+          // Live check. The cache must not keep a path that disappeared after it was stored.
+          childRuntime: readChildRuntimeViability(),
+        },
         undefined,
         { cached: true },
       );
@@ -167,7 +172,15 @@ export const healthHandlers: GatewayRequestHandlers = {
     }
     await respondUnavailableOnThrow(respond, async () => {
       const snap = await refreshHealthSnapshot({ probe: wantsProbe, includeSensitive });
-      respond(true, { ...snap, modelRuntime: getPreparedModelRuntimeStartupStatus() }, undefined);
+      respond(
+        true,
+        {
+          ...snap,
+          modelRuntime: getPreparedModelRuntimeStartupStatus(),
+          childRuntime: readChildRuntimeViability(),
+        },
+        undefined,
+      );
     });
   },
   status: async ({ respond, client, params, context }) => {
@@ -202,6 +215,7 @@ export const healthHandlers: GatewayRequestHandlers = {
         workerPools,
         pid: process.pid,
         shutdownBudget: shutdownStatus,
+        childRuntime: readChildRuntimeViability(),
       },
       undefined,
     );

@@ -14,6 +14,7 @@ import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gatew
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withLocalGatewayRequestScope } from "../local-request-context.js";
 import { cronHandlers } from "./cron.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
@@ -72,6 +73,8 @@ async function withCronStore(
       const storePath = path.join(root, "jobs.json");
       await saveCronStore(storePath, { version: 1, jobs: createJobs(count) });
       const cron = new CronService({
+        scheduler: createTestGatewayScheduler(),
+        nowMs: () => Date.now(),
         storePath,
         cronEnabled: true,
         defaultAgentId: "main",

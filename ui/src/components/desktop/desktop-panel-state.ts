@@ -23,9 +23,11 @@ export function renderDesktopPanelRecovery(props: {
         props.inventoryError
           ? nothing
           : html`<div>
-              ${t("desktop.disconnected", {
-                reason: props.reason ?? t("desktop.unknownReason"),
-              })}
+              ${
+                props.reason
+                  ? t("desktop.disconnected", { reason: props.reason })
+                  : t("desktop.disconnectedClean")
+              }
             </div>`
       }
       <button class="desktop-button desktop-button--primary" type="button" @click=${props.onRetry}>

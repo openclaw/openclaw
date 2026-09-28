@@ -15,13 +15,9 @@ import {
   readMirroredSessionHistoryMessages,
   renderCodexSkillsInstructions,
 } from "./attempt-context.js";
-import {
-  buildCodexWorkspaceBootstrapContext,
-  getCodexWorkspaceMemoryToolNames,
-} from "./attempt-workspace-context.js";
+import { buildCodexWorkspaceBootstrapContext } from "./attempt-workspace-context.js";
 import {
   resolveCodexContextEngineProjectionMaxChars,
-  resolveCodexContextEngineProjectionReserveTokens,
   resolveCodexContinuityProjectionMaxChars,
   type CodexProjectedContextRange,
 } from "./context-engine-projection.js";
@@ -41,9 +37,6 @@ export async function prepareCodexAttemptContext(
   const {
     connection,
     runtimeParams,
-    activeSessionId,
-    activeSessionFile,
-    buildActiveRunAttemptParams,
     effectiveContextWindowInfo,
     effectiveContextTokenBudget,
     effectiveRuntimeProviderId,
@@ -67,8 +60,8 @@ export async function prepareCodexAttemptContext(
   const { toolBridge } = attemptTools;
   const activeTranscriptTarget = {
     agentId: sessionAgentId,
-    sessionFile: activeSessionFile,
-    sessionId: activeSessionId,
+    sessionFile: runtimeParams.sessionFile,
+    sessionId: runtimeParams.sessionId,
     sessionKey: contextSessionKey,
     sessionTarget: params.sessionTarget,
   };
@@ -133,7 +126,7 @@ export async function prepareCodexAttemptContext(
   const hookRunner = getAgentHarnessHookRunner();
   const buildActiveContextEngineRuntimeContext = () =>
     buildHarnessContextEngineRuntimeContext({
-      attempt: buildActiveRunAttemptParams(),
+      attempt: { ...runtimeParams },
       workspaceDir: effectiveWorkspace,
       cwd: effectiveCwd,
       agentDir,
@@ -145,9 +138,9 @@ export async function prepareCodexAttemptContext(
     await bootstrapHarnessContextEngine({
       hadSessionFile: hadSessionTranscriptState,
       contextEngine: activeContextEngine,
-      sessionId: activeSessionId,
+      sessionId: runtimeParams.sessionId,
       sessionKey: contextSessionKey,
-      sessionFile: activeSessionFile,
+      sessionFile: runtimeParams.sessionFile,
       sessionTarget: params.sessionTarget,
       runtimeContext: buildActiveContextEngineRuntimeContext(),
       transcriptReadFence: params.userTurnTranscriptRecorder?.getAdmissionReceipt(),
@@ -165,7 +158,6 @@ export async function prepareCodexAttemptContext(
   }
   // The admission fence intentionally excludes this logical turn's committed results.
   historyState.messages.push(...(params.pluginRuntimeRefreshMessages ?? []));
-  const memoryToolNames = getCodexWorkspaceMemoryToolNames(toolBridge.availableSpecs);
   const workspaceBootstrapContext = await buildCodexWorkspaceBootstrapContext({
     params: runtimeParams,
     agentWorkspaceDeveloperInstructions:
@@ -175,7 +167,7 @@ export async function prepareCodexAttemptContext(
     effectiveWorkspace,
     sessionKey: contextSessionKey,
     sessionAgentId,
-    memoryToolNames,
+    tools: toolBridge.availableSpecs,
     ringZeroActive:
       isHostScopedAgentToolActive("openclaw") &&
       isSystemAgentOnlyCodexDynamicToolAllowlist(runtimeParams.toolsAllow),
@@ -210,7 +202,6 @@ export async function prepareCodexAttemptContext(
     promptText: params.prompt,
     promptContextRange: undefined as CodexProjectedContextRange | undefined,
     developerInstructions: baseDeveloperInstructions,
-    prePromptMessageCount: historyState.messages.length,
     contextEngineProjection: undefined as CodexContextEngineThreadBootstrapProjection | undefined,
     precomputedStaleBindingContinuityProjectionApplied: false,
     staleBindingContinuityForcedFreshStart: false,
@@ -223,7 +214,6 @@ export async function prepareCodexAttemptContext(
   };
   const codexContextProjectionMaxChars = resolveCodexContextEngineProjectionMaxChars({
     contextTokenBudget: effectiveContextTokenBudget,
-    reserveTokens: resolveCodexContextEngineProjectionReserveTokens(),
   });
   const codexContinuityProjectionMaxChars = resolveCodexContinuityProjectionMaxChars({
     contextTokenBudget: effectiveContextTokenBudget,

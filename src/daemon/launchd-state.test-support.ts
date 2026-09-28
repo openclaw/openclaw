@@ -1,0 +1,43 @@
+import { vi } from "vitest";
+import type { ExecResult } from "./exec-file.js";
+
+const launchdTestState = vi.hoisted(() => ({
+  launchctlCalls: [] as string[][],
+  listOutput: "",
+  printOutput: "",
+  printDisabledOutput: "",
+  printDisabledError: "",
+  printDisabledCode: 0,
+  printNotLoadedRemaining: 0,
+  printError: "",
+  printCode: 1,
+  printFailuresRemaining: 0,
+  bootstrapError: "",
+  bootstrapCode: 1,
+  bootstrapTermination: "exit" as ExecResult["termination"],
+  bootstrapLoadsServiceOnFailure: false,
+  bootstrapTransient: false,
+  kickstartError: "",
+  kickstartCode: 1,
+  kickstartFailuresRemaining: 0,
+  kickstartUnloadsService: false,
+  disableError: "",
+  disableCode: 1,
+  bootoutError: "",
+  bootoutCode: 1,
+  bootoutLeavesLoaded: false,
+  serviceLoaded: true,
+  serviceRunning: true,
+  serviceStates: new Map<string, "running" | "stopped" | "not-loaded">(),
+  fsRoot: "",
+  resolveFsPath: undefined as ((file: string) => string) | undefined,
+  dirs: new Set<string>(),
+  dirModes: new Map<string, number>(),
+  files: new Map<string, string>(),
+  fileModes: new Map<string, number>(),
+  fileWrites: [] as Array<{ path: string; data: string }>,
+  cleanupProtectedPids: [] as Array<number | undefined>,
+  realExecFile: false,
+}));
+
+export { launchdTestState };

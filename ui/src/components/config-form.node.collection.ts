@@ -1,4 +1,4 @@
-// Control UI renderers for structured config form nodes.
+import { asNonArrayRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type TemplateResult } from "lit";
 import { Directive, directive } from "lit/directive.js";
 import { repeat } from "lit/directives/repeat.js";
@@ -69,10 +69,7 @@ export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
   const inherited = value === undefined && schema.default !== undefined;
   const fallback = inherited ? schema.default : value;
   const objectSourceIdentity = fallback === undefined ? UNSET_MAP_SOURCE_IDENTITY : fallback;
-  const objectValue =
-    fallback && typeof fallback === "object" && !Array.isArray(fallback)
-      ? (fallback as Record<string, unknown>)
-      : {};
+  const objectValue = asNonArrayRecord(fallback);
   const entries = objectPropertyKeys(schema)
     .map((key) => [key, objectPropertySchema(schema, key)] as const)
     .filter((entry): entry is readonly [string, ConfigNodeRenderParams["schema"]] =>
@@ -80,7 +77,6 @@ export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
     );
   const requiredKeys = requiredPropertyKeys(schema);
 
-  // Sort by hint order
   const sorted = entries.toSorted((left, right) => {
     const leftOrder = hintForPath([...path, left[0]], hints)?.order ?? 0;
     const rightOrder = hintForPath([...path, right[0]], hints)?.order ?? 0;
@@ -103,10 +99,10 @@ export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
     let candidate: Record<string, unknown>;
     const relativePath = childPath.slice(path.length);
     if (relativePath.length === 0) {
-      if (!childValue || typeof childValue !== "object" || Array.isArray(childValue)) {
+      if (!isRecord(childValue)) {
         return false;
       }
-      candidate = childValue as Record<string, unknown>;
+      candidate = childValue;
     } else {
       try {
         candidate = structuredClone(objectValue);
@@ -187,7 +183,6 @@ export function renderObject(
     return fields;
   }
 
-  // Nested objects get collapsible treatment as an indented sub-block.
   return html`
     <details class="cfg-object cfg-block" ?open=${path.length <= 2}>
       <summary class="settings-row cfg-object__summary">

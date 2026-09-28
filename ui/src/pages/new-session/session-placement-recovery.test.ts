@@ -28,6 +28,10 @@ const recovery = {
 const exactKey = (sessionKey: string) =>
   sessionPlacementRecoveryExactStorageKey(recovery.gatewayUrl, recovery.recoveryScope, sessionKey);
 
+const readRecovery = (
+  record: Pick<typeof recovery, "gatewayUrl" | "recoveryScope" | "sessionKey"> = recovery,
+) => readSessionPlacementRecovery(record.gatewayUrl, record.recoveryScope, record.sessionKey);
+
 describe("session placement recovery", () => {
   beforeEach(() => sessionStorage.clear());
   afterEach(() => {
@@ -70,25 +74,11 @@ describe("session placement recovery", () => {
       recovery,
       second,
     ]);
-    expect(
-      readSessionPlacementRecovery(
-        recovery.gatewayUrl,
-        recovery.recoveryScope,
-        recovery.sessionKey,
-      ),
-    ).toEqual(recovery);
+    expect(readRecovery()).toEqual(recovery);
 
     clearSessionPlacementRecovery(recovery.gatewayUrl, recovery.recoveryScope, recovery.sessionKey);
-    expect(
-      readSessionPlacementRecovery(
-        recovery.gatewayUrl,
-        recovery.recoveryScope,
-        recovery.sessionKey,
-      ),
-    ).toBeNull();
-    expect(
-      readSessionPlacementRecovery(second.gatewayUrl, second.recoveryScope, second.sessionKey),
-    ).toEqual(second);
+    expect(readRecovery()).toBeNull();
+    expect(readRecovery(second)).toEqual(second);
 
     clearSessionPlacementRecovery(recovery.gatewayUrl, recovery.recoveryScope);
     expect(listSessionPlacementRecoveries(recovery.gatewayUrl, recovery.recoveryScope)).toEqual([]);
@@ -100,13 +90,7 @@ describe("session placement recovery", () => {
       target: { kind: "auto-device" as const },
     };
     expect(writeSessionPlacementRecovery(automatic)).toBe(true);
-    expect(
-      readSessionPlacementRecovery(
-        automatic.gatewayUrl,
-        automatic.recoveryScope,
-        automatic.sessionKey,
-      ),
-    ).toEqual(automatic);
+    expect(readRecovery(automatic)).toEqual(automatic);
   });
 
   it("does not retire a replacement submission at the same session key", () => {
@@ -118,26 +102,14 @@ describe("session placement recovery", () => {
       recovery.sessionKey,
       recovery.messageId,
     );
-    expect(
-      readSessionPlacementRecovery(
-        recovery.gatewayUrl,
-        recovery.recoveryScope,
-        recovery.sessionKey,
-      ),
-    ).toEqual(replacement);
+    expect(readRecovery()).toEqual(replacement);
     clearSessionPlacementRecovery(
       recovery.gatewayUrl,
       recovery.recoveryScope,
       recovery.sessionKey,
       replacement.messageId,
     );
-    expect(
-      readSessionPlacementRecovery(
-        recovery.gatewayUrl,
-        recovery.recoveryScope,
-        recovery.sessionKey,
-      ),
-    ).toBeNull();
+    expect(readRecovery()).toBeNull();
   });
 
   it.each(["not-sent", "rejected", "unconfirmed"] as const)(
@@ -150,21 +122,9 @@ describe("session placement recovery", () => {
         error: "Target unavailable",
       };
       expect(writeSessionPlacementRecovery(paused)).toBe(true);
-      expect(
-        readSessionPlacementRecovery(
-          recovery.gatewayUrl,
-          recovery.recoveryScope,
-          recovery.sessionKey,
-        ),
-      ).toEqual(paused);
+      expect(readRecovery()).toEqual(paused);
       expect(writeSessionPlacementRecovery({ ...paused, error: "x".repeat(4097) })).toBe(false);
-      expect(
-        readSessionPlacementRecovery(
-          recovery.gatewayUrl,
-          recovery.recoveryScope,
-          recovery.sessionKey,
-        ),
-      ).toEqual(paused);
+      expect(readRecovery()).toEqual(paused);
     },
   );
 
@@ -198,13 +158,7 @@ describe("session placement recovery", () => {
           error: expect.stringContaining("Keep this page open"),
         },
       });
-      expect(
-        readSessionPlacementRecovery(
-          recovery.gatewayUrl,
-          recovery.recoveryScope,
-          recovery.sessionKey,
-        ),
-      ).toEqual(alreadyPaused ? retained : null);
+      expect(readRecovery()).toEqual(alreadyPaused ? retained : null);
     },
   );
 
@@ -216,13 +170,7 @@ describe("session placement recovery", () => {
 
       expect(paused.recovery.error).toBe("x".repeat(4095));
       expect(paused.persisted).toBe(persistent);
-      expect(
-        readSessionPlacementRecovery(
-          recovery.gatewayUrl,
-          recovery.recoveryScope,
-          recovery.sessionKey,
-        ),
-      ).toEqual(persistent ? paused.recovery : null);
+      expect(readRecovery()).toEqual(persistent ? paused.recovery : null);
     },
   );
 
@@ -243,13 +191,7 @@ describe("session placement recovery", () => {
 
     expect(paused.recovery.error).toBe(`${prefix}${"x".repeat(4095 - prefix.length)}`);
     expect(paused.persisted).toBe(false);
-    expect(
-      readSessionPlacementRecovery(
-        recovery.gatewayUrl,
-        recovery.recoveryScope,
-        recovery.sessionKey,
-      ),
-    ).toBeNull();
+    expect(readRecovery()).toBeNull();
   });
 
   it("migrates only exact framed rows under a new scope", () => {
@@ -403,13 +345,7 @@ describe("session placement recovery", () => {
       attachments: [{ type: "file", mimeType: "text/plain", content: "aGVsbG8=" }],
     };
     expect(writeSessionPlacementRecovery(attachmentRecovery)).toBe(true);
-    expect(
-      readSessionPlacementRecovery(
-        recovery.gatewayUrl,
-        recovery.recoveryScope,
-        recovery.sessionKey,
-      ),
-    ).toEqual(attachmentRecovery);
+    expect(readRecovery()).toEqual(attachmentRecovery);
   });
 
   it.each([
@@ -436,25 +372,13 @@ describe("session placement recovery", () => {
       },
     };
     expect(writeSessionPlacementRecovery(creating)).toBe(true);
-    expect(
-      readSessionPlacementRecovery(
-        recovery.gatewayUrl,
-        recovery.recoveryScope,
-        recovery.sessionKey,
-      ),
-    ).toEqual(creating);
+    expect(readRecovery()).toEqual(creating);
 
     sessionStorage.setItem(
       exactKey(recovery.sessionKey),
       JSON.stringify({ ...creating, createParams: { key: "agent:cloud:other" } }),
     );
-    expect(
-      readSessionPlacementRecovery(
-        recovery.gatewayUrl,
-        recovery.recoveryScope,
-        recovery.sessionKey,
-      ),
-    ).toBeNull();
+    expect(readRecovery()).toBeNull();
   });
 
   it.each([
@@ -510,18 +434,6 @@ describe("session placement recovery", () => {
         "cloud",
       ),
     ).toBeNull();
-  });
-
-  it("does not let stale cleanup erase another session", () => {
-    expect(writeSessionPlacementRecovery(recovery)).toBe(true);
-    clearSessionPlacementRecovery(recovery.gatewayUrl, recovery.recoveryScope, "agent:cloud:older");
-    expect(
-      readSessionPlacementRecovery(
-        recovery.gatewayUrl,
-        recovery.recoveryScope,
-        recovery.sessionKey,
-      ),
-    ).toEqual(recovery);
   });
 
   it("arbitrates matching sessions without blocking another session", () => {

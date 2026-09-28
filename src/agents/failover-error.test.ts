@@ -22,7 +22,6 @@ vi.mock("../plugins/provider-hook-runtime.js", async (importOriginal) => {
 });
 import {
   buildFailoverRemediationHint,
-  buildProviderReauthCommand,
   coerceToFailoverError,
   describeFailoverError,
   FailoverError,
@@ -58,27 +57,16 @@ const OPENAI_SERVER_ERROR_PAYLOAD =
   'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}';
 
 describe("failover-error", () => {
-  it.each([
-    {
-      message: "handoff refused",
-      cause: { status: 401, code: "INVALID_API_KEY", message: "API key has been revoked" },
-    },
-    {
-      message: "handoff refused: 529 OVERLOADED",
-      cause: { status: 529, code: "OVERLOADED", message: "overloaded" },
-    },
-    { message: "503 service unavailable; reconnect before continuing", cause: { status: 503 } },
-  ])(
-    "does not promote a direct preflight into a provider failure: $message",
-    ({ message, cause }) => {
-      const error = new AgentHarnessPreflightError(message, { cause });
-      expect(resolveFailoverReasonFromError(error)).toBeNull();
-      expect(coerceToFailoverError(error)).toBeNull();
-      expect(describeFailoverError(error)).toEqual({ message });
-      expect(resolveModelFallbackError(error)).toEqual({ kind: "coordination", error });
-      expect(error.cause).toBe(cause);
-    },
-  );
+  it("does not promote a direct preflight into a provider failure", () => {
+    const message = "handoff refused: 529 OVERLOADED";
+    const cause = { status: 529, code: "OVERLOADED", message: "overloaded" };
+    const error = new AgentHarnessPreflightError(message, { cause });
+    expect(resolveFailoverReasonFromError(error)).toBeNull();
+    expect(coerceToFailoverError(error)).toBeNull();
+    expect(describeFailoverError(error)).toEqual({ message });
+    expect(resolveModelFallbackError(error)).toEqual({ kind: "coordination", error });
+    expect(error.cause).toBe(cause);
+  });
   it("finds structured CLI timeout context through aggregate wrappers", () => {
     const timeout = new FailoverError("CLI exceeded timeout", {
       reason: "timeout",
@@ -877,75 +865,6 @@ describe("failover-error", () => {
     expect(err?.sessionId).toBe("session:browser-1234");
     expect(err?.lane).toBe("draft");
     expect(err?.provider).toBe("openai");
-  });
-});
-
-describe("buildFailoverRemediationHint", () => {
-  it("returns a copy-pasteable login command for auth failures", () => {
-    const err = new FailoverError("missing token", {
-      reason: "auth",
-      provider: "anthropic",
-      model: "claude-opus-4-7",
-    });
-    expect(buildFailoverRemediationHint(err)).toBe(
-      "Re-authenticate with: openclaw models auth login --provider 'anthropic' --force",
-    );
-  });
-
-  it("routes Gemini CLI auth failures to supported recovery paths", () => {
-    const err = new FailoverError("revoked", {
-      reason: "auth_permanent",
-      provider: "google-gemini-cli",
-      model: "gemini-3.1-pro-preview",
-    });
-    expect(buildFailoverRemediationHint(err)).toBe(
-      "Authenticate in Gemini CLI directly, or configure a supported Google API key with: openclaw configure",
-    );
-  });
-
-  it("quotes provider ids that contain shell metacharacters", () => {
-    expect(buildProviderReauthCommand("custom;touch /tmp/pwned")).toBe(
-      "openclaw models auth login --provider 'custom;touch /tmp/pwned' --force",
-    );
-    expect(buildProviderReauthCommand("custom'provider")).toBe(
-      "openclaw models auth login --provider 'custom'\\''provider' --force",
-    );
-  });
-
-  it("refuses control characters in rendered provider commands", () => {
-    expect(buildProviderReauthCommand("custom\nprovider")).toBeUndefined();
-  });
-
-  it("wraps rendered provider commands in the standard CLI formatter", () => {
-    expect(buildProviderReauthCommand("anthropic", { OPENCLAW_PROFILE: "work" })).toBe(
-      "openclaw --profile work models auth login --provider 'anthropic' --force",
-    );
-    expect(buildProviderReauthCommand("anthropic", { OPENCLAW_CONTAINER_HINT: "dev" })).toBe(
-      "openclaw --container dev models auth login --provider 'anthropic' --force",
-    );
-  });
-
-  it("returns undefined for non-auth reasons", () => {
-    const err = new FailoverError("429", {
-      reason: "rate_limit",
-      provider: "openai",
-      model: "gpt-5",
-    });
-    expect(buildFailoverRemediationHint(err)).toBeUndefined();
-  });
-
-  it("returns undefined when provider is not attributed", () => {
-    const err = new FailoverError("no token", {
-      reason: "auth",
-      model: "claude-opus-4-7",
-    });
-    expect(buildFailoverRemediationHint(err)).toBeUndefined();
-  });
-
-  it("returns undefined for non-FailoverError inputs", () => {
-    expect(buildFailoverRemediationHint(new Error("oops"))).toBeUndefined();
-    expect(buildFailoverRemediationHint(undefined)).toBeUndefined();
-    expect(buildFailoverRemediationHint("just a string")).toBeUndefined();
   });
 });
 

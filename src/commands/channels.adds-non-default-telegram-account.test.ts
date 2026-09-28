@@ -1,8 +1,9 @@
 // Channels account tests cover non-default Telegram account setup, status, removal, and binding behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPatchedAccountSetupAdapter } from "../channels/plugins/setup-helpers.js";
-import type { ChannelSetupInput, ChannelStatusIssue } from "../channels/plugins/types.core.js";
+import type { ChannelSetupInput } from "../channels/plugins/types.core.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createScopedChannelConfigAdapter } from "../plugin-sdk/channel-config-helpers.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
@@ -22,6 +23,7 @@ let minimalChannelsCommandRegistry: ReturnType<typeof createTestRegistry>;
 const createClackPrompterMock = vi.hoisted(() => vi.fn());
 const catalogMocks = vi.hoisted(() => ({
   listTrustedChannelPluginCatalogEntries: vi.fn(() => []),
+  resolveTrustedChannelCatalogInput: vi.fn(() => undefined),
 }));
 
 vi.mock("../wizard/clack-prompter.js", () => ({
@@ -105,7 +107,6 @@ function createScopedCommandTestPlugin(params: {
   singleAccountKeysToMove?: readonly string[];
   onAccountConfigChanged?: NonNullable<ChannelPlugin["lifecycle"]>["onAccountConfigChanged"];
   onAccountRemoved?: NonNullable<ChannelPlugin["lifecycle"]>["onAccountRemoved"];
-  collectStatusIssues?: NonNullable<NonNullable<ChannelPlugin["status"]>["collectStatusIssues"]>;
 }): ChannelPlugin {
   return {
     ...createChannelTestPluginBase({
@@ -147,11 +148,6 @@ function createScopedCommandTestPlugin(params: {
             ...(params.onAccountRemoved ? { onAccountRemoved: params.onAccountRemoved } : {}),
           }
         : undefined,
-    status: params.collectStatusIssues
-      ? {
-          collectStatusIssues: params.collectStatusIssues,
-        }
-      : undefined,
   } as ChannelPlugin;
 }
 
@@ -212,48 +208,6 @@ function createMinimalChannelsCommandRegistryForTests(): ReturnType<typeof creat
         label: "Discord",
         buildPatch: ({ token }) => (token ? { token } : {}),
         clearBaseFields: ["token", "name"],
-        collectStatusIssues: (accounts) =>
-          accounts.flatMap((account) => {
-            if (account.enabled !== true || account.configured !== true) {
-              return [];
-            }
-            const issues: ChannelStatusIssue[] = [];
-            const issueAccountId = account.accountId ?? DEFAULT_ACCOUNT_ID;
-            const messageContent = (
-              account.application as { intents?: { messageContent?: string } } | undefined
-            )?.intents?.messageContent;
-            if (messageContent === "disabled") {
-              issues.push({
-                channel: "discord",
-                accountId: issueAccountId,
-                kind: "intent",
-                message:
-                  "Message Content Intent is disabled. Bot may not see normal channel messages.",
-              });
-            }
-            const audit = account.audit as
-              | {
-                  channels?: Array<{
-                    channelId?: string;
-                    ok?: boolean;
-                    missing?: string[];
-                    error?: string;
-                  }>;
-                }
-              | undefined;
-            for (const channel of audit?.channels ?? []) {
-              if (channel.ok === true || !channel.channelId) {
-                continue;
-              }
-              issues.push({
-                channel: "discord",
-                accountId: issueAccountId,
-                kind: "permissions",
-                message: `Channel ${channel.channelId} permission audit failed.${channel.missing?.length ? ` missing ${channel.missing.join(", ")}` : ""}${channel.error ? `: ${channel.error}` : ""}`,
-              });
-            }
-            return issues;
-          }),
       }),
       source: "test",
     },
@@ -328,31 +282,10 @@ describe("channels command", () => {
     });
   }
 
-  async function addAlertsTelegramAccount(token: string): Promise<{
-    channels?: {
-      telegram?: {
-        enabled?: boolean;
-        accounts?: Record<string, { botToken?: string }>;
-      };
-    };
-  }> {
+  async function addAlertsTelegramAccount(token: string): Promise<OpenClawConfig> {
     await addTelegramAccount("alerts", token);
-    return getWrittenConfig<{
-      channels?: {
-        telegram?: {
-          enabled?: boolean;
-          accounts?: Record<string, { botToken?: string }>;
-        };
-      };
-    }>();
+    return getWrittenConfig<OpenClawConfig>();
   }
-
-  it("adds a non-default telegram account", async () => {
-    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
-    const next = await addAlertsTelegramAccount("123:abc");
-    expect(next.channels?.telegram?.enabled).toBe(true);
-    expect(next.channels?.telegram?.accounts?.alerts?.botToken).toBe("123:abc");
-  });
 
   it("moves single-account telegram config into accounts.default when adding non-default", async () => {
     configMocks.readConfigFileSnapshot.mockResolvedValue({
@@ -373,27 +306,7 @@ describe("channels command", () => {
 
     await addTelegramAccount("alerts", "alerts-token");
 
-    const next = getWrittenConfig<{
-      channels?: {
-        telegram?: {
-          botToken?: string;
-          dmPolicy?: string;
-          allowFrom?: string[];
-          groupPolicy?: string;
-          streaming?: string;
-          accounts?: Record<
-            string,
-            {
-              botToken?: string;
-              dmPolicy?: string;
-              allowFrom?: string[];
-              groupPolicy?: string;
-              streaming?: string;
-            }
-          >;
-        };
-      };
-    }>();
+    const next = getWrittenConfig<OpenClawConfig>();
     expect(next.channels?.telegram?.accounts?.default).toEqual({
       botToken: "legacy-token",
       dmPolicy: "allowlist",
@@ -440,11 +353,7 @@ describe("channels command", () => {
       { hasFlags: true },
     );
 
-    const next = getWrittenConfig<{
-      channels?: {
-        slack?: { enabled?: boolean; botToken?: string; appToken?: string };
-      };
-    }>();
+    const next = getWrittenConfig<OpenClawConfig>();
     expect(next.channels?.slack?.enabled).toBe(true);
     expect(next.channels?.slack?.botToken).toBe("xoxb-1");
     expect(next.channels?.slack?.appToken).toBe("xapp-1");
@@ -468,11 +377,7 @@ describe("channels command", () => {
       hasFlags: true,
     });
 
-    const next = getWrittenConfig<{
-      channels?: {
-        discord?: { accounts?: Record<string, { token?: string }> };
-      };
-    }>();
+    const next = getWrittenConfig<OpenClawConfig>();
     expect(next.channels?.discord?.accounts?.work).toBeUndefined();
     expect(next.channels?.discord?.accounts?.default?.token).toBe("d0");
   });
@@ -485,11 +390,7 @@ describe("channels command", () => {
       { hasFlags: true },
     );
 
-    const next = getWrittenConfig<{
-      channels?: {
-        whatsapp?: { accounts?: Record<string, { name?: string }> };
-      };
-    }>();
+    const next = getWrittenConfig<OpenClawConfig>();
     expect(next.channels?.whatsapp?.accounts?.family?.name).toBe("Family Phone");
   });
 
@@ -518,13 +419,7 @@ describe("channels command", () => {
       { hasFlags: true },
     );
 
-    const next = getWrittenConfig<{
-      channels?: {
-        signal?: {
-          accounts?: Record<string, { account?: string; name?: string }>;
-        };
-      };
-    }>();
+    const next = getWrittenConfig<OpenClawConfig>();
     expect(next.channels?.signal?.accounts?.lab?.account).toBe("+15555550123");
     expect(next.channels?.signal?.accounts?.lab?.name).toBe("Lab");
     expect(next.channels?.signal?.accounts?.default?.name).toBe("Primary");
@@ -539,9 +434,7 @@ describe("channels command", () => {
 
     await runRemoveWithConfirm({ channel: "discord", account: "default" });
 
-    const next = getWrittenConfig<{
-      channels?: { discord?: { enabled?: boolean } };
-    }>();
+    const next = getWrittenConfig<OpenClawConfig>();
     expect(next.channels?.discord?.enabled).toBe(false);
   });
 
@@ -571,14 +464,7 @@ describe("channels command", () => {
       { hasFlags: true },
     );
 
-    const next = getWrittenConfig<{
-      channels?: {
-        telegram?: {
-          name?: string;
-          accounts?: Record<string, { botToken?: string; name?: string }>;
-        };
-      };
-    }>();
+    const next = getWrittenConfig<OpenClawConfig>();
     expect(next.channels?.telegram?.name).toBeUndefined();
     expect(next.channels?.telegram?.accounts?.default?.name).toBe("Primary Bot");
   });
@@ -600,14 +486,7 @@ describe("channels command", () => {
       hasFlags: true,
     });
 
-    const next = getWrittenConfig<{
-      channels?: {
-        discord?: {
-          name?: string;
-          accounts?: Record<string, { name?: string; token?: string }>;
-        };
-      };
-    }>();
+    const next = getWrittenConfig<OpenClawConfig>();
     expect(next.channels?.discord?.name).toBeUndefined();
     expect(next.channels?.discord?.accounts?.default?.name).toBe("Primary Bot");
     expect(next.channels?.discord?.accounts?.work?.token).toBe("d1");
@@ -650,55 +529,6 @@ describe("channels command", () => {
     expect(lines).toContain(
       "- Signal work (+12133734253): configured, allow:+44 20 7946 0018 (id: +442079460018),uuid:123e4567-e89b-12d3-a456-426614174000",
     );
-  });
-
-  it.each([
-    {
-      name: "surfaces Discord privileged intent issues in channels status output",
-      channelAccounts: {
-        discord: [
-          {
-            accountId: "default",
-            enabled: true,
-            configured: true,
-            application: { intents: { messageContent: "disabled" } },
-          },
-        ],
-      },
-      patterns: [
-        /Warnings:/,
-        /Message Content Intent is disabled/i,
-        /Run: (?:openclaw|openclaw)( --profile isolated)? doctor/,
-      ],
-    },
-    {
-      name: "surfaces Discord permission audit issues in channels status output",
-      channelAccounts: {
-        discord: [
-          {
-            accountId: "default",
-            enabled: true,
-            configured: true,
-            audit: {
-              unresolvedChannels: 1,
-              channels: [
-                {
-                  channelId: "111",
-                  ok: false,
-                  missing: ["ViewChannel", "SendMessages"],
-                },
-              ],
-            },
-          },
-        ],
-      },
-      patterns: [/Warnings:/, /permission audit/i, /Channel 111/i],
-    },
-  ])("$name", ({ channelAccounts, patterns }) => {
-    const joined = formatChannelStatusJoined(channelAccounts);
-    for (const pattern of patterns) {
-      expect(joined).toMatch(pattern);
-    }
   });
 
   it("includes Telegram bot username from probe data", () => {

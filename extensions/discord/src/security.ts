@@ -1,4 +1,5 @@
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { identityEntryAuthenticationClassifier } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   createConditionalWarningCollector,
@@ -10,7 +11,6 @@ import {
   resolveDiscordAccountDmPolicy,
   type ResolvedDiscordAccount,
 } from "./accounts.js";
-import type { ChannelPlugin } from "./channel-api.js";
 import { discordIngressIdentity } from "./monitor/ingress-identity.js";
 
 const resolveDiscordDmPolicy = createScopedDmSecurityResolver<ResolvedDiscordAccount>({
@@ -56,9 +56,7 @@ const collectDiscordSecurityFindings = createConditionalWarningCollector.finding
   title: "Discord security warning",
 });
 
-const loadDiscordSecurityAuditModule = createLazyRuntimeModule(
-  () => import("./security-audit.runtime.js"),
-);
+const loadDiscordSecurityAuditModule = createLazyRuntimeModule(() => import("./security-audit.js"));
 
 export const discordSecurityAdapter = {
   resolveDmPolicy: resolveDiscordDmPolicy,

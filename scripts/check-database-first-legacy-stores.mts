@@ -91,7 +91,6 @@ type BranchFsSafePropertyAssignment = {
   jsonStoreValue: boolean;
 };
 type BranchWrapperAssignment = { index: number; name: string; value: WrapperValue };
-const isWrapperNode = (node: ts.Node): node is WrapperNode => ts.isFunctionLikeDeclaration(node);
 
 const databaseFirstLegacyStoreSourceRoots = ["src", "extensions", "packages"];
 const databaseFirstNativeSourceRoots = ["apps/macos/Sources/OpenClaw"];
@@ -876,10 +875,6 @@ export function collectDatabaseFirstLegacyStoreViolations(
     return scopeForRead(requireAliasScopes, name)?.get(name) === true;
   }
 
-  function isNodeRequireName(name: string) {
-    return resolveRequireAlias(name);
-  }
-
   function isCreateRequireShadowed(name: string) {
     return createRequireShadowScopes.some((scope) => scope.has(name));
   }
@@ -935,23 +930,11 @@ export function collectDatabaseFirstLegacyStoreViolations(
   }
 
   function resolveFsSafeStore(name: string) {
-    const value = lookupFsSafeStore(name);
-    return value === true;
-  }
-
-  function lookupFsSafeStore(name: string) {
-    const scope = scopeForRead(fsSafeStoreScopes, name);
-    return scope ? scope.get(name) === true : null;
+    return scopeForRead(fsSafeStoreScopes, name)?.get(name) === true;
   }
 
   function resolveFsSafeJsonStore(name: string) {
-    const value = lookupFsSafeJsonStore(name);
-    return value === true;
-  }
-
-  function lookupFsSafeJsonStore(name: string) {
-    const scope = scopeForRead(fsSafeJsonStoreScopes, name);
-    return scope ? scope.get(name) === true : null;
+    return scopeForRead(fsSafeJsonStoreScopes, name)?.get(name) === true;
   }
 
   function lookupKnownLegacyObjectLiteral(name: string) {
@@ -1043,16 +1026,6 @@ export function collectDatabaseFirstLegacyStoreViolations(
 
   function resolveKnownUndefinedIdentifier(name: string) {
     return scopeForRead(knownUndefinedScopes, name)?.get(name) === true;
-  }
-
-  function requireAliasWriteTarget(name: string) {
-    for (let index = requireAliasScopes.length - 1; index >= 0; index--) {
-      const scope = requireAliasScopes[index]!;
-      if (scope.has(name)) {
-        return { index, scope };
-      }
-    }
-    return { index: requireAliasScopes.length - 1, scope: lastScope(requireAliasScopes) };
   }
 
   function expressionLiteralCandidateTexts(node: ts.Expression) {
@@ -1178,7 +1151,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
   function legacyObjectPropertyRewriteValues(
     objectName: string,
     initializer: ts.Expression,
-    existingScope: StringMap<LegacyPropertyValue>,
+    existingScope: StringMap<LegacyPropertyValue> = new Map(),
   ) {
     const values = new Map<string, LegacyPropertyValue>();
     markLegacyObjectProperties(objectName, initializer, values, null);
@@ -1483,7 +1456,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
   function isFsModuleExpression(expression: ts.Expression) {
     const receiver = unwrapExpression(expression);
     if (
-      isFsRequireExpression(receiver, isNodeRequireName) ||
+      isFsRequireExpression(receiver, resolveRequireAlias) ||
       isFsDynamicImportExpression(receiver)
     ) {
       return true;
@@ -1500,7 +1473,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
     }
     const propertyPath = propertyAccessPath(receiver.expression);
     return Boolean(
-      isFsRequireExpression(receiver.expression, isNodeRequireName) ||
+      isFsRequireExpression(receiver.expression, resolveRequireAlias) ||
       isFsDynamicImportExpression(receiver.expression) ||
       (ts.isIdentifier(receiver.expression) && resolveFsModuleBinding(receiver.expression.text)) ||
       (propertyPath && resolveFsModuleProperty(propertyPath)),
@@ -1512,23 +1485,15 @@ export function collectDatabaseFirstLegacyStoreViolations(
     aliases: StringMap<string | null> | null = null,
   ) {
     const callee = unwrapExpression(expression);
-    if (ts.isPropertyAccessExpression(callee)) {
+    if (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) {
       const aliasedName = callExpressionName(callee);
       const writeAlias = aliasedName ? resolveFsWriteAlias(aliasedName) : null;
       if (writeAlias) {
         return writeAlias;
       }
-      return legacyWriteCallees.has(callee.name.text) && isFsModuleExpression(callee.expression)
+      const writeName = ts.isPropertyAccessExpression(callee)
         ? callee.name.text
-        : null;
-    }
-    if (ts.isElementAccessExpression(callee)) {
-      const aliasedName = callExpressionName(callee);
-      const writeAlias = aliasedName ? resolveFsWriteAlias(aliasedName) : null;
-      if (writeAlias) {
-        return writeAlias;
-      }
-      const writeName = elementAccessName(callee.argumentExpression);
+        : elementAccessName(callee.argumentExpression);
       return writeName &&
         legacyWriteCallees.has(writeName) &&
         isFsModuleExpression(callee.expression)
@@ -1544,19 +1509,12 @@ export function collectDatabaseFirstLegacyStoreViolations(
   }
 
   function fsSafeStoreFactoryAliasName(expression: ts.Expression) {
-    const callee = unwrapExpression(expression);
-    if (ts.isIdentifier(callee)) {
-      return resolveFsSafeStoreFactoryAlias(callee.text);
-    }
-    const name = callExpressionName(callee);
+    const name = callExpressionName(expression);
     return name ? resolveFsSafeStoreFactoryAlias(name) : null;
   }
 
   function isFsSafeStoreFactoryCall(expression: ts.Expression) {
-    const unwrapped = unwrapExpression(expression);
-    const call = ts.isAwaitExpression(unwrapped)
-      ? unwrapExpression(unwrapped.expression)
-      : unwrapped;
+    const call = unwrapAwaitExpression(expression);
     if (!ts.isCallExpression(call)) {
       return false;
     }
@@ -1597,7 +1555,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
     if (!ts.isObjectLiteralExpression(unwrapped)) {
       return expressionContainsLegacyStore(unwrapped);
     }
-    return objectLiteralPropertyContainsLegacyStore(unwrapped, "filePath");
+    return objectLiteralPropertyLegacyValue(unwrapped, "filePath") === true;
   }
 
   function expressionContainsFsSafeJsonStoreLegacyPath(expression: ts.Expression) {
@@ -1629,7 +1587,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
       return false;
     }
     const pathArgument = unwrapped.arguments[0];
-    return pathArgument ? pathArgumentContainsLegacyStore(pathArgument) : false;
+    return pathArgument ? expressionContainsLegacyStore(pathArgument) : false;
   }
 
   function fsSafeJsonStoreWriteContainsLegacyStore(call: ts.CallExpression) {
@@ -1756,10 +1714,6 @@ export function collectDatabaseFirstLegacyStoreViolations(
     for (const pathParts of fsModulePropertyPathsFromType(type)) {
       lastScope(fsModulePropertyScopes).set([name, ...pathParts].join("."), true);
     }
-  }
-
-  function collectFsWriteAliasesFromBinding(node: ts.Node) {
-    collectFsWriteAliasesFromBindingInto(node, lastScope(fsWriteAliasScopes));
   }
 
   function clearFsWriteObjectAliases(scope: StringMap<string | null>, objectName: string) {
@@ -1968,7 +1922,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
   function isFsBindingExpression(expression: ts.Expression) {
     const initializer = unwrapExpression(expression);
     if (
-      isFsRequireExpression(initializer, isNodeRequireName) ||
+      isFsRequireExpression(initializer, resolveRequireAlias) ||
       isFsDynamicImportExpression(initializer)
     ) {
       return true;
@@ -1979,18 +1933,14 @@ export function collectDatabaseFirstLegacyStoreViolations(
     return (
       ts.isPropertyAccessExpression(initializer) &&
       initializer.name.text === "promises" &&
-      (isFsRequireExpression(initializer.expression, isNodeRequireName) ||
+      (isFsRequireExpression(initializer.expression, resolveRequireAlias) ||
         isFsDynamicImportExpression(initializer.expression) ||
         (ts.isIdentifier(initializer.expression) &&
           resolveFsModuleBinding(initializer.expression.text)))
     );
   }
 
-  function collectFsWriteAliasesFromBindingInto(
-    node: ts.Node,
-    aliases: StringMap<string | null>,
-    isFsBinding: (expression: ts.Expression) => boolean = isFsBindingExpression,
-  ) {
+  function collectFsWriteAliasesFromBinding(node: ts.Node) {
     if (
       !ts.isVariableDeclaration(node) ||
       !ts.isObjectBindingPattern(node.name) ||
@@ -1998,10 +1948,10 @@ export function collectDatabaseFirstLegacyStoreViolations(
     ) {
       return;
     }
-    if (!isFsBinding(node.initializer)) {
+    if (!isFsBindingExpression(node.initializer)) {
       return;
     }
-    collectFsWriteAliasesFromPattern(node.name, aliases);
+    collectFsWriteAliasesFromPattern(node.name, lastScope(fsWriteAliasScopes));
   }
 
   function collectFsWriteAliasesFromPattern(
@@ -2078,49 +2028,6 @@ export function collectDatabaseFirstLegacyStoreViolations(
   }
 
   function pathArgumentsForFsWrite(name: string, args: readonly ts.Expression[]) {
-    if (
-      name === "appendRegularFile" ||
-      name === "appendRegularFileSync" ||
-      name === "replaceFileAtomic" ||
-      name === "replaceFileAtomicSync"
-    ) {
-      const first = args[0];
-      if (!first) {
-        return [];
-      }
-      const objectArg = unwrapExpression(first);
-      if (!ts.isObjectLiteralExpression(objectArg)) {
-        return first ? [first] : [];
-      }
-      return objectArg.properties.flatMap((property) => {
-        if (ts.isPropertyAssignment(property)) {
-          const key = property.name;
-          const propertyName =
-            ts.isIdentifier(key) || ts.isStringLiteral(key) || ts.isNumericLiteral(key)
-              ? key.text
-              : null;
-          return propertyName === "filePath" ? [property.initializer] : [];
-        }
-        if (
-          ts.isShorthandPropertyAssignment(property) &&
-          ts.isIdentifier(property.name) &&
-          property.name.text === "filePath"
-        ) {
-          return [property.name];
-        }
-        return [];
-      });
-    }
-    if (
-      name === "saveJsonFile" ||
-      name === "writeJson" ||
-      name === "writeJsonAtomic" ||
-      name === "writeJsonFileAtomically" ||
-      name === "writeJsonSync" ||
-      name === "writeTextAtomic"
-    ) {
-      return args.slice(0, 1);
-    }
     if (name === "copyFile" || name === "copyFileSync" || name === "cp" || name === "cpSync") {
       return args.slice(1, 2);
     }
@@ -2220,13 +2127,6 @@ export function collectDatabaseFirstLegacyStoreViolations(
     return result;
   }
 
-  function objectLiteralPropertyContainsLegacyStore(
-    objectLiteral: ts.ObjectLiteralExpression,
-    propertyName: string,
-  ) {
-    return objectLiteralPropertyLegacyValue(objectLiteral, propertyName) === true;
-  }
-
   function deleteObjectPropertyDescendants<Value>(scope: StringMap<Value>, objectName: string) {
     const prefix = `${objectName}.`;
     for (const key of scope.keys()) {
@@ -2234,14 +2134,6 @@ export function collectDatabaseFirstLegacyStoreViolations(
         scope.delete(key);
       }
     }
-  }
-
-  function legacyObjectPropertiesFromAssignment(
-    objectName: string,
-    initializer: ts.Expression,
-    existingScope: StringMap<LegacyPropertyValue> = new Map(),
-  ) {
-    return legacyObjectPropertyRewriteValues(objectName, initializer, existingScope);
   }
 
   function legacyKnownObjectLiteralsFromAssignment(objectName: string, initializer: ts.Expression) {
@@ -2256,10 +2148,6 @@ export function collectDatabaseFirstLegacyStoreViolations(
 
   function branchPropertyAssignmentKey(index: number, objectName: string, propertyName: string) {
     return `${index}:${objectPropertyKey(objectName, propertyName)}`;
-  }
-
-  function branchWrapperAssignmentKey(index: number, name: string) {
-    return `${index}:${name}`;
   }
 
   function recordBranchIdentifierAssignment(
@@ -2283,7 +2171,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
       literalTexts,
       name,
       value,
-      objectProperties: objectProperties ?? legacyObjectPropertiesFromAssignment(name, initializer),
+      objectProperties: objectProperties ?? legacyObjectPropertyRewriteValues(name, initializer),
     });
     const prefix = `${index}:${name}.`;
     for (const key of effects.propertyAssignments.keys()) {
@@ -2327,7 +2215,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
     if (!effects) {
       return;
     }
-    effects.wrapperAssignments.set(branchWrapperAssignmentKey(index, name), {
+    effects.wrapperAssignments.set(branchIdentifierAssignmentKey(index, name), {
       index,
       name,
       value: cloneWrapperFunctionValue(value),
@@ -2416,21 +2304,8 @@ export function collectDatabaseFirstLegacyStoreViolations(
     const assignmentRoot = objectPropertyKey(objectName, propertyName);
     const storeAssignments = new Map([[assignmentRoot, storeValue]]);
     const jsonStoreAssignments = new Map([[assignmentRoot, jsonStoreValue]]);
-    const descendantPrefix = `${assignmentRoot}.`;
-    for (const scope of fsSafeStoreScopes) {
-      for (const key of scope.keys()) {
-        if (key.startsWith(descendantPrefix)) {
-          storeAssignments.set(key, false);
-        }
-      }
-    }
-    for (const scope of fsSafeJsonStoreScopes) {
-      for (const key of scope.keys()) {
-        if (key.startsWith(descendantPrefix)) {
-          jsonStoreAssignments.set(key, false);
-        }
-      }
-    }
+    shadowObjectPropertyScopes(fsSafeStoreScopes, assignmentRoot, false, storeAssignments);
+    shadowObjectPropertyScopes(fsSafeJsonStoreScopes, assignmentRoot, false, jsonStoreAssignments);
     registerFsSafeStoreObjectAliases(
       assignmentRoot,
       initializer,
@@ -2467,6 +2342,8 @@ export function collectDatabaseFirstLegacyStoreViolations(
     const mergedIdentifierNames = new Set<string>();
     const parentEffect = lastScope(branchEffectScopes);
     const applyToTargetScopes = !lastScope(conditionalExecutionScopes) && !parentEffect;
+    const targetIndexes = (index: number) =>
+      applyToTargetScopes ? [index, legacyPathScopes.length - 1] : [legacyPathScopes.length - 1];
     for (const [key, thenAssignment] of thenEffects.fsIdentifierAssignments) {
       const elseAssignment = elseEffects.fsIdentifierAssignments.get(key);
       if (!elseAssignment || thenAssignment.index >= legacyPathScopes.length) {
@@ -2482,20 +2359,14 @@ export function collectDatabaseFirstLegacyStoreViolations(
       const mergedFsSafeJsonStoreValue =
         thenAssignment.fsSafeJsonStoreValue || elseAssignment.fsSafeJsonStoreValue;
       const mergedRequireAlias = thenAssignment.requireAlias || elseAssignment.requireAlias;
-      if (applyToTargetScopes) {
-        fsModuleBindingScopes[index]!.set(name, mergedModuleValue);
-        fsWriteAliasScopes[index]!.set(name, mergedWriteAlias);
-        fsSafeStoreFactoryAliasScopes[index]!.set(name, mergedFsSafeFactoryAlias);
-        fsSafeStoreScopes[index]!.set(name, mergedFsSafeStoreValue);
-        fsSafeJsonStoreScopes[index]!.set(name, mergedFsSafeJsonStoreValue);
-        requireAliasScopes[index]!.set(name, mergedRequireAlias);
+      for (const targetIndex of targetIndexes(index)) {
+        fsModuleBindingScopes[targetIndex]!.set(name, mergedModuleValue);
+        fsWriteAliasScopes[targetIndex]!.set(name, mergedWriteAlias);
+        fsSafeStoreFactoryAliasScopes[targetIndex]!.set(name, mergedFsSafeFactoryAlias);
+        fsSafeStoreScopes[targetIndex]!.set(name, mergedFsSafeStoreValue);
+        fsSafeJsonStoreScopes[targetIndex]!.set(name, mergedFsSafeJsonStoreValue);
+        requireAliasScopes[targetIndex]!.set(name, mergedRequireAlias);
       }
-      lastScope(fsModuleBindingScopes).set(name, mergedModuleValue);
-      lastScope(fsWriteAliasScopes).set(name, mergedWriteAlias);
-      lastScope(fsSafeStoreFactoryAliasScopes).set(name, mergedFsSafeFactoryAlias);
-      lastScope(fsSafeStoreScopes).set(name, mergedFsSafeStoreValue);
-      lastScope(fsSafeJsonStoreScopes).set(name, mergedFsSafeJsonStoreValue);
-      lastScope(requireAliasScopes).set(name, mergedRequireAlias);
       if (parentEffect) {
         parentEffect.fsIdentifierAssignments.set(branchIdentifierAssignmentKey(index, name), {
           fsSafeFactoryAlias: mergedFsSafeFactoryAlias,
@@ -2517,12 +2388,12 @@ export function collectDatabaseFirstLegacyStoreViolations(
       const { index, name } = thenAssignment;
       mergedIdentifierNames.add(branchIdentifierAssignmentKey(index, name));
       const merged = mergeLegacyPathBranchAssignments(thenAssignment, elseAssignment);
-      if (applyToTargetScopes) {
-        const pathScope = legacyPathScopes[index]!;
-        const literalScope = literalTextScopes[index]!;
-        const knownUndefinedScope = knownUndefinedScopes[index]!;
-        const propertyScope = legacyObjectPropertyScopes[index]!;
-        const knownObjectLiteralScope = legacyKnownObjectLiteralScopes[index]!;
+      for (const targetIndex of targetIndexes(index)) {
+        const pathScope = legacyPathScopes[targetIndex]!;
+        const literalScope = literalTextScopes[targetIndex]!;
+        const knownUndefinedScope = knownUndefinedScopes[targetIndex]!;
+        const propertyScope = legacyObjectPropertyScopes[targetIndex]!;
+        const knownObjectLiteralScope = legacyKnownObjectLiteralScopes[targetIndex]!;
         deleteObjectPropertyDescendants(knownObjectLiteralScope, name);
         knownObjectLiteralScope.set(name, merged.knownObjectLiteral);
         for (const [knownObjectLiteralKey, value] of merged.knownObjectLiterals) {
@@ -2535,18 +2406,6 @@ export function collectDatabaseFirstLegacyStoreViolations(
         for (const [propertyKey, value] of merged.objectProperties) {
           propertyScope.set(propertyKey, value);
         }
-      }
-      deleteObjectPropertyDescendants(lastScope(legacyKnownObjectLiteralScopes), name);
-      lastScope(legacyKnownObjectLiteralScopes).set(name, merged.knownObjectLiteral);
-      for (const [knownObjectLiteralKey, value] of merged.knownObjectLiterals) {
-        lastScope(legacyKnownObjectLiteralScopes).set(knownObjectLiteralKey, value);
-      }
-      lastScope(legacyPathScopes).set(name, merged.value);
-      lastScope(knownUndefinedScopes).set(name, merged.knownUndefined);
-      lastScope(literalTextScopes).set(name, merged.literalTexts);
-      deleteObjectPropertyDescendants(lastScope(legacyObjectPropertyScopes), name);
-      for (const [propertyKey, value] of merged.objectProperties) {
-        lastScope(legacyObjectPropertyScopes).set(propertyKey, value);
       }
       if (parentEffect) {
         parentEffect.identifierAssignments.set(branchIdentifierAssignmentKey(index, name), {
@@ -2565,12 +2424,10 @@ export function collectDatabaseFirstLegacyStoreViolations(
       const mergedStoreValue = thenAssignment.storeValue || elseAssignment.storeValue;
       const mergedJsonStoreValue = thenAssignment.jsonStoreValue || elseAssignment.jsonStoreValue;
       const propertyKey = objectPropertyKey(thenAssignment.objectName, thenAssignment.propertyName);
-      if (applyToTargetScopes) {
-        fsSafeStoreScopes[thenAssignment.index]!.set(propertyKey, mergedStoreValue);
-        fsSafeJsonStoreScopes[thenAssignment.index]!.set(propertyKey, mergedJsonStoreValue);
+      for (const targetIndex of targetIndexes(thenAssignment.index)) {
+        fsSafeStoreScopes[targetIndex]!.set(propertyKey, mergedStoreValue);
+        fsSafeJsonStoreScopes[targetIndex]!.set(propertyKey, mergedJsonStoreValue);
       }
-      lastScope(fsSafeStoreScopes).set(propertyKey, mergedStoreValue);
-      lastScope(fsSafeJsonStoreScopes).set(propertyKey, mergedJsonStoreValue);
       if (parentEffect) {
         recordBranchFsSafePropertyAssignment(
           thenAssignment.index,
@@ -2600,15 +2457,10 @@ export function collectDatabaseFirstLegacyStoreViolations(
       const mergedKnownObjectLiteral =
         thenAssignment.knownObjectLiteral && elseAssignment.knownObjectLiteral;
       const propertyKey = objectPropertyKey(thenAssignment.objectName, thenAssignment.propertyName);
-      if (applyToTargetScopes) {
-        legacyObjectPropertyScopes[thenAssignment.index]!.set(propertyKey, mergedValue);
-        legacyKnownObjectLiteralScopes[thenAssignment.index]!.set(
-          propertyKey,
-          mergedKnownObjectLiteral,
-        );
+      for (const targetIndex of targetIndexes(thenAssignment.index)) {
+        legacyObjectPropertyScopes[targetIndex]!.set(propertyKey, mergedValue);
+        legacyKnownObjectLiteralScopes[targetIndex]!.set(propertyKey, mergedKnownObjectLiteral);
       }
-      lastScope(legacyObjectPropertyScopes).set(propertyKey, mergedValue);
-      lastScope(legacyKnownObjectLiteralScopes).set(propertyKey, mergedKnownObjectLiteral);
       if (parentEffect) {
         recordBranchPropertyAssignment(
           thenAssignment.index,
@@ -2626,12 +2478,11 @@ export function collectDatabaseFirstLegacyStoreViolations(
       }
       const { index, name } = thenAssignment;
       const mergedValue = mergeWrapperAssignmentValues(thenAssignment.value, elseAssignment.value);
-      if (applyToTargetScopes) {
-        wrapperFunctionScopes[index]!.set(name, cloneWrapperFunctionValue(mergedValue));
+      for (const targetIndex of targetIndexes(index)) {
+        wrapperFunctionScopes[targetIndex]!.set(name, cloneWrapperFunctionValue(mergedValue));
       }
-      lastScope(wrapperFunctionScopes).set(name, cloneWrapperFunctionValue(mergedValue));
       if (parentEffect) {
-        parentEffect.wrapperAssignments.set(branchWrapperAssignmentKey(index, name), {
+        parentEffect.wrapperAssignments.set(branchIdentifierAssignmentKey(index, name), {
           index,
           name,
           value: cloneWrapperFunctionValue(mergedValue),
@@ -2747,22 +2598,15 @@ export function collectDatabaseFirstLegacyStoreViolations(
     sourceName: string,
     targetScope: StringMap<LegacyPropertyValue> = lastScope(legacyObjectPropertyScopes),
   ) {
-    const sourcePrefix = `${sourceName}.`;
     for (let index = legacyObjectPropertyScopes.length - 1; index >= 0; index--) {
       const scope = legacyObjectPropertyScopes[index]!;
-      const copiedEntries: Array<[string, LegacyPropertyValue]> = [];
-      for (const [key, value] of scope) {
-        if (key.startsWith(sourcePrefix)) {
-          copiedEntries.push([`${targetName}.${key.slice(sourcePrefix.length)}`, value]);
-        }
-      }
+      const copiedEntries = prepareObjectPropertyCopies([scope], sourceName, targetName);
       copiedEntries.sort((left, right) => left[0].length - right[0].length);
       for (const [key, value] of copiedEntries) {
         deleteObjectPropertyDescendants(targetScope, key);
         targetScope.set(key, value);
       }
-      const copied = copiedEntries.length > 0;
-      if (copied || legacyPathScopes[index]!.has(sourceName)) {
+      if (copiedEntries.length > 0 || legacyPathScopes[index]!.has(sourceName)) {
         return;
       }
     }
@@ -2774,22 +2618,19 @@ export function collectDatabaseFirstLegacyStoreViolations(
     targetScope: StringMap<boolean> = lastScope(legacyKnownObjectLiteralScopes),
   ) {
     targetScope.set(targetName, lookupKnownLegacyObjectLiteral(sourceName));
-    const sourcePrefix = `${sourceName}.`;
     for (let index = legacyKnownObjectLiteralScopes.length - 1; index >= 0; index--) {
       const scope = legacyKnownObjectLiteralScopes[index]!;
-      const copiedEntries: Array<[string, boolean]> = [];
-      for (const [key, value] of scope) {
-        if (key.startsWith(sourcePrefix)) {
-          copiedEntries.push([`${targetName}.${key.slice(sourcePrefix.length)}`, value]);
-        }
-      }
+      const copiedEntries = prepareObjectPropertyCopies([scope], sourceName, targetName);
       copiedEntries.sort((left, right) => left[0].length - right[0].length);
       for (const [key, value] of copiedEntries) {
         deleteObjectPropertyDescendants(targetScope, key);
         targetScope.set(key, value);
       }
-      const copied = copiedEntries.length > 0;
-      if (copied || scope.has(sourceName) || legacyPathScopes[index]!.has(sourceName)) {
+      if (
+        copiedEntries.length > 0 ||
+        scope.has(sourceName) ||
+        legacyPathScopes[index]!.has(sourceName)
+      ) {
         return;
       }
     }
@@ -3024,16 +2865,8 @@ export function collectDatabaseFirstLegacyStoreViolations(
   }
 
   function resolveWrapperExpression(expression: ts.Expression) {
-    const unwrapped = unwrapExpression(expression);
-    if (ts.isIdentifier(unwrapped)) {
-      return resolveWrapperFunction(unwrapped.text);
-    }
-    const name = callExpressionName(unwrapped);
+    const name = callExpressionName(expression);
     return name ? resolveWrapperFunction(name) : null;
-  }
-
-  function pathArgumentContainsLegacyStore(argument: ts.Expression) {
-    return expressionContainsLegacyStore(argument);
   }
 
   function isUndefinedExpression(expression: ts.Expression) {
@@ -3416,9 +3249,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
       knownObjects,
       knownUndefined: isKnownUndefinedExpression(expression),
       legacyPath: expressionProducesLegacyPath(expression),
-      literalTexts: ts.isIdentifier(unwrapped)
-        ? resolveLiteralTextIdentifier(unwrapped.text)
-        : literalTextsFromExpression(expression),
+      literalTexts: literalTextsFromExpression(expression),
       properties,
       requireAlias: isRequireAliasExpression(expression),
       store: isFsSafeStoreExpression(expression),
@@ -3812,7 +3643,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
       return;
     }
 
-    if (isWrapperNode(node)) {
+    if (ts.isFunctionLikeDeclaration(node)) {
       if (ts.isFunctionDeclaration(node) && node.name) {
         registerWrapperFunction(node.name.text, node);
       }
@@ -3993,8 +3824,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
           node.left.text,
           nextFsSafeJsonStoreValue,
         );
-        const requireAliasTarget = requireAliasWriteTarget(node.left.text);
-        requireAliasTarget.scope.set(node.left.text, nextRequireAlias);
+        scopeForWrite(requireAliasScopes, node.left.text).set(node.left.text, nextRequireAlias);
         markFsModulePropertyShadows(node.left);
         deleteObjectPropertyDescendants(propertyScope, node.left.text);
         markKnownLegacyObjectLiteral(
@@ -4280,14 +4110,14 @@ export function collectDatabaseFirstLegacyStoreViolations(
         (filePathOptionsWrite
           ? node.arguments[0] && objectFilePathContainsLegacyStore(node.arguments[0])
           : pathArgumentsForFsWrite(fsWriteName, [...node.arguments]).some((argument) =>
-              pathArgumentContainsLegacyStore(argument),
+              expressionContainsLegacyStore(argument),
             ))
       ) {
         addViolation(node.expression, "legacy store filesystem write");
       }
       if (
         fsSafeStoreWritePathArguments(node).some((argument) =>
-          pathArgumentContainsLegacyStore(argument),
+          expressionContainsLegacyStore(argument),
         )
       ) {
         addViolation(node.expression, "legacy store filesystem write");

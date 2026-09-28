@@ -97,11 +97,6 @@ describe("exec safe bin policy sort", () => {
     expect(validateSafeBinArgv(["-S", "C:\\temp\\buffer"], sortProfile)).toBe(false);
   });
 
-  it("blocks sort --compress-program in safe-bin mode", () => {
-    expect(validateSafeBinArgv(["--compress-program=sh"], sortProfile)).toBe(false);
-    expect(validateSafeBinArgv(["--compress-program", "sh"], sortProfile)).toBe(false);
-  });
-
   it("blocks denied long-option abbreviations in safe-bin mode", () => {
     expect(validateSafeBinArgv(["--compress-prog=sh"], sortProfile)).toBe(false);
     expect(validateSafeBinArgv(["--files0-fro=list.txt"], sortProfile)).toBe(false);

@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements Matrix live transport adapter behavior.
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -7,7 +6,11 @@ import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { buildQaTarget } from "openclaw/plugin-sdk/qa-channel-protocol";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { readQaScenarioExecutionConfig } from "../../scenario-catalog.js";
-import { createMatrixQaScenarioEnvironment } from "./scenarios/scenario-environment.js";
+import { readLiveQaChannelAccounts } from "../shared/live-channel-status.js";
+import {
+  createMatrixQaScenarioEnvironment,
+  isMatrixQaAccountReady,
+} from "./scenarios/scenario-environment.js";
 import { createMatrixQaClient, provisionMatrixQaRoom } from "./substrate/client.js";
 import { buildMatrixQaConfig } from "./substrate/config.js";
 import type { MatrixQaObservedEvent } from "./substrate/events.js";
@@ -152,39 +155,16 @@ async function waitForMatrixChannelReady(
   let lastAccounts: unknown;
   while (Date.now() < deadline) {
     try {
-      const payload = (await gateway.call(
-        "channels.status",
-        { probe: false, timeoutMs: Math.min(2_000, timeoutMs) },
-        { timeoutMs: Math.min(5_000, timeoutMs) },
-      )) as {
-        channelAccounts?: Record<
-          string,
-          Array<{
-            accountId?: string;
-            connected?: boolean;
-            healthState?: string;
-            restartPending?: boolean;
-            running?: boolean;
-          }>
-        >;
-      };
-      const accounts = payload.channelAccounts?.matrix ?? [];
+      const accounts = await readLiveQaChannelAccounts(gateway, "matrix", { timeoutMs });
       lastAccounts = accounts;
       const account = accounts.find((entry) => entry.accountId === accountId);
-      if (
-        account?.running === true &&
-        account.connected === true &&
-        account.restartPending !== true &&
-        account.healthState !== "degraded"
-      ) {
+      if (isMatrixQaAccountReady(account)) {
         return;
       }
     } catch {
       // Retry until the shared host readiness deadline.
     }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, pollIntervalMs);
-    });
+    await sleep(pollIntervalMs);
   }
   throw new Error(
     `matrix account "${accountId}" did not become ready; last accounts: ${JSON.stringify(lastAccounts ?? [])}`,

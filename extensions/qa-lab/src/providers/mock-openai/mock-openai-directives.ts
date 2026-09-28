@@ -1,4 +1,7 @@
-// QA Lab mock provider prompt directives and tool declarations.
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   type ResponsesInputItem,
@@ -80,19 +83,11 @@ export function extractSlackProgressCommentaryDirectives(text: string) {
   return { commentaryMarker, execCommand, finalMarker, toolMarker };
 }
 
-function extractWhatsAppLocationMarkerDirective(text: string) {
+function extractWhatsAppMarkerDirective(text: string, kind: "location" | "contact" | "sticker") {
   return extractLastCapture(
     text,
-    /WhatsApp location marker:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i,
+    new RegExp(`WhatsApp ${kind} marker:\\s*([^\\s\`.,;:!?]+(?:-[^\\s\`.,;:!?]+)*)`, "i"),
   );
-}
-
-function extractWhatsAppContactMarkerDirective(text: string) {
-  return extractLastCapture(text, /WhatsApp contact marker:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i);
-}
-
-function extractWhatsAppStickerMarkerDirective(text: string) {
-  return extractLastCapture(text, /WhatsApp sticker marker:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i);
 }
 
 const QA_TIMESTAMPED_MESSAGE_PREFIX_RE =
@@ -119,14 +114,6 @@ function hasWhatsAppStructuredMessageBody(prompt: string, bodyPattern: RegExp) {
     }
     return bodyPattern.test(envelopeBody.replace(QA_WHATSAPP_SENDER_PREFIX_RE, ""));
   });
-}
-
-function shouldUseWhatsAppLocationMarker(prompt: string) {
-  return hasWhatsAppStructuredMessageBody(prompt, /^📍\s*37\.774900,\s*-122\.419400\b/u);
-}
-
-function shouldUseWhatsAppContactMarker(prompt: string) {
-  return hasWhatsAppStructuredMessageBody(prompt, /^<contacts?(?::|>)/iu);
 }
 
 function shouldUseWhatsAppStickerMarker(input: ResponsesInputItem[]) {
@@ -164,11 +151,12 @@ export function resolveWhatsAppStructuredReply(
   allInputText: string,
 ) {
   return (
-    (shouldUseWhatsAppLocationMarker(prompt) &&
-      extractWhatsAppLocationMarkerDirective(allInputText)) ||
-    (shouldUseWhatsAppContactMarker(prompt) &&
-      extractWhatsAppContactMarkerDirective(allInputText)) ||
-    (shouldUseWhatsAppStickerMarker(input) && extractWhatsAppStickerMarkerDirective(allInputText))
+    (hasWhatsAppStructuredMessageBody(prompt, /^📍\s*37\.774900,\s*-122\.419400\b/u) &&
+      extractWhatsAppMarkerDirective(allInputText, "location")) ||
+    (hasWhatsAppStructuredMessageBody(prompt, /^<contacts?(?::|>)/iu) &&
+      extractWhatsAppMarkerDirective(allInputText, "contact")) ||
+    (shouldUseWhatsAppStickerMarker(input) &&
+      extractWhatsAppMarkerDirective(allInputText, "sticker"))
   );
 }
 
@@ -380,27 +368,19 @@ export function resolveHeartbeatPromptReply(text: string): "HEARTBEAT_OK" | "NO_
 }
 
 export function readFirstMediaPath(value: unknown): string {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  const media = asOptionalRecord(value);
+  if (!media) {
     return "";
   }
-  const media = value as {
-    mediaUrl?: unknown;
-    mediaUrls?: unknown;
-    path?: unknown;
-    filePath?: unknown;
-    attachments?: unknown;
-  };
-  for (const candidate of [media.mediaUrl, media.path, media.filePath]) {
-    if (typeof candidate === "string" && candidate.trim()) {
-      return candidate.trim();
-    }
-  }
-  if (Array.isArray(media.mediaUrls)) {
-    const mediaUrl = media.mediaUrls.find(
-      (candidate) => typeof candidate === "string" && candidate.trim(),
-    );
-    if (typeof mediaUrl === "string" && mediaUrl.trim()) {
-      return mediaUrl.trim();
+  for (const candidate of [
+    media.mediaUrl,
+    media.path,
+    media.filePath,
+    ...(Array.isArray(media.mediaUrls) ? media.mediaUrls : []),
+  ]) {
+    const mediaPath = normalizeOptionalString(candidate);
+    if (mediaPath) {
+      return mediaPath;
     }
   }
   if (Array.isArray(media.attachments)) {

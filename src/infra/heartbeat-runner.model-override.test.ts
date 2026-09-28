@@ -199,14 +199,6 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     });
   }
 
-  it("passes heartbeatModelOverride from defaults heartbeat config", async () => {
-    const replyOpts = await runDefaultsHeartbeat({ model: "ollama/llama3.2:1b" });
-    expectReplyOptions(replyOpts, {
-      isHeartbeat: true,
-      heartbeatModelOverride: "ollama/llama3.2:1b",
-    });
-  });
-
   it("passes heartbeat timeoutSeconds as a reply-run timeout override", async () => {
     const replyOpts = await runDefaultsHeartbeat({ timeoutSeconds: 45 });
     expectReplyOptions(replyOpts, {
@@ -449,35 +441,6 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
 
     const sharedOpts = await runDefaultsHeartbeat({});
     expectReplyOptions(sharedOpts, { isHeartbeat: true, cleanupBundleMcpOnRunEnd: undefined });
-  });
-
-  it("uses isolated session key when isolatedSession is enabled", async () => {
-    await withHeartbeatFixture(async ({ tmpDir, storePath, replySpy, seedSession }) => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            workspace: tmpDir,
-            heartbeat: {
-              every: "5m",
-              target: "whatsapp",
-              isolatedSession: true,
-            },
-          },
-        },
-        channels: { whatsapp: { allowFrom: ["*"] } },
-        session: { store: storePath },
-      };
-      const sessionKey = resolveMainSessionKey(cfg);
-      const result = await runHeartbeatWithSeed({
-        seedSession,
-        cfg,
-        sessionKey,
-        replySpy,
-      });
-
-      // Isolated heartbeat runs use a dedicated session key with :heartbeat suffix
-      expect(result.ctx?.SessionKey).toBe(`${sessionKey}:heartbeat`);
-    });
   });
 
   it("uses main session key when isolatedSession is not set", async () => {

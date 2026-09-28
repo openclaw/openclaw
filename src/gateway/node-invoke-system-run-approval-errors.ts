@@ -12,13 +12,12 @@ export function systemRunApprovalGuardError(params: {
   message: string;
   details?: Record<string, unknown>;
 }): SystemRunApprovalGuardError {
-  const details = params.details ? { ...params.details } : {};
   return {
     ok: false,
     message: params.message,
     details: {
       code: params.code,
-      ...details,
+      ...params.details,
     },
   };
 }

@@ -1,21 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import { deserialize } from "node:v8";
-import { Worker, type MessagePort } from "node:worker_threads";
-import { afterEach, expect, it, vi } from "vitest";
+import { Worker } from "node:worker_threads";
+import { expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type {
   SqliteWorkerCommand,
   SqliteWorkerReply,
   SqliteWorkerRequest,
 } from "../infra/sqlite-worker-contract.js";
-import * as workerLifecycle from "../infra/sqlite-worker-lifecycle-preparation.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../state/openclaw-state-db.js";
 import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
+import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
 import { createNodeWorkerSupervisorFixture } from "./node-worker-supervisor.fixture.test-support.js";
 import {
@@ -24,17 +19,7 @@ import {
   testWorkerLaunchInput,
 } from "./node-worker-supervisor.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    cleanup();
-  }),
-);
-
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+const tempDirs = useStateDatabaseTempDirs();
 
 it.skipIf(process.platform === "win32")(
   "keeps physical capacity reserved after a committed turn reply becomes unknown",
@@ -46,7 +31,7 @@ it.skipIf(process.platform === "win32")(
     );
     const input = testWorkerLaunchInput(workspaceDir, "unknown-turn");
     const committed = createDeferred<unknown>();
-    let target: { port: MessagePort | undefined; id: number } | undefined;
+    let target: { worker: Worker; id: number } | undefined;
     let turnWrites = 0;
     // oxlint-disable-next-line typescript/unbound-method -- call preserves the sending worker.
     const postMessage = Worker.prototype.postMessage;
@@ -64,30 +49,28 @@ it.skipIf(process.platform === "win32")(
           command.input[0].expected.launchId === input.launchId
         ) {
           turnWrites += 1;
-          target ??= { port: request.lifecyclePreparation, id: request.id };
+          target ??= { worker: this, id: request.id };
         }
       }
       return postMessage.call(this, request, transferList);
     });
-    const prepareLifecycle = workerLifecycle.createSqliteWorkerLifecyclePreparation;
-    const replies = vi
-      .spyOn(workerLifecycle, "createSqliteWorkerLifecyclePreparation")
-      .mockImplementation((params) => {
-        const preparation = prepareLifecycle({
-          ...params,
-          receiveResult(value, pumping) {
-            const reply = value as SqliteWorkerReply;
-            if (target?.port === preparation.port && reply.id === target.id && reply.ok) {
-              replies.mockRestore();
-              committed.resolve(deserialize(reply.value));
-              params.receiveResult({ ...reply, value: new Uint8Array([0]) }, pumping);
-              return;
-            }
-            params.receiveResult(value, pumping);
-          },
-        });
-        return preparation;
-      });
+    // oxlint-disable-next-line typescript/unbound-method -- call preserves the receiving worker.
+    const emit = Worker.prototype.emit;
+    const replies = vi.spyOn(Worker.prototype, "emit").mockImplementation(function (
+      this: Worker,
+      event: string | symbol,
+      ...args: unknown[]
+    ) {
+      if (event === "message" && target?.worker === this) {
+        const reply = args[0] as SqliteWorkerReply;
+        if (reply.id === target.id && reply.ok) {
+          replies.mockRestore();
+          committed.resolve(deserialize(reply.value));
+          return emit.call(this, event, { ...reply, value: new Uint8Array([0]) });
+        }
+      }
+      return emit.call(this, event, ...args);
+    });
     const reader = new NodeWorkerJournalWorker({ env });
     try {
       await supervisor.launch(input, TEST_WORKER_ENDPOINT);

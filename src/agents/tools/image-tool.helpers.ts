@@ -1,8 +1,3 @@
-/**
- * Image/media understanding helper functions.
- *
- * Handles model config, data URL decoding, provider lookup, and reasoning-only response validation.
- */
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -12,7 +7,6 @@ import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import { coerceToolModelConfig, type ToolModelConfig } from "./model-config.helpers.js";
 
-/** Image tool model config uses the shared tool model config shape. */
 export type ImageModelConfig = ToolModelConfig;
 
 const IMAGE_REASONING_FALLBACK_SIGNATURES = new Set([
@@ -125,19 +119,16 @@ export function coerceImageAssistantText(params: {
 }): string {
   const stop = params.message.stopReason;
   const errorMessage = params.message.errorMessage?.trim();
-  if (stop === "error" || stop === "aborted") {
+  if (stop === "error" || stop === "aborted" || errorMessage) {
     throw new Error(
       errorMessage
         ? `Image model failed (${params.provider}/${params.model}): ${errorMessage}`
         : `Image model failed (${params.provider}/${params.model})`,
     );
   }
-  if (errorMessage) {
-    throw new Error(`Image model failed (${params.provider}/${params.model}): ${errorMessage}`);
-  }
-  const text = extractEmbeddedAssistantText(params.message);
-  if (text.trim()) {
-    return text.trim();
+  const text = extractEmbeddedAssistantText(params.message).trim();
+  if (text) {
+    return text;
   }
   throw new Error(`Image model returned no text (${params.provider}/${params.model}).`);
 }

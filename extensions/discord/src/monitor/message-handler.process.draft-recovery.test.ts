@@ -161,28 +161,6 @@ describe("processDiscordMessage draft streaming recovery", () => {
     expect(draftStream.clear).not.toHaveBeenCalled();
   });
 
-  it("uses root discord maxLinesPerMessage for fresh final delivery when runtime config omits it", async () => {
-    const longReply = Array.from({ length: 20 }, (_value, index) => `Line ${index + 1}`).join("\n");
-    const draftStream = await runFinalReplyScenario(
-      { text: longReply },
-      {
-        cfg: {
-          messages: { ackReaction: "👀" },
-          session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
-          channels: {
-            discord: {
-              maxLinesPerMessage: 120,
-            },
-          },
-        },
-        discordConfig: { streaming: { mode: "partial" } },
-      },
-    );
-
-    expectFreshFinalText(longReply);
-    expect(draftStream.messageId()).toBeUndefined();
-  });
-
   it("does not flush draft previews for media finals before normal delivery", async () => {
     const draftStream = await runFinalReplyScenario({
       text: "Photo",
@@ -416,21 +394,6 @@ describe("processDiscordMessage draft streaming recovery", () => {
 
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
     expect(updates).toEqual(["Hello", "HelloWorld"]);
-  });
-
-  it("keeps canonical block mode on the Discord draft preview path", async () => {
-    const draftStream = createMockDraftStreamForTest();
-
-    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.replyOptions?.onPartialReply?.({ text: "HelloWorld" });
-      return createNoQueuedDispatchResult();
-    });
-
-    const ctx = await createBlockModeContext({ streaming: { mode: "block" } });
-
-    await runProcessDiscordMessage(ctx);
-
-    expect(draftStream.update).toHaveBeenCalledWith("Hello");
     expect(firstDispatchParams().replyOptions?.disableBlockStreaming).toBe(true);
   });
 

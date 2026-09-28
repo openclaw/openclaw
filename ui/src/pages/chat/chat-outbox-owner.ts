@@ -6,6 +6,7 @@ import {
 } from "../../lib/chat/outbox-payload-store.runtime.ts";
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
 import { readStoredChatOutbox } from "../../lib/chat/outbox-store-projection.ts";
+import type { StoredChatOutboxScope as Scope } from "../../lib/chat/outbox-store-scope.ts";
 import {
   applyStoredChatOutboxScope,
   subscribeStoredChatOutboxChanges,
@@ -23,7 +24,6 @@ import {
   updateStoredChatComposerQueueItems,
   storedChatOutboxScopeKey,
   type ChatComposerScope as Composer,
-  type StoredChatOutboxScope as Scope,
 } from "./composer-persistence.ts";
 import {
   captureOutboxPayloadOwner,

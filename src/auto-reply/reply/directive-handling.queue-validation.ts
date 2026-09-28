@@ -1,9 +1,10 @@
 /** Validation and status handling for /queue directives. */
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { prefixSystemMessage } from "../../infra/system-message.js";
 import type { ReplyPayload } from "../types.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
-import { formatDirectiveAck, withOptions } from "./directive-handling.shared.js";
+import { withOptions } from "./directive-handling.shared.js";
 import { resolveQueueSettingsCore } from "./queue/settings.js";
 
 /** Validates `/queue` directives and returns immediate status/error replies. */
@@ -87,21 +88,21 @@ export function formatQueueDirectiveAcknowledgements(
 ): string[] {
   const parts: string[] = [];
   if (directives.hasQueueDirective && directives.queueMode) {
-    parts.push(formatDirectiveAck(`Queue mode set to ${directives.queueMode}.`));
+    parts.push(prefixSystemMessage(`Queue mode set to ${directives.queueMode}.`));
   } else if (directives.hasQueueDirective && directives.queueReset) {
-    parts.push(formatDirectiveAck("Queue mode reset to default."));
+    parts.push(prefixSystemMessage("Queue mode reset to default."));
   }
   if (directives.hasQueueDirective && typeof directives.debounceMs === "number") {
-    parts.push(formatDirectiveAck(`Queue debounce set to ${directives.debounceMs}ms.`));
+    parts.push(prefixSystemMessage(`Queue debounce set to ${directives.debounceMs}ms.`));
   }
   if (directives.hasQueueDirective && typeof directives.cap === "number") {
-    parts.push(formatDirectiveAck(`Queue cap set to ${directives.cap}.`));
+    parts.push(prefixSystemMessage(`Queue cap set to ${directives.cap}.`));
   }
   if (directives.hasQueueDirective && directives.dropPolicy) {
-    parts.push(formatDirectiveAck(`Queue drop set to ${directives.dropPolicy}.`));
+    parts.push(prefixSystemMessage(`Queue drop set to ${directives.dropPolicy}.`));
   }
   if (resumedQueuedWork) {
-    parts.push(formatDirectiveAck("Retained queued messages will retry."));
+    parts.push(prefixSystemMessage("Retained queued messages will retry."));
   }
   return parts;
 }

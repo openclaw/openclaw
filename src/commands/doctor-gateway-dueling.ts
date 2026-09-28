@@ -15,18 +15,8 @@ import {
   resolveServiceRepairPolicy,
 } from "./doctor-service-repair-policy.js";
 
-/**
- * Resolves a `dueling` systemd install (both a user-scope and a system-scope
- * gateway unit present) by removing the redundant user-scope unit after
- * confirmation, keeping the root-installed system-scope unit as authoritative.
- *
- * This is the fix for issue #79375: on Linux the two units bind the same port
- * and SIGTERM each other in an endless restart loop. The canonical units are
- * deliberately excluded from `findExtraGatewayServices`, so this detects the
- * condition directly via `findSystemdGatewayInstallation`. Removing a unit
- * under `$HOME` needs no root; the system-scope unit is never auto-removed
- * (only a `sudo`-flavored hint is offered for that direction).
- */
+// Canonical units are excluded from findExtraGatewayServices. Inspect both scopes
+// directly, and remove only a redundant user unit after verifying the system owner.
 export async function maybeResolveDuelingSystemdGatewayScopes(
   runtime: RuntimeEnv,
   prompter: DoctorPrompter,
@@ -55,10 +45,7 @@ export async function maybeResolveDuelingSystemdGatewayScopes(
     "Dueling gateway services detected",
   );
 
-  // Ownership guard: delete the user unit only when the system unit is the
-  // live or boot-configured supervisor. A staged/disabled/failed/uncheckable
-  // system unit file with a working user gateway must fail closed to hints,
-  // or doctor would take down the operator's only running gateway.
+  // A staged, disabled, failed, or uncheckable system unit cannot replace a working user Gateway.
   const systemOwnsGateway = await isSystemUnitActiveAndEnabled(process.env, system.unitName).catch(
     () => false,
   );
@@ -123,30 +110,52 @@ export async function maybeResolveDuelingSystemdGatewayScopes(
     return;
   }
 
-  try {
-    const result = await uninstallUserSystemdGatewayUnit({
-      env: process.env,
-      stdout: process.stdout,
-      target: user,
-    });
-    note(
-      result.removed
-        ? `Removed user-scope unit ${result.unitPath}.`
-        : `User-scope unit already absent at ${result.unitPath}.`,
-      "Redundant user gateway removed",
-    );
-    // Only claim the conflict is resolved when systemd actually released the
-    // unit; a file-only removal can leave the loaded unit running.
-    runtime.log(
-      result.disabled
-        ? "Removed the redundant user-scope gateway unit. The system-scope unit is now the sole gateway manager."
-        : `Removed the user-scope unit file, but systemctl was unavailable to stop it. Run: systemctl --user disable --now ${result.unitName} && systemctl --user daemon-reload`,
-    );
-  } catch (err) {
+  const result = await uninstallUserSystemdGatewayUnit({
+    env: process.env,
+    stdout: process.stdout,
+    target: user,
+  }).catch((err: unknown) => {
     runtime.error(`Failed to remove redundant user-scope gateway unit: ${String(err)}`);
     const hints = renderGatewayServiceCleanupHints();
     if (hints.length > 0) {
       note(hints.map((hint) => `- ${hint}`).join("\n"), "Cleanup hints");
     }
+    return null;
+  });
+  if (!result) {
+    return;
+  }
+  note(
+    result.removed
+      ? `Removed user-scope unit ${result.unitPath}.`
+      : `User-scope unit already absent at ${result.unitPath}.`,
+    "Redundant user gateway removed",
+  );
+  if (!result.disabled) {
+    runtime.log(
+      `Removed the user-scope unit file, but systemctl was unavailable to stop it. Run: systemctl --user disable --now ${result.unitName} && systemctl --user daemon-reload`,
+    );
+    return;
+  }
+
+  // Removing the confirmed unit does not authorize cleanup of another alias.
+  const remaining = await findSystemdGatewayInstallation(process.env, {
+    requireLoaded: true,
+  }).catch(() => null);
+  const completed = `Cleanup of ${result.unitName} completed.`;
+  if (remaining?.kind === "user" || remaining?.kind === "dueling") {
+    runtime.log(
+      `${completed} Another user-scope unit remains at ${remaining.user.unitPath}. It was not removed. Run openclaw doctor again to inspect it before removal.`,
+    );
+  } else if (
+    remaining?.kind === "system" &&
+    remaining.system.unitName === system.unitName &&
+    remaining.system.unitPath === system.unitPath
+  ) {
+    runtime.log(`${completed} No other matching installed user-scope unit was found.`);
+  } else {
+    runtime.log(
+      `${completed} Remaining service ownership could not be verified. Run openclaw gateway status --deep and openclaw doctor before any further cleanup.`,
+    );
   }
 }

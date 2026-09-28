@@ -38,13 +38,10 @@ export async function hasSessionRelatedCronJobs(params: {
   try {
     const storePath = resolveCronJobsStorePath(params.cronStorePath);
     const store = await loadCronJobsStore(storePath);
-    if (store.jobs.length === 0) {
-      return false;
-    }
-    if (params.sessionKey) {
-      return store.jobs.some((job) => job.enabled && job.sessionKey === params.sessionKey);
-    }
-    return false;
+    return Boolean(
+      params.sessionKey &&
+      store.jobs.some((job) => job.enabled && job.sessionKey === params.sessionKey),
+    );
   } catch {
     // If we cannot read the cron store, do not suppress the note.
     return false;

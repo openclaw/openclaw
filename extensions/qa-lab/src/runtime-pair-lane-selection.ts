@@ -1,4 +1,3 @@
-// Qa Lab plugin module owns canonical runtime-pair-lane scenario selection.
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import type { QaProviderMode } from "./model-selection.js";

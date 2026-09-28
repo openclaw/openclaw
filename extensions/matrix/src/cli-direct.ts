@@ -2,6 +2,11 @@ import type { Command } from "commander";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import * as cli from "./cli-shared.js";
 import { resolveMatrixAccountConfig } from "./matrix/account-config.js";
+import type {
+  inspectMatrixDirectRooms,
+  MatrixDirectRoomCandidate,
+  repairMatrixDirectRooms,
+} from "./matrix/direct-management.js";
 import { getMatrixRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
@@ -13,30 +18,18 @@ const loadMatrixDirectManagementModule = createLazyRuntimeModule(
   () => import("./matrix/direct-management.js"),
 );
 
-type MatrixCliDirectRoomCandidate = {
-  roomId: string;
-  source: "account-data" | "joined";
-  strict: boolean;
-  joinedMembers: string[] | null;
-};
-
-type MatrixCliDirectRoomInspection = {
+type MatrixCliDirectRoomCandidate = Omit<MatrixDirectRoomCandidate, "explicit">;
+type MatrixCliDirectRoomInspection = Omit<
+  Awaited<ReturnType<typeof inspectMatrixDirectRooms>>,
+  "mappedRooms"
+> & {
   accountId: string;
-  remoteUserId: string;
-  selfUserId: string | null;
-  mappedRoomIds: string[];
   mappedRooms: MatrixCliDirectRoomCandidate[];
-  discoveredStrictRoomIds: string[];
-  activeRoomId: string | null;
 };
-
-type MatrixCliDirectRoomRepair = MatrixCliDirectRoomInspection & {
-  encrypted: boolean;
-  createdRoomId: string | null;
-  changed: boolean;
-  directContentBefore: Record<string, string[]>;
-  directContentAfter: Record<string, string[]>;
-};
+type MatrixCliDirectRoomRepair = MatrixCliDirectRoomInspection &
+  Omit<Awaited<ReturnType<typeof repairMatrixDirectRooms>>, keyof MatrixCliDirectRoomInspection> & {
+    encrypted: boolean;
+  };
 
 function printDirectRoomCandidate(room: MatrixCliDirectRoomCandidate): void {
   const members =
@@ -135,20 +128,14 @@ function toCliDirectRoomInspection(
     remoteUserId: inspection.remoteUserId,
     selfUserId: inspection.selfUserId,
     mappedRoomIds: inspection.mappedRoomIds,
-    mappedRooms: inspection.mappedRooms.map(toCliDirectRoomCandidate),
+    mappedRooms: inspection.mappedRooms.map(({ roomId, source, strict, joinedMembers }) => ({
+      roomId,
+      source,
+      strict,
+      joinedMembers,
+    })),
     discoveredStrictRoomIds: inspection.discoveredStrictRoomIds,
     activeRoomId: inspection.activeRoomId,
-  };
-}
-
-function toCliDirectRoomCandidate(
-  room: MatrixCliDirectRoomCandidate,
-): MatrixCliDirectRoomCandidate {
-  return {
-    roomId: room.roomId,
-    source: room.source,
-    strict: room.strict,
-    joinedMembers: room.joinedMembers,
   };
 }
 
@@ -162,24 +149,18 @@ export function registerMatrixDirectCommands(root: Command): void {
     .option("--account <id>", "Account ID (for multi-account setups)")
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
-    .action(
-      async (options: { userId: string; account?: string; verbose?: boolean; json?: boolean }) => {
-        const accountId = cli.resolveMatrixCliAccountContext(options.account).accountId;
-        await cli.runMatrixCliCommand({
-          verbose: options.verbose === true,
-          json: options.json === true,
-          run: async () =>
-            await inspectMatrixDirectRoom({
-              accountId,
-              userId: options.userId,
-            }),
-          onText: (result) => {
-            printDirectRoomInspection(result);
-          },
-          errorPrefix: "Direct room inspection failed",
-        });
-      },
-    );
+    .action(async (options: cli.MatrixCliOptions & { userId: string }) => {
+      const accountId = cli.resolveMatrixCliAccountContext(options.account).accountId;
+      await cli.runMatrixCliCommand(options, {
+        run: async () =>
+          await inspectMatrixDirectRoom({
+            accountId,
+            userId: options.userId,
+          }),
+        onText: printDirectRoomInspection,
+        errorPrefix: "Direct room inspection failed",
+      });
+    });
 
   direct
     .command("repair")
@@ -188,33 +169,29 @@ export function registerMatrixDirectCommands(root: Command): void {
     .option("--account <id>", "Account ID (for multi-account setups)")
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
-    .action(
-      async (options: { userId: string; account?: string; verbose?: boolean; json?: boolean }) => {
-        const accountId = cli.resolveMatrixCliAccountContext(options.account).accountId;
-        await cli.runMatrixCliCommand({
-          verbose: options.verbose === true,
-          json: options.json === true,
-          run: async () =>
-            await repairMatrixDirectRoom({
-              accountId,
-              userId: options.userId,
-            }),
-          onText: (result, verbose) => {
-            printDirectRoomInspection(result);
-            console.log(`Encrypted room creation: ${result.encrypted ? "enabled" : "disabled"}`);
-            console.log(`Created room: ${cli.formatMatrixCliText(result.createdRoomId, "none")}`);
-            console.log(`m.direct updated: ${result.changed ? "yes" : "no"}`);
-            if (verbose) {
-              console.log(
-                `m.direct before: ${cli.formatMatrixCliText(JSON.stringify(result.directContentBefore[result.remoteUserId] ?? []))}`,
-              );
-              console.log(
-                `m.direct after: ${cli.formatMatrixCliText(JSON.stringify(result.directContentAfter[result.remoteUserId] ?? []))}`,
-              );
-            }
-          },
-          errorPrefix: "Direct room repair failed",
-        });
-      },
-    );
+    .action(async (options: cli.MatrixCliOptions & { userId: string }) => {
+      const accountId = cli.resolveMatrixCliAccountContext(options.account).accountId;
+      await cli.runMatrixCliCommand(options, {
+        run: async () =>
+          await repairMatrixDirectRoom({
+            accountId,
+            userId: options.userId,
+          }),
+        onText: (result, verbose) => {
+          printDirectRoomInspection(result);
+          console.log(`Encrypted room creation: ${result.encrypted ? "enabled" : "disabled"}`);
+          console.log(`Created room: ${cli.formatMatrixCliText(result.createdRoomId, "none")}`);
+          console.log(`m.direct updated: ${result.changed ? "yes" : "no"}`);
+          if (verbose) {
+            console.log(
+              `m.direct before: ${cli.formatMatrixCliText(JSON.stringify(result.directContentBefore[result.remoteUserId] ?? []))}`,
+            );
+            console.log(
+              `m.direct after: ${cli.formatMatrixCliText(JSON.stringify(result.directContentAfter[result.remoteUserId] ?? []))}`,
+            );
+          }
+        },
+        errorPrefix: "Direct room repair failed",
+      });
+    });
 }

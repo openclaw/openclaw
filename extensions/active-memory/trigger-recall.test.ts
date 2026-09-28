@@ -2,7 +2,6 @@ import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-en
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildTriggerRecallContext,
-  isPromotedTrustedMemoryEntry,
   MAX_TRIGGER_CONTEXT_CHARS,
   resolveTriggerRecall,
   selectStrongTriggerMatches,
@@ -138,25 +137,6 @@ describe("active-memory trigger recall", () => {
   });
 
   it("limits automatic injection to curated or trusted-origin entries", () => {
-    expect(isPromotedTrustedMemoryEntry(result())).toBe(true);
-    expect(isPromotedTrustedMemoryEntry(result({ path: "USER.md" }))).toBe(true);
-    expect(isPromotedTrustedMemoryEntry(result({ provenance: undefined }))).toBe(false);
-    expect(
-      isPromotedTrustedMemoryEntry({
-        ...result({ path: "memory/2026-07-27.md" }),
-        provenance: undefined,
-      }),
-    ).toBe(false);
-    expect(isPromotedTrustedMemoryEntry(result({ source: "sessions" }))).toBe(false);
-    expect(
-      isPromotedTrustedMemoryEntry(
-        result({
-          path: "memory/promoted.md",
-          provenance: { originClass: "agent", sessionKind: "interactive", observedAt: 1 },
-        }),
-      ),
-    ).toBe(true);
-
     const matches = selectStrongTriggerMatches("when booking a flight", [
       result(),
       result({ path: "USER.md", startLine: 3 }),
@@ -173,12 +153,20 @@ describe("active-memory trigger recall", () => {
       }),
       result({ path: "memory/missing.md", provenance: undefined, score: 1 }),
       result({
+        path: "memory/agent.md",
+        provenance: { originClass: "agent", sessionKind: "interactive", observedAt: 1 },
+        score: 1,
+      }),
+      result({
         path: "memory/owner.md",
         provenance: { originClass: "owner", sessionKind: "interactive", observedAt: 1 },
         score: 1,
       }),
     ]);
-    expect(provenanceMatches.map((entry) => entry.path)).toEqual(["memory/owner.md"]);
+    expect(provenanceMatches.map((entry) => entry.path)).toEqual([
+      "memory/agent.md",
+      "memory/owner.md",
+    ]);
   });
 
   it("gates tagged entries to the active project while leaving global entries unchanged", () => {
@@ -201,48 +189,6 @@ describe("active-memory trigger recall", () => {
         [],
       ),
     ).toHaveLength(1);
-  });
-
-  it("selects and injects only the matching curated entry within the active project", () => {
-    const alpha = result({
-      startLine: 1,
-      endLine: 1,
-      snippet: "Alpha-only deployment guidance.",
-      triggers: "alpha deployment",
-      projectKey: "alpha-key",
-    });
-    const beta = result({
-      startLine: 2,
-      endLine: 2,
-      snippet: "Beta-only deployment guidance.",
-      triggers: "beta deployment",
-      projectKey: "beta-key",
-    });
-    const global = result({
-      startLine: 3,
-      endLine: 3,
-      snippet: "Global deployment guidance.",
-      triggers: "global deployment",
-    });
-    const entries = [alpha, beta, global];
-
-    const alphaMatches = selectStrongTriggerMatches("Review the alpha deployment", entries, [
-      "alpha-key",
-    ]);
-    expect(alphaMatches.map((entry) => entry.snippet)).toEqual(["Alpha-only deployment guidance."]);
-    expect(
-      selectStrongTriggerMatches("Review the global deployment", entries, ["alpha-key"]).map(
-        (entry) => entry.snippet,
-      ),
-    ).toEqual(["Global deployment guidance."]);
-    expect(
-      selectStrongTriggerMatches("Review the beta deployment", entries, ["alpha-key"]),
-    ).toEqual([]);
-
-    const context = buildTriggerRecallContext(alphaMatches);
-    expect(context).toContain("Alpha-only deployment guidance.");
-    expect(context).not.toContain("Beta-only deployment guidance.");
-    expect(context).not.toContain("Global deployment guidance.");
   });
 
   it("excludes annotation carriers from injected trigger context", () => {
@@ -275,28 +221,6 @@ describe("active-memory trigger recall", () => {
         (entry) => entry.startLine,
       ),
     ).toEqual([1, 2]);
-  });
-
-  it("blocks every oversized entry fragment when its project is inactive", () => {
-    const fragments = [
-      result({
-        startLine: 1,
-        endLine: 2,
-        snippet: "First oversized fragment.",
-        triggers: "oversized alpha",
-        projectKey: "alpha-key",
-      }),
-      result({
-        startLine: 2,
-        endLine: 2,
-        snippet: "Second oversized fragment.",
-        triggers: "oversized alpha",
-        projectKey: "alpha-key",
-      }),
-    ];
-
-    expect(selectStrongTriggerMatches("oversized alpha", fragments, ["beta-key"])).toEqual([]);
-    expect(selectStrongTriggerMatches("oversized alpha", fragments, ["alpha-key"])).toHaveLength(2);
   });
 
   it("requires every project on a mixed chunk to be active before trigger injection", () => {

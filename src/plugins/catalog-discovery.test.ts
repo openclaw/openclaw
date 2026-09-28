@@ -1,7 +1,15 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
-import { PluginDiscoveryEntrySchema } from "../../packages/gateway-protocol/src/schema/plugins.js";
-import { joinClawHubPluginCatalog, resolvePluginDiscoveryIdentity } from "./catalog-discovery.js";
+import {
+  PluginDiscoveryDetailSchema,
+  PluginDiscoveryEntrySchema,
+  type PluginsInspectResult,
+} from "../../packages/gateway-protocol/src/schema/plugins.js";
+import {
+  joinClawHubPluginCatalog,
+  joinLocalPluginDetail,
+  resolvePluginDiscoveryIdentity,
+} from "./catalog-discovery.js";
 
 const remote = {
   packageName: "@alice/memory-plus",
@@ -13,6 +21,97 @@ const remote = {
 };
 
 describe("plugin discovery identity and local join", () => {
+  it.each([
+    [false, true],
+    [true, true],
+    [false, false],
+  ])(
+    "shows only selected plugin capabilities, not package consent (tools: %s, overview: %s)",
+    (includeTools, includeOverview) => {
+      const plugin = {
+        id: "media-suite",
+        name: "Media Suite",
+        installed: true,
+        enabled: false,
+        state: "disabled" as const,
+      };
+      const tools = includeTools ? ["media_metadata", "media_render"] : [];
+      const inspection: PluginsInspectResult = {
+        ok: true,
+        plugin,
+        declared: {
+          channels: ["sibling-channel"],
+          providers: ["media-models", "sibling-models"],
+          tools,
+          contracts: [
+            "mediaUnderstandingProviders: media-models",
+            "speechProviders: speech-a",
+            "speechProviders: speech-b:regional",
+            "videoGenerationProviders: sibling-video",
+            ...(includeTools ? ["tools: media_render"] : []),
+          ],
+          hooks: [],
+          mcpServers: [],
+          cliCommands: [],
+          cliBackends: [],
+          skills: [],
+          dangerousConfigFlags: [],
+        },
+        ...(includeOverview
+          ? {
+              overview: {
+                capabilities: {
+                  providers: ["media-models"],
+                  channels: [],
+                  ui: ["page", "widget"],
+                  contracts: {
+                    mediaUnderstandingProviders: ["media-models"],
+                    speechProviders: ["speech-a", "speech-b:regional"],
+                  },
+                },
+              },
+            }
+          : {}),
+        components: {
+          mapped: [],
+          skills: [],
+          mcpServers: [],
+          commands: [],
+          hooks: [],
+          lspServers: [],
+          unavailable: { capabilities: [], mcpServers: [], lspServers: [] },
+        },
+        reviewToken: "media-review",
+        grants: {
+          hooks: {
+            allowPromptInjection: { effective: false },
+            allowConversationAccess: { effective: false },
+          },
+        },
+      };
+
+      const { detail } = joinLocalPluginDetail({
+        plugin,
+        local: { plugins: [plugin], diagnostics: [], mutationAllowed: true },
+        inspection,
+      });
+
+      expect(detail.contracts).toEqual(
+        includeOverview
+          ? {
+              mediaUnderstandingProviders: ["media-models"],
+              speechProviders: ["speech-a", "speech-b:regional"],
+              ...(includeTools ? { tools: ["media_metadata", "media_render"] } : {}),
+            }
+          : undefined,
+      );
+      expect(detail.providers).toEqual(includeOverview ? ["media-models"] : undefined);
+      expect(detail.channels).toBeUndefined();
+      expect(detail.uiCapabilities).toEqual(includeOverview ? ["page", "widget"] : undefined);
+      expect(Value.Check(PluginDiscoveryDetailSchema, detail)).toBe(true);
+    },
+  );
+
   it("round-trips a stable URL-safe opaque route identity", () => {
     const [plugin] = joinClawHubPluginCatalog({
       remote: [remote],
@@ -105,10 +204,21 @@ describe("plugin discovery identity and local join", () => {
       local: {
         plugins: [
           {
+            id: "bundled-memory-plus",
+            packageName: "@alice/memory-plus",
+            clawhubPackage: "@alice/memory-plus",
+            name: "Bundled presentation",
+            origin: "bundled",
+            installed: false,
+            enabled: false,
+            state: "not-installed",
+          },
+          {
             id: "memory-plus",
             packageName: "@alice/memory-plus",
             clawhubPackage: "@alice/memory-plus",
             name: "Local presentation",
+            origin: "workspace",
             installed: true,
             enabled: true,
             state: "enabled",
@@ -160,7 +270,8 @@ describe("plugin discovery identity and local join", () => {
       catalog: {
         packageName: bundledOnly.packageName,
         categories: ["tools", "web"],
-        official: false,
+        official: true,
+        author: "openclaw",
         publishedToClawHub: false,
       },
       local: {
@@ -174,6 +285,73 @@ describe("plugin discovery identity and local join", () => {
       identity: "calendar-local",
     });
   });
+
+  it.each([
+    ["bundled", "@openclaw/calendar-local"],
+    ["official", "@acme/calendar-local"],
+    ["global", "@openclaw/calendar-local"],
+    ["workspace", "@openclaw/calendar-local"],
+  ])(
+    "derives %s attribution from Gateway provenance, never package name %s",
+    (origin, packageName) => {
+      const plugin = {
+        id: "calendar-local",
+        name: "Calendar Local",
+        packageName,
+        origin,
+        installed: true,
+        enabled: true,
+        state: "enabled" as const,
+      };
+      const local = { plugins: [plugin], diagnostics: [], mutationAllowed: true };
+      const [item] = joinClawHubPluginCatalog({ remote: [], local, intent: "all" });
+      const official = origin === "bundled";
+      expect(item?.catalog.official).toBe(official);
+      expect(item?.catalog.author).toBe(official ? "openclaw" : undefined);
+      expect(item?.catalog.publishedToClawHub).not.toBe(true);
+      expect(joinLocalPluginDetail({ plugin, local }).detail.author).toEqual(
+        official ? { handle: "openclaw", displayName: "OpenClaw", official: true } : undefined,
+      );
+    },
+  );
+
+  it.each([
+    ["all", undefined, true],
+    ["official", undefined, true],
+    ["bundled", undefined, true],
+    ["featured", undefined, false],
+    ["trending", undefined, false],
+    ["updated", undefined, false],
+    ["official", "page-two", false],
+  ] as const)(
+    "keeps local additions scoped to %s intent and cursor %s",
+    (intent, cursor, visible) => {
+      const items = joinClawHubPluginCatalog({
+        remote: [],
+        local: {
+          plugins: [
+            {
+              id: "calendar-local",
+              name: "Calendar Local",
+              origin: "bundled",
+              installed: true,
+              enabled: true,
+              state: "enabled",
+            },
+          ],
+          diagnostics: [],
+          mutationAllowed: true,
+        },
+        intent,
+        includeBundledOnly: intent === "bundled" || intent === "official",
+        cursor,
+      });
+      expect(items).toHaveLength(visible ? 1 : 0);
+      if (visible) {
+        expect(items[0]?.catalog).toMatchObject({ official: true, author: "openclaw" });
+      }
+    },
+  );
 
   it("uses the local catalog counterpart to exclude published bundled plugins", () => {
     const expedia = {
@@ -216,6 +394,117 @@ describe("plugin discovery identity and local join", () => {
     });
 
     expect(items.map((item) => item.catalog.name)).toEqual(["Private Bundle"]);
+  });
+
+  it.each(["bundled", "global"])(
+    "preserves derived Media membership through category filtering and hosted pagination (%s)",
+    (origin) => {
+      const provider = {
+        id: "novita",
+        name: "Novita",
+        packageName: "@openclaw/novita",
+        clawhubPackage: "@openclaw/novita",
+        origin,
+        installed: true,
+        enabled: true,
+        state: "enabled" as const,
+        categories: ["models"],
+        capabilityCategories: ["media"],
+      };
+      const local = { plugins: [provider], diagnostics: [], mutationAllowed: true };
+      const options = {
+        local,
+        intent: "all" as const,
+        includeBundledOnly: true,
+        category: "media",
+        categories: [
+          {
+            slug: "media",
+            label: "Media",
+            description: "Media",
+            icon: "palette" as const,
+            order: 0,
+          },
+        ],
+      };
+      const first = joinClawHubPluginCatalog({ ...options, remote: [] });
+      expect(first).toHaveLength(1);
+      expect(first[0]?.catalog.categories).toEqual(["models", "media"]);
+      expect(first[0]?.local).toMatchObject({ enabled: true, action: "manage" });
+      const published = {
+        ...remote,
+        packageName: provider.packageName,
+        displayName: "Novita published",
+        categories: ["models"],
+        downloads: 10,
+      };
+      const next = joinClawHubPluginCatalog({ ...options, remote: [published], cursor: "next" });
+      expect(next).toHaveLength(1);
+      expect(next[0]?.id).toBe(first[0]?.id);
+      expect(next[0]?.catalog).toMatchObject({ categories: ["models", "media"], downloads: 10 });
+      expect(joinClawHubPluginCatalog({ ...options, remote: [published] })).toHaveLength(1);
+      expect(joinClawHubPluginCatalog({ ...options, category: "voice", remote: [] })).toEqual([]);
+      expect(joinClawHubPluginCatalog({ ...options, query: "novita", remote: [] })).toHaveLength(1);
+      const disabled = {
+        ...provider,
+        enabled: false,
+        state: "disabled" as const,
+        capabilityCategories: undefined,
+      };
+      const disabledOptions = { ...options, local: { ...local, plugins: [disabled] } };
+      expect(joinClawHubPluginCatalog({ ...disabledOptions, remote: [] })).toEqual([]);
+      if (origin === "bundled") {
+        const disabledModelsLocal = joinClawHubPluginCatalog({
+          ...disabledOptions,
+          category: "models",
+          remote: [],
+        });
+        expect(disabledModelsLocal[0]?.catalog.categories).toEqual(["models"]);
+      }
+      const disabledModels = joinClawHubPluginCatalog({
+        ...disabledOptions,
+        category: "models",
+        remote: [published],
+        cursor: "next",
+      });
+      expect(disabledModels[0]?.catalog.categories).toEqual(["models"]);
+      expect(disabledModels[0]?.local).toMatchObject({ enabled: false, action: "manage" });
+      expect(provider.categories).toEqual(["models"]);
+      expect(published.categories).toEqual(["models"]);
+      const legacy = { ...provider, categories: ["models", "tools", "runtime"] };
+      const legacyItems = joinClawHubPluginCatalog({
+        ...options,
+        local: { ...local, plugins: [legacy] },
+        remote: [],
+      });
+      expect(legacyItems[0]?.catalog.categories).toEqual(["models", "tools", "runtime", "media"]);
+      expect(Value.Check(PluginDiscoveryEntrySchema, legacyItems[0])).toBe(true);
+    },
+  );
+
+  it("does not transfer capability membership through an unverified package namesake", () => {
+    const [item] = joinClawHubPluginCatalog({
+      remote: [{ ...remote, categories: ["models"] }],
+      local: {
+        mutationAllowed: true,
+        diagnostics: [],
+        plugins: [
+          {
+            id: "namesake",
+            name: "Namesake",
+            packageName: remote.packageName,
+            origin: "workspace",
+            installed: true,
+            enabled: true,
+            state: "enabled",
+            categories: ["models"],
+            capabilityCategories: ["media"],
+          },
+        ],
+      },
+    });
+    expect(item?.catalog.categories).toEqual(["models"]);
+    expect(item?.local.present).toBe(false);
   });
 
   it("does not repeat local-only entries on remote cursor pages", () => {
@@ -328,7 +617,7 @@ describe("plugin discovery identity and local join", () => {
     });
   });
 
-  it("keeps official entries ahead of local-only entries in ordinary browse", () => {
+  it("sorts ordinary browse by downloads without an official-first tail", () => {
     const official = {
       ...remote,
       packageName: "@openclaw/official-memory",
@@ -357,10 +646,46 @@ describe("plugin discovery identity and local join", () => {
     });
 
     expect(items.map((item) => item.catalog.name)).toEqual([
-      "Official Memory",
       "Memory Plus",
+      "Official Memory",
       "Workspace Memory",
     ]);
+  });
+
+  it("pins trusted bundled identities using the registry category policy and ignores local namesakes", () => {
+    const bundled = {
+      id: "bundled-model",
+      name: "Bundled Model",
+      packageName: "@vendor/model",
+      origin: "bundled",
+      installed: true,
+      enabled: true,
+      state: "enabled" as const,
+      categories: ["models"],
+    };
+    const items = joinClawHubPluginCatalog({
+      remote: [{ ...remote, categories: ["models"], downloads: 100_000 }],
+      local: {
+        plugins: [bundled, { ...bundled, id: "impostor", origin: "workspace" }],
+        diagnostics: [],
+        mutationAllowed: true,
+      },
+      intent: "all",
+      category: "models",
+      includeBundledOnly: true,
+      categories: [
+        {
+          slug: "models",
+          label: "Models",
+          description: "Models",
+          icon: "bot",
+          order: 0,
+          pinnedPackages: ["@vendor/model"],
+        },
+      ],
+    });
+    expect(items.map((item) => item.catalog.name)).toEqual(["Bundled Model", "Memory Plus"]);
+    expect(items[0]?.catalog.categoryRanks).toEqual({ models: 0 });
   });
 
   it("filters bundled entries for unified search and keeps them ahead of ClawHub results", () => {

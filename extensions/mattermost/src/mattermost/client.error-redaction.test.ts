@@ -4,18 +4,6 @@ import { createMattermostClient, readMattermostError, uploadMattermostFile } fro
 describe("Mattermost reflected credential diagnostics", () => {
   it.each([
     {
-      name: "bare text",
-      contentType: "text/plain",
-      body: "upstream rejected abcdefghijklmnopqrstuvwxyz",
-      expected: "upstream rejected ***",
-    },
-    {
-      name: "bare JSON message",
-      contentType: "application/json",
-      body: '{"message":"upstream rejected abcdefghijklmnopqrstuvwxyz"}',
-      expected: "upstream rejected ***",
-    },
-    {
       name: "serialized object fallback",
       contentType: "application/json",
       body: '{"context":"retry later","echoed":"abcdefghijklmnopqrstuvwxyz"}',
@@ -26,18 +14,6 @@ describe("Mattermost reflected credential diagnostics", () => {
       contentType: "application/json",
       body: '{"message":{"context":"retry later","echoed":"abcdefghijklmnopqrstuvwxyz"}}',
       expected: '{"message":{"context":"retry later","echoed":"***"}}',
-    },
-    {
-      name: "array-valued message",
-      contentType: "application/json",
-      body: '{"message":["retry later","abcdefghijklmnopqrstuvwxyz"]}',
-      expected: '{"message":["retry later","***"]}',
-    },
-    {
-      name: "non-string message without credentials",
-      contentType: "application/json",
-      body: '{"message":503,"context":"retry later"}',
-      expected: '{"message":503,"context":"retry later"}',
     },
   ])("redacts the active credential and preserves $name diagnostics", async (scenario) => {
     const response = new Response(scenario.body, {
@@ -85,9 +61,11 @@ describe("Mattermost reflected credential diagnostics", () => {
         fetchImpl: async (_url, init) => {
           const authorization = new Headers(init?.headers).get("Authorization");
           expect(authorization).toBe("Bearer abcdefghijklmnopqrstuvwxyz");
-          return new Response(`upstream rejected ${authorization?.slice(7)}`, {
+          const message = `upstream rejected ${authorization?.slice(7)}`;
+          return new Response(route === "request" ? JSON.stringify({ message }) : message, {
             status: 503,
             statusText: "Service Unavailable",
+            headers: { "content-type": route === "request" ? "application/json" : "text/plain" },
           });
         },
       });

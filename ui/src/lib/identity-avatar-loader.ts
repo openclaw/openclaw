@@ -166,6 +166,10 @@ export class IdentityAvatarController implements ReactiveController {
     this.connected = false;
     this.unsubscribeGatewayReset?.();
     this.unsubscribeGatewayReset = undefined;
+    this.clearRoutes();
+  }
+
+  private clearRoutes(): void {
     for (const route of this.routes.values()) {
       route.release?.();
     }
@@ -209,10 +213,7 @@ export class IdentityAvatarController implements ReactiveController {
       return null;
     }
     if (this.generation !== identityAvatarGeneration) {
-      for (const route of this.routes.values()) {
-        route.release?.();
-      }
-      this.routes.clear();
+      this.clearRoutes();
       this.generation = identityAvatarGeneration;
     }
     this.activeRoutes?.add(value);

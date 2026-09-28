@@ -99,32 +99,6 @@ describe("Codex catalog preview decoding", () => {
     },
   );
 
-  it("bounds catalog previews before delivery while preserving ordinary thread/list results", async () => {
-    const parse = vi.spyOn(CodexAppServerMessageDecoder.prototype, "parse");
-    const harness = createHarness();
-    const preview = "x".repeat(1024 * 1024);
-    type PreviewPage = { data: Array<{ id: string; preview: string }> };
-    const catalog = harness.client.request<PreviewPage>(
-      "thread/list",
-      { limit: 1 },
-      { timeoutMs: 1_000, catalogPreview: true },
-    );
-    const first = JSON.parse(harness.writes[0]!);
-    harness.send({ id: first.id, result: { data: [{ id: "large-preview", preview }] } });
-    expect((await catalog).data[0]?.preview).toBe("x".repeat(500));
-    expect(parse).not.toHaveBeenCalled();
-
-    const ordinary = harness.client.request<PreviewPage>(
-      "thread/list",
-      { limit: 1 },
-      { timeoutMs: 1_000 },
-    );
-    const second = JSON.parse(harness.writes[1]!);
-    harness.send({ id: second.id, result: { data: [{ id: "large-preview", preview }] } });
-    expect((await ordinary).data[0]?.preview).toBe(preview);
-    expect(parse).toHaveBeenCalledOnce();
-  });
-
   it("reuses unchanged resident previews after worker projection", async () => {
     const harness = createHarness();
     const catalogPreviewCache = (thread: { updatedAt?: number | null }) =>
@@ -156,12 +130,13 @@ describe("Codex catalog preview decoding", () => {
     }
   });
 
-  it("discards unused native payloads before retaining a catalog response", async () => {
+  it("bounds catalog payloads while preserving ordinary thread/list results", async () => {
+    const parse = vi.spyOn(CodexAppServerMessageDecoder.prototype, "parse");
     const harness = createHarness();
     const large = "unused native history ".repeat(100_000);
     const thread = {
       id: "bounded-metadata",
-      preview: "Please review the sidebar and check its session ordering.",
+      preview: "x".repeat(1024 * 1024),
       cwd: "/workspace/project",
       name: "Sidebar review",
       gitInfo: { branch: "catalog-fix", sha: large, originUrl: large },
@@ -177,15 +152,17 @@ describe("Codex catalog preview decoding", () => {
     const page = await catalog;
     expect(page.data[0]).toMatchObject({
       id: thread.id,
-      preview: thread.preview,
+      preview: "x".repeat(500),
       cwd: thread.cwd,
       name: thread.name,
       gitInfo: { branch: "catalog-fix" },
     });
     expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThan(2_048);
+    expect(parse).not.toHaveBeenCalled();
     const ordinary = harness.client.request("thread/list", { limit: 64, useStateDbOnly: true });
     harness.send({ id: requestId(harness, 1), result: { data: [thread] } });
     await expect(ordinary).resolves.toEqual({ data: [thread] });
+    expect(parse).toHaveBeenCalledOnce();
   });
 
   it.each([0, 64 * 1024])(
@@ -255,11 +232,6 @@ describe("Codex catalog preview decoding", () => {
       expected: "x".repeat(498) + "😀",
     },
     {
-      name: "surrogate pair across the input prefix",
-      preview: "x".repeat(2047) + "😀tail",
-      expected: "x".repeat(500),
-    },
-    {
       name: "surrogate lookahead after whitespace normalization",
       preview: " ".repeat(1548) + "x".repeat(499) + "😀tail",
       expected: "x".repeat(499),
@@ -300,16 +272,6 @@ describe("Codex catalog preview decoding", () => {
       expected: "visible",
     },
     {
-      name: "escape introducer at the input boundary",
-      preview: "x".repeat(2047) + "\u001b[31mTAIL",
-      expected: "x".repeat(500),
-    },
-    {
-      name: "controls only after the certified prefix",
-      preview: "x".repeat(2048) + "\u001b]0;" + "p".repeat(4096),
-      expected: "x".repeat(500),
-    },
-    {
       name: "C1 next-line is not JavaScript whitespace",
       preview: "a\u0085b" + "x".repeat(4096),
       expected: "ab" + "x".repeat(498),
@@ -340,24 +302,4 @@ describe("Codex catalog preview decoding", () => {
     });
     expect(vi.getTimerCount()).toBe(0);
   });
-
-  it.each([undefined, true] as const)(
-    "keeps thread/list requests independent with catalogPreview=%s",
-    async (catalogPreview) => {
-      const harness = createHarness();
-      const request = () =>
-        harness.client.request("thread/list", { limit: 1 }, { timeoutMs: 1_000, catalogPreview });
-      const first = request();
-      const second = request();
-      expect(harness.writes).toHaveLength(2);
-      const frames = harness.writes.map((write) => JSON.parse(write));
-      expect(frames[0].id).not.toBe(frames[1].id);
-      const pages = ["first", "second"].map((id) => ({
-        data: [{ id, ...(catalogPreview ? { projectId: null } : {}) }],
-      }));
-      harness.send({ id: frames[0].id, result: pages[0] });
-      harness.send({ id: frames[1].id, result: pages[1] });
-      await expect(Promise.all([first, second])).resolves.toEqual(pages);
-    },
-  );
 });

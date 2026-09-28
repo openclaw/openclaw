@@ -59,8 +59,7 @@ export class CodexCompactionPlanState {
     if (event.stream !== "plan") {
       return;
     }
-    const plan = readBoundedPlan(event.data.explanation, event.data.steps);
-    this.latestPlan = plan;
+    this.latestPlan = readBoundedPlan(event.data.explanation, event.data.steps);
   }
 
   /** Retains markdown that migration-only plan events intentionally omit. */
@@ -144,10 +143,10 @@ function readPlanSteps(value: unknown): AgentPlanStep[] {
     return [];
   }
   return value.flatMap((entry) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    if (!isJsonObject(entry)) {
       return [];
     }
-    const { step, status } = entry as { step?: unknown; status?: unknown };
+    const { step, status } = entry;
     if (typeof step !== "string" || !isPlanStatus(status)) {
       return [];
     }

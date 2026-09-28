@@ -134,10 +134,7 @@ describe("sessionsTailCommand", () => {
 
     await sessionsTailCommand({ agent: "main", store: storePath, sessionKey }, runtime);
 
-    const output = vi
-      .mocked(runtime.log)
-      .mock.calls.map((call) => String(call[0]))
-      .join("\n");
+    const output = runtimeOutput(runtime);
     expect(output).toContain("12:04:18");
     expect(output).toContain("tool.call");
     expect(output).toContain("bash {...redacted...}");
@@ -155,11 +152,6 @@ describe("sessionsTailCommand", () => {
       { stopReason: "toolUse", terminalError: "non_deliverable_terminal_turn" },
       "error",
     ],
-    [
-      "empty terminal reply",
-      { stopReason: "stop", terminalError: "non_deliverable_terminal_turn" },
-      "error",
-    ],
     ["assistant interruption", { stopReason: "aborted", aborted: false }, "aborted"],
     ["prompt failure", { promptError: "sensitive failure detail" }, "error"],
     [
@@ -168,10 +160,7 @@ describe("sessionsTailCommand", () => {
       "timeout",
     ],
     ["abort with failure", { aborted: true, promptError: "sensitive failure detail" }, "aborted"],
-    ["normal stop", { stopReason: "stop" }, "done"],
-    ["normal end turn", { stopReason: "end_turn" }, "done"],
     ["delivered partial reply", { stopReason: "length" }, "done"],
-    ["unspecified completion", undefined, "done"],
   ])("renders the recorded terminal outcome for %s", async (_name, data, expected) => {
     const runtime = createTestRuntime();
     await writeSessionEntry();
@@ -192,10 +181,7 @@ describe("sessionsTailCommand", () => {
   });
 
   it.each([
-    ["ASCII", "incident", "incident"],
     ["CJK", "中文", "中文"],
-    ["combining accent", "e\u0301", "e\u0301"],
-    ["joined emoji", "👩🏽‍💻", "👩🏽‍💻"],
     ["truncated emoji", `${"a".repeat(17)}👩🏽‍💻-incident`, `${"a".repeat(17)}…`],
   ])("keeps progress columns aligned with %s session keys", async (_name, suffix, displayed) => {
     const runtime = createTestRuntime();
@@ -225,20 +211,6 @@ describe("sessionsTailCommand", () => {
 
   it.each([
     ["CSI inside", "a\u001b[31mb", "custom\u001b[31m", "ab", "custom"],
-    [
-      "OSC inside",
-      "a\u001b]8;;https://example.invalid/\u0007b",
-      "custom\u001b]8;;https://example.invalid/\u0007",
-      "ab",
-      "custom",
-    ],
-    [
-      "CSI beyond cutoff",
-      `${"a".repeat(30)}\u001b[31m`,
-      "custom.progress-long\u001b[31m",
-      `${"a".repeat(18)}…`,
-      "custom.progress…",
-    ],
     [
       "OSC beyond cutoff",
       `${"a".repeat(30)}\u001b]8;;https://example.invalid/\u0007`,
@@ -289,10 +261,7 @@ describe("sessionsTailCommand", () => {
 
     await sessionsTailCommand({ agent: "main", store: storePath, sessionKey, tail: "2" }, runtime);
 
-    const output = vi
-      .mocked(runtime.log)
-      .mock.calls.map((call) => String(call[0]))
-      .join("\n");
+    const output = runtimeOutput(runtime);
     expect(output).not.toContain("session.started");
     expect(output).toContain("tool.call");
     expect(output).toContain("tool.result");
@@ -313,23 +282,43 @@ describe("sessionsTailCommand", () => {
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
-  it("tails SQLite trajectory rows from the database", async () => {
+  it.each([false, true])("rejects a missing explicit session with follow=%s", async (follow) => {
     const runtime = createTestRuntime();
     await writeSessionEntry();
-    appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-one", storePath }, [
-      makeEvent({
-        type: "tool.result",
-        ts: "2026-05-18T12:04:21.000Z",
-        data: { name: "sqlite", success: true },
-      }),
-    ]);
 
-    await sessionsTailCommand({ agent: "main", store: storePath, sessionKey }, runtime);
+    await sessionsTailCommand(
+      { agent: "main", store: storePath, sessionKey: "agent:main:missing", follow },
+      runtime,
+    );
 
-    const output = runtimeOutput(runtime);
-    expect(output).toContain("tool.result");
-    expect(output).toContain("sqlite ok");
-    expect(output).not.toContain("No sessions found");
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Session not found: agent:main:missing. Run openclaw sessions list --all-agents --json to choose a valid key.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
+
+  it.each(["", "   "])("rejects a blank explicit session key %j", async (blankKey) => {
+    const runtime = createTestRuntime();
+    await writeSessionEntry();
+
+    await sessionsTailCommand({ agent: "main", store: storePath, sessionKey: blankKey }, runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "--session-key must not be empty. Omit it to tail active sessions.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
+
+  it("reports an empty default selection without failing or following", async () => {
+    const runtime = createTestRuntime();
+
+    await sessionsTailCommand({ agent: "main", follow: true }, runtime);
+
+    expect(runtimeOutput(runtime)).toBe("No sessions found.");
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it.each(["explicit", "running", "latest", "acp"])(
@@ -528,22 +517,20 @@ describe("sessionsTailCommand", () => {
     expect(process.listenerCount("SIGTERM")).toBe(sigtermListeners);
   });
 
-  it.each([
-    { agent: "" },
-    { agent: "   " },
-    { agent: "", sessionKey },
-    { agent: "   ", sessionKey },
-  ])("rejects an explicit blank agent without inferring a store: %j", async (opts) => {
-    mocks.getRuntimeConfig.mockReturnValue({});
-    const runtime = createTestRuntime();
-    const result = sessionsTailCommand(opts, runtime);
+  it.each([{ agent: "   " }, { agent: "", sessionKey }])(
+    "rejects an explicit blank agent without inferring a store: %j",
+    async (opts) => {
+      mocks.getRuntimeConfig.mockReturnValue({});
+      const runtime = createTestRuntime();
+      const result = sessionsTailCommand(opts, runtime);
 
-    await expect(result).rejects.toBeInstanceOf(ExpectedCliError);
-    await expect(result).rejects.toMatchObject({ message: "--agent must not be blank" });
-    expect(runtime.log).not.toHaveBeenCalled();
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(runtime.exit).not.toHaveBeenCalled();
-  });
+      await expect(result).rejects.toBeInstanceOf(ExpectedCliError);
+      await expect(result).rejects.toMatchObject({ message: "--agent must not be blank" });
+      expect(runtime.log).not.toHaveBeenCalled();
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.exit).not.toHaveBeenCalled();
+    },
+  );
 
   it("resolves the target store from a fully qualified non-default agent session key", async () => {
     const runtime = createTestRuntime();

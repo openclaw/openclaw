@@ -114,15 +114,7 @@ extension RootTabs {
         }
 
         var settingsRoute: SettingsRoute? {
-            switch self {
-            case .gateway:
-                .gateway
-            case .chat, .overview, .activity, .agents, .workboard, .skillWorkshop, .instances, .sessions,
-                 .files,
-                 .dreaming,
-                 .usage, .cron, .desktop, .terminal, .settings, .docs:
-                nil
-            }
+            self == .gateway ? .gateway : nil
         }
     }
 

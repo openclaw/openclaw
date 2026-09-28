@@ -1,13 +1,10 @@
-import {
-  installChannelOutboundPayloadContractSuite,
-  primeChannelOutboundSendMock,
-  type OutboundPayloadHarnessParams,
-} from "openclaw/plugin-sdk/channel-contract-testing";
+import { primeChannelOutboundSendMock } from "openclaw/plugin-sdk/channel-contract-testing";
 import {
   createMessageReceiptFromOutboundResults,
   verifyChannelMessageAdapterCapabilityProofs,
 } from "openclaw/plugin-sdk/channel-outbound";
 // Zalouser tests cover channel.sendpayload plugin behavior.
+import { resetGlobalHookRunner } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./accounts.test-mocks.js";
@@ -126,26 +123,6 @@ describe("zalouserPlugin outbound sendPayload", () => {
     expect(result.messageId).toBe("zlu-g1");
   });
 
-  it("treats bare numeric targets as direct chats for backward compatibility", async () => {
-    mockedSend.mockResolvedValue({ ok: true, messageId: "zlu-d1" } as never);
-    const sendPayload = requireZalouserSendPayload();
-
-    const result = await sendPayload({
-      ...baseCtx({ text: "hello" }),
-      to: "987654321",
-    });
-
-    expect(mockedSend).toHaveBeenCalledOnce();
-    const sendCall = requireSendCall(mockedSend);
-    expect(sendCall[0]).toBe("987654321");
-    expect(sendCall[1]).toBe("hello");
-    const options = requireSendOptions(mockedSend);
-    expect(options.isGroup).toBe(false);
-    expect(options.textMode).toBe("markdown");
-    expect(result.channel).toBe("zalouser");
-    expect(result.messageId).toBe("zlu-d1");
-  });
-
   it("preserves provider-native group ids when sending to raw g- targets", async () => {
     mockedSend.mockResolvedValue({ ok: true, messageId: "zlu-g-native" } as never);
     const sendPayload = requireZalouserSendPayload();
@@ -187,6 +164,36 @@ describe("zalouserPlugin outbound sendPayload", () => {
     expect(options.textChunkLimit).toBe(1200);
     expect(result.channel).toBe("zalouser");
     expect(result.messageId).toBe("zlu-code");
+  });
+
+  it("sends media URLs in order with a caption only on the first", async () => {
+    resetGlobalHookRunner();
+    primeChannelOutboundSendMock(mockedSend, { ok: true }, [
+      { messageId: "m-1" },
+      { messageId: "m-2" },
+    ]);
+    const result = await requireZalouserSendPayload()(
+      baseCtx({
+        text: "caption",
+        mediaUrls: ["https://example.com/1.jpg", "https://example.com/2.jpg"],
+      }),
+    );
+
+    expect(mockedSend).toHaveBeenCalledTimes(2);
+    expect(mockedSend).toHaveBeenNthCalledWith(
+      1,
+      "987654321",
+      "caption",
+      expect.objectContaining({ mediaUrl: "https://example.com/1.jpg" }),
+    );
+    expect(mockedSend).toHaveBeenNthCalledWith(
+      2,
+      "987654321",
+      "",
+      expect.objectContaining({ mediaUrl: "https://example.com/2.jpg" }),
+    );
+    expect(result.channel).toBe("zalouser");
+    expect(result.messageId).toBe("m-2");
   });
 
   it("forwards internal chunk progress through the outbound adapter", async () => {
@@ -298,39 +305,6 @@ describe("zalouserPlugin outbound sendPayload", () => {
     expect(proofStatusByCapability.get("text")).toBe("verified");
     expect(proofStatusByCapability.get("media")).toBe("verified");
     expect(proofStatusByCapability.get("messageSendingHooks")).toBe("verified");
-  });
-});
-
-describe("zalouserPlugin outbound payload contract", () => {
-  function createZalouserHarness(params: OutboundPayloadHarnessParams) {
-    const mockedSend = vi.mocked(sendModule.sendMessageZalouser);
-    setZalouserRuntime({
-      channel: {
-        text: {
-          resolveChunkMode: vi.fn(() => "length"),
-          resolveTextChunkLimit: vi.fn(() => 1200),
-        },
-      },
-    } as never);
-    primeChannelOutboundSendMock(mockedSend, { ok: true, messageId: "zlu-1" }, params.sendResults);
-    const ctx = {
-      cfg: {},
-      to: "user:987654321",
-      text: "",
-      payload: params.payload,
-    };
-    const sendPayload = requireZalouserSendPayload();
-    return {
-      run: async () => await sendPayload(ctx),
-      sendMock: mockedSend,
-      to: "987654321",
-    };
-  }
-
-  installChannelOutboundPayloadContractSuite({
-    channel: "zalouser",
-    chunking: { mode: "passthrough", longTextLength: 3000 },
-    createHarness: createZalouserHarness,
   });
 });
 

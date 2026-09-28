@@ -6,35 +6,34 @@ import {
   summarizeMapping,
 } from "openclaw/plugin-sdk/allow-from";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { warn, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import {
+  resolveDefaultGroupPolicy,
+  resolveOpenProviderRuntimeGroupPolicy,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "openclaw/plugin-sdk/runtime-group-policy";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveSlackAccountAllowFrom,
   resolveSlackAccountDmPolicy,
   mergeSlackAccountConfig,
 } from "../accounts.js";
+import { formatSlackError } from "../errors.js";
 import { SLACK_TEXT_LIMIT } from "../limits.js";
 import { resolveSlackChannelAllowlist } from "../resolve-channels.js";
 import { resolveSlackUserAllowlist, type SlackUserResolution } from "../resolve-users.js";
 import type { SlackMessageEvent } from "../types.js";
-import { normalizeAllowList } from "./allow-list.js";
-import {
-  isDangerousNameMatchingEnabled,
-  resolveDefaultGroupPolicy,
-  resolveOpenProviderRuntimeGroupPolicy,
-  warnMissingProviderGroupPolicyFallbackOnce,
-} from "./config.runtime.js";
 import {
   assertEnterpriseSlackPolicyConfig,
   type SlackInstallationIdentity,
 } from "./enterprise-install.js";
 import type { SlackEventScope } from "./event-scope.js";
 import { formatSlackChannelResolved, formatSlackUserResolved } from "./provider-support.js";
-import { formatUnknownError } from "./reconnect-policy.js";
 import { createSlackSystemEventRouteResolver } from "./system-event-session.js";
 
 type SlackRuntimePolicyContext = ReturnType<typeof resolveSlackMonitorPolicy> & {
@@ -78,10 +77,10 @@ export function resolveSlackMonitorPolicy(
     mainKey: normalizeMainKey(cfg.session?.mainKey),
     dmEnabled: slack.dm?.enabled ?? true,
     dmPolicy: resolveSlackAccountDmPolicy({ cfg, accountId }) ?? "pairing",
-    allowFrom: normalizeAllowList(resolveSlackAccountAllowFrom({ cfg, accountId })),
+    allowFrom: normalizeStringEntries(resolveSlackAccountAllowFrom({ cfg, accountId })),
     allowNameMatching: isDangerousNameMatchingEnabled(slack),
     groupDmEnabled: slack.dm?.groupEnabled ?? false,
-    groupDmChannels: normalizeAllowList(slack.dm?.groupChannels),
+    groupDmChannels: normalizeStringEntries(slack.dm?.groupChannels),
     defaultRequireMention: slack.requireMention ?? true,
     channelsConfig: slack.channels,
     channelsConfigKeys: Object.keys(slack.channels ?? {}),
@@ -168,17 +167,6 @@ function resolveStableSlackUserIdEntry(raw: string): string | undefined {
   return /^[UW][A-Z0-9]+$/i.test(trimmed) ? trimmed.toUpperCase() : undefined;
 }
 
-function resolveStableSlackUserAllowlistEntries(entries: string[]): SlackUserResolution[] {
-  const resolved: SlackUserResolution[] = [];
-  for (const input of entries) {
-    const id = resolveStableSlackUserIdEntry(input);
-    if (id) {
-      resolved.push({ input, resolved: true, id });
-    }
-  }
-  return resolved;
-}
-
 async function resolveWorkspacePolicy(ctx: SlackRuntimePolicyContext, resolveToken: string) {
   if (ctx.installationIdentity.kind === "enterprise") {
     assertEnterpriseSlackPolicyConfig({
@@ -223,9 +211,7 @@ async function resolveWorkspacePolicy(ctx: SlackRuntimePolicyContext, resolveTok
         summarizeMapping("slack channels", mapping, unresolved, runtime);
       }
     } catch (err) {
-      runtime.log?.(
-        `slack channel resolve failed; using config entries. ${formatUnknownError(err)}`,
-      );
+      runtime.log?.(`slack channel resolve failed; using config entries. ${formatSlackError(err)}`);
     }
   }
 
@@ -235,19 +221,22 @@ async function resolveWorkspacePolicy(ctx: SlackRuntimePolicyContext, resolveTok
     addAllowlistUserEntriesFromConfigEntry(userEntries, channel);
   }
   const entries = [...userEntries];
-  const resolved = resolveStableSlackUserAllowlistEntries(entries);
+  const resolved: SlackUserResolution[] = entries.flatMap((input) => {
+    const id = resolveStableSlackUserIdEntry(input);
+    return id ? [{ input, resolved: true, id }] : [];
+  });
   if (allowNameMatching && entries.length > 0) {
     try {
       resolved.push(...(await resolveSlackUserAllowlist({ token: resolveToken, entries })));
     } catch (err) {
-      runtime.log?.(`slack user resolve failed; using config entries. ${formatUnknownError(err)}`);
+      runtime.log?.(`slack user resolve failed; using config entries. ${formatSlackError(err)}`);
     }
   }
   const { additions } = buildAllowlistResolutionSummary(
     resolved.filter((entry) => dmEntries.has(entry.input)),
     { formatResolved: formatSlackUserResolved },
   );
-  ctx.allowFrom = normalizeAllowList(mergeAllowlist({ existing: allowFrom, additions }));
+  ctx.allowFrom = normalizeStringEntries(mergeAllowlist({ existing: allowFrom, additions }));
   const { resolvedMap, mapping, unresolved } = buildAllowlistResolutionSummary(resolved, {
     formatResolved: formatSlackUserResolved,
   });

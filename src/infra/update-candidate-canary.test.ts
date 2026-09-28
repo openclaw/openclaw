@@ -231,6 +231,63 @@ describe("update candidate canary", () => {
     }
   });
 
+  it("streams database copy progress and retains completed size and timing in the update ledger", async () => {
+    stubHealthyGateway();
+    const snapshot = mocks.snapshot.getMockImplementation()!;
+    mocks.snapshot.mockImplementation(
+      async (
+        command,
+        options: {
+          input: string;
+          onOutputChunk?: (chunk: Buffer, stream: "stdout" | "stderr") => void;
+        },
+      ) => {
+        const request: unknown = JSON.parse(options.input);
+        if (isRecord(request) && request.mode === "snapshot") {
+          for (const status of ["copying", "completed"]) {
+            const frame = Buffer.from(
+              `State schema progress: ${JSON.stringify({
+                phase: "database snapshot",
+                path: path.join(root, "state", "openclaw.sqlite"),
+                snapshot: {
+                  status,
+                  copiedPages: status === "copying" ? 460222 : 920445,
+                  totalPages: 920445,
+                  ...(status === "completed" ? { copiedBytes: 3770142720 } : {}),
+                  elapsedMs: 2500,
+                },
+              })}\n`,
+            );
+            // Process chunks may split the protocol prefix or a JSON value.
+            options.onOutputChunk?.(frame.subarray(0, 13), "stderr");
+            options.onOutputChunk?.(frame.subarray(13), "stderr");
+          }
+        }
+        return snapshot(command, options);
+      },
+    );
+    const onProgress = vi.fn();
+    const result = await validateUpdateCandidateCanary({ ...canaryStateOptions(), onProgress });
+    expect(result.status).toBe("ok");
+    expect(onProgress).toHaveBeenCalledWith(
+      expect.objectContaining({
+        step: "candidate-state-snapshot",
+        status: "in_progress",
+        detail: expect.stringContaining("copying, attempt 1, 460222/920445 pages"),
+      }),
+    );
+    const retained = result.steps.flatMap(updateRunStepsFromResultStep);
+    expect(retained).toContainEqual(
+      expect.objectContaining({
+        step: "diagnostic:candidate-state-snapshot",
+        status: "completed",
+        detail: expect.stringContaining(
+          "completed, attempt 1, 920445/920445 pages, 3,770,142,720 bytes, 2.500 seconds",
+        ),
+      }),
+    );
+  });
+
   it.each([
     [0, undefined, "error"],
     [2 * 1024 ** 3, undefined, "ok"],
@@ -241,6 +298,13 @@ describe("update candidate canary", () => {
       databasePath = path.join(root, "runtime-budget.sqlite");
       await fs.writeFile(databasePath, "");
       await fs.truncate(databasePath, sqliteBytes);
+      // The sparse database models validation cost, not this host's free disk space.
+      const capacity = vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
+        targetPath,
+        checkedPath: targetPath,
+        availableBytes: 16 * 1024 ** 3,
+        totalBytes: 32 * 1024 ** 3,
+      }));
       const now = Date.now.bind(Date);
       let doctorElapsed = 0;
       const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + doctorElapsed);
@@ -270,6 +334,7 @@ describe("update candidate canary", () => {
         }
       } finally {
         clock.mockRestore();
+        capacity.mockRestore();
       }
     },
   );
@@ -752,13 +817,17 @@ describe("update candidate canary", () => {
         ),
       );
       const result = await validateUpdateCandidateCanary(canaryStateOptions(250));
-      expect(result.status).toBe(failure === "readiness" ? "ok" : "error");
+      expect(result.status).toBe("error");
       expect(result.phase).toBe(failure);
       if (failure === "plugins") {
         expect(renderSteps(result.steps)).toContain("incompatible plugin");
       }
       if (failure === "readiness") {
-        readiness.expectCanaryReadinessWarning(result.steps.at(-1), "readyz", 503);
+        expect(result.steps.at(-1)).toMatchObject({
+          exitCode: 1,
+          failureFacts: [{ check: "readyz", message: expect.stringContaining("stalled") }],
+        });
+        expect(result.steps.at(-1)?.advisory).toBeUndefined();
       }
       expect(result.steps.some((step) => step.exitCode !== 0)).toBe(true);
       expect(result.logTail.length).toBeLessThanOrEqual(40);

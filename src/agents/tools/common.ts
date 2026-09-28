@@ -1,8 +1,3 @@
-/**
- * Shared built-in tool contracts and helpers.
- *
- * Defines erased tool types, parameter readers, JSON results, progress blocks, and media sanitization.
- */
 import { detectMime } from "@openclaw/media-core/mime";
 import {
   asPositiveSafeInteger,
@@ -55,23 +50,8 @@ type ErasedAgentToolExecute = {
   ): Promise<AgentToolResult<unknown>>;
 };
 
-export type AnyAgentTool = Omit<AgentTool, "execute"> &
-  ErasedAgentToolExecute & {
-    displaySummary?: string;
-    /** Keep this tool model-visible; hidden catalog bridges cannot preserve its result contract. */
-    catalogMode?: "direct-only";
-    /** Gateway client capabilities required before this tool can be assembled. */
-    requiredClientCaps?: string[];
-    getExecutionTimeoutMs?: AgentToolWithMeta<TSchema, unknown>["getExecutionTimeoutMs"];
-    prepareBeforeToolCallParams?: AgentToolWithMeta<
-      TSchema,
-      unknown
-    >["prepareBeforeToolCallParams"];
-    finalizeBeforeToolCallParams?: AgentToolWithMeta<
-      TSchema,
-      unknown
-    >["finalizeBeforeToolCallParams"];
-  };
+export type AnyAgentTool = Omit<AgentToolWithMeta<TSchema, unknown>, "execute"> &
+  ErasedAgentToolExecute;
 
 export function asToolParamsRecord(params: unknown): Record<string, unknown> {
   return asNonArrayRecord(params);
@@ -124,14 +104,8 @@ export function readToolStringParam(
 ) {
   const { required = false, trim = true, label = key, allowEmpty = false } = options;
   const raw = readSnakeCaseParamRaw(params, key);
-  if (typeof raw !== "string") {
-    if (required) {
-      throw new ToolInputError(`${label} required`);
-    }
-    return undefined;
-  }
-  const value = trim ? raw.trim() : raw;
-  if (!value && !allowEmpty) {
+  const value = typeof raw === "string" ? (trim ? raw.trim() : raw) : undefined;
+  if (value === undefined || (!value && !allowEmpty)) {
     if (required) {
       throw new ToolInputError(`${label} required`);
     }
@@ -140,12 +114,7 @@ export function readToolStringParam(
   return value;
 }
 
-/**
- * Normalize tool model override input.
- * - empty/whitespace => undefined
- * - "default" (case-insensitive) => undefined (sentinel: reset/fallback)
- * - otherwise returns trimmed explicit model string
- */
+/** "default" resets a model override to its configured fallback. */
 export function normalizeToolModelOverride(value: string | undefined): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -296,17 +265,13 @@ export function readFiniteNumberParam(
     }
     return undefined;
   }
-  if (options.min !== undefined) {
-    const below = options.minExclusive ? value <= options.min : value < options.min;
-    if (below) {
-      throw new ToolInputError(options.message ?? `${key} must be a finite number`);
-    }
-  }
-  if (options.max !== undefined) {
-    const above = options.maxExclusive ? value >= options.max : value > options.max;
-    if (above) {
-      throw new ToolInputError(options.message ?? `${key} must be a finite number`);
-    }
+  if (
+    (options.min !== undefined &&
+      (options.minExclusive ? value <= options.min : value < options.min)) ||
+    (options.max !== undefined &&
+      (options.maxExclusive ? value >= options.max : value > options.max))
+  ) {
+    throw new ToolInputError(options.message ?? `${key} must be a finite number`);
   }
   return value;
 }
@@ -522,9 +487,6 @@ type AvailableTag = {
  * Entries that lack a string `name` are silently dropped.
  */
 export function parseAvailableTags(raw: unknown): AvailableTag[] | undefined {
-  if (raw === undefined || raw === null) {
-    return undefined;
-  }
   if (!Array.isArray(raw)) {
     return undefined;
   }
@@ -536,7 +498,7 @@ export function parseAvailableTags(raw: unknown): AvailableTag[] | undefined {
     .map((t) =>
       Object.assign(
         {},
-        t.id !== undefined && typeof t.id === `string` ? { id: t.id } : {},
+        typeof t.id === "string" ? { id: t.id } : {},
         { name: t.name as string },
         typeof t.moderated === `boolean` ? { moderated: t.moderated } : {},
         t.emoji_id === null || typeof t.emoji_id === `string` ? { emoji_id: t.emoji_id } : {},

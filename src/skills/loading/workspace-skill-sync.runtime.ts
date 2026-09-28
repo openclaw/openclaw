@@ -9,6 +9,7 @@ import { sha256Hex } from "../../infra/crypto-digest.js";
 import { tryReadJson, writeJson } from "../../infra/json-files.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
 import { loadSkillLibrarySelection, readSelectedSkillLibraryFiles } from "../library/selection.js";
@@ -21,13 +22,13 @@ import type {
   SkillUsagePath,
 } from "../types.js";
 import { resolveSkillKey } from "./frontmatter.js";
-import { serializeByKey } from "./serialize.js";
 import { shouldSyncSkillPath } from "./skill-paths.js";
 import { resolveSkillTelemetrySource } from "./source.js";
 import { prepareWorkspaceSkills } from "./workspace-skill-loader.js";
 
 const fsp = fs.promises;
 const skillsLogger = createSubsystemLogger("skills");
+const skillsSyncQueue = new KeyedAsyncQueue();
 
 function resolveUniqueSyncedSkillDirName(base: string, used: Set<string>): string {
   if (!used.has(base)) {
@@ -146,7 +147,7 @@ export async function syncWorkspaceSkills(params: {
     return [];
   }
 
-  return await serializeByKey(`syncSkills:${targetDir}`, async () => {
+  return await skillsSyncQueue.enqueue(`syncSkills:${targetDir}`, async () => {
     const targetSkillsDir = path.join(targetDir, "skills");
     const manifestPath = path.join(targetSkillsDir, SYNCED_SKILLS_MANIFEST_NAME);
     const skillsSnapshot = params.skillsSnapshot;

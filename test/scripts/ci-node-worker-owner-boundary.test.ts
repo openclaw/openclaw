@@ -3,18 +3,17 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect } from "vitest";
 import { shouldUseDetachedVitestProcessGroup } from "../../scripts/vitest-process-group.mts";
+import { readCiWorkflow, type WorkflowStep } from "./ci-workflow.test-support.js";
 import { createWorkerArtifactTest, writeFixture } from "./vitest-worker-artifacts.test-support.js";
 
 const it = createWorkerArtifactTest();
 const root = process.cwd();
 // ci.yml's trusted frozen-target checkout is intentionally this lightweight closure.
-const sparseFiles = [
-  "scripts/ci-run-node-test-shard.mts",
-  "scripts/lib/ci-node-test-groups-codec.mts",
-  "scripts/lib/direct-run.mjs",
-  "scripts/lib/local-check-runtime.mts",
-  "scripts/lib/numeric-options.mjs",
-];
+const checkout = Object.values(readCiWorkflow().jobs)
+  .flatMap((job) => (job as { steps?: WorkflowStep[] }).steps ?? [])
+  .find((step: WorkflowStep) => step.name === "Checkout trusted Node shard runner");
+const sparseFiles = String(checkout?.with?.["sparse-checkout"]).trim().split(/\s+/u);
+expect(sparseFiles[0]).toBe("scripts/ci-run-node-test-shard.mts");
 
 it.for([
   "frozen",
@@ -37,6 +36,7 @@ it.for([
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.copyFileSync(path.join(root, file), target);
     }
+    expect(fs.existsSync(path.join(copiedRoot, "scripts/lib/vitest-worker-run.mts"))).toBe(false);
     writeFixture(
       directory,
       "scripts/test-projects.mjs",
