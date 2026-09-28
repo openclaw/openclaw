@@ -155,6 +155,7 @@ export class PaletteSessionDraft implements ReactiveController {
     }
     const readSignal = attachmentDraft.readSignal;
     return {
+      uploadConfig: this.read().context?.config,
       attachments: attachmentDraft.attachments,
       attachmentReads: attachmentDraft.reads,
       attachmentLimits: this.read().context?.gateway.snapshot.hello?.policy?.attachments,

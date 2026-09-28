@@ -185,6 +185,7 @@ async function mutateSqliteSessionAtMessage(
             };
           },
           toDatabaseOptions(resolved),
+          { operationLabel: "session.transcript.message-cut" },
         );
         if (result.status === "created") {
           invalidateSessionBranchCache(databasePath, [

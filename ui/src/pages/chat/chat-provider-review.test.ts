@@ -42,6 +42,50 @@ const paused: GatewaySessionRow = {
   },
 };
 
+it.each([
+  { selected: " MAIN ", candidates: ["other", "agent:main:main", "main"], index: 1 },
+  { selected: "Agent:Work:CHAT", candidates: ["agent:work:chat"], index: 0 },
+  { selected: " ", candidates: ["", " "], index: -1 },
+  {
+    selected: "agent:main:matrix:group:Room",
+    candidates: ["agent:main:matrix:group:room", "AGENT:MAIN:MATRIX:GROUP:Room"],
+    index: 1,
+  },
+  {
+    selected: "agent:main:catalog:Source",
+    candidates: ["agent:main:catalog:source", "AGENT:MAIN:catalog:Source"],
+    index: 1,
+  },
+  { selected: " GLOBAL ", candidates: ["global", "global"], index: 1 },
+])("keeps provider-review row selection for $selected", ({ selected, candidates, index }) => {
+  const rows = candidates.map((key, candidate) => ({
+    ...paused,
+    key,
+    agentId: candidate === 0 ? "other" : "main",
+  }));
+  const fallback = { ...paused, key: selected };
+  const host = {
+    sessionKey: selected,
+    sessionsResult: sessionsResult(rows, 1),
+    sessions: {
+      state: {
+        result: sessionsResult([fallback], 1),
+        agentId: "main",
+        modelOverrides: {},
+        loading: false,
+        error: null,
+        deletedSessions: [],
+        groups: [],
+        groupSettings: [],
+        sectionOrder: [],
+      },
+    },
+  };
+  expect(chatProviderReviewRow(host, selected, "main")).toBe(index < 0 ? undefined : rows[index]);
+  host.sessionsResult = sessionsResult([], 1);
+  expect(chatProviderReviewRow(host, selected, "main")).toBe(index < 0 ? undefined : fallback);
+});
+
 it("holds composer and queued inputs across the provider pause and only retries an explicitly selected row", async () => {
   let row = paused;
   const request = makeRequestMock({

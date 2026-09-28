@@ -567,7 +567,6 @@ describe("createMattermostInteractionHandler", () => {
   function createUnusedInteractionHandler() {
     return createMattermostInteractionHandler({
       client: createMattermostClientMock(async () => ({ message: "unused" })),
-      botUserId: "bot",
       accountId: "acct",
     });
   }
@@ -589,7 +588,6 @@ describe("createMattermostInteractionHandler", () => {
         }
         return createActionPost({ actionName: params?.actionName });
       }),
-      botUserId: "bot",
       accountId: "acct",
       allowedSourceIps: params?.allowedSourceIps,
       trustedProxies: params?.trustedProxies,
@@ -609,7 +607,6 @@ describe("createMattermostInteractionHandler", () => {
       client: createMattermostClientMock(async () =>
         createActionPost({ actionId, actionName: actionId }),
       ),
-      botUserId: "bot",
       accountId: "acct",
     });
 
@@ -633,7 +630,6 @@ describe("createMattermostInteractionHandler", () => {
       client: createMattermostClientMock(async () => {
         throw new Error("unexpected client request");
       }),
-      botUserId: "bot",
       accountId: "acct",
       log,
     });
@@ -665,7 +661,6 @@ describe("createMattermostInteractionHandler", () => {
       client: createMattermostClientMock(async () => {
         throw new Error("should not fetch post for rejected origins");
       }),
-      botUserId: "bot",
       accountId: "acct",
       allowedSourceIps: ["127.0.0.1"],
     });
@@ -705,7 +700,6 @@ describe("createMattermostInteractionHandler", () => {
     const { context, token } = createActionContext();
     const handler = createMattermostInteractionHandler({
       client: createMattermostClientMock(async () => createActionPost({ channelId: "chan-9" })),
-      botUserId: "bot",
       accountId: "acct",
     });
 
@@ -738,7 +732,6 @@ describe("createMattermostInteractionHandler", () => {
       client: createMattermostClientMock(async (_path: string, init?: { method?: string }) =>
         init?.method === "PUT" ? { id: "post-1" } : createActionPost(),
       ),
-      botUserId: "bot",
       accountId: "acct",
       authorizeButtonClick: async () => ({
         ok: false,
@@ -771,7 +764,6 @@ describe("createMattermostInteractionHandler", () => {
       client: createMattermostClientMock(async (_path: string, init?: { method?: string }) =>
         init?.method === "PUT" ? { id: "post-1" } : fetchedPost,
       ),
-      botUserId: "bot",
       accountId: "acct",
       resolveSessionKey,
       dispatchButtonClick,
@@ -820,7 +812,6 @@ describe("createMattermostInteractionHandler", () => {
         requestLog.push({ path, method: init?.method });
         return originalPost;
       }),
-      botUserId: "bot",
       accountId: "acct",
       handleInteraction,
       dispatchButtonClick,
@@ -861,7 +852,6 @@ describe("createMattermostInteractionHandler body limits", () => {
     const handleInteraction = vi.fn();
     const handler = createMattermostInteractionHandler({
       client: {} as MattermostClient,
-      botUserId: "bot",
       accountId: "acct",
       handleInteraction,
     });

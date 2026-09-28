@@ -236,9 +236,15 @@ describe("runInstallPolicy", () => {
       const setTimeoutSpy = vi
         .spyOn(globalThis, "setTimeout")
         .mockImplementation((callback, delay, ...args) => {
-          if (delay === 1_000) {
-            noOutputTimeout = () => callback(...args);
-            return nativeSetTimeout(() => undefined, 60_000);
+          if (delay === 1_000 || delay === 10_000) {
+            if (delay === 1_000) {
+              noOutputTimeout = () => callback(...args);
+            }
+            // Neither policy deadline should race real process startup.
+            const timer = nativeSetTimeout(() => undefined, delay);
+            clearTimeout(timer);
+            timer.refresh = () => timer;
+            return timer;
           }
           return nativeSetTimeout(callback, delay, ...args);
         });
@@ -265,6 +271,7 @@ describe("runInstallPolicy", () => {
         expect(await waitForPidToExit(childPid, 5_000)).toBe(true);
       } finally {
         setTimeoutSpy.mockRestore();
+        noOutputTimeout?.();
         killPidIfAlive(childPid);
         await resultPromise?.catch(() => {});
       }

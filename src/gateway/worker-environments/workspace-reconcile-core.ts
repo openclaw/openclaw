@@ -64,16 +64,6 @@ export async function assertWorkspaceMatchesManifest(params: {
   }
 }
 
-export async function readActualWorkspaceManifest(params: {
-  root: string;
-  baseCommit: string | null;
-  preserveDirectories?: ReadonlySet<string>;
-  includePaths?: ReadonlySet<string>;
-  signal?: AbortSignal;
-}): Promise<{ manifest: WorkerWorkspaceManifest; manifestRef: string }> {
-  return await captureWorkspaceManifest(params);
-}
-
 export async function inspectAcceptedWorkerWorkspace(params: {
   root: string;
   expectedManifestRef: string;
@@ -92,7 +82,7 @@ export async function inspectAcceptedWorkerWorkspace(params: {
   const includePaths = params.current.baseCommit
     ? new Set([...manifestNodes(params.base).keys(), ...manifestNodes(params.current).keys()])
     : undefined;
-  const actual = await readActualWorkspaceManifest({
+  const actual = await captureWorkspaceManifest({
     root,
     baseCommit: params.current.baseCommit,
     preserveDirectories,
@@ -134,7 +124,7 @@ export async function assertActualWorkspaceManifest(params: {
   preserveDirectories?: ReadonlySet<string>;
   includePaths?: ReadonlySet<string>;
 }): Promise<void> {
-  const actual = await readActualWorkspaceManifest(params);
+  const actual = await captureWorkspaceManifest(params);
   if (actual.manifestRef !== params.expectedRef) {
     throw new ConcurrentWorkspacePathError("Gateway workspace changed after cloud reconciliation");
   }

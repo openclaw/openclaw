@@ -3847,6 +3847,12 @@ class ChatController internal constructor(
         }
       }
 
+      "session.narration" -> {
+        // Native foreground subscriptions use full streams; bounded narration
+        // tails cannot replace transcript messages.
+        return
+      }
+
       else -> {
         if (payloadJson.isNullOrBlank()) return
         when (event) {
@@ -5482,6 +5488,8 @@ class ChatController internal constructor(
     // leave this request pending so its finally block schedules reconciliation after the drain.
     if (outboxFlushInFlight.get()) {
       outboxBranchReconcileInFlight.set(false)
+      // The drain can retire before this owner; recheck its handoff after releasing ours.
+      if (!outboxFlushInFlight.get()) scope.launch { reconcileOutboxBranchesThenDrain() }
       return
     }
     try {
@@ -5527,8 +5535,9 @@ class ChatController internal constructor(
       }
     } finally {
       outboxFlushInFlight.set(false)
-      // Close the release race: a requester that observed in-flight ownership leaves this bit set.
-      if (outboxFlushRequested.get()) requestOutboxFlush()
+      // A drain can consume the flush bit before its requester publishes reconciliation.
+      // Preserve either pending request when handing off the single-flight owner.
+      if (outboxFlushRequested.get() || outboxBranchReconcileRequested.get()) requestOutboxFlush()
     }
   }
 
@@ -6637,6 +6646,7 @@ class ChatController internal constructor(
       if (obj["label"] is JsonNull) add("label")
       if (obj["autoLabel"] is JsonNull) add("autoLabel")
       if (obj["displayName"] is JsonNull) add("displayName")
+      if (obj["subject"] is JsonNull) add("subject")
       if (obj["category"] is JsonNull) add("category")
     }
 
@@ -7578,6 +7588,9 @@ class ChatController internal constructor(
       sessionId = obj.nonBlankString("sessionId"),
       updatedAtMs = obj["updatedAt"].asLongOrNull(),
       ownerAgentId = obj.nonBlankString("agentId"),
+      createdActorType = obj["createdActor"].asObjectOrNull()?.nonBlankString("type"),
+      createdVia = obj.nonBlankString("createdVia"),
+      subject = obj["subject"].asStringOrNull()?.trim(),
       classification = obj.nonBlankString("classification"),
       accountId = obj.nonBlankString("accountId"),
       peerKind = obj.nonBlankString("peerKind"),
@@ -7653,6 +7666,10 @@ class ChatController internal constructor(
       hasActiveRunMetadata = "hasActiveRun" in obj || "activeRunIds" in obj,
       hasActiveRunIdsMetadata = "activeRunIds" in obj,
       parentSessionKey = obj["parentSessionKey"].asStringOrNull()?.trim(),
+      worktreeId = obj["worktree"].asObjectOrNull()?.nonBlankString("id"),
+      hasWorktreeMetadata = "worktree" in obj,
+      spawnDepth = obj["spawnDepth"].asLongOrNull()?.toInt(),
+      forkedFromParent = obj["forkedFromParent"].asBooleanOrNull(),
       spawnedBy = obj["spawnedBy"].asStringOrNull()?.trim(),
       hasActiveSubagentRun = obj["hasActiveSubagentRun"].asBooleanOrNull(),
       subagentRunState = obj["subagentRunState"].asStringOrNull()?.trim(),
@@ -7939,6 +7956,7 @@ class ChatController internal constructor(
           label = if ("label" in clearedFields) null else applied.label,
           autoLabel = if ("autoLabel" in clearedFields) null else applied.autoLabel,
           displayName = if ("displayName" in clearedFields) null else applied.displayName,
+          subject = if ("subject" in clearedFields) null else applied.subject,
           category = if ("category" in clearedFields) null else applied.category,
         )
     }
@@ -8407,6 +8425,7 @@ private fun parseToolActivityContent(
         result = result,
         isError = isChatToolError(obj),
         arguments = toolPresentationArguments(args),
+        browserTab = if (resultBlock && name == "browser" && !isChatToolError(obj)) parseChatBrowserTab(obj["details"]) else null,
       ),
   )
 }
@@ -8415,7 +8434,7 @@ private fun parseTopLevelToolResult(obj: JsonObject): ChatMessageContent? {
   val synthetic =
     buildMap<String, JsonElement> {
       put("type", JsonPrimitive("toolResult"))
-      listOf("toolCallId", "tool_call_id", "toolUseId", "tool_use_id", "callId", "name", "toolName", "tool_name", "isError", "is_error", "content", "result", "text").forEach { key ->
+      listOf("toolCallId", "tool_call_id", "toolUseId", "tool_use_id", "callId", "name", "toolName", "tool_name", "isError", "is_error", "content", "result", "text", "details").forEach { key ->
         obj[key]?.let { put(key, it) }
       }
     }
@@ -8916,6 +8935,9 @@ internal fun mergeChatSessionEntry(
     sessionId = next.sessionId ?: existing.sessionId,
     updatedAtMs = next.updatedAtMs ?: existing.updatedAtMs,
     ownerAgentId = next.ownerAgentId ?: existing.ownerAgentId,
+    createdActorType = next.createdActorType ?: existing.createdActorType,
+    createdVia = next.createdVia ?: existing.createdVia,
+    subject = next.subject ?: existing.subject,
     classification = if (next.hasClassificationMetadata) next.classification else existing.classification,
     accountId = if (next.hasClassificationMetadata) next.accountId else existing.accountId,
     peerKind = if (next.hasClassificationMetadata) next.peerKind else existing.peerKind,
@@ -8983,6 +9005,10 @@ internal fun mergeChatSessionEntry(
         existing.hasActiveRunIdsMetadata || next.hasActiveRunIdsMetadata
       },
     parentSessionKey = next.parentSessionKey ?: existing.parentSessionKey,
+    worktreeId = if (next.hasWorktreeMetadata) next.worktreeId else existing.worktreeId,
+    hasWorktreeMetadata = next.hasWorktreeMetadata || existing.hasWorktreeMetadata,
+    spawnDepth = next.spawnDepth ?: existing.spawnDepth,
+    forkedFromParent = next.forkedFromParent ?: existing.forkedFromParent,
     spawnedBy = next.spawnedBy ?: existing.spawnedBy,
     hasActiveSubagentRun = next.hasActiveSubagentRun ?: existing.hasActiveSubagentRun,
     subagentRunState = next.subagentRunState ?: existing.subagentRunState,

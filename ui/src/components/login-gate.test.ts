@@ -197,6 +197,31 @@ describe("login gate failure recovery", () => {
     expect(failure?.querySelector(".login-gate__failure-raw")?.textContent).toBe(error);
   });
 
+  it("explains operator access denial without credential or network recovery", async () => {
+    const element = await mountFailure(
+      "Gateway access is not active for this account; ask a Gateway administrator to grant or restore access.",
+      ConnectErrorDetailCodes.OPERATOR_ACCESS_DENIED,
+    );
+    const failure = element.querySelector(".login-gate__failure");
+
+    expect(failure?.getAttribute("data-kind")).toBe("access-denied");
+    expect(failure?.getAttribute("data-tone")).toBe("warn");
+    expect(failure?.querySelector(".login-gate__failure-title")?.textContent).toBe(
+      "No access to this Gateway",
+    );
+    expect(failure?.textContent).not.toMatch(/openclaw gateway run|Gateway unreachable/u);
+    const steps = failure?.querySelector(".login-gate__failure-steps");
+    expect(steps?.textContent).toContain(
+      "Ask a Gateway administrator to assign your profile a role",
+    );
+    expect(steps?.textContent).toContain("This page reconnects on its own once access is granted.");
+    expect(steps?.textContent).not.toMatch(/Gateway is running|Gateway URL|token|password/iu);
+    expect(steps?.querySelector("code")?.textContent).toBe("openclaw users list --json");
+    expect(failure?.querySelector(".login-gate__failure-docs")?.getAttribute("href")).toBe(
+      "https://docs.openclaw.ai/gateway/operator-scopes#named-operator-roles",
+    );
+  });
+
   it("renders every auth recovery command exactly once", async () => {
     const element = await mountFailure(
       "unauthorized: gateway token required",

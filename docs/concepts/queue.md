@@ -144,6 +144,9 @@ overflow summary.
 - A queued request that expires or is cancelled before execution settles only
   that request. Its saved input stays marked cancelled; it does not end the
   active turn, pause its goal, or add an active-run failure to the conversation.
+- Removing a specific queued message in Control UI also hides that pending
+  prompt and its attachments. The cancellation record prevents replay after
+  reconnect. Stop and timeout cancellations keep their recovery messages.
 
 Gateway-backed clients (including `openclaw tui`) forward mid-run prompts and
 let the Gateway apply the queue mode. Esc/`/stop` uses a session-scoped abort

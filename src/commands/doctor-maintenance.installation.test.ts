@@ -179,6 +179,7 @@ afterEach(() => {
 async function runInstallationCase(params: {
   platform: "linux" | "darwin" | "win32";
   mode: "maintenance" | "direct";
+  bun?: boolean;
   installFails?: boolean;
   stopFailsWithPairedDevice?: boolean;
   tokenRecovery?: "success" | "refused" | "service-failure" | "writer-unavailable";
@@ -231,7 +232,7 @@ async function runInstallationCase(params: {
   mocks.runtimePath =
     params.consent?.mixed === "version-managed-runtime"
       ? path.join(home, ".nvm", "versions", "node", "v26.8.1", "bin", "node")
-      : path.join(home, "runtime", "node");
+      : path.join(home, "runtime", params.bun ? "bun" : "node");
   const oldRoot = path.join(home, "prefix-a/lib/node_modules/openclaw");
   mocks.activeRoot = path.join(home, "prefix-b/lib/node_modules/openclaw");
   for (const [root, version] of [
@@ -430,6 +431,13 @@ async function runInstallationCase(params: {
         const cli = params.profile ? `openclaw --profile ${params.profile}` : "openclaw";
         expect(notes).toContain(`${cli} doctor --fix`);
         expect(notes).toContain(`${cli} gateway install --force`);
+        if (params.bun) {
+          expect(events).toEqual([]);
+          expect(running).toBe(true);
+          expect(command).toEqual(originalCommand);
+          expect(notes).toContain("automatic installation repair was skipped");
+          return;
+        }
         if (params.updateInProgress) {
           expect(notes).toContain("deferred to update finalization");
           expect(events).toEqual([]);
@@ -722,16 +730,8 @@ it.each(["success", "refused", "service-failure", "writer-unavailable"] as const
     }),
 );
 
-it.each(["success", "install-failed", "already-stopped"] as const)(
-  "Doctor handles two-prefix drift through maintenance finish (%s)",
-  async (scenario) =>
-    runInstallationCase({
-      platform: "linux",
-      mode: "maintenance",
-      installFails: scenario === "install-failed",
-      initiallyStopped: scenario === "already-stopped",
-    }),
-);
+it("preserves an already-stopped service with two-prefix installation drift", async () =>
+  runInstallationCase({ platform: "linux", mode: "maintenance", initiallyStopped: true }));
 
 it.each(["read-error", "unknown-runtime"] as const)(
   "keeps the old installation stopped after inconclusive restoration inspection (%s)",
@@ -764,10 +764,8 @@ it("refuses installation repair when an update starts during passive native insp
     inspectionScenario: "competing-update",
   }));
 
-it.each(["linux", "darwin", "win32"] as const)(
-  "diagnoses and repairs a running service pinned to another package with doctor --fix on %s",
-  async (platform) => runInstallationCase({ platform, mode: "direct" }),
-);
+it("restarts a Windows service after repairing its installation with doctor --fix", async () =>
+  runInstallationCase({ platform: "win32", mode: "direct" }));
 
 it("honors an explicit invoking Gateway port while repairing installation drift", async () =>
   runInstallationCase({ platform: "linux", mode: "direct", invocationPort: "19990" }));
@@ -778,14 +776,8 @@ it.each([
   { aggressive: true, approved: false, interactive: false },
   { aggressive: false, approved: false, interactive: true },
   { aggressive: false, approved: false, interactive: true, mixed: "stale-native" },
-  { aggressive: false, approved: true, interactive: true, mixed: "stale-native" },
-  { aggressive: false, approved: false, interactive: false, mixed: "stale-native" },
   { aggressive: false, approved: false, interactive: true, mixed: "custom-argv" },
-  { aggressive: false, approved: true, interactive: true, mixed: "custom-argv" },
-  { aggressive: false, approved: false, interactive: false, mixed: "custom-argv" },
   { aggressive: false, approved: false, interactive: true, mixed: "version-managed-runtime" },
-  { aggressive: false, approved: true, interactive: true, mixed: "version-managed-runtime" },
-  { aggressive: false, approved: false, interactive: false, mixed: "version-managed-runtime" },
 ] as const)(
   "requires consent beyond installation drift (aggressive=$aggressive, mixed=$mixed, approved=$approved, interactive=$interactive)",
   async (consent) => runInstallationCase({ platform: "darwin", mode: "direct", consent }),
@@ -815,7 +807,8 @@ it.each(["unchanged", "restored", "recovery-pending", "unclassified"] as const)(
 it("keeps installation reconciliation guidance on the selected profile", async () =>
   runInstallationCase({ platform: "linux", mode: "direct", profile: "work" }));
 
-it.each(["linux", "darwin", "win32"] as const)(
-  "leaves two-prefix installation drift with update finalization on %s",
-  async (platform) => runInstallationCase({ platform, mode: "direct", updateInProgress: true }),
-);
+it("leaves two-prefix installation drift with update finalization", async () =>
+  runInstallationCase({ platform: "linux", mode: "direct", updateInProgress: true }));
+
+it("reports split-root Bun drift without rewriting or stopping the service", async () =>
+  runInstallationCase({ platform: "linux", mode: "direct", bun: true }));

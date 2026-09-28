@@ -92,7 +92,7 @@ OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL="stable"
 if [ "$SCENARIO" = "prerelease-plugin-registry" ] ||
   { [ "$UPDATE_RESTART_MODE" = "auto-auth" ] &&
     [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ] &&
-    [[ "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION:-}" =~ -(alpha|beta)\.[1-9][0-9]*$ ]]; }; then
+    [[ "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION:-}" =~ -beta\.[1-9][0-9]*$ ]]; }; then
   OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL="beta"
 fi
 export OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL
@@ -1546,6 +1546,11 @@ update_candidate() {
     "NODE_OPTIONS=$update_node_options"
   )
   local update_status=0
+  local update_phase="${CURRENT_PHASE:-}"
+  # Keep outer phase events unchanged; failed recovery exposes only fixed coordinates.
+  if [ "$after_repair" = "1" ]; then
+    CURRENT_PHASE="recovery-update-command"
+  fi
   update_outcome="failed"
   if [ "$SCENARIO" = "recovery-cleanup" ]; then
     # Keep sampler output outside the old updater's JSON and join its process group.
@@ -1561,6 +1566,10 @@ update_candidate() {
   # classifying the result; an unreadable package must not retain the baseline.
   installed_version="$(read_installed_version)" || installed_version=""
   update_exit_code="$update_status"
+  # A nonzero command never runs the JSON assertion and must not be labeled as one.
+  if [ "$after_repair" = "1" ] && [ "$update_status" -eq 0 ]; then
+    CURRENT_PHASE="recovery-update-result-assertion"
+  fi
   if [ "$after_repair" != "1" ] && [ "$update_status" -le 1 ] && node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
     assert-recoverable-update-json "$update_json" "$expected_version" "$observation_root" "$baseline_version" >"$ARTIFACT_ROOT/update-result-check.log" 2>&1; then
     update_repair_required="1"
@@ -1589,6 +1598,9 @@ update_candidate() {
     update_end="$(node -e "process.stdout.write(String(Date.now()))")"
     update_restart_seconds=$(((update_end - update_start + 999) / 1000))
     # Accepted plugin warnings do not waive this invocation's restart proof.
+    if [ "$after_repair" = "1" ]; then
+      CURRENT_PHASE="recovery-update-service-replacement"
+    fi
     assert_update_restart_service_replaced "$previous_service_pid" "$previous_systemctl_lines" || return 1
     update_restart_source="candidate-update"
     if [ "$SCENARIO" = "legacy-operator-state" ]; then
@@ -1599,10 +1611,14 @@ update_candidate() {
       update_restart_source="candidate-to-future"
     fi
   fi
+  if [ "$after_repair" = "1" ]; then
+    CURRENT_PHASE="recovery-update-version-match"
+  fi
   if [ "$installed_version" != "$expected_version" ]; then
     echo "update did not leave the selected target installed: $installed_version (expected $expected_version)" >&2
     return 1
   fi
+  CURRENT_PHASE="$update_phase"
 }
 
 assert_sibling_published_refusal() {
@@ -1836,12 +1852,20 @@ NODE
 repair_update_restart_auth() {
   [ "$SCENARIO" = "legacy-operator-state" ] && return 0
   if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+    local membership_mode="${OPENCLAW_FROZEN_UPGRADE_SURVIVOR_MEMBERSHIP_MODE:-absent}"
+    case "$membership_mode" in
+      native | absent) ;;
+      *) echo "invalid selected service membership mode: $membership_mode" >&2; return 2 ;;
+    esac
+    # Standalone Doctor may have started the service after the first update.
+    phase stop-recovery-service stop_update_restart_probe_gateway "$COMMAND_TIMEOUT" || return "$?"
     # Historical preservation has already passed. This separate current-runtime
     # update needs a configured inference route for its real serving receipt.
     phase prepare-restart-inference prepare_restart_inference || return "$?"
     phase prepare-restart-fixture prepare_restart_fixture || return "$?"
-    # Native service clients do not forward the newly created fixture registry.
-    phase prepare-restart-manager install_update_restart_systemctl_shim || return "$?"
+    # New targets exercise absent containment and its warning. Frozen cuts
+    # without that contract retain their original native-contained recovery.
+    phase prepare-restart-manager install_update_restart_systemctl_shim "$membership_mode" || return "$?"
     # Start is preparation only. The following updater must replace this exact
     # supervisor itself; its existing replacement and auth assertions remain required.
     phase prepare-recovery-service run_update_restart_probe_gateway start 18789 "$COMMAND_TIMEOUT"
@@ -1854,6 +1878,9 @@ repair_update_restart_auth() {
     phase recovery-update-restart update_candidate 1 "file:$restart_fixture_package" "$restart_fixture_version"
     local recovery_status=$?
     [ "$recovery_status" -eq 0 ] || return "$recovery_status"
+    if [ "$membership_mode" = absent ]; then
+      phase recovery-membership-warning assert_managed_membership_warning || return "$?"
+    fi
     if [ "$SCENARIO" != "watchos-direct-node" ] && [ "$SCENARIO" != "mobile-pairing-reconnect" ]; then
       phase assert-restart-serving-turn node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
         assert-restart-serving-turn "$ARTIFACT_ROOT/restart-serving-turn.json" || return "$?"
@@ -1865,6 +1892,29 @@ repair_update_restart_auth() {
         assert-recovered-plugin-installs "$UPDATE_JSON" "$candidate_version" "$initial_update_observation_root" "$baseline_version"
     fi
   fi
+}
+
+assert_managed_membership_warning() {
+  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw update status --json \
+    >"$ARTIFACT_ROOT/recovery-update-status.json" 2>"$ARTIFACT_ROOT/recovery-update-status.err" || return "$?"
+  node --input-type=module - "$ARTIFACT_ROOT/recovery-update.json" "$ARTIFACT_ROOT/recovery-update-status.json" <<'NODE'
+import assert from "node:assert/strict";
+import fs from "node:fs";
+const read = (file) => {
+  const text = fs.readFileSync(file, "utf8");
+  return JSON.parse(text.slice(text.indexOf("{")));
+};
+const result = read(process.argv[2]);
+const status = read(process.argv[3]);
+const message = "Service membership unverifiable on this host; using managed stop/update/start.";
+assert.equal(result.status, "ok");
+assert(result.steps.some((step) => step.name === "managed-service-membership" &&
+  step.exitCode === 0 && step.advisory?.kind === "recoverable-maintenance" && step.advisory.message === message));
+assert.equal(status.lastRun?.runId, result.runId);
+assert(status.lastRun.steps.some((step) => step.step === "warning:managed-service-membership" &&
+  step.status === "completed" && step.detail === message));
+console.log(JSON.stringify({ runId: result.runId, status: result.status, membershipWarning: message }));
+NODE
 }
 
 repair_fixture_plugin_consent() {

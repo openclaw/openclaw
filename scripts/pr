@@ -472,8 +472,9 @@ is_supervised_pr_process() {
     [ "${OPENCLAW_PR_LOCK_SUPERVISOR_PID:-}" = "$PPID" ]
 }
 
-# The supervisor changes cwd to the canonical repo. Resolve an explicit body
-# relative to the operator's caller before crossing that boundary; do not read it.
+# The supervisor changes cwd to the canonical repo. Resolve explicit body and
+# evidence paths relative to the operator's caller before crossing that
+# boundary; do not read them.
 if [ "${1-}" = merge-run ] || [ "${1-}" = merge-recover ]; then
   merge_cli_args=() merge_cli_body_next=false
   for merge_cli_arg in "$@"; do
@@ -482,7 +483,7 @@ if [ "${1-}" = merge-run ] || [ "${1-}" = merge-recover ]; then
     fi
     merge_cli_args+=("$merge_cli_arg")
     merge_cli_body_next=false
-    if [ "$merge_cli_arg" = --body-file ] || [ "$merge_cli_arg" = --legacy-refusal ] || [ "$merge_cli_arg" = --pre-dispatch-refusal ]; then merge_cli_body_next=true; fi
+    if [ "$merge_cli_arg" = --body-file ] || [ "$merge_cli_arg" = --legacy-refusal ] || [ "$merge_cli_arg" = --pre-dispatch-refusal ] || [ "$merge_cli_arg" = --admin-evidence ]; then merge_cli_body_next=true; fi
   done
   set -- "${merge_cli_args[@]}"
 fi
@@ -530,19 +531,26 @@ Usage:
   scripts/pr prepare-run <PR>
   scripts/pr ci-dispatch <PR> [--backend crabbox]
   scripts/pr merge-verify <PR>
-  scripts/pr merge-run <PR> [--auto-merge] [--body-file <path>]
+  scripts/pr merge-run <PR> [--auto-merge] [--body-file <path>] [--admin-evidence <path> --confirmed-operator-admin]
     OPENCLAW_PR_MERGE_METHOD=merge|rebase preserves the PR commit series.
     --auto-merge selects pinned immediate squash for CLEAN, auto for BEHIND/BLOCKED (MERGEABLE only).
     OPENCLAW_PR_GATES_REMOTE=github prepare-run defers required CI to this auto-merge handoff.
     OPENCLAW_PR_AUTO_MERGE=1 is equivalent.
     --body-file snapshots a regular UTF-8 file relative to the caller, replacing squash prose.
     Empty files are valid. Explicit/source co-authors and preview credit backed by tree-changing PR commits or PR authorship are retained; known machine credit is excluded. Queue merges reject it.
+    --admin-evidence admits reviewed prior-green conflict repairs or attributed pre-existing CI failures, with active organization-admin authority.
+    Exact evidence is required; branch-caused failures, security checks, and enforced reviews remain blocking.
+    This requires --confirmed-operator-admin and immediate squash without auto-merge.
     Repeated merge-run reconciles retained outcomes; it never retries an uncertain dispatch.
-  scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery [--replacement-head <SHA>] [--body-file <path>] [--legacy-refusal <evidence-directory>] [--pre-dispatch-refusal <evidence-directory>]
+  scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery [--replacement-head <SHA>] [--body-file <path>] [--legacy-refusal <evidence-directory>] [--pre-dispatch-refusal <evidence-directory>] [--admin-evidence <path> --confirmed-operator-admin]
     Explicitly authorize one new attempt after inspecting the retained outcome and remote history.
-    Defaults to the retained head; replacement requires an explicitly approved full lowercase 40-character SHA,
-    freshly authored exact-head review/preparation and completed CI proof. Never rebases automatically.
-    Keeps prior evidence and reruns admission; requires the same method and no auto/queue/admin route.
+    Defaults to the retained head; replacement requires an explicitly selected full lowercase 40-character SHA,
+    freshly authored exact-head review/preparation and completed CI proof. Standing landing authority covers
+    a replacement repairing the same scope; new scope or another method needs authorization. Never rebases automatically.
+    Ordinary recovery keeps prior evidence and requires the same method with immediate non-admin admission.
+    Paired admin flags permit an explicit different replacement after confirmed auto cancellation, with current-head CI evidence.
+    They also permit same-head recovery for the complete known prior-CI REST base-modified HTTP 405 rejection.
+    This reruns current admin admission and retains the original captures; other admin failures remain fenced.
     --cancel-auto instead retires the exact accepted or uncertain non-queue auto request before head repair.
     Cancels a matching active request once, or records an already absent request without sending cancellation.
     Repeated cancellation reconciles only. Use its current outcome OID for later reviewed/prepared recovery.
@@ -645,7 +653,7 @@ main() {
         [[ "$2" =~ ^[0-9a-f]{40}$ ]] && [ "$3" = --confirmed-operator-completion ] || { usage; exit 2; }
       ;;
     merge-run | merge-recover)
-      local merge_pr="${1-}" auto_merge=false recovery_oid="" replacement_head="" body_path="" legacy_directory="" cancel_auto=false refusal_directory=""
+      local merge_pr="${1-}" auto_merge=false recovery_oid="" replacement_head="" body_path="" legacy_directory="" cancel_auto=false refusal_directory="" admin_evidence="" confirmed_admin=false
       [ -n "$merge_pr" ] || { usage; exit 2; }
       shift
       if [ "$cmd" = merge-recover ]; then
@@ -659,6 +667,16 @@ main() {
           --cancel-auto)
             [ "$cmd" = merge-recover ] && [ "$cancel_auto" = false ] || { usage; exit 2; }
             cancel_auto=true
+            shift
+            ;;
+          --admin-evidence)
+            [ "$#" -ge 2 ] && [ -n "$2" ] && [ -z "$admin_evidence" ] || { usage; exit 2; }
+            admin_evidence="$2"
+            shift 2
+            ;;
+          --confirmed-operator-admin)
+            [ "$confirmed_admin" = false ] || { usage; exit 2; }
+            confirmed_admin=true
             shift
             ;;
           --auto-merge)
@@ -692,6 +710,11 @@ main() {
       done
       if [ "$cmd" = merge-run ] && [ "${OPENCLAW_PR_AUTO_MERGE:-}" = 1 ]; then
         auto_merge=true
+      fi
+      if [ -n "$admin_evidence" ] || [ "$confirmed_admin" = true ]; then
+        [ -n "$admin_evidence" ] && [ "$confirmed_admin" = true ] && [ "$auto_merge" = false ] &&
+          [ -z "$legacy_directory$refusal_directory" ] && [ "$cancel_auto" = false ] &&
+          [ "${OPENCLAW_PR_MERGE_METHOD:-squash}" = squash ] || { usage; exit 2; }
       fi
       [ -z "$legacy_directory" ] || [ -n "$replacement_head" ] || { usage; exit 2; }
       [ -z "$refusal_directory" ] || [ -z "$legacy_directory" ] || { usage; exit 2; }
@@ -852,7 +875,7 @@ main() {
       merge_verify "$pr" '{"replacementHead":"","autoMergeRequested":false,"qualifiedRefusal":false,"observation":null}'
       ;;
     merge-run | merge-recover)
-      merge_run "$merge_pr" "$auto_merge" "$recovery_oid" "$replacement_head" "$body_path" "$legacy_directory" "$cancel_auto" "$refusal_directory"
+      merge_run "$merge_pr" "$auto_merge" "$recovery_oid" "$replacement_head" "$body_path" "$legacy_directory" "$cancel_auto" "$refusal_directory" "$admin_evidence" "$confirmed_admin"
       ;;
     merge-complete)
       merge_complete "$1" "$2"

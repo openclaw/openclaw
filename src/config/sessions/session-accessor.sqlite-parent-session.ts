@@ -137,18 +137,22 @@ export async function forkSessionTranscriptFromParent(
     return await runExclusiveSqliteSessionWrite(
       resolved,
       async () =>
-        runOpenClawAgentWriteTransaction((database) => {
-          params.commitGuard?.();
-          return forkSqliteParentTranscriptInTransaction(database, resolved, {
-            enforceTokenLimit: params.enforceTokenLimit,
-            maxTokens: params.maxTokens,
-            parentEntry: params.parentEntry,
-            parentSessionKey: params.parentSessionKey,
-            forkFrom: params.forkFrom,
-            targetSessionId: params.targetSessionId,
-            targetSessionKey: params.sessionKey,
-          });
-        }, toDatabaseOptions(resolved)),
+        runOpenClawAgentWriteTransaction(
+          (database) => {
+            params.commitGuard?.();
+            return forkSqliteParentTranscriptInTransaction(database, resolved, {
+              enforceTokenLimit: params.enforceTokenLimit,
+              maxTokens: params.maxTokens,
+              parentEntry: params.parentEntry,
+              parentSessionKey: params.parentSessionKey,
+              forkFrom: params.forkFrom,
+              targetSessionId: params.targetSessionId,
+              targetSessionKey: params.sessionKey,
+            });
+          },
+          toDatabaseOptions(resolved),
+          { operationLabel: "session.parent-fork.same-store" },
+        ),
       "session.parent.fork-transcript",
     );
   }
@@ -187,13 +191,17 @@ export async function forkSessionTranscriptFromParent(
         sessionKey: normalizeSqliteSessionKey(params.sessionKey),
       };
       const sessionFile = formatSqliteSessionReferenceForScope(targetScope);
-      runOpenClawAgentWriteTransaction((database) => {
-        params.commitGuard?.();
-        writeSqliteForkedChildTranscriptInTransaction(database, targetScope, {
-          parentSessionFile,
-          source,
-        });
-      }, toDatabaseOptions(target));
+      runOpenClawAgentWriteTransaction(
+        (database) => {
+          params.commitGuard?.();
+          writeSqliteForkedChildTranscriptInTransaction(database, targetScope, {
+            parentSessionFile,
+            source,
+          });
+        },
+        toDatabaseOptions(target),
+        { operationLabel: "session.parent-fork.copy-transcript" },
+      );
       return { status: "created", transcript: { sessionFile, sessionId } };
     },
     "session.parent.fork-transcript",
@@ -278,96 +286,100 @@ export async function forkSessionEntryFromParentTarget(
               parentEntry: SessionEntry;
             };
           }
-      >((writeDatabase) => {
-        // Parent authority can close while this fork waits behind another writer.
-        params.commitGuard?.();
-        const freshParent = resolveLifecyclePrimaryEntry(writeDatabase, parentTarget)?.entry;
-        const freshExisting = resolveLifecyclePrimaryEntry(writeDatabase, sessionTarget);
-        const freshBase = freshExisting?.entry ?? params.fallbackEntry;
-        if (
-          !freshParent ||
-          !freshBase ||
-          !sqliteSessionEntriesEqual(freshParent, prepared.parentEntry) ||
-          !sqliteSessionEntriesEqual(freshBase, prepared.base)
-        ) {
-          return { result: { status: "failed" } };
-        }
-        assertModelSelectionUnlocked(freshParent, MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE);
-        const source = resolveParentForkSourceTranscript(
-          loadTranscriptEventsFromDatabase(writeDatabase, freshParent.sessionId),
-        );
-        const decision = planParentForkDecision(
-          freshParent,
-          estimateParentForkPromptTokens(source),
-        );
-        if (decision.status === "skip") {
-          return { skip: { decision, base: freshBase, parentEntry: freshParent } };
-        }
-        const fork = forkSqliteParentTranscriptInTransaction(writeDatabase, resolved, {
-          parentEntry: freshParent,
-          parentSessionKey: parentTarget.canonicalKey,
-          source,
-          targetSessionKey: sessionTarget.canonicalKey,
-        });
-        if (fork.status !== "created") {
-          return {
-            result:
-              fork.status === "missing-parent"
-                ? { status: "missing-parent" }
-                : { status: "failed" },
-          };
-        }
-        const patch = params.patch?.({
-          decision,
-          entry: cloneSessionEntry(freshBase),
-          fork: fork.transcript,
-          parentEntry: cloneSessionEntry(freshParent),
-        });
-        const forkIdentityPatch: Partial<InternalSessionEntry> = {
-          ...patch,
-          forkSource: {
-            sessionKey: parentTarget.canonicalKey,
-            sessionId: freshParent.sessionId,
-          },
-          forkedFromParent: true,
-          lifecycleRunId: undefined,
-          lastRunId: undefined,
-          sessionId: fork.transcript.sessionId,
-          totalTokens: undefined,
-          totalTokensFresh: false,
-          totalTokensVersion: undefined,
-        };
-        const previousIdentity = readSessionIdentitySnapshot(writeDatabase, [
-          sessionTarget.canonicalKey,
-        ]);
-        const next = writeSessionEntry(
-          writeDatabase,
-          sessionTarget.canonicalKey,
-          mergeSessionEntry(freshBase, forkIdentityPatch),
-          {
-            previousEntry: freshBase,
-            canonicalPreviousEntry: previousIdentity.get(sessionTarget.canonicalKey) ?? null,
-          },
-        );
-        const currentIdentity = readSessionIdentitySnapshot(writeDatabase, [
-          sessionTarget.canonicalKey,
-        ]);
-        return {
-          result: {
-            status: "forked",
+      >(
+        (writeDatabase) => {
+          // Parent authority can close while this fork waits behind another writer.
+          params.commitGuard?.();
+          const freshParent = resolveLifecyclePrimaryEntry(writeDatabase, parentTarget)?.entry;
+          const freshExisting = resolveLifecyclePrimaryEntry(writeDatabase, sessionTarget);
+          const freshBase = freshExisting?.entry ?? params.fallbackEntry;
+          if (
+            !freshParent ||
+            !freshBase ||
+            !sqliteSessionEntriesEqual(freshParent, prepared.parentEntry) ||
+            !sqliteSessionEntriesEqual(freshBase, prepared.base)
+          ) {
+            return { result: { status: "failed" } };
+          }
+          assertModelSelectionUnlocked(freshParent, MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE);
+          const source = resolveParentForkSourceTranscript(
+            loadTranscriptEventsFromDatabase(writeDatabase, freshParent.sessionId),
+          );
+          const decision = planParentForkDecision(
+            freshParent,
+            estimateParentForkPromptTokens(source),
+          );
+          if (decision.status === "skip") {
+            return { skip: { decision, base: freshBase, parentEntry: freshParent } };
+          }
+          const fork = forkSqliteParentTranscriptInTransaction(writeDatabase, resolved, {
+            parentEntry: freshParent,
+            parentSessionKey: parentTarget.canonicalKey,
+            source,
+            targetSessionKey: sessionTarget.canonicalKey,
+          });
+          if (fork.status !== "created") {
+            return {
+              result:
+                fork.status === "missing-parent"
+                  ? { status: "missing-parent" }
+                  : { status: "failed" },
+            };
+          }
+          const patch = params.patch?.({
             decision,
+            entry: cloneSessionEntry(freshBase),
             fork: fork.transcript,
             parentEntry: cloneSessionEntry(freshParent),
-            sessionEntry: cloneSessionEntry(next),
-          },
-          publish: prepareSessionIdentityPublication(
+          });
+          const forkIdentityPatch: Partial<InternalSessionEntry> = {
+            ...patch,
+            forkSource: {
+              sessionKey: parentTarget.canonicalKey,
+              sessionId: freshParent.sessionId,
+            },
+            forkedFromParent: true,
+            lifecycleRunId: undefined,
+            lastRunId: undefined,
+            sessionId: fork.transcript.sessionId,
+            totalTokens: undefined,
+            totalTokensFresh: false,
+            totalTokensVersion: undefined,
+          };
+          const previousIdentity = readSessionIdentitySnapshot(writeDatabase, [
+            sessionTarget.canonicalKey,
+          ]);
+          const next = writeSessionEntry(
             writeDatabase,
-            resolved.agentId,
-            previousIdentity,
-            currentIdentity,
-          ),
-        };
-      }, toDatabaseOptions(resolved));
+            sessionTarget.canonicalKey,
+            mergeSessionEntry(freshBase, forkIdentityPatch),
+            {
+              previousEntry: freshBase,
+              canonicalPreviousEntry: previousIdentity.get(sessionTarget.canonicalKey) ?? null,
+            },
+          );
+          const currentIdentity = readSessionIdentitySnapshot(writeDatabase, [
+            sessionTarget.canonicalKey,
+          ]);
+          return {
+            result: {
+              status: "forked",
+              decision,
+              fork: fork.transcript,
+              parentEntry: cloneSessionEntry(freshParent),
+              sessionEntry: cloneSessionEntry(next),
+            },
+            publish: prepareSessionIdentityPublication(
+              writeDatabase,
+              resolved.agentId,
+              previousIdentity,
+              currentIdentity,
+            ),
+          };
+        },
+        toDatabaseOptions(resolved),
+        { operationLabel: "session.parent-fork.entry" },
+      );
       if ("skip" in committed) {
         const { decision, base, parentEntry } = committed.skip;
         const patch = params.decisionSkipPatch?.({
@@ -413,21 +425,25 @@ function persistSqliteParentForkSkipPatch(params: {
     previous: params.entry,
     sessionKey: params.sessionKey,
   });
-  const publish = runOpenClawAgentWriteTransaction((database) => {
-    params.commitGuard?.();
-    const previousIdentity = readSessionIdentitySnapshot(database, [params.sessionKey]);
-    writeSessionEntry(database, params.sessionKey, next, {
-      previousEntry: params.entry,
-      canonicalPreviousEntry: previousIdentity.get(params.sessionKey) ?? null,
-    });
-    const currentIdentity = readSessionIdentitySnapshot(database, [params.sessionKey]);
-    return prepareSessionIdentityPublication(
-      database,
-      params.resolved.agentId,
-      previousIdentity,
-      currentIdentity,
-    );
-  }, toDatabaseOptions(params.resolved));
+  const publish = runOpenClawAgentWriteTransaction(
+    (database) => {
+      params.commitGuard?.();
+      const previousIdentity = readSessionIdentitySnapshot(database, [params.sessionKey]);
+      writeSessionEntry(database, params.sessionKey, next, {
+        previousEntry: params.entry,
+        canonicalPreviousEntry: previousIdentity.get(params.sessionKey) ?? null,
+      });
+      const currentIdentity = readSessionIdentitySnapshot(database, [params.sessionKey]);
+      return prepareSessionIdentityPublication(
+        database,
+        params.resolved.agentId,
+        previousIdentity,
+        currentIdentity,
+      );
+    },
+    toDatabaseOptions(params.resolved),
+    { operationLabel: "session.parent-fork.skip" },
+  );
   publish();
   return cloneSessionEntry(next);
 }

@@ -18,6 +18,7 @@ import {
 } from "./node-worker-tunnel.test-support.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
+import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import { createWorkerEnvironmentService } from "./service.js";
 import { BUNDLE_ARTIFACT, createProvider } from "./service.test-support.js";
@@ -29,6 +30,7 @@ import {
   SESSION_KEY,
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
+  database,
   placements,
   root,
   setupWorkerTurnLauncherTest,
@@ -153,40 +155,24 @@ describe("worker turn recovery after environment reconciliation errors", () => {
         ownerEpoch: ready.ownerEpoch,
         sessionId: SESSION_ID,
       });
-      let placement = await placements.startDispatch({
-        sessionId: SESSION_ID,
-        sessionKey: SESSION_KEY,
-        agentId: "main",
-        executionMode: "worker-turn",
-      });
-      placement = placements.transition({
-        sessionId: SESSION_ID,
-        from: "requested",
-        to: "provisioning",
-        expectedGeneration: placement.generation,
-        patch: { environmentId: ENVIRONMENT_ID },
-      });
-      placement = placements.transition({
-        sessionId: SESSION_ID,
-        from: "provisioning",
-        to: "syncing",
-        expectedGeneration: placement.generation,
-        patch: { workerBundleHash: installation.bundleHash },
-      });
-      placement = placements.transition({
-        sessionId: SESSION_ID,
-        from: "syncing",
-        to: "starting",
-        expectedGeneration: placement.generation,
-        patch: { remoteWorkspaceDir: "/worker/workspace", workspaceBaseManifestRef: MANIFEST_REF },
-      });
-      placements.transition({
-        sessionId: SESSION_ID,
-        from: "starting",
-        to: "active",
-        expectedGeneration: placement.generation,
-        patch: { activeOwnerEpoch: attached.ownerEpoch },
-      });
+      await advancePlacementFixtureToActive(
+        placements,
+        database,
+        {
+          sessionId: SESSION_ID,
+          sessionKey: SESSION_KEY,
+          agentId: "main",
+          executionMode: "worker-turn",
+        },
+        {
+          environmentId: ENVIRONMENT_ID,
+          ownerEpoch: attached.ownerEpoch,
+          workerBundleHash: installation.bundleHash,
+          remoteWorkspaceDir: "/worker/workspace",
+          workspaceBaseManifestRef: MANIFEST_REF,
+          seedEnvironment: false,
+        },
+      );
       installation = { ...installation, bundleHash: "d".repeat(64) };
       const startTunnel = vi.spyOn(environments, "startTunnel");
       const launcher = createWorkerSessionTurnPlacementProvider({

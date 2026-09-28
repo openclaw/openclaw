@@ -1,6 +1,3 @@
-/**
- * Manages active embedded-agent run handles, queues, aborts, and waiters.
- */
 import fs from "node:fs";
 import path from "node:path";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
@@ -936,16 +933,9 @@ export function prepareEmbeddedAgentRunCompletionClaim(
   resolveCurrentRegistration: () => EmbeddedRunCompletionRegistration | undefined;
   registered: Promise<EmbeddedRunCompletionRegistration | undefined>;
 } {
-  let registrationSettled = false;
   let settleRegistration!: (registration: EmbeddedRunCompletionRegistration | undefined) => void;
   const registered = new Promise<EmbeddedRunCompletionRegistration | undefined>((resolve) => {
-    settleRegistration = (registration) => {
-      if (registrationSettled) {
-        return;
-      }
-      registrationSettled = true;
-      resolve(registration);
-    };
+    settleRegistration = resolve;
   });
   const claim: EmbeddedRunCompletionClaim = {
     runId,
@@ -1250,11 +1240,7 @@ export function resolveActiveEmbeddedRunHandleSessionIdBySessionFile(
   return ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(normalizedSessionFile);
 }
 
-export function resolveActiveEmbeddedRunSessionIdBySessionFile(
-  sessionFile: string,
-): string | undefined {
-  return resolveActiveEmbeddedRunHandleSessionIdBySessionFile(sessionFile);
-}
+export { resolveActiveEmbeddedRunHandleSessionIdBySessionFile as resolveActiveEmbeddedRunSessionIdBySessionFile };
 
 export function getActiveEmbeddedRunSnapshot(
   sessionId: string,

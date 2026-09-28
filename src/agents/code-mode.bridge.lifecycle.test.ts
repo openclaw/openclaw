@@ -187,7 +187,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
       });
       const firstStarted = createDeferred();
       const finishFirst = createDeferred();
-      const ids = [1, 2, 3].map((index) => `tool_search_code:exec|fc-original:read:${index}`);
+      const ids = [1, 2, 3].map((index) => `tool_call:exec|fc-original:read:${index}`);
       const target = pluginToolWithExecute("read", "Read a record", async (id) => {
         if (id === ids[0]) {
           firstStarted.resolve();

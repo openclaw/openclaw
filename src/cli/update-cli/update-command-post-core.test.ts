@@ -2,8 +2,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { acquireDistArtifactOwnership } from "../../../scripts/lib/dist-artifact-lock.mts";
+import { installPrivateUpdateHandoffStore } from "../../../test/helpers/private-update-handoff-store.js";
 import {
   createPluginInstallRecordMap,
   getPluginInstallRecordMapEntry,
@@ -12,6 +13,7 @@ import {
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { isPidAlive } from "../../shared/pid-alive.js";
 import { killPidIfAlive, readPidFile, waitForPidToExit } from "../../test-utils/process-tree.js";
+import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 import {
   continuePostCoreUpdateInFreshProcess,
@@ -40,6 +42,7 @@ const pluginUpdate: PostCorePluginUpdateResult = {
 };
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(
     tempDirs.splice(0).map(async (dir) => {
       await fs.rm(dir, { recursive: true, force: true });
@@ -58,6 +61,9 @@ describe("continuePostCoreUpdateInFreshProcess", () => {
     "releases artifact ownership only for a target without the prepared-fact consumer (modern=%s)",
     async (modern) => {
       const root = await withTempDir();
+      const control = path.join(root, "control");
+      await fs.mkdir(control, { mode: 0o700 });
+      installPrivateUpdateHandoffStore(control);
       const observation = path.join(root, "ownership.txt");
       await fs.mkdir(path.join(root, "dist"));
       await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ version: "9999.0.0" }));
@@ -89,19 +95,23 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
       );
       const sourceArtifactLock = await acquireDistArtifactOwnership(root);
       try {
-        const result = await continuePostCoreUpdateInFreshProcess({
-          root,
-          sourceRuntimePrepared: true,
-          channel: "dev",
-          requestedChannel: null,
-          opts: {
-            json: true,
-            run: { runId: "fixture-source-lock", env: {}, sourceArtifactLock },
-          },
-          pluginInstallRecords: {},
-          updateStartedAtMs: Date.now(),
-          timeoutMs: 5000,
-          nodeRunner: process.execPath,
+        const runId = "fixture-source-lock";
+        const result = await withUpdateCommandExecutor(runId, async (executor) => {
+          const executorFence = await executor.enter(root);
+          return await continuePostCoreUpdateInFreshProcess({
+            root,
+            sourceRuntimePrepared: true,
+            channel: "dev",
+            requestedChannel: null,
+            opts: {
+              json: true,
+              run: { runId, env: {}, sourceArtifactLock, executorFence },
+            },
+            pluginInstallRecords: {},
+            updateStartedAtMs: Date.now(),
+            timeoutMs: 5000,
+            nodeRunner: process.execPath,
+          });
         });
         expect(result).toEqual({ resumed: true, pluginUpdate });
         expect(await fs.readFile(observation, "utf8")).toBe(

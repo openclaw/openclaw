@@ -9,7 +9,7 @@ import {
   sessionsListResponse,
   waitForSessionRosterHydration,
 } from "./session-management.test-support.ts";
-import { openSidebarSortMenu } from "./session-ownership-visuals.test-support.ts";
+import { chooseSidebarOwner, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 const sessionKey = "agent:main:design-review";
@@ -101,12 +101,12 @@ suite.define(() => {
         await waitForSessionRosterHydration(page);
         const target = page.locator('[data-session-key="' + sessionKey + '"]');
         await expectBrowser(target).toBeVisible();
-        const chooseFilter = async (label: string) => {
-          const menu = await openSidebarSortMenu(page);
-          await menu.getByRole("menuitemradio", { name: label, exact: true }).click();
+        const chooseFilter = async (value: "all" | "involving-me") => {
+          await chooseSidebarOwner(page, value);
+          await closeSidebarMenu(page);
         };
         await gateway.setMethodResponse("sessions.list", list([home]));
-        await chooseFilter("Involving me");
+        await chooseFilter("involving-me");
         await expectBrowser(target).toHaveCount(0);
         await captureUiProof(suite, page, "01-before-mention.png");
 
@@ -145,7 +145,7 @@ suite.define(() => {
           "sessions.list",
           list([home, { ...mentioned, hiddenFromInvolvingMe: true }]),
         );
-        await chooseFilter("All owners");
+        await chooseFilter("all");
         await expectBrowser(target).toBeVisible();
         await target.hover();
         await target.click({ button: "right" });
@@ -158,7 +158,7 @@ suite.define(() => {
         expect((await gateway.getRequests("sessions.setInvolvement")).at(-1)?.params).toMatchObject(
           { hidden: false },
         );
-        await chooseFilter("Involving me");
+        await chooseFilter("involving-me");
         await expectBrowser(target).toBeVisible();
         await page.reload();
         await waitForSessionRosterHydration(page);

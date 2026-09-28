@@ -49,10 +49,6 @@ type ResolvedGlobalInstallCommand = {
   };
 };
 
-/**
- * Resolved package-manager command plus the root paths used for install,
- * verification, and staged package swaps.
- */
 export type ResolvedGlobalInstallTarget = ResolvedGlobalInstallCommand & {
   globalRoot: string | null;
   packageRoot: string | null;
@@ -141,10 +137,6 @@ function isMainPackageTarget(value: string): boolean {
   return normalizeLowercaseStringOrEmpty(value) === "main";
 }
 
-/**
- * Returns true for targets that should pass through as package-manager specs
- * rather than being treated as registry dist-tags.
- */
 function isExplicitPackageInstallSpec(value: string): boolean {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -434,8 +426,8 @@ async function collectCriticalInstalledPackageDistPaths(packageRoot: string): Pr
   const expectedFiles = new Set<string>();
   await Promise.all(
     BUNDLED_RUNTIME_SIDECAR_PATHS.map(async (relativePath) => {
-      const pluginRoot = resolveBundledPluginRoot(relativePath);
-      if (pluginRoot === null) {
+      const pluginRoot = /^dist\/extensions\/[^/]+/u.exec(relativePath)?.[0];
+      if (!pluginRoot) {
         return;
       }
       if (
@@ -447,11 +439,6 @@ async function collectCriticalInstalledPackageDistPaths(packageRoot: string): Pr
     }),
   );
   return [...expectedFiles].toSorted((left, right) => left.localeCompare(right));
-}
-
-function resolveBundledPluginRoot(relativePath: string): string | null {
-  const match = /^dist\/extensions\/[^/]+/u.exec(relativePath);
-  return match ? match[0] : null;
 }
 
 async function collectInstalledPathErrors(params: {
@@ -590,6 +577,9 @@ export async function createGlobalInstallEnv(
   applyCorepackDownloadPromptEnv(merged);
   applyNpmFreshnessBypassEnv(merged);
   applyPosixNpmScriptShellEnv(merged);
+  if (process.versions.bun) {
+    merged.OPENCLAW_PACKAGE_BUN_LAUNCHER = process.execPath;
+  }
   return merged;
 }
 
@@ -956,36 +946,20 @@ export async function resolvePnpmGlobalInstallOwner(
   return { ownerRoot, packageRoot };
 }
 
-function resolvePreferredGlobalManagerCommand(
-  manager: GlobalInstallManager,
-  pkgRoot?: string | null,
-): string {
-  if (manager !== "npm") {
-    return manager;
-  }
-  return resolvePreferredNpmCommand(pkgRoot) ?? manager;
-}
-
-/**
- * Resolves the package-manager command to execute for a global install.
- * npm may use the npm binary beside an existing package root when available.
- */
-function resolveGlobalInstallCommand(
-  manager: GlobalInstallManager,
-  pkgRoot?: string | null,
-): ResolvedGlobalInstallCommand {
-  return {
-    manager,
-    command: resolvePreferredGlobalManagerCommand(manager, pkgRoot),
-  };
-}
-
 function normalizeGlobalInstallCommand(
   managerOrCommand: GlobalInstallManager | ResolvedGlobalInstallCommand,
   pkgRoot?: string | null,
 ): ResolvedGlobalInstallCommand {
   return typeof managerOrCommand === "string"
-    ? resolveGlobalInstallCommand(managerOrCommand, pkgRoot)
+    ? {
+        manager: managerOrCommand,
+        command:
+          managerOrCommand === "npm"
+            ? (resolvePreferredNpmCommand(pkgRoot) ?? managerOrCommand)
+            : managerOrCommand === "bun" && process.versions.bun
+              ? process.execPath
+              : managerOrCommand,
+      }
     : managerOrCommand;
 }
 
@@ -1010,7 +984,7 @@ function resolveInstallCommandForManager(
   const normalized = normalizeGlobalInstallCommand(managerOrCommand, pkgRoot);
   return normalized.manager === manager
     ? normalized
-    : resolveGlobalInstallCommand(manager, pkgRoot);
+    : normalizeGlobalInstallCommand(manager, pkgRoot);
 }
 
 /**
@@ -1179,7 +1153,7 @@ async function inspectNpmGlobalOwner(
   const selected = await probeNpmGlobalPrefix(
     runCommand,
     timeoutMs,
-    resolvePreferredGlobalManagerCommand("npm", pkgRoot),
+    resolvePreferredNpmCommand(pkgRoot) ?? "npm",
     diagnostics,
   );
   const pkgReal = await tryRealpath(pkgRoot);

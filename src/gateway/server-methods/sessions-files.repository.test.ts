@@ -45,9 +45,10 @@ import type {
   WorkerWorkspaceCommand,
   WorkerWorkspaceReconcileRequest,
 } from "../worker-environments/tunnel-contract.js";
+import { captureWorkspaceManifest } from "../worker-environments/workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "../worker-environments/workspace-manifest.js";
 import { createWorkerWorkspaceOperationCoordinator } from "../worker-environments/workspace-operation-coordinator.js";
-import { readActualWorkspaceManifest } from "../worker-environments/workspace-reconcile-core.js";
+import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
 import { loadSessionDiff } from "./sessions-diff.js";
 import { resolveLocalSessionWorkspaceRoot, sessionsFilesHandlers } from "./sessions-files.js";
 import {
@@ -58,7 +59,6 @@ import {
   hashContent,
   removeWorkspaceFixture,
 } from "./sessions-files.test-support.js";
-import { WORKSPACE_PREVIEW_MAX_BYTES } from "./workspace-fs.js";
 
 const mocks = vi.hoisted(() => ({
   load: vi.fn(),
@@ -206,7 +206,7 @@ beforeEach(async () => {
     url: "https://example.test/repository.git",
     assertCurrent: () => {},
   });
-  const base = await readActualWorkspaceManifest({
+  const base = await captureWorkspaceManifest({
     root: workspace,
     baseCommit: git("rev-parse", "HEAD"),
   });
@@ -291,7 +291,7 @@ async function withCheckpointAcceptance(failCapture = false) {
     });
   }
   generation = placement.generation;
-  const base = await readActualWorkspaceManifest({
+  const base = await captureWorkspaceManifest({
     root: workspace,
     baseCommit: source.baseCommit,
   });
@@ -317,7 +317,7 @@ async function withCheckpointAcceptance(failCapture = false) {
         if (request.source.kind !== "repository") {
           throw new Error("expected repository capture");
         }
-        const current = await readActualWorkspaceManifest({
+        const current = await captureWorkspaceManifest({
           root: workspace,
           baseCommit: source.baseCommit,
         });
@@ -348,7 +348,7 @@ async function withCheckpointAcceptance(failCapture = false) {
           verifyStable: async () => {
             expect(
               (
-                await readActualWorkspaceManifest({
+                await captureWorkspaceManifest({
                   root: workspace,
                   baseCommit: source.baseCommit,
                 })
@@ -595,7 +595,7 @@ it.each(["stop", "reset"])(
 );
 
 it("keeps stopped inspection limited to verified changed artifacts", async () => {
-  const base = await readActualWorkspaceManifest({
+  const base = await captureWorkspaceManifest({
     root: workspace,
     baseCommit: source.baseCommit,
   });
@@ -605,7 +605,7 @@ it("keeps stopped inspection limited to verified changed artifacts", async () =>
     path.join(workspace, "oversized.txt"),
     Buffer.alloc(WORKSPACE_PREVIEW_MAX_BYTES + 1, 97),
   );
-  const current = await readActualWorkspaceManifest({
+  const current = await captureWorkspaceManifest({
     root: workspace,
     baseCommit: source.baseCommit,
   });

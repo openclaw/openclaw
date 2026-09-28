@@ -1162,7 +1162,7 @@ describe("buildAgentSystemPrompt", () => {
     (promptMode) => {
       const prompt = buildAgentSystemPrompt({
         workspaceDir: "/tmp/openclaw",
-        toolNames: ["tool_search_code"],
+        toolNames: ["exec", "wait"],
         capabilityToolNames: ["skill_workshop"],
         codeModeActive: true,
         promptMode,
@@ -1892,11 +1892,11 @@ describe("buildAgentSystemPrompt", () => {
       "- fake_calendar: Schedule a calendar event",
       "- fake_weather: Read current weather",
       "",
-      "Use tool_search_code with openclaw.tools.search(query).",
+      "Use tool_search to discover deferred tools.",
     ].join("\n");
     const buildPrompt = (owner: string) =>
       renderPrompt({
-        toolNames: ["tool_search_code"],
+        toolNames: ["tool_search", "tool_describe", "tool_call"],
         toolSchemaDirectoryPrompt,
         ownerNumbers: [owner],
       });

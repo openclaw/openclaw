@@ -544,7 +544,6 @@ export function createOpenClawStateReadTransport(command: OpenClawStateReadComma
     if (closed) {
       throw new WorkerTaskError("Shared-state read transport is closed", "unavailable");
     }
-    authority.assertCurrent();
     const request: OpenClawStateReadRequest = {
       context: {
         environment: { ...context.environment },

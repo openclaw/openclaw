@@ -123,6 +123,8 @@ type SkillProposalContext = {
 };
 
 export type SkillProposalCreateInput = SkillProposalContext & {
+  /** Caller-owned synchronous authority for draft bytes and metadata publication. */
+  assertCommitAllowed?: () => void;
   name: string;
   description: string;
   content: string;
@@ -152,6 +154,8 @@ export type SkillProposalUpdateInput = Omit<
 };
 
 export type SkillProposalReviseInput = SkillProposalRevisionInput & {
+  /** Caller-owned synchronous authority for draft bytes and metadata publication. */
+  assertCommitAllowed?: () => void;
   content?: string;
   supportFiles?: SkillProposalSupportFileInput[];
   description?: string;

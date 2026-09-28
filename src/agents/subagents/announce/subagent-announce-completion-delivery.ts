@@ -12,6 +12,8 @@ import type { RestartRecoveryTerminalDeliveryEvidence } from "../../../config/se
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { waitForGatewayDispatch } from "../../../gateway/server-in-process-dispatch.js";
+import type { GatewayRecoveryTypingParams } from "../../../gateway/server-instance-runtime.types.js";
+import { getGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime-context.js";
 import { sourceDeliveryTargetsMatch } from "../../../infra/outbound/source-delivery-plan.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../../sessions/input-provenance.js";
 import { deriveSessionChatTypeFromKey } from "../../../sessions/session-chat-type-shared.js";
@@ -49,6 +51,7 @@ import { inferDeliveryTargetChatType } from "./subagent-announce-origin.js";
 export async function runAnnounceAgentCall(params: {
   agentParams: Record<string, unknown>;
   privateCompletion?: true;
+  typing?: Omit<GatewayRecoveryTypingParams, "isCurrent">;
   settleWakeSourceSessionKeys?: readonly string[];
   delegatedToolPolicyHandoff?: SubagentCompletionToolHandoffRegistration;
   expectFinal?: boolean;
@@ -58,6 +61,12 @@ export async function runAnnounceAgentCall(params: {
   isSourceSessionAdmissionAllowed?: () => boolean;
   resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
 }): Promise<unknown> {
+  const typingRuntime = params.typing
+    ? params.resolveGatewayContext
+      ? params.resolveGatewayContext()?.recoveryRuntime
+      : getGatewayRecoveryRuntime()
+    : undefined;
+  let stopTyping: (() => void) | undefined;
   const deadline = new AbortController();
   const sourceLifecycle = new AbortController();
   const isSourceSessionAdmissionAllowed = params.isSourceSessionAdmissionAllowed;
@@ -121,6 +130,17 @@ export async function runAnnounceAgentCall(params: {
         }
         // Execution can be observed before acceptance on an already-running replay.
         clearTimeout(timer);
+        if (params.typing) {
+          stopTyping ??= typingRuntime?.startRecoveryTyping?.({
+            ...params.typing,
+            isCurrent: () =>
+              !executionSignal.aborted &&
+              params.isExecutionAllowed() &&
+              (params.resolveGatewayContext
+                ? params.resolveGatewayContext()?.recoveryRuntime === typingRuntime
+                : getGatewayRecoveryRuntime() === typingRuntime),
+          });
+        }
       },
       resolveGatewayContext: params.resolveGatewayContext,
     });
@@ -132,6 +152,7 @@ export async function runAnnounceAgentCall(params: {
     throw error;
   } finally {
     clearTimeout(timer);
+    stopTyping?.();
   }
 }
 

@@ -19,6 +19,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -50,6 +51,7 @@ import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.MicNone
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -206,10 +208,14 @@ internal fun SessionsScreen(
       }
 
       item {
-        Row(horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxxs)) {
+        FlowRow(
+          horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxxs),
+          verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxxs),
+        ) {
           FilterPill(text = nativeString("Recent"), icon = Icons.Outlined.AccessTime, active = filter == SessionFilter.Recent, onClick = { filter = SessionFilter.Recent })
           FilterPill(text = nativeString("Current"), icon = Icons.Outlined.MicNone, active = filter == SessionFilter.Current, showDot = sessions.any { it.key == chatSessionKey }, onClick = { filter = SessionFilter.Current })
           FilterPill(text = nativeString("Archived"), icon = Icons.Outlined.Archive, active = filter == SessionFilter.Archived, onClick = { filter = SessionFilter.Archived })
+          FilterPill(text = nativeString("Automations"), icon = Icons.Outlined.Schedule, active = filter == SessionFilter.Automations, onClick = { filter = SessionFilter.Automations })
         }
       }
 
@@ -980,6 +986,7 @@ internal enum class SessionFilter {
   Recent,
   Current,
   Archived,
+  Automations,
 }
 
 internal data class SessionBrowserSearchState(
@@ -1037,9 +1044,11 @@ internal fun resolveSessionBrowserEntries(
 ): List<ChatSessionEntry> {
   val filtered =
     when (filter) {
-      SessionFilter.Recent -> entries.filter { it.archived != true }
+      SessionFilter.Recent -> entries.filter { isSessionVisibleInNavigation(it, currentSessionKey) }
 
-      SessionFilter.Current -> entries.filter { it.key == currentSessionKey && it.archived != true }
+      SessionFilter.Current -> entries.filter { it.key == currentSessionKey }
+
+      SessionFilter.Automations -> entries.filter { it.archived != true && isAutomationSession(it) }
 
       // Gate on the entry's own archived flag so a pre-toggle active list can
       // never render with archived-only actions while a refetch is in flight.
@@ -1050,6 +1059,24 @@ internal fun resolveSessionBrowserEntries(
   } else {
     filtered.sortedBy { it.lastActivityAt ?: it.updatedAtMs ?: 0L }
   }
+}
+
+private val cronSessionDisplayKey = Regex("^(?:cron:|agent::*[^:]+:+cron:+[^:])")
+
+// Keep the native adapter aligned with src/shared/session-list-visibility.ts and
+// the selected-session exception in ui/src/lib/sessions/navigation.ts.
+internal fun isSessionVisibleInNavigation(
+  session: ChatSessionEntry,
+  currentSessionKey: String,
+): Boolean = session.key == currentSessionKey || (session.archived != true && !isAutomationSession(session))
+
+private fun isAutomationSession(session: ChatSessionEntry): Boolean {
+  if (cronSessionDisplayKey.containsMatchIn(session.key.trim().lowercase()) || session.createdActorType == "system") return true
+  return (session.createdVia == "run" || session.createdVia == "internal") &&
+    session.createdActorType != "human" &&
+    session.label.isNullOrBlank() &&
+    session.displayName.isNullOrBlank() &&
+    session.subject.isNullOrBlank()
 }
 
 internal fun sessionListSubtitle(
@@ -1220,6 +1247,14 @@ internal fun buildSessionTreeSections(
         val parentKey =
           entry.parentSessionKey?.trim()?.takeIf(String::isNotEmpty)
             ?: entry.spawnedBy?.trim()?.takeIf(String::isNotEmpty)
+        // Ordinary New chats can retain a settings-inheritance parent without being child sessions.
+        if (
+          entry.createdVia == "operator" && entry.spawnDepth == 0 &&
+          entry.spawnedBy.isNullOrBlank() && entry.worktreeId == null &&
+          entry.forkedFromParent != true && entry.classification != "subagent"
+        ) {
+          return@forEach
+        }
         if (parentKey != null && parentKey != entry.key && parentKey in entriesByKey) {
           put(entry.key, parentKey)
         }
@@ -1374,7 +1409,7 @@ internal fun groupSessionEntries(
     if (pinned.isNotEmpty()) add(SessionSection(title = nativeString("Pinned"), entries = pinned))
     categories.forEach { (category, sessions) -> add(SessionSection(title = category, entries = sessions, isCategory = true)) }
     if (ungrouped.isNotEmpty()) {
-      add(SessionSection(title = nativeString("Ungrouped").takeIf { categories.isNotEmpty() }, entries = ungrouped))
+      add(SessionSection(title = nativeString("Ungrouped").takeIf { pinned.isNotEmpty() || categories.isNotEmpty() }, entries = ungrouped))
     }
   }
 }
@@ -1400,6 +1435,7 @@ private fun emptySessionTitle(filter: SessionFilter): String =
     SessionFilter.Recent -> nativeString("No threads yet")
     SessionFilter.Current -> nativeString("No current thread")
     SessionFilter.Archived -> nativeString("No archived threads")
+    SessionFilter.Automations -> nativeString("No automation threads")
   }
 
 private fun emptySessionBody(filter: SessionFilter): String =
@@ -1407,6 +1443,7 @@ private fun emptySessionBody(filter: SessionFilter): String =
     SessionFilter.Recent -> nativeString("Start a new conversation and it will show up here.")
     SessionFilter.Current -> nativeString("Open Chat to start or resume the current thread.")
     SessionFilter.Archived -> nativeString("Archived threads will show up here.")
+    SessionFilter.Automations -> nativeString("Automation and system conversations will show up here.")
   }
 
 internal fun relativeSessionTime(

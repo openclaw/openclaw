@@ -91,6 +91,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/e2e/qa-lab/runtime/gateway-config-hot-reload-upstream.mjs!",
   // The identity scenario spawns this process-isolated repeated-turn driver by path.
   "test/e2e/qa-lab/runtime/agent-run-identity-repeated-turn-child.ts!",
+  // The Slack requester flow seeds its stopped Gateway through this isolated process.
+  "test/e2e/qa-lab/slack-requester-profile.fixture.ts!",
   // Invoked directly by the Docker image-auth scenario.
   "test/e2e/qa-lab/runtime/openai-image-auth-docker-client.ts!",
   "test/e2e/qa-lab/runtime/system-agent-first-run-docker-client.ts!",

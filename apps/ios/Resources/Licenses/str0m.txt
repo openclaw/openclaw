@@ -219,7 +219,7 @@ Declared license: MIT OR Apache-2.0
 LICENSE-APACHE: L001
 LICENSE-MIT: L036
 
-dimpl 0.7.3
+dimpl 0.7.4
 Source: https://github.com/algesten/dimpl
 Declared license: MIT OR Apache-2.0
 LICENSE-APACHE.txt: L037
@@ -565,7 +565,7 @@ Declared license: MIT OR Apache-2.0
 LICENSE-APACHE: L079
 LICENSE-MIT: L080
 
-sctp-proto 0.10.4
+sctp-proto 0.10.5
 Source: https://github.com/algesten/sctp-proto
 Declared license: MIT OR Apache-2.0
 LICENSE-APACHE: L081

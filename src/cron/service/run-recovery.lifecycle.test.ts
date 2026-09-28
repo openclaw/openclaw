@@ -19,12 +19,14 @@ import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-h
 import { loadCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import {
-  claimCronRunReceiptInDatabase,
   finishCronRunReceipt,
   finishCronRunReceiptInDatabase,
   prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.js";
-import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
+import {
+  claimCronRunReceiptInDatabaseForTest,
+  inspectActiveCronRunReceipt,
+} from "../store/run-receipt-store.test-support.js";
 import { prepareCronRunReceiptWriteSchema } from "../store/run-receipt-write-admission.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import type { CronJob, CronRunStatus } from "../types.js";
@@ -181,15 +183,15 @@ describe("one-shot recovery", () => {
             }),
           );
           const prepared = prepareCronRunReceiptClaim({
+            observed: undefined,
             storePath,
             job,
             agentId: "alpha",
             startedAtMs: nowMs,
           });
           successor = runOpenClawStateWriteTransaction(({ db }) =>
-            claimCronRunReceiptInDatabase({
+            claimCronRunReceiptInDatabaseForTest({
               database: db,
-              receiptSchema: prepareCronRunReceiptWriteSchema(db),
               prepared,
               resolveAgentId: () => "alpha",
             }),

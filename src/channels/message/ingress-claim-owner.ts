@@ -91,12 +91,7 @@ export function processPidFromOwnerId(ownerId: string): number {
 
 /** Instance UUID from ownerId `pid:startToken:uuid`. */
 function processInstanceIdFromOwnerId(ownerId: string): string | null {
-  const parts = ownerId.split(":");
-  if (parts.length < 3) {
-    return null;
-  }
-  const instanceId = parts[2];
-  return instanceId && instanceId.length > 0 ? instanceId : null;
+  return ownerId.split(":")[2] || null;
 }
 
 /** Mint a unique per-drain ownerId (`pid:startToken:uuid`). Caller registers via drain. */

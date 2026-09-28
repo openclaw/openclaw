@@ -1,4 +1,3 @@
-// Plugin Clawhub Release script supports OpenClaw repository automation.
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { truncateUtf16Safe } from "../../packages/normalization-core/src/utf16-slice.js";
@@ -261,31 +260,20 @@ export function collectPluginClawHubReleasePathsFromGitRange(params: {
   rootDir?: string;
   gitRange: GitRangeSelection;
 }): string[] {
-  return collectPluginClawHubReleasePathsFromGitRangeForPathspecs(params, ["extensions"]);
+  return collectChangedPathsFromGitRange({ ...params, pathspecs: ["extensions"] });
 }
 
 function collectPluginClawHubRelevantPathsFromGitRange(params: {
   rootDir?: string;
   gitRange: GitRangeSelection;
 }): string[] {
-  return collectPluginClawHubReleasePathsFromGitRangeForPathspecs(params, [
-    "extensions",
-    ...PLUGIN_PUBLICATION_SHARED_AUTHORITY_PATHS,
-    ...CLAWHUB_RELEASE_AUTHORITY_PATHS,
-  ]);
-}
-
-function collectPluginClawHubReleasePathsFromGitRangeForPathspecs(
-  params: {
-    rootDir?: string;
-    gitRange: GitRangeSelection;
-  },
-  pathspecs: readonly string[],
-): string[] {
   return collectChangedPathsFromGitRange({
-    rootDir: params.rootDir,
-    gitRange: params.gitRange,
-    pathspecs,
+    ...params,
+    pathspecs: [
+      "extensions",
+      ...PLUGIN_PUBLICATION_SHARED_AUTHORITY_PATHS,
+      ...CLAWHUB_RELEASE_AUTHORITY_PATHS,
+    ],
   });
 }
 
@@ -405,48 +393,31 @@ async function isPluginVersionPublishedOnClawHub(
   version: string,
   options: ClawHubRetryOptions & { registryBaseUrl?: string } = {},
 ): Promise<boolean> {
-  const url = new URL(
+  return clawHubResourceExists(
     `/api/v1/packages/${encodeURIComponent(packageName)}/versions/${encodeURIComponent(version)}`,
-    getRegistryBaseUrl(options.registryBaseUrl),
+    `Failed to query ClawHub for ${packageName}@${version}`,
+    options,
   );
-  const request = await fetchClawHubRead(url, {
-    fetchImpl: options.fetchImpl,
-    requestTimeoutMs: options.requestTimeoutMs,
-    sleep: options.sleep,
-  });
-  const { response } = request;
-
-  try {
-    if (response.status === 404) {
-      return false;
-    }
-    if (response.ok) {
-      return true;
-    }
-
-    throw await buildClawHubQueryError(
-      `Failed to query ClawHub for ${packageName}@${version}`,
-      request,
-    );
-  } finally {
-    await cancelClawHubResponseBody(response);
-    request.clearTimeout();
-  }
 }
 
 async function doesClawHubPackageExist(
   packageName: string,
   options: ClawHubRetryOptions & { registryBaseUrl?: string } = {},
 ): Promise<boolean> {
-  const url = new URL(
+  return clawHubResourceExists(
     `/api/v1/packages/${encodeURIComponent(packageName)}`,
-    getRegistryBaseUrl(options.registryBaseUrl),
+    `Failed to query ClawHub package ${packageName}`,
+    options,
   );
-  const request = await fetchClawHubRead(url, {
-    fetchImpl: options.fetchImpl,
-    requestTimeoutMs: options.requestTimeoutMs,
-    sleep: options.sleep,
-  });
+}
+
+async function clawHubResourceExists(
+  resource: string,
+  errorMessage: string,
+  options: ClawHubRetryOptions & { registryBaseUrl?: string },
+): Promise<boolean> {
+  const url = new URL(resource, getRegistryBaseUrl(options.registryBaseUrl));
+  const request = await fetchClawHubRead(url, options);
   const { response } = request;
 
   try {
@@ -454,7 +425,7 @@ async function doesClawHubPackageExist(
       return false;
     }
     if (!response.ok) {
-      throw await buildClawHubQueryError(`Failed to query ClawHub package ${packageName}`, request);
+      throw await buildClawHubQueryError(errorMessage, request);
     }
 
     return true;

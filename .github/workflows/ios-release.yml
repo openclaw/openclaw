@@ -6,12 +6,13 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: Upload a new release or reconcile one existing processed build
+        description: Upload a release, capture screenshots without uploading, or reconcile a processed build
         required: true
         default: release
         type: choice
         options:
           - release
+          - screenshots
           - reconcile-and-record
       target_ref:
         description: Frozen mobile release branch; reconcile only
@@ -58,12 +59,97 @@ env:
   NODE_VERSION: "24.21.0"
 
 jobs:
+  screenshots:
+    name: Capture release screenshots without uploading
+    if: inputs.operation == 'screenshots' && github.repository == 'openclaw/openclaw'
+    permissions:
+      contents: read
+    runs-on: xcode-27-xlarge
+    timeout-minutes: 90
+    steps:
+      - name: Checkout screenshot source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify screenshot source
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: off
+          install-bun: "false"
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@a0102e0972be65f351c307e2d64b9314a57c8073 # v1.324.0
+        with:
+          ruby-version: "3.4.10"
+          bundler: "4.0.21"
+          bundler-cache: false
+          working-directory: apps/ios
+
+      - name: Install locked Fastlane bundle
+        working-directory: apps/ios
+        run: |
+          set -euo pipefail
+          bundle _4.0.21_ install --jobs 4 --retry 3
+          bundle _4.0.21_ check
+          test "$(bundle _4.0.21_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.240.1"
+
+      - name: Select Xcode and install pinned native tools
+        run: |
+          set -euo pipefail
+          source scripts/lib/swift-toolchain.sh
+          select_xcode_toolchain
+          swift_tools_dir="$RUNNER_TEMP/ios-screenshot-tools"
+          ./scripts/install-xcodegen.sh "$swift_tools_dir"
+          ./scripts/install-swift-tools.sh "$swift_tools_dir"
+          echo "$swift_tools_dir" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          watch_toolchain="$(awk -F '\"' '/^channel =/ { print $2; exit }' apps/shared/OpenClawWatchRTC/rust-toolchain.toml)"
+          test -n "$watch_toolchain"
+          rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Capture iPhone, iPad, and Watch screenshots
+        env:
+          OPENCLAW_SNAPSHOT_DIAGNOSTICS: "1"
+        run: pnpm ios:screenshots
+
+      - name: Retain screenshots and sanitized diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ios-screenshots-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            apps/ios/fastlane/screenshots/en-US/*.png
+            apps/ios/build/SnapshotTestResults/capture-attempts.json
+            apps/ios/build/screenshot-diagnostics.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  qualify:
+    if: inputs.operation == 'release' && github.ref == 'refs/heads/main' && github.repository == 'openclaw/openclaw'
+    permissions:
+      contents: read
+    # Qualification rebuilds tracked plugin manifests; keep its workspace separate
+    # from the clean checkout that admits the release.
+    uses: ./.github/workflows/ios-release-e2e.yml
+    with:
+      target_sha: ${{ github.sha }}
+      mode: stock
+
   release:
     name: Prepare and upload iOS release
+    needs: qualify
     if: inputs.operation == 'release' && github.ref == 'refs/heads/main' && github.repository == 'openclaw/openclaw'
     permissions:
       contents: write
-    runs-on: xcode-27
+    runs-on: xcode-27-xlarge
     timeout-minutes: 360
     environment: ios-store-release
     steps:
@@ -126,23 +212,6 @@ jobs:
           watch_toolchain="$(awk -F '"' '/^channel =/ { print $2; exit }' apps/shared/OpenClawWatchRTC/rust-toolchain.toml)"
           test -n "$watch_toolchain"
           rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src
-
-      - name: Qualify native iOS pairing and chat
-        id: qualification
-        run: |
-          set -euo pipefail
-          node --import ./scripts/tsx.mjs scripts/ios-release-e2e.ts \
-            --mode stock --target-sha "$(git rev-parse HEAD)" \
-            --output "$RUNNER_TEMP/ios-release-e2e-proof.json"
-
-      - name: Retain sanitized iOS qualification proof
-        if: always() && steps.qualification.outcome != 'skipped'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: ios-release-e2e-stock
-          path: ${{ runner.temp }}/ios-release-e2e-proof.json
-          if-no-files-found: error
-          retention-days: 14
 
       - name: Create apps-signing read token
         id: apps-signing-token

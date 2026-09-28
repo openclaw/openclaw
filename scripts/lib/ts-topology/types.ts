@@ -1,4 +1,3 @@
-// Types script supports OpenClaw repository automation.
 import type { Checker, Project } from "typescript/unstable/sync";
 
 export type UsageBucket = "internal" | "production" | "test";
@@ -53,18 +52,6 @@ export type PublicEntrypoint = {
   importSpecifier: string;
 };
 
-export type ReferenceEvent = {
-  canonicalKey: string;
-  bucket: UsageBucket;
-  consumerPath: string;
-  usageCount: number;
-  importCount: number;
-  importSpecifier: string;
-  owner: string | null;
-  extensionId: string | null;
-  packageOwner: string | null;
-};
-
 export type TopologyRecord = CanonicalSymbol & {
   entrypoints: string[];
   exportNames: string[];
@@ -92,7 +79,6 @@ export type TopologyScope = {
   entrypoints: PublicEntrypoint[];
   importFilter: (specifier: string) => boolean;
   classifyUsageBucket: (relPath: string) => UsageBucket;
-  classifyScope: (relPath: string) => ConsumerScope;
   ownerForPath: (relPath: string) => string | null;
   extensionForPath: (relPath: string) => string | null;
   packageOwnerForPath: (relPath: string) => string | null;
@@ -130,10 +116,4 @@ export type TopologyEnvelope = {
   };
   rankedCandidates?: RankedCandidates;
   records: TopologyRecord[];
-};
-
-export type ReportModule = {
-  name: TopologyReportName;
-  describe: (envelope: TopologyEnvelope, limit: number) => string;
-  filterRecords?: (record: TopologyRecord) => boolean;
 };

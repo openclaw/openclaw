@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { computeBackoff, sleepWithAbort } from "../../infra/backoff.js";
 import {
   NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
@@ -13,6 +14,7 @@ import {
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
   resolveNodeWorkerExecutionIssue,
 } from "../../infra/node-runner-inventory.js";
+import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import {
   nodeWorkerPlanHash,
   parseNodeWorkerLaunchInput,
@@ -20,6 +22,7 @@ import {
   type NodeWorkerLaunchInput,
   type NodeWorkerSupervisorIdentity,
   type NodeWorkerSupervisorReceipt,
+  nodeWorkerTurnMatchesIdentity,
 } from "../../worker/node-supervisor-protocol.js";
 import {
   parseWorkerAdmissionDeadlineResult,
@@ -170,21 +173,6 @@ function expectedIdentity(input: NodeWorkerLaunchInput): NodeWorkerSupervisorIde
     placementGeneration: input.placementGeneration,
     runId: input.descriptor.assignment.runId,
   };
-}
-
-function receiptMatchesIdentity(
-  receipt: NodeWorkerSupervisorReceipt,
-  expected: NodeWorkerSupervisorIdentity,
-): boolean {
-  return (
-    receipt.launchId === expected.launchId &&
-    receipt.planHash === expected.planHash &&
-    receipt.environmentId === expected.environmentId &&
-    receipt.sessionId === expected.sessionId &&
-    receipt.ownerEpoch === expected.ownerEpoch &&
-    receipt.placementGeneration === expected.placementGeneration &&
-    receipt.runId === expected.runId
-  );
 }
 
 function parseInvokeReceipt(
@@ -389,7 +377,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     receipt: NodeWorkerSupervisorReceipt,
     expected: NodeWorkerSupervisorIdentity,
   ): NodeWorkerSupervisorReceipt => {
-    if (!receiptMatchesIdentity(receipt, expected)) {
+    if (!nodeWorkerTurnMatchesIdentity(receipt, expected)) {
       throw new Error("node worker supervisor receipt identity mismatch");
     }
     return receipt;
@@ -462,6 +450,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
   const launch = async (
     request: DeviceWorkerLaunchRequest,
   ): Promise<TerminalNodeWorkerSupervisorReceipt> => {
+    const restartSignal = getGatewayRestartDrainSignal();
     const originalInput = snapshotLaunchInput(request.input);
     let input = originalInput;
     const stableRequest = { ...request, input };
@@ -504,6 +493,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
         if (!stableRequest.isDispatchAuthorized()) {
           throw new Error("node worker launch authority closed");
         }
+        const launchMayAlreadyExist = mayHaveLaunched;
         try {
           const receipt = await invoke({
             deviceId: stableRequest.deviceId,
@@ -572,6 +562,19 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
             delayMs = pollIntervalMs;
           }
         } catch (error) {
+          // Supervisors answer INVALID_REQUEST before retaining any admission, turn, or child
+          // for a launch ID they have not seen. Launch IDs are minted per turn plan, so only an
+          // earlier dispatch in this call could have registered it; cancelling would otherwise
+          // poll a null receipt until its deadline.
+          if (
+            !pollStatus &&
+            !launchMayAlreadyExist &&
+            error instanceof NodeWorkerLaunchTransportError &&
+            error.code === "INVALID_REQUEST"
+          ) {
+            mayHaveLaunched = false;
+            throw error;
+          }
           if (
             deadline.signal.aborted ||
             (!dispatchReady && availabilityDeadline.signal.aborted) ||
@@ -593,6 +596,10 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
         });
       }
     } catch (error) {
+      if (restartSignal.aborted && isAgentRunRestartAbortReason(deadline.signal.reason)) {
+        // The launcher retains the durable claim; startup must stop this worker before reuse.
+        throw deadline.signal.reason;
+      }
       if (!dispatchReady && availabilityDeadline.signal.aborted && !deadline.signal.aborted) {
         throw new WorkerRunnerUnavailableError();
       }

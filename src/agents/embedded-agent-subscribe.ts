@@ -291,7 +291,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.pendingToolAudioAsVoice = false;
     state.pendingToolMediaDeliveryFailed = false;
     state.visibleBlockReplyCount = 0;
-    state.deferBlockReplyDelivery = typeof params.onBeforeTerminalDelivery === "function";
+    state.deferBlockReplyDelivery =
+      typeof params.onBeforeTerminalDelivery === "function" &&
+      params.deferTerminalDelivery !== false;
     clearAssistantStream();
     clearDeferredBlockReplies();
     state.deterministicApprovalPromptPending = false;

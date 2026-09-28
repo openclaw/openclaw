@@ -77,6 +77,8 @@ export function normalizeChromeMcpOptions(
   return {
     // The pinned server runs on the Gateway's own runtime, Node or Bun.
     command: customCommand ?? process.execPath,
+    // Its update check shells out to npm, which Bun-only installs lack; custom servers keep theirs.
+    env: managedServer ? { CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS: "1" } : undefined,
     userDataDir,
     browserUrl,
     args: [

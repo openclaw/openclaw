@@ -230,7 +230,13 @@ docker_build_run_logged() {
 
 docker_build_relay_limit_warnings() {
   if grep -q '::warning file=.*col=0,title=' "$1"; then
-    node "$DOCKER_BUILD_LIB_DIR/../relay-build-limit-warnings.mts" "$1"
+    local relay_script="$DOCKER_BUILD_LIB_DIR/../relay-build-limit-warnings.mts"
+    if [ -f "$relay_script" ]; then
+      node "$relay_script" "$1"
+    else
+      # npm installs omit CI-only reporting; keep warnings visible without failing a finished build.
+      grep -o '::warning file=.*col=0,title=.*' "$1" | sort -u >&2
+    fi
   fi
 }
 

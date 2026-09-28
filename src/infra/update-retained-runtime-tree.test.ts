@@ -274,7 +274,8 @@ it("copies overlay files without copy-up changing their admitted identity", asyn
     for (const file of nestedFiles) {
       const destination = path.join(source, file);
       await fs.mkdir(path.dirname(destination), { recursive: true });
-      await fs.writeFile(destination, `// ${file}\n`, { mode: 0o444 });
+      await fs.writeFile(destination, `// ${file}\n`);
+      await fs.chmod(destination, 0o444);
     }
     await fs.chmod(path.dirname(path.join(source, nestedFiles[0]!)), 0o751);
   });

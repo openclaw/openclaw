@@ -235,7 +235,10 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
     > = original?.service ?? before;
     const readCurrentService = async () => {
       assertCurrent();
-      const state = await readGatewayServiceStateForUpdate(service, serviceEnv, params.timeoutMs);
+      const state = await readGatewayServiceStateForUpdate(service, serviceEnv, params.timeoutMs, {
+        managerUid: expectedService.serviceManagerUid,
+        assertCurrent: assertOriginal,
+      });
       assertCurrent();
       const inspection = await revalidateManagedGatewayServiceAfterUpdate({
         state,

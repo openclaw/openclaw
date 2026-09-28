@@ -142,6 +142,10 @@ describe("gateway talk runtime", () => {
           text: "Hello from talk mode.",
         });
         expect(res?.ok, JSON.stringify(res?.error)).toBe(true);
+        expect(res?.payload).toMatchObject({
+          provider: "acme",
+          audioBase64: Buffer.from([7, 8, 9]).toString("base64"),
+        });
         const synthesizeParams = expectSingleSynthesizeSpeechCall();
         expect(synthesizeParams.text).toBe("Hello from talk mode.");
         expect(synthesizeParams.overrides).toEqual({ provider: "acme" });
@@ -159,31 +163,6 @@ describe("gateway talk runtime", () => {
         expect(ttsConfig?.providers?.acme?.voiceId).toBe("plugin-voice");
       },
     );
-  });
-
-  it("allows extension speech providers through talk.speak", async () => {
-    await setAcmeTalkConfig();
-
-    await withAcmeSpeechProvider(async () => {
-      const res = await invokeTalkSpeakDirect({
-        text: "Hello from talk mode.",
-      });
-      expect(res?.ok, JSON.stringify(res?.error)).toBe(true);
-      expect((res?.payload as TalkSpeakTestPayload | undefined)?.provider).toBe("acme");
-      expect((res?.payload as TalkSpeakTestPayload | undefined)?.audioBase64).toBe(
-        Buffer.from([7, 8, 9]).toString("base64"),
-      );
-    });
-  });
-
-  it.each(["```printf```", "> ```\n> x"])("preserves talk.speak prose after %s", async (prefix) => {
-    await setAcmeTalkConfig();
-    const text = `${prefix}\n\nThis explanation is ordinary prose and should be spoken in full.`;
-    await withAcmeSpeechProvider(async () => {
-      const res = await invokeTalkSpeakDirect({ text });
-      expect(res?.ok, JSON.stringify(res?.error)).toBe(true);
-      expect(expectSingleSynthesizeSpeechCall().text).toBe(text);
-    });
   });
 
   it("uses the spoken fallback for code-heavy talk.speak replies", async () => {

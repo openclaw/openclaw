@@ -21,6 +21,7 @@ The official Android app is available on [Google Play](https://play.google.com/s
   - Protocols: [Gateway protocol](/gateway/protocol) (nodes + control plane).
 - Select an agent in the sidebar to view its credential status in **Settings → Providers & Models**. The page updates when the Gateway publishes model, credential, or config changes. Use **Refresh** to recheck model availability.
 - The sidebar marks sessions waiting for an answer or approval, including inactive sessions and collapsed groups. Tap the attention icon, hover over it, or focus it with a keyboard to read the oldest pending request and the count of additional requests of the same kind. The indicator clears when requests resolve, are canceled, or expire. Question previews never include answer drafts.
+- The sidebar and recent Threads view keep cron sessions and system-created probes out of ordinary chat lists, without changing saved pins. The selected conversation stays reachable; named work and human-created background conversations remain visible. Open **Threads → Automations** to find and reopen automation and system conversations, including previously pinned chats. This is a view filter, not a saved setting. **Sidebar → Pages pencil → Automations** shows scheduled jobs and their recent run summaries. Other sessions without creation metadata remain visible rather than being classified from their titles.
 - **Settings → OpenClaw** opens a dedicated Gateway settings assistant when the operator connection has `operator.admin` and the Gateway supports `openclaw.chat`. Its setup conversation stays separate from ordinary Chat, redacts secret replies locally, and moves to Chat only after you tap **Open Chat**.
 
 Its reply field switches to masked input for secret prompts. Tap it again if a prompt change closes the keyboard. Android sends sensitive replies without trimming them and clears unsent drafts when you leave this page or background the app.
@@ -41,10 +42,18 @@ location, screen, or notification commands to the same phone. Android can
 suspend the secondary connections after the app leaves the foreground.
 
 The sidebar defaults to **Home → Threads → Skills → Overview**. Existing
-personalized orders and pinned pages are preserved; **Pages → Edit pinned items →
+personalized orders and pinned work pages are preserved; **Pages pencil → Edit pinned items →
 Reset pinned items** restores these defaults. The **Settings** gear beside the
-Gateway selector opens all settings, including while offline. Settings remains
-available in the Pages menu if you want to pin it explicitly.
+Gateway selector opens all settings, including while offline. Settings stays in
+the footer rather than the Pages menu or pin editor.
+
+Use the **pencil beside Pages** to open Agents, Automations, Usage, Skills,
+Skill Workshop, Dreaming, Terminal, or Desktop (when available). Pin the pages
+you use often with **Edit pinned items**. These work pages also remain reachable
+through search; Settings focuses on this phone, connections, configuration, and
+diagnostics. Settings, sidebar, search, and detail headers share the Web UI's
+icon meanings. Connection and approval states are written out rather than
+represented by unlabeled green or gray dots.
 
 The sidebar footer's Gateway selector opens **Add Gateway** when none are saved and Gateway
 settings when one is saved. With multiple saved Gateways, it opens a native
@@ -432,15 +441,15 @@ The draft has its own full-width row above the attachment and voice/send control
 so larger text and narrow screens do not squeeze it between buttons. The empty
 hint stays on one line; drafts show up to six lines and scroll when space is limited.
 The composer has narrower side gutters than the transcript. **+**, model, and
-reasoning stay together on the left; the context ring, microphone, and Talk/send
+reasoning stay together on the left; the microphone and Talk/send
 stay on the right in one row. Controls remain 48dp tall; very short views use
 narrower icon buttons to make room for **Details** while retaining an editable line.
 The placeholder and typed text share the same alignment.
 
 Open **+** for a compact icon list with Camera, Gallery, Files, Location, and
-Permissions. The Permissions row shows the current access mode. The
-context ring remains directly accessible on narrow screens and opens context
-usage, latest-run tokens, and the cost breakdown. Viewing usage does not require
+Permissions. The Permissions row shows the current access mode. Open the top-right
+**Chat actions** (⋮) menu to see the live Context usage ring. Choose **Context** to
+open context usage, latest-run tokens, and the cost breakdown. Viewing usage does not require
 permission to change session settings. A reported model-call total remains visible
 when no cost breakdown is available. Missing usage is shown as unknown.
 Tap the model name to open a compact menu above the composer, search by model name,
@@ -474,7 +483,7 @@ Open **Home** from the sidebar's **Pages** menu to chat, or select an existing s
 - Thread activity: search results and sidebar rows use each thread's own reported activity. An inactive run does not keep a working or queued indicator solely because its last status was running or queued.
 - Session selection: while the app is running, each Gateway and agent remembers the last chat you explicitly selected. Returning to an agent checks an older chat directly if it is outside the recent page; temporary lookup failures show an error without forgetting that choice.
 - Archiving the open session returns to the app's main chat only if that same session is still selected. Switching sessions, agents, or Gateways while the archive finishes preserves your newer selection. A successful archive also retires the archived chat's remembered selection even if its push notification is missed.
-- **New** in the sidebar creates and selects a fresh chat from any page without clearing the previous session. The sidebar and chat header show progress during creation and initial loading, and duplicate New actions are disabled. History refreshes do not cancel creation; selecting another session, agent, or Gateway while it finishes preserves that newer selection.
+- **New** in the sidebar creates and selects an independent chat for the selected agent without clearing the previous session. It preserves the existing model/provider, thinking, and Fast Mode inheritance behavior while appearing separately in Threads instead of beneath the previous chat or Home. Existing ordinary New chats also appear independently even when an older app recorded the previous chat as their parent; their history and stored settings are not changed. Forks, subagents, explicit worktree starts, and sessions without creation metadata keep their nesting. The sidebar and chat header show progress during creation and initial loading, and duplicate New actions are disabled. History refreshes do not cancel creation; selecting another session, agent, or Gateway while it finishes preserves that newer selection.
 - Offline history: cached transcripts update in the order live histories are accepted, so a delayed reconnect health check cannot restore an older snapshot. Switching sessions preserves queued cache updates for the session you left.
 - **Refresh chat** in chat actions reloads history and rechecks Gateway health without clearing pending messages. Chat readiness is separate from the Gateway connection: an empty connected thread shows **Chat not ready** while health is unconfirmed or a check has failed. Use **Refresh chat** to check again; **Gateway offline** indicates a disconnected Gateway. History failures do not stop subsequent health checks. Once Android observes a recovered run finish, a delayed history response does not bring back that run's Stop button or partial reply.
 - Send: `chat.send`. Outside an active Talk session, you can send text or staged attachments while the agent is working. A new draft brings back **Send**; clearing it restores **Stop**. The Gateway applies the existing [queue mode](/concepts/queue), so steering does not require stopping the current run. Sending remains disabled while another submission, attachment staging, or microphone capture owns the draft.
@@ -484,6 +493,35 @@ Open **Home** from the sidebar's **Pages** menu to chat, or select an existing s
 - Image input works through the picker and Android Sharesheet. Sent photos sit above your text bubble; adjacent photos wrap into compact rows. Assistant photos stay beside their associated text in message order. Tap a photo for the full-screen preview. Messages display at most four image previews at once; **Next images** and **Previous images** reach the rest without keeping every decoded image in memory. Assistant-generated images resolve through the paired Gateway connection and retain only their small artifact references in the offline transcript cache. Downloads are capped at 12 MiB and decoded to bounded display bitmaps.
 - Push updates (best-effort): `chat.subscribe` -> `event:"chat"`
 - Listen: long-press an assistant message and choose **Listen** to hear it; audio renders via Gateway `tts.speak` with the configured TTS provider chain, and on-device system TTS is used when the Gateway cannot render audio. Playback stops on session switch, new chat, app backgrounding, or chat close.
+
+#### Agent browser in chat
+
+When the Browser plugin returns an identifiable tab, Chat shows a preview of
+the session's latest browser tab under **Agent browser**. Tap the upward chevron
+to interact without leaving the conversation or replacing your draft. The
+downward chevron or Android Back returns to the preview. Collapsing dismisses
+the browser's keyboard without changing your chat draft. **Open in your browser**
+is a separate, explicit action.
+Ordinary website links and **Desktop** keep their existing behavior.
+
+The close icon removes the card from chat without closing the agent's remote
+tab. To restore it, choose **Chat actions > Agent browser**. Refreshing the same
+browser result does not reopen a dismissed card; a new browser-tool presentation
+can show it again. Closing is also available while the browser is offline or
+unavailable.
+
+The preview uses the connected Gateway and the exact browser profile, host or
+node, and tab from the tool result. It never starts another browser or substitutes
+a different tab. Switching sessions or Gateways replaces the viewer; going offline
+removes its controls until the connection returns. A stopped or closed remote tab
+stays unavailable rather than creating a replacement.
+
+This uses the Gateway's existing Browser panel and `operator.admin` browser
+permission. The connected Gateway must advertise browser-focus support and use
+its bundled Control UI. Older Gateways, disabled Control UI, and custom UI roots
+show an unavailable notice instead of loading an unsupported page; update the
+Gateway and use its bundled UI to enable embedded control. The card remains
+closable. No additional browser service or session-sharing permission is created.
 
 ### 7. Camera
 

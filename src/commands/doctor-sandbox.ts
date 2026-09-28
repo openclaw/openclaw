@@ -200,21 +200,6 @@ async function containerImageExists(command: "docker" | "podman", image: string)
   }
 }
 
-function resolveSandboxDockerImage(cfg: OpenClawConfig): string {
-  const image = cfg.agents?.defaults?.sandbox?.docker?.image?.trim();
-  return image ? image : DEFAULT_SANDBOX_IMAGE;
-}
-
-function resolveSandboxBackend(cfg: OpenClawConfig): string {
-  const backend = cfg.agents?.defaults?.sandbox?.backend?.trim();
-  return (backend || "docker").toLowerCase();
-}
-
-function resolveSandboxBrowserImage(cfg: OpenClawConfig): string {
-  const image = cfg.agents?.defaults?.sandbox?.browser?.image?.trim();
-  return image ? image : DEFAULT_SANDBOX_BROWSER_IMAGE;
-}
-
 type SandboxImageCheck = {
   engineCommand: "docker" | "podman";
   kind: string;
@@ -264,7 +249,7 @@ export async function maybeRepairSandboxImages(
   if (!sandbox || mode === "off") {
     return cfg;
   }
-  const backend = resolveSandboxBackend(cfg);
+  const backend = (sandbox.backend?.trim() || "docker").toLowerCase();
   if (backend !== "docker" && backend !== "podman") {
     if (sandbox.browser?.enabled) {
       note(
@@ -304,7 +289,7 @@ export async function maybeRepairSandboxImages(
   await validateSandboxContainerEngineTarget(containerEngine);
   await noteCodexBwrapNamespaceWarning(cfg, containerEngine.displayName);
 
-  const dockerImage = resolveSandboxDockerImage(cfg);
+  const dockerImage = sandbox.docker?.image?.trim() || DEFAULT_SANDBOX_IMAGE;
   await handleMissingSandboxImage(
     {
       engineCommand: containerEngine.command,
@@ -324,7 +309,7 @@ export async function maybeRepairSandboxImages(
   );
 
   if (sandbox.browser?.enabled && containerEngine.id === "docker") {
-    const browserImage = resolveSandboxBrowserImage(cfg);
+    const browserImage = sandbox.browser.image?.trim() || DEFAULT_SANDBOX_BROWSER_IMAGE;
     await handleMissingSandboxImage(
       {
         engineCommand: containerEngine.command,
@@ -451,16 +436,9 @@ export function noteSandboxScopeWarnings(cfg: OpenClawConfig) {
       continue;
     }
 
-    const overrides: string[] = [];
-    if (agentSandbox.docker && Object.keys(agentSandbox.docker).length > 0) {
-      overrides.push("docker");
-    }
-    if (agentSandbox.browser && Object.keys(agentSandbox.browser).length > 0) {
-      overrides.push("browser");
-    }
-    if (agentSandbox.prune && Object.keys(agentSandbox.prune).length > 0) {
-      overrides.push("prune");
-    }
+    const overrides = (["docker", "browser", "prune"] as const).filter(
+      (key) => agentSandbox[key] && Object.keys(agentSandbox[key]).length > 0,
+    );
 
     if (overrides.length === 0) {
       continue;

@@ -20,8 +20,6 @@ export function isPackageVersionDowngrade(
   return comparePackageUpdateVersions(nextVersion, currentVersion) < 0;
 }
 
-// Package update utilities inspect installed package metadata without trusting
-// paths outside the provided package root.
 export function expectedIntegrityForUpdate(
   spec: string | undefined,
   integrity: string | undefined,

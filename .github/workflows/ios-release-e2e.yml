@@ -22,7 +22,7 @@ permissions:
 
 jobs:
   qualify:
-    runs-on: xcode-27
+    runs-on: xcode-27-xlarge
     timeout-minutes: 240
     env:
       TARGET_SHA: ${{ inputs.target_sha || github.sha }}
@@ -41,7 +41,7 @@ jobs:
           sha = os.environ["TARGET_SHA"]
           mode = os.environ["E2E_MODE"]
           with open(os.environ["PROOF_PATH"], "w") as out:
-              json.dump({"schema": 1, "status": "failed", "trials": [],
+              json.dump({"schema": 2, "kind": "qualification", "status": "failed", "trials": [],
                          "targetSha": sha if re.fullmatch(r"[a-f0-9]{40}", sha) else None,
                          "harnessSha": None,
                          "mode": mode if mode in ("stock", "compare") else None,
@@ -73,7 +73,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
-          node-version: "24.19.0"
+          node-version: "24.21.0"
           install-bun: "false"
           cache-mode: "off"
 

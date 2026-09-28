@@ -48,16 +48,11 @@ function tupleForMode(
     case "read-only":
       return { sandbox: "read-only", approvalPolicy: "on-request", approvalsReviewer: "user" };
     case "guarded":
-      return {
-        sandbox: "workspace-write",
-        approvalPolicy: "on-request",
-        approvalsReviewer: "user",
-      };
     case "workspace":
       return {
         sandbox: "workspace-write",
         approvalPolicy: "on-request",
-        approvalsReviewer: canUseAutoReview ? "auto_review" : "user",
+        approvalsReviewer: mode === "workspace" && canUseAutoReview ? "auto_review" : "user",
       };
     case "full":
       return {

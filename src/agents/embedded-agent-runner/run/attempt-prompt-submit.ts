@@ -1,7 +1,3 @@
-/**
- * Submits or skips the prompt after build/preflight and before stream execution.
- * It may assume prompt context is assembled and admission state is published.
- */
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ImageContent } from "../../../llm/types.js";
 import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
@@ -39,9 +35,6 @@ import { isMidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./midturn-
 import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-/**
- * Submits one prepared prompt while owning provider transforms and cleanup.
- */
 type PromptSubmissionSession = {
   messages: AgentMessage[];
   [agentSessionQueuePromptContext]: AgentSession[typeof agentSessionQueuePromptContext];

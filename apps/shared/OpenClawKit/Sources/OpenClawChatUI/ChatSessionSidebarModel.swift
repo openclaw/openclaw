@@ -156,8 +156,8 @@ public enum ChatSessionSidebarModel {
         return trimmed == "onboarding" || trimmed.hasSuffix(":onboarding")
     }
 
-    /// `excludesMainSession` is for sidebars with a dedicated Home row (iOS);
-    /// the macOS sidebar keeps the main session inside its sections.
+    /// Omit main only when another navigation entry opens it. View options are
+    /// opt-in so iOS, palettes, and other session-list consumers retain their defaults.
     @MainActor
     public static func sections(
         sessions: [OpenClawChatSessionEntry],
@@ -167,19 +167,30 @@ public enum ChatSessionSidebarModel {
         groups: [OpenClawChatSessionGroup] = [],
         excludesMainSession: Bool = false,
         query: String,
-        sessionRoutingContract: String? = nil) -> [Section]
+        sessionRoutingContract: String? = nil,
+        viewOptions: ViewOptions? = nil,
+        observedOrder: ObservedOrder = .init()) -> [Section]
     {
-        let visible = self.visibleSessions(
+        let entries = self.visibleSessions(
             sessions: sessions,
             currentSessionKey: currentSessionKey,
             mainSessionKey: mainSessionKey,
             activeAgentID: activeAgentID,
             excludesMainSession: excludesMainSession,
-            query: query,
-            sessionRoutingContract: sessionRoutingContract)
+            sessionRoutingContract: sessionRoutingContract,
+            viewOptions: viewOptions)
+        let ordered: [OpenClawChatSessionEntry]
+        if viewOptions?.sort == .created {
+            var order = observedOrder
+            order.observe(sessions.map(\.key))
+            ordered = order.sortedByCreation(entries)
+        } else {
+            ordered = OpenClawChatSessionListOrganizer.organize(entries)
+        }
+        let visible = OpenClawChatSessionListOrganizer.filter(ordered, search: query)
         // Pin state owns first placement. Group sections then preserve the
         // same tree builder, so grouped parent/child rosters still nest.
-        let pinned = self.tree(from: visible.filter { $0.pinned == true })
+        let pinned = self.tree(from: OpenClawChatSessionListOrganizer.organize(visible.filter { $0.pinned == true }))
         let unpinned = visible.filter { $0.pinned != true }
         let orderedGroups = groups.sorted { lhs, rhs in
             lhs.position == rhs.position ? lhs.name < rhs.name : lhs.position < rhs.position
@@ -677,8 +688,8 @@ public enum ChatSessionSidebarModel {
         mainSessionKey: String,
         activeAgentID: String?,
         excludesMainSession: Bool,
-        query: String,
-        sessionRoutingContract: String?) -> [OpenClawChatSessionEntry]
+        sessionRoutingContract: String?,
+        viewOptions: ViewOptions?) -> [OpenClawChatSessionEntry]
     {
         let scopedSessions = sessions.filter {
             self.isSessionInActiveAgentScope(key: $0.key, agentID: $0.agentId, activeAgentID: activeAgentID)
@@ -712,7 +723,8 @@ public enum ChatSessionSidebarModel {
                 return false
             }
             return entry.key == selectedSessionKey ||
-                (!self.isHiddenInternalSession(entry.key) && entry.archived != true)
+                (!self.isHiddenInternalSession(entry.key) && entry.archived != true &&
+                    (viewOptions?.includes(entry) ?? true))
         }
         if !(excludesMainSession && selectedIsMain),
            !entries.contains(where: { $0.key == selectedSessionKey }),
@@ -723,10 +735,6 @@ public enum ChatSessionSidebarModel {
             // active row selectable instead of showing an empty selection.
             entries.append(OpenClawChatSessionEntry.placeholder(key: currentSessionKey))
         }
-        // Gateway, cached lists, iOS, and macOS must share the same pin
-        // chronology, stable key ties, and searchable session fields.
-        return OpenClawChatSessionListOrganizer.filter(
-            OpenClawChatSessionListOrganizer.organize(entries),
-            search: query)
+        return entries
     }
 }

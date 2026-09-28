@@ -24,6 +24,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { sessionPersonalProfileId } from "../../config/sessions/session-entry-provenance.js";
+import { getGatewayLocalUserIngress } from "../../gateway/local-user-ingress.js";
 import { normalizeMediaFacts } from "../../media/media-facts.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
 import { isSessionPersonalBootstrapTurn } from "../../sessions/session-participant-input.js";
@@ -400,6 +401,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     ...(userTurnTranscriptRecorder ? { userTurnTranscriptRecorder } : {}),
     currentInboundEventKind: inboundEventKind,
     currentInboundAudio: hasInboundAudio(sessionCtx),
+    gatewayLocalUserIngress: getGatewayLocalUserIngress(ctx),
     channelAdmissionEvidence:
       readChannelContextAdmissionEvidence(ctx) ?? readChannelContextAdmissionEvidence(sessionCtx),
     currentInboundContext,

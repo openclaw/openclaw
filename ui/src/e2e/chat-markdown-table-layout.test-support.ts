@@ -96,7 +96,8 @@ export function expectResponsiveTableGeometry(
   expect(geometry.verticalOverflow).toBeLessThanOrEqual(1);
   expect(geometry.topAligned).toBe(true);
   expect(geometry.headerPainted).toBe(true);
-  expect(geometry.actionAboveTable).toBe(true);
+  expect(geometry.actionBelowTable).toBe(true);
+  expect(geometry.tableStartsShell).toBe(true);
   expect(geometry.columnWidths[0]).toBeGreaterThan(geometry.columnWidths[1]!);
   if (width > 932) {
     expect(geometry.width).toBeCloseTo(geometry.prose, 0);
@@ -116,7 +117,8 @@ export function expectResponsiveTableGeometry(
     expect(geometry.controlsGap).toBe(4);
     expect(geometry.denseOverflow).toBeGreaterThan(0);
     if (width === 932) {
-      expect(geometry.width).toBeCloseTo(900, 0);
+      // 4px shell inset plus the shared 16px reading gutter on each side.
+      expect(geometry.width).toBeCloseTo(width - 2 * 20, 0);
     } else {
       expect(geometry.width).toBeLessThanOrEqual(geometry.prose + 1);
     }
@@ -144,8 +146,8 @@ export function readResponsiveTableGeometry(element: HTMLElement) {
     visibleExpandLabel:
       element.querySelector(".markdown-table__expand > span")!.getClientRects().length > 0,
     controlsGap:
-      table.getBoundingClientRect().top -
-      element.querySelector(".markdown-table__actions")!.getBoundingClientRect().bottom,
+      element.querySelector(".markdown-table__actions")!.getBoundingClientRect().top -
+      viewport.getBoundingClientRect().bottom,
     bottomGap: element.nextElementSibling!.getBoundingClientRect().top - rect.bottom,
     width: rect.width,
     prose: paragraph.getBoundingClientRect().width,
@@ -154,6 +156,7 @@ export function readResponsiveTableGeometry(element: HTMLElement) {
     columnWidths: [...cells].map((cell) => cell.getBoundingClientRect().width),
     topAligned: [...cells].every((cell) => getComputedStyle(cell).verticalAlign === "top"),
     headerPainted: table.contains(document.elementFromPoint(header.left + 4, header.top + 4)),
-    actionAboveTable: action.getBoundingClientRect().bottom <= table.getBoundingClientRect().top,
+    actionBelowTable: action.getBoundingClientRect().top >= viewport.getBoundingClientRect().bottom,
+    tableStartsShell: Math.abs(table.getBoundingClientRect().top - rect.top) <= 1,
   };
 }

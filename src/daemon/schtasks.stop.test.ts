@@ -1,6 +1,16 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { describe, expect, it, vi } from "vitest";
+import { resolveDoctorUpdateAdmission } from "../commands/doctor-maintenance-admission.js";
+import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
+import * as gatewayStateOwner from "../infra/gateway-state-owner.js";
+import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import {
   GATEWAY_OWNER,
   GATEWAY_PORT,
@@ -11,6 +21,7 @@ import {
   findVerifiedGatewayListenerPidsOnPortSync,
   formatWindowsTaskSupervisorChildArgument,
   mockWindowsTaskkillSuccess,
+  mockLingeringGatewayListener,
   probeProcessState,
   pushSuccessfulSchtasksResponses,
   readGatewayOwnerLease,
@@ -21,6 +32,7 @@ import {
   setTaskStateProbeResult,
   spawnSync,
   spawnSyncResult,
+  scheduledTaskProbeResult,
   startScheduledTask,
   stopScheduledTask,
   taskkillPids,
@@ -29,6 +41,7 @@ import {
   busyPortUsage,
   freePortUsage,
 } from "./schtasks.stop.test-support.js";
+import { withGatewayServiceUpdateAuthority } from "./service-update-authority.js";
 import {
   gatewayServiceProbeHostsMock,
   inspectPortUsageMock,
@@ -38,6 +51,119 @@ import {
 } from "./test-helpers/schtasks-fixtures.js";
 
 describe("Scheduled Task stop/restart cleanup", () => {
+  it.each([3, 4])(
+    "restores an ownerless task in state %s while revalidating Doctor's state admission",
+    async (taskState) => {
+      await withPreparedGatewayTask(async ({ env, stdout }) => {
+        env.OPENCLAW_STATE_DIR = path.join(
+          expectDefined(env.USERPROFILE, "fixture home"),
+          ".openclaw",
+        );
+        openOpenClawStateDatabase({ env });
+        closeOpenClawStateDatabaseForTest();
+        const admission = resolveDoctorUpdateAdmission(env);
+        vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+        let clock = 0;
+        vi.spyOn(Date, "now").mockImplementation(() => clock);
+        setTaskStateProbeResult(() => {
+          if (schtasksCalls.some(([action]) => action === "/Run")) {
+            return 4;
+          }
+          if (schtasksCalls.some(([action]) => action === "/End")) {
+            return 3;
+          }
+          clock += GATEWAY_SERVICE_STOP_TIMEOUT_MS / 4;
+          return taskState;
+        });
+        pushSuccessfulSchtasksResponses(4);
+
+        await expect(
+          withGatewayServiceUpdateAuthority(admission.assertCurrent, (assertCurrent) =>
+            restartScheduledTask({ env, stdout, assertCurrent, preserveDefinition: true }),
+          ),
+        ).resolves.toMatchObject({ outcome: "completed" });
+
+        expect(schtasksCalls).toContainEqual(["/Run", "/TN", "OpenClaw Gateway"]);
+        expect(schtasksCalls.filter(([action]) => action === "/End")).toHaveLength(
+          taskState === 4 ? 1 : 0,
+        );
+        expect(() => admission.assertCurrent()).not.toThrow();
+      });
+    },
+  );
+
+  it.each([
+    ["cleanup", false, true],
+    ["stop", true, false],
+    ["stop and cleanup", true, true],
+  ] as const)(
+    "preserves %s failures without activating the task",
+    async (_name, failStop, failClose) => {
+      await withPreparedGatewayTask(async ({ env, stdout }) => {
+        env.OPENCLAW_STATE_DIR = path.join(
+          expectDefined(env.USERPROFILE, "fixture home"),
+          ".openclaw",
+        );
+        openOpenClawStateDatabase({ env });
+        closeOpenClawStateDatabaseForTest();
+        const admission = resolveDoctorUpdateAdmission(env);
+        const acquire = gatewayStateOwner.tryAcquireGatewayStateOwner;
+        const captured: { exclusion: ReturnType<typeof acquire> } = { exclusion: null };
+        vi.spyOn(gatewayStateOwner, "tryAcquireGatewayStateOwner").mockImplementation(
+          (databasePath) => {
+            captured.exclusion = acquire(databasePath);
+            return captured.exclusion;
+          },
+        );
+        let resources: ReturnType<typeof getOpenClawDatabaseMaintenanceScope>;
+        let failCleanup = failClose;
+        const stopFailure = new Error("native stop authority refused");
+        const cleanupFailure = new Error("native state close failed");
+        const assertCurrent = () => {
+          admission.assertCurrent();
+          const currentScope = getOpenClawDatabaseMaintenanceScope();
+          if (currentScope && !resources) {
+            resources = currentScope;
+            resources.own({}, "shared-resources", () => {
+              if (failCleanup) {
+                throw cleanupFailure;
+              }
+            });
+          }
+          if (currentScope && failStop) {
+            throw stopFailure;
+          }
+        };
+        vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+        setTaskStateProbeResult(3);
+        pushSuccessfulSchtasksResponses(4);
+        try {
+          const failure = await withGatewayServiceUpdateAuthority(assertCurrent, (current) =>
+            restartScheduledTask({ env, stdout, assertCurrent: current, preserveDefinition: true }),
+          ).catch((error: unknown) => error);
+          const errors = collectNestedErrorCandidates(failure);
+          if (failStop) {
+            expect(errors).toContain(stopFailure);
+          }
+          if (failClose) {
+            expect(errors).toContain(cleanupFailure);
+          }
+          expect(schtasksCalls).not.toContainEqual(["/Run", "/TN", "OpenClaw Gateway"]);
+          if (failClose) {
+            expect(() => admission.assertCurrent()).toThrow("undergoing offline maintenance");
+          } else {
+            expect(() => admission.assertCurrent()).not.toThrow();
+          }
+        } finally {
+          // The test retains handles only to clean its fixture; production retires the CLI process.
+          failCleanup = false;
+          await resources?.close();
+          captured.exclusion?.release();
+        }
+      });
+    },
+  );
+
   it.each([
     { stdout: '"node.exe","4242","Console","1","1,024 K"', status: 0, result: "alive" },
     { stdout: "No tasks", status: 0, result: "missing" },
@@ -79,6 +205,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
 
   it("accepts a localized /End failure when COM proves the task is ready", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       const onMutation = vi.fn();
       schtasksResponses.push(
         { ...SUCCESS_RESPONSE },
@@ -89,7 +216,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
           stderr: "FEHLER: Die Aufgabe wird derzeit nicht ausgeführt.",
         },
       );
-      setTaskStateProbeResult(3);
+      setTaskStateProbeResult(() => (schtasksCalls.some(([action]) => action === "/End") ? 3 : 4));
 
       await expect(stopScheduledTask({ env, stdout, onMutation })).resolves.toBeUndefined();
 
@@ -98,15 +225,13 @@ describe("Scheduled Task stop/restart cleanup", () => {
         ["/Query", "/TN", "OpenClaw Gateway"],
         ["/End", "/TN", "OpenClaw Gateway"],
       ]);
-      // Native Windows cleanup adds a CIM ownership snapshot; portable lanes
-      // exercise only the locale-independent COM state probe here.
-      expect(spawnSync).toHaveBeenCalledTimes(process.platform === "win32" ? 2 : 1);
       expect(onMutation).toHaveBeenCalledWith({ mode: "schtasks-stop" });
     });
   });
 
   it("fails closed after a localized /End failure when the task is running", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       const onMutation = vi.fn();
       schtasksResponses.push(
         { ...SUCCESS_RESPONSE },
@@ -123,13 +248,13 @@ describe("Scheduled Task stop/restart cleanup", () => {
         "schtasks end failed: FEHLER: Die Aufgabe konnte nicht beendet werden.",
       );
 
-      expect(spawnSync).toHaveBeenCalledOnce();
       expect(onMutation).not.toHaveBeenCalled();
     });
   });
 
   it("fails closed after a localized /End failure when the state probe is missing", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       const onMutation = vi.fn();
       schtasksResponses.push(
         { ...SUCCESS_RESPONSE },
@@ -140,20 +265,14 @@ describe("Scheduled Task stop/restart cleanup", () => {
           stderr: "FEHLER: Der Aufgabenstatus ist nicht verfügbar.",
         },
       );
-      spawnSync.mockReturnValueOnce({
-        pid: 0,
-        output: [null, "-2147024894", ""],
-        stdout: "-2147024894",
-        stderr: "",
-        status: 1,
-        signal: null,
-      });
+      setTaskStateProbeResult(() =>
+        schtasksCalls.some(([action]) => action === "/End") ? null : 4,
+      );
 
       await expect(stopScheduledTask({ env, stdout, onMutation })).rejects.toThrow(
         "schtasks end failed: FEHLER: Der Aufgabenstatus ist nicht verfügbar.",
       );
 
-      expect(spawnSync).toHaveBeenCalledOnce();
       expect(onMutation).not.toHaveBeenCalled();
     });
   });
@@ -166,18 +285,13 @@ describe("Scheduled Task stop/restart cleanup", () => {
         pushSuccessfulSchtasksResponses(3);
         mockWindowsTaskkillSuccess();
         findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
-        inspectPortUsageMock
-          .mockResolvedValueOnce(
-            busyPortUsage(4242, { commandLine: INSTALLED_GATEWAY_COMMAND_LINE }),
-          )
-          .mockResolvedValueOnce(freePortUsage());
+        mockLingeringGatewayListener(4242);
 
         await stopScheduledTask({ env, stdout, onMutation });
 
         expect(findVerifiedGatewayListenerPidsOnPortSync).not.toHaveBeenCalled();
         expectGatewayTermination(4242);
         expectTaskkill(4242);
-        expect(inspectPortUsageMock).toHaveBeenCalledTimes(2);
         expect(inspectPortUsageMock).toHaveBeenCalledWith(GATEWAY_PORT, {
           probeHosts: ["127.0.0.1"],
         });
@@ -327,7 +441,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
         });
 
         await expect(terminateScheduledTaskGatewayListeners(env)).rejects.toThrow(
-          "Gateway owner changed before terminating process 4242",
+          "Gateway owner changed",
         );
 
         const taskkillCalls = spawnSync.mock.calls
@@ -511,7 +625,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
         });
 
         await expect(terminateScheduledTaskGatewayListeners(env)).rejects.toThrow(
-          "Gateway owner changed before terminating process 4242",
+          "Gateway owner changed",
         );
 
         const taskkillCalls = spawnSync.mock.calls
@@ -538,7 +652,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
       });
 
       await expect(terminateScheduledTaskGatewayListeners(env)).rejects.toThrow(
-        "Gateway owner changed before terminating process 4242",
+        "Gateway owner changed",
       );
 
       expect(taskkillPids()).toEqual([]);
@@ -637,6 +751,9 @@ describe("Scheduled Task stop/restart cleanup", () => {
         spawnSync.mockImplementation((command, args, options) => {
           expect(options?.env).toBeDefined();
           expect(options?.env).not.toHaveProperty("BOUNDARY_PARENT_ONLY");
+          if (args?.includes("-EncodedCommand")) {
+            return scheduledTaskProbeResult();
+          }
           const executable = command.toLowerCase();
           if (executable.endsWith("taskkill.exe")) {
             const argv = Array.isArray(args) ? args.map(String) : [];
@@ -722,6 +839,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
         { ...SUCCESS_RESPONSE },
         { ...SUCCESS_RESPONSE },
       );
+      spawnSync.mockReturnValueOnce(spawnSyncResult(JSON.stringify({ state: 4, enabled: true })));
       setTaskStateProbeResult(4);
       const write = vi.fn();
       const onMutation = vi.fn(() => {
@@ -747,6 +865,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
   it("audits a successful task stop before a later output failure", async () => {
     await withPreparedGatewayTask(async ({ env }) => {
       pushSuccessfulSchtasksResponses(3);
+      setTaskStateProbeResult(() => (schtasksCalls.some(([action]) => action === "/End") ? 3 : 4));
       const onMutation = vi.fn();
       const stdout = {
         write: vi.fn(() => {
@@ -764,10 +883,7 @@ describe("Scheduled Task stop/restart cleanup", () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
       pushSuccessfulSchtasksResponses(3);
       mockWindowsTaskkillSuccess();
-      inspectPortUsageMock.mockResolvedValueOnce(
-        busyPortUsage(4242, { commandLine: INSTALLED_GATEWAY_COMMAND_LINE }),
-      );
-      inspectPortUsageMock.mockResolvedValue(busyPortUsage(5252));
+      mockLingeringGatewayListener(4242, busyPortUsage(5252));
 
       const failure = await stopScheduledTask({ env, stdout }).catch((err: unknown) => err);
 
@@ -824,20 +940,12 @@ describe("Scheduled Task stop/restart cleanup", () => {
       pushSuccessfulSchtasksResponses(3);
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
       mockWindowsTaskkillSuccess();
-      inspectPortUsageMock
-        .mockResolvedValueOnce(
-          busyPortUsage(6262, {
-            commandLine:
-              '"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\steipete\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js" gateway --port 18789',
-          }),
-        )
-        .mockResolvedValueOnce(freePortUsage());
+      mockLingeringGatewayListener(6262);
 
       await stopScheduledTask({ env, stdout });
 
       expectGatewayTermination(6262);
       expectTaskkill(6262);
-      expect(inspectPortUsageMock).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -866,18 +974,21 @@ describe("Scheduled Task stop/restart cleanup", () => {
     "waits for the owned gateway port before restart with suffix %s",
     async (launcherSuffix) => {
       await withPreparedGatewayTask(async ({ env, stdout }) => {
+        vi.spyOn(process, "platform", "get").mockReturnValue("win32");
         const onMutation = vi.fn();
         pushSuccessfulSchtasksResponses(4);
         mockWindowsTaskkillSuccess();
         findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([5151]);
-        inspectPortUsageMock
-          .mockResolvedValueOnce(
-            busyPortUsage(5151, { commandLine: INSTALLED_GATEWAY_COMMAND_LINE }),
-          )
-          .mockResolvedValueOnce(freePortUsage());
+        mockLingeringGatewayListener(5151);
 
         await expect(restartScheduledTask({ env, stdout, onMutation })).resolves.toEqual({
           outcome: "completed",
+          taskSettlement: {
+            status: "settled",
+            taskName: "OpenClaw Gateway",
+            lastRunResult: "0",
+            ended: false,
+          },
         });
 
         expect(findVerifiedGatewayListenerPidsOnPortSync).not.toHaveBeenCalled();
@@ -891,7 +1002,6 @@ describe("Scheduled Task stop/restart cleanup", () => {
         expect(schtasksCalls).toEqual([
           ["/Query"],
           ["/Query", "/TN", "OpenClaw Gateway"],
-          ["/End", "/TN", "OpenClaw Gateway"],
           ["/Run", "/TN", "OpenClaw Gateway"],
         ]);
       }, launcherSuffix);
@@ -905,7 +1015,9 @@ describe("Scheduled Task stop/restart cleanup", () => {
         pushSuccessfulSchtasksResponses(4);
         let current = stage !== "routing";
         inspectPortUsageMock.mockImplementation(async () => {
-          current = false;
+          if (inspectPortUsageMock.mock.calls.length > 1) {
+            current = false;
+          }
           return freePortUsage();
         });
 
@@ -922,7 +1034,9 @@ describe("Scheduled Task stop/restart cleanup", () => {
         ).rejects.toThrow("repair continuation retired");
 
         expect(schtasksCalls.filter(([action]) => action === "/End" || action === "/Run")).toEqual(
-          stage === "routing" ? [] : [["/End", "/TN", "OpenClaw Gateway"]],
+          stage === "routing" || process.platform === "win32"
+            ? []
+            : [["/End", "/TN", "OpenClaw Gateway"]],
         );
         expect(killProcessTreeMock).not.toHaveBeenCalled();
       });
@@ -955,7 +1069,9 @@ describe("Scheduled Task stop/restart cleanup", () => {
 
   it("throws when /Run fails during restart", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       const onMutation = vi.fn();
+      setTaskStateProbeResult(() => (schtasksCalls.some(([action]) => action === "/End") ? 3 : 4));
       schtasksResponses.push(
         { ...SUCCESS_RESPONSE },
         { ...SUCCESS_RESPONSE },

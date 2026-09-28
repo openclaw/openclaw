@@ -243,10 +243,12 @@ function resolveMissingProperties(error: TypeBoxValidationError): string[] {
   return properties.filter((property): property is string => typeof property === "string");
 }
 
-function extractAllowedValues(error: TypeBoxValidationError): unknown[] | null {
+function getAllowedValuesSummary(
+  error: TypeBoxValidationError,
+): ReturnType<typeof summarizeAllowedValues> {
   if (error.keyword === "enum") {
     const allowedValues = error.params?.allowedValues;
-    return Array.isArray(allowedValues) ? allowedValues : null;
+    return Array.isArray(allowedValues) ? summarizeAllowedValues(allowedValues) : null;
   }
 
   if (error.keyword === "const") {
@@ -254,20 +256,10 @@ function extractAllowedValues(error: TypeBoxValidationError): unknown[] | null {
     if (!params || !Object.hasOwn(params, "allowedValue")) {
       return null;
     }
-    return [params.allowedValue];
+    return summarizeAllowedValues([params.allowedValue]);
   }
 
   return null;
-}
-
-function getAllowedValuesSummary(
-  error: TypeBoxValidationError,
-): ReturnType<typeof summarizeAllowedValues> {
-  const allowedValues = extractAllowedValues(error);
-  if (!allowedValues) {
-    return null;
-  }
-  return summarizeAllowedValues(allowedValues);
 }
 
 function resolveAdditionalProperty(error: TypeBoxValidationError): string | undefined {

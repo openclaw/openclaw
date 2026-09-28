@@ -1,4 +1,3 @@
-// Channel runtime context helpers build plugin runtime context for channel execution.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ChannelRuntimeContextEvent,
@@ -10,30 +9,17 @@ import { createSubsystemLogger } from "../../logging.js";
 type StoredRuntimeContext = {
   token: symbol;
   context: unknown;
-  normalizedKey: {
-    channelId: string;
-    accountId?: string;
-    capability: string;
-  };
 };
 
 const log = createSubsystemLogger("plugins/runtime-channel");
 
-function normalizeRuntimeContextString(value: string | null | undefined): string {
-  return normalizeOptionalString(value) ?? "";
-}
-
 function normalizeRuntimeContextKey(params: ChannelRuntimeContextKey): {
   mapKey: string;
-  normalizedKey: {
-    channelId: string;
-    accountId?: string;
-    capability: string;
-  };
+  normalizedKey: ChannelRuntimeContextEvent["key"];
 } | null {
-  const channelId = normalizeRuntimeContextString(params.channelId);
-  const capability = normalizeRuntimeContextString(params.capability);
-  const accountId = normalizeRuntimeContextString(params.accountId);
+  const channelId = normalizeOptionalString(params.channelId);
+  const capability = normalizeOptionalString(params.capability);
+  const accountId = normalizeOptionalString(params.accountId) ?? "";
   if (!channelId || !capability) {
     return null;
   }
@@ -47,30 +33,6 @@ function normalizeRuntimeContextKey(params: ChannelRuntimeContextKey): {
   };
 }
 
-function doesRuntimeContextWatcherMatch(params: {
-  watcher: {
-    channelId?: string;
-    accountId?: string;
-    capability?: string;
-  };
-  event: ChannelRuntimeContextEvent;
-}): boolean {
-  if (params.watcher.channelId && params.watcher.channelId !== params.event.key.channelId) {
-    return false;
-  }
-  if (
-    params.watcher.accountId !== undefined &&
-    params.watcher.accountId !== (params.event.key.accountId ?? "")
-  ) {
-    return false;
-  }
-  if (params.watcher.capability && params.watcher.capability !== params.event.key.capability) {
-    return false;
-  }
-  return true;
-}
-
-/** Creates the in-memory channel runtime context registry used by plugin runtime surfaces. */
 export function createChannelRuntimeContextRegistry(): ChannelRuntimeContextRegistry {
   const runtimeContexts = new Map<string, StoredRuntimeContext>();
   const runtimeContextWatchers = new Set<{
@@ -83,7 +45,12 @@ export function createChannelRuntimeContextRegistry(): ChannelRuntimeContextRegi
   }>();
   const emitRuntimeContextEvent = (event: ChannelRuntimeContextEvent) => {
     for (const watcher of runtimeContextWatchers) {
-      if (!doesRuntimeContextWatcherMatch({ watcher: watcher.filter, event })) {
+      const { channelId, accountId, capability } = watcher.filter;
+      if (
+        (channelId && channelId !== event.key.channelId) ||
+        (accountId !== undefined && accountId !== (event.key.accountId ?? "")) ||
+        (capability && capability !== event.key.capability)
+      ) {
         continue;
       }
       try {
@@ -102,10 +69,7 @@ export function createChannelRuntimeContextRegistry(): ChannelRuntimeContextRegi
   return {
     register: (params) => {
       const normalized = normalizeRuntimeContextKey(params);
-      if (!normalized) {
-        return { dispose: () => {} };
-      }
-      if (params.abortSignal?.aborted) {
+      if (!normalized || params.abortSignal?.aborted) {
         return { dispose: () => {} };
       }
       const token = Symbol(normalized.mapKey);
@@ -136,7 +100,6 @@ export function createChannelRuntimeContextRegistry(): ChannelRuntimeContextRegi
       runtimeContexts.set(normalized.mapKey, {
         token,
         context: params.context,
-        normalizedKey: normalized.normalizedKey,
       });
       if (disposed) {
         return { dispose };

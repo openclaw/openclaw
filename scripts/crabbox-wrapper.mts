@@ -123,7 +123,7 @@ try {
   console.error(`[crabbox] ${error instanceof Error ? error.message : String(error)}`);
   process.exit(2);
 }
-const { binary, version } = cli;
+let { binary, version } = cli;
 const workloadCommand = isWorkloadRoutedCommand(args);
 const workloadOption = workloadCommand ? extractWrapperValueOption(args, "--workload") : undefined;
 const userArgStart = commandUserArgStart(args);
@@ -1183,8 +1183,7 @@ function userDisplayPath(path: string) {
 }
 
 function blacksmithTestboxPrivateKeyPath(id: string) {
-  // Crabbox 0.58 moved explicit state-root keys; older supported clients use config.
-  const stateRoot = semverGte(version, "0.58.0") ? process.env.XDG_STATE_HOME : undefined;
+  const stateRoot = process.env.XDG_STATE_HOME;
   if (
     stateRoot &&
     !(process.platform === "win32"
@@ -1335,7 +1334,7 @@ function observeBlacksmithTimingJSONLine(line: string) {
     if (
       canonicalProviderName(report?.provider) === "blacksmith-testbox" &&
       typeof report.leaseId === "string" &&
-      report.leaseId.startsWith("tbx_")
+      /^tbx_[a-zA-Z0-9_-]+$/u.test(report.leaseId)
     ) {
       capturedBlacksmithLeaseId = report.leaseId;
     }
@@ -3709,18 +3708,22 @@ async function applyRunTransforms(
 }
 
 const helpCommand = workloadCommand ? args.slice(0, userArgStart) : ["run"];
-const help = probeCrabboxHelp(binary, [...helpCommand, "--help"]);
-const providers = parseProvidersFromHelp(help.text);
-commandValueOptionsFromHelp = parseCommandValueOptionsFromHelp(help.text);
-const displayBinary = binary === "crabbox" ? "crabbox" : relative(repoRoot, binary);
+function cliMetadata() {
+  const help = probeCrabboxHelp(binary, [...helpCommand, "--help"]);
+  const providers = parseProvidersFromHelp(help.text);
+  commandValueOptionsFromHelp = parseCommandValueOptionsFromHelp(help.text);
+  const displayBinary = binary === "crabbox" ? "crabbox" : relative(repoRoot, binary);
 
-if (help.status !== 0 || commandValueOptionsFromHelp.size === 0) {
-  console.error(
-    `[crabbox] bin=${displayBinary} version=${version} providers=${providers.join(",") || "unknown"}`,
-  );
-  console.error("[crabbox] selected binary failed --help sanity checks");
-  process.exit(2);
+  if (help.status !== 0 || commandValueOptionsFromHelp.size === 0) {
+    console.error(
+      `[crabbox] bin=${displayBinary} version=${version} providers=${providers.join(",") || "unknown"}`,
+    );
+    console.error("[crabbox] selected binary failed --help sanity checks");
+    process.exit(2);
+  }
+  return { help, providers, displayBinary };
 }
+let { help, providers, displayBinary } = cliMetadata();
 
 // Classify help before removing the wrapper separator or preparing execution.
 // Only the leaf's option prefix counts; payloads and flag values stay gated.
@@ -3751,7 +3754,27 @@ if (args[userArgStart] === "--") {
   args.splice(userArgStart, 1);
 }
 
-const providerSelection = selectedProvider(args, providers);
+let providerSelection = selectedProvider(args, providers);
+if (
+  !providerSelection.error &&
+  canonicalProviderName(providerSelection.provider) === "blacksmith-testbox" &&
+  !semverGte(version, "0.67.0")
+) {
+  // Only Testbox needs the native SSH lifetime repair. Preserve supported
+  // offline binaries for other providers, and parse against the executable used.
+  try {
+    ({ binary, version } = await ensureManagedCrabboxBinary({
+      binary,
+      minimumVersion: "0.67.0",
+    }));
+    resolvedCrabboxConfigCache = undefined;
+    ({ help, providers, displayBinary } = cliMetadata());
+    providerSelection = selectedProvider(args, providers);
+  } catch (error) {
+    console.error(`[crabbox] ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(2);
+  }
+}
 if (providerSelection.error) {
   console.error(`[crabbox] ${providerSelection.error}`);
   if (providerSelection.readiness) {
@@ -3859,11 +3882,36 @@ if (canonicalProvider === "blacksmith-testbox") {
 let testboxLeaseFreshness: ReturnType<typeof prepareTestboxLeaseFreshness>;
 try {
   testboxLeaseFreshness = prepareTestboxLeaseFreshness({
-    args: normalizedArgs,
+    // Reuse the native-help parser's boundary; payload flags are never lease
+    // options. Equals form preserves option-looking values and Go's last value.
+    args: [
+      normalizedArgs[0] ?? "",
+      ...parseCommandInvocation(help.text, normalizedArgs).optionEntries.map(
+        ({ name, value, index }) =>
+          normalizedArgs[index]?.includes("=") || commandValueOptionsFromHelp.has(name)
+            ? `--${name}=${value}`
+            : `--${name}`,
+      ),
+    ],
+    command: normalizedArgs,
     env: { ...process.env, CI: process.env.CI || "true" },
     provider: canonicalProvider,
     repoRoot,
   });
+  if (testboxLeaseFreshness) {
+    // Native timing carries the allocated id for warmup as well as run. Capture
+    // it so reuse can require an allocation receipt instead of adopting a lease.
+    // Go flags use the last value. An earlier explicit false must not disable
+    // the allocation receipt after a retained lease has already been created.
+    normalizedArgs.splice(commandOptionEnd(normalizedArgs), 0, "--timing-json");
+    console.error(
+      JSON.stringify({
+        event: "testbox-admission",
+        ...testboxLeaseFreshness.attribution,
+        leaseId: testboxLeaseFreshness.id || undefined,
+      }),
+    );
+  }
 } catch (error) {
   console.error(`[crabbox] ${error instanceof Error ? error.message : String(error)}`);
   process.exit(2);
@@ -4232,6 +4280,14 @@ const childStartedAtMs = Date.now();
 const FAST_FAIL_HINT_WINDOW_MS = 15_000;
 const spawnManagedChild = await loadManagedChildSpawner();
 await preparationCheckpoint();
+try {
+  // Preparation can yield while a receipt or source changes. Keep the original
+  // capsule provenance and refuse before native Testbox I/O if it no longer matches.
+  testboxLeaseFreshness?.assertCurrent();
+} catch (error) {
+  cleanupOnce();
+  throw error;
+}
 // Persist admission before the child can observe or mutate the staged source.
 if (sourceStaging?.recorded) {
   let namespace;
@@ -4312,9 +4368,9 @@ async function finishChildExit(code: number | null, signal: Signal | null) {
   let exitCode = code;
   const fullCheckoutAvailable =
     !fullCheckout || assertFullCheckoutAvailableBeforeExit(fullCheckout.dir);
-  if (settled && !signal && code === 0) {
+  if (settled && !signal && (code === 0 || capturedBlacksmithLeaseId)) {
     try {
-      recordTestboxLeaseFreshness(testboxLeaseFreshness);
+      recordTestboxLeaseFreshness(testboxLeaseFreshness, capturedBlacksmithLeaseId, code ?? 1);
     } catch (error) {
       console.error(
         `[crabbox] failed to record Testbox lease freshness: ${error instanceof Error ? error.message : String(error)}`,
@@ -4323,10 +4379,27 @@ async function finishChildExit(code: number | null, signal: Signal | null) {
     }
   }
   const cleaned = cleanupOnce();
+  const finalExitCode = (exitCode ?? 1) || (settled && fullCheckoutAvailable && cleaned ? 0 : 1);
+  if (testboxLeaseFreshness) {
+    console.error(
+      JSON.stringify({
+        event: "testbox-completion",
+        ...testboxLeaseFreshness.attribution,
+        leaseId: capturedBlacksmithLeaseId || testboxLeaseFreshness.id || undefined,
+        sourceTree: sourceCapsule?.tree,
+        elapsedMs: Date.now() - childStartedAtMs,
+        exitCode:
+          cancellationSignal || signal
+            ? (signalExitCodes.get(cancellationSignal ?? signal!) ?? 1)
+            : finalExitCode,
+        signal: cancellationSignal || signal,
+        settled,
+      }),
+    );
+  }
   if (cancellationSignal || signal) {
     process.exit(signalExitCodes.get(cancellationSignal ?? signal!) ?? 1);
   }
-  const finalExitCode = (exitCode ?? 1) || (settled && fullCheckoutAvailable && cleaned ? 0 : 1);
   if (finalExitCode === 0 && discoveredStaging && !cancellationSignal && !signal) {
     try {
       const recovered = await recoverDiscoveredStaging(

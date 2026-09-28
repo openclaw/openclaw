@@ -42,12 +42,12 @@ describe("native parent retirement after rotation", () => {
           await replacement.unregister();
         }
         expect(releasePin).not.toHaveBeenCalled();
-        codexNativeSubagentMonitorRuntime.retireParent(client.client, "replacement-parent");
+        await codexNativeSubagentMonitorRuntime.retireParent(client.client, "replacement-parent");
         expect(releasePin).toHaveBeenCalledOnce();
         expect(f.deliver).not.toHaveBeenCalled();
       } finally {
-        codexNativeSubagentMonitorRuntime.retireParent(client.client, "parent-thread");
-        codexNativeSubagentMonitorRuntime.retireParent(client.client, "replacement-parent");
+        await codexNativeSubagentMonitorRuntime.retireParent(client.client, "parent-thread");
+        await codexNativeSubagentMonitorRuntime.retireParent(client.client, "replacement-parent");
         await replacement.unregister();
         client.close();
       }
@@ -95,13 +95,13 @@ describe("native parent retirement after rotation", () => {
           other.agentId = "other";
         }
         const replacement = await monitor.registerParent(other);
-        monitor.retireParent("other-parent");
+        await monitor.retireParent("other-parent");
         expect(releasePin).not.toHaveBeenCalled();
-        monitor.retireParent("parent-thread");
+        await monitor.retireParent("parent-thread");
         expect(releasePin).toHaveBeenCalledOnce();
         await replacement.unregister();
       } finally {
-        monitor.dispose();
+        await monitor.dispose();
         client.close();
       }
     },

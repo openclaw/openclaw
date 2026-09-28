@@ -112,6 +112,7 @@ describe("runDoctorHealthFlow", () => {
             return kind.startsWith("absent")
               ? null
               : {
+                  ...(windows ? { sourcePath: state.path("foreign-state", "gateway.cmd") } : {}),
                   programArguments: [process.execPath, entrypoint, "gateway"],
                   environment: {
                     OPENCLAW_STATE_DIR: foreign ? state.path("foreign-state") : state.stateDir,
@@ -236,6 +237,67 @@ describe("runDoctorHealthFlow", () => {
         }
         expect(stop).not.toHaveBeenCalled();
         expect(restart).not.toHaveBeenCalled();
+      });
+    },
+  );
+
+  it.each([false, true])(
+    "leaves a split-root Bun Gateway running before Doctor repair (update=%s)",
+    async (update) => {
+      vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", update ? "1" : undefined);
+      vi.stubEnv("OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION", undefined);
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        await state.writeConfig({});
+        const activeRoot = state.path("cli-install");
+        const serviceRoot = state.path("bun-install");
+        for (const root of [activeRoot, serviceRoot]) {
+          fs.mkdirSync(root);
+          fs.writeFileSync(
+            path.join(root, "package.json"),
+            JSON.stringify({ name: "openclaw", version: "2026.9.6" }),
+          );
+        }
+        const command = {
+          programArguments: [
+            state.path("runtime", "bun"),
+            path.join(serviceRoot, "openclaw.mjs"),
+            "gateway",
+          ],
+          environment: {
+            OPENCLAW_STATE_DIR: state.stateDir,
+            OPENCLAW_CONFIG_PATH: state.configPath,
+          },
+        };
+        let running = true;
+        const service = {
+          readCommand: async () => command,
+          readRuntime: async () => ({
+            status: running ? "running" : "stopped",
+            ...(running ? { pid: 4200 } : {}),
+            systemd: { managerUid: process.getuid?.() ?? 2001 },
+          }),
+          isLoaded: async () => true,
+          stop: vi.fn(async () => {
+            running = false;
+          }),
+          restart: vi.fn(),
+          install: vi.fn(),
+        };
+        mocks.packageRoot.mockReturnValue(activeRoot);
+        mocks.service.mockReturnValue(service);
+        mocks.resident.mockImplementation(() => (running ? { pid: 4200 } : undefined));
+        const configBefore = fs.readFileSync(state.configPath);
+        const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+        await expect(
+          runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true }),
+        ).rejects.toThrow("different OpenClaw installation");
+        expect(service.stop).not.toHaveBeenCalled();
+        expect(service.restart).not.toHaveBeenCalled();
+        expect(service.install).not.toHaveBeenCalled();
+        expect(await service.readRuntime()).toMatchObject({ status: "running", pid: 4200 });
+        expect(await service.readCommand()).toEqual(command);
+        expect(fs.readFileSync(state.configPath)).toEqual(configBefore);
+        expect(mocks.runContributions).not.toHaveBeenCalled();
       });
     },
   );

@@ -1,7 +1,3 @@
-/**
- * Prepares transcript boundaries, session management, and active resources.
- * It may assume attempt configuration and tool inputs are ready.
- */
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
@@ -62,16 +58,12 @@ import {
 } from "./pre-persisted-user-turn.js";
 import { resolveSessionBoundaryPromptCacheKey } from "./session-boundary-prompt-cache-key.js";
 import { resolveEmbeddedSessionContextLimits } from "./session-context-limits.js";
-import { notifyToolActivity } from "./tool-activity-heartbeat.js";
+import { withEmbeddedAttemptToolActivity } from "./tool-activity-heartbeat.js";
 import {
   createToolLoopBatchAdmission,
   installToolLoopRecoveryCleanup,
 } from "./tool-loop-recovery.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
-
-/**
- * Prepares embedded-agent resources, tools, and active sessions.
- */
 
 type ClientToolPreparation = Omit<
   Parameters<typeof prepareEmbeddedAttemptClientTools>[0],
@@ -80,7 +72,6 @@ type ClientToolPreparation = Omit<
 
 type AttemptSessionManager = ReturnType<typeof guardSessionManager>;
 
-/** Prepares resource loading, client tools, and the active agent session. */
 export async function prepareEmbeddedAttemptAgentSession(input: {
   attempt: EmbeddedRunAttemptParams;
   activeContextEngineInfo?: ContextEngine["info"];
@@ -199,17 +190,8 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
           if (hydratedTool) {
             log.info(`tool-search: hydrated deferred directory tool ${toolCall.name}`);
             const originalExecute = hydratedTool.execute;
-            hydratedTool.execute = (async (...args: Parameters<typeof originalExecute>) => {
-              const interval = setInterval(() => notifyToolActivity(attempt.runId), 60_000);
-              interval.unref?.();
-              try {
-                notifyToolActivity(attempt.runId);
-                return await originalExecute(...args);
-              } finally {
-                clearInterval(interval);
-                notifyToolActivity(attempt.runId);
-              }
-            }) as typeof originalExecute;
+            hydratedTool.execute = (...args: Parameters<typeof originalExecute>) =>
+              withEmbeddedAttemptToolActivity(attempt.runId, () => originalExecute(...args));
           }
           return hydratedTool;
         }
@@ -382,8 +364,6 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   };
 }
 
-/** Prepares the restored transcript at the LLM boundary for one attempt. */
-
 type SessionBoundaryAttempt = Pick<
   EmbeddedRunAttemptParams,
   | "config"
@@ -514,7 +494,6 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
       sessionVersion: sessionManager.getHeader()?.version,
       appendOnlyRuntimeContext: input.appendOnlyRuntimeContext,
       ...(boundaryTimezone ? { timezone: boundaryTimezone } : {}),
-      ...(includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
       ...(userTranscriptContexts?.length ? { userTranscriptContexts } : {}),
       ...(currentUserTimestampOverride ? { currentUserTimestampOverride } : {}),
     };
@@ -549,10 +528,6 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
     },
   };
 }
-
-/**
- * Prepares the durable session manager before embedded-agent session creation.
- */
 
 type WithOwnedTranscriptWrite = <T>(operation: () => Promise<T> | T) => Promise<T>;
 export async function prepareEmbeddedAttemptSessionManager(input: {

@@ -236,6 +236,22 @@ export function coalesceAgentRunFrames(
       boundaryId = candidateBoundaryId;
     }
     const candidateRunId = itemRunId(item);
+    if (item.kind === "activity-run" && !candidateRunId) {
+      flush();
+      result.push(item);
+      // A mixed-run log owns no frame, but does not end its surrounding turn.
+      // Retain the latest projected boundary for subsequent replies and status.
+      const lastBoundary = item.groups.findLast(chatItemStartsUserTurn);
+      if (lastBoundary) {
+        boundaryId = groupBoundaryId(lastBoundary);
+        presentationBoundaryKey = lastBoundary.key;
+        segmentId = undefined;
+      } else if (item.groups.some((group) => group.runId === undefined)) {
+        boundaryId = undefined;
+        segmentId = item.key;
+      }
+      continue;
+    }
     if (!boundaryId || !candidateRunId) {
       flush();
       result.push(item);

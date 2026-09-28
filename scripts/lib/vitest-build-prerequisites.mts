@@ -11,6 +11,11 @@ import { resolveRepoRoot } from "./repo-root.mjs";
 // A private-QA build also satisfies ordinary runtime readers.
 const VITEST_PRETEST_BUILD_MODES = ["private-qa", "runtime"] as const;
 const CONTROL_UI_E2E_CONFIG = "test/vitest/vitest.ui-e2e.config.ts";
+const aiPackageConsumer = {
+  file: "packages/ai/src/package.e2e.test.ts",
+  configs: ["test/vitest/vitest.e2e.config.ts"],
+  dir: "",
+};
 export type VitestPretestBuildMode = (typeof VITEST_PRETEST_BUILD_MODES)[number];
 type SetupCommandRunner = (args: string[], env: NodeJS.ProcessEnv) => Promise<number>;
 
@@ -31,6 +36,12 @@ const runtimeConsumers = [
   {
     file: "src/process/exec.windows.integration.test.ts",
     configs: ["test/vitest/vitest.process.config.ts"],
+    mode: "runtime",
+    dir: "src",
+  },
+  {
+    file: "src/tui/tui-session-identity-pty.e2e.test.ts",
+    configs: ["test/vitest/vitest.tui-pty.config.ts"],
     mode: "runtime",
     dir: "src",
   },
@@ -261,6 +272,12 @@ const runtimeConsumers = [
     dir: "src/commands",
   })),
   {
+    file: "src/commands/doctor-config-preflight.legacy-driver.live.test.ts",
+    configs: ["test/vitest/vitest.live.config.ts"],
+    mode: "runtime",
+    dir: "src/commands",
+  },
+  {
     file: "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts",
     configs: ["test/vitest/vitest.tooling.config.ts"],
     mode: "private-qa",
@@ -348,6 +365,9 @@ function includesRuntimeConfig(configs: readonly string[] | undefined, config: s
 }
 
 export function resolveVitestRuntimeConfigScopes(config: string) {
+  if (aiPackageConsumer.configs.includes(config)) {
+    return [aiPackageConsumer];
+  }
   // UI E2E is not part of the root unit-test inventory.
   if (config === CONTROL_UI_E2E_CONFIG) {
     return uiE2eRealGatewayTestFiles.map((file) => ({ file, configs: [config], dir: "" }));
@@ -410,6 +430,56 @@ export function resolveVitestPretestBuildMode(
   );
 }
 
+export async function preparePrebuiltAiPackage(
+  selections: readonly VitestRuntimeTestSelection[],
+  env: NodeJS.ProcessEnv,
+  signal?: AbortSignal,
+): Promise<number> {
+  const selected =
+    env.OPENCLAW_E2E_SKIP_BUILD !== "1" &&
+    env.OPENCLAW_E2E_USE_PREBUILT_DIST === "1" &&
+    selections.some(({ configs, includePatterns, matchesFile }) => {
+      const included = includePatterns
+        ? includePatterns.some((pattern) => path.matchesGlob(aiPackageConsumer.file, pattern))
+        : configs?.some((config) => aiPackageConsumer.configs.includes(config)) === true;
+      return matchesFile
+        ? matchesFile(aiPackageConsumer.file, included, includePatterns)
+        : included;
+    });
+  if (!selected) {
+    return 0;
+  }
+  signal?.throwIfAborted();
+  const cwd = path.resolve(import.meta.dirname, "../..");
+  const packageRoot = path.join(cwd, "packages/ai");
+  const manifest = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8")) as {
+    types: string;
+    exports: Record<string, { types: string }>;
+  };
+  const declarations = new Set([
+    manifest.types,
+    ...Object.values(manifest.exports).map((entry) => entry.types),
+  ]);
+  // CI's qaRuntime supplies JavaScript only. Its shard owner repairs types
+  // before reader admission; generic prebuilt readers must never rebuild them.
+  if ([...declarations].some((entry) => !fs.existsSync(path.resolve(packageRoot, entry)))) {
+    console.error(
+      "[test] preparing missing prebuilt AI package declarations before Vitest workers",
+    );
+    const code = await runManagedCommand({
+      bin: process.execPath,
+      args: ["--import", "tsx", "scripts/tsdown-build.mts", "--config", "tsdown.ai.config.ts"],
+      cwd,
+      env: { ...env, OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0" },
+      signal,
+    });
+    if (code !== 0) {
+      return code;
+    }
+  }
+  return 0;
+}
+
 export async function prepareVitestRuntime(
   selections: readonly VitestRuntimeTestSelection[],
   env: NodeJS.ProcessEnv = process.env,
@@ -437,7 +507,7 @@ export async function prepareVitestRuntime(
     console.error(`[test] preparing ${mode} runtime before Vitest workers`);
     const code = await runManagedCommand({
       bin: process.execPath,
-      args: ["scripts/run-node.mjs", "--version"],
+      args: ["scripts/prepare-vitest-runtime.mjs"],
       cwd,
       env: { ...env, ...(mode === "private-qa" ? { OPENCLAW_BUILD_PRIVATE_QA: "1" } : {}) },
       signal: options.signal,
@@ -537,7 +607,7 @@ export async function runE2eGlobalSetup(
   }
   const commands = [
     {
-      args: ["scripts/run-node.mjs", "--version"],
+      args: ["scripts/prepare-vitest-runtime.mjs"],
       env: {
         ...env,
         OPENCLAW_BUILD_PRIVATE_QA: "1",

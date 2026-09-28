@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ClawHubTrustErrorCode } from "../infra/clawhub-install-trust.js";
 import { isPackageVersionDowngrade } from "../infra/package-update-utils.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
-import { CLAWHUB_INSTALL_ERROR_CODE } from "./clawhub-error-codes.js";
+import { CLAWHUB_INSTALL_ERROR_CODE, isUnavailableClawHubTarget } from "./clawhub-error-codes.js";
 import { installPluginFromClawHub } from "./clawhub.js";
 import { installPluginFromGitSpec } from "./git-install.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
@@ -18,8 +18,6 @@ import {
   resolveExactNpmSpecVersion,
   resolveNewerExactPinnedClawHubDefaultLine,
   resolveNewerExactPinnedNpmDefaultLine,
-  resolveNpmResultVersion,
-  shouldFallbackBetaClawHubUpdate,
   type PluginUpdateChannelFallback,
   type PluginUpdateIntegrityDriftParams,
   type PluginUpdateLogger,
@@ -88,14 +86,6 @@ export function formatClawHubInstallFailure(params: {
   return `Failed to ${params.phase} ${params.pluginId}: ${params.error} (ClawHub ${params.spec}).`;
 }
 
-function isClawHubDownloadBlocked(result: { ok: false; code?: string }): boolean {
-  return result.code === CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_DOWNLOAD_BLOCKED;
-}
-
-function isClawHubSecurityUnavailable(result: { ok: false; code?: string }): boolean {
-  return result.code === CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_SECURITY_UNAVAILABLE;
-}
-
 export function readClawHubTrustErrorCode(result: {
   code?: string;
 }): ClawHubTrustErrorCode | undefined {
@@ -112,10 +102,10 @@ export function shouldSkipClawHubTrustFailureForExistingInstall(params: {
   result: { ok: false; code?: string; version?: string };
   currentVersion: string | undefined;
 }): boolean {
-  if (isClawHubSecurityUnavailable(params.result)) {
+  if (params.result.code === CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_SECURITY_UNAVAILABLE) {
     return Boolean(params.currentVersion);
   }
-  if (!isClawHubDownloadBlocked(params.result)) {
+  if (params.result.code !== CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_DOWNLOAD_BLOCKED) {
     return false;
   }
   return Boolean(
@@ -309,7 +299,7 @@ export async function buildDryRunPluginUpdateOutcome(params: {
   checkNewerExactPinnedClawHubDefaultLine?: boolean;
 }): Promise<PluginUpdateOutcome> {
   const npmProbeVersion =
-    params.record.source === "npm" ? resolveNpmResultVersion(params.result) : undefined;
+    params.record.source === "npm" ? params.result.npmResolution?.version : undefined;
   const resolvedProbeVersion =
     params.result.version ??
     npmProbeVersion ??
@@ -475,7 +465,7 @@ export async function runPluginUpdateAttempt(params: {
     !result.ok &&
     params.record.source === "clawhub" &&
     params.clawhubSpecs?.fallbackSpec &&
-    shouldFallbackBetaClawHubUpdate(result)
+    isUnavailableClawHubTarget(result)
   ) {
     channelFallbackSuffix = formatBetaChannelFallbackOutcomeSuffix({
       fallbackLabel: params.clawhubSpecs.fallbackLabel ?? params.effectiveSpec,

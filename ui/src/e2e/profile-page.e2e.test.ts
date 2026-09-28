@@ -180,9 +180,7 @@ suite.define(() => {
           });
         });
         const gateway = await openProfilePage(page, {
-          "users.self": {
-            sequence: [{ profile: testProfile }, { profile: linkedGitHubProfile }],
-          },
+          "users.self": { profile: testProfile },
           "users.prefs.get": {
             status: "ok",
             entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: false },
@@ -211,8 +209,10 @@ suite.define(() => {
         ).toHaveCount(0);
         await screenshot(page, "08-github-identity-unlinked.png");
 
+        await gateway.setMethodResponse("users.self", { profile: linkedGitHubProfile });
+        const readsBeforeRefresh = (await gateway.getRequests("users.self")).length;
         await page.locator(".profile-refresh").click();
-        await expect.poll(async () => (await gateway.getRequests("users.self")).length).toBe(2);
+        await gateway.waitForRequest("users.self", { after: readsBeforeRefresh });
         const prefGet = await gateway.waitForRequest("users.prefs.get");
         expect(prefGet.params).toEqual({ keys: [GIT_COAUTHOR_PREFERENCE_KEY] });
         const account = githubRow.getByRole("link", { name: "@octocat" });
@@ -296,6 +296,7 @@ suite.define(() => {
         const gateway = await openProfilePage(
           page,
           {
+            "users.self": { __mockError: { code: "FORBIDDEN", message: "No authenticated user" } },
             "agent.identity.get": {
               agentId: "main",
               name: "Main agent",
@@ -744,8 +745,9 @@ suite.define(() => {
         });
         await startSignIn();
         await expect(section.locator(".wizard-step__progress")).toHaveText("Saving account…");
+        const readsBeforeRefresh = (await gateway.getRequests("users.self")).length;
         await page.locator(".profile-refresh").click();
-        await expect.poll(async () => (await gateway.getRequests("users.self")).length).toBe(2);
+        await gateway.waitForRequest("users.self", { after: readsBeforeRefresh });
         await expect(section.locator(".profile-auth-connect-cancel")).toBeEnabled();
         await captureAccounts(
           "model-accounts-saving.png",

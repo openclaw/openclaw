@@ -10,7 +10,8 @@ import {
   startSessionWorkAdmissionInterruption,
 } from "../../sessions/session-lifecycle-admission.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -18,13 +19,14 @@ import * as registry from "./reply-run-registry.js";
 import { testing } from "./reply-run-registry.test-support.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-afterEach(() => {
-  testing.resetReplyRunRegistry();
-  closeOpenClawAgentDatabasesForTest();
-  vi.restoreAllMocks();
-});
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    testing.resetReplyRunRegistry();
+    await closeOpenClawAgentDatabasesAsync();
+    vi.restoreAllMocks();
+    cleanup();
+  }),
+);
 
 it.each([
   "cancelled",
@@ -158,7 +160,7 @@ it.each([
       controller.abort();
     } else if (change === "request-changed") {
       requestFailure = new Error("Original caller was retired during preparation");
-      expect(closeOpenClawAgentDatabaseByPath(storePath)).toBe(true);
+      await closeOpenClawAgentDatabaseByPathAsync(storePath);
     }
     release.resolve();
     if (change === "cancelled") {
@@ -260,7 +262,7 @@ it.each(
       const claim = (await observed.value).databaseClaim;
       expect(claim.isCurrent()).toBe(true);
       if (replacement !== "unchanged") {
-        expect(closeOpenClawAgentDatabaseByPath(storePath)).toBe(true);
+        await closeOpenClawAgentDatabaseByPathAsync(storePath);
         expect(claim.isCurrent()).toBe(false);
         if (replacement === "other-inode") {
           fs.unlinkSync(storePath);
@@ -303,7 +305,7 @@ it("preserves first admission to a missing durable agent store", async () => {
     expect(result.entry).toBeUndefined();
     expect(result.databaseClaim.isCurrent()).toBe(true);
   } finally {
-    result.databaseClaim.release();
+    await result.databaseClaim.release();
   }
 });
 

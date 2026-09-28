@@ -92,7 +92,24 @@ type ChatMessagePreview = {
   timestamp: number | null;
 };
 
+const chatMessagePreviews = new WeakMap<object, ChatMessagePreview | null>();
+
 export function extractChatMessagePreview(toolMessage: unknown): ChatMessagePreview | null {
+  const message = asRecord(toolMessage);
+  if (!message) {
+    return null;
+  }
+  const cached = chatMessagePreviews.get(message);
+  if (cached !== undefined) {
+    return cached;
+  }
+  // A negative result also belongs to this immutable message snapshot.
+  const preview = readChatMessagePreview(message);
+  chatMessagePreviews.set(message, preview);
+  return preview;
+}
+
+function readChatMessagePreview(toolMessage: Record<string, unknown>): ChatMessagePreview | null {
   if (!safeNormalizeMessage(toolMessage)) {
     return null;
   }

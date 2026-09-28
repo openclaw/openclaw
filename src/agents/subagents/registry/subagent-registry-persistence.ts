@@ -10,6 +10,19 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 type PendingRegistryWrite = { runIds: Set<string>; superseded: Set<string> };
 const pendingWrites = new Set<PendingRegistryWrite>();
 
+/** Source custody is independent of the caller admission that authorized a new Stop. */
+export function assertSubagentRegistryWriteSourceCurrent(
+  context: OpenClawStateWorkerContext,
+): void {
+  context.maintenanceScope?.assertAdmission();
+  context.admission.assertCurrent();
+  if (
+    captureOpenClawStateWorkerContext().admission.identity.key !== context.admission.identity.key
+  ) {
+    throw new Error("Queued registry write lost its original database");
+  }
+}
+
 /** Synchronous writers invalidate pending row authority before waiting for their write lock. */
 export function supersedePendingSubagentRegistryWrites(runIds?: readonly string[]): void {
   for (const pending of pendingWrites) {
@@ -51,14 +64,8 @@ export async function withSubagentRegistryWriteAuthority<T>(
 ): Promise<T> {
   const pending: PendingRegistryWrite = { runIds: new Set(runIds), superseded: new Set() };
   const { context } = options;
-  const assertDatabase = () => {
-    context.admission.assertCurrent();
-    if (
-      captureOpenClawStateWorkerContext().admission.identity.key !== context.admission.identity.key
-    ) {
-      throw new Error("Queued registry write lost its original database");
-    }
-  };
+  const assertDatabase = () => assertSubagentRegistryWriteSourceCurrent(context);
+
   const assertCurrent = () => {
     assertDatabase();
     options.assertCurrent?.();
