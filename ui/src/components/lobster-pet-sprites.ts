@@ -263,6 +263,22 @@ const GRAHAM_SHELL_WAISTCOAT = svg`
   </g>
 `;
 
+const CLAWFATHER_SHIRT = svg`
+  <g class="lob-clawfather">
+    <path d="M18 48 Q60 58 102 48 L104 52 C104 72 90 90 76 95 Q60 98 44 95 C30 90 16 72 16 52 Z" fill="#337eb6" />
+    <path d="M44 49 L60 57 L76 49 L74 96 Q60 99 46 96 Z" fill="#222a33" />
+    <path d="M37 47 L50 57 L44 70 L29 52 Z M83 47 L70 57 L76 70 L91 52 Z" fill="#55a0cd" />
+    <path d="M38 71 L37 89 M82 71 L83 89" fill="none" stroke="#21649c" stroke-width="1.5" stroke-linecap="round" />
+    <path d="M26 29 C21 16 32 6 49 7 C64 1 85 5 93 16 L94 28 L85 23 L82 15 Q62 24 44 18 L35 27 Z" fill="#27292e" />
+    <path d="M36 15 Q52 8 65 12 Q77 8 86 16" fill="none" stroke="#46505b" stroke-width="1.5" stroke-linecap="round" />
+    <path d="M27 28 L32 27 L34 44 L28 39 Z M88 27 L93 29 L92 39 L86 44 Z" fill="#57483c" />
+    <path d="M35 40 Q41 46 46 44 Q60 50 74 44 Q80 46 85 40 Q83 56 70 61 Q60 67 50 61 Q37 56 35 40 Z" fill="#785b45" />
+    <path d="M42 42 Q60 47 78 42 Q75 55 60 57 Q45 55 42 42 Z" fill="var(--lob-shell)" />
+    <path d="M52 47 Q60 44 68 47" fill="none" stroke="#785b45" stroke-width="2" stroke-linecap="round" />
+    <path d="M52 50 Q61 54 70 49 Q61 58 52 50 Z" fill="#fff0df" />
+  </g>
+`;
+
 const MECHA_PLATES = svg`
   <g class="lob-mecha">
     <g fill="none" stroke="#5f6a75" stroke-width="1.5">
@@ -349,6 +365,7 @@ export const PATTERNED_PALETTES: ReadonlySet<LobsterPetPaletteId> = new Set([
   "leonardodepinchy",
   "shellvis",
   "alexandergrahamshell",
+  "clawfather",
   "clawtron",
   "selene",
   "pixel",
@@ -470,6 +487,7 @@ export const PALETTE_OVERLAYS: Partial<Record<LobsterPetPaletteId, TemplateResul
   leonardodepinchy: LEONARDO_SMOCK,
   shellvis: SHELLVIS_JUMPSUIT,
   alexandergrahamshell: GRAHAM_SHELL_WAISTCOAT,
+  clawfather: CLAWFATHER_SHIRT,
   clawtron: MECHA_PLATES,
   banana: BANANA_MARKS,
   bee: BEE_PARTS,

@@ -318,6 +318,7 @@ export function renderLobsterSvg(
   const isFlatpack = look.palette.id === "flatpack";
   const paletteGeometry = PALETTE_GEOMETRY[look.palette.id];
   const hasRetroGeometry = RETRO_GEOMETRY_PALETTES.has(look.palette.id);
+  const clawProp = options.shell ? undefined : PALETTE_RIGHT_CLAW_PROPS[look.palette.id];
   const eyesClosed = options.shell || (options.sleeping && !options.reading);
   const openEyeStyle = eyesClosed ? "display:none" : "";
   const closedEyeStyle = eyesClosed
@@ -348,7 +349,7 @@ export function renderLobsterSvg(
                   ? nothing
                   : svg`
                       <g class="lob-claw lob-claw--r">
-                        ${options.shell ? nothing : (PALETTE_RIGHT_CLAW_PROPS[look.palette.id] ?? nothing)}
+                        ${clawProp ?? nothing}
                         <path d="M100 42 C115 37 120 47 115 57 C110 67 100 62 95 52 C92 45 95 42 100 42 Z" fill="var(--lob-claw)" />
                       </g>
                     `
@@ -400,8 +401,8 @@ export function renderLobsterSvg(
           : ACCESSORY_SPRITES[look.accessory]
       }
       ${
-        // The retro grail's mega claw owns the same shoulder; it moves light.
-        options.bindle && !hasRetroGeometry && !isFlatpack ? BINDLE : nothing
+        // Oversized claws and signature props already occupy the carrying shoulder.
+        options.bindle && !hasRetroGeometry && !isFlatpack && !clawProp ? BINDLE : nothing
       }
       ${
         // The foil hat is palette identity; Mulder declines the navy-issued

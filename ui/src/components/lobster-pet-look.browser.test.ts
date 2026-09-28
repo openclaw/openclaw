@@ -109,6 +109,20 @@ it.each([
     }
     expect(poses.size).toBeGreaterThan(1);
   }
+  render(renderLobsterSvg(canonicalLobsterLook(palette), { bindle: true }), container);
+  expect(container.querySelector(propSelector)).not.toBeNull();
+  expect(container.querySelector(".lob-bindle")).toBeNull();
   render(renderLobsterSvg(canonicalLobsterLook(palette), { shell: true }), container);
   expect(container.querySelector(propSelector)).toBeNull();
+});
+
+it("keeps the moving-in bag for unoccupied claws", () => {
+  for (const id of ["crimson", "clawfather"]) {
+    const palette = expectDefined(
+      LOBSTER_PET_PALETTES.find((entry) => entry.id === id),
+      "unoccupied palette",
+    );
+    render(renderLobsterSvg(canonicalLobsterLook(palette), { bindle: true }), container);
+    expect(container.querySelector(".lob-bindle")).not.toBeNull();
+  }
 });

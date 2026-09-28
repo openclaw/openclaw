@@ -26,7 +26,7 @@ describe("renderLobsterdex", () => {
     const container = document.createElement("div");
     render(renderLobsterdex(entries), container);
 
-    expect(container.querySelector(".lobsterdex-page__count")?.textContent).toBe("1/49 visited");
+    expect(container.querySelector(".lobsterdex-page__count")?.textContent).toBe("1/50 visited");
 
     const seen = container.querySelector(".lobster-pet--palette-crimson")?.closest("article");
     expect(seen?.id).toBe("lobsterdex-crimson");
@@ -87,6 +87,12 @@ describe("renderLobsterdex", () => {
       "Alexander Graham Shell",
       "A familiar ringing from the shore.",
       "Good ideas ring a bell.",
+    ],
+    [
+      "clawfather",
+      "The Clawfather",
+      "Every family has a beginning.",
+      "Started the whole claw family.",
     ],
   ] as const)(
     "discovers %s by palette, not an existing visitor name, and retains shiny sightings",
