@@ -136,11 +136,7 @@ public final class TalkSystemSpeechSynthesizer: NSObject {
         self.didStartCallback = nil
         let cont = self.speakContinuation
         self.speakContinuation = nil
-        if let error {
-            cont?.resume(throwing: error)
-        } else {
-            cont?.resume(returning: ())
-        }
+        if let cont { ThrowingContinuationSupport.resumeVoid(cont, error: error) }
     }
 }
 

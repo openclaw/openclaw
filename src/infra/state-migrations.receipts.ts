@@ -90,6 +90,17 @@ export function readLegacyMigrationReceipt(
   return readLegacyMigrationReceiptFromDatabase(openOpenClawStateDatabase({ env }).db, sourceKey);
 }
 
+export function readLegacyMigrationRunFromDatabase(database: DatabaseSync, runId: string) {
+  const row = executeSqliteQueryTakeFirstSync(
+    database,
+    getNodeSqliteKysely<MigrationReceiptDatabase>(database)
+      .selectFrom("migration_runs")
+      .select(["status", "report_json"])
+      .where("id", "=", runId),
+  );
+  return row ? { status: row.status, reportJson: row.report_json } : null;
+}
+
 export function recordLegacyMigrationRun(database: DatabaseSync, run: LegacyMigrationRun): void {
   const query = getNodeSqliteKysely<MigrationReceiptDatabase>(database)
     .insertInto("migration_runs")
@@ -179,9 +190,12 @@ export function markLegacyMigrationSourceRemoved(
   sourceKey: string,
   env: NodeJS.ProcessEnv,
   operationLabel?: string,
+  assertCurrent?: () => void,
 ): void {
+  assertCurrent?.();
   runOpenClawStateWriteTransaction(
     ({ db }) => {
+      assertCurrent?.();
       executeSqliteQuerySync(
         db,
         getNodeSqliteKysely<MigrationReceiptDatabase>(db)
@@ -189,6 +203,7 @@ export function markLegacyMigrationSourceRemoved(
           .set({ removed_source: 1 })
           .where("source_key", "=", sourceKey),
       );
+      assertCurrent?.();
     },
     { env },
     operationLabel ? { operationLabel } : {},

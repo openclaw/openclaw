@@ -11,7 +11,6 @@ import type { LinkReaderTarget } from "./link-reader-target.ts";
 import { createMarkdownParser } from "./markdown-parser.ts";
 import { normalizeMarkdownRenderOptions } from "./markdown-render-options.ts";
 import { escapeMarkdownHtml } from "./markdown-text.ts";
-export { linkReaderContentStyles } from "./link-reader-content.styles.ts";
 
 type ControlUiLinkReaderComment = NonNullable<ControlUiLinkReaderDocument["comments"]>[number];
 type ControlUiLinkReaderFile = NonNullable<ControlUiLinkReaderDocument["files"]>[number];
@@ -85,14 +84,13 @@ function documentUrl(value: string, base: string): URL | null {
   if (!value.trim()) {
     return null;
   }
-  try {
-    const url = new URL(value, base);
-    return ["https:", "http:", "mailto:"].includes(url.protocol) && !url.username && !url.password
-      ? url
-      : null;
-  } catch {
-    return null;
-  }
+  const url = URL.parse(value, base);
+  return url &&
+    ["https:", "http:", "mailto:"].includes(url.protocol) &&
+    !url.username &&
+    !url.password
+    ? url
+    : null;
 }
 
 function externalAnchor(url: string, label: string): HTMLAnchorElement {

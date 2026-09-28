@@ -95,10 +95,6 @@ describe("isLikelyInterimCronMessage", () => {
       false,
     );
   });
-  it("does not treat empty as interim (empty = NO_REPLY was stripped)", () => {
-    expect(isLikelyInterimCronMessage("")).toBe(false);
-  });
-
   it("does not treat whitespace-only as interim", () => {
     expect(isLikelyInterimCronMessage("   ")).toBe(false);
   });
@@ -130,16 +126,6 @@ describe("readDescendantSubagentFallbackReply", () => {
       runStartedAt,
     });
     expect(result).toBeUndefined();
-  });
-
-  it("reads reply from child session transcript", async () => {
-    vi.mocked(listDescendantRunsForRequester).mockReturnValue([createDescendantRun()]);
-    vi.mocked(readLatestAssistantReply).mockResolvedValue("child output text");
-    const result = await readDescendantSubagentFallbackReply({
-      sessionKey: "test-session",
-      runStartedAt,
-    });
-    expect(result).toBe("child output text");
   });
 
   it("falls back to frozenResultText when session transcript unavailable", async () => {

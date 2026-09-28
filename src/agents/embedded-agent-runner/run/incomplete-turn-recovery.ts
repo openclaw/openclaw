@@ -56,15 +56,13 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
   >;
   assistant: EmbeddedRunAttemptResult["lastAssistant"] | null | undefined;
 }): boolean {
-  if (joinAssistantTexts(params.attempt.assistantTexts).length > 0) {
-    return false;
-  }
-  if (hasAttemptTerminalState(params.attempt)) {
-    return false;
-  }
   // Current-attempt evidence avoids blocking on prior committed effects; older
   // harnesses retain the cumulative, fail-closed behavior.
-  if (!isCurrentAttemptReplaySafe(params.attempt)) {
+  if (
+    joinAssistantTexts(params.attempt.assistantTexts).length > 0 ||
+    hasAttemptTerminalState(params.attempt) ||
+    !isCurrentAttemptReplaySafe(params.attempt)
+  ) {
     return false;
   }
 
@@ -155,26 +153,16 @@ export function resolveReasoningOnlyRetryInstruction(params: {
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): string | null {
-  if (shouldSkipNonVisibleTurnRetry(params)) {
-    return null;
-  }
-
-  if (!shouldApplyNonVisibleTurnRetryGuard(params)) {
+  if (shouldSkipNonVisibleTurnRetry(params) || !shouldApplyNonVisibleTurnRetryGuard(params)) {
     return null;
   }
 
   const assistant = resolveCurrentAttemptAssistant(params.attempt);
-  if (joinAssistantTexts(params.attempt.assistantTexts).length > 0) {
-    return null;
-  }
-  if (assistant?.stopReason === "error") {
-    return null;
-  }
-  if (!isReasoningOnlyAssistantTurn(assistant) && !isUnsignedThinkingOnlyAssistantTurn(assistant)) {
-    return null;
-  }
-
-  return REASONING_ONLY_RETRY_INSTRUCTION;
+  return joinAssistantTexts(params.attempt.assistantTexts).length === 0 &&
+    assistant?.stopReason !== "error" &&
+    (isReasoningOnlyAssistantTurn(assistant) || isUnsignedThinkingOnlyAssistantTurn(assistant))
+    ? REASONING_ONLY_RETRY_INSTRUCTION
+    : null;
 }
 
 type SettledToolCall = { id: string | null; name: string | null };

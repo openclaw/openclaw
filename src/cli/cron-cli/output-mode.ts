@@ -40,13 +40,11 @@ const CRON_OUTPUT_COMMANDS = {
 } as const satisfies Record<string, CronOutputCommandDefinition>;
 
 type CronOutputCommandName = keyof typeof CRON_OUTPUT_COMMANDS;
-const MACHINE_OUTPUT_COMMANDS = new Set<string>();
-for (const [name, definition] of Object.entries(CRON_OUTPUT_COMMANDS)) {
-  MACHINE_OUTPUT_COMMANDS.add(name);
-  for (const alias of definition.aliases) {
-    MACHINE_OUTPUT_COMMANDS.add(alias);
-  }
-}
+const MACHINE_OUTPUT_COMMANDS = new Set<string>(
+  Object.entries(CRON_OUTPUT_COMMANDS).flatMap(([name, definition]) =>
+    [name].concat(definition.aliases),
+  ),
+);
 
 export function createCronOutputCommand(parent: Command, name: CronOutputCommandName): Command {
   const definition = CRON_OUTPUT_COMMANDS[name];

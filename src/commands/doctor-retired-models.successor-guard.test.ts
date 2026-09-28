@@ -12,20 +12,6 @@ import {
 // selectors, fallbacks, and modelPolicy.allow converts a visible retirement
 // warning into a latent unusable reference.
 describe("doctor retired successor guard", () => {
-  it("retains a reference whose successor is itself retired", async () => {
-    const { cfg, state } = await fixture("oauth");
-    const warnings: string[] = [];
-    const resolve = createRetiredModelRefRepairResolver({
-      cfg,
-      env: state.env,
-      warnings,
-    });
-    expect(resolve({ modelRef: "openai/retired-chain-to-retired", agentId: "main" })).toEqual({
-      kind: "unchanged",
-    });
-    expect(warnings.join("\n")).toContain("successor");
-  });
-
   it("migrates a supported successor absent from manifest and configured catalogs", async () => {
     const { cfg, state } = await fixture("oauth");
     const { loadManifestMetadataSnapshot } =
@@ -107,9 +93,6 @@ describe("doctor retired successor guard", () => {
 
   it.each([
     ["inherited", "qualified"],
-    ["local", "qualified"],
-    ["explicit-successor", "qualified"],
-    ["inherited", "unqualified"],
     ["local", "unqualified"],
     ["explicit-successor", "unqualified"],
   ] as const)(

@@ -51,7 +51,10 @@ function prepareReclamationWorkerTransferList(plan: SqliteSessionReclamationPlan
 export async function runPreparedSqliteSessionReclamation(
   params: {
     diagnostics?: SqliteSessionReclamationDiagnostics;
-    onWorkerResult?: (result: SqliteSessionReclamationResult) => void;
+    onWorkerResult?: (
+      result: SqliteSessionReclamationResult,
+      databaseIdentity: string | symbol,
+    ) => void;
     plan: SqliteSessionReclamationPlan;
   },
   owner: {
@@ -78,7 +81,7 @@ export async function runPreparedSqliteSessionReclamation(
       () => {
         assertCommitAllowed();
         // A blocked writer may authorize before the Worker's queued request.
-        publishCommitted = prepareReclamationPublication(plan);
+        publishCommitted = prepareReclamationPublication(plan, claim.identity);
       },
       (authorize) =>
         worker.run({
@@ -101,11 +104,11 @@ export async function runPreparedSqliteSessionReclamation(
                 const completed = await run(refusal);
                 if (completed) {
                   // Publish captured identities after transaction settlement, before releasing the writer.
-                  params.onWorkerResult?.(completed);
+                  params.onWorkerResult?.(completed, claim.identity);
                   withSqlitePostCommitPublications(database.db, () => {
                     const publishRemoval =
                       plan.kind === "maintenance-finalize"
-                        ? prepareReclamationPublication(plan, completed)
+                        ? prepareReclamationPublication(plan, claim.identity, completed)
                         : publishCommitted;
                     if (publishRemoval) {
                       deferSqlitePostCommitPublication(database.db, publishRemoval);
@@ -158,16 +161,5 @@ export async function runPreparedSqliteSessionReclamation(
           transferList: prepareReclamationWorkerTransferList(plan),
         }),
     );
-  // Finalization retains its logical FIFO place across cold validation.
-  // Acquire here, after the archive FIFO, so earlier worker work can settle.
-  return plan.kind === "maintenance-finalize"
-    ? await runExclusiveSqliteSessionWrite(
-        plan.databaseOptions,
-        runAuthorized,
-        "session.maintenance.finalize",
-        params.diagnostics,
-        "foreground",
-        owner.signal,
-      )
-    : await runAuthorized();
+  return await runAuthorized();
 }

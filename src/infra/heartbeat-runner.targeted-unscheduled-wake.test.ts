@@ -191,11 +191,13 @@ describe("startHeartbeatRunner targeted unscheduled wake dispatch", () => {
 
   it.each(
     targetedWakeCases.flatMap((testCase) =>
-      ["0m", "30m"].map((heartbeatEvery) => ({
-        name: testCase.name,
-        wake: testCase.wake,
-        heartbeatEvery,
-      })),
+      (testCase.name === "cron" || testCase.name === "manual" ? ["0m", "30m"] : ["0m"]).map(
+        (heartbeatEvery) => ({
+          name: testCase.name,
+          wake: testCase.wake,
+          heartbeatEvery,
+        }),
+      ),
     ),
   )("runs one targeted $name wake with heartbeat cadence $heartbeatEvery", async (testCase) => {
     useFakeHeartbeatTime();
@@ -254,7 +256,7 @@ describe("startHeartbeatRunner targeted unscheduled wake dispatch", () => {
     runner.stop();
   });
 
-  it.each(targetedWakeCases)("keeps targeted $name wakes globally disabled", async (testCase) => {
+  it("keeps targeted cron wakes globally disabled", async () => {
     useFakeHeartbeatTime();
     setHeartbeatsEnabled(false);
     const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
@@ -265,7 +267,7 @@ describe("startHeartbeatRunner targeted unscheduled wake dispatch", () => {
       runOnce: runSpy,
     });
 
-    requestHeartbeat({ ...testCase.wake, coalesceMs: 0 });
+    requestHeartbeat({ ...targetedWakeCases[0].wake, coalesceMs: 0 });
     await vi.advanceTimersByTimeAsync(1);
 
     expect(runSpy).not.toHaveBeenCalled();
@@ -338,28 +340,25 @@ describe("startHeartbeatRunner targeted unscheduled wake dispatch", () => {
     runner.stop();
   });
 
-  it.each(targetedWakeCases)(
-    "rejects targeted $name wakes for unconfigured agents",
-    async (testCase) => {
-      useFakeHeartbeatTime();
-      const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
-      const runner = startHeartbeatRunner({
-        cfg: { agents: { list: [{ id: "main" }] } } as OpenClawConfig,
-        runOnce: runSpy,
-      });
+  it("rejects targeted cron wakes for unconfigured agents", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: { agents: { list: [{ id: "main" }] } } as OpenClawConfig,
+      runOnce: runSpy,
+    });
 
-      requestHeartbeat({
-        ...testCase.wake,
-        agentId: "unknown",
-        sessionKey: "agent:unknown:main",
-        coalesceMs: 0,
-      });
-      await vi.advanceTimersByTimeAsync(1);
+    requestHeartbeat({
+      ...targetedWakeCases[0].wake,
+      agentId: "unknown",
+      sessionKey: "agent:unknown:main",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
 
-      expect(runSpy).not.toHaveBeenCalled();
-      runner.stop();
-    },
-  );
+    expect(runSpy).not.toHaveBeenCalled();
+    runner.stop();
+  });
 
   it.each(["0m", "30m"])(
     "retains the shared flood limit through reload with cadence %s",

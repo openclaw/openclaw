@@ -1,35 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { applyConstructFallbacks } from "./construct-fallbacks.js";
-import type {
-  ConstructSupport,
+import {
   FormatCapabilityProfile,
-  FormatConstruct,
+  type ConstructSupport,
+  type FormatConstruct,
 } from "./format-capabilities.js";
 import { markdownToIR, sliceMarkdownIR, type MarkdownIR } from "./ir.js";
 
-const ALL_NATIVE = {
+const ALL_NATIVE = FormatCapabilityProfile.define({
   mechanism: "markdown",
-  constructs: {
-    bold: "native",
-    italic: "native",
-    underline: "native",
-    strikethrough: "native",
-    spoiler: "native",
-    codeInline: "native",
-    codeBlock: "native",
-    codeLanguage: "native",
-    linkLabel: "native",
-    heading: "native",
-    bulletList: "native",
-    orderedList: "native",
-    taskList: "native",
-    table: "native",
-    blockquote: "native",
-    image: "native",
-    mention: "native",
-  },
   chunk: { limit: 4_000, unit: "chars" },
-} satisfies FormatCapabilityProfile;
+});
 
 function withSupport(
   construct: FormatConstruct,
@@ -65,102 +46,78 @@ it("preserves authored tags through projection and list-marker removal", () => {
 });
 
 type FallbackCase = {
-  name: string;
   construct: FormatConstruct;
+  support: ConstructSupport;
   ir: MarkdownIR;
-  expected: Record<ConstructSupport, [text: string, styles: string[], links: number]>;
+  expected: [text: string, styles: string[], links: number];
 };
 
-const TASK_LIST_IR = markdownToTaskIR("- [x] done");
-
-const CASES: FallbackCase[] = [
-  {
-    name: "heading",
-    construct: "heading",
-    ir: { text: "Title", styles: [{ start: 0, end: 5, style: "heading_2" }], links: [] },
-    expected: {
-      native: ["Title", ["heading_2"], 0],
-      fallback: ["Title", ["bold"], 0],
-      strip: ["Title", [], 0],
-    },
-  },
-  {
-    name: "labeled link",
-    construct: "linkLabel",
-    ir: { text: "docs", styles: [], links: [{ start: 0, end: 4, href: "https://example.com" }] },
-    expected: {
-      native: ["docs", [], 1],
-      fallback: ["docs (https://example.com)", [], 0],
-      strip: ["docs", [], 0],
-    },
-  },
-  {
-    name: "spoiler",
-    construct: "spoiler",
-    ir: { text: "secret", styles: [{ start: 0, end: 6, style: "spoiler" }], links: [] },
-    expected: {
-      native: ["secret", ["spoiler"], 0],
-      fallback: ["secret", [], 0],
-      strip: ["secret", [], 0],
-    },
-  },
-  {
-    name: "task list",
-    construct: "taskList",
-    ir: TASK_LIST_IR,
-    expected: {
-      native: ["• [x] done", [], 0],
-      fallback: ["[x] done", [], 0],
-      strip: ["• done", [], 0],
-    },
-  },
-  {
-    name: "code language",
-    construct: "codeLanguage",
-    ir: {
-      text: "const x = 1;",
-      styles: [{ start: 0, end: 12, style: "code_block", language: "ts" }],
-      links: [],
-    },
-    expected: {
-      native: ["const x = 1;", ["code_block:ts"], 0],
-      fallback: ["const x = 1;", ["code_block"], 0],
-      strip: ["const x = 1;", ["code_block"], 0],
-    },
-  },
-  {
-    name: "underline",
-    construct: "underline",
-    ir: { text: "under", styles: [{ start: 0, end: 5, style: "underline" }], links: [] },
-    expected: {
-      native: ["under", ["underline"], 0],
-      fallback: ["under", [], 0],
-      strip: ["under", [], 0],
-    },
-  },
-];
+const HEADING_IR: MarkdownIR = {
+  text: "Title",
+  styles: [{ start: 0, end: 5, style: "heading_2" }],
+  links: [],
+};
+const LINK_IR: MarkdownIR = {
+  text: "docs",
+  styles: [],
+  links: [{ start: 0, end: 4, href: "https://example.com" }],
+};
+const CODE_IR: MarkdownIR = {
+  text: "const x = 1;",
+  styles: [{ start: 0, end: 12, style: "code_block", language: "ts" }],
+  links: [],
+};
 
 describe("applyConstructFallbacks", () => {
-  for (const testCase of CASES) {
-    for (const support of ["native", "fallback", "strip"] as const) {
-      it(`${testCase.name}: ${support}`, () => {
-        const actual = applyConstructFallbacks(
-          testCase.ir,
-          withSupport(testCase.construct, support),
-        );
-        expect(
-          [
-            actual.text,
-            actual.styles.map((span) =>
-              span.language ? `${span.style}:${span.language}` : span.style,
-            ),
-            actual.links.length,
-          ],
-          `${testCase.name}: ${support}`,
-        ).toEqual(testCase.expected[support]);
-      });
-    }
-  }
+  it.each<FallbackCase>([
+    {
+      construct: "heading",
+      support: "native",
+      ir: HEADING_IR,
+      expected: ["Title", ["heading_2"], 0],
+    },
+    { construct: "heading", support: "fallback", ir: HEADING_IR, expected: ["Title", ["bold"], 0] },
+    { construct: "heading", support: "strip", ir: HEADING_IR, expected: ["Title", [], 0] },
+    { construct: "linkLabel", support: "native", ir: LINK_IR, expected: ["docs", [], 1] },
+    { construct: "linkLabel", support: "strip", ir: LINK_IR, expected: ["docs", [], 0] },
+    {
+      construct: "spoiler",
+      support: "strip",
+      ir: { text: "secret", styles: [{ start: 0, end: 6, style: "spoiler" }], links: [] },
+      expected: ["secret", [], 0],
+    },
+    {
+      construct: "taskList",
+      support: "native",
+      ir: markdownToTaskIR("- [x] done"),
+      expected: ["• [x] done", [], 0],
+    },
+    {
+      construct: "codeLanguage",
+      support: "native",
+      ir: CODE_IR,
+      expected: ["const x = 1;", ["code_block:ts"], 0],
+    },
+    {
+      construct: "codeLanguage",
+      support: "fallback",
+      ir: CODE_IR,
+      expected: ["const x = 1;", ["code_block"], 0],
+    },
+    {
+      construct: "underline",
+      support: "fallback",
+      ir: { text: "under", styles: [{ start: 0, end: 5, style: "underline" }], links: [] },
+      expected: ["under", [], 0],
+    },
+  ])("$construct: $support", ({ construct, support, ir, expected }) => {
+    const actual = applyConstructFallbacks(ir, withSupport(construct, support));
+    expect([
+      actual.text,
+      actual.styles.map((span) => (span.language ? `${span.style}:${span.language}` : span.style)),
+      actual.links.length,
+    ]).toEqual(expected);
+  });
 
   it("keeps link suffixes outside surrounding styles", () => {
     const ir: MarkdownIR = {

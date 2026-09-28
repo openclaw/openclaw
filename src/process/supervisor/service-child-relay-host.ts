@@ -502,6 +502,8 @@ export async function createServiceChildRelayAdapter(
         }
       },
       () => {
+        // Dispatch forced cleanup through the retained anchor before revoking its authority.
+        kill("SIGKILL");
         loseIdentity("control pipe pending line exceeded cap");
         child.kill("SIGKILL");
       },

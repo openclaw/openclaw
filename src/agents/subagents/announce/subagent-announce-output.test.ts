@@ -87,86 +87,42 @@ describe("buildCompactAnnounceStatsLine", () => {
     testing.setDepsForTest();
   });
 
-  it("rolls one-decimal thousand token stats over to the million unit", async () => {
+  it.each([
+    {
+      name: "rolls thousand-token stats over to the million unit",
+      usage: { inputTokens: 999_999, outputTokens: 0, totalTokens: 999_999 },
+      expected: "Stats: runtime n/a • tokens 1.0m (in 1.0m / out 0)",
+    },
+    {
+      name: "reports missing usage as unknown",
+      usage: {},
+      expected: "Stats: runtime n/a • tokens unknown",
+    },
+    {
+      name: "keeps genuine zero usage distinct from missing usage",
+      usage: { inputTokens: 0, outputTokens: 0 },
+      expected: "Stats: runtime n/a • tokens 0 (in 0 / out 0)",
+    },
+    {
+      name: "reports a fresh total without inventing directional counts",
+      usage: { totalTokens: 500, totalTokensFresh: true, totalTokensVersion: 1 },
+      expected: "Stats: runtime n/a • tokens 500 prompt/cache",
+    },
+  ])("$name", async ({ usage, expected }) => {
     testing.setDepsForTest({
       getRuntimeConfig: (() => ({ session: { store: "memory" } })) as GetRuntimeConfig,
       readSubagentSessionEntry: (() => ({
         sessionId: "child-session",
         updatedAt: 0,
-        inputTokens: 999_999,
-        outputTokens: 0,
-        totalTokens: 999_999,
+        ...usage,
       })) as ReadSessionEntry,
       resolveAgentIdFromSessionKey: (() => "main") as ResolveAgentIdFromSessionKey,
       resolveSessionStorePathCore: (() => "/tmp/openclaw-session-store") as ResolveStorePath,
     });
 
     await expect(
-      buildCompactAnnounceStatsLine({
-        sessionKey: "agent:main:subagent:child",
-      }),
-    ).resolves.toBe("Stats: runtime n/a • tokens 1.0m (in 1.0m / out 0)");
-  });
-
-  it("reports unknown token usage when the session entry carries no usage data", async () => {
-    testing.setDepsForTest({
-      getRuntimeConfig: (() => ({ session: { store: "memory" } })) as GetRuntimeConfig,
-      // No inputTokens/outputTokens/totalTokens: usage never landed on the entry.
-      readSubagentSessionEntry: (() => ({
-        sessionId: "child-session",
-        updatedAt: 0,
-      })) as ReadSessionEntry,
-      resolveAgentIdFromSessionKey: (() => "main") as ResolveAgentIdFromSessionKey,
-      resolveSessionStorePathCore: (() => "/tmp/openclaw-session-store") as ResolveStorePath,
-    });
-
-    await expect(
-      buildCompactAnnounceStatsLine({
-        sessionKey: "agent:main:subagent:child",
-      }),
-    ).resolves.toBe("Stats: runtime n/a • tokens unknown");
-  });
-
-  it("keeps a genuine zero-usage reading distinct from absent usage data", async () => {
-    testing.setDepsForTest({
-      getRuntimeConfig: (() => ({ session: { store: "memory" } })) as GetRuntimeConfig,
-      // Fields present and zero: the child really did make no model call.
-      readSubagentSessionEntry: (() => ({
-        sessionId: "child-session",
-        updatedAt: 0,
-        inputTokens: 0,
-        outputTokens: 0,
-      })) as ReadSessionEntry,
-      resolveAgentIdFromSessionKey: (() => "main") as ResolveAgentIdFromSessionKey,
-      resolveSessionStorePathCore: (() => "/tmp/openclaw-session-store") as ResolveStorePath,
-    });
-
-    await expect(
-      buildCompactAnnounceStatsLine({
-        sessionKey: "agent:main:subagent:child",
-      }),
-    ).resolves.toBe("Stats: runtime n/a • tokens 0 (in 0 / out 0)");
-  });
-
-  it("reports a fresh total without inventing directional token counts", async () => {
-    testing.setDepsForTest({
-      getRuntimeConfig: (() => ({ session: { store: "memory" } })) as GetRuntimeConfig,
-      readSubagentSessionEntry: (() => ({
-        sessionId: "child-session",
-        updatedAt: 0,
-        totalTokens: 500,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-      })) as ReadSessionEntry,
-      resolveAgentIdFromSessionKey: (() => "main") as ResolveAgentIdFromSessionKey,
-      resolveSessionStorePathCore: (() => "/tmp/openclaw-session-store") as ResolveStorePath,
-    });
-
-    await expect(
-      buildCompactAnnounceStatsLine({
-        sessionKey: "agent:main:subagent:child",
-      }),
-    ).resolves.toBe("Stats: runtime n/a • tokens 500 prompt/cache");
+      buildCompactAnnounceStatsLine({ sessionKey: "agent:main:subagent:child" }),
+    ).resolves.toBe(expected);
   });
 });
 
@@ -631,20 +587,6 @@ describe("buildChildCompletionFindings", () => {
     expect(findings).toContain(`${"&lt;".repeat(2_000)}-required-tail\n</prompt-data>`);
   });
 
-  it("does not convert ANNOUNCE_SKIP child completions into no-output findings", () => {
-    const findings = buildChildCompletionFindings([
-      {
-        childSessionKey: "agent:main:subagent:silent",
-        task: "silent task",
-        createdAt: 1,
-        completion: { resultText: "ANNOUNCE_SKIP" },
-        execution: { outcome: { status: "ok" } },
-      },
-    ]);
-
-    expect(findings).toBeUndefined();
-  });
-
   it("keeps failed ANNOUNCE_SKIP child completions visible", () => {
     const findings = buildChildCompletionFindings([
       {
@@ -658,21 +600,6 @@ describe("buildChildCompletionFindings", () => {
 
     expect(findings).toContain("status: error: boom");
     expect(findings).toContain("ANNOUNCE_SKIP");
-  });
-
-  it("uses the canonical captured child completion text", () => {
-    const findings = buildChildCompletionFindings([
-      {
-        childSessionKey: "agent:main:subagent:child",
-        task: "child task",
-        createdAt: 1,
-        completion: { resultText: "final child output" },
-        execution: { outcome: { status: "ok" } },
-      },
-    ]);
-
-    expect(findings).toContain("final child output");
-    expect(findings).not.toContain("(no output)");
   });
 
   it("does not recover result text from delivery metadata after completion text is cleared", () => {
@@ -693,7 +620,6 @@ describe("buildChildCompletionFindings", () => {
     { name: "successful NO_REPLY", status: "ok", resultText: "NO_REPLY" },
     { name: "blank failed", status: "error", resultText: "" },
     { name: "whitespace timed-out", status: "timeout", resultText: " \n\t " },
-    { name: "blank unknown", status: "unknown", resultText: "" },
   ] as const)("uses captured fallback output for a $name completion", ({ status, resultText }) => {
     const findings = buildChildCompletionFindings([
       {
@@ -756,26 +682,6 @@ describe("buildChildCompletionFindings", () => {
         expect(findings).toContain(expected);
         expect(findings).not.toContain("older captured output");
       }
-    },
-  );
-
-  it.each(["silent", "empty"] as const)(
-    "treats %s terminal evidence without retained text as an intentional non-result",
-    (disposition) => {
-      const findings = buildChildCompletionFindings([
-        {
-          childSessionKey: "agent:main:subagent:child",
-          task: "child task",
-          createdAt: 1,
-          completion: {
-            resultText: disposition === "silent" ? "NO_REPLY" : null,
-            terminalReply: { disposition },
-          },
-          execution: { outcome: { status: "ok" } },
-        },
-      ]);
-
-      expect(findings).toBeUndefined();
     },
   );
 

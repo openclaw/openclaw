@@ -6,6 +6,7 @@ import type {
   ResponseInputItem,
   ResponseInputMessageContentList,
 } from "openai/resources/responses/responses.js";
+import { getAiTransportHost } from "../host.js";
 import { isImageWithMediaPayload } from "../media-payload.js";
 import { transformProviderMessages } from "../provider-transcript-transform.js";
 import {
@@ -14,9 +15,7 @@ import {
 } from "../providers/tool-result-text.js";
 import { shortHash } from "../utils/hash.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
-import { transformTransportMessages } from "./host-policy.js";
 import {
-  buildOpenAIResponsesReplayContext,
   buildOpenAIResponsesCompactionReplayPlan,
   isOpenAIResponsesReplayContext,
   isSafeResponsesReplayItemId,
@@ -33,7 +32,10 @@ import {
 } from "./openai-responses-contracts.js";
 import { createResponsesInputReplay } from "./openai-responses-input-replay.js";
 import { resolveReplayableResponsesMessageId } from "./openai-responses-replay.js";
-import { providerReplayContextMatches } from "./provider-replay-context.js";
+import {
+  buildProviderReplayContext,
+  providerReplayContextMatches,
+} from "./provider-replay-context.js";
 import {
   sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
@@ -234,28 +236,7 @@ export function buildResponsesInputMessage(
   return { type: "message", role, content };
 }
 
-export function createOpenAIResponsesAssistantOutput(
-  model: Model,
-  api: Api = model.api,
-): AssistantMessage {
-  return {
-    role: "assistant",
-    content: [],
-    api,
-    provider: model.provider,
-    model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason: "stop",
-    timestamp: Date.now(),
-  };
-}
+export { createAssistantOutput as createOpenAIResponsesAssistantOutput } from "./assistant-output.js";
 
 type ConvertResponsesMessagesOptions = {
   includeSystemPrompt?: boolean;
@@ -277,7 +258,7 @@ function convertResponsesMessagesWithStyle(
   const providerStyle = conversionStyle === "provider";
   const shouldReplayReasoningItems = options?.replayReasoningItems ?? true;
   const shouldReplayResponsesItemIds = options?.replayResponsesItemIds ?? true;
-  const replayContext = buildOpenAIResponsesReplayContext(model, {
+  const replayContext = buildProviderReplayContext(model, {
     sessionId: options?.sessionId,
     authProfileId: options?.authProfileId,
   });
@@ -336,7 +317,7 @@ function convertResponsesMessagesWithStyle(
   const transformMessages = (source: Context["messages"]) =>
     providerStyle
       ? transformProviderMessages(source, model, normalizeToolCallId)
-      : transformTransportMessages(source, model, normalizeToolCallId, {
+      : getAiTransportHost().transformTransportMessages(source, model, normalizeToolCallId, {
           normalizeSameModelToolCallIds: shouldNormalizeSameModelToolCallIds,
           preserveUnframedToolResults: replayPlan.preserveUnframedToolResults,
         });

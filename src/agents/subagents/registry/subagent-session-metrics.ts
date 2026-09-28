@@ -9,7 +9,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type SubagentExecutionMetrics = Pick<
   SubagentRunRecord["execution"],
-  "status" | "startedAt" | "endedAt" | "outcome"
+  "status" | "startedAt" | "endedAt" | "outcome" | "interruptionReason"
 >;
 type SubagentSessionStartRecord = Pick<SubagentRunRecord, "sessionStartedAt"> & {
   execution: Pick<SubagentExecutionMetrics, "startedAt">;
@@ -21,7 +21,11 @@ type SubagentSessionStatusRecord = Pick<
   SubagentRunRecord,
   "endedReason" | "waitExpiryObservedAt" | "pauseReason"
 > & {
-  execution: Pick<SubagentExecutionMetrics, "status" | "endedAt" | "outcome">;
+  delivery?: Pick<NonNullable<SubagentRunRecord["delivery"]>, "status" | "disposition">;
+  execution: Pick<
+    SubagentExecutionMetrics,
+    "status" | "endedAt" | "outcome" | "interruptionReason"
+  >;
 };
 
 /** Returns a recorded execution start, never the earlier admission time. */
@@ -94,11 +98,14 @@ export function isSubagentChildStopUnconfirmed(
 /** Maps persisted run outcome fields to the compact session status shown in tools/UI. */
 export function resolveSubagentSessionStatus(
   entry: SubagentSessionStatusRecord | null | undefined,
-): "queued" | "running" | "killed" | "failed" | "timeout" | "done" | undefined {
+): "queued" | "running" | "interrupted" | "killed" | "failed" | "timeout" | "done" | undefined {
   if (!entry) {
     return undefined;
   }
   if (!entry.execution.endedAt) {
+    if (entry.execution.status === "interrupted") {
+      return "interrupted";
+    }
     return entry.execution.status === "queued" ? "queued" : "running";
   }
   if (entry.endedReason === SUBAGENT_ENDED_REASON_KILLED) {
@@ -108,12 +115,21 @@ export function resolveSubagentSessionStatus(
     // `endedAt` on this row is the end of the PARENT'S WAIT, not of the child's
     // run. Reporting `timeout` here would file a possibly-live child under a
     // terminal death in every reader of this function — including the session
-    // rows a parent consults before deciding whether to replace it — while its
-    // detached task is still `running`. Report the only thing that is known: the
-    // child has not been observed to stop.
+    // rows a parent consults before deciding whether to replace it. Report the
+    // only thing that is known: the child has not been observed to stop.
     return "running";
   }
   const status = entry.execution.outcome?.status;
+  if (status === "error" && entry.execution.interruptionReason === "gateway-restart") {
+    const delivery = entry.delivery;
+    return delivery &&
+      delivery.disposition !== "intentional_non_delivery" &&
+      (delivery.status === "failed" ||
+        delivery.status === "suspended" ||
+        delivery.status === "discarded")
+      ? "failed"
+      : "interrupted";
+  }
   if (status === "error") {
     return "failed";
   }

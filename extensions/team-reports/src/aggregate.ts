@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { MAX_REPORT_BYTES } from "./limits.js";
 import { periodDayKeys } from "./periods.js";
 import { isBotLogin, primaryLogin } from "./roster.js";
@@ -132,7 +133,7 @@ function emptyReport(
   };
 }
 
-function itemKey(item: GithubItem): string {
+export function itemKey(item: GithubItem): string {
   return JSON.stringify([item.kind, item.repo, item.url || [item.atMs, item.title]]);
 }
 
@@ -173,13 +174,13 @@ function finishReport(report: ReportDocument): ReportDocument {
   return boundReportDocument(report);
 }
 
-type AggregateDayOptions = {
+export type AggregateDayOptions = {
   period: PeriodDescriptor;
   nowMs: number;
   orgs: string[];
   roster: Roster;
-  items: GithubItem[];
-  messages: DiscordMessage[];
+  items: Iterable<GithubItem>;
+  messages: Iterable<DiscordMessage>;
   githubStatus: SourceStatus;
   discordStatus?: SourceStatus;
   ignoreCommentPatterns?: RegExp[];
@@ -204,7 +205,9 @@ export function aggregateDay(options: AggregateDayOptions): ReportDocument {
   const patterns = (options.ignoreCommentPatterns ?? []).map(
     (pattern) => new RegExp(pattern.source, pattern.flags.replace(/[gy]/g, "")),
   );
-  for (const item of options.items.toSorted(newestFirst)) {
+  for (const item of Array.isArray(options.items)
+    ? options.items.toSorted(newestFirst)
+    : options.items) {
     if (item.atMs < period.sinceMs || item.atMs >= Math.min(period.untilMs, nowMs)) {
       continue;
     }
@@ -212,7 +215,11 @@ export function aggregateDay(options: AggregateDayOptions): ReportDocument {
     const comment = item.kind === "issue_comment" || item.kind === "review_comment";
     const body = item.body;
     if (comment && body !== undefined) {
-      const key = JSON.stringify([actor, item.kind, body]);
+      const key = JSON.stringify([
+        actor,
+        item.kind,
+        createHash("sha256").update(body, "utf16le").digest("hex"),
+      ]);
       if (commentBodies.has(key) || patterns.some((pattern) => pattern.test(body))) {
         continue;
       }
@@ -247,18 +254,24 @@ export function aggregateDay(options: AggregateDayOptions): ReportDocument {
       countItem(member?.github ?? otherBucket(others, login).github, item);
       countItem(report.totals.github, item);
       if (member) {
-        member.github.items.push(evidenceItem(item));
+        if (member.github.items.length < 200) {
+          member.github.items.push(evidenceItem(item));
+        } else {
+          report.truncated = true;
+        }
       }
     }
   }
   const channels = new Map(discordConfig?.channels.map((channel) => [channel.id, channel]));
   const unmatched = new Map<string, number>();
-  for (const message of options.messages.toSorted(
-    (a, b) =>
-      b.atMs - a.atMs ||
-      a.channelId.localeCompare(b.channelId) ||
-      a.authorId.localeCompare(b.authorId),
-  )) {
+  for (const message of Array.isArray(options.messages)
+    ? options.messages.toSorted(
+        (a, b) =>
+          b.atMs - a.atMs ||
+          a.channelId.localeCompare(b.channelId) ||
+          a.authorId.localeCompare(b.authorId),
+      )
+    : options.messages) {
     const channel = channels.get(message.parentChannelId);
     if (
       !channel ||
@@ -291,6 +304,17 @@ export function aggregateDay(options: AggregateDayOptions): ReportDocument {
         atMs: message.atMs,
         excerpt: truncateGraphemes(collapsed, discordConfig?.excerptMaxChars ?? 260),
       });
+      if (member.discord.excerpts.length > 8) {
+        report.truncated = true;
+        member.discord.excerpts = member.discord.excerpts
+          .toSorted(
+            (a, b) =>
+              b.atMs - a.atMs ||
+              a.channel.localeCompare(b.channel) ||
+              a.excerpt.localeCompare(b.excerpt),
+          )
+          .slice(0, 8);
+      }
     }
   }
   report.members = [...members.values()];
@@ -314,7 +338,7 @@ function mergeStatus(statuses: SourceStatus[]): SourceStatus {
 export function aggregateDays(options: {
   period: PeriodDescriptor;
   nowMs: number;
-  days: ReportDocument[];
+  days: ReportDocument[] | (() => Iterable<ReportDocument>);
   roster?: Roster;
   orgs?: string[];
 }): ReportDocument {
@@ -322,8 +346,16 @@ export function aggregateDays(options: {
   if (period.period === "day") {
     throw new Error("Stored days can only be aggregated into a week or month");
   }
-  const byDay = new Map<string, ReportDocument>();
-  for (const day of options.days) {
+  const input = options.days;
+  const readDays =
+    typeof input === "function"
+      ? input
+      : () => input.toSorted((a, b) => a.period.sinceMs - b.period.sinceMs);
+  const byDay = new Map<
+    string,
+    Pick<ReportDocument, "period" | "generatedAtMs" | "orgs" | "sources" | "truncated">
+  >();
+  for (const day of readDays()) {
     if (
       day.period.period === "day" &&
       day.period.sinceMs >= period.sinceMs &&
@@ -332,7 +364,8 @@ export function aggregateDays(options: {
     ) {
       const previous = byDay.get(day.period.key);
       if (!previous || previous.generatedAtMs < day.generatedAtMs) {
-        byDay.set(day.period.key, day);
+        const { period: dayPeriod, generatedAtMs, orgs, sources, truncated } = day;
+        byDay.set(dayPeriod.key, { period: dayPeriod, generatedAtMs, orgs, sources, truncated });
       }
     }
   }
@@ -365,7 +398,15 @@ export function aggregateDays(options: {
   );
   const others = new Map<string, OtherActor>();
   const unmatched = new Map<string, number>();
-  for (const day of days) {
+  const included = new Set<string>();
+  for (const day of readDays()) {
+    if (
+      included.has(day.period.key) ||
+      byDay.get(day.period.key)?.generatedAtMs !== day.generatedAtMs
+    ) {
+      continue;
+    }
+    included.add(day.period.key);
     sumGithub(report.totals.github, day.totals.github);
     report.totals.discord.messages += day.totals.discord.messages;
     sumMap(report.totals.discord.channels, day.totals.discord.channels);
@@ -398,6 +439,7 @@ export function aggregateDays(options: {
       member.discord.total += source.discord.total;
       sumMap(member.discord.channels, source.discord.channels);
       member.discord.excerpts.push(...structuredClone(source.discord.excerpts));
+      boundMemberEvidence(report, member);
     }
     for (const actor of day.otherActors) {
       sumGithub(otherBucket(others, actor.login).github, actor.github);
@@ -415,21 +457,23 @@ export function aggregateDays(options: {
   return finishReport(report);
 }
 
+function boundMemberEvidence(report: ReportDocument, member: PersonReport): void {
+  if (member.github.items.length > 200 || member.discord.excerpts.length > 8) {
+    report.truncated = true;
+  }
+  member.github.items = member.github.items.map(evidenceItem).toSorted(newestFirst).slice(0, 200);
+  member.discord.excerpts = member.discord.excerpts
+    .toSorted(
+      (a, b) =>
+        b.atMs - a.atMs || a.channel.localeCompare(b.channel) || a.excerpt.localeCompare(b.excerpt),
+    )
+    .slice(0, 8);
+}
+
 export function boundReportDocument(input: ReportDocument): ReportDocument {
   const report = structuredClone(input);
   for (const member of report.members) {
-    if (member.github.items.length > 200 || member.discord.excerpts.length > 8) {
-      report.truncated = true;
-    }
-    member.github.items = member.github.items.map(evidenceItem).toSorted(newestFirst).slice(0, 200);
-    member.discord.excerpts = member.discord.excerpts
-      .toSorted(
-        (a, b) =>
-          b.atMs - a.atMs ||
-          a.channel.localeCompare(b.channel) ||
-          a.excerpt.localeCompare(b.excerpt),
-      )
-      .slice(0, 8);
+    boundMemberEvidence(report, member);
   }
   if (Buffer.byteLength(JSON.stringify(report)) <= MAX_REPORT_BYTES) {
     return report;

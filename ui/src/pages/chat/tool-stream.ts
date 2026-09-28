@@ -2,10 +2,12 @@ import { asNullableObjectRecord as readRecord } from "@openclaw/normalization-co
 import { normalizeNullableString as toTrimmedString } from "@openclaw/normalization-core/string-coerce";
 import { Value } from "typebox/value";
 import { AgentActivityItemSchema } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import type { ChatGuardianNotice, ToolApprovalReview } from "../../lib/chat/chat-types.ts";
 import {
   MAX_TOOL_APPROVAL_REVIEWS,
   normalizeToolApprovalReview,
+} from "../../../../src/shared/tool-approval-reviews.js";
+import type { ChatGuardianNotice, ToolApprovalReview } from "../../lib/chat/chat-types.ts";
+import {
   readToolApprovalReviewOutcome,
   readToolApprovalReviews,
   resolveToolApprovalReviewOutcome,

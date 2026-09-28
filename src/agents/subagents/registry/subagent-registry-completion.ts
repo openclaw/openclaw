@@ -5,18 +5,13 @@
  */
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
-import {
-  SUBAGENT_KILL_TASK_ERROR,
-  type DetachedTaskTerminalState,
-} from "../../../tasks/detached-task-runtime-contract.js";
-import { resolveRequiredCompletionTerminalResult } from "../../../tasks/task-completion-contract.js";
-import { resolveSubagentCompletionResultText } from "../completion/subagent-completion-result.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
+import { SUBAGENT_KILL_TASK_ERROR, type SubagentTerminalState } from "./subagent-control.types.js";
 import {
-  SUBAGENT_ENDED_REASON_KILLED,
   SUBAGENT_ENDED_OUTCOME_ERROR,
   SUBAGENT_ENDED_OUTCOME_OK,
   SUBAGENT_ENDED_OUTCOME_TIMEOUT,
+  SUBAGENT_ENDED_REASON_KILLED,
   SUBAGENT_TARGET_KIND_SUBAGENT,
   type SubagentLifecycleEndedOutcome,
   type SubagentLifecycleEndedReason,
@@ -27,9 +22,9 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 const log = createSubsystemLogger("agents/subagent-registry-completion");
 
 /** Classify execution independently of reply capture, including cancelled yielded runs. */
-export function resolveSubagentTaskTerminalStatus(
+function resolveSubagentTaskTerminalStatus(
   entry: SubagentRunRecord,
-): DetachedTaskTerminalState["status"] | undefined {
+): SubagentTerminalState["status"] | undefined {
   const outcome = entry.execution.outcome;
   if (
     typeof entry.execution.endedAt !== "number" ||
@@ -52,19 +47,12 @@ export function resolveSubagentTaskTerminalStatus(
 }
 
 /**
- * Returns the complete task projection only after completion capture has
- * settled **and** the child's stop has actually been observed.
- *
- * This is the single boundary between a provisional registry row and a durable
- * task projection: every writer of subagent task state resolves through here
- * (`safeFinalizeSubagentTaskRun` for both completion call sites, the
- * steer-restart abandon path, and the kill target-state read). Returning
- * `undefined` therefore keeps the detached task nonterminal everywhere at once,
- * instead of each projection re-deriving the provisional predicate.
+ * Returns terminal execution facts only after completion capture has settled
+ * and the child's stop has actually been observed.
  */
 export function resolveFinalizedSubagentTaskState(
   entry: SubagentRunRecord,
-): DetachedTaskTerminalState | undefined {
+): SubagentTerminalState | undefined {
   const endedAt = entry.execution.endedAt;
   const outcome = entry.execution.outcome;
   const completion = entry.completion;
@@ -76,50 +64,22 @@ export function resolveFinalizedSubagentTaskState(
   ) {
     return undefined;
   }
-  const progressSummary = resolveSubagentCompletionResultText(entry);
-  if (status === "cancelled") {
-    return {
-      status: "cancelled",
-      endedAt,
-      lastEventAt: endedAt,
-      error: SUBAGENT_KILL_TASK_ERROR,
-      progressSummary,
-      terminalSummary: null,
-    };
-  }
-  if (status === "succeeded") {
-    const terminal =
-      entry.expectsCompletionMessage !== true
-        ? {}
-        : entry.delivery?.disposition === "intentional_non_delivery"
-          ? { terminalOutcome: "succeeded" as const, terminalSummary: null }
-          : resolveRequiredCompletionTerminalResult(progressSummary);
-    return {
-      status: "succeeded",
-      endedAt,
-      lastEventAt: endedAt,
-      progressSummary,
-      terminalSummary: terminal.terminalSummary ?? null,
-      terminalOutcome: terminal.terminalOutcome,
-    };
-  }
   if (shouldDeferTerminalCleanupForUnconfirmedChild(entry)) {
-    // A deadline-only expiry observed nothing about the child, and this
-    // projection is the one provisional effect that cannot be taken back:
-    // `shouldApplyRunScopedStatusUpdate` refuses `timed_out` -> `succeeded`, so
-    // writing `timed_out` here would make the later observed success
-    // unrepresentable and leave a still-running child permanently timed out.
-    // Stay nonterminal; promotion resolves through this same function with an
-    // observed outcome and publishes the real terminal state exactly once.
+    // A deadline-only expiry observed nothing about the child, so it must not
+    // read as a terminal fact: a still-running child would otherwise be
+    // reported stopped. Stay nonterminal; promotion resolves through this same
+    // function with an observed outcome.
     return undefined;
   }
   return {
     status,
     endedAt,
-    lastEventAt: endedAt,
-    error: outcome?.status === "error" ? outcome.error : undefined,
-    progressSummary,
-    terminalSummary: null,
+    error:
+      status === "cancelled"
+        ? SUBAGENT_KILL_TASK_ERROR
+        : outcome?.status === "error"
+          ? outcome.error
+          : undefined,
   };
 }
 

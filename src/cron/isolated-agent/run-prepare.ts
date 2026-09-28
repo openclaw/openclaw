@@ -120,6 +120,8 @@ export type PreparedCronRunContext = {
   deliveryRequested: boolean;
   /** Trusted delivery-channel formatting metadata; absent without a resolved chat delivery. */
   deliverySystemPrompt?: string;
+  /** Message-tool formatting contract for a run without a reply route; applied once tools resolve. */
+  messageToolFormatPrompt?: string;
   sourceDelivery: SourceDeliveryPlan;
   suppressExecNotifyOnExit: boolean;
   skillsSnapshot: SkillSnapshot;
@@ -518,6 +520,7 @@ export async function prepareCronRunContext(params: {
       resolvedDelivery,
       sourceDelivery,
       deliverySystemPrompt,
+      messageToolFormatPrompt,
     } = await resolveCronDeliveryContext({
       cfg: cfgWithAgentDefaults,
       job: input.job,
@@ -701,6 +704,7 @@ export async function prepareCronRunContext(params: {
         resolvedDelivery,
         deliveryRequested,
         deliverySystemPrompt,
+        messageToolFormatPrompt,
         sourceDelivery,
         suppressExecNotifyOnExit: deliveryPlan.mode === "none",
         skillsSnapshot,

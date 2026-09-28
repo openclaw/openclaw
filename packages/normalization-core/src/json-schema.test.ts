@@ -4,8 +4,7 @@ import { normalizeJsonSchemaForTypeBox, normalizeTypeBoxValidationErrors } from 
 
 describe("normalizeJsonSchemaForTypeBox", () => {
   it("removes only schema format keywords when annotations are requested", () => {
-    const formatted = { type: "string", format: "uri" };
-    const schema = {
+    const createSchema = (formatted: { type: string; format?: string }) => ({
       $defs: { format: formatted },
       definitions: { format: formatted },
       properties: { format: formatted },
@@ -32,38 +31,13 @@ describe("normalizeJsonSchemaForTypeBox", () => {
       enum: [{ format: "literal" }],
       default: { format: "literal" },
       examples: [{ format: "literal" }],
-    };
-    const original = structuredClone(schema);
-    const stripped = { type: "string" };
-    expect(normalizeJsonSchemaForTypeBox(schema)).toEqual(original);
-    expect(normalizeJsonSchemaForTypeBox(schema, { format: "annotation" })).toEqual({
-      $defs: { format: stripped },
-      definitions: { format: stripped },
-      properties: { format: stripped },
-      patternProperties: { format: stripped },
-      dependentSchemas: { format: { properties: { value: stripped } } },
-      dependencies: { format: ["format"], value: { properties: { format: stripped } } },
-      allOf: [{ properties: { nested: stripped } }],
-      anyOf: [stripped],
-      oneOf: [stripped],
-      prefixItems: [stripped],
-      items: stripped,
-      additionalItems: stripped,
-      contains: stripped,
-      additionalProperties: stripped,
-      propertyNames: stripped,
-      unevaluatedProperties: stripped,
-      unevaluatedItems: stripped,
-      if: stripped,
-      // oxlint-disable-next-line unicorn/no-thenable -- JSON Schema conditional keyword, not a Promise method.
-      then: stripped,
-      else: stripped,
-      not: stripped,
-      const: { format: "literal" },
-      enum: [{ format: "literal" }],
-      default: { format: "literal" },
-      examples: [{ format: "literal" }],
     });
+    const schema = createSchema({ type: "string", format: "uri" });
+    const original = structuredClone(schema);
+    expect(normalizeJsonSchemaForTypeBox(schema)).toEqual(original);
+    expect(normalizeJsonSchemaForTypeBox(schema, { format: "annotation" })).toEqual(
+      createSchema({ type: "string" }),
+    );
     expect(schema).toEqual(original);
   });
 });

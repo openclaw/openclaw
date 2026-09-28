@@ -127,26 +127,13 @@ describe("device-pair notify CAS", () => {
     },
   );
 
-  it("retires the delivered arm without the legacy callback", async () => {
-    const harness = createHarness(delivered);
-    delete harness.subscriberStore.deleteIf;
-
-    await harness.poll();
-
-    expect(harness.snapshot().value).toBeUndefined();
-    expect(harness.sendText).toHaveBeenCalledTimes(1);
-    expect(harness.observe.mock.invocationCallOrder[0]).toBeGreaterThan(
-      harness.sendText.mock.invocationCallOrder[0]!,
-    );
-    expect(harness.recordSeen).toHaveBeenCalledTimes(1);
-  });
-
   it.each([
     { label: "same arm", current: delivered, action: "delete" },
     { label: "new arm", current: { ...delivered, armId: "arm-2" }, action: "keep" },
     { label: "removed arm", current: undefined, action: "keep" },
   ])("reconsiders a conflict for $label without sending again", async ({ current, action }) => {
     const harness = createHarness(delivered);
+    delete harness.subscriberStore.deleteIf;
     harness.observe.mockImplementationOnce(async () => {
       const original = harness.snapshot();
       harness.replace(current);
@@ -157,6 +144,9 @@ describe("device-pair notify CAS", () => {
 
     expect(harness.sendText).toHaveBeenCalledTimes(1);
     expect(harness.observe).toHaveBeenCalledTimes(1);
+    expect(harness.observe.mock.invocationCallOrder[0]).toBeGreaterThan(
+      harness.sendText.mock.invocationCallOrder[0]!,
+    );
     expect(harness.compareAndApply).toHaveBeenCalledTimes(2);
     expect(harness.snapshot().value).toEqual(action === "delete" ? undefined : current);
     expect(harness.recordSeen).toHaveBeenCalledTimes(1);

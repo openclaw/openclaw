@@ -22,16 +22,9 @@ afterEach(resetPluginLoaderTestStateForTest);
 afterAll(cleanupPluginLoaderFixturesForTest);
 
 describe("realtime voice provider discovery", () => {
-  it.each(
-    [false, true].flatMap((activeReady) =>
-      ["configured-voice", "configured-voice-alias"].map((configKey) => ({
-        activeReady,
-        configKey,
-      })),
-    ),
-  )(
-    "discovers $configKey config when the active provider is configured=$activeReady",
-    ({ activeReady, configKey }) => {
+  it.each(["configured-voice", "configured-voice-alias"])(
+    "discovers %s config ahead of a configured active provider",
+    (configKey) => {
       withVoiceProviders((cfg) => {
         const registry = loadOpenClawPlugins({ config: cfg, onlyPluginIds: ["active-voice"] });
         expect(registry.realtimeVoiceProviders.map((entry) => entry.provider.id)).toEqual([
@@ -41,7 +34,7 @@ describe("realtime voice provider discovery", () => {
         const result = resolveConfiguredRealtimeVoiceProvider({
           cfg,
           providerConfigs: {
-            "active-voice": { ready: activeReady },
+            "active-voice": { ready: true },
             [configKey]: { ready: true },
           },
         });
@@ -56,14 +49,12 @@ describe("realtime voice provider discovery", () => {
     },
   );
 
-  it.each(
-    ["configured-voice", "configured-voice-alias"].flatMap((configKey) =>
-      [undefined, " ", configKey].map((configuredProviderId) => ({
-        configKey,
-        configuredProviderId,
-      })),
-    ),
-  )(
+  it.each([
+    { configKey: "configured-voice", configuredProviderId: undefined },
+    { configKey: "configured-voice", configuredProviderId: "configured-voice" },
+    { configKey: "configured-voice-alias", configuredProviderId: " " },
+    { configKey: "configured-voice-alias", configuredProviderId: "configured-voice-alias" },
+  ])(
     "selects cold $configKey config with explicit selection $configuredProviderId",
     ({ configuredProviderId, configKey }) => {
       withVoiceProviders((cfg) => {

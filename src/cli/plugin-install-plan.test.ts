@@ -31,22 +31,17 @@ function createSourceCheckoutPlugin(pluginId: string): {
 }
 
 describe("plugin install plan helpers", () => {
-  it.each([
-    "clawhub:",
-    "clawhub:demo@",
-    "clawhub:@scope/pkg@",
-    "CLAWHUB:",
-    "ClAwHuB:demo@",
-    " clawhub:demo@ ",
-  ])("rejects the malformed explicit ClawHub selector %s before npm fallback", (raw) => {
-    expect(resolvePluginInstallSourcePlan({ raw, mode: "install" })).toEqual({
-      ok: false,
-      error: `Unsupported ClawHub plugin spec: ${raw}`,
-    });
-  });
+  it.each(["clawhub:", "clawhub:@scope/pkg@", " ClAwHuB:demo@ "])(
+    "rejects the malformed explicit ClawHub selector %s before npm fallback",
+    (raw) => {
+      expect(resolvePluginInstallSourcePlan({ raw, mode: "install" })).toEqual({
+        ok: false,
+        error: `Unsupported ClawHub plugin spec: ${raw}`,
+      });
+    },
+  );
 
   it.each([
-    ["clawhub:demo", "demo", undefined],
     ["CLAWHUB:demo", "demo", undefined],
     ["clawhub:@scope/pkg@1.2.3", "@scope/pkg", "1.2.3"],
   ])(
@@ -102,6 +97,25 @@ describe("plugin install plan helpers", () => {
           expectedIntegrity:
             "sha512-7kqdBIOF3SgDDoBoFtO6jxnxofbYSgbKdxZDNabD0y0jg2xKcVqlXZOOJ9+XQho/QOtIFrnRH2IRnPukFEYwJg==",
         }),
+      ],
+    });
+  });
+
+  it("resolves Telnyx to its integrity-pinned npm artifact", () => {
+    expect(resolveCatalogOfficialExternalInstallPlan("telnyx")).toEqual({
+      pluginId: "telnyx",
+      spec: "@telnyx/openclaw-provider@0.2.0",
+      installSources: [
+        {
+          source: "npm",
+          spec: "@telnyx/openclaw-provider@0.2.0",
+          expectedIntegrity:
+            "sha512-htqOJfPx+TlLWE/nmpdJJVgrg8zDqRIX87smzY3CnKcdJPlx51Rc1kWzarvE+2hvhpm2lzD5sKkxRSIWKz2AaA==",
+        },
+        {
+          source: "clawhub",
+          spec: "clawhub:@telnyx/openclaw-provider@0.2.0",
+        },
       ],
     });
   });

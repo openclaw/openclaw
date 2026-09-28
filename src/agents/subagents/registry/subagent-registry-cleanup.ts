@@ -48,10 +48,9 @@ export function resolveCleanupCompletionReason(
  * `sessions.delete` that removes its session and transcript, not its attachments
  * directory, not its browser sessions, not its MCP runtimes, not the internal
  * session-effects teardown, not the context-engine "this child ended" report,
- * not the exactly-once terminal plugin hooks, and not the detached task's
- * terminal state — `shouldApplyRunScopedStatusUpdate` rejects
- * `timed_out` -> `succeeded`, so a published `timed_out` is the one projection a
- * later observed success could never repair.
+ * not the exactly-once terminal plugin hooks, and not a terminal status
+ * projection (session status, terminal signal) that a later observed success
+ * could not repair.
  *
  * Only authoritative stop evidence promotes the row out of this state, never a
  * clock, and never the mere absence of a record. Two owners produce that

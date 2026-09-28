@@ -40,7 +40,6 @@ import {
   runDaemonInstall,
   runExec,
   runPostCorePluginConvergenceSpy,
-  runUtf8CommandWithTimeout,
   updateCommand,
   updateGitCheckout,
 } from "./update-cli-modules.test-support.js";
@@ -204,18 +203,6 @@ describe("update-cli", () => {
   ])(
     "finalizes downgrade to $targetVersion with target writer=$fresh",
     async ({ targetVersion, fresh }) => {
-      const runWorker = expectDefined(
-        vi.mocked(runUtf8CommandWithTimeout).getMockImplementation(),
-        "worker transport is initialized",
-      );
-      vi.mocked(runUtf8CommandWithTimeout).mockImplementation((argv, options) => {
-        if (argv.includes("--check")) {
-          return Promise.reject(
-            new Error("Older target does not contain the migration-continuation worker"),
-          );
-        }
-        return runWorker(argv, options);
-      });
       candidateValidation.mockImplementation(async (options) =>
         reportCandidateSteps(options, {
           status: "ok",

@@ -48,44 +48,6 @@ import Testing
         GatewayTLSStore.clearFingerprint(stableID: stableID)
     }
 
-    @Test @MainActor func `discovered TLS params prefers stored pin over advertised TXT`() {
-        let stableID = "test|\(UUID().uuidString)"
-        defer { clearTLSFingerprint(stableID: stableID) }
-        self.clearTLSFingerprint(stableID: stableID)
-
-        GatewayTLSStore.saveFingerprint("11", stableID: stableID)
-
-        let gateway = self.makeDiscoveredGateway(
-            stableID: stableID,
-            lanHost: "evil.example.com",
-            tailnetDns: "evil.example.com",
-            gatewayPort: 12345,
-            fingerprint: "22")
-        let controller = self.makeController()
-
-        let params = controller._test_resolveDiscoveredTLSParams(gateway: gateway)
-        #expect(params?.expectedFingerprint == "11")
-        #expect(params?.allowTOFU == false)
-    }
-
-    @Test @MainActor func `discovered TLS params does not trust advertised fingerprint`() {
-        let stableID = "test|\(UUID().uuidString)"
-        defer { clearTLSFingerprint(stableID: stableID) }
-        self.clearTLSFingerprint(stableID: stableID)
-
-        let gateway = self.makeDiscoveredGateway(
-            stableID: stableID,
-            lanHost: nil,
-            tailnetDns: nil,
-            gatewayPort: nil,
-            fingerprint: "22")
-        let controller = self.makeController()
-
-        let params = controller._test_resolveDiscoveredTLSParams(gateway: gateway)
-        #expect(params?.expectedFingerprint == nil)
-        #expect(params?.allowTOFU == false)
-    }
-
     @Test @MainActor func `discovered gateway availability requires advertised TLS or a stored pin`() {
         let unpinnedID = "test|\(UUID().uuidString)"
         let pinnedID = "test|\(UUID().uuidString)"

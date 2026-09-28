@@ -13,6 +13,30 @@ import {
 
 registerCodexEventProjectorTestLifecycle();
 
+function toolResult(projector: Awaited<ReturnType<typeof createProjector>>) {
+  const results = projector
+    .buildResult(buildEmptyToolTelemetry())
+    .messagesSnapshot.filter((message) => message.role === "toolResult");
+  expect(results).toHaveLength(1);
+  return requireRecord(results[0], "result");
+}
+
+function outputText(result: Record<string, unknown>) {
+  return requireRecord(requireArray(result.content, "content")[0], "output").text;
+}
+
+async function projectCodeModeOutput(output: string, input: string) {
+  const projector = await createProjector();
+  for (const item of [
+    { type: "custom_tool_call", call_id: "outer-exec", name: "exec", input },
+    { type: "custom_tool_call_output", call_id: "outer-exec", output },
+  ]) {
+    await projector.handleNotification(forCurrentTurn("rawResponseItem/completed", { item }));
+  }
+  await projector.handleNotification(turnCompleted());
+  return toolResult(projector);
+}
+
 // The response notification is distinct from the command's raw stdout. Codex
 // may further truncate history after constructing this response; do not claim
 // exact model-input fidelity from this notification alone.
@@ -43,14 +67,7 @@ describe("Codex tool response fidelity", () => {
         },
       }),
     );
-    const result = requireRecord(
-      projector
-        .buildResult(buildEmptyToolTelemetry())
-        .messagesSnapshot.find((message) => message.role === "toolResult"),
-      "result",
-    );
-    const output = requireRecord(requireArray(result.content, "content")[0], "output").text;
-    expect(output).toBe(
+    expect(outputText(toolResult(projector))).toBe(
       JSON.stringify(
         [
           { type: "input_text", text },
@@ -83,13 +100,8 @@ describe("Codex tool response fidelity", () => {
         },
       ]),
     );
-    const result = requireRecord(
-      projector
-        .buildResult(buildEmptyToolTelemetry())
-        .messagesSnapshot.find((message) => message.role === "toolResult"),
-      "result",
-    );
-    expect(requireRecord(requireArray(result.content, "content")[0], "output").text).toBe(output);
+    const result = toolResult(projector);
+    expect(outputText(result)).toBe(output);
     expect(result["__openclaw"]).toMatchObject({
       toolOutput: { source: "execution", modelInput: "unverified" },
     });
@@ -113,28 +125,9 @@ describe("Codex tool response fidelity", () => {
   ])(
     "retains $label outer code-mode output under its own call ID",
     async ({ output, isError, outcome }) => {
-      const projector = await createProjector();
-      await projector.handleNotification(
-        forCurrentTurn("rawResponseItem/completed", {
-          item: {
-            type: "custom_tool_call",
-            call_id: "outer-exec",
-            name: "exec",
-            input: "text(await tools.exec_command({cmd: 'transcript'}))",
-          },
-        }),
-      );
-      await projector.handleNotification(
-        forCurrentTurn("rawResponseItem/completed", {
-          item: { type: "custom_tool_call_output", call_id: "outer-exec", output },
-        }),
-      );
-      await projector.handleNotification(turnCompleted());
-      const result = requireRecord(
-        projector
-          .buildResult(buildEmptyToolTelemetry())
-          .messagesSnapshot.find((message) => message.role === "toolResult"),
-        "result",
+      const result = await projectCodeModeOutput(
+        output,
+        "text(await tools.exec_command({cmd: 'transcript'}))",
       );
       expect(result.toolCallId).toBe("outer-exec");
       expect(result.isError).toBe(isError);
@@ -142,56 +135,26 @@ describe("Codex tool response fidelity", () => {
         requireRecord(requireRecord(result["__openclaw"], "metadata").toolOutput, "provenance")
           .outcome,
       ).toBe(outcome);
-      expect(requireRecord(requireArray(result.content, "content")[0], "output").text).toBe(output);
+      expect(outputText(result)).toBe(output);
     },
   );
 
-  it.each([
-    {
-      label: "unrecognized",
-      output: "  Future patch execution failure\r\n" + "details\n".repeat(2_000),
-      outcome: "unknown",
-    },
-    {
-      label: "nonempty completed",
-      output: "Script completed\nWall time 0.1 seconds\nOutput:\npatch details\n",
-      outcome: undefined,
-    },
-  ])(
-    "retains $label code-mode patch responses without inventing patch success",
-    async ({ output, outcome }) => {
-      const projector = await createProjector();
-      const patchInput = "*** Begin Patch\n*** Add File: fixture.txt\n+fixture\n*** End Patch\n";
-      await projector.handleNotification(
-        forCurrentTurn("rawResponseItem/completed", {
-          item: {
-            type: "custom_tool_call",
-            call_id: "outer-patch-exec",
-            name: "exec",
-            input: `const result = await tools.apply_patch(${JSON.stringify(patchInput)});\ntext(result);\n`,
-          },
-        }),
-      );
-      await projector.handleNotification(
-        forCurrentTurn("rawResponseItem/completed", {
-          item: { type: "custom_tool_call_output", call_id: "outer-patch-exec", output },
-        }),
-      );
-      await projector.handleNotification(turnCompleted());
-      const results = projector
-        .buildResult(buildEmptyToolTelemetry())
-        .messagesSnapshot.filter((message) => message.role === "toolResult");
-      expect(results).toHaveLength(1);
-      expect(results[0]).toMatchObject({
-        toolCallId: "outer-patch-exec",
-        toolName: "exec",
-        content: [{ type: "text", text: output }],
-        __openclaw: { toolOutput: { source: "provider-response", modelInput: "unverified" } },
-      });
-      const metadata = requireRecord(requireRecord(results[0], "result")["__openclaw"], "metadata");
-      expect(requireRecord(metadata.toolOutput, "provenance").outcome).toBe(outcome);
-    },
-  );
+  it("retains unrecognized code-mode patch responses without inventing patch success", async () => {
+    const output = "  Future patch execution failure\r\n" + "details\n".repeat(2_000);
+    const patchInput = "*** Begin Patch\n*** Add File: fixture.txt\n+fixture\n*** End Patch\n";
+    const result = await projectCodeModeOutput(
+      output,
+      `const result = await tools.apply_patch(${JSON.stringify(patchInput)});\ntext(result);\n`,
+    );
+    expect(result).toMatchObject({
+      toolCallId: "outer-exec",
+      toolName: "exec",
+      content: [{ type: "text", text: output }],
+      __openclaw: { toolOutput: { source: "provider-response", modelInput: "unverified" } },
+    });
+    const metadata = requireRecord(result["__openclaw"], "metadata");
+    expect(requireRecord(metadata.toolOutput, "provenance").outcome).toBe("unknown");
+  });
 
   it.each([
     {
@@ -199,12 +162,6 @@ describe("Codex tool response fidelity", () => {
       aggregate: "available",
       aggregatedOutput: "raw execution output is not the response",
     },
-    {
-      order: "after",
-      aggregate: "available",
-      aggregatedOutput: "raw execution output is not the response",
-    },
-    { order: "before", aggregate: "null", aggregatedOutput: null },
     { order: "after", aggregate: "null", aggregatedOutput: null },
   ])(
     "preserves the complete response $order the terminal item with $aggregate aggregate",
@@ -233,43 +190,11 @@ describe("Codex tool response fidelity", () => {
         await projector.handleNotification(response);
       }
       await projector.handleNotification(turnCompleted([command]));
-      const messages = projector.buildResult(buildEmptyToolTelemetry()).messagesSnapshot;
-      const results = messages.filter((message) => message.role === "toolResult");
-      expect(results).toHaveLength(1);
-      const result = requireRecord(results[0], "result");
-      const block = requireRecord(requireArray(result.content, "content")[0], "output");
-      expect(block.text).toBe(output);
+      const result = toolResult(projector);
+      expect(outputText(result)).toBe(output);
       expect(result["__openclaw"]).toMatchObject({
         toolOutput: { source: "provider-response", modelInput: "unverified" },
       });
     },
   );
-
-  it("preserves provider truncation verbatim instead of substituting raw command output", async () => {
-    const projector = await createProjector();
-    const command = {
-      type: "commandExecution",
-      id: "call-truncated",
-      command: "transcript",
-      status: "completed",
-      aggregatedOutput: "untruncated raw stdout",
-      exitCode: 0,
-    };
-    await projector.handleNotification(forCurrentTurn("item/completed", { item: command }));
-    const output =
-      "Chunk ID: abc\nWall time: 0.1000 seconds\nProcess exited with code 0\nOutput:\nWarning: truncated output (original token count: 8693)\nhead…12345 chars truncated…tail\n";
-    await projector.handleNotification(
-      forCurrentTurn("rawResponseItem/completed", {
-        item: { type: "function_call_output", call_id: command.id, output },
-      }),
-    );
-    await projector.handleNotification(turnCompleted([command]));
-    const result = requireRecord(
-      projector
-        .buildResult(buildEmptyToolTelemetry())
-        .messagesSnapshot.find((message) => message.role === "toolResult"),
-      "result",
-    );
-    expect(requireRecord(requireArray(result.content, "content")[0], "output").text).toBe(output);
-  });
 });

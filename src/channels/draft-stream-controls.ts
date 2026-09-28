@@ -1,8 +1,3 @@
-/**
- * Finalizable draft stream controls.
- *
- * Coordinates preview updates, final flushes, clears, and deletion callbacks for channel drafts.
- */
 import { formatErrorMessage } from "../infra/errors.js";
 import { createDraftStreamLoop } from "./draft-stream-loop.js";
 
@@ -34,32 +29,30 @@ type DeleteFinalizableDraftMessageParams<T> = Omit<
   "isValidMessageId" | "onDeleteFailure" | "stopForClear"
 >;
 
+type DraftStreamOptions<T> = Omit<
+  Parameters<typeof createDraftStreamLoop<T>>[0],
+  "isStopped" | "onBackgroundFlushError"
+>;
+
 type FinalizableDraftLifecycleParams<TMessageId, TUpdate = string> = Omit<
   ClearFinalizableDraftMessageParams<TMessageId>,
   "onDeleteFailure" | "stopForClear"
-> & {
-  throttleMs: number;
-  coalesceInFlight?: boolean;
-  state: FinalizableDraftStreamState;
-  sendOrEditStreamMessage: (value: TUpdate) => Promise<void | boolean>;
-  emptyValue?: TUpdate;
-  isEmpty?: (value: TUpdate) => boolean;
-};
+> &
+  DraftStreamOptions<TUpdate> & {
+    state: FinalizableDraftStreamState;
+  };
 
 /**
  * Creates controls for streaming preview messages that can be finalized, sealed, or cleared.
  */
-export function createFinalizableDraftStreamControls<T = string>(params: {
-  throttleMs: number;
-  coalesceInFlight?: boolean;
-  isStopped: () => boolean;
-  isFinal: () => boolean;
-  markStopped: () => void;
-  markFinal: () => void;
-  sendOrEditStreamMessage: (value: T) => Promise<void | boolean>;
-  emptyValue?: T;
-  isEmpty?: (value: T) => boolean;
-}) {
+export function createFinalizableDraftStreamControls<T = string>(
+  params: DraftStreamOptions<T> & {
+    isStopped: () => boolean;
+    isFinal: () => boolean;
+    markStopped: () => void;
+    markFinal: () => void;
+  },
+) {
   const loop = createDraftStreamLoop<T>({
     throttleMs: params.throttleMs,
     coalesceInFlight: params.coalesceInFlight,
@@ -111,14 +104,11 @@ export function createFinalizableDraftStreamControls<T = string>(params: {
 /**
  * Creates finalizable draft controls backed by a shared mutable state object.
  */
-export function createFinalizableDraftStreamControlsForState<T = string>(params: {
-  throttleMs: number;
-  coalesceInFlight?: boolean;
-  state: FinalizableDraftStreamState;
-  sendOrEditStreamMessage: (value: T) => Promise<void | boolean>;
-  emptyValue?: T;
-  isEmpty?: (value: T) => boolean;
-}) {
+export function createFinalizableDraftStreamControlsForState<T = string>(
+  params: DraftStreamOptions<T> & {
+    state: FinalizableDraftStreamState;
+  },
+) {
   return createFinalizableDraftStreamControls<T>({
     throttleMs: params.throttleMs,
     coalesceInFlight: params.coalesceInFlight,
@@ -196,14 +186,7 @@ export async function clearFinalizableDraftMessage<T>(
 export function createFinalizableDraftLifecycle<TMessageId, TUpdate = string>(
   params: FinalizableDraftLifecycleParams<TMessageId, TUpdate>,
 ) {
-  const controls = createFinalizableDraftStreamControlsForState<TUpdate>({
-    throttleMs: params.throttleMs,
-    coalesceInFlight: params.coalesceInFlight,
-    state: params.state,
-    sendOrEditStreamMessage: params.sendOrEditStreamMessage,
-    ...(params.emptyValue !== undefined ? { emptyValue: params.emptyValue } : {}),
-    ...(params.isEmpty ? { isEmpty: params.isEmpty } : {}),
-  });
+  const controls = createFinalizableDraftStreamControlsForState<TUpdate>(params);
   type Retirement = {
     owner: DeleteFinalizableDraftMessageParams<TMessageId>;
     attempt?: Promise<boolean>;

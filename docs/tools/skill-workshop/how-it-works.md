@@ -9,7 +9,12 @@ read_when:
 
 ## How it works
 
-The following lifecycle applies to Workshop proposals:
+The following lifecycle applies to Workshop proposals. When you ask your agent to
+change a skill you own (repository skill source, the workspace `skills/`
+directory, project `.agents/skills/`, or a configured extra skill directory), it
+edits that file directly; Workshop is for skills the agent captures on its own.
+Bundled, ClawHub-installed, and plugin-provided skills are replaced by their
+owners' updates, so the agent says so instead of editing them.
 
 - **Proposal first:** generated content is stored as `PROPOSAL.md`, not
   `SKILL.md`.

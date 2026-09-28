@@ -62,6 +62,7 @@ export async function relocateRuntimeSymlink(
   sourceFile: string,
   destinationFile: string,
   relocations: RuntimeRelocations,
+  assertBeforeMutation?: () => void,
 ): Promise<void> {
   const link = await fs.readlink(file);
   const target = relocateRuntimePath(path.resolve(path.dirname(sourceFile), link), relocations);
@@ -75,7 +76,9 @@ export async function relocateRuntimeSymlink(
   // source before rebinding; Windows junctions require the final absolute target.
   const type =
     process.platform === "win32" && (await fs.stat(sourceFile)).isDirectory() ? "junction" : "file";
+  assertBeforeMutation?.();
   await fs.unlink(file);
+  assertBeforeMutation?.();
   await fs.symlink(type === "junction" ? target : replacement, file, type);
 }
 
@@ -84,6 +87,7 @@ export async function relocateRuntimeLauncher(
   sourceFile: string,
   destinationFile: string,
   relocations: RuntimeRelocations,
+  assertBeforeMutation?: () => void,
 ): Promise<void> {
   const prepared = prepareRuntimeRelocations(relocations);
   const original = await fs.readFile(file, "utf8");
@@ -125,6 +129,7 @@ export async function relocateRuntimeLauncher(
     }
   }
   if (content !== original) {
+    assertBeforeMutation?.();
     await fs.writeFile(file, content);
   }
 }
@@ -148,6 +153,7 @@ async function relocateModulesManifest(
   sourceFile: string,
   destinationFile: string,
   relocations: RuntimeRelocations,
+  assertBeforeMutation?: () => void,
 ): Promise<void> {
   const contents = await readRuntimeModulesManifest(file);
   if (!contents) {
@@ -177,6 +183,7 @@ async function relocateModulesManifest(
     const content = original.trimStart().startsWith("{")
       ? `${JSON.stringify(manifest, null, 2)}\n`
       : stringifyYaml(manifest);
+    assertBeforeMutation?.();
     await fs.writeFile(file, content);
   }
 }
@@ -188,13 +195,32 @@ export async function relocateRuntimeEntry(
   destinationFile: string,
   kind: "file" | "symlink",
   relocations: RuntimeRelocations,
+  assertBeforeMutation?: () => void,
 ): Promise<void> {
   if (kind === "symlink") {
-    await relocateRuntimeSymlink(file, sourceFile, destinationFile, relocations);
+    await relocateRuntimeSymlink(
+      file,
+      sourceFile,
+      destinationFile,
+      relocations,
+      assertBeforeMutation,
+    );
   } else if (path.basename(file) === ".modules.yaml") {
-    await relocateModulesManifest(file, sourceFile, destinationFile, relocations);
+    await relocateModulesManifest(
+      file,
+      sourceFile,
+      destinationFile,
+      relocations,
+      assertBeforeMutation,
+    );
   } else if (path.basename(path.dirname(file)) === ".bin" && !file.endsWith(".exe")) {
-    await relocateRuntimeLauncher(file, sourceFile, destinationFile, relocations);
+    await relocateRuntimeLauncher(
+      file,
+      sourceFile,
+      destinationFile,
+      relocations,
+      assertBeforeMutation,
+    );
   }
 }
 

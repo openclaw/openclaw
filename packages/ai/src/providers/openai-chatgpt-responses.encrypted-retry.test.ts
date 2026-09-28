@@ -156,6 +156,22 @@ function decodeRequest(init: RequestInit | undefined): RecordedRequest {
   return { body: JSON.parse(json) as Record<string, unknown>, contentEncoding };
 }
 
+function installSseResponses(responses: Response[]): RecordedRequest[] {
+  const requests: RecordedRequest[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn<typeof fetch>(async (_input, init) => {
+      requests.push(decodeRequest(init));
+      const response = responses.shift();
+      if (!response) {
+        throw new Error("missing SSE response");
+      }
+      return response;
+    }),
+  );
+  return requests;
+}
+
 function hasInputType(request: RecordedRequest | Record<string, unknown>, type: string): boolean {
   const body = requestBody(request);
   return Array.isArray(body.input) && body.input.some((item) => item?.type === type);
@@ -271,23 +287,11 @@ describe("ChatGPT Responses encrypted replay recovery", () => {
     const context = createReplayContext("compaction");
     const onCompactionRejected = vi.fn();
     const observations: ResponsesPromptObservation[] = [];
-    const requests: RecordedRequest[] = [];
-    const responses = [
+    const requests = installSseResponses([
       typeOnlyErrorResponse("invalid_encrypted_content"),
       successResponse("resp_recovered"),
       successResponse("resp_next"),
-    ];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async (_input, init) => {
-        requests.push(decodeRequest(init));
-        const response = responses.shift();
-        if (!response) {
-          throw new Error("missing SSE response");
-        }
-        return response;
-      }),
-    );
+    ]);
     const options = createObservedOptions(
       {
         apiKey: createJwt(),
@@ -329,19 +333,11 @@ describe("ChatGPT Responses encrypted replay recovery", () => {
   it("SSE preserves compaction when reasoning-stripped recovery succeeds", async () => {
     const context = createReplayContext("mixed");
     const observations: ResponsesPromptObservation[] = [];
-    const requests: RecordedRequest[] = [];
-    const responses = [
+    const requests = installSseResponses([
       errorResponse("invalid_encrypted_content"),
       successResponse("resp_reasoning_recovered"),
       successResponse("resp_reasoning_next"),
-    ];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async (_input, init) => {
-        requests.push(decodeRequest(init));
-        return responses.shift() ?? successResponse("unexpected");
-      }),
-    );
+    ]);
     const options = createObservedOptions(
       { apiKey: createJwt(), transport: "sse" as const, ...REPLAY_IDENTITY },
       observations,
@@ -365,20 +361,12 @@ describe("ChatGPT Responses encrypted replay recovery", () => {
   it("SSE failed final recovery leaves compaction replayable on the next turn", async () => {
     const context = createReplayContext("mixed");
     const onCompactionRejected = vi.fn();
-    const requests: RecordedRequest[] = [];
-    const responses = [
+    const requests = installSseResponses([
       errorResponse("invalid_encrypted_content"),
       errorResponse("invalid_encrypted_content"),
       errorResponse("unsupported_parameter"),
       successResponse("resp_after_failure"),
-    ];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async (_input, init) => {
-        requests.push(decodeRequest(init));
-        return responses.shift() ?? successResponse("unexpected");
-      }),
-    );
+    ]);
     const options = {
       apiKey: createJwt(),
       transport: "sse" as const,
@@ -697,14 +685,7 @@ describe("ChatGPT Responses encrypted replay recovery", () => {
       { events: [invalidEncryptedEvent()] },
       { beforeEvents: (socket) => socket.dispatchEvent(new Event("error")) },
     ]);
-    const sseRequests: RecordedRequest[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async (_input, init) => {
-        sseRequests.push(decodeRequest(init));
-        return successResponse("resp_fallback");
-      }),
-    );
+    const sseRequests = installSseResponses([successResponse("resp_fallback")]);
     const options = createObservedOptions(
       { apiKey: createJwt(), transport: "auto" as const, ...REPLAY_IDENTITY },
       observations,
@@ -730,14 +711,7 @@ describe("ChatGPT Responses encrypted replay recovery", () => {
       { events: [invalidEncryptedEvent()] },
       { beforeEvents: (socket) => socket.dispatchEvent(new Event("error")) },
     ]);
-    const sseRequests: RecordedRequest[] = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async (_input, init) => {
-        sseRequests.push(decodeRequest(init));
-        return successResponse("resp_full_history_fallback");
-      }),
-    );
+    const sseRequests = installSseResponses([successResponse("resp_full_history_fallback")]);
     const onPayload = vi.fn((request: unknown) => request);
     const options = createObservedOptions(
       {

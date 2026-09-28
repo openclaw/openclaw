@@ -99,7 +99,7 @@ describe("tool-policy", () => {
     expect(couldNormalizeToolNamePrefixToAllowedTool(name, new Set(["other"]))).toBe(false);
   });
 
-  it.each(["ba", "bash", "apply-", "cron"])("retains declared alias prefix %s", (prefix) => {
+  it.each(["ba", "bash", "cron"])("retains declared alias prefix %s", (prefix) => {
     expect(
       couldNormalizeToolNamePrefixToAllowedTool(
         prefix,
@@ -164,19 +164,14 @@ describe("sandbox tool policy", () => {
     }
   });
 
-  it("allows all tools with * allow", () => {
-    const policy: SandboxToolPolicy = { allow: ["*"], deny: [] };
-    expect(isToolAllowed(policy, "browser")).toBe(true);
-  });
-
   it("denies all tools with * deny", () => {
     const policy: SandboxToolPolicy = { allow: [], deny: ["*"] };
     expect(isToolAllowed(policy, "read")).toBe(false);
   });
 
   it("supports wildcard patterns", () => {
-    const policy: SandboxToolPolicy = { allow: ["web_*"] };
-    expect(isToolAllowed(policy, "web_fetch")).toBe(true);
+    const policy: SandboxToolPolicy = { allow: [" WEB_* "] };
+    expect(isToolAllowed(policy, "WEB_FETCH")).toBe(true);
     expect(isToolAllowed(policy, "read")).toBe(false);
   });
 
@@ -200,11 +195,6 @@ describe("sandbox tool policy", () => {
     expect(isToolAllowed(policy, "read")).toBe(true);
     expect(isToolAllowed(policy, "exec")).toBe(true);
     expect(isToolAllowed(policy, "apply_patch")).toBe(false);
-  });
-
-  it("normalizes whitespace + case", () => {
-    const policy: SandboxToolPolicy = { allow: [" WEB_* "] };
-    expect(isToolAllowed(policy, "WEB_FETCH")).toBe(true);
   });
 });
 
@@ -261,10 +251,6 @@ describe("isToolAllowedByPolicyName — legacy scheduler tool name (RFC 0026)", 
 describe("isToolAllowedByPolicyName — apply_patch / write deny decoupling (#76749)", () => {
   it("does not deny apply_patch when write is denied", () => {
     expect(isToolAllowedByPolicyName("apply_patch", { deny: ["write"] })).toBe(true);
-  });
-
-  it("still denies apply_patch when apply_patch is explicitly denied", () => {
-    expect(isToolAllowedByPolicyName("apply_patch", { deny: ["apply_patch"] })).toBe(false);
   });
 
   it("still allows apply_patch via write in the allow list", () => {

@@ -1,12 +1,4 @@
-// Telegram helper module supports body helpers behavior.
-import type {
-  Chat,
-  Message,
-  RichBlock,
-  RichBlockCaption,
-  RichMessageButton,
-  RichText,
-} from "grammy/types";
+import type { Chat, Message, RichBlock, RichBlockCaption, RichText } from "grammy/types";
 import type {
   ChannelInboundMediaInput,
   NormalizedLocation,
@@ -115,10 +107,6 @@ function joinRichText(parts: string[], separator: string): string {
   return parts.map(compactRichText).filter(Boolean).join(separator);
 }
 
-function renderRichMessageButton(button: RichMessageButton): string {
-  return renderRichInlineText(button.text);
-}
-
 function renderRichInlineText(value: RichText | undefined): string {
   if (value === undefined) {
     return "";
@@ -133,7 +121,7 @@ function renderRichInlineText(value: RichText | undefined): string {
     case "anchor":
       return "";
     case "button":
-      return renderRichMessageButton(value.button);
+      return renderRichInlineText(value.button.text);
     case "custom_emoji":
       return value.alternative_text;
     case "mathematical_expression":
@@ -203,7 +191,10 @@ function renderRichBlock(block: RichBlock): string {
     case "voice_note":
       return renderRichCaption(block.caption);
     case "buttons":
-      return joinRichText(block.buttons.map(renderRichMessageButton), "\n");
+      return joinRichText(
+        block.buttons.map((button) => renderRichInlineText(button.text)),
+        "\n",
+      );
     case "anchor":
     case "divider":
       return "";
@@ -359,9 +350,7 @@ export function hasBotMention(msg: Message, botUsername: string, botId?: number)
     if (ent.type === "bot_command" && isBotCommandAddressedToMention(slice, mention)) {
       return true;
     }
-    // A `text_mention` entity tags a user by id (the entity text is the display
-    // name, not `@username`), so the `mention` branch above never matches it.
-    // When it resolves to this bot, it is still an explicit mention of us.
+    // Text mentions identify the bot by ID rather than username.
     if (ent.type === "text_mention" && botId !== undefined && ent.user?.id === botId) {
       return true;
     }

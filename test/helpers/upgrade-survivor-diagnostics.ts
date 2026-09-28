@@ -11,6 +11,8 @@ export function copySurvivorCaptureClosure(workDir: string) {
     "scripts/e2e/lib/text-file-utils.mjs",
     UPGRADE_SURVIVOR_DIAGNOSTICS_PATH,
     "scripts/e2e/lib/upgrade-survivor/backup-rollback-summary.mjs",
+    "scripts/e2e/lib/upgrade-survivor/native-assignment-summary.mjs",
+    "scripts/e2e/lib/upgrade-survivor/plugin-policy-summary.mjs",
     "scripts/lib/release-version.mjs",
   ]) {
     const destination = join(workDir, source);

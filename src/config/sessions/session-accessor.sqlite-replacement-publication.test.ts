@@ -295,6 +295,7 @@ it.each([
           ? [
               {
                 agentId: "main",
+                databaseIdentity: identity,
                 kind: "reset",
                 previous: { sessionId: "settlement", sessionKeys: [sessionKey] },
                 current: { sessionId: "settlement", sessionKeys: [sessionKey] },
@@ -352,10 +353,10 @@ it("keeps uncertain alias membership unavailable after newer native metadata set
       storePath: database.path,
       databaseIdentity: identity,
     });
-    const invalidations: string[] = [];
+    const invalidations: Array<{ sessionKey: string; scope: string | undefined }> = [];
     const stop = sessionChanges.subscribeFacts((change) => {
       if ("sessionKey" in change && change.sessionKey === sessionKey && change.factsInvalidated) {
-        invalidations.push(change.sessionKey);
+        invalidations.push({ sessionKey: change.sessionKey, scope: change.scope });
       }
     });
     try {
@@ -368,7 +369,7 @@ it("keeps uncertain alias membership unavailable after newer native metadata set
       expect(invalidations).toEqual([]);
       publication.settle(undefined, true);
       expect(sharing.readCurrent()).toBeUndefined();
-      expect(invalidations).toEqual([sessionKey]);
+      expect(invalidations).toEqual([{ sessionKey, scope: undefined }]);
       expect(readExactSessionEntryRow(database, sessionKey)?.entry.visibility).toBe("draft");
     } finally {
       publication.settle(undefined, false);

@@ -743,12 +743,14 @@ describe("subagent registry sqlite store", () => {
         cleanupCompletedAt: 300,
         execution: {
           status: "terminal",
+          interruptionReason: "gateway-restart",
           startedAt: 110,
           endedAt: 250,
           outcome: { status: "error", error: "full payload detail" },
         },
         delivery: {
           status: "suspended",
+          disposition: "intentional_non_delivery",
           suspendedAt: 275,
           suspendedReason: "expiry",
         },
@@ -766,6 +768,7 @@ describe("subagent registry sqlite store", () => {
         createdAt: 100,
         execution: {
           status: "terminal",
+          interruptionReason: "gateway-restart",
           startedAt: 110,
           endedAt: 250,
           outcome: { status: "error" },
@@ -775,7 +778,11 @@ describe("subagent registry sqlite store", () => {
         runTimeoutSeconds: 7_200,
         endedReason: "subagent-error",
         cleanupCompletedAt: 300,
-        delivery: { status: "suspended", suspendedAt: 275 },
+        delivery: {
+          status: "suspended",
+          disposition: "intentional_non_delivery",
+          suspendedAt: 275,
+        },
       });
     });
   });

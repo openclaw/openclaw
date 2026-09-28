@@ -127,18 +127,16 @@ function resolveLocalGatewayUrlKeys(cfg: OpenClawConfig): Set<string> {
 }
 
 function resolveConfiguredRemoteGatewayKey(cfg: OpenClawConfig): string | undefined {
-  let remoteKey: string | undefined;
   const remoteUrl = normalizeOptionalString(cfg.gateway?.remote?.url) ?? "";
   if (remoteUrl) {
     try {
-      const remote = canonicalizeToolGatewayWsUrl(remoteUrl);
-      remoteKey = remote.key;
+      return canonicalizeToolGatewayWsUrl(remoteUrl).key;
     } catch {
       // Misconfigured remote URL should not make ordinary tool calls fail; only explicit
       // gatewayUrl overrides need strict validation.
     }
   }
-  return remoteKey;
+  return undefined;
 }
 
 function resolveDefaultGatewayTarget(params: {
@@ -373,8 +371,7 @@ async function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
       }
       return identity;
     }
-    const identity = await loadOrCreateDeviceIdentityAsync();
-    return identity;
+    return await loadOrCreateDeviceIdentityAsync();
   } catch (error) {
     if (isNodeApprovalReplay) {
       throw new Error(

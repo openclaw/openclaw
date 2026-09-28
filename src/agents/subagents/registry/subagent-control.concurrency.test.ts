@@ -12,20 +12,17 @@ import {
   runExclusiveSessionLifecycleMutation,
   type SessionWorkAdmissionLease,
 } from "../../../sessions/session-lifecycle-admission.js";
-import { getDetachedTaskLifecycleRuntime } from "../../../tasks/detached-task-runtime.js";
-import { setDetachedTaskLifecycleRuntime } from "../../../tasks/detached-task-runtime.test-support.js";
-import { withTaskCancellationContext } from "../../../tasks/task-cancellation-context.js";
-import * as taskControlRuntime from "../../../tasks/task-registry-control.runtime.js";
-import { cancelTaskById, findTaskByRunId, getTaskById } from "../../../tasks/task-registry.js";
 import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
 import { createSubagentsTool } from "../../tools/subagents-tool.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import * as nativeControl from "./subagent-control.js";
 import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { markSubagentRunTerminated, registerSubagentRun } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
 import { finalizeInterruptedSubagentRun } from "./subagent-registry.test-helpers.js";
+import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
 const fixture = useSubagentControlFixture();
 
@@ -50,20 +47,16 @@ it("does not transfer a selected task cancellation to an admitted follow-up gene
     expectsCompletionMessage: true,
   });
   const original = subagentRuns.get("selected-original")!;
-  const task = findTaskByRunId(original.runId)!;
   const entered = createDeferred();
   const release = createDeferred();
-  const runtime = getDetachedTaskLifecycleRuntime();
-  setDetachedTaskLifecycleRuntime({
-    ...runtime,
-    cancelDetachedTaskRunById: async (params) => {
-      entered.resolve();
-      await release.promise;
-      return runtime.cancelDetachedTaskRunById(params);
-    },
+  const killNative = nativeControl.killSubagentRunAdmin;
+  vi.spyOn(nativeControl, "killSubagentRunAdmin").mockImplementation(async (...args) => {
+    entered.resolve();
+    await release.promise;
+    return killNative(...args);
   });
   const tool = createSubagentsTool({ agentSessionKey: owner, config: getRuntimeConfig() });
-  const pending = tool.execute("cancel-original", { action: "cancel", taskId: task.taskId });
+  const pending = tool.execute("cancel-original", { action: "cancel", runId: original.runId });
   const controller = new AbortController();
   const handle = createEmbeddedRunHandle({
     runId: "selected-followup",
@@ -92,16 +85,10 @@ it("does not transfer a selected task cancellation to an admitted follow-up gene
     ).toBe(true);
     const successor = subagentRuns.get("selected-followup")!;
     expect(successor.generation).toBeGreaterThan(original.generation!);
-    expect(getTaskById(task.taskId)).toMatchObject({
-      runId: task.runId,
-      status: "running",
-      detail: { generation: successor.generation },
-    });
     setActiveEmbeddedRun(sessionId, handle, sessionKey);
     release.resolve();
-    expect((await pending).details).toMatchObject({ cancelled: false });
+    expect((await pending).details).toMatchObject({ killed: false });
     expect(controller.signal.aborted).toBe(false);
-    expect(getTaskById(task.taskId)?.status).toBe("running");
   } finally {
     release.resolve();
     await pending;
@@ -131,7 +118,6 @@ it.each(["before interruption", "after interruption", "after abort"] as const)(
       cleanup: "keep",
       expectsCompletionMessage: false,
     });
-    const task = findTaskByRunId(runId)!;
     let callerControlsAncestor = true;
     const controller = new AbortController();
     const abort = vi.fn(() => {
@@ -171,26 +157,23 @@ it.each(["before interruption", "after interruption", "after abort"] as const)(
     if (revocation === "before interruption") {
       await blockerEntered.promise;
     }
-    const ownerEntered = createDeferred();
-    const runAdmin = killSubagentRunAdmin;
-    const adminSpy = vi
-      .spyOn(taskControlRuntime, "killSubagentRunAdmin")
-      .mockImplementation((params) => {
-        ownerEntered.resolve();
-        return runAdmin(params);
-      });
-    const pending = withTaskCancellationContext(
-      () => {
-        if (!callerControlsAncestor) {
-          throw new Error("Caller no longer controls ancestor.");
-        }
+    const pending = killSubagentRunAdmin(
+      {
+        cfg: getRuntimeConfig(),
+        sessionKey,
+        expectedRunId: runId,
+        expectedOwnerKey: "agent:main:main",
       },
-      () => cancelTaskById({ cfg: getRuntimeConfig(), taskId: task.taskId }),
-      { selectedTask: task },
+      {
+        assertCurrent: () => {
+          if (!callerControlsAncestor) {
+            throw new Error("Caller no longer controls ancestor.");
+          }
+        },
+      },
     );
     try {
       if (revocation === "before interruption") {
-        await ownerEntered.promise;
         callerControlsAncestor = false;
         releaseBlocker.resolve();
       } else if (revocation === "after interruption") {
@@ -199,22 +182,16 @@ it.each(["before interruption", "after interruption", "after abort"] as const)(
         callerControlsAncestor = false;
         admission.release();
       }
-      const result = await pending;
+      await expect(pending).rejects.toThrow("Caller no longer controls ancestor.");
       const accepted = revocation === "after abort";
-      expect(result.cancelled).toBe(accepted);
       expect(controller.signal.aborted).toBe(accepted);
       expect(abort).toHaveBeenCalledTimes(Number(accepted));
       expect(onInterrupt).toHaveBeenCalledTimes(Number(revocation !== "before interruption"));
-      expect(getTaskById(task.taskId)?.status).toBe(accepted ? "cancelled" : "running");
       expect(subagentRuns.get(runId)?.killIntent).toBeUndefined();
-      if (!accepted) {
-        expect(result.reason).toContain("Caller no longer controls ancestor.");
-      }
     } finally {
       releaseBlocker.resolve();
       admission.release();
-      await Promise.all([blocker, pending]);
-      adminSpy.mockRestore();
+      await Promise.allSettled([blocker, pending]);
       clearActiveEmbeddedRun(sessionId, handle, sessionKey);
       expect(getActiveSessionWorkAdmissionCount()).toBe(0);
       expect(getActiveSessionLifecycleMutationCount()).toBe(0);
@@ -228,7 +205,7 @@ it.each([
   ),
   { phase: "accepted", outcome: "failure", terminal: true },
 ] as const)(
-  "prepares inherited cancellation facts while $phase and settles $outcome (terminal=$terminal)",
+  "prepares cancellation facts while $phase and settles $outcome (terminal=$terminal)",
   async ({ phase, outcome, terminal }) => {
     const sessionKey = "agent:main:subagent:readiness";
     const sessionId = "readiness-session";
@@ -249,7 +226,6 @@ it.each([
       cleanup: "keep",
       expectsCompletionMessage: false,
     });
-    const task = findTaskByRunId(runId)!;
     const controller = new AbortController();
     const aborted = vi.fn();
     controller.signal.addEventListener("abort", aborted, { once: true });
@@ -285,14 +261,6 @@ it.each([
     if (phase === "queued") {
       await blockerEntered.promise;
     }
-    const ownerEntered = createDeferred();
-    const runAdmin = killSubagentRunAdmin;
-    const adminSpy = vi
-      .spyOn(taskControlRuntime, "killSubagentRunAdmin")
-      .mockImplementation((params) => {
-        ownerEntered.resolve();
-        return runAdmin(params);
-      });
     const readEntered = createDeferred();
     const releaseRead = createDeferred();
     const failure = new AggregateError([new Error("read cleanup failed")], "cancel read failed");
@@ -304,20 +272,18 @@ it.each([
       }
     });
     void read.catch(() => {});
-    const pending = withTaskCancellationContext(
-      () => {
-        if (needsRead) {
-          throw new Error("Caller facts were not prepared.");
-        }
-      },
-      () =>
-        withTaskCancellationContext(
-          () => {},
-          () => cancelTaskById({ cfg: getRuntimeConfig(), taskId: task.taskId }),
-          { selectedTask: task },
-        ),
+    const pending = killSubagentRunAdmin(
       {
-        selectedTask: task,
+        cfg: getRuntimeConfig(),
+        sessionKey,
+        expectedRunId: runId,
+      },
+      {
+        assertCurrent: () => {
+          if (needsRead) {
+            throw new Error("Caller facts were not prepared.");
+          }
+        },
         prepareRead: () => {
           if (!needsRead) {
             return undefined;
@@ -332,7 +298,9 @@ it.each([
       settled = true;
     });
     try {
-      await (phase === "queued" ? ownerEntered.promise : interrupted.promise);
+      if (phase === "accepted") {
+        await interrupted.promise;
+      }
       needsRead = true;
       releaseBlocker.resolve();
       admission.release();
@@ -347,27 +315,30 @@ it.each([
       expect(getActiveSessionLifecycleMutationCount()).toBeGreaterThan(0);
       if (terminal) {
         expect(markSubagentRunTerminated({ runId, reason: "killed" })).toBe(1);
-        expect(getTaskById(task.taskId)?.status).toBe("cancelled");
+        expect(resolveSubagentSessionStatus(subagentRuns.get(runId))).toBe("killed");
       }
       releaseRead.resolve();
       const result = await pending;
       if (outcome === "failure") {
-        expect(result.cancelled).toBe(false);
-        expect(result.reason).toContain("cancel read failed");
-        expect(result.reason).not.toContain("Caller facts were not prepared");
+        expect(result.killed).toBe(phase === "accepted");
+        expect("error" in result ? result.error : undefined).toContain("cancel read failed");
+        expect("error" in result ? result.error : undefined).not.toContain(
+          "Caller facts were not prepared",
+        );
       } else {
-        expect(result.cancelled).toBe(true);
+        expect(result.killed).toBe(true);
       }
       const stopped = phase === "accepted" || outcome === "ready";
       expect(aborted).toHaveBeenCalledTimes(Number(stopped));
       expect(subagentRuns.get(runId)?.killIntent).toBeUndefined();
-      expect(getTaskById(task.taskId)?.status).toBe(stopped ? "cancelled" : "running");
+      expect(resolveSubagentSessionStatus(subagentRuns.get(runId))).toBe(
+        stopped ? "killed" : "running",
+      );
     } finally {
       releaseBlocker.resolve();
       releaseRead.resolve();
       admission.release();
       await Promise.allSettled([blocker, pending]);
-      adminSpy.mockRestore();
       clearActiveEmbeddedRun(sessionId, handle, sessionKey);
       expect(getActiveSessionWorkAdmissionCount()).toBe(0);
       expect(getActiveSessionLifecycleMutationCount()).toBe(0);
@@ -483,7 +454,7 @@ it.each(["bulk", "admin"] as const)(
           : { status: "ok", killed: selected.length, labels: selected },
       );
       for (const id of selected) {
-        expect(findTaskByRunId(id)?.status).toBe("cancelled");
+        expect(resolveSubagentSessionStatus(subagentRuns.get(id))).toBe("killed");
       }
       expect(start).not.toHaveBeenCalled();
     } finally {
@@ -570,10 +541,8 @@ it.each(["after interrupt", "before capacity release"] as const)(
     });
     const registerG = () =>
       admissionD.run(async () => {
-        const completion = register("g", true);
-        if (completion) {
-          await completion;
-        }
+        const pendingRegistration = register("g", true);
+        // Keep G queued before B releases capacity, without detaching its durable registration.
         enqueueSwarmRun({
           groupId: JSON.stringify(["main", key("d"), "shared-name"]),
           runId: "g",
@@ -582,6 +551,7 @@ it.each(["after interrupt", "before capacity release"] as const)(
           start: startG,
           onStartFailure: startFailure,
         });
+        await pendingRegistration;
       });
     let lateRegistration: Promise<void> | undefined;
     const handleB = createEmbeddedRunHandle({
@@ -633,14 +603,14 @@ it.each(["after interrupt", "before capacity release"] as const)(
         killed: 5,
         labels: ["a", "d", "x", "g", "b"],
       });
-      expect(findTaskByRunId("g")?.status).toBe("cancelled");
+      expect(resolveSubagentSessionStatus(subagentRuns.get("g"))).toBe("killed");
       expect(startG).not.toHaveBeenCalled();
       expect(startFailure).not.toHaveBeenCalled();
     } finally {
       admissionA.release();
       admissionB.release();
       admissionD.release();
-      await pending;
+      await Promise.all([pending, lateRegistration]);
       clearActiveEmbeddedRun("b-session", handleB, key("b"));
       clearActiveEmbeddedRun("x-session", handleX, key("x"));
       expect(getActiveSessionWorkAdmissionCount()).toBe(0);

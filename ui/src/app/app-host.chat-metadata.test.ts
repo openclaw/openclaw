@@ -30,6 +30,7 @@ import {
 } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import "./app-host.ts";
+import { createShellConfigFixture } from "./app-host.test-support.ts";
 import type { ApplicationContext } from "./context.ts";
 import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
 
@@ -55,6 +56,7 @@ it("retains model and auth reads across 50 metadata-only publications", async ()
   const shell = document.createElement("openclaw-app-shell") as unknown as ChatMetadataShell;
   shell.runtime = {
     context: {
+      config: createShellConfigFixture(),
       gateway,
       runtimeConfig: {
         state: { configFormDirty: false },
@@ -152,6 +154,7 @@ it.each([
     const shell = document.createElement("openclaw-app-shell") as unknown as ChatMetadataShell;
     shell.runtime = {
       context: {
+        config: createShellConfigFixture(),
         gateway: { snapshot: { client, phase: "connected" } },
         agents: { state: { agentsList: null } },
         sessions: state.sessions,
@@ -214,6 +217,7 @@ it("keeps the pending catalog across unrelated session changes", async () => {
   const shell = document.createElement("openclaw-app-shell") as unknown as ChatMetadataShell;
   shell.runtime = {
     context: {
+      config: createShellConfigFixture(),
       gateway: { snapshot: { client, phase: "connected" } },
       agents: { state: { agentsList: null } },
       sessions: state.sessions,
@@ -338,6 +342,7 @@ it.each([
     const shell = document.createElement("openclaw-app-shell") as unknown as ChatMetadataShell;
     shell.runtime = {
       context: {
+        config: createShellConfigFixture(),
         gateway: { snapshot: { client, phase: "connected" } },
         agents: { state: { agentsList: null }, refreshList: vi.fn(async () => null) },
         agentSelection: { state: { selectedId: "main" } },
@@ -403,6 +408,7 @@ it("retires chat metadata through config.changed and the Gateway close callback"
     synchronize: vi.fn(),
   };
   const context = {
+    config: createShellConfigFixture(),
     gateway,
     connectionBootstrap,
     runtimeConfig: {
@@ -450,6 +456,7 @@ describe.each(["auth", "catalog"] as const)("%s read lifecycle", (kind) => {
     const client = gateway.snapshot.client;
     assert.ok(client);
     const context = {
+      config: createShellConfigFixture(),
       gateway,
       connectionBootstrap: {
         reset: vi.fn(),
@@ -558,6 +565,7 @@ it("retires an unmounted session catalog on session changes without evicting dra
   const shell = document.createElement("openclaw-app-shell") as unknown as ChatMetadataShell;
   shell.runtime = {
     context: {
+      config: createShellConfigFixture(),
       gateway: { snapshot: { client, phase: "connected" } },
       agents: { state: { agentsList: null } },
       sessions: { state: { deletedSessions: [] } },
@@ -626,6 +634,7 @@ describe.each(["command-metadata", "patch", "reset"])("session metadata event %s
       const shell = document.createElement("openclaw-app-shell") as unknown as ChatMetadataShell;
       shell.runtime = {
         context: {
+          config: createShellConfigFixture(),
           gateway: { snapshot: { client, hello, phase: "connected" } },
           agents: { state: { agentsList: null } },
           sessions: selected.sessions,

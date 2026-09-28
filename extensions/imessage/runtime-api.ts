@@ -1,6 +1,3 @@
-// Imessage API module exposes the plugin public contract.
-import type { OpenClawConfig as RuntimeApiOpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-
 export {
   DEFAULT_ACCOUNT_ID,
   getChatChannelMeta,
@@ -32,7 +29,4 @@ export { sendMessageIMessage } from "./src/send.js";
 export { imessageMessageActions } from "./src/actions.js";
 export { setIMessageRuntime } from "./src/runtime.js";
 export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
-export type IMessageAccountConfig = Omit<
-  NonNullable<NonNullable<RuntimeApiOpenClawConfig["channels"]>["imessage"]>,
-  "accounts" | "defaultAccount"
->;
+export type { IMessageAccountConfig } from "./src/account-types.js";

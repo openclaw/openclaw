@@ -48,15 +48,6 @@ struct TalkRealtimeTranscriptParams: Encodable {
     let timestamp: Double?
 }
 
-struct TalkRealtimeClientCloseParams: Encodable {
-    let sessionKey: String
-    let voiceSessionId: String
-}
-
-struct TalkVoiceCompletionResult: Decodable {
-    let ok: Bool
-}
-
 struct TalkRealtimeToolCallResponse: Decodable {
     let runId: String?
     let idempotencyKey: String?

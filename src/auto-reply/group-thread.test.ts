@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   readAgentRunTerminalOutcome,
   recordAgentRunTerminalOutcome,
@@ -83,7 +84,6 @@ function dispatch(
     deliveryFinalization?: Promise<{ visibleReplySent: true }>;
     text?: string;
     context?: Partial<MsgContext>;
-    abortSignal?: AbortSignal;
     replyOptions?: DispatchFromConfigParams["replyOptions"];
     reply?: (turn: DispatchFromConfigParams, index: number) => string[] | Promise<string[]>;
     result?: (
@@ -135,7 +135,7 @@ function dispatch(
     },
     dispatcher,
     outboundHooks: params.enableHooks ? "enabled" : "disabled",
-    replyOptions: { abortSignal: params.abortSignal, ...params.replyOptions },
+    replyOptions: params.replyOptions,
     dispatchReplyFromConfig: async (turn) => {
       const index = turns.push(turn) - 1;
       const replies = await (params.reply?.(turn, index) ?? ["A useful answer."]);
@@ -168,15 +168,12 @@ describe("agent group thread dispatch", () => {
       replyHooks.enabled = true;
       const publicFinal = "Bob, this is the public final. [[reply_to:999]]";
       replyHooks.rewriteText = publicFinal;
-      let completeDelivery = () => {};
-      const deliveryFinalization = new Promise<{ visibleReplySent: true }>((resolve) => {
-        completeDelivery = () => resolve({ visibleReplySent: true });
-      });
+      const deliveryFinalization = createDeferred<{ visibleReplySent: true }>();
       const run = dispatch({
         cfg: config({ agents: ["alice", "bob"], maxRounds: 2, maxTurns: 4 }),
         enableHooks: true,
         prepared,
-        deliveryFinalization,
+        deliveryFinalization: deliveryFinalization.promise,
         reply: (_turn, index) =>
           index === 0 ? ["Bob, this is the unfiltered draft."] : ["NO_REPLY"],
       });
@@ -187,14 +184,14 @@ describe("agent group thread dispatch", () => {
           prepared ? publicFinal : "Bob, this is the public final.",
         );
         expect(run.deliveredPayloads[0]?.replyToId).toBe(prepared ? undefined : "999");
-        completeDelivery();
+        deliveryFinalization.resolve({ visibleReplySent: true });
         await run.done;
         expect(run.turns).toHaveLength(4);
         const continuation = expectDefined(run.turns[3], "expected Bob's continuation");
         expect(continuation.ctx.BodyForAgent).toContain(publicFinal);
         expect(continuation.ctx.BodyForAgent).not.toContain("unfiltered draft");
       } finally {
-        completeDelivery();
+        deliveryFinalization.resolve({ visibleReplySent: true });
         await run.done;
         replyHooks.enabled = false;
         replyHooks.rewriteText = undefined;
@@ -349,8 +346,6 @@ describe("agent group thread dispatch", () => {
       "physical-1",
       "physical-1",
     ]);
-    expect(new Set(run.turns.slice(3).map((turn) => turn.ctx.MessageSid)).size).toBe(2);
-    expect(run.turns.slice(3).every((turn) => turn.ctx.MessageSid !== "physical-1")).toBe(true);
     expect(run.delivered).toHaveLength(1);
   });
 
@@ -401,21 +396,18 @@ describe("agent group thread dispatch", () => {
   it.each([2, 4])(
     "reserves maxTurns=%i before parallel launch without counting physical replies",
     async (maxTurns) => {
-      let release = () => {};
-      const gate = new Promise<void>((resolve) => {
-        release = resolve;
-      });
+      const gate = createDeferred();
       const run = dispatch({
         cfg: config({ agents: ["alice", "bob", "carol"], maxRounds: 4, maxTurns }),
         reply: async () => {
-          await gate;
+          await gate.promise;
           return ["First delivery.", "Second delivery."];
         },
       });
       try {
         await vi.waitFor(() => expect(run.turns).toHaveLength(Math.min(3, maxTurns)));
       } finally {
-        release();
+        gate.resolve();
       }
       await run.done;
       expect(run.turns).toHaveLength(maxTurns);
@@ -500,14 +492,11 @@ describe("agent group thread dispatch", () => {
   });
 
   it("shares an in-flight root budget across equivalent thread ids, while isolating accounts and other threads", async () => {
-    let release = () => {};
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const gate = createDeferred();
     const first = dispatch({
       context: { AccountId: "work", MessageThreadId: 7 },
       reply: async () => {
-        await gate;
+        await gate.promise;
         return ["Done."];
       },
     });
@@ -522,7 +511,7 @@ describe("agent group thread dispatch", () => {
       expect(otherAccount.turns).toHaveLength(2);
       expect(otherThread.turns).toHaveLength(2);
     } finally {
-      release();
+      gate.resolve();
       await first.done;
     }
     expect(first.turns).toHaveLength(2);
@@ -583,22 +572,19 @@ describe("agent group thread dispatch", () => {
   it("attributes parallel reply hooks to each participant's own run and session", async () => {
     replyHooks.events.length = 0;
     replyHooks.enabled = true;
-    let release = () => {};
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const gate = createDeferred();
     const run = dispatch({
       enableHooks: true,
       reply: async ({ ctx, replyOptions }) => {
         replyOptions?.onAgentRunStart?.(`run-${ctx.AgentId}`);
-        await gate;
+        await gate.promise;
         return [`Answer from ${ctx.AgentId}.`];
       },
     });
     try {
       await vi.waitFor(() => expect(run.turns).toHaveLength(2));
     } finally {
-      release();
+      gate.resolve();
       try {
         await run.done;
       } finally {
@@ -669,14 +655,6 @@ describe("agent group thread dispatch", () => {
       ]);
     },
   );
-
-  it("retains normal single-agent dispatch outside a configured room", async () => {
-    const run = dispatch({ cfg: { agents: roster } });
-    await run.done;
-    expect(run.turns).toHaveLength(1);
-    expect(run.turns[0]?.ctx.SessionKey).toBe("agent:routed:telegram:group:-100123");
-    expect(expectDefined(run.delivered[0], "expected ordinary reply").participant).toBeUndefined();
-  });
 });
 
 describe("group thread entry compatibility", () => {

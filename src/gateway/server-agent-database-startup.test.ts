@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles.js";
 import { listConfiguredOwnerInputs } from "../agents/prepared-model-runtime.configured.js";
 import {
@@ -25,6 +26,7 @@ import { getActiveSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -77,7 +79,11 @@ DatabaseSync.prototype.prepare = function(sql) {
   const location = this.location();
   const index = /integrity_check/.test(sql) && location ? paths.indexOf(fs.realpathSync.native(location)) : -1;
   if (index >= 0) {
-    fs.writeFileSync(markers[index], String(process.pid));
+    // Existence is the shutdown gate; never expose a truncated PID.
+    const marker = markers[index];
+    const pendingMarker = marker + '.' + process.pid + '.tmp';
+    fs.writeFileSync(pendingMarker, String(process.pid));
+    fs.renameSync(pendingMarker, marker);
     const pause = new Int32Array(new SharedArrayBuffer(4));
     const deadline = Date.now() + 60000;
     while (paused[index] && !fs.existsSync(release) && !fs.existsSync(releases[index])) {
@@ -224,12 +230,15 @@ it.each([
           try {
             const marker =
               outcome === "shutdown" ? enteredPath : pause!.preparationEnteredPaths[0]!;
-            const pid = Number(fs.readFileSync(marker, "utf8"));
-            try {
-              process.kill(pid, 0);
-              inspectionAliveAtBrokerClose = true;
-            } catch {
-              inspectionAliveAtBrokerClose = false;
+            // Failed preparation may never create its marker; preserve the primary error.
+            if (fs.existsSync(marker)) {
+              const pid = Number(fs.readFileSync(marker, "utf8"));
+              try {
+                process.kill(pid, 0);
+                inspectionAliveAtBrokerClose = true;
+              } catch {
+                inspectionAliveAtBrokerClose = false;
+              }
             }
           } finally {
             await close();
@@ -362,6 +371,16 @@ it.each([
         expect(healthyInput).toBeDefined();
         expect(healthyInput && getPreparedModelRuntimeSnapshot(healthyInput)).toBeDefined();
       }
+      const hostJournalRead = createDeferredCore();
+      let hostJournalReads = 0;
+      if (outcome === "recover") {
+        observeHostDataSql((sql) => {
+          if (sql.includes("agent_deletion_journal")) {
+            hostJournalReads++;
+            hostJournalRead.resolve();
+          }
+        });
+      }
       if (outcome === "shutdown-preparation") {
         fs.writeFileSync(releasePath, "resume");
         const preparationEnteredPath = pause!.preparationEnteredPaths[0]!;
@@ -379,7 +398,10 @@ it.each([
         expect(() => process.kill(pid, 0)).toThrow();
       } else if (outcome === "recover" || outcome === "superseded") {
         fs.writeFileSync(releasePath, "resume");
-        await preparationEntered.promise;
+        await Promise.race([
+          preparationEntered.promise,
+          hostJournalRead.promise.then(() => expect(hostJournalReads).toBe(0)),
+        ]);
         expect(sessionPrepared).toBe(true);
         if (outcome === "recover") {
           expect(preparationParent).toBe(brokerExpected ? brokerPid : process.pid);
@@ -404,11 +426,11 @@ it.each([
           { timeout: 10000 },
         );
         expect(
-          sessionTranscriptIndexNeedsReconcile(
-            openOpenClawAgentDatabase(scope).db,
-            scope.sessionId,
+          withOpenClawAgentDatabaseReadOnly(
+            ({ db }) => sessionTranscriptIndexNeedsReconcile(db, scope.sessionId),
+            scope,
           ),
-        ).toBe(false);
+        ).toEqual({ found: true, value: false });
         const input = listConfiguredOwnerInputs(getRuntimeConfig(), undefined, true).find(
           (entry) => entry.agentId === agentId,
         );
@@ -424,6 +446,7 @@ it.each([
           false,
         );
         expect((await fetch(`http://127.0.0.1:${port}/readyz`)).status).toBe(200);
+        expect(hostJournalReads).toBe(0);
       } else if (outcome === "corrupt" || outcome === "physical-corrupt") {
         expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toMatchObject({
           code: "agent-database-inspection-failed",

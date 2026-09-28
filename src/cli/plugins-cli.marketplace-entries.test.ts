@@ -265,44 +265,18 @@ describe("plugins marketplace entries", () => {
     vi.stubEnv("OPENCLAW_DIAGNOSTICS", "1");
     vi.stubEnv("OPENCLAW_DIAGNOSTICS_TIMELINE_PATH", timelinePath);
     mocks.getRuntimeConfig.mockReturnValue({});
-    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue({
-      source: "hosted-snapshot",
-      entries: [
-        {
-          name: "@acme/calendar",
-          openclaw: { plugin: { id: "acme-calendar", label: "Acme Calendar" } },
-        },
-      ],
-      feed: {
-        schemaVersion: 1,
-        id: "acme-marketplace",
-        generatedAt: "2026-06-23T00:00:00.000Z",
-        sequence: 7,
-        entries: [],
-      },
-      metadata: {
+    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue(
+      createHostedMarketplaceFeedFixture({
+        source: "hosted-snapshot",
+        entries: [
+          {
+            name: "@acme/calendar",
+            openclaw: { plugin: { id: "acme-calendar", label: "Acme Calendar" } },
+          },
+        ],
         url: "https://user:secret@packages.acme.example/openclaw/feed?token=leak#frag",
-        status: 200,
-        checksum: "feed-sha",
-      },
-      snapshot: {
-        body: "{}",
-        metadata: {
-          url: "https://user:secret@packages.acme.example/openclaw/feed?token=leak#frag",
-          status: 200,
-          checksum: "feed-sha",
-        },
-        savedAt: "2026-06-23T01:02:03.000Z",
-      },
-      trust: {
-        mode: "signed",
-        signedBy: "acme-root-2026",
-        signatureCount: 1,
-        threshold: 1,
-        verifiedAt: "2026-06-23T01:02:03.000Z",
-      },
-      error: "hosted catalog feed offline mode",
-    });
+      }),
+    );
 
     const { runPluginMarketplaceEntriesCommand } = await import("./plugins-cli.runtime.js");
     await runPluginMarketplaceEntriesCommand({ feedProfile: "acme", offline: true });

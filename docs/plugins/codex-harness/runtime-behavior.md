@@ -16,7 +16,7 @@ Codex dynamic tools default to `searchable` loading. OpenClaw normally does
 not expose dynamic tools that duplicate Codex-native workspace operations:
 `read`, `write`, `edit`, `apply_patch`, `exec`, `process`,
 `get_goal`, `create_goal`, `update_goal`, `tool_call`, `tool_describe`,
-`tool_search`, and `tool_search_code`. Goal operations stay native to Codex,
+and `tool_search`. Goal operations stay native to Codex,
 so OpenClaw does not project a second goal store into Codex turns. Most
 remaining OpenClaw integration tools, such as messaging, media, cron,
 browser, nodes, gateway, `progress_card`, and `heartbeat_respond` are available through

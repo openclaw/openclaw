@@ -1,4 +1,3 @@
-// Migrate Hermes plugin module implements memory-only import planning.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -6,13 +5,13 @@ import {
   MIGRATION_REASON_TARGET_EXISTS,
   summarizeMigrationItems,
 } from "openclaw/plugin-sdk/migration";
+import { resolvePlannedMigrationTargets } from "openclaw/plugin-sdk/migration-runtime";
 import type {
   MigrationItem,
   MigrationPlan,
   MigrationProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { HermesSource } from "./source.js";
-import { resolveTargets } from "./targets.js";
 
 const MIGRATION_REASON_TARGET_NOT_REGULAR = "target is not a regular file";
 
@@ -79,27 +78,26 @@ export async function buildHermesMemoryPlan(
   ctx: MigrationProviderContext,
   source: HermesSource,
 ): Promise<MigrationPlan> {
-  const targets = resolveTargets(ctx);
+  const targets = resolvePlannedMigrationTargets(ctx);
   const importRoot = path.join(targets.workspaceDir, "memory", "imports", "hermes");
   const items = (
-    await Promise.all([
-      buildMemoryItem({
-        id: "memory:MEMORY.md",
-        source: source.memoryPath,
-        sourceLabel: "Hermes MEMORY.md",
-        target: path.join(importRoot, "MEMORY.md"),
-        relativePath: "MEMORY.md",
-        overwrite: ctx.overwrite,
-      }),
-      buildMemoryItem({
-        id: "memory:USER.md",
-        source: source.userPath,
-        sourceLabel: "Hermes USER.md",
-        target: path.join(importRoot, "USER.md"),
-        relativePath: "USER.md",
-        overwrite: ctx.overwrite,
-      }),
-    ])
+    await Promise.all(
+      (
+        [
+          ["MEMORY.md", source.memoryPath],
+          ["USER.md", source.userPath],
+        ] as const
+      ).map(([filename, sourcePath]) =>
+        buildMemoryItem({
+          id: `memory:${filename}`,
+          source: sourcePath,
+          sourceLabel: `Hermes ${filename}`,
+          target: path.join(importRoot, filename),
+          relativePath: filename,
+          overwrite: ctx.overwrite,
+        }),
+      ),
+    )
   ).filter((item): item is MigrationItem => item !== undefined);
   return {
     providerId: "hermes",

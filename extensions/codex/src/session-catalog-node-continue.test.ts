@@ -39,6 +39,29 @@ import {
 
 const nodeSourceHomeId = "a".repeat(64);
 
+function nodeCatalog(options: Parameters<typeof createRuntime>[0] = {}) {
+  const context = createRuntime({
+    nodes: [
+      {
+        nodeId: "devbox",
+        connected: true,
+        caps: [CODEX_CLI_SESSION_SOURCE_CAPABILITY],
+        commands: [...CODEX_NODE_CONTINUE_COMMANDS],
+        invocableCommands: [...CODEX_NODE_CONTINUE_COMMANDS],
+      },
+    ],
+    ...options,
+  });
+  const { api, getProvider } = createGatewayApi(context.runtime);
+  registerCodexSessionCatalog({
+    api,
+    bindingStore: createCodexTestBindingStore(),
+    control: createControl(),
+    getRuntimeConfig: () => config,
+  });
+  return { ...context, provider: getProvider()! };
+}
+
 describe("Codex supervision actions", () => {
   it.each(["openai/gpt-6-astra", "openai/gpt-5.6-sol"])(
     "advertises creation for %s from startup config before the live snapshot is available",
@@ -330,7 +353,7 @@ describe("Codex supervision actions", () => {
   });
 
   it("rejects paired-node continue without the permitted run command", async () => {
-    const { runtime, createSessionEntry } = createRuntime({
+    const { provider, createSessionEntry } = nodeCatalog({
       nodes: [
         {
           nodeId: "devbox",
@@ -347,16 +370,9 @@ describe("Codex supervision actions", () => {
         },
       ],
     });
-    const { api, getProvider } = createGatewayApi(runtime);
-    registerCodexSessionCatalog({
-      api,
-      bindingStore: createCodexTestBindingStore(),
-      control: createControl(),
-      getRuntimeConfig: () => config,
-    });
 
     await expect(
-      getProvider()?.continueSession?.({
+      provider.continueSession!({
         hostId: "node:devbox",
         threadId: "thread-remote",
         clientScopes: ["operator.admin"],
@@ -366,27 +382,10 @@ describe("Codex supervision actions", () => {
   });
 
   it("rejects non-canonical paired-node host ids before adoption keying", async () => {
-    const { runtime, createSessionEntry } = createRuntime({
-      nodes: [
-        {
-          nodeId: "devbox",
-          connected: true,
-          caps: [CODEX_CLI_SESSION_SOURCE_CAPABILITY],
-          commands: [...CODEX_NODE_CONTINUE_COMMANDS],
-          invocableCommands: [...CODEX_NODE_CONTINUE_COMMANDS],
-        },
-      ],
-    });
-    const { api, getProvider } = createGatewayApi(runtime);
-    registerCodexSessionCatalog({
-      api,
-      bindingStore: createCodexTestBindingStore(),
-      control: createControl(),
-      getRuntimeConfig: () => config,
-    });
+    const { provider, createSessionEntry } = nodeCatalog();
 
     await expect(
-      getProvider()?.continueSession?.({
+      provider.continueSession!({
         hostId: "node:devbox ",
         threadId: "thread-remote",
         clientScopes: ["operator.admin"],
@@ -396,27 +395,10 @@ describe("Codex supervision actions", () => {
   });
 
   it("requires operator.admin before continuing a paired-node session", async () => {
-    const { runtime, createSessionEntry } = createRuntime({
-      nodes: [
-        {
-          nodeId: "devbox",
-          connected: true,
-          caps: [CODEX_CLI_SESSION_SOURCE_CAPABILITY],
-          commands: [...CODEX_NODE_CONTINUE_COMMANDS],
-          invocableCommands: [...CODEX_NODE_CONTINUE_COMMANDS],
-        },
-      ],
-    });
-    const { api, getProvider } = createGatewayApi(runtime);
-    registerCodexSessionCatalog({
-      api,
-      bindingStore: createCodexTestBindingStore(),
-      control: createControl(),
-      getRuntimeConfig: () => config,
-    });
+    const { provider, createSessionEntry } = nodeCatalog();
 
     await expect(
-      getProvider()?.continueSession?.({
+      provider.continueSession!({
         hostId: "node:devbox",
         threadId: "thread-remote",
         clientScopes: ["operator.write"],
@@ -440,28 +422,10 @@ describe("Codex supervision actions", () => {
         ],
       }),
     }));
-    const { runtime, createSessionEntry } = createRuntime({
-      nodes: [
-        {
-          nodeId: "devbox",
-          connected: true,
-          caps: [CODEX_CLI_SESSION_SOURCE_CAPABILITY],
-          commands: [...CODEX_NODE_CONTINUE_COMMANDS],
-          invocableCommands: [...CODEX_NODE_CONTINUE_COMMANDS],
-        },
-      ],
-      invoke,
-    });
-    const { api, getProvider } = createGatewayApi(runtime);
-    registerCodexSessionCatalog({
-      api,
-      bindingStore: createCodexTestBindingStore(),
-      control: createControl(),
-      getRuntimeConfig: () => config,
-    });
+    const { provider, createSessionEntry } = nodeCatalog({ invoke });
 
     await expect(
-      getProvider()?.continueSession?.({
+      provider.continueSession!({
         hostId: "node:devbox",
         threadId: "thread-remote",
         clientScopes: ["operator.admin"],

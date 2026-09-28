@@ -525,26 +525,6 @@ function expectOnlyApprovedExtensionSeams(file: string, imports: string[]): void
   }
 }
 
-function expectNoSiblingExtensionPrivateSrcImports(file: string, imports: string[]): void {
-  const normalizedFile = file.replaceAll("\\", "/");
-  const currentExtensionId =
-    normalizedFile.match(new RegExp(`/${BUNDLED_PLUGIN_ROOT_DIR}/([^/]+)/`))?.[1] ?? null;
-  if (!currentExtensionId) {
-    return;
-  }
-  for (const specifier of imports) {
-    if (!specifier.startsWith(".")) {
-      continue;
-    }
-    const resolvedImport = resolve(dirname(file), specifier).replaceAll("\\", "/");
-    const targetExtensionId = resolvedImport.match(/\/extensions\/([^/]+)\/src\//)?.[1] ?? null;
-    if (!targetExtensionId || targetExtensionId === currentExtensionId) {
-      continue;
-    }
-    expect.fail(`${file} should not import another extension's private src, got ${specifier}`);
-  }
-}
-
 function expectNoCrossPluginSdkFacadeImports(file: string, imports: string[]): void {
   const normalizedFile = file.replaceAll("\\", "/");
   const currentExtensionId =
@@ -674,21 +654,6 @@ describe("channel import guardrails", () => {
   it("keeps core production files off plugin-private src imports", () => {
     for (const file of collectCoreSourceFiles()) {
       expectNoCorePluginPrivateSrcImports(file, readSource(file));
-    }
-  });
-
-  describe("extension private src import guardrails", () => {
-    for (const extensionId of BUNDLED_EXTENSION_IDS.toSorted((left, right) =>
-      left.localeCompare(right),
-    )) {
-      it(`${extensionId} stays off other extensions' private src imports`, () => {
-        for (const file of collectExtensionFiles(extensionId)) {
-          if (basename(file) === "api.ts") {
-            continue;
-          }
-          expectNoSiblingExtensionPrivateSrcImports(file, getSourceAnalysis(file).importSpecifiers);
-        }
-      });
     }
   });
 

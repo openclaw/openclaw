@@ -58,15 +58,13 @@ enum VoiceWakeDeviceOptions {
         let cleanedID = normalizeLocaleIdentifier(locale.identifier)
         let cleanLocale = Locale(identifier: cleanedID)
         if let langCode = cleanLocale.language.languageCode?.identifier,
-           let lang = cleanLocale.localizedString(forLanguageCode: langCode),
-           let regionCode = cleanLocale.region?.identifier,
-           let region = cleanLocale.localizedString(forRegionCode: regionCode)
-        {
-            return "\(lang) (\(region))"
-        }
-        if let langCode = cleanLocale.language.languageCode?.identifier,
            let lang = cleanLocale.localizedString(forLanguageCode: langCode)
         {
+            if let regionCode = cleanLocale.region?.identifier,
+               let region = cleanLocale.localizedString(forRegionCode: regionCode)
+            {
+                return "\(lang) (\(region))"
+            }
             return lang
         }
         return cleanLocale.localizedString(forIdentifier: cleanedID) ?? cleanedID

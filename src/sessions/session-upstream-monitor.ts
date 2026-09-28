@@ -6,6 +6,7 @@ import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { readRecentUserAssistantTextForSession } from "../config/sessions/transcript.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import type { SessionCatalogProvider, SessionUpstreamProbe } from "../plugins/session-catalog.js";
@@ -40,7 +41,7 @@ type SessionUpstreamMonitorOptions = OpenClawStateDatabaseOptions & {
   }) => Promise<string[]>;
 };
 
-type SessionUpstreamMonitor = { stop: () => void };
+type SessionUpstreamMonitor = { stop: () => Promise<void> };
 
 type SessionUpstreamMissingCounter = {
   count: number;
@@ -436,40 +437,48 @@ async function runSessionUpstreamMonitorTick(
 }
 
 export function startSessionUpstreamMonitor(
-  options: SessionUpstreamMonitorOptions = {},
+  options: SessionUpstreamMonitorOptions & { scheduler: GatewayScheduler },
 ): SessionUpstreamMonitor {
+  const { scheduler } = options;
   let stopped = false;
-  let running = false;
+  let running: Promise<void> | undefined;
   const lifecycle = new AbortController();
-  const tickOptions = { ...options, signal: lifecycle.signal };
+  const tickOptions = {
+    ...options,
+    now: options.now ?? (() => scheduler.now()),
+    signal: AbortSignal.any([lifecycle.signal, scheduler.signal]),
+  };
   const missingCounts = new Map<string, SessionUpstreamMissingCounter>();
   const run = () => {
     if (stopped || running) {
-      return;
+      return undefined;
     }
-    running = true;
-    void runSessionUpstreamMonitorTick(tickOptions, missingCounts)
+    running = runSessionUpstreamMonitorTick(tickOptions, missingCounts)
       .catch((error: unknown) => {
         log.warn(`upstream monitor tick failed: ${String(error)}`);
       })
       .finally(() => {
-        running = false;
+        running = undefined;
       });
+    return running;
   };
   // Session catalogs own this bounded freshness exception; plugin metadata remains restart-stable.
-  const initialTimer = setTimeout(run, SESSION_UPSTREAM_MONITOR_INITIAL_DELAY_MS);
-  initialTimer.unref?.();
-  const interval = setInterval(run, SESSION_UPSTREAM_MONITOR_INTERVAL_MS);
-  interval.unref?.();
+  const initial = scheduler.schedule({
+    id: "sessions:upstream-initial-probe",
+    delayMs: SESSION_UPSTREAM_MONITOR_INITIAL_DELAY_MS,
+    run,
+  });
+  const recurring = scheduler.schedule({
+    id: "sessions:upstream-monitor",
+    delayMs: SESSION_UPSTREAM_MONITOR_INTERVAL_MS,
+    everyMs: SESSION_UPSTREAM_MONITOR_INTERVAL_MS,
+    run,
+  });
   return {
-    stop: () => {
-      if (stopped) {
-        return;
-      }
+    stop: async () => {
       stopped = true;
       lifecycle.abort();
-      clearTimeout(initialTimer);
-      clearInterval(interval);
+      await Promise.all([initial.stop(), recurring.stop()]);
     },
   };
 }

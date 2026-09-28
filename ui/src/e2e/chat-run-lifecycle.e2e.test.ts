@@ -11,6 +11,7 @@ import {
   installMockGateway,
   pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
+import { openMockAbortableRun } from "./chat-run-lifecycle.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -30,32 +31,6 @@ async function captureMockStopProof(currentPage: Page, name: string) {
       fullPage: false,
     });
   }
-}
-
-async function openMockAbortableRun(currentPage: Page, runId: string) {
-  const sessionKey = "agent:main:main";
-  const sessionInfo = {
-    key: sessionKey,
-    sessionId: `session:${sessionKey}`,
-    kind: "direct",
-    updatedAt: 1,
-    hasActiveRun: true,
-    activeRunIds: [runId],
-    status: "running",
-  };
-  const gateway = await installMockGateway(currentPage, {
-    sessionKey,
-    sessions: [sessionInfo],
-    sessionInfo,
-    inFlightRun: { runId, text: "The fixture run is still working." },
-    methodResponses: { "chat.abort": { ok: true, aborted: false, runIds: [] } },
-  });
-  await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-  const stop = currentPage.getByRole("button", { name: "Stop generating" });
-  const composer = currentPage.locator(".agent-chat__input textarea");
-  await stop.waitFor({ state: "visible" });
-  await currentPage.getByText("The fixture run is still working.", { exact: true }).waitFor();
-  return { gateway, sessionKey, runId, stop, composer };
 }
 
 suite.define(() => {
@@ -399,6 +374,7 @@ suite.define(() => {
     page = currentPage;
     const { gateway, sessionKey, runId, stop, composer } = await openMockAbortableRun(
       currentPage,
+      suite.server.baseUrl,
       "finished-run",
     );
     // Change only the mock server's next snapshot after the browser observes activity.
@@ -445,6 +421,7 @@ suite.define(() => {
     page = currentPage;
     const { gateway, sessionKey, runId, stop, composer } = await openMockAbortableRun(
       currentPage,
+      suite.server.baseUrl,
       "finalizing-run",
     );
     await gateway.emitGatewayEvent("agent", {
@@ -521,6 +498,7 @@ suite.define(() => {
     page = currentPage;
     const { gateway, sessionKey, runId, stop, composer } = await openMockAbortableRun(
       currentPage,
+      suite.server.baseUrl,
       "live-abort-run",
     );
     const historyCount = (await gateway.getRequests("chat.history")).length;
@@ -536,10 +514,18 @@ suite.define(() => {
       runId,
       state: "delta",
       deltaText: "Waiting for the accepted abort to settle.",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Waiting for the accepted abort to settle." }],
+      },
     });
     await currentPage
       .getByText("Waiting for the accepted abort to settle.", { exact: false })
       .waitFor();
+    const interrupted = currentPage.locator(".chat-bubble [role=status]", {
+      hasText: "Interrupted",
+    });
+    expect(await interrupted.count()).toBe(0);
     await currentPage.locator(".chat-working-indicator").waitFor({ state: "visible" });
     expect(await composer.inputValue()).toBe("keep this draft");
     expect(await gateway.getRequests("chat.history")).toHaveLength(historyCount);
@@ -551,6 +537,9 @@ suite.define(() => {
     await stop.waitFor({ state: "detached" });
     await composer.fill("next message");
     await currentPage.getByRole("button", { name: "Send message", exact: true }).waitFor();
+    await captureMockStopProof(currentPage, "stopped-live");
+    await interrupted.waitFor({ state: "visible" });
+    expect(await interrupted.count()).toBe(1);
   });
 
   it("retains stale Stop after a mock-Gateway history error and recovers on the next Stop", async () => {
@@ -559,6 +548,7 @@ suite.define(() => {
     page = currentPage;
     const { gateway, sessionKey, runId, stop, composer } = await openMockAbortableRun(
       currentPage,
+      suite.server.baseUrl,
       "refresh-retry-run",
     );
     const historyCount = (await gateway.getRequests("chat.history")).length;
@@ -649,33 +639,48 @@ suite.define(() => {
       const stop = currentPage.getByRole("button", { name: "Stop generating" });
       const composer = currentPage.locator(".agent-chat__input textarea");
       await stop.waitFor({ state: "visible" });
+      const finishedSession = {
+        key: sessionKey,
+        sessionId: `session:${sessionKey}`,
+        kind: "direct",
+        updatedAt: activeUpdatedAt + 1,
+        hasActiveRun: false,
+        hasActiveSubagentRun: false,
+        activeRunIds: [],
+        status: "done",
+      };
       await gateway.setMethodResponse("chat.history", {
         messages: [{ role: "assistant", content: "Cached activity has finished." }],
         sessionId: `session:${sessionKey}`,
-        sessionInfo: {
-          key: sessionKey,
-          sessionId: `session:${sessionKey}`,
-          kind: "direct",
-          updatedAt: activeUpdatedAt + 1,
-          hasActiveRun: false,
-          hasActiveSubagentRun: false,
-          activeRunIds: [],
-          status: "done",
-        },
+        sessionInfo: finishedSession,
       });
       const historyCount = (await gateway.getRequests("chat.history")).length;
+      await gateway.deferNext("chat.history");
       await gateway.deferNext("sessions.abort");
       await stop.click();
       const abort = await gateway.waitForRequest("sessions.abort");
       expect(abort.params).toEqual({ key: sessionKey, clearQueued: true });
       expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
       await composer.fill("keep this draft");
+      // Finish the backend without a terminal event; every fresh read must agree.
+      await gateway.setSessionsListResponse({ sessions: [finishedSession] });
       await gateway.resolveDeferred("sessions.abort", {
         ok: true,
         abortedRunId: null,
         status: "no-active-run",
       });
       await gateway.waitForRequest("chat.history", { after: historyCount });
+      // A newer sidebar read may publish while Stop's history is still pending.
+      await currentPage.evaluate(async () => {
+        const app = document.querySelector<
+          HTMLElement & { runtime?: { context: ApplicationContext } }
+        >("openclaw-app");
+        if (!app?.runtime?.context) {
+          throw new Error("Control UI context is unavailable");
+        }
+        await app.runtime.context.sessions.refreshList({ force: true });
+      });
+      await gateway.resolveDeferred("chat.history");
       await currentPage
         .locator(".chat-bubble")
         .getByText("Cached activity has finished.", { exact: true })

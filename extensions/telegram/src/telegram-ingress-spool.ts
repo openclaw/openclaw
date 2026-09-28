@@ -1,13 +1,8 @@
-// Telegram plugin module implements durable ingress enqueue + update_id mapping.
-import os from "node:os";
-import path from "node:path";
 import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
 import { computeBackoff, type BackoffPolicy } from "openclaw/plugin-sdk/runtime-env";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { getTelegramRuntime } from "./runtime.js";
 import { normalizeTelegramStateAccountId } from "./state-account-id.js";
 import type { TelegramSpooledUpdatePayload } from "./telegram-ingress-spool.payload.js";
-const TELEGRAM_INGRESS_SPOOL_PREFIX = "ingress-spool-";
 const TELEGRAM_SPOOLED_COMPLETION_RETRY_POLICY: BackoffPolicy = {
   initialMs: 250,
   maxMs: 5_000,
@@ -17,18 +12,6 @@ const TELEGRAM_SPOOLED_COMPLETION_RETRY_POLICY: BackoffPolicy = {
 
 function isValidUpdateId(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
-
-export function resolveTelegramIngressSpoolDir(params: {
-  accountId?: string;
-  env?: NodeJS.ProcessEnv;
-}): string {
-  const stateDir = resolveStateDir(params.env, os.homedir);
-  return path.join(
-    stateDir,
-    "telegram",
-    `${TELEGRAM_INGRESS_SPOOL_PREFIX}${normalizeTelegramStateAccountId(params.accountId)}`,
-  );
 }
 
 export function resolveTelegramUpdateId(update: unknown): number | null {
@@ -43,32 +26,13 @@ export function telegramQueueEventId(updateId: number): string {
   return String(updateId).padStart(16, "0");
 }
 
-function resolveQueueParts(spoolDir: string): {
-  accountId: string;
-  stateDir: string;
-} {
-  const basename = path.basename(spoolDir);
-  const accountId = normalizeTelegramStateAccountId(
-    basename.startsWith(TELEGRAM_INGRESS_SPOOL_PREFIX)
-      ? basename.slice(TELEGRAM_INGRESS_SPOOL_PREFIX.length)
-      : basename,
-  );
-  const stateDir =
-    basename.startsWith(TELEGRAM_INGRESS_SPOOL_PREFIX) &&
-    path.basename(path.dirname(spoolDir)) === "telegram"
-      ? path.dirname(path.dirname(spoolDir))
-      : spoolDir;
-  return { accountId, stateDir };
-}
-
-/** Open the account-scoped durable ingress queue for this spool directory. */
-export function openTelegramIngressQueue(
-  spoolDir: string,
-): ChannelIngressQueue<TelegramSpooledUpdatePayload> {
-  const parts = resolveQueueParts(spoolDir);
+export function openTelegramIngressQueue(params: {
+  accountId?: string;
+  stateDir?: string;
+}): ChannelIngressQueue<TelegramSpooledUpdatePayload> {
   return getTelegramRuntime().state.openChannelIngressQueue<TelegramSpooledUpdatePayload>({
-    accountId: parts.accountId,
-    stateDir: parts.stateDir,
+    accountId: normalizeTelegramStateAccountId(params.accountId),
+    stateDir: params.stateDir,
   });
 }
 

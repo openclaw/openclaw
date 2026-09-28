@@ -1,5 +1,4 @@
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
-// Googlechat plugin module implements monitor behavior.
 import {
   formatInboundMediaUnavailableText,
   recordChannelBotPairLoopAndCheckSuppression,
@@ -7,13 +6,13 @@ import {
   toInboundMediaFactsWithMetadata,
   type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { channelBlockedPatch, channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { parseDateStringTimestampMs as resolveGoogleChatTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { OpenClawConfig } from "../runtime-api.js";
-import { resolveWebhookPath } from "../runtime-api.js";
+import { resolveWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { downloadGoogleChatMedia, sendGoogleChatMessage } from "./api.js";
 import { maybeHandleGoogleChatApprovalCardClick } from "./approval-card-click.js";
@@ -67,12 +66,6 @@ function normalizeAudienceType(value?: string | null): GoogleChatAudienceType | 
   return undefined;
 }
 
-/**
- * Resolve bot display name with fallback chain:
- * 1. Account config name
- * 2. Agent name from config
- * 3. Agent identity name, then "OpenClaw"
- */
 function resolveBotDisplayName(params: {
   accountName?: string;
   agentId: string;
@@ -295,9 +288,6 @@ async function processGoogleChatEvent(
     },
   });
 
-  // Typing indicator setup
-  // Note: Reaction mode requires user OAuth, not available with service account auth.
-  // If reaction is configured, we fall back to message mode with a warning.
   let typingIndicator = account.config.typingIndicator ?? "message";
   if (typingIndicator === "reaction") {
     runtime.error?.(
@@ -311,7 +301,6 @@ async function processGoogleChatEvent(
       ? replyThreadName
       : undefined;
 
-  // Start typing indicator (message mode only, reaction mode not supported with app auth)
   if (typingIndicator === "message") {
     try {
       const botName = resolveBotDisplayName({

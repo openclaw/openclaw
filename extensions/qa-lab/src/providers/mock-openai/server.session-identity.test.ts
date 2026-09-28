@@ -53,6 +53,21 @@ async function observeSession(server: MockServer, sessionId: string) {
   ).toBeUndefined();
 }
 
+async function expectUtilityAffinity(body: unknown, route = "/v1/responses") {
+  const server = await startMockServer();
+  const sessionId = "observed-agent-session";
+  await observeSession(server, sessionId);
+  const missing = await postJson(server, route, body);
+  expect(missing.status).toBe(500);
+  expect(await missing.text()).toContain("Missing QA session identity");
+  expect(await getJson(server, "/debug/requests")).toEqual([]);
+  const admitted = await postJson(server, route, body, {
+    [route === "/v1/messages" ? "x-session-affinity" : "session_id"]: sessionId,
+  });
+  expect(admitted.status).toBe(200);
+  expect(await getJson(server, "/debug/last-request")).toMatchObject({ sessionId });
+}
+
 describe("QA transport session identity", () => {
   it("isolates interleaved sessions across providers and cache boundaries without prompt identity", async () => {
     const sessions = [
@@ -142,6 +157,112 @@ describe("QA transport session identity", () => {
         });
       }
     }
+  });
+
+  it.each([
+    "You are a JSON-only function. Return only a valid JSON value.",
+    "You are keeping a dream diary. Write a single entry in first person.",
+    "Choose how to incorporate each supplied candidate into MEMORY.md.",
+  ])("accepts standalone tool-free completion: %s", async (instructions) => {
+    const server = await startMockServer();
+    await observeSession(server, "observed-agent-session");
+    for (const body of [
+      { instructions, input: [makeUserInput("Reply exactly: {}")], tools: [] },
+      { instructions, input: "Reply exactly: {}" },
+      ...["system", "developer"].map((role) => ({
+        input: [
+          { type: "message", role, content: [{ type: "input_text", text: instructions }] },
+          makeUserInput("Reply exactly: {}"),
+        ],
+      })),
+    ]) {
+      const response = await postJson(server, "/v1/responses", body);
+      expect(response.status).toBe(200);
+      expect(outputText(await response.json())).toBe("{}");
+      expect(await getJson(server, "/debug/last-request")).toMatchObject({
+        requestKind: "agent-initial",
+        prompt: "Reply exactly: {}",
+      });
+    }
+    const anthropic = await postJson(server, "/v1/messages", {
+      system: [{ type: "text", text: instructions }],
+      messages: [{ role: "user", content: [{ type: "text", text: "Reply exactly: {}" }] }],
+      tools: [],
+    });
+    expect(anthropic.status).toBe(200);
+    expect(await anthropic.json()).toMatchObject({ content: [{ type: "text", text: "{}" }] });
+  });
+
+  it.each([
+    { input: [makeUserInput("You are a JSON-only function.")], tools: [] },
+    {
+      instructions: "You are a JSON-only function.",
+      input: [makeUserInput("Reply exactly: {}")],
+      tools: [{ type: "function", name: "read" }],
+    },
+  ])("requires affinity for quoted or tool-enabled utility prompts", async (body) => {
+    const server = await startMockServer();
+    await observeSession(server, "observed-agent-session");
+    const response = await postJson(server, "/v1/responses", body);
+    expect(response.status).toBe(500);
+    expect(await response.text()).toContain("Missing QA session identity");
+  });
+
+  it.each([
+    { type: "function_call_output", output: "tool result", beforeUser: false },
+    { type: "custom_tool_call_output", output: "", beforeUser: false },
+    { type: "function_call_output", output: "earlier result", beforeUser: true },
+  ])(
+    "requires affinity for utility requests carrying $type (earlier=$beforeUser)",
+    async ({ type, output, beforeUser }) => {
+      const user = makeUserInput("Reply exactly: {}");
+      const result = { type, call_id: "utility-continuation", output };
+      await expectUtilityAffinity({
+        instructions: "You are a JSON-only function. Return only a valid JSON value.",
+        tools: [],
+        input: beforeUser ? [result, user] : [user, result],
+      });
+    },
+  );
+
+  it.each([
+    { label: "assistant history", item: { role: "assistant", content: "Earlier answer" } },
+    {
+      label: "function call",
+      item: { type: "function_call", call_id: "prior", name: "read", arguments: "{}" },
+    },
+    { label: "earlier user turn", item: makeUserInput("Earlier request") },
+  ])("requires affinity for utility requests with $label", async ({ item }) => {
+    await expectUtilityAffinity({
+      instructions: "You are a JSON-only function. Return only a valid JSON value.",
+      tools: [],
+      input: [item, makeUserInput("Reply exactly: {}")],
+    });
+  });
+
+  it.each([
+    { previous_response_id: "previous-response" },
+    { conversation: "retained-conversation" },
+  ])("requires affinity for retained utility conversations: %j", async (continuation) => {
+    await expectUtilityAffinity({
+      instructions: "You are a JSON-only function.",
+      input: [makeUserInput("Reply exactly: {}")],
+      ...continuation,
+    });
+  });
+
+  it.each([
+    { role: "assistant", content: [{ type: "thinking", thinking: "Earlier reasoning" }] },
+    { role: "user", content: [] },
+  ])("requires affinity for Anthropic history discarded by normalization: %j", async (history) => {
+    await expectUtilityAffinity(
+      {
+        system: "You are a JSON-only function.",
+        messages: [history, { role: "user", content: "Reply exactly: {}" }],
+        tools: [],
+      },
+      "/v1/messages",
+    );
   });
 
   it("settles the full requester observed behind a truncated affinity value", async () => {

@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import type { DoctorMemoryStatusPayload } from "../../../../src/gateway/server-methods/doctor.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { lobsterPetSeed } from "../../components/lobster-pet-contract.ts";
 import {
   createLobsterPetLook,
@@ -307,27 +308,22 @@ function renderStatusCards(props: MemoryOverviewProps) {
 function renderShortcuts(props: MemoryOverviewProps) {
   return renderSettingsSection(
     { title: t("memoryPage.overview.shortcuts.title") },
-    html`
-      ${renderSettingsNavRow({
-        title: t("memoryPage.overview.shortcuts.memories"),
-        onClick: () => props.onNavigate("memories"),
-      })}
-      ${renderSettingsNavRow({
-        title: t("memoryPage.overview.shortcuts.diary"),
-        onClick: () => props.onNavigate("dreams"),
-      })}
-      ${renderSettingsNavRow({
-        title: t("memoryPage.overview.shortcuts.settings"),
-        onClick: () => props.onNavigate("settings"),
-      })}
-    `,
+    (
+      [
+        ["memories", "memoryPage.overview.shortcuts.memories"],
+        ["dreams", "memoryPage.overview.shortcuts.diary"],
+        ["settings", "memoryPage.overview.shortcuts.settings"],
+      ] as const
+    ).map(([tab, label]) =>
+      renderSettingsNavRow({ title: t(label), onClick: () => props.onNavigate(tab) }),
+    ),
   );
 }
 
 export function renderMemoryOverview(props: MemoryOverviewProps) {
   const active = props.engineSelection.kind !== "off" && !props.engineDisabled;
   return html`
-    <div class="settings-page memory-overview">
+    <div class="settings-page memory-overview" ${shellLayoutTraits({ settingsPage: true })}>
       ${renderHero(props)} ${active ? renderStatusCards(props) : nothing} ${renderShortcuts(props)}
     </div>
   `;

@@ -63,28 +63,7 @@ export function resolveManifestCliCommandSurfaceOwner(params: {
   })[0];
 }
 
-/**
- * Resolve which plugin owns an agent-tool name, applying control-plane
- * availability filters so disabled/denied plugins are not falsely attributed.
- *
- * Behavior:
- * - Walks the full manifest snapshot (not the lighter-weight registry view) so
- *   per-tool `configSignals`/`authSignals` are visible.
- * - Skips plugins that fail `isManifestPluginAvailableForControlPlane`
- *   (`plugins.allow` / `plugins.deny` / `plugins.entries[id].enabled` /
- *   installed-index).
- * - For matched tools, runs `hasManifestToolAvailability` to check the
- *   tool's own configSignals (e.g. Feishu's `appId`/`appSecret` gate).
- * - Reports `availability: "loaded"` when both filters pass, enough for a
- *   direct "available from this plugin" diagnostic.
- * - Reports `availability: "manifest-only"` when the manifest declares
- *   ownership but availability is not provable from manifest alone (e.g.
- *   per-account `enabled` flags or per-tool toggles that are runtime-only).
- *   Caller should soften the wording to "may be provided by".
- *
- * Falls back to the pure registry walk only when an explicit registry is
- * supplied (no snapshot to filter against).
- */
+/** Applies control-plane availability unless the caller supplies its own registry selection. */
 export function resolveManifestToolOwner(params: {
   toolName: string | undefined;
   config?: OpenClawConfig;

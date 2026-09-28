@@ -292,13 +292,12 @@ export class BrokerChild extends EventEmitter implements ChildProcess {
         : typeof optionsOrCallback === "function"
           ? optionsOrCallback
           : callback;
-    if (!this.connected) {
-      const error = new Error("Child process IPC channel is closed");
-      queueMicrotask(() => (done ? done(error) : this.emit("error", error)));
-      return false;
-    }
-    if (this.sends.size >= 1024) {
-      const error = new Error("Child process IPC capacity exceeded");
+    if (!this.connected || this.sends.size >= 1024) {
+      const error = new Error(
+        this.connected
+          ? "Child process IPC capacity exceeded"
+          : "Child process IPC channel is closed",
+      );
       queueMicrotask(() => (done ? done(error) : this.emit("error", error)));
       return false;
     }

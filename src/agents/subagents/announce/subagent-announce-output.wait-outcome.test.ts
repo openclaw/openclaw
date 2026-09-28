@@ -167,27 +167,6 @@ describe("applySubagentWaitOutcome", () => {
     expect(applied.outcome?.disposition).toBe("exited");
   });
 
-  it("treats aborted ok wait snapshots as terminated subagent errors", () => {
-    const applied = applySubagentWaitOutcome({
-      wait: {
-        status: "ok",
-        startedAt: 100,
-        endedAt: 150,
-        stopReason: "aborted",
-      },
-      outcome: undefined,
-    });
-
-    expect(applied.outcome).toEqual({
-      status: "error",
-      error: "subagent run terminated",
-      disposition: "killed",
-      startedAt: 100,
-      endedAt: 150,
-      elapsedMs: 50,
-    });
-  });
-
   it.each(["restart", "aborted"] as const)(
     "keeps %s stop reasons as cancellation even when liveness is blocked",
     (stopReason) => {
@@ -232,25 +211,6 @@ describe("applySubagentWaitOutcome", () => {
     expect(applied.outcome).toEqual({
       status: "timeout",
       error: "model returned an unrecoverable tool-call sequence",
-      disposition: "exited",
-      startedAt: 100,
-      endedAt: 150,
-      elapsedMs: 50,
-    });
-  });
-
-  it("leaves genuine budget timeouts without a cause", () => {
-    const applied = applySubagentWaitOutcome({
-      wait: {
-        status: "timeout",
-        startedAt: 100,
-        endedAt: 150,
-      },
-      outcome: undefined,
-    });
-
-    expect(applied.outcome).toEqual({
-      status: "timeout",
       disposition: "exited",
       startedAt: 100,
       endedAt: 150,

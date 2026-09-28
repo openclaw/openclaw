@@ -159,7 +159,7 @@ vi.mock("../../../config/sessions/session-accessor.js", async (importOriginal) =
   ...(await importOriginal<typeof import("../../../config/sessions/session-accessor.js")>()),
   loadSessionEntry: (scope: { sessionKey: string }) => sessionStore[scope.sessionKey],
   // Timing writes must share the synthetic session fixture used by reads.
-  // Subagent and task settlement below still use their real SQLite stores.
+  // Subagent settlement below still uses its real SQLite store.
   patchSessionEntryCore: async (
     ...[scope, update, options = {}]: Parameters<
       typeof import("../../../config/sessions/session-accessor.js").patchSessionEntryCore
@@ -252,13 +252,15 @@ describe("requester settle wake product flow", () => {
     vi.useFakeTimers();
     settleRootWork = observeRootWork();
     const settle = completionStore.settleRequesterCompletionBatch;
-    vi.spyOn(completionStore, "settleRequesterCompletionBatch").mockImplementation((params) => {
-      if (rejectNextRequesterWakePersistence) {
-        rejectNextRequesterWakePersistence = false;
-        throw new Error("database is locked");
-      }
-      settle(params);
-    });
+    vi.spyOn(completionStore, "settleRequesterCompletionBatch").mockImplementation(
+      async (params) => {
+        if (rejectNextRequesterWakePersistence) {
+          rejectNextRequesterWakePersistence = false;
+          throw new Error("database is locked");
+        }
+        return settle(params);
+      },
+    );
     vi.mocked(maybeWakeRequesterAfterAllChildrenSettled).mockImplementation(async (params) => {
       if (rejectNextRequesterWake) {
         rejectNextRequesterWake = false;
@@ -490,29 +492,42 @@ describe("requester settle wake product flow", () => {
       expect(resolvers[1]?.()).toBe(
         binding === "same" ? context : binding === "distinct" ? otherContext : undefined,
       );
+      activate();
+      activate();
+      children.forEach((child, index) => {
+        expect(getGatewayContextResolver(registry.getSubagentRunByRunId(child.runId)!)).toBe(
+          resolvers[index],
+        );
+      });
       const completionOrder = firstCompleted === "alpha" ? children : children.toReversed();
       const first = completionOrder[0]!;
       const second = completionOrder[1]!;
       emitCompleted(first.runId, first.childSessionKey, `${first.name} complete`);
       await flushOwnedWork();
+      await waitForDeliveredCleanup(first.runId, {
+        allowPendingRequesterSettleWake: first.name !== yieldedParent,
+      });
+      expect(registry.getSubagentRunByRunId(second.runId)).toMatchObject({
+        execution: { status: "running" },
+        delivery: { status: "pending" },
+      });
+      expect(getRequesterWakeCalls()).toHaveLength(first.name === yieldedParent ? 1 : 0);
       if (first.name === yieldedParent) {
-        // Yielded completion stays owned by its frozen wake until every child settles.
-        await vi.waitFor(() =>
-          expect(registry.getSubagentRunByRunId(first.runId)).toMatchObject({
-            execution: { status: "terminal" },
-            cleanupCompletedAt: expect.any(Number),
-            requesterSettleWake: { rearmGeneration: 1 },
-          }),
-        );
-      } else {
-        await waitForDeliveredCleanup(first.runId, { allowPendingRequesterSettleWake: true });
+        const wake = getRequesterWakeCalls()[0]?.params;
+        expect(wake?.inputProvenance?.sourceSessionKey).toBe(first.childSessionKey);
+        expect(wake?.message).toContain(`${first.name} complete`);
+        expect(wake?.message).not.toContain(`${second.name} complete`);
+        const completed = registry.getSubagentRunByRunId(first.runId)!;
+        expect(completed.execution.status).toBe("terminal");
+        expect(getGatewayContextResolver(completed)).toBeUndefined();
       }
-      expect(getRequesterWakeCalls()).toHaveLength(0);
       activate();
       activate();
       children.forEach((child, index) => {
         const row = registry.getSubagentRunByRunId(child.runId)!;
-        expect(getGatewayContextResolver(row)).toBe(resolvers[index]);
+        if (child !== first || first.name !== yieldedParent) {
+          expect(getGatewayContextResolver(row)).toBe(resolvers[index]);
+        }
         expect(row.requesterTurnRunId).toBeUndefined();
       });
       emitCompleted(second.runId, second.childSessionKey, `${second.name} complete`);
@@ -524,10 +539,11 @@ describe("requester settle wake product flow", () => {
       await flushOwnedWork();
       expect(getRequesterWakeCalls()).toHaveLength(binding === "same" ? 1 : 0);
       for (const child of children) {
-        expect(registry.getSubagentRunByRunId(child.runId)).toMatchObject({
+        const entry = registry.getSubagentRunByRunId(child.runId);
+        expect(entry).toMatchObject({
           delivery: { status: "delivered" },
-          requesterSettleWake: undefined,
         });
+        expect(entry?.requesterSettleWake).toBeUndefined();
       }
     },
   );
@@ -665,10 +681,11 @@ describe("requester settle wake product flow", () => {
       );
     }
     for (const child of [alpha, beta]) {
-      expect(registry.getSubagentRunByRunId(child.runId)).toMatchObject({
+      const entry = registry.getSubagentRunByRunId(child.runId);
+      expect(entry).toMatchObject({
         delivery: { status: "delivered" },
-        requesterSettleWake: undefined,
       });
+      expect(entry?.requesterSettleWake).toBeUndefined();
     }
 
     agentCallGates.delete(beta.childSessionKey);
@@ -933,7 +950,17 @@ describe("requester settle wake product flow", () => {
             // Cross both native retry deadlines; a transferred obligation must not
             // start an extra parent turn, while an empty failed handoff must recover.
             await flushOwnedWork();
-            await vi.advanceTimersByTimeAsync(151_000);
+            const retryHorizon = Date.now() + 151_000;
+            if (!acceptNextChild) {
+              const retryAt = registry.getSubagentRunByRunId(alpha.runId)?.requesterSettleWake
+                ?.nextAttemptAt;
+              expect(retryAt).toEqual(expect.any(Number));
+              // The retry starts real worker I/O. Join it before advancing fake time
+              // across that worker's timeout, while retaining the full no-replay window.
+              await vi.advanceTimersByTimeAsync(retryAt! - Date.now());
+              await flushOwnedWork();
+            }
+            await vi.advanceTimersByTimeAsync(retryHorizon - Date.now());
             await registry.testing.sweepOnceForTests();
             await vi.advanceTimersByTimeAsync(0);
             await flushOwnedWork();
@@ -974,6 +1001,7 @@ describe("requester settle wake product flow", () => {
     requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
     spawnVisibleChild,
     emitCompleted,
+    flushOwnedWork,
     waitForDeliveredCleanup,
     getRequesterWakeCalls,
     useGlobalSessionScope: () => {

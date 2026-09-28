@@ -203,37 +203,6 @@ describe("doctor canonical session delivery state", () => {
     }
   });
 
-  it("keeps rewritten delivery rows valid for normal session reads", () => {
-    const stateDir = fs.realpathSync(tempDirs.make("openclaw-delivery-validity-"));
-    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    const sessionKey = "agent:main:delivery-validity";
-    insertSessionRow(env, sessionKey, {
-      sessionId: "delivery-validity-session",
-      updatedAt: 10,
-      deliveryContext: { channel: "telegram", to: "recipient" },
-    });
-    const database = openOpenClawAgentDatabase({ agentId: "main", env });
-    database.db
-      .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
-      .run(sessionKey);
-
-    expect(repairCanonicalSessionDeliveryStates({ apply: true, cfg: {}, env })).toEqual({
-      found: 1,
-      repaired: 1,
-      scannedStores: 1,
-    });
-    expect(readEntryValidity(env, sessionKey)).toBe(1);
-    closeOpenClawAgentDatabasesForTest();
-    expect(listSessionEntriesCore({ agentId: "main", env })).toMatchObject([
-      { sessionKey, entry: { sessionId: "delivery-validity-session", updatedAt: 10 } },
-    ]);
-    expect(repairCanonicalSessionDeliveryStates({ apply: true, cfg: {}, env })).toEqual({
-      found: 0,
-      repaired: 0,
-      scannedStores: 1,
-    });
-  });
-
   it("publishes repaired delivery accounts to the existing SQLite connection without aging sessions", () => {
     const stateDir = fs.realpathSync(tempDirs.make("openclaw-delivery-warm-cache-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };

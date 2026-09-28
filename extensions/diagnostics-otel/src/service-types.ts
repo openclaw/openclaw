@@ -4,8 +4,8 @@ import type { LogRecord } from "@opentelemetry/api-logs";
 import type {
   DiagnosticEventPayload,
   DiagnosticTraceContext,
-  OpenClawPluginServiceContext,
-} from "../api.js";
+} from "openclaw/plugin-sdk/diagnostic-runtime";
+import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk/plugin-entry";
 
 export type OtelLogsExporter = "otlp" | "stdout" | "both";
 type OtelHttpAgent = HttpAgent | HttpsAgent;

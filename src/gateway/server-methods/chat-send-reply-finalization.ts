@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
+import { readAssistantDisplayContent } from "../../shared/assistant-display-content.js";
 import { appendChatCanvasBlocksToMessage } from "../chat-display-projection.canvas.js";
 import { attachManagedOutgoingMediaToMessage } from "../managed-image-attachments.js";
 import { loadSessionEntry } from "../session-utils.js";
@@ -9,6 +10,7 @@ import {
   combineNonStreamingReplyParts,
   extractAssistantDisplayText,
   hasAssistantDisplayMediaContent,
+  hasManagedOutgoingAssistantContent,
   hasVisibleAssistantFinalMessage,
   stripManagedOutgoingAssistantContentBlocks,
 } from "./chat-assistant-content.js";
@@ -73,46 +75,25 @@ function resolveTranscriptMirrorOwner(
   }
   const sessionKey = first.sessionKey.trim();
   const expectedSessionId = first.expectedSessionId?.trim();
-  if (first.transcriptWriteBlocked) {
-    if (
-      !sessionKey ||
-      owners.some(
-        (owner) =>
-          !owner?.transcriptWriteBlocked ||
-          owner.sessionKey.trim() !== sessionKey ||
-          owner.expectedSessionId?.trim() !== expectedSessionId ||
-          owner.agentId !== first.agentId,
-      )
-    ) {
-      return { kind: "invalid" };
-    }
-    return {
-      kind: "blocked",
-      owner: {
-        sessionKey,
-        ...(expectedSessionId ? { expectedSessionId } : {}),
-        ...(first.agentId ? { agentId: first.agentId } : {}),
-      },
-    };
-  }
   if (
     !sessionKey ||
-    !expectedSessionId ||
+    (!first.transcriptWriteBlocked && !expectedSessionId) ||
     owners.some(
       (owner) =>
+        (first.transcriptWriteBlocked && !owner?.transcriptWriteBlocked) ||
         owner?.sessionKey.trim() !== sessionKey ||
         owner.expectedSessionId?.trim() !== expectedSessionId ||
         owner.agentId !== first.agentId ||
-        owner.transcriptWriteBlocked === true,
+        (!first.transcriptWriteBlocked && owner.transcriptWriteBlocked === true),
     )
   ) {
     return { kind: "invalid" };
   }
   return {
-    kind: "owner",
+    kind: first.transcriptWriteBlocked ? "blocked" : "owner",
     owner: {
       sessionKey,
-      expectedSessionId,
+      ...(expectedSessionId ? { expectedSessionId } : {}),
       ...(first.agentId ? { agentId: first.agentId } : {}),
     },
   };
@@ -362,14 +343,16 @@ export async function finalizeChatSendDispatchedReplies(params: {
       ttsSupplement: ttsSupplementMarker,
       ...(contextFreeCommand ? { contextFreeCommand: true } : {}),
       cfg,
+      onMessageCommitted: (receipt, acceptCompletion) => {
+        const blocks = readAssistantDisplayContent(receipt.message);
+        if (hasManagedOutgoingAssistantContent(blocks)) {
+          acceptCompletion(async () => {
+            await attachManagedOutgoingMediaToMessage({ messageId: receipt.messageId, blocks });
+          });
+        }
+      },
     });
     if (appended.ok) {
-      if (appended.messageId && assistantContent?.length) {
-        attachManagedOutgoingMediaToMessage({
-          messageId: appended.messageId,
-          blocks: assistantContent,
-        });
-      }
       message = broadcastAssistantContent?.length
         ? applyAssistantDeliveryDirectives({
             ...appended.message,

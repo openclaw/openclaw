@@ -6,7 +6,8 @@ import { stripProposalFrontmatterForSkill } from "../../skills/workshop/frontmat
 import { findUniqueSkillPatchSpan } from "../../skills/workshop/service.js";
 import type { SkillWorkshopPreparedPatch } from "../../skills/workshop/types.js";
 import { readWritableWorkshopSkill } from "../../skills/workshop/workspace-skill-read.js";
-import { readToolStringParam, ToolInputError, type AnyAgentTool } from "./common.js";
+import { readToolStringParam, ToolInputError } from "./common.js";
+import { textResult } from "./tool-results.js";
 
 type WritableSkillPatchTarget = Awaited<ReturnType<typeof readWritableWorkshopSkill>>;
 
@@ -83,7 +84,6 @@ function prepareSkillPatch(params: {
 }
 
 export async function executePrepareSkillPatch(params: {
-  workspaceDir: string;
   config: OpenClawConfig;
   agentId?: string;
   env?: NodeJS.ProcessEnv;
@@ -91,7 +91,7 @@ export async function executePrepareSkillPatch(params: {
   preparedSkillPatches: Map<string, SkillWorkshopPreparedPatch>;
   proposalMutationBudgetRemaining?: number;
   maxChars: number;
-}): Promise<Awaited<ReturnType<AnyAgentTool["execute"]>>> {
+}) {
   if (
     params.proposalMutationBudgetRemaining !== undefined &&
     params.proposalMutationBudgetRemaining <= 0
@@ -113,35 +113,36 @@ export async function executePrepareSkillPatch(params: {
   try {
     const prepared = prepareSkillPatch({
       skill,
-      oldString:
-        readToolStringParam(params.toolParams, "old_string", {
-          required: true,
-          label: "old_string",
-          trim: false,
-        }) ?? "",
+      oldString: readToolStringParam(params.toolParams, "old_string", {
+        required: true,
+        label: "old_string",
+        trim: false,
+      }),
       maxChars: params.maxChars,
     });
     params.preparedSkillPatches.set(skill.skillKey, prepared.authority);
-    return {
-      content: [{ type: "text", text: prepared.text }],
-      details: {
-        skillName: skill.skillName,
-        skillKey: skill.skillKey,
-        sizeBytes: prepared.sizeBytes,
-        patchPrepared: true,
-      },
-    };
+    return textResult(prepared.text, {
+      skillName: skill.skillName,
+      skillKey: skill.skillKey,
+      sizeBytes: prepared.sizeBytes,
+      patchPrepared: true,
+    });
   } catch (error) {
     params.preparedSkillPatches.delete(skill.skillKey);
     throw new ToolInputError(error instanceof Error ? error.message : String(error));
   }
 }
 
-function redeemPreparedSkillPatch(params: {
+export function resolveSkillPatchAuthorization(params: {
   skill: WritableSkillPatchTarget;
   oldString: string;
+  readHash: string | undefined;
   preparedSkillPatches: Map<string, SkillWorkshopPreparedPatch>;
 }): string | undefined {
+  if (params.readHash) {
+    params.preparedSkillPatches.delete(params.skill.skillKey);
+    return params.readHash;
+  }
   const prepared = params.preparedSkillPatches.get(params.skill.skillKey);
   if (!prepared) {
     return undefined;
@@ -161,19 +162,6 @@ function redeemPreparedSkillPatch(params: {
     );
   }
   return prepared.contentHash;
-}
-
-export function resolveSkillPatchAuthorization(params: {
-  skill: WritableSkillPatchTarget;
-  oldString: string;
-  readHash: string | undefined;
-  preparedSkillPatches: Map<string, SkillWorkshopPreparedPatch>;
-}): string | undefined {
-  if (params.readHash) {
-    params.preparedSkillPatches.delete(params.skill.skillKey);
-    return params.readHash;
-  }
-  return redeemPreparedSkillPatch(params);
 }
 
 export function assertSkillPatchRunUsage(params: {

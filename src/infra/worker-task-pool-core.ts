@@ -7,7 +7,12 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
-import { createCpuTrackedWorker, markWorkerRetirement } from "./worker-cpu.js";
+import {
+  attributeWorkerToPool,
+  createCpuTrackedWorker,
+  markWorkerRetirement,
+  receiveWorkerMemoryPort,
+} from "./worker-cpu.js";
 import {
   DEFAULT_WORKER_PENDING_BYTES,
   DEFAULT_WORKER_PENDING_TASKS,
@@ -29,10 +34,7 @@ import {
   type OwnedWorkerTaskSettlement,
 } from "./worker-task-pool-owned.js";
 import { closeWorkerPoolResources } from "./worker-task-pool-resources.js";
-import {
-  createWorkerTaskPoolRetirement,
-  type WorkerTaskPoolRetirement,
-} from "./worker-task-pool-retirement.js";
+import { createWorkerTaskPoolRetirement } from "./worker-task-pool-retirement.js";
 import type {
   OwnedWorkerTask,
   WorkerTaskPoolDispatch,
@@ -93,7 +95,7 @@ class WorkerTaskPoolCore<Input, Output> {
       pendingBytes: this.pendingBytes,
     }),
   };
-  private readonly retirement: WorkerTaskPoolRetirement<Input, Output>;
+  private readonly retirement;
   private readonly queue: Task<Input, Output>[] = [];
   private readonly maxWorkers: number;
   private readonly maxPendingTasks: number;
@@ -396,8 +398,13 @@ class WorkerTaskPoolCore<Input, Output> {
     });
     this.workers++;
     this.workersCreated++;
+    attributeWorkerToPool(worker, this);
     slot.worker = worker;
     worker.on("message", (message: unknown) => {
+      // Native message events inherit the Worker's detached creation context.
+      if (receiveWorkerMemoryPort(worker, message)) {
+        return;
+      }
       const task = slot.task;
       if (task) {
         task.runInContext(() => this.receive(slot, message));
@@ -456,6 +463,7 @@ class WorkerTaskPoolCore<Input, Output> {
             taskId: task.id,
             interactive: Boolean(task.options.onRequest),
             nativeSections: slot.nativeSections.buffer,
+            sampleMemory: true,
           },
           transferList,
         );

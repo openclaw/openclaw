@@ -18,7 +18,7 @@ const { runCliAgentMock } = vi.hoisted(() => ({
 
 vi.mock("../cli-runner.js", () => ({ runCliAgent: runCliAgentMock }));
 
-const { testing } = await import("./compact.js");
+const { compactNativeCliSession } = await import("./compact.js");
 
 function registerBackend(overrides: Partial<CliBackendPlugin> = {}) {
   cliBackendsTesting.setDepsForTest({
@@ -93,7 +93,7 @@ describe("native CLI manual compaction", () => {
   it("resumes the bound backend session with the backend-owned command", async () => {
     registerBackend();
 
-    const result = await testing.compactNativeCliSession({
+    const result = await compactNativeCliSession({
       runtime: "claude-cli",
       compactParams: compactParams(),
     });
@@ -138,7 +138,7 @@ describe("native CLI manual compaction", () => {
   it("fails explicitly when an owning backend has no resumable session", async () => {
     registerBackend();
 
-    const result = await testing.compactNativeCliSession({
+    const result = await compactNativeCliSession({
       runtime: "claude-cli",
       compactParams: compactParams({
         cliSessionId: undefined,
@@ -155,7 +155,7 @@ describe("native CLI manual compaction", () => {
     registerBackend({ ownsNativeCompaction: false });
 
     await expect(
-      testing.compactNativeCliSession({
+      compactNativeCliSession({
         runtime: "claude-cli",
         compactParams: compactParams(),
       }),

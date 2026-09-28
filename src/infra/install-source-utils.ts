@@ -2,7 +2,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  asNullableObjectRecord,
+  asRecord,
+  isRecord,
+} from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   gt as gtSemver,
@@ -124,7 +128,7 @@ function selectNpmViewMetadataEntry(value: unknown, spec: string): unknown {
   if (!Array.isArray(value)) {
     return value;
   }
-  const entries = value.filter((entry) => isRecord(entry) && !Array.isArray(entry));
+  const entries = value.filter(isRecord);
   if (entries.length === 1 && parseRegistryNpmSpec(spec)?.selectorKind === "tag") {
     // npm resolves literal tags before ranges; npm 12 wraps that single result.
     // Rechecking a semver-like tag against its spelling would reject a valid tag target.
@@ -156,23 +160,21 @@ function normalizeNpmViewMetadata(value: unknown, spec: string): NpmSpecResoluti
   // npm output varies by version, selector, and field projection. Multi-version
   // arrays follow publication order; selection above handles ranges and literal tags.
   const entry = selectNpmViewMetadataEntry(value, spec);
-  if (!isRecord(entry) || Array.isArray(entry)) {
+  if (!isRecord(entry)) {
     return null;
   }
-  const rec = entry;
-  const name = normalizeOptionalString(rec.name);
-  const version = normalizeOptionalString(rec.version);
+  const name = normalizeOptionalString(entry.name);
+  const version = normalizeOptionalString(entry.version);
   const resolvedSpec = name && version ? `${name}@${version}` : undefined;
-  const dist =
-    rec.dist && typeof rec.dist === "object" ? (rec.dist as Record<string, unknown>) : {};
+  const dist = asRecord(entry.dist);
   return {
     name,
     version,
     resolvedSpec,
     integrity:
-      normalizeOptionalString(rec["dist.integrity"]) ?? normalizeOptionalString(dist.integrity),
-    shasum: normalizeOptionalString(rec["dist.shasum"]) ?? normalizeOptionalString(dist.shasum),
-    ...(isRecord(rec.openclaw) ? { packageOpenClaw: rec.openclaw } : {}),
+      normalizeOptionalString(entry["dist.integrity"]) ?? normalizeOptionalString(dist.integrity),
+    shasum: normalizeOptionalString(entry["dist.shasum"]) ?? normalizeOptionalString(dist.shasum),
+    ...(isRecord(entry.openclaw) ? { packageOpenClaw: entry.openclaw } : {}),
   };
 }
 
@@ -302,10 +304,10 @@ function parseResolvedSpecFromId(id: string): string | undefined {
 function normalizeNpmPackEntry(
   entry: unknown,
 ): { filename?: string; metadata: NpmSpecResolution } | null {
-  if (!entry || typeof entry !== "object") {
+  const rec = asNullableObjectRecord(entry);
+  if (!rec) {
     return null;
   }
-  const rec = entry as Record<string, unknown>;
   const name = normalizeOptionalString(rec.name);
   const version = normalizeOptionalString(rec.version);
   const id = normalizeOptionalString(rec.id);

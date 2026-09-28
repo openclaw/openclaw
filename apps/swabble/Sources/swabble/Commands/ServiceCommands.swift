@@ -27,7 +27,7 @@ private enum LaunchdHelper {
 }
 
 @MainActor
-struct ServiceInstall: ParsableCommand {
+struct ServiceInstall: CLICommand {
     static var commandDescription: CommandDescription {
         CommandDescription(commandName: "install", abstract: "Install user launch agent")
     }
@@ -40,7 +40,7 @@ struct ServiceInstall: ParsableCommand {
 }
 
 @MainActor
-struct ServiceUninstall: ParsableCommand {
+struct ServiceUninstall: CLICommand {
     static var commandDescription: CommandDescription {
         CommandDescription(commandName: "uninstall", abstract: "Remove launch agent")
     }
@@ -52,7 +52,7 @@ struct ServiceUninstall: ParsableCommand {
 }
 
 @MainActor
-struct ServiceStatus: ParsableCommand {
+struct ServiceStatus: CLICommand {
     static var commandDescription: CommandDescription {
         CommandDescription(commandName: "status", abstract: "Show launch agent status")
     }

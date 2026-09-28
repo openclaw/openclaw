@@ -167,7 +167,11 @@ export function bindWebSocketRequestMutationAuthority<T extends GatewayRequestOp
       options.hasCurrentClientAuthority !== hasCurrentClientAuthority ||
       options.sessionMutationCommitGuard !== undefined ||
       client.invalidated ||
-      !isGatewayAuthPolicyCurrent(client.authPolicyGeneration, getRuntimeConfigSnapshot()) ||
+      !isGatewayAuthPolicyCurrent(
+        client.authPolicyGeneration,
+        getRuntimeConfigSnapshot(),
+        client.authenticatedUserId,
+      ) ||
       !hasCurrentDeviceRevocation() ||
       client.internal?.agentRuntimeIdentity
     ) {
@@ -232,28 +236,23 @@ export function bindGatewayRequestHandlerMutationAuthority<T extends GatewayRequ
     // Keep the pre-router owner; the handler guard also contains native profile selection.
     source.assertLifetimeCurrent();
   };
-  const authority: GatewayRequestMutationAuthority =
-    source.family === "worker"
+  const authority: GatewayRequestMutationAuthority = {
+    assertCurrent,
+    assertLifetimeCurrent,
+    expectedProfileBinding: retainedProfileBinding,
+    sessionScope: retainedSessionScope,
+    assertOperatorCurrent: source.assertOperatorCurrent,
+    ...(source.family === "worker"
       ? {
-          family: "worker",
-          assertCurrent,
-          assertLifetimeCurrent,
-          expectedProfileBinding: retainedProfileBinding,
-          sessionScope: retainedSessionScope,
+          family: "worker" as const,
           assertWorkerCurrent: () => {
             assertHandlerCurrent();
             source.assertOperatorCurrent?.();
             source.assertWorkerCurrent();
           },
         }
-      : {
-          family: "native-compatibility",
-          assertCurrent,
-          assertLifetimeCurrent,
-          expectedProfileBinding: retainedProfileBinding,
-          sessionScope: retainedSessionScope,
-        };
-  authority.assertOperatorCurrent = source.assertOperatorCurrent;
+      : { family: "native-compatibility" as const }),
+  };
   if (source.assertAdmittedInputCurrent) {
     const assertAdmittedInputCurrent = source.assertAdmittedInputCurrent;
     const assertTransferredHandlerCurrent = () => {

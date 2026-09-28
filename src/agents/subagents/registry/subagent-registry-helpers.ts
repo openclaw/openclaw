@@ -177,7 +177,7 @@ export async function persistSubagentSessionTiming(
       }
       if (lastRunError) {
         next.lastRunError = lastRunError;
-      } else if (status === "done") {
+      } else if (status === "done" || status === "interrupted") {
         delete next.lastRunError;
       }
       if (status && status !== "killed") {

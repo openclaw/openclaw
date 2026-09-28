@@ -11,6 +11,7 @@ import {
 import { applyGatewayWebSocketTlsPin } from "../../packages/gateway-client/src/websocket-transport.js";
 import { createLoopbackConnectOptions } from "../infra/loopback-connect.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createDeferredCore } from "../shared/deferred.js";
 
 const require = createRequire(import.meta.url);
 let webSocketConstructor: Promise<typeof WebSocket> | undefined;
@@ -226,10 +227,7 @@ export async function runNodeStreamTransport(params: {
   const diagnostics: NodeStreamDiagnostics = {};
   let ws: WebSocket | undefined;
   let aborted: boolean = params.signal.aborted;
-  let resolveAbort!: () => void;
-  const abort = new Promise<void>((resolve) => {
-    resolveAbort = resolve;
-  });
+  const { promise: abort, resolve: resolveAbort } = createDeferredCore();
   const onAbort = () => {
     diagnostics.trigger ??= "owner-abort";
     aborted = true;

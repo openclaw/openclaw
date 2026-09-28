@@ -63,6 +63,8 @@ OpenClaw `worker-turn` cloud workers receive the effective shared identity per t
 
 OpenClaw sandboxes, ordinary node-host exec, and Codex `remote-exec` placements still do not receive the Gateway's managed GitHub credentials. The `github_publish` tool remains available for remote-exec sessions: it records a bounded publication request without credentials or repository authority. After the exact workspace result is reconciled and accepted, the Gateway commits remaining changes as the verified effective GitHub user, pushes the authoritative session branch through a one-shot HTTPS credential helper, and creates or reuses a draft pull request.
 
+Publication may wait until the requesting turn finishes and its workspace is accepted. Its result is appended to the session transcript; this does not start another agent turn. When the authorized task also includes review, CI repair, or landing, the agent must arrange a separate continuation before ending the requesting turn. A draft PR or publication receipt does not complete a landing request.
+
 Gateway-hosted agents check publication availability for ordinary messages and internal continuations, including when a subagent finishes after the requester yields. The check uses the current session workspace and GitHub identity. If publication is unavailable, `github_identity_status` remains available to explain identity setup or reconnection needs, subject to the session's tool policy. Standalone local runs and runs with tools disabled do not expose these managed publication tools.
 
 The built-in, Codex, and Copilot tool surfaces use this same host-prepared availability. Harness options cannot replace the host's decision; tool profiles and Gateway authorization still apply.

@@ -7,7 +7,10 @@ import {
 } from "../../../process/gateway-work-admission.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
-import { reconcileRetiredSubagentCancellation } from "../completion/subagent-completion-admission.store.js";
+import {
+  blockSubagentCompletionDelivery,
+  reconcileRetiredSubagentCancellation,
+} from "../completion/subagent-completion-admission.store.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import {
@@ -17,6 +20,7 @@ import {
   shouldDeferTerminalCleanupForUnconfirmedChild,
 } from "./subagent-registry-cleanup.js";
 import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import { createInterruptedRecoveryCoordinator } from "./subagent-registry-restart-recovery-coordinator.js";
 import { isRestoredQueuedFailureSettlementClaimed } from "./subagent-registry-restore.js";
 import {
@@ -63,6 +67,7 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOpt
   }
 
   function stop() {
+    recovery.reset();
     intervalStarted = false;
     clearTimeout(scheduled?.timer);
     scheduled = undefined;
@@ -241,9 +246,24 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOpt
           continue;
         }
         if (
-          entry.killReconciliation &&
-          reconcileRetiredSubagentCancellation(entry, now) === false
+          subagentRuns.isCompletionAuthorityRetired(entry) &&
+          ["pending", "in_progress"].includes(entry.delivery?.status ?? "")
         ) {
+          await blockSubagentCompletionDelivery({
+            subagent: entry,
+            reason: "store replaced",
+            suspendedReason: "permanent_failure",
+            storeReplaced: true,
+          });
+          continue;
+        }
+        if (
+          entry.killReconciliation &&
+          (await reconcileRetiredSubagentCancellation(entry, now)) === false
+        ) {
+          continue;
+        }
+        if (runs.get(runId) !== entry) {
           continue;
         }
         // Yield freezes the parent's wake before its children finish. Keep
@@ -452,15 +472,15 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOpt
           const groupId = entry.groupId?.trim();
           const swarmRequesterSessionKey =
             entry.swarmRequesterSessionKey ?? entry.requesterSessionKey;
-          const groupKey = groupId
-            ? JSON.stringify([entry.requesterAgentId, swarmRequesterSessionKey, groupId])
-            : undefined;
-          if (groupKey && groupId) {
-            collectorArchiveCandidates.set(groupKey, {
-              requesterSessionKey: swarmRequesterSessionKey,
-              groupId,
-              requesterAgentId: entry.requesterAgentId,
-            });
+          if (groupId) {
+            collectorArchiveCandidates.set(
+              JSON.stringify([entry.requesterAgentId, swarmRequesterSessionKey, groupId]),
+              {
+                requesterSessionKey: swarmRequesterSessionKey,
+                groupId,
+                requesterAgentId: entry.requesterAgentId,
+              },
+            );
           }
           continue;
         }
@@ -528,7 +548,7 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOpt
           );
         }
       }
-      for (const {
+      collectorGroups: for (const {
         requesterSessionKey,
         groupId,
         requesterAgentId,
@@ -545,11 +565,9 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOpt
         ) {
           continue;
         }
-        let keepGroup = false;
         for (const [candidateRunId, candidate] of groupEntries) {
           if (runs.get(candidateRunId) !== candidate) {
-            keepGroup = true;
-            break;
+            continue collectorGroups;
           }
           if (shouldSuppressSubagentRecoverySessionEffects(candidate)) {
             continue;
@@ -565,8 +583,7 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOpt
           try {
             const deletion = await deleteSession(candidate, sessionIdentity);
             if (runs.get(candidateRunId) !== candidate) {
-              keepGroup = true;
-              break;
+              continue collectorGroups;
             }
             if (deletion === "changed") {
               candidate.execution = {
@@ -581,14 +598,9 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOpt
               groupId,
               error,
             });
-            keepGroup = true;
-            break;
+            continue collectorGroups;
           }
         }
-        if (keepGroup) {
-          continue;
-        }
-        let attachmentCleanupFailed = false;
         for (const [candidateRunId, candidate] of groupEntries) {
           if (await safeRemoveAttachmentsDir(candidate)) {
             continue;
@@ -598,13 +610,8 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOpt
             childSessionKey: candidate.childSessionKey,
             groupId,
           });
-          attachmentCleanupFailed = true;
-          break;
+          continue collectorGroups;
         }
-        if (attachmentCleanupFailed) {
-          continue;
-        }
-        let contextCleanupFailed = false;
         for (const [candidateRunId, candidate] of groupEntries) {
           if (
             candidate.cleanup === "delete" ||
@@ -627,12 +634,8 @@ export function createSubagentRegistrySweeper(params: SubagentRegistrySweeperOpt
                 error,
               },
             );
-            contextCleanupFailed = true;
-            break;
+            continue collectorGroups;
           }
-        }
-        if (contextCleanupFailed) {
-          continue;
         }
         const expectedGroupEntries = new Map(groupEntries);
         const liveGroupEntries = readGroup();

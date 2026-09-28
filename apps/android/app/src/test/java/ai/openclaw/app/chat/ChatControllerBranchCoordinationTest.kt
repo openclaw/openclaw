@@ -292,7 +292,7 @@ class ChatControllerBranchCoordinationTest {
       val otherKey = "agent:main:other"
       val branchScope = ChatOutboxScope(key, "main")
       val gateway = ScriptedGateway(json)
-      val healthy = AtomicBoolean(true)
+      val healthy = AtomicBoolean(false)
       val runningHead = AtomicReference<ChatOutboxItem?>(null)
       val completedHead = AtomicReference<ChatOutboxItem?>(null)
       val retirementEntered = CompletableDeferred<ChatOutboxBranchState?>()
@@ -340,22 +340,26 @@ class ChatControllerBranchCoordinationTest {
       runCurrent()
       controller.awaitOutboxRestore()
       controller.load(key)
-      awaitBranchProgress { controller.healthOk.value && !controller.historyLoading.value && !controller.sessionBranchesLoading.value }
+      awaitBranchProgress { !controller.healthOk.value && !controller.historyLoading.value && !controller.sessionBranchesLoading.value }
       assertNull(outbox.branchState("gateway-a", branchScope)?.lastActiveLeafEntryId)
       assertTrue(controller.sendMessageAwaitAcceptance("submitted head", "off", emptyList()))
       val head = outbox.load("gateway-a").single()
       runningHead.set(head)
-      // Admission can return while the flush lane is still persisting its ACK.
-      awaitBranchProgress { outbox.load("gateway-a").single().status == ChatOutboxStatus.Accepted }
+      healthy.set(true)
+      controller.handleGatewayEvent("health", null)
+      // A flush can publish its ACK before adopting the live run.
+      awaitBranchProgress { outbox.load("gateway-a").single().status == ChatOutboxStatus.Accepted && controller.pendingRunCount.value == 1 }
 
       // Keep the target's reconciled scope while moving its live run offscreen.
       healthy.set(false)
       controller.switchSession(otherKey)
       awaitBranchProgress { !controller.healthOk.value && !controller.historyLoading.value && !controller.sessionBranchesLoading.value }
-      val successor = enqueue("queued successor", sessionKey = key)
-      assertEquals(ChatOutboxStatus.Accepted, outbox.load("gateway-a").single { it.id == head.id }.status)
+      // Live-owned accepted sends intentionally permit successors. Make this head
+      // orphaned before a still-finishing flush can observe the new queued row.
       completedHead.set(head)
       controller.handleGatewayEvent("chat", chatTerminalPayload(key, head.id, seq = 1, assistantText = "completed"))
+      val successor = enqueue("queued successor", sessionKey = key)
+      assertEquals(ChatOutboxStatus.Accepted, outbox.load("gateway-a").single { it.id == head.id }.status)
       healthy.set(true)
       controller.handleGatewayEvent("health", null)
       awaitBranchProgress { retirementEntered.isCompleted }

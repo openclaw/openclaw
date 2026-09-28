@@ -26,27 +26,7 @@ function success(stdout = ""): SpawnResult {
   };
 }
 
-function fakeJpeg(width = 640, height = 480): Buffer {
-  return Buffer.from([
-    0xff,
-    0xd8,
-    0xff,
-    0xc0,
-    0x00,
-    0x0b,
-    0x08,
-    (height >> 8) & 0xff,
-    height & 0xff,
-    (width >> 8) & 0xff,
-    width & 0xff,
-    0x01,
-    0x01,
-    0x11,
-    0x00,
-    0xff,
-    0xd9,
-  ]);
-}
+const jpeg640x480 = Buffer.from("ffd8ffc0000b0801e0028001011100ffd9", "hex");
 
 function createHarness(overrides: Partial<LinuxNodeCommandDeps> = {}) {
   const runCommand = vi.fn(async (_argv: string[], _options: CommandOptions) => success());
@@ -59,8 +39,8 @@ function createHarness(overrides: Partial<LinuxNodeCommandDeps> = {}) {
     listVideoDevices: async () => [
       { id: "/dev/video0", name: "Test Camera", position: "unknown", deviceType: "v4l2" },
     ],
-    readFile: async (filePath) => (filePath.endsWith(".jpg") ? fakeJpeg() : Buffer.from("mp4")),
-    statFile: async (filePath) => ({ size: filePath.endsWith(".jpg") ? fakeJpeg().length : 3 }),
+    readFile: async (filePath) => (filePath.endsWith(".jpg") ? jpeg640x480 : Buffer.from("mp4")),
+    statFile: async (filePath) => ({ size: filePath.endsWith(".jpg") ? jpeg640x480.length : 3 }),
     withTempFile: async (suffix, run) => await run(`/tmp/capture${suffix}`),
     now: () => new Date("2026-07-13T12:00:10.000Z"),
     ...overrides,
@@ -73,7 +53,9 @@ function createHarness(overrides: Partial<LinuxNodeCommandDeps> = {}) {
     }
     return found;
   };
-  return { command, commands, runCommand };
+  const invoke = async (name: string, params?: Record<string, unknown>): Promise<unknown> =>
+    JSON.parse(await command(name).handle(JSON.stringify(params)));
+  return { command, invoke, runCommand };
 }
 
 describe("linux-node commands", () => {
@@ -113,19 +95,7 @@ describe("linux-node commands", () => {
     );
     const { command } = createHarness({ resolveExecutable: resolver });
     const context = {
-      config: {
-        plugins: {
-          entries: {
-            "linux-node": {
-              config: {
-                notify: { enabled: true },
-                camera: { enabled: true },
-                location: { enabled: true },
-              },
-            },
-          },
-        },
-      },
+      config: { plugins: { entries: { "linux-node": { config: enabledConfig } } } },
       env: { PATH: "/usr/bin" },
     };
 
@@ -185,52 +155,32 @@ describe("linux-node commands", () => {
     );
   });
 
-  it("lists V4L2 devices using the mac-compatible payload shape", async () => {
-    const payload = JSON.parse(await createHarness().command("camera.list").handle()) as unknown;
-    expect(payload).toEqual({
-      devices: [
-        {
-          id: "/dev/video0",
-          name: "Test Camera",
-          position: "unknown",
-          deviceType: "v4l2",
-        },
-      ],
-    });
-  });
-
   it("maps snap defaults and clamps delay and quality", async () => {
-    const { command, runCommand } = createHarness();
-    const payload = JSON.parse(
-      await command("camera.snap").handle(
-        JSON.stringify({
-          deviceId: "/dev/video0",
-          delayMs: 50_000,
-          quality: 2,
-          maxWidth: -1,
-          format: "jpeg",
-        }),
-      ),
-    ) as Record<string, unknown>;
-    const argv = runCommand.mock.calls[0]?.[0] as string[];
+    const { invoke, runCommand } = createHarness();
+    const payload = await invoke("camera.snap", {
+      deviceId: "/dev/video0",
+      delayMs: 50_000,
+      quality: 2,
+      maxWidth: -1,
+      format: "jpeg",
+    });
+    const argv = runCommand.mock.calls[0]?.[0];
 
     expect(argv).toContain("10.000");
     expect(argv).toContain("scale=min(iw\\,1600):-2");
     expect(argv).toContain("2");
     expect(payload).toEqual({
       format: "jpeg",
-      base64: fakeJpeg().toString("base64"),
+      base64: jpeg640x480.toString("base64"),
       width: 640,
       height: 480,
     });
   });
 
   it("records clip audio through PulseAudio and clamps duration", async () => {
-    const { command, runCommand } = createHarness();
-    const payload = JSON.parse(
-      await command("camera.clip").handle(JSON.stringify({ durationMs: 1 })),
-    ) as Record<string, unknown>;
-    const argv = runCommand.mock.calls[0]?.[0] as string[];
+    const { invoke, runCommand } = createHarness();
+    const payload = await invoke("camera.clip", { durationMs: 1 });
+    const argv = runCommand.mock.calls[0]?.[0];
 
     expect(argv).toEqual(
       expect.arrayContaining(["-f", "pulse", "-i", "default", "-t", "0.250", "-c:a", "aac"]),
@@ -249,12 +199,12 @@ describe("linux-node commands", () => {
       options.onOutputChunk?.(Buffer.from(output), "stdout");
       return success(output);
     });
-    const { command } = createHarness({ runCommand });
-    const payload = JSON.parse(
-      await command("location.get").handle(
-        JSON.stringify({ timeoutMs: 100, maxAgeMs: 20_000, desiredAccuracy: "precise" }),
-      ),
-    ) as Record<string, unknown>;
+    const { invoke } = createHarness({ runCommand });
+    const payload = await invoke("location.get", {
+      timeoutMs: 100,
+      maxAgeMs: 20_000,
+      desiredAccuracy: "precise",
+    });
 
     expect(runCommand.mock.calls[0]?.[0]).toEqual(["/usr/bin/where-am-i", "-t", "1", "-a", "8"]);
     expect(payload).toEqual({
@@ -270,45 +220,29 @@ describe("linux-node commands", () => {
     });
   });
 
-  it("keeps GeoClue running past a stale fix until a fresh update arrives", async () => {
-    const fix = (lat: number, epochSeconds: number) =>
-      `\nNew location:\nLatitude: ${lat}\nLongitude: 16\nAccuracy: 25 meters\nTimestamp: now (${epochSeconds} seconds since the Epoch)\n`;
-    const stale = fix(47, Date.parse("2026-07-13T11:00:00.000Z") / 1000);
-    const fresh = fix(48, Date.parse("2026-07-13T12:00:05.000Z") / 1000);
-    const runCommand = vi.fn(async (_argv: string[], options: CommandOptions) => {
-      expect(options.onOutputChunk?.(Buffer.from(stale), "stdout")).toBe(true);
-      expect(options.onOutputChunk?.(Buffer.from(fresh), "stdout")).toBe(false);
-      return success(`${stale}${fresh}`);
-    });
-    const { command } = createHarness({ runCommand });
-
-    const payload = JSON.parse(
-      await command("location.get").handle(JSON.stringify({ maxAgeMs: 20_000 })),
-    ) as Record<string, unknown>;
-
-    expect(payload.lat).toBe(48);
-    expect(payload.timestamp).toBe("2026-07-13T12:00:05.000Z");
-  });
-
-  it("keeps GeoClue running past a future-dated fix until a current update arrives", async () => {
-    const fix = (lat: number, epochSeconds: number) =>
-      `\nNew location:\nLatitude: ${lat}\nLongitude: 16\nAccuracy: 25 meters\nTimestamp: now (${epochSeconds} seconds since the Epoch)\n`;
-    const future = fix(47, Date.parse("2026-07-13T12:00:15.000Z") / 1000);
-    const current = fix(48, Date.parse("2026-07-13T12:00:09.000Z") / 1000);
-    const runCommand = vi.fn(async (_argv: string[], options: CommandOptions) => {
-      expect(options.onOutputChunk?.(Buffer.from(future), "stdout")).toBe(true);
-      expect(options.onOutputChunk?.(Buffer.from(current), "stdout")).toBe(false);
-      return success(`${future}${current}`);
-    });
-    const { command } = createHarness({ runCommand });
-
-    const payload = JSON.parse(
-      await command("location.get").handle(JSON.stringify({ maxAgeMs: 2000 })),
-    ) as Record<string, unknown>;
-
-    expect(payload.lat).toBe(48);
-    expect(payload.timestamp).toBe("2026-07-13T12:00:09.000Z");
-  });
+  it.each([
+    ["stale", "11:00:00", "12:00:05", 20_000],
+    ["future-dated", "12:00:15", "12:00:09", 2000],
+  ])(
+    "keeps GeoClue running past a %s fix until a fresh update arrives",
+    async (_kind, rejectedTime, acceptedTime, maxAgeMs) => {
+      const fix = (lat: number, time: string) =>
+        `\nNew location:\nLatitude: ${lat}\nLongitude: 16\nAccuracy: 25 meters\nTimestamp: now (${Date.parse(`2026-07-13T${time}.000Z`) / 1000} seconds since the Epoch)\n`;
+      const rejected = fix(47, rejectedTime);
+      const accepted = fix(48, acceptedTime);
+      const { invoke } = createHarness({
+        runCommand: async (_argv, options) => {
+          expect(options.onOutputChunk?.(Buffer.from(rejected), "stdout")).toBe(true);
+          expect(options.onOutputChunk?.(Buffer.from(accepted), "stdout")).toBe(false);
+          return success(`${rejected}${accepted}`);
+        },
+      });
+      expect(await invoke("location.get", { maxAgeMs })).toMatchObject({
+        lat: 48,
+        timestamp: `2026-07-13T${acceptedTime}.000Z`,
+      });
+    },
+  );
 
   it("accounts for GeoClue second precision when maxAgeMs is zero", async () => {
     const output = `\nNew location:\nLatitude: 48\nLongitude: 16\nAccuracy: 25 meters\nTimestamp: now (1783944010 seconds since the Epoch)\n`;

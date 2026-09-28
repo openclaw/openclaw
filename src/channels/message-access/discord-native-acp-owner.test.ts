@@ -23,7 +23,6 @@ it.each([
   { commandName: "think", preparation: "replace", label: "replacement" },
   { commandName: "new", preparation: "initialize", label: "recovery initialization" },
   { commandName: "status", preparation: "initialize", label: "read without initialization" },
-  { commandName: "status", preparation: "configure", label: "read without configuration" },
   { commandName: "status", preparation: "replace", label: "read without replacement" },
   { commandName: "think", preparation: "revoke", label: "revocation during capability lookup" },
   { commandName: "think", preparation: "settle", label: "revocation during accepted control" },

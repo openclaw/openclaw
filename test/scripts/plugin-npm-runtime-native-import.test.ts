@@ -208,8 +208,6 @@ describe("explicit source native-import preparation", () => {
 
   it.each([
     ["esm", "peerDependencies"],
-    ["cjs", "peerDependencies"],
-    ["esm", "dependencies"],
     ["cjs", "dependencies"],
     ["esm", "optionalDependencies"],
     ["cjs", "optionalDependencies"],

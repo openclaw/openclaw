@@ -1,7 +1,11 @@
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
+import { UPDATE_PREFLIGHT_DETAILS } from "../infra/update-preflight-details.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 
 /** Native probe facts are diagnostic only; they never grant lifecycle authority. */
 const SERVICE_INSPECTION_MESSAGES = {
+  "service-membership-unverified": UPDATE_PREFLIGHT_DETAILS["service-membership-unverified"],
+  "service-ancestry-unverified": UPDATE_PREFLIGHT_DETAILS["service-ancestry-unverified"],
   "service-manager-unavailable":
     "No supported service manager detected. Restart the Gateway you launched manually after the update.",
   "systemd-user-bus-unavailable":
@@ -38,7 +42,9 @@ export function isServiceInspectionReason(value: string): value is ServiceInspec
 }
 
 export function formatServiceInspectionReason(reason: ServiceInspectionReason): string {
-  return reason === "service-manager-unavailable" ||
+  return reason === "service-ancestry-unverified" ||
+    reason === "service-membership-unverified" ||
+    reason === "service-manager-unavailable" ||
     reason === "systemd-inspection-deadline-exceeded" ||
     reason === "windows-task-inspection-failed"
     ? SERVICE_INSPECTION_MESSAGES[reason]
@@ -131,6 +137,17 @@ export function findServiceOwnershipRefusal(
     }
   }
   return undefined;
+}
+
+/** Diagnostic fallback cannot hide unsettled native work or an ownership refusal. */
+export function assertServiceInspectionFallbackAllowed(error: unknown): void {
+  if (hasCommandProcessCleanupError(error)) {
+    throw error;
+  }
+  const refusal = findServiceOwnershipRefusal(error);
+  if (refusal) {
+    throw refusal;
+  }
 }
 
 export class ServiceDefinitionInspectionError extends Error {

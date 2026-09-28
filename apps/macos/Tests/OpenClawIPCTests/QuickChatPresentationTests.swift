@@ -376,8 +376,8 @@ private actor QuickChatPresentationTransport: OpenClawChatTransport {
         try await .init(choices: self.listModels(agentID: agentID), availabilityIsSessionScoped: true)
     }
 
-    func listAgents() async throws -> OpenClawChatAgentsListResponse? {
-        .init(defaultId: "main", agents: [.init(id: "main", name: "Claw", emoji: "🦞")])
+    func loadAgents(onUpdate: @escaping OpenClawChatAgentCatalogUpdate) async throws {
+        await onUpdate(.init(defaultId: "main", agents: [.init(id: "main", name: "Claw", emoji: "🦞")]))
     }
 
     func listSessions(

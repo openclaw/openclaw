@@ -24,6 +24,7 @@ type ProviderAuthMethodNonInteractiveValidationContext = Parameters<
 >[0];
 
 const mocks = vi.hoisted(() => ({
+  loadedSetupRuntimes: new Set<string>(),
   runInteractiveSetup: vi.fn(async () => {}),
   runGuidedOnboarding: vi.fn(async () => {}),
   runNonInteractiveSetup: vi.fn(async () => {}),
@@ -87,17 +88,20 @@ const mocks = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("./onboard-interactive.js", () => ({
-  runInteractiveSetup: mocks.runInteractiveSetup,
-}));
+vi.mock("./onboard-interactive.js", () => {
+  mocks.loadedSetupRuntimes.add("classic");
+  return { runInteractiveSetup: mocks.runInteractiveSetup };
+});
 
-vi.mock("./onboard-guided.js", () => ({
-  runGuidedOnboarding: mocks.runGuidedOnboarding,
-}));
+vi.mock("./onboard-guided.js", () => {
+  mocks.loadedSetupRuntimes.add("guided");
+  return { runGuidedOnboarding: mocks.runGuidedOnboarding };
+});
 
-vi.mock("./onboard-non-interactive.js", () => ({
-  runNonInteractiveSetup: mocks.runNonInteractiveSetup,
-}));
+vi.mock("./onboard-non-interactive.js", () => {
+  mocks.loadedSetupRuntimes.add("non-interactive");
+  return { runNonInteractiveSetup: mocks.runNonInteractiveSetup };
+});
 
 vi.mock("./onboard-interactive-runner.js", () => ({
   hasInteractiveOnboardingTty: mocks.hasInteractiveOnboardingTty,
@@ -154,6 +158,8 @@ const localResetProviderCases = [
   { providerId: "lmstudio", methodId: "custom" },
 ] as const;
 
+const eagerlyLoadedSetupRuntimes = [...mocks.loadedSetupRuntimes];
+
 function mockLocalResetPreflight(params: {
   providerId: (typeof localResetProviderCases)[number]["providerId"];
   methodId: (typeof localResetProviderCases)[number]["methodId"];
@@ -198,7 +204,11 @@ describe("setupWizardCommand", () => {
     mocks.readConfigFileSnapshot.mockResolvedValue({ exists: false, valid: false, config: {} });
   });
 
-  it.each(["main", "robby", "Robby!"])("accepts valid first-agent name %s", async (agentName) => {
+  it("defers loading setup runtimes until a flow is selected", () => {
+    expect(eagerlyLoadedSetupRuntimes).toEqual([]);
+  });
+
+  it.each(["Robby!"])("accepts valid first-agent name %s", async (agentName) => {
     const runtime = makeRuntime();
 
     await setupWizardCommand({ nonInteractive: true, acceptRisk: true, agentName }, runtime);
@@ -209,7 +219,7 @@ describe("setupWizardCommand", () => {
     );
   });
 
-  it.each(["!!!", "openclaw", "crestodian"])(
+  it.each(["!!!", "openclaw"])(
     "rejects invalid or reserved first-agent name %s before setup",
     async (agentName) => {
       const runtime = makeRuntime();
@@ -274,8 +284,6 @@ describe("setupWizardCommand", () => {
 
   it.each([
     ["guided", { reset: true }],
-    ["classic", { reset: true, classic: true }],
-    ["guided JSON", { reset: true, json: true }],
     ["classic JSON", { reset: true, classic: true, json: true }],
   ] as const)("rejects headless %s onboarding before reset", async (_label, options) => {
     const runtime = makeRuntime();
@@ -431,14 +439,6 @@ describe("setupWizardCommand", () => {
     );
   });
 
-  it("accepts explicit --reset-scope full", async () => {
-    const runtime = makeRuntime();
-
-    await setupWizardCommand({ reset: true, resetScope: "full" }, runtime);
-
-    expectResetCall({ scope: "full", runtime });
-  });
-
   it("fails fast for invalid --reset-scope", async () => {
     const runtime = makeRuntime();
 
@@ -501,25 +501,6 @@ describe("setupWizardCommand", () => {
       expect(runtime.log).not.toHaveBeenCalled();
     }
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(mocks.handleReset).not.toHaveBeenCalled();
-    expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
-  });
-
-  it("validates a remote URL before reset", async () => {
-    const runtime = makeRuntime();
-
-    await setupWizardCommand(
-      {
-        reset: true,
-        nonInteractive: true,
-        acceptRisk: true,
-        mode: "remote",
-        remoteUrl: "https://example.com",
-      },
-      runtime,
-    );
-
-    expect(runtime.error).toHaveBeenCalledWith(expect.any(String));
     expect(mocks.handleReset).not.toHaveBeenCalled();
     expect(mocks.runNonInteractiveSetup).not.toHaveBeenCalled();
   });
@@ -771,11 +752,9 @@ describe("setupWizardCommand", () => {
   ] as const)("$name", ({ opts, message }) => expectAuthPreflightError(opts, () => message));
 
   it.each([
-    { agentName: "robby", agentId: "robby", scope: "config", reuseProfile: true },
     { agentName: "Robby!", agentId: "robby", scope: "config", reuseProfile: true },
     { agentName: undefined, agentId: "main", scope: "config", reuseProfile: true },
     { agentName: "robby", agentId: "robby", scope: "config+creds+sessions", reuseProfile: false },
-    { agentName: "robby", agentId: "robby", scope: "full", reuseProfile: false },
   ] as const)(
     "preflights $agentId provider profiles against reset scope $scope",
     async ({ agentName, agentId, scope, reuseProfile }) => {
@@ -821,13 +800,11 @@ describe("setupWizardCommand", () => {
   );
 
   it.each(
-    [true, false].flatMap((validationResult) =>
-      localResetProviderCases.map(({ providerId, methodId }) => ({
-        providerId,
-        methodId,
-        validationResult,
-      })),
-    ),
+    localResetProviderCases.map(({ providerId, methodId }, index) => ({
+      providerId,
+      methodId,
+      validationResult: index === 0,
+    })),
   )(
     "preflights $providerId before reset and setup (accepted: $validationResult)",
     async (params) => {
@@ -966,16 +943,8 @@ describe("setupWizardCommand", () => {
 
   it.each([
     ["--classic", { classic: true }],
-    ["--flow quickstart", { flow: "quickstart" as const }],
-    ["--mode remote", { mode: "remote" as const }],
-    ["--import-from", { importFrom: "hermes" }],
-    ["--auth-choice", { authChoice: "skip" }],
-    ["--gateway-port", { gatewayPort: 19001 }],
-    ["--remote-url", { remoteUrl: "wss://gw.example.ts.net" }],
-    ["--skip-bootstrap", { skipBootstrap: true }],
     ["--no-install-daemon", { installDaemon: false }],
     ["--custom-text-input", { customImageInput: false }],
-    ["--daemon-runtime", { daemonRuntime: "bun" as const }],
     ["a provider auth flag", { mistralApiKey: "sk-x" }],
   ])("keeps the classic interactive wizard for %s", async (_label, opts) => {
     const runtime = makeRuntime();

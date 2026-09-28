@@ -1,10 +1,10 @@
 /** Doctor warnings for source checkout installs with missing pnpm runtime state. */
 import fs from "node:fs";
 import path from "node:path";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseDocument } from "yaml";
 import { note } from "../../packages/terminal-core/src/note.js";
 
-/** Emits install warnings when a source checkout looks npm-installed or lacks source-run deps. */
 export function noteSourceInstallIssues(root: string | null) {
   if (!root) {
     return;
@@ -33,7 +33,7 @@ export function noteSourceInstallIssues(root: string | null) {
     );
   }
 
-  if (fs.existsSync(srcEntry) && !fs.existsSync(tsxBin)) {
+  if (!fs.existsSync(tsxBin)) {
     warnings.push("- tsx binary is missing for source runs. Run: pnpm install.");
   }
 
@@ -59,29 +59,22 @@ function isSelfLink(root: string, value: unknown): boolean {
   }
 }
 
-/** Detects self-referential `openclaw: link:` damage left by link commands run inside a source checkout. */
 function detectSelfLinkWarnings(root: string): string[] {
   const warnings: string[] = [];
 
   const packageJsonPath = path.join(root, "package.json");
-  if (fs.existsSync(packageJsonPath)) {
-    try {
-      // SAFETY: JSON.parse of a package.json file yields an object with optional dependency maps.
-      const manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
-        dependencies?: Record<string, string>;
-        devDependencies?: Record<string, string>;
-      };
-      const selfLink = [manifest.dependencies, manifest.devDependencies].some((deps) =>
-        isSelfLink(root, deps?.openclaw),
+  try {
+    const manifest = asOptionalRecord(JSON.parse(fs.readFileSync(packageJsonPath, "utf8")));
+    const selfLink = [manifest?.dependencies, manifest?.devDependencies].some((deps) =>
+      isSelfLink(root, asOptionalRecord(deps)?.openclaw),
+    );
+    if (selfLink) {
+      warnings.push(
+        `- package.json has a self-referential "openclaw": "link:" dependency, which can break frozen pnpm installs. If the link is unintended: ${SELF_LINK_RECOVERY}`,
       );
-      if (selfLink) {
-        warnings.push(
-          `- package.json has a self-referential "openclaw": "link:" dependency, which can break frozen pnpm installs. If the link is unintended: ${SELF_LINK_RECOVERY}`,
-        );
-      }
-    } catch {
-      // Unparseable package.json is reported by other checks; skip link detection.
     }
+  } catch {
+    // Missing or unparseable package.json is reported by other checks.
   }
 
   const workspacePath = path.join(root, "pnpm-workspace.yaml");

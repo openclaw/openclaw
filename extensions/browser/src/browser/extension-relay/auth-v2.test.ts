@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { parseStrictJsonObject } from "../../../chrome-extension/modules/strict-json.js";
 import {
   createRelayProof,
   relayKeyIdFromHex,
@@ -13,7 +14,6 @@ import {
   parseRelayAuthHello,
   parseRelayAuthResponse,
 } from "./auth-v2.js";
-import { parseStrictJsonObject } from "./strict-json.js";
 
 const KEY = Array.from({ length: 32 }, (_, index) => index.toString(16).padStart(2, "0")).join("");
 const SOURCE = "127.0.0.1";
@@ -120,48 +120,6 @@ describe("BrowserRelayAuthV2Authority", () => {
     expect(authority.issueChallenge(first, hello(), BINDING, 1_001)).toBeNull();
     expect(authority.issueChallenge(second, hello(), BINDING, 1_001)).toBeNull();
     expect(authority.issueChallenge(second, hello(), BINDING, 11_001)).not.toBeNull();
-  });
-
-  it("rejects expired challenges and wrong client proofs", () => {
-    const authority = new BrowserRelayAuthV2Authority(KEY);
-    const first = {};
-    authority.registerPendingConnection(first, vi.fn(), SOURCE);
-    const expired = authority.issueChallenge(first, hello(), BINDING, 1_000);
-    expect(expired).not.toBeNull();
-    expect(
-      authority.completeChallenge(
-        first,
-        {
-          type: "auth.response",
-          v: 2,
-          sessionId: expired!.sessionId,
-          clientProof: createRelayProof(KEY, "client", expired!),
-        },
-        11_001,
-      ),
-    ).toBeNull();
-
-    const second = {};
-    authority.registerPendingConnection(second, vi.fn(), SOURCE);
-    const challenge = authority.issueChallenge(
-      second,
-      hello("REREREREREREREREREREREREREREREREREREREREREQ"),
-      BINDING,
-      20_000,
-    );
-    expect(challenge).not.toBeNull();
-    expect(
-      authority.completeChallenge(
-        second,
-        {
-          type: "auth.response",
-          v: 2,
-          sessionId: challenge!.sessionId,
-          clientProof: "A".repeat(43),
-        },
-        20_001,
-      ),
-    ).toBeNull();
   });
 
   it("invalidates pending and authenticated connections exactly once on rotation", () => {

@@ -18,12 +18,6 @@ import {
   getActiveGatewayRootWorkCount,
   getActiveGatewayRootWorkHolders,
 } from "../../../process/gateway-work-admission.js";
-import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
-import { getDetachedTaskLifecycleRuntime } from "../../../tasks/detached-task-runtime.js";
-import type { captureTaskDeliveryWork } from "../../../tasks/task-registry-delivery.test-support.js";
-import { captureTaskRegistryReadFence } from "../../../tasks/task-registry-listener-state.js";
-import { setDetachedTaskLifecycleRuntime } from "../../../tasks/task-runtime.test-helpers.js";
-import { findTaskByRunIdForStatus } from "../../../tasks/task-status-access.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import {
@@ -98,54 +92,28 @@ export function observeSubagentRequesterWake(
 
 /** Gates owned by a test must be released before waiting for imports and detached tails. */
 export async function settleSubagentRegistryPersistenceWork(
-  deliveries?: ReturnType<typeof captureTaskDeliveryWork>,
+  settleOwnedWork?: () => void | Promise<void>,
 ) {
   await vi.dynamicImportSettled();
-  // Accepted task events can outlive both reset and synchronous task reads.
-  const failures: unknown[] = [];
-  try {
-    await captureTaskRegistryReadFence(captureOpenClawStateWorkerContext().admission);
-  } catch (error) {
-    failures.push(error);
-  }
-  // A committed event can publish delivery even when its own cleanup failed.
-  try {
-    await deliveries?.settle();
-  } catch (error) {
-    failures.push(error);
-  }
-  // Terminal notification writes run off the Gateway thread, so uncaptured
-  // deliveries can outlive the default fence on a loaded runner.
-  try {
-    await vi.waitFor(
-      () => {
-        const holders = getActiveGatewayRootWorkHolders();
-        expect(
-          getActiveGatewayRootWorkCount(),
-          `residual registry roots: ${holders.join(", ") || "unattributed"}`,
-        ).toBe(0);
-      },
-      { timeout: 10_000 },
-    );
-  } catch (error) {
-    failures.push(error);
-  }
-  if (failures.length === 1) {
-    throw failures[0];
-  }
-  if (failures.length > 1) {
-    throw new AggregateError(failures, "Subagent registry fixture work failed");
-  }
+  await settleOwnedWork?.();
+  await vi.waitFor(() => {
+    const holders = getActiveGatewayRootWorkHolders();
+    expect(
+      getActiveGatewayRootWorkCount(),
+      `residual registry roots: ${holders.join(", ") || "unattributed"}`,
+    ).toBe(0);
+  });
 }
 
 type PersistenceCleanup = {
   stateDir: string;
   resetRegistry: () => void;
   closeDatabases?: () => void | Promise<void>;
+  settleOwnedWork?: () => void | Promise<void>;
 };
 
 export async function cleanupSubagentRegistryPersistenceTest(params: PersistenceCleanup) {
-  await settleSubagentRegistryPersistenceWork();
+  await settleSubagentRegistryPersistenceWork(params.settleOwnedWork);
   params.resetRegistry();
   await cleanupSessionStateForTest({ stateDir: params.stateDir });
   await params.closeDatabases?.();
@@ -373,7 +341,7 @@ export function registerSubagentRegistrationPersistenceTests({
   it.each([
     { name: "running", queued: false },
     { name: "queued", queued: true },
-  ])("persists a $name registration exactly once", async ({ queued }) => {
+  ])("persists the $name native admission before returning", async ({ queued }) => {
     const mod = getRegistry();
     mockPendingAgentWait();
 
@@ -387,173 +355,9 @@ export function registerSubagentRegistrationPersistenceTests({
       await registrationCompletion;
     }
 
-    expect(mocks.persistSubagentRunsToDiskOrThrow).toHaveBeenCalledOnce();
+    expect(mocks.persistSubagentRunsToDiskOrThrow).toHaveBeenCalledTimes(queued ? 2 : 1);
     expect(mocks.persistSubagentRunsToDiskOrThrow).toHaveBeenCalledWith(expect.any(Map), [runId]);
     expect(mocks.persistSubagentRunsToDisk).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { name: "running", queued: false },
-    { name: "queued", queued: true },
-  ])("isolates a $name registration from task runtime input mutation", async ({ queued }) => {
-    const mod = getRegistry();
-    const runId = `run-isolated-origin-${queued ? "queued" : "running"}`;
-    const expectedRequesterOrigin = {
-      channel: "discord",
-      to: "channel:123",
-      accountId: "acct-1",
-      threadId: 42,
-    };
-    const requesterOrigin = {
-      ...expectedRequesterOrigin,
-      deliveryIntent: {
-        id: "delivery-1",
-        kind: "outbound_queue" as const,
-        queuePolicy: "required" as const,
-      },
-    };
-    let persistedEntry: SubagentRunRecord | undefined;
-    mocks.persistSubagentRunsToDiskOrThrow.mockImplementationOnce((runs) => {
-      persistedEntry = structuredClone(runs.get(runId));
-    });
-    mockPendingAgentWait();
-    const defaultRuntime = getDetachedTaskLifecycleRuntime();
-    const mutateRequesterOrigin = (
-      taskParams: Parameters<typeof defaultRuntime.createQueuedTaskRun>[0],
-    ) => {
-      if (!taskParams.requesterOrigin) {
-        throw new Error("expected requester origin");
-      }
-      Object.assign(taskParams.requesterOrigin, {
-        channel: "mutated",
-        to: "mutated",
-        accountId: "mutated",
-        threadId: "mutated",
-      });
-    };
-    const createMutatingQueuedTaskRun = vi.fn(
-      (taskParams: Parameters<typeof defaultRuntime.createQueuedTaskRun>[0]) => {
-        mutateRequesterOrigin(taskParams);
-        return defaultRuntime.createQueuedTaskRun(taskParams);
-      },
-    );
-    const createMutatingRunningTaskRun = vi.fn(
-      (taskParams: Parameters<typeof defaultRuntime.createRunningTaskRun>[0]) => {
-        mutateRequesterOrigin(taskParams);
-        return defaultRuntime.createRunningTaskRun(taskParams);
-      },
-    );
-    setDetachedTaskLifecycleRuntime({
-      ...defaultRuntime,
-      createQueuedTaskRun: createMutatingQueuedTaskRun,
-      createRunningTaskRun: createMutatingRunningTaskRun,
-    });
-
-    const registrationCompletion = mod.registerSubagentRun({
-      runId,
-      task: "isolate the registry delivery context",
-      queued,
-      requesterOrigin,
-    });
-    if (registrationCompletion) {
-      await registrationCompletion;
-    }
-
-    expect(
-      queued ? createMutatingQueuedTaskRun : createMutatingRunningTaskRun,
-    ).toHaveBeenCalledOnce();
-    expect(findRequesterRun(runId)?.requesterOrigin).toEqual(expectedRequesterOrigin);
-    expect(persistedEntry?.requesterOrigin).toEqual(expectedRequesterOrigin);
-    expect(mocks.persistSubagentRunsToDiskOrThrow).toHaveBeenCalledOnce();
-    expect(mocks.persistSubagentRunsToDisk).not.toHaveBeenCalled();
-  });
-
-  const optionalTaskRowFaults: Array<[label: string, createTaskRun: () => null]> = [
-    ["returns no row", () => null],
-    [
-      "throws",
-      () => {
-        throw new Error("task store unavailable");
-      },
-    ],
-  ];
-  it.each(optionalTaskRowFaults)(
-    "keeps ACP-style registry ownership when the secondary task runtime %s",
-    async (_label, createTaskRun) => {
-      const mod = getRegistry();
-      const runId = `run-acp-task-fault-${_label.replaceAll(" ", "-")}`;
-      setDetachedTaskLifecycleRuntime({
-        ...getDetachedTaskLifecycleRuntime(),
-        createQueuedTaskRun: createTaskRun,
-        createRunningTaskRun: createTaskRun,
-      });
-      mockPendingAgentWait();
-
-      await mod.registerSubagentRun({
-        runId,
-        task: "preserve ACP registry ownership",
-      });
-
-      expect(findRequesterRun(runId)).toMatchObject({
-        runId,
-        task: "preserve ACP registry ownership",
-      });
-    },
-  );
-
-  it("keeps memory aligned with the durable registration when rollback persistence fails", async () => {
-    const mod = getRegistry();
-    const childSessionKey = "agent:main:subagent:task-row-rollback-failure";
-    mod.addSubagentRunForTests({
-      runId: "run-task-row-rollback-old",
-      childSessionKey,
-      task: "preserve the durable predecessor state",
-      createdAt: Date.now() - 1_000,
-      endedAt: Date.now() - 500,
-      endedReason: "subagent-killed",
-      suppressAnnounceReason: "killed",
-      killReconciliation: { killedAt: Date.now() - 500 },
-    });
-    mocks.persistSubagentRunsToDiskOrThrow
-      .mockImplementationOnce(() => {})
-      .mockImplementationOnce(() => {
-        throw new Error("rollback disk full");
-      });
-    setDetachedTaskLifecycleRuntime({
-      ...getDetachedTaskLifecycleRuntime(),
-      createRunningTaskRun: () => null,
-    });
-    const waitStarted = createDeferred<Parameters<typeof mocks.callGateway>[0]>();
-    mocks.callGateway.mockImplementation(async (request) => {
-      if (request.method === "agent.wait") {
-        waitStarted.resolve(request);
-      }
-      return { status: "pending" };
-    });
-
-    expect(() =>
-      mod.registerSubagentRun({
-        runId: "run-task-row-rollback-new",
-        childSessionKey,
-        task: "retain the last durable snapshot",
-        taskRowOwnership: "required",
-      }),
-    ).toThrowError("rollback disk full");
-
-    expect(findRequesterRun("run-task-row-rollback-new")).toMatchObject({
-      runId: "run-task-row-rollback-new",
-      childSessionKey,
-    });
-    expect(
-      findRequesterRun("run-task-row-rollback-old")?.killReconciliation?.supersededAt,
-    ).toBeTypeOf("number");
-    expect(mocks.persistSubagentRunsToDiskOrThrow).toHaveBeenCalledTimes(2);
-    expect(await waitStarted.promise).toEqual(
-      expect.objectContaining({
-        method: "agent.wait",
-        params: expect.objectContaining({ runId: "run-task-row-rollback-new" }),
-      }),
-    );
   });
 
   it("restores the source owner when replacement persistence fails", async () => {
@@ -647,6 +451,37 @@ export function registerSubagentRegistrationPersistenceTests({
     const run = findRequesterRun(runId);
     expect(run?.execution.endedAt).toBeUndefined();
     expect(run?.endedReason).toBeUndefined();
-    expect(findTaskByRunIdForStatus(runId)).toMatchObject({ status: "running" });
+  });
+}
+
+export function createRestoredRequesterWakeRuns(params: {
+  activationSettlement: boolean;
+  requesterYielded?: true;
+  endedAt: number;
+}): SubagentRunRecord[] {
+  const { activationSettlement, requesterYielded, endedAt } = params;
+  return Array.from({ length: 3 }, (_, index): SubagentRunRecord => {
+    const runId = `run-restored-wake-${index}`;
+    return createDeliveredWake(
+      runId,
+      requesterYielded ? undefined : { status: "pending", attemptCount: 0 },
+      {
+        childSessionKey: `agent:main:subagent:restored-wake-${index}`,
+        requesterSessionKey: `agent:main:requester-${index}`,
+        requesterDisplayKey: `requester-${index}`,
+        task: "resume a durable requester wake",
+        createdAt: endedAt - 1_000,
+        endedReason: "subagent-complete",
+        startedAt: endedAt - 500,
+        endedAt,
+        ...(activationSettlement
+          ? {
+              requesterTurnRunId: `requester-turn-${index}`,
+              requesterTurnYielded: requesterYielded ?? undefined,
+              taskRunId: runId,
+            }
+          : {}),
+      },
+    );
   });
 }

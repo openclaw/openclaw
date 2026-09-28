@@ -2,6 +2,7 @@ import {
   getDeliveryLastError,
   ensureDeliveryState,
   ensureCompletionState,
+  clearSubagentPendingDelivery,
 } from "./subagent-delivery-state.js";
 import {
   resolveCleanupCompletionReason,
@@ -15,11 +16,7 @@ import {
   retireSupersededCleanupIfNeeded,
 } from "./subagent-registry-lifecycle-cleanup.js";
 import type { SubagentLifecycleAnnounceCleanupContext } from "./subagent-registry-lifecycle-context.js";
-import {
-  clearSubagentPendingDelivery,
-  safeSetSubagentTaskDeliveryStatus,
-  emitCompletionEndedHookIfNeeded,
-} from "./subagent-registry-lifecycle-delivery.js";
+import { emitCompletionEndedHookIfNeeded } from "./subagent-registry-lifecycle-delivery.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export const finalizeResumedAnnounceGiveUp = async (
@@ -38,7 +35,7 @@ export const finalizeResumedAnnounceGiveUp = async (
   const { runId, entry, reason, cleanup, cleanupGeneration, retryCount, completedAt } =
     giveUpParams;
   if (shouldSuspendPendingFinalDelivery(entry)) {
-    suspendPendingFinalDelivery(context, {
+    await suspendPendingFinalDelivery(context, {
       runId,
       entry,
       reason,
@@ -55,14 +52,6 @@ export const finalizeResumedAnnounceGiveUp = async (
     failedDelivery.attemptCount = retryCount;
     failedDelivery.lastAttemptAt = completedAt ?? Date.now();
   }
-  await safeSetSubagentTaskDeliveryStatus(params, {
-    entry,
-    deliveryStatus: "failed",
-    deliveryError,
-    isCurrent: () =>
-      cleanupGeneration === undefined ||
-      context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration),
-  });
   entry.wakeOnDescendantSettle = undefined;
   const completion = ensureCompletionState(entry);
   completion.fallbackResultText = undefined;

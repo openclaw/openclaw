@@ -49,6 +49,7 @@ type SubagentRunReadSqliteRow = Pick<
   swarm_run_id: string | null;
   run_timeout_seconds: number | null;
   execution_status: SubagentRunRecord["execution"]["status"];
+  interruption_reason: string | null;
   started_at: number | null;
   session_started_at: number | null;
   accumulated_runtime_ms: number | null;
@@ -61,6 +62,7 @@ type SubagentRunReadSqliteRow = Pick<
   outcome_disposition: string | null;
   wait_expiry_observed_at: number | null;
   delivery_status: string | null;
+  delivery_disposition: string | null;
   delivery_suspended_at: number | null;
   requester_agent_id: string | null;
   collect: number | null;
@@ -269,6 +271,9 @@ function readSubagentSessionListRows(
         subagentPayloadJsonValue<SubagentRunRecord["execution"]["status"]>("$.execution.status").as(
           "execution_status",
         ),
+        subagentPayloadJsonValue<string | null>("$.execution.interruptionReason").as(
+          "interruption_reason",
+        ),
         subagentPayloadJsonValue<number | null>("$.execution.startedAt").as("started_at"),
         subagentPayloadJsonValue<number | null>("$.sessionStartedAt").as("session_started_at"),
         subagentPayloadJsonValue<number | null>("$.accumulatedRuntimeMs").as(
@@ -293,6 +298,9 @@ function readSubagentSessionListRows(
           "outcome_timeout_disposition",
         ),
         subagentPayloadJsonValue<string | null>("$.delivery.status").as("delivery_status"),
+        subagentPayloadJsonValue<string | null>("$.delivery.disposition").as(
+          "delivery_disposition",
+        ),
         subagentPayloadJsonValue<string | null>("$.requesterAgentId").as("requester_agent_id"),
         subagentPayloadJsonValue<number | null>("$.delivery.suspendedAt").as(
           "delivery_suspended_at",
@@ -357,6 +365,9 @@ function rowToSubagentRunReadRecord(row: SubagentRunReadSqliteRow): SubagentRunR
       createdAt: row.created_at,
       execution: {
         status: row.execution_status,
+        ...(row.interruption_reason === "gateway-restart"
+          ? { interruptionReason: "gateway-restart" as const }
+          : {}),
         ...(startedAt !== undefined ? { startedAt } : {}),
         ...(endedAt !== undefined ? { endedAt } : {}),
         ...(outcomeStatus
@@ -378,6 +389,9 @@ function rowToSubagentRunReadRecord(row: SubagentRunReadSqliteRow): SubagentRunR
       delivery: deliveryStatus
         ? {
             status: deliveryStatus,
+            ...(row.delivery_disposition === "intentional_non_delivery"
+              ? { disposition: "intentional_non_delivery" as const }
+              : {}),
             ...(normalizeFiniteNumber(row.delivery_suspended_at) !== undefined
               ? { suspendedAt: row.delivery_suspended_at ?? undefined }
               : {}),

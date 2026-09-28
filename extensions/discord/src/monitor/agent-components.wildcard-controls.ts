@@ -6,12 +6,11 @@ import {
   type ButtonInteraction,
   type ComponentData,
 } from "../internal/discord.js";
-import {
-  parseDiscordComponentData,
-  resolveInteractionCustomId,
-  type AgentComponentContext,
-  type AgentComponentMessageInteraction,
-} from "./agent-components-helpers.js";
+import { parseDiscordComponentData, resolveInteractionCustomId } from "./agent-components-data.js";
+import type {
+  AgentComponentContext,
+  AgentComponentMessageInteraction,
+} from "./agent-components.types.js";
 
 export type DiscordComponentControlHandlers = {
   handleComponentEvent: (params: {

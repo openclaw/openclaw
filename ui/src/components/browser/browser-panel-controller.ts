@@ -368,9 +368,7 @@ export class BrowserPanelController implements ReactiveController {
         invocation.epoch = this.operations.epoch;
         this.exitCaptureModes();
         const targetId = this.activeTargetId;
-        previousNavigationQueued =
-          this.operations.hasQueuedNavigation(client, targetId) ||
-          this.operations.hasUnreconciledNavigation(client, targetId);
+        previousNavigationQueued = this.operations.hasPendingNavigation(client, targetId);
         await this.operations.queueNavigation(client, targetId, async () => {
           if (invocation.isCurrent()) {
             await navigateBrowser(client, { url, targetId });

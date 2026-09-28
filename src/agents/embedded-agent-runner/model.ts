@@ -22,7 +22,6 @@ import { buildConfiguredFallbackModel } from "./model.configured-fallback.js";
 import {
   applyConfiguredProviderOverrides,
   resolveConfiguredProviderConfig,
-  type StaticCatalogFallbackModel,
 } from "./model.configured-overrides.js";
 import {
   normalizeResolvedModel,
@@ -181,7 +180,7 @@ export async function resolveModelAsync(
     }
     const runtimeHooks = resolveRuntimeHooks(options);
     let staticCatalogResolved = false;
-    let staticCatalogModel: StaticCatalogFallbackModel | undefined;
+    let staticCatalogModel: ProviderRuntimeModel | undefined;
     const getManifestStaticCatalogModel = () => {
       if (!staticCatalogResolved) {
         staticCatalogResolved = true;

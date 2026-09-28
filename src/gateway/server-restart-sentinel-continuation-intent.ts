@@ -1,11 +1,37 @@
+import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "../auto-reply/reply/get-reply-run-queue.js";
 import type { RestartSentinelContinuation } from "../infra/restart-sentinel.js";
 import type {
+  QueuedSessionDelivery,
   QueuedSessionDeliveryPayload,
   SessionDeliveryRoute,
 } from "../infra/session-delivery-queue.records.js";
+import type { OutboundReplyPayload } from "../plugin-sdk/reply-payload.js";
 import type { DeliveryContext } from "../utils/delivery-context.shared.js";
 
 export const RESTART_CONTINUATION_BUSY_MAX_ATTEMPTS = 20;
+export const RESTART_CONTINUATION_BUSY_RETRY_ERROR =
+  "restart continuation deferred because previous run is still shutting down";
+
+type QueuedAgentTurnSessionDelivery = Extract<QueuedSessionDelivery, { kind: "agentTurn" }>;
+
+export function isRestartContinuationBusyPayload(payload: OutboundReplyPayload): boolean {
+  return (
+    typeof payload.text === "string" && payload.text.trim() === REPLY_RUN_STILL_SHUTTING_DOWN_TEXT
+  );
+}
+
+export function isRestartContinuationBusyRetry(entry: QueuedSessionDelivery | null): boolean {
+  return entry?.lastError === RESTART_CONTINUATION_BUSY_RETRY_ERROR;
+}
+
+export function resolveQueuedRestartContinuationMessageId(
+  entry: QueuedAgentTurnSessionDelivery,
+): string {
+  if (isRestartContinuationBusyRetry(entry) && entry.retryCount > 0) {
+    return `${entry.messageId}:retry:${entry.retryCount}`;
+  }
+  return entry.messageId;
+}
 
 const buildRestartContinuationMessageId = (params: {
   sessionKey: string;

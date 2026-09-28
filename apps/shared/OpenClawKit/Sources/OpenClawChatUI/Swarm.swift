@@ -162,10 +162,7 @@ func buildOpenClawChatSwarmGroups(
               let status = SelfContainedSwarmHelpers.status(row)
         else { continue }
         let label = [row.label, row.displayName, row.derivedTitle, row.key]
-            .compactMap { value -> String? in
-                let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-                return normalized?.isEmpty == false ? normalized : nil
-            }
+            .compactMap(ChatPayloadDecoding.trimmedNonEmptyString)
             .first ?? row.key
         byGroup[groupID, default: []].append(Entry(
             phase: row.swarmPhase?.trimmingCharacters(in: .whitespacesAndNewlines),

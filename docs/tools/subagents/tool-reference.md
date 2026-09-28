@@ -149,7 +149,7 @@ In either mode, internal QA, research, coding, review, and test lanes use ordina
   Optional stable handle for identifying a specific child in later status output. Must match `[a-z][a-z0-9_-]{0,63}` and cannot be a reserved target such as `last` or `all`.
 </ParamField>
 <ParamField path="label" type="string">
-  Optional short task title shown in transcript activity and Tasks views, and in the session sidebar for visible sessions. Name the work being done, not the agent; it is set on the child session at run start.
+  Optional short task title shown in session transcripts, and in the session sidebar for visible sessions. Name the work being done, not the agent; it is set on the child session at run start.
 </ParamField>
 <ParamField path="agentId" type="string">
   Spawn under another configured agent id when allowed by `subagents.allowAgents`.
@@ -375,49 +375,26 @@ quoted as data. Reading this context does not acknowledge or retry delivery.
 
 ## Tool: `subagents`
 
-Lists spawned sub-agent runs and background-task records owned by the
-requester session tree. The task rows cover native sub-agents, ACP runs,
-Gateway CLI/media work, and cron executions. It is scoped to the current
-requester; a child can only see its own controlled children.
+Lists native subagent runs owned by the requester session tree. A child can
+only inspect its controlled children. ACP, shell, media, and cron status remain
+with their native owners.
 
-Use `subagents` for on-demand status and debugging. Use `sessions_yield` to
-wait for completion events in a later turn. Use `action: "wait"` when the
-immediate next step needs one or more specific tasks within the current turn.
+Use `subagents` for on-demand status and debugging. Use `sessions_yield` for
+announced completions, or `action: "wait"` with returned `runIds` (1–32 IDs)
+and `timeoutSeconds` (0–60, default 30) when this turn needs a selected result.
+A zero timeout reads a snapshot. `reason` is `completed`, `attention`,
+`unavailable`, or `timeout`; `tasks` contains authorized native run snapshots.
+Waiting does not cancel execution or consume completion delivery.
 
-`action: "wait"` accepts `taskIds` from the task rows returned by `list`
-(1–32 IDs), plus `timeoutSeconds` (0–60, default 30). It returns when any
-selected task completes or needs approval/user input, or a selected task
-becomes unavailable. `reason` identifies `completed`, `attention`,
-`unavailable`, or `timeout`; `tasks` contains the current authorized snapshots.
-A zero timeout reads a snapshot. Waiting does not cancel tasks, consume their
-completion announcements, or change the requester's delivery ownership.
-Cancelling the waiting turn also leaves those tasks running. The task IDs
-remain stable when a yielded child resumes under a new execution run ID.
+List entries include the native `runId`, child `sessionKey`, status, outcome,
+and delivery status. A yielded child remains `waiting` until its continuation.
+For an external wait, its controlling parent can send a continuation with
+`sessions_send`; yielding itself does not schedule external work.
 
-Structured list entries separate `execution` from task outcome and
-`deliveryStatus`. A yielded child remains active even after its last execution
-ended: `execution.wait` identifies the currently pending announcing children,
-or reports `external` when no such child owns the next continuation. External
-means the runtime has no child completion to await; it does not prove that a
-remote job or timer was scheduled. Child dependency lists are bounded to 32
-entries and `pendingCount` retains the total. A finished child with pending
-delivery has produced a result that has not yet reached its requester.
-For an external wait, the controlling parent can send a continuation to the
-listed child session key with `sessions_send`; merely yielding does not schedule
-one. The task owner delivers completion when the resumed child finishes.
-
-Use `action: "cancel"` with a `taskId` returned by `action: "list"` to stop
-a task. Native subagent cancellation requires current controller authority;
-retained task history and completion-recipient read/wait access do not grant
-that control. A leaf sub-agent cannot cancel work owned by another session.
-
-A canonical ACP task's recorded owner retains cancellation of its own exact
-execution after a session-parent change. Core task cancellation refuses retained ACP tasks
-without execution-instance metadata; select the current task or use ACP session
-controls instead. Control over descendants follows the child's current
-spawning session, or its current parent when no spawning session is recorded.
-Moving a normally spawned child's navigation parent does not transfer descendant
-control.
+Use `action: "cancel"` with a returned `runId` to stop that native run and its
+descendants. Cancellation requires current controller authority; read access to
+history or completion results does not grant control. ACP session controls,
+not this tool, own ACP cancellation.
 
 Messages and control have distinct effects. `sessions_send` with
 `mode: "steer"` injects guidance into an active supported run and rejects an

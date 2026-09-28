@@ -1,6 +1,7 @@
 /** Writes, restores, and refreshes the installed plugin index in the state database. */
 import { existsSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import {
   createPluginInstallRecordMap,
@@ -18,6 +19,7 @@ import {
 } from "../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { readOpenClawStateLease } from "../state/openclaw-state-lease-store.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
 import { isBundledProviderCompatPlugin } from "./bundled-provider-compat.js";
@@ -33,6 +35,7 @@ import { resolveCompatRegistryVersion } from "./installed-plugin-index-policy.js
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "./installed-plugin-index-record-cache.js";
 import { findForeignManagedNpmInstallRecordPluginIds } from "./installed-plugin-index-record-reader.js";
 import { INSTALLED_PLUGIN_INDEX_STATE_KEY } from "./installed-plugin-index-row.js";
+import { preservePluginSourceAdmissions } from "./installed-plugin-index-source-admissions.js";
 import { resolveInstalledPluginIndexStateDatabaseOptions } from "./installed-plugin-index-store-path.js";
 import {
   parseInstalledPluginIndex,
@@ -53,7 +56,10 @@ import {
   type RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index.js";
 import { hasMissingInstalledPluginOwnerMetadata } from "./installed-plugin-package-ownership.js";
+import { PLUGIN_LIFECYCLE_LEASE_IDENTITY } from "./plugin-lifecycle-lease-identity.js";
+import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import type { PluginSourceAdmissionPublication } from "./plugin-source-admission.types.js";
 
 export type InstalledPluginIndexWriteLease = {
   assertOwnedInTransaction(database: DatabaseSync): void;
@@ -197,8 +203,9 @@ function writePersistedInstalledPluginIndexRow(
 
 function writePersistedInstalledPluginIndexToSqlite(
   index: InstalledPluginIndex,
-  options: InstalledPluginIndexStoreOptions = {},
-  lease?: InstalledPluginIndexWriteLease,
+  options: InstalledPluginIndexStoreOptions,
+  lease: InstalledPluginIndexWriteLease,
+  preserveAdmissions = false,
 ): InstalledPluginIndexWriteReceipt {
   assertWritableInstalledPluginIndexStoreOptions(options);
   const persisted = preparePersistedInstalledPluginIndex(index);
@@ -218,7 +225,13 @@ function writePersistedInstalledPluginIndexToSqlite(
         );
       }
     }
-    lease?.assertOwnedInTransaction(db);
+    lease.assertOwnedInTransaction(db);
+    if (preserveAdmissions) {
+      preservePluginSourceAdmissions(
+        previousRow ? parseInstalledPluginIndex(previousRow.index) : null,
+        persisted,
+      );
+    }
     const revision = resolveNextInstalledPluginIndexRevision(
       previousRow ? previousRow.revision : null,
     );
@@ -236,6 +249,43 @@ function writePersistedInstalledPluginIndexToSqlite(
   }, resolveInstalledPluginIndexStateDatabaseOptions(options));
 }
 
+/** Merge prepared facts against the worker's current row, never the caller's old inventory. */
+export function publishPluginSourceAdmissionInDatabase(
+  database: DatabaseSync,
+  publication: PluginSourceAdmissionPublication,
+): boolean {
+  // Only the lifecycle owner releases or reclaims its holder; receipts cannot fence its rollback.
+  const lifecycleLease = readOpenClawStateLease(database, PLUGIN_LIFECYCLE_LEASE_IDENTITY);
+  if (lifecycleLease) {
+    return false;
+  }
+  const stored = parseInstalledPluginIndexRow(readInstalledPluginIndexRow(database));
+  const index = stored ? parseInstalledPluginIndex(stored.index) : null;
+  const plugin = index?.plugins.find((record) => record.pluginId === publication.pluginId);
+  if (
+    !stored ||
+    !index ||
+    !plugin ||
+    plugin.rootDir !== publication.rootDir ||
+    plugin.installRecordHash !== publication.installRecordHash
+  ) {
+    return false;
+  }
+  if (isDeepStrictEqual(plugin.sourceAdmissions?.[publication.key], publication.receipt)) {
+    return true;
+  }
+  plugin.sourceAdmissions = {
+    ...plugin.sourceAdmissions,
+    [publication.key]: publication.receipt,
+  };
+  writePersistedInstalledPluginIndexRow(
+    database,
+    index,
+    resolveNextInstalledPluginIndexRevision(stored.revision),
+  );
+  return true;
+}
+
 function clearPersistedInstalledPluginIndexCaches(): void {
   // Install transactions change the next boot's inventory, never the running Gateway's graph.
   if (!isGatewayPluginMetadataSnapshotActive()) {
@@ -248,7 +298,11 @@ export async function writePersistedInstalledPluginIndex(
   index: InstalledPluginIndex,
   options: InstalledPluginIndexStoreOptions = {},
 ): Promise<string> {
-  return writePersistedInstalledPluginIndexSync(index, options);
+  assertWritableInstalledPluginIndexStoreOptions(options);
+  return await withPluginLifecycleLease(
+    resolveInstalledPluginIndexStateDatabaseOptions(options),
+    async (lease) => writePersistedInstalledPluginIndexWithLeaseSync(index, { ...options, lease }),
+  );
 }
 
 /** Restore a snapshot only while the caller's tentative write is still current. */
@@ -293,16 +347,6 @@ export async function restorePersistedInstalledPluginIndexIfCurrent(
   // this process's cached metadata stale.
   clearPersistedInstalledPluginIndexCaches();
   return restored;
-}
-
-export function writePersistedInstalledPluginIndexSync(
-  index: InstalledPluginIndex,
-  options: InstalledPluginIndexStoreOptions = {},
-): string {
-  const filePath = resolveInstalledPluginIndexStorePath(options);
-  writePersistedInstalledPluginIndexToSqlite(index, options);
-  clearPersistedInstalledPluginIndexCaches();
-  return filePath;
 }
 
 export function writePersistedInstalledPluginIndexWithLeaseSync(
@@ -438,17 +482,33 @@ function resolveRefreshedPersistedInstalledPluginIndex(
   });
 }
 
-export function refreshPersistedInstalledPluginIndex(
+export async function refreshPersistedInstalledPluginIndex(
   params: RefreshInstalledPluginIndexParams &
     InstalledPluginIndexStoreOptions & {
       lease?: InstalledPluginIndexWriteLease;
     },
-): InstalledPluginIndex {
-  const { lease, ...storeParams } = params;
-  const index = resolveRefreshedPersistedInstalledPluginIndex(storeParams);
-  writePersistedInstalledPluginIndexToSqlite(index, storeParams, lease);
-  clearPersistedInstalledPluginIndexCaches();
-  return index;
+): Promise<InstalledPluginIndex> {
+  const { lease: callerLease, ...storeParams } = params;
+  assertWritableInstalledPluginIndexStoreOptions(storeParams);
+  return await withPluginLifecycleLease(
+    resolveInstalledPluginIndexStateDatabaseOptions(storeParams),
+    async (lease) => {
+      const index = resolveRefreshedPersistedInstalledPluginIndex(storeParams);
+      writePersistedInstalledPluginIndexToSqlite(
+        index,
+        storeParams,
+        {
+          assertOwnedInTransaction(database) {
+            lease.assertOwnedInTransaction(database);
+            callerLease?.assertOwnedInTransaction(database);
+          },
+        },
+        true,
+      );
+      clearPersistedInstalledPluginIndexCaches();
+      return index;
+    },
+  );
 }
 
 export function refreshPersistedInstalledPluginIndexWithLeaseSync(
@@ -459,7 +519,7 @@ export function refreshPersistedInstalledPluginIndexWithLeaseSync(
 ): InstalledPluginIndexWriteReceipt {
   const { lease, ...storeParams } = params;
   const index = resolveRefreshedPersistedInstalledPluginIndex(storeParams);
-  const receipt = writePersistedInstalledPluginIndexToSqlite(index, storeParams, lease);
+  const receipt = writePersistedInstalledPluginIndexToSqlite(index, storeParams, lease, true);
   clearPersistedInstalledPluginIndexCaches();
   return receipt;
 }
