@@ -424,7 +424,7 @@ export function resolveMessageGroupSenderLabel(
   return normalizedRole === "user"
     ? isOwnSenderGroup(group, opts.userId)
       ? resolvedUserName
-      : (userLabel ?? t("sessionsView.user"))
+      : (userLabel ?? t("chat.messages.unattributedSender"))
     : normalizedRole === "assistant"
       ? (userLabel ?? opts.assistantName ?? "Assistant")
       : normalizedRole === "tool"
@@ -468,6 +468,8 @@ export function renderMessageGroupContent(group: MessageGroup, opts: RenderMessa
 export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroupOptions) {
   const normalizedRole = normalizeRoleForGrouping(group.role);
   const sourceOnly = isSourceOnlyUserGroup(group);
+  const showAvatar =
+    normalizedRole !== "user" || Boolean(group.sender || group.senderLabel?.trim());
   const assistantName = opts.assistantName ?? "Assistant";
   const isOwnGroup = isOwnSenderGroup(group, opts.userId);
   const isPeerGroup =
@@ -567,7 +569,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     avatarPlacement === "gutter" &&
     Boolean(preparedMessages[lastMessageIndex]?.source.displayMarkdown);
   const avatar =
-    !sourceOnly &&
+    showAvatar &&
     !isTurnBlock &&
     avatarPlacement === "gutter" &&
     (isForwarded || normalizedRole !== "assistant" || opts.showAssistantAvatar !== false)
@@ -674,7 +676,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                 ${isPeerGroup ? nothing : userFooterActions}
                 <div class="chat-group-footer__meta">
                   ${
-                    normalizedRole === "user" && !sourceOnly && avatarPlacement === "footer"
+                    normalizedRole === "user" && showAvatar && avatarPlacement === "footer"
                       ? renderChatAuthorAvatar(group.sender)
                       : nothing
                   }

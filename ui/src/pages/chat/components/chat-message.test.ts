@@ -861,7 +861,7 @@ describe("grouped chat rendering", () => {
 
     expect(onReply).toHaveBeenLastCalledWith({
       messageId: "user-message",
-      senderLabel: "User",
+      senderLabel: "Message",
       sourceMessageId: "user-entry-1",
       text: "User reply context.",
     });

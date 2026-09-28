@@ -32,7 +32,7 @@ export function buildChatMarkdown(messages: unknown[], assistantName: string): s
     const role = normalizeRoleForGrouping(resolveMessageRole(msg));
     const speaker =
       role === "user"
-        ? (resolveMessageSenderLabel(msg) ?? t("sessionsView.user"))
+        ? (resolveMessageSenderLabel(msg) ?? t("chat.messages.unattributedSender"))
         : role === "assistant"
           ? (resolveMessageSenderLabel(msg) ?? assistantName)
           : "Tool";

@@ -187,7 +187,7 @@ describe("stored chat snapshot hydration", () => {
           expect(container.querySelector('[aria-busy="true"]')).toBeNull();
           expect(container.textContent).toContain(text);
           const sender = container.querySelector(".chat-sender-name");
-          expect(sender?.textContent?.trim()).toBe(author ?? "User");
+          expect(sender?.textContent?.trim()).toBe(author ?? "Message");
         };
         expectRenderedInput("Keep the attributed initial image", "Local Author");
         const metadata = {

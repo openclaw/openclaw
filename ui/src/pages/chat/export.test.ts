@@ -63,7 +63,7 @@ describe("exportChatMarkdown", () => {
     expect((createObjectURL.mock.calls[0]![0] as Blob).type).toBe("text/markdown");
     const markdown = await (createObjectURL.mock.calls[0]![0] as Blob).text();
     expect(markdown).toContain("# Chat with OpenClaw");
-    expect(markdown).toContain("## User");
+    expect(markdown).toContain("## Message");
     expect(markdown).toContain("What can you export?");
     expect(markdown).toContain("## OpenClaw");
     expect(markdown).toContain("A readable conversation.");
