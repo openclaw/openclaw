@@ -124,6 +124,26 @@ describe("non-secret environment references", () => {
     });
   });
 
+describe("redactAllowPatterns exemptions", () => {
+    it("exempts candidate secret values that match an allow pattern", () => {
+      const text = "MY_TOKEN=***";
+      expect(redactSensitiveText(text, { mode: "tools" })).not.toContain(
+        "supersecretvalue123456",
+      );
+      expect(redactSensitiveText(text, { mode: "tools", allowPatterns: [/^supersecret/] })).toBe(
+        text,
+      );
+    });
+
+    it("keeps masking when no allow pattern matches", () => {
+      const output = redactSensitiveText("MY_TOKEN=***", {
+        mode: "tools",
+        allowPatterns: [/^does-not-match/],
+      });
+      expect(output).not.toContain("supersecretvalue123456");
+    });
+  });
+
 describe("default redact pattern ownership", () => {
   it("getDefaultRedactPatterns exposes the serializable string pattern table", () => {
     expect(defaults).toEqual(DEFAULT_REDACT_STRING_PATTERNS);
@@ -2117,6 +2137,7 @@ describe("redactSensitiveText", () => {
     expect(resolveRedactOptions(options)).toEqual({
       mode: "off",
       patterns: [],
+      allowPatterns: [],
     });
     expect(redactSensitiveText("OPENAI_API_KEY=sk-1234567890abcdef", options)).toBe(
       "OPENAI_API_KEY=sk-1234567890abcdef",
