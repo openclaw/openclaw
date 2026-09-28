@@ -211,7 +211,7 @@
   align-items: center;
   justify-content: center;
   flex-direction: column;
-  gap: 5px;
+  gap: 4px;
   padding: 24px;
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
@@ -225,7 +225,7 @@
 
 .sidebar-issues-panel__empty-icon {
   display: inline-flex;
-  margin-block-end: 3px;
+  margin-block-end: 12px;
   color: var(--muted);
 }
 
