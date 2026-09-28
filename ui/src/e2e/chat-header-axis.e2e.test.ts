@@ -14,15 +14,19 @@ const suite = createChatFlowE2eSuite();
 suite.define(() => {
   for (const colorScheme of ["light", "dark"] as const) {
     for (const viewport of [
-      { label: "desktop", width: 800 },
-      { label: "mobile", width: 760 },
+      { label: "desktop", width: 769, height: 520, mobile: false, mergedChrome: true },
+      { label: "mobile", width: 768, height: 520, mobile: true, mergedChrome: true },
+      { label: "narrow mobile", width: 390, height: 650, mobile: true, mergedChrome: true },
+      { label: "small mobile", width: 360, height: 650, mobile: true, mergedChrome: true },
+      { label: "landscape phone", width: 932, height: 500, mobile: true, mergedChrome: true },
+      { label: "wide landscape", width: 933, height: 500, mobile: false, mergedChrome: false },
     ] as const) {
       it(`lays out and navigates the ${viewport.label} project-parent-child trail in ${colorScheme} mode`, async () => {
         const context = await suite.newBrowserContext({
           colorScheme,
           locale: "en-US",
           serviceWorkers: "block",
-          viewport: { height: 520, width: viewport.width },
+          viewport: { height: viewport.height, width: viewport.width },
         });
         const page = await context.newPage();
         const favicon = await readFile(path.resolve(process.cwd(), "ui/public/favicon.svg"));
@@ -75,53 +79,58 @@ suite.define(() => {
               const rect = node.getBoundingClientRect();
               return rect.top + rect.height / 2;
             };
-            const rect = (selector: string) => {
-              const node = root.querySelector(selector);
-              if (!node) {
-                throw new Error(`missing header element: ${selector}`);
-              }
-              return node.getBoundingClientRect().toJSON();
-            };
             return {
-              nav: centerY(".chat-pane__nav-toggle svg"),
+              nav: root.querySelector(".chat-pane__nav-toggle svg")
+                ? centerY(".chat-pane__nav-toggle svg")
+                : null,
               projectIcon: centerY(".workspace-icon"),
-              projectText: centerY(".chat-pane__workspace-chip span"),
+              projectText: centerY(".chat-pane__workspace-chip > span"),
+              projectTextVisible: root
+                .querySelector<HTMLElement>(".chat-pane__workspace-chip > span")
+                ?.checkVisibility(),
               menu: centerY(".chat-header-session-menu__trigger svg"),
               parentText: centerY(".chat-pane__parent-session-text"),
               sessionText: centerY(".chat-pane__session-title-text"),
-              projectRow: rect(".chat-pane__project-row"),
-              sessionTrail: rect(".chat-pane__session-trail"),
               separatorDisplays: [
                 ...root.querySelectorAll<HTMLElement>(".chat-pane__crumb-sep"),
               ].map((node) => getComputedStyle(node).display),
               headerBottom: root.getBoundingClientRect().bottom,
+              headerHeight: root.getBoundingClientRect().height,
               contentTop: main.getBoundingClientRect().top,
             };
           });
 
-          expect(
-            Math.abs(geometry.menu - geometry.nav),
-            JSON.stringify(geometry),
-          ).toBeLessThanOrEqual(0.1);
+          expect(geometry.nav !== null).toBe(viewport.mergedChrome);
+          if (geometry.nav !== null) {
+            expect(
+              Math.abs(geometry.menu - geometry.nav),
+              JSON.stringify(geometry),
+            ).toBeLessThanOrEqual(0.1);
+          }
           expect(geometry.contentTop).toBeGreaterThanOrEqual(geometry.headerBottom - 0.1);
-          if (viewport.label === "desktop") {
+          if (!viewport.mobile) {
             for (const center of [
               geometry.projectIcon,
-              geometry.projectText,
               geometry.parentText,
               geometry.sessionText,
             ]) {
               // Text and artwork carry more visible weight below their geometric
               // boxes than Lucide actions, so the identity trail needs a 1px
               // optical lift to share the topbar's perceived horizontal axis.
-              expect(geometry.nav - center, JSON.stringify(geometry)).toBeCloseTo(1, 1);
+              expect(
+                (geometry.nav ?? geometry.menu) - center,
+                JSON.stringify(geometry),
+              ).toBeCloseTo(1, 1);
             }
-            expect(geometry.separatorDisplays).toEqual(["block", "block"]);
+            expect(geometry.separatorDisplays).toEqual(["none", "block"]);
           } else {
-            expect(geometry.projectRow.bottom - geometry.sessionTrail.top).toBeLessThanOrEqual(0.1);
-            expect(geometry.parentText).toBeCloseTo(geometry.sessionText, 1);
-            expect(geometry.separatorDisplays).toEqual(["none", "none"]);
+            expect(geometry.projectIcon).toBeCloseTo(geometry.projectText, 1);
+            expect(geometry.projectText).toBeLessThan(geometry.sessionText);
+            expect(geometry.parentText).toBeCloseTo(geometry.projectText, 1);
+            expect(geometry.separatorDisplays).toEqual(["block", "none"]);
+            expect(geometry.headerHeight).toBe(52);
           }
+          expect(geometry.projectTextVisible).toBe(viewport.mobile);
           expect(await header.locator(".chat-pane__crumb-sep").count()).toBe(2);
           const parent = header.locator(".chat-pane__parent-session");
           const nestedTrail = await header.evaluate((root) => {
@@ -134,12 +143,23 @@ suite.define(() => {
               childEllipses: childText.scrollWidth > childText.clientWidth,
               headerWidth: headerRect.width,
               parentEllipses: parentText.scrollWidth > parentText.clientWidth,
+              overflow: [parentText, childText].map((node) => getComputedStyle(node).textOverflow),
+              childWidth: child.getBoundingClientRect().width,
+              availableWidth: root.querySelector(".chat-pane__crumbs")!.getBoundingClientRect()
+                .width,
               width: child.getBoundingClientRect().right - parentCrumb.getBoundingClientRect().left,
             };
           });
-          expect(nestedTrail.parentEllipses).toBe(true);
-          expect(nestedTrail.childEllipses).toBe(true);
-          expect(nestedTrail.width).toBeLessThanOrEqual(nestedTrail.headerWidth / 2 + 1);
+          expect(nestedTrail.overflow).toEqual(["ellipsis", "ellipsis"]);
+          if (!viewport.mobile || viewport.width <= 390) {
+            expect(nestedTrail.parentEllipses).toBe(true);
+            expect(nestedTrail.childEllipses).toBe(true);
+          }
+          if (viewport.mobile) {
+            expect(nestedTrail.childWidth).toBeLessThanOrEqual(nestedTrail.availableWidth);
+          } else {
+            expect(nestedTrail.width).toBeLessThanOrEqual(nestedTrail.headerWidth / 2 + 1);
+          }
           expect((await parent.textContent())?.trim()).toBe(
             "Release readiness and production rollout coordination",
           );
