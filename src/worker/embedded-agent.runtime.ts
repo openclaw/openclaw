@@ -429,10 +429,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
         disposeTools(runFailure),
         transcriptRuntime
           .withSessionWriteSettlement(() => undefined)
-          .then(
-            () => undefined,
-            (error: unknown) => toWorkerAgentError(error, "Worker transcript flush failed."),
-          ),
+          .catch((error: unknown) => toWorkerAgentError(error, "Worker transcript flush failed.")),
       ]);
       runFailure = cleanupFailure;
       if (runFailure) {
