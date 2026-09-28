@@ -21,9 +21,10 @@ env:
 jobs:
   validate:
     if: github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
-    # The helper watches the parent through Release Decision and evidence verification.
-    timeout-minutes: 360
+    # The helper watches the parent for up to 720 minutes, like the parent's own
+    # release_decision waiter, so this job uses that job's runner and budget.
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404') }}
+    timeout-minutes: 720
     permissions:
       # Dispatch the parent and read its runs and evidence artifacts.
       actions: write

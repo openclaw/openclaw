@@ -4,7 +4,10 @@ import {
   normalizePublicationIntent,
   publicationDispatchEnvelope,
 } from "../../scripts/full-release-publication-contract.mjs";
-import { parseArgs } from "../../scripts/full-release-validation-at-sha.mts";
+import {
+  FULL_RELEASE_WAIT_TIMEOUT_MINUTES,
+  parseArgs,
+} from "../../scripts/full-release-validation-at-sha.mts";
 import {
   evaluateWorkflowExpression,
   readTrackedText,
@@ -65,6 +68,10 @@ describe("nightly Full Release Validation", () => {
     expect(text).not.toMatch(/--ref\s+main|ref:\s*["']?main["']?\s*$/mu);
     expect(Object.keys(nightly.jobs)).toEqual(["validate"]);
     expect(job.permissions).toEqual({ actions: "write", contents: "write" });
+    // The job hosts the helper's watch, so it needs the parent waiter's runner and budget.
+    expect(job["runs-on"]).toBe(frv.jobs.release_decision["runs-on"]);
+    expect(job["timeout-minutes"]).toBe(FULL_RELEASE_WAIT_TIMEOUT_MINUTES);
+    expect(frv.jobs.release_decision["timeout-minutes"]).toBe(FULL_RELEASE_WAIT_TIMEOUT_MINUTES);
     expect(steps[0]).toMatchObject({
       uses: expect.stringMatching(/^actions\/checkout@[0-9a-f]{40}$/u),
       with: { ref: "${{ github.sha }}", "persist-credentials": false },

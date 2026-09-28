@@ -177,8 +177,9 @@ both Validation and Tooling SHA and dispatches from an immutable
 workflow ref. A still-active parent for the same SHA shares the SHA-specific
 Full Release Validation concurrency group and queues this dispatch; a completed
 one is validated again and adopts its own exact-target evidence through reuse.
-The parent automatically uses `OPENCLAW_RELEASE_RUNNER_GROUP` when configured;
-the nightly job stays on an ordinary `ubuntu-24.04` runner.
+The parent automatically uses `OPENCLAW_RELEASE_RUNNER_GROUP` when configured.
+The scheduled job runs on the same runner selection and 720-minute budget as the
+parent's `release_decision` waiter, matching the helper's 720-minute watch.
 
 The job watches the parent through its Release Decision and evidence
 verification, so its conclusion is the validation result. One concurrency group
