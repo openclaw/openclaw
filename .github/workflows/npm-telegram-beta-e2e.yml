@@ -339,6 +339,7 @@ jobs:
             extensions/telegram/src/bot-message-dispatch.ts
             extensions/telegram/src/draft-stream.ts
             qa/scenarios/channels/telegram-empty-response-after-write-recovery.yaml
+            qa/scenarios/channels/telegram-prepared-delivery-recovery.yaml
             qa/scenarios/channels/telegram-progress-tool-visibility.yaml
             qa/scenarios/channels/telegram-queue-invalid-mode.yaml
             qa/scenarios/channels/telegram-rich-inline-composition.yaml
