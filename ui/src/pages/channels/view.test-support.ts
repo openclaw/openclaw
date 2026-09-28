@@ -33,6 +33,7 @@ export function createChannelsViewProps(
     pairingError: null,
     pairingLastSuccess: null,
     pairingBusyRequestId: null,
+    pairingBusyKind: null,
     whatsappLoginMessage: null,
     whatsappLoginQrDataUrl: null,
     whatsappLoginSessionKey: null,
