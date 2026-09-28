@@ -48,6 +48,21 @@ describe("buildEmptyInteractiveReplyPayload", () => {
 });
 
 describe("buildExternalRunFailureReply", () => {
+  it.each(["auth", "auth_permanent"] as const)(
+    "keeps interactive %s guidance while carrying the classified background outcome",
+    (reason) => {
+      const payload = buildKnownAgentRunFailureReplyPayload({
+        err: new FailoverError("Sign in again to continue.", { reason, provider: "openai" }),
+        sessionCtx: { ChatType: "direct" },
+        resolvedVerboseLevel: undefined,
+      });
+      expect(payload).toMatchObject({
+        isError: true,
+        text: expect.stringContaining("Re-authenticate the provider and try again."),
+      });
+      expect(getReplyPayloadMetadata(payload!)).toMatchObject({ agentRunFailureReason: reason });
+    },
+  );
   it("does not expose a foreign error's userMessage property", () => {
     const error = Object.assign(new Error("private-diagnostic-canary"), {
       userMessage: "untrusted-public-canary",

@@ -90,6 +90,7 @@ export async function handleAgentExecutionError(params: {
   const settleFailure = async (
     payload: ReplyPayload & { text: string },
     isGenericRunnerFailure = false,
+    failureReason?: ReturnType<typeof resolveReplyFailoverFacts>["reason"],
   ): Promise<Extract<AgentTurnInternalResult, { kind: "final" }>> => {
     takePendingLifecycleTerminal().emit("error", err);
     turn.replyOperation?.fail("run_failed", err);
@@ -106,7 +107,7 @@ export async function handleAgentExecutionError(params: {
     });
     return {
       kind: "final",
-      payload: markAgentRunFailureReplyPayload(payload),
+      payload: markAgentRunFailureReplyPayload(payload, failureReason),
       postCompactionModelFailure,
     };
   };
@@ -245,11 +246,15 @@ export async function handleAgentExecutionError(params: {
   }
   const replayPrevented = findCliTimeoutError(err)?.cliTimeout.observedActivity === true;
   if (providerRequestError) {
-    return await settleFailure({
-      // Curated facet copy beats the generic classified summary; see
-      // buildExternalRunFailureReply for the same priority.
-      text: providerRequestError.userMessage,
-    });
+    return await settleFailure(
+      {
+        // Curated facet copy beats the generic classified summary; see
+        // buildExternalRunFailureReply for the same priority.
+        text: providerRequestError.userMessage,
+      },
+      false,
+      failoverFacts.reason,
+    );
   }
   defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
   const externalRunFailureCandidate =
@@ -291,5 +296,6 @@ export async function handleAgentExecutionError(params: {
     !failureSummary &&
       !isContextOverflow &&
       (externalRunFailureCandidate?.isGenericRunnerFailure ?? !turn.isHeartbeat),
+    failoverFacts.reason,
   );
 }

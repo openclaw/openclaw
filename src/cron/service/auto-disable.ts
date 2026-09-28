@@ -64,6 +64,9 @@ export function maybeAutoDisableCronJobAfterRunFailure(params: {
   const consecutiveErrors = params.job.state.consecutiveErrors ?? 0;
   if (
     (params.job.schedule.kind !== "cron" && params.job.schedule.kind !== "every") ||
+    // A new login restores recurring work without requiring each job to be enabled again.
+    params.job.state.lastErrorReason === "auth" ||
+    params.job.state.lastErrorReason === "auth_permanent" ||
     consecutiveErrors < MAX_CONSECUTIVE_RUN_FAILURES
   ) {
     return false;

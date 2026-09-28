@@ -410,6 +410,17 @@ async function prepareHeartbeatDispatchReply(
   };
   if (failed) {
     await restoreActivity();
+    const failureReason = selected && getReplyPayloadMetadata(selected)?.agentRunFailureReason;
+    if (failureReason === "auth" || failureReason === "auth_permanent") {
+      // Authentication needs operator action. Keep the failed outcome and queued
+      // events, but retire prepared notices so background ticks cannot spam chat.
+      for (const reply of replies) {
+        await suppressPendingFinalDelivery(reply, { preserveActivity: true });
+      }
+      finish({ ...event, silent: true }, false);
+      policy.result = { status: "failed", reason: outcome.reason, failureReason };
+      return {};
+    }
   } else {
     const previousAt = stateEntry?.lastHeartbeatSentAt;
     if (

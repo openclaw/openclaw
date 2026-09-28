@@ -56,26 +56,21 @@ import {
   buildThreadResumeParams,
   startOrResumeThread as startOrResumeThreadImpl,
 } from "./thread-lifecycle.js";
-import { createLeasedCodexLifecycleHarness } from "./thread-lifecycle.test-fixtures.js";
+import {
+  createCodexLifecycleRequest as createLifecycleRequest,
+  createLeasedCodexLifecycleHarness,
+} from "./thread-lifecycle.test-fixtures.js";
 import {
   releaseCodexAppServerBindingSubscription,
   withCodexAppServerThreadMutation,
 } from "./thread-ownership.js";
 import { CodexIncognitoPolicyChangeError } from "./thread-policy.js";
 
-function createLifecycleRequest(
-  respond: (method: string, requestParams?: unknown) => Promise<unknown>,
-) {
-  return vi.fn((method: string, requestParams?: unknown) => {
-    if (method === "config/read") {
-      return Promise.resolve({ config: {}, origins: {}, layers: [] });
-    }
-    if (method === "configRequirements/read") {
-      return Promise.resolve({ requirements: null });
-    }
-    return respond(method, requestParams);
-  });
-}
+// These fixtures isolate thread lifecycle RPCs. The actual attempt startup auth
+// suite exercises account readiness against the wire before thread handoff.
+vi.mock("./auth-readiness.js", () => ({
+  assertCodexAppServerAuthenticated: vi.fn(async () => {}),
+}));
 
 function twoStartsThenResumeMethods(): string[] {
   return [

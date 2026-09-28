@@ -1,12 +1,14 @@
 // Covers terminal failure delivery and exact pending-final settlement.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { heartbeatRunnerTelegramPlugin } from "../../test/helpers/infra/heartbeat-runner-channel-plugins.js";
+import { FailoverError } from "../agents/failover/error.js";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../agents/failover/user-copy.js";
 import {
   createHeartbeatToolResponsePayload,
   type HeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
 import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import { buildKnownAgentRunFailureReplyPayload } from "../auto-reply/reply/agent-runner-failure-reply.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -119,6 +121,54 @@ describe("runHeartbeatOnce failure delivery", () => {
       ? [heartbeatPayload, setReplyPayloadMetadata({ text: warning, isError: true }, metadata)]
       : heartbeatPayload;
   }
+
+  it.each(["auth", "auth_permanent"] as const)(
+    "keeps repeated %s failures quiet and delivers the next authenticated heartbeat",
+    async (reason) => {
+      await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+        const cfg = createConfig({ tmpDir, storePath });
+        const sessionKey = await seedTelegramSession(storePath, cfg);
+        enqueueSystemEvent("Scheduled work is due", {
+          sessionKey,
+          contextKey: "cron:pending-work",
+        });
+        replySpy.mockImplementation(async (_ctx, options) => {
+          setHeartbeatAgentTurnStatus(options, "failed");
+          return buildKnownAgentRunFailureReplyPayload({
+            err: new FailoverError("Sign in again to continue.", { reason, provider: "openai" }),
+            sessionCtx: { ChatType: "direct" },
+            resolvedVerboseLevel: undefined,
+          });
+        });
+        const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+        for (let tick = 0; tick < 3; tick += 1) {
+          expect(await runHeartbeat(cfg, replySpy, sendTelegram)).toEqual({
+            status: "failed",
+            reason: "agent-runner-failure",
+            failureReason: reason,
+          });
+        }
+        expect(sendTelegram).toHaveBeenCalledTimes(0);
+        expect(getLastHeartbeatEvent()).toMatchObject({ status: "failed", silent: true });
+        expect(peekSystemEventEntries(sessionKey)).toHaveLength(1);
+        expect(await loadPendingDeliveries()).toHaveLength(0);
+
+        replySpy.mockImplementation(async (_ctx, options) => {
+          setHeartbeatAgentTurnStatus(options, "ok");
+          return createHeartbeatToolResponsePayload({
+            outcome: "done",
+            notify: true,
+            summary: "Scheduled work completed.",
+            notificationText: "Scheduled work completed.",
+          });
+        });
+        expect(await runHeartbeat(cfg, replySpy, sendTelegram)).toMatchObject({ status: "ran" });
+        expectTelegramSend(sendTelegram, { text: "Scheduled work completed.", cfg });
+        expect(peekSystemEventEntries(sessionKey)).toHaveLength(0);
+      });
+    },
+  );
 
   it("reports a quiet terminal tool failure without external delivery for target none", async () => {
     await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {

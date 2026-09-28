@@ -389,8 +389,14 @@ export function buildExternalRunFailureReply(
   };
 }
 
-export function markAgentRunFailureReplyPayload<T extends ReplyPayload>(payload: T): T {
+export function markAgentRunFailureReplyPayload<T extends ReplyPayload>(
+  payload: T,
+  reason?: ReplyFailoverFacts["reason"],
+): T {
   const marked = markReplyPayloadForSourceSuppressionDelivery(payload);
+  if (reason) {
+    setReplyPayloadMetadata(marked, { agentRunFailureReason: reason });
+  }
   if (!isSilentReplyText(marked.text, SILENT_REPLY_TOKEN)) {
     marked.isError = true;
   }
@@ -504,10 +510,13 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
   if (externalRunFailureReply.isGenericRunnerFailure) {
     return undefined;
   }
-  return markAgentRunFailureReplyPayload({
-    text: externalRunFailureReply.text,
-    ...(externalRunFailureReply.presentation
-      ? { presentation: externalRunFailureReply.presentation }
-      : {}),
-  });
+  return markAgentRunFailureReplyPayload(
+    {
+      text: externalRunFailureReply.text,
+      ...(externalRunFailureReply.presentation
+        ? { presentation: externalRunFailureReply.presentation }
+        : {}),
+    },
+    failoverFacts.reason,
+  );
 }

@@ -110,6 +110,8 @@ export function applyJobResult(
     pacedNextRunAtMs: job.state.pacedNextRunAtMs,
     forcePreservedNextRunAtMs: job.state.forcePreservedNextRunAtMs,
   };
+  const previousFailureWasAuth =
+    job.state.lastErrorReason === "auth" || job.state.lastErrorReason === "auth_permanent";
   job.state.queuedAtMs = undefined;
   job.state.runningAtMs = undefined;
   job.state.runningReceiptId = undefined;
@@ -186,7 +188,11 @@ export function applyJobResult(
   };
   const alertConfig = resolveFailureAlert(state, job);
   if (result.status === "error") {
-    job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
+    const failureIsAuth =
+      job.state.lastErrorReason === "auth" || job.state.lastErrorReason === "auth_permanent";
+    // Logged-out attempts cannot spend the retry budget for a later runnable attempt.
+    job.state.consecutiveErrors =
+      previousFailureWasAuth && !failureIsAuth ? 1 : (job.state.consecutiveErrors ?? 0) + 1;
     job.state.consecutiveSkipped = 0;
   } else if (result.status === "skipped") {
     job.state.consecutiveErrors = 0;
@@ -299,6 +305,18 @@ export function applyJobResult(
         job.enabled = false;
         job.state.nextRunAtMs = undefined;
       } else if (result.status === "error") {
+        if (
+          job.state.lastErrorReason === "auth" ||
+          job.state.lastErrorReason === "auth_permanent"
+        ) {
+          // A login can unblock this scheduled occurrence. Keep it pending with
+          // the ordinary error backoff instead of consuming its retry budget.
+          scheduleNextRun(
+            result.endedAt +
+              errorBackoffMs(job.state.consecutiveErrors ?? 1, DEFAULT_ERROR_BACKOFF_SCHEDULE_MS),
+          );
+          return finish();
+        }
         const retryDecision = resolveTransientCronRetryDecision({
           cronConfig: state.deps.cronConfig,
           error: result.error,

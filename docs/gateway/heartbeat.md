@@ -137,6 +137,7 @@ If you want a heartbeat to do something very specific (e.g. "check Gmail PubSub 
 - For alerts, return only the alert text. Do not include a silent acknowledgment.
 - Delivery selects the last outbound-capable non-reasoning payload. Separate reasoning or thinking payloads remain internal. A reasoning-only result produces no alert.
 - Tool error warnings remain enabled during heartbeat turns.
+- Authentication failures are recorded as failed heartbeat checks without sending repeated chat warnings. Pending events remain queued, and the next heartbeat can resume after you sign in again. Direct requests still show login guidance.
 - `openclaw system heartbeat last --json` reports a confirmed message-tool send to the heartbeat recipient as `sent`, without sending another acknowledgment.
 - If the heartbeat starts background work without sending an update, its status event reports `skipped` with reason `background-work`. Check the task for completion. This is not an all-clear acknowledgment.
 

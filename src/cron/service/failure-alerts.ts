@@ -5,9 +5,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { classifyOAuthRefreshFailure } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import type { FailoverReason } from "../../agents/failover/signal.js";
-import { buildProviderLoginRecovery } from "../../auto-reply/provider-login-recovery.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { normalizeAnyChannelId } from "../../channels/registry-normalize.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
@@ -226,17 +224,8 @@ function buildFailureAlertPayload(params: {
     `Automation "${safeJobName}" ${statusVerb} ${params.consecutiveErrors} times`,
     ...detailLines,
   ].join("\n");
-  const oauthRefreshFailure = params.error ? classifyOAuthRefreshFailure(params.error) : null;
-  const providerLoginRecovery =
-    params.status === "error" && (errorReason === "auth" || errorReason === "auth_permanent")
-      ? buildProviderLoginRecovery({
-          provider: normalizeOptionalString(oauthRefreshFailure?.provider),
-          oauthReason: oauthRefreshFailure?.reason,
-        })
-      : undefined;
   const payload: ReplyPayload = {
-    text: providerLoginRecovery ? `${text}\n${providerLoginRecovery.hint}` : text,
-    ...(providerLoginRecovery ? { presentation: providerLoginRecovery.presentation } : {}),
+    text,
   };
 
   return payload;
@@ -335,6 +324,14 @@ export function maybeEmitFailureAlert(
   },
 ) {
   recordUnresolvedFailure(params.job, params.failureNotificationDetail);
+  // Background authentication failures remain in run history. Interactive
+  // requests own login guidance; scheduled retries must not repeat it.
+  if (
+    params.status === "error" &&
+    (params.errorReason === "auth" || params.errorReason === "auth_permanent")
+  ) {
+    return;
+  }
   const alertConfig = params.alertConfig;
   if (!alertConfig || params.consecutiveCount < alertConfig.after) {
     return;

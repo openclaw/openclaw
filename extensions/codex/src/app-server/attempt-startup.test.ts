@@ -308,14 +308,15 @@ describe("startCodexAttemptThread", () => {
     expect(readHarnessRequestMethods(first)).toEqual([
       "initialize",
       "account/login/start",
+      "account/read",
       "config/read",
       "configRequirements/read",
-      "account/read",
     ]);
     expect([
       [
         "initialize",
         "account/login/start",
+        "account/read",
         "config/read",
         "configRequirements/read",
         "thread/start",
@@ -323,6 +324,7 @@ describe("startCodexAttemptThread", () => {
       [
         "initialize",
         "account/login/start",
+        "account/read",
         "config/read",
         "configRequirements/read",
         "account/read",
@@ -386,9 +388,9 @@ describe("startCodexAttemptThread", () => {
       expect(readHarnessRequestMethods(second)).toEqual([
         "initialize",
         "account/login/start",
+        "account/read",
         "config/read",
         "configRequirements/read",
-        "account/read",
         "thread/start",
       ]);
       await vi.waitFor(() => expect(first.process.stdin.destroyed).toBe(true));
@@ -427,7 +429,7 @@ describe("startCodexAttemptThread", () => {
     );
     expect(
       readHarnessMessages(harness.writes.slice(writesBeforeRestart)).map(({ method }) => method),
-    ).toEqual(["config/read", "configRequirements/read", "account/read"]);
+    ).toEqual(["account/read", "config/read", "configRequirements/read"]);
 
     result.turnRoute.release();
     result.releaseSharedClientLease();
@@ -482,6 +484,9 @@ describe("startCodexAttemptThread", () => {
     const paths = createAttemptPaths(tempRoots);
     const harness = createCodexLifecycleHarness({
       respond: async (method, params) => {
+        if (method === "account/read") {
+          return { account: { type: "apiKey" }, requiresOpenaiAuth: true };
+        }
         if (method === "config/read") {
           return { config: {}, origins: {}, layers: [] };
         }
@@ -536,6 +541,7 @@ describe("startCodexAttemptThread", () => {
     expect(continued.client).toBe(harness.client);
     expect(continued.thread.threadId).toBe(previous.thread.threadId);
     expect(readHarnessMessages(harness.writes.slice(before)).map(({ method }) => method)).toEqual([
+      "account/read",
       "config/read",
       "configRequirements/read",
     ]);

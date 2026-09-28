@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isIncognitoSessionKey } from "../incognito-session.js";
 import { closeCodexStartupClientBestEffort } from "./attempt-client-cleanup.js";
+import { assertCodexAppServerAuthenticated } from "./auth-readiness.js";
 import { resolveCodexAppServerClientInstanceId } from "./client.js";
 import { assertCodexInferenceRouteConfig } from "./inference-routing.js";
 import { applyCodexNativeSkillIsolation } from "./native-skill-isolation.js";
@@ -53,6 +54,7 @@ import {
   throwIfCodexThreadLifecycleAborted,
   tryReuseCodexLiveThread,
 } from "./thread-lifecycle-warm.js";
+import { resolveCodexAppServerThreadModelSelection } from "./thread-model-selection.js";
 import { materializePendingSupervisionBranch } from "./thread-supervision.js";
 
 export async function startOrResumeThread(
@@ -65,6 +67,25 @@ export async function startOrResumeThread(
     const expectedOwnership = params.params.expectedSessionRuntimeOwnership;
     let binding = saved;
     let selectionBinding = binding;
+    const authModelSelection = resolveCodexAppServerThreadModelSelection({
+      homeScope: params.appServer.start.homeScope,
+      provider: params.params.provider,
+      model: params.runtimeModelId ?? params.params.modelId,
+      binding,
+      authProfileId: params.params.authProfileId,
+      authProfileStore: params.params.authProfileStore,
+      agentDir: params.params.agentDir,
+      config: params.params.config,
+    });
+    await assertCodexAppServerAuthenticated({
+      client: params.client,
+      modelProvider:
+        binding?.preserveNativeModel || binding?.connectionScope === "supervision"
+          ? binding.modelProvider
+          : authModelSelection.modelProvider,
+      assertCurrent: assert,
+      signal: params.signal,
+    });
     if (hasCodexNativeToolCatalog(binding)) {
       // A resumed native catalog is immutable data. Run eligibility only changes
       // the bridge's available executors, never this thread's inherited history.

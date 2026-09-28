@@ -174,6 +174,186 @@ describe("cron timer outcome and failure policy regressions", () => {
     expect(sendCronFailureAlert).not.toHaveBeenCalled();
   });
 
+  it.each(["auth", "auth_permanent"] as const)(
+    "keeps recurring jobs scheduled through repeated %s failures and login recovery",
+    (reason) => {
+      const startedAt = Date.parse("2026-08-01T12:00:00.000Z");
+      const deferredNotifications: DeferredCronNotifications = [];
+      const state = createCronServiceState({
+        storePath: "/tmp/cron-auth-recovery.json",
+        nowMs: () => startedAt,
+        runIsolatedAgentJob: createDefaultIsolatedRunner(),
+      });
+      const job = createIsolatedRegressionJob({
+        id: "recurring-auth-recovery",
+        name: "scheduled report",
+        scheduledAt: startedAt,
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: startedAt },
+        payload: { kind: "agentTurn", message: "report" },
+        state: { consecutiveErrors: 9 },
+      });
+      job.failureAlert = { after: 1, cooldownMs: 0 };
+
+      for (const run of [0, 1]) {
+        const runAt = startedAt + run * 60_000;
+        applyJobResult(
+          state,
+          job,
+          {
+            status: "error",
+            error: "The provider requires sign-in.",
+            errorClassification: { kind: "reason", reason },
+            startedAt: runAt,
+            endedAt: runAt + 10,
+          },
+          { deferredNotifications },
+        );
+        expect(job.enabled).toBe(true);
+        expect(job.state).toMatchObject({
+          lastRunStatus: "error",
+          lastErrorReason: reason,
+          consecutiveErrors: 10 + run,
+        });
+        expect(job.state.nextRunAtMs).toBeGreaterThan(runAt + 10);
+        expect(deferredNotifications).toEqual([]);
+      }
+
+      applyJobResult(
+        state,
+        job,
+        {
+          status: "ok",
+          delivered: true,
+          startedAt: startedAt + 120_000,
+          endedAt: startedAt + 120_010,
+        },
+        { deferredNotifications },
+      );
+      expect(job.enabled).toBe(true);
+      expect(job.state).toMatchObject({
+        lastRunStatus: "ok",
+        lastDeliveryStatus: "delivered",
+        consecutiveErrors: 0,
+      });
+      expect(job.state.nextRunAtMs).toBeGreaterThan(startedAt + 120_010);
+      expect(deferredNotifications).toEqual([]);
+    },
+  );
+
+  it.each(["auth", "auth_permanent"] as const)(
+    "retains a one-shot occurrence across %s failures until successful delivery",
+    (reason) => {
+      const startedAt = Date.parse("2026-08-01T12:00:00.000Z");
+      const deferredNotifications: DeferredCronNotifications = [];
+      const state = createCronServiceState({
+        storePath: "/tmp/cron-one-shot-auth-recovery.json",
+        nowMs: () => startedAt,
+        runIsolatedAgentJob: createDefaultIsolatedRunner(),
+      });
+      const job = createIsolatedRegressionJob({
+        id: "one-shot-auth-recovery",
+        name: "scheduled reminder",
+        scheduledAt: startedAt,
+        schedule: { kind: "at", at: new Date(startedAt).toISOString() },
+        payload: { kind: "agentTurn", message: "remind me" },
+        state: { consecutiveErrors: 3 },
+      });
+      job.deleteAfterRun = true;
+      job.failureAlert = { after: 1, cooldownMs: 0 };
+
+      for (const run of [0, 1]) {
+        const runAt = startedAt + run * 60_000;
+        const shouldDelete = applyJobResult(
+          state,
+          job,
+          {
+            status: "error",
+            error: "The provider requires sign-in.",
+            errorClassification: { kind: "reason", reason },
+            startedAt: runAt,
+            endedAt: runAt + 10,
+          },
+          { deferredNotifications },
+        );
+        expect(shouldDelete).toBe(false);
+        expect(job.enabled).toBe(true);
+        expect(job.state).toMatchObject({
+          lastRunStatus: "error",
+          lastErrorReason: reason,
+          consecutiveErrors: 4 + run,
+        });
+        expect(job.state.nextRunAtMs).toBeGreaterThan(runAt + 10);
+        expect(deferredNotifications).toEqual([]);
+      }
+
+      const shouldDelete = applyJobResult(
+        state,
+        job,
+        {
+          status: "ok",
+          delivered: true,
+          startedAt: startedAt + 120_000,
+          endedAt: startedAt + 120_010,
+        },
+        { deferredNotifications },
+      );
+      expect(shouldDelete).toBe(true);
+      expect(job.state).toMatchObject({
+        lastRunStatus: "ok",
+        lastDeliveryStatus: "delivered",
+        consecutiveErrors: 0,
+      });
+      expect(deferredNotifications).toEqual([]);
+    },
+  );
+
+  it.each(["at", "every"] as const)(
+    "starts a fresh %s retry budget when authentication recovers into a transient error",
+    (kind) => {
+      const startedAt = Date.parse("2026-08-01T12:00:00.000Z");
+      const deferredNotifications: DeferredCronNotifications = [];
+      const state = createCronServiceState({
+        storePath: "/tmp/cron-auth-transient-recovery.json",
+        nowMs: () => startedAt,
+        runIsolatedAgentJob: createDefaultIsolatedRunner(),
+      });
+      const job = createIsolatedRegressionJob({
+        id: "auth-transient-recovery",
+        name: "scheduled report",
+        scheduledAt: startedAt,
+        schedule:
+          kind === "at"
+            ? { kind, at: new Date(startedAt).toISOString() }
+            : { kind, everyMs: 60_000, anchorMs: startedAt },
+        payload: { kind: "agentTurn", message: "report" },
+        state: { consecutiveErrors: 12, lastErrorReason: "auth_permanent" },
+      });
+      job.failureAlert = { after: 1, cooldownMs: 0 };
+
+      applyJobResult(
+        state,
+        job,
+        {
+          status: "error",
+          error: "The provider is temporarily busy.",
+          errorClassification: { kind: "reason", reason: "rate_limit" },
+          startedAt,
+          endedAt: startedAt + 10,
+        },
+        { deferredNotifications },
+      );
+
+      expect(job.enabled).toBe(true);
+      expect(job.state).toMatchObject({
+        lastRunStatus: "error",
+        lastErrorReason: "rate_limit",
+        consecutiveErrors: 1,
+      });
+      expect(job.state.nextRunAtMs).toBeGreaterThan(startedAt + 10);
+      expect(deferredNotifications).toMatchObject([{ kind: "failure-alert" }]);
+    },
+  );
+
   it("resets the auto-disable streak after a successful recurring run", () => {
     const startedAt = Date.parse("2026-08-01T13:00:00.000Z");
     const state = createCronServiceState({

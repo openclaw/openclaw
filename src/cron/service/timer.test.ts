@@ -14,6 +14,7 @@ import {
   createTestGatewayScheduler,
 } from "../../test-utils/gateway-scheduler-clock.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { heartbeatTaskDeclarationKey } from "../heartbeat-task.js";
 import { start, stop } from "./ops-lifecycle.js";
 import { add as addJob, update as updateJob } from "./ops-mutations.js";
 import { status as cronStatus } from "./ops-read.js";
@@ -213,6 +214,62 @@ describe("cron service timer seam coverage", () => {
 
     expect(clock.armedAtMs).toBe(now + 60_000);
   });
+
+  it.each(["monitor", "heartbeat task", "main event"] as const)(
+    "preserves an authentication failure through the scheduled %s boundary",
+    async (kind) => {
+      const { storePath } = await makeStorePath();
+      const now = Date.parse("2026-03-23T12:00:00.000Z");
+      const job = createDueMainJob({ now, wakeMode: "now" });
+      if (kind === "monitor") {
+        job.payload = { kind: "heartbeat" };
+      } else if (kind === "heartbeat task") {
+        job.declarationKey = heartbeatTaskDeclarationKey("main", job.name);
+      }
+      job.state.consecutiveErrors = 9;
+      job.failureAlert = { after: 1, cooldownMs: 0, channel: "telegram", to: "12345" };
+      await writeCronStoreSnapshot({ storePath, jobs: [job] });
+      const sendCronFailureAlert = vi.fn(async () => undefined);
+      const removeQueuedEvent = vi.fn();
+      const requestHeartbeatAndWait = vi.fn(async () => ({
+        status: "failed" as const,
+        reason: "agent-runner-failure",
+        failureReason: "auth_permanent" as const,
+      }));
+      const state = createCronServiceState({
+        scheduler: createTestGatewayScheduler(),
+        storePath,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(() => ({ accepted: true, remove: removeQueuedEvent })),
+        requestHeartbeat: vi.fn(),
+        requestHeartbeatAndWait,
+        sendCronFailureAlert,
+        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      });
+
+      await onTimer(state);
+
+      const stored = (await loadCronStore(storePath)).jobs[0];
+      expect(requestHeartbeatAndWait).toHaveBeenCalledOnce();
+      expect(stored).toMatchObject({
+        enabled: true,
+        state: {
+          lastRunStatus: "error",
+          lastErrorReason: "auth_permanent",
+          consecutiveErrors: 10,
+          lastFailureNotificationDeliveryStatus: "not-requested",
+        },
+      });
+      expect(stored?.state.nextRunAtMs).toBeGreaterThan(now);
+      expect(sendCronFailureAlert).toHaveBeenCalledTimes(0);
+      // Cron retains the occurrence and owns its next retry. Its queued event
+      // must not also run through an ordinary heartbeat after login.
+      expect(removeQueuedEvent).toHaveBeenCalledTimes(kind === "main event" ? 1 : 0);
+      expect(findCronRunByBaseRunId(storePath, `cron:${job.id}:${now}`)).toMatchObject({
+        status: "failed",
+      });
+    },
+  );
 
   it("uses the persisted execution timestamp for the canonical timer task", async () => {
     const { storePath } = await makeStorePath();

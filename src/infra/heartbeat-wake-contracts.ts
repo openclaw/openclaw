@@ -1,7 +1,9 @@
+import type { FailoverReason } from "../agents/failover/signal.js";
+
 export type HeartbeatRunResult =
   | { status: "ran"; durationMs: number }
   | { status: "skipped"; reason: string; retryAtMs?: number }
-  | { status: "failed"; reason: string };
+  | { status: "failed"; reason: string; failureReason?: FailoverReason };
 
 export type HeartbeatWakeIntent = "scheduled" | "task" | "event" | "immediate" | "manual";
 
