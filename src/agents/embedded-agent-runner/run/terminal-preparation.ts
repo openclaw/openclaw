@@ -69,6 +69,7 @@ export function prepareEmbeddedRunTerminal(input: {
   reportedModelRef: { provider: string; model: string };
   finalAssistantVisibleText: string | undefined;
   finalAssistantRawText: string | undefined;
+  finalAssistantRawTextIsFallback: boolean;
   payloads: ReturnType<typeof buildEmbeddedRunPayloads>;
   payloadsWithToolMedia: ReturnType<typeof mergeAttemptToolMediaPayloads>;
   timedOutDuringPrompt: boolean;
@@ -167,6 +168,14 @@ export function prepareEmbeddedRunTerminal(input: {
   const finalAssistantRawText = terminalAssistantCanOwnFinalText
     ? (resolveFinalAssistantRawText(terminalAssistant) ?? attemptFinalText)
     : undefined;
+  // The model's actual last message exists but carries no text, so any raw text
+  // above is earlier turn text. Harnesses that project their final answer only
+  // through assistantTexts (no last-message text) are not marked.
+  const lastModelMessage = terminalAssistant ?? attempt.currentAttemptAssistant;
+  const finalAssistantRawTextIsFallback =
+    finalAssistantRawText !== undefined &&
+    lastModelMessage !== undefined &&
+    resolveFinalAssistantRawText(lastModelMessage) === undefined;
   const terminalTurnId = (attempt as { terminalTurnId?: string }).terminalTurnId;
   Object.assign(agentMeta, {
     terminalReceipt: {
@@ -316,6 +325,7 @@ export function prepareEmbeddedRunTerminal(input: {
     reportedModelRef,
     finalAssistantVisibleText,
     finalAssistantRawText,
+    finalAssistantRawTextIsFallback,
     payloads,
     payloadsWithToolMedia,
     timedOutDuringPrompt,

@@ -193,7 +193,7 @@ describe("runEmbeddedAttempt diagnostics", () => {
     },
   );
 
-  it("captures a confirmed tool-only source reply on the built-in run span", async () => {
+  it("does not capture message-tool text on the built-in run span", async () => {
     setRuntimeConfigSnapshot({ diagnostics: { otel: { enabled: true, captureContent: true } } });
     getHoisted().subscribeEmbeddedAgentSessionMock.mockImplementation(() => ({
       ...createSubscriptionMock(),
@@ -223,7 +223,8 @@ describe("runEmbeddedAttempt diagnostics", () => {
     }
 
     expect(completed).toHaveLength(1);
-    expect(completed[0]?.messageContent?.finalResponse).toBe("sent via message tool");
+    // output.value is the model's own final message; the tool text lives on child spans.
+    expect(completed[0]?.messageContent?.finalResponse).toBeUndefined();
   });
 
   it("keeps run failure text on the trusted private channel", async () => {

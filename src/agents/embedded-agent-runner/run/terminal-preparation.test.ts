@@ -242,6 +242,49 @@ describe("prepareEmbeddedRunTerminal", () => {
     },
   );
 
+  it("marks earlier turn text substituted for an empty final message", async () => {
+    const emptyFinal = { ...assistantMessage("stop"), content: [] };
+    const prepared = await prepareAttempt({
+      attempt: attemptResult({
+        assistantTexts: ["Checking now"],
+        lastAssistant: emptyFinal,
+        currentAttemptAssistant: emptyFinal,
+        currentAttemptCompletedAssistant: emptyFinal,
+      }),
+      currentAttemptCompletedAssistant: emptyFinal,
+      terminalState: {
+        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
+        signalOwnedInterruption: false,
+      },
+    });
+
+    expect(prepared.finalAssistantRawText).toBe("Checking now");
+    expect(prepared.finalAssistantRawTextIsFallback).toBe(true);
+  });
+
+  it("does not mark the model's own final text as a fallback", async () => {
+    const final = {
+      ...assistantMessage("stop"),
+      content: [{ type: "text" as const, text: "Done" }],
+    };
+    const prepared = await prepareAttempt({
+      attempt: attemptResult({
+        assistantTexts: ["Checking now", "Done"],
+        lastAssistant: final,
+        currentAttemptAssistant: final,
+        currentAttemptCompletedAssistant: final,
+      }),
+      currentAttemptCompletedAssistant: final,
+      terminalState: {
+        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
+        signalOwnedInterruption: false,
+      },
+    });
+
+    expect(prepared.finalAssistantRawText).toBe("Done");
+    expect(prepared.finalAssistantRawTextIsFallback).toBe(false);
+  });
+
   it.each(["error", "aborted"] as const)(
     "does not use %s assistant text as final terminal text",
     async (stopReason) => {

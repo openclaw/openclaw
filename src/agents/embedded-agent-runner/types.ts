@@ -207,6 +207,12 @@ export type EmbeddedAgentRunMeta = {
   finalPromptText?: string;
   finalAssistantVisibleText?: string;
   finalAssistantRawText?: string;
+  /**
+   * True when finalAssistantRawText was filled from earlier turn text because the
+   * model's actual last message had none (e.g. narration before a tool-only reply).
+   * Diagnostics never report that text as the model's final response.
+   */
+  finalAssistantRawTextIsFallback?: true;
   replayInvalid?: boolean;
   livenessState?: EmbeddedRunLivenessState;
   timeoutPhase?: AgentRunTimeoutPhase;

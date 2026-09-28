@@ -26,7 +26,6 @@ import {
   normalizeAgentRunAttemptTerminal,
   projectAgentRunAttemptTerminal,
 } from "../agent-run-terminal-outcome.js";
-import { resolveDiagnosticSourceReplyText } from "../diagnostic-model-response.js";
 import { resolveFinalAssistantRawText } from "../embedded-agent-runner/run/helpers.js";
 import type { EmbeddedRunAttemptResult } from "../embedded-agent-runner/run/types.js";
 import { copyCoreTtsAttemptResultProvenance } from "../tools/tts-tool-result-provenance.js";
@@ -61,13 +60,9 @@ type AgentRunMessageContent = { userPrompt?: string; finalResponse?: string };
 function agentRunMessageContent(
   prompt: string | undefined,
   assistant?: Parameters<typeof resolveFinalAssistantRawText>[0],
-  resolveSourceReplyText?: () => string | undefined,
 ): AgentRunMessageContent | undefined {
   const policy = resolveDiagnosticModelContentCapturePolicy(getRuntimeConfig());
-  // Source-reply text is resolved lazily so disabled capture does no content work.
-  const finalText = policy.outputMessages
-    ? (resolveFinalAssistantRawText(assistant) ?? resolveSourceReplyText?.())
-    : undefined;
+  const finalText = policy.outputMessages ? resolveFinalAssistantRawText(assistant) : undefined;
   const finalResponse = finalText ? joinDiagnosticContent([finalText]) : undefined;
   const userPrompt = policy.inputMessages && prompt ? truncateDiagnosticContent(prompt) : undefined;
   return userPrompt || finalResponse
@@ -253,9 +248,9 @@ function emitAgentHarnessRunCompleted(params: {
     outcome === "error" ? diagnosticErrorMessage(terminal.promptError) : undefined;
   const contentPolicy = resolveDiagnosticModelContentCapturePolicy(getRuntimeConfig());
   const finalAssistantText = contentPolicy.outputMessages
-    ? (resolveFinalAssistantRawText(
+    ? resolveFinalAssistantRawText(
         result.currentAttemptCompletedAssistant ?? result.currentAttemptAssistant,
-      ) ?? resolveDiagnosticSourceReplyText(result))
+      )
     : undefined;
   const finalResponse = finalAssistantText
     ? joinDiagnosticContent([finalAssistantText])
@@ -406,7 +401,6 @@ export async function runAgentHarnessLifecycleAttempt(
     messageContent: agentRunMessageContent(
       params.prompt,
       result.currentAttemptCompletedAssistant ?? result.currentAttemptAssistant,
-      () => resolveDiagnosticSourceReplyText(result),
     ),
   });
   emitAgentHarnessRunCompleted({

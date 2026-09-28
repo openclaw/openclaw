@@ -21,7 +21,6 @@ import {
   projectAgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
 import { resolveAgentDir } from "../../agent-scope.js";
-import { resolveDiagnosticSourceReplyText } from "../../diagnostic-model-response.js";
 import { buildExecAutoReviewTranscript } from "../../exec-auto-review-transcript.js";
 import { recordAgentCleanupFailure, runOwnedAgentCleanup } from "../../run-cleanup-timeout.js";
 import {
@@ -477,10 +476,10 @@ async function runEmbeddedAttemptOwned(
       executionState.diagnosticFinalResponse = resolveDiagnosticModelContentCapturePolicy(
         getRuntimeConfig(),
       ).outputMessages
-        ? (resolveFinalAssistantRawText(
+        ? resolveFinalAssistantRawText(
             executionResult.currentAttemptCompletedAssistant ??
               executionResult.currentAttemptAssistant,
-          ) ?? resolveDiagnosticSourceReplyText(executionResult))
+          )
         : undefined;
       // Read catalog counters before the finally-phase cleanup clears the
       // run-scoped catalog session; afterwards the counts are gone.
