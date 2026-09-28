@@ -125,12 +125,15 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 ```
 
 Follow the onboarding prompts to set up your model provider (Anthropic, OpenAI, etc.).
-Then make sure the Gateway runs as a background service, so it keeps running
-when the VM runs headless:
+
+Quick start keeps the Gateway in the foreground of this terminal, but the VM
+will later run headless, so the Gateway needs to run as a background service.
+Press **Ctrl+C** to stop the foreground Gateway, then install the service and
+verify that it is running:
 
 ```bash
+openclaw gateway install
 openclaw gateway status
-openclaw gateway install   # only if status reports no installed service
 ```
 
 If the VM already has [Node 24.16+ or 26.1+](/install/node), you can install the
