@@ -23,7 +23,6 @@ import { createAgentLifecycleTerminalBackstop } from "../auto-reply/reply/agent-
 import {
   emitAgentEvent as emitRuntimeAgentEvent,
   emitAgentEventForOwner,
-  emitAgentEventForRunContext,
   getAgentEventLifecycleGeneration,
   onAgentRuntimeEvent,
   resetAgentEventsForTest,
@@ -32,7 +31,6 @@ import {
 import {
   clearAgentRunContext as clearRegisteredAgentRunContext,
   claimAgentRunContext,
-  getAgentRunContext,
   registerAgentRunContext,
   releaseAgentRunContext,
 } from "../infra/agent-run-registry.js";
@@ -2780,47 +2778,6 @@ describe("agent event handler", () => {
     });
   });
 
-  it("projects tool-search bridge calls like native channel verbose tool events", () => {
-    const { nodeSendToSession, handler } = createHarness({
-      resolveSessionKeyForRun: () => "session-1",
-    });
-
-    registerAgentRunContext("run-tool-search-node", {
-      sessionKey: "session-1",
-      verboseLevel: "on",
-    });
-
-    emitAgentEvent(
-      handler,
-      "run-tool-search-node",
-      "tool",
-      {
-        phase: "start",
-        name: "tool_search_code",
-        toolCallId: "tool-search-node-1",
-        args: {
-          code: 'return await openclaw.tools.call("openclaw:core:exec", { command: "echo hi" });',
-        },
-      },
-      { ts: 1_234 },
-    );
-
-    const payload = requireMockArg(nodeSendToSession, 0, 2, "node tool-search payload") as {
-      stream?: string;
-      data?: { name?: string; args?: Record<string, unknown> };
-    };
-    expect(payload.stream).toBe("tool");
-    expect(payload.data).toEqual({
-      phase: "start",
-      name: "exec",
-      toolCallId: "tool-search-node-1",
-      bridgeToolName: "tool_search_code",
-      bridgeTargetToolName: "openclaw:core:exec",
-      bridgeVerb: "call",
-      args: { command: "echo hi" },
-    });
-  });
-
   it("hydrates node session tool events with session ownership metadata", () => {
     const { nodeSendToSession, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-1",
@@ -2859,59 +2816,6 @@ describe("agent event handler", () => {
       toolCallId: "tool-node-1",
       args: { command: "echo hi" },
     });
-  });
-
-  it("publishes candidate changes and clearing without persisting session selection", ({
-    onTestFinished,
-  }) => {
-    const runId = "run-live-model";
-    registerAgentRunContext(runId, {
-      agentId: "main",
-      sessionKey: "session-1",
-      sessionId: "session-id",
-      projectSessionActive: true,
-    });
-    vi.mocked(loadGatewaySessionRow).mockImplementation(() => ({
-      key: "session-1",
-      kind: "direct",
-      updatedAt: 1,
-      status: "running",
-      modelProvider: "selected",
-      model: "configured",
-      activeModelProvider: getAgentRunContext(runId)?.activeModel?.provider,
-      activeModel: getAgentRunContext(runId)?.activeModel?.model,
-    }));
-    const { broadcastToConnIds, sessionEventSubscribers, handler } = createHarness({
-      resolveSessionKeyForRun: () => "session-1",
-      resolveSessionActiveRunState: () => ({ active: true, runIds: [runId] }),
-    });
-    sessionEventSubscribers.subscribe("conn-model");
-    onTestFinished(onAgentRuntimeEvent(handler));
-    const runContext = getAgentRunContext(runId)!;
-    for (const model of ["primary", "fallback", null]) {
-      emitAgentEventForRunContext(
-        {
-          runId,
-          stream: "lifecycle",
-          data: { phase: "model", provider: model === null ? null : "provider", model },
-        },
-        runContext,
-      );
-    }
-    const changes = broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed");
-    expect(changes).toHaveLength(3);
-    for (const [index, model] of ["primary", "fallback", null].entries()) {
-      expectPayloadFields(changes[index]?.[1], {
-        phase: "model",
-        modelProvider: "selected",
-        model: "configured",
-        activeModelProvider: model === null ? null : "provider",
-        activeModel: model,
-        hasActiveRun: true,
-        activeRunIds: [runId],
-      });
-    }
-    expect(persistGatewaySessionLifecycleEventMock).not.toHaveBeenCalled();
   });
 
   it("broadcasts terminal session status to session subscribers on lifecycle end", async () => {

@@ -197,6 +197,7 @@ install_update_restart_systemctl_shim() { :; }
 openclaw_e2e_wait_gateway_ready() { node "$FIXTURE_PROBE" fixture-ready "\${5:-strict}"; }
 openclaw_e2e_probe_tcp() { [ -f "$FIXTURE_ROOT/live" ]; }
 update_candidate() { node "$FIXTURE_PROBE" fixture-update "\${1:-0}" "\${2:-}" "\${3:-}"; }
+assert_managed_membership_warning() { [ -f "$FIXTURE_ROOT/restarted" ]; }
 assert_survival() { printf 'passed' > "$FIXTURE_ROOT/survival"; }
 ${source.slice(phaseStart, phaseEnd)}
 assert_survival

@@ -1,3 +1,7 @@
+import type {
+  AcpSessionEntryMutationInput,
+  AcpSessionEntryMutationResult,
+} from "../acp/runtime/session-meta-entry.types.js";
 import type { SessionProviderReviewComparison } from "../config/sessions/provider-review.types.js";
 import type {
   TranscriptArchivePublishPlan,
@@ -12,6 +16,7 @@ import type {
   PublishedSessionTranscriptArchive,
   SessionLegacyArchiveRemovalResult,
 } from "../config/sessions/session-history-archive-pruning.types.js";
+import type { SessionPendingInputWithdrawal } from "../config/sessions/session-pending-input-withdrawal.worker.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { SqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import type {
@@ -73,6 +78,10 @@ export type AgentDatabaseOperations = AgentDatabaseDomainOperations & {
   };
   "database.prepareWrite": { input: undefined; output: void };
   "session.entry.read": { input: { sessionKey: string }; output: SessionEntry | undefined };
+  "session.entry.acp": {
+    input: AcpSessionEntryMutationInput;
+    output: AcpSessionEntryMutationResult;
+  };
   "session.entries.replace": {
     input: SessionEntryReplacementCommit & {
       initializeTranscript?: { sessionKey: string; sessionId: string; cwd?: string };
@@ -82,6 +91,10 @@ export type AgentDatabaseOperations = AgentDatabaseDomainOperations & {
   "session.providerReview.compare": {
     input: SessionProviderReviewComparison;
     output: SessionEntry;
+  };
+  "session.pendingInputs.withdraw": {
+    input: SessionPendingInputWithdrawal;
+    output: boolean;
   };
   "session.archivePruning.deletePublished": {
     input: PublishedSessionTranscriptArchive;

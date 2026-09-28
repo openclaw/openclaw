@@ -80,7 +80,11 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
   let deviceCredentialMutationBarrier: Promise<void> | undefined;
 
   const closeInvalidatedClient = (client: GatewayWsClient, method: string): boolean => {
-    const policyChanged = !isGatewayAuthPolicyCurrent(client.authPolicyGeneration);
+    const policyChanged = !isGatewayAuthPolicyCurrent(
+      client.authPolicyGeneration,
+      undefined,
+      client.authenticatedUserId,
+    );
     if (!client.invalidated && !policyChanged) {
       return false;
     }
@@ -137,6 +141,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       isGatewayAuthPolicyCurrent(
         client.authPolicyGeneration,
         sourceContext.getCommittedRuntimeConfig?.() ?? sourceContext.getRuntimeConfig(),
+        client.authenticatedUserId,
       );
     const clientAuthority = captureGatewayDeviceRevocation(
       context,
@@ -395,7 +400,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
           // deadline. Operator requests share bounded starts without serializing completion.
           if (client.connect.role === "operator") {
             diagnostics?.startQueue();
-            const start = scheduleGatewayRequestStart(frameBytes);
+            const start = scheduleGatewayRequestStart(frameBytes, req, connId);
             if (!start) {
               respondWithAuthority(
                 false,
@@ -425,6 +430,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
                 {
                   req,
                   respond: respondWithAuthority,
+                  acceptsSerializedJson: true,
                   client,
                   isWebchatConnect: params.isWebchatConnect,
                   hasCurrentClientAuthority,

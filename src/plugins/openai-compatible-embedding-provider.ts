@@ -114,11 +114,6 @@ function normalizeDimensions(value: number | undefined): number | undefined {
   return value;
 }
 
-function normalizeOptionalInputType(value: string | undefined): string | undefined {
-  const inputType = value?.trim();
-  return inputType ? inputType : undefined;
-}
-
 function resolveRequestInputType(
   client: OpenAICompatibleEmbeddingClient,
   kind: EmbeddingProviderCallOptions["inputType"] | undefined,
@@ -388,9 +383,9 @@ async function createOpenAICompatibleEmbeddingClient(
   const providerOwnsDestination =
     providerBaseUrl !== undefined && embeddingProviderOwnsDestination({ baseUrl, providerBaseUrl });
   const model = normalizeModel(options.model, options.provider);
-  const inputType = normalizeOptionalInputType(options.inputType);
-  const queryInputType = normalizeOptionalInputType(options.queryInputType);
-  const documentInputType = normalizeOptionalInputType(options.documentInputType);
+  const inputType = normalizeOptionalString(options.inputType);
+  const queryInputType = normalizeOptionalString(options.queryInputType);
+  const documentInputType = normalizeOptionalString(options.documentInputType);
   const headers = buildHeaders({
     apiKey: normalizeResolvedSecretInputString({
       value: options.remote?.apiKey,

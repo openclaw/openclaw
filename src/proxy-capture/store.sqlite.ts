@@ -1,4 +1,3 @@
-// Proxy capture SQLite store persists capture metadata and replayable exchanges.
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -166,10 +165,6 @@ function openPathBasedDebugProxyCaptureStore(
     db.close();
     throw err;
   }
-}
-
-function serializeJson(value: unknown): string | null {
-  return value == null ? null : JSON.stringify(value);
 }
 
 type SharedDebugProxyCaptureState = {
@@ -412,6 +407,5 @@ export function acquireDebugProxyCaptureStore(
 }
 
 export function safeJsonString(value: unknown): string | undefined {
-  const raw = serializeJson(value);
-  return raw ?? undefined;
+  return value == null ? undefined : JSON.stringify(value);
 }

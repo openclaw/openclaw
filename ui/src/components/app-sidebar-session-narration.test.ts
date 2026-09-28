@@ -1,9 +1,15 @@
-// @vitest-environment node
-import { GatewaySessionMessageSubscriptionCoordinator } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// @vitest-environment node
+import { GatewayProtocolRequestError } from "../../../packages/gateway-client/src/protocol-request.js";
+import { GatewaySessionMessageSubscriptionCoordinator } from "../../../packages/gateway-client/src/session-subscriptions.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
+import {
+  browserVisibility,
+  createRunningNarrationController,
+  runningRow,
+} from "../test-helpers/app-sidebar-session-narration.ts";
 import {
   SidebarSessionNarrationController,
   type SidebarNarrationSyncInput,
@@ -13,34 +19,6 @@ import { deriveSidebarNarrationLine } from "./sidebar-narration-line.ts";
 // Mirrors the controller-internal throttle; asserting through timers keeps the
 // constant unexported (production-only export policy).
 const SIDEBAR_NARRATION_THROTTLE_MS = 2_000;
-import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
-
-function runningRow(key: string): SidebarRecentSession {
-  return {
-    key,
-    label: "Run",
-    renameValue: "",
-    updatedAt: Date.now(),
-    active: false,
-    visuallyActive: false,
-    hasActiveRun: true,
-    modelSelectionLocked: false,
-    pinned: false,
-    pinnable: true,
-    cloudWorkerStopAction: null,
-    hasAutomation: false,
-    unread: false,
-    attention: { kind: "none" },
-    startedAt: 1,
-    childSessionKeys: [],
-    children: [],
-    isChild: false,
-    loadingChildren: false,
-    containsActiveDescendant: false,
-    runningChildCount: 0,
-    failedChildCount: 0,
-  };
-}
 
 function gatewayEvent(eventName: string, payload: unknown): GatewayEventFrame {
   return { event: eventName, payload } as GatewayEventFrame;
@@ -55,32 +33,6 @@ function chatDelta(text?: string, deltaText?: string, replace?: boolean): Gatewa
     replace,
     ...(text === undefined ? {} : { message: { role: "assistant", content: text } }),
   });
-}
-
-function createRunningNarrationController(source: SidebarNarrationSyncInput["source"]) {
-  const updates: Array<ReadonlyMap<string, string>> = [];
-  const controller = new SidebarSessionNarrationController((lines) => updates.push(lines));
-  controller.sync({
-    enabled: true,
-    connected: true,
-    connectionIdentity: {},
-    source,
-    openSessionKey: "",
-    rows: [runningRow("agent:main:run")],
-    agentId: "main",
-  });
-  return { controller, updates };
-}
-
-function browserVisibility(initial: DocumentVisibilityState = "visible") {
-  let visibility = initial;
-  const events = new EventTarget();
-  Object.defineProperty(events, "visibilityState", { get: () => visibility });
-  vi.stubGlobal("document", events);
-  return (next: DocumentVisibilityState) => {
-    visibility = next;
-    events.dispatchEvent(new Event("visibilitychange"));
-  };
 }
 
 describe("sidebar narration derivation", () => {
@@ -108,9 +60,10 @@ describe("SidebarSessionNarrationController", () => {
 
   afterEach(() => {
     // isolate:false shares the worker clock: a leaked fake timer deterministically
-    // times out unrelated later files (seen: chat-background-tasks 60s hangs).
+    // times out unrelated later files.
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it("retains pending interests while switching foreground and resets the window on reconnect", async () => {
@@ -172,6 +125,7 @@ describe("SidebarSessionNarrationController", () => {
   });
 
   it.each([false, true])("retains a failed hidden release (late acquisition: %s)", async (late) => {
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
     const visibility = browserVisibility();
     const subscribed = createDeferred();
     const released = createDeferred();
@@ -184,7 +138,7 @@ describe("SidebarSessionNarrationController", () => {
       } else {
         releases += 1;
         if (releases === 1) {
-          throw new Error("unsubscribe failed");
+          throw new GatewayProtocolRequestError({ retryable: true });
         }
         await released.promise;
         wireKeys.delete(params.key);
@@ -212,6 +166,8 @@ describe("SidebarSessionNarrationController", () => {
 
     visibility("hidden");
     visibility("hidden");
+    expect(source.unsubscribeMessages.mock.calls).toEqual([[handle]]);
+    await vi.advanceTimersByTimeAsync(250);
     expect(source.unsubscribeMessages.mock.calls).toEqual([[handle], [handle]]);
     visibility("visible");
     expect(releases).toBe(2);
@@ -369,7 +325,7 @@ describe("SidebarSessionNarrationController", () => {
   it("subscribes only to sessions with a projected active run", async () => {
     const subscribeMessages = vi.fn((key: string) => Promise.resolve({ key, agentId: null }));
     const unsubscribeMessages = vi.fn(() => Promise.resolve());
-    const source = { subscribeMessages, unsubscribeMessages } as unknown as SessionCapability;
+    const source = { subscribeMessages, unsubscribeMessages };
     const controller = new SidebarSessionNarrationController(() => undefined);
 
     controller.sync({
@@ -397,7 +353,7 @@ describe("SidebarSessionNarrationController", () => {
     const source = {
       subscribeMessages: vi.fn(() => Promise.resolve({ key: "agent:main:run", agentId: null })),
       unsubscribeMessages: vi.fn(() => Promise.resolve()),
-    } as unknown as SessionCapability;
+    };
     const lines: Array<ReadonlyMap<string, string>> = [];
     const digests: Array<ReadonlyMap<string, { headline: string }>> = [];
     const controller = new SidebarSessionNarrationController(
@@ -503,7 +459,7 @@ describe("SidebarSessionNarrationController", () => {
       Promise.resolve({ key: "agent:main:run", agentId: null }),
     );
     const unsubscribeMessages = vi.fn(() => Promise.resolve());
-    const source = { subscribeMessages, unsubscribeMessages } as unknown as SessionCapability;
+    const source = { subscribeMessages, unsubscribeMessages };
     const updates: Array<ReadonlyMap<string, string>> = [];
     const controller = new SidebarSessionNarrationController((lines) => updates.push(lines));
     const connectionIdentity = {};
@@ -547,7 +503,7 @@ describe("SidebarSessionNarrationController", () => {
     const source = {
       subscribeMessages: vi.fn(() => Promise.resolve({ key: "agent:main:run", agentId: null })),
       unsubscribeMessages: vi.fn(() => Promise.resolve()),
-    } as unknown as SessionCapability;
+    };
     const { controller, updates } = createRunningNarrationController(source);
 
     controller.handleEvent(
@@ -570,7 +526,7 @@ describe("SidebarSessionNarrationController", () => {
     const source = {
       subscribeMessages: vi.fn(() => Promise.resolve({ key: "agent:main:run", agentId: null })),
       unsubscribeMessages: vi.fn(() => Promise.resolve()),
-    } as unknown as SessionCapability;
+    };
     const { controller, updates } = createRunningNarrationController(source);
     controller.handleEvent(chatDelta("Reading"));
     controller.handleEvent(
@@ -590,7 +546,7 @@ describe("SidebarSessionNarrationController", () => {
     const source = {
       subscribeMessages: vi.fn(() => Promise.resolve({ key: "agent:main:run", agentId: null })),
       unsubscribeMessages: vi.fn(() => Promise.resolve()),
-    } as unknown as SessionCapability;
+    };
     const { controller, updates } = createRunningNarrationController(source);
 
     controller.handleEvent(
@@ -614,7 +570,7 @@ describe("SidebarSessionNarrationController", () => {
     const source = {
       subscribeMessages: vi.fn(() => Promise.resolve({ key: "agent:main:run", agentId: null })),
       unsubscribeMessages: vi.fn(() => Promise.resolve()),
-    } as unknown as SessionCapability;
+    };
     const { controller, updates } = createRunningNarrationController(source);
 
     controller.handleEvent(
@@ -630,7 +586,7 @@ describe("SidebarSessionNarrationController", () => {
     const source = {
       subscribeMessages: vi.fn(() => Promise.resolve({ key: "agent:main:run", agentId: null })),
       unsubscribeMessages: vi.fn(() => Promise.resolve()),
-    } as unknown as SessionCapability;
+    };
     const { controller, updates } = createRunningNarrationController(source);
 
     controller.handleEvent(
@@ -652,7 +608,7 @@ describe("SidebarSessionNarrationController", () => {
     const source = {
       subscribeMessages: vi.fn(() => Promise.resolve({ key: "agent:main:run", agentId: null })),
       unsubscribeMessages: vi.fn(() => Promise.resolve()),
-    } as unknown as SessionCapability;
+    };
     const { controller, updates } = createRunningNarrationController(source);
 
     controller.handleEvent(chatDelta("Visible setup.\n<<<BEGIN_OPENCLAW_INTERNAL_CONT"));
@@ -666,15 +622,17 @@ describe("SidebarSessionNarrationController", () => {
     const source = {
       subscribeMessages: vi.fn(() => Promise.resolve({ key: "agent:main:run", agentId: null })),
       unsubscribeMessages: vi.fn(() => Promise.resolve()),
-    } as unknown as SessionCapability;
+    };
     const { controller, updates } = createRunningNarrationController(source);
+    const internalText = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nprivate runtime text";
 
     controller.handleEvent(
       gatewayEvent("chat", {
         sessionKey: "agent:main:run",
         runId: "run-1",
         state: "delta",
-        deltaText: "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nprivate runtime text",
+        deltaText: internalText,
+        message: { role: "assistant", content: internalText },
       }),
     );
     controller.handleEvent(
@@ -703,7 +661,7 @@ describe("SidebarSessionNarrationController", () => {
     const source = {
       subscribeMessages: vi.fn(() => Promise.resolve({ key: "agent:main:run", agentId: null })),
       unsubscribeMessages: vi.fn(() => Promise.resolve()),
-    } as unknown as SessionCapability;
+    };
     const { controller, updates } = createRunningNarrationController(source);
 
     controller.handleEvent(
@@ -736,7 +694,7 @@ describe("SidebarSessionNarrationController", () => {
     const source = {
       subscribeMessages: vi.fn(() => Promise.resolve({ key: "agent:main:run", agentId: null })),
       unsubscribeMessages: vi.fn(() => Promise.resolve()),
-    } as unknown as SessionCapability;
+    };
     const { controller, updates } = createRunningNarrationController(source);
 
     controller.handleEvent(chatDelta("Draft answer."));
@@ -750,7 +708,7 @@ describe("SidebarSessionNarrationController", () => {
     const source = {
       subscribeMessages: vi.fn(() => Promise.resolve({ key: "agent:main:run", agentId: null })),
       unsubscribeMessages: vi.fn(() => Promise.resolve()),
-    } as unknown as SessionCapability;
+    };
     const { controller, updates } = createRunningNarrationController(source);
 
     // First observed event is a bare delta: it could be the inside of an
@@ -781,7 +739,7 @@ describe("SidebarSessionNarrationController", () => {
     const source = {
       subscribeMessages: vi.fn(() => Promise.resolve({ key: "agent:main:run", agentId: null })),
       unsubscribeMessages: vi.fn(() => Promise.resolve()),
-    } as unknown as SessionCapability;
+    };
     const { controller, updates } = createRunningNarrationController(source);
 
     controller.handleEvent(
@@ -811,7 +769,7 @@ describe("SidebarSessionNarrationController", () => {
     const source = {
       subscribeMessages: vi.fn(() => Promise.resolve({ key: "agent:main:run", agentId: null })),
       unsubscribeMessages: vi.fn(() => Promise.resolve()),
-    } as unknown as SessionCapability;
+    };
     const { controller, updates } = createRunningNarrationController(source);
 
     controller.handleEvent(chatDelta("Draft that gets withdrawn."));
@@ -838,7 +796,7 @@ describe("SidebarSessionNarrationController", () => {
       return promise;
     });
     const unsubscribeMessages = vi.fn(() => Promise.resolve());
-    const source = { subscribeMessages, unsubscribeMessages } as unknown as SessionCapability;
+    const source = { subscribeMessages, unsubscribeMessages };
     const controller = new SidebarSessionNarrationController(() => undefined);
     const base = {
       enabled: true,
@@ -869,7 +827,7 @@ describe("SidebarSessionNarrationController", () => {
       Promise.resolve({ key, agentId: options?.agentId ?? null }),
     );
     const unsubscribeMessages = vi.fn(() => Promise.resolve());
-    const source = { subscribeMessages, unsubscribeMessages } as unknown as SessionCapability;
+    const source = { subscribeMessages, unsubscribeMessages };
     const updates: Array<ReadonlyMap<string, string>> = [];
     const controller = new SidebarSessionNarrationController((lines) => updates.push(lines));
     const base = {
@@ -906,7 +864,7 @@ describe("SidebarSessionNarrationController", () => {
     const source = {
       subscribeMessages: vi.fn(() => Promise.resolve({ key: "agent:main:run", agentId: null })),
       unsubscribeMessages: vi.fn(() => Promise.resolve()),
-    } as unknown as SessionCapability;
+    };
     const { controller, updates } = createRunningNarrationController(source);
 
     controller.handleEvent(
@@ -941,11 +899,11 @@ describe("SidebarSessionNarrationController", () => {
           }),
       ),
       unsubscribeMessages: vi.fn(() => Promise.resolve()),
-    } as unknown as SessionCapability;
+    };
     const secondSource = {
       subscribeMessages: vi.fn(),
       unsubscribeMessages: vi.fn(() => Promise.resolve()),
-    } as unknown as SessionCapability;
+    };
     const controller = new SidebarSessionNarrationController(() => undefined);
     const connectionIdentity = {};
 
@@ -980,7 +938,7 @@ describe("SidebarSessionNarrationController", () => {
     const source = {
       subscribeMessages: vi.fn(() => Promise.resolve({ key: "agent:main:run", agentId: null })),
       unsubscribeMessages: vi.fn(() => Promise.resolve()),
-    } as unknown as SessionCapability;
+    };
     const { controller, updates } = createRunningNarrationController(source);
 
     controller.handleEvent(

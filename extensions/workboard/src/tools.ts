@@ -485,7 +485,9 @@ export function createWorkboardTools(params: {
       }),
       execute: async (_toolCallId, rawParams) => {
         const { record, id, scope } = await readScopedCardToolParams(rawParams);
-        return redactedCardResult(await store.addAttachment(id, record, scope));
+        return redactedCardResult(
+          await store.addAttachment(id, record, scope, params.context?.assertInputCommitAllowed),
+        );
       },
     },
     {

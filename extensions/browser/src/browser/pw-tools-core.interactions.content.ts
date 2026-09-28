@@ -26,7 +26,6 @@ import {
   type GuardedInteractionOptions,
   type InteractionTargetOptions,
   interactionNavigationPolicy,
-  type NavigationTargetOptions,
   reconcileRemoteDialogAfterActionSettled,
   resolveBoundedDelayMs,
   runCancellablePageInteraction,
@@ -76,12 +75,6 @@ async function toPlaywrightFilePayloads(paths: string[]): Promise<PlaywrightFile
   );
 }
 
-function shouldUsePlaywrightFilePayloads(
-  opts: Pick<NavigationTargetOptions, "browserFilesystemLocal" | "ssrfPolicy">,
-): boolean {
-  return Boolean(opts.ssrfPolicy) && opts.browserFilesystemLocal !== true;
-}
-
 async function resolvePlaywrightUploadFiles(opts: GuardedInteractionOptions & { paths: string[] }) {
   const { abortPromise, cleanup } = createAbortPromiseWithListener(opts.signal);
   try {
@@ -91,7 +84,7 @@ async function resolvePlaywrightUploadFiles(opts: GuardedInteractionOptions & { 
         if (!resolved.ok) {
           throw new Error(resolved.error);
         }
-        return shouldUsePlaywrightFilePayloads(opts)
+        return opts.ssrfPolicy && opts.browserFilesystemLocal !== true
           ? await toPlaywrightFilePayloads(resolved.paths)
           : resolved.paths;
       })(),

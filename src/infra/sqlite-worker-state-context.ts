@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { withExistingOpenClawStateSchema } from "../state/openclaw-state-db-schema-policy.js";
-import type { StateDatabaseCoordinatorRuntime } from "./state-database-coordinator.js";
 
 /** Resolved host facts for the canonical shared-state owner, never authority. */
 export type SqliteWorkerStateContext = {
@@ -13,7 +12,6 @@ export type SqliteWorkerStateContext = {
   initializationEnvironment?: NodeJS.ProcessEnv;
   /** Known agent paths preserve deletion-history uncertainty during native initialization. */
   initializationAgentPaths?: readonly string[];
-  coordinatorRuntime: StateDatabaseCoordinatorRuntime;
   existingSchemaPath?: string;
 };
 
@@ -28,7 +26,6 @@ export function captureSqliteWorkerStateContext(
     ...(context.initializationAgentPaths
       ? { initializationAgentPaths: [...context.initializationAgentPaths] }
       : {}),
-    coordinatorRuntime: { ...context.coordinatorRuntime },
     existingSchemaPath: context.existingSchemaPath,
   };
 }

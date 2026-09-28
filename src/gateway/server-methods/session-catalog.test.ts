@@ -1,3 +1,5 @@
+import childProcess, { ChildProcess } from "node:child_process";
+import { PassThrough } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
@@ -18,6 +20,62 @@ import {
 
 describe("session catalog Gateway methods", () => {
   beforeEach(resetSessionCatalogTestState);
+
+  it("prepares the login-shell PATH before synchronous catalog availability checks", async () => {
+    let finishProbe: (() => void) | undefined;
+    type ShellProcess = childProcess.ChildProcessByStdio<null, PassThrough, PassThrough>;
+    type ShellSpawnOptions = childProcess.SpawnOptionsWithStdioTuple<"ignore", "pipe", "pipe">;
+    const asyncExec = vi.fn<
+      (command: string, args: readonly string[], options: ShellSpawnOptions) => ShellProcess
+    >(() => {
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      const stdio: ShellProcess["stdio"] = [null, stdout, stderr, null, null];
+      const child = Object.assign(new ChildProcess(), { stdin: null, stdout, stderr, stdio });
+      finishProbe = () => {
+        child.stdout?.emit("data", Buffer.from("\0PATH=/catalog/bin\0"));
+        child.emit("close", 0, null);
+      };
+      return child;
+    });
+    const syncExec = vi.fn<typeof childProcess.execFileSync>(() => {
+      throw new Error("catalog request blocked on synchronous shell probe");
+    });
+    vi.doMock("node:child_process", () => ({
+      ...childProcess,
+      spawn: asyncExec,
+      execFileSync: syncExec,
+    }));
+    vi.resetModules();
+    const shell = await vi.importActual<typeof import("../../infra/shell-env.js")>(
+      "../../infra/shell-env.js",
+    );
+    const options = { env: process.env, platform: "linux" as const };
+    hoisted.prepareShellPathFromLoginShell.mockImplementation(() =>
+      shell.prepareShellPathFromLoginShell(options),
+    );
+    const list = vi.fn(async () => {
+      expect(shell.getShellPathFromLoginShell(options)).toBe("/catalog/bin");
+      return [];
+    });
+    hoisted.activeRegistry.sessionCatalogs = [{ provider: provider("local", { list }) }];
+    const pending = call("sessions.catalog.list", {});
+    try {
+      expect(list).not.toHaveBeenCalled();
+      expect(asyncExec).toHaveBeenCalledOnce();
+      finishProbe?.();
+      const respond = await pending;
+      expect(respond).toHaveBeenCalledWith(true, {
+        catalogs: [expect.objectContaining({ id: "local", hosts: [] })],
+      });
+      expect(list).toHaveBeenCalledOnce();
+      expect(syncExec).not.toHaveBeenCalled();
+    } finally {
+      finishProbe?.();
+      await pending;
+      vi.doUnmock("node:child_process");
+    }
+  });
 
   it("returns catalog metadata without listing providers or acquiring session projection", async () => {
     const list = vi.fn(async () => []);

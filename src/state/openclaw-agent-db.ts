@@ -66,6 +66,7 @@ import {
   agentDatabaseLifecycle as cache,
   assertAgentDatabaseTerminalOpenAllowed,
   startAgentDatabaseOpenTiming,
+  resolveAgentDatabaseIntegrityGateReason,
   closeCachedOpenClawAgentDatabase,
   closeMaintenanceAgentDatabase,
   closeOpenClawAgentDatabaseByPath,
@@ -300,6 +301,7 @@ function* openOpenClawAgentDatabaseSteps(
   }
   let verification: OpenClawAgentIntegrityVerification | undefined;
   let reuseIntegrity = false;
+  let integrityRevoked = false;
   const validation = pending?.validation ?? preparedLease?.validation;
   const captureVerification: OpenClawAgentIntegrityVerificationReceiver = (
     record,
@@ -308,6 +310,7 @@ function* openOpenClawAgentDatabaseSteps(
   ) => {
     verification = record;
     reuseIntegrity = runtimeIntegrityAllowed;
+    integrityRevoked = invalidated;
     if (invalidated && validation) {
       // Stale-peer cleanup precedes adoption of proof already transferred by the host.
       Atomics.store(new Int32Array(validation.valid), 0, 0);
@@ -370,6 +373,10 @@ function* openOpenClawAgentDatabaseSteps(
         assertExistingAgentSchemaOwner(existingSchema, agentId, pathname);
         // Runtime proof survives last-lease close; cold opens require clean-close proof.
         // Runtime proof carries owner revocation; every open still checks schema convergence.
+        diagnostics.integrityGateReason = resolveAgentDatabaseIntegrityGateReason(
+          validationDatabase,
+          { verification, validation, integrityRevoked, reuseIntegrity },
+        );
         const requiresCurrentVersionConvergence = yield* agentDatabaseIntegrityBeforeMutationSteps(
           db,
           agentId,
@@ -377,7 +384,11 @@ function* openOpenClawAgentDatabaseSteps(
           diagnostics,
           verification,
           isValidatedReopen && reuseIntegrity,
+          true,
         );
+        if (!diagnostics.integrityGateOutcome || diagnostics.integrityGateOutcome === "cached") {
+          delete diagnostics.integrityGateReason;
+        }
         if (isValidatedReopen && (!existingSchema || requiresCurrentVersionConvergence)) {
           // New files and same-version divergence cannot inherit an earlier validation.
           // The existing full path initializes or converges them before exposure.
@@ -404,6 +415,9 @@ function* openOpenClawAgentDatabaseSteps(
         finishPhase("schema");
         return maintenance;
       } catch (err) {
+        if (diagnostics.integrityGateOutcome === "failed") {
+          finishPhase("validation");
+        }
         maintenance?.close();
         if (db.isOpen) {
           db.close();

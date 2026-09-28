@@ -180,6 +180,10 @@ it.each([
   "keeps the birth requester window through async $backend launch (original=$originalSessionId, global=$globalRequester)",
   async ({ backend, originalSessionId, globalRequester }) => {
     const requesterSessionKey = globalRequester ? "global" : "agent:main:completion-owner";
+    const originalLifecycleRevision = originalSessionId
+      ? "original-requester-lifecycle"
+      : undefined;
+    const replacementLifecycleRevision = "replacement-requester-lifecycle";
     if (globalRequester) {
       const cfg = getRuntimeConfig();
       await writeFile(
@@ -215,6 +219,7 @@ it.each([
         agentId: "main",
         sessionKey: requesterSessionKey,
         defaultSessionId: originalSessionId,
+        lifecycleRevision: originalLifecycleRevision,
       });
     }
     if (backend === "acp") {
@@ -270,7 +275,11 @@ it.each([
       // must retain that captured window even when later launch steps await.
       replaceSessionEntrySync(
         { sessionKey: requesterSessionKey, agentId: "main" },
-        { sessionId: "replacement-requester", updatedAt: Date.now() },
+        {
+          sessionId: "replacement-requester",
+          lifecycleRevision: replacementLifecycleRevision,
+          updatedAt: Date.now(),
+        },
       );
     });
     const ctx = {
@@ -333,9 +342,13 @@ it.each([
         expectsCompletionMessage: true,
       });
       expect(restored?.completionRequesterSessionId).toBe(originalSessionId);
+      expect(restored?.completionRequesterLifecycleRevision).toBe(originalLifecycleRevision);
       expect(
-        loadSessionEntryReadOnly({ sessionKey: requesterSessionKey, agentId: "main" })?.sessionId,
-      ).toBe("replacement-requester");
+        loadSessionEntryReadOnly({ sessionKey: requesterSessionKey, agentId: "main" }),
+      ).toMatchObject({
+        sessionId: "replacement-requester",
+        lifecycleRevision: replacementLifecycleRevision,
+      });
     } finally {
       if (backend === "acp") {
         await disposeAcpSessionManagerInstance(getAcpSessionManager(), "test-cleanup");

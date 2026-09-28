@@ -1,5 +1,6 @@
 .github/workflows/pr-crabbox-gate-publisher.yml
 cli-root-options.mjs
+config/ci-test-timings.json
 node-compile-cache.mjs
 node-sqlite.mjs
 node-version.mjs
@@ -15,14 +16,19 @@ packages/gateway-protocol/src/capability-consent-error-details.ts
 packages/gateway-protocol/src/client-info.ts
 packages/gateway-protocol/src/failover-reasons.ts
 packages/gateway-protocol/src/plugin-ui-capabilities.ts
+packages/gateway-protocol/src/protocol-validator.ts
 packages/gateway-protocol/src/protocol-value-normalization.ts
 packages/gateway-protocol/src/schema/closed-object.ts
 packages/gateway-protocol/src/schema/failover-reason.ts
 packages/gateway-protocol/src/schema/plugin-declared-surface-groups.ts
+packages/gateway-protocol/src/schema/presence.ts
+packages/gateway-protocol/src/schema/primitives.ts
 packages/gateway-protocol/src/schema/since.ts
+packages/gateway-protocol/src/schema/user-profile-constants.ts
 packages/gateway-protocol/src/schema/worker-admission.ts
 packages/gateway-protocol/src/schema/worker-computer.ts
 packages/gateway-protocol/src/schema/worker-protocol-primitives.ts
+packages/gateway-protocol/src/secret-ref-contract.ts
 packages/gateway-protocol/src/svg-image.ts
 packages/gateway-protocol/src/theme-ids.ts
 packages/gateway-protocol/src/theme.ts
@@ -113,6 +119,8 @@ scripts/lib/arg-utils.runtime.mjs
 scripts/lib/bundled-plugin-paths.mjs
 scripts/lib/changed-extensions.mts
 scripts/lib/changed-path-facts.mjs
+scripts/lib/ci-test-timings-schema.mts
+scripts/lib/ci-test-timings.mts
 scripts/lib/direct-run.mjs
 scripts/lib/error-format.mts
 scripts/lib/extension-test-plan.mts
@@ -332,6 +340,7 @@ src/commands/doctor/shared/legacy-config-migrations.runtime.system-agent.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.tier-eval.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.tool-names.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.tool-policy-conflicts.ts
+src/commands/doctor/shared/legacy-config-migrations.runtime.tool-search.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.tts.ts
 src/commands/doctor/shared/legacy-config-migrations.ts
@@ -618,8 +627,6 @@ src/infra/diagnostics-timeline.ts
 src/infra/directory-durability.ts
 src/infra/disk-space.ts
 src/infra/dispatch-wrapper-resolution.ts
-src/infra/device-identity-coordinator-paths.ts
-src/infra/device-identity-coordinator.ts
 src/infra/device-identity-process-cache.ts
 src/infra/device-identity-store.ts
 src/infra/device-identity.ts
@@ -656,6 +663,8 @@ src/infra/fs-safe-copy.worker.ts
 src/infra/fs-safe.ts
 src/infra/gateway-lock-process.ts
 src/infra/gateway-owner-lease.ts
+src/infra/gateway-lock-payload.ts
+src/infra/gateway-state-owner.ts
 src/infra/gateway-process-argv.ts
 src/infra/gateway-supervision.ts
 src/infra/git-commit.ts
@@ -741,7 +750,6 @@ src/infra/sqlite-audit-record-store.ts
 src/infra/sqlite-audit-record.kernel.ts
 src/infra/sqlite-backup.ts
 src/infra/sqlite-busy-timeout.ts
-src/infra/sqlite-coordinator.ts
 src/infra/sqlite-error-diagnostics.ts
 src/infra/sqlite-existing-database.ts
 src/infra/sqlite-file-generation.ts
@@ -751,6 +759,7 @@ src/infra/sqlite-index-recovery.ts
 src/infra/sqlite-index-schema.ts
 src/infra/sqlite-integrity.ts
 src/infra/sqlite-live-snapshot.ts
+src/infra/sqlite-lifecycle-errors.ts
 src/infra/sqlite-maintenance-cache.ts
 src/infra/sqlite-number.ts
 src/infra/sqlite-pinned-read-snapshot.ts
@@ -802,7 +811,6 @@ src/infra/sqlite-worker-input-admission.ts
 src/infra/sqlite-worker-client.ts
 src/infra/sqlite-worker-contract.ts
 src/infra/sqlite-worker-identity.ts
-src/infra/sqlite-worker-lifecycle-preparation.ts
 src/infra/sqlite-worker-operation-admission.ts
 src/infra/sqlite-worker-state-context.ts
 src/infra/sqlite-worker-store.ts
@@ -810,12 +818,7 @@ src/infra/sqlite-worker-transfer.ts
 src/infra/stale-lock-file.ts
 src/infra/startup-maintenance-required.ts
 src/infra/startup-migration-checkpoint.ts
-src/infra/state-database-coordinator-delegate.ts
-src/infra/state-database-coordinator-errors.ts
-src/infra/state-database-coordinator-owner.ts
-src/infra/state-database-coordinator-paths.ts
-src/infra/state-database-coordinator-acquisition.ts
-src/infra/state-database-coordinator.ts
+src/infra/state-database-maintenance.ts
 src/infra/state-lease-process-owner.ts
 src/infra/state-migrations.cron-run-logs.ts
 src/infra/state-migrations.receipts.ts
@@ -970,6 +973,7 @@ src/plugins/host-hook-cleanup-timeout.ts
 src/plugins/host-hook-json.ts
 src/plugins/host-hook-runtime.ts
 src/plugins/host-hooks.ts
+src/plugins/http-path-prefix.ts
 src/plugins/http-path.ts
 src/plugins/http-route-owner.ts
 src/plugins/install-channel-specs.ts
@@ -1102,6 +1106,7 @@ src/plugins/plugin-source-admission-store.ts
 src/plugins/plugin-source-build.ts
 src/plugins/plugin-source-capture-context.ts
 src/plugins/plugin-source-capture-directory.ts
+src/plugins/plugin-source-capture-native-loads.ts
 src/plugins/plugin-source-capture-path.ts
 src/plugins/plugin-source-file.ts
 src/plugins/plugin-source-references.ts
@@ -1120,6 +1125,7 @@ src/plugins/provider-registry-shared.ts
 src/plugins/provider-thinking-catalog.ts
 src/plugins/public-surface-loader.ts
 src/plugins/public-surface-runtime.ts
+src/plugins/record-groups.ts
 src/plugins/registry-empty.ts
 src/plugins/registry-lifecycle.ts
 src/plugins/root-artifact-path.ts
@@ -1244,6 +1250,7 @@ src/shared/lazy-promise.ts
 src/shared/lazy-runtime.ts
 src/shared/listeners.ts
 src/shared/model-key.ts
+src/shared/node-list-parse.ts
 src/shared/path-array-index.ts
 src/shared/pid-alive.ts
 src/shared/regexp.ts
@@ -1322,15 +1329,13 @@ src/state/openclaw-state-db-snapshot-owner.ts
 src/state/openclaw-state-db-startup-checkpoint.ts
 src/state/openclaw-state-db-table-retirements.ts
 src/state/openclaw-state-db-task-delivery-recovery.ts
-src/state/openclaw-state-db-task-identifiers.ts
-src/state/openclaw-state-db-write-coordination.ts
+src/state/openclaw-state-db-transaction.ts
 src/state/openclaw-state-db.paths.ts
 src/state/openclaw-state-db.ts
 src/state/openclaw-state-feature-schema.ts
 src/state/openclaw-state-lease-acquisition.ts
 src/state/openclaw-state-lease-cleanup.ts
 src/state/openclaw-state-lease-error.ts
-src/state/openclaw-state-lease-exclusion.ts
 src/state/openclaw-state-lease-heartbeat-cleanup.ts
 src/state/openclaw-state-lease-heartbeat-shared.ts
 src/state/openclaw-state-lease-heartbeat.ts
@@ -1421,3 +1426,17 @@ test/vitest/vitest.ui-paths.mjs
 test/vitest/vitest.unit-fast-paths.mjs
 test/vitest/vitest.unit-paths.mjs
 tsconfig.json
+.github/actions/setup-security-review/action.yml
+.github/actions/setup-security-review/package-lock.json
+.github/actions/setup-security-review/package.json
+.github/security-review-policy.yml
+.github/workflows/security-review.yml
+scripts/github/dependency-guard.mjs
+scripts/github/guard-review.mjs
+scripts/github/guard-shared.mjs
+scripts/github/security-review-policy.mjs
+scripts/github/security-review-rollout.mjs
+scripts/github/security-review.mjs
+scripts/github/security-sensitive-guard.mjs
+scripts/lib/bounded-response.mjs
+scripts/pr-lib/merge-prior-ci-security.mjs

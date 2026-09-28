@@ -23,7 +23,7 @@ export async function prepareCompactionSessionAgent(params: {
   signal: AbortSignal;
   effectiveModel: ProviderRuntimeModel;
   resolvedApiKey?: string;
-  authStorage: unknown;
+  authStorage: Parameters<typeof resolveEmbeddedAgentStream>[0]["authStorage"];
   config?: OpenClawConfig;
   provider: string;
   modelId: string;
@@ -45,20 +45,11 @@ export async function prepareCompactionSessionAgent(params: {
   senderUsername?: string | null;
   senderE164?: string | null;
 }) {
-  const authStorage =
-    params.authStorage &&
-    typeof params.authStorage === "object" &&
-    "getApiKey" in params.authStorage &&
-    typeof params.authStorage.getApiKey === "function"
-      ? (params.authStorage as {
-          getApiKey(provider: string): Promise<string | undefined>;
-        })
-      : undefined;
-  const transportApiKey = authStorage
+  const transportApiKey = params.authStorage
     ? await resolveEmbeddedAgentApiKey({
         provider: params.effectiveModel.provider,
         resolvedApiKey: params.resolvedApiKey,
-        authStorage,
+        authStorage: params.authStorage,
       })
     : params.resolvedApiKey;
   params.session.agent.streamFn = resolveEmbeddedAgentStream({
@@ -71,7 +62,7 @@ export async function prepareCompactionSessionAgent(params: {
     resolvedApiKey: params.resolvedApiKey,
     transportAuthAvailable: Boolean(transportApiKey?.trim()),
     authProfileId: params.runtimePlan?.auth.forwardedAuthProfileId,
-    authStorage: params.authStorage as never,
+    authStorage: params.authStorage,
   }).streamFn;
   const providerTextTransforms = resolveProviderTextTransforms({
     provider: params.provider,

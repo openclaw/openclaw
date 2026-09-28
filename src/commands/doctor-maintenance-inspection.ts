@@ -7,8 +7,8 @@ import { hasGatewayServiceStopUnsafeError } from "../daemon/service-inspection-e
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
+import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
 import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
-import { StateDatabaseCoordinatorContentionError } from "../infra/state-database-coordinator-errors.js";
 import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import {
@@ -57,7 +57,7 @@ export function classifyDoctorMaintenanceRefusal(error: unknown): DoctorMaintena
   }
   return {
     kind: "deferred",
-    reason: causes.some((cause) => cause instanceof StateDatabaseCoordinatorContentionError)
+    reason: causes.some((cause) => cause instanceof GatewayStateOwnerContentionError)
       ? "coordinator-contention"
       : "admission-unavailable",
   };
@@ -110,8 +110,8 @@ export function assertDoctorMaintenanceInspection(
   env: NodeJS.ProcessEnv,
 ): void {
   const kind = inspection.serviceUpdateVerdict?.kind;
-  // Unavailable inspection grants no service authority. The state coordinators
-  // and agent leases below still exclude live writers before repair.
+  // Unavailable inspection grants no service authority. Process ownership and
+  // agent leases still exclude live writers before repair.
   if (
     !inspection.blockMessage &&
     (kind === "unavailable" ||

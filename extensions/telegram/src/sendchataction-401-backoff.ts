@@ -6,12 +6,7 @@ import {
   type BackoffPolicy,
 } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  isRecoverableTelegramNetworkError,
-  isTelegramRateLimitError,
-  isTelegramServerError,
-  readTelegramRetryAfterMs,
-} from "./network-errors.js";
+import { isRetryableTelegramApiError, readTelegramRetryAfterMs } from "./network-errors.js";
 
 type TelegramSendChatActionLogger = (message: string) => void;
 
@@ -69,14 +64,6 @@ function is401Error(error: unknown): boolean {
   // substring matching — that was the root cause of #94787.
   const message = error instanceof Error ? error.message : JSON.stringify(error);
   return normalizeLowercaseStringOrEmpty(message).includes("unauthorized");
-}
-
-function isTransientSendChatActionError(error: unknown): boolean {
-  return (
-    isTelegramRateLimitError(error) ||
-    isTelegramServerError(error) ||
-    isRecoverableTelegramNetworkError(error, { context: "action" })
-  );
 }
 
 function resolveTransientCooldownMs(error: unknown, attempt: number): number {
@@ -250,7 +237,7 @@ export function createTelegramSendChatActionHandler({
               `Retrying with exponential backoff.`,
           );
         }
-      } else if (isTransientSendChatActionError(error)) {
+      } else if (isRetryableTelegramApiError(error, { context: "action" })) {
         failureVersion++;
         consecutiveTransientFailures++;
         const cooldownMs = resolveTransientCooldownMs(error, consecutiveTransientFailures);

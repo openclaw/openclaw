@@ -1,3 +1,4 @@
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
   buildLegacyDmAccountAllowlistAdapter,
   createAccountScopedAllowlistNameResolver,
@@ -7,6 +8,7 @@ import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-h
 import {
   buildThreadAwareOutboundSessionRoute,
   createChatChannelPlugin,
+  type ChannelPlugin,
 } from "openclaw/plugin-sdk/channel-core";
 import {
   createChannelMessageAdapterFromOutbound,
@@ -14,6 +16,12 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
+import {
+  PAIRING_APPROVED_MESSAGE,
+  projectCredentialSnapshotFields,
+  resolveConfiguredFromRequiredCredentialStatuses,
+} from "openclaw/plugin-sdk/channel-status";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createChannelDirectoryAdapter,
   createRuntimeDirectoryLiveAdapter,
@@ -46,16 +54,6 @@ import type { SlackActionContext } from "./action-runtime.js";
 import { resolveSlackAutoThreadId } from "./action-threading.js";
 import { slackApprovalCapability } from "./approval-native.js";
 import { createSlackActions } from "./channel-actions.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  looksLikeSlackTargetId,
-  normalizeSlackMessagingTarget,
-  PAIRING_APPROVED_MESSAGE,
-  projectCredentialSnapshotFields,
-  resolveConfiguredFromRequiredCredentialStatuses,
-  type ChannelPlugin,
-  type OpenClawConfig,
-} from "./channel-api.js";
 import { resolveSlackChannelType, resolveSlackConversationInfo } from "./channel-type.js";
 import { getSlackWriteClient } from "./client.js";
 import { inspectSlackConversationRouteOwner } from "./conversation-route-owner.js";
@@ -83,6 +81,8 @@ import {
 import {
   canonicalizeSlackApiTargetId,
   formatSlackTarget,
+  looksLikeSlackTargetId,
+  normalizeSlackMessagingTarget,
   parseSlackTarget,
 } from "./target-parsing.js";
 import { slackContextTargetsMatch } from "./targets.js";

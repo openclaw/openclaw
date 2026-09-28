@@ -575,8 +575,19 @@ struct ChatMarkdownProse {
         let options = AttributedString.MarkdownParsingOptions(
             interpretedSyntax: .full,
             failurePolicy: .returnPartiallyParsedIfPossible)
-        return (try? AttributedString(markdown: displayMarkdown, options: options))
+        let parsed = (try? AttributedString(markdown: displayMarkdown, options: options))
             ?? AttributedString(displayMarkdown)
+        // Foundation stores block boundaries as presentation intents, without newline
+        // characters. SwiftUI Text needs explicit separators, including on the reveal path.
+        var rendered = AttributedString()
+        for (_, range) in parsed.runs[\.presentationIntent] {
+            if !rendered.characters.isEmpty {
+                let trailingNewlines = rendered.characters.suffix(2).reversed().prefix { $0 == "\n" }.count
+                rendered.append(AttributedString(String(repeating: "\n", count: 2 - trailingNewlines)))
+            }
+            rendered.append(AttributedString(parsed[range]))
+        }
+        return rendered
     }
 
     private static func tailPieces(

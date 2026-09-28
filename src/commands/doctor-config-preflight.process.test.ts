@@ -513,7 +513,7 @@ describe("Doctor repair followed by gateway readiness", () => {
       openOpenClawStateDatabase({ env: process.env });
       closeOpenClawStateDatabase();
       const oldDatabase = new DatabaseSync(${JSON.stringify(databasePath)});
-      oldDatabase.exec("ALTER TABLE task_runs DROP COLUMN tool_use_count");
+      oldDatabase.exec("ALTER TABLE apns_registrations DROP COLUMN relay_origin");
       oldDatabase.close();
       const legacyIdentityPath = path.join(${JSON.stringify(stateDir)}, "identity", "device.json");
       fs.mkdirSync(path.dirname(legacyIdentityPath), { recursive: true });
@@ -536,7 +536,7 @@ describe("Doctor repair followed by gateway readiness", () => {
       }
       const config = JSON.parse(fs.readFileSync(${JSON.stringify(configPath)}, "utf8"));
       const repairedDatabase = new DatabaseSync(${JSON.stringify(databasePath)}, { readOnly: true });
-      const columns = repairedDatabase.prepare("PRAGMA table_info(task_runs)").all();
+      const columns = repairedDatabase.prepare("PRAGMA table_info(apns_registrations)").all();
       const identity = repairedDatabase
         .prepare("SELECT device_id FROM device_identities WHERE identity_key = 'primary'")
         .get();
@@ -548,7 +548,7 @@ describe("Doctor repair followed by gateway readiness", () => {
         valid: result.snapshot.valid,
         hasLastTouchedAt: Object.hasOwn(config.meta ?? {}, "lastTouchedAt"),
         hasSkipWhenBusy: Object.hasOwn(config.agents?.defaults?.heartbeat ?? {}, "skipWhenBusy"),
-        hasToolUseCount: columns.some((column) => column.name === "tool_use_count"),
+        hasRelayOrigin: columns.some((column) => column.name === "relay_origin"),
         migratedDeviceIdentity: identity?.device_id === "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c",
         removedLegacyDeviceIdentity: !fs.existsSync(legacyIdentityPath),
         pluginState,
@@ -566,7 +566,7 @@ describe("Doctor repair followed by gateway readiness", () => {
       valid: true,
       hasLastTouchedAt: false,
       hasSkipWhenBusy: false,
-      hasToolUseCount: true,
+      hasRelayOrigin: true,
       migratedDeviceIdentity: true,
       removedLegacyDeviceIdentity: true,
       pluginState: { value_json: '{"ok":false}', created_at: 4_000 },

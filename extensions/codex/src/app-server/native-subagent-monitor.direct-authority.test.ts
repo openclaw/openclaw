@@ -1,6 +1,4 @@
-import type { AgentHarnessTaskRecord } from "openclaw/plugin-sdk/agent-harness-task-runtime";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   type CodexThreadReadResponse,
   directSpawnItem,
@@ -8,16 +6,13 @@ import {
   CodexNativeSubagentMonitor,
   createClient,
   createRuntime,
-  createRecordedRuntime,
-  createTaskScope,
+  createCompletionScope,
   registerParent,
   notifyChildStarted,
   nativeCompletionNotification,
   childTurnCompletedNotification,
   turnStartedNotification,
   threadRead,
-  taskRecord,
-  nativeHistoryOwner,
   createNativeModelSourceFixture as modelSource,
   requireNativeModelSourceCapture as requireCapture,
 } from "./native-subagent-monitor.test-support.js";
@@ -155,8 +150,9 @@ describe("CodexNativeSubagentMonitor", () => {
     next.release();
     expect(monitor.resolveModelThreadId("child-b")).toBeUndefined();
     expect(b.release).toHaveBeenCalledOnce();
-    monitor.dispose();
+    const disposal = monitor.dispose();
     expect(a.release).toHaveBeenCalledOnce();
+    await disposal;
   });
 
   it("retains nested admitted work and fences only the cancelled execution across regrant", async () => {
@@ -240,9 +236,10 @@ describe("CodexNativeSubagentMonitor", () => {
     first.release();
     sibling.release();
     nested.release();
-    monitor.dispose();
+    const disposal = monitor.dispose();
     expect(monitor.resolveModelThreadId("grandchild-turn")).toBeUndefined();
     expect(source.release).toHaveBeenCalledOnce();
+    await disposal;
   });
 
   it("does not accept parent commentary as a native child result or delivery receipt", async () => {
@@ -277,8 +274,7 @@ describe("CodexNativeSubagentMonitor", () => {
       },
     });
 
-    expect(runtime.finalizeTaskRunByRunId).not.toHaveBeenCalled();
-    expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
+    expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
 
     await client.notify(
       childTurnCompletedNotification({
@@ -290,216 +286,11 @@ describe("CodexNativeSubagentMonitor", () => {
     );
     await parent.unregister();
 
-    expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledExactlyOnceWith(
+    expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ result: "child result" }),
     );
     client.close();
   });
-
-  it.each(["v1", "v2"] as const)(
-    "starts a distinct %s assignment while a completed predecessor is still recovering its result",
-    async (version) => {
-      const client = createClient();
-      const records = new Map<string, AgentHarnessTaskRecord>();
-      const runtime = createRecordedRuntime(records, "agent:main:main");
-      const { promise: historyRead, resolve: releaseRead } =
-        createDeferred<CodexThreadReadResponse>();
-      client.setThreadReadFactory("child-thread", () => historyRead);
-      const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
-        recoveryPollDelaysMs: [10],
-      });
-      const claimDirectChild = vi.fn(() => () => undefined);
-      const owner = await monitor.registerParent({
-        parentThreadId: "parent-thread",
-        requesterSessionKey: "agent:main:main",
-        taskRuntimeScope: createTaskScope("agent:main:main"),
-        agentId: "main",
-        claimDirectChild,
-      });
-      owner.bindTurn("parent-turn");
-      await client.notify({
-        method: "item/completed",
-        params: {
-          threadId: "parent-thread",
-          turnId: "parent-turn",
-          item: directSpawnItem(version, "parent-thread", "child-thread"),
-        },
-      });
-      await client.notify(turnStartedNotification("turn-previous", { error: null }));
-      const firstCompletion = client.notify(
-        childTurnCompletedNotification({ turnId: "turn-previous", status: "completed" }),
-      );
-      const history = threadRead({ previousResult: "first result", result: "second result" });
-      try {
-        await vi.waitFor(() => expect(client.request).toHaveBeenCalled());
-        await client.notify(turnStartedNotification("turn-1", { error: null }));
-        expect(records.size).toBe(1);
-        await client.notify({
-          method: "item/completed",
-          params: {
-            threadId: "parent-thread",
-            turnId: "parent-turn",
-            item:
-              version === "v2"
-                ? {
-                    type: "subAgentActivity",
-                    id: "followup",
-                    kind: "interacted",
-                    agentThreadId: "child-thread",
-                    agentPath: "/root/child-thread",
-                  }
-                : {
-                    type: "collabAgentToolCall",
-                    id: "followup",
-                    tool: "sendInput",
-                    status: "completed",
-                    senderThreadId: "parent-thread",
-                    receiverThreadIds: ["child-thread"],
-                  },
-          },
-        });
-        if (version === "v1") {
-          await client.notify(
-            successfulSendInputOutput({ callId: "followup", submissionId: "turn-1" }),
-          );
-        }
-        expect([...records.keys()].toSorted()).toEqual([
-          "codex-thread:child-thread",
-          "codex-thread:child-thread:turn:turn-1",
-        ]);
-        expect(records.get("codex-thread:child-thread")?.taskId).not.toBe(
-          records.get("codex-thread:child-thread:turn:turn-1")?.taskId,
-        );
-        expect(claimDirectChild).toHaveBeenCalledTimes(2);
-        client.setThreadRead("child-thread", history);
-        releaseRead(history);
-        await firstCompletion;
-        await client.notify(
-          childTurnCompletedNotification({
-            turnId: "turn-1",
-            status: "completed",
-            items: [{ id: "second-final", type: "agentMessage", text: "second result" }],
-          }),
-        );
-        await vi.waitFor(() =>
-          expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith(
-            expect.objectContaining({
-              runId: "codex-thread:child-thread",
-              terminalSummary: "first result",
-            }),
-          ),
-        );
-        expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith(
-          expect.objectContaining({
-            runId: "codex-thread:child-thread:turn:turn-1",
-            terminalSummary: "second result",
-          }),
-        );
-        await owner.unregister();
-        await vi.waitFor(() =>
-          expect(
-            runtime.deliverAgentHarnessTaskCompletion.mock.calls
-              .map(([params]) => params.result)
-              .toSorted(),
-          ).toEqual(["first result", "second result"]),
-        );
-      } finally {
-        client.setThreadRead("child-thread", history);
-        releaseRead(history);
-        await firstCompletion;
-        monitor.dispose();
-      }
-    },
-  );
-
-  it.each(["succeeded", "failed", "cancelled"] as const)(
-    "keeps a recorded %s outcome when its interrupted native thread starts a later assignment",
-    async (status) => {
-      const client = createClient();
-      const historyOwner = nativeHistoryOwner();
-      const task = {
-        ...taskRecord({
-          childThreadId: "child-thread:turn:turn-previous",
-          status,
-          deliveryStatus: "pending",
-        }),
-        runId: "codex-thread:child-thread:turn:turn-previous",
-        terminalSummary: "recorded result",
-        detail: { nativeHistory: historyOwner, nativeTurnId: "turn-previous" },
-      };
-      const records = new Map<string, AgentHarnessTaskRecord>([[task.runId, task]]);
-      const runtime = createRecordedRuntime(records);
-      const history = threadRead({
-        previousResult: "interrupted",
-        result: "later assignment result",
-      });
-      history.thread.turns![0]!.status = "interrupted";
-      client.setThreadRead("child-thread", history);
-      const releaseClaim = vi.fn();
-      const claimDirectChild = vi.fn(() => releaseClaim);
-      const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
-        recoveryPollDelaysMs: [],
-      });
-      onTestFinished(() => monitor.dispose());
-      const owner = await monitor.registerParent({
-        parentThreadId: "parent-thread",
-        historyOwner,
-        requesterSessionKey: task.requesterSessionKey,
-        taskRuntimeScope: createTaskScope(),
-        claimDirectChild,
-      });
-      owner.bindTurn("parent-turn");
-      await vi.waitFor(() =>
-        expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith(
-          expect.objectContaining({
-            detail: expect.objectContaining({ nativeTurnId: "turn-previous" }),
-          }),
-        ),
-      );
-      const first = structuredClone(records.get(task.runId));
-      await client.notify(turnStartedNotification("turn-previous"));
-      expect(records.get(task.runId)).toEqual(first);
-      await client.notify({
-        method: "item/completed",
-        params: {
-          threadId: "parent-thread",
-          turnId: "parent-turn",
-          item: {
-            id: "next-assignment",
-            type: "subAgentActivity",
-            kind: "interacted",
-            agentThreadId: "child-thread",
-          },
-        },
-      });
-      await client.notify(turnStartedNotification("turn-1"));
-      expect(records.get(task.runId)).toEqual(first);
-      expect(records.get("codex-thread:child-thread:turn:turn-1")).toMatchObject({
-        status: "running",
-        detail: { nativeHistory: historyOwner, nativeTurnId: "turn-1" },
-      });
-      expect(claimDirectChild).toHaveBeenCalledOnce();
-      await client.notify(
-        childTurnCompletedNotification({
-          turnId: "turn-1",
-          status: "completed",
-          items: [{ id: "next-final", type: "agentMessage", text: "later assignment result" }],
-        }),
-      );
-      expect(releaseClaim).toHaveBeenCalledOnce();
-      expect(records.get(task.runId)).toEqual(first);
-      await owner.unregister();
-      await vi.waitFor(() =>
-        expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(2),
-      );
-      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledWith(
-        expect.objectContaining({ status, result: "recorded result" }),
-      );
-      expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledWith(
-        expect.objectContaining({ status: "succeeded", result: "later assignment result" }),
-      );
-    },
-  );
 
   it("does not consume pre-bind direct spawn evidence for another turn", async () => {
     const client = createClient();
@@ -521,7 +312,7 @@ describe("CodexNativeSubagentMonitor", () => {
     owner.bindTurn("turn-1");
 
     expect(claimDirectChild).not.toHaveBeenCalled();
-    monitor.dispose();
+    await monitor.dispose();
   });
 
   it.each(["v1", "v2"] as const)(
@@ -570,7 +361,7 @@ describe("CodexNativeSubagentMonitor", () => {
         params: { threadId: "parent-first", turnId: "wrong-parent-turn", item: secondItem },
       } as unknown as CodexServerNotification);
       expect(secondClaim).toHaveBeenCalledTimes(1);
-      monitor.dispose();
+      await monitor.dispose();
     },
   );
 
@@ -593,7 +384,7 @@ describe("CodexNativeSubagentMonitor", () => {
 
       owner.bindTurn("turn-1");
       expect(claimDirectChild).not.toHaveBeenCalled();
-      monitor.dispose();
+      await monitor.dispose();
     },
   );
 
@@ -601,7 +392,7 @@ describe("CodexNativeSubagentMonitor", () => {
     const client = createClient();
     const runtime = createRuntime();
     const release = vi.fn();
-    runtime.deliverAgentHarnessTaskCompletion.mockImplementation(async () => {
+    runtime.deliverAgentHarnessCompletion.mockImplementation(async () => {
       expect(release).toHaveBeenCalledTimes(1);
       return { delivered: true, path: "direct" };
     });
@@ -610,7 +401,7 @@ describe("CodexNativeSubagentMonitor", () => {
     const owner = await monitor.registerParent({
       parentThreadId: "parent-thread",
       requesterSessionKey: "agent:main:main",
-      taskRuntimeScope: createTaskScope("agent:main:main"),
+      completionScope: createCompletionScope("agent:main:main"),
       agentId: "main",
       claimDirectChild,
     });
@@ -632,7 +423,7 @@ describe("CodexNativeSubagentMonitor", () => {
       nativeCompletionNotification({ agentPath: "child-thread", result: "direct result" }),
     );
     expect(release).toHaveBeenCalledTimes(1);
-    monitor.dispose();
+    await monitor.dispose();
   });
 
   it("does not retain authority for a failed V1 spawn", async () => {
@@ -661,7 +452,7 @@ describe("CodexNativeSubagentMonitor", () => {
     });
 
     expect(claimDirectChild).not.toHaveBeenCalled();
-    monitor.dispose();
+    await monitor.dispose();
   });
 
   it.each(["v1", "v2"] as const)(
@@ -673,7 +464,7 @@ describe("CodexNativeSubagentMonitor", () => {
       const owner = await monitor.registerParent({
         parentThreadId: "parent-thread",
         requesterSessionKey: "agent:main:main",
-        taskRuntimeScope: createTaskScope("agent:main:main"),
+        completionScope: createCompletionScope("agent:main:main"),
         claimDirectChild,
       });
       owner.bindTurn("turn-1");
@@ -693,7 +484,7 @@ describe("CodexNativeSubagentMonitor", () => {
       } as unknown as CodexServerNotification);
 
       expect(claimDirectChild).toHaveBeenCalledTimes(1);
-      monitor.dispose();
+      await monitor.dispose();
     },
   );
 
@@ -718,7 +509,7 @@ describe("CodexNativeSubagentMonitor", () => {
     });
 
     expect(claimDirectChild).toHaveBeenCalledTimes(1);
-    monitor.dispose();
+    await monitor.dispose();
   });
 
   it("does not reclaim a completed child while its final result is still unresolved", async () => {
@@ -744,7 +535,7 @@ describe("CodexNativeSubagentMonitor", () => {
 
     expect(release).toHaveBeenCalledTimes(1);
     expect(claimDirectChild).toHaveBeenCalledTimes(1);
-    monitor.dispose();
+    await monitor.dispose();
   });
 
   it.each(["completed", "failed", "interrupted"] as const)(
@@ -776,7 +567,7 @@ describe("CodexNativeSubagentMonitor", () => {
         expect.stringContaining("Codex child turn"),
       );
       expect(claimDirectChild).not.toHaveBeenCalled();
-      monitor.dispose();
+      await monitor.dispose();
     },
   );
 
@@ -814,7 +605,7 @@ describe("CodexNativeSubagentMonitor", () => {
 
     expect(firstClaim).not.toHaveBeenCalled();
     expect(nextClaim).toHaveBeenCalledWith("terminal-child-1");
-    monitor.dispose();
+    await monitor.dispose();
   });
 
   it("collects a terminal revision after its last held reader releases", async () => {
@@ -855,6 +646,6 @@ describe("CodexNativeSubagentMonitor", () => {
 
     expect(firstClaim).not.toHaveBeenCalled();
     expect(nextClaim).toHaveBeenCalledWith("child-thread");
-    monitor.dispose();
+    await monitor.dispose();
   });
 });

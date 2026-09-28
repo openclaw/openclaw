@@ -1,6 +1,3 @@
-/**
- * Builds plugin hook context metadata for native agent harness events.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildAgentHookContextIdentityFields } from "../../plugins/hook-agent-context.js";
 import type { PluginHookAgentContext } from "../../plugins/hook-types.js";

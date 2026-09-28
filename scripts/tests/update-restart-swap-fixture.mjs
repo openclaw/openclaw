@@ -45,12 +45,16 @@ export async function createDiskSwap(sourceRoot, base) {
     Date,
     Error,
     AggregateError,
+    AbortController,
     Buffer,
     performance,
     setTimeout,
     clearTimeout,
   });
   const files = [
+    "infra/errno",
+    "infra/fs-safe-remove",
+    "infra/mutation-authority",
     "infra/package-update-swap",
     "infra/package-update-filesystem",
     "infra/package-update-integrity",
@@ -58,9 +62,6 @@ export async function createDiskSwap(sourceRoot, base) {
     "infra/package-update-local-overrides",
     "infra/package-update-swap-contract",
     "infra/update-npm-prefix",
-    "infra/mutation-authority",
-    "infra/fs-safe-remove",
-    "infra/errno",
     "utils/absolute-deadline",
   ];
   const modules = new Map(),

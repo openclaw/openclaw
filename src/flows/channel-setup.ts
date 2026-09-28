@@ -492,7 +492,6 @@ export async function setupChannels(
   };
   const runScopedChannelStep = async <T>(
     runner: (prompter: WizardPrompter, options: SetupChannelsOptions) => Promise<T>,
-    onPersistentEffect?: () => void,
   ) =>
     await runNavigationScope({
       prompter,
@@ -501,7 +500,6 @@ export async function setupChannels(
         withCommandPluginMetadata({ config: next, workspaceDir: resolveWorkspaceDir() }, () =>
           runner(scopedPrompter, scopedOptions),
         ),
-      ...(onPersistentEffect ? { onPersistentEffect } : {}),
     });
 
   const configureChannel = async (

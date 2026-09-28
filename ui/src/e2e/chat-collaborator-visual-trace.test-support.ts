@@ -151,14 +151,14 @@ export async function traceCollaboratorVisuals(page: Page, dir: string, artifact
           }
         }
         const block = thread.querySelector(".chat-virtual-block");
-        const sizer = thread.querySelector(".chat-virtual-sizer");
+        const range = thread.querySelector(".chat-thread-inner--virtual");
         frames.push({
           t: performance.now(),
           top: thread.scrollTop,
           height: thread.scrollHeight,
           viewport,
           block: block ? rect(block) : null,
-          sizer: sizer ? rect(sizer) : null,
+          range: range ? rect(range) : null,
           rows,
           texts,
           overlaps,

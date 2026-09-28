@@ -330,7 +330,6 @@ function sendInteractionResponse(
 
 export function createMattermostInteractionHandler(params: {
   client: MattermostClient;
-  botUserId: string;
   accountId: string;
   allowedSourceIps?: string[];
   trustedProxies?: string[];

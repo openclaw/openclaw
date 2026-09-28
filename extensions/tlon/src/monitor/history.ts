@@ -1,4 +1,3 @@
-// Tlon plugin module implements history behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { asNullableRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -87,12 +86,7 @@ async function fetchChannelHistory(
         const essay = asRecord(itemRecord?.essay) ?? asRecord(replyPostSet?.essay);
         const seal = asRecord(itemRecord?.seal) ?? asRecord(replyPostSet?.seal);
 
-        return {
-          author: typeof essay?.author === "string" ? essay.author : "unknown",
-          content: extractMessageText(essay?.content || []),
-          timestamp: typeof essay?.sent === "number" ? essay.sent : Date.now(),
-          id: typeof seal?.id === "string" ? seal.id : undefined,
-        } as TlonHistoryEntry;
+        return createHistoryEntryFromMemo({ memo: essay, seal });
       })
       .filter((msg) => msg.content);
 

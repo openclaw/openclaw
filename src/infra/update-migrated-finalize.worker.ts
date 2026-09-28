@@ -26,7 +26,7 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contra
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveEnvironmentValue } from "./process-env.js";
-import { createSqliteLifecycleAggregateError } from "./sqlite-coordinator.js";
+import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import {
   adoptCandidateManagedServiceStop,
   stopSupervisedPredecessorGateway,
@@ -305,13 +305,13 @@ async function finalizeInput(
     throw new Error("Update finalization requires its migrated update run.");
   }
   const { requesterAuthority: descriptor, ...runIdentity } = transferredRun;
-  executorFence?.assertCurrent();
+  executorFence.assertCurrent();
   adoptUpdateRun(runIdentity.runId, { env: runIdentity.env });
   // Parent closures cannot cross JSON. The fresh runtime retains identity checks
   // under its validated original native update lineage.
   const run: NonNullable<UpdateCommandOptions["run"]> = {
     ...runIdentity,
-    ...(executorFence ? { executorFence } : {}),
+    executorFence,
     ...(descriptor
       ? {
           requesterAuthority: descriptor.requester.authorizationSource?.startsWith("profile:")
@@ -327,7 +327,7 @@ async function finalizeInput(
   executorFence.assertCurrent();
   registerRun(run);
   for (const step of input.bufferedSteps) {
-    executorFence?.assertCurrent();
+    executorFence.assertCurrent();
     recordUpdateRunStep(run.runId, step, { env: run.env });
   }
   const { stopped, restartRequired } = await adoptCandidateManagedServiceStop({

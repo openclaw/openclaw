@@ -12,6 +12,7 @@ import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { VERSION } from "../version.js";
+import { withConsoleLogsRoutedToStderrForJson } from "./json-output-mode.js";
 import {
   commandCalls,
   completionCommandCall,
@@ -575,40 +576,94 @@ describe("update-cli", () => {
   it.each([
     {
       name: "update command invalid timeout",
-      run: async () => await invokeUpdateCli({ timeout: "invalid" }),
+      argv: ["update", "--timeout", "invalid"],
       requireTty: false,
       expectedError: "--timeout must be a positive integer (seconds)",
     },
     {
       name: "update status command invalid timeout",
-      run: async () => await updateStatusCommand({ timeout: "invalid" }),
+      argv: ["update", "status", "--timeout", "invalid"],
       requireTty: false,
       expectedError: "--timeout must be a positive integer (seconds)",
     },
     {
       name: "update wizard invalid timeout",
-      run: async () => await updateWizardCommand({ timeout: "invalid" }),
+      argv: ["update", "wizard", "--timeout", "invalid"],
       requireTty: true,
       expectedError: "--timeout must be a positive integer (seconds)",
     },
     {
+      name: "update repair invalid timeout",
+      argv: ["update", "repair", "--timeout", "invalid"],
+      requireTty: false,
+      expectedError: "--timeout must be a positive integer (seconds)",
+    },
+    {
+      name: "update finalize invalid timeout",
+      argv: ["update", "finalize", "--timeout", "invalid"],
+      requireTty: false,
+      expectedError: "--timeout must be a positive integer (seconds)",
+    },
+    {
       name: "update wizard requires a TTY",
-      run: async () => await updateWizardCommand({}),
+      argv: ["update", "wizard"],
       requireTty: false,
       expectedError:
         "Update wizard requires a TTY. Use `openclaw update --channel <stable|extended-stable|beta|dev>` instead.",
     },
   ] as const)(
     "validates update command invocation errors: $name",
-    async ({ run, requireTty, expectedError, name }) => {
+    async ({ argv, requireTty, expectedError }) => {
       setTty(requireTty);
       vi.mocked(defaultRuntime.error).mockClear();
       vi.mocked(defaultRuntime.exit).mockClear();
+      const runsBefore = listUpdateRuns();
+      const program = new Command();
+      registerUpdateCli(program);
 
-      await run();
+      await program.parseAsync([...argv], { from: "user" });
 
-      expect(defaultRuntime.error, name).toHaveBeenCalledWith(expectedError);
-      expect(defaultRuntime.exit, name).toHaveBeenCalledWith(1);
+      expect(vi.mocked(defaultRuntime.error).mock.calls).toEqual([[expectedError]]);
+      expect(vi.mocked(defaultRuntime.exit).mock.calls).toEqual([[1]]);
+      expect(listUpdateRuns()).toEqual(runsBefore);
+      expectNoSideEffects(
+        readConfigFileSnapshot,
+        cleanupStaleManagedServiceUpdateHandoffs,
+        runDaemonInstall,
+        runDaemonRestart,
+      );
+    },
+  );
+
+  it.each(["status", "wizard", "repair", "finalize"])(
+    "routes an invalid %s timeout to the outer JSON error owner",
+    async (command) => {
+      setTty(true);
+      const previousArgv = process.argv;
+      process.argv = ["node", "openclaw", "update", "--json", command, "--timeout", "invalid"];
+      const program = new Command();
+      registerUpdateCli(program);
+      const runsBefore = listUpdateRuns();
+      try {
+        await expect(
+          withConsoleLogsRoutedToStderrForJson(process.argv, () =>
+            program.parseAsync(process.argv),
+          ),
+        ).rejects.toThrow("--timeout must be a positive integer (seconds)");
+      } finally {
+        process.argv = previousArgv;
+      }
+
+      expect(listUpdateRuns()).toEqual(runsBefore);
+      expectNoSideEffects(
+        defaultRuntime.error,
+        defaultRuntime.exit,
+        defaultRuntime.writeJson,
+        readConfigFileSnapshot,
+        cleanupStaleManagedServiceUpdateHandoffs,
+        runDaemonInstall,
+        runDaemonRestart,
+      );
     },
   );
 

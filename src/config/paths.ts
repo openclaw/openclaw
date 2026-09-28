@@ -370,10 +370,18 @@ export function resolveGatewayLockDir(
   stateDir: string = resolveStateDir(),
   uid: number | undefined = typeof process.getuid === "function" ? process.getuid() : undefined,
 ): string {
+  return resolveGatewayLockDirForCanonicalStateDir(normalizePathForComparison(stateDir), uid);
+}
+
+/** Append the lock layout when the caller has already resolved the state directory. */
+export function resolveGatewayLockDirForCanonicalStateDir(
+  stateDir: string,
+  uid: number | undefined = typeof process.getuid === "function" ? process.getuid() : undefined,
+): string {
   const suffix = uid != null ? `openclaw-${uid}` : "openclaw";
   // Clean break: older binaries still use process temp and do not exclude a
   // state-local binary during a mixed-version upgrade.
-  return path.join(normalizePathForComparison(stateDir), "tmp", suffix);
+  return path.join(stateDir, "tmp", suffix);
 }
 
 /**

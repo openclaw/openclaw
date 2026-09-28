@@ -431,7 +431,7 @@ export function resolveRunnerMatrix(params: {
         // Windows packaged-fresh retains the validated version before the
         // Node 24.19 libuv fs-event crash on Windows Server 2025 RUNNER~1 paths.
         const node24Version =
-          runner.os_id === "windows" && suite === "packaged-fresh" ? "24.16.0" : "24.19.0";
+          runner.os_id === "windows" && suite === "packaged-fresh" ? "24.16.0" : "24.21.0";
         const nodeVersions =
           suite === "packaged-fresh" || suite === "packaged-upgrade"
             ? [node24Version, "26.1.0"]

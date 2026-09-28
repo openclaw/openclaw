@@ -21,7 +21,10 @@ import {
   gatewayMethodsTestExclude,
   gatewayMethodsIsolatedTestFiles,
 } from "../../test/vitest/vitest.gateway-server-paths.mjs";
-import { filterFilesByPatterns } from "../../test/vitest/vitest.include-patterns.ts";
+import {
+  filterFilesByPatterns,
+  isPlainRepoRelativePath,
+} from "../../test/vitest/vitest.include-patterns.ts";
 import {
   autoReplyCoreTestInclude,
   autoReplyCoreTestExclude,
@@ -47,13 +50,17 @@ export function listScopedOwnerTestFiles(owner: {
   // Scoped configs drop unit-fast files, so a lister that keeps them prices
   // stripes on files the shard never runs and hands Vitest inert patterns.
   const unitFastFiles = new Set(getUnitFastTestFiles());
-  return filterFilesByPatterns(
-    listTrackedTestFiles(owner.root).filter((file) =>
-      isStripeEligibleTestFile(file, unitFastFiles),
-    ),
-    owner.include,
-    owner.exclude,
-    matchesGlob,
+  const files = listTrackedTestFiles(owner.root).filter((file) =>
+    isStripeEligibleTestFile(file, unitFastFiles),
+  );
+  const literalFiles = new Set(files.filter(isPlainRepoRelativePath));
+  const literalPatterns = new Set(
+    [...owner.include, ...owner.exclude].filter(isPlainRepoRelativePath),
+  );
+  return filterFilesByPatterns(files, owner.include, owner.exclude, (file, pattern) =>
+    literalFiles.has(file) && literalPatterns.has(pattern)
+      ? file === pattern
+      : matchesGlob(file, pattern),
   );
 }
 
@@ -212,10 +219,7 @@ const WHOLE_CONFIG_FILE_OWNERS = new Map<
     "agentic-gateway-server-isolated",
     { listFiles: () => [...gatewayServerIsolatedTestFiles, ...gatewayDatabaseWorkerTestFiles] },
   ],
-  [
-    "agentic-cli",
-    { listFiles: () => listScopedOwnerTestFiles(getCliVitestProjectOwner()), splitByFile: false },
-  ],
+  ["agentic-cli", { listFiles: () => listScopedOwnerTestFiles(getCliVitestProjectOwner()) }],
   ["agentic-cli-process", { listFiles: () => cliProcessTestFiles }],
   [
     "agentic-agents-support",

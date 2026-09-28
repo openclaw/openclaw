@@ -378,24 +378,14 @@ export function findStructuredAuthParamRanges(value: string): StructuredAuthPara
 }
 
 export function redactStructuredAuthHeaders(value: string, replacement: string): string {
-  const ranges = findStructuredAuthParamRanges(value);
-  if (ranges.length === 0) {
-    return value;
-  }
-  const merged: StructuredAuthParamRange[] = [];
-  for (const range of ranges) {
-    const previous = merged.at(-1);
-    if (previous && range.start <= previous.end) {
-      previous.end = Math.max(previous.end, range.end);
-    } else {
-      merged.push({ ...range });
-    }
-  }
   const parts: string[] = [];
   let cursor = 0;
-  for (const range of merged) {
-    parts.push(value.slice(cursor, range.start), replacement);
-    cursor = range.end;
+  for (const range of findStructuredAuthParamRanges(value)) {
+    // Ranges follow header order; overlapping credentials share one replacement.
+    if (parts.length === 0 || range.start > cursor) {
+      parts.push(value.slice(cursor, range.start), replacement);
+    }
+    cursor = Math.max(cursor, range.end);
   }
   parts.push(value.slice(cursor));
   return parts.join("");

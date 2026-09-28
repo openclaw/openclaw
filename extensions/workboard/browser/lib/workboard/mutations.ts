@@ -18,13 +18,10 @@ import {
   getWorkboardRuntime,
   getWorkboardState,
   invalidateWorkboardLoads,
-  resetWorkboardLifecycleTaskConfirmations,
-  setWorkboardLifecycleTaskRefreshFailed,
   workboardHasActiveWrites,
   workboardMutationsReady,
   type WorkboardHost,
 } from "./runtime.ts";
-import { applyTaskSummariesToState, listWorkboardTasks } from "./task-links.ts";
 import type {
   WorkboardCard,
   WorkboardDeleteResult,
@@ -279,7 +276,6 @@ export async function moveWorkboardCard(
       requestUpdate: params.requestUpdate,
       force: true,
       preserveError: true,
-      taskRefresh: "all",
     });
   }
 }
@@ -442,20 +438,6 @@ export async function dispatchWorkboard(params: {
     setWorkboardCards(state, normalized.cards);
     state.statuses = normalized.statuses;
     state.lastDispatchSummary = normalizeDispatchSummary(dispatchResult);
-    state.tasksByCardId = new Map();
-    resetWorkboardLifecycleTaskConfirmations(state, { host: params.host });
-    try {
-      applyTaskSummariesToState(state, await listWorkboardTasks(params.client));
-      setWorkboardLifecycleTaskRefreshFailed(state, false, { host: params.host });
-      state.lifecycleTaskRefreshError = null;
-      state.lastRefreshError = null;
-    } catch (error) {
-      setWorkboardLifecycleTaskRefreshFailed(state, true, {
-        host: params.host,
-        requestUpdate: params.requestUpdate,
-      });
-      state.lastRefreshError = formatError(error);
-    }
     // A teardown may have invalidated this in-flight dispatch. Keep its cached
     // result reload-required so reconnect cannot treat an old completion as canonical.
     state.loaded = workboardMutationsReady(state);

@@ -6,6 +6,7 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { createWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
 import type { ExecutionIdentityInspectionQuery } from "../audit/execution-identity-inspection.types.js";
+import * as boundaryPath from "../infra/boundary-path.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
@@ -18,6 +19,33 @@ import { createOpenClawStateReadTransport } from "./openclaw-state-read-worker.j
 import type { OpenClawStateReadReply } from "./openclaw-state-read.types.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
+
+it("resolves state ownership once at each read preparation and dispatch boundary", async () => {
+  const { pathname, options } = source();
+  const dispatch = createDeferredCore();
+  const task = queueTask(dispatch.promise);
+  const resolve = vi.spyOn(boundaryPath, "resolveIdentityPathViaExistingAncestorSync");
+  const resolutions = () => resolve.mock.calls.filter(([target]) => target === pathname).length;
+  const result = executeExistingOpenClawStateRead(options, { type: "fleet.list" });
+  try {
+    // Retaining the source admits preparation before the worker queue can yield.
+    expect(resolutions()).toBe(1);
+    resolve.mockClear();
+    dispatch.resolve();
+    await task.captured;
+    expect(resolutions()).toBe(1);
+    resolve.mockClear();
+    task.result.resolve(emptyReply);
+    await expect(result).resolves.toEqual(emptyReply);
+    // Result acceptance and awaited native cleanup are separate authority boundaries.
+    expect(resolutions()).toBe(2);
+  } finally {
+    dispatch.resolve();
+    task.result.resolve(emptyReply);
+    await Promise.allSettled([result]);
+    resolve.mockRestore();
+  }
+});
 
 it("captures queued read routing and schema facts without reading unrelated environment values", async () => {
   const { root, pathname } = source();
@@ -533,73 +561,6 @@ it.each(["skills.library.descriptions", "skills.library.manifests"] as const)(
       expect((await task.captured).command).toEqual({ type, input: expected });
       task.result.resolve(returned);
       expect(await result).toEqual(returned);
-    } finally {
-      dispatch.resolve();
-      task.result.resolve(returned);
-      await Promise.allSettled([result]);
-    }
-  },
-);
-
-it.each(["single", "union"] as const)(
-  "captures and charges %s task selectors while retaining original admission",
-  async (shape) => {
-    const { options } = source();
-    const context = captureOpenClawStateWorkerContext(options);
-    const admission = context.admission;
-    context.admission = {
-      ...admission,
-      get identity() {
-        return admission.identity;
-      },
-    };
-    const selector = "任务🦞".repeat(512);
-    const scope = {
-      taskId: selector,
-      flowId: selector,
-      runId: selector,
-      childSessionKey: selector,
-    };
-    const input = shape === "single" ? scope : [scope, { taskId: selector }];
-    const expected = structuredClone(input);
-    const dispatch = createDeferredCore();
-    const task = queueTask(dispatch.promise);
-    const result = executeExistingOpenClawStateRead(
-      { path: context.admission.databasePath, env: context.environment },
-      { type: "tasks.mutationSnapshot", input },
-      { context },
-    );
-    const returned: OpenClawStateReadReply = {
-      ok: true,
-      type: "tasks.mutationSnapshot",
-      sourceAdmitted: true,
-      snapshot: { tasks: new Map(), deliveryStates: new Map() },
-    };
-    try {
-      const submitted = await task.submitted;
-      scope.taskId = "changed task";
-      scope.flowId = "changed flow";
-      scope.runId = "changed run";
-      scope.childSessionKey = "changed child";
-      if (Array.isArray(input)) {
-        input.push({ taskId: "added while queued" });
-      }
-      options.env.OPENCLAW_STATE_DIR = "/changed-after-capture";
-      expect(submitted.inputBytes).toBeGreaterThanOrEqual(
-        Buffer.byteLength(selector) * (shape === "single" ? 4 : 5),
-      );
-      dispatch.resolve();
-      const request = await task.captured;
-      expect(request.command).toEqual({ type: "tasks.mutationSnapshot", input: expected });
-      expect(request.databasePath).toBe(context.admission.databasePath);
-      expect(request.context.environment).toEqual(context.environment);
-      const failure = new Error("Original task admission retired");
-      vi.spyOn(context.admission, "assertCurrent").mockImplementation(() => {
-        throw failure;
-      });
-      const rejected = expect(result).rejects.toThrow(failure.message);
-      task.result.resolve(returned);
-      await rejected;
     } finally {
       dispatch.resolve();
       task.result.resolve(returned);

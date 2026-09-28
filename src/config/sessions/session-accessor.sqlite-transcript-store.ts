@@ -21,7 +21,7 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import {
   createTranscriptIdentityReader,
-  findTranscriptEventInDatabase,
+  findAssistantTranscriptEventInDatabase,
   readEventTimestamp,
   readTranscriptEventId,
   readTranscriptEventMessage,
@@ -632,10 +632,7 @@ export function readTranscriptMessageByScopedIdempotencyKey(
   if (lookup !== "scan-assistant") {
     return readTranscriptMessageByIdempotencyKey(database, scope, idempotencyKey);
   }
-  const found = findTranscriptEventInDatabase(database, scope.sessionId, (event) => {
-    const message = readTranscriptEventMessage(event);
-    return message?.role === "assistant" && message.idempotencyKey === idempotencyKey;
-  });
+  const found = findAssistantTranscriptEventInDatabase(database, scope.sessionId, idempotencyKey);
   if (!found) {
     return undefined;
   }

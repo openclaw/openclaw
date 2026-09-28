@@ -1378,12 +1378,9 @@ extension OpenClawSnapshotUITests {
 
         let toolDetails = app.staticTexts["Tool details"]
         let reasoning = app.buttons["chat-show-reasoning-toggle"]
-        let backgroundTasks = popover.buttons["Background tasks"]
         XCTAssertTrue(toolDetails.exists)
         XCTAssertTrue(reasoning.exists)
-        XCTAssertTrue(backgroundTasks.exists)
         XCTAssertGreaterThan(reasoning.frame.minY, toolDetails.frame.maxY)
-        XCTAssertGreaterThanOrEqual(backgroundTasks.frame.minY, reasoning.frame.maxY)
 
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5)).tap()
         XCTAssertTrue(popover.waitForNonExistence(timeout: 3))
@@ -1655,10 +1652,7 @@ extension OpenClawSnapshotUITests {
     }
 
     private func waitForEnabled(_ element: XCUIElement) {
-        let expectation = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "enabled == true"),
-            object: element)
-        XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 5), .completed)
+        XCTAssertTrue(element.wait(for: \.isEnabled, toEqual: true, timeout: 5))
     }
 
     private func waitForHittable(_ isHittable: Bool, of element: XCUIElement) {
@@ -1879,6 +1873,7 @@ extension OpenClawSnapshotUITests {
     {
         let input = self.chatMessageInput(in: app)
         XCTAssertTrue(input.waitForExistence(timeout: 8))
+        self.waitForEnabled(input)
         input.tap()
         input.typeText(text)
 

@@ -2222,6 +2222,7 @@ describe("frozen admission workflow barriers", () => {
     "acquires selected upgrade metadata before expanded %s admission",
     (lane) => {
       const path = "src/gateway/node-command-policy.ts";
+      const membershipOwner = "src/cli/update-cli/update-command-terminal-publication.ts";
       const scenarioCatalog = "scripts/lib/upgrade-survivor-scenarios.json";
       const inputs = {
         docker_lanes: lane,
@@ -2239,12 +2240,14 @@ describe("frozen admission workflow barriers", () => {
         {
           "package.json": '{"type":"module","version":"2026.9.2"}',
           [path]: readFileSync(path, "utf8"),
+          [membershipOwner]: readFileSync(membershipOwner, "utf8"),
           ...currentSurvivorScenarioFiles(),
         },
         { ADMISSION_BASELINES_RESOLVED: "true" },
       );
       const planned = fixture.selection();
       expect(planned.sourcePaths).toContain(path);
+      expect(planned.sourcePaths).toContain(membershipOwner);
       expect(planned.sourcePaths).toContain(scenarioCatalog);
       const origin = join(fixture.root, "origin.git");
       fixture.git("clone", "--bare", "--no-hardlinks", fixture.target, origin);
@@ -2254,6 +2257,10 @@ describe("frozen admission workflow barriers", () => {
       fixture.git("config", "remote.origin.partialclonefilter", "blob:none");
       const oid = fixture.git("rev-parse", `${fixture.sha}:${path}`);
       const scenarioCatalogOid = fixture.git("rev-parse", `${fixture.sha}:${scenarioCatalog}`);
+      const membershipOid = fixture.git("rev-parse", `${fixture.sha}:${membershipOwner}`);
+      unlinkSync(
+        join(fixture.target, ".git", "objects", membershipOid.slice(0, 2), membershipOid.slice(2)),
+      );
       unlinkSync(join(fixture.target, ".git", "objects", oid.slice(0, 2), oid.slice(2)));
       unlinkSync(
         join(
@@ -2283,7 +2290,10 @@ describe("frozen admission workflow barriers", () => {
       });
       expect(acquired.status, acquired.stderr).toBe(0);
       expect(readFileSync(requested, "utf8").trim().split("\n")).toEqual(
-        expect.arrayContaining([oid, scenarioCatalogOid]),
+        expect.arrayContaining([oid, scenarioCatalogOid, membershipOid]),
+      );
+      expect(fixture.git("cat-file", "blob", membershipOid)).toBe(
+        readFileSync(membershipOwner, "utf8").trim(),
       );
       const admitted = fixture.admit();
       expect(admitted.status, admitted.stderr).toBe(0);
@@ -4045,10 +4055,12 @@ function runNpmTelegramInputValidation(overrides: Record<string, string>) {
 }
 
 function runNpmTelegramArtifactValidation(params: {
+  currentRunAttempt?: string;
   currentRunId: string;
+  producerJobConclusion?: "failure" | "success";
   producerRunId: string;
   producerStatus: "completed" | "in_progress" | "pending" | "queued" | "requested" | "waiting";
-  producerConclusion: "success" | null;
+  producerConclusion: "failure" | "success" | null;
 }) {
   const job = workflowJob(NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e");
   const script = workflowStep(job, "Validate package artifact identity").run;
@@ -4062,6 +4074,7 @@ function runNpmTelegramArtifactValidation(params: {
     `#!/bin/sh
 case "$*" in
   *actions/artifacts*) printf '%s\\n' "$MOCK_ARTIFACT_JSON" ;;
+  *actions/runs*/jobs*) printf '%s\\n' "$MOCK_JOBS_JSON" ;;
   *actions/runs*) printf '%s\\n' "$MOCK_ATTEMPT_JSON" ;;
   *) exit 2 ;;
 esac
@@ -4081,6 +4094,7 @@ esac
       ARTIFACT_RUN_ATTEMPT: attempt,
       ARTIFACT_RUN_ID: params.producerRunId,
       GITHUB_REPOSITORY: "openclaw/openclaw",
+      GITHUB_RUN_ATTEMPT: params.currentRunAttempt ?? attempt,
       GITHUB_RUN_ID: params.currentRunId,
       MOCK_ARTIFACT_JSON: JSON.stringify({
         created_at: "2026-07-15T08:49:20Z",
@@ -4097,6 +4111,20 @@ esac
         run_started_at: "2026-07-15T08:39:00Z",
         status: params.producerStatus,
         updated_at: "2026-07-15T08:49:30Z",
+      }),
+      MOCK_JOBS_JSON: JSON.stringify({
+        jobs: [
+          {
+            completed_at: "2026-07-15T08:49:30Z",
+            conclusion: params.producerJobConclusion ?? "success",
+            id: 654,
+            name: "Run package acceptance / Resolve package candidate",
+            run_attempt: Number(attempt),
+            run_id: Number(params.producerRunId),
+            started_at: "2026-07-15T08:39:00Z",
+            status: "completed",
+          },
+        ],
       }),
       PATH: `${binDir}:${process.env.PATH}`,
     },
@@ -4952,6 +4980,19 @@ function runReleaseChecksSummary(params: {
 }
 
 describe("package acceptance workflow", () => {
+  it("keeps manual frozen-target adaptation explicit and forwards the reusable contract", () => {
+    const workflow = readWorkflow(PACKAGE_ACCEPTANCE_WORKFLOW);
+    const name = "allow_frozen_target_scenario_omissions";
+    const input = workflow.on?.workflow_dispatch?.inputs?.[name];
+    expect(input).toEqual(workflow.on?.workflow_call?.inputs?.[name]);
+    expect(input).toMatchObject({ required: false, default: false, type: "boolean" });
+    for (const job of ["docker_acceptance", "docker_acceptance_registry", "package_telegram"]) {
+      expect(workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, job).with?.[name]).toBe(
+        "${{ inputs.allow_frozen_target_scenario_omissions || false }}",
+      );
+    }
+  });
+
   it("forwards sealed publication inputs through the canonical publish dispatch", () => {
     const workflow = readWorkflow(RELEASE_PUBLISH_WORKFLOW);
     const input = workflow.on?.workflow_dispatch?.inputs?.plugin_sdk_api_acknowledgement;
@@ -8094,7 +8135,7 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(dispatchInputs?.advisory).toBeUndefined();
     expect(callInputs?.advisory).toBeUndefined();
     expect(callInputs?.telegram_advisory).toBeUndefined();
-    expect(Object.keys(dispatchInputs ?? {})).toHaveLength(24);
+    expect(Object.keys(dispatchInputs ?? {})).toHaveLength(25);
     expect(parsedWorkflow.on?.workflow_dispatch?.inputs?.telegram_advisory).toBeUndefined();
     expect(parsedWorkflow.on?.workflow_call?.inputs?.suite_profile).toMatchObject({
       default: "package",
@@ -10300,7 +10341,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("suite_id: native-live-extensions-media-video");
     expect(workflow).toContain("suite_group: native-live-extensions-media-video");
     expect(workflow).toContain("OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=google,minimax");
-    expect(workflow).toContain("OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=openai,openrouter,xai");
+    expect(workflow).toContain("OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=openrouter,xai");
     expect(workflow).toContain(
       "inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic'",
     );
@@ -13223,6 +13264,10 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "artifact_created_at > attempt_completed_at",
       "Package Telegram artifact creation time is outside the declared producer run attempt.",
       "Package Telegram artifact producer run attempt does not match the requested tuple.",
+      "actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}/jobs?per_page=100",
+      "Resolve package candidate",
+      "Prior-attempt Package Telegram artifact lacks one exact successful producer job.",
+      "Package Telegram artifact creation time is outside the successful producer job.",
     ]);
     expect(runStep.env).toMatchObject({
       PACKAGE_FILE_NAME: "${{ inputs.package_file_name || '' }}",
@@ -13280,6 +13325,34 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     });
 
     expect(result.status, result.stderr).toBe(0);
+  });
+
+  it("accepts a prior-attempt artifact from the exact successful package producer", () => {
+    const result = runNpmTelegramArtifactValidation({
+      currentRunAttempt: "3",
+      currentRunId: "123",
+      producerConclusion: "failure",
+      producerRunId: "123",
+      producerStatus: "completed",
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it("rejects a prior-attempt artifact when the package producer failed", () => {
+    const result = runNpmTelegramArtifactValidation({
+      currentRunAttempt: "3",
+      currentRunId: "123",
+      producerConclusion: "failure",
+      producerJobConclusion: "failure",
+      producerRunId: "123",
+      producerStatus: "completed",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "Prior-attempt Package Telegram artifact lacks one exact successful producer job.",
+    );
   });
 
   it("rejects queued artifacts after GitHub assigns a conclusion", () => {

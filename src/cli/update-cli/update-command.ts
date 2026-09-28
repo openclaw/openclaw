@@ -305,6 +305,7 @@ async function updateCommandInternal(
       message: error.message,
       nextAction: error.nextAction,
       failureFacts: error.failureFacts,
+      stepResult: error.stepResult,
       recoverySteps: error.recoverySteps,
     });
   }
@@ -348,7 +349,6 @@ async function runResolvedUpdate(
     currentVersion,
     targetVersion,
     downgradeRisk,
-    packageInstallSpec,
     packageInstallTarget,
     packageAlreadyCurrent,
     packageRuntimeTarget,
@@ -439,7 +439,6 @@ async function runResolvedUpdate(
     startedAt,
     controlPlaneUpdateSentinelMeta,
     packageUpdateNodeRunner: packageUpdateNodeRunner ?? managedServiceNodeRunner,
-    packageInstallSpec,
     runtimeTarget: packageRuntimeTarget,
     managedServiceRootRedirect,
     managedServiceRoot,

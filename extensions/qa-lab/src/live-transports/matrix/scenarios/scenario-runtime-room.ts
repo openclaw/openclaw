@@ -33,14 +33,8 @@ import type { MatrixQaScenarioExecution } from "./scenario-types.js";
 
 export {
   runMatrixQaCanary,
-  runObserverAllowlistOverrideScenario,
-  runRoomThreadReplyOverrideScenario,
-  runSubagentThreadSpawnScenario,
-  runThreadFollowUpScenario,
-  runThreadIsolationScenario,
   runThreadNestedReplyShapeScenario,
   runThreadRootPreservationScenario,
-  runTopLevelReplyShapeScenario,
 } from "./scenario-runtime-thread.js";
 export {
   runPartialStreamingPreviewScenario,

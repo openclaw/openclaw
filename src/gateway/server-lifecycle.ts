@@ -98,7 +98,6 @@ export async function prepareGatewayLifecycle(params: {
     sessionEventSubscribers,
     watchNodeRequestHandler,
     defaultWorkspaceDir,
-    activeTaskCount,
     desktopSessionRegistry,
     nodeDesktopStreamBroker,
     bindDeviceNodeControl,
@@ -135,7 +134,7 @@ export async function prepareGatewayLifecycle(params: {
       void nodeDesktopServiceRef.current?.stopNode(nodeId);
     },
   });
-  const { nodeRegistry, nodePresenceTimers, nodeSendToSession, nodeUnsubscribeAll } = nodeRuntime;
+  const { nodeRegistry, nodeSendToSession, nodeUnsubscribeAll } = nodeRuntime;
   const nodeDesktopService = (await import("./desktop/node-source.js")).createNodeDesktopService({
     getConfig: getRuntimeConfig,
     nodeRegistry,
@@ -253,10 +252,8 @@ export async function prepareGatewayLifecycle(params: {
       runtimeState.gatewayMethods.splice(0, runtimeState.gatewayMethods.length, ...methods);
     },
     setEarlyRuntimeHandles: (handles: {
-      getActiveTaskCount: () => number;
       skillsChangeUnsub: typeof runtimeState.skillsChangeUnsub;
     }) => {
-      activeTaskCount.get = handles.getActiveTaskCount;
       runtimeState.skillsChangeUnsub = handles.skillsChangeUnsub;
     },
     swapDiscovery: (next: typeof runtimeState.discovery) => {
@@ -563,16 +560,14 @@ export async function prepareGatewayLifecycle(params: {
               stopChannel,
               pluginServices: runtimeState.pluginServices,
               cron: runtimeState.cronState.cron,
+              stopCronMaintenance: shutdownRuntime.stopCronMaintenance,
               heartbeatRunner: runtimeState.heartbeatRunner,
-              stopTaskRegistryMaintenance: shutdownRuntime.stopTaskRegistryMaintenance,
-              nodePresenceTimers,
               maintenance: runtimeState.maintenance,
               stopMediaCleanup: stopMediaCleanupForClose,
               agentUnsub: runtimeState.agentUnsub,
               heartbeatUnsub: runtimeState.heartbeatUnsub,
               transcriptUnsub: runtimeState.transcriptUnsub,
               lifecycleUnsub: runtimeState.lifecycleUnsub,
-              taskUnsub: runtimeState.taskUnsub,
               chatRunState,
               clients,
               finishRequestEntries: () => requestEntryLifetime.sealAndJoin(),

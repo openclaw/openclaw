@@ -43,6 +43,8 @@ export type PreManagedServiceStop = {
   /** Verified native service process, used only to correlate legacy Gateway locks. */
   servicePid?: number;
   serviceControlGroup?: string;
+  /** Reporting fact only; membership is rechecked before the native stop. */
+  serviceMembershipSourceAbsent?: boolean;
   offline?: boolean;
   serviceMutationAllowed?: boolean;
   serviceMutationSkipMessage?: string;

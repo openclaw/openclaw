@@ -170,6 +170,14 @@ keys. Repeated stage visits contribute to the counts and totals. Parallel and
 nested stages can overlap, so their totals are neither an exclusive breakdown
 of request time nor CPU measurements.
 
+Session collaboration reads emit queued `diagnostic.phase.completed` events to
+interested diagnostic listeners. `session.members.list` and
+`session.members.listEvidence` separate `profiles`, `evidence`, and `projection`
+waits; `session.discussion.info` and `session.discussion.open` report `provider`
+time, including remote provider requests. Phase names use the method as their
+prefix and contain no session keys or response data. Membership evidence uses
+the existing projection worker lane so full transcript reads do not block it.
+
 With diagnostics and warning logs enabled, `sessions.create` calls lasting at
 least one second emit `slow session create`. Its `elapsedMs` and
 `phaseDurationsMs` separate request preparation, admission, target discovery,
@@ -295,16 +303,23 @@ JavaScript isolate without taking a whole-heap snapshot:
 ```bash
 openclaw gateway call diagnostics.heapProfile --params '{}' --timeout 30000 --json
 openclaw gateway call diagnostics.heapProfile --params '{"durationMs":10000,"samplingIntervalBytes":32768}' --timeout 45000 --json
+openclaw gateway call diagnostics.heapProfile --params '{"includeObjectsCollectedByMajorGC":true,"includeObjectsCollectedByMinorGC":true}' --timeout 30000 --json
 ```
 
 The Node-only RPC defaults to five seconds and an average sampling interval of
-32 KiB. Parameters must be positive integers. Durations above 30 seconds are
+32 KiB. `durationMs` and `samplingIntervalBytes` must be positive integers. Durations above 30 seconds are
 clamped to 30 seconds; intervals below 4 KiB are clamped to 4 KiB. Smaller intervals
 collect more samples at greater CPU and memory cost. Choose a CLI timeout longer
 than the requested capture. The critical-memory warning points to this RPC;
 pressure never starts a capture automatically.
 
+The optional booleans `includeObjectsCollectedByMajorGC` and
+`includeObjectsCollectedByMinorGC` both default to `false`. Enable both to retain
+samples of objects collected during the window and attribute transient allocation
+churn. Retaining collected samples can increase profiler memory use.
+
 The result includes actual elapsed `durationMs`, `samplingIntervalBytes`,
+`includeObjectsCollectedByMajorGC`, `includeObjectsCollectedByMinorGC`,
 `heapUsedBefore`, `heapUsedAfter`, `rssBefore`, `rssAfter` (all memory values in
 bytes), `redactedNodeCount`, `unattributedSampleCount`, `unattributedSampleBytes`,
 and `truncated`. When present, `profile` contains the sanitized V8 sampling tree
@@ -328,8 +343,9 @@ overlap across callers, so do not add them together. Start with large `selfBytes
 and inspect the stack to identify the allocating code.
 
 Sampling is cheaper than a whole-heap snapshot but is still approximate. V8's
-default sampling mode excludes objects collected before capture ends; this is not
-an inventory of every transient allocation or objects allocated before capture.
+default sampling mode excludes objects collected before capture ends; enable both
+collection flags to include those samples. Neither mode is an exact inventory of
+every allocation or includes objects allocated before capture.
 Native allocations, external buffers, other isolates, and other process threads
 are not attributed, so sampled bytes need not explain the full RSS change.
 

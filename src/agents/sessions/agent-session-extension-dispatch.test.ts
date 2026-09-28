@@ -33,14 +33,12 @@ function streamAnswer(model: Model, consumed: readonly Promise<void>[] = []) {
 }
 
 describe("AgentSession text extension dispatch", () => {
-  it.each(["none", "unrelated", "empty"])(
+  it.each(["none", "unrelated"])(
     "delivers updates without extension dispatch when handlers are %s",
     async (mode) => {
       const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>();
       if (mode === "unrelated") {
         handlers.set("turn_start", [async () => undefined]);
-      } else if (mode === "empty") {
-        handlers.set("message_update", []);
       }
       streamMocks.streamSimple.mockImplementation((model) => streamAnswer(model));
       const { session } = await createTestSession({

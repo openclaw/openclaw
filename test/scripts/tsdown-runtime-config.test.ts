@@ -246,6 +246,7 @@ describe("tsdown config", () => {
       requireStandaloneRuntimeGraph("agents/harness/native-hook-relay-client.worker"),
       requireStandaloneRuntimeGraph("process/spawn-broker/worker"),
       requireStandaloneRuntimeGraph("state/openclaw-state-lease-heartbeat.worker"),
+      requireStandaloneRuntimeGraph("tooling/managed-memory-launcher"),
     ]);
 
     for (const config of configs) {
@@ -287,7 +288,6 @@ describe("tsdown config", () => {
       "state/openclaw-database-verify.worker",
       "plugins/memory-state",
       "subagent-registry.runtime",
-      "task-registry-control.runtime",
       "link-understanding/apply.runtime",
       "media-understanding/apply.runtime",
       "index",

@@ -132,6 +132,7 @@ export const preservedModuleBuildSources = [
   "scripts/run-additional-boundary-checks.mts",
   "scripts/run-with-env.mts",
   "scripts/plugin-sdk-api-diff.mts",
+  "scripts/lib/native-declaration-subprocess.mts",
   "scripts/test-projects.mts",
   "scripts/lib/vitest-build-prerequisites.mts",
   "scripts/lib/vitest-batch-runner.mts",
@@ -248,6 +249,7 @@ export const preservedModuleBuildAssets = [
   "scripts/e2e/lib/upgrade-survivor/config-recipe/plugins-feishu.json",
   "scripts/e2e/lib/upgrade-survivor/config-recipe/plugins.json",
   "scripts/e2e/lib/upgrade-survivor/config-recipe/skills.json",
+  "scripts/e2e/lib/upgrade-survivor/config-recipe/tools-tool-search.json",
   ".github/workflows/plugin-npm-release.yml",
   "scripts/lib/vitest-worker-bootstrap.mts",
 ];

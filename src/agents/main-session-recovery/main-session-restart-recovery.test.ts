@@ -108,6 +108,7 @@ import {
 } from "../subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
 import { registerHarnessCompletionRecoveryCases } from "./main-session-harness-completion.test-harness.js";
+import { registerParentRestartRecoveryCases } from "./main-session-parent-recovery.test-harness.js";
 import * as recoveryOwnerRelease from "./main-session-recovery-owner-release.js";
 import { createRecoveryRuntimeFixture } from "./main-session-recovery-runtime.test-support.js";
 import {
@@ -394,13 +395,6 @@ async function writePreparedMainSessionTranscript(
   entry: SessionEntryFixture = {},
 ): Promise<string> {
   tmpDir = transcriptFixture.prepareRoot();
-  return writeMainSessionTranscript(messages, entry);
-}
-
-async function writeMainSessionTranscript(
-  messages: readonly unknown[],
-  entry: SessionEntryFixture = {},
-): Promise<string> {
   const sessionsDir = await makeSessionsDir();
   await writeMainSession({ sessionsDir, ...entry });
   await writeTranscript(sessionsDir, "main-session", messages);
@@ -1370,6 +1364,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("resumes marked sessions with a tool-result transcript tail", async () => {
+    tmpDir = transcriptFixture.prepareRoot();
     const { sessionsDir } = await makeMainSessionFixture();
     await writeCompletedToolTranscript(sessionsDir);
 
@@ -1387,6 +1382,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("resumes when durable commentary is mirrored after the restart recovery mark", async () => {
+    tmpDir = transcriptFixture.prepareRoot();
     const sessionsDir = await makeSessionsDir();
     const sessionKey = "agent:main:main";
     await writeStore(sessionsDir, {
@@ -1534,107 +1530,13 @@ describe("main-session-restart-recovery", () => {
     expect(gatewayParams().idempotencyKey).not.toBe(runId);
   });
 
-  it.each([
-    {
-      label: "an announcement interrupted during lifecycle rotation",
-      lifecycleRunId: undefined,
-      sessionKey: "agent:main:telegram:group:-100:topic:2",
-      sessionId: "topic-2-session",
-      restartRecoveryRuns: [
-        {
-          runId: "announce:v1:agent:main:subagent:child:run-1",
-          lifecycleGeneration: "generation-old",
-        },
-      ],
-      userMessage: { role: "user", content: "earlier human request" },
-    },
-    {
-      label: "an announcement interrupted during a full restart",
-      lifecycleRunId: undefined,
-      sessionKey: "agent:main:telegram:group:-100:topic:8893",
-      sessionId: "topic-8893-session",
-      restartRecoveryRuns: undefined,
-      userMessage: {
-        role: "user",
-        content: "A background task finished.",
-        provenance: {
-          kind: "inter_session",
-          sourceSessionKey: "agent:main:subagent:child",
-          sourceChannel: "internal",
-          sourceTool: "subagent_announce",
-        },
-      },
-    },
-    {
-      label: "a parent continuation after children settled",
-      lifecycleRunId: undefined,
-      sessionKey: "agent:main:dashboard:parent",
-      sessionId: "parent-session",
-      restartRecoveryRuns: [
-        {
-          runId: "announce:requester-settle:main:parent:child:yield-1",
-          lifecycleGeneration: "generation-old",
-        },
-      ],
-      userMessage: {
-        role: "user",
-        content: "The child finished; continue the original task.",
-        provenance: {
-          kind: "inter_session",
-          sourceSessionKey: "agent:main:subagent:child",
-          sourceChannel: "internal",
-          sourceTool: "subagent_settle",
-        },
-      },
-    },
-    {
-      label: "a hard-killed parent continuation",
-      sessionKey: "agent:main:dashboard:hard-killed-parent",
-      sessionId: "hard-killed-parent-session",
-      lifecycleRunId: "announce:requester-settle:main:parent:child:cold",
-      restartRecoveryRuns: undefined,
-      userMessage: {
-        role: "user",
-        content: "The child finished; continue the original task.",
-        provenance: {
-          kind: "inter_session",
-          sourceSessionKey: "agent:main:subagent:child",
-          sourceChannel: "internal",
-          sourceTool: "subagent_settle",
-        },
-      },
-    },
-  ])("resumes unfinished work after $label", async (fixture) => {
-    const sessionsDir = await makeSessionsDir();
-    const storePath = path.join(sessionsDir, "sessions.json");
-    await writeStore(sessionsDir, {
-      [fixture.sessionKey]: {
-        sessionId: fixture.sessionId,
-        updatedAt: Date.now() - 10_000,
-        status: "running",
-        abortedLastRun: true,
-        restartRecoveryRuns: fixture.restartRecoveryRuns,
-        lifecycleRunId: fixture.lifecycleRunId,
-      },
-    });
-    await writeTranscript(sessionsDir, fixture.sessionId, [
-      fixture.userMessage,
-      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
-      { role: "toolResult", content: "done" },
-    ]);
-
-    await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
-    expect(callGateway).toHaveBeenCalledOnce();
-    expect(gatewayParams()).toMatchObject({
-      sessionKey: fixture.sessionKey,
-      expectedExistingSessionId: fixture.sessionId,
-      message: expect.stringContaining("The restart did not cancel the user's task"),
-    });
-    const recovered = loadSessionEntry({ sessionKey: fixture.sessionKey, storePath });
-    expect(recovered).toMatchObject({ status: "running" });
-    expect(recovered?.restartRecoveryDeliverySourceRunId).toBe(
-      fixture.restartRecoveryRuns?.[0]?.runId ?? fixture.lifecycleRunId,
-    );
+  registerParentRestartRecoveryCases({
+    makeSessionsDir,
+    writeStore,
+    writeTranscript,
+    writePreparedMainSessionTranscript,
+    expectRecovery,
+    gatewayParams,
   });
 
   registerHarnessCompletionRecoveryCases(getHarnessRecoveryFixture);
@@ -2655,7 +2557,7 @@ describe("main-session-restart-recovery", () => {
   );
 
   it("resumes stale approval-pending exec tool results with restart-safe tools", async () => {
-    const sessionsDir = await writeMainSessionTranscript([
+    const sessionsDir = await writePreparedMainSessionTranscript([
       { role: "user", content: "run a command that needs approval" },
       { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
       {
@@ -3051,7 +2953,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("retains restart safety when the first restart follows pending final persistence", async () => {
-    const sessionsDir = await writeMainSessionTranscript(
+    const sessionsDir = await writePreparedMainSessionTranscript(
       [
         { role: "user", content: "do the thing" },
         {
@@ -3080,6 +2982,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("sanitizes durable pending final delivery payloads before resume prompts", async () => {
+    tmpDir = transcriptFixture.prepareRoot();
     const sessionsDir = await makeSessionsDir();
     const pendingPayload = [
       "The final answer is 42.",
@@ -3134,7 +3037,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("resumes pending final delivery even when the transcript tail is assistant output", async () => {
-    const sessionsDir = await writeMainSessionTranscript(
+    const sessionsDir = await writePreparedMainSessionTranscript(
       [
         { role: "user", content: "finish" },
         { role: "assistant", content: "assistant final was already captured" },
@@ -3158,6 +3061,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("does not scan ordinary running sessions without the restart-aborted marker", async () => {
+    tmpDir = transcriptFixture.prepareRoot();
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, {
       "agent:main:main": {
@@ -3664,6 +3568,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("cancels startup recovery when its gateway lifecycle stops", async () => {
+    tmpDir = transcriptFixture.prepareRoot();
     const sessionsDir = await makeSessionsDir();
     await writeMainSession({
       sessionsDir,
@@ -3694,6 +3599,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("cancels an immediate startup recovery before its queued attempt can claim a session", async () => {
+    tmpDir = transcriptFixture.prepareRoot();
     const { storePath } = await makeMainSessionFixture({
       pendingFinalDelivery: makePendingFinalDelivery(),
     });
@@ -3714,6 +3620,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("stops startup recovery while its Gateway admission is suspended", async () => {
+    tmpDir = transcriptFixture.prepareRoot();
     const { storePath } = await makeMainSessionFixture({
       pendingFinalDelivery: makePendingFinalDelivery(),
     });
@@ -3833,6 +3740,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("stops without waiting for an unresolved startup release", async () => {
+    tmpDir = transcriptFixture.prepareRoot();
     const releaseStartup = createDeferred();
     const { storePath } = await makeMainSessionFixture({
       pendingFinalDelivery: makePendingFinalDelivery(),
@@ -3857,6 +3765,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("fences an in-flight startup recovery before its durable session claim", async () => {
+    tmpDir = transcriptFixture.prepareRoot();
     const { storePath } = await makeMainSessionFixture({
       pendingFinalDelivery: makePendingFinalDelivery(),
     });
@@ -3914,6 +3823,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("joins an in-flight startup dispatch before stopping its recovery owner", async () => {
+    tmpDir = transcriptFixture.prepareRoot();
     await makeMainSessionFixture({
       pendingFinalDelivery: makePendingFinalDelivery(),
     });
@@ -3955,6 +3865,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("fences an ambiguous terminal probe when its startup recovery owner stops", async () => {
+    tmpDir = transcriptFixture.prepareRoot();
     const { storePath } = await makeMainSessionFixture({
       pendingFinalDelivery: makePendingFinalDelivery(),
     });
@@ -4354,6 +4265,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("rejects foreground takeover while tombstoning exhausted recovery", async () => {
+    tmpDir = transcriptFixture.prepareRoot();
     const { sessionsDir, storePath, sessionKey } = await makeMainSessionFixture({
       mainRestartRecovery: {
         cycleId: "cycle-exhausted",
@@ -4408,6 +4320,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("retries tombstoning after a transcript metadata conflict", async () => {
+    tmpDir = transcriptFixture.prepareRoot();
     const { sessionsDir, storePath, sessionKey } = await makeMainSessionFixture({
       mainRestartRecovery: {
         cycleId: "cycle-exhausted",
@@ -4472,6 +4385,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("tombstones when message-tool-only authority cannot be reconstructed", async () => {
+    tmpDir = transcriptFixture.prepareRoot();
     const { sessionsDir, storePath } = await makeMainSessionFixture({
       restartRecoveryDeliveryRunId: "recovery-main",
       restartRecoverySourceIngress: "channel",
@@ -4507,6 +4421,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("does not restore channel authority from a generic session route", async () => {
+    tmpDir = transcriptFixture.prepareRoot();
     const { sessionsDir, storePath } = await makeMainSessionFixture({
       channel: "discord",
       lastTo: "discord:dm:fallback",
@@ -4990,7 +4905,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("resumes marked sessions without a meaningful transcript tail", async () => {
-    const sessionsDir = await writeMainSessionTranscript([
+    const sessionsDir = await writePreparedMainSessionTranscript([
       { role: "system", content: "session metadata only" },
     ]);
 
@@ -5268,6 +5183,7 @@ describe("main-session-restart-recovery", () => {
   });
 
   it("matches a checkpointed Control UI hook to its run-keyed user turn", async () => {
+    tmpDir = transcriptFixture.prepareRoot();
     const { sessionsDir, storePath, sessionKey } = await makeControlUiRecoveryFixture({
       restartRecoveryBeforeAgentReplyState: "handled-silent",
     });

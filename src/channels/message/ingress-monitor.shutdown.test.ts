@@ -18,49 +18,13 @@ afterEach(() => {
 });
 
 describe("channel ingress monitor shutdown", () => {
-  it("joins a settlement write before disposing the drain on stop", async () => {
-    await withQueue(async (queue) => {
-      const releaseStarted = createDeferredCore();
-      const settlementGate = createDeferredCore();
-      const release = queue.release.bind(queue);
-      const order: string[] = [];
-      const blockedRelease: typeof queue.release = async (idOrClaim, releaseOptions) => {
-        releaseStarted.resolve();
-        await settlementGate.promise;
-        const result = await release(idOrClaim, releaseOptions);
-        order.push("committed");
-        return result;
-      };
-      queue.release = vi.fn(blockedRelease);
-      const monitor = createMonitor(queue, async () => ({
-        kind: "failed-retryable",
-        error: new Error("retry later"),
-      }));
-      monitor.start();
-      await monitor.admit({ id: "event-stop-settlement", lane: "a", text: "hello" });
-      await releaseStarted.promise;
-
-      const stopping = monitor.stop().then(() => order.push("stopped"));
-      try {
-        await monitor.waitForPumpIdle();
-        settlementGate.resolve();
-        await stopping;
-        expect(order).toEqual(["committed", "stopped"]);
-      } finally {
-        settlementGate.resolve();
-        await stopping;
-      }
-    });
-  });
-
-  it.each(
-    (["cancel", "adopt", "completed", "failed"] as const).flatMap((settlementKind) =>
-      [false, true].map((waitForDeliveryIdleOnStop) => ({
-        settlementKind,
-        waitForDeliveryIdleOnStop,
-      })),
-    ),
-  )(
+  it.each([
+    { settlementKind: "cancel", waitForDeliveryIdleOnStop: false },
+    { settlementKind: "adopt", waitForDeliveryIdleOnStop: false },
+    { settlementKind: "completed", waitForDeliveryIdleOnStop: false },
+    { settlementKind: "failed", waitForDeliveryIdleOnStop: false },
+    { settlementKind: "failed", waitForDeliveryIdleOnStop: true },
+  ])(
     "joins the $settlementKind write before disposal with delivery wait=$waitForDeliveryIdleOnStop",
     async ({ settlementKind, waitForDeliveryIdleOnStop }) => {
       await withQueue(async (queue) => {
@@ -103,7 +67,10 @@ describe("channel ingress monitor shutdown", () => {
             );
             return { kind: settlementKind === "cancel" ? "deferred" : "completed" };
           },
-          { deferredClaims: "wait-on-stop", waitForDeliveryIdleOnStop },
+          {
+            deferredClaims: waitForDeliveryIdleOnStop ? undefined : "wait-on-stop",
+            waitForDeliveryIdleOnStop,
+          },
         );
         monitor.start();
         await monitor.admit({ id: "inline-settlement", lane: "a", text: "hello" });

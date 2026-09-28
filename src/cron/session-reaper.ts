@@ -1,5 +1,6 @@
 /** Prunes expired per-run cron sessions and archives unreferenced transcripts. */
 import path from "node:path";
+import { buildPendingGeneratedMediaSessionKeySet } from "../agents/media-generation-activity.js";
 import { hasDescendantRunAwaitingSettle } from "../agents/subagents/registry/subagent-registry-read.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import {
@@ -13,7 +14,6 @@ import type { CronConfig } from "../config/types.cron.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { isCompetingSessionWorkAdmissionActive } from "../sessions/session-lifecycle-admission.js";
-import { buildPendingGeneratedMediaSessionKeySet } from "../tasks/task-status-access.js";
 import { deleteCronSessionViaGateway } from "./isolated-agent/session-cleanup.js";
 import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
 import type { Logger } from "./service/state.js";
@@ -148,7 +148,7 @@ export async function sweepCronRunSessions(params: {
     })) {
       if (entry.cronRunContinuation) {
         // Build one unordered snapshot only when an expired continuation needs it.
-        // Fresh rows and stores without continuations never touch the task registry.
+        // Fresh rows and stores without continuations never read media operation state.
         pendingMediaSessionKeys ??= buildPendingGeneratedMediaSessionKeySet();
         if (pendingMediaSessionKeys.has(sessionKey) || hasDescendantRunAwaitingSettle(sessionKey)) {
           continue;

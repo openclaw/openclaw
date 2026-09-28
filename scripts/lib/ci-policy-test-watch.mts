@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { matchesGlob } from "node:path";
+import { isPlainRepoRelativePath } from "../../test/vitest/vitest.include-patterns.ts";
 
 type PolicyTestWatch = {
   ownerGlobs?: readonly string[];
@@ -362,18 +363,6 @@ const policyTestWatches = [
     ],
   },
   {
-    testFile: "src/tasks/task-registry-terminal-notification.test.ts",
-    watchGlobs: [
-      "src/tasks/task-notification.kernel.ts",
-      "src/tasks/task-initial.worker.ts",
-      "src/tasks/task-registry.worker.ts",
-      "src/state/openclaw-state.worker.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
-      "src/state/openclaw-state-read.worker.ts",
-      "src/infra/sqlite-store.worker.ts",
-    ],
-  },
-  {
     testFile: "src/transcripts/store.test.ts",
     watchGlobs: [
       "src/transcripts/store-worker-read.ts",
@@ -663,24 +652,36 @@ const policyTestWatches = [
       "src/agents/sandbox/ssh-backend.ts",
     ],
   },
-  {
-    testFile: "src/tasks/task-boundaries.test.ts",
-    watchGlobs: ["src/**/!(*.test|*.test-harness|*.test-utils|*.e2e-harness).ts"],
-  },
 ] satisfies readonly PolicyTestWatch[];
+
+const literalPolicyPatterns = new Set(
+  policyTestWatches
+    .flatMap(({ watchGlobs, ownerGlobs }) => [...watchGlobs, ...(ownerGlobs ?? [])])
+    .filter(isPlainRepoRelativePath),
+);
+
+function matchesPolicyPattern(changedPath: string, pattern: string, literalPath: boolean) {
+  return literalPath && literalPolicyPatterns.has(pattern)
+    ? changedPath === pattern
+    : matchesGlob(changedPath, pattern);
+}
 
 /** Resolve watched tests, optionally restricting to complete owners of the changed input. */
 export function resolvePolicyTestTargets(
   changedPaths: readonly string[],
   options: { completeOwnersOnly?: boolean } = {},
 ): string[] {
+  const paths = changedPaths.map((changedPath) => ({
+    changedPath,
+    literal: isPlainRepoRelativePath(changedPath),
+  }));
   return policyTestWatches
     .filter(({ watchGlobs, ownerGlobs }) =>
-      changedPaths.some(
-        (changedPath) =>
-          watchGlobs.some((watchGlob) => matchesGlob(changedPath, watchGlob)) &&
+      paths.some(
+        ({ changedPath, literal }) =>
+          watchGlobs.some((watchGlob) => matchesPolicyPattern(changedPath, watchGlob, literal)) &&
           (!options.completeOwnersOnly ||
-            ownerGlobs?.some((ownerGlob) => matchesGlob(changedPath, ownerGlob))),
+            ownerGlobs?.some((ownerGlob) => matchesPolicyPattern(changedPath, ownerGlob, literal))),
       ),
     )
     .map(({ testFile }) => testFile);
@@ -688,7 +689,8 @@ export function resolvePolicyTestTargets(
 
 /** True when the policy tests are the complete bounded owner for this path. */
 export function isPolicyTestOwnedPath(changedPath: string): boolean {
+  const literal = isPlainRepoRelativePath(changedPath);
   return policyTestWatches.some(({ ownerGlobs }) =>
-    ownerGlobs?.some((ownerGlob) => matchesGlob(changedPath, ownerGlob)),
+    ownerGlobs?.some((ownerGlob) => matchesPolicyPattern(changedPath, ownerGlob, literal)),
   );
 }

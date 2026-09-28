@@ -138,7 +138,6 @@ export const pluginRegistrationContractCases = {
     realtimeVoiceProviderIds: ["openai"],
     mediaUnderstandingProviderIds: ["openai"],
     imageGenerationProviderIds: ["openai"],
-    videoGenerationProviderIds: ["openai"],
   },
   "opencode-go": {
     pluginId: "opencode-go",

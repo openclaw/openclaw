@@ -18,7 +18,6 @@ import {
 import { isActiveEmbeddedRunId } from "../agents/embedded-agent-runner/runs.js";
 import { isTimeoutError, resolveFailoverReasonFromError } from "../agents/failover-error.js";
 import type { FailoverReason } from "../agents/failover/signal.js";
-import { resolveToolSearchCodeDisplayTarget } from "../agents/tool-display-common.js";
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
 import { normalizeAgentPlanSteps } from "../channels/streaming.js";
@@ -56,6 +55,7 @@ import {
   resolveHeartbeatFlag,
   shouldHideHeartbeatChatOutput,
 } from "./server-chat-heartbeat.js";
+import { createSessionLifecyclePublisher } from "./server-chat-lifecycle-publication.js";
 import {
   mergeAgentTextPayload,
   mergeChatTextPayload,
@@ -117,41 +117,6 @@ const RESTART_RECOVERY_LIFECYCLE_PHASES = new Set(["start", "end", "error"]);
 // Keep the newest handles, independently of tool-progress verbosity and eviction.
 const MAX_LIVE_CANVAS_BLOCKS = 32;
 const MAX_LIVE_CANVAS_BYTES = 64 * 1024;
-
-function projectToolSearchCodeEventForChannelPayload<T extends { data?: unknown }>(payload: T): T {
-  const data = payload.data;
-  if (!data || typeof data !== "object") {
-    return payload;
-  }
-  const record = data as Record<string, unknown>;
-  if (record.name !== "tool_search_code") {
-    return payload;
-  }
-  const target = resolveToolSearchCodeDisplayTarget(record.args);
-  if (!target) {
-    return payload;
-  }
-  const projectedName = target.displayToolName ?? target.toolName;
-  if (!projectedName || projectedName === "tool_search_code") {
-    return payload;
-  }
-
-  // Channel/node subscribers render from event data, not the richer display
-  // helper used by Control UI. Project obvious bridge calls so verbose
-  // surfaces name the concrete tool while keeping the bridge identity available.
-  const projectedData: Record<string, unknown> = { ...record, name: projectedName };
-  if (target.displayArgs) {
-    projectedData.args = target.displayArgs;
-  } else if (target.detail) {
-    projectedData.args = { detail: target.detail };
-  }
-  if (target.bridgeVerb) {
-    projectedData.bridgeToolName = "tool_search_code";
-    projectedData.bridgeTargetToolName = target.toolName;
-    projectedData.bridgeVerb = target.bridgeVerb;
-  }
-  return { ...payload, data: projectedData };
-}
 
 function shouldMirrorAssistantEventToHiddenSessionMessages(data: unknown): boolean {
   if (!data || typeof data !== "object") {
@@ -480,6 +445,15 @@ export function createAgentEventHandler({
       activeRunState,
     });
   };
+
+  const publishSessionLifecycle = createSessionLifecyclePublisher({
+    broadcastToConnIds,
+    sessionEventSubscribers,
+    getSessionRowProjection,
+    persistGatewaySessionLifecycleEventForEvent,
+    buildSnapshot: (sessionKey, event, agentId, phase) =>
+      buildSessionEventSnapshot(sessionKey, event, agentId, true, phase === "start"),
+  });
 
   const resolveSessionDeliveryKeys = (sessionKey: string, agentId?: string) => {
     if (sessionKey.trim().toLowerCase() !== "global") {
@@ -1340,10 +1314,10 @@ export function createAgentEventHandler({
       delete data.partialResult;
       channelPayload = { ...payload, data };
     }
-    const nodePayload = projectToolSearchCodeEventForChannelPayload({
+    const nodePayload = {
       ...channelPayload,
       ...buildSessionEventSnapshot(sessionKey, undefined, agentId),
-    });
+    };
     // Registration is demand only; each send still validates its pairing generation.
     nodeSendToSession(firstDeliveryKey, "agent", nodePayload, { sessionKeys: deliveryKeys });
   };
@@ -1769,52 +1743,14 @@ export function createAgentEventHandler({
       (lifecyclePhase === "start" ||
         (lifecyclePhase === "model" && runContext && isControlUiVisible))
     ) {
-      if (lifecyclePhase === "start") {
-        void persistGatewaySessionLifecycleEventForEvent({
-          sessionKey,
-          agentId: sessionAgentId,
-          event: {
-            ...evt,
-            ...(eventRunId !== evt.runId ? { clientRunId: eventRunId } : {}),
-          },
-        }).catch((err: unknown) => {
-          // Surface the swallowed start-phase persistence failure: a silent write
-          // failure drops the run's start marker from restart-recovery accounting
-          // with no operator trace, matching the terminal-phase log below.
-          logError(
-            `gateway: start session persistence failed session=${formatForLog(sessionKey)} run=${formatForLog(evt.runId)} error=${formatForLog(err)}`,
-          );
-        });
-      }
-      const sessionEventConnIds = sessionEventSubscribers.getAll();
-      if (hasSessionChangeReceivers(sessionEventConnIds)) {
-        const publish = () =>
-          broadcastToConnIds(
-            "sessions.changed",
-            {
-              sessionKey,
-              ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
-              phase: lifecyclePhase,
-              runId: evt.runId,
-              ...(eventRunId !== evt.runId ? { clientRunId: eventRunId } : {}),
-              ts: evt.ts,
-              ...buildSessionEventSnapshot(
-                sessionKey,
-                evt,
-                sessionAgentId,
-                true,
-                lifecyclePhase === "start",
-              ),
-            },
-            sessionEventConnIds,
-            { dropIfSlow: true },
-          );
-        const projection = getSessionRowProjection?.();
-        void withPreparedSessionEventRow(projection, sessionKey, sessionAgentId, publish).catch(
-          (error: unknown) =>
-            logError(`gateway: session snapshot publication failed: ${formatErrorMessage(error)}`),
-        );
-      }
+      publishSessionLifecycle({
+        event: evt,
+        phase: lifecyclePhase,
+        sessionKey,
+        agentId: sessionAgentId,
+        clientRunId: eventRunId,
+        runContext,
+      });
     }
   };
 

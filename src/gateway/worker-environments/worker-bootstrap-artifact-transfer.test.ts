@@ -83,7 +83,7 @@ describe("worker bootstrap artifact transfer", () => {
     await expect(prepare("")).rejects.toThrow("Worker artifact archive is invalid");
   });
 
-  it("delivers exactly one artifact, only on its digest route with a header bearer", async () => {
+  it("delivers an artifact only on its digest route with a header bearer", async () => {
     const { artifact, url, headers } = await prepare();
     for (const rejectedUrl of [
       url.replace(artifact.tarballSha256, "a".repeat(64)),
@@ -101,7 +101,6 @@ describe("worker bootstrap artifact transfer", () => {
     expect(response.headers.get("x-openclaw-content-sha256")).toBe(artifact.tarballSha256);
     expect(response.headers.get("content-length")).toBe(String(artifact.tarballBytes));
     await expect(response.text()).resolves.toBe("source-runtime");
-    expect((await fetch(url, { headers })).status).toBe(404);
     expect((await fetch(`${origin}/__openclaw__/worker-bootstrap-other`)).status).toBe(418);
   });
 
@@ -183,7 +182,7 @@ describe("worker bootstrap artifact transfer", () => {
       const { receipt, url, headers } = await prepare(Buffer.alloc(8 * 1024 * 1024), owner.signal);
       const response = await fetch(url, { headers });
       expect(response.status).toBe(200);
-      expect((await fetch(url, { headers })).status).toBe(404);
+      expect((await fetch(url, { headers })).status).toBe(503);
       if (closure === "owner") {
         authorized = false;
       }

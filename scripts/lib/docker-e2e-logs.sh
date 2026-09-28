@@ -36,26 +36,17 @@ docker_e2e_read_positive_int_env() {
 }
 
 run_logged() {
-  local label="$1"
-  shift
-  docker_e2e_read_positive_int_env OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES 65536 >/dev/null || return $?
-  local log_file
-  log_file="$(docker_e2e_run_log "$label")"
-  if ! "$@" >"$log_file" 2>&1; then
-    local print_status=0
-    docker_e2e_print_log "$log_file" || print_status="$?"
-    rm -f "$log_file"
-    if [ "$print_status" -ne 0 ]; then
-      return "$print_status"
-    fi
-    return 1
-  fi
-  rm -f "$log_file"
+  docker_e2e_run_logged 0 "$@"
 }
 
 run_logged_print() {
-  local label="$1"
-  shift
+  docker_e2e_run_logged 1 "$@"
+}
+
+docker_e2e_run_logged() {
+  local print_success="$1"
+  local label="$2"
+  shift 2
   docker_e2e_read_positive_int_env OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES 65536 >/dev/null || return $?
   local log_file
   log_file="$(docker_e2e_run_log "$label")"
@@ -68,11 +59,13 @@ run_logged_print() {
     fi
     return 1
   fi
-  docker_e2e_print_log "$log_file" || {
-    local print_status="$?"
-    rm -f "$log_file"
-    return "$print_status"
-  }
+  if [ "$print_success" = 1 ]; then
+    docker_e2e_print_log "$log_file" || {
+      local print_status="$?"
+      rm -f "$log_file"
+      return "$print_status"
+    }
+  fi
   rm -f "$log_file"
 }
 

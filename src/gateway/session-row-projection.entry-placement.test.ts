@@ -1,6 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { updateSessionEntry } from "../config/sessions/session-accessor.entry-mutation.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.js";
+import { recordSessionParticipant as recordNativeParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.transcript-turn.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -13,7 +15,7 @@ import { createWorkerSessionPlacementStore } from "./worker-environments/placeme
 
 afterEach(() => vi.restoreAllMocks());
 
-it("reuses placement facts after transcript writes and refreshes actual placement changes", async () => {
+it("reuses placement after entry and participant writes and refreshes actual placement changes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = {
       agents: {
@@ -76,6 +78,24 @@ it("reuses placement facts after transcript writes and refreshes actual placemen
           placement: expect.objectContaining({ state: "requested" }),
         }),
       });
+      expect(reads).not.toHaveBeenCalled();
+
+      for (const [index, record] of [recordNativeParticipant, recordSessionParticipant].entries()) {
+        const identity = { type: "agent" as const, id: `peer-${index}` };
+        for (const promptedAt of [10, 20]) {
+          expect(await record(target, { identity, promptedAt })).toBe(
+            promptedAt === 10 ? "inserted" : "updated",
+          );
+          await describe();
+          expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
+            session: expect.objectContaining({
+              participantCount: index + 1,
+              participants: expect.arrayContaining([expect.objectContaining({ identity })]),
+              placement: expect.objectContaining({ state: "requested" }),
+            }),
+          });
+        }
+      }
       expect(reads).not.toHaveBeenCalled();
 
       sessionChanges.emit({

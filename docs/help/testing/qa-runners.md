@@ -53,6 +53,14 @@ inside every shard.
     and config paths, so its CLI bootstrap cannot select the operator's installed
     Gateway service. Parent profiles and runtime environment patches do not
     override that worker identity.
+    Child temporary files and default compiler caches stay in the worker's
+    temporary root and are removed after its processes stop. Parent temporary
+    paths and runtime environment patches do not redirect this scratch storage.
+    `OPENCLAW_QA_KEEP_TEMP=1` retains that root for debugging.
+    If the controller dies, the current Gateway's parent watchdog exits without
+    deleting runtime files that descendants may still use. A surviving owner or
+    host maintenance must confirm that those writers stopped before removing the
+    retained roots.
   - Exits non-zero when any scenario fails. Use `--allow-failures` for
     artifacts without a failing exit code.
   - Supports provider modes `live-frontier`, `mock-openai`, and `aimock`.
@@ -138,7 +146,11 @@ inside every shard.
     fail immediately, while unknown or inapplicable ids fail canonical scenario
     validation. The package runner promotes the selected RTT scenario once to
     the first position before the remaining taxonomy-backed fail-fast release
-    scenarios.
+    scenarios. Probes continue in its most recently observed conversation and
+    thread, using the leased primary participant. The first sample starts a
+    new message; later samples chain their own replies rather than a reply
+    observed by another scenario participant. Delivery-only scenarios use their
+    observed outbound route and need no additional catalog metadata.
   - Uses the same Convex-leased Test Server userbot credentials as
     `pnpm openclaw qa telegram`. Set `OPENCLAW_QA_CONVEX_SITE_URL` and the
     secret for the selected role. The Docker wrapper selects Convex by default.

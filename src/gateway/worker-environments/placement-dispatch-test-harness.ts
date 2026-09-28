@@ -142,14 +142,16 @@ export function createHarness(
   };
   const placements: WorkerDispatchPlacementStore = {
     get: (sessionId) => placementStore.get(sessionId),
+    readProjection: (sessionIds, readOptions) =>
+      placementStore.readProjection(sessionIds, readOptions),
+    readRecoveryCandidates: () => placementStore.readRecoveryCandidates(),
+    readChangeSnapshot: () => placementStore.readChangeSnapshot(),
     loadWorkspaceReconciliation: (owner, loadOptions) =>
       placementStore.loadWorkspaceReconciliation(owner, loadOptions),
     beginWorkspaceReconciliation: (owner, journal) =>
       placementStore.beginWorkspaceReconciliation(owner, journal),
     abortWorkspaceReconciliation: (owner, abortOptions) =>
       placementStore.abortWorkspaceReconciliation(owner, abortOptions),
-    getWorkspaceReconciliationPlacement: (owner) =>
-      placementStore.getWorkspaceReconciliationPlacement(owner),
     listWorkspaceReconciliationOwners: () => placementStore.listWorkspaceReconciliationOwners(),
     listPendingWorkspaceResults: (sessionId) =>
       placementStore.listPendingWorkspaceResults(sessionId),
@@ -180,7 +182,6 @@ export function createHarness(
     },
     completePlacementMoveToWorker: (params) => placementStore.completePlacementMoveToWorker(params),
     getPlacementMove: (sessionId) => placementStore.getPlacementMove(sessionId),
-    listPlacementMoves: () => placementStore.listPlacementMoves(),
     recordPlacementMoveError: (params) => placementStore.recordPlacementMoveError(params),
     markWorkspaceResultPending: (claim) => placementStore.markWorkspaceResultPending(claim),
     acceptWorkspaceResult: (claim) => placementStore.acceptWorkspaceResult(claim),

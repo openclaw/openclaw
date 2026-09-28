@@ -25,15 +25,13 @@ export const linkReaderPanelStyles = css`
     min-height: 0;
     flex: 1;
   }
-  .bp-actions {
-    padding-left: 0;
-  }
   .bp-icon {
     cursor: default;
     flex: none;
     text-decoration: none;
   }
-  .bp-icon svg {
+  .bp-icon svg,
+  .lr-external svg {
     width: 15px;
     height: 15px;
   }
@@ -89,10 +87,6 @@ export const linkReaderPanelStyles = css`
   }
   .lr-external:hover {
     text-decoration: underline;
-  }
-  .lr-external svg {
-    width: 15px;
-    height: 15px;
   }
   .lr-panels {
     display: flex;
@@ -296,15 +290,6 @@ export const linkReaderPanelStyles = css`
   }
   .lr-markdown img {
     max-width: 100%;
-  }
-  .lr-markdown .markdown-link-github__icon {
-    display: inline-block;
-    width: 12px;
-    height: 12px;
-  }
-  .lr-markdown .markdown-code-block__lang {
-    color: var(--muted);
-    font-size: 11px;
   }
   @media (max-width: 768px) {
     .bp--right {

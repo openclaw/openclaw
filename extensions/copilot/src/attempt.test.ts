@@ -27,8 +27,8 @@ import {
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerCopilotCleanupTests } from "./attempt-cleanup.test-support.js";
 import { runCopilotAttempt } from "./attempt.js";
-import { registerCopilotNativeSubagentCleanupTests } from "./attempt.native-subagents.test-support.js";
 import {
   makeAssistantMessageEvent,
   makeFakePool,
@@ -2278,7 +2278,7 @@ describe("runCopilotAttempt", () => {
 
   describe("Tool Search prompt parity", () => {
     it.each(
-      (["tools", "code", "directory"] as const).flatMap((mode) =>
+      (["tools", "directory"] as const).flatMap((mode) =>
         [undefined, ["fixture_allowed"], []].map((toolsAllow) => ({ mode, toolsAllow })),
       ),
     )(
@@ -2309,7 +2309,7 @@ describe("runCopilotAttempt", () => {
             config,
             disableTools: false,
             hostCapabilities: createCopilotTestHostCapabilities(() => [
-              ...["tool_search_code", "tool_search", "tool_describe", "tool_call"].map(makeTool),
+              ...["tool_search", "tool_describe", "tool_call"].map(makeTool),
               ...["read", "fixture_allowed", "fixture_denied"].map(makeTool),
             ]),
           }),
@@ -2338,14 +2338,9 @@ describe("runCopilotAttempt", () => {
           expect(content).toContain("fixture_allowed");
           expect(content).toContain("Allowed catalog capability.");
           expect(submitted.tools?.map((tool) => tool.name)).not.toContain("fixture_allowed");
-          if (mode === "code") {
-            expect(content).toContain("openclaw.tools.call(id, args)");
-            expect(content).not.toContain("Call tool_call");
-          } else {
-            expect(content).toContain("Deferred names are not directly callable.");
-            expect(content).toContain("Call tool_call");
-            expect(content).not.toContain("Call a unique deferred tool name directly");
-          }
+          expect(content).toContain("Deferred names are not directly callable.");
+          expect(content).toContain("Call tool_call");
+          expect(content).not.toContain("Call a unique deferred tool name directly");
           expect(content.includes("fixture_denied")).toBe(toolsAllow === undefined);
         }
         expect(config.tools.toolSearch.mode).toBe(mode);
@@ -2999,41 +2994,7 @@ describe("runCopilotAttempt", () => {
     );
   });
 
-  it("cleanup on success", async () => {
-    const sdk = makeFakeSdk();
-    const pool = makeFakePool(sdk);
-
-    await runCopilotAttempt(makeParams(), { pool });
-
-    const session = requireSession(sdk);
-    expect(session.off).toHaveBeenCalledTimes(session.on.mock.calls.length);
-    expect(session.disconnect).toHaveBeenCalledTimes(1);
-    expect(pool["release"]).toHaveBeenCalledTimes(1);
-  });
-
-  it("cleanup on send error", async () => {
-    const error = new Error("send failed");
-    const sdk = makeFakeSdk((session) => {
-      session.sendAndWait.mockImplementationOnce(async () => {
-        session.emit("user.message", { content: "hello" });
-        throw error;
-      });
-    });
-    const pool = makeFakePool(sdk);
-
-    const result = await runCopilotAttempt(makeParams(), { pool });
-    const session = requireSession(sdk);
-
-    expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBe(error);
-    expect(
-      (result as AgentHarnessAttemptResult & { journalValidated?: boolean }).journalValidated,
-    ).toBe(false);
-    expect(session.off).toHaveBeenCalledTimes(session.on.mock.calls.length);
-    expect(session.disconnect).toHaveBeenCalledTimes(1);
-    expect(pool["release"]).toHaveBeenCalledTimes(1);
-  });
-
-  registerCopilotNativeSubagentCleanupTests({ makeParams, requireSession });
+  registerCopilotCleanupTests({ makeParams, requireSession });
 
   it("cleanup on disconnect throw", async () => {
     const primaryError = new Error("send failed");

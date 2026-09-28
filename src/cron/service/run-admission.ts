@@ -23,6 +23,7 @@ import {
   releaseReservationOwnership,
   type QueuedCronRunReservation,
 } from "./run-admission-mutation.js";
+import { createCronOwnerExecutionIdentityAdmission, createCronRunHandle } from "./run-history.js";
 import { skipCronJobsWithoutOwners } from "./run-owner.js";
 import {
   claimServiceCronRunReceiptInDatabase,
@@ -30,12 +31,8 @@ import {
   prepareServiceCronRunReceiptClaim,
 } from "./run-receipts.js";
 import { applyCronRuntimeRowsToState, commitCronRuntimeRows } from "./runtime-store.js";
-import { type CronServiceState, emit } from "./state.js";
+import { emit, type CronServiceState } from "./state.js";
 import { ensureLoaded } from "./store.js";
-import {
-  createCronOwnerExecutionIdentityAdmission,
-  tryCreateCronTaskRunHandle,
-} from "./task-runs.js";
 import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
 import { authorCronRunCompletion, executeJobCoreWithTimeout } from "./timer-job-runner.js";
 import { isRunnableJob } from "./timer-runnable.js";
@@ -189,7 +186,7 @@ export async function persistQueuedCronRunReservations(params: {
   };
 }): Promise<Array<{ job: CronJob; runReceipt: CronRunReceiptHandle }>> {
   // Manual runs reach reservations without the scheduler's earlier owner filter.
-  const candidates = skipCronJobsWithoutOwners(
+  const candidates = await skipCronJobsWithoutOwners(
     params.state,
     [...params.candidates],
     params.reservedAtMs,
@@ -219,7 +216,7 @@ export async function persistQueuedCronRunReservations(params: {
         jobIds: pendingJobs.keys(),
         operationLabel: "cron.run-reservation",
         transactionHooks: params.manualRun ? withCronMutationCommitHook("cron.run") : undefined,
-        mutate: ({ database, jobs }) => {
+        mutate: ({ database, jobs, receiptSchema }) => {
           (params.manualRun?.commitGuard ?? params.manualRun?.onExit?.commitGuard)?.();
           const jobIds = [...pendingJobs.keys()].toSorted();
           for (const jobId of jobIds) {
@@ -256,6 +253,7 @@ export async function persistQueuedCronRunReservations(params: {
             const prior = params.state.queuedRunReservationsByJobId.get(job.id)?.runReceipt;
             if (prior) {
               finishCronRunReceiptInDatabase({
+                receiptSchema,
                 database,
                 handle: prior,
                 status: "superseded",
@@ -270,6 +268,7 @@ export async function persistQueuedCronRunReservations(params: {
                 params.state,
                 database,
                 preparedClaims.get(job.id)!,
+                receiptSchema,
               ),
             };
           });
@@ -519,7 +518,7 @@ export async function executeQueuedCronRun(params: {
       const executionJob = structuredClone(activation.job);
       executionJob.state.runningAtMs = activation.startedAt;
       executionJob.state.lastError = undefined;
-      const taskRun = tryCreateCronTaskRunHandle({
+      const taskRun = createCronRunHandle({
         state,
         job: executionJob,
         startedAt: activation.startedAt,
@@ -563,8 +562,6 @@ export async function executeQueuedCronRun(params: {
         executionIdentity: createCronOwnerExecutionIdentityAdmission({
           state,
           runReceipt: started.runReceipt,
-          taskId: taskRun?.taskId,
-          flowId: taskRun?.flowId,
         }),
       });
       outcome = { ...base, ...result, endedAt: state.deps.nowMs() };

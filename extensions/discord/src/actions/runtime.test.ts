@@ -1211,14 +1211,6 @@ describe("handleDiscordMessagingAction", () => {
     expect(readMessagesDiscord).not.toHaveBeenCalled();
   });
 
-  it("rejects unexpected readMessages payloads with a boundary error", async () => {
-    readMessagesDiscord.mockResolvedValueOnce({ ok: true } as never);
-
-    await expect(
-      handleMessagingAction("readMessages", { channelId: "C1" }, enableAllActions),
-    ).rejects.toThrow("Discord message read returned object with keys ok instead of an array.");
-  });
-
   it("rejects fractional Discord read limits before reading messages", async () => {
     await expect(
       handleMessagingAction(

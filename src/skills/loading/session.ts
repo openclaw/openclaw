@@ -26,8 +26,14 @@ interface LoadSkillsResult {
   diagnostics: ResourceDiagnostic[];
 }
 
-function validateName(name: string): string[] {
+function validateSkillMetadata(name: string, description: string | undefined): string[] {
   const errors: string[] = [];
+
+  if (!description || description.trim() === "") {
+    errors.push("description is required");
+  } else if (description.length > MAX_DESCRIPTION_LENGTH) {
+    errors.push(`description exceeds ${MAX_DESCRIPTION_LENGTH} characters (${description.length})`);
+  }
 
   if (name.length > MAX_NAME_LENGTH) {
     errors.push(`name exceeds ${MAX_NAME_LENGTH} characters (${name.length})`);
@@ -43,18 +49,6 @@ function validateName(name: string): string[] {
 
   if (name.includes("--")) {
     errors.push(`name must not contain consecutive hyphens`);
-  }
-
-  return errors;
-}
-
-function validateDescription(description: string | undefined): string[] {
-  const errors: string[] = [];
-
-  if (!description || description.trim() === "") {
-    errors.push("description is required");
-  } else if (description.length > MAX_DESCRIPTION_LENGTH) {
-    errors.push(`description exceeds ${MAX_DESCRIPTION_LENGTH} characters (${description.length})`);
   }
 
   return errors;
@@ -167,7 +161,7 @@ function loadSkillFromFile(filePath: string, source: string): LoadSkillsResult {
     const frontmatter = parseSkillFrontmatter(rawContent);
     const skillDir = dirname(filePath);
     const name = frontmatter.name || basename(skillDir);
-    for (const error of [...validateDescription(frontmatter.description), ...validateName(name)]) {
+    for (const error of validateSkillMetadata(name, frontmatter.description)) {
       diagnostics.push({ type: "warning", message: error, path: filePath });
     }
 

@@ -112,19 +112,19 @@ async function listTreeEntries(
       code: "CANONICAL_PATH_CHANGED",
     });
   }
+  // Root.walk is core-only; plugins enumerate through the rooted list contract.
   async function visit(relativeDir: string): Promise<boolean> {
     const entries = await rootHandle.list(relativeDir, { withFileTypes: true });
-    for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
-      const rel = path.posix.join(relativeDir === "." ? "" : relativeDir, entry.name);
-      results.push(rel);
+    for (const entry of entries.toSorted(
+      (left, right) => left.name.localeCompare(right.name) || (left.name < right.name ? -1 : 1),
+    )) {
+      const relativePath = path.posix.join(relativeDir, entry.name);
+      results.push(relativePath);
       if (results.length > maxEntries) {
         return false;
       }
-      if (entry.isDirectory) {
-        const ok = await visit(rel);
-        if (!ok) {
-          return false;
-        }
+      if (entry.isDirectory && !(await visit(relativePath))) {
+        return false;
       }
     }
     return true;

@@ -534,18 +534,12 @@ function ensureAsyncCaptureLease(owner: CaptureOwner) {
       owner.asyncStore = finalizingStore;
       const finishing = finishCaptureOwnerAsync(owner);
       // Observe the memoized owning close without awaiting it from its finalizer.
-      void lease.store.close().then(
-        () => {
-          if (!owner.closing) {
-            forgetCaptureOwner(owner);
-          }
-        },
-        () => {
-          if (!owner.closing) {
-            forgetCaptureOwner(owner);
-          }
-        },
-      );
+      const forgetAfterStoreClose = () => {
+        if (!owner.closing) {
+          forgetCaptureOwner(owner);
+        }
+      };
+      void lease.store.close().then(forgetAfterStoreClose, forgetAfterStoreClose);
       return finishing;
     });
     const previous = owner.unregister;

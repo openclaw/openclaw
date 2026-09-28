@@ -1,14 +1,14 @@
 {
   "name": "@openclaw/agentsapi",
   "version": "2026.9.6",
-  "description": "OpenClaw OpenAI Agents API harness and hosted session plugin.",
+  "description": "OpenClaw OpenAI Agents API harness with hosted or self-hosted sessions.",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"
   },
   "type": "module",
   "dependencies": {
-    "openai": "7.18.0",
+    "openai": "7.19.0",
     "zod": "4.6.5"
   },
   "devDependencies": {

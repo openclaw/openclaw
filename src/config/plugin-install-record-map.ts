@@ -19,15 +19,10 @@ const NORMALIZED_STRING_FIELDS = [
   "installedAt",
   "clawhubUrl",
   "clawhubPackage",
-  "clawhubFamily",
-  "clawhubChannel",
-  "clawhubTrustDisposition",
   "clawhubTrustScanStatus",
   "clawhubTrustModerationState",
   "clawhubTrustCheckedAt",
   "clawhubTrustAcknowledgedAt",
-  "artifactKind",
-  "artifactFormat",
   "npmIntegrity",
   "npmShasum",
   "npmTarballName",
@@ -88,15 +83,15 @@ export function parsePluginInstallRecord(value: unknown): PluginInstallRecord | 
   if (!parsed.success) {
     return null;
   }
-  const record = parsed.data as PluginInstallRecord & Record<string, unknown>;
+  const record = parsed.data;
   for (const field of NORMALIZED_STRING_FIELDS) {
     const fieldValue = record[field];
-    if (typeof fieldValue !== "string") {
+    if (fieldValue === undefined) {
       continue;
     }
     const normalized = fieldValue.trim();
     if (normalized) {
-      record[field] = normalized as never;
+      record[field] = normalized;
     } else {
       delete record[field];
     }

@@ -9,7 +9,6 @@ import { sessionsResult } from "../../lib/sessions/session-capability.test-suppo
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
 import type { TestChatPane } from "./chat-pane.test-support.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
-import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import {
   installTranscriptDomMocks,
@@ -24,7 +23,6 @@ function parentBreadcrumb(pane: TestChatPane) {
   render(
     pane.renderPaneHeader(
       createSessionWorkspaceProps(pane.state),
-      createBackgroundTasksProps(pane.state),
       selectedChatSessionRow(pane.state),
       false,
       undefined,

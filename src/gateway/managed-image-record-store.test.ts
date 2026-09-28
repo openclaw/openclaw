@@ -271,32 +271,25 @@ describe("managed image record SQLite store", () => {
     const initial = record();
     const receive = brokerReply.receiveSqliteWorkerReply;
     const corrupted: string[] = [];
-    vi.spyOn(brokerReply, "receiveSqliteWorkerReply").mockImplementation(
-      (slot, reply, owner, pumping) => {
+    vi.spyOn(brokerReply, "receiveSqliteWorkerReply").mockImplementation((slot, reply, owner) => {
+      if (slot.current?.request.type === "execute" && reply.ok && !reply.transfer && !reply.input) {
+        const command: unknown = deserialize(slot.current.request.input);
         if (
-          slot.current?.request.type === "execute" &&
-          reply.ok &&
-          !reply.transfer &&
-          !reply.input
+          isRecord(command) &&
+          typeof command.type === "string" &&
+          [
+            "managedImages.insert",
+            "managedImages.attach",
+            "managedImages.claimCleanup",
+            "managedImages.deleteClaimed",
+          ].includes(command.type)
         ) {
-          const command: unknown = deserialize(slot.current.request.input);
-          if (
-            isRecord(command) &&
-            typeof command.type === "string" &&
-            [
-              "managedImages.insert",
-              "managedImages.attach",
-              "managedImages.claimCleanup",
-              "managedImages.deleteClaimed",
-            ].includes(command.type)
-          ) {
-            corrupted.push(command.type);
-            return receive(slot, { ...reply, value: new Uint8Array([0]) }, owner, pumping);
-          }
+          corrupted.push(command.type);
+          return receive(slot, { ...reply, value: new Uint8Array([0]) }, owner);
         }
-        return receive(slot, reply, owner, pumping);
-      },
-    );
+      }
+      return receive(slot, reply, owner);
+    });
     await insertManagedImageRecord(initial, stateDir);
     expect(
       await attachManagedImageRecordsToMessage({

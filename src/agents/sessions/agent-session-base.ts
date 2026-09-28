@@ -75,7 +75,6 @@ export abstract class AgentSessionBase {
   readonly sessionManager: SessionManager;
   readonly settingsManager: SettingsManager;
 
-  // Event subscription state
   protected unsubscribeAgent?: () => void;
   private eventListeners: AgentSessionEventListener[] = [];
 
@@ -86,22 +85,18 @@ export abstract class AgentSessionBase {
   /** Messages queued to be included with the next user prompt as context ("asides"). */
   protected pendingNextTurnMessages: CustomMessage[] = [];
 
-  // Compaction state
   protected compactionAbortController: AbortController | undefined = undefined;
   protected autoCompactionAbortController: AbortController | undefined = undefined;
   protected overflowRecoveryAttempts = 0;
   protected contextOverflowRecoveryOwner: "session" | "caller";
   protected resolveCompactionThinkingLevel?: AgentSessionConfig["resolveCompactionThinkingLevel"];
 
-  // Branch summarization state
   protected branchSummaryAbortController: AbortController | undefined = undefined;
   private extensionModifiedToolResultIds = new Set<string>();
 
-  // Retry state
   protected retryAbortController: AbortController | undefined = undefined;
   protected retryCount = 0;
 
-  // Extension system
   protected currentExtensionRunner!: ExtensionRunner;
   private turnIndex = 0;
 
@@ -124,7 +119,6 @@ export abstract class AgentSessionBase {
   protected extensionErrorUnsubscriber?: () => void;
   private readonly cleanupProviderSessionResourcesOnDispose: boolean;
 
-  // Model registry for API key resolution
   protected sessionModelRegistry: ModelRegistry;
 
   // Tool registry for extension getTools/setTools
@@ -287,10 +281,6 @@ export abstract class AgentSessionBase {
       executionStarted ? undefined : { isError: isError || isToolResultError(result) };
   }
 
-  // =========================================================================
-  // Event Subscription
-  // =========================================================================
-
   /** Copy-on-write listener registration keeps dispatch stable without per-event snapshots. */
   protected emit(event: AgentSessionEvent): void {
     for (const l of this.eventListeners) {
@@ -403,9 +393,7 @@ export abstract class AgentSessionBase {
     messageChanged = prepareSessionToolResult(this.sessionManager, event) || messageChanged;
 
     if (event.type === "message_end") {
-      // Check if this is a custom message from extensions
       if (event.message.role === "custom") {
-        // Persist as CustomMessageEntry
         const message = event.message;
         await withSessionManagerWrite(this.sessionManager, () =>
           this.sessionManager.appendCustomMessageEntry(
@@ -420,7 +408,6 @@ export abstract class AgentSessionBase {
         event.message.role === "assistant" ||
         event.message.role === "toolResult"
       ) {
-        // Regular LLM message - persist as SessionMessageEntry
         const toolResultChangedByExtension =
           event.message.role === "toolResult" &&
           this.extensionModifiedToolResultIds.delete(event.message.toolCallId);
@@ -570,7 +557,6 @@ export abstract class AgentSessionBase {
   subscribe(listener: AgentSessionEventListener): () => void {
     this.eventListeners = [...this.eventListeners, listener];
 
-    // Return unsubscribe function for this specific listener
     return () => {
       const index = this.eventListeners.indexOf(listener);
       if (index !== -1) {
@@ -630,10 +616,6 @@ export abstract class AgentSessionBase {
       cleanupSessionResources(this.sessionId);
     }
   }
-
-  // =========================================================================
-  // Read-only State Access
-  // =========================================================================
 
   /** Full agent state */
   get state(): AgentState {
@@ -707,7 +689,6 @@ export abstract class AgentSessionBase {
     }
     this.agent.state.tools = tools;
 
-    // Rebuild base system prompt with new tool set
     this.baseSystemPrompt = this.rebuildSystemPrompt(validToolNames);
     this.agent.state.systemPrompt = this.systemPromptOverride ?? this.baseSystemPrompt;
   }

@@ -146,25 +146,11 @@ function combinedSeparateValueOptionCount(token: string): number {
   return countSeparateValueOptionChars(token);
 }
 
-function consumesSeparateValue(token: string): boolean {
-  return POSIX_SHELL_OPTIONS_WITH_SEPARATE_VALUES.has(token);
-}
-
 function isPosixShortOption(token: string, option: string): boolean {
   if (token.length < 2 || token[0] !== "-" || token[1] === "-") {
     return false;
   }
-  let hasOption = false;
-  for (let index = 1; index < token.length; index += 1) {
-    const char = token[index];
-    if (char === "-") {
-      return false;
-    }
-    if (char === option) {
-      hasOption = true;
-    }
-  }
-  return hasOption;
+  return !token.includes("-", 1) && token.includes(option, 1);
 }
 
 /** Return how many argv tokens a POSIX shell option consumes while scanning. */
@@ -173,7 +159,7 @@ export function advancePosixInlineOptionScan(token: string): number {
   if (combinedValueCount > 0) {
     return 1 + combinedValueCount;
   }
-  if (consumesSeparateValue(token)) {
+  if (POSIX_SHELL_OPTIONS_WITH_SEPARATE_VALUES.has(token)) {
     return 2;
   }
   return 1;
@@ -219,12 +205,12 @@ export function resolveInlineCommandMatch(
       const command = argv[i + 1]?.trim();
       return { command: command ? command : null, valueTokenIndex };
     }
-    if (options.allowCombinedC && isCombinedCommandFlag(token)) {
-      const combined = parseCombinedCommandFlag(token);
-      if (combined?.attachedCommand != null) {
+    const combined = options.allowCombinedC ? parseCombinedCommandFlag(token) : null;
+    if (combined) {
+      if (combined.attachedCommand != null) {
         return { command: combined.attachedCommand.trim() || null, valueTokenIndex: i };
       }
-      const valueTokenIndex = i + 1 + (combined?.separateValueCount ?? 0);
+      const valueTokenIndex = i + 1 + combined.separateValueCount;
       const command = argv[valueTokenIndex]?.trim();
       return { command: command ? command : null, valueTokenIndex };
     }

@@ -13,6 +13,7 @@ import type {
 } from "./update-command-service-context-types.js";
 export type FinishUpdateParams = UpdateRestartParams & {
   coreAlreadyCurrent?: boolean;
+  deferredMaintenance?: string;
   failure?: { cause: unknown; detail: string };
   mutationStarted: boolean;
   expectedVersion?: string;
