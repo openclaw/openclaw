@@ -91,6 +91,7 @@ suite.define(() => {
           ),
         )
         .toEqual([true, true]);
+      await gateway.waitForRequest("chat.startup");
       expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
 
       await gateway.resolveDeferred("chat.startup");
