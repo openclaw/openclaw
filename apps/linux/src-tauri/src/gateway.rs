@@ -19,6 +19,15 @@ pub struct GatewaySnapshot {
 }
 
 impl GatewaySnapshot {
+    #[cfg(target_os = "linux")]
+    pub(crate) fn connected(mut self) -> Self {
+        self.phase = "connected";
+        self.reachable = true;
+        self.status = "Connected".to_string();
+        self.detail = None;
+        self
+    }
+
     pub(crate) fn remote_opening() -> Self {
         Self {
             phase: "remoteOpening",
@@ -339,6 +348,29 @@ mod status_tests;
 #[cfg(test)]
 mod dashboard_tests {
     use super::dashboard_token;
+    #[cfg(target_os = "linux")]
+    use super::GatewaySnapshot;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn connected_projection_preserves_service_ownership() {
+        let connected = GatewaySnapshot {
+            phase: "reconnecting",
+            installed: false,
+            running: false,
+            reachable: false,
+            status: "Unavailable".to_string(),
+            detail: Some("socket reconnecting".to_string()),
+        }
+        .connected();
+
+        assert_eq!(connected.phase, "connected");
+        assert!(connected.reachable);
+        assert!(!connected.installed);
+        assert!(!connected.running);
+        assert_eq!(connected.status, "Connected");
+        assert_eq!(connected.detail, None);
+    }
 
     #[test]
     fn extracts_and_decodes_dashboard_fragment_token() {
