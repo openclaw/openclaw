@@ -461,7 +461,7 @@ def checkout_selected_ref():
 def checkout_harness(sha):
     action = ".github/actions/setup-node-env/action.yml"
     node_setup_scripts = ("scripts/lib/pnpm-lockfile-documents.mjs",)
-    evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/direct-run.mjs")
+    evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/direct-run.mjs", "scripts/ci-static-step.sh")
     platform_scripts = ("scripts/lib/swift-toolchain.sh",)
     upgrade_scripts = ("scripts/lib/release-upgrade-baseline.mjs", "scripts/lib/release-version.mjs")
     npm_lock_scripts = (

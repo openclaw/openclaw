@@ -437,6 +437,24 @@ function preparedSealingFixture(attempts: readonly [number, number] = [2, 2]) {
 }
 
 describe("ClawHub prepared publication", () => {
+  it("seals a lone prepared package from a flat artifact download", () => {
+    const f = preparedFixture();
+    const { directory, matrix } = f.sealOptions;
+    rmSync(join(directory, matrix[0].artifactName), { recursive: true });
+    writeFileSync(join(directory, "example.tgz"), f.tarball);
+
+    const manifest = createPreparedClawHubManifest(f.sealOptions);
+    expect(manifest.packages).toMatchObject([
+      {
+        packageName: "@openclaw/example",
+        version: "2026.8.2",
+        tarballName: "example.tgz",
+        tarballSha256: digest(f.tarball),
+        tarballSizeBytes: f.tarball.length,
+      },
+    ]);
+  });
+
   it("seals the complete same-attempt roster from successful pack producers", () => {
     const options = preparedSealingFixture();
     const manifest = createPreparedClawHubManifest(options);

@@ -7,14 +7,13 @@ export const en: TranslationMap & {
   linkReader: TranslationMap;
   agentTools: TranslationMap;
   board: TranslationMap & { widget: TranslationMap };
-  browser: TranslationMap & { errors: TranslationMap };
+  browser: TranslationMap & { errors: TranslationMap; annotatePrompt: TranslationMap };
   shortcutsOverlay: TranslationMap & { title: string };
   chat: TranslationMap & {
     codeBlock: TranslationMap;
     commands: TranslationMap;
     detailPanel: TranslationMap;
     welcome: TranslationMap & { suggestions: TranslationMap & { whatCanYouDo: string } };
-    backgroundTasks: TranslationMap;
     goals: TranslationMap;
     messages: TranslationMap &
       Record<
@@ -77,6 +76,8 @@ export const en: TranslationMap & {
   updates: TranslationMap;
   login: TranslationMap;
   labsPage: TranslationMap;
+  mcpServers: TranslationMap;
+  mcpPage: TranslationMap;
   modelSetup: TranslationMap;
   newSession: TranslationMap &
     Record<"title" | "hint" | "placementReloadBlocked" | "discardUnsavedAndReload", string>;
@@ -119,6 +120,7 @@ export const en: TranslationMap & {
   },
   agentsHome: {},
   common: {
+    uploadsDisabled: "File and image uploads are disabled.",
     health: "Health",
     ok: "OK",
     yes: "Yes",
@@ -175,6 +177,9 @@ export const en: TranslationMap & {
     unknown: "Unknown",
     configured: "Configured",
     running: "Running",
+    queued: "Queued",
+    completed: "Completed",
+    cancelled: "Cancelled",
     linked: "Linked",
     mode: "Mode",
     system: "System",
@@ -229,6 +234,9 @@ export const en: TranslationMap & {
   optionCard: {
     recommended: "Recommended",
     skip: "Skip for now",
+  },
+  nativeConversation: {
+    openDashboardFailed: "Couldn't open that page in the Dashboard",
   },
   nativeLinkMenu: {
     label: "Link actions",
@@ -1075,6 +1083,7 @@ export const en: TranslationMap & {
     statusRunning: "Running",
     statusDone: "Done",
     statusFailed: "Failed",
+    statusInterrupted: "Interrupted",
     statusKilled: "Killed",
     statusTimeout: "Timed out",
     waitingForAnswer: "Waiting for your answer",
@@ -1854,10 +1863,6 @@ export const en: TranslationMap & {
     remoteTab: "Agent browser tab",
     stop: "Stop loading",
     profile: "Browser profile: {profile}",
-    navigationBlocked:
-      "The current browser navigation rules block this address. Select another tab or enter an allowed address.",
-    navigationCheckFailed: "OpenClaw couldn’t verify this tab’s address. Refresh to try again.",
-    tabUnavailable: "This tab is no longer available. Select another tab.",
     title: "Browser",
     open: "Open",
     openPanel: "Open browser panel",
@@ -1890,27 +1895,8 @@ export const en: TranslationMap & {
     loading: "Loading page…",
     notRunning: "The gateway browser is not running.",
     start: "Start browser",
-    noChatTarget: "Open a chat session first so the annotation has somewhere to go.",
-    annotationLimitReached:
-      "Remove a browser annotation before retrying (maximum 4 cards and 8,000 characters of generated context).",
-    inspectUnavailable: "Element inspection is disabled (browser.evaluateEnabled=false).",
-    annotationSent: "Annotation added to the chat composer.",
     errors: {},
-    annotatePrompt: {
-      browserTarget: "Browser target: {target}",
-      // introTitled/elementDetail (not intro/element): translated keys never
-      // retranslate on source-wording changes, so the provenance-label rewrite
-      // required fresh key names to propagate to all locales.
-      introTitled:
-        'I annotated the page at {url} (page-reported title: "{title}") — the attached screenshot shows my markup.',
-      introUntitled: "I annotated the page at {url} — the attached screenshot shows my markup.",
-      region:
-        "Marked region {index}: centered around {x}% across / {y}% down, spanning about {width}% × {height}% of the view.",
-      moreRegions: "…plus {count} more marked region(s), all visible in the screenshot.",
-      elementDetail:
-        "Marked element (page-reported): {descriptor} — {width}×{height}px at ({x}, {y}).",
-      outro: "Please look at the marked area and tell me what you make of it.",
-    },
+    annotatePrompt: {},
   },
   desktop: {
     title: "Desktop",
@@ -1944,7 +1930,6 @@ export const en: TranslationMap & {
     systems: "Systems",
     usage: "Usage",
     cron: "Automations",
-    tasks: "Tasks",
     skills: "Skills",
     plugins: "Plugins",
     skillWorkshop: "Skill workshop",
@@ -1993,7 +1978,6 @@ export const en: TranslationMap & {
     systems: "Machines and desktops.",
     usage: "API usage and costs.",
     cron: "Scheduled tasks and recurring agent runs.",
-    tasks: "Background tasks: subagents, automation runs, CLI.",
     skills: "Manage your agent skills",
     plugins: "Extend your Claw with tools",
     skillWorkshop:
@@ -2279,59 +2263,8 @@ export const en: TranslationMap & {
       channelStatusErrorBody: "Retry the check, or keep using the web app without a channel.",
     },
   },
-  mcpServers: {
-    signIn: "Sign in",
-    authenticationSaved: "Authentication saved",
-    signInFailed: "Sign-in did not finish. Check the connector settings and try again.",
-    signInExpired: "This sign-in session ended. Close the dialog and sign in again.",
-    profileSignIn: "Sign in through the linked account in Models.",
-    requesterSignIn: "Each person signs in through this connector in chat.",
-    add: "Add server",
-    adding: "Adding…",
-    nameLabel: "Name",
-    transportLabel: "Transport",
-    transportStreamableHttp: "Streamable HTTP",
-    transportSse: "SSE",
-    transportStdio: "Stdio",
-    targetLabel: "URL or command",
-    nameInvalid: "Server names use letters, numbers, dots, dashes, or underscores.",
-    targetInvalid: "Enter a URL for HTTP transports or a valid command line for stdio.",
-    sessionEnableFailed:
-      "The server was saved disabled globally, but enabling it for this session failed: {error}",
-    sessionChanged: "The active session changed before it could be enabled.",
-    sessionUnavailable: "The active session is unavailable; refresh and try again.",
-    nameTaken: "An MCP server named “{name}” already exists.",
-    missing: "MCP server “{name}” was not found in the configuration.",
-    missingTransport: "missing transport",
-    addedSuccess: "Added MCP server {name}.",
-    enabledSuccess: "Enabled MCP server {name}.",
-    disabledSuccess: "Disabled MCP server {name}.",
-    removedSuccess: "Removed MCP server {name}.",
-    configUnavailable: "Configuration is unavailable; refresh and try again.",
-    connectRequired: "Connect to the gateway to change MCP servers.",
-    adminRequired: "MCP server changes require operator.admin access.",
-    enable: "Enable",
-    disable: "Disable",
-    removeNamed: "Remove {name}",
-    working: "Working…",
-  },
-  mcpPage: {
-    intro: "Connect and manage MCP servers that provide tools to OpenClaw.",
-    servers: "Servers",
-    oauth: "OAuth",
-    filtered: "Filtered",
-    configuredServers: "Configured servers",
-    noServers: "No MCP servers configured.",
-    setUpFirstServer: "Set up your first MCP server",
-    operatorCommands: "MCP operator commands",
-    operatorCommandsHint: "Status, diagnostics, auth, probing, and runtime reload.",
-    runtimeHint:
-      "Edits save automatically. With automatic reload enabled, MCP connections rebuild on next use.",
-    toolFilter: "tool filter",
-    parallel: "parallel",
-    tlsVerifyOff: "TLS verify off",
-    mtls: "mTLS",
-  },
+  mcpServers: {},
+  mcpPage: {},
   talkPage: {
     intro: "Configure realtime voice providers, models, and speaker voices.",
     voiceSection: {
@@ -2449,8 +2382,29 @@ export const en: TranslationMap & {
       hint: "Connected with the Gateway token or over a tunnel, not a personal sign-in.",
     },
     rosterTitle: "Online",
+    active: "Active",
+    onlineActive: "Online · Active",
+    onlineIdle: "Online · Idle",
     idle: "Idle",
     offline: "Offline",
+    sessions: {
+      all: "All",
+      open: "Open",
+      running: "Running",
+      runningOnly: "Only people with running sessions",
+      sortOpen: "Sort people by open sessions",
+      sortRunning: "Sort people by running sessions",
+      openHint:
+        "Owned, unarchived conversations you can access across agents. Excludes hidden subagents, automation, and system sessions.",
+      runningHint: "Open sessions actively executing an agent turn. Queued work is not running.",
+      counts: "{open} open sessions, {running} running",
+      unavailable: "Session counts unavailable",
+      noneRunning: "No sessions running.",
+      total: "Total",
+      scope:
+        "Totals for the people shown, across agents. Only sessions you can access are counted.",
+      retry: "Counts may be out of date. Retry",
+    },
     card: {
       details: "Details for {name}",
       loadFailed: "Could not open details. Try again, or open this person’s Activity page.",
@@ -2459,8 +2413,8 @@ export const en: TranslationMap & {
       onlineFor: "Online for",
       where: "Where",
       reportedTimeZone: "Reported time zone: {zone}",
-      lastActivity: "Last activity",
-      notObserved: "Not observed yet",
+      lastActivity: "Last interaction",
+      notObserved: "Activity unavailable",
       viewingNow: "Viewing now",
       recentSessions: "Recent sessions",
       noVisibleSessions: "No visible sessions being viewed.",
@@ -2489,7 +2443,6 @@ export const en: TranslationMap & {
     lastActive: "· {time}",
     unresolvedIdentities: "Unresolved identities",
     clearPersonFilter: "Clear person filter",
-    sessions: "Sessions",
     showing: "Showing {shown} of {total}",
     today: "Today",
     yesterday: "Yesterday",
@@ -2618,51 +2571,6 @@ export const en: TranslationMap & {
       linkedEmails: "Linked emails",
     },
     modelAccounts: {},
-  },
-  tasksPage: {
-    active: "Active",
-    activeSub: "Queued and running background work.",
-    recent: "Recent",
-    recentSub: "Latest completed, failed, and cancelled tasks.",
-    loading: "Loading tasks…",
-    empty: "No background tasks yet.",
-    emptyActive: "No queued or running tasks.",
-    emptyRecent: "No recent completed tasks.",
-    disconnected: "Connect to the gateway to load and manage tasks.",
-    loadFailed: "Could not load tasks.",
-    cancelFailed: "Could not cancel the task.",
-    recoveryFailed: "Could not update completion delivery.",
-    invalidResponse: "The gateway returned an invalid task list.",
-    untitled: "Background task",
-    taskCount: "{count} tasks",
-    taskCountOne: "1 task",
-    agent: "Agent: {agent}",
-    openSession: "Open session",
-    viewTranscript: "View transcript",
-    transcript: "Task transcript",
-    cancelTask: "Cancel {title}",
-    cancelling: "Cancelling…",
-    retryDelivery: "Retry delivery",
-    dismissDelivery: "Dismiss delivery",
-    copyResult: "Copy result",
-    deliveryBlocked: "Completed, but result delivery is blocked.",
-    deliveryDismissed: "Completed; result delivery was dismissed.",
-    duplicateRisk: "Retrying may duplicate a result after an ambiguous acknowledgement.",
-    status: {
-      queued: "Queued",
-      running: "Running",
-      completed: "Completed",
-      failed: "Failed",
-      cancelled: "Cancelled",
-      timedOut: "Timed out",
-    },
-    runtime: {
-      subagent: "Subagent",
-      cron: "Automation",
-      acp: "ACP",
-      cli: "CLI",
-      unknown: "Task",
-    },
   },
   skillWorkshop: {},
   // Chat swarm summaries render before the lazy Activity catalog loads.
@@ -3308,8 +3216,11 @@ export const en: TranslationMap & {
       dismiss: "Dismiss {author}'s suggestion",
       typing: "{name} is typing…",
       typingMany: "{names} are typing…",
-      typingDraftState: "Typing · not sent",
-      pausedDraftState: "Paused · not sent",
+      typingSeveral: "Several people are typing…",
+      typingOthers: "{count} others",
+      otherCollaborators: "Other collaborators",
+      typingDraftState: "is typing...",
+      pausedDraftState: "Draft",
       state: {
         pending: "Pending",
         accepted: "Accepted",
@@ -3531,6 +3442,29 @@ export const en: TranslationMap & {
     outboxRecoveryFull:
       "Recovery is full. Restore saved entries to make room; remaining legacy data is still retained in this browser.",
     outboxRecoveryMessages: "Queued messages: {count}",
+    privateDraftReload: {
+      blocked: "An unsent Incognito draft is keeping this tab open. Review it before refreshing.",
+      review: "Review private draft",
+      title: "Unsent Incognito draft",
+      description:
+        "This draft stays only in this tab. Copy its text or download its attachments before discarding it to refresh. Keeping this tab open leaves the draft unchanged.",
+      text: "Draft text",
+      copy: "Copy text",
+      goal: "This draft includes an unsent goal change.",
+      reading:
+        "Some attachments are still being read. Keep this tab open, then review the draft again when they finish.",
+      changed:
+        "The draft changed while you were reviewing it. It has not been discarded; review the current draft before refreshing.",
+      copyFailed:
+        "The text could not be copied. Select it in the draft field and copy it manually.",
+      attachmentUnavailable:
+        "This attachment is no longer available to download. Keep the draft open and recover the original file before discarding it.",
+      download: "Download {name}",
+      discard: "Discard this draft and refresh",
+      keep: "Keep in this tab",
+      unavailable:
+        "The private draft could not be opened. It remains in this tab; try Review private draft again.",
+    },
     incognitoExpiredTitle: "Incognito session expired",
     incognitoExpiredBody:
       "Incognito sessions last for 24 hours or until the Gateway restarts. Your unsent input stays in this tab.",
@@ -3605,10 +3539,14 @@ export const en: TranslationMap & {
       loading: "Loading skills…",
     },
     splitView: {
+      chooseConversation: "Choose a conversation",
+      missingOwner:
+        "Select this pane, then choose Home or a conversation in the sidebar to restore it.",
       open: "Open split view",
       splitRight: "Split right",
       splitDown: "Split down",
       closePane: "Close pane",
+      panePosition: "Column {column}, row {row} ({pane})",
       dropSplit: "Split",
       dropOpenHere: "Open here",
     },
@@ -3635,8 +3573,12 @@ export const en: TranslationMap & {
       openSessionMenu: "Open session menu",
       sortBy: "Sort by",
       sortCreated: "Created",
+      menuFilters: "Filters",
+      menuDisplay: "Display",
+      hideEmpty: "Hide empty",
+      activeFilterCount: "Active filters: {count}",
       sortSessions: "Filter & sort",
-      sessionSources: "Session sources…",
+      sessionSources: "Session sources",
       showOnlyPerson: "Show only {name}",
       showEveryone: "Show everyone",
       showAllSessions: "Show all sessions",
@@ -3730,7 +3672,7 @@ export const en: TranslationMap & {
     },
     questions: {
       other: "Type your own answer here",
-      multilineHint: "Enter adds a line · Ctrl/⌘+Enter to continue",
+      multilineHint: "Enter adds a line · {shortcut} to continue",
       answer: "Answer",
       answerPlaceholder: "{label}",
       openLink: "Open link",
@@ -3885,8 +3827,6 @@ export const en: TranslationMap & {
       filesEmpty: "Browse files, artifacts, and changes from this session.",
       companion: "Side chat",
       companionEmpty: "Ask a focused question about this session.",
-      tasks: "Tasks",
-      tasksEmpty: "Follow active and recently completed background tasks.",
       desktop: "Desktop",
       desktopEmpty: "Connect to an available remote desktop.",
       portal: "Portal",
@@ -4258,7 +4198,6 @@ export const en: TranslationMap & {
       workedFor: "Worked for {duration}",
       worked: "Worked",
     },
-    backgroundTasks: {},
     sessionDiff: {
       title: "Changes",
       show: "Show session changes",
@@ -4304,9 +4243,9 @@ export const en: TranslationMap & {
       expandAllLines: "Show all {count} unmodified lines",
       binaryFile: "Binary file",
       untracked: "untracked",
-      tooLarge: "Diff too large to display.",
+      previewUnavailable: "Diff preview is unavailable.",
       truncatedFile: "Diff truncated.",
-      truncatedResult: "Some changes were omitted because the diff is very large.",
+      truncatedResult: "Some changes could not be displayed.",
       statusAdded: "Added",
       statusDeleted: "Deleted",
       statusRenamed: "Renamed",
@@ -4431,53 +4370,7 @@ export const en: TranslationMap & {
       paused: "Paused",
     },
     list: {},
-    suggestions: {
-      title: "Starter automations",
-      schedules: {
-        weekdayMornings: "Weekdays at 9:00 AM",
-        everyMorning: "Daily at 8:00 AM",
-        weekly: "Mondays at 9:00 AM",
-        hourly: "Every hour",
-      },
-      ideas: {
-        repoPulse: {
-          name: "Repo pulse",
-          tagline: "Overnight issues, PRs, and CI failures, ranked by urgency.",
-          prompt:
-            "Review overnight activity in my repositories: new issues, pull requests, and CI failures. Summarize the three things that most need my attention today, each with a link and a one-line reason.",
-        },
-        standupGhostwriter: {
-          name: "Standup ghostwriter",
-          tagline: "Your standup update, drafted from yesterday's work.",
-          prompt:
-            "Draft my standup update from yesterday's commits, merged pull requests, and open review threads. Three bullets max: done, doing, blocked.",
-        },
-        hackerNewsScout: {
-          name: "Hacker News scout",
-          tagline: "Three links worth your coffee, with hot takes.",
-          prompt:
-            "Scan today's Hacker News front page for posts about AI agents, developer tooling, and TypeScript. Send me the three most interesting links, each with a one-line hot take.",
-        },
-        dependencyRadar: {
-          name: "Dependency radar",
-          tagline: "Outdated or vulnerable dependencies, with upgrade notes.",
-          prompt:
-            "Check my main project for outdated or vulnerable dependencies. List the notable updates with a one-line risk note each, and draft the upgrade command.",
-        },
-        watchdog: {
-          name: "Night watch",
-          tagline: "Hourly health check with a one-line verdict.",
-          prompt:
-            "Check that my services and gateway are healthy: scan recent logs for new errors, restarts, or unusual load. Reply with a single short all-clear line when everything is fine; if something looks broken, report what failed and where to start looking.",
-        },
-        polyglotMinute: {
-          name: "Polyglot minute",
-          tagline: "One useful foreign phrase with your morning coffee.",
-          prompt:
-            "Teach me one useful phrase in Japanese: the phrase, how to pronounce it, its literal meaning, and when to use it. Keep it under five lines.",
-        },
-      },
-    },
+    suggestions: {},
     stats: {
       tasks: "Automations",
       failing: "Failing",
@@ -4726,6 +4619,9 @@ export const en: TranslationMap & {
       noSummary: "No summary.",
       deliverySuppression: "Delivery suppression: {reason}",
       runAt: "Run at",
+      transcript: "Run transcript",
+      viewTranscript: "View transcript",
+      transcriptEmpty: "No messages in this run yet.",
       transcriptMissingMetadata: "This run is missing the identity needed to open its transcript.",
       transcriptUnavailable:
         "The exact run transcript is unavailable or ambiguous. Refresh run history and try again.",

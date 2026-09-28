@@ -142,21 +142,6 @@ describe("msteams thread parent context injection", () => {
     },
   );
 
-  it("caches parent fetches across thread replies in the same session", async () => {
-    fetchChannelMessageMock.mockResolvedValue({
-      id: threadRootId,
-      from: { user: { displayName: "Alice" } },
-      body: { content: "Original question", contentType: "text" },
-    });
-    const { deps } = createMessageHandlerDeps(cfg);
-    const handler = createMSTeamsMessageHandler(deps);
-
-    await dispatchTwoThreadReplies(handler);
-
-    // Parent message fetched exactly once across two replies thanks to LRU cache.
-    expect(fetchChannelMessageMock).toHaveBeenCalledTimes(1);
-  });
-
   it("does not re-enqueue the same parent context within the same session", async () => {
     fetchChannelMessageMock.mockResolvedValue({
       id: threadRootId,

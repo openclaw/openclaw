@@ -25,6 +25,7 @@ const coreIsolatedFiles = [
   "src/agents/openai-transport-stream.streaming.test.ts",
   "src/agents/subagents/announce/subagent-announce.test.ts",
   "src/agents/subagents/registry/subagent-registry.announce-loop-guard.test.ts",
+  "src/agents/subagents/registry/subagent-registry-requester-wake-commit.test.ts",
   "src/agents/subagents/registry/subagent-registry-restart-recovery.test.ts",
 ];
 const incompleteTurnFiles = [

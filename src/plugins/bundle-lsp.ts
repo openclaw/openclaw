@@ -2,8 +2,8 @@
 import path from "node:path";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isRecord } from "../utils.js";
 import {
+  extractBundleServerMap,
   inspectBundleServerRuntimeSupport,
   loadEnabledBundleConfig,
   readBundleJsonObject,
@@ -37,24 +37,6 @@ type BundleLspRuntimeSupport = {
 const MANIFEST_PATH_BY_FORMAT: Partial<Record<PluginBundleFormat, string>> = {
   claude: CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
 };
-
-function extractLspServerMap(raw: unknown): Record<string, BundleLspServerConfig> {
-  if (!isRecord(raw)) {
-    return {};
-  }
-  const nested = isRecord(raw.lspServers) ? raw.lspServers : raw;
-  if (!isRecord(nested)) {
-    return {};
-  }
-  const result: Record<string, BundleLspServerConfig> = {};
-  for (const [serverName, serverRaw] of Object.entries(nested)) {
-    if (!isRecord(serverRaw)) {
-      continue;
-    }
-    result[serverName] = { ...serverRaw };
-  }
-  return result;
-}
 
 function resolveBundleLspConfigPaths(params: {
   raw: Record<string, unknown>;
@@ -91,7 +73,10 @@ function loadBundleLspConfigFile(params: { rootDir: string; relativePath: string
       ],
     };
   }
-  return { config: { lspServers: extractLspServerMap(result.raw) }, diagnostics: [] };
+  return {
+    config: { lspServers: extractBundleServerMap(result.raw, ["lspServers"]) },
+    diagnostics: [],
+  };
 }
 
 function loadBundleLspConfig(params: {

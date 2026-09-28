@@ -1,4 +1,3 @@
-// Whatsapp plugin module prepares inbound text, context, and downloaded media.
 import type { proto, WAMessage, WASocket } from "baileys";
 import {
   formatInboundMediaUnavailableText,

@@ -115,6 +115,7 @@ describe("skills watcher subscription lifecycle", () => {
     );
     second.watcher.emit("raw", "rename", undefined, { watchedPath: ancestor });
     expect(first.watcher.close).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(0);
     const promoted = [watchForSkillRoot(firstRoot).watcher, watchForSkillRoot(secondRoot).watcher];
     await vi.advanceTimersByTimeAsync(250);
     expect(readFirst()).toEqual(["first-proof"]);

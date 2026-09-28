@@ -26,6 +26,7 @@ export function createNodeWorkerBundleTransferService(options: ArtifactTransferO
         ...params,
         artifactKey: params.artifact.bundleHash,
         ttlMs: workerBootstrapOperationTimeoutMs(params.artifact),
+        maxServes: 1,
       });
       return {
         token,
@@ -44,9 +45,6 @@ export function createNodeWorkerBundleTransferService(options: ArtifactTransferO
           },
         },
       };
-    },
-    authorize(params: { token: string; bundleHash: string }) {
-      return transfer.authorize({ token: params.token, artifactKey: params.bundleHash });
     },
   };
 }

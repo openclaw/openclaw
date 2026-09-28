@@ -367,6 +367,8 @@ node -e '
   const root = process.argv[1];
   const read = name => JSON.parse(fs.readFileSync(path.join(root, name), "utf8"));
   const source = read("source.json");
+  const secondHopFixture = read("second-hop-fixture.json");
+  const retainedLegacyCompatibilityChunks = secondHopFixture.retainedLegacyCompatibilityChunks ?? [];
   const [sourcePid, candidatePid, futurePid] = fs.readFileSync(path.join(root, "positive-service-pids.txt"), "utf8").trim().split("\n").map(Number);
   fs.writeFileSync(path.join(root, "summary.json"), `${JSON.stringify({
     source,
@@ -374,7 +376,7 @@ node -e '
       ? { status: "passed", exit: 1, missingChunk: source.expectedMissingChunk }
       : source.negativeControl,
     firstHop: { exit: 0, method: "in-process-self-update", selfUpdatePassed: true, serviceIntent: "active", residueCount: 0, build: read("positive-first-build-info.json"), beforePid: sourcePid, afterPid: candidatePid },
-    secondHop: { exit: 0, method: "in-process-self-update", legacyCompatibilityChunksPresent: false, serviceIntent: "active", residueCount: 0, build: read("positive-second-build-info.json"), beforePid: candidatePid, afterPid: futurePid },
+    secondHop: { exit: 0, method: "in-process-self-update", legacyCompatibilityChunksPresent: retainedLegacyCompatibilityChunks.length > 0, retainedLegacyCompatibilityChunks, removedCompatibilityChunks: secondHopFixture.removedCompatibilityChunks ?? [], serviceIntent: "active", residueCount: 0, build: read("positive-second-build-info.json"), beforePid: candidatePid, afterPid: futurePid },
     admission: process.env.OPENCLAW_UPDATE_FIRST_HOP_ADMISSION_PROTOCOL === "1" ? {
       supportedTarget: read("positive-second-admission.json"),
       unsupportedTarget: read("positive-unsupported-admission-admission.json"),

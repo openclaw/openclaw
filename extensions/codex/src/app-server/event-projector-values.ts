@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import {
   asFiniteNumber,
   normalizeOptionalString,
@@ -73,7 +74,7 @@ export function readCodexProviderRefusal(
     : undefined;
 }
 
-export function codexProviderRefusalDetails(refusal: CodexProviderRefusal) {
+function codexProviderRefusalDetails(refusal: CodexProviderRefusal) {
   return {
     provider: "openai",
     category: refusal.category,
@@ -81,6 +82,19 @@ export function codexProviderRefusalDetails(refusal: CodexProviderRefusal) {
     ...(refusal.nativeThreadId ? { nativeThreadId: refusal.nativeThreadId } : {}),
     ...(refusal.nativeTurnId ? { nativeTurnId: refusal.nativeTurnId } : {}),
   };
+}
+
+export function codexProviderRefusalDiagnostics(
+  refusal: CodexProviderRefusal | undefined,
+  timestamp: number,
+): Pick<AssistantMessage, "diagnostics"> {
+  return refusal
+    ? {
+        diagnostics: [
+          { type: "provider_refusal", timestamp, details: codexProviderRefusalDetails(refusal) },
+        ],
+      }
+    : {};
 }
 
 export { normalizeOptionalString as normalizeNonEmptyString };
@@ -147,11 +161,6 @@ export function extractRawAssistantText(item: JsonObject): string | undefined {
     return value === undefined ? [] : [value];
   });
   return parts.length > 0 ? parts.join("").trim() : undefined;
-}
-
-export function readItemString(item: CodexThreadItem, key: string): string | undefined {
-  const value = item[key];
-  return typeof value === "string" ? value : undefined;
 }
 
 export function readItem(value: JsonValue | undefined): CodexThreadItem | undefined {

@@ -442,7 +442,13 @@ export function focusComposerFromChrome(event: MouseEvent | PointerEvent, connec
   if (!connected) {
     return;
   }
-  if (target.closest(COMPOSER_CHROME_INTERACTIVE_SELECTOR)) {
+  // A menu action can replace its clicked row before this bubbling listener.
+  // The dispatch path still records that the interaction belonged to a control.
+  if (
+    event
+      .composedPath()
+      .some((node) => node instanceof Element && node.matches(COMPOSER_CHROME_INTERACTIVE_SELECTOR))
+  ) {
     return;
   }
   const currentTarget = event.currentTarget;

@@ -292,6 +292,7 @@ describe("Web Awesome popup lifecycle", () => {
       );
       const anchor = document.createElement("button");
       const popup = document.createElement("wa-popup");
+      const reposition = vi.spyOn(popup, "reposition");
       popup.anchor = anchor;
       popup.active = true;
       const repositioned = vi.fn();
@@ -304,8 +305,10 @@ describe("Web Awesome popup lifecycle", () => {
         await popup.updateComplete;
         await positioned;
         repositioned.mockClear();
+        reposition.mockClear();
         window.dispatchEvent(new Event("resize"));
         expect(repositioned).toHaveBeenCalled();
+        expect(reposition).toHaveBeenCalled();
 
         if (transition === "reposition event") {
           popup.addEventListener("wa-reposition", () => popup.remove(), { once: true });
@@ -320,12 +323,12 @@ describe("Web Awesome popup lifecycle", () => {
         pending.forEach((callback) => callback(performance.now()));
         await Promise.resolve();
         repositioned.mockClear();
-        raf.mockClear();
+        reposition.mockClear();
 
         window.dispatchEvent(new Event("resize"));
 
         expect(repositioned).not.toHaveBeenCalled();
-        expect(raf).not.toHaveBeenCalled();
+        expect(reposition).not.toHaveBeenCalled();
       } finally {
         popup.remove();
         anchor.remove();

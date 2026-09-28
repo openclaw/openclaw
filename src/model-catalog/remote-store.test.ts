@@ -28,53 +28,35 @@ describe("remote model catalog store", () => {
     roots.push(root);
     const options = { path: path.join(root, "state.sqlite") };
     expect(readRemoteModelCatalog(options)).toBeUndefined();
-    expect(
-      markRemoteModelCatalogChecked(
-        1,
-        {
-          expected: {
-            source_url: "https://catalog.test/one",
-            generated_at: 1,
-            etag: null,
-            last_modified: null,
-          },
-        },
-        options,
-      ),
-    ).toBe(false);
+    const initial = {
+      bundle_json: '{"schemaVersion":1}',
+      generated_at: 1,
+      min_version: null,
+      source_url: "https://catalog.test/one",
+      etag: null,
+      last_modified: null,
+      checked_at: 2,
+    };
+    expect(markRemoteModelCatalogChecked(1, { expected: initial }, options)).toBe(false);
     expect(readConfigMachineState("modelCatalog.remote.v2", options)).toBeUndefined();
-    writeRemoteModelCatalog(
-      {
-        bundle_json: '{"schemaVersion":1}',
-        generated_at: 1,
-        min_version: null,
-        source_url: "https://catalog.test/one",
-        etag: null,
-        last_modified: null,
-        checked_at: 2,
-      },
-      options,
-    );
-    writeRemoteModelCatalog(
-      {
-        bundle_json: '{"schemaVersion":1,"updated":true}',
-        generated_at: 3,
-        min_version: "2026.7.0",
-        source_url: "https://catalog.test/two",
-        etag: '"two"',
-        last_modified: null,
-        checked_at: 4,
-      },
-      options,
-    );
+    writeRemoteModelCatalog(initial, options);
+    const updated = {
+      ...initial,
+      bundle_json: '{"schemaVersion":1,"updated":true}',
+      generated_at: 3,
+      min_version: "2026.7.0",
+      source_url: "https://catalog.test/two",
+      etag: '"two"',
+      checked_at: 4,
+    };
+    writeRemoteModelCatalog(updated, options);
     const retained = writeRemoteModelCatalog(
       {
+        ...updated,
         bundle_json: '{"schemaVersion":1,"older":true}',
         generated_at: 2,
         min_version: null,
-        source_url: "https://catalog.test/two",
         etag: '"older"',
-        last_modified: null,
         checked_at: 5,
       },
       options,
@@ -83,12 +65,10 @@ describe("remote model catalog store", () => {
     expect(
       writeRemoteModelCatalog(
         {
+          ...updated,
           bundle_json: '{"schemaVersion":1,"sameGenerationDifferentBody":true}',
-          generated_at: 3,
           min_version: null,
-          source_url: "https://catalog.test/two",
           etag: '"different"',
-          last_modified: null,
           checked_at: 5,
         },
         options,
@@ -98,33 +78,9 @@ describe("remote model catalog store", () => {
       row: { bundle_json: expect.stringContaining("updated") },
     });
     expect(
-      markRemoteModelCatalogChecked(
-        5,
-        {
-          expected: {
-            source_url: "https://catalog.test/two",
-            generated_at: 3,
-            etag: '"older"',
-            last_modified: null,
-          },
-        },
-        options,
-      ),
+      markRemoteModelCatalogChecked(5, { expected: { ...updated, etag: '"older"' } }, options),
     ).toBe(false);
-    expect(
-      markRemoteModelCatalogChecked(
-        6,
-        {
-          expected: {
-            source_url: "https://catalog.test/two",
-            generated_at: 3,
-            etag: '"two"',
-            last_modified: null,
-          },
-        },
-        options,
-      ),
-    ).toBe(true);
+    expect(markRemoteModelCatalogChecked(6, { expected: updated }, options)).toBe(true);
     expect(readRemoteModelCatalog(options)).toMatchObject({
       id: 1,
       generated_at: 3,

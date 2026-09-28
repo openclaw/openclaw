@@ -49,6 +49,7 @@ import {
 } from "../session-sharing.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { emitSessionsChanged } from "./session-change-event.js";
+import { measureSessionCollaborationPhase } from "./sessions-collaboration-diagnostics.js";
 import {
   requireCurrentManagedTarget,
   sharingExpectedEntry,
@@ -239,16 +240,22 @@ function createSessionMembersListHandler(
     if (!projection) {
       throw new Error("Session projection is unavailable before Gateway startup completes");
     }
-    const profiles = await listProfiles();
+    const profiles = await measureSessionCollaborationPhase(`${method}.profiles`, () =>
+      listProfiles(),
+    );
     const evidenceMembers = (
-      await listSessionMembersInWorker({
-        agentId: managed.target.agentId,
-        sessionKey: managed.target.storeKey,
-        storePath: managed.target.storePath,
-      })
+      await measureSessionCollaborationPhase(`${method}.evidence`, () =>
+        listSessionMembersInWorker({
+          agentId: managed.target.agentId,
+          sessionKey: managed.target.storeKey,
+          storePath: managed.target.storePath,
+        }),
+      )
     ).map(projectSessionMemberEvidence);
     do {
-      await projection.ensureMaterialized();
+      await measureSessionCollaborationPhase(`${method}.projection`, () =>
+        projection.ensureMaterialized(),
+      );
     } while (projection.needsMaterialization);
     const currentCfg = context.getRuntimeConfig();
     const target = requireCurrentManagedTarget({

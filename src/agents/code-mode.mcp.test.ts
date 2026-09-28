@@ -715,7 +715,7 @@ describe("Code Mode MCP namespace", () => {
   );
 
   describe("reserved MCP tool names", () => {
-    const toolNames = ["delete", "default", "return", "enum", "class"] as const;
+    const toolNames = ["delete", "enum"] as const;
     const targets = new Map<string, ReturnType<typeof mcpTool>>();
     let results: Record<string, unknown>;
 

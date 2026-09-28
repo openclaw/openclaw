@@ -47,10 +47,6 @@ const DEFAULT_SANDBOX_SSH_WORKSPACE_ROOT = "/tmp/openclaw-sandboxes";
 type DangerousSandboxDockerBooleanKey = (typeof DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS)[number];
 type DangerousSandboxDockerBooleans = Pick<SandboxDockerConfig, DangerousSandboxDockerBooleanKey>;
 
-function resolveSandboxBrowserAutoStartTimeoutMs(value: number | undefined): number {
-  return resolveTimerTimeoutMs(value, DEFAULT_SANDBOX_BROWSER_AUTOSTART_TIMEOUT_MS);
-}
-
 function resolveDangerousSandboxDockerBooleans(
   agentDocker?: Partial<SandboxDockerConfig>,
   globalDocker?: Partial<SandboxDockerConfig>,
@@ -156,8 +152,9 @@ export function resolveSandboxBrowserConfig(params: {
     noVncEnabled: agentBrowser?.noVncEnabled ?? globalBrowser?.noVncEnabled ?? true,
     allowHostControl: agentBrowser?.allowHostControl ?? globalBrowser?.allowHostControl ?? false,
     autoStart: agentBrowser?.autoStart ?? globalBrowser?.autoStart ?? true,
-    autoStartTimeoutMs: resolveSandboxBrowserAutoStartTimeoutMs(
+    autoStartTimeoutMs: resolveTimerTimeoutMs(
       agentBrowser?.autoStartTimeoutMs ?? globalBrowser?.autoStartTimeoutMs,
+      DEFAULT_SANDBOX_BROWSER_AUTOSTART_TIMEOUT_MS,
     ),
     binds: bindsConfigured ? binds : undefined,
   };
@@ -225,12 +222,8 @@ export function resolveSandboxConfigForAgent(
 ): SandboxConfig {
   const agent = cfg?.agents?.defaults?.sandbox;
 
-  // Agent-specific sandbox config overrides global
-  let agentSandbox: typeof agent | undefined;
   const agentConfig = cfg && agentId ? resolveAgentConfig(cfg, agentId) : undefined;
-  if (agentConfig?.sandbox) {
-    agentSandbox = agentConfig.sandbox;
-  }
+  const agentSandbox = agentConfig?.sandbox;
   const scope = resolveSandboxScope({
     scope: agentSandbox?.scope ?? agent?.scope,
   });

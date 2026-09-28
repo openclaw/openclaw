@@ -97,20 +97,20 @@ export function createDiscordDraftStream(params: {
     }
 
     try {
+      const body = {
+        content: trimmed,
+        allowed_mentions: DISCORD_PREVIEW_ALLOWED_MENTIONS,
+        ...(flags ? { flags } : {}),
+      };
       if (streamMessage !== undefined) {
         await editChannelMessage(rest, streamMessage.channelId, streamMessage.messageId, {
-          body: {
-            content: trimmed,
-            allowed_mentions: DISCORD_PREVIEW_ALLOWED_MENTIONS,
-            ...(flags ? { flags } : {}),
-          },
+          body,
         });
         if (generation === streamGeneration) {
           lastSentText = trimmed;
         }
         return true;
       }
-      // Send new message
       const replyToMessageId = resolveReplyToMessageId()?.trim();
       const messageReference = replyToMessageId
         ? { message_id: replyToMessageId, fail_if_not_exists: false }
@@ -118,9 +118,7 @@ export function createDiscordDraftStream(params: {
       activeCreateGeneration = generation;
       const sent = await createChannelMessage<{ id?: string }>(rest, targetChannelId, {
         body: {
-          content: trimmed,
-          allowed_mentions: DISCORD_PREVIEW_ALLOWED_MENTIONS,
-          ...(flags ? { flags } : {}),
+          ...body,
           ...(messageReference ? { message_reference: messageReference } : {}),
         },
       });

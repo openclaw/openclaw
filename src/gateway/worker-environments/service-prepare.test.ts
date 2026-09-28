@@ -75,6 +75,7 @@ describe("on-demand prepared worker admission", () => {
 
   it("admits HEAD without a session, authorizes setup, and starts background preparation", async () => {
     const f = await fixture();
+    await f.service.ready();
     support.getDevelopmentProfile().readyWorkers = 0;
     const entered = createDeferredCore();
     const release = createDeferredCore();

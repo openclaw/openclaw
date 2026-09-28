@@ -357,6 +357,72 @@ export function resolvePreflightTag(runGh: PublishPreflightGh, repo: string, tag
   return object.sha;
 }
 
+export function ensureReleasePublishToolingTag({
+  runGh,
+  repo,
+  toolingSha,
+  now = Date.now,
+}: {
+  runGh: PublishPreflightGh;
+  repo: string;
+  toolingSha: string;
+  now?: () => number;
+}): { tag: string; created: boolean } {
+  if (!/^[a-f0-9]{40}$/u.test(toolingSha)) {
+    throw new Error("Tooling SHA must be a lowercase 40-character commit SHA.");
+  }
+  const ancestry = runGh([
+    "api",
+    `repos/${repo}/compare/${toolingSha}...main`,
+    "--method",
+    "GET",
+    "--jq",
+    ".status",
+  ]).trim();
+  if (ancestry !== "ahead" && ancestry !== "identical") {
+    throw new Error(`Tooling SHA ${toolingSha} is not reachable from trusted main.`);
+  }
+  const sha12 = toolingSha.slice(0, 12);
+  const refs = preflightApi(runGh, repo, `git/matching-refs/tags/release-publish/${sha12}-`);
+  if (!Array.isArray(refs)) {
+    throw new Error("Invalid protected tooling tag inventory.");
+  }
+  let newest: RegExpExecArray | undefined;
+  for (const entry of refs) {
+    if (
+      !isRecord(entry) ||
+      !isRecord(entry.object) ||
+      entry.object.type !== "commit" ||
+      entry.object.sha !== toolingSha ||
+      typeof entry.ref !== "string"
+    ) {
+      continue;
+    }
+    const match = /^refs\/tags\/(release-publish\/[a-f0-9]{12}-([1-9][0-9]*))$/u.exec(entry.ref);
+    if (match && (!newest || BigInt(match[2]!) > BigInt(newest[2]!))) {
+      newest = match;
+    }
+  }
+  if (newest) {
+    return { tag: newest[1]!, created: false };
+  }
+  const tag = `release-publish/${sha12}-${Math.floor(now() / 1000)}`;
+  runGh([
+    "api",
+    `repos/${repo}/git/refs`,
+    "--method",
+    "POST",
+    "-f",
+    `ref=refs/tags/${tag}`,
+    "-f",
+    `sha=${toolingSha}`,
+  ]);
+  if (resolvePreflightTag(runGh, repo, tag) !== toolingSha) {
+    throw new Error(`Protected tooling tag ${tag} does not resolve to ${toolingSha}.`);
+  }
+  return { tag, created: true };
+}
+
 function listPreflightArtifacts(runGh: PublishPreflightGh, repo: string, runId: string) {
   const artifacts: PublishPreflightRecord[] = [];
   for (let page = 1; page <= 20; page++) {

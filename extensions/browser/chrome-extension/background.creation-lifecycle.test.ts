@@ -288,7 +288,6 @@ describe("physical tab creation authority", () => {
     { event: "unrelated group removal", response: "result" },
     { event: "own title change", response: "error" },
     { event: "own group removal", response: "error" },
-    { event: "own title change and restoration", response: "error" },
   ] as const)(
     "scopes handed-off navigation authority across $event",
     async ({ event, response }) => {
@@ -305,9 +304,6 @@ describe("physical tab creation authority", () => {
           h.tabGroupRemovedListener?.({ id: 7, title: "OpenClaw" });
         } else {
           h.tabGroupUpdatedListener?.({ id: 7, title: "Other" });
-          if (event === "own title change and restoration") {
-            h.tabGroupUpdatedListener?.({ id: 7, title: "OpenClaw" });
-          }
         }
         return { frameId: "main" };
       });

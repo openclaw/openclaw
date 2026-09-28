@@ -27,18 +27,14 @@ import { resolveModelRouteIntent } from "../model-runtime-policy.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { resolveModelCatalogIdentityKey } from "../openai-model-routes.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
+import { authProfilesLog } from "./constants.js";
 import { createSelectedAuthProfileUnavailableError } from "./selection-error.js";
 import { ensureAuthProfileStore } from "./store-runtime.js";
 
+// Read-only auth resolution must not import session persistence.
 const sessionAccessorLoader = createLazyImportLoader(
   () => import("../../config/sessions/session-accessor.js"),
 );
-
-// Session accessor writes are lazy-loaded so read-only auth resolution paths do
-// not import persistence code unless an override must be updated.
-function loadSessionAccessor() {
-  return sessionAccessorLoader.load();
-}
 
 type SessionAuthProfileOverrideState = Pick<
   SessionEntry,
@@ -150,7 +146,7 @@ async function persistSessionAuthProfileOverrideState(params: {
     sessionStore[sessionKey] = sessionEntry;
   }
   const persisted = await (
-    await loadSessionAccessor()
+    await sessionAccessorLoader.load()
   ).patchSessionEntryCore(
     { agentId: params.agentId, storePath, sessionKey },
     (current) => {
@@ -356,6 +352,15 @@ async function resolveSessionAuthProfileOverride(params: {
   let current = sessionEntry.authProfileOverride?.trim();
   const source = resolveSessionAuthProfileOverrideSource(sessionEntry);
 
+  const overrideTarget = {
+    agentId,
+    sessionEntry,
+    sessionStore,
+    sessionKey,
+    storePath,
+    assertCommitAllowed: params.assertCommitAllowed,
+  };
+
   const currentProfileId = current;
   if (
     currentProfileId &&
@@ -386,28 +391,25 @@ async function resolveSessionAuthProfileOverride(params: {
         }),
       )
     ) {
+      authProfilesLog.warn(
+        "selected session auth profile is unavailable; explicit pin remains strict",
+        {
+          event: "session_auth_profile_unavailable",
+          sessionKey,
+          profileId: currentProfileId,
+          recovery:
+            "select a configured model@profile or reconnect the intended account with models auth login --profile-id",
+          tags: ["auth_profiles", "session_recovery"],
+        },
+      );
       return { profileId: currentProfileId, store };
     }
-    await clearSessionAuthProfileOverride({
-      agentId,
-      sessionEntry,
-      sessionStore,
-      sessionKey,
-      storePath,
-      assertCommitAllowed: params.assertCommitAllowed,
-    });
+    await clearSessionAuthProfileOverride(overrideTarget);
     current = undefined;
   }
 
   if (current && !isProfileForProvider({ cfg, providers, profileId: current, store })) {
-    await clearSessionAuthProfileOverride({
-      agentId,
-      sessionEntry,
-      sessionStore,
-      sessionKey,
-      storePath,
-      assertCommitAllowed: params.assertCommitAllowed,
-    });
+    await clearSessionAuthProfileOverride(overrideTarget);
     current = undefined;
   }
 
@@ -429,17 +431,12 @@ async function resolveSessionAuthProfileOverride(params: {
     });
     if (linked) {
       await persistSessionAuthProfileOverrideState({
-        agentId,
-        sessionEntry,
-        sessionStore,
-        sessionKey,
+        ...overrideTarget,
         state: {
           authProfileOverride: linked.profileId,
           authProfileOverrideSource: "user-link",
           authProfileOverrideCompactionCount: undefined,
         },
-        storePath,
-        assertCommitAllowed: params.assertCommitAllowed,
       });
       return linked;
     }
@@ -447,14 +444,7 @@ async function resolveSessionAuthProfileOverride(params: {
 
   // Automatic pins must stay inside the currently configured rotation order.
   if (current && order.length > 0 && !order.includes(current)) {
-    await clearSessionAuthProfileOverride({
-      agentId,
-      sessionEntry,
-      sessionStore,
-      sessionKey,
-      storePath,
-      assertCommitAllowed: params.assertCommitAllowed,
-    });
+    await clearSessionAuthProfileOverride(overrideTarget);
     current = undefined;
   }
 
@@ -466,17 +456,12 @@ async function resolveSessionAuthProfileOverride(params: {
     // An automatic pin must not trap later turns on an unavailable provider.
     if (current) {
       const latest = await persistSessionAuthProfileOverrideState({
-        agentId,
-        sessionEntry,
-        sessionStore,
-        sessionKey,
+        ...overrideTarget,
         state: {
           authProfileOverride: undefined,
           authProfileOverrideSource: undefined,
           authProfileOverrideCompactionCount: undefined,
         },
-        storePath,
-        assertCommitAllowed: params.assertCommitAllowed,
         expectedSnapshot: {
           sessionId: sessionEntry.sessionId,
           authProfileOverride: sessionEntry.authProfileOverride,
@@ -589,17 +574,12 @@ async function resolveSessionAuthProfileOverride(params: {
     next !== sessionEntry.authProfileOverride || sessionEntry.authProfileOverrideSource !== "auto";
   if (shouldPersist) {
     await persistSessionAuthProfileOverrideState({
-      agentId,
-      sessionEntry,
-      sessionStore,
-      sessionKey,
+      ...overrideTarget,
       state: {
         authProfileOverride: next,
         authProfileOverrideSource: "auto",
         authProfileOverrideCompactionCount: compactionCount,
       },
-      storePath,
-      assertCommitAllowed: params.assertCommitAllowed,
     });
   }
 

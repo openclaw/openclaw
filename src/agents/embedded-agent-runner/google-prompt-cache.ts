@@ -97,16 +97,6 @@ type GooglePromptCacheDeps = {
   now?: () => number;
 };
 
-function resolveGooglePromptCacheTtl(cacheRetention: CacheRetention): string {
-  return cacheRetention === "long" ? "3600s" : "300s";
-}
-
-function resolveGooglePromptCacheRefreshWindowMs(cacheRetention: CacheRetention): number {
-  return cacheRetention === "long"
-    ? GOOGLE_PROMPT_CACHE_LONG_REFRESH_WINDOW_MS
-    : GOOGLE_PROMPT_CACHE_SHORT_REFRESH_WINDOW_MS;
-}
-
 function resolveExplicitCachedContent(
   extraParams: Record<string, unknown> | undefined,
 ): string | undefined {
@@ -118,17 +108,6 @@ function resolveExplicitCachedContent(
         : undefined;
   const trimmed = raw?.trim();
   return trimmed ? trimmed : undefined;
-}
-
-function buildGooglePromptCacheMatchKey(params: {
-  provider: string;
-  modelId: string;
-  modelApi?: string | null;
-  baseUrl: string;
-  systemPromptDigest: string;
-  cacheConfigDigest?: string;
-}) {
-  return stableStringify(params);
 }
 
 function stringifyGooglePromptCacheKeyPart(value: unknown): string {
@@ -157,7 +136,7 @@ function readLatestGooglePromptCacheEntry(
         continue;
       }
       const cacheData = data as Record<string, unknown>;
-      const candidateKey = buildGooglePromptCacheMatchKey({
+      const candidateKey = stableStringify({
         provider: stringifyGooglePromptCacheKeyPart(cacheData.provider),
         modelId: stringifyGooglePromptCacheKeyPart(cacheData.modelId),
         modelApi:
@@ -361,12 +340,13 @@ async function requestGooglePromptCache(
     ? `${params.baseUrl}/${params.cachedContent}?updateMask=ttl`
     : `${params.baseUrl}/cachedContents`;
   const headers = buildGooglePromptCacheHeaders(params);
+  const ttl = params.cacheRetention === "long" ? "3600s" : "300s";
   const body = JSON.stringify(
     refreshing
-      ? { ttl: resolveGooglePromptCacheTtl(params.cacheRetention) }
+      ? { ttl }
       : {
           model: params.modelId.startsWith("models/") ? params.modelId : `models/${params.modelId}`,
-          ttl: resolveGooglePromptCacheTtl(params.cacheRetention),
+          ttl,
           systemInstruction: { parts: [{ text: params.systemPrompt }] },
           ...(params.tools ? { tools: params.tools } : {}),
           ...(params.toolConfig ? { toolConfig: params.toolConfig } : {}),
@@ -428,7 +408,7 @@ async function ensureGooglePromptCache(
     return null;
   }
   const systemPromptDigest = sha256Hex(params.systemPrompt);
-  const matchKey = buildGooglePromptCacheMatchKey({
+  const matchKey = stableStringify({
     provider: params.provider,
     modelId: params.model.id,
     modelApi: params.model.api,
@@ -466,7 +446,10 @@ async function ensureGooglePromptCache(
     now,
     signal: params.signal,
   };
-  const refreshWindowMs = resolveGooglePromptCacheRefreshWindowMs(params.cacheRetention);
+  const refreshWindowMs =
+    params.cacheRetention === "long"
+      ? GOOGLE_PROMPT_CACHE_LONG_REFRESH_WINDOW_MS
+      : GOOGLE_PROMPT_CACHE_SHORT_REFRESH_WINDOW_MS;
   const cachedContent =
     latestEntry?.status === "ready" ? readGooglePromptCacheName(latestEntry.cachedContent) : null;
   if (latestEntry?.status === "ready" && cachedContent) {
@@ -487,7 +470,6 @@ async function ensureGooglePromptCache(
           cachedContent,
           expireTime: refreshed.expireTime,
         });
-        return cachedContent;
       }
       return cachedContent;
     }

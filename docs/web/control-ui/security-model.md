@@ -66,6 +66,13 @@ Concurrent profile-photo requests can share a Gravatar lookup. Each HTTP request
 keeps its own timeout and disconnect lifecycle, so one expired or disconnected
 request does not interrupt another client loading the same photo.
 
+Saved profile photos use a bounded in-memory cache tied to the Gateway's profile
+catalog. Committed profile edits and merges invalidate cached representations;
+authentication still runs before cached responses and `304 Not Modified`.
+Cold photo reads have a separate concurrency budget to preserve shared-state read
+capacity. During overload, the endpoint returns `503 Service Unavailable` with
+`Retry-After: 1` instead of a permanent lookup failure.
+
 ## Assistant media route auth
 
 Local image previews follow the chat's filesystem permissions. Project chats use
@@ -114,7 +121,7 @@ before they expire.
 
 This keeps media rendering compatible with browser-native media elements without putting reusable gateway credentials in visible media URLs.
 
-Uploaded and local chat image previews rendered with native image elements keep an already-loaded image visible during temporary connection or metadata-renewal failures. Retention applies only to that mounted image; it does not extend its media ticket or authorize fresh reads. An explicit missing or access-denied response, or a change to the source, credentials, or access scope, clears the retained image.
+Uploaded and local chat image previews rendered with native image elements keep an already-loaded image visible during temporary connection or metadata-renewal failures. That failure tolerance applies only to the mounted image; it does not extend its media ticket or authorize fresh reads. Scrolling can reuse a successfully decoded image from the bounded in-memory preview cache while its existing metadata and ticket remain valid, without another image download or loading placeholder. An explicit missing or access-denied response, or a change to the source, credentials, or access scope, clears the retained image. When the UI receives a sharing invalidation, a role-configuration change, or the connection close for a role reassignment, cached previews must pass fresh admission before remounting.
 
 Uploaded images also stay visible while a new session's workspace or worktree details arrive. Media access is rechecked in the background without replacing the loaded preview with a loading card.
 

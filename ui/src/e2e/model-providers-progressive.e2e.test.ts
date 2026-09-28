@@ -497,8 +497,11 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
           await takeControlUiViewportScreenshot(page, page.locator(".shell"), [defaults]),
         );
       }
-      await expect.poll(() => trigger.isEnabled()).toBe(false);
-      expect(await defaults.locator(".picker-select__trigger:enabled").count()).toBe(0);
+      await trigger.click();
+      const currentOption = picker.locator('[role="option"][data-value="fixture/current"]');
+      expect(await currentOption.getAttribute("aria-disabled")).toBe("true");
+      await currentOption.click({ force: true });
+      await trigger.click();
       expect(await pickerValue(picker)).toBe("");
       expect(await defaults.locator("#model-providers-utility-model").textContent()).toContain(
         "Auto · Current connection model",
@@ -545,7 +548,12 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
       const defaults = page.locator(".model-providers__defaults");
       const picker = defaults.locator("openclaw-select-picker").first();
       const trigger = picker.locator(".picker-select__trigger");
-      await expect.poll(() => trigger.isEnabled()).toBe(false);
+      await trigger.click();
+      const currentOption = picker.locator('[role="option"][data-value="fixture/current"]');
+      expect(await currentOption.getAttribute("aria-disabled")).toBe("true");
+      await currentOption.click({ force: true });
+      expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+      await trigger.click();
       const configReads = (await gateway.getRequests("config.get")).length;
       await page.locator(".model-providers__refresh-button").click();
       await gateway.waitForRequest("config.get", { after: configReads });

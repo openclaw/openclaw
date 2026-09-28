@@ -20,7 +20,5 @@ export async function inspectReadOnlyChannelAccount(params: {
   if (!inspectAccount) {
     return null;
   }
-  return (await Promise.resolve(
-    inspectAccount(params.cfg, params.accountId),
-  )) as ReadOnlyInspectedAccount | null;
+  return (await inspectAccount(params.cfg, params.accountId)) as ReadOnlyInspectedAccount | null;
 }

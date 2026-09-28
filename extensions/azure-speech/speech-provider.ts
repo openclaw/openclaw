@@ -1,7 +1,3 @@
-/**
- * Azure Speech provider descriptor. It reads config/env defaults, parses speech
- * directives, lists voices, and calls the Azure TTS runtime helper.
- */
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -14,6 +10,7 @@ import { resolveSpeechProviderApiKey } from "openclaw/plugin-sdk/speech-provider
 import {
   asFiniteNumber,
   asOptionalRecord,
+  filterStringRecord,
   normalizeOptionalString as trimToUndefined,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -212,7 +209,6 @@ async function resolveAzureSpeechTtsRequest(
   };
 }
 
-/** Build the Azure Speech provider descriptor for the speech-core runtime. */
 export function buildAzureSpeechProvider(): SpeechProviderPlugin {
   return {
     id: "azure-speech",
@@ -239,39 +235,28 @@ export function buildAzureSpeechProvider(): SpeechProviderPlugin {
       });
       return {
         ...base,
-        ...(apiKey === undefined ? {} : { apiKey }),
-        ...(region === undefined ? {} : { region }),
-        ...(endpoint === undefined ? {} : { endpoint }),
-        ...(baseUrl === undefined ? {} : { baseUrl }),
-        ...(trimToUndefined(talkProviderConfig.voiceId) == null
-          ? {}
-          : { voice: trimToUndefined(talkProviderConfig.voiceId) }),
-        ...(trimToUndefined(talkProviderConfig.languageCode) == null
-          ? {}
-          : { lang: trimToUndefined(talkProviderConfig.languageCode) }),
-        ...(trimToUndefined(talkProviderConfig.outputFormat) == null
-          ? {}
-          : { outputFormat: trimToUndefined(talkProviderConfig.outputFormat) }),
+        ...filterStringRecord({
+          apiKey,
+          region,
+          endpoint,
+          baseUrl,
+          voice: trimToUndefined(talkProviderConfig.voiceId),
+          lang: trimToUndefined(talkProviderConfig.languageCode),
+          outputFormat: trimToUndefined(talkProviderConfig.outputFormat),
+        }),
       };
     },
-    resolveTalkOverrides: ({ params }) => ({
-      ...(trimToUndefined(params.voiceId) == null
-        ? {}
-        : { voice: trimToUndefined(params.voiceId) }),
-      ...(trimToUndefined(params.languageCode) == null
-        ? {}
-        : { lang: trimToUndefined(params.languageCode) }),
-      ...(trimToUndefined(params.outputFormat) == null
-        ? {}
-        : { outputFormat: trimToUndefined(params.outputFormat) }),
-    }),
+    resolveTalkOverrides: ({ params }) =>
+      filterStringRecord({
+        voice: trimToUndefined(params.voiceId),
+        lang: trimToUndefined(params.languageCode),
+        outputFormat: trimToUndefined(params.outputFormat),
+      }) ?? {},
     listVoices: async (req) => {
       const config = req.providerConfig
         ? readAzureSpeechProviderConfig(req.providerConfig)
         : undefined;
-      const requestValue = req.apiKey;
-      const configValue = config?.apiKey;
-      const apiKey = resolveApiKey(requestValue, configValue);
+      const apiKey = resolveApiKey(req.apiKey, config?.apiKey);
       if (!apiKey) {
         throw new Error("Azure Speech API key missing");
       }

@@ -86,6 +86,7 @@ export async function isComposerDraftCommitted(expected: CommittedStateArgs): Pr
     type DraftRecord = {
       revision: number;
       text: string;
+      replyTarget?: { sourceMessageId?: string };
       attachments: { fileName?: string; selectionAnnotation?: { comment: string } }[];
     };
     const draft = await new Promise<DraftRecord | undefined>((resolve, reject) => {
@@ -108,6 +109,12 @@ export async function isComposerDraftCommitted(expected: CommittedStateArgs): Pr
       );
     });
     if (!draft) {
+      return false;
+    }
+    if (
+      expected.replySourceMessageId !== undefined &&
+      (draft.replyTarget?.sourceMessageId ?? null) !== expected.replySourceMessageId
+    ) {
       return false;
     }
     if (expected.text === null) {
@@ -135,6 +142,7 @@ export async function waitForCommittedComposerDraft(
   text: string | null,
   attachments: number | readonly string[],
   annotationComments?: readonly (string | null)[],
+  replySourceMessageId?: string | null,
 ): Promise<void> {
   await waitForCommittedState(page, isComposerDraftCommitted, {
     scopeKey,
@@ -142,5 +150,6 @@ export async function waitForCommittedComposerDraft(
     attachmentCount: typeof attachments === "number" ? attachments : attachments.length,
     attachmentNames: typeof attachments === "number" ? null : JSON.stringify(attachments),
     annotationComments: annotationComments ? JSON.stringify(annotationComments) : null,
+    ...(replySourceMessageId !== undefined ? { replySourceMessageId } : {}),
   });
 }

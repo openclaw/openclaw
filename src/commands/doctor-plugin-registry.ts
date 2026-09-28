@@ -17,10 +17,12 @@ import {
   removePluginInstallRecordFromRecords,
   type InstalledPluginIndexRecordStoreOptions,
 } from "../plugins/installed-plugin-index-records.js";
+import { resolveInstalledPluginIndexStateDatabaseOptions } from "../plugins/installed-plugin-index-store-path.js";
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { hasRetainedManagedNpmInstallMarker } from "../plugins/managed-npm-retention.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import { isExternallyDistributedPlugin } from "../plugins/official-external-plugin-catalog.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { refreshPluginRegistry } from "../plugins/plugin-registry-refresh.js";
 import {
   listStaleLocalBundledPluginInstallRecords,
@@ -188,12 +190,13 @@ function listStaleManagedNpmBundledPlugins(
       if (!pluginId || pluginId !== bundled.pluginId) {
         continue;
       }
+      const version = readPackageVersion(packageDir);
       stale.push({
         pluginId,
         packageName,
         packageDir,
         npmRoot,
-        ...(readPackageVersion(packageDir) ? { version: readPackageVersion(packageDir) } : {}),
+        ...(version ? { version } : {}),
       });
     }
   }
@@ -244,17 +247,12 @@ function removeManagedNpmDependency(params: {
   const packageJson = readJsonObject(npmPackageJsonPath) ?? {};
   const dependencies = readStringMap(packageJson.dependencies);
   delete dependencies[params.packageName];
-  const nextPackageJson =
-    Object.keys(dependencies).length === 0
-      ? (() => {
-          const { dependencies: _dependencies, ...rest } = packageJson;
-          return rest;
-        })()
-      : {
-          ...packageJson,
-          dependencies,
-        };
-  writeJsonTarget(npmPackageJsonPath, nextPackageJson);
+  if (Object.keys(dependencies).length === 0) {
+    delete packageJson.dependencies;
+  } else {
+    packageJson.dependencies = dependencies;
+  }
+  writeJsonTarget(npmPackageJsonPath, packageJson);
   removeManagedNpmPackageLockDependency(params);
   fs.rmSync(params.packageDir, { recursive: true, force: true });
   const scopeDir = path.dirname(params.packageDir);
@@ -610,25 +608,44 @@ function assertNeverPluginRegistryIssue(issue: never): never {
 export async function maybeRepairPluginRegistryState(
   params: PluginRegistryDoctorRepairParams,
 ): Promise<PluginRegistryDoctorRepairResult> {
-  let preflight: ReturnType<typeof preflightPluginRegistryDoctorMigration>;
-  try {
-    preflight = preflightPluginRegistryDoctorMigration(params);
-  } catch (error) {
-    if (!(error instanceof InvalidPluginInstallRecordStateError)) {
-      throw error;
+  const readPreflight = () => {
+    try {
+      return preflightPluginRegistryDoctorMigration(params);
+    } catch (error) {
+      if (!(error instanceof InvalidPluginInstallRecordStateError)) {
+        throw error;
+      }
+      note(error.message, "Plugin registry");
+      return undefined;
     }
-    note(error.message, "Plugin registry");
+  };
+  // Invalid input must not bootstrap state; only leased facts can authorize repair.
+  const initial = readPreflight();
+  if (!initial) {
     return { config: params.config };
   }
+  if (!params.prompter.shouldRepair) {
+    return await inspectOrRepairPluginRegistryState(params, initial);
+  }
+  return await withPluginLifecycleLease(
+    resolveInstalledPluginIndexStateDatabaseOptions(params),
+    async () => {
+      const current = readPreflight();
+      return current
+        ? inspectOrRepairPluginRegistryState(params, current)
+        : { config: params.config };
+    },
+  );
+}
 
+async function inspectOrRepairPluginRegistryState(
+  params: PluginRegistryDoctorRepairParams,
+  preflight: ReturnType<typeof preflightPluginRegistryDoctorMigration>,
+): Promise<PluginRegistryDoctorRepairResult> {
   // Earlier Doctor stages can commit install-record repairs inside another metadata scope.
   // This refresh owns the next write, so it must start from the durable ledger.
   clearLoadInstalledPluginIndexInstallRecordsCache();
 
-  const migrationParams = {
-    ...params,
-    config: params.config,
-  };
   const staleManagedNpmBundledPluginRepair = maybeRepairStaleManagedNpmBundledPlugins(params);
   const removedStaleLocalBundledPluginIds =
     await maybeRepairStaleLocalBundledPluginInstallRecords(params);
@@ -660,7 +677,7 @@ export async function maybeRepairPluginRegistryState(
   );
   if (preflight.action !== "skip-existing") {
     const result = await migratePluginRegistryForDoctor({
-      ...migrationParams,
+      ...params,
       installRecords,
     });
     if (result.migrated) {
@@ -678,7 +695,7 @@ export async function maybeRepairPluginRegistryState(
   }
 
   const index = await refreshPluginRegistry({
-    ...migrationParams,
+    ...params,
     reason: "migration",
     installRecords,
   });

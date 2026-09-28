@@ -1163,7 +1163,7 @@ extension OnboardingWizardView {
     private func advanceFromIntro() {
         // An interrupted first run replays the intro until the user explicitly continues.
         OnboardingStateStore.markFirstRunIntroSeen()
-        self.requestLocalNetworkAccess(reason: "onboarding_continue")
+        self.onRequestLocalNetworkAccess("onboarding_continue")
         self.statusLine = ""
         self.navigate(to: .welcome)
     }
@@ -1171,10 +1171,6 @@ extension OnboardingWizardView {
     private func requestLocalNetworkAccessIfPastIntro(reason: String) {
         // Keep the first-run intro focused; request local-network access when pairing starts.
         guard self.step != .intro else { return }
-        self.requestLocalNetworkAccess(reason: reason)
-    }
-
-    private func requestLocalNetworkAccess(reason: String) {
         self.onRequestLocalNetworkAccess(reason)
     }
 
@@ -1325,13 +1321,19 @@ extension OnboardingWizardView {
     private var gatewayTokenBinding: Binding<String> {
         Binding(
             get: { self.gatewayToken },
-            set: { self.persistGatewayToken($0) })
+            set: { value in
+                self.gatewayToken = value
+                self.persistGatewayCredentials(for: self.gatewayCredentialTargetStableID)
+            })
     }
 
     private var gatewayPasswordBinding: Binding<String> {
         Binding(
             get: { self.gatewayPassword },
-            set: { self.persistGatewayPassword($0) })
+            set: { value in
+                self.gatewayPassword = value
+                self.persistGatewayCredentials(for: self.gatewayCredentialTargetStableID)
+            })
     }
 
     private var manualHostBinding: Binding<String> {
@@ -1366,33 +1368,13 @@ extension OnboardingWizardView {
             })
     }
 
-    private func persistGatewayToken(_ value: String) {
-        self.gatewayToken = value
+    private func persistGatewayCredentials(for stableID: String?) {
         let instanceId = GatewaySettingsStore.currentInstanceID()
-        guard !instanceId.isEmpty, let stableID = self.gatewayCredentialTargetStableID else { return }
-        self.gatewayCredentialFieldStableID = stableID
-        let saved = GatewaySettingsStore.updateGatewayCredentials(
-            token: value,
-            password: self.gatewayPassword,
-            gatewayStableID: stableID,
-            instanceId: instanceId)
-        self.pendingManualAuthOverride = saved
-            ? GatewayConnectionController.ManualAuthOverride.selectingCredentialTarget(
-                current: self.pendingManualAuthOverride,
-                instanceId: instanceId,
-                targetStableID: stableID,
-                allowManualOverride: true)
-            : nil
-    }
-
-    private func persistGatewayPassword(_ value: String) {
-        self.gatewayPassword = value
-        let instanceId = GatewaySettingsStore.currentInstanceID()
-        guard !instanceId.isEmpty, let stableID = self.gatewayCredentialTargetStableID else { return }
+        guard !instanceId.isEmpty, let stableID else { return }
         self.gatewayCredentialFieldStableID = stableID
         let saved = GatewaySettingsStore.updateGatewayCredentials(
             token: self.gatewayToken,
-            password: value,
+            password: self.gatewayPassword,
             gatewayStableID: stableID,
             instanceId: instanceId)
         self.pendingManualAuthOverride = saved
@@ -1471,17 +1453,13 @@ extension OnboardingWizardView {
         switch mode {
         case .homeNetwork:
             if hostIsDefaultLike { self.manualHost = "openclaw.local" }
-            self.manualTLS = true
-            if self.manualPort <= 0 || self.manualPort > 65535 { self.manualPort = 18789 }
         case .remoteDomain:
             if host == "openclaw.local" || host == "localhost" { self.manualHost = "" }
-            self.manualTLS = true
-            if self.manualPort <= 0 || self.manualPort > 65535 { self.manualPort = 18789 }
         case .developerLocal:
             if hostIsDefaultLike { self.manualHost = "localhost" }
-            self.manualTLS = false
-            if self.manualPort <= 0 || self.manualPort > 65535 { self.manualPort = 18789 }
         }
+        self.manualTLS = mode != .developerLocal
+        if self.manualPort <= 0 || self.manualPort > 65535 { self.manualPort = 18789 }
     }
 
     private func connectManual(setupAttemptID: UUID? = nil) async {
@@ -1595,10 +1573,7 @@ extension OnboardingWizardView {
     private func handleGatewayProblemPrimaryAction(_ problem: GatewayConnectionProblem) async {
         if problem.suggestsOnboardingReset {
             await GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: self.instanceId)
-            self.gatewayToken = ""
-            self.gatewayPassword = ""
-            self.gatewayCredentialFieldStableID = nil
-            self.pendingManualAuthOverride = nil
+            self.clearManualCredentialFields()
             self.connectingGateway = nil
             self.connectMessage = nil
             self.issue = .none

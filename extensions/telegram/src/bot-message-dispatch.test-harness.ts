@@ -111,7 +111,6 @@ const getAgentScopedMediaLocalRootsHoisted = vi.hoisted(() =>
   vi.fn((_cfg: unknown, agentId: string) => [`/tmp/.openclaw/workspace-${agentId}`]),
 );
 const resolveChunkModeHoisted = vi.hoisted(() => vi.fn(() => undefined));
-const resolveMarkdownTableModeHoisted = vi.hoisted(() => vi.fn(() => "preserve"));
 const getGlobalHookRunnerHoisted = vi.hoisted(() => vi.fn());
 
 export const createTelegramDraftStream = createTelegramDraftStreamHoisted;
@@ -148,7 +147,6 @@ const resolveDefaultModelForAgent = resolveDefaultModelForAgentHoisted;
 const resolveHumanDelayConfig = resolveHumanDelayConfigHoisted;
 const getAgentScopedMediaLocalRoots = getAgentScopedMediaLocalRootsHoisted;
 const resolveChunkMode = resolveChunkModeHoisted;
-const resolveMarkdownTableMode = resolveMarkdownTableModeHoisted;
 const getGlobalHookRunner = getGlobalHookRunnerHoisted;
 
 vi.mock("./draft-stream.js", () => ({
@@ -292,7 +290,6 @@ vi.mock("./bot-message-dispatch.runtime.js", () => ({
   getAgentScopedMediaLocalRoots: getAgentScopedMediaLocalRootsHoisted,
   resolveAutoTopicLabelConfig: resolveAutoTopicLabelConfigRuntime,
   resolveChunkMode: resolveChunkModeHoisted,
-  resolveMarkdownTableMode: resolveMarkdownTableModeHoisted,
 }));
 
 vi.mock("./bot-message-dispatch.agent.runtime.js", () => ({
@@ -363,7 +360,6 @@ async function resetTelegramDispatchTestState() {
   getSessionEntry.mockReset();
   getAgentScopedMediaLocalRoots.mockClear();
   resolveChunkMode.mockClear();
-  resolveMarkdownTableMode.mockClear();
   resolveDefaultModelForAgent.mockReset();
   loadConfig.mockReturnValue({});
   dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({

@@ -12,6 +12,7 @@ import { callGateway } from "../../gateway/call.js";
 import { buildGatewayConnectionDetailsWithResolvers } from "../../gateway/connection-details.js";
 import { isLoopbackHost } from "../../gateway/net.js";
 import { canonicalizeSpeechProviderId, listSpeechProviders } from "../../tts/provider-registry.js";
+import type { TtsResult } from "../../tts/tts-runtime-types.js";
 import {
   getTtsProvider,
   getTtsPersona,
@@ -36,15 +37,6 @@ import {
   resolveSelectedProviderFromModelRef,
 } from "./shared.js";
 
-async function copyTtsOutputAtomically(sourcePath: string, targetPath: string): Promise<void> {
-  await publishOutputFileAtomically({
-    filePath: targetPath,
-    writeTemp: async (tempPath) => {
-      await fs.copyFile(sourcePath, tempPath);
-    },
-  });
-}
-
 export async function runTtsConvert(params: {
   text: string;
   channel?: string;
@@ -54,6 +46,8 @@ export async function runTtsConvert(params: {
   output?: string;
   transport: CapabilityTransport;
 }) {
+  let result: Pick<TtsResult, "audioPath" | "provider" | "outputFormat" | "voiceCompatible">;
+  let attempts: NonNullable<TtsResult["attempts"]> = [];
   if (params.transport === "gateway") {
     const gatewayConnection = buildGatewayConnectionDetailsWithResolvers({
       config: getRuntimeConfig(),
@@ -63,12 +57,7 @@ export async function runTtsConvert(params: {
         `--output is not supported for remote gateway TTS yet (gateway target: ${gatewayConnection.url}).`,
       );
     }
-    const result: {
-      audioPath?: string;
-      provider?: string;
-      outputFormat?: string;
-      voiceCompatible?: boolean;
-    } = await callGateway({
+    result = await callGateway({
       method: "tts.convert",
       params: {
         text: params.text,
@@ -79,80 +68,65 @@ export async function runTtsConvert(params: {
       },
       timeoutMs: 120_000,
     });
-    let outputPath = result.audioPath;
-    if (params.output && result.audioPath) {
-      const target = path.resolve(params.output);
-      await copyTtsOutputAtomically(result.audioPath, target);
-      outputPath = target;
+  } else {
+    const cfg = await resolveLocalCapabilityRuntimeConfig({
+      commandName: "infer tts convert",
+      targetIds: getTtsCommandSecretTargetIds(),
+    });
+    const ttsProvider = resolveTtsProviderForAuthHydration({
+      cfg,
+      provider: params.provider,
+      modelId: params.modelId,
+      channelId: params.channel,
+    });
+    const effectiveCfg = await injectTtsAuthProfileApiKey({
+      cfg,
+      provider: ttsProvider,
+      channelId: params.channel,
+    });
+    if (effectiveCfg !== cfg) {
+      pinRuntimeConfigSnapshot(effectiveCfg);
     }
-    return {
-      ok: true,
-      capability: "tts.convert",
-      transport: "gateway" as const,
-      provider: result.provider,
-      attempts: [],
-      outputs: [
-        {
-          path: outputPath,
-          format: result.outputFormat,
-          voiceCompatible: result.voiceCompatible,
-        },
-      ],
-    } satisfies CapabilityEnvelope;
-  }
-
-  const cfg = await resolveLocalCapabilityRuntimeConfig({
-    commandName: "infer tts convert",
-    targetIds: getTtsCommandSecretTargetIds(),
-  });
-  const ttsProvider = resolveTtsProviderForAuthHydration({
-    cfg,
-    provider: params.provider,
-    modelId: params.modelId,
-    channelId: params.channel,
-  });
-  const effectiveCfg = await injectTtsAuthProfileApiKey({
-    cfg,
-    provider: ttsProvider,
-    channelId: params.channel,
-  });
-  if (effectiveCfg !== cfg) {
-    pinRuntimeConfigSnapshot(effectiveCfg);
-  }
-  const overrides = resolveExplicitTtsOverrides({
-    cfg: effectiveCfg,
-    provider: params.provider,
-    modelId: params.modelId,
-    voiceId: params.voiceId,
-    channelId: params.channel,
-  });
-  const hasExplicitSelection = Boolean(
-    overrides.provider ||
-    normalizeOptionalString(params.modelId) ||
-    normalizeOptionalString(params.voiceId),
-  );
-  const result = await textToSpeech({
-    text: params.text,
-    cfg: effectiveCfg,
-    channel: params.channel,
-    overrides,
-    disableFallback: hasExplicitSelection,
-  });
-  if (!result.success || !result.audioPath) {
-    throw new Error(result.error ?? "TTS conversion failed");
+    const overrides = resolveExplicitTtsOverrides({
+      cfg: effectiveCfg,
+      provider: params.provider,
+      modelId: params.modelId,
+      voiceId: params.voiceId,
+      channelId: params.channel,
+    });
+    const hasExplicitSelection = Boolean(
+      overrides.provider ||
+      normalizeOptionalString(params.modelId) ||
+      normalizeOptionalString(params.voiceId),
+    );
+    const localResult = await textToSpeech({
+      text: params.text,
+      cfg: effectiveCfg,
+      channel: params.channel,
+      overrides,
+      disableFallback: hasExplicitSelection,
+    });
+    if (!localResult.success || !localResult.audioPath) {
+      throw new Error(localResult.error ?? "TTS conversion failed");
+    }
+    result = localResult;
+    attempts = localResult.attempts ?? [];
   }
   let outputPath = result.audioPath;
-  if (params.output) {
-    const target = path.resolve(params.output);
-    await copyTtsOutputAtomically(result.audioPath, target);
-    outputPath = target;
+  if (params.output && result.audioPath) {
+    const sourcePath = result.audioPath;
+    outputPath = path.resolve(params.output);
+    await publishOutputFileAtomically({
+      filePath: outputPath,
+      writeTemp: (tempPath) => fs.copyFile(sourcePath, tempPath),
+    });
   }
   return {
     ok: true,
     capability: "tts.convert",
-    transport: "local" as const,
+    transport: params.transport,
     provider: result.provider,
-    attempts: result.attempts ?? [],
+    attempts,
     outputs: [
       {
         path: outputPath,
@@ -300,22 +274,27 @@ function resolveExistingTtsProviderConfigInTts(params: {
     return undefined;
   }
   const providers = isObjectRecord(params.tts.providers) ? params.tts.providers : undefined;
-  if (!providers) {
-    return resolveDirectTtsProviderConfig(params);
-  }
-  const exact = providers[params.providerId];
+  const exact = providers?.[params.providerId];
   if (exact !== undefined) {
     return { container: "providers", key: params.providerId, value: exact };
   }
-  for (const [key, value] of Object.entries(providers)) {
-    const normalizedKey = normalizeLowercaseStringOrEmpty(
-      canonicalizeSpeechProviderId(key, params.cfg) ?? key,
-    );
-    if (normalizedKey === params.providerId) {
-      return { container: "providers", key, value };
+  for (const [container, entries] of [
+    ["providers", providers],
+    ["direct", params.tts],
+  ] as const) {
+    for (const [key, value] of Object.entries(entries ?? {})) {
+      if (container === "direct" && TTS_CONFIG_RESERVED_KEYS.has(key)) {
+        continue;
+      }
+      const normalizedKey = normalizeLowercaseStringOrEmpty(
+        canonicalizeSpeechProviderId(key, params.cfg) ?? key,
+      );
+      if (normalizedKey === params.providerId) {
+        return { container, key, value };
+      }
     }
   }
-  return resolveDirectTtsProviderConfig(params);
+  return undefined;
 }
 
 const TTS_CONFIG_RESERVED_KEYS = new Set([
@@ -332,28 +311,6 @@ const TTS_CONFIG_RESERVED_KEYS = new Set([
   "summaryModel",
   "timeoutMs",
 ]);
-
-function resolveDirectTtsProviderConfig(params: {
-  cfg: OpenClawConfig;
-  tts: unknown;
-  providerId: string;
-}): TtsProviderConfigLocation | undefined {
-  if (!isObjectRecord(params.tts)) {
-    return undefined;
-  }
-  for (const [key, value] of Object.entries(params.tts)) {
-    if (TTS_CONFIG_RESERVED_KEYS.has(key)) {
-      continue;
-    }
-    const normalizedKey = normalizeLowercaseStringOrEmpty(
-      canonicalizeSpeechProviderId(key, params.cfg) ?? key,
-    );
-    if (normalizedKey === params.providerId) {
-      return { container: "direct", key, value };
-    }
-  }
-  return undefined;
-}
 
 function resolveChannelTtsConfigForAuthHydration(params: {
   cfg: OpenClawConfig;
@@ -518,7 +475,7 @@ export async function runTtsStateMutation(params: {
           : params.capability === "tts.set-provider"
             ? "tts.setProvider"
             : "tts.setPersona";
-    const payload = await callGateway({
+    return await callGateway({
       method,
       params:
         params.capability === "tts.set-provider"
@@ -528,19 +485,15 @@ export async function runTtsStateMutation(params: {
             : undefined,
       timeoutMs: 30_000,
     });
-    return payload;
   }
 
   const cfg = getRuntimeConfig();
   const config = resolveTtsConfig(cfg);
   const prefsPath = resolveTtsPrefsPath(config);
-  if (params.capability === "tts.enable") {
-    setTtsEnabled(prefsPath, true);
-    return { enabled: true };
-  }
-  if (params.capability === "tts.disable") {
-    setTtsEnabled(prefsPath, false);
-    return { enabled: false };
+  if (params.capability === "tts.enable" || params.capability === "tts.disable") {
+    const enabled = params.capability === "tts.enable";
+    setTtsEnabled(prefsPath, enabled);
+    return { enabled };
   }
   if (params.capability === "tts.set-persona") {
     if (!params.persona) {

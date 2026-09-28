@@ -1,5 +1,6 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   clearCronJobActive,
   markCronJobActive,
@@ -12,7 +13,7 @@ import { recomputeNextRunsForMaintenance } from "./jobs-scheduling.js";
 import { createCronServiceState, type DeferredCronNotifications } from "./state.js";
 import { runPostPersistCronNotifications } from "./store.js";
 import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
-import { applyOutcomeToStoredJob, applyTriggerNoFireResult } from "./timer-outcomes.js";
+import { applyOutcomeToAuthoritativeJob, applyTriggerNoFireResult } from "./timer-outcomes.js";
 import { applyJobResult, authorCronRunCompletion } from "./timer.js";
 
 const ENDED_AT = Date.parse("2026-07-18T12:00:00.000Z");
@@ -20,6 +21,7 @@ const STARTED_AT = ENDED_AT - 1_000;
 
 function makeState() {
   return createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
     storePath: "/tmp/cron-pacing-timer/jobs.json",
     cronEnabled: true,
     log: createNoopLogger(),
@@ -42,9 +44,12 @@ function applyAuthoredOutcome(
   state: ReturnType<typeof createCronServiceState>,
   outcome: Omit<TimedCronRunOutcome, "completionStatus" | "deliveryState">,
 ) {
-  applyOutcomeToStoredJob(state, authorCronRunCompletion(state, outcome.job, outcome), {
-    deferredNotifications: [],
-  });
+  applyOutcomeToAuthoritativeJob(
+    state,
+    state.store!.jobs.find((job) => job.id === outcome.jobId)!,
+    authorCronRunCompletion(state, outcome.job, outcome),
+    { deferredNotifications: [] },
+  );
 }
 
 describe("cron trigger evaluation ownership", () => {

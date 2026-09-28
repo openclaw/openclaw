@@ -131,32 +131,19 @@ export function createQaLiveLaneGateway() {
         throw new Error("qa live gateway lifecycle already started or closed");
       }
       startup = (async () => {
+        const { mockProviderOptions, mutateConfig, ...gatewayParams } = params;
         mock = await startQaProviderServer(params.providerMode, {
           modelRefs: [params.primaryModel, params.alternateModel],
-          ...params.mockProviderOptions,
+          ...mockProviderOptions,
         });
         if (closed) {
           throw new Error("qa live gateway lifecycle is closed");
         }
         const gateway = await gatewayOwner.start({
-          repoRoot: params.repoRoot,
-          command: params.command,
+          ...gatewayParams,
           providerBaseUrl: mock ? `${mock.baseUrl}/v1` : undefined,
-          transport: params.transport,
-          transportBaseUrl: params.transportBaseUrl,
-          controlUiAllowedOrigins: params.controlUiAllowedOrigins,
-          providerMode: params.providerMode,
-          primaryModel: params.primaryModel,
-          alternateModel: params.alternateModel,
-          fastMode: params.fastMode,
-          forcedRuntime: params.forcedRuntime,
-          thinkingDefault: params.thinkingDefault,
-          claudeCliAuthMode: params.claudeCliAuthMode,
-          controlUiEnabled: params.controlUiEnabled,
-          mockAuthAgentIds: params.mockAuthAgentIds,
-          ...(params.runtimeEnvPatch ? { runtimeEnvPatch: params.runtimeEnvPatch } : {}),
           mutateConfig: (cfg) =>
-            prepareLiveTransportGatewayConfig(params.mutateConfig ? params.mutateConfig(cfg) : cfg),
+            prepareLiveTransportGatewayConfig(mutateConfig ? mutateConfig(cfg) : cfg),
         });
 
         return { gateway, mock, stop: stopReady };

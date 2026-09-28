@@ -5,6 +5,7 @@ import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterEach, expect, it, vi } from "vitest";
 import { reactivateCompletedSubagentSession } from "../../../gateway/session-subagent-reactivation.js";
+import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
 import { buildAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import {
   createAssistant,
@@ -104,7 +105,7 @@ async function prepareSteering() {
           __openclaw: { runId: childRunId },
         },
       };
-      return match(event) ? { event } : undefined;
+      return matchesTranscriptEvent(event, match) ? { event } : undefined;
     },
   });
   const leaseId = "requester-steering";

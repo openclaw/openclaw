@@ -295,6 +295,24 @@ describe("OpenClaw rescue message", () => {
     });
   });
 
+  it("refuses config deletion without creating a pending approval or writing config", async () => {
+    await withRescueStateDir("config-unset-refused-", async () => {
+      const cfg: OpenClawConfig = {};
+      const before = mockConfig.currentConfig();
+      mockConfig.mutateConfigFile.mockClear();
+
+      await expect(
+        runRescue("/openclaw config unset agents.defaults.fastModeDefault", cfg),
+      ).resolves.toContain("cannot remove configuration settings");
+      await expect(runRescue("/openclaw yes", cfg)).resolves.toBe(
+        "No pending OpenClaw rescue change is waiting for approval.",
+      );
+      expect(mockConfig.mutateConfigFile).not.toHaveBeenCalled();
+      expect(mockConfig.currentConfig()).toEqual(before);
+      expect(listSystemAgentAuditEntriesForTests()).toEqual([]);
+    });
+  });
+
   it("drops a pending rescue change on decline", async () => {
     await withRescueStateDir("decline-", async () => {
       const cfg: OpenClawConfig = {};

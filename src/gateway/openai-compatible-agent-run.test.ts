@@ -258,6 +258,74 @@ describe("OpenAI-compatible operator run authority", () => {
     },
   );
 
+  it("refuses client media when uploads are disabled during operator preparation", async () => {
+    await withOpenClawTestState({ label: "compat-upload-preparation" }, async () => {
+      const fixture = createOperatorRunFixture();
+      fixture.params.hasClientUploads = true;
+      const entered = createDeferred();
+      const resume = createDeferred();
+      const prepare = profileReader.prepareUserProfileIdentity;
+      const held = vi
+        .spyOn(profileReader, "prepareUserProfileIdentity")
+        .mockImplementationOnce(async (...args) => {
+          const identity = await prepare(...args);
+          entered.resolve();
+          await resume.promise;
+          return identity;
+        });
+      const running = runOpenAiCompatibleAgentCommand(fixture.params);
+      const rejected = expect(running).rejects.toThrow("uploads are disabled");
+      try {
+        await entered.promise;
+        setRuntimeConfigSnapshot({
+          ...fixture.cfg,
+          gateway: { ...fixture.cfg.gateway, uploads: { enabled: false } },
+        });
+        resume.resolve();
+        await rejected;
+        expect(agentCommandFromGatewayIngress).not.toHaveBeenCalled();
+      } finally {
+        resume.resolve();
+        await running.catch(() => {});
+        held.mockRestore();
+      }
+    });
+  });
+
+  it("does not revoke already admitted input or its output when uploads are disabled", async () => {
+    await withOpenClawTestState({ label: "compat-upload-accepted" }, async () => {
+      const fixture = createOperatorRunFixture();
+      fixture.params.hasClientUploads = true;
+      let admission: ReturnType<typeof prepareAgentRunAdmission> | undefined;
+      vi.mocked(agentCommandFromGatewayIngress).mockImplementation(async (options) => {
+        admission = prepareAgentRunAdmission({
+          cfg: fixture.cfg,
+          facts: {
+            runId: "compat-upload-accepted",
+            agentId: "main",
+            ingress: { kind: "system", boundary: "compat-upload-test", state: "present" },
+          },
+          operationalRunInstance: createOperationalRunInstanceRef("compat-upload-accepted"),
+          operatorAuthority: options.operatorAuthority,
+        });
+        await options.onAdmittedRunContext?.(await admission.admit("embedded"));
+        setRuntimeConfigSnapshot({
+          ...fixture.cfg,
+          gateway: { ...fixture.cfg.gateway, uploads: { enabled: false } },
+        });
+        options.assertSourceCurrent?.();
+        return completedResult;
+      });
+      try {
+        await expect(runOpenAiCompatibleAgentCommand(fixture.params)).resolves.toBe(
+          completedResult,
+        );
+      } finally {
+        admission?.close();
+      }
+    });
+  });
+
   it("does not enter the command when its request ends during profile preparation", async () => {
     await withOpenClawTestState({ label: "compat-run-preparation" }, async () => {
       const fixture = createOperatorRunFixture();

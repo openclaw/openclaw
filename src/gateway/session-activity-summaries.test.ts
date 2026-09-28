@@ -2,7 +2,7 @@ import { mkdir } from "node:fs/promises";
 import { backup } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -26,6 +26,7 @@ import { normalizePersistedSessionEntryShape } from "../config/sessions/store-en
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerAgentRunContext, clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
 import {
@@ -122,6 +123,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
   let testState: OpenClawTestState;
   let cfg: OpenClawConfig;
   let service: SessionActivitySummaryService;
+  let residentProjection: Awaited<ReturnType<typeof createSessionRowProjection>> | undefined;
   const complete = vi.fn(async (_params: Parameters<typeof defaultCompleteModel>[0]) =>
     result("Completed the requested work."),
   );
@@ -143,6 +145,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     });
     service = createSessionActivitySummaries({
       getConfig: () => cfg,
+      getSessionRowProjection: () => residentProjection,
       onChanged: changed,
       prepareModel: prepare,
       completeModel: complete,
@@ -152,6 +155,8 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     archiveMaterializationHook.beforeMaterialize = undefined;
     clearAgentRunContext("recap-context-run");
     await service.dispose();
+    residentProjection?.dispose();
+    residentProjection = undefined;
     await testState.cleanup();
   });
 
@@ -384,30 +389,40 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     }
   });
 
-  it("does not decode saved prompts during transcript notification bursts", async () => {
+  it("uses committed resident facts for recap notifications and current-authority checks", async () => {
     await messages(2);
     const prompt = "Saved recap prompt marker. ".repeat(40_000);
     await patchSessionEntryCore(scope, () => ({ skillsSnapshot: { prompt, skills: [] } }));
     const before = read()!;
     const completion = createDeferred<ReturnType<typeof result>>();
     complete.mockImplementationOnce(() => completion.promise);
+    residentProjection = await createSessionRowProjection({ cfg, getConfig: () => cfg });
+    await residentProjection.ensureMaterialized();
     service.ensure(target);
     await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(1));
-    const database = openOpenClawAgentDatabase({ agentId: "main" });
-    const queries = trackSqliteStatementExecutions(database.db, ["entries"], (sql) =>
-      /from\s+"session_nodes"/i.test(sql) ? "entries" : null,
-    );
+    const queries = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
     const parse = vi.spyOn(JSON, "parse");
     try {
-      for (let index = 0; index < 100; index += 1) {
+      for (let index = 0; index < 50; index += 1) {
         service.handleTranscript({ target: { ...scope }, lifecycleRevision: "lifecycle-1" });
+        complete.mock.calls[0]![0].assertCurrent?.();
       }
-      expect(queries.rowCounts.entries).toBeGreaterThanOrEqual(100);
-      expect(queries.textBytes.entries).toBeLessThan(100 * 1024);
+      expect(queries.queries).toHaveLength(0);
       expect(parse.mock.calls.some(([json]) => json.includes("Saved recap prompt marker."))).toBe(
         false,
       );
       expect(complete).toHaveBeenCalledTimes(1);
+      queries.restore();
+      await patchSessionEntryCore(scope, () => ({ initializationPending: true }), {
+        preserveActivity: true,
+      });
+      // A committed identity change fences requests before display rows finish refreshing.
+      expect(() => complete.mock.calls[0]![0].assertCurrent?.()).toThrow(
+        "Activity recap lifecycle or utility model changed",
+      );
+      await patchSessionEntryCore(scope, () => ({ initializationPending: undefined }), {
+        preserveActivity: true,
+      });
     } finally {
       parse.mockRestore();
       queries.restore();
@@ -478,10 +493,16 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     },
   );
 
-  it.each(["initialization", "lifecycle", "utility-model"] as const)(
+  it.each(["initialization", "lifecycle", "utility-model", "visibility"] as const)(
     "rejects a recap when %s changes while its write is queued",
     async (change) => {
       await messages(2);
+      if (change === "visibility") {
+        await patchSessionEntryCore(scope, () => ({
+          spawnedBy: "agent:main:main",
+          category: "Work",
+        }));
+      }
       const completion = createDeferred<ReturnType<typeof result>>();
       complete.mockImplementationOnce(() => completion.promise);
       service.ensure(target);
@@ -503,7 +524,9 @@ describe("Activity recap lifecycle with the canonical session store", () => {
                 ...before,
                 ...(change === "initialization"
                   ? { initializationPending: true }
-                  : { lifecycleRevision: "lifecycle-2" }),
+                  : change === "visibility"
+                    ? { category: undefined }
+                    : { lifecycleRevision: "lifecycle-2" }),
               });
             }, writerScope);
           }
@@ -711,8 +734,46 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     expect(complete).toHaveBeenCalledTimes(1);
   });
 
-  it("enqueues through the registered RPC handler and rejects an invalid batch before model work", async () => {
-    await messages(1);
+  it("enqueues visible conversations through the registered RPC handler and rejects an invalid batch before model work", async () => {
+    const conversations = [
+      { key: target.key, sessionId: scope.sessionId, entry: {} },
+      {
+        key: "agent:main:dashboard:spawned",
+        sessionId: "spawned-dashboard",
+        entry: { spawnedBy: "agent:main:main" },
+      },
+      {
+        key: "agent:main:grouped-child",
+        sessionId: "spawned-grouped",
+        entry: { spawnedBy: "agent:main:main", category: "Work" },
+      },
+    ].map(({ key, sessionId, entry }) => ({
+      target: { key, agentId: "main" },
+      scope: { sessionKey: key, agentId: "main", sessionId },
+      entry,
+    }));
+    for (const conversation of conversations) {
+      await upsertSessionEntryCore(conversation.scope, {
+        sessionId: conversation.scope.sessionId,
+        updatedAt: 1,
+        ...conversation.entry,
+      });
+      await persistSessionTranscriptTurn(conversation.scope, {
+        messages: [{ eventId: "request", message: { role: "user", content: "Check the build." } }],
+        touchSessionEntry: false,
+      });
+    }
+    const published = createDeferred();
+    changed.mockImplementation(() => {
+      if (
+        conversations.every(({ target: row, scope: session }) => {
+          const entry = loadSessionEntryReadOnly(session);
+          return projectSessionActivitySummary({ ...row, cfg, entry })?.state === "current";
+        })
+      ) {
+        published.resolve();
+      }
+    });
     cfg.gateway = { controlUi: { sessionObserver: false } };
     const context = createDirectChatContext({
       getRuntimeConfig: () => cfg,
@@ -729,19 +790,30 @@ describe("Activity recap lifecycle with the canonical session store", () => {
         respond,
         isWebchatConnect: () => false,
       });
-    await invoke({ sessions: [target, { key: "agent:main:missing", agentId: "main" }] });
+    await invoke({
+      sessions: [conversations[1]!.target, { key: "agent:main:missing", agentId: "main" }],
+    });
     expect(respond).toHaveBeenLastCalledWith(
       false,
       undefined,
       expect.objectContaining({ code: "INVALID_REQUEST" }),
     );
     expect(prepare).not.toHaveBeenCalled();
-    await invoke({ sessions: [target] });
+    await invoke({ sessions: conversations.map((conversation) => conversation.target) });
     expect(respond).toHaveBeenLastCalledWith(true, {
-      sessions: [{ ...target, activitySummary: { state: "updating", canEnsure: true } }],
+      sessions: conversations.map((conversation) => ({
+        ...conversation.target,
+        activitySummary: { state: "updating", canEnsure: true },
+      })),
     });
-    await vi.waitFor(() => expect(view()?.state).toBe("current"));
-    expect(complete).toHaveBeenCalledTimes(1);
+    await published.promise;
+    for (const conversation of conversations) {
+      expect(loadSessionEntryReadOnly(conversation.scope)).toMatchObject({
+        ...conversation.entry,
+        activitySummary: { text: "Completed the requested work.", coveredMessages: 1 },
+      });
+    }
+    expect(complete).toHaveBeenCalledTimes(conversations.length);
   });
 
   it("backfills a cold archived transcript through its restoration owner", async () => {
@@ -933,23 +1005,30 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     );
   });
 
-  it("honors disabled utility routing and excludes child and incognito sessions", async () => {
+  it("honors disabled utility routing and excludes hidden child and incognito sessions", async () => {
     await messages(1);
     cfg = { agents: { defaults: { utilityModel: "" } } };
     expect(service.ensure(target).state).toBe("unavailable");
     cfg = { agents: { defaults: { utilityModel: "test/utility" } } };
-    for (const key of ["agent:main:subagent:child", "agent:main:incognito:private"]) {
-      const childScope = { agentId: "main", sessionKey: key, sessionId: key };
-      await upsertSessionEntryCore(childScope, { sessionId: key, updatedAt: 1 });
+    for (const { key, ...entry } of [
+      { key: "agent:main:subagent:child", category: "Work" },
+      { key: "agent:main:legacy-child", spawnedBy: "agent:main:main" },
+      { key: "agent:main:dashboard:incognito-private" },
+    ]) {
+      const childScope = { agentId: "main", sessionKey: key, sessionId: key.replaceAll(":", "-") };
+      await upsertSessionEntryCore(childScope, {
+        sessionId: childScope.sessionId,
+        updatedAt: 1,
+        ...entry,
+      });
       await persistSessionTranscriptTurn(childScope, {
         messages: [
           { eventId: `event-${key}`, message: { role: "user", content: "Private child work" } },
         ],
         touchSessionEntry: false,
       });
+      expect(service.ensure({ key, agentId: "main" }).state).toBe("unavailable");
     }
-    service.ensure({ key: "agent:main:subagent:child", agentId: "main" });
-    service.ensure({ key: "agent:main:incognito:private", agentId: "main" });
     expect(prepare).not.toHaveBeenCalled();
     expect(complete).not.toHaveBeenCalled();
   });

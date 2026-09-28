@@ -16,11 +16,14 @@ import { GatewayClientRequestError } from "../gateway/client.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "../gateway/credentials-secret-inputs.js";
 import { resolveExplicitGatewayAuth } from "../gateway/credentials.js";
 import { loadDeviceAuthTokenReadOnly } from "../infra/device-auth-store.js";
-import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import {
+  loadDeviceIdentityIfPresent,
+  loadOrCreateDeviceIdentity,
+} from "../infra/device-identity.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { logInfo } from "../logger.js";
-import { getExistingOpenClawStateSchemaPath } from "../state/openclaw-state-db-schema-policy.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { VERSION } from "../version.js";
 import { configureNodeHost, loadNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
 import { startNodeHostConnection } from "./connection.js";
@@ -45,7 +48,7 @@ import {
   watchNodeHostParentStdin,
 } from "./launcher-client.js";
 import { prepareNodeHostRuntime } from "./runtime.js";
-import { runStartupMigrations } from "./startup-state-migrations.js";
+import { ensureNodeHostStateReady } from "./startup-state-readiness.js";
 
 type NodeHostRunOptions = {
   gatewayHost: string;
@@ -55,6 +58,7 @@ type NodeHostRunOptions = {
   gatewayCloudflareAccess?: NodeHostCloudflareAccessConfig;
   gatewayCandidates?: NodeHostGatewayConfig[];
   gatewayBootstrapToken?: string;
+  gatewayBootstrapExpiresAtMs?: number;
   preferGatewayBootstrapToken?: boolean;
   /** Stop cleanly after the first authenticated hello (used before service install). */
   stopAfterFirstConnect?: boolean;
@@ -88,6 +92,30 @@ const NODE_HOST_EXIT_ON_RECONNECT_PAUSE_CODES: ReadonlySet<string> = new Set([
   ConnectErrorDetailCodes.CLIENT_VERSION_MISMATCH,
 ]);
 
+async function canReuseNodeHostDeviceToken(params: {
+  savedGateway?: NodeHostGatewayConfig;
+  gatewayCandidates: readonly NodeHostGatewayConfig[];
+  deviceId: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<boolean> {
+  const savedGatewayScope = params.savedGateway
+    ? gatewayOriginScope(formatGatewayCandidateUrl(params.savedGateway))
+    : undefined;
+  return Boolean(
+    savedGatewayScope &&
+    params.gatewayCandidates.every(
+      (candidate) => gatewayOriginScope(formatGatewayCandidateUrl(candidate)) === savedGatewayScope,
+    ) &&
+    (
+      await loadDeviceAuthTokenReadOnly({
+        deviceId: params.deviceId,
+        role: "node",
+        env: params.env ?? process.env,
+      })
+    )?.token,
+  );
+}
+
 async function resolveNodeHostGatewayCredentials(params: {
   config: OpenClawConfig;
   savedGateway?: NodeHostGatewayConfig;
@@ -103,16 +131,7 @@ async function resolveNodeHostGatewayCredentials(params: {
       password: env.OPENCLAW_GATEWAY_PASSWORD,
     });
   }
-  const savedGatewayScope = params.savedGateway
-    ? gatewayOriginScope(formatGatewayCandidateUrl(params.savedGateway))
-    : undefined;
-  if (
-    savedGatewayScope &&
-    params.gatewayCandidates.every(
-      (candidate) => gatewayOriginScope(formatGatewayCandidateUrl(candidate)) === savedGatewayScope,
-    ) &&
-    (await loadDeviceAuthTokenReadOnly({ deviceId: params.deviceId, role: "node", env }))?.token
-  ) {
+  if (await canReuseNodeHostDeviceToken(params)) {
     // A co-located Gateway's shared password must not displace the paired node
     // credential. GatewayClient rereads the current token when connecting.
     return resolveExplicitGatewayAuth({
@@ -150,12 +169,27 @@ function buildNodeHostLocalAuthConfig(config: OpenClawConfig): OpenClawConfig {
   return nextConfig;
 }
 
+/**
+ * The saved Gateway endpoint when a node credential exists to reconnect without a setup code.
+ * Node tokens are not bound to an endpoint, so callers must present the reconnect as conditional.
+ */
+export async function loadResumableNodeHostGateway(): Promise<NodeHostGatewayConfig | undefined> {
+  // A failed first enrollment saves the endpoint before any device token exists.
+  const gateway = (await loadNodeHostConfig())?.gateway;
+  const identity = gateway ? loadDeviceIdentityIfPresent() : null;
+  return gateway &&
+    identity &&
+    (await canReuseNodeHostDeviceToken({
+      savedGateway: gateway,
+      gatewayCandidates: [gateway],
+      deviceId: identity.deviceId,
+    }))
+    ? gateway
+    : undefined;
+}
+
 export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
-  // Operator-approved startup is a second authorized entry point for Doctor-owned
-  // state migrators. Runtime invokes those owners here and never migrates inline.
-  if (!getExistingOpenClawStateSchemaPath()) {
-    await runStartupMigrations({ log: { info: writeStderrLine, warn: writeStderrLine } });
-  }
+  ensureNodeHostStateReady();
   const cfg = getRuntimeConfig();
   const savedConfig = await loadNodeHostConfig();
   const plannedGateway: NodeHostGatewayConfig = {
@@ -166,6 +200,32 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     contextPath: opts.gatewayContextPath,
     cloudflareAccess: opts.gatewayCloudflareAccess,
   };
+  let gatewayBootstrapToken = opts.gatewayBootstrapToken;
+  let reuseDeviceTokenOnly = false;
+  if (
+    gatewayBootstrapToken &&
+    opts.gatewayBootstrapExpiresAtMs !== undefined &&
+    opts.gatewayBootstrapExpiresAtMs <= Date.now()
+  ) {
+    const identity = loadDeviceIdentityIfPresent();
+    if (
+      opts.preferGatewayBootstrapToken ||
+      opts.gatewayAuthFromEnv ||
+      !identity ||
+      !(await canReuseNodeHostDeviceToken({
+        savedGateway: savedConfig?.gateway,
+        gatewayCandidates: opts.gatewayCandidates?.length
+          ? opts.gatewayCandidates
+          : [plannedGateway],
+        deviceId: identity.deviceId,
+      }))
+    ) {
+      throw new Error("Pairing setup code has expired.");
+    }
+    // The existing pairing can reconnect; never submit its expired fallback bearer.
+    gatewayBootstrapToken = undefined;
+    reuseDeviceTokenOnly = true;
+  }
   const fallbackDisplayName = await getMachineDisplayName();
   const config = await configureNodeHost({
     nodeId: opts.nodeId,
@@ -224,16 +284,17 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   });
   logInfo(`node-host: advertised commands: ${preparedRuntime.manifest.commands.join(", ")}`);
   const deviceIdentity = loadOrCreateDeviceIdentity();
-  const { token, password } = opts.gatewayBootstrapToken
-    ? {}
-    : await resolveNodeHostGatewayCredentials({
-        config: cfg,
-        envOnly: opts.gatewayAuthFromEnv,
-        savedGateway: savedConfig?.gateway,
-        gatewayCandidates,
-        deviceId: deviceIdentity.deviceId,
-        env: process.env,
-      });
+  const { token, password } =
+    gatewayBootstrapToken || reuseDeviceTokenOnly
+      ? {}
+      : await resolveNodeHostGatewayCredentials({
+          config: cfg,
+          envOnly: opts.gatewayAuthFromEnv,
+          savedGateway: savedConfig?.gateway,
+          gatewayCandidates,
+          deviceId: deviceIdentity.deviceId,
+          env: process.env,
+        });
 
   let consecutivePermanentGatewayRejections = 0;
   const autoUpdateAbort = new AbortController();
@@ -256,7 +317,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     cloudflareAccessByCandidate,
     clientOptions: {
       token: token || undefined,
-      bootstrapToken: opts.gatewayBootstrapToken,
+      bootstrapToken: gatewayBootstrapToken,
       preferBootstrapToken: opts.preferGatewayBootstrapToken,
       password: password || undefined,
       instanceId: nodeId,
@@ -443,10 +504,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   }
 
   let stopping = false;
-  let resolveStopped: (() => void) | undefined;
-  const stopped = new Promise<void>((resolve) => {
-    resolveStopped = resolve;
-  });
+  const { promise: stopped, resolve: resolveStopped } = createDeferredCore();
   // A pending Promise alone does not keep Node alive. Pairing pauses can close
   // the last socket, so retain a handle until a signal finishes the foreground host.
   const lifetimeInterval = setInterval(() => {}, 1_000_000);
@@ -499,7 +557,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     } finally {
       removeSignalHandlers();
       process.exitCode = finalExitCode;
-      resolveStopped?.();
+      resolveStopped();
     }
   };
   const onSigint = AsyncLocalStorage.bind(() => void finish(130));

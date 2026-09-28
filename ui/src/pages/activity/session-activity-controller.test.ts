@@ -5,12 +5,82 @@ import { GatewayBrowserClient } from "../../api/gateway.ts";
 import { SessionActivityController } from "./session-activity-controller.ts";
 
 it.each([
+  { month: 8, day: 27 },
+  { month: 2, day: 8 },
+  { month: 10, day: 1 },
+])(
+  "refreshes the sessions pulse at local midnight and leaves current work unaggregated ($month/$day)",
+  async ({ month, day }) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, month, day, 23, 59));
+    const client = new GatewayBrowserClient({ url: "ws://fixture.invalid" });
+    const request = vi.spyOn(client, "request").mockResolvedValue({
+      ts: 1,
+      path: "",
+      count: 0,
+      sessions: [],
+      defaults: { model: null, modelProvider: null, contextTokens: null },
+    });
+    const controller = new SessionActivityController({
+      addController() {},
+      removeController() {},
+      requestUpdate() {},
+      updateComplete: Promise.resolve(true),
+    });
+    const filters = { personId: null, time: "all" as const, query: "" };
+    try {
+      await controller.load(client, filters);
+      expect(request).toHaveBeenLastCalledWith(
+        "sessions.list",
+        expect.objectContaining({
+          activityPulseSince: new Date(2026, month, day).getTime(),
+          activityPulseUntil: new Date(2026, month, day + 1).getTime(),
+        }),
+        expect.anything(),
+      );
+      await controller.load(client, filters);
+      expect(request).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(66_000);
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(request).toHaveBeenLastCalledWith(
+        "sessions.list",
+        expect.objectContaining({
+          activityPulseSince: new Date(2026, month, day + 1).getTime(),
+          activityPulseUntil: new Date(2026, month, day + 2).getTime(),
+        }),
+        expect.anything(),
+      );
+
+      await controller.load(client, "current");
+      expect(request).toHaveBeenCalledTimes(3);
+      expect(request.mock.calls[2]?.[1]).not.toHaveProperty("activityPulseSince");
+      expect(request.mock.calls[2]?.[1]).not.toHaveProperty("activityPulseUntil");
+      await vi.advanceTimersByTimeAsync(24 * 3_600_000);
+      expect(request).toHaveBeenCalledTimes(3);
+
+      await controller.load(client, filters);
+      expect(request).toHaveBeenCalledTimes(4);
+      controller.hostDisconnected();
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(24 * 3_600_000);
+      expect(request).toHaveBeenCalledTimes(4);
+    } finally {
+      controller.hostDisconnected();
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
+  },
+);
+
+it.each([
   { duration: 1_000, requestsPerMinute: 10 },
   { duration: 2_000, requestsPerMinute: 7 },
 ])(
   "paces continuous Activity invalidations after $duration ms reads settle",
   async ({ duration, requestsPerMinute }) => {
     vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
     vi.setSystemTime(0);
     const result = {
       ts: 1,

@@ -23,6 +23,7 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { readLockPayloadSync, resolveGatewayLockPaths } from "./gateway-lock.js";
 import { readGatewayOwnerLease, readGatewayOwnerLeaseFromDatabase } from "./gateway-owner-lease.js";
+import { tryAcquireGatewayStateOwner } from "./gateway-state-owner.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -32,7 +33,6 @@ import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import { GatewayRestartPreparationError } from "./restart-intent-error.js";
 import { spawnPsSync } from "./spawn-ps.js";
 import { extractSqliteTableSchema } from "./sqlite-schema-sql.js";
-import { tryAcquireGatewayLifecycleCleanupCoordinator } from "./state-database-coordinator.js";
 
 const GATEWAY_RESTART_INTENT_KEY = "gateway-restart";
 const GATEWAY_RESTART_INTENT_TTL_MS = 60_000;
@@ -277,20 +277,24 @@ export function writeGatewayServiceRestartIntentSync(opts: {
   if (opts.nativeStopped) {
     try {
       // A stopped wrapper can still have a serving child or an unpublished startup owner.
-      const exclusion = tryAcquireGatewayLifecycleCleanupCoordinator({
-        databasePath: resolveOpenClawStateSqlitePath(opts.env),
-      });
+      const exclusion = tryAcquireGatewayStateOwner(resolveOpenClawStateSqlitePath(opts.env));
       if (exclusion) {
         try {
-          const owner = readGatewayOwnerLease({ env: opts.env, current: true });
-          opts.assertCurrent();
-          if (!owner || owner.state === "dead") {
+          const inactive = exclusion.run(() => {
+            const owner = readGatewayOwnerLease({ env: opts.env, current: true });
+            opts.assertCurrent();
+            if (owner && owner.state !== "dead") {
+              return false;
+            }
             assertLegacyGatewayStoppedSync(opts.env ?? process.env);
             opts.assertCurrent();
+            return true;
+          });
+          if (inactive) {
             return false;
           }
         } finally {
-          // The successor must be able to acquire its lifecycle coordinator during startup.
+          // The successor acquires the same process owner during startup.
           exclusion.release();
         }
       }

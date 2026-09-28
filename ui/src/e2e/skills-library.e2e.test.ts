@@ -211,9 +211,10 @@ suite.define(() => {
         slug: own.entry.slug,
         expectedRevision: own.entry.revision,
         content: draft,
-        files: own.files.map((file) =>
-          file.path === "assets/sample.bin" ? { ...file, executable: true } : file,
-        ),
+        files: own.files
+          .filter((file) => file.path === "assets/sample.bin")
+          .map(({ path, content, encoding }) => ({ path, content, encoding, executable: true })),
+        retainFiles: ["references/checklist.md"],
       });
       await gateway.rejectDeferred("skills.library.save", {
         code: "INVALID_REQUEST",

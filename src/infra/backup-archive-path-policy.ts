@@ -1,5 +1,5 @@
 import path from "node:path";
-import { isWindowsDrivePath } from "./archive-path.js";
+import { isWindowsDrivePath } from "@openclaw/fs-safe/archive";
 
 /**
  * Collapse drive and UNC spellings of `\\?\`, `\\.\`, `//?/`, and `//./` to the

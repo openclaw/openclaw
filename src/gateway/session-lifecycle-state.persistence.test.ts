@@ -32,6 +32,7 @@ import {
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import { startSessionWorkAdmissionInterruption } from "../sessions/session-lifecycle-admission.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createAgentAdmissionController } from "./agent-turn/agent-admission-controller.js";
 import { createAgentDedupeLifecycle } from "./agent-turn/agent-dedupe-lifecycle.js";
@@ -291,7 +292,6 @@ it.each(["success", "failed-write"])(
       getResolvedSessionId: () => sessionId,
       getResolvedSessionAgentId: () => "main",
       getAgentId: () => "main",
-      getCfgForAgent: () => cfg,
       getSessionPersisted: () => true,
       getSupersededSessionId: () => undefined,
       setAdmittedSessionId: (admittedSessionId) => expect(admittedSessionId).toBe(sessionId),
@@ -340,6 +340,7 @@ it.each(["success", "failed-write"])(
       const sessionEventSubscribers = createSessionEventSubscriberRegistry();
       sessionEventSubscribers.subscribe("session-observer");
       subscriptions = startGatewayEventSubscriptions({
+        scheduler: createTestGatewayScheduler(),
         getSessionRowProjection: () => getSessionRowProjection(context),
         signal: new AbortController().signal,
         log: silentLog,
@@ -354,7 +355,6 @@ it.each(["success", "failed-write"])(
         sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
         chatAbortControllers: context.chatAbortControllers,
         restartRecoveryCandidates,
-        terminalSessions: { closeTaskSessions: vi.fn() },
         refreshConnectedUserProfiles: vi.fn(),
       });
       const persistLifecycleEvent = lifecycleState.persistGatewaySessionLifecycleEvent;
@@ -491,7 +491,6 @@ it.each(["success", "failed-write"])(
       subscriptions?.heartbeatUnsub();
       subscriptions?.transcriptUnsub();
       subscriptions?.lifecycleUnsub();
-      await subscriptions?.taskUnsub();
       getSessionRowProjection(context)?.dispose();
       registration.cleanup();
       persistenceSpy?.mockRestore();
@@ -577,6 +576,7 @@ it.for([
         const markFinal = vi.spyOn(chatRunState.toolEventRecipients, "markFinal");
         const agentRunSeq = new Map<string, number>();
         subscriptions = startGatewayEventSubscriptions({
+          scheduler: createTestGatewayScheduler(),
           signal: new AbortController().signal,
           log: silentLog,
           broadcast: vi.fn(),
@@ -590,7 +590,6 @@ it.for([
           sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
           chatAbortControllers: new Map(),
           restartRecoveryCandidates: new Map(),
-          terminalSessions: { closeTaskSessions: vi.fn() },
           refreshConnectedUserProfiles: vi.fn(),
         });
 
@@ -646,7 +645,6 @@ it.for([
         subscriptions?.heartbeatUnsub();
         subscriptions?.transcriptUnsub();
         subscriptions?.lifecycleUnsub();
-        await subscriptions?.taskUnsub();
         releaseAgentRunContext(runId, claimId);
         routing.loadSessionEntry.mockReset();
         closeOpenClawAgentDatabasesForTest();

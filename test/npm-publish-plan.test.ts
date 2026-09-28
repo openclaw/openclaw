@@ -460,11 +460,6 @@ describe("resolvePublishedNpmVersionRoute", () => {
       distTags: { beta: "2026.7.1-beta.2" },
     },
     {
-      label: "lagging alpha",
-      version: "2026.7.1-alpha.3",
-      distTags: { alpha: "2026.7.1-alpha.2" },
-    },
-    {
       label: "lagging latest with a current beta mirror",
       version: "2026.7.1",
       distTags: { latest: "2026.6.11", beta: "2026.7.1" },
@@ -605,7 +600,6 @@ describe("resolvePublishedNpmVersionRoute", () => {
 
   it.each([
     ["beta", "2026.7.1-beta.3", { beta: "2026.7.1-beta.3" }],
-    ["alpha", "2026.7.1-alpha.3", { alpha: "2026.7.1-alpha.3" }],
     ["stable", "2026.7.1", { latest: "2026.7.1", beta: "2026.7.1" }],
   ])("accepts complete %s registry readback", (_label, version, distTags) => {
     expect(

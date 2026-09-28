@@ -599,7 +599,7 @@ export function createModelAuthAvailabilityResolver(
       }).eligible
     );
   };
-  const credentialAvailability = (
+  const resolvedProfileAvailability = (
     provider: string,
     profileId: string,
     credential: AuthProfileCredential,
@@ -615,6 +615,11 @@ export function createModelAuthAvailabilityResolver(
     ) {
       return false;
     }
+    if (hydratedProfileIds.has(profileId)) {
+      return (
+        credential.type !== "token" || credential.expires === undefined || credential.expires > now
+      );
+    }
     return resolveStoredCredentialReadOnlyAvailability({
       credential,
       cfg: params.cfg,
@@ -623,29 +628,6 @@ export function createModelAuthAvailabilityResolver(
       canRefreshOAuth:
         provider === OPENAI_PROVIDER_ID || externalCliRefreshProfileIds.has(profileId),
     });
-  };
-  const resolvedProfileAvailability = (
-    provider: string,
-    profileId: string,
-    credential: AuthProfileCredential,
-    target: AuthTarget,
-  ) => {
-    if (!hydratedProfileIds.has(profileId)) {
-      return credentialAvailability(provider, profileId, credential, target);
-    }
-    if (
-      !modeAllowed(
-        provider,
-        target,
-        credential.type,
-        credential.type === "oauth" ? credential.authFlow : undefined,
-      )
-    ) {
-      return false;
-    }
-    return (
-      credential.type !== "token" || credential.expires === undefined || credential.expires > now
-    );
   };
   const profileInCooldown = (profileId: string, target: AuthTarget) => {
     const cooldownModel = target.modelId
@@ -673,6 +655,15 @@ export function createModelAuthAvailabilityResolver(
     }
     return resolvedProfileAvailability(provider, profileId, credential, target);
   };
+  const hasMatchingProfileEvidence = (provider: string, profileId: string) => {
+    const reason = resolveAuthProfileEligibility({
+      cfg: params.cfg,
+      store,
+      provider,
+      profileId,
+    }).reasonCode;
+    return reason !== "provider_mismatch" && reason !== "profile_missing";
+  };
   const hasProfileEvidence = (provider: string) => {
     const normalized = normalizeProvider(provider);
     const configuredOrder = findNormalizedProviderValue(params.cfg.auth?.order, normalized);
@@ -686,30 +677,16 @@ export function createModelAuthAvailabilityResolver(
     ) {
       return true;
     }
-    return Object.keys(store.profiles).some((profileId) => {
-      const reason = resolveAuthProfileEligibility({
-        cfg: params.cfg,
-        store,
-        provider: normalized,
-        profileId,
-      }).reasonCode;
-      return reason !== "provider_mismatch" && reason !== "profile_missing";
-    });
+    return Object.keys(store.profiles).some((profileId) =>
+      hasMatchingProfileEvidence(normalized, profileId),
+    );
   };
   const firstProfileEvidenceId = (provider: string): string | undefined => {
     const normalized = normalizeProvider(provider);
     const configuredOrder = findNormalizedProviderValue(params.cfg.auth?.order, normalized);
     const storedOrder = findNormalizedProviderValue(store.order, normalized);
     const candidates = configuredOrder ?? storedOrder ?? Object.keys(store.profiles);
-    return candidates.find((profileId) => {
-      const reason = resolveAuthProfileEligibility({
-        cfg: params.cfg,
-        store,
-        provider: normalized,
-        profileId,
-      }).reasonCode;
-      return reason !== "provider_mismatch" && reason !== "profile_missing";
-    });
+    return candidates.find((profileId) => hasMatchingProfileEvidence(normalized, profileId));
   };
   const unprofiledEvaluation = (provider: string, target: AuthTarget): AuthSourceEvaluation => {
     const withMode = (
@@ -733,12 +710,9 @@ export function createModelAuthAvailabilityResolver(
     const binding = target.pinnedProfileId ? { kind: "none" as const } : providerBinding(provider);
     if (binding.kind === "profile") {
       const credential = profileCredential(binding.profileId, binding.credential);
-      const cooldownModel = target.modelId
-        ? splitTrailingAuthProfile(target.modelId).model
-        : undefined;
       const availability =
         credential &&
-        !isProfileInCooldown(store, binding.profileId, now, cooldownModel) &&
+        !profileInCooldown(binding.profileId, target) &&
         profileEligibleForReadOnlyAvailability(
           binding.credential.provider,
           binding.profileId,
@@ -873,23 +847,12 @@ export function createModelAuthAvailabilityResolver(
       selectedAuthMode: configured?.auth,
     };
   };
-  const automaticProfileSource = (
+  const profileSource = (
     provider: string,
     profileId: string,
     target: AuthTarget,
-  ): ProviderModelAuthProfileSource => ({
-    kind: "profile",
-    profileId,
-    mode: profileMode(profileId),
-    ...profilePolicyFacts(provider, profileId),
-    readiness: toProviderModelAuthReadiness(profileAvailability(provider, profileId, target, true)),
-    cooldown: profileInCooldown(profileId, target) ? "active" : "clear",
-  });
-  const requiredProfileSource = (
-    provider: string,
-    profileId: string,
-    target: AuthTarget,
-    ignoreCooldown: boolean,
+    ignoreCooldown = true,
+    cooldown?: ProviderModelAuthProfileSource["cooldown"],
   ): ProviderModelAuthProfileSource => ({
     kind: "profile",
     profileId,
@@ -898,7 +861,7 @@ export function createModelAuthAvailabilityResolver(
     readiness: toProviderModelAuthReadiness(
       profileAvailability(provider, profileId, target, ignoreCooldown),
     ),
-    cooldown: "clear",
+    cooldown: cooldown ?? (profileInCooldown(profileId, target) ? "active" : "clear"),
   });
   const cooldownEvaluation = (
     profiles: readonly ProviderModelAuthProfileSource[],
@@ -952,9 +915,7 @@ export function createModelAuthAvailabilityResolver(
       const availability =
         selection.kind === "unavailable" ? false : fromProviderModelAuthReadiness(source.readiness);
       const profile =
-        availability === false
-          ? automaticProfileSource(provider, source.profileId, target)
-          : undefined;
+        availability === false ? profileSource(provider, source.profileId, target) : undefined;
       return {
         ...(availability === false
           ? profile && profile.readiness !== "unavailable" && profile.cooldown === "active"
@@ -1033,28 +994,25 @@ export function createModelAuthAvailabilityResolver(
     } = {},
   ) => {
     const { profileLock, boundProfileId } = options;
-    const ownership = profileLock
+    const ownedProfileId = profileLock || boundProfileId;
+    const ownership = ownedProfileId
       ? {
-          reason: "runtime-binding" as const,
-          source: requiredProfileSource(provider, profileLock, targetForProfile(profileLock), true),
+          reason: profileLock ? ("runtime-binding" as const) : ("provider-binding" as const),
+          source: profileSource(
+            provider,
+            ownedProfileId,
+            targetForProfile(ownedProfileId),
+            Boolean(profileLock),
+            "clear",
+          ),
         }
-      : boundProfileId
-        ? {
-            reason: "provider-binding" as const,
-            source: requiredProfileSource(
-              provider,
-              boundProfileId,
-              targetForProfile(boundProfileId),
-              false,
-            ),
-          }
-        : policy.required
-          ? { reason: "configured-auth" as const, source: policy.direct }
-          : undefined;
+      : policy.required
+        ? { reason: "configured-auth" as const, source: policy.direct }
+        : undefined;
     return buildProviderModelAuthSourcePlan({
       ...(ownership ? { ownership } : {}),
       profiles: (options.profileIds ?? order.profileIds).map((profileId) =>
-        automaticProfileSource(provider, profileId, targetForProfile(profileId)),
+        profileSource(provider, profileId, targetForProfile(profileId)),
       ),
       preferredProfileId: ref.pinnedProfileId ?? ref.preferredProfileId,
       explicitOrder: order.hasExplicitOrder,

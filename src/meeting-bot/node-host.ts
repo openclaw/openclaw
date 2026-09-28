@@ -81,10 +81,6 @@ export type MeetingNodeHostOptions = {
   };
 };
 
-function readPositiveNumberOr(value: unknown, fallback: number): number {
-  return asPositiveFiniteNumber(value) ?? fallback;
-}
-
 function readOutputGeneration(value: unknown): number | undefined {
   if (value === undefined) {
     return undefined;
@@ -152,10 +148,6 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     return child;
   };
 
-  const wake = (session: NodeBridgeSession) => {
-    session.waiters.wake();
-  };
-
   const releaseOutputWriteWaiters = (session: NodeBridgeSession, output?: ChildProcess): void => {
     for (const waiter of session.outputWriteWaiters) {
       if (!output || waiter.process === output) {
@@ -212,7 +204,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
       if (!session.closed) {
         session.closed = true;
       }
-      wake(session);
+      session.waiters.wake();
     }
     releaseOutputWriteWaiters(session);
     // Process and stream errors can arrive together during teardown. Close once
@@ -227,7 +219,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
             return;
           }
           session.closed = true;
-          wake(session);
+          session.waiters.wake();
         });
     session.stopPromise = Promise.all([
       terminateMeetingBridgeProcess(session.input, {
@@ -299,6 +291,8 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
         spawn(input.command, input.args, { stdio: ["ignore", "pipe", "pipe"] }),
       );
     } catch (error) {
+      // Output spawn errors can arrive after input construction has already failed.
+      outputProcess.on("error", () => {});
       void terminateMeetingBridgeProcess(outputProcess, {
         graceMs: NODE_BRIDGE_TERMINATION_GRACE_MS,
       });
@@ -330,7 +324,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
         }
       }
       if (!session.stopPromise) {
-        wake(session);
+        session.waiters.wake();
       }
     });
     const stop = () => {
@@ -354,7 +348,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     if (!session) {
       throw new Error(`unknown bridgeId: ${bridgeId}`);
     }
-    const timeoutMs = Math.min(readPositiveNumberOr(params.timeoutMs, 250), 2_000);
+    const timeoutMs = Math.min(asPositiveFiniteNumber(params.timeoutMs) ?? 250, 2_000);
     if (session.chunks.length === 0 && !session.closed) {
       await session.waiters.wait(timeoutMs);
     }
@@ -470,7 +464,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
 
   const startBrowser = async (params: Record<string, unknown>) => {
     const url = options.normalizeUrl(params.url);
-    const timeoutMs = readPositiveNumberOr(params.joinTimeoutMs, 30_000);
+    const timeoutMs = asPositiveFiniteNumber(params.joinTimeoutMs) ?? 30_000;
     const mode = readNonEmptyString(params.mode);
     let audioRuntime: MeetingAudioRuntime | undefined;
     let bridgeId: string | undefined;

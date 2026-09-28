@@ -56,7 +56,9 @@ export interface SessionListHost {
     | Pick<ApplicationContext, "gateway" | "agentSelection" | "agents" | "sessions">
     | undefined;
   readonly sidebarLiveActivity: boolean;
+  readonly sessionsShowCron: boolean;
   readonly sessionsShowPreview: boolean;
+  readonly sessionsShowSystem: boolean;
   readonly sidebarNarrationLines: ReadonlyMap<string, string>;
   readonly sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest>;
   readonly sessionProjection: Pick<SidebarSessionProjection, "resolveSubtitle">;

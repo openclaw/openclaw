@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
-import { compareReleaseVersions } from "../../../lib/release-version.mjs";
+import { publishedBackupRollback } from "./backup-rollback-summary.mjs";
+import { publishedNativeAssignments } from "./native-assignment-summary.mjs";
+import { publishedPluginPolicy } from "./plugin-policy-summary.mjs";
 
 // Capture and snapshot validation stay plain Node. The host entrypoint owns
 // the redactor; neither candidate code nor raw fixture data owns uploads.
@@ -31,13 +33,49 @@ const siblingRefusalLogs = [
   "sibling-refusal-cleanup.json",
   "sibling-refusal-registrations.jsonl",
 ];
+const restoredIndexLogs = [
+  "legacy-operator-restored-index.json",
+  "restored-index-post-update.json",
+  "restored-index-candidate-import.json",
+  "restored-index-rollback.json",
+];
+const backupRollbackLogs = [
+  "backup-rollback.json",
+  "backup-rollback-create.json",
+  "backup-rollback-create.json.err",
+  "backup-rollback-restore.json",
+  "backup-rollback-restore.json.err",
+];
+const nativeAssignmentLogs = [
+  "native-assignment-eligibility.json",
+  "native-assignment-baseline.json",
+  "native-assignment-first-hop.json",
+  "native-assignment-proof.json",
+  "native-assignment-messages.jsonl",
+  "native-assignment-server.log",
+  "native-recover.out",
+  "native-recover.err",
+  "native-recover-wait.out",
+  "native-recover-wait.err",
+];
+
+const pluginPolicyLogs = [
+  "webhooks-only-policy/result.json",
+  "webhooks-only-policy/update.json",
+  "webhooks-only-policy/baseline-runtime.out",
+  "webhooks-only-policy/candidate-runtime.out",
+];
 const logNames = [
   "baseline-install.log",
   "baseline-companion.json",
   "install.log",
   "update.json",
   "update.err",
+  "update-noop.json",
+  "update-noop.err",
   ...siblingRefusalLogs,
+  ...restoredIndexLogs,
+  ...backupRollbackLogs,
   "repair.json",
   "repair.err",
   "recovery-update.json",
@@ -47,6 +85,18 @@ const logNames = [
   "doctor.log",
   "baseline-doctor.log",
   "workshop-doctor-recovery.json",
+  "update-report-recovery.json",
+  "update-report-baseline.json",
+  "update-report-retry.pty.log",
+  "update-report-pending.pty.log",
+  "update-report-retry.gh.jsonl",
+  "update-report-pending.gh.jsonl",
+  "update-report-retry-status.log",
+  "update-report-pending-status.log",
+  "update-report-retry-status.err",
+  "update-report-pending-status.err",
+  "update-report-retry.output.log",
+  "update-report-pending.output.log",
   "workshop-published-refusal.json",
   "workshop-baseline-doctor.json",
   "workshop-recovered-upgrade.json",
@@ -58,13 +108,39 @@ const logNames = [
   "physical-candidate-doctor.log",
   "physical-candidate-repair.json",
   "legacy-operator-cron-history-proof.json",
+  ...pluginPolicyLogs,
+  ...nativeAssignmentLogs,
+  "webhooks-only-policy/update.err",
+  "webhooks-only-policy/gateway.log",
+  "webhooks-only-policy/baseline-gateway.log",
+  "legacy-operator-post-update-cron-history.json",
+  "legacy-operator-candidate-cron-history.json",
+  "dreaming-cron-proof.json",
   "legacy-operator-baseline-turn.out",
   "legacy-operator-baseline-turn.err",
   "legacy-operator-candidate-turn.out",
   "legacy-operator-candidate-turn.err",
+  "legacy-operator-add-survivor-default-owner.out",
+  "legacy-operator-add-survivor-default-owner.err",
+  "legacy-operator-add-survivor-ops-owner.out",
+  "legacy-operator-add-survivor-ops-owner.err",
+  "legacy-operator-run-survivor-default-owner.out",
+  "legacy-operator-run-survivor-default-owner.err",
+  "legacy-operator-run-survivor-ops-owner.out",
+  "legacy-operator-run-survivor-ops-owner.err",
+  ...["post-update", "candidate"].flatMap((stage) =>
+    [0, 1].flatMap((index) =>
+      ["", "-earlier"].flatMap((page) =>
+        ["out", "err"].map(
+          (extension) => `legacy-operator-${stage}-transcript-${index}${page}.${extension}`,
+        ),
+      ),
+    ),
+  ),
   "gateway.log",
   "gateway.log.doctor",
   "missing-load-path/baseline-gateway.log",
+  "missing-load-path/startup-readiness.log",
   "missing-load-path/baseline-gateway-convergence-refusal.log",
   "baseline-service-install.err",
   "systemctl-shim.log",
@@ -899,8 +975,21 @@ function publishedSessionMigration(snapshot, sanitize) {
   return report;
 }
 
+function isPostCoreProcess() {
+  return (
+    process.env.OPENCLAW_UPDATE_POST_CORE === "1" &&
+    (process.argv[2] === "update" ||
+      (process.argv[2] === "--post-core" &&
+        path.basename(process.argv[1] ?? "") === "update-migrated-finalize.worker.js"))
+  );
+}
+
 function armUpgradeProcessCapture() {
-  const command = process.argv[2];
+  const delegatedDoctor =
+    process.argv[2] === "--doctor" &&
+    path.basename(process.argv[1] ?? "") === "update-migrated-finalize.worker.js";
+  const postCore = isPostCoreProcess();
+  const command = delegatedDoctor ? "doctor" : postCore ? "update" : process.argv[2];
   const artifactRoot = process.env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT;
   if (!isMainThread || !artifactRoot || !["update", "doctor"].includes(command)) {
     return;
@@ -929,10 +1018,7 @@ function armUpgradeProcessCapture() {
       return;
     }
     const identity = {
-      role:
-        command === "update" && process.env.OPENCLAW_UPDATE_POST_CORE === "1"
-          ? "post-core"
-          : command,
+      role: postCore ? "post-core" : command,
       packageVersion: version,
       pid: process.pid,
       parentPid: process.ppid,
@@ -975,11 +1061,7 @@ function armUpgradeProcessCapture() {
 }
 
 function armPostCoreCapture() {
-  if (
-    !isMainThread ||
-    process.argv[2] !== "update" ||
-    process.env.OPENCLAW_UPDATE_POST_CORE !== "1"
-  ) {
+  if (!isMainThread || !isPostCoreProcess()) {
     return;
   }
   try {
@@ -1583,160 +1665,6 @@ function publishedPostCore(snapshot, sanitize) {
   };
 }
 
-function publishedBackupRollback(snapshot, sanitize) {
-  const invalid = () => {
-    throw new Error("Invalid backup rollback evidence");
-  };
-  const proof = snapshot.backupRollback;
-  if (proof === undefined || proof === null) {
-    if (snapshot.scenario === "legacy-operator-state") {
-      const comparison =
-        typeof snapshot.baseline?.version === "string"
-          ? compareReleaseVersions(snapshot.baseline.version, "2026.9.4")
-          : null;
-      if (comparison === null || comparison >= 0) {
-        invalid();
-      }
-    }
-    return undefined;
-  }
-  const count = (value) => (Number.isSafeInteger(value) && value >= 0 ? value : invalid());
-  const digest = (value) =>
-    typeof value === "string" && /^[a-f0-9]{64}$/.test(value) ? value : invalid();
-  const name = (value) =>
-    typeof value === "string" && /^[a-z0-9_][a-z0-9_-]{0,127}$/.test(value)
-      ? sanitize(value, "backup rollback")
-      : invalid();
-  const versions = (value) => ({ state: count(value?.state), agent: count(value?.agent) });
-  const releaseVersion = (value) =>
-    typeof value === "string" &&
-    value.trim() === value &&
-    compareReleaseVersions(value, value) !== null
-      ? sanitize(value, "backup rollback")
-      : invalid();
-  if (
-    snapshot.scenario !== "legacy-operator-state" ||
-    proof.baselineVersion !== snapshot.baseline.version
-  ) {
-    invalid();
-  }
-  if (proof.status === "not-applicable") {
-    if (
-      proof.minimumBaseline !== "2026.9.4" ||
-      compareReleaseVersions(proof.baselineVersion, proof.minimumBaseline) >= 0
-    ) {
-      invalid();
-    }
-    return {
-      status: "not-applicable",
-      baselineVersion: releaseVersion(proof.baselineVersion),
-      minimumBaseline: releaseVersion(proof.minimumBaseline),
-    };
-  }
-  if (
-    proof.status !== "passed" ||
-    proof.runtime?.version !== proof.baselineVersion ||
-    proof.candidateVersion !== snapshot.candidate.version ||
-    proof.candidateVersion !== snapshot.installedVersion
-  ) {
-    invalid();
-  }
-  const baselineSchemaVersions = versions(proof.runtime.schemaVersions);
-  const preflights = boundedList(proof.preflights);
-  const sessionReads = boundedList(proof.sessionReads);
-  const databases = boundedList(proof.before?.databases).map((database) => {
-    if (!["state", "agent"].includes(database.kind) || typeof database.present !== "boolean") {
-      invalid();
-    }
-    const result = {
-      kind: database.kind,
-      present: database.present,
-    };
-    if (database.kind === "agent") {
-      result.agentId = name(database.agentId);
-    }
-    if (!database.present) {
-      return result;
-    }
-    for (const session of boundedList(database.sessions)) {
-      if (typeof session?.key !== "string" || typeof session.sessionId !== "string") {
-        invalid();
-      }
-    }
-    Object.assign(result, {
-      userVersion: count(database.userVersion),
-      contentVersion: count(database.contentVersion),
-      sessionCount: boundedList(database.sessions).length,
-      tables: boundedList(database.tables).map((table) => ({
-        table: name(table.table),
-        rows: count(table.rows),
-        sha256: digest(table.sha256),
-      })),
-    });
-    if (database.kind === "agent") {
-      const matchingPreflights = preflights.filter((entry) => entry.agentId === database.agentId);
-      const matchingReads = sessionReads.filter((entry) => entry.agentId === database.agentId);
-      const preflight = matchingPreflights[0];
-      const read = matchingReads[0];
-      if (
-        matchingPreflights.length !== 1 ||
-        matchingReads.length !== 1 ||
-        preflight?.status !== "exact" ||
-        preflight.foundVersion !== database.userVersion ||
-        preflight.targetVersion !== baselineSchemaVersions.agent ||
-        database.userVersion !== baselineSchemaVersions.agent ||
-        database.contentVersion !== database.userVersion ||
-        read?.count !== result.sessionCount
-      ) {
-        invalid();
-      }
-      Object.assign(result, {
-        preflight: {
-          status: "exact",
-          foundVersion: count(preflight.foundVersion),
-          targetVersion: count(preflight.targetVersion),
-        },
-        sessionRead: { count: count(read.count) },
-      });
-    }
-    return result;
-  });
-  const presentAgents = databases.filter(
-    (database) => database.kind === "agent" && database.present,
-  );
-  if (
-    preflights.length !== presentAgents.length ||
-    sessionReads.length !== presentAgents.length ||
-    new Set(presentAgents.map((database) => database.agentId)).size !== presentAgents.length ||
-    !presentAgents.some(
-      (database) =>
-        database.sessionCount > 0 &&
-        database.tables.some((table) => table.table === "transcript_events" && table.rows > 0),
-    )
-  ) {
-    invalid();
-  }
-  return {
-    status: "passed",
-    baselineVersion: releaseVersion(proof.baselineVersion),
-    candidateVersion: releaseVersion(proof.candidateVersion),
-    baselineSchemaVersions,
-    candidateSchemaVersions: versions(proof.candidateSchemaVersions),
-    archiveSha256: digest(proof.archive?.sha256),
-    baselineRuntime: {
-      manifestSha256: digest(proof.runtime.manifestSha256),
-      entrySha256: digest(proof.runtime.entrySha256),
-    },
-    databases,
-    files: boundedList(proof.before.files).map((file) => {
-      if (!["legacy-store", "transcript", "trajectory", "skill-prompt"].includes(file.kind)) {
-        invalid();
-      }
-      return { kind: file.kind, sha256: digest(file.sha256) };
-    }),
-  };
-}
-
 function publishedSuccessSummary(artifactRoot, sanitize) {
   const raw = readOwned(artifactRoot, "summary.json", "summary");
   if (raw === null) {
@@ -1746,6 +1674,8 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
   if (snapshot.status !== "passed") {
     throw new Error();
   }
+  const pluginPolicy = publishedPluginPolicy(snapshot, { sanitize, boundedList });
+  const nativeAssignments = publishedNativeAssignments(snapshot);
   for (const value of [
     snapshot.baseline?.spec,
     snapshot.baseline?.version,
@@ -1799,11 +1729,29 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
       reason: sanitize(companion.reason, "baseline companion"),
     };
   }
+  let missingLoadPath = null;
+  const applicability = snapshot.missingLoadPath;
+  if (applicability !== null && applicability !== undefined) {
+    if (
+      !(applicability.applicability === "supported" && applicability.reason === null) &&
+      !(
+        applicability.applicability === "unsupported-driver" &&
+        applicability.reason === "published-cli-rejects-invalid-config-before-staging"
+      )
+    ) {
+      throw new Error();
+    }
+    missingLoadPath = {
+      applicability: applicability.applicability,
+      reason: applicability.reason,
+    };
+  }
   return {
     status: "passed",
     baseline: textFields(snapshot.baseline, ["spec", "version"], sanitize),
     candidate: textFields(snapshot.candidate, ["kind", "version"], sanitize),
     baselineCompanion,
+    missingLoadPath,
     ...textFields(
       snapshot,
       [
@@ -1818,7 +1766,9 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
     updateRecovery: sanitize(snapshot.updateRecovery, "summary"),
     updateRestartSource: sanitize(snapshot.updateRestartSource, "summary"),
     firstHopPostCore: publishedPostCore(snapshot.firstHopPostCore, sanitize),
-    backupRollback: publishedBackupRollback(snapshot, sanitize),
+    backupRollback: publishedBackupRollback(snapshot, { sanitize, boundedList, textFields }),
+    ...(pluginPolicy ? { pluginPolicy } : {}),
+    ...(nativeAssignments ? { nativeAssignments } : {}),
     timings,
     phases: boundedList(snapshot.phases).map((event) => {
       if (
@@ -1838,6 +1788,13 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
         "repair.json",
         "recovery-update.json",
         ...(snapshot.scenario === "custom-plugin-siblings" ? siblingRefusalLogs : []),
+        ...(snapshot.scenario === "legacy-operator-state" ? backupRollbackLogs : []),
+        ...(pluginPolicy ? pluginPolicyLogs : []),
+        ...(nativeAssignments?.status === "not-applicable"
+          ? ["native-assignment-eligibility.json"]
+          : nativeAssignments
+            ? nativeAssignmentLogs
+            : []),
         ...(snapshot.scenario === "workshop-doctor-recovery"
           ? [
               "workshop-doctor-recovery.json",
@@ -1850,10 +1807,35 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
               "physical-candidate-repair.json",
             ]
           : []),
+        ...(snapshot.scenario === "update-report-recovery"
+          ? [
+              "update-report-recovery.json",
+              "update-report-baseline.json",
+              "update-report-retry-status.log",
+              "update-report-pending-status.log",
+              "update-report-retry.gh.jsonl",
+              "update-report-pending.gh.jsonl",
+            ]
+          : []),
+        ...(snapshot.scenario === "dreaming-cron-doctor" ? ["dreaming-cron-proof.json"] : []),
         ...(snapshot.scenario === "legacy-operator-state" &&
         snapshot.updateRestartMode === "manual" &&
         ["2026.9.3", "2026.9.4"].includes(snapshot.baseline.version)
           ? ["legacy-operator-cron-history-proof.json"]
+          : []),
+        ...(snapshot.scenario === "legacy-operator-state" &&
+        (snapshot.baseline.version === "2026.9.6" ||
+          (snapshot.updateRestartMode === "manual" &&
+            ["2026.9.3", "2026.9.4"].includes(snapshot.baseline.version)))
+          ? [
+              "legacy-operator-post-update-cron-history.json",
+              "legacy-operator-candidate-cron-history.json",
+            ]
+          : []),
+        ...(snapshot.scenario === "legacy-operator-state" &&
+        snapshot.updateRestartMode === "manual" &&
+        snapshot.baseline.version === "2026.9.4"
+          ? restoredIndexLogs
           : []),
       ].map((name) => [name, sanitize(readOwned(artifactRoot, name, name), name)]),
     ),
@@ -1878,7 +1860,7 @@ export function publishDiagnostics(
       publishedSuccessSummary(artifactRoot, sanitize),
       publicLimit,
     );
-    return;
+    return undefined;
   }
   if (outcome !== "failed") {
     throw new Error();
@@ -1933,13 +1915,22 @@ export function publishDiagnostics(
       throw new Error();
     }
     const redacted = redactSensitiveText(text, { mode: "tools" });
+    // Keep the latest startup/native events after redacting the whole input.
+    const tail =
+      label === "missing-load-path/baseline-gateway.log" ||
+      label === "native-assignment-messages.jsonl";
+    const lines = redacted.split(/(?<=\n)/u);
+    if (tail) {
+      lines.reverse();
+    }
     let result = "";
-    for (const line of redacted.split(/(?<=\n)/u)) {
-      if (Buffer.byteLength(JSON.stringify(result + line)) > outputLimit) {
+    for (const line of lines) {
+      const next = tail ? line + result : result + line;
+      if (Buffer.byteLength(JSON.stringify(next)) > outputLimit) {
         omissions[label] = "redacted output truncated at a complete line (16 KiB)";
         break;
       }
-      result += line;
+      result = next;
     }
     return result;
   }
@@ -2058,6 +2049,12 @@ export function publishDiagnostics(
       "Upgrade survivor diagnostics: some inputs omitted; see failure.json omissions.\n",
     );
   }
+  // Return only published failure coordinates; logs and configuration stay in the artifact.
+  return {
+    phase: sanitize(report.phase, "phase"),
+    exitStatus: report.exitStatus,
+    signal: report.signal,
+  };
 }
 
 if (import.meta.main) {

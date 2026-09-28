@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -49,6 +50,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { executeSystemAgentOperation } from "../system-agent/operations-execute.js";
 import { createSystemAgentTestRuntime } from "../system-agent/system-agent.runtime.test-support.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { nodeFilePath } from "../test-utils/node-file-path.js";
 import {
   createOpenClawTestState,
@@ -491,40 +493,57 @@ it.each(["workspace", "workspace-write", "config"] as const)(
       instanceId: "preparation-instance",
       runId: "preparation-run",
     });
-    const entered = createDeferred();
+    const entered = createDeferred<typeof phase>();
     const resume = createDeferred();
     const workspace = state.path("prepared-workspace");
     const stagedFile = state.path("staged-effect");
     const originalConfig = await fs.readFile(state.configPath, "utf8");
-    const pause = async () => {
-      entered.resolve();
+    const pause = async (pausedPhase: typeof phase) => {
+      entered.resolve(pausedPhase);
       await resume.promise;
     };
+    const nativeModeEnv = captureEnv(["FS_SAFE_NATIVE_MODE"]);
+    if (phase === "workspace-write") {
+      setTestEnvValue("FS_SAFE_NATIVE_MODE", "off");
+    }
     const realAccess = fs.access.bind(fs);
     const access = vi.spyOn(fs, "access").mockImplementation(async (file, mode) => {
       if (phase === "workspace" && file === path.join(workspace, "AGENTS.md")) {
-        await pause();
+        await pause("workspace");
       }
       return await realAccess(file, mode);
     });
-    const realWrite = fs.writeFile.bind(fs);
-    const write = vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, options) => {
-      await realWrite(file, data, options);
+    const realOpen = fs.open.bind(fs);
+    const restoreWrites: Array<() => void> = [];
+    let writePaused = false;
+    const open = vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
+      const handle = await realOpen(file, flags, mode);
       const filePath = nodeFilePath(file);
       if (
         phase === "workspace-write" &&
         filePath &&
-        path.basename(filePath) === "AGENTS.md" &&
-        path.basename(path.dirname(filePath)).startsWith("openclaw-bootstrap-")
+        path.dirname(filePath) === workspace &&
+        typeof flags === "number" &&
+        (flags & fsConstants.O_EXCL) !== 0
       ) {
-        await pause();
+        const realWrite = handle.write.bind(handle);
+        const write = vi.spyOn(handle, "write").mockImplementation(async (...args) => {
+          const result = await realWrite(...args);
+          if (!writePaused) {
+            writePaused = true;
+            await pause("workspace-write");
+          }
+          return result;
+        });
+        restoreWrites.push(() => write.mockRestore());
       }
+      return handle;
     });
     const commit = vi.fn();
     const rollback = vi.fn(async () => await fs.rm(stagedFile));
     const prepareConfigCommit = vi.fn(async () => {
       await fs.writeFile(stagedFile, "staged before publication");
-      await pause();
+      await pause("config");
       return { commit, rollback };
     });
     const creation = createAgent({
@@ -542,7 +561,9 @@ it.each(["workspace", "workspace-write", "config"] as const)(
       (error: unknown) => ({ error }),
     );
     try {
-      await withTestTimeout(entered.promise, 10_000, "creation did not reach preparation pause");
+      expect(
+        await withTestTimeout(entered.promise, 10_000, "creation did not reach preparation pause"),
+      ).toBe(phase);
       expect(releaseAgentRunDelegatedAuthority(authority)).toBe(true);
       resume.resolve();
 
@@ -565,8 +586,12 @@ it.each(["workspace", "workspace-write", "config"] as const)(
     } finally {
       resume.resolve();
       await outcome;
-      write.mockRestore();
+      open.mockRestore();
+      for (const restore of restoreWrites) {
+        restore();
+      }
       access.mockRestore();
+      nativeModeEnv.restore();
       releaseAgentRunDelegatedAuthority(authority);
       closeOpenClawStateDatabaseForTest();
       await state.cleanup();

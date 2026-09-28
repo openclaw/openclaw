@@ -25,6 +25,7 @@ type GatewaySessionCompactionParams = {
   agentId: string;
   cfg: OpenClawConfig;
   entry: SessionEntry;
+  abortSignal?: AbortSignal;
   runId?: string;
   sessionId: string;
   sessionKey: string;
@@ -44,15 +45,6 @@ function usesLegacyOpenClawCompaction(params: GatewaySessionCompactionParams): b
     (!persistedRuntime || persistedRuntime === "openclaw") &&
     (!contextEngine || contextEngine === "legacy")
   );
-}
-
-async function resolveGatewayCompactionTranscriptTarget(params: GatewaySessionCompactionParams) {
-  return await resolveSessionTranscriptRuntimeTarget({
-    agentId: params.agentId,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionStoreKey,
-    storePath: params.storePath,
-  });
 }
 
 /** Returns only definitive legacy-runtime no-op verdicts; other runtimes decide for themselves. */
@@ -87,9 +79,14 @@ export async function preflightGatewaySessionCompaction(
 
 export async function runGatewaySessionCompaction(
   params: GatewaySessionCompactionParams,
-  host?: Parameters<typeof compactEmbeddedAgentSession>[1],
+  host: Parameters<typeof compactEmbeddedAgentSession>[1],
 ): Promise<Awaited<ReturnType<typeof compactEmbeddedAgentSession>>> {
-  const transcriptTarget = await resolveGatewayCompactionTranscriptTarget(params);
+  const transcriptTarget = await resolveSessionTranscriptRuntimeTarget({
+    agentId: params.agentId,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionStoreKey,
+    storePath: params.storePath,
+  });
   const resolvedModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
   const workspaceDir =
     resolveIngressWorkspaceOverrideForSessionRun({
@@ -105,6 +102,7 @@ export async function runGatewaySessionCompaction(
   const primaryConversation = resolveCurrentSessionPrimaryConversation(transcriptTarget);
   return await compactEmbeddedAgentSession(
     {
+      abortSignal: params.abortSignal,
       contextEngineAgentId: params.agentId,
       runId: params.runId,
       sessionId: params.sessionId,

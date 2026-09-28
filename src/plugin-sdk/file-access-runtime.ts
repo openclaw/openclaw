@@ -29,9 +29,9 @@ export {
   readFileHandleBounded,
   resolvePathPrefixSync,
   tempFile,
-} from "../infra/fs-safe-advanced.js";
-export { readFileWindowFully } from "../infra/file-read.js";
-export { inspectPathPermissions } from "../infra/permissions.js";
+} from "@openclaw/fs-safe/advanced";
+export { readFileWindowFully } from "@openclaw/fs-safe/advanced";
+export { inspectPathPermissions } from "@openclaw/fs-safe/permissions";
 export { writeFileWindowFully } from "../infra/file-descriptor.js";
 export { openRootFile } from "../infra/boundary-file-read.js";
 export {
@@ -47,8 +47,9 @@ export const removePathWithinRoot: (params: {
   recursive?: boolean;
   force?: boolean;
 }) => Promise<void> = removePathWithinRootCore;
-export { basenameFromMediaSource, safeFileURLToPath } from "../infra/local-file-access.js";
+export { basenameFromMediaSource, safeFileURLToPath } from "@openclaw/fs-safe/advanced";
 export { isPathInside, isPathStrictlyInside } from "../infra/path-guards.js";
 export { getFileWatchCapacityCode } from "../infra/fs-watch-errors.js";
 export { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 export { readFileRangeAsync } from "../config/sessions/file-range.js";
+export { createStagedInputPathMatcher } from "../media/staged-inputs.js";

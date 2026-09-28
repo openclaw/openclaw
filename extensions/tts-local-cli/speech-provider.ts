@@ -1,4 +1,3 @@
-// Tts Local Cli provider module implements model/runtime integration.
 import { readdirSync } from "node:fs";
 import path from "node:path";
 import type {
@@ -292,36 +291,19 @@ async function runFfmpegToBuffer(params: {
 async function convertAudio(
   inputPath: string,
   outputDir: string,
-  target: OutputFormat,
+  target: OutputFormat | "pcm",
 ): Promise<Buffer> {
-  const outputFileName = `converted.${target}`;
+  const outputFileName = target === "pcm" ? "telephony.pcm" : `converted.${target}`;
   const args = ["-y", "-i", inputPath];
-  if (target === "opus") {
+  if (target === "pcm") {
+    args.push("-c:a", "pcm_s16le", "-ar", "16000", "-ac", "1", "-f", "s16le");
+  } else if (target === "opus") {
     args.push("-c:a", "libopus", "-b:a", "64k", "-f", "opus");
   } else if (target === "wav") {
     args.push("-c:a", "pcm_s16le", "-f", "wav");
   } else {
     args.push("-c:a", "libmp3lame", "-b:a", "128k", "-f", "mp3");
   }
-  return await runFfmpegToBuffer({ args, outputDir, outputFileName });
-}
-
-async function convertToRawPcm(inputPath: string, outputDir: string): Promise<Buffer> {
-  // Output raw 16kHz mono 16-bit little-endian PCM (no WAV headers)
-  const outputFileName = "telephony.pcm";
-  const args = [
-    "-y",
-    "-i",
-    inputPath,
-    "-c:a",
-    "pcm_s16le",
-    "-ar",
-    "16000",
-    "-ac",
-    "1",
-    "-f",
-    "s16le",
-  ];
   return await runFfmpegToBuffer({ args, outputDir, outputFileName });
 }
 
@@ -424,7 +406,7 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
           }
 
           // Convert to raw 16kHz mono PCM for telephony (no WAV headers)
-          const pcmBuffer = await convertToRawPcm(inputFile, tempDir);
+          const pcmBuffer = await convertAudio(inputFile, tempDir, "pcm");
 
           return {
             audioBuffer: pcmBuffer,

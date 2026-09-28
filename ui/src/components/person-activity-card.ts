@@ -9,6 +9,8 @@ import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { describePlatform } from "../lib/platform-label.ts";
 import {
   presenceMatchesProfile,
+  presenceViewerActivity,
+  presenceViewerLastActivity,
   presenceUserLabel,
   type PresenceViewer,
 } from "../lib/presence-users.ts";
@@ -253,10 +255,8 @@ export function renderPersonActivityCard(input: PersonCardInput) {
     entries.map((entry) => entry.onlineSince),
     "first",
   );
-  const lastActivityAt = observedTimestamp(
-    entries.map((entry) => entry.lastActivityAt),
-    "last",
-  );
+  const lastActivityAt = presenceViewerLastActivity(user);
+  const activity = presenceViewerActivity(user);
   const where = connections(user);
   const zones = [
     ...new Set(entries.flatMap((entry) => (entry.timeZone?.trim() ? [entry.timeZone.trim()] : []))),
@@ -295,7 +295,9 @@ export function renderPersonActivityCard(input: PersonCardInput) {
       observed
         ? html` <span
             class="person-activity-card__status ${
-              offline ? "person-activity-card__status--offline" : ""
+              offline
+                ? "person-activity-card__status--offline"
+                : `person-activity-card__status--${activity}`
             }"
             ><span aria-hidden="true"></span>${
               offline
@@ -303,7 +305,7 @@ export function renderPersonActivityCard(input: PersonCardInput) {
                 : onlineSince === undefined
                   ? t("presence.rosterTitle")
                   : html`${t("presence.card.onlineFor")} ${elapsed(onlineSince, "minute-compact")}`
-            }</span
+            }${!offline && activity !== "unknown" ? html` · ${t(activity === "active" ? "presence.active" : "presence.idle")}` : nothing}</span
           >`
         : nothing,
     )}

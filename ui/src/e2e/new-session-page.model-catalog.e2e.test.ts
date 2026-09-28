@@ -376,6 +376,47 @@ suite.define(() => {
     },
   );
 
+  it("selects fetched models while the next catalog request stays held", async () => {
+    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      agentModel: "fixture/one",
+      models: ["one", "two"].map((id) => ({
+        id,
+        name: `Retained ${id}`,
+        provider: "fixture",
+        available: true,
+      })),
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      const trigger = page.locator('.new-session-page__composer [data-chat-model-select="true"]');
+      await expect.poll(() => trigger.textContent()).toContain("Retained one");
+      const reads = (await gateway.getRequests("models.list")).length;
+      await gateway.deferNext("models.list");
+      await gateway.emitGatewayEvent("chat.metadata.changed", {});
+      await expect
+        .poll(async () => (await gateway.getRequests("models.list")).length)
+        .toBe(reads + 1);
+      await trigger.click();
+      await page.getByRole("combobox", { name: "Search models" }).fill("Retained");
+      await page.locator('[data-chat-model-option="fixture/two"]').click();
+      await expect.poll(() => trigger.textContent()).toContain("Retained two");
+      expect(await trigger.getAttribute("aria-busy")).toBe("false");
+      expect(await gateway.getRequests("models.list")).toHaveLength(reads + 1);
+      if (captureUiProof) {
+        await trigger.click();
+        await page.getByRole("combobox", { name: "Search models" }).fill("Retained");
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(suite.artifactDir, "selected-during-held-refresh.png"),
+        });
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
   it("starts with a usable retained account despite a refresh failure and leaves the default cleared", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
@@ -692,7 +733,9 @@ suite.define(() => {
       await gateway.waitForRequest("models.list");
 
       const modelSelect = page.locator('[data-chat-model-select="true"]');
-      await expect.poll(() => modelSelect.getAttribute("title")).toBe("Models unavailable");
+      await expect
+        .poll(() => modelSelect.getByText("Models unavailable", { exact: true }).isVisible())
+        .toBe(true);
       expect(await page.locator("[data-chat-model-option]").count()).toBe(0);
 
       await modelSelect.click();

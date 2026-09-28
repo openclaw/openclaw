@@ -81,6 +81,60 @@ struct ChatReplyQuoteTests {
 
 @MainActor
 struct ChatComposerStateTests {
+    enum ComposerRouteTransition: CaseIterable {
+        case contract
+        case canonicalContract
+        case pinnedContract
+        case refresh
+        case pinnedQuestionRetirement
+        case detached
+    }
+
+    @Test(arguments: ComposerRouteTransition.allCases)
+    func `captured composer input follows only its admitted route`(_ transition: ComposerRouteTransition) {
+        let vm = OpenClawChatViewModel(
+            sessionKey: transition == .canonicalContract ? "agent:main:thread" : "main",
+            transport: ComposerParityTransport(),
+            activeAgentId: "main",
+            sessionRoutingContract: "global|main|main")
+        defer { vm.detachTransport() }
+        vm.input = "existing draft"
+        let resolveInputModel = vm.composerModelResolver()
+
+        switch transition {
+        case .contract, .canonicalContract:
+            vm.syncSessionRoutingContract("per-sender|main|main")
+        case .pinnedContract:
+            vm.beginAttachmentStaging()
+            vm.syncSessionRoutingContract("per-sender|main|main")
+        case .refresh:
+            vm.refresh()
+        case .pinnedQuestionRetirement:
+            vm.beginAttachmentStaging()
+            vm.retireQuestionAuthority()
+        case .detached:
+            vm.detachTransport()
+        }
+
+        resolveInputModel()?.input = "typed after transition"
+        let rejectsInput = transition == .contract || transition == .detached
+        #expect(vm.input == (rejectsInput ? "existing draft" : "typed after transition"))
+
+        if transition == .pinnedContract {
+            vm.endAttachmentStaging()
+            resolveInputModel()?.input = "stale editor callback"
+            #expect(vm.input == "typed after transition")
+        }
+        if transition == .contract || transition == .pinnedContract {
+            let resolveNewInputModel = vm.composerModelResolver()
+            resolveNewInputModel()?.input = "new route draft"
+            #expect(vm.input == "new route draft")
+        }
+        if transition == .pinnedQuestionRetirement {
+            vm.endAttachmentStaging()
+        }
+    }
+
     @Test func `model selection target describes only gateway owned values`() {
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: ComposerParityTransport())
         let expectations: [(String?, String?)] = [
@@ -117,17 +171,6 @@ struct ChatComposerStateTests {
             selectionID: OpenClawChatViewModel.defaultModelSelectionID,
             currentSelectionID: "claude-opus-4-1",
             choices: choices))
-    }
-
-    @Test func `file picker allows images and movie containers only`() {
-        #expect(OpenClawChatPickerAttachmentMetadata.allowedFileContentTypes == [
-            .image,
-            .movie,
-            .mpeg4Movie,
-            .quickTimeMovie,
-        ])
-        #expect(!OpenClawChatPickerAttachmentMetadata.allowedFileContentTypes.contains(.audiovisualContent))
-        #expect(!OpenClawChatPickerAttachmentMetadata.allowedFileContentTypes.contains(.audio))
     }
 
     @Test func `tagless movie metadata stages as video`() async throws {

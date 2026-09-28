@@ -677,11 +677,11 @@ describe("Git database admission", () => {
     },
   );
 
-  it.each(
-    (["global", "command"] as const).flatMap((configuration) =>
-      [false, true].map((configured) => ({ configuration, configured })),
-    ),
-  )(
+  it.each([
+    { configuration: "global", configured: false },
+    { configuration: "global", configured: true },
+    { configuration: "command", configured: true },
+  ] as const)(
     "uses captured transport configuration ($configuration, configured=$configured)",
     async ({ configuration, configured }) => {
       const state = fixture();

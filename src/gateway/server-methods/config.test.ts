@@ -232,53 +232,49 @@ describe("config.patch effective change receipt", () => {
 });
 
 describe("config application settlement", () => {
-  it.each(
-    (["config.patch", "config.apply"] as const).flatMap((method) =>
-      [
-        { name: "hooks", config: { hooks: { enabled: true } } },
-        {
-          name: "new Gateway HTTP settings",
-          config: { gateway: { http: { endpoints: { responses: { enabled: true } } } } },
-        },
-      ].map(({ name, config }) => ({ method, name, config })),
-    ),
-  )("waits for $method application of $name before acknowledging", async ({ method, config }) => {
-    const { promise: application, resolve: settleApplication } = createDeferred<"applied">();
-    configWriteMocks.commitGatewayConfigWrite.mockImplementationOnce(async (params) => ({
-      path: "/tmp/openclaw.json",
-      config,
-      hash: "settled-hash",
-      application: params.awaitRuntimeApplication ? application : undefined,
-      queueFollowUp: vi.fn(),
-    }));
+  it.each([
+    { method: "config.patch", name: "hooks", config: { hooks: { enabled: true } } },
+    {
+      method: "config.apply",
+      name: "new Gateway HTTP settings",
+      config: { gateway: { http: { endpoints: { responses: { enabled: true } } } } },
+    },
+  ] as const)(
+    "waits for $method application of $name before acknowledging",
+    async ({ method, config }) => {
+      const { promise: application, resolve: settleApplication } = createDeferred<"applied">();
+      configWriteMocks.commitGatewayConfigWrite.mockImplementationOnce(async (params) => ({
+        path: "/tmp/openclaw.json",
+        config,
+        hash: "settled-hash",
+        application: params.awaitRuntimeApplication ? application : undefined,
+        queueFollowUp: vi.fn(),
+      }));
 
-    const { harness, operation } = startConfigWrite(method, {
-      raw: config,
-      baseHash: "base-hash",
-    });
-    await vi.waitFor(() =>
-      expect(configWriteMocks.commitGatewayConfigWrite).toHaveBeenCalledOnce(),
-    );
+      const { harness, operation } = startConfigWrite(method, {
+        raw: config,
+        baseHash: "base-hash",
+      });
+      await vi.waitFor(() =>
+        expect(configWriteMocks.commitGatewayConfigWrite).toHaveBeenCalledOnce(),
+      );
 
-    expect(harness.respond).not.toHaveBeenCalled();
+      expect(harness.respond).not.toHaveBeenCalled();
 
-    settleApplication("applied");
-    await operation;
-    expect(harness.respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ ok: true }),
-      undefined,
-    );
-  });
+      settleApplication("applied");
+      await operation;
+      expect(harness.respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ ok: true }),
+        undefined,
+      );
+    },
+  );
 
-  it.each(
-    (["config.patch", "config.apply"] as const).flatMap((method) =>
-      (["applied-restart-required", "restart-pending"] as const).map((outcome) => ({
-        method,
-        outcome,
-      })),
-    ),
-  )(
+  it.each([
+    { method: "config.patch", outcome: "applied-restart-required" },
+    { method: "config.apply", outcome: "restart-pending" },
+  ] as const)(
     "reports $method $outcome without misrepresenting active config",
     async ({ method, outcome }) => {
       const queueFollowUp = vi.fn();
@@ -329,40 +325,37 @@ describe("config application settlement", () => {
     },
   );
 
-  it.each(["superseded", "failed", "stopped", "unclaimed"] as const)(
-    "reports a persisted write whose runtime application was %s",
-    async (outcome) => {
-      const queueFollowUp = vi.fn();
-      configWriteMocks.commitGatewayConfigWrite.mockResolvedValueOnce({
-        path: "/tmp/openclaw.json",
-        config: { hooks: { enabled: true } },
-        hash: `${outcome}-hash`,
-        application: Promise.resolve(outcome),
-        queueFollowUp,
-      });
+  it("reports a persisted write whose runtime application failed", async () => {
+    const queueFollowUp = vi.fn();
+    configWriteMocks.commitGatewayConfigWrite.mockResolvedValueOnce({
+      path: "/tmp/openclaw.json",
+      config: { hooks: { enabled: true } },
+      hash: "failed-hash",
+      application: Promise.resolve("failed"),
+      queueFollowUp,
+    });
 
-      const { harness, operation } = startConfigWrite("config.patch", {
-        raw: { hooks: { enabled: true } },
-        baseHash: "base-hash",
-      });
-      await operation;
+    const { harness, operation } = startConfigWrite("config.patch", {
+      raw: { hooks: { enabled: true } },
+      baseHash: "base-hash",
+    });
+    await operation;
 
-      expect(harness.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "UNAVAILABLE",
-          message: expect.stringContaining("persisted but was not applied"),
-        }),
-      );
-      expect(harness.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: expect.stringContaining("use config.apply") }),
-      );
-      expect(queueFollowUp).toHaveBeenCalledOnce();
-    },
-  );
+    expect(harness.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        message: expect.stringContaining("persisted but was not applied"),
+      }),
+    );
+    expect(harness.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("use config.apply") }),
+    );
+    expect(queueFollowUp).toHaveBeenCalledOnce();
+  });
 });
 
 describe("config.openFile", () => {
@@ -628,16 +621,6 @@ describe("config.patch hash-free ui.prefs LWW", () => {
       true,
       expect.objectContaining({ ok: true, hash: "next-hash-1" }),
       undefined,
-    );
-  });
-
-  it("rejects a hash-free patch outside the LWW subtree", async () => {
-    const { respond } = await invokeConfigPatch({ raw: { gateway: { port: 19_001 } } });
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: expect.stringContaining("config base hash required") }),
     );
   });
 

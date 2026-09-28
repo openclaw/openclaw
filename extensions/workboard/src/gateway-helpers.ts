@@ -1,9 +1,9 @@
 import { WORKBOARD_STATUSES, type WorkboardCard } from "@openclaw/workboard-contract";
-// Workboard plugin module implements shared gateway request helpers.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawPluginApi } from "../api.js";
-import { redactClaimToken } from "./card-redaction.js";
+import { redactClaimToken, redactDispatchResult } from "./card-redaction.js";
 import {
   dispatchAndStartWorkboardCards,
   type WorkboardDispatchStartOptions,
@@ -25,7 +25,22 @@ type WorkboardGatewayScope = NonNullable<
   NonNullable<Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2]>["scope"]
 >;
 
+export class WorkboardUploadsDisabledError extends Error {
+  constructor() {
+    super("File and image uploads are disabled by gateway.uploads.enabled");
+    this.name = "WorkboardUploadsDisabledError";
+  }
+}
+
 export function respondError(respond: GatewayRespond, error: unknown) {
+  if (error instanceof WorkboardUploadsDisabledError) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.FORBIDDEN, error.message, { details: { code: "UPLOADS_DISABLED" } }),
+    );
+    return;
+  }
   if (error instanceof WorkboardCardConflictError) {
     respond(false, undefined, {
       code: "workboard_conflict",
@@ -222,13 +237,7 @@ export function createWorkboardDispatchHandler(params: {
         respond(true, { ...started, card: params.redactCard(started.card) });
         return;
       }
-      respond(true, {
-        ...result,
-        promoted: result.promoted.map(params.redactCard),
-        reclaimed: result.reclaimed.map(params.redactCard),
-        blocked: result.blocked.map(params.redactCard),
-        orchestrated: result.orchestrated.map(params.redactCard),
-      });
+      respond(true, redactDispatchResult(result, params.redactCard));
     } catch (error) {
       respondError(respond, error);
     }

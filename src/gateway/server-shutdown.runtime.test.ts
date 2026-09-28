@@ -6,6 +6,7 @@ const state = vi.hoisted(() => ({
   drainEmbeddingProviders: vi.fn(),
   completeClose: vi.fn(),
   flushSessionChanges: vi.fn(),
+  drainSessionPublications: vi.fn(),
   stopPlugins: vi.fn(),
   preparePluginRegistryShutdown: vi.fn(async () => undefined),
   artifactsAvailable: true,
@@ -29,13 +30,20 @@ vi.mock("./server-methods/session-change-event.js", () => {
   state.loaded.push("session-change-events");
   return { flushPendingSessionsChangedEvents: state.flushSessionChanges };
 });
+vi.mock("./session-event-prepared-row.js", () => {
+  state.loaded.push("session-event-publications");
+  return {
+    get drainSessionEventPublications() {
+      if (!state.artifactsAvailable) {
+        throw new Error("installed session-event-prepared-row chunk was removed");
+      }
+      return state.drainSessionPublications;
+    },
+  };
+});
 vi.mock("./mcp-http.js", () => {
   state.loaded.push("mcp-http");
   return { closeMcpLoopbackServer: vi.fn() };
-});
-vi.mock("../tasks/task-registry.maintenance.js", () => {
-  state.loaded.push("task-maintenance");
-  return { stopTaskRegistryMaintenance: vi.fn() };
 });
 vi.mock("../agents/main-session-recovery/main-session-restart-recovery.js", () => {
   state.loaded.push("restart-recovery");
@@ -55,6 +63,10 @@ vi.mock("./embeddings-provider-lifetime.js", () => {
 vi.mock("../hooks/gmail-watcher.js", () => {
   state.loaded.push("gmail-watcher");
   return { stopGmailWatcher: vi.fn() };
+});
+vi.mock("../cron/maintenance.js", () => {
+  state.loaded.push("cron-maintenance");
+  return { stopCronMaintenance: vi.fn() };
 });
 vi.mock("../agents/code-mode-state.js", () => {
   state.loaded.push("code-mode");
@@ -93,12 +105,13 @@ describe("gateway shutdown runtime", () => {
         "server-close",
         "plugin-hooks",
         "session-change-events",
+        "session-event-publications",
         "mcp-http",
-        "task-maintenance",
         "restart-recovery",
         "bundle-lsp",
         "embeddings",
         "gmail-watcher",
+        "cron-maintenance",
         "code-mode",
         "provider-transports",
         "plugin-runtime",
@@ -112,8 +125,10 @@ describe("gateway shutdown runtime", () => {
     expect(runtime.runGlobalGatewayStopSafely).toBe(state.stopPlugins);
     expect(state.preparePluginRegistryShutdown).toHaveBeenCalledOnce();
     expect(state.waitForPluginCacheRetirement).not.toHaveBeenCalled();
+    expect(state.drainSessionPublications).not.toHaveBeenCalled();
     state.artifactsAvailable = false;
     try {
+      expect(runtime.drainSessionEventPublications).toBe(state.drainSessionPublications);
       await runtime.waitForPluginCacheRetirement();
       expect(state.waitForPluginCacheRetirement).toHaveBeenCalledOnce();
     } finally {

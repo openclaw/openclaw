@@ -267,7 +267,7 @@ describe("ordered runner supplied intent after deletion", () => {
     expect(result.paths).toEqual([["channels", "custom", "accounts", "1", "name"]]);
   });
 
-  it("does not shift canonical numeric agent IDs after a legacy roster splice", async () => {
+  it("drops deleted canonical agent intent without moving surviving IDs", async () => {
     const result = await apply(
       {
         agents: {
@@ -278,25 +278,6 @@ describe("ordered runner supplied intent after deletion", () => {
           ],
         },
       },
-      [op("set", ["agents", "list", "1", "name"], "edited"), op("delete", ["agents", "list", "0"])],
-    );
-    expect(result.paths).toEqual([["agents", "entries", "1", "name"]]);
-    expect(result.config.agents?.entries).toEqual({
-      "1": { name: "edited" },
-      "2": { name: "two" },
-    });
-  });
-
-  it("drops deleted canonical agent intent without moving surviving IDs", async () => {
-    const result = await apply(
-      {
-        agents: {
-          list: [
-            { id: "0", name: "zero" },
-            { id: "1", name: "one" },
-          ],
-        },
-      },
       [
         op("set", ["agents", "list", "0", "name"], "removed"),
         op("set", ["agents", "list", "1", "name"], "survivor"),
@@ -304,6 +285,10 @@ describe("ordered runner supplied intent after deletion", () => {
       ],
     );
     expect(result.paths).toEqual([["agents", "entries", "1", "name"]]);
+    expect(result.config.agents?.entries).toEqual({
+      "1": { name: "survivor" },
+      "2": { name: "two" },
+    });
   });
 
   it("rebases a nested array below a canonical agent ID", async () => {
@@ -339,36 +324,6 @@ describe("ordered runner supplied intent after deletion", () => {
       op("delete", modelPath(8)),
     ]);
     expect(result.paths).toEqual([modelPath(1, "name")]);
-  });
-});
-
-describe("ordered writer policy after deletion", () => {
-  it("keeps final writer restoration on the shifted explicit leaf", async () => {
-    const authored = modelConfig(rows);
-    const resolved = modelConfig(resolvedRows);
-    const result = await apply(
-      resolved,
-      [op("set", modelPath(1, "name"), "${TARGET}"), op("delete", modelPath(0))],
-      authored,
-    );
-    expect(result.policyPaths).toEqual([modelPath(0, "name")]);
-    expect(
-      restoreEnvVarRefsFromResolved(result.config, authored, resolved, result.policyPaths),
-    ).toEqual(
-      modelConfig([
-        { id: "edited", name: "${TARGET}" },
-        { id: "untouched", name: "${OTHER_ALIAS}" },
-      ]),
-    );
-  });
-
-  it("removes deleted explicit leaf policy without authorizing its survivor", async () => {
-    const result = await apply(
-      modelConfig(resolvedRows),
-      [op("set", modelPath(1, "name"), "${TARGET}"), op("delete", modelPath(1))],
-      modelConfig(rows),
-    );
-    expect(result.policyPaths).toBeUndefined();
   });
 });
 

@@ -3,6 +3,7 @@ import { constants as fsConstants, type Dirent, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import { filterStringRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as readOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parse as parseYaml } from "yaml";
@@ -14,7 +15,6 @@ import { JsonFileReadError, readJson, readJsonIfExists, writeJson } from "./json
 import { createManagedNpmPeerPlanArgs } from "./npm-managed-peer-plan.js";
 import type { ParsedRegistryNpmSpec } from "./npm-registry-spec.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
-import { replaceFileAtomicSync } from "./replace-file.js";
 import { createSafeNpmInstallEnv } from "./safe-package-install.js";
 import { UPDATE_NETWORK_TIMEOUT_MS } from "./update-network-budget.js";
 

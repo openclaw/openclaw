@@ -17,6 +17,13 @@ const RELEASE_PUBLISH_PARENT_STATE_POLICIES = new Set([
 ]);
 const GH_COMMAND_TIMEOUT_MS = 60_000;
 
+function isLiveWorkflowRun(run) {
+  return (
+    ["in_progress", "waiting", "queued", "requested", "pending"].includes(run?.status) &&
+    run?.conclusion === null
+  );
+}
+
 function fail(message) {
   throw new Error(message);
 }
@@ -95,9 +102,6 @@ export function resolveReleaseToolingIdentity({
     ? parseIdentityJson(requestedIdentityJson)
     : undefined;
   if (!requested) {
-    if (contract !== "1" && contract !== "2") {
-      fail(`release tooling contract ${contract} requires explicit trusted workflow identity.`);
-    }
     if (!directRoute) {
       fail("release-ci and protected-tag workflows require explicit trusted workflow identity.");
     }
@@ -268,7 +272,7 @@ export function validateReleasePublishParentRun({
   if (workflowFullRef && workflowFullRef !== parentFullRef) {
     fail("release publish parent run workflow full ref does not match trusted tooling.");
   }
-  const active = run?.status === "in_progress" && !run?.conclusion;
+  const active = isLiveWorkflowRun(run);
   const completedSuccess = run?.status === "completed" && run?.conclusion === "success";
   const completedFailure = run?.status === "completed" && run?.conclusion === "failure";
   if (
@@ -355,7 +359,7 @@ export function verifyReleaseWorkflowRun({
     headBranch: ref,
     workflowPath: path,
     event,
-    status: runStatePolicy === "active" ? "in_progress" : "completed",
+    status: true,
     conclusion: runStatePolicy === "active" ? null : "success",
   };
   const actual = {
@@ -366,7 +370,7 @@ export function verifyReleaseWorkflowRun({
     headBranch: run.head_branch,
     workflowPath: refSeparator === -1 ? observedPath : observedPath.slice(0, refSeparator),
     event: run.event,
-    status: run.status,
+    status: runStatePolicy === "active" ? isLiveWorkflowRun(run) : run.status === "completed",
     conclusion: run.conclusion,
   };
   for (const key of Object.keys(expected)) {
@@ -401,8 +405,10 @@ export function verifyReleaseToolingIdentity({
     workflowSha,
   });
 
+  let tagRef;
+  let branchRef;
+  let mainComparisonStatus;
   if (identity.route === "protected-tag") {
-    let tagRef;
     try {
       tagRef = parseJson(
         runGh([
@@ -416,27 +422,7 @@ export function verifyReleaseToolingIdentity({
     } catch (error) {
       throw new Error("protected release tooling tag is missing or unreadable.", { cause: error });
     }
-    const validated = validateReleaseToolingIdentity({
-      allowPrevalidatedRef,
-      tagRef,
-      workflowFullRef,
-      workflowRef,
-      workflowSha,
-    });
-    validateParentRunIfRequested({
-      identity: validated,
-      releasePublishFullRef,
-      releasePublishParentStatePolicy,
-      releasePublishRef,
-      releasePublishRunAttempt,
-      releasePublishRunId,
-      repository: normalizedRepository,
-      runGh,
-    });
-    return validated;
-  }
-
-  if (identity.route === "main") {
+  } else if (identity.route === "main") {
     let comparison;
     try {
       comparison = parseJson(
@@ -454,45 +440,29 @@ export function verifyReleaseToolingIdentity({
     } catch (error) {
       throw new Error("main release tooling ancestry could not be verified.", { cause: error });
     }
-    const validated = validateReleaseToolingIdentity({
-      allowPrevalidatedRef,
-      mainComparisonStatus: isRecord(comparison) ? comparison.status : undefined,
-      workflowFullRef,
-      workflowRef,
-      workflowSha,
-    });
-    validateParentRunIfRequested({
-      identity: validated,
-      releasePublishFullRef,
-      releasePublishParentStatePolicy,
-      releasePublishRef,
-      releasePublishRunAttempt,
-      releasePublishRunId,
-      repository: normalizedRepository,
-      runGh,
-    });
-    return validated;
-  }
-
-  let branchRef;
-  try {
-    branchRef = parseJson(
-      runGh([
-        "api",
-        `repos/${normalizedRepository}/git/ref/heads/${identity.ref}`,
-        "--method",
-        "GET",
-      ]),
-      "prevalidated release tooling branch",
-    );
-  } catch (error) {
-    throw new Error("prevalidated release tooling branch is missing or unreadable.", {
-      cause: error,
-    });
+    mainComparisonStatus = isRecord(comparison) ? comparison.status : undefined;
+  } else {
+    try {
+      branchRef = parseJson(
+        runGh([
+          "api",
+          `repos/${normalizedRepository}/git/ref/heads/${identity.ref}`,
+          "--method",
+          "GET",
+        ]),
+        "prevalidated release tooling branch",
+      );
+    } catch (error) {
+      throw new Error("prevalidated release tooling branch is missing or unreadable.", {
+        cause: error,
+      });
+    }
   }
   const validated = validateReleaseToolingIdentity({
     allowPrevalidatedRef,
     branchRef,
+    tagRef,
+    mainComparisonStatus,
     workflowFullRef,
     workflowRef,
     workflowSha,

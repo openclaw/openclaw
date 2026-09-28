@@ -1,6 +1,8 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import chokidar from "chokidar";
-import { expect, vi, type TestContext } from "vitest";
+import { assert, expect, onTestFinished, vi, type TestContext } from "vitest";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type {
   ConfigFileSnapshot,
   ConfigWriteNotification,
@@ -8,6 +10,8 @@ import type {
 } from "../config/config.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import * as backoff from "../infra/backoff.js";
+import * as pluginLifecycleLease from "../plugins/plugin-lifecycle-lease.js";
 import {
   startGatewayConfigReloader as startGatewayConfigReloaderImpl,
   type GatewayConfigReloadTransactionOwnership,
@@ -20,6 +24,94 @@ let currentTest: { timeout: number; signal: AbortSignal } | undefined;
 
 export function prepareConfigReloadTest({ task, signal }: TestContext) {
   currentTest = { timeout: task.timeout, signal };
+}
+
+export function createPluginLifecycleLeaseTestClock() {
+  const leaseScope = new AsyncLocalStorage<boolean>();
+  const pendingBackoffs = new Set<{ dueAt: number }>();
+  let backoffScheduled = createDeferred();
+  const sleep = backoff.sleepWithAbort;
+  const sleepSpy = vi.spyOn(backoff, "sleepWithAbort").mockImplementation((ms, ...args) => {
+    const completion = sleep(ms, ...args);
+    if (leaseScope.getStore() && Number.isFinite(ms) && ms > 0) {
+      const pending = { dueAt: Date.now() + Math.max(1, Math.floor(ms)) };
+      pendingBackoffs.add(pending);
+      const scheduled = backoffScheduled;
+      backoffScheduled = createDeferred();
+      scheduled.resolve();
+      void completion.then(
+        () => pendingBackoffs.delete(pending),
+        () => pendingBackoffs.delete(pending),
+      );
+    }
+    return completion;
+  });
+  const withLease = pluginLifecycleLease.withPluginLifecycleLease;
+  let firstCompletion: ReturnType<typeof withLease> | undefined;
+  const leaseSpy = vi
+    .spyOn(pluginLifecycleLease, "withPluginLifecycleLease")
+    .mockImplementation((options, run) => {
+      const completion = leaseScope.run(true, () => withLease(options, run));
+      firstCompletion ??= completion;
+      return completion;
+    });
+  onTestFinished(() => {
+    leaseSpy.mockRestore();
+    sleepSpy.mockRestore();
+  });
+  const waitFor = async <T>(completion: Promise<T>): Promise<T> => {
+    const settlement = completion.then(
+      () => "settled",
+      () => "settled",
+    );
+    for (;;) {
+      const backoffReady =
+        pendingBackoffs.size > 0
+          ? Promise.resolve("backoff")
+          : backoffScheduled.promise.then(() => "backoff");
+      if ((await Promise.race([settlement, backoffReady])) === "settled") {
+        return await completion;
+      }
+      // Worker replies can schedule lease backoff after a fake timer advance ends.
+      // Advance only for an observed lease delay; never poll a real clock for completion.
+      const next = Math.min(...[...pendingBackoffs].map(({ dueAt }) => dueAt));
+      if (Number.isFinite(next)) {
+        await vi.advanceTimersByTimeAsync(Math.max(0, next - Date.now()));
+      }
+    }
+  };
+  return {
+    waitFor,
+    async waitForFirstLease() {
+      assert.isDefined(firstCompletion);
+      await waitFor(firstCompletion);
+    },
+  };
+}
+
+export function createReloadWarningObserver() {
+  let record: ((message: string) => void) | undefined;
+  return {
+    observe: (message: string) => record?.(message),
+    next: (text: string) =>
+      new Promise<void>((resolve) => {
+        record = (message) => {
+          if (message.includes(text)) {
+            record = undefined;
+            resolve();
+          }
+        };
+      }),
+  };
+}
+
+export function createRecoveryRestartMock() {
+  const emitted = createDeferred();
+  const requestRecoveryRestart = vi.fn(() => {
+    emitted.resolve();
+    return { status: "emitted" as const };
+  });
+  return { requestRecoveryRestart, restartEmitted: emitted.promise };
 }
 
 export function startGatewayConfigReloader(

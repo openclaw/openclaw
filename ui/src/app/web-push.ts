@@ -1,4 +1,3 @@
-// Application-owned browser push subscription lifecycle.
 import { isIosBrowserPlatform } from "../lib/browser-platform.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";

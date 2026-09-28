@@ -367,12 +367,6 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
             return nil
         }
         let tls = payload.tls ?? true
-        if !tls, tlsFingerprintSha256 != nil {
-            return nil
-        }
-        if !tls, !LoopbackHost.isLocalNetworkHost(host) {
-            return nil
-        }
         return GatewayConnectDeepLink.validated(
             host: host,
             port: payload.port ?? defaultGatewayPort(tls: tls),
@@ -405,12 +399,6 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
             return nil
         }
         let tls = scheme == "wss" || scheme == "https"
-        if !tls, tlsFingerprintSha256 != nil {
-            return nil
-        }
-        if !tls, !LoopbackHost.isLocalNetworkHost(hostname) {
-            return nil
-        }
         return GatewayConnectDeepLink.validated(
             host: hostname,
             port: parsed.port ?? defaultGatewayPort(tls: tls),
@@ -602,9 +590,6 @@ public enum DeepLinkParser {
                 port = parsedPort
             } else {
                 port = defaultGatewayPort(tls: tls)
-            }
-            if !tls, !LoopbackHost.isLocalNetworkHost(hostParam) {
-                return nil
             }
             guard let link = GatewayConnectDeepLink.validated(
                 host: hostParam,

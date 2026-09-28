@@ -13,6 +13,7 @@ import {
   validateSessionsFilesListParams,
   validateSessionsFilesSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
@@ -28,6 +29,7 @@ import {
 } from "../session-transcript-readers.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { resolveSessionWorkspaceRoots } from "../session-workspace-roots.js";
+import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
 import {
   execOpenPath,
   formatOpenPathError,
@@ -53,7 +55,6 @@ import {
   type LoadedSessionFiles,
   type TouchedFile,
 } from "./workspace-files.js";
-import { WORKSPACE_PREVIEW_MAX_BYTES } from "./workspace-fs.js";
 
 type FileKind = TouchedFile["kind"];
 
@@ -300,7 +301,9 @@ export function resolveLocalSessionWorkspaceRoot(params: {
   agentId?: string;
 }): string | undefined {
   const loaded = loadSessionFileRoot(params);
-  return loaded.entry?.execNode ? undefined : loaded.root;
+  return loaded.entry?.execNode || (loaded.root && getAgentWorkspaceAccess(loaded.root))
+    ? undefined
+    : loaded.root;
 }
 
 async function loadSessionFiles(params: {
@@ -449,7 +452,11 @@ async function handleSessionFilesRead(
           ? await listRepositoryArtifacts(loaded.repository, query)
           : loaded.repository
             ? await loaded.repository.inspect("list", query)
-            : await listSessionWorkspaceFiles({ ...loaded, ...query });
+            : await listSessionWorkspaceFiles({
+                ...loaded,
+                ...query,
+                assertCurrent: () => read?.assertCurrent(),
+              });
       read?.assertCurrent();
     } else {
       const query = { files: loaded.files, path: request.params.path };
@@ -458,7 +465,11 @@ async function handleSessionFilesRead(
           ? await getRepositoryArtifact(loaded.repository, request.params.path)
           : loaded.repository
             ? await loaded.repository.inspect("get", query)
-            : await getSessionWorkspaceFile({ ...loaded, ...query });
+            : await getSessionWorkspaceFile({
+                ...loaded,
+                ...query,
+                assertCurrent: () => read?.assertCurrent(),
+              });
       read?.assertCurrent();
       const { file } = fileResult;
       if (!file || file.missing) {
@@ -595,11 +606,13 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
         });
         return;
       }
-      if (loaded.entry?.execNode) {
+      if (loaded.entry?.execNode || getAgentWorkspaceAccess(workspaceRoot)) {
         respond(true, {
           ok: false,
           path: workspaceRoot,
-          error: "Cannot reveal this workspace because the session runs on an exec node.",
+          error: loaded.entry?.execNode
+            ? "Cannot reveal this workspace because the session runs on an exec node."
+            : "Cannot reveal this workspace because its files live on a remote host.",
         });
         return;
       }

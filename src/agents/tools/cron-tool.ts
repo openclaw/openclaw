@@ -1,8 +1,3 @@
-/**
- * cron built-in tool.
- *
- * Manages scheduled jobs, wake/run actions, delivery context, and reminder-style payload normalization.
- */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -79,8 +74,23 @@ export {
   replaceWithEffectiveCronCreatorToolAllowlist,
 } from "./cron-tool-creator-cap.js";
 
-function isMissingOrEmptyObject(value: unknown): boolean {
-  return !value || (isRecord(value) && Object.keys(value).length === 0);
+function readCronToolJob(params: Record<string, unknown>, action: "add" | "update") {
+  let recovered = false;
+  // Models sometimes flatten job fields beside action; create requires a schedule/payload signal.
+  if (!params.job || (isRecord(params.job) && Object.keys(params.job).length === 0)) {
+    const synthetic = recoverCronObjectFromFlatParams(params);
+    if (synthetic.found && (action === "update" || hasCronCreateSignal(synthetic.value))) {
+      params.job = synthetic.value;
+      recovered = true;
+    }
+  }
+  if (!params.job || typeof params.job !== "object") {
+    throw new Error("job required");
+  }
+  return {
+    job: canonicalizeCronToolObject(params.job as Record<string, unknown>),
+    recovered,
+  };
 }
 
 function readCronJobIdParam(params: Record<string, unknown>) {
@@ -101,17 +111,13 @@ function readCronSelfRemoveOnlyJobId(opts: CronToolOptions | undefined) {
   return opts?.selfRemoveOnlyJobId?.trim() || undefined;
 }
 
-function isCronSelfIntrospectionAction(action: string) {
-  return action === "status" || action === "list";
-}
-
 function assertCronSelfRemoveScope(
   opts: CronToolOptions | undefined,
   action: string,
   params: Record<string, unknown>,
 ) {
   const selfRemoveOnlyJobId = readCronSelfRemoveOnlyJobId(opts);
-  if (!selfRemoveOnlyJobId || isCronSelfIntrospectionAction(action)) {
+  if (!selfRemoveOnlyJobId || action === "status" || action === "list") {
     return;
   }
   if (["next_check", "get", "remove", "runs"].includes(action)) {
@@ -121,10 +127,6 @@ function assertCronSelfRemoveScope(
     }
   }
   throw new Error(CRON_SELF_REMOVE_SCOPE_ERROR);
-}
-
-function filterCronStatusResultForSelfScope(result: unknown): unknown {
-  return { enabled: isRecord(result) && result.enabled === true };
 }
 
 function formatCronTerminalPresentation(
@@ -201,8 +203,8 @@ SCHEDULE:
 - {kind:"cron",expr,tz?:"IANA"}: expr is wall time in tz; never pre-convert to UTC; no tz=gateway host local. 18:00 Shanghai => {expr:"0 18 * * *",tz:"Asia/Shanghai"}.${streamScheduleLine}
 
 TARGET+PAYLOAD:
-- "current" (agentTurn default) = this conversation: the run stays detached, reads bounded chat context, then commits its final visible assistant result to this conversation's durable history. Self-wakeup/"continue later"/loop = at|every + agentTurn + current.
-- "isolated" = fresh detached session (shows in \`openclaw tasks\`); standalone background work.
+- "current" (agentTurn default) = this conversation: the run stays detached, reads bounded chat context, then commits its final visible assistant result to this conversation's durable history. Delayed work/loop = at|every + agentTurn + current. This is not a resumed parent turn: it uses the scheduled agent workspace, not the conversation worktree. Verify required checkout/tool access before delegating repository work; result delivery alone does not resume the original agent.
+- "isolated" = fresh detached session; standalone background work recorded in cron run history.
 - "main" = heartbeat lane; payload {kind:"systemEvent",text} (systemEvent default target).
 - "session:<key>" = named session.
 - {kind:"agentTurn",message}; timeoutSeconds 0=none.
@@ -225,17 +227,23 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
   const requesterAuthority = bindCronRequesterGrant(opts?.runId);
   // Trigger-gated surfaces default on, matching cron/service/jobs-validation.ts.
   const triggersEnabled = opts?.config?.cron?.triggers?.enabled !== false;
+  const selfRemoveOnly = Boolean(readCronSelfRemoveOnlyJobId(opts));
   const tool: AnyAgentTool = {
     label: "Automations",
     name: AUTOMATIONS_TOOL_NAME,
     displaySummary: CRON_TOOL_DISPLAY_SUMMARY,
-    description: managementAuthority?.managementOnly
-      ? 'Manage any existing automation on this Gateway with the admitted automation management authority. Actions: list [includeDisabled,limit,offset] (compact summaries with timing; follow nextOffset); get jobId (full schedule, payload, and delivery details); update jobId job (partial patch, null clears); run jobId (runMode:"force" runs now); remove jobId. Creator attribution and scheduled execution policy stay intact. Use the Automations page for other actions.'
-      : buildCronToolDescription({ triggersEnabled }),
+    description: selfRemoveOnly
+      ? managementAuthority?.managementOnly
+        ? "Inspect or remove only the current automation. Actions: list [includeDisabled], get jobId, remove jobId. Use the current job ID; other jobs and management actions are unavailable."
+        : 'Inspect or remove only the current automation. Actions: status; list [includeDisabled]; get/runs/remove jobId; next_check in:"15m" for this paced run. Use the current job ID. To stop a finished job, remove it; creating/updating/running jobs and waking sessions are unavailable. Return the task result; the scheduler owns delivery.'
+      : managementAuthority?.managementOnly
+        ? 'Manage any existing automation on this Gateway with the admitted automation management authority. Actions: list [includeDisabled,limit,offset] (compact summaries with timing; follow nextOffset); get jobId (full schedule, payload, and delivery details); update jobId job (partial patch, null clears); run jobId (runMode:"force" runs now); remove jobId. Creator attribution and scheduled execution policy stay intact. Use the Automations page for other actions.'
+        : buildCronToolDescription({ triggersEnabled }),
     outputSchema: CronToolOutputSchema,
     parameters: createCronToolSchema({
       agentSessionKey: opts?.agentSessionKey,
       triggersEnabled,
+      selfRemoveOnly,
       management: managementAuthority
         ? managementAuthority.managementOnly
           ? "only"
@@ -345,7 +353,7 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
             const result = await callGateway("cron.status", gatewayOpts, {});
             return jsonResult(
               readCronSelfRemoveOnlyJobId(opts)
-                ? filterCronStatusResultForSelfScope(result)
+                ? { enabled: isRecord(result) && result.enabled === true }
                 : result,
             );
           }
@@ -407,36 +415,18 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
               }),
             );
           }
-          case "get": {
+          case "get":
+          case "remove":
+          case "runs": {
             const id = requireCronJobIdParam(params);
             return jsonResult(
-              await callGateway("cron.get", gatewayOpts, {
+              await callGateway(`cron.${action}`, gatewayOpts, {
                 id,
               }),
             );
           }
           case "add": {
-            // Flat-params recovery: non-frontier models (e.g. Grok) sometimes flatten
-            // job properties to the top level alongside `action` instead of nesting
-            // them inside `job`. When `params.job` is missing or empty, reconstruct
-            // a synthetic job object from any recognised top-level job fields.
-            // See: https://github.com/openclaw/openclaw/issues/11310
-            if (isMissingOrEmptyObject(params.job)) {
-              const synthetic = recoverCronObjectFromFlatParams(params);
-              // Only use the synthetic job if at least one meaningful field is present
-              // (schedule, payload, message, or text are the minimum signals that the
-              // LLM intended to create a job).
-              if (synthetic.found && hasCronCreateSignal(synthetic.value)) {
-                params.job = synthetic.value;
-              }
-            }
-
-            if (!params.job || typeof params.job !== "object") {
-              throw new Error("job required");
-            }
-            const canonicalJob = stripCronCreateNullClears(
-              canonicalizeCronToolObject(params.job as Record<string, unknown>),
-            );
+            const canonicalJob = stripCronCreateNullClears(readCronToolJob(params, "add").job);
             assertNoCronShellExecution(canonicalJob);
             assertCronDeliveryInputNonBlankFields(canonicalJob.delivery);
             assertCronPacingInput(canonicalJob.pacing);
@@ -485,27 +475,21 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
               : opts?.creatorToolAllowlistCaptureRef;
             capCronJobToolsAllowOnCreate(job, creatorToolAllowlist);
             assertInheritedCronToolCaptureReady(job, creatorToolAllowlistCaptureRef);
-            if (job && typeof job === "object") {
-              const { mainKey, alias } = resolveMainSessionAlias(runtimeConfig);
-              const resolvedSessionKey = opts?.agentSessionKey
-                ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias, mainKey })
-                : undefined;
-              const sessionTarget = normalizeLowercaseStringOrEmpty(
-                (job as { sessionTarget?: unknown }).sessionTarget,
-              );
-              if (!("sessionKey" in job) && resolvedSessionKey && sessionTarget !== "isolated") {
-                (job as { sessionKey?: string }).sessionKey = resolvedSessionKey;
-              }
+            const { mainKey, alias } = resolveMainSessionAlias(runtimeConfig);
+            const resolvedSessionKey = opts?.agentSessionKey
+              ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias, mainKey })
+              : undefined;
+            const sessionTarget = normalizeLowercaseStringOrEmpty(job.sessionTarget);
+            if (!("sessionKey" in job) && resolvedSessionKey && sessionTarget !== "isolated") {
+              job.sessionKey = resolvedSessionKey;
             }
 
             if (
               (opts?.agentSessionKey || opts?.currentDeliveryContext) &&
-              job &&
-              typeof job === "object" &&
               "payload" in job &&
               (job as { payload?: { kind?: string } }).payload?.kind === "agentTurn"
             ) {
-              const deliveryValue = (job as { delivery?: unknown }).delivery;
+              const deliveryValue = job.delivery;
               const delivery = isRecord(deliveryValue) ? deliveryValue : undefined;
               const modeRaw = typeof delivery?.mode === "string" ? delivery.mode : "";
               const mode = normalizeLowercaseStringOrEmpty(modeRaw);
@@ -535,7 +519,7 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
                   agentSessionKey: opts.agentSessionKey,
                 });
                 if (inferred) {
-                  (job as { delivery?: unknown }).delivery = {
+                  job.delivery = {
                     ...inferred,
                     ...delivery,
                   } satisfies CronDelivery;
@@ -545,8 +529,6 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
 
             const contextMessages = readNonNegativeIntegerParam(params, "contextMessages") ?? 0;
             if (
-              job &&
-              typeof job === "object" &&
               "payload" in job &&
               (job as { payload?: { kind?: string; text?: string } }).payload?.kind ===
                 "systemEvent"
@@ -575,21 +557,9 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
           case "update": {
             const id = requireCronJobIdParam(params);
 
-            // Flat-params recovery for update patches
-            let recoveredFlatPatch = false;
-            if (isMissingOrEmptyObject(params.job)) {
-              const synthetic = recoverCronObjectFromFlatParams(params);
-              if (synthetic.found) {
-                params.job = synthetic.value;
-                recoveredFlatPatch = true;
-              }
-            }
-
-            if (!params.job || typeof params.job !== "object") {
-              throw new Error("job required");
-            }
-            const canonicalPatch = canonicalizeCronToolObject(
-              params.job as Record<string, unknown>,
+            const { job: canonicalPatch, recovered: recoveredFlatPatch } = readCronToolJob(
+              params,
+              "update",
             );
             if (!managementAuthority) {
               assertNoCronShellExecution(canonicalPatch);
@@ -629,14 +599,6 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
               }),
             );
           }
-          case "remove": {
-            const id = requireCronJobIdParam(params);
-            return jsonResult(
-              await callGateway("cron.remove", gatewayOpts, {
-                id,
-              }),
-            );
-          }
           case "run": {
             const id = requireCronJobIdParam(params);
             const runMode =
@@ -645,14 +607,6 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
               await callGateway("cron.run", gatewayOpts, {
                 id,
                 mode: runMode,
-              }),
-            );
-          }
-          case "runs": {
-            const id = requireCronJobIdParam(params);
-            return jsonResult(
-              await callGateway("cron.runs", gatewayOpts, {
-                id,
               }),
             );
           }

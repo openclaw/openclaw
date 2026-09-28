@@ -5,6 +5,7 @@
  * copies instead of reusing host-path snapshots.
  */
 import path from "node:path";
+import { indexFirstByKey } from "../../shared/dedupe-by-key.js";
 import { formatSkillsForPromptBounded } from "../../skills/loading/skill-prompt-limits.js";
 import type {
   SkillEligibilityContext,
@@ -100,19 +101,6 @@ export function mapSandboxSkillEntriesForPrompt(params: {
   });
 }
 
-export function createSandboxPromptEntryLoader(params: {
-  loadEntries: () => SkillEntry[] | Promise<SkillEntry[]>;
-  skillsWorkspaceDir: string;
-  skillsPromptWorkspaceDir: string;
-}): () => Promise<SkillEntry[]> {
-  return async () =>
-    mapSandboxSkillEntriesForPrompt({
-      entries: await params.loadEntries(),
-      skillsWorkspaceDir: params.skillsWorkspaceDir,
-      skillsPromptWorkspaceDir: params.skillsPromptWorkspaceDir,
-    }) ?? [];
-}
-
 function mapSandboxSkillUsagePaths(params: {
   paths?: SkillUsagePath[];
   skillsWorkspaceDir: string;
@@ -168,13 +156,7 @@ export function resolveSandboxSkillRuntimeInputs(params: {
         ? params.skillsSnapshot
         : undefined;
     if (params.skillsSnapshot?.librarySelections?.length) {
-      const usageBySkillName = new Map<string, SkillUsagePath>();
-      for (const usage of skillUsagePaths ?? []) {
-        // Duplicate names keep their first delivered path.
-        if (!usageBySkillName.has(usage.skillName)) {
-          usageBySkillName.set(usage.skillName, usage);
-        }
-      }
+      const usageBySkillName = indexFirstByKey(skillUsagePaths ?? [], (usage) => usage.skillName);
       const resolvedSkills = params.skillsSnapshot.resolvedSkills?.map((skill) => {
         const materialized = usageBySkillName.get(skill.name);
         if (!materialized) {

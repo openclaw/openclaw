@@ -29,7 +29,11 @@ function getFallbacks(cfg: OpenClawConfig, key: DefaultsFallbackKey): string[] {
 
 function patchDefaultsFallbacks(
   cfg: OpenClawConfig,
-  params: { key: DefaultsFallbackKey; fallbacks: string[]; models?: Record<string, unknown> },
+  params: {
+    key: DefaultsFallbackKey;
+    fallbacks: string[];
+    models?: Record<string, AgentModelEntryConfig>;
+  },
 ): OpenClawConfig {
   const existing = toAgentModelListLike(cfg.agents?.defaults?.[params.key]);
   return {
@@ -39,7 +43,7 @@ function patchDefaultsFallbacks(
       defaults: {
         ...cfg.agents?.defaults,
         [params.key]: mergePrimaryFallbackConfig(existing, { fallbacks: params.fallbacks }),
-        ...(params.models ? { models: params.models as never } : undefined),
+        ...(params.models ? { models: params.models } : undefined),
       },
     },
   };
@@ -92,9 +96,7 @@ export async function addFallbackCommand(
     (cfg, context) => {
       const { runtimeConfig } = context;
       const resolved = resolveModelTarget({ raw: modelRaw, cfg: runtimeConfig });
-      const nextModels = {
-        ...cfg.agents?.defaults?.models,
-      } as Record<string, AgentModelEntryConfig>;
+      const nextModels = { ...cfg.agents?.defaults?.models };
       const targetKey = upsertCanonicalModelConfigEntry(nextModels, resolved, context);
       const existing = getFallbacks(cfg, params.key);
       const existingKeys = resolveModelKeysFromEntries({

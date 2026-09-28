@@ -90,7 +90,7 @@ describe("cross-OS release checks workflow", () => {
             .filter((entry) => entry.os_id === osId && entry.suite === suite)
             .map((entry) => entry.node_version),
         ).toEqual([
-          osId === "windows" && suite === "packaged-fresh" ? "24.16.0" : "24.19.0",
+          osId === "windows" && suite === "packaged-fresh" ? "24.16.0" : "24.21.0",
           "26.1.0",
         ]);
       }
@@ -100,7 +100,7 @@ describe("cross-OS release checks workflow", () => {
     ).toEqual({
       artifact_name: "windows",
       display_name: "Windows",
-      node_version: "24.19.0",
+      node_version: "24.21.0",
       lane: "upgrade",
       os_id: "windows",
       runner: "blacksmith-32vcpu-windows-2025",
@@ -112,7 +112,7 @@ describe("cross-OS release checks workflow", () => {
     ).toEqual({
       artifact_name: "linux",
       display_name: "Linux",
-      node_version: "24.19.0",
+      node_version: "24.21.0",
       lane: "fresh",
       os_id: "ubuntu",
       runner: "blacksmith-8vcpu-ubuntu-2404",
@@ -124,7 +124,7 @@ describe("cross-OS release checks workflow", () => {
     ).toEqual({
       artifact_name: "macos",
       display_name: "macOS",
-      node_version: "24.19.0",
+      node_version: "24.21.0",
       lane: "fresh",
       os_id: "macos",
       runner: "blacksmith-6vcpu-macos-15",
@@ -150,7 +150,7 @@ describe("cross-OS release checks workflow", () => {
       {
         artifact_name: "windows",
         display_name: "Windows",
-        node_version: "24.19.0",
+        node_version: "24.21.0",
         lane: "upgrade",
         os_id: "windows",
         runner: "blacksmith-32vcpu-windows-2025",
@@ -893,12 +893,7 @@ describe("cross-OS release checks workflow", () => {
     // Lane tooling has no installed packages. Keep the fixture outside the checkout
     // so a developer's node_modules cannot satisfy an accidental runtime import.
     const fixture = tempDirs.make("cross-os-no-packages-");
-    for (const source of [
-      "package.json",
-      "scripts",
-      "packages/normalization-core",
-      "src/infra/file-read.ts",
-    ]) {
+    for (const source of ["package.json", "scripts", "packages/normalization-core"]) {
       const target = join(fixture, source);
       mkdirSync(dirname(target), { recursive: true });
       cpSync(source, target, { recursive: true });

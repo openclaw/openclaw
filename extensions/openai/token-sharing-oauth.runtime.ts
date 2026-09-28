@@ -190,7 +190,9 @@ async function readCredential(params: {
       tokenEndpoint: TOKEN_ENDPOINT,
       grantedScope: scope,
       authFlow: sharing ? TOKEN_SHARING_AUTH_FLOW : IDENTITY_AUTH_FLOW,
-      displayName: sharing ? "Sign in with ChatGPT" : "Sign in with ChatGPT (identity only)",
+      displayName: sharing
+        ? "Sign in with ChatGPT (Beta)"
+        : "Sign in with ChatGPT (Beta, identity only)",
     },
   };
 }
@@ -386,7 +388,7 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
     await withOAuthLoginAbort(
       ctx.prompter.note(
         [
-          "Authorize eligible Responses API calls using your ChatGPT allowance. Token sharing does not grant access to conversations, Codex history, or connected apps.",
+          "Authorize eligible Responses API calls using your Codex allowance. Token sharing does not grant access to conversations, Codex history, or connected apps.",
           ...(registering
             ? []
             : [
@@ -399,7 +401,7 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
             : []),
           ...(ctx.prompter.openUrl ? [] : [`Sign-in URL: ${url.toString()}`]),
         ].join("\n\n"),
-        "Sign in with ChatGPT",
+        "Sign in with ChatGPT (Beta)",
       ),
       owner.signal,
     );
@@ -462,7 +464,7 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
       ...(sharing ? {} : { configPatch: {} }),
       notes: [
         sharing
-          ? "ChatGPT token sharing is connected. Eligible Responses requests use your ChatGPT allowance."
+          ? "ChatGPT token sharing is connected. Eligible Responses requests use your Codex allowance."
           : "ChatGPT sign-in succeeded, but token sharing is disabled. Sign in again and enable sharing, or explicitly choose another inference credential.",
       ],
     });

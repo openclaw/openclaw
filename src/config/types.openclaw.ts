@@ -28,51 +28,13 @@ import type { ToolsConfig } from "./types.tools.js";
 import type { TtsConfig } from "./types.tts.js";
 import type { ProxyConfig } from "./zod-schema.proxy.js";
 import type { OpenClawSchemaShape } from "./zod-schema.root-shape.js";
+import type { SecuritySchema } from "./zod-schema.root-support.js";
 
 /** One persisted suppression for a known security audit finding. */
-export type SecurityAuditSuppression = {
-  /** Exact security audit check id to suppress. */
-  checkId: string;
-  /** Optional case-insensitive substring required in the finding title. */
-  titleIncludes?: string;
-  /** Optional case-insensitive substring required in the finding detail. */
-  detailIncludes?: string;
-  /** Operator rationale for accepting this standing finding. */
-  reason?: string;
-};
-
-export type SecurityConfig = {
-  /** Security audit policy and accepted standing findings. */
-  audit?: {
-    /** Accepted security audit findings to omit from active summary/findings. */
-    suppressions?: SecurityAuditSuppression[];
-  };
-  installPolicy?: {
-    /**
-     * Enable operator-owned install policy. When true without an exec command,
-     * install/update attempts fail closed for supported targets.
-     */
-    enabled?: boolean;
-    /** Supported install targets. Omit to cover every supported target. */
-    targets?: Array<"skill" | "plugin">;
-    /**
-     * Trusted local policy command. Transport intentionally mirrors exec
-     * SecretRef provider fields: absolute command, no shell, bounded output,
-     * explicit env allowlist, and secure path checks.
-     */
-    exec?: {
-      source: "exec";
-      command: string;
-      args?: string[];
-      timeoutMs?: number;
-      noOutputTimeoutMs?: number;
-      maxOutputBytes?: number;
-      env?: Record<string, string>;
-      passEnv?: string[];
-      trustedDirs?: string[];
-    };
-  };
-};
+export type SecurityConfig = NonNullable<z.input<typeof SecuritySchema>>;
+export type SecurityAuditSuppression = NonNullable<
+  NonNullable<SecurityConfig["audit"]>["suppressions"]
+>[number];
 
 export type SurfaceConfigEntry = NonNullable<z.input<typeof OpenClawSchemaShape.surfaces>>[string];
 

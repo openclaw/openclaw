@@ -184,7 +184,9 @@ it.for(["cases", "sequence"])(
         "sessionInfo",
       );
     }
-    expect((await request("sessions.list")).payload.sessions).toEqual([row]);
+    expect((await request("sessions.list")).payload.sessions).toEqual([
+      { ...row, snapshotAt: expect.any(Number) },
+    ]);
     // Wire-only list responses do not declare a canonical stored row for describe.
     expect((await request("sessions.describe", { key: row.key })).payload.session).toBeNull();
     expect((await request("sessions.resolve", { reference: { key: row.key } })).payload).toEqual({
@@ -442,9 +444,9 @@ it("replaces canonical rows and membership without retaining omitted fields", as
       ts: expect.any(Number),
       sessions: [replacement],
     });
-    expect(list.sessions).toEqual([replacement]);
+    expect(list.sessions).toEqual([{ ...replacement, snapshotAt: expect.any(Number) }]);
     expect((await currentRequest("sessions.describe", { key: notes.key })).payload.session).toEqual(
-      replacement,
+      { ...replacement, snapshotAt: expect.any(Number) },
     );
     for (const method of ["chat.history", "chat.startup"]) {
       expect((await currentRequest(method, { sessionKey: notes.key })).payload).toMatchObject({

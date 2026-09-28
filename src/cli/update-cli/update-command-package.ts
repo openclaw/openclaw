@@ -7,12 +7,14 @@ import {
   runGlobalPackageUpdateSteps,
   type PackageUpdateTransaction,
 } from "../../infra/package-update-steps.js";
+import type { PackageActivationOptions } from "../../infra/package-update-swap-contract.js";
 import { PackageUpdateActivationError } from "../../infra/package-update-swap-contract.js";
 import {
   failedPackageVerificationStep,
   markPackagePostInstallDoctorAdvisory,
 } from "../../infra/package-update-verification-step.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
 import {
   formatUpdateDoctorConfigWriteRefusal,
   getUpdateDoctorConfigFailureReason,
@@ -64,6 +66,7 @@ import {
   readUpdateConfigSnapshot,
   type UpdateConfigSnapshot,
 } from "./update-command-config-snapshot.js";
+import { recordUpdateDatabaseWrites } from "./update-command-database-receipts.js";
 import { withUpdateDoctorChild } from "./update-command-doctor-child.js";
 import { resolveUpdateTargetEnv } from "./update-command-service-env.js";
 export async function readPackageUpdateIdentity(root: string) {
@@ -91,6 +94,7 @@ type PackageDoctorOptions = {
         requester?: Readonly<UpdateRequester>;
         inputHash: string;
         changes: UpdateDoctorConfigChange[];
+        databaseBackup?: UpdateDatabaseBackup;
         assertCurrent: () => void;
         assertBoundChildCurrent: () => void;
         onStateHandoff?: () => void;
@@ -105,6 +109,7 @@ export function preparePackageDoctorContext(params: {
   requester?: Readonly<UpdateRequester>;
   inputHash?: string | null;
   changes: UpdateDoctorConfigChange[];
+  databaseBackup?: UpdateDatabaseBackup;
   assertCurrent: () => void;
   assertBoundChildCurrent: () => void;
   onStateHandoff?: () => void;
@@ -122,6 +127,7 @@ export function preparePackageDoctorContext(params: {
     requester: params.requester,
     inputHash: params.inputHash ?? hashConfigRaw(null),
     changes: params.changes,
+    databaseBackup: params.databaseBackup,
     assertCurrent: params.assertCurrent,
     assertBoundChildCurrent: params.assertBoundChildCurrent,
     onStateHandoff: params.onStateHandoff,
@@ -178,6 +184,16 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
     failure?: { error: unknown },
   ) => {
     let completionFailure = failure;
+    if (context?.databaseBackup) {
+      const receipt = recordUpdateDatabaseWrites(
+        context.databaseBackup,
+        doctorResult?.databaseWrites,
+        doctorStep,
+      );
+      if (receipt) {
+        params.progress?.onStepComplete?.({ ...receipt, index: 0, total: 0 });
+      }
+    }
     try {
       const refusal = doctorResult?.configWriteRefusal;
       const configWriteRefusal = refusal
@@ -271,6 +287,7 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
         termination: doctorStep.termination,
         advisory: doctorStep.advisory,
         warnings: doctorStep.warnings,
+        diagnostics: doctorStep.diagnostics,
         failureFacts: doctorStep.failureFacts,
         doctorLintFindings: doctorStep.doctorLintFindings,
         configChanges: doctorStep.configChanges,
@@ -322,7 +339,11 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
             {
               root: params.root,
               context: { ...context, assertRequesterCurrent: context.assertBoundChildCurrent },
-              input: { configInputHash: context.inputHash, repair: doctorPolicy.fix },
+              input: {
+                configInputHash: context.inputHash,
+                repair: doctorPolicy.fix,
+                databaseGenerations: context.databaseBackup?.sourceGenerations,
+              },
             },
             runDoctor,
           )
@@ -376,7 +397,10 @@ export async function prepareGitPackageExposure(
           ? normalizeFallbackFailureReason(failure.name)
           : "source-exposure-preparation-failed"),
       failure?.stderrTail ?? "Global source exposure did not reach the activation gate",
-      { failureFacts: failure?.failureFacts },
+      {
+        failureFacts: failure?.failureFacts,
+        stepResult: { steps: outcome.steps, failedStep: failure ?? undefined },
+      },
     );
   }
   return {
@@ -426,9 +450,11 @@ export type PackageInstallUpdateParams = {
   validateCandidate: (root: string) => Promise<UpdateStepResult[]>;
   beforeActivate: () => Promise<void>;
   assertCurrent?: () => void;
-  onTransaction: (transaction: PackageUpdateTransaction) => void;
+  reserveInstallSlot?: (root: string) => void;
+  onTransaction: (transaction: PackageUpdateTransaction) => void | Promise<void>;
   onConfigSnapshot?: PackageDoctorOptions["onConfigSnapshot"];
   getDoctorContext?: PackageDoctorOptions["getDoctorContext"];
+  getActivation?: () => PackageActivationOptions | undefined;
 };
 
 /** Retain one staged target while its runtime initializes a fresh profile. */
@@ -458,7 +484,12 @@ export async function stagePackageInstallUpdate(
   const completed = runPackageInstallUpdate(
     {
       ...params,
-      requirePackageReplacement: true,
+      // Admission pauses before the no-op decision, so its resumed caller can
+      // preserve an identical installation. Fresh-profile staging pauses later
+      // and must retain the candidate through initialization.
+      get requirePackageReplacement() {
+        return !params.pauseBeforeVerification || requireActive().requirePackageReplacement;
+      },
       beforeVerifyCandidate:
         params.pauseBeforeVerification || params.beforeVerifyCandidate
           ? async (root) => {
@@ -486,6 +517,9 @@ export async function stagePackageInstallUpdate(
         return await requireActive().validateCandidate(root);
       },
       beforeActivate: () => requireActive().beforeActivate(),
+      assertCurrent: () => requireActive().assertCurrent?.(),
+      reserveInstallSlot: (root) => requireActive().reserveInstallSlot?.(root),
+      getActivation: () => requireActive().getActivation?.(),
       onTransaction: (transaction) => requireActive().onTransaction(transaction),
       onConfigSnapshot: (snapshot) => requireActive().onConfigSnapshot?.(snapshot),
     },
@@ -499,7 +533,7 @@ export async function stagePackageInstallUpdate(
     throw new UpdatePreMutationError(
       ready.result.reason ?? "package-staging-failed",
       ready.result.failedStep?.stderrTail ?? "Package staging did not produce a target runtime.",
-      { failureFacts: ready.result.failedStep?.failureFacts },
+      { failureFacts: ready.result.failedStep?.failureFacts, stepResult: ready.result },
     );
   }
   return {
@@ -545,9 +579,7 @@ export async function runPackageInstallUpdate(
     });
   }
   const pkgRoot = installTarget.packageRoot;
-  const packageName =
-    (pkgRoot ? await readPackageName(pkgRoot) : await readPackageName(params.root)) ??
-    DEFAULT_PACKAGE_NAME;
+  const packageName = (await readPackageName(pkgRoot || params.root)) ?? DEFAULT_PACKAGE_NAME;
   const installSpec =
     params.installSpec ??
     resolveGlobalInstallSpec({
@@ -571,14 +603,17 @@ export async function runPackageInstallUpdate(
     resolveLifecycleNodeRunner: params.resolveLifecycleNodeRunner ?? (() => params.nodeRunner),
     beforeActivate: params.beforeActivate,
     assertCurrent: params.assertCurrent,
+    reserveInstallSlot: params.reserveInstallSlot,
     onTransaction: params.onTransaction,
+    getActivation: params.getActivation,
     installTarget,
     installSpec,
     packageName,
     packageRoot: pkgRoot,
     // Artifact equality cannot skip a method switch or retained-runtime staging.
-    requirePackageReplacement:
-      params.requirePackageReplacement === true || params.installKind === "git",
+    get requirePackageReplacement() {
+      return params.requirePackageReplacement === true || params.installKind === "git";
+    },
     runCommand: runCommandWithTimeout,
     timeoutMs: params.timeoutMs,
     workTimeoutMs: params.workTimeoutMs,

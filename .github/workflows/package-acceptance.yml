@@ -129,6 +129,11 @@ on:
         required: false
         default: ""
         type: string
+      allow_frozen_target_scenario_omissions:
+        description: Trusted opt-in to omit survivor scenarios absent from a canonical frozen target
+        required: false
+        default: false
+        type: boolean
       telegram_mode:
         description: Optional Telegram QA lane for the resolved package candidate
         required: true
@@ -425,7 +430,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.19.0"
+  NODE_VERSION: "24.21.0"
   PACKAGE_ARTIFACT_NAME: package-under-test-${{ github.run_id }}-${{ github.run_attempt }}
   TELEGRAM_PLUGIN_REGISTRY_ARTIFACT_NAME: package-acceptance-telegram-plugin-registry-${{ github.run_id }}-${{ github.run_attempt }}
 

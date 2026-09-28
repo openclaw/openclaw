@@ -1,11 +1,12 @@
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { SessionEntry } from "./types.js";
+
+export type SessionEntryCacheDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db">;
 
 export type SessionEntryCacheReadOptions = {
   cache: boolean;
   latest?: boolean;
   projection?: "full" | "list";
-  /** Uncached mixed snapshot: retain complete selected rows beside sibling metadata. */
-  fullEntryKeys?: readonly string[];
   /** Stream full JSON once, retaining prompt snapshots only for selected rows. Never cached. */
   retainFullEntry?: (sessionKey: string, entry: SessionEntry) => boolean;
   /** Topology admits metadata first; its worker owns participant hydration. Never cache this view. */
@@ -22,11 +23,31 @@ export type SessionSharingEntry = Pick<
   | "sessionId"
   | "updatedAt"
   | "lifecycleRevision"
+  | "archivedAt"
   | "visibility"
   | "incognito"
   | "createdActor"
   | "sandbox"
+  | "spawnedBy"
+  | "parentSessionKey"
+  | "sessionStartedAt"
 >;
+
+export function projectSessionSharingEntry(entry: SessionEntry): SessionSharingEntry {
+  return {
+    sessionId: entry.sessionId,
+    updatedAt: entry.updatedAt,
+    lifecycleRevision: entry.lifecycleRevision,
+    archivedAt: entry.archivedAt,
+    visibility: entry.visibility,
+    incognito: entry.incognito,
+    createdActor: entry.createdActor ? { ...entry.createdActor } : undefined,
+    sandbox: entry.sandbox,
+    spawnedBy: entry.spawnedBy,
+    parentSessionKey: entry.parentSessionKey,
+    sessionStartedAt: entry.sessionStartedAt,
+  };
+}
 
 export type SessionEntryPlaceholder = Readonly<{ sessionId: string }>;
 

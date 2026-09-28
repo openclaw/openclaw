@@ -277,8 +277,18 @@ describe("human personal namespace authority", () => {
         () => tool.execute("read", { action: "read", skill_id: created.entry.skillId }),
       );
       expect(JSON.stringify(result).length).toBeLessThan(2000);
-      expect(JSON.stringify(result)).toContain('contentIncluded\\":false');
-      expect(JSON.stringify(result)).toContain("Open My skills");
+      const text = result.content.find((block) => block.type === "text");
+      if (!text || typeof text.text !== "string") {
+        throw new Error("Expected a visible JSON read result");
+      }
+      const payload: unknown = JSON.parse(text.text);
+      expect(payload).toMatchObject({
+        contentIncluded: false,
+        omissionReason: "too-large",
+        nextAction: expect.stringContaining("Open My skills"),
+      });
+      expect(payload).not.toHaveProperty("content");
+      expect(result.details).toEqual(payload);
       expect(
         (await readSkillLibrary(libraryAuthority(owner), created.entry.skillId)).files[0]?.content
           .length,
@@ -335,6 +345,7 @@ it("serves worker Workshop through the same Gateway capability and rejects a los
       requestSessionsSend: unused,
       requestSessionsSpawn: unused,
       requestPortal: unused,
+      requestPresence: unused,
       requestSkillWorkshop: async (input) => {
         expect(validateWorkerSkillWorkshopParams(input)).toBe(true);
         return {

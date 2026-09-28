@@ -1,5 +1,5 @@
 import childProcess from "node:child_process";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   createDiagnosticFixtureRouting,
   diagnosticCanaries,
@@ -17,10 +17,19 @@ const readers = [
   },
 ];
 
-afterEach(() => vi.restoreAllMocks());
+beforeEach(() => {
+  vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+  // This suite owns the subprocess environment, independent of host native inspection.
+  vi.stubGlobal("SEALED_RUNTIME_BUILD", true);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 it.each(readers)("bounds $name by the supplied process allowance", ({ read }) => {
-  vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+  vi.spyOn(performance, "now").mockReturnValue(0);
   let elapsedMs = 0;
   vi.spyOn(childProcess, "execFileSync").mockImplementation((_file, _args, options) => {
     elapsedMs += options?.timeout ?? 0;
@@ -41,7 +50,6 @@ it.each(readers)(
       LC_ALL: "C",
       TZ: "UTC",
     });
-    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     await withSyntheticDiagnosticEnv(
       { ...routing, LC_ALL: "fr_FR.UTF-8", TZ: "Pacific/Honolulu" },
       async () => {

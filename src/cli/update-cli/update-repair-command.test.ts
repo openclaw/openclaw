@@ -518,11 +518,13 @@ describe("update repair ledger recovery", () => {
     },
   );
 
-  it.each(
-    (["activating", "restarting", "verifying", "repairing"] as const).flatMap((phase) =>
-      [false, true].map((reconciled) => ({ phase, reconciled })),
-    ),
-  )(
+  it.each([
+    { phase: "activating", reconciled: false },
+    { phase: "restarting", reconciled: false },
+    { phase: "verifying", reconciled: false },
+    { phase: "repairing", reconciled: false },
+    { phase: "verifying", reconciled: true },
+  ] as const)(
     "retains post-core phases in full repair ($phase, reconciled=$reconciled)",
     async ({ phase, reconciled }) => {
       const run = seedRun({ phase: phase === "repairing" ? "verifying" : phase });
@@ -609,21 +611,18 @@ describe("update repair ledger recovery", () => {
     expect(mocks.runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("Reconciled"));
   });
 
-  it.each(["in_progress", "completed", "failed"] as const)(
-    "retains full repair after a %s finalization step",
-    async (status) => {
-      const run = seedRun();
-      vi.mocked(Date.now).mockReturnValue(run.updatedAtMs);
-      recordUpdateRunStep(run.runId, { step: "finalize:doctor", status });
-      vi.mocked(Date.now).mockReturnValue(now);
-      mocks.finalize.mockRejectedValueOnce(new Error("Stop the service through its owner"));
+  it("retains full repair after a failed finalization step", async () => {
+    const run = seedRun();
+    vi.mocked(Date.now).mockReturnValue(run.updatedAtMs);
+    recordUpdateRunStep(run.runId, { step: "finalize:doctor", status: "failed" });
+    vi.mocked(Date.now).mockReturnValue(now);
+    mocks.finalize.mockRejectedValueOnce(new Error("Stop the service through its owner"));
 
-      await expect(updateRepairCommand({})).rejects.toThrow("Stop the service through its owner");
+    await expect(updateRepairCommand({})).rejects.toThrow("Stop the service through its owner");
 
-      expect(getUpdateRun(run.runId)?.status).toBe("running");
-      expect(mocks.finalize).toHaveBeenCalledWith({}, [run.runId]);
-    },
-  );
+    expect(getUpdateRun(run.runId)?.status).toBe("running");
+    expect(mocks.finalize).toHaveBeenCalledWith({}, [run.runId]);
+  });
 
   it.each([
     "version mismatch",

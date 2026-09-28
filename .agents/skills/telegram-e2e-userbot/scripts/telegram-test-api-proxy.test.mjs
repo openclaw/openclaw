@@ -160,6 +160,8 @@ test("rejects only the selected matching request before forwarding and then resu
 });
 
 test("injects repeated flood waits with retry_after before forwarding", async (t) => {
+  // Chat ID digits may also appear in legitimate timing fields.
+  t.mock.method(Date, "now", () => 1790301001001);
   const forwarded = [];
   const proxy = await startTelegramTestApiProxy({
     fetchImpl: async (_url, init) => {
@@ -210,7 +212,13 @@ test("injects repeated flood waits with retry_after before forwarding", async (t
     body: JSON.stringify({ chat_id: -1001, text: "group" }),
   });
   assert.equal(proxy.getRequestLog().at(-1).chat, "group");
-  assert.equal(JSON.stringify(proxy.getRequestLog()).includes("1001"), false);
+  for (const event of proxy.getRequestLog()) {
+    assert.equal(typeof event.at, "number");
+    assert.deepEqual(
+      Object.keys(event).sort(),
+      event.chat === undefined ? ["at", "method", "status"] : ["at", "chat", "method", "status"],
+    );
+  }
   assert.deepEqual(
     proxy.getRequestRejectionEvents().map(({ errorCode, retryAfter }) => [errorCode, retryAfter]),
     [

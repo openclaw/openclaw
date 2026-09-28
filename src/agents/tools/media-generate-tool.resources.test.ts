@@ -16,9 +16,13 @@ import {
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import * as taskRuntime from "../../tasks/runtime-internal.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import {
+  resetGeneratedMediaTaskActivityForTests,
+  admitMediaHandle,
+} from "../media-generation-activity.test-support.js";
 import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
+import * as taskRuntime from "../media-generation-task-status.js";
 import { prepareConfiguredRuntimeFacts } from "../prepared-model-runtime.configured-catalog.js";
 import { prepareWorkspaceBuildGroup } from "../prepared-model-runtime.facts.js";
 import { createPreparedModelRuntimeSnapshot } from "../prepared-model-runtime.full-catalog.js";
@@ -289,6 +293,7 @@ async function prepareSnapshot(
 afterEach(() => {
   vi.restoreAllMocks();
   resetRecentMediaGenerationDuplicateGuardsForTests();
+  resetGeneratedMediaTaskActivityForTests();
   clearPluginMetadataLifecycleCaches();
   resetPluginLoaderTestStateForTest();
 });
@@ -321,8 +326,9 @@ describe.each(["image", "music", "video"] as const)(
             fs.writeFileSync(referencePath, png);
             const prepared = await prepareSnapshot(fixture, first.registry);
             const { snapshot } = prepared;
-            const createTask = vi.spyOn(lifecycle, "createTaskRun").mockReturnValue({
+            const createTask = vi.spyOn(lifecycle, "createTaskRun").mockResolvedValue({
               taskId: "preflight-image-task",
+              detach: true,
               runId: "preflight-image-run",
               requesterSessionKey: "agent:main:discord:direct:synthetic-media",
               taskLabel: "Synthetic media edit",
@@ -338,21 +344,24 @@ describe.each(["image", "music", "video"] as const)(
                 }
                 return loadReference(...args);
               });
-            const readTasks = taskRuntime.listFreshTasksForOwnerKey;
+            const lookup = {
+              image: "findDuplicateGuardImageGenerationTaskForSession",
+              music: "findDuplicateGuardMusicGenerationTaskForSession",
+              video: "findDuplicateGuardVideoGenerationTaskForSession",
+            } as const;
+            const readTasks = taskRuntime[lookup[kind]];
             let lookups = 0;
-            vi.spyOn(taskRuntime, "listFreshTasksForOwnerKey").mockImplementation(
-              async (ownerKey) => {
-                const tasks = await readTasks(ownerKey);
-                if (
-                  pause !== "reference loading" &&
-                  ++lookups === (pause === "request lookup" ? 1 : 2)
-                ) {
-                  preflightPaused.resolve();
-                  await resumePreflight.promise;
-                }
-                return tasks;
-              },
-            );
+            vi.spyOn(taskRuntime, lookup[kind]).mockImplementation(async (ownerKey, options) => {
+              const tasks = await readTasks(ownerKey, options);
+              if (
+                pause !== "reference loading" &&
+                ++lookups === (pause === "request lookup" ? 1 : 2)
+              ) {
+                preflightPaused.resolve();
+                await resumePreflight.promise;
+              }
+              return tasks;
+            });
             const tool = createTool({
               config: {
                 ...fixture.config,
@@ -441,13 +450,16 @@ describe.each(["image", "music", "video"] as const)(
             );
             const connection = fixture.connections[0]!;
             const sessionKey = "agent:main:discord:direct:synthetic-media";
-            vi.spyOn(lifecycle, "createTaskRun").mockReturnValue({
-              taskId: "image-resource-task",
-              runId: "image-resource-run",
-              requesterSessionKey: sessionKey,
-              requesterAgentId: "main",
-              taskLabel: "Synthetic media resource proof",
-            });
+            vi.spyOn(lifecycle, "createTaskRun").mockImplementation(async () =>
+              admitMediaHandle({
+                taskId: "image-resource-task",
+                detach: true,
+                runId: "image-resource-run",
+                requesterSessionKey: sessionKey,
+                requesterAgentId: "main",
+                taskLabel: "Synthetic media resource proof",
+              }),
+            );
             vi.spyOn(lifecycle, "recordTaskProgress").mockImplementation(() => {});
             const completed = vi.spyOn(lifecycle, "completeTaskRun").mockImplementation(() => {});
             const failed = vi.spyOn(lifecycle, "failTaskRun").mockImplementation(() => {});

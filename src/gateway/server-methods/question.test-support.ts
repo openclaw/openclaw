@@ -9,6 +9,7 @@ import {
   releaseAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { QuestionManager } from "../question-manager.js";
 import type { GatewayBroadcastFn } from "../server-broadcast-types.js";
@@ -18,6 +19,7 @@ import { createSecretStoreWriteService } from "./secrets.js";
 import type { GatewayClient, GatewayRequestOptions, RespondFn } from "./types.js";
 
 export let manager: QuestionManager;
+let scheduler: ReturnType<typeof createTestGatewayScheduler>;
 export let requesterAuthority: AgentRunDelegatedAuthority;
 let unregisterAuthorityClosed: () => void;
 export let adminRequestClient: GatewayClient;
@@ -36,7 +38,8 @@ export function installQuestionTestHooks() {
     });
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
-    manager = new QuestionManager();
+    scheduler = createTestGatewayScheduler("fake-timers");
+    manager = new QuestionManager(scheduler);
     requesterAuthority = claimAgentRunDelegatedAuthority({
       instanceId: "requester-instance",
       runId: requestParams.runId,
@@ -59,7 +62,7 @@ export function installQuestionTestHooks() {
     broadcast = vi.fn<GatewayBroadcastFn>();
     reloadSecrets = vi.fn<SecretStoreReload>().mockResolvedValue({ warningCount: 0 });
     storeWriteService = createSecretStoreWriteService({ reloadSecrets });
-    handlers = createQuestionHandlers(manager, storeWriteService);
+    handlers = createQuestionHandlers(manager, storeWriteService, scheduler);
   });
 
   afterEach(async () => {

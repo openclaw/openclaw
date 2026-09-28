@@ -1065,7 +1065,7 @@ describe("ci workflow guards", () => {
     expect(qaValidateJob.steps[0]).toEqual({
       name: "Setup supported Node runtime",
       uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
-      with: { "node-version": "24.19.0", "package-manager-cache": false },
+      with: { "node-version": "24.21.0", "package-manager-cache": false },
     });
     const workflowIdentityStep = qaValidateJob.steps[1];
     expect(workflowIdentityStep).toMatchObject({

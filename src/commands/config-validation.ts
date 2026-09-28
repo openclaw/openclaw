@@ -9,6 +9,7 @@ import {
   readConfigFileSnapshot,
   readConfigFileSnapshotForWrite,
 } from "../config/config.js";
+import { configFailureHeading, isConfigReadFailure } from "../config/io.invalid-config.js";
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -89,11 +90,13 @@ async function validateConfigFileSnapshot(
       snapshot.issues.length > 0
         ? renderConfigValidationIssueLines(snapshot).join("\n")
         : "Unknown validation issue.";
-    runtime.error(`OpenClaw config is invalid: ${snapshot.path}\n${issues}`);
+    runtime.error(`${configFailureHeading(snapshot)}: ${snapshot.path}\n${issues}`);
     runtime.error(
-      isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot)
-        ? `Fix: ${formatPluginPackagingRuntimeOutputRecoveryHint()}`
-        : `Fix: ${formatCliCommand("openclaw doctor --fix")}`,
+      isConfigReadFailure(snapshot)
+        ? "Resolve the read error shown above, then retry."
+        : isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot)
+          ? `Fix: ${formatPluginPackagingRuntimeOutputRecoveryHint()}`
+          : `Fix: ${formatCliCommand("openclaw doctor --fix")}`,
     );
     runtime.error(`Inspect: ${formatCliCommand("openclaw config validate")}`);
     runtime.exit(1);

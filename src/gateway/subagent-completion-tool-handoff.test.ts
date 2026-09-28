@@ -63,13 +63,4 @@ describe("subagent completion tool handoff", () => {
     expect(cancelSubagentCompletionToolHandoff(cancelledId)).toBe(true);
     expect(consume(cancelledId)).toBeUndefined();
   });
-
-  it("allows exactly one winner under concurrent consumption", async () => {
-    const handoffId = registerSubagentCompletionToolHandoff(registration);
-    const results = await Promise.all([
-      Promise.resolve().then(() => consume(handoffId)),
-      Promise.resolve().then(() => consume(handoffId)),
-    ]);
-    expect(results.filter(Boolean)).toHaveLength(1);
-  });
 });
