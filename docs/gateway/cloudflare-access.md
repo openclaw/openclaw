@@ -119,15 +119,17 @@ authenticated identity endpoint after a fresh sign-in to verify the response
 OpenClaw consumes.
 
 A missing claim or an unselected issuer/provider keeps ordinary email-only
-resolution. A malformed trusted claim or failed identity verification fails
-identity enrichment instead of inventing credit. This failure behavior applies to
-both `oidc_fields` and `custom`. When Gateway roles or access policies require a
-verified profile, a malformed selected claim, failed GitHub lookup without an
-exact cached identity, or conflicting account binding also rejects profile
-admission, including for an existing email-only profile. Correct the claim,
-restore GitHub access, or resolve the account conflict before retrying. An
-operator can remove the explicit `cloudflareAccessOidc` mapping to return to
-email-only resolution without granting unverified GitHub credit.
+resolution. If the optional GitHub account lookup fails, OpenClaw resolves the
+authenticated email through the normal profile and access-policy checks. An
+existing authorized profile or valid email invitation can still sign in. A
+GitHub-only access requirement is not satisfied by an email fallback.
+
+Lookup failure does not create a GitHub identity or public credit. An existing
+verified matching association and saved co-author preference remain intact;
+a later successful lookup can complete or refresh the link. This behavior
+applies to both `oidc_fields` and `custom`. Invalid Access authentication,
+mismatched principals, malformed selected account claims, conflicting profile
+bindings, and expired or revoked access still fail their normal checks.
 
 Existing email profiles retain
 their identity, role, and saved co-author preference. A conflicting GitHub account

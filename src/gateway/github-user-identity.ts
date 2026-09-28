@@ -354,6 +354,15 @@ export function createAuthenticatedGitHubIdentitySync(params: {
           return cached;
         }
       }
+      if (accessIdentity.provider === "oidc") {
+        params.assertCurrent?.();
+        const profile = await ensureCanonicalUserProfileForEmail(access.principal, {
+          ...options,
+          expectedGitHubAccountId: accountId,
+        });
+        params.assertCurrent?.();
+        return { profileId: profile.id, updatedAt: profile.updatedAt };
+      }
       throw error instanceof gitHubPublicApi.ControlUiGitHubError
         ? error
         : new gitHubPublicApi.ControlUiGitHubError(502, "GitHub request failed");
