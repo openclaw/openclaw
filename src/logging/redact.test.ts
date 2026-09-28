@@ -124,6 +124,31 @@ describe("non-secret environment references", () => {
     });
   });
 
+describe("model-visible redaction notification", () => {
+    const marker = "⟦redacted⟧";
+    const secret = "a".repeat(24);
+
+    it("uses a self-describing marker and appends a notice for model-visible content", () => {
+      const output = redactModelVisibleToolPayloadText(`apiKey = "${secret}"`);
+      expect(output).toContain(marker);
+      expect(output).not.toContain(secret);
+      expect(output).toContain("[openclaw]");
+    });
+
+    it("keeps the compact marker and no notice on log surfaces", () => {
+      const output = redactSensitiveText(`apiKey = "${secret}"`, { mode: "tools" });
+      expect(output).not.toContain(secret);
+      expect(output).not.toContain(marker);
+      expect(output).not.toContain("[openclaw]");
+    });
+
+    it("does not append a notice when nothing was redacted", () => {
+      expect(redactModelVisibleToolPayloadText("just a normal sentence")).toBe(
+        "just a normal sentence",
+      );
+    });
+  });
+
 describe("redactAllowPatterns exemptions", () => {
     it("exempts candidate secret values that match an allow pattern", () => {
       const text = "MY_TOKEN=***";
