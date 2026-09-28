@@ -182,6 +182,8 @@ describeSpawnTransports("service-managed child lifecycle", () => {
       activePids.add(descendantPid);
       expect(isAlive(rootPid) && isAlive(descendantPid)).toBe(true);
       await vi.advanceTimersByTimeAsync(100);
+      // Deadline decisions wait one timer turn for pending child exit notifications.
+      await vi.advanceTimersToNextTimerAsync();
       const exit = await run.wait();
       expect(exit.reason).toBe(timing.reason);
       expect(parsePidPair(exit.stdout)).toEqual([rootPid, descendantPid]);
@@ -228,6 +230,8 @@ describeSpawnTransports("service-managed child lifecycle", () => {
       activePids.add(startedPid);
       expect(isAlive(startedPid)).toBe(true);
       await vi.advanceTimersByTimeAsync(500);
+      // Let the deferred construction deadline decide before awaiting startup settlement.
+      await vi.advanceTimersToNextTimerAsync();
       const run = await pendingRun;
       await expect(run.wait()).resolves.toMatchObject({
         reason: "overall-timeout",

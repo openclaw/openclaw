@@ -674,6 +674,14 @@ physical target, and caller authority are unchanged. It never replays a dispatch
 operation or accepts target reassociation. Recovery callers await the result and
 recheck their live authority before admission or reply decisions.
 Transaction predicates and commit checks stay with their existing writers.
+Persistent reply admission uses that same executor for lease registration,
+initialization, and the entry read. It retains a claim on the worker's verified
+native generation while admission waits for writers, active turns, or delivery. Queued preparation retains its original target and borrows
+the executor after earlier attempts settle, so cancelling one opening does not
+retire another caller's pending admission. Clearing a reply revokes the claim
+immediately; the existing successor barrier joins its asynchronous release before
+later admission proceeds.
+Discarded reads and failed admission also join their borrowed executor release.
 Process-held incognito entries retain their native owner until its complete
 worker cutover; this does not make the whole reply path free of host SQLite.
 

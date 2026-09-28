@@ -48,8 +48,8 @@ import {
   resolveExtensionTestConfig,
 } from "../../scripts/lib/extension-test-plan.mts";
 import * as extensionTestPlan from "../../scripts/lib/extension-test-plan.mts";
-import { listVitestRuntimeConsumerFiles } from "../../scripts/lib/vitest-build-prerequisites.mts";
 import * as buildPrerequisites from "../../scripts/lib/vitest-build-prerequisites.mts";
+import { VITEST_PRETEST_BUILD_SECONDS } from "../../scripts/lib/vitest-shard-metadata.mts";
 import {
   buildVitestRunPlans,
   hasImportGraphConsumers,
@@ -917,6 +917,95 @@ describe("CI changed Node test plan", () => {
     expect(shards?.flatMap((shard) => shard.groups).map((group) => group.shard_name)).toEqual([
       "core-tooling-isolated",
     ]);
+  });
+
+  it("retains selected compact coverage when time splitting exceeds the non-dist matrix cap", async () => {
+    const targets = [
+      "test/scripts/ci-node-test-plan.test.ts",
+      "test/scripts/ci-changed-node-test-plan.test.ts",
+    ];
+    const artifactTarget = "test/scripts/build-all.test.ts";
+    const selectedTestTargets = [...targets, artifactTarget];
+    const compact: CompactNodeTestShard = {
+      checkName: "checks-node-changed-tooling",
+      shardName: "changed-tooling",
+      runner: "ubuntu-24.04",
+      requiresDist: false,
+      planConcurrency: 1,
+      timeoutMinutes: 10,
+      pretestBuildMode: "runtime",
+      env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+      predictedSeconds: 200,
+      predictedTestSeconds: 200,
+      groups: [
+        {
+          shard_name: "core-tooling",
+          configs: ["test/vitest/vitest.tooling.config.ts"],
+          includePatterns: targets,
+          runner: "ubuntu-24.04",
+          env: { NODE_OPTIONS: "--max-old-space-size=4096" },
+          fallbackMaxWorkers: 1,
+          minTotalMemoryBytes: 8 * 1024 ** 3,
+          requiresDist: false,
+        },
+      ],
+    };
+    const artifact: CompactNodeTestShard = {
+      checkName: "checks-node-changed-build",
+      shardName: "changed-build",
+      runner: "ubuntu-24.04",
+      requiresDist: true,
+      predictedSeconds: 10,
+      groups: [
+        {
+          shard_name: "core-build",
+          configs: ["test/vitest/vitest.tooling.config.ts"],
+          includePatterns: [artifactTarget],
+          runner: "ubuntu-24.04",
+          requiresDist: true,
+        },
+      ],
+    };
+    const selected = vi
+      .spyOn(
+        await import("../../scripts/lib/ci-node-test-plan.mts"),
+        "createSelectedNodeTestShardBundles",
+      )
+      .mockReturnValue([compact, artifact]);
+    const timing = vi
+      .spyOn(testTimings, "readToolingFileTimings")
+      .mockReturnValue(Object.fromEntries(targets.map((file) => [file, 100])));
+    const groups = vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue({});
+    try {
+      const split = createChangedNodeTestShardsWithSmoke(selectedTestTargets, {
+        selectedTestTargets,
+      });
+      expect(split?.filter((shard) => !shard.requiresDist)).toHaveLength(2);
+      expect(selectedFiles(split).toSorted()).toEqual(selectedTestTargets.toSorted());
+
+      const capped = createChangedNodeTestShardsWithSmoke(selectedTestTargets, {
+        selectedTestTargets,
+        compactNodeJobCap: 1,
+      });
+      expect(capped?.filter((shard) => !shard.requiresDist)).toHaveLength(1);
+      expect(capped).toEqual([
+        { ...compact, configs: [] },
+        { ...artifact, configs: [] },
+      ]);
+      expect(selectedFiles(capped).toSorted()).toEqual(selectedTestTargets.toSorted());
+
+      // A dist descriptor does not consume the Node matrix budget.
+      expect(
+        createChangedNodeTestShardsWithSmoke(selectedTestTargets, {
+          selectedTestTargets,
+          compactNodeJobCap: 2,
+        }),
+      ).toEqual(split);
+    } finally {
+      groups.mockRestore();
+      timing.mockRestore();
+      selected.mockRestore();
+    }
   });
 
   it("avoids full-suite fallback for the ClawHub fixture's four changed paths", () => {
@@ -2993,8 +3082,9 @@ describe("CI changed Node test plan", () => {
       expect(bundle.groups!.length).toBeGreaterThan(1);
       expect(bundle.predictedSeconds).toBeLessThanOrEqual(300);
       expect(bundle.configs).toEqual([]);
-      expect(bundle.pretestBuildMode).toBeUndefined();
-      expect(bundle.groups!.every((group) => !group.pretestBuildMode)).toBe(true);
+      expect(
+        bundle.groups!.every((group) => group.pretestBuildMode === bundle.pretestBuildMode),
+      ).toBe(true);
       expect(bundle.groups!.every((group) => group.runner === bundle.runner)).toBe(true);
       expect(bundle.groups!.every((group) => group.requiresDist === bundle.requiresDist)).toBe(
         true,
@@ -3008,11 +3098,13 @@ describe("CI changed Node test plan", () => {
           )
           .flatMap((group) => group.includePatterns ?? []);
         const canShareJob =
-          !shard.pretestBuildMode &&
-          !other.pretestBuildMode &&
+          shard.pretestBuildMode === other.pretestBuildMode &&
           shard.runner === other.runner &&
           shard.requiresDist === other.requiresDist &&
-          shard.predictedSeconds! + other.predictedSeconds! <= 300 &&
+          shard.predictedSeconds! +
+            other.predictedSeconds! -
+            (shard.pretestBuildMode ? VITEST_PRETEST_BUILD_SECONDS[shard.pretestBuildMode] : 0) <=
+            300 &&
           combinedWorkerFiles.length <= 20;
         expect(canShareJob, `${shard.shardName} and ${other.shardName} fit one job`).toBe(false);
       }
@@ -3462,59 +3554,6 @@ describe("CI changed Node test plan", () => {
     expect(groups.flatMap((group) => group.includePatterns ?? [])).toContain(target);
     expect(groups.flatMap((group) => group.includePatterns ?? []).length).toBeLessThan(
       listExecutableExtensionFiles([changedPath.split("/").slice(0, 2).join("/")]).length,
-    );
-  });
-
-  it("packs separate Telegram envelopes into serial fallback jobs without merging file scopes", () => {
-    const result = createChangedExtensionFallbackShards(["extensions/telegram/src/channel.ts"]);
-    expect(result).not.toBeNull();
-    const shards = result ?? [];
-    const groups = fallbackGroups(shards);
-    const targets = groups.flatMap((group) => group.includePatterns ?? []);
-
-    expect(shards.length).toBeLessThan(groups.length);
-    expect(shards.every((shard) => shard.planConcurrency === 1)).toBe(true);
-    expect(shards.every((shard) => shard.predictedSeconds! <= 300)).toBe(true);
-    expect(
-      groups.every(
-        (group) =>
-          group.configs[0] ===
-            (group.includePatterns?.every((file) => databaseWorkerExtensionTestFiles.includes(file))
-              ? "test/vitest/vitest.extension-database-workers.config.ts"
-              : "test/vitest/vitest.extension-telegram.config.ts") &&
-          (group.includePatterns?.length ?? 0) > 0 &&
-          (group.includePatterns?.length ?? 0) <= 10,
-      ),
-    ).toBe(true);
-    expect(targets.toSorted()).toEqual(
-      listExecutableExtensionFiles(["extensions/telegram"]).toSorted(),
-    );
-    const runtimeFiles = new Set(
-      listVitestRuntimeConsumerFiles([
-        "test/vitest/vitest.extension-telegram.config.ts",
-        "test/vitest/vitest.extension-database-workers.config.ts",
-      ]),
-    );
-    const preparedConsumers: string[] = [];
-    for (const shard of shards) {
-      const consumers = fallbackGroups([shard])
-        .flatMap((group) => group.includePatterns ?? [])
-        .filter((file) => runtimeFiles.has(file));
-      expect(Boolean(shard.pretestBuildMode)).toBe(consumers.length > 0);
-      if (consumers.length > 0) {
-        expect(shard.groups).toBeUndefined();
-        expect(shard.pretestBuildMode).toBe("runtime");
-        preparedConsumers.push(...consumers);
-      }
-    }
-    expect(preparedConsumers.toSorted()).toEqual(
-      targets.filter((file) => runtimeFiles.has(file)).toSorted(),
-    );
-    expect(preparedConsumers).toEqual(
-      expect.arrayContaining([
-        "extensions/telegram/src/polling-session.test.ts",
-        "extensions/telegram/src/sticker-cache.selection.test.ts",
-      ]),
     );
   });
 

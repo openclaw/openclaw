@@ -13,19 +13,18 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("PR failure cancellation", () => {
-  it("keeps PR failure reporting hosted and preserves main gate routing", () => {
+  it("keeps critical-path routing and adds default Blacksmith failure reporting", () => {
     const gate = readCiWorkflow().jobs["ci-gate"];
     const context = {
       eventName: "pull_request" as const,
       repository: "openclaw/openclaw",
       runAttempt: 1,
-      runnerProfile: "hybrid" as const,
-      preflightOutputs: { node_runner_backend: "blacksmith" },
+      runnerProfile: "blacksmith" as const,
       failFastOutputs: { failure_job_id: "42", failure_run_attempt: "1" },
     };
-    for (const runnerBackend of ["", "blacksmith", "hybrid", "runson"] as const) {
+    for (const runnerBackend of ["", "blacksmith"] as const) {
       expect(evaluateWorkflowExpression(gate["runs-on"], { ...context, runnerBackend })).toBe(
-        "ubuntu-24.04",
+        "blacksmith-4vcpu-ubuntu-2404",
       );
     }
     for (const override of [
@@ -45,7 +44,6 @@ describe("PR failure cancellation", () => {
       expect(
         evaluateWorkflowExpression(gate["runs-on"], {
           ...context,
-          eventName: "push",
           runnerBackend,
           runnerProfile: "hybrid",
           failFastOutputs: {},
@@ -136,7 +134,6 @@ describe("PR failure cancellation", () => {
 
   it("uses the existing monitor grants for canonical PR observation including forks", () => {
     const workflow = readCiWorkflow();
-    expect(workflow.jobs["pr-fail-fast"]["runs-on"]).toBe("ubuntu-24.04");
     expect(
       Object.entries(workflow.jobs)
         .filter(

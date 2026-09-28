@@ -22,24 +22,11 @@ import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import { sendMessageMatrix, sendPollMatrix } from "./matrix/send.js";
 import type { MatrixExtraContentFields } from "./matrix/send/types.js";
+import { matrixPresentationCapabilities } from "./presentation-capabilities.js";
 
 const MATRIX_OPENCLAW_PRESENTATION_KEY = "com.openclaw.presentation" as const;
 const MATRIX_OPENCLAW_PRESENTATION_TYPE = "message.presentation" as const;
 const MATRIX_EMPTY_PRESENTATION_FALLBACK_TEXT = "---";
-
-const MATRIX_PRESENTATION_CAPABILITIES = {
-  supported: true,
-  buttons: true,
-  selects: true,
-  context: true,
-  divider: true,
-  limits: {
-    text: {
-      markdownDialect: "markdown",
-      supportsEdit: true,
-    },
-  },
-} satisfies NonNullable<ChannelOutboundAdapter["presentationCapabilities"]>;
 
 type MatrixChannelData = {
   extraContent?: MatrixExtraContentFields;
@@ -102,7 +89,7 @@ function renderMatrixPresentationPayload(params: {
 export function prepareMatrixReplyPayload(payload: ReplyPayload): Promise<ReplyPayload> {
   return renderPresentationForDelivery(
     {
-      presentationCapabilities: MATRIX_PRESENTATION_CAPABILITIES,
+      presentationCapabilities: matrixPresentationCapabilities,
       renderPresentation: (prepared) =>
         renderMatrixPresentationPayload({ payload: prepared, presentation: prepared.presentation }),
     },
@@ -170,7 +157,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
   chunker: chunkTextForOutbound,
   chunkerMode: "markdown",
   textChunkLimit: 4000,
-  presentationCapabilities: MATRIX_PRESENTATION_CAPABILITIES,
+  presentationCapabilities: matrixPresentationCapabilities,
   renderPresentation: renderMatrixPresentationPayload,
   sendPayload: async ({
     cfg,

@@ -223,6 +223,18 @@ export function createChangedExtensionConfigShardsForPaths(
 export function packChangedExtensionConfigShards(
   shards: ChangedExtensionConfigShard[],
 ): NodeTestShard[] {
+  const predictedSeconds = ([first, ...rest]: readonly [
+    ChangedExtensionConfigShard,
+    ...ChangedExtensionConfigShard[],
+  ]) => {
+    const preparation = first.pretestBuildMode
+      ? VITEST_PRETEST_BUILD_SECONDS[first.pretestBuildMode]
+      : 0;
+    return rest.reduce(
+      (seconds, shard) => seconds + shard.predictedSeconds - preparation,
+      first.predictedSeconds,
+    );
+  };
   const workerFileCounts = new Map(
     shards.map((shard) => [
       shard,
@@ -233,23 +245,21 @@ export function packChangedExtensionConfigShards(
     shards.toSorted(
       (a, b) => b.predictedSeconds - a.predictedSeconds || a.shardName.localeCompare(b.shardName),
     ),
-    // Each envelope retains its own child process. Share only the checkout;
-    // runtime preparation stays separate from other configs' readers.
+    // Each envelope retains its child process. Identical prerequisites share
+    // one preparation before all readers; other preparation modes stay separate.
     (bin, shard) =>
       // Count the effective config, including files migrated from other plugins.
       bin.reduce(
         (count, entry) => count + (workerFileCounts.get(entry) ?? 0),
         workerFileCounts.get(shard) ?? 0,
       ) <= DATABASE_WORKER_TEST_JOB_FILE_LIMIT &&
-      !shard.pretestBuildMode &&
       bin.every(
         (entry) =>
-          !entry.pretestBuildMode &&
+          entry.pretestBuildMode === shard.pretestBuildMode &&
           entry.runner === shard.runner &&
           entry.requiresDist === shard.requiresDist,
       ) &&
-      bin.reduce((seconds, entry) => seconds + entry.predictedSeconds, shard.predictedSeconds) <=
-        CHANGED_EXTENSION_JOB_SECONDS,
+      predictedSeconds([...bin, shard]) <= CHANGED_EXTENSION_JOB_SECONDS,
     true,
   );
   // Singleton objects keep their full metadata and original relative order.
@@ -258,26 +268,30 @@ export function packChangedExtensionConfigShards(
     .map((bin, index) =>
       bin.length === 1
         ? bin[0]
-        : {
-            checkName: `checks-node-changed-extensions-bundle-${index + 1}`,
-            configs: [],
-            groups: bin.map((shard) => ({
-              configs: shard.configs,
-              ...(shard.env ? { env: shard.env } : {}),
-              ...(shard.includePatterns ? { includePatterns: shard.includePatterns } : {}),
-              requiresDist: shard.requiresDist,
-              runner: shard.runner,
-              shard_name: shard.shardName,
-            })),
-            planConcurrency: 1,
-            predictedSeconds: bin.reduce((seconds, shard) => seconds + shard.predictedSeconds, 0),
-            predictedTestSeconds: bin.reduce(
-              (seconds, shard) => seconds + shard.predictedTestSeconds,
-              0,
-            ),
-            requiresDist: bin[0].requiresDist,
-            runner: bin[0].runner,
-            shardName: `changed-extensions-bundle-${index + 1}`,
-          },
+        : Object.assign(
+            {
+              checkName: `checks-node-changed-extensions-bundle-${index + 1}`,
+              configs: [],
+              groups: bin.map((shard) => ({
+                configs: shard.configs,
+                ...(shard.env ? { env: shard.env } : {}),
+                ...(shard.includePatterns ? { includePatterns: shard.includePatterns } : {}),
+                ...(shard.pretestBuildMode ? { pretestBuildMode: shard.pretestBuildMode } : {}),
+                requiresDist: shard.requiresDist,
+                runner: shard.runner,
+                shard_name: shard.shardName,
+              })),
+              planConcurrency: 1,
+              predictedSeconds: predictedSeconds(bin),
+              predictedTestSeconds: bin.reduce(
+                (seconds, shard) => seconds + shard.predictedTestSeconds,
+                0,
+              ),
+              requiresDist: bin[0].requiresDist,
+              runner: bin[0].runner,
+              shardName: `changed-extensions-bundle-${index + 1}`,
+            },
+            bin[0].pretestBuildMode ? { pretestBuildMode: bin[0].pretestBuildMode } : {},
+          ),
     );
 }

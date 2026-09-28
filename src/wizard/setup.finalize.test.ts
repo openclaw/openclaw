@@ -268,11 +268,9 @@ vi.mock("../tui/tui.js", () => ({
   scheduleProcessExitAfterTuiReturn,
 }));
 
-vi.mock("../commands/auth-choice.js", () => ({
-  applyAuthChoice: vi.fn(),
+vi.mock("../commands/auth-choice.model-check.js", () => ({
   resolveDefaultModelCatalogFacts,
   resolveDefaultModelAuthStatus,
-  resolvePreferredProviderForAuthChoice: vi.fn(),
   warnIfModelConfigLooksOff: vi.fn(),
 }));
 

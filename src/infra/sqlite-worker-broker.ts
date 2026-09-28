@@ -242,6 +242,7 @@ export class SqliteWorkerBroker {
         sqliteWorkerRequestBytes(input, options.stateContext, options.preparation),
         {
           dispatchState: opening.openDispatch,
+          signal: options.signal,
           assertCurrent: options.assertCurrent,
           maintenanceScope: options.maintenanceScope,
           createAdmission: options.createAdmission ?? options.createOpenAdmission,

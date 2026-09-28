@@ -73,6 +73,7 @@ export type WorkerDispatchPlacementStore = Pick<
   | "abandonWorkspaceResult"
   | "listForReconcile"
   | "releaseTurn"
+  | "retainInterruptedTurnWorkspace"
   | "bindPreparedEnvironment"
   | "startDispatch"
   | "startDrain"
