@@ -133,7 +133,7 @@ export function createOpenAIProvider(): ProviderPlugin {
           choiceId: "openai-token-sharing",
           choiceLabel: "Sign in with ChatGPT (Beta)",
           choiceHint: "Authorize OpenClaw for eligible Responses models using your Codex allowance",
-          assistantPriority: -50,
+          assistantPriority: 0,
           ...OPENAI_ACCOUNT_WIZARD_GROUP,
         },
       },

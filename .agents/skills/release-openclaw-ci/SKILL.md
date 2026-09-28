@@ -62,7 +62,7 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   access first; unset preserves ordinary routing. Shared workers inherit the
   caller group; PR/main CI and unrelated scheduled work remain outside it.
 - Validate provider secrets before dispatching expensive full release matrices.
-- Check the nightly parent for the Code SHA before dispatching a fresh main validation; it seals per-child receipts that exact-target dispatches adopt when inputs match.
+- Check the nightly parent for the Code SHA before dispatching a fresh main validation; it seals per-child receipts that exact-target dispatches adopt when inputs match. The nightly runs this helper route (`--sha <main-sha> --workflow-sha <main-sha>`), so its parent runs on a `release-ci/<sha12>-<id>` branch, not `main`.
 - Every selected validation lane must pass. Stable tags require stable/full
   evidence, soak, and blocking performance. Beta-profile evidence cannot qualify
   stable. No lane or soak waiver bypasses these requirements. All-group
@@ -186,9 +186,9 @@ Keep the required publication proofs and soak gates intact.
 
 ## Continuous release readiness
 
-The 04:00 UTC nightly seals a direct-root manifest and per-child receipts for the exact main SHA.
-For a same-day cut, start the release train on `main` (version and changelog) before 04:00 UTC,
-then cut `release/YYYY.M.PATCH` at the nightly SHA so the Code SHA equals the validated SHA.
+The scheduled main validation (every 3 hours at :07 UTC) seals a direct-root manifest and per-child receipts for the exact main SHA.
+For a same-day cut, land the release train on `main` (version and changelog) before the next scheduled run,
+then cut `release/YYYY.M.PATCH` at that run's SHA so the Code SHA equals the validated SHA.
 Per-child adoption matches exact target SHA, role, and dispatch inputs minus `dispatch_id`:
 `productPerformance` is adopted because its inputs are context-free and match.
 A stable candidate dispatched with `--target-ref release/YYYY.M.PATCH` resolves
@@ -647,8 +647,11 @@ pnpm ci:full-release \
   -f dispatch_release_evidence=false
 ```
 
-The helper verifies both SHAs, creates the transport ref with the equivalent of
-the following GitHub refs operation, and dispatches from that branch:
+The helper verifies both SHAs and proves GitHub serves the exact Validation SHA
+by bare-SHA fetch in a fresh temporary repository, including in dry runs, before
+retaining a request or mutating remote state. It creates one immutable workflow
+transport ref with the equivalent of the following GitHub refs operation, and
+dispatches from that branch:
 
 ```bash
 gh api --method POST repos/openclaw/openclaw/git/refs \
@@ -733,7 +736,7 @@ node scripts/release-ci-summary.mjs <full-release-run-id> --watch
 Do not start this watcher when the SHA-pinned helper is still the foreground
 owner. The helper reads the exact Release Decision artifact itself. On
 `blocked_diagnostics_running`, it exits nonzero immediately, keeps the temporary
-refs, and leaves Diagnostic Drain collecting the remaining terminal evidence.
+workflow ref, and leaves Diagnostic Drain collecting the remaining terminal evidence.
 The watcher behaves the same way for separately dispatched parents: it reports
 the Release Decision blocker once and exits while the drain continues.
 

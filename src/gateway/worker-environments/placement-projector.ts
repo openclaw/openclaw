@@ -9,14 +9,13 @@ import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import type { WorkerPlacementMoveIntent } from "./placement-move-intent.js";
 import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projection.types.js";
 import type { WorkerSessionPlacementRecord } from "./placement-store.js";
+import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 import type { WorkerEnvironmentServiceContract } from "./service-contract.js";
 
 export type WorkerSessionPlacementReader = {
   getMany(sessionIds: readonly string[]): ReadonlyMap<string, WorkerSessionPlacementRecord>;
   getWorkspaceResultReconcilingSessionIds?(sessionIds: readonly string[]): ReadonlySet<string>;
-  listPendingWorkspaceResults?(
-    sessionId?: string,
-  ): import("./placement-workspace-result.js").WorkerWorkspacePendingResult[];
+  listPendingWorkspaceResults?(sessionId?: string): WorkerWorkspacePendingResult[];
   /** Runtime consumers may cancel work when the exact captured turn claim closes. */
   registerTurnClaimClosedHandler?: (
     handler: (claim: import("./placement-record.js").WorkerSessionTurnClaim) => void,

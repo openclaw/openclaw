@@ -96,6 +96,15 @@ count.
   `chat` stream. Subscribe to one text projection for a display; consuming both
   streams into one accumulator duplicates output. In-process agent observers
   retain their cumulative-text contract.
+  A client that renders assistant text solely from `chat` can advertise
+  `chat-only-assistant-text` in its connect `caps`. The Gateway then omits
+  text-bearing `agent` events with `stream: "assistant"` from that connection,
+  including foreground and background narration subscriptions. Other agent
+  streams (tools, items, usage, run status, lifecycle, plans, and approvals),
+  assistant events without text, and the `chat` stream are unchanged. Filtered
+  frames do not consume connection sequence numbers. Clients without the
+  capability keep both projections; native clients that display current-item
+  agent text separately from cumulative chat text should not advertise it.
 - `session.message`, `session.operation`, `session.tool`: transcript, in-flight
   session operation, and event-stream updates for a subscribed session.
 - `session.approval`: sanitized pending and terminal approval truth for an

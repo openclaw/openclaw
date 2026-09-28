@@ -479,22 +479,14 @@ export function createFeishuMessageReceiveHandler({
         return { kind: "failed-retryable", error: err };
       }
     }
-    if (fireAndForget) {
-      void processMessage().catch((err: unknown) => {
-        if (claim.kind === "claimed") {
-          claim.handle.release({ error: err });
-        }
-        error(`feishu[${accountId}]: error handling message: ${String(err)}`);
-      });
-      return undefined;
-    }
-    try {
-      await processMessage();
-    } catch (err) {
+    const processing = processMessage().catch((err: unknown) => {
       if (claim.kind === "claimed") {
         claim.handle.release({ error: err });
       }
       error(`feishu[${accountId}]: error handling message: ${String(err)}`);
+    });
+    if (!fireAndForget) {
+      await processing;
     }
     return undefined;
   };

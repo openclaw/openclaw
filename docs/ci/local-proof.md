@@ -286,6 +286,12 @@ binary untouched. Provider readiness and broker authentication still determine
 which configured backend can run the proof.
 The check workflow hydrates its pinned dispatch commit with a depth-1 checkout;
 the changed gate later reconstructs the exact merge base and synced final tree.
+Dispatched check leases request `blacksmith-32vcpu-ubuntu-2404`. A native capacity
+probe measured eight CPUs and 30.95 GiB of memory on that class, compared with
+15.42 GiB on the previous 16-class. This supplies headroom for isolated runtime
+validation without increasing the number of jobs or workers. Workloads still
+admit work from observed resources; the runner label is not a capacity guarantee.
+PR hydration checks remain on `ubuntu-24.04`.
 Its outer GitHub job defaults to 240 minutes, matching the native full-test
 gate's four-hour Testbox lease envelope. Manual dispatches can override
 `timeout_minutes`; the lease TTL and individual test deadlines remain separate

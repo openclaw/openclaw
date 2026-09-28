@@ -173,8 +173,11 @@ describe("chat header session menu", () => {
       vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
       const menu = await mountMenu({ archiveShortcut: true });
       expect(
-        item(menu, "Archive session").querySelector(".session-menu__shortcut")?.textContent?.trim(),
-      ).toBe(platform === "MacIntel" ? "A / ⌘⇧A" : "A / Ctrl+Shift+A");
+        item(menu, "Archive session")
+          .querySelector(".session-menu__shortcut")
+          ?.textContent?.replace(/\s+/gu, "")
+          .trim(),
+      ).toBe(platform === "MacIntel" ? "A/⌘⇧A" : "A/Ctrl+Shift+A");
       const inactive = await mountMenu();
       expect(
         item(inactive, "Archive session")

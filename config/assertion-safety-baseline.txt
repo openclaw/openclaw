@@ -364,7 +364,7 @@ extensions/feishu/src/bitable.ts	1
 extensions/feishu/src/bot-broadcast.ts	3
 extensions/feishu/src/bot-content.ts	1
 extensions/feishu/src/bot-identity-cache.ts	1
-extensions/feishu/src/bot-name.ts	4
+extensions/feishu/src/bot-name.ts	2
 extensions/feishu/src/bot-sender-name.ts	2
 extensions/feishu/src/bot.ts	7
 extensions/feishu/src/card-action.ts	1
@@ -389,7 +389,6 @@ extensions/feishu/src/monitor.vc-meeting-invited-handler.ts	1
 extensions/feishu/src/perm.ts	2
 extensions/feishu/src/policy.ts	1
 extensions/feishu/src/presentation-card.ts	1
-extensions/feishu/src/reactions.ts	3
 extensions/feishu/src/reply-dispatcher.ts	1
 extensions/feishu/src/send.ts	8
 extensions/feishu/src/setup-core.ts	1
@@ -501,7 +500,7 @@ extensions/line/src/gateway.ts	1
 extensions/line/src/markdown-to-line.ts	7
 extensions/line/src/monitor-durable.ts	1
 extensions/line/src/monitor.ts	1
-extensions/line/src/outbound.ts	6
+extensions/line/src/outbound.ts	5
 extensions/line/src/send.ts	1
 extensions/line/src/setup-core.ts	1
 extensions/line/src/webhook-spool.ts	2
@@ -693,7 +692,6 @@ extensions/msteams/src/feedback-invoke.ts	2
 extensions/msteams/src/file-consent.ts	1
 extensions/msteams/src/graph.ts	2
 extensions/msteams/src/inbound.ts	1
-extensions/msteams/src/media-helpers.ts	1
 extensions/msteams/src/messenger.ts	1
 extensions/msteams/src/monitor-handler/inbound-dispatch.ts	1
 extensions/msteams/src/monitor-handler/inbound-facts.ts	1
@@ -710,7 +708,6 @@ extensions/msteams/src/sdk-proactive.ts	3
 extensions/msteams/src/sdk.ts	7
 extensions/msteams/src/setup-surface.ts	7
 extensions/msteams/src/sqlite-state.ts	1
-extensions/msteams/src/token-response.ts	2
 extensions/msteams/src/user-agent.ts	1
 extensions/mxc/src/fs-bridge.ts	1
 extensions/nextcloud-talk/src/approval-auth.ts	1
@@ -1002,7 +999,7 @@ extensions/tavily/src/config.ts	1
 extensions/teams-meetings/src/transports/teams-meetings-urls.ts	1
 extensions/telegram/src/account-selection.ts	1
 extensions/telegram/src/account-throttler.ts	2
-extensions/telegram/src/action-runtime.ts	3
+extensions/telegram/src/action-runtime.ts	1
 extensions/telegram/src/api-fetch.ts	1
 extensions/telegram/src/approval-handler.runtime.ts	2
 extensions/telegram/src/audit-membership-runtime.ts	1
@@ -1025,7 +1022,6 @@ extensions/telegram/src/bot-message-dispatch-reply.ts	1
 extensions/telegram/src/bot-message-dispatch-session.ts	1
 extensions/telegram/src/bot-message-dispatch-turn.ts	2
 extensions/telegram/src/bot-native-command-dispatch.ts	1
-extensions/telegram/src/bot-native-command-menu.ts	1
 extensions/telegram/src/bot-native-command-plugins.ts	2
 extensions/telegram/src/bot/body-helpers.ts	1
 extensions/telegram/src/bot/delivery.replies.ts	1
@@ -2023,8 +2019,6 @@ src/commands/agents.commands.identity.ts	1
 src/commands/agents.config.ts	1
 src/commands/agents.providers.ts	8
 src/commands/audit.ts	1
-src/commands/auth-choice-prompt.ts	1
-src/commands/auth-choice.apply.api-providers.ts	1
 src/commands/backup-restore.ts	1
 src/commands/backup-schedule.ts	1
 src/commands/backup-verify.ts	2
@@ -2036,10 +2030,8 @@ src/commands/channels/add.ts	2
 src/commands/channels/capabilities.ts	4
 src/commands/channels/list.ts	1
 src/commands/channels/status.runtime.ts	8
-src/commands/configure.channels.ts	1
 src/commands/configure.daemon.ts	1
 src/commands/configure.gateway.ts	1
-src/commands/configure.shared.ts	2
 src/commands/configure.wizard.ts	2
 src/commands/daemon-install-helpers.ts	3
 src/commands/docs.ts	2
@@ -2094,7 +2086,7 @@ src/commands/doctor/shared/codex-route-compaction-repair.ts	2
 src/commands/doctor/shared/codex-route-config-repair.ts	1
 src/commands/doctor/shared/codex-route-session-repair.ts	1
 src/commands/doctor/shared/configured-channel-ids.ts	1
-src/commands/doctor/shared/empty-allowlist-policy.ts	14
+src/commands/doctor/shared/empty-allowlist-policy.ts	12
 src/commands/doctor/shared/empty-allowlist-scan.ts	17
 src/commands/doctor/shared/legacy-config-compat.ts	1
 src/commands/doctor/shared/legacy-config-core-migrate.ts	1
@@ -2129,7 +2121,6 @@ src/commands/onboard-helpers.ts	2
 src/commands/onboard-non-interactive/local.ts	1
 src/commands/onboard-non-interactive/local/auth-choice-inference.ts	1
 src/commands/onboarding-plugin-install.ts	1
-src/commands/promos/claim.ts	2
 src/commands/sessions-compact.ts	1
 src/commands/sessions-lifecycle.ts	3
 src/commands/setup.ts	1
@@ -2424,13 +2415,13 @@ src/gateway/server-startup-bootstrap.ts	1
 src/gateway/server-startup-config-helpers.ts	1
 src/gateway/server-startup-post-attach.ts	1
 src/gateway/server-worker-placement-startup.ts	2
-src/gateway/server.auth.control-ui.bootstrap-lifecycle.suite.ts	8
+src/gateway/server.auth.control-ui.bootstrap-lifecycle.suite.ts	7
 src/gateway/server.auth.control-ui.device-token.suite.ts	2
 src/gateway/server.auth.control-ui.mobile-bootstrap.suite.ts	6
 src/gateway/server.auth.control-ui.owner-bootstrap.suite.ts	5
 src/gateway/server.auth.control-ui.pairing.suite.ts	2
-src/gateway/server.auth.control-ui.trusted-proxy.suite.ts	4
-src/gateway/server.auth.default-token.suite.ts	9
+src/gateway/server.auth.control-ui.trusted-proxy.suite.ts	3
+src/gateway/server.auth.default-token.suite.ts	8
 src/gateway/server.auth.modes.suite.ts	1
 src/gateway/server/http-listen.ts	1
 src/gateway/server/plugins-http/route-capability.ts	1

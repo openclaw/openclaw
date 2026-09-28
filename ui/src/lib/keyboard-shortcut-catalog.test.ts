@@ -4,14 +4,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { isCommandPaletteShortcut } from "../components/command-palette-contract.ts";
 import { isTerminalPanelShortcut } from "../components/panel-toggle-contract.ts";
 import { t } from "../i18n/index.ts";
+import { resolveKeyboardShortcutSections } from "./keyboard-shortcut-catalog.ts";
 import {
   formatKeyboardShortcutCombo,
-  formatKeyboardShortcutParts,
   isApplePlatform,
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
-  resolveKeyboardShortcutSections,
-} from "./keyboard-shortcut-catalog.ts";
+  formatKeyboardShortcutParts,
+} from "./keyboard-shortcut-contract.ts";
 
 describe("keyboard shortcut catalog matching", () => {
   afterEach(() => vi.restoreAllMocks());

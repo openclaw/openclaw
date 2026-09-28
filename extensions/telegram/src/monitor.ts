@@ -39,7 +39,7 @@ function formatTelegramOffsetRotationMessage(
 }
 
 const loadTelegramMonitorPollingRuntime = createLazyRuntimeModule(
-  () => import("./monitor-polling.runtime.js"),
+  () => import("./polling-session.js"),
 );
 
 const loadTelegramMonitorWebhookRuntime = createLazyRuntimeModule(() => import("./webhook.js"));

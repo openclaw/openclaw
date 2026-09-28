@@ -1183,8 +1183,8 @@ export function buildGatewayCronService(params: {
     logger: cronServiceLogger,
   } satisfies CronExitWatcherHandlers;
   exitWatchersRef.current = createCronExitWatchers(exitWatcherHandlers);
-  const updateCron = cron.update.bind(cron);
   streamWatchersRef.current = createCronStreamWatchers({
+    scheduler: params.scheduler,
     getProcessSupervisor,
     updateState: async (jobId, patch, streamScheduleKey, streamSourceIdentity) => {
       return await cron.updateExternalState(jobId, streamScheduleKey, streamSourceIdentity, patch);
@@ -1219,13 +1219,9 @@ export function buildGatewayCronService(params: {
       ),
     logger: cronServiceLogger,
   });
-  const routeLiveStreamJob = async (jobId: string) => {
-    const current = cron.getJob(jobId);
-    await routeStreamWatcherMutation(jobId, current, current ? "updated" : "removed");
-  };
   const queueStreamStopAfterValidation = (
     current: CronJob,
-    patch: Parameters<typeof updateCron>[1],
+    patch: Parameters<CronService["update"]>[1],
     nowMs: number,
   ): Promise<void> | undefined => {
     if (
@@ -1283,7 +1279,7 @@ export function buildGatewayCronService(params: {
     } catch (error) {
       // The durable update already committed and the owner persisted its own
       // terminal stream diagnostic. Failing the caller here would claim a
-      // rollback that never happened; routeLiveStreamJob below retries teardown.
+      // rollback that never happened; routeLiveStreamJobLogged below retries teardown.
       cronLogger.warn(
         { jobId, err: String(error) },
         "cron-stream: source teardown failed after committed update",
@@ -1295,7 +1291,8 @@ export function buildGatewayCronService(params: {
   // already-persisted change into a caller-visible error.
   const routeLiveStreamJobLogged = async (jobId: string) => {
     try {
-      await routeLiveStreamJob(jobId);
+      const current = cron.getJob(jobId);
+      await routeStreamWatcherMutation(jobId, current, current ? "updated" : "removed");
     } catch (error) {
       cronLogger.warn(
         { jobId, err: String(error) },

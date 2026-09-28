@@ -11,6 +11,7 @@ import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { sqliteReaderDatabasePathKey } from "../infra/sqlite-reader-lifecycle.js";
 import { onSqliteWalCheckpoint } from "../infra/sqlite-wal-checkpoint.js";
 import * as walAdmission from "../infra/sqlite-wal-write-admission.js";
+import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
   runOutsideOpenClawDatabaseMaintenanceScope,
@@ -21,6 +22,7 @@ import {
 } from "./openclaw-state-db-cache.js";
 import {
   closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
@@ -435,3 +437,32 @@ it.each(["synchronous", "asynchronous"] as const)(
     }
   },
 );
+
+it("leaves raw access sole custody only after the orderly close joins worker retirement", async () => {
+  const root = tempDirs.make("state-wal-worker-retirement-");
+  const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
+  const store = createPluginStateKeyedStore<string>("fixture-plugin", {
+    namespace: "worker-retirement",
+    maxEntries: 1,
+    env,
+  });
+  await store.register("retained", "value");
+  const databasePath = openOpenClawStateDatabase({ env }).path;
+  // Every open WAL connection keeps a shared file lock, so only a sole
+  // connection can take this exclusive lock.
+  const claimSoleCustody = () => {
+    const raw = new DatabaseSync(databasePath);
+    try {
+      raw.exec("PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; COMMIT");
+    } finally {
+      raw.close();
+    }
+  };
+
+  // The synchronous close only starts retirement of the worker's connection.
+  closeOpenClawStateDatabaseForTest();
+  expect(claimSoleCustody).toThrow(/database is locked/);
+
+  await closeOpenClawStateDatabaseAsync();
+  expect(claimSoleCustody).not.toThrow();
+});

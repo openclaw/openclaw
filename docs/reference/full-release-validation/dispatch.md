@@ -109,7 +109,7 @@ Plugin Prerelease owns the full extension sweep.
 Pass them through the SHA-pinned helper as `-f name='["exact/path.test.ts"]'`.
 The helper packs the extension input into the existing trusted dispatch envelope
 to stay within GitHub's 25-input limit, and refuses tooling without the matching
-lane-input capability before creating remote refs or dispatching.
+lane-input capability before creating the workflow ref or dispatching.
 
 Preflight rejects malformed, duplicate, nonexistent, and out-of-lane paths using
 the selected target's actual Vitest discovery. Globs and basenames are not
@@ -126,10 +126,16 @@ coverage, not passing evidence.
 
 ## Retain and reconcile the root request
 
-Before creating remote refs, the helper writes a private operator artifact at
+For new dispatches, including `--dry-run`, the helper first proves GitHub serves
+the exact Validation SHA by bare-SHA fetch in a fresh temporary repository. A failed
+fetch stops before any request artifact or remote mutation. The helper pushes one
+immutable `release-ci/*` workflow ref at the Tooling SHA and dispatches the exact
+Validation SHA as `ref` and `expected_sha`.
+
+Before creating that workflow ref, the helper writes a private operator artifact at
 `.artifacts/full-release-validation/<request-id>.json` and prints its path.
 Use `--request-file <path>` to choose the artifact location. It retains the
-repository, workflow, frozen target/tooling identities, transport refs, complete
+repository, workflow, frozen target/tooling identities, workflow transport ref, complete
 typed/defaulted inputs, effective soak, and the first observed run and attempt.
 The helper records attempted intent before its single workflow dispatch POST.
 
@@ -146,10 +152,19 @@ creation/deletion, dispatch, rerun, cancellation, Git fetch, or request rewrite.
 `dispatch=observed` reports the exact run URL and attempt, not successful
 validation. A newer attempt cannot replace the retained attempt.
 
+Requests written before the helper stopped creating `validation/target-*` refs
+still record `targetRef` and `refs.target`, and the current helper rejects them
+as invalid. Reconcile such a file with the helper from the parent of the merge
+commit that removed the target ref, for example from
+`git worktree add --detach <path> <merge-commit>^`. Neither version creates or
+deletes refs during reconciliation. Keep any remaining `release-ci/*` or
+`validation/target-*` ref while GitHub reruns or evidence diagnosis may still
+need it, then delete it deliberately.
+
 Missing or ambiguous runs, incomplete pagination, unavailable or mismatched input
 witnesses, and exhausted discovery remain `dispatch=unknown`. A complete HTTP
 rejection is retained as `dispatch=rejected`; neither state permits redispatch.
-Keep the artifact and printed refs for investigation. There is no automatic
+Keep the artifact and printed workflow ref for investigation. There is no automatic
 retention expiry or cleanup for the local artifact; remove it only through
 deliberate operator cleanup. Losing or deleting it never proves non-execution.
 Independent requests and copies on other hosts are not globally deduplicated.

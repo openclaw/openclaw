@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import { rewindChatHistory, switchChatHistoryBranch } from "./chat-history-actions.ts";
@@ -202,6 +202,10 @@ describe("syncSelectedSessionMessageSubscription", () => {
   });
 
   it("retries a stale generation's rejected subscription release", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const stale = { key: "agent:main:stale", agentId: null };
     const selected = { key: "agent:main:selected", agentId: null };
     const staleSubscription = createDeferred<typeof stale>();
@@ -231,6 +235,7 @@ describe("syncSelectedSessionMessageSubscription", () => {
     await syncSelectedSessionMessageSubscription(state as never);
 
     staleSubscription.resolve(stale);
+    await vi.runAllTimersAsync();
     await staleSync;
 
     expect(state.chatSessionMessageSubscription).toBe(selected);
@@ -239,6 +244,8 @@ describe("syncSelectedSessionMessageSubscription", () => {
     await syncSelectedSessionMessageSubscription(state as never);
 
     expect(unsubscribeMessages).toHaveBeenNthCalledWith(2, stale);
+    expect(unsubscribeMessages).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
     expect(state.chatSessionMessageSubscription).toBe(selected);
     expect(subscribeMessages).toHaveBeenCalledTimes(2);
   });
