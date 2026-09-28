@@ -44,7 +44,7 @@ import {
 vi.mock("./crabbox-managed-binary.js", () => ({
   ensureManagedCrabboxBinary: vi.fn(async ({ binary }: { binary: string }) => ({
     binary,
-    version: "0.55.0",
+    version: "999.0.0",
   })),
 }));
 
@@ -92,7 +92,7 @@ beforeEach(() => {
     .mockReset()
     .mockImplementation(async (params) => ({
       binary: params?.binary ?? "crabbox",
-      version: "0.55.0",
+      version: "999.0.0",
     }));
   // Provider instances share durable state within a replay test, never across test cases.
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-crabbox-provider-"));
@@ -255,7 +255,7 @@ describe("Crabbox worker provider", () => {
     const managedBinary = path.resolve(path.sep, "managed", "crabbox");
     vi.mocked(ensureManagedCrabboxBinary).mockResolvedValue({
       binary: managedBinary,
-      version: "0.55.0",
+      version: "999.0.0",
     });
     const runCommand = vi.fn<CrabboxCommandRunner>(async (argv) => {
       if (argv[1] === "providers") {
@@ -334,7 +334,7 @@ describe("Crabbox worker provider", () => {
     controller.abort();
     acquisition.resolve({
       binary: path.resolve(path.sep, "managed", "crabbox"),
-      version: "0.55.0",
+      version: "999.0.0",
     });
     await rejected;
 

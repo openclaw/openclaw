@@ -19,7 +19,7 @@
     border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
     border-radius: 50%;
     background: color-mix(in srgb, var(--panel) 90%, transparent);
-    box-shadow: 0 1px 3px color-mix(in srgb, black 8%, transparent);
+    box-shadow: var(--shadow-sm);
     corner-shape: round;
     line-height: 1;
   }

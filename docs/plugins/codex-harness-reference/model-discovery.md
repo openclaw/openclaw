@@ -104,6 +104,11 @@ specialized flows without being normal model-picker choices.
 
 Tune discovery under `plugins.entries.codex.config.discovery`:
 
+The default budget is 10 seconds. It allows Codex's five-second remote catalog
+refresh to finish or return its native cached/bundled catalog, with time left for
+transport and the account read. Setting a shorter budget can cancel that native
+fallback and leave native models unavailable until discovery succeeds.
+
 ```json5
 {
   plugins: {
@@ -113,7 +118,7 @@ Tune discovery under `plugins.entries.codex.config.discovery`:
         config: {
           discovery: {
             enabled: true,
-            timeoutMs: 2500,
+            timeoutMs: 10000,
           },
         },
       },

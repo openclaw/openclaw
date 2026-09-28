@@ -49,4 +49,32 @@ describe("session display visibility", () => {
       }),
     ).toBe(false);
   });
+
+  it("classifies unnamed isolated heartbeat lanes as system-created", () => {
+    expect(
+      isSystemCreatedSessionRow({
+        key: "agent:main:dashboard:00000000-0000-0000-0000-000000000000:heartbeat",
+        classification: "heartbeat",
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps an operator-named heartbeat lane discoverable", () => {
+    expect(
+      isSystemCreatedSessionRow({
+        key: "agent:main:main:heartbeat",
+        classification: "heartbeat",
+        label: "Background watch",
+      }),
+    ).toBe(false);
+  });
+
+  it("leaves non-heartbeat classifications on the provenance path", () => {
+    expect(
+      isSystemCreatedSessionRow({
+        key: "agent:main:main",
+        classification: "main",
+      }),
+    ).toBe(false);
+  });
 });
