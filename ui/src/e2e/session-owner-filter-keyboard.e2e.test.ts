@@ -6,6 +6,7 @@ import {
   createSessionManagementE2eSuite,
   installMockGateway,
   sessionsListResponse,
+  waitForSessionRosterHydration,
 } from "./session-management.test-support.ts";
 import {
   chooseSidebarOwner,
@@ -49,6 +50,8 @@ suite.define(() => {
 
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
+      // Initial focus lands on the first control; owners render only after roster admission.
+      await waitForSessionRosterHydration(page);
       const trigger = page.getByRole("button", { name: "Filter & sort" });
       await trigger.focus();
       await page.keyboard.press("Enter");
