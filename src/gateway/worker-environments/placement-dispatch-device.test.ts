@@ -707,7 +707,7 @@ describe("device worker placement dispatch", () => {
 
     await harness.service.reconcile();
 
-    expect(harness.log).toEqual(["environment:reconcile", "workspace", "placement:adopted"]);
+    expect(harness.log).toEqual(["environment:reconcile", "placement:adopted", "workspace"]);
     expect(harness.placements.current()).toMatchObject({ state: "active" });
     expect(harness.environments.startTunnel).not.toHaveBeenCalled();
     expect(harness.environments.destroy).not.toHaveBeenCalled();

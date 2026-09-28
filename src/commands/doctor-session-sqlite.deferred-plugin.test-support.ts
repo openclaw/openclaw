@@ -1,5 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { expect } from "vitest";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.sqlite-lifecycle.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   readDeferredPluginMigrations,
@@ -11,6 +14,28 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
+
+export async function editAndDeleteImportedSessions(
+  scope: Awaited<ReturnType<typeof seedDeferredPluginSessionSource>>["scope"],
+  keptLabel: string,
+) {
+  // Retention of the fixture's old timestamps must not race its intended deletion.
+  await expect(
+    patchSessionEntryCore(
+      { ...scope, sessionKey: "agent:main:kept" },
+      () => ({ label: keptLabel }),
+      { skipMaintenance: true },
+    ),
+  ).resolves.toMatchObject({ label: keptLabel });
+  await expect(
+    deleteSessionEntryLifecycle({
+      ...scope,
+      target: { canonicalKey: "agent:main:deleted", storeKeys: ["agent:main:deleted"] },
+      archiveTranscript: false,
+      deleteTranscriptWithoutArchive: true,
+    }),
+  ).resolves.toMatchObject({ deleted: true });
+}
 
 /** Inject competing work inside synchronous publication callbacks. */
 export function seedConcurrentDeferredPluginMigration(state: OpenClawTestState, pluginId: string) {
@@ -44,8 +69,6 @@ export async function seedDeferredPluginSessionSource(
   missingTranscript?: "declared" | "metadata-only",
 ) {
   // This fixture models active legacy stores with known deletion history.
-  // Keep them within retention so background maintenance cannot race setup deletions.
-  const updatedAt = Date.now();
   openOpenClawStateDatabase({ env: state.env });
   const sessionsDir =
     layout === "external"
@@ -65,7 +88,7 @@ export async function seedDeferredPluginSessionSource(
           {
             sessionId,
             ...(missingTranscript === "declared" ? { sessionFile: path.basename(transcript) } : {}),
-            updatedAt,
+            updatedAt: 20,
           },
         ];
       }
@@ -95,7 +118,7 @@ export async function seedDeferredPluginSessionSource(
       );
       return [
         `agent:main:${name}`,
-        { sessionId, sessionFile: path.basename(transcript), updatedAt },
+        { sessionId, sessionFile: path.basename(transcript), updatedAt: 20 },
       ];
     }),
   );

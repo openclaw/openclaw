@@ -421,6 +421,7 @@ async function runSetupWizardOnce(
         url: remoteUrl,
         config: baseConfig,
         originScopedDeviceAuth: true,
+        configuredRemote: !remoteUrlChanged,
         token: remoteProbeAuth?.auth.token,
         ...(remoteProbeAuth?.auth.password ? { password: remoteProbeAuth.auth.password } : {}),
       })

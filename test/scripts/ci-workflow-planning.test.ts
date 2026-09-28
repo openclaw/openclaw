@@ -2568,6 +2568,8 @@ describe("ci workflow guards", () => {
       expect(actual).toContain("preflight");
       expect(actual).not.toContain("ci-gate");
       expect(actual).not.toContain("check-lint-hosted-core-shard");
+      expect(actual).toContain("checks-baseline-ratchets");
+      expect(actual).not.toContain("check-plan");
       expect(Number(qualification.outputs.hybrid_hosted_base_rows)).toBe(
         Number(ordinary.outputs.hybrid_hosted_base_rows) + 2,
       );
@@ -4967,7 +4969,7 @@ describe("ci workflow guards", () => {
     expect(readFrozenAdditionalCheckRows()).toContainEqual({
       check_name: "check-additional-extension-package-boundary",
       group: "extension-package-boundary",
-      runner: "blacksmith-16vcpu-ubuntu-2404",
+      runner: "blacksmith-32vcpu-ubuntu-2404",
     });
     const runStep = additionalJob.steps.find(
       (step: WorkflowStep) => step.name === "Run additional check shard",

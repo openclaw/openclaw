@@ -870,23 +870,6 @@ describe("runDaemonRestart health checks", () => {
     expect(callGatewayCli).not.toHaveBeenCalled();
   });
 
-  it("does not send a legacy restart signal when an owner ID appears before delivery", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    const legacyLock = { pid: 4200, createdAt: "2026-07-16T12:00:00.000Z", port: 18_789 };
-    readActiveGatewayLockIdentity
-      .mockResolvedValueOnce(legacyLock)
-      .mockResolvedValue({ ...legacyLock, ownerId: "gateway-owner-new" });
-    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
-    mockUnmanagedRestart();
-
-    await expect(runDaemonRestart({ json: true })).rejects.toThrow("gateway lock owner changed");
-
-    expect(writeGatewayRestartIntentSync).toHaveBeenCalledOnce();
-    expect(clearGatewayRestartIntentSync).toHaveBeenCalledOnce();
-    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
-    expect(callGatewayCli).not.toHaveBeenCalled();
-  });
-
   it("uses the legacy local RPC contract for a pre-upgrade Windows gateway lock", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     readActiveGatewayLockIdentity.mockResolvedValue(

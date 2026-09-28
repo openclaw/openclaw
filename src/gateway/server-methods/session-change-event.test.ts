@@ -600,7 +600,7 @@ describe("sessions.changed coalescing", () => {
         bootId: "event-generation",
         cfg: config,
       });
-      const send = vi.fn<(frame: string) => void>();
+      const send = vi.fn<(frame: string | Buffer) => void>();
       connection.clients.add({
         connId: "conn-1",
         usesSharedGatewayAuth: false,
@@ -651,7 +651,9 @@ describe("sessions.changed coalescing", () => {
         ]);
         expect(payloads[0]).not.toHaveProperty("session");
         expect(payloads[1]).not.toHaveProperty("session");
-        expect(send.mock.calls.map(([frame]) => JSON.parse(frame).payload)).toMatchObject([
+        expect(
+          send.mock.calls.map(([frame]) => JSON.parse(frame.toString()).payload),
+        ).toMatchObject([
           { reason: "delete", sessionId: "original" },
           { reason: "create", sessionId: "replacement", session: { sessionId: "replacement" } },
         ]);
@@ -682,7 +684,7 @@ describe("sessions.changed coalescing", () => {
             await flushPendingSessionsChangedEvents(context);
             expect(
               send.mock.calls
-                .map(([frame]) => JSON.parse(frame).payload)
+                .map(([frame]) => JSON.parse(frame.toString()).payload)
                 .filter((payload) => payload.sessionKey === sessionKey),
             ).toMatchObject([
               {

@@ -149,7 +149,7 @@ runs:
       id: setup-node
       shell: bash
       env:
-        REQUESTED_NODE_VERSION: ${{ inputs.node-version }}
+        REQUESTED_NODE_VERSION: ${{ runner.environment == 'github-hosted' && inputs.node-version == '24.x' && startsWith(env.NODE_VERSION, '24.') && env.NODE_VERSION || inputs.node-version }}
         OPENCLAW_NODE_TOOLCHAIN_ROOT: ${{ inputs.cache-mode != 'off' && runner.os != 'Windows' && format('{0}/openclaw-node-toolchain/node', runner.temp) || '' }}
       run: |
         set -euo pipefail

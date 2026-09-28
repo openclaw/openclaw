@@ -109,6 +109,7 @@ class AndroidLicenseNoticesTest {
         "llama.cpp",
         "Lobe Icons",
         "lodash-es",
+        "Lucide",
         "Manrope",
         "Markdown",
         "Marked",

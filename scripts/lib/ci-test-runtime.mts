@@ -1,5 +1,6 @@
 import { globSync } from "node:fs";
 import { agentVitestProjectOwners } from "../../test/vitest/vitest.agents-paths.mjs";
+import { databaseWorkerCoreTestFiles } from "../../test/vitest/vitest.database-worker-core-paths.mjs";
 import {
   matchesVitestCliSelection,
   matchesVitestGlob,
@@ -74,8 +75,23 @@ const nativeCompilerTestFiles = [
 // Keep every case on Node while the canonical inventories own all other membership.
 const runtimePartitions = new Map<
   string,
-  { files: (cwd: string) => string[]; nodeRequired: ReadonlySet<string>; includeAfterShard?: true }
+  {
+    files: (cwd: string) => string[];
+    nodeRequired: ReadonlySet<string> | ((file: string) => boolean);
+    includeAfterShard?: true;
+  }
 >([
+  [
+    "test/vitest/vitest.process.config.ts",
+    {
+      files: (cwd) =>
+        globSync("src/process/**/*.test.ts", { cwd, exclude: databaseWorkerCoreTestFiles })
+          .map((file) => file.replaceAll("\\", "/"))
+          .toSorted(),
+      // Only this native-Bun contract is qualified; process siblings retain Node.
+      nodeRequired: (file) => file !== "src/process/terminal-pty-bun.test.ts",
+    },
+  ],
   [
     "test/vitest/vitest.unit-fast.config.ts",
     {
@@ -125,6 +141,15 @@ const runtimePartitions = new Map<
     },
   ],
 ]);
+
+function partitionRequiresNode(
+  partition: { nodeRequired: ReadonlySet<string> | ((file: string) => boolean) },
+  file: string,
+): boolean {
+  return typeof partition.nodeRequired === "function"
+    ? partition.nodeRequired(file)
+    : partition.nodeRequired.has(file);
+}
 
 function unitFastFiles(): string[] {
   const otherOwners = new Set([...getUnitFastTimerTestFiles(), ...getUnitFastIsolatedTestFiles()]);
@@ -255,7 +280,7 @@ export function resolveCiTestRuntimeSelections(
     }
     const files = new Set(partition.files(cwd));
     return selection.targets.every(
-      (target) => files.has(target) && !partition.nodeRequired.has(target),
+      (target) => files.has(target) && !partitionRequiresNode(partition, target),
     )
       ? completeBun()
       : node;
@@ -320,11 +345,11 @@ export function resolveCiTestRuntimeSelections(
         ? requested.has(file)
         : selection.includePatterns.some((pattern) => matchesVitestGlob(file, pattern))),
   );
-  const bunFiles = files.filter((file) => !partition.nodeRequired.has(file));
+  const bunFiles = files.filter((file) => !partitionRequiresNode(partition, file));
   if (!bunFiles.length) {
     return node;
   }
-  const nodeFiles = files.filter((file) => partition.nodeRequired.has(file));
+  const nodeFiles = files.filter((file) => partitionRequiresNode(partition, file));
   return [
     ...(policy === "dual"
       ? node

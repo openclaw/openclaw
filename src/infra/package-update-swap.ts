@@ -47,6 +47,7 @@ import {
   FreeBsdPkgOwnershipError,
 } from "./update-freebsd-pkg-ownership.js";
 import { verifyPackageUpdateRecovery } from "./update-global.js";
+import { UPDATE_CLEANUP_BUDGET_MS } from "./update-maintenance.js";
 import {
   finalizeNativePackageStage,
   NativePackageRollbackError,
@@ -491,6 +492,8 @@ export async function swapStagedPackageInstall(
           // Seal automatic rollback once retirement begins, but retain the actual
           // outcome. A repeated completion must not report a renamed backup gone.
           retirement = (async () => {
+            const cleanupStartedAt = performance.now();
+            const cleanupDeadlineAtMs = cleanupStartedAt + UPDATE_CLEANUP_BUDGET_MS;
             const messages: string[] = [];
             // The filesystem fallback can recheck an assertion after catching it.
             // A later successful read cannot turn that authority failure into cleanup.
@@ -507,6 +510,7 @@ export async function swapStagedPackageInstall(
                 "old package",
                 targetLayout.globalRoot,
                 assertRetirementCurrent,
+                cleanupDeadlineAtMs,
               );
               if (message) {
                 messages.push(message);
@@ -516,6 +520,7 @@ export async function swapStagedPackageInstall(
               launchers,
               targetLayout.globalRoot,
               assertRetirementCurrent,
+              cleanupDeadlineAtMs,
             );
             if (launcherCleanup) {
               messages.push(launcherCleanup);
@@ -527,6 +532,7 @@ export async function swapStagedPackageInstall(
               return {
                 ...step(1, null, messages.join("\n")),
                 name: "package-backup-retention",
+                durationMs: Math.round(performance.now() - cleanupStartedAt),
                 // Only this verified obsolete-resource path qualifies the warning.
                 // Recovery refusal and unclassified link outcomes remain hard.
                 advisory: {

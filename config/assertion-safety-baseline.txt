@@ -2042,7 +2042,6 @@ src/commands/channels/add.ts	2
 src/commands/channels/capabilities.ts	4
 src/commands/channels/list.ts	1
 src/commands/channels/status.runtime.ts	8
-src/commands/cleanup-utils.ts	1
 src/commands/configure.channels.ts	1
 src/commands/configure.daemon.ts	1
 src/commands/configure.gateway.ts	1

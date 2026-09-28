@@ -2,7 +2,10 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { listAvailableExtensionIds } from "../../scripts/lib/changed-extensions.mts";
+import {
+  detectChangedExtensionIds,
+  listAvailableExtensionIds,
+} from "../../scripts/lib/changed-extensions.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
 import * as extensionTestPlan from "../../scripts/lib/extension-test-plan.mts";
 import { resolveBoundedVitestInvocations } from "../../scripts/run-vitest.mts";
@@ -80,7 +83,10 @@ describe("extension executable test plans", () => {
       const selected = `${root}/${snapshot}.test.ts`;
       const files = [
         `${root}/package.json`,
+        `${root}/openclaw.plugin.json`,
         `extensions/${snapshot}/package.json`,
+        `extensions/manifest-${snapshot}/openclaw.plugin.json`,
+        `extensions/nested/${snapshot}/openclaw.plugin.json`,
         selected,
         `${root}/browser/ui.test.ts`,
         `${root}/dist/generated.test.ts`,
@@ -89,17 +95,51 @@ describe("extension executable test plans", () => {
       for (const file of files) {
         const absolute = path.join(cwd, file);
         mkdirSync(path.dirname(absolute), { recursive: true });
-        writeFileSync(absolute, file.endsWith("package.json") ? "{}\n" : "export {};\n");
+        writeFileSync(absolute, file.endsWith(".json") ? "{}\n" : "export {};\n");
       }
       if (kind === "git") {
         for (const args of [["init"], ["add", "."]]) {
           execFileSync("git", args, { cwd, stdio: "ignore" });
         }
+        const untracked = path.join(cwd, "extensions/untracked");
+        mkdirSync(untracked);
+        writeFileSync(path.join(untracked, "openclaw.plugin.json"), "{}\n");
       }
-      expect(listAvailableExtensionIds(cwd)).toEqual([snapshot, "fixture"].toSorted());
+      expect(listAvailableExtensionIds(cwd)).toEqual(
+        [snapshot, "fixture", `manifest-${snapshot}`].toSorted(),
+      );
       expect(extensionTestPlan.listExtensionTestFilesForRoots([root], cwd)).toEqual([selected]);
       expect(extensionTestPlan.listExtensionTestFilesForRoots([selected], cwd)).toEqual([selected]);
     }
+  });
+
+  it.each([
+    { selection: "name", targetArg: "active-memory", cwd: process.cwd() },
+    { selection: "path", targetArg: "extensions/active-memory", cwd: process.cwd() },
+    { selection: "cwd", cwd: path.join(process.cwd(), "extensions/active-memory") },
+  ])("plans manifest-only Active Memory by $selection", ({ targetArg, cwd }) => {
+    expect(extensionTestPlan.resolveExtensionTestPlan({ targetArg, cwd })).toMatchObject({
+      extensionId: "active-memory",
+      extensionDir: "extensions/active-memory",
+      hasTests: true,
+      planGroups: [
+        {
+          config: "test/vitest/vitest.extension-active-memory.config.ts",
+          roots: ["extensions/active-memory"],
+        },
+        {
+          config: workerConfig,
+          roots: ["extensions/active-memory/index.test.ts"],
+        },
+      ],
+    });
+  });
+
+  it("includes manifest-only Active Memory in default and changed discovery", () => {
+    expect(listAvailableExtensionIds()).toContain("active-memory");
+    expect(detectChangedExtensionIds(["extensions/active-memory/index.ts"])).toEqual([
+      "active-memory",
+    ]);
   });
 
   it.each([

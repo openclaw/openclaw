@@ -253,7 +253,7 @@ export async function finishUpdate(
     );
     assertCurrent();
     let restoreFailure = initialRestoreFailure;
-    let finalResult = completeUpdateCommandResult(params, result);
+    let finalResult = completeUpdateCommandResult(params, result, currentServiceStop());
     const serviceVerdict = currentServiceStop()?.serviceUpdateVerdict;
     let root =
       finalResult.recovery?.packageRollbackVerified && serviceVerdict?.kind === "owned"
@@ -427,6 +427,10 @@ export async function finishUpdate(
 
   const runPostUpdate = async (): Promise<UpdateRunResult> => {
     try {
+      if (params.coreAlreadyCurrent && params.deferredMaintenance) {
+        defaultRuntime.error(params.deferredMaintenance);
+        return params.result;
+      }
       if (
         params.result.status === "error" ||
         params.result.recovery?.serviceRestartSafe === false
@@ -518,7 +522,7 @@ export async function finishUpdate(
       let restartContext: Awaited<ReturnType<typeof prepareUpdateRestart>>;
       try {
         restartContext = await prepareUpdateRestart(
-          { ...params, shouldRestart, result: resultWithPostUpdate },
+          { ...params, shouldRestart, result: resultWithPostUpdate, assertCurrent },
           restartConfigSnapshot,
         );
       } catch (error) {
@@ -669,6 +673,7 @@ export async function finishUpdate(
               result: resultWithPostUpdate,
               shouldRestart,
               preManagedServiceStop: currentServiceStop(),
+              assertCurrent,
             },
             postUpdateConfigSnapshot ?? restartConfigSnapshot,
           );
