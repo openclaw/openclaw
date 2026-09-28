@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync-cache-state.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
@@ -28,7 +29,7 @@ import {
 import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
 import { recoverOrphanTaskDeliveryRows } from "./openclaw-state-db-task-delivery-recovery.js";
 import { runManagedStateTransaction } from "./openclaw-state-db-transaction.js";
-import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
+import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
 
 /** Validate only the stable storage subset used by an existing-schema owner.
@@ -71,7 +72,7 @@ export function runExistingOpenClawStateWriteTransaction<T>(
   }
   const env = options.env ?? process.env;
   const busyTimeoutMs = contract.busyTimeoutMs ?? OPENCLAW_SQLITE_BUSY_TIMEOUT_MS;
-  const pathname = resolveDatabasePath(options);
+  const pathname = path.resolve(options.path ?? resolveOpenClawStateSqlitePath(env));
   const existingSchema = isExistingOpenClawStateSchema(pathname);
   if (contract.recoverTaskDeliveryOrphans) {
     assertOpenClawStateSchemaRepairAllowed(pathname);

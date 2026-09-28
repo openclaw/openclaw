@@ -42,6 +42,7 @@ import { needsOpenClawStateDatabaseSchemaRepair } from "./openclaw-state-db-fast
 import {
   assertOpenClawStateDatabaseForMaintenance,
   markCurrentStateSchemaVersion,
+  resolveDatabasePath,
 } from "./openclaw-state-db-maintenance.js";
 import { openUnpublishedStateDatabase } from "./openclaw-state-db-open.js";
 import { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
@@ -63,7 +64,6 @@ import {
   withOpenClawStateStartupCheckpointConnection,
 } from "./openclaw-state-db-startup-checkpoint.js";
 import { runManagedStateTransaction } from "./openclaw-state-db-transaction.js";
-import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 import {
   assertOpenClawStateWriteAllowed,
   assertOpenClawStateWriteAllowedAtPath,

@@ -50,7 +50,10 @@ import {
   type ReusedOpenClawStateReadOnlyDatabase,
 } from "./openclaw-state-db-readonly-reuse.js";
 import { isExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
-import { existingPathOrUndefined, resolveDatabasePath } from "./openclaw-state-db.paths.js";
+import {
+  existingPathOrUndefined,
+  resolveOpenClawStateSqlitePath,
+} from "./openclaw-state-db.paths.js";
 import {
   mapOpenClawStateReadError,
   observeReadOutcome,
@@ -247,7 +250,9 @@ export function withSynchronousArtifactPreservingStateSnapshot<T>(
 }
 
 function resolveReadOnlyPath(options: OpenClawStateDatabaseOptions): string {
-  const pathname = resolveDatabasePath(options);
+  const pathname = path.resolve(
+    options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env),
+  );
   assertRetainedReadScopeAdmission(pathname, [
     stateSnapshotReads.getStore(),
     ...(disposableStateReads.getStore() ?? []),

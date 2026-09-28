@@ -20,7 +20,7 @@ import {
   listAgentDatabaseAdmissionRefusals,
 } from "../state/agent-database-admission.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
-import { resolveDatabasePath } from "../state/openclaw-state-db.paths.js";
+import { resolveDatabasePath } from "../state/openclaw-state-db-maintenance.js";
 import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { createDesktopSessionRegistry } from "./desktop/session-registry.js";

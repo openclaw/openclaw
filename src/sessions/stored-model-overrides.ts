@@ -87,7 +87,8 @@ function resolveParentSessionKeyCandidate(params: {
   return null;
 }
 
-type StoredModelOverrideParams = {
+/** Keep prepared host metadata outside the published command resolver contract. */
+export function resolveStoredModelOverride(params: {
   loadSessionEntry?: (sessionKey: string) => SessionEntry | undefined;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
@@ -95,12 +96,7 @@ type StoredModelOverrideParams = {
   parentSessionKey?: string;
   defaultProvider: string;
   allowPluginNormalization?: boolean;
-};
-
-/** Keep prepared host metadata outside the published command resolver contract. */
-export function resolveStoredModelOverride(
-  params: StoredModelOverrideParams,
-): StoredModelOverride | null {
+}): StoredModelOverride | null {
   return resolveStoredModelOverrideCore({
     loadSessionEntry: params.loadSessionEntry,
     sessionEntry: params.sessionEntry,
@@ -114,7 +110,15 @@ export function resolveStoredModelOverride(
 
 /** Resolves the persisted model override visible to the current session. */
 export function resolveStoredModelOverrideCore(
-  params: StoredModelOverrideParams & ModelManifestNormalizationContext,
+  params: {
+    loadSessionEntry?: (sessionKey: string) => SessionEntry | undefined;
+    sessionEntry?: SessionEntry;
+    sessionStore?: Record<string, SessionEntry>;
+    sessionKey?: string;
+    parentSessionKey?: string;
+    defaultProvider: string;
+    allowPluginNormalization?: boolean;
+  } & ModelManifestNormalizationContext,
 ): StoredModelOverride | null {
   if (params.sessionEntry?.modelOverrideSource === "default") {
     return null;
