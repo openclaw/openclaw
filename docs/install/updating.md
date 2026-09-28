@@ -192,6 +192,13 @@ existing install/restart path retains the recorded runtime pin. A path under
 `~/.openclaw` alone does not establish Bun package-manager ownership. See
 [Bun-only installs](/install/bun-compatibility#bun-only-installs).
 
+Doctor and `openclaw update repair` do not move a Bun Gateway onto a different
+CLI installation. A repair invoked from that other installation reports the
+drift and refuses service maintenance before stopping the Gateway. Run repair
+from the Gateway's own installation, for example
+`<bun> <service-root>/openclaw.mjs update repair`, or use `openclaw update` to
+advance its installation in place.
+
 The installed updater runs first. Published 2026.9.6 still tries cross-root
 rebinding for a Bun service and refuses with `original-service-unverified`
 before stopping it; the Gateway keeps running. The service-root route applies

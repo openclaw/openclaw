@@ -96,6 +96,13 @@ the target package's Node and SQLite requirements because finalization uses it.
 The existing service install/restart path retains the recorded Bun pin. Node split-root routing is unchanged, and a path under
 `~/.openclaw` alone does not establish Bun global-install ownership.
 
+Doctor and `openclaw update repair` from another installation leave this Bun
+Gateway at its own root. Explicit repair reports the installation drift and
+refuses maintenance before stopping the service. Use
+`<bun> <service-root>/openclaw.mjs update repair` or
+`<bun> <service-root>/openclaw.mjs doctor --fix` for repair from the service's
+installation.
+
 First installs and updater staging without a persistent Node require `OPENCLAW_PACKAGE_BUN_LAUNCHER` set to the absolute Bun executable that launches the CLI. The updater sets it automatically when running under Bun; an app must set it for its first `bun add -g --trust openclaw@<version>`. Preinstall validates that launcher as Bun 1.4+. Without the marker, preinstall still requires a persistent Node; a Node found on PATH must satisfy the package's Node requirements even when the marker is set.
 
 Published updaters through 2026.9.6 cannot update a Bun-only install. They do not set this marker, so the new package's preinstall stops staging (`global-install-failed`). If the caller sets the marker, their own bare `node` probe fails to start instead (`update-executor-settlement-failed`). Both refusals happen before the Gateway stops, and it keeps running. A fixed version must drive the update; installing a fixed candidate cannot change the updater already running.
