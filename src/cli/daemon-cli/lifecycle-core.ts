@@ -1,8 +1,8 @@
 // Gateway service lifecycle command core: install, uninstall, start, stop, restart.
 import type { Writable } from "node:stream";
-import { readBestEffortConfig } from "../../config/config.js";
+import { readBestEffortConfig, type OpenClawConfig } from "../../config/config.js";
 import { resolveIsNixMode } from "../../config/paths.js";
-import { checkTokenDrift } from "../../daemon/service-audit.js";
+import { checkManagedServiceEnvDrift, checkTokenDrift } from "../../daemon/service-audit.js";
 import { readGatewayServiceLoadState } from "../../daemon/service-load-state.js";
 import { collectGatewayServiceStartRepairIssues } from "../../daemon/service-start-repair.js";
 import type { GatewayServiceRestartResult } from "../../daemon/service-types.js";
@@ -589,14 +589,17 @@ export async function runServiceRestart(params: {
 
   if (loaded && !handledRecovery && params.checkTokenDrift) {
     // Check for token drift before restart (service token vs config token)
+    let command: Awaited<ReturnType<typeof params.service.readCommand>> = null;
+    let cfg: OpenClawConfig | null = null;
+    let driftEnv: Record<string, string | undefined> = process.env;
     try {
-      const command = await params.service.readCommand(process.env);
-      const serviceToken = command?.environment?.OPENCLAW_GATEWAY_TOKEN;
-      const cfg = await readBestEffortConfig();
-      const driftEnv = {
+      command = await params.service.readCommand(process.env);
+      cfg = await readBestEffortConfig();
+      driftEnv = {
         ...process.env,
         ...command?.environment,
       };
+      const serviceToken = command?.environment?.OPENCLAW_GATEWAY_TOKEN;
       const configToken = await resolveGatewayTokenForDriftCheck({ cfg, env: driftEnv });
       const driftIssue = checkTokenDrift({ serviceToken, configToken });
       if (driftIssue) {
@@ -618,6 +621,34 @@ export async function runServiceRestart(params: {
           defaultRuntime.log(`\n⚠️  ${warning}\n`);
         }
       }
+    }
+
+    try {
+      const { collectDurableServiceEnvVarSources } =
+        await import("../../config/state-dir-dotenv.js");
+      const { collectEnvSecretRefIds } = await import("../../config/resolution-facts.js");
+      const { durableEnvironment } = collectDurableServiceEnvVarSources({
+        env: driftEnv,
+        config: cfg ?? undefined,
+      });
+      const secretRefKeys = cfg ? collectEnvSecretRefIds(cfg) : undefined;
+      const envDriftIssue = checkManagedServiceEnvDrift({
+        serviceEnvironment: command?.environment,
+        durableEnvironment,
+        secretRefKeys,
+      });
+      if (envDriftIssue) {
+        const recovery =
+          resolveDaemonInstallBlockMessage("gateway") ??
+          `Run \`${formatCliCommand("openclaw gateway install --force")}\` to refresh the service environment.`;
+        const warning = `${envDriftIssue.message} ${recovery}`;
+        warnings.push(warning);
+        if (!json) {
+          defaultRuntime.log(`\n⚠️  ${warning}\n`);
+        }
+      }
+    } catch {
+      // Best-effort drift inspection; ignore inspection failures
     }
   }
 
