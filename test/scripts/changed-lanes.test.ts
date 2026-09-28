@@ -1720,6 +1720,10 @@ describe("scripts/changed-lanes", () => {
     ["test/fixtures/foo.ts", false, false],
     ["test/foo.mjs", false, false],
     ["test/tsconfig/tsconfig.test.root.json", true, false],
+    ["test/tsconfig/tsconfig.test.root.tooling.json", true, false],
+    ["test/tsconfig/tsconfig.test.root.scripts.json", true, false],
+    ["test/tsconfig/tsconfig.test.root.e2e.json", true, false],
+    ["test/tsconfig/tsconfig.test.root.other.json", true, false],
     ["test/tsconfig.json", true, false],
   ])(
     "routes %s to root typecheck=%s and targeted lint=%s",

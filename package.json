@@ -2204,7 +2204,7 @@
     "tsgo:test": "pnpm tsgo:core:test && pnpm tsgo:extensions:test && pnpm tsgo:test:root",
     "tsgo:test:extensions": "pnpm tsgo:extensions:test",
     "tsgo:test:packages": "node scripts/run-tsgo-core-test-shards.mjs packages",
-    "tsgo:test:root": "node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.test.root.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/test-root.tsbuildinfo",
+    "tsgo:test:root": "node scripts/run-tsgo-core-test-shards.mjs root",
     "tsgo:test:src": "node scripts/run-tsgo-core-test-shards.mjs src",
     "tsgo:test:ui": "node scripts/run-tsgo-core-test-shards.mjs ui",
     "tsgo:ui": "node scripts/run-tsgo.mjs -p tsconfig.ui.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/ui.tsbuildinfo",

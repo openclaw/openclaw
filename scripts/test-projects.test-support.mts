@@ -2982,6 +2982,10 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
 
 const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   [
+    /^test\/tsconfig\/tsconfig\.test\.root(?:\.(?:tooling|scripts|e2e|other))?\.json$/u,
+    ["tsgo-core-test-shards", "changed-lanes"],
+  ],
+  [
     /^(?:git-hooks\/pre-commit|scripts\/pre-commit\/(?:guard-staged-content\.mjs|filter-staged-files\.mjs|format-staged\.sh|run-node-tool\.sh)|test\/git-hooks-pre-commit\.test-support\.ts)$/u,
     ["test/git-hooks-pre-commit.test.ts", "test/git-hooks-pre-commit-boundaries.test.ts"],
   ],
