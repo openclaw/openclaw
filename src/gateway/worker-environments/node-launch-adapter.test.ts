@@ -518,6 +518,73 @@ describe("node worker launch adapter", () => {
     expect(invoke.mock.calls.map(([request]) => request.command)).toEqual(["worker.launch.v1"]);
   });
 
+  it("fails a launch the supervisor rejected as invalid without awaiting cancellation", async () => {
+    let nowMs = 0;
+    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
+      if (request.command === "worker.cancel.v1") {
+        // A supervisor that rejected the request never registered the launch.
+        return wire(null);
+      }
+      request.onDispatchReady?.("invoke-1");
+      return {
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message: "INVALID_REQUEST: invalid worker launch descriptor",
+        },
+      };
+    });
+    const adapter = createNodeWorkerLaunchAdapter({
+      getTransport: () => transportWith(invoke),
+      now: () => nowMs,
+      sleep: async (ms) => {
+        nowMs += ms;
+      },
+    });
+
+    await expect(adapter.launch(launchRequest())).rejects.toMatchObject({
+      code: "INVALID_REQUEST",
+      message:
+        "node worker supervisor worker.launch.v1 failed (INVALID_REQUEST): INVALID_REQUEST: invalid worker launch descriptor",
+    });
+    expect(invoke.mock.calls.map(([request]) => request.command)).toEqual(["worker.launch.v1"]);
+    expect(nowMs).toBe(0);
+  });
+
+  it("cancels an invalid launch replay when an earlier dispatch may have registered it", async () => {
+    const input = launchInput();
+    const launchResponses = [
+      { ok: false, error: { code: "TIMEOUT", message: "node invoke timed out" } },
+      {
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message: "INVALID_REQUEST: node placement workspace is being removed",
+        },
+      },
+    ];
+    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
+      if (request.command === "worker.cancel.v1") {
+        return wire(receipt(input, "cancelled"));
+      }
+      request.onDispatchReady?.("invoke-1");
+      return launchResponses.shift()!;
+    });
+    const adapter = createNodeWorkerLaunchAdapter({
+      getTransport: () => transportWith(invoke),
+      sleep: async () => {},
+    });
+
+    await expect(adapter.launch(launchRequest(input))).rejects.toMatchObject({
+      code: "INVALID_REQUEST",
+    });
+    expect(invoke.mock.calls.map(([request]) => request.command)).toEqual([
+      "worker.launch.v1",
+      "worker.launch.v1",
+      "worker.cancel.v1",
+    ]);
+  });
+
   it("snapshots the launch plan before asynchronous node discovery", async () => {
     const input = launchInput();
     const expectedInput = structuredClone(input);
@@ -623,7 +690,7 @@ describe("node worker launch adapter", () => {
             : wire(receipt(input, "cancelled"));
         }
         request.onDispatchReady?.("invoke-1");
-        if (request.command === "worker.launch.v1" && failedCommand === "status") {
+        if (request.command === "worker.launch.v1" && failedCommand !== "launch") {
           return wire(receipt(input, "running"));
         }
         return { ok: false, error: { code: "INVALID_REQUEST", message: rejection } };
@@ -644,7 +711,10 @@ describe("node worker launch adapter", () => {
         expect(diagnostic).toContain(cancellationRejection);
         expect(diagnostic).toContain("cancellation could not be confirmed");
       }
-      expect(invoke.mock.calls.at(-1)?.[0].command).toBe("worker.cancel.v1");
+      // A rejected new launch left nothing to cancel; a running receipt did.
+      expect(invoke.mock.calls.at(-1)?.[0].command).toBe(
+        failedCommand === "launch" ? "worker.launch.v1" : "worker.cancel.v1",
+      );
     },
   );
 

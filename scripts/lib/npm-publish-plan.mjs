@@ -21,9 +21,9 @@ export function npmRegistryReadbackDeadline() {
 
 /**
  * @typedef {object} NpmPublishPlan
- * @property {"stable" | "alpha" | "beta"} channel
- * @property {"latest" | "alpha" | "beta" | "extended-stable"} publishTag
- * @property {("latest" | "alpha" | "beta")[]} mirrorDistTags
+ * @property {"stable" | "beta"} channel
+ * @property {"latest" | "beta" | "extended-stable"} publishTag
+ * @property {("latest" | "beta")[]} mirrorDistTags
  */
 
 /**
@@ -291,6 +291,9 @@ export function resolveNpmPublishPlan(version, currentBetaVersion, publishTagOve
   if (parsedVersion === null) {
     throw new Error(`Unsupported release version "${version}".`);
   }
+  if (parsedVersion.channel === "alpha" || publishTagOverride?.trim() === "alpha") {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
   const releaseTrain = classifyReleaseTrain(parsedVersion);
 
   const normalizedOverride = publishTagOverride?.trim();
@@ -316,13 +319,6 @@ export function resolveNpmPublishPlan(version, currentBetaVersion, publishTagOve
     return {
       channel: "beta",
       publishTag: "beta",
-      mirrorDistTags: [],
-    };
-  }
-  if (parsedVersion.channel === "alpha") {
-    return {
-      channel: "alpha",
-      publishTag: "alpha",
       mirrorDistTags: [],
     };
   }

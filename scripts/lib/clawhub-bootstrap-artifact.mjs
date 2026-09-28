@@ -25,8 +25,7 @@ const PACKAGE_DIR_PATTERN = /^extensions\/[a-z0-9][a-z0-9._-]*$/u;
 const TAG_PATTERN = /^[a-z0-9][a-z0-9._-]*$/u;
 const PROTECTED_WORKFLOW_TAG_PATTERN =
   /^refs\/tags\/(release-publish\/([a-f0-9]{12})-[1-9][0-9]*)$/u;
-const VERSION_PATTERN =
-  /^[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(?:-(?:alpha|beta)\.[1-9][0-9]*|-[1-9][0-9]*)?$/u;
+const VERSION_PATTERN = /^[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(?:-beta\.[1-9][0-9]*|-[1-9][0-9]*)?$/u;
 const TOOLCHAIN_VERSION_PATTERN = /^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/u;
 const MAX_BOOTSTRAP_ARCHIVE_BYTES = 256 * 1024 * 1024;
 const MAX_BOOTSTRAP_ARCHIVE_FILES = 128;
@@ -99,6 +98,9 @@ function normalizePlanEntry(value, index) {
     PACKAGE_DIR_PATTERN,
     `matrix[${index}].packageDir`,
   );
+  if (value.version?.includes("-alpha.") || value.publishTag === "alpha") {
+    fail("Alpha releases are retired; use a beta prerelease instead.");
+  }
   const publishTag = requirePattern(value.publishTag, TAG_PATTERN, `matrix[${index}].publishTag`);
   const version = requirePattern(value.version, VERSION_PATTERN, `matrix[${index}].version`);
   const bootstrapMode = requireString(value.bootstrapMode, `matrix[${index}].bootstrapMode`);

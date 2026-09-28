@@ -124,6 +124,8 @@ export function collectPluginSafetyInspectedFiles(
     const activity = activityScope(entry.path);
     const browser = browserScope(entry.path);
     if (
+      // Peer repair reads ordinary dependency manifests with the same strict inode guard.
+      path.basename(entry.path) === "package.json" ||
       (activity &&
         path.dirname(entry.path) === activity &&
         entry.path.endsWith(".svg") &&
