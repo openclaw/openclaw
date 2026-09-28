@@ -2558,12 +2558,12 @@ openclaw-settings-save-indicator:empty {
 .sidebar-online__person {
   flex: 1;
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) auto;
-  align-items: center;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: baseline;
   gap: 8px;
   width: 100%;
   min-width: 0;
-  min-height: 30px;
+  min-height: 32px;
   padding: 4px 8px;
   border: 0;
   border-radius: var(--radius-md);
@@ -2590,10 +2590,11 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-online__avatar {
   position: relative;
+  align-self: center;
   display: flex;
   align-items: center;
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
 }
 
 /* All rows are connected; a hollow ring avoids implying observed activity. */
@@ -2625,49 +2626,68 @@ openclaw-settings-save-indicator:empty {
   overflow: hidden;
   color: var(--text-strong);
   font-size: calc(13px * var(--control-ui-text-scale));
-  font-weight: 500;
-  text-overflow: ellipsis;
+  font-weight: 600;
+  line-height: calc(24px * var(--control-ui-text-scale));
   white-space: nowrap;
+  mask-image: linear-gradient(to right, black calc(100% - 12px), transparent);
 }
 
-.sidebar-online__person-copy {
-  display: flex;
+.sidebar-online__person-name:dir(rtl) {
+  mask-image: linear-gradient(to left, black calc(100% - 12px), transparent);
+}
+
+/* Keep the group intrinsic and right-anchored; hover changes paint, not spacing. */
+.sidebar-online__counts {
+  display: inline-flex;
   align-items: baseline;
-  gap: 6px;
-  min-width: 0;
+  gap: 10px;
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  background: transparent;
+  font-size: calc(12px * var(--control-ui-text-scale));
+  line-height: calc(24px * var(--control-ui-text-scale));
+  white-space: nowrap;
+  transition: background var(--duration-fast) ease;
+}
+
+.sidebar-online__person:hover .sidebar-online__counts,
+.sidebar-online__person:focus-visible .sidebar-online__counts {
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+}
+
+.sidebar-online__open,
+.sidebar-online__running {
+  display: inline-block;
 }
 
 .sidebar-online__open {
-  flex: none;
   color: var(--muted);
-  font-size: calc(12px * var(--control-ui-text-scale));
-  font-weight: 400;
-  white-space: nowrap;
+}
+
+.sidebar-online__open-icon {
+  display: inline-block;
+  width: calc(11px * var(--control-ui-text-scale));
+  height: calc(11px * var(--control-ui-text-scale));
+  margin-inline-end: 4px;
+  vertical-align: -0.125em;
+}
+
+.sidebar-online__open-icon svg {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 .sidebar-online__running {
-  justify-self: end;
-  padding: 0 4px;
-  border: 1px solid transparent;
-  border-radius: 5px;
-  background: var(--accent-subtle);
-  color: color-mix(in srgb, var(--accent) 70%, var(--text));
-  font-family: var(--font-body);
-  font-size: calc(10px * var(--control-ui-text-scale));
-  font-weight: 400;
-  line-height: calc(14px * var(--control-ui-text-scale));
-  white-space: nowrap;
+  color: color-mix(in srgb, var(--accent) 70%, var(--text-strong));
+  font-weight: 500;
 }
 
-/* Keep translated word boundaries legible at compact sizes in every interface font. */
-.sidebar-online__open,
-.sidebar-online__running {
-  letter-spacing: normal;
-  word-spacing: 0.15em;
-}
-
-.sidebar-online__running strong {
-  font-weight: 600;
+.sidebar-online__running .session-run-spinner {
+  width: calc(9px * var(--control-ui-text-scale));
+  height: calc(9px * var(--control-ui-text-scale));
+  margin-inline-end: 4px;
+  vertical-align: baseline;
 }
 
 .sidebar-online__retry {
@@ -2695,7 +2715,8 @@ openclaw-settings-save-indicator:empty {
 @media (prefers-reduced-motion: reduce) {
   .sidebar-recent-sessions__head,
   .sidebar-recent-sessions__head .sidebar-recent-sessions__label-text,
-  .sidebar-online__person {
+  .sidebar-online__person,
+  .sidebar-online__counts {
     transition: none;
   }
 }

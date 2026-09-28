@@ -189,8 +189,8 @@ describe("sidebar people workload", () => {
     const { sidebar, sessions, context, request, summaryRequest } = await mountWorkload(
       () => pending.promise,
     );
-    expect(counts(sidebar, "ada")).toEqual(["— open"]);
-    expect(counts(sidebar, "cy")).toEqual(["— open"]);
+    expect(counts(sidebar, "ada")).toEqual([]);
+    expect(counts(sidebar, "cy")).toEqual([]);
     expect(person(sidebar, "cy").getAttribute("aria-description")).toContain(
       "Session counts unavailable",
     );
@@ -216,8 +216,8 @@ describe("sidebar people workload", () => {
 
     expect(summaryRequest).toHaveBeenCalledOnce();
     expect(sessions.state.result?.sessions).toHaveLength(1);
-    expect(counts(sidebar, "ada")).toEqual(["7 open", "1 running"]);
-    expect(counts(sidebar, "bea")).toEqual(["3 open", "2 running"]);
+    expect(counts(sidebar, "ada")).toEqual(["1", "7"]);
+    expect(counts(sidebar, "bea")).toEqual(["2", "3"]);
     expect(counts(sidebar, "cy")).toEqual([]);
     expect(person(sidebar, "bea").dataset.presenceActivity).toBe("idle");
     expect(person(sidebar, "bea").getAttribute("aria-description")).toContain("2 running");
@@ -240,8 +240,16 @@ describe("sidebar people workload", () => {
       ],
     });
     await settle(sidebar);
-    expect(counts(sidebar, "ada")).toEqual(["7 open", "1 running"]);
-    expect(counts(sidebar, "Raw Ada")).toEqual(["— open"]);
+    expect(counts(sidebar, "ada")).toEqual(["1", "7"]);
+    expect(counts(sidebar, "Raw Ada")).toEqual([]);
+    expect(person(sidebar, "Raw Ada").title).toBe("Session counts unavailable");
+    expect(person(sidebar, "ada").querySelector(".session-run-spinner")).not.toBeNull();
+    expect(person(sidebar, "ada").querySelector(".sidebar-online__open svg")).not.toBeNull();
+    expect(person(sidebar, "cy").querySelector(".sidebar-online__counts")).toBeNull();
+    expect(person(sidebar, "Raw Ada").querySelector(".sidebar-online__counts")).toBeNull();
+    expect(
+      person(sidebar, "ada").querySelector('[data-session-count="open"]')?.getAttribute("title"),
+    ).toBe("7\u00a0open");
     expect(counts(sidebar, "cy")).toEqual([]);
     expect(names(sidebar)).toEqual(["ada", "cy", "bea", "Raw Ada", "zoe"]);
     expect(counts(sidebar, "zoe")).toEqual([]);
@@ -279,7 +287,7 @@ describe("sidebar people workload", () => {
       .mockResolvedValue(summary([]));
     const { sidebar, summaryRequest } = await mountWorkload(response);
     expect(sidebar.sessionData.ownerCounts.error).toContain("Summary unavailable");
-    expect(counts(sidebar, "cy")).toEqual(["— open"]);
+    expect(counts(sidebar, "cy")).toEqual([]);
     await click(sidebar, ".sidebar-online__retry");
     expect(summaryRequest).toHaveBeenCalledTimes(2);
     expect(sidebar.sessionData.ownerCounts.error).toBeNull();
@@ -300,7 +308,7 @@ describe("sidebar people workload", () => {
       .mockReturnValueOnce(stale.promise)
       .mockReturnValue(current.promise);
     const { sidebar, gateway, summaryRequest } = await mountWorkload(response);
-    expect(counts(sidebar, "ada")).toEqual(["7 open", "1 running"]);
+    expect(counts(sidebar, "ada")).toEqual(["1", "7"]);
     void sidebar.sessionData.ownerCounts.refresh();
     expect(summaryRequest).toHaveBeenCalledTimes(2);
     gateway.publish({
@@ -310,15 +318,15 @@ describe("sidebar people workload", () => {
       },
     });
     await settle(sidebar);
-    expect(counts(sidebar, "ada")).toEqual(["— open"]);
+    expect(counts(sidebar, "ada")).toEqual([]);
 
     stale.resolve(summary([{ profileId: "ada", open: 99, running: 99 }]));
     await settle(sidebar);
-    expect(counts(sidebar, "ada")).toEqual(["— open"]);
+    expect(counts(sidebar, "ada")).toEqual([]);
     expect(summaryRequest).toHaveBeenCalledTimes(3);
     current.resolve(summary([{ profileId: "ada", open: 2, running: 0 }]));
     await settle(sidebar);
-    expect(counts(sidebar, "ada")).toEqual(["2 open"]);
+    expect(counts(sidebar, "ada")).toEqual(["2"]);
   });
 
   it.each(["disconnect", "scope replacement", "presence reset", "unmount"] as const)(
@@ -330,7 +338,7 @@ describe("sidebar people workload", () => {
         .mockResolvedValueOnce(summary())
         .mockReturnValue(late.promise);
       const { sidebar, gateway, provider, summaryRequest } = await mountWorkload(response);
-      expect(counts(sidebar, "ada")).toEqual(["7 open", "1 running"]);
+      expect(counts(sidebar, "ada")).toEqual(["1", "7"]);
       void sidebar.sessionData.ownerCounts.refresh();
       expect(summaryRequest).toHaveBeenCalledTimes(2);
 
@@ -352,14 +360,14 @@ describe("sidebar people workload", () => {
       if (boundary !== "scope replacement") {
         expect(sidebar.sessionData.ownerCounts.counts).toBeNull();
       } else {
-        expect(counts(sidebar, "ada")).toEqual(["2 open"]);
+        expect(counts(sidebar, "ada")).toEqual(["2"]);
       }
       late.resolve(summary([{ profileId: "ada", open: 99, running: 99 }]));
       await settle(sidebar);
       if (boundary !== "scope replacement") {
         expect(sidebar.sessionData.ownerCounts.counts).toBeNull();
       } else {
-        expect(counts(sidebar, "ada")).toEqual(["2 open"]);
+        expect(counts(sidebar, "ada")).toEqual(["2"]);
       }
     },
   );

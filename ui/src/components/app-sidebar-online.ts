@@ -116,6 +116,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
                     data-online-user-id=${user.id}
                     data-presence-activity=${activityState}
                     aria-description=${`${presenceActivityLabel(activityState)} · ${workloadLabel}`}
+                    title=${workload ? nothing : t("presence.sessions.unavailable")}
                     data-person-card-key=${presenceUserKey(user)}
                     data-person-card-trigger
                     aria-haspopup="dialog"
@@ -131,35 +132,38 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
                         variant="footer"
                       ></openclaw-viewer-avatar>
                     </span>
-                    <span class="sidebar-online__person-copy">
-                      <span class="sidebar-online__person-name">${presenceViewerLabel(user)}</span>
-                      ${
-                        workload?.open === 0
-                          ? nothing
-                          : html`<span
-                              class="sidebar-online__open"
-                              data-session-count="open"
-                              title=${t(workload ? "presence.sessions.openHint" : "presence.sessions.unavailable")}
-                              aria-hidden="true"
-                              >${t("presence.sessions.openCount", { count: String(workload?.open ?? "—") })}</span
-                            >`
-                      }
-                    </span>
+                    <span class="sidebar-online__person-name">${presenceViewerLabel(user)}</span>
                     ${
-                      workload && workload.running > 0
-                        ? html`<span
-                            class="sidebar-online__running"
-                            data-session-count="running"
-                            title=${t("presence.sessions.runningHint")}
-                            aria-hidden="true"
-                            >${t("presence.sessions.runningCount")
-                              .split(/(\{count\})/u)
-                              .map((part) =>
-                                part === "{count}"
-                                  ? html`<strong>${workload.running}</strong>`
-                                  : part,
-                              )}</span
-                          >`
+                      workload && (workload.open > 0 || workload.running > 0)
+                        ? html`<span class="sidebar-online__counts" aria-hidden="true">
+                            ${
+                              workload.running > 0
+                                ? html`<span
+                                    class="sidebar-online__running"
+                                    data-session-count="running"
+                                    title=${t("presence.sessions.runningCount", { count: String(workload.running) })}
+                                    ><span class="session-run-spinner"></span
+                                    ><span class="sidebar-online__count"
+                                      >${workload.running}</span
+                                    ></span
+                                  >`
+                                : nothing
+                            }
+                            ${
+                              workload.open > 0
+                                ? html`<span
+                                    class="sidebar-online__open"
+                                    data-session-count="open"
+                                    title=${t("presence.sessions.openCount", { count: String(workload.open) })}
+                                    ><span class="sidebar-online__open-icon"
+                                      >${icons.messageCircle}</span
+                                    ><span class="sidebar-online__count"
+                                      >${workload.open}</span
+                                    ></span
+                                  >`
+                                : nothing
+                            }
+                          </span>`
                         : nothing
                     }
                   </${tag}>
