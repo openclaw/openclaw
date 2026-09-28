@@ -76,7 +76,8 @@ it.each([false, true])(
   },
 );
 
-it.each(["absent", "replaced"] as const)(
+// Windows SQLite handles do not allow renaming the open native database.
+it.runIf(process.platform !== "win32").each(["absent", "replaced"] as const)(
   "keeps the original native rows when its pathname is already %s",
   async (pathnameState) => {
     const { options, database } = createSource();
