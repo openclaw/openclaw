@@ -66,7 +66,14 @@ it.each([
   "incomplete inventory",
   "live overlapping service",
   ...(process.platform === "linux"
-    ? ["disjoint service", "shared dist", "not-loaded service", "unreadable dist"]
+    ? [
+        "disjoint service",
+        "shared dist",
+        "shared dist-runtime",
+        "shared package dist",
+        "not-loaded service",
+        "unreadable dist",
+      ]
     : []),
 ])("prepares private-QA artifacts only with verified separation: %s", async (service) => {
   vi.mocked(gatewayService.readGatewayServiceState).mockRejectedValue(
@@ -82,7 +89,15 @@ it.each([
       errors: [{ source: "fixture", message: "Unreadable service directory" }],
     });
   }
-  if (["disjoint service", "shared dist", "unreadable dist"].includes(service)) {
+  if (
+    [
+      "disjoint service",
+      "shared dist",
+      "shared dist-runtime",
+      "shared package dist",
+      "unreadable dist",
+    ].includes(service)
+  ) {
     const other = tempDirs.make("serving-runtime-");
     await fs.writeFile(path.join(other, "package.json"), JSON.stringify({ name: "openclaw" }));
     await fs.mkdir(path.join(other, "dist"));
@@ -90,6 +105,12 @@ it.each([
     if (service === "shared dist") {
       await fs.rm(path.join(root, "dist"), { recursive: true });
       await fs.symlink(path.join(other, "dist"), path.join(root, "dist"));
+    }
+    if (service === "shared dist-runtime" || service === "shared package dist") {
+      const output = service === "shared dist-runtime" ? "dist-runtime" : "packages/sdk/dist";
+      await fs.mkdir(path.join(other, output), { recursive: true });
+      await fs.mkdir(path.dirname(path.join(root, output)), { recursive: true });
+      await fs.symlink(path.join(other, output), path.join(root, output));
     }
     vi.mocked(systemdFiles.readSystemdServiceCommandLocation).mockResolvedValue({
       kind: "command",

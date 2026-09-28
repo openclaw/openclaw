@@ -35,6 +35,7 @@ import {
   TSDOWN_DECLARATION_EXTENSIONS,
   TSDOWN_DECLARATION_TOOL_INPUTS,
   TSDOWN_PACKAGES_CACHE_INPUT,
+  listTsdownOutputRoots,
   resolveTsdownBuildPlan,
 } from "./tsdown-build.mts";
 
@@ -555,6 +556,7 @@ export async function runBuildAllSteps(
   const fence = await resolveLiveManagedGatewayDistFence(params.cwd ?? process.cwd(), {
     env: buildEnv,
     requireVerified: params.requireVerifiedGatewayFence,
+    outputPaths: listTsdownOutputRoots(),
   });
   params.signal?.throwIfAborted();
   if (fence.refuse) {

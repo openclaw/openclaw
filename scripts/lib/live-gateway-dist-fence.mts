@@ -7,7 +7,7 @@ import { isPidAlive } from "../../src/shared/pid-alive.ts";
 
 type LiveGatewayDistFenceResult = { refuse: true; message: string } | { refuse: false };
 
-/** True when the managed service still holds a live process on this checkout's dist. */
+/** True when the managed service still holds a live process on this checkout's build artifacts. */
 function isLiveManagedGatewayHoldingDist(state: GatewayServiceState): boolean {
   if (state.running) {
     return true;
@@ -112,7 +112,7 @@ function formatRefuseMessage(params: {
         `run \`pnpm build\` in this checkout, then after a successful build start those services (${startHints} or the matching service starts). ` +
         `\`openclaw update\` can apply an available update; an already-current result does not rebuild stale dist.`;
   return (
-    `[openclaw] Refusing to rebuild dist while a managed Gateway${profileText}${unit} is still running from this checkout's dist${entry}. ` +
+    `[openclaw] Refusing to rebuild artifacts while a managed Gateway${profileText}${unit} is still using overlapping build outputs${entry}. ` +
     recovery
   );
 }
@@ -161,33 +161,41 @@ async function loadFenceRuntime() {
   }
 }
 
-async function samePathIdentity(left: string, right: string): Promise<boolean> {
+async function samePathIdentity(
+  left: string,
+  right: string,
+  statCache: Map<string, Promise<Awaited<ReturnType<typeof fs.stat>> | null>>,
+): Promise<boolean> {
   if (left === right) {
     return true;
   }
-  const [leftStat, rightStat] = await Promise.all(
-    [left, right].map((file) =>
-      fs.stat(file).catch((error: unknown) => {
+  const stat = (file: string) => {
+    let pending = statCache.get(file);
+    if (!pending) {
+      pending = fs.stat(file).catch((error: unknown) => {
         if (!hasErrnoCode(error, "ENOENT")) {
           throw error;
         }
         return null;
-      }),
-    ),
-  );
+      });
+      statCache.set(file, pending);
+    }
+    return pending;
+  };
+  const [leftStat, rightStat] = await Promise.all([left, right].map(stat));
   return Boolean(
     leftStat && rightStat && leftStat.dev === rightStat.dev && leftStat.ino === rightStat.ino,
   );
 }
 
 /**
- * True when this checkout's dist physically overlaps the serving Gateway
+ * True when a written output root physically overlaps the serving Gateway
  * artifacts. Logical current/releases ownership is not enough.
  */
 export async function gatewayServiceCommandOverlapsPhysicalCheckout(
   checkoutRoot: string,
   command: GatewayServiceState["command"],
-  options: { requireVerified?: boolean } = {},
+  options: { requireVerified?: boolean; outputPaths?: readonly string[] } = {},
 ): Promise<boolean | null> {
   const runtime = await loadFenceRuntime();
   if (!runtime) {
@@ -204,33 +212,42 @@ export async function gatewayServiceCommandOverlapsPhysicalCheckout(
     return null;
   }
 
-  const checkoutDist = await tryRealpath(path.join(checkoutRoot, "dist"));
-  if (!options.requireVerified) {
-    const existing = await fs.stat(checkoutDist).catch(() => null);
-    if (!existing?.isDirectory()) {
-      return false;
-    }
-  }
-  const servingDist = await tryRealpath(path.join(servingRoot, "dist"));
   const servingEntryReal = await tryRealpath(servingEntry);
-
-  if (runtime.isPathInside(checkoutDist, servingEntryReal)) {
-    return true;
-  }
-  // The packaged launcher imports dist/entry; a shared package root alone is insufficient.
+  const outputPaths = options.outputPaths ?? ["dist"];
+  const servingOutputs = await Promise.all(
+    outputPaths.map((output) => tryRealpath(path.join(servingRoot, output))),
+  );
+  const statCache = new Map<string, Promise<Awaited<ReturnType<typeof fs.stat>> | null>>();
+  // A source entry outside generated outputs does not hold their imports open.
+  // The packaged launcher imports generated outputs from its package root.
   if (
-    !runtime.isPathInside(servingDist, servingEntryReal) &&
+    !servingOutputs.some((output) => runtime.isPathInside(output, servingEntryReal)) &&
     servingEntryReal !== path.join(servingRoot, "openclaw.mjs")
   ) {
     return false;
   }
-  if (await samePathIdentity(checkoutDist, servingDist)) {
-    return true;
+  for (const output of outputPaths) {
+    const checkoutOutput = await tryRealpath(path.join(checkoutRoot, output));
+    if (!options.requireVerified) {
+      const existing = await fs.stat(checkoutOutput).catch(() => null);
+      if (!existing?.isDirectory()) {
+        continue;
+      }
+    }
+    if (runtime.isPathInside(checkoutOutput, servingEntryReal)) {
+      return true;
+    }
+    for (const servingOutput of servingOutputs) {
+      if (
+        runtime.isPathInside(checkoutOutput, servingOutput) ||
+        runtime.isPathInside(servingOutput, checkoutOutput) ||
+        (await samePathIdentity(checkoutOutput, servingOutput, statCache))
+      ) {
+        return true;
+      }
+    }
   }
-  return (
-    runtime.isPathInside(checkoutDist, servingDist) ||
-    runtime.isPathInside(servingDist, checkoutDist)
-  );
+  return false;
 }
 
 async function resolveFenceBindings(
@@ -253,7 +270,11 @@ async function resolveFenceBindings(
  */
 export async function resolveLiveManagedGatewayDistFence(
   checkoutRoot: string,
-  options: { env?: NodeJS.ProcessEnv; requireVerified?: boolean } = {},
+  options: {
+    env?: NodeJS.ProcessEnv;
+    requireVerified?: boolean;
+    outputPaths?: readonly string[];
+  } = {},
 ): Promise<LiveGatewayDistFenceResult> {
   const env = options.env ?? process.env;
   const unknown = {

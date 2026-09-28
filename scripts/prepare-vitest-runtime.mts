@@ -7,6 +7,7 @@ import { resolveLiveManagedGatewayDistFence } from "./lib/live-gateway-dist-fenc
 import { writeRuntimePostBuildStamp } from "./lib/local-build-metadata.mts";
 import { resolveRunNodePreparation } from "./run-node.mts";
 import { runRuntimePostBuild } from "./runtime-postbuild.mts";
+import { listTsdownOutputRoots } from "./tsdown-build.mts";
 
 export async function prepareTestRuntime(
   cwd = process.cwd(),
@@ -39,7 +40,11 @@ export async function prepareTestRuntime(
         ).exitCode;
       }
       if (preparation.runtime) {
-        const fence = await resolveLiveManagedGatewayDistFence(cwd, { env, requireVerified: true });
+        const fence = await resolveLiveManagedGatewayDistFence(cwd, {
+          env,
+          requireVerified: true,
+          outputPaths: listTsdownOutputRoots(),
+        });
         signal?.throwIfAborted();
         if (fence.refuse) {
           console.error(fence.message);
