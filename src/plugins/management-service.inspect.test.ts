@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createConfigResolutionFacts,
+  setConfigResolutionFacts,
+} from "../config/resolution-facts.js";
 import type { McpServerConfig } from "../config/types.mcp.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { computeDeclaredSurfaceHash } from "./capability-summary.js";
 import {
   emptyMetadataSnapshot,
@@ -170,6 +175,66 @@ describe("managed plugin inspection", () => {
     expect(inspection.mcpAuth).toBeUndefined();
     expect(mocks.mcpAuth).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { value: undefined, env: {}, status: "missing" },
+    { value: "private-literal", env: {}, status: "configured" },
+    { value: undefined, env: { ALTERNATIVE_KEY: "private-env" }, status: "configured" },
+    {
+      value: { source: "file", provider: "vault", id: "/private/key" },
+      env: {},
+      status: "configured",
+    },
+    { value: { invalid: true }, env: {}, status: "invalid" },
+    { value: "${WORKBOARD_KEY}", env: {}, status: "unresolved", unresolved: true },
+  ])(
+    "projects only public credential status $status",
+    async ({ value, env, status, unresolved }) => {
+      mocks.metadata.mockReturnValue(metadataSnapshot({ enabled: true }));
+      const registry = createEmptyPluginRegistry();
+      registry.webSearchProviders.push({
+        pluginId: "workboard",
+        source: "/plugins/workboard/index.ts",
+        provider: {
+          id: "workboard",
+          label: "Workboard",
+          hint: "Search",
+          placeholder: "",
+          signupUrl: "",
+          credentialPath: "plugins.entries.workboard.config.apiKey",
+          credentialLabel: "Workboard key",
+          envVars: ["WORKBOARD_KEY", "ALTERNATIVE_KEY"],
+          getCredentialValue: () => undefined,
+          setCredentialValue: () => {},
+          createTool: () => null,
+        },
+      });
+      const config: OpenClawConfig = {
+        plugins: { entries: { workboard: { enabled: true, config: { apiKey: value } } } },
+      };
+      if (unresolved) {
+        const path = "plugins.entries.workboard.config.apiKey";
+        setConfigResolutionFacts(
+          config,
+          createConfigResolutionFacts(
+            [{ configPath: path, varName: "WORKBOARD_KEY" }],
+            new Map([[path, "WORKBOARD_KEY"]]),
+          ),
+        );
+      }
+      const inspection = await withPluginRuntimeRegistryScope(registry, () =>
+        inspectManagedPlugin({ config, pluginId: "workboard", env }),
+      );
+      expect(inspection.credentials).toEqual([
+        {
+          path: ["plugins", "entries", "workboard", "config", "apiKey"],
+          label: "Workboard key",
+          envVars: ["WORKBOARD_KEY", "ALTERNATIVE_KEY"],
+          status,
+        },
+      ]);
+    },
+  );
 
   it("inspects bundled plugin metadata with its effective default hook grants", async () => {
     mocks.metadata.mockReturnValue(metadataSnapshot({ enabled: true }));

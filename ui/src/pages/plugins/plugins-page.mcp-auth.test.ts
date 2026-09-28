@@ -34,10 +34,11 @@ describe("plugin MCP sign-in", () => {
       result,
       createPluginsRouteLocation("/settings/plugins/workboard"),
     );
-    const mounted = await mountPage(createContext(harness.gateway), route, "settings");
+    const context = createContext(harness.gateway);
+    const mounted = await mountPage(context, route, "settings");
     await waitForFast(() => expect(mounted.page.detail?.inspection).toBeTruthy());
     await mounted.page.updateComplete;
-    return { ...mounted, ...harness, client, request, route };
+    return { ...mounted, ...harness, client, request, route, context };
   }
 
   it.each([
@@ -47,19 +48,73 @@ describe("plugin MCP sign-in", () => {
     "authorized",
     undefined,
   ] as const)(
-    "shows sign-in only when the OAuth owner reports missing authorization (%s)",
+    "keeps Accounts visible after sign-in and offers Connect only when needed (%s)",
     async (state) => {
       const inspection = createInspectResult({
         mcpAuth: state ? [{ serverName: "workboard-mcp", state }] : undefined,
       });
       const { page } = await setup(async () => inspection);
-      const alert = page.querySelector(".plugin-auth-alert");
-      if (state && state !== "authorized") {
-        expect(alert?.textContent).toContain("Sign in to Workboard");
-        expect(page.querySelector(".plugin-catalog-detail__panel")?.contains(alert)).toBe(true);
+      const section = [...page.querySelectorAll(".plugin-capabilities")].find((entry) =>
+        entry.querySelector("h2")?.textContent?.startsWith("Accounts"),
+      );
+      if (state) {
+        expect(section?.textContent).toContain("workboard-mcp");
+        expect(section?.textContent).toContain(
+          state === "authorized" ? "Signed in" : "Needs sign-in",
+        );
+        expect(Boolean(section?.querySelector("button"))).toBe(state !== "authorized");
+        expect(page.querySelector(".plugin-catalog-detail__panel")?.firstElementChild).toBe(
+          section,
+        );
       } else {
-        expect(alert).toBeNull();
+        expect(section).toBeUndefined();
       }
+    },
+  );
+
+  it.each([
+    ["missing", undefined, "Not configured"],
+    ["missing", false, "Optional"],
+    ["configured", undefined, "Configured"],
+    ["invalid", undefined, "Needs attention"],
+    ["unresolved", undefined, "Needs attention"],
+  ] as const)(
+    "shows credential state %s (required=%s) and opens existing Settings",
+    async (status, requiresCredential, label) => {
+      const inspection = createInspectResult({
+        credentials: [
+          {
+            path: ["plugins", "entries", "workboard", "config", "apiKey"],
+            label: "Workboard API key",
+            envVars: ["WORKBOARD_API_KEY"],
+            status,
+            requiresCredential,
+          },
+        ],
+        overview: {
+          capabilities: {
+            providers: [],
+            channels: [],
+            contracts: { webSearchProviders: ["workboard"] },
+          },
+        },
+      });
+      const { page, context } = await setup(async () => inspection);
+      const sections = [...page.querySelectorAll(".plugin-capabilities")];
+      expect(sections.map((section) => section.querySelector("h2")?.textContent)).toEqual([
+        "Credentials1",
+        "Capabilities1",
+      ]);
+      expect(sections[0]?.textContent).toContain("WORKBOARD_API_KEY");
+      expect(sections[0]?.querySelector('[role="status"]')?.textContent).toBe(label);
+      expect(Boolean(sections[0]?.querySelector(".plugin-connection-status--warning"))).toBe(
+        label === "Needs attention",
+      );
+      sections[0]?.querySelector<HTMLButtonElement>("button")?.click();
+      expect(context.navigate).toHaveBeenCalledWith(
+        "plugin-settings",
+        expect.objectContaining({ search: "?view=settings" }),
+      );
     },
   );
 
@@ -80,7 +135,7 @@ describe("plugin MCP sign-in", () => {
       }
       throw new Error(`Unexpected method ${method}`);
     });
-    page.querySelector<HTMLButtonElement>(".plugin-auth-alert button")!.click();
+    page.querySelector<HTMLButtonElement>('[aria-label="Connect workboard-mcp"]')!.click();
     await waitForFast(() =>
       expect(request).toHaveBeenCalledWith(
         "mcp.authLogin",
@@ -91,11 +146,14 @@ describe("plugin MCP sign-in", () => {
     await waitForFast(() =>
       expect(request.mock.calls.filter(([method]) => method === "plugins.inspect")).toHaveLength(2),
     );
-    expect(page.querySelector(".plugin-auth-alert")).not.toBeNull();
+    expect(page.querySelector('[aria-label="Connect workboard-mcp"]')).not.toBeNull();
     refreshed.resolve(
       createInspectResult({ mcpAuth: [{ serverName: "workboard-mcp", state: "authorized" }] }),
     );
-    await waitForFast(() => expect(page.querySelector(".plugin-auth-alert")).toBeNull());
+    await waitForFast(() =>
+      expect(page.querySelector('[aria-label="Connect workboard-mcp"]')).toBeNull(),
+    );
+    expect(page.querySelector(".plugin-capabilities")?.textContent).toContain("Signed in");
   });
 
   it.each(["navigation", "reconnect"])(
@@ -119,7 +177,7 @@ describe("plugin MCP sign-in", () => {
         }
         throw new Error(`Unexpected method ${method}`);
       });
-      page.querySelector<HTMLButtonElement>(".plugin-auth-alert button")!.click();
+      page.querySelector<HTMLButtonElement>('[aria-label="Connect workboard-mcp"]')!.click();
       const start = request.mock.calls.find(([method]) => method === "mcp.authLogin")!;
       if (change === "navigation") {
         page.routeData = { ...route, location: createPluginsRouteLocation("/settings/plugins") };

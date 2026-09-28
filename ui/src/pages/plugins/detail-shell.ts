@@ -40,7 +40,6 @@ export function renderPluginDetailShell(props: {
   backLabel: string;
   onBack: () => void;
   titleAction?: TemplateResult;
-  alert?: TemplateResult;
   identity: TemplateResult | typeof nothing;
   icon?: TemplateResult;
   readme?: TemplateResult;
@@ -69,9 +68,7 @@ export function renderPluginDetailShell(props: {
       </div>
     </div>
     <div class="plugin-catalog-detail__content">
-      <section class="plugin-catalog-detail__panel">
-        ${props.alert ?? nothing}${props.panel}
-      </section>
+      <section class="plugin-catalog-detail__panel">${props.panel}</section>
       ${props.sidebar ? html`<aside class="plugin-catalog-detail__sidebar">${props.sidebar}</aside>` : nothing}
       ${
         props.readme

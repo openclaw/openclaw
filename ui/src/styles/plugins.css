@@ -1331,6 +1331,7 @@ openclaw-plugins-page
   gap: 4px;
 }
 .plugin-capability__copy strong {
+  overflow-wrap: anywhere;
   font-size: var(--control-ui-text-sm);
 }
 .plugin-capability__copy > span {
@@ -1560,58 +1561,26 @@ openclaw-plugins-page
   height: 20px;
 }
 
-.plugin-auth-alert {
+.plugin-capability__trailing {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
-  gap: 14px;
-  padding: 14px 18px;
-  margin-bottom: 30px;
-  border: 1px solid color-mix(in srgb, var(--warn) 28%, transparent);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--warn) 7%, var(--bg));
+  gap: 12px;
 }
 
-.plugin-auth-alert__icon {
-  display: flex;
-  flex: none;
+.plugin-connection-status {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.plugin-connection-status--warning {
   color: var(--warn);
 }
 
-.plugin-auth-alert__icon svg {
-  width: 20px;
-  height: 20px;
-}
-
-.plugin-auth-alert__message {
-  flex: 1;
-  min-width: 0;
-  overflow-wrap: anywhere;
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.plugin-auth-alert__action {
-  flex: none;
-  gap: 7px;
-}
-
-.plugin-auth-alert__action svg {
-  width: 15px;
-  height: 15px;
-}
-
 @media (max-width: 560px) {
-  .plugin-auth-alert {
-    gap: 10px;
-    padding: 12px;
-    margin-bottom: 24px;
-  }
-
-  .plugin-auth-alert__message {
-    font-size: 13px;
-  }
-
-  .plugin-auth-alert__action {
-    padding-inline: 10px;
+  .plugin-capability__trailing {
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
   }
 }

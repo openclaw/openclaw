@@ -17,14 +17,21 @@ For a shorter setup walkthrough covering Settings, the composer path (**+** → 
 
 Use the page for operator edits and quick inventory. Use `openclaw mcp doctor --probe` or `openclaw mcp probe` when you need live server proof.
 
-Installed plugins also show a sign-in alert on their detail page when a matching
-HTTP MCP server is configured with `auth: "oauth"` and its shared operator account
-has no saved credentials or requires authorization. **Connect** opens the existing
-OAuth sign-in flow; the page refreshes its saved authorization status when sign-in
-finishes. An administrator connection is required.
+Installed plugin detail pages show **Accounts** first for matching HTTP MCP
+servers configured with `auth: "oauth"`. Each row shows whether the shared operator
+account needs sign-in or has saved authorization. **Connect** opens the existing
+OAuth flow; the page refreshes its saved status afterward. Sign-in requires an
+administrator connection.
+
+Plugins with declared API-key fields also show **Credentials**, including their
+environment variable names and configuration status. **Configure** opens the
+existing plugin Settings editor for keys and secret references. Optional keys are
+marked optional when absent. These sections appear only after installation, not
+in the pre-install catalog preview. Credential presence does not verify that a
+key or secret reference works with the service.
 
 The server name and URL must match the plugin's active MCP declaration. This
-alert does not probe service health or discover OAuth for an unconfigured URL.
+section does not probe service health or discover OAuth for an unconfigured URL.
 Local stdio servers, per-requester accounts, and `oauth.authProfileId` connections
 keep their existing authentication setup paths.
 

@@ -113,7 +113,17 @@ describe("PluginsPage routing", () => {
         method === "plugins.catalog.get"
           ? detail
           : method === "plugins.inspect"
-            ? createInspectResult()
+            ? createInspectResult({
+                mcpAuth: [{ serverName: "account", state: "unauthenticated" }],
+                credentials: [
+                  {
+                    path: ["plugins", "entries", "whatsapp", "config", "apiKey"],
+                    label: "API key",
+                    envVars: ["SERVICE_KEY"],
+                    status: "missing",
+                  },
+                ],
+              })
             : inventory,
       );
       const harness = createGateway(client);
@@ -130,6 +140,15 @@ describe("PluginsPage routing", () => {
           search: "",
         }),
       );
+      await vi.waitFor(() => expect(page.querySelector("h1")).not.toBeNull());
+      if (installed) {
+        await vi.waitFor(() => expect(page.textContent).toContain("Needs sign-in"));
+        expect(page.textContent).toContain("Credentials");
+      } else {
+        expect(page.textContent).not.toContain("Accounts");
+        expect(page.textContent).not.toContain("Credentials");
+        expect(request.mock.calls.some(([method]) => method === "plugins.inspect")).toBe(false);
+      }
       expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
       expect(request.mock.calls.some(([method]) => method === "plugins.install")).toBe(false);
     },

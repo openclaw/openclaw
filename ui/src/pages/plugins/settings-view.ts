@@ -411,28 +411,6 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
       backHref: props.backHref,
       backLabel: props.backLabel,
       onBack: props.onBack,
-      alert: html`${(props.inspection?.mcpAuth ?? [])
-        .filter((server) => server.state !== "authorized")
-        .map(
-          (server) => html`
-            <div class="plugin-auth-alert" role="status" data-mcp-server=${server.serverName}>
-              <span class="plugin-auth-alert__icon" aria-hidden="true">${icons.key}</span>
-              <span class="plugin-auth-alert__message"
-                >${t("pluginsPage.auth.signIn", {
-                  name:
-                    (props.inspection?.mcpAuth?.length ?? 0) > 1 ? server.serverName : plugin.name,
-                })}</span
-              >
-              <button
-                class="btn oc-action oc-action-secondary plugin-auth-alert__action"
-                ?disabled=${!props.canMcpLogin || props.mcpLoginBusy || !props.onMcpLogin}
-                @click=${() => props.onMcpLogin?.(server.serverName)}
-              >
-                ${t("pluginsPage.auth.connect")}${icons.arrowUpRight}
-              </button>
-            </div>
-          `,
-        )}`,
       icon: renderArtTile(plugin.id, plugin.name, {
         iconUrl:
           props.iconUrls[plugin.id] ??
@@ -479,6 +457,51 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
           : undefined,
       panel: html`${notices}
       ${!props.inspection && !catalog && !props.inspectionError ? renderSettingsLoadingSkeleton({ rows: 2, carapace: true }) : nothing}
+      ${renderPluginCapabilitySection(
+        t("pluginsPage.auth.accounts"),
+        (props.inspection?.mcpAuth ?? []).map((server) => ({
+          name: server.serverName,
+          trailing: html`<span
+              class="plugin-connection-status ${server.state === "authorized" ? "" : "plugin-connection-status--warning"}"
+              role="status"
+              >${t(server.state === "authorized" ? "pluginsPage.auth.signedIn" : "pluginsPage.auth.needsSignIn")}</span
+            >
+            ${
+              server.state === "authorized"
+                ? nothing
+                : html`<button
+                    type="button"
+                    class="btn btn--sm oc-action oc-action-secondary"
+                    aria-label=${t("pluginsPage.auth.connectAccount", { name: server.serverName })}
+                    ?disabled=${!props.canMcpLogin || props.mcpLoginBusy || !props.onMcpLogin}
+                    @click=${() => props.onMcpLogin?.(server.serverName)}
+                  >
+                    ${t("pluginsPage.auth.connect")}
+                  </button>`
+            }`,
+        })),
+        icons.circleUser,
+      )}
+      ${renderPluginCapabilitySection(
+        t("pluginsPage.auth.credentials"),
+        (props.inspection?.credentials ?? []).map((credential) => ({
+          name: credential.envVars.join(" / ") || credential.label,
+          trailing: html`<span
+              class="plugin-connection-status ${credential.status === "invalid" || credential.status === "unresolved" ? "plugin-connection-status--warning" : ""}"
+              role="status"
+              >${t(credential.status === "missing" && credential.requiresCredential === false ? "pluginsPage.auth.optional" : `pluginsPage.auth.credentialStatus.${credential.status}`)}</span
+            >
+            <button
+              type="button"
+              class="btn btn--sm oc-action oc-action-secondary"
+              aria-label=${t("pluginsPage.auth.configureCredential", { name: credential.label })}
+              @click=${() => props.onTabChange("configuration")}
+            >
+              ${t("pluginsPage.auth.configure")}
+            </button>`,
+        })),
+        icons.key,
+      )}
       ${renderPluginDeclaredCapabilities(props.inspection?.overview?.capabilities?.contracts, props.inspection?.overview?.capabilities?.ui)}
       ${props.skillsSection ?? renderPluginCapabilitySection(t("pluginsPage.detailTabs.skills"), skills, icons.bookOpenText)}
       ${renderPluginCapabilitySection(
