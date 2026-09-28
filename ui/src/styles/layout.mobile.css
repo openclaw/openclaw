@@ -225,7 +225,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 }
 
 .shell--mobile-nav .sidebar-shell {
-  --sidebar-pad-x: 6px;
+  --sidebar-pad-x: 8px;
   --sidebar-pad-bottom: 14px;
   padding: 18px var(--sidebar-pad-x) var(--sidebar-pad-bottom);
   border-radius: 0;
