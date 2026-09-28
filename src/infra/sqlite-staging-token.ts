@@ -23,6 +23,12 @@ export class SqliteStagingRetiredError extends Error {
   }
 }
 
+export class SqliteStagingOwnershipUnknownError extends Error {
+  constructor() {
+    super("SQLite staging ownership is unknown");
+  }
+}
+
 /** Native transactions fence private staging admission and committed retirement. */
 export function acquireSqliteStagingToken(
   directory: string,
@@ -34,11 +40,11 @@ export function acquireSqliteStagingToken(
     const stat = fs.lstatSync(pathname, { bigint: true });
     // Windows may report zero identities under contention. Read-compatible
     // identity matching is insufficient authority for destructive retirement.
-    if (
-      !(kind === "directory" ? stat.isDirectory() : stat.isFile()) ||
-      (process.platform === "win32" && (stat.dev === 0n || stat.ino === 0n))
-    ) {
+    if (!(kind === "directory" ? stat.isDirectory() : stat.isFile())) {
       throw new Error("SQLite staging ownership is unknown");
+    }
+    if (process.platform === "win32" && (stat.dev === 0n || stat.ino === 0n)) {
+      throw new SqliteStagingOwnershipUnknownError();
     }
     return stat;
   };

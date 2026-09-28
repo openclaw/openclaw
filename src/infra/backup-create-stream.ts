@@ -1,4 +1,4 @@
-import fsSync, { createWriteStream, type Stats } from "node:fs";
+import fsSync, { createWriteStream, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import { compose, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -44,24 +44,32 @@ type BackupArchiveProgress = {
 
 export type BackupArchiveCleanupReceipt = {
   archivePath: string;
-  identity?: Stats;
+  identity?: BigIntStats;
 };
 
 export type PreparedBackupArchive = BackupArchiveCleanupReceipt & {
-  identity: Stats;
+  identity: BigIntStats;
 };
 
 // OpenClaw's one-user trust model treats hostile same-UID pathname rewrites as
 // trusted host mutation. Keep the check and unlink synchronous so cooperative
 // processes cannot interleave through an in-process await boundary.
 export function removePreparedBackupArchive(prepared: PreparedBackupArchive): boolean {
-  let currentIdentity: Stats;
+  let currentIdentity: BigIntStats;
   try {
-    currentIdentity = fsSync.lstatSync(prepared.archivePath);
+    currentIdentity = fsSync.lstatSync(prepared.archivePath, { bigint: true });
   } catch {
     return false;
   }
-  if (!currentIdentity.isFile() || !sameFileIdentity(prepared.identity, currentIdentity)) {
+  if (
+    !currentIdentity.isFile() ||
+    (process.platform === "win32" &&
+      (prepared.identity.dev === 0n ||
+        prepared.identity.ino === 0n ||
+        currentIdentity.dev === 0n ||
+        currentIdentity.ino === 0n)) ||
+    !sameFileIdentity(prepared.identity, currentIdentity)
+  ) {
     return false;
   }
   try {
@@ -84,7 +92,7 @@ export async function writeArchiveStreamToFile(params: {
   // refuses a pre-existing path instead of following a symlink.
   const controller = new AbortController();
   let archiveStream: DestroyableArchiveStream | undefined;
-  let openedIdentity: Stats | undefined;
+  let openedIdentity: BigIntStats | undefined;
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   let idleTimeoutError: Error | undefined;
   let lastEntryPath: string | undefined;
@@ -138,7 +146,7 @@ export async function writeArchiveStreamToFile(params: {
   });
   archiveWriteStream.once("open", (fileDescriptor) => {
     try {
-      openedIdentity = fsSync.fstatSync(fileDescriptor);
+      openedIdentity = fsSync.fstatSync(fileDescriptor, { bigint: true });
     } catch (error) {
       archiveWriteStream.destroy(error as Error);
     }
@@ -150,7 +158,7 @@ export async function writeArchiveStreamToFile(params: {
     });
     reportProgress();
     await pipelinePromise;
-    const currentIdentity = await fs.lstat(params.archivePath);
+    const currentIdentity = await fs.lstat(params.archivePath, { bigint: true });
     if (
       !openedIdentity?.isFile() ||
       !currentIdentity.isFile() ||
@@ -166,7 +174,7 @@ export async function writeArchiveStreamToFile(params: {
       : undefined;
     if (!cleanupReceipt) {
       try {
-        const currentIdentity = fsSync.lstatSync(params.archivePath);
+        const currentIdentity = fsSync.lstatSync(params.archivePath, { bigint: true });
         cleanupReceipt = currentIdentity.isFile()
           ? {
               archivePath: params.archivePath,
