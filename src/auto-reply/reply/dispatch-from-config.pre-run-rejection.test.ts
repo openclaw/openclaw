@@ -121,7 +121,7 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
       handled: true,
       text: "handled by hook",
     });
-    const deliveryGate = createDeferred<void>();
+    const deliveryGate = createDeferred();
     const dispatcher = createReplyDispatcher({ deliver: () => deliveryGate.promise });
     try {
       const dispatch = dispatchReplyFromConfig({
