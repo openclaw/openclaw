@@ -47,6 +47,24 @@ type SystemAgentRescueMessageInput = {
 const SYSTEM_AGENT_COMMAND = "/openclaw";
 const RESCUE_PENDING_NAMESPACE = "rescue-pending";
 const RESCUE_PENDING_MAX_ENTRIES = 1_024;
+const RESCUE_OPERATION_FIELDS = new Map<
+  string,
+  { required?: readonly string[]; optional?: readonly string[] }
+>([
+  ["set-default-model", { required: ["model"], optional: ["agentId"] }],
+  ["config-set", { required: ["path", "value"] }],
+  ["config-set-ref", { required: ["path", "source", "id"], optional: ["provider"] }],
+  ["setup", { optional: ["workspace", "model"] }],
+  ["plugin-install", { required: ["spec"] }],
+  [
+    "create-agent",
+    { required: ["agentId"], optional: ["name", "purpose", "workspace", "model", "role"] },
+  ],
+  ["create-team", { optional: ["coordinatorId", "prefix", "workspaceRoot"] }],
+  ["gateway-start", {}],
+  ["gateway-stop", {}],
+  ["gateway-restart", {}],
+]);
 
 function createCaptureRuntime(): { runtime: RuntimeEnv; read: () => string } {
   const lines: string[] = [];
@@ -110,20 +128,22 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   );
 }
 
-function hasExactKeys(
+function hasOperationFields(
   value: Record<string, unknown>,
-  required: readonly string[],
+  required: readonly string[] = [],
   optional: readonly string[] = [],
 ): boolean {
-  const allowed = new Set([...required, ...optional]);
+  const allowed = new Set(["kind", ...required, ...optional]);
   return (
-    required.every((key) => Object.hasOwn(value, key)) &&
+    Object.hasOwn(value, "kind") &&
+    required.every((key) => Object.hasOwn(value, key) && isNonEmptyString(value[key])) &&
+    optional.every((key) =>
+      key === "role"
+        ? value.role === undefined || listAgentRoles().some((role) => role === value.role)
+        : !Object.hasOwn(value, key) || isNonEmptyString(value[key]),
+    ) &&
     Object.keys(value).every((key) => allowed.has(key))
   );
-}
-
-function hasOptionalString(value: Record<string, unknown>, key: string): boolean {
-  return !Object.hasOwn(value, key) || isNonEmptyString(value[key]);
 }
 
 function parsePendingOperation(value: unknown): SystemAgentOperation | null {
@@ -134,81 +154,18 @@ function parsePendingOperation(value: unknown): SystemAgentOperation | null {
   if (typeof operation.kind !== "string") {
     return null;
   }
-  switch (operation.kind) {
-    case "set-default-model":
-      if (!hasExactKeys(operation, ["kind", "model"]) || !isNonEmptyString(operation.model)) {
-        return null;
-      }
-      break;
-    case "config-set":
-      if (
-        !hasExactKeys(operation, ["kind", "path", "value"]) ||
-        !isNonEmptyString(operation.path) ||
-        !isNonEmptyString(operation.value)
-      ) {
-        return null;
-      }
-      break;
-    case "config-set-ref":
-      if (
-        !hasExactKeys(operation, ["kind", "path", "source", "id"], ["provider"]) ||
-        !isNonEmptyString(operation.path) ||
-        (operation.source !== "env" &&
-          operation.source !== "file" &&
-          operation.source !== "exec" &&
-          operation.source !== "store") ||
-        !isNonEmptyString(operation.id) ||
-        !hasOptionalString(operation, "provider")
-      ) {
-        return null;
-      }
-      break;
-    case "setup":
-      if (
-        !hasExactKeys(operation, ["kind"], ["workspace", "model"]) ||
-        !hasOptionalString(operation, "workspace") ||
-        !hasOptionalString(operation, "model")
-      ) {
-        return null;
-      }
-      break;
-    case "plugin-install":
-      if (!hasExactKeys(operation, ["kind", "spec"]) || !isNonEmptyString(operation.spec)) {
-        return null;
-      }
-      break;
-    case "create-agent":
-      if (
-        !hasExactKeys(operation, ["kind", "agentId"], ["name", "workspace", "model", "role"]) ||
-        !isNonEmptyString(operation.agentId) ||
-        !hasOptionalString(operation, "name") ||
-        (operation.role !== undefined &&
-          !listAgentRoles().some((role) => role === operation.role)) ||
-        !hasOptionalString(operation, "workspace") ||
-        !hasOptionalString(operation, "model")
-      ) {
-        return null;
-      }
-      break;
-    case "create-team":
-      if (
-        !hasExactKeys(operation, ["kind"], ["coordinatorId", "prefix", "workspaceRoot"]) ||
-        !hasOptionalString(operation, "coordinatorId") ||
-        !hasOptionalString(operation, "prefix") ||
-        !hasOptionalString(operation, "workspaceRoot")
-      ) {
-        return null;
-      }
-      break;
-    case "gateway-start":
-    case "gateway-stop":
-    case "gateway-restart":
-      if (!hasExactKeys(operation, ["kind"])) {
-        return null;
-      }
-      break;
-    default:
-      return null;
+  const fields = RESCUE_OPERATION_FIELDS.get(operation.kind);
+  if (!fields || !hasOperationFields(operation, fields.required, fields.optional)) {
+    return null;
+  }
+  if (
+    operation.kind === "config-set-ref" &&
+    operation.source !== "env" &&
+    operation.source !== "file" &&
+    operation.source !== "exec" &&
+    operation.source !== "store"
+  ) {
+    return null;
   }
   return isPersistentSystemAgentOperation(operation as SystemAgentOperation)
     ? (operation as SystemAgentOperation)

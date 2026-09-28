@@ -398,9 +398,10 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
         "-only-testing:OpenClawTests/OpenClawTypographyTests",
       ]),
     );
-    expect(tests[1]?.args).toContain(
+    expect(tests[1]?.args.filter((arg) => arg.startsWith("-only-testing:"))).toEqual([
       "-only-testing:OpenClawUITests/OpenClawSnapshotUITests/testWatchMessageDeliveryIsReachableFromSettings",
-    );
+      "-only-testing:OpenClawUITests/BootstrapSetupFailureUITests",
+    ]);
   });
 
   it("fails on auth test errors before attempting later UI tests", () => {
