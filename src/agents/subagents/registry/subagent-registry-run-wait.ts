@@ -10,6 +10,7 @@ import {
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
+import { retainGatewayRootWorkAdmissionContinuation } from "../../../process/gateway-work-admission.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import {
@@ -250,6 +251,7 @@ export class SubagentWaitManager {
     const stateContext = captureOpenClawStateWorkerContext();
     let waitedEntry: SubagentRunRecord | undefined;
     let completionForRetry: Parameters<typeof this.options.completeSubagentRun>[0] | undefined;
+    let releaseCompletionWork: (() => void) | null = null;
     const assertCurrent = () => {
       assertSubagentRegistryWriteSourceCurrent(stateContext);
       if (
@@ -306,6 +308,8 @@ export class SubagentWaitManager {
       if (wait.status === "pending") {
         return;
       }
+      // Reconciliation can yield to worker IO before the terminal owner takes custody.
+      releaseCompletionWork = retainGatewayRootWorkAdmissionContinuation();
       const waitTerminalOutcome = buildAgentRunTerminalOutcomeFromWaitResult(wait);
       const waitBlocked = waitTerminalOutcome?.reason === "blocked";
       const waitAborted =
@@ -536,6 +540,8 @@ export class SubagentWaitManager {
       } else if (completionForRetry && typeof current.execution.endedAt !== "number") {
         this.options.scheduleSweep({ delayMs: 1_000 });
       }
+    } finally {
+      releaseCompletionWork?.();
     }
   };
 
