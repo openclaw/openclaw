@@ -4,6 +4,7 @@ import { log } from "../logger.js";
 
 export type EmbeddedAttemptSteeringAdmission = {
   accepting: boolean;
+  readonly closed: boolean;
   stop: () => void;
   bindStreamUnsubscribe: (unsubscribe: () => void) => () => void;
 };
@@ -47,6 +48,9 @@ export function withEmbeddedAttemptSteeringAdmission<T>(
       stop();
     }
     return prepare({
+      get closed() {
+        return closed;
+      },
       get accepting() {
         return accepting;
       },

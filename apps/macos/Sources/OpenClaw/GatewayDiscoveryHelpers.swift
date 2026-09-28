@@ -2,28 +2,17 @@ import Foundation
 import OpenClawDiscovery
 
 enum GatewayDiscoveryHelpers {
-    static func resolvedServiceHost(
-        for gateway: GatewayDiscoveryModel.DiscoveredGateway) -> String?
-    {
-        self.resolvedServiceHost(gateway.serviceHost)
-    }
-
-    static func resolvedServiceHost(_ host: String?) -> String? {
-        guard let host = self.trimmed(host), !host.isEmpty else { return nil }
-        return host
-    }
-
     static func serviceEndpoint(
         serviceHost: String?,
         servicePort: Int?) -> (host: String, port: Int)?
     {
-        guard let host = self.resolvedServiceHost(serviceHost) else { return nil }
+        guard let host = serviceHost?.nonEmpty else { return nil }
         guard let port = servicePort, port > 0, port <= 65535 else { return nil }
         return (host, port)
     }
 
     static func sshTarget(for gateway: GatewayDiscoveryModel.DiscoveredGateway) -> String? {
-        guard let host = self.resolvedServiceHost(for: gateway) else { return nil }
+        guard let host = gateway.serviceHost?.nonEmpty else { return nil }
         let user = NSUserName()
         var target = "\(user)@\(host)"
         if gateway.sshPort != 22 {
@@ -61,10 +50,6 @@ enum GatewayDiscoveryHelpers {
         }
         let portSuffix = scheme == "wss" && endpoint.port == 443 ? "" : ":\(endpoint.port)"
         return "\(scheme)://\(endpoint.host)\(portSuffix)"
-    }
-
-    private static func trimmed(_ value: String?) -> String? {
-        value?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func isLoopbackHost(_ rawHost: String) -> Bool {

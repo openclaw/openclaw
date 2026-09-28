@@ -1,20 +1,19 @@
 import { createHash } from "node:crypto";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloudWorkerProfileConfig } from "../../config/types.cloud-workers.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import { REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerPlacementIdleSweep } from "./placement-idle-sweep.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 
-const tempDirs = createTempDirTracker();
+const tempDirs = useStateDatabaseTempDirs();
 
 describe("worker placement idle suspension", () => {
   let nowMs: number;
@@ -26,11 +25,6 @@ describe("worker placement idle suspension", () => {
     const root = tempDirs.make("openclaw-worker-idle-sweep-");
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     placements = createWorkerSessionPlacementStore({ database, now: () => nowMs });
-  });
-
-  afterEach(async () => {
-    await closeStateDatabaseForTest();
-    tempDirs.cleanup();
   });
 
   function createIdleFixture(

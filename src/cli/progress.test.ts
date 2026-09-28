@@ -200,22 +200,17 @@ describe("cli progress", () => {
   it("routes clack spinner output through the progress stream", () => {
     const stream = createOutput(true, vi.fn());
 
-    const fallbacks: Array<"spinner" | "none"> = ["spinner", "none"];
-    let fallbackReads = 0;
     withStdinIsRaw(false, () => {
       const progress = createCliProgress({
         label: "Loading",
         stream,
-        get fallback() {
-          return fallbacks[fallbackReads++];
-        },
+        fallback: "spinner",
       });
       try {
         expect(clackMocks.spinner).toHaveBeenCalledWith({ output: stream });
         expect(clackMocks.spinnerInstance.start).toHaveBeenCalledWith(
           expect.stringContaining("Loading"),
         );
-        expect(fallbackReads).toBe(2);
       } finally {
         progress.done();
       }

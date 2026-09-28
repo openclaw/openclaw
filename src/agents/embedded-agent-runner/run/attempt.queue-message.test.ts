@@ -70,6 +70,40 @@ function fixture(queue: Message[] = [], target = queue[0]) {
 }
 
 describe("embedded OpenClaw queued steering cancellation", () => {
+  it.each(["message_end", "agent_settled", "agent_handoff"])(
+    "keeps admission-only steering owned until %s",
+    async (terminal) => {
+      vi.useFakeTimers();
+      const target = message("admitted guidance");
+      const unrelated = message("unrelated guidance");
+      const f = fixture([target, unrelated], target);
+      const sourceAbort = new AbortController();
+      const onQueueAccepted = vi.fn();
+      await f.wait("admitted guidance", {
+        waitForTranscriptCommit: false,
+        deliveryTimeoutMs: 1,
+        abortSignal: sourceAbort.signal,
+        onQueueAccepted,
+      });
+      expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
+      expect(f.listeners).toHaveLength(1);
+      // A completed sender no longer owns withdrawal of the admitted message.
+      sourceAbort.abort();
+      await vi.advanceTimersByTimeAsync(2);
+      expect(f.queue).toEqual([target, unrelated]);
+      if (terminal === "message_end") {
+        f.queue.shift();
+        f.emit({ type: terminal, message: target });
+      } else {
+        f.emit({ type: terminal });
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(f.queue).toEqual([unrelated]);
+      expect(f.listeners).toHaveLength(0);
+      expect(f.retire).toHaveBeenCalledTimes(terminal === "message_end" ? 0 : 1);
+      expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
+    },
+  );
   it.each(["text", "offloaded", "recorded"] as const)(
     "keeps %s replies distinct from harness secrets",
     async (kind) => {

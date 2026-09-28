@@ -1,0 +1,39 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "allowJs": true,
+    // Explicit ambient roots span the repository, including test augmentations.
+    "rootDir": "../..",
+    // The broad graph imported ESNext through unrelated roots. Preserve that
+    // ambient library contract when those roots move to other projects.
+    "lib": ["DOM", "DOM.Iterable", "ESNext"]
+  },
+  // Narrow projects retain the broad source graph's module augmentations.
+  "files": [
+    "../../src/config/sessions/session-entry.test-compat.d.ts",
+    "../../src/agents/sessions/keybindings.ts",
+    "../../src/cli/program/openclaw-command.ts",
+    "../../src/agents/bash-tools.exec.resolve-env-hook.test.ts",
+    "../../src/plugin-sdk/channel-inbound.test.ts",
+    "../../src/infra/host-env-security-policy.d.ts"
+  ],
+  "include": [
+    "${configDir}/**/*.ts",
+    "${configDir}/**/*.tsx",
+    "${configDir}/**/*.mts",
+    "${configDir}/**/*.cts",
+    "${configDir}/**/*.test-support.cjs",
+    "../../src/**/*.d.ts",
+    "../../src/**/*.d.mts",
+    "../../src/**/*.d.cts",
+    "../../packages/**/*.d.ts",
+    "../../packages/**/*.d.mts",
+    "../../packages/**/*.d.cts",
+    "../../ui/**/*.d.ts",
+    "../../ui/**/*.d.mts",
+    "../../ui/**/*.d.cts",
+    "../../extensions/**/*.d.ts",
+    "../../extensions/**/*.d.mts",
+    "../../extensions/**/*.d.cts"
+  ]
+}
