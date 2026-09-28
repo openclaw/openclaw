@@ -180,6 +180,20 @@ export async function killSubagentRun(params: {
   const runtime = await subagentKillRuntimeLoader.load();
   let admission: "ready" | "declined" | "busy" = "ready";
   let killClaim: Awaited<ReturnType<typeof claimSubagentRunKill>>;
+  const claimSelectedRunKill = () =>
+    claimSubagentRunKill({
+      runId: params.entry.runId,
+      expected: params.entry,
+      sessionId,
+      sessionLifecycleRevision,
+      suppressTaskDelivery: params.suppressTaskDelivery,
+      context: stateContext,
+      assertCurrent: () => {
+        assertState();
+        params.cancellationControl?.assertCurrent();
+      },
+      assertPublicationCurrent: assertSelectedNativeRun,
+    });
   let stopAccepted = false;
   let preparationResult: Awaited<ReturnType<typeof killSubagentRun>> | undefined;
   const cancellationFailure = async (
@@ -309,19 +323,7 @@ export async function killSubagentRun(params: {
         try {
           // Active completion must see cancellation before admission interruption.
           // Pending launch/recovery owners first need the drain to commit their identity.
-          killClaim = await claimSubagentRunKill({
-            runId: params.entry.runId,
-            expected: params.entry,
-            sessionId,
-            sessionLifecycleRevision,
-            suppressTaskDelivery: params.suppressTaskDelivery,
-            context: stateContext,
-            assertCurrent: () => {
-              assertState();
-              params.cancellationControl?.assertCurrent();
-            },
-            assertPublicationCurrent: assertSelectedNativeRun,
-          });
+          killClaim = await claimSelectedRunKill();
         } catch (error) {
           if (hasSqliteWorkerOutcomeUnknown(error)) {
             throw error;
@@ -363,6 +365,29 @@ export async function killSubagentRun(params: {
         SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
       );
       admission = released ? "ready" : "busy";
+      // Native preaccept cancellation first returns its recorded abort outcome.
+      // Claim before another worker read lets that response adopt the queued row.
+      if (
+        released &&
+        params.beforeSessionKill &&
+        params.entry.swarmLaunchPending === true &&
+        params.entry.execution.restartRecovery === undefined &&
+        !resolveSubagentKillTargetState(params.entry) &&
+        isCurrent()
+      ) {
+        try {
+          killClaim = await claimSelectedRunKill();
+        } catch (error) {
+          if (hasSqliteWorkerOutcomeUnknown(error)) {
+            throw error;
+          }
+          preparationResult = {
+            killed: false,
+            sessionId,
+            error: `Failed to persist subagent kill intent: ${formatKillPersistenceError(error)}`,
+          };
+        }
+      }
     },
     run: async () => {
       if (preparationResult) {
@@ -467,19 +492,7 @@ export async function killSubagentRun(params: {
         });
       if (!killClaim) {
         try {
-          killClaim = await claimSubagentRunKill({
-            runId: params.entry.runId,
-            expected: params.entry,
-            sessionId,
-            sessionLifecycleRevision,
-            suppressTaskDelivery: params.suppressTaskDelivery,
-            context: stateContext,
-            assertCurrent: () => {
-              assertState();
-              params.cancellationControl?.assertCurrent();
-            },
-            assertPublicationCurrent: assertSelectedNativeRun,
-          });
+          killClaim = await claimSelectedRunKill();
         } catch (error) {
           if (hasSqliteWorkerOutcomeUnknown(error)) {
             throw error;
