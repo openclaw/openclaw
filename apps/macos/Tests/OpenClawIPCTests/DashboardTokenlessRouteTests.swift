@@ -84,7 +84,6 @@ struct DashboardTokenlessRouteTests {
                     await manager._testHandleControlChannelStateChange(.connected)
                 }
                 let recovered = try #require(manager._testAuxiliaryWindows().first?.controller)
-                try await Self.captureRoute(recovered, transition: transition)
                 #expect(recovered.currentURL == server.url())
                 try #require(!recovered.isShowingFailurePage)
                 #expect(transition == "url" ? recovered === original : recovered !== original)
@@ -161,20 +160,5 @@ struct DashboardTokenlessRouteTests {
                     return try .data(JSONSerialization.data(withJSONObject: response))
                 })
         })
-    }
-
-    /// Temporary hosted-only diagnostic, removed once before/after evidence is collected.
-    private static func captureRoute(_ controller: DashboardWindowController, transition: String) async throws {
-        guard transition == "revision" else { return }
-        let view = controller.webView
-        let deadline = ContinuousClock.now + .seconds(5)
-        while view.isLoading, ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        let image = try await view.takeSnapshot(configuration: nil)
-        let data = try #require(image.tiffRepresentation)
-        let bitmap = try #require(NSBitmapImageRep(data: data))
-        let png = try #require(bitmap.representation(using: .png, properties: [:]))
-        print("TOKENLESS_ROUTE_PNG \(png.base64EncodedString())")
     }
 }
