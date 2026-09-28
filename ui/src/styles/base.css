@@ -222,6 +222,37 @@
   --hljs-deletion: #ffa198;
   --hljs-addition: #7ee787;
 
+  /* Web Awesome shadow parts otherwise retain its independent blue-gray palette.
+     Map its semantic colors once so menus, form controls, tabs, and dialogs
+     inherit built-in, imported, and personal themes together. */
+  --wa-color-surface-default: var(--bg);
+  --wa-color-surface-raised: var(--popover);
+  --wa-color-surface-lowered: var(--bg-muted);
+  --wa-color-surface-border: var(--border);
+  --wa-color-text-normal: var(--text);
+  --wa-color-text-quiet: var(--muted);
+  --wa-color-text-link: var(--link);
+  --wa-color-focus: var(--ring);
+  --wa-color-neutral-fill-quiet: var(--bg-muted);
+  --wa-color-neutral-fill-normal: var(--bg-hover);
+  --wa-color-neutral-border-normal: var(--border-strong);
+  --wa-color-neutral-border-loud: var(--muted);
+  --wa-color-neutral-on-quiet: var(--muted);
+  --wa-color-neutral-on-normal: var(--text);
+  --wa-color-brand-fill-quiet: var(--accent-subtle);
+  --wa-color-brand-fill-loud: var(--accent);
+  --wa-color-brand-on-quiet: var(--accent);
+  --wa-color-danger-fill-normal: var(--danger-subtle);
+  --wa-color-danger-on-quiet: var(--danger);
+  --wa-color-danger-on-normal: var(--danger);
+  --wa-form-control-background-color: var(--bg);
+  --wa-form-control-border-color: var(--border-strong);
+  --wa-form-control-activated-color: var(--accent);
+  --wa-form-control-label-color: var(--text);
+  --wa-form-control-value-color: var(--text);
+  --wa-form-control-hint-color: var(--muted);
+  --wa-form-control-placeholder-color: var(--muted);
+
   /* Theme transition */
   --theme-switch-x: 50%;
   --theme-switch-y: 50%;
@@ -949,6 +980,13 @@ wa-dropdown-item {
 
 wa-dropdown-item[disabled] {
   cursor: not-allowed;
+}
+
+/* Options are menu rows, not solid primary actions. Keep their keyboard-current
+   fill and ink paired even when a theme has a very bright or dark accent. */
+wa-option {
+  --wa-form-control-activated-color: var(--bg-hover);
+  --current-text-color: var(--text);
 }
 
 /* The submenu safe triangle follows the pointer and can cover sibling rows,
