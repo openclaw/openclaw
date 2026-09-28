@@ -127,7 +127,7 @@ export async function resolveDescendantSubagentFollowup(params: {
 }): Promise<DescendantSubagentFollowup> {
   const expectedFollowup = expectsSubagentFollowup(params.initialSynthesizedText);
   const subagentRegistryRuntime = await deliverySubagentRegistryRuntimeLoader.load();
-  let hasUnsettledDescendants = await subagentRegistryRuntime.hasDescendantRunAwaitingSettle(
+  let hasUnsettledDescendants = await subagentRegistryRuntime.hasUnsettledCronDescendants(
     params.sessionKey,
   );
   const shouldCheckCompletedDescendants =
@@ -159,7 +159,7 @@ export async function resolveDescendantSubagentFollowup(params: {
       observedActiveDescendants: hasUnsettledDescendants || expectedFollowup,
       abortSignal: params.abortSignal,
     });
-    hasUnsettledDescendants = await subagentRegistryRuntime.hasDescendantRunAwaitingSettle(
+    hasUnsettledDescendants = await subagentRegistryRuntime.hasUnsettledCronDescendants(
       params.sessionKey,
     );
     if (!params.abortSignal?.aborted && !finalReply && !hasUnsettledDescendants) {

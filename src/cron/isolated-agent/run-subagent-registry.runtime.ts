@@ -45,7 +45,7 @@ export function listDescendantRunsForRequester(sessionKey: string): Promise<Suba
   );
 }
 
-export function hasDescendantRunAwaitingSettle(sessionKey: string): Promise<boolean> {
+export function hasUnsettledCronDescendants(sessionKey: string): Promise<boolean> {
   return withCronDescendantRuns(sessionKey, (runs) =>
     hasDescendantRunAwaitingSettleFromRuns(runs, sessionKey),
   );

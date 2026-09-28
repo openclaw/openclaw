@@ -19,7 +19,7 @@ vi.mock("./run-subagent-registry.runtime.js", () => ({
 }));
 
 vi.mock("./delivery-subagent-registry.runtime.js", () => ({
-  hasDescendantRunAwaitingSettle: vi.fn().mockResolvedValue(false),
+  hasUnsettledCronDescendants: vi.fn().mockResolvedValue(false),
 }));
 
 vi.mock("../../agents/run-wait.js", async () => {
@@ -37,7 +37,7 @@ const callGateway = vi.spyOn(gatewayCallRuntime, "callGateway").mockResolvedValu
 afterAll(() => callGateway.mockRestore());
 
 const { listDescendantRunsForRequester } = await import("./run-subagent-registry.runtime.js");
-const { hasDescendantRunAwaitingSettle } = await import("./delivery-subagent-registry.runtime.js");
+const { hasUnsettledCronDescendants } = await import("./delivery-subagent-registry.runtime.js");
 const { readLatestAssistantReply } = await import("../../agents/run-wait.js");
 
 async function resolveAfterAdvancingTimers<T>(promise: Promise<T>, advanceMs = 100): Promise<T> {
@@ -328,7 +328,7 @@ describe("waitForDescendantSubagentSummary", () => {
     vi.clearAllMocks();
     vi.useRealTimers();
     vi.mocked(listDescendantRunsForRequester).mockResolvedValue([]);
-    vi.mocked(hasDescendantRunAwaitingSettle).mockResolvedValue(false);
+    vi.mocked(hasUnsettledCronDescendants).mockResolvedValue(false);
     vi.mocked(readLatestAssistantReply).mockResolvedValue(undefined);
     vi.mocked(callGateway).mockResolvedValue({ status: "ok" });
   });
@@ -546,7 +546,7 @@ describe("waitForDescendantSubagentSummary", () => {
       let cronReply = "spawned a subagent";
       const finalSynthesis = "Daily report complete: both findings reconciled.";
       vi.mocked(listDescendantRunsForRequester).mockImplementation(async () => descendants);
-      vi.mocked(hasDescendantRunAwaitingSettle).mockImplementation(async () =>
+      vi.mocked(hasUnsettledCronDescendants).mockImplementation(async () =>
         hasDescendantRunAwaitingSettleFromRuns(
           new Map(descendants.map((entry) => [entry.runId, entry])),
           cronSessionKey,
@@ -612,7 +612,7 @@ describe("waitForDescendantSubagentSummary", () => {
     const paused = createDescendantRun();
     paused.pauseReason = "sessions_yield";
     vi.mocked(listDescendantRunsForRequester).mockResolvedValue([paused]);
-    vi.mocked(hasDescendantRunAwaitingSettle).mockResolvedValue(true);
+    vi.mocked(hasUnsettledCronDescendants).mockResolvedValue(true);
     vi.mocked(readLatestAssistantReply).mockResolvedValue("Partial results are available.");
 
     const resultPromise = waitForDescendantSubagentSummary({
@@ -634,7 +634,7 @@ describe("waitForDescendantSubagentSummary", () => {
       descendant.pauseReason = "sessions_yield";
     }
     vi.mocked(listDescendantRunsForRequester).mockResolvedValue([descendant]);
-    vi.mocked(hasDescendantRunAwaitingSettle).mockResolvedValue(true);
+    vi.mocked(hasUnsettledCronDescendants).mockResolvedValue(true);
     vi.mocked(readLatestAssistantReply).mockResolvedValue("on it");
     vi.mocked(callGateway).mockImplementation(async ({ signal }) => {
       await new Promise<void>((_resolve, reject) => {

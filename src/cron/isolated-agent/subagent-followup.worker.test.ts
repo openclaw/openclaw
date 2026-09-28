@@ -22,7 +22,7 @@ import {
   withOpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import {
-  hasDescendantRunAwaitingSettle,
+  hasUnsettledCronDescendants,
   readDescendantExecutionState,
 } from "./run-subagent-registry.runtime.js";
 import { readDescendantSubagentFallbackReply } from "./subagent-followup.js";
@@ -253,7 +253,7 @@ it.each(["running", "yielded", "queued delivery"] as const)(
       });
       saveSubagentRegistryToSqlite(new Map([[child.runId, child]]));
       clearSubagentRunsReadCacheForTest();
-      expect(await hasDescendantRunAwaitingSettle(sessionKey)).toBe(true);
+      expect(await hasUnsettledCronDescendants(sessionKey)).toBe(true);
       expect(await readDescendantExecutionState(sessionKey, 25)).toEqual({
         hasFreshDescendants: false,
         hasActiveDescendants: phase === "running",

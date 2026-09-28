@@ -13,7 +13,7 @@ import {
 } from "../../auto-reply/tokens.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
-import { hasDescendantRunAwaitingSettle } from "./delivery-subagent-registry.runtime.js";
+import { hasUnsettledCronDescendants } from "./delivery-subagent-registry.runtime.js";
 import { listDescendantRunsForRequester } from "./run-subagent-registry.runtime.js";
 import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
@@ -119,7 +119,7 @@ export async function waitForDescendantSubagentSummary(params: {
     sawPendingDescendants =
       params.observedActiveDescendants === true ||
       initialActiveRuns.length > 0 ||
-      (await hasDescendantRunAwaitingSettle(params.sessionKey));
+      (await hasUnsettledCronDescendants(params.sessionKey));
   } catch (error) {
     if (params.abortSignal?.aborted) {
       return undefined;
@@ -148,7 +148,7 @@ export async function waitForDescendantSubagentSummary(params: {
         initialPendingRunIds: pendingRunIds,
         getPendingRunIds: async () => (await getActiveRuns()).map((entry) => entry.runId),
       });
-      if (!(await hasDescendantRunAwaitingSettle(params.sessionKey))) {
+      if (!(await hasUnsettledCronDescendants(params.sessionKey))) {
         break;
       }
       // A yielded task still owns completion while no execution can be waited
@@ -159,7 +159,7 @@ export async function waitForDescendantSubagentSummary(params: {
       );
       pendingRunIds = (await getActiveRuns()).map((entry) => entry.runId);
     }
-    if (params.abortSignal?.aborted || (await hasDescendantRunAwaitingSettle(params.sessionKey))) {
+    if (params.abortSignal?.aborted || (await hasUnsettledCronDescendants(params.sessionKey))) {
       return undefined;
     }
 
