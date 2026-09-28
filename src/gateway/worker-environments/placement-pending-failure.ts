@@ -15,10 +15,8 @@ import {
 } from "./placement-session-tool-operations.js";
 import { publishPlacementTurnClaimState } from "./placement-turn-authority.js";
 import { deferWorkerTurnClaimClosed } from "./placement-turn-claim-events.js";
-import {
-  isCurrentWorkerWorkspacePendingResultOwner,
-  type WorkerWorkspacePendingResult,
-} from "./placement-workspace-result.js";
+import { isCurrentWorkerWorkspacePendingResultOwner } from "./placement-workspace-result.js";
+import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 import { boundedWorkerError } from "./worker-error.js";
 
 export function createPlacementPendingFailureOps(runtime: PlacementStoreRuntime) {

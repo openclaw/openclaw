@@ -3,6 +3,7 @@ import { live } from "lit/directives/live.js";
 import { ref } from "lit/directives/ref.js";
 import type { ChatFollowUpMode } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
+import { renderKbd } from "../../../components/kbd.ts";
 import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import { canSubmitBeforeChatHistory } from "../../../lib/chat/commands.ts";
@@ -516,6 +517,12 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
   const activeRunActionTooltip = alternateShortcutAvailable
     ? `${activeRunActionLabel} ⏎ · ${alternateActionLabel} ${t("chat.sendShortcutModifierEnter")}`
     : activeRunActionLabel;
+  const activeRunActionTooltipTemplate = alternateShortcutAvailable
+    ? html`${activeRunActionLabel}${" "}${renderKbd("⏎", { inline: true })}${" · "}${alternateActionLabel}${" "}${renderKbd(
+        t("chat.sendShortcutModifierEnter").split(/(⌘)/u).filter(Boolean),
+        { inline: true },
+      )}`
+    : undefined;
   // Preserve the click identity without mistaking it for a follow-up mode.
   const send = (event: Event) => props.onSend(event);
   const abortAction = renderChatAbortAction(props);
@@ -586,6 +593,7 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
   const sendAction = html`
     <openclaw-tooltip
       .content=${props.preparingAttachments ? t("chat.composer.preparingAttachments") : (sendStatus ?? activeRunActionTooltip)}
+      .contentTemplate=${!props.preparingAttachments && sendStatus == null ? activeRunActionTooltipTemplate : undefined}
     >
       <button
         class="chat-send-btn chat-send-btn--send${props.sending ? " chat-send-btn--sending" : ""}"

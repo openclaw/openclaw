@@ -3,10 +3,12 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, expect, it } from "vitest";
+import { Header } from "tar";
+import { afterEach, expect, it, vi } from "vitest";
 import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import {
   createPackagedOwnerLoader as createLoader,
+  verifyPackageMember,
   type PackagedOwnerEvidence,
 } from "../../scripts/lib/windows-repair-package.mts";
 import { resolveNpmRunner } from "../../scripts/npm-runner.mts";
@@ -71,6 +73,52 @@ async function loadPackagedOwner(
   const loadOwner = await createPackagedOwnerLoader(packageRoot, tarball);
   return loadOwner(stem, names, evidence);
 }
+
+it("verifies a package member without system tar and rejects changed installed bytes", async () => {
+  const source = "export const fixture = true;\n";
+  const { packageRoot, tarball } = await fixture({ "member.mjs": source });
+  const file = path.join(packageRoot, "dist/member.mjs");
+  vi.stubEnv("PATH", path.join(packageRoot, "no-system-tools"));
+  try {
+    await expect(verifyPackageMember(packageRoot, tarball, file)).resolves.toEqual({
+      file: "dist/member.mjs",
+      sha256: createHash("sha256").update(source).digest("hex"),
+    });
+    await fs.writeFile(file, "export const fixture = false;\n");
+    await expect(verifyPackageMember(packageRoot, tarball, file)).rejects.toThrow(
+      "Installed module differs from the bound package",
+    );
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
+
+it("rejects an oversized member before draining its missing body", async () => {
+  const { packageRoot, tarball } = await fixture({ "member.mjs": "export {};\n" });
+  const block = Buffer.alloc(512);
+  new Header({
+    path: "package/dist/member.mjs",
+    type: "File",
+    mode: 0o644,
+    size: 32 * 1024 * 1024 + 1,
+  }).encode(block);
+  await fs.writeFile(tarball, block);
+  await expect(
+    verifyPackageMember(packageRoot, tarball, path.join(packageRoot, "dist/member.mjs")),
+  ).rejects.toThrow("regular package member within 33554432 bytes");
+});
+
+it("accepts a highly compressible member below the existing byte ceiling", async () => {
+  const source = "\0".repeat(31 * 1024 * 1024);
+  const { packageRoot, tarball } = await fixture({ "member.node": source });
+  expect((await fs.stat(tarball)).size).toBeLessThan(source.length / 1000);
+  await expect(
+    verifyPackageMember(packageRoot, tarball, path.join(packageRoot, "dist/member.node")),
+  ).resolves.toEqual({
+    file: "dist/member.node",
+    sha256: createHash("sha256").update(source).digest("hex"),
+  });
+});
 
 it.each([
   { alias: "a", split: false },

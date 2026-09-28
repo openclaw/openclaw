@@ -1,9 +1,9 @@
-import type { PlacementRecoveryDeps } from "./placement-dispatch-pending-results.js";
 import {
   FORCED_WORKER_ABANDONMENT_ERROR,
   placementTurnOwner,
   type WorkerSessionPlacementIdentity,
 } from "./placement-record.js";
+import type { PlacementRecoveryDeps } from "./placement-recovery-contract.js";
 import { isCurrentWorkerWorkspacePendingResultOwner } from "./placement-workspace-result.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {

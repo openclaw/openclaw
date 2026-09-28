@@ -12,6 +12,7 @@ import {
   resolveGatewayCredentialsForUrlEdit,
   type UiSettings,
 } from "../../app/settings.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import type { GatewayStatusSample } from "../../components/gateway-vitals.ts";
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
@@ -395,7 +396,7 @@ export class ConnectionPage extends OpenClawLightDomElement {
       onDiscardSession: () => this.resetSessionDraft(),
     });
     return html`
-      <section class="content-header">
+      <section class="content-header" ${shellLayoutTraits({ toolbarHeader: true })}>
         <div>
           <h1 class="page-title">${titleForRoute("connection")}</h1>
           <div class="page-subtitle">

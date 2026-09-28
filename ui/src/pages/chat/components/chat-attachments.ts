@@ -21,7 +21,6 @@ import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.typ
 import { renderAttachmentFileIcon } from "./chat-attachment-file-icon.ts";
 import { renderCompactAttachmentFile } from "./chat-attachment-file.ts";
 import { dataImageClipboardFile, resizeChatAttachmentImage } from "./chat-attachment-image.ts";
-import { useSingleAttachmentPicker } from "./chat-attachment-picker-policy.ts";
 import {
   ChatAttachmentReadLifecycle,
   type ChatAttachmentRead,
@@ -32,9 +31,6 @@ import { renderComposerPastedText } from "./chat-composer-pasted-text.ts";
 import { isPastedTextAttachment } from "./chat-pasted-text.ts";
 import { renderChatSelectionAnnotations } from "./chat-selection-annotations.ts";
 
-const CHAT_ATTACHMENT_ACCEPT =
-  "image/*,audio/*,video/*,application/pdf,text/*,.csv,.json,.md,.txt,.zip," +
-  ".doc,.docx,.xls,.xlsx,.ppt,.pptx";
 const LARGE_PASTE_TEXT_THRESHOLD = 1000;
 const LARGE_PASTE_TEXT_MIME_TYPE = "text/plain";
 const LARGE_PASTE_TEXT_FILE_PREFIX = "pasted-text-";
@@ -75,14 +71,6 @@ function isEditableDropTarget(event: DragEvent): boolean {
 
 function currentAttachments(props: ChatAttachmentControlsProps): ChatAttachment[] {
   return props.getAttachments?.() ?? props.attachments ?? [];
-}
-
-function clickComposerInput(target: HTMLElement, selector: string) {
-  target.closest("details")?.removeAttribute("open");
-  target
-    .closest(".agent-chat__composer-shell, .new-session-page__composer")
-    ?.querySelector<HTMLInputElement>(selector)
-    ?.click();
 }
 
 function chatAttachmentFromFile(
@@ -350,16 +338,6 @@ export function handleChatAttachmentPaste(
   appendChatAttachmentFiles(imageFiles, props);
 }
 
-function handleChatAttachmentFileSelect(e: Event, props: ChatAttachmentControlsProps) {
-  const input = e.target;
-  if (!(input instanceof HTMLInputElement)) {
-    return;
-  }
-  const files = [...(input.files ?? [])];
-  input.value = "";
-  appendChatAttachmentFiles(files, props);
-}
-
 type ChatAttachmentDropProps = ChatAttachmentControlsProps & {
   canCompose: boolean;
 };
@@ -439,83 +417,6 @@ export function createChatAttachmentDropHandlers(props: ChatAttachmentDropProps)
       }
     },
   };
-}
-
-export function renderChatAttachmentInputs(props: ChatAttachmentControlsProps) {
-  if (!uploadsEnabled(props.uploadConfig)) {
-    return nothing;
-  }
-  return html`
-    ${(["file", "photo", "camera"] as const).map(
-      (kind) => html`
-        <input
-          type="file"
-          accept=${kind === "file" ? CHAT_ATTACHMENT_ACCEPT : "image/*"}
-          ?multiple=${kind !== "camera"}
-          capture=${kind === "camera" ? "environment" : nothing}
-          class=${`agent-chat__${kind}-input`}
-          ?disabled=${props.disabled}
-          @change=${(event: Event) => {
-            if (!props.disabled) {
-              handleChatAttachmentFileSelect(event, props);
-            }
-          }}
-        />
-      `,
-    )}
-  `;
-}
-
-export function handleChatAttachmentMenuSelection(
-  event: CustomEvent<{ item: { value?: string } }>,
-): boolean {
-  const value = event.detail.item.value;
-  if (value !== "camera" && value !== "photo" && value !== "file") {
-    return false;
-  }
-  const target = event.currentTarget;
-  if (target instanceof HTMLElement) {
-    clickComposerInput(target, `.agent-chat__${value}-input`);
-  }
-  return true;
-}
-
-export function renderChatAttachmentMenuTrigger(
-  disabled: boolean | undefined,
-  hasOverrides = false,
-) {
-  return html`
-    <button
-      slot="trigger"
-      type="button"
-      class="agent-chat__input-btn agent-chat__input-btn--attach ${
-        hasOverrides ? "agent-chat__input-btn--has-overrides" : ""
-      }"
-      aria-label=${t("chat.composer.addAttachment")}
-      ?disabled=${disabled}
-      title=${t("chat.composer.addAttachment")}
-    >
-      ${icons.plus}
-    </button>
-  `;
-}
-
-export function renderChatAttachmentMenuOptions(fileIcon = icons.folder) {
-  const options = useSingleAttachmentPicker()
-    ? [{ value: "file", icon: fileIcon, label: t("chat.composer.attach") }]
-    : [
-        { value: "camera", icon: icons.camera, label: t("chat.composer.takePhoto") },
-        { value: "photo", icon: icons.image, label: t("chat.composer.attachPhoto") },
-        { value: "file", icon: fileIcon, label: t("chat.composer.attachFileOption") },
-      ];
-  return options.map(
-    ({ value, icon, label }) => html`
-      <wa-dropdown-item class="agent-chat__attach-menu-option" value=${value}>
-        <span slot="icon" aria-hidden="true">${icon}</span>
-        <span>${label}</span>
-      </wa-dropdown-item>
-    `,
-  );
 }
 
 function removeBrowserAnnotationAttachment(

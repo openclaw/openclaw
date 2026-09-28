@@ -2,10 +2,26 @@ import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { vi } from "vitest";
+import * as cronStore from "../../../src/cron/store.js";
+import { cronStoreKey } from "../../../src/cron/store/key.js";
 import type { CronRuntimeMutationType } from "../../../src/cron/store/runtime-worker.types.js";
 import type { SqliteWorkerRequest } from "../../../src/infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../../../src/infra/sqlite-worker-operation-admission.js";
 import { openOpenClawStateDatabase } from "../../../src/state/openclaw-state-db.js";
+
+export function observeCronStoreCommits(storePath: string, observer: () => void): () => void {
+  const storeKey = cronStoreKey(storePath);
+  const noteCommit = cronStore.noteCronJobsStoreCommit;
+  const publication = vi
+    .spyOn(cronStore, "noteCronJobsStoreCommit")
+    .mockImplementation((committedStoreKey) => {
+      noteCommit(committedStoreKey);
+      if (committedStoreKey === storeKey) {
+        observer();
+      }
+    });
+  return () => publication.mockRestore();
+}
 
 export function loseFirstCronMutationReply(type: CronRuntimeMutationType = "cron.repairRun") {
   let target: { worker: Worker; requestId: number; nonce: string } | undefined;
@@ -110,7 +126,7 @@ export function observeCronJobWrites(
       SELECT ${functionName}(NEW.job_id, NEW.state_json);
     END;
   `);
-  // TEMP triggers cover the synchronous reservation writer only. Worker mutations
+  // TEMP triggers cover native scheduling writes. Worker mutations
   // supply their actual rows after SQL has run but before their retained commit
   // admission. Observe that boundary without replacing SQL, grants, or outcomes.
   const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
@@ -129,7 +145,9 @@ export function observeCronJobWrites(
               ? [outcome.activation.job]
               : Array.isArray(outcome.jobs)
                 ? outcome.jobs
-                : [];
+                : Array.isArray(outcome.reservations)
+                  ? outcome.reservations.filter(isRecord).map((reservation) => reservation.job)
+                  : [];
             for (const job of jobs) {
               if (isRecord(job) && job.id === jobId && isRecord(job.state)) {
                 observer({

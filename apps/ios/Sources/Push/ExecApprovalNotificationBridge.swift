@@ -75,9 +75,7 @@ struct ApprovalNotificationPrompt: Codable, Equatable, Hashable {
     }
 }
 
-typealias ExecApprovalNotificationPrompt = ApprovalNotificationPrompt
-
-private struct ApprovalNotificationConfiguration {
+struct ApprovalNotificationConfiguration {
     let kind: ApprovalKind
     let requestedKind: String
     let resolvedKind: String
@@ -88,11 +86,26 @@ private struct ApprovalNotificationConfiguration {
 }
 
 enum ApprovalNotificationBridge {
+    static let exec = ApprovalNotificationConfiguration(
+        kind: .exec,
+        requestedKind: "exec.approval.requested",
+        resolvedKind: "exec.approval.resolved",
+        categoryIdentifier: "openclaw.exec-approval",
+        reviewActionIdentifier: "openclaw.exec-approval.review",
+        encodedRequestPrefix: "exec.approval-v2.",
+        legacyRequestPrefix: "exec.approval.")
+    static let plugin = ApprovalNotificationConfiguration(
+        kind: .plugin,
+        requestedKind: "plugin.approval.requested",
+        resolvedKind: "plugin.approval.resolved",
+        categoryIdentifier: "openclaw.plugin-approval",
+        reviewActionIdentifier: "openclaw.plugin-approval.review",
+        encodedRequestPrefix: "plugin.approval-v2.",
+        legacyRequestPrefix: "plugin.approval.")
+    private static let configurations = [ApprovalNotificationBridge.exec, ApprovalNotificationBridge.plugin]
+
     static func registerCategories(center: UNUserNotificationCenter = .current()) {
-        let categories = [
-            ExecApprovalNotificationBridge.configuration,
-            PluginApprovalNotificationBridge.configuration,
-        ].map(self.category(for:))
+        let categories = self.configurations.map(self.category(for:))
         center.getNotificationCategories { existingCategories in
             var updated = existingCategories
             for category in categories {
@@ -106,34 +119,48 @@ enum ApprovalNotificationBridge {
         actionIdentifier: String,
         userInfo: [AnyHashable: Any]) -> ApprovalNotificationPrompt?
     {
-        self.parsePrompt(
-            actionIdentifier: actionIdentifier,
-            userInfo: userInfo,
-            configuration: ExecApprovalNotificationBridge.configuration)
-            ?? self.parsePrompt(
-                actionIdentifier: actionIdentifier,
+        for configuration in self.configurations where
+            actionIdentifier == UNNotificationDefaultActionIdentifier ||
+            actionIdentifier == configuration.reviewActionIdentifier
+        {
+            if let prompt = self.parsePush(
                 userInfo: userInfo,
-                configuration: PluginApprovalNotificationBridge.configuration)
+                expectedKind: configuration.requestedKind,
+                configuration: configuration)
+            {
+                return prompt
+            }
+        }
+        return nil
     }
 
-    static func parseRequestedPush(userInfo: [AnyHashable: Any]) -> ApprovalNotificationPrompt? {
-        let exec = ExecApprovalNotificationBridge.configuration
-        let plugin = PluginApprovalNotificationBridge.configuration
-        return self.parsePush(userInfo: userInfo, expectedKind: exec.requestedKind, configuration: exec)
-            ?? self.parsePush(
+    static func parseRequestedPush(
+        userInfo: [AnyHashable: Any],
+        kind: ApprovalKind? = nil) -> ApprovalNotificationPrompt?
+    {
+        for configuration in self.configurations where kind == nil || configuration.kind == kind {
+            if let prompt = self.parsePush(
                 userInfo: userInfo,
-                expectedKind: plugin.requestedKind,
-                configuration: plugin)
+                expectedKind: configuration.requestedKind,
+                configuration: configuration)
+            {
+                return prompt
+            }
+        }
+        return nil
     }
 
     static func parseResolvedPush(userInfo: [AnyHashable: Any]) -> ApprovalNotificationPrompt? {
-        let exec = ExecApprovalNotificationBridge.configuration
-        let plugin = PluginApprovalNotificationBridge.configuration
-        return self.parsePush(userInfo: userInfo, expectedKind: exec.resolvedKind, configuration: exec)
-            ?? self.parsePush(
+        for configuration in self.configurations {
+            if let prompt = self.parsePush(
                 userInfo: userInfo,
-                expectedKind: plugin.resolvedKind,
-                configuration: plugin)
+                expectedKind: configuration.resolvedKind,
+                configuration: configuration)
+            {
+                return prompt
+            }
+        }
+        return nil
     }
 
     @MainActor
@@ -142,68 +169,7 @@ enum ApprovalNotificationBridge {
         notificationCenter: NotificationCentering,
         includingLegacyOwnerless: Bool = false) async
     {
-        guard let configuration = configuration(for: push.kind) else { return }
-        await self.removeNotifications(
-            for: push,
-            notificationCenter: notificationCenter,
-            includingLegacyOwnerless: includingLegacyOwnerless,
-            configuration: configuration)
-    }
-
-    fileprivate static func shouldPresentNotification(
-        userInfo: [AnyHashable: Any],
-        configuration: ApprovalNotificationConfiguration) -> Bool
-    {
-        self.parsePush(
-            userInfo: userInfo,
-            expectedKind: configuration.requestedKind,
-            configuration: configuration) != nil
-    }
-
-    fileprivate static func parsePrompt(
-        actionIdentifier: String,
-        userInfo: [AnyHashable: Any],
-        configuration: ApprovalNotificationConfiguration) -> ApprovalNotificationPrompt?
-    {
-        guard actionIdentifier == UNNotificationDefaultActionIdentifier
-            || actionIdentifier == configuration.reviewActionIdentifier
-        else {
-            return nil
-        }
-        return self.parsePush(
-            userInfo: userInfo,
-            expectedKind: configuration.requestedKind,
-            configuration: configuration)
-    }
-
-    fileprivate static func parseRequestedPush(
-        userInfo: [AnyHashable: Any],
-        configuration: ApprovalNotificationConfiguration) -> ApprovalNotificationPrompt?
-    {
-        self.parsePush(
-            userInfo: userInfo,
-            expectedKind: configuration.requestedKind,
-            configuration: configuration)
-    }
-
-    fileprivate static func parseResolvedPush(
-        userInfo: [AnyHashable: Any],
-        configuration: ApprovalNotificationConfiguration) -> ApprovalNotificationPrompt?
-    {
-        self.parsePush(
-            userInfo: userInfo,
-            expectedKind: configuration.resolvedKind,
-            configuration: configuration)
-    }
-
-    @MainActor
-    fileprivate static func removeNotifications(
-        for push: ApprovalNotificationPrompt,
-        notificationCenter: NotificationCentering,
-        includingLegacyOwnerless: Bool,
-        configuration: ApprovalNotificationConfiguration) async
-    {
-        guard push.kind == configuration.kind,
+        guard let configuration = self.configurations.first(where: { $0.kind == push.kind }),
               let requestIdentifier = localRequestIdentifier(for: push, configuration: configuration)
         else { return }
         let legacyOwner = push.gatewayDeviceId ?? "legacy"
@@ -232,7 +198,7 @@ enum ApprovalNotificationBridge {
         let identifiers = delivered.compactMap { snapshot -> String? in
             guard let requestedPush = self.parseRequestedPush(
                 userInfo: snapshot.userInfo,
-                configuration: configuration)
+                kind: push.kind)
             else { return nil }
             let matchesCurrentOwner = requestedPush == push
             let matchesLegacyOwnerless = includingLegacyOwnerless &&
@@ -258,17 +224,6 @@ enum ApprovalNotificationBridge {
             ],
             intentIdentifiers: [],
             options: [])
-    }
-
-    private static func configuration(for kind: ApprovalKind) -> ApprovalNotificationConfiguration? {
-        switch kind {
-        case .exec:
-            ExecApprovalNotificationBridge.configuration
-        case .plugin:
-            PluginApprovalNotificationBridge.configuration
-        case .systemAgent:
-            nil
-        }
     }
 
     private static func parsePush(
@@ -322,67 +277,5 @@ enum ApprovalNotificationBridge {
             }
         }
         return nil
-    }
-}
-
-enum ExecApprovalNotificationBridge {
-    static let requestedKind = "exec.approval.requested"
-    static let resolvedKind = "exec.approval.resolved"
-    static let categoryIdentifier = "openclaw.exec-approval"
-    static let reviewActionIdentifier = "openclaw.exec-approval.review"
-
-    fileprivate static let configuration = ApprovalNotificationConfiguration(
-        kind: .exec,
-        requestedKind: ExecApprovalNotificationBridge.requestedKind,
-        resolvedKind: ExecApprovalNotificationBridge.resolvedKind,
-        categoryIdentifier: ExecApprovalNotificationBridge.categoryIdentifier,
-        reviewActionIdentifier: ExecApprovalNotificationBridge.reviewActionIdentifier,
-        encodedRequestPrefix: "exec.approval-v2.",
-        legacyRequestPrefix: "exec.approval.")
-
-    static func shouldPresentNotification(userInfo: [AnyHashable: Any]) -> Bool {
-        ApprovalNotificationBridge.shouldPresentNotification(
-            userInfo: userInfo,
-            configuration: self.configuration)
-    }
-
-    static func parseRequestedPush(userInfo: [AnyHashable: Any]) -> ApprovalNotificationPrompt? {
-        ApprovalNotificationBridge.parseRequestedPush(
-            userInfo: userInfo,
-            configuration: self.configuration)
-    }
-}
-
-enum PluginApprovalNotificationBridge {
-    static let requestedKind = "plugin.approval.requested"
-    static let resolvedKind = "plugin.approval.resolved"
-    static let categoryIdentifier = "openclaw.plugin-approval"
-    static let reviewActionIdentifier = "openclaw.plugin-approval.review"
-
-    fileprivate static let configuration = ApprovalNotificationConfiguration(
-        kind: .plugin,
-        requestedKind: PluginApprovalNotificationBridge.requestedKind,
-        resolvedKind: PluginApprovalNotificationBridge.resolvedKind,
-        categoryIdentifier: PluginApprovalNotificationBridge.categoryIdentifier,
-        reviewActionIdentifier: PluginApprovalNotificationBridge.reviewActionIdentifier,
-        encodedRequestPrefix: "plugin.approval-v2.",
-        legacyRequestPrefix: "plugin.approval.")
-
-    static func shouldPresentNotification(userInfo: [AnyHashable: Any]) -> Bool {
-        ApprovalNotificationBridge.shouldPresentNotification(
-            userInfo: userInfo,
-            configuration: self.configuration)
-    }
-
-    static func parseRequestedPush(userInfo: [AnyHashable: Any]) -> ApprovalNotificationPrompt? {
-        ApprovalNotificationBridge.parseRequestedPush(
-            userInfo: userInfo,
-            configuration: self.configuration)
-    }
-
-    static func parseResolvedPush(userInfo: [AnyHashable: Any]) -> ApprovalNotificationPrompt? {
-        ApprovalNotificationBridge.parseResolvedPush(
-            userInfo: userInfo,
-            configuration: self.configuration)
     }
 }

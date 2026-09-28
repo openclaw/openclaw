@@ -16,6 +16,7 @@ import {
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { updateNodeRunnerInventory } from "./node-registry-private.js";
 import { NodeRegistry, type NodeSessionConnectParams } from "./node-registry.js";
+import { createSessionPlacementFactsReader } from "./server-methods/sessions-read-cache.test-support.js";
 import { createOperatorWsClient } from "./server/ws-connection/authenticated-request-dispatch.test-support.js";
 import {
   disposeSessionReadContexts,
@@ -41,6 +42,7 @@ import {
   advancePlacementFixtureToActive,
   writePlacementEnvironmentFixture,
 } from "./worker-environments/placement-test-fixtures.js";
+import type { WorkerEnvironmentServiceRecord } from "./worker-environments/service-contract.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
@@ -229,7 +231,22 @@ function placementContext(
       getMany: () => new Map([[placement.sessionId, placement]]),
     },
     workerEnvironmentService: {
-      get: () => environment,
+      get: (): WorkerEnvironmentServiceRecord | undefined =>
+        environment
+          ? {
+              environmentId: placement.environmentId ?? "env-placement",
+              leaseId: null,
+              sharedHost: null,
+              createdAtMs: 100,
+              idleSinceAtMs: null,
+              destroyRequestedAtMs: null,
+              attachedSessionIds: [],
+              desktopAvailable: false,
+              desktopApps: [],
+              tunnelStatus: "stopped",
+              ...environment,
+            }
+          : undefined,
       readMachineShape: () => undefined,
       machineShapeVersion: () => 0,
       inventoryVersion: () => 0,
@@ -373,14 +390,22 @@ test("sessions.list projects durable placement move progress", async () => {
   const getMany = vi.fn<WorkerSessionPlacementReader["getMany"]>(
     () => new Map([[placement.sessionId, placement]]),
   );
-  const getPlacementMoves = vi.fn<NonNullable<WorkerSessionPlacementReader["getPlacementMoves"]>>(
-    () => new Map([[move.sessionId, move]]),
+  const facts = createSessionPlacementFactsReader(
+    { getMany },
+    undefined,
+    new Map([[move.sessionId, move]]),
   );
+  const readProjection = vi.fn(facts.readProjection);
+  const projection = await createSessionRowProjection({
+    cfg: (await getGatewayConfigModule()).getRuntimeConfig(),
+    placementFactsReader: { readProjection },
+  });
+  trackSessionReadProjection(projection);
 
   const result = await directSessionReq<{ sessions: GatewaySessionRow[] }>(
     "sessions.list",
     {},
-    { context: { workerSessionPlacementService: { getMany, getPlacementMoves } } },
+    { context: bindSessionRowProjection({}, () => projection) },
   );
 
   expect(result.ok).toBe(true);
@@ -392,7 +417,7 @@ test("sessions.list projects durable placement move progress", async () => {
   });
   expect(main?.placementMove).not.toHaveProperty("operationId");
   expect(
-    getPlacementMoves.mock.calls.flatMap(([ids]) => ids).toSorted((a, b) => a.localeCompare(b)),
+    readProjection.mock.calls.flatMap(([ids]) => ids).toSorted((a, b) => a.localeCompare(b)),
   ).toEqual(["sess-main", "sess-other"]);
 });
 
@@ -445,19 +470,22 @@ test.each([
             state: "destroyed",
           },
     );
+    const projection = await createSessionRowProjection({
+      cfg: (await getGatewayConfigModule()).getRuntimeConfig(),
+      context,
+      placementFactsReader: createSessionPlacementFactsReader(
+        context.workerSessionPlacementService,
+        context.workerEnvironmentService.get,
+        new Map(retryBlock === "move" ? [[placement.sessionId, move]] : []),
+      ),
+    });
+    trackSessionReadProjection(projection);
 
     const result = await directSessionReq<{ session: GatewaySessionRow | null }>(
       "sessions.describe",
       { key: "main" },
       {
-        context: {
-          ...context,
-          workerSessionPlacementService: {
-            ...context.workerSessionPlacementService,
-            getPlacementMoves: () =>
-              new Map(retryBlock === "move" ? [[placement.sessionId, move]] : []),
-          },
-        },
+        context: bindSessionRowProjection(context, () => projection),
       },
     );
 
@@ -517,12 +545,10 @@ test.each([
     });
     const database = openOpenClawStateDatabase({ path: path.join(dir, "placements.sqlite") });
     const placements = createWorkerSessionPlacementStore({ database });
-    const active = await advancePlacementFixtureToActive(
-      placements,
-      database,
-      identity,
+    const active = await advancePlacementFixtureToActive(placements, database, {
+      ...identity,
       executionMode,
-    );
+    });
     const journalOwner = {
       sessionId: identity.sessionId,
       environmentId: active.environmentId,

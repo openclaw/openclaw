@@ -10,6 +10,7 @@ import { loadInstalledPluginIndex } from "../../plugins/installed-plugin-index.j
 import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
 import { seedInstalledPluginIndex } from "../../plugins/test-helpers/installed-plugin-index.js";
 import * as cohort from "../../plugins/update-cohort.js";
+import { listKnownProviderAuthEnvVarNamesCore } from "../../secrets/provider-env-vars.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { preparePostCorePluginConfig } from "./update-command-config.js";
@@ -19,7 +20,14 @@ describe("post-core plugin payload degradation", () => {
   it.each(["stable", "dev"] as const)(
     "retains an explicitly linked plugin through post-core convergence on %s",
     async (channel) => {
-      await withOpenClawTestState({ label: `post-core-linked-${channel}` }, async (state) => {
+      // Keep host provider credentials from adding unrelated installs to this linked-plugin fixture.
+      const env = Object.fromEntries(
+        listKnownProviderAuthEnvVarNamesCore({ config: {}, env: process.env }).map((key) => [
+          key,
+          undefined,
+        ]),
+      );
+      await withOpenClawTestState({ label: `post-core-linked-${channel}`, env }, async (state) => {
         const pluginId = "llm-task";
         const linkedPath = state.statePath("linked-task");
         const bundledPath = state.statePath("bundled", pluginId);

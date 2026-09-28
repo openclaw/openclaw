@@ -445,38 +445,52 @@ struct GatewayLaunchAgentManagerTests {
         #expect(snapshot.port == 18789)
         #expect(snapshot.bind == nil)
     }
-}
 
-@Suite(.serialized)
-struct GatewayLaunchAgentLocalRoutingTests {
-    @Test func `all daemon actions resolve locally before the execution intercept`() async {
-        await TestIsolationLock.shared.acquire()
-        do {
+    @Test(arguments: [
+        ["/fixture/managed/openclaw"],
+        ["/fixture/node", "/fixture/openclaw.mjs"],
+        ["/fixture/app runtime/bun", "/fixture/openclaw.mjs"],
+        ["bun", "/fixture/openclaw.mjs"],
+    ])
+    func `all daemon actions resolve locally before the execution intercept`(
+        cliPrefix: [String]) async
+    {
+        await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": TestIsolation.tempConfigPath()]) {
+            let marker = FileManager.default.temporaryDirectory
+                .appendingPathComponent("openclaw-no-disable-marker-\(UUID().uuidString)")
+            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
             GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(
-                true, resolveCLI: { _, _ in .executable(["/fixture/managed/openclaw"]) })
+                true, resolveCLI: { _, _ in .executable(cliPrefix) })
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
             GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
             defer {
+                GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
                 GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
                 GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
                 GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
             }
             let actions = [
-                ["install", "--force", "--port", "51845", "--runtime", "node", "--allow-unconfigured"],
+                ["install", "--force", "--port", "51845", "--allow-unconfigured"],
                 ["uninstall"],
                 ["restart"],
                 ["status", "--json", "--no-probe"],
             ]
-            for action in actions {
+            let installError = await GatewayLaunchAgentManager.set(
+                enabled: true,
+                bundlePath: "/Applications/OpenClaw.app",
+                port: 51845,
+                allowUnconfigured: true)
+            #expect(installError == nil)
+            for action in actions.dropFirst() {
                 let error = await GatewayLaunchAgentManager.runDaemonCommand(action)
                 #expect(error == nil)
             }
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == actions)
-            let prefix = ["/fixture/managed/openclaw"] + AppProfile.current.cliRootArguments + ["gateway"]
-            #expect(GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot() == actions.map {
+            let prefix = cliPrefix + AppProfile.current.cliRootArguments + ["gateway"]
+            let expectedCommands = actions.map {
                 prefix + $0 + ($0.contains("--json") ? [] : ["--json"])
-            })
+            }
+            #expect(GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot() == expectedCommands)
         }
-        await TestIsolationLock.shared.release()
     }
 }

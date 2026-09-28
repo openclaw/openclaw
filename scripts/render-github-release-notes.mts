@@ -323,7 +323,7 @@ export function dedicatedSectionVersionForTag(tag: unknown) {
   return /-(?:alpha\.)?[1-9][0-9]*$/u.test(taggedVersion) ? taggedVersion : undefined;
 }
 
-export function releaseNotesSectionForTag(changelog: unknown, version: unknown, tag: unknown) {
+function releaseNotesSectionForTag(changelog: unknown, version: unknown, tag: unknown) {
   // Alpha and correction tags prefer their own exact heading when the
   // changelog carries one; otherwise they fall back to the base version.
   assertString(tag, "tag");

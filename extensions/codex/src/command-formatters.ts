@@ -171,6 +171,9 @@ export function formatComputerUseStatus(status: CodexComputerUseStatus): string 
 }
 
 function computerUsePluginState(status: CodexComputerUseStatus): string {
+  if (status.installed === null) {
+    return "installation unchecked";
+  }
   if (!status.installed) {
     return "not installed";
   }

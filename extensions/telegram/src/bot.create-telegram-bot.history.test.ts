@@ -1,4 +1,4 @@
-import { webhookCallback, type Bot } from "grammy";
+import type { Bot } from "grammy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   normalizeSessionDeliveryState,
@@ -11,6 +11,7 @@ import {
   chat,
   commandMessage,
   createBot,
+  deliverTelegramUpdate,
   from,
   harness,
 } from "./bot.create-telegram-bot.native-pipeline.test-support.js";
@@ -43,17 +44,7 @@ beforeEach(() => {
 });
 
 async function receive(bot: Bot, payload: Record<string, unknown>) {
-  const response = await webhookCallback(
-    bot,
-    "std/http",
-  )(
-    new Request("http://localhost/telegram", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ update_id: ++updateId, ...payload }),
-    }),
-  );
-  expect(response.status).toBe(200);
+  await deliverTelegramUpdate(bot, { update_id: ++updateId, ...payload });
 }
 
 function message(text: string) {

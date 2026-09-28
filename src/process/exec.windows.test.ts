@@ -542,6 +542,7 @@ describe("Windows command execution", () => {
           controller.abort();
         } else {
           await vi.advanceTimersByTimeAsync(80);
+          await vi.advanceTimersToNextTimerAsync();
         }
         await vi.advanceTimersByTimeAsync(300);
         expect(requireExecaCall(2)[1]).toEqual(["/PID", "1234", "/T", "/F"]);
@@ -616,7 +617,9 @@ describe("Windows command execution", () => {
         });
         const cancelSignal = requireExecaCall(0)[2].cancelSignal as AbortSignal;
 
-        await vi.advanceTimersByTimeAsync(380);
+        await vi.advanceTimersByTimeAsync(80);
+        await vi.advanceTimersToNextTimerAsync();
+        await vi.advanceTimersByTimeAsync(300);
         expect(cancelSignal.aborted).toBe(true);
         command.finish({ signal: "SIGKILL" });
 
