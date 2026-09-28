@@ -126,12 +126,15 @@ function assignDiagnosticLogAttribute(
   if (!DIAGNOSTIC_LOG_ATTRIBUTE_KEY_RE.test(normalizedKey)) {
     return;
   }
+  let attribute: string | number | boolean;
   if (typeof value === "string") {
-    value = sanitizeDiagnosticLogText(value, MAX_DIAGNOSTIC_LOG_ATTRIBUTE_VALUE_CHARS);
-  } else if (typeof value !== "boolean" && (typeof value !== "number" || !Number.isFinite(value))) {
+    attribute = sanitizeDiagnosticLogText(value, MAX_DIAGNOSTIC_LOG_ATTRIBUTE_VALUE_CHARS);
+  } else if (typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value))) {
+    attribute = value;
+  } else {
     return;
   }
-  attributes[normalizedKey] = value;
+  attributes[normalizedKey] = attribute;
   state.count += 1;
 }
 

@@ -60,7 +60,12 @@ export async function resolveReusableWorkspaceSkillSnapshot(
     agentWorkspaceDir: params.workspaceDir,
     executionWorkspaceDir: params.executionWorkspaceDir,
   });
-  const skillRoots = normalizedRoots.executionWorkspaceDir ? normalizedRoots : undefined;
+  const skillRoots = normalizedRoots.executionWorkspaceDir
+    ? {
+        agentWorkspaceDir: normalizedRoots.agentWorkspaceDir,
+        executionWorkspaceDir: normalizedRoots.executionWorkspaceDir,
+      }
+    : undefined;
   const watcherWorkspaceDir = skillRoots?.agentWorkspaceDir ?? params.workspaceDir;
   const versionBeforePreparation = getSkillsSnapshotVersion(watcherWorkspaceDir);
   await prepareRemoteSkillConnections();

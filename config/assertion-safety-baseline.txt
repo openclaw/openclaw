@@ -1310,7 +1310,6 @@ packages/terminal-core/src/stream-writer.ts	1
 packages/tool-call-repair/src/stream-normalizer.ts	1
 src/acp/client.ts	1
 src/acp/control-plane/manager.runtime-controls.ts	3
-src/acp/control-plane/manager.runtime-handle-cache.ts	1
 src/acp/control-plane/manager.runtime-resume-state.ts	2
 src/acp/control-plane/manager.ts	1
 src/acp/control-plane/manager.utils.ts	1
@@ -2230,7 +2229,6 @@ src/entry.compile-cache.ts	2
 src/entry.respawn.ts	1
 src/fleet/backup.runtime.ts	3
 src/fleet/service-support.runtime.ts	1
-src/flows/channel-setup.prompts.ts	2
 src/flows/channel-setup.status.ts	2
 src/flows/channel-setup.ts	3
 src/flows/doctor-core-checks.runtime.ts	2
@@ -2597,7 +2595,7 @@ src/llm/utils/node-http-proxy.ts	1
 src/llm/utils/oauth/anthropic.ts	2
 src/llm/utils/oauth/openai-chatgpt.ts	2
 src/logging/config.ts	2
-src/logging/console.ts	5
+src/logging/console.ts	4
 src/logging/diagnostic-run-activity.ts	1
 src/logging/diagnostic-session-recovery-coordinator.ts	1
 src/logging/diagnostic-stability-bundle.ts	6
@@ -2607,7 +2605,7 @@ src/logging/diagnostic.ts	1
 src/logging/json-console-line.ts	2
 src/logging/levels.ts	2
 src/logging/log-file-shared.ts	1
-src/logging/logger.ts	11
+src/logging/logger.ts	7
 src/logging/parse-log-line.ts	1
 src/logging/redact-internal-state.ts	1
 src/logging/redact.ts	2
@@ -2628,7 +2626,6 @@ src/media-understanding/runner.entries.ts	4
 src/media-understanding/shared.ts	1
 src/media/audio-transcode.ts	1
 src/media/bounded-read-file.ts	2
-src/media/fetch.ts	2
 src/media/input-files.ts	1
 src/media/local-media-access.ts	1
 src/media/media-facts.ts	16
@@ -2951,7 +2948,6 @@ src/state/openclaw-agent-db-schema.ts	1
 src/state/openclaw-agent-db-session-migrations.ts	4
 src/state/openclaw-agent-db-session-provenance.ts	1
 src/state/openclaw-agent-standing-intents-schema.ts	1
-src/state/openclaw-database-verify.impl.ts	1
 src/state/openclaw-database-verify.worker.ts	1
 src/state/openclaw-quarantine-store.ts	2
 src/state/openclaw-schema-versions.ts	7
