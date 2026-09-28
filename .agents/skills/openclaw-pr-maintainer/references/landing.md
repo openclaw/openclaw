@@ -168,6 +168,59 @@ It dispatches the protected REST merge with the exact head pinned and retains
 the prior run, inspected delta, scoped evidence, and operator in the existing
 merge outcome. Accepted or uncertain outcomes still require reconciliation.
 
+#### Explicitly approved pre-existing failures
+
+When the operator specifically authorizes ignoring independently attributed
+pre-existing CI failures, use the same flags and `github_pending` preparation.
+Keep `tests.result: "fail"` in the exact-head review and add `tests.preExistingCi`
+with `head`, numeric `runId` and `runAttempt`, and a nonempty `reason`. A READY
+review can retain that exception; ordinary merge admission still rejects it.
+The confirmed admin route must verify the same head and failed attempt. Product
+findings, enforced reviews, and security requirements are never waived.
+
+Use the existing version-1 admin evidence with
+`changeKind: "pre-existing-failure"`. Here `priorHead` is the recorded main
+baseline, `head` is the exact prepared and tested PR head, and `runId`/`runAttempt`
+identify its completed failed or cancelled CI attempt. No prior successful run
+or conflict-resolution claim is required. Keep the inspected `deltaSha256`,
+operator `reason`, affected `contracts`, and actual passing scoped `checks`.
+Retain these additional fields:
+
+- `testedMerge`: the actual checkout from inspected CI evidence. Its retained
+  Git object must have exactly two ordered parents, `priorHead` and `head`;
+  the baseline must be an ancestor of the captured protected main.
+- `artifacts`: named regular files with `name`, `path`, and `sha256`. Reuse
+  existing checkout logs, failure logs, and independent qualification receipts;
+  do not create another proof system. `checkout` contains `reason` and `evidence`
+  (an array of these artifact names) identifying the inspected checkout binding.
+- `failures`: exactly one entry per non-aggregate failed job, with numeric
+  `jobId`, observed failing `cases`, repository-relative `sourcePaths`, `reason`,
+  and `evidence` names. The verifier compares each named blob/tree between the
+  baseline and tested merge. Qualification must explain why those inputs cover
+  the failure and why the PR cannot cause it; changed or unattributed failures
+  stay blocked.
+- `aggregate`: the CI gate's `jobId`, `causedBy` (all admitted failed-job IDs),
+  `reason`, and `evidence` names establishing the downstream failure.
+- `cancellation`, only when sibling jobs were cancelled: their exhaustive
+  `jobIds`, the same `causedBy` root IDs, `reason`, and `evidence` names, plus the
+  successful `pr-fail-fast` job's `jobId` and cancellation-step number `step`.
+  This records inspected cancellation provenance, never passing coverage.
+
+The tool verifies live run/attempt/PR/head identities, complete job accounting,
+the current effective GitHub Actions gate check-run, and source/artifact hashes.
+A fork run with an empty GitHub PR association must match the current PR's exact
+head, branch, and source repository identity as well as that check-run; an
+explicit association with another PR is rejected. The retained result names
+this source/check correlation rather than claiming an API-provided association.
+A new or running attempt invalidates the old failure attribution. Checkout
+identification and causal independence remain explicit operator attestations,
+supported by the retained evidence; source equality alone is not a causal proof.
+A baseline reproduction is useful when needed, but an independently inspected
+failure before changed code is reached can also qualify. Describe unknowns
+honestly—for example, an initial bind collision need not invent an occupant.
+Other required checks and exactly one `security-fast` job must pass. The outcome and completion
+comment retain the exception without turning failed or cancelled CI into green.
+
 ### Completed-evidence follow-through
 
 For a requested diagnosis or the completed-evidence path, watch one exact head

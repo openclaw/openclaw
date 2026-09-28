@@ -292,6 +292,17 @@ require_prepared_review() {
   esac
 }
 
+read_prepared_ci_failure() (
+  local PREP_REVIEW_MODE=ready review_path=.local/review.json
+  [ ! -s .local/prep-context.env ] || source .local/prep-context.env || return 1
+  case "$PREP_REVIEW_MODE" in
+    ready) ;;
+    correction) review_path=.local/correction-review.json ;;
+    *) return 1 ;;
+  esac
+  jq -c '.tests.preExistingCi // empty' "$review_path"
+)
+
 # A correction's review authority must survive every awaited admission read.
 # Normal READY preparation keeps its existing contract; the nonempty snapshot
 # also detects loss of correction mode during an operation.
