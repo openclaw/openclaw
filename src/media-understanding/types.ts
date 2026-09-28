@@ -171,6 +171,12 @@ export type ImagesDescriptionRequest = {
   maxTokens?: number;
   timeoutMs: number;
   signal?: AbortSignal;
+  /**
+   * Conversation identity forwarded to session-affine providers. OpenCode's API rejects a
+   * completion without `x-opencode-session`, so image requests need one even though they are
+   * one-shot; when absent the caller's turn session is not available and an ephemeral id is used.
+   */
+  sessionId?: string;
   profile?: string;
   preferredProfile?: string;
   authStore?: AuthProfileStore;
