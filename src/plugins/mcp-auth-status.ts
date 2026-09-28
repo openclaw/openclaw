@@ -4,13 +4,9 @@ import { resolveOperatorMcpOAuthConfig } from "../agents/mcp-operator-auth.js";
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadEnabledBundleMcpConfig } from "./bundle-mcp.js";
+import type { PluginMcpAuthDeclarations } from "./plugin-cache-metadata.js";
 import { getPluginMetadataSnapshotCache, withPluginCache } from "./plugin-cache.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
-
-export type PluginMcpAuthDeclarations = ReadonlyMap<
-  string,
-  readonly { serverName: string; url: string }[]
->;
 
 function resolvePluginMcpAuthDeclarations(
   config: OpenClawConfig,
