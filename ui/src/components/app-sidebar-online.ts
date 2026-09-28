@@ -2,7 +2,6 @@ import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { html as staticHtml, literal } from "lit/static-html.js";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
-import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
 import { renderHoverMarquee } from "../lib/hover-marquee.ts";
 import {
@@ -22,16 +21,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
   const team = host.sidebarAgentsMode === "roster";
   const collapsed = team ? !host.teamOnlineExpanded : host.collapsedSessionSections.has(sectionId);
   const label = t("presence.rosterTitle");
-  const selfUser = resolveCurrentSelfUser({
-    snapshotUser: host.sessionDataContext?.gateway.snapshot.selfUser,
-    presenceEntries: readPresenceEntries(host.sessionData.presencePayload),
-    presenceInstanceId: host.sessionData.presenceInstanceId,
-  });
-  const onlineUsers = projectOnlinePresenceViewers(
-    host.sessionData.presencePayload,
-    selfUser,
-    host.sessionData.presenceInstanceId,
-  );
+  const onlineUsers = projectOnlinePresenceViewers(host.sessionData.presencePayload);
   if (onlineUsers.length === 0) {
     return nothing;
   }

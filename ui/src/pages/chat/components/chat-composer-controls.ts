@@ -588,8 +588,6 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
         : t("chat.composer.emptyHint"));
   const hasSendableContent =
     hasComposedContent && props.canSend && !props.sending && !sendDisabledReason;
-  // A held draft must not replace Stop with a disabled Send. Only an available
-  // follow-up action takes that slot during an abortable run.
   const sendAction = html`
     <openclaw-tooltip
       .content=${props.preparingAttachments ? t("chat.composer.preparingAttachments") : (sendStatus ?? activeRunActionTooltip)}
@@ -616,22 +614,22 @@ export function renderChatPrimaryActions(props: ChatRunControlsProps) {
           props.onPrimaryActionPointerDown,
         )
       : sendAction;
-  const desktopPrimaryAction = props.dictation?.active
-    ? dictationSendAction
-    : props.canAbort && !hasSendableContent
-      ? abortAction
-      : sendAction;
+  const desktopPrimaryAction = props.dictation?.active ? dictationSendAction : sendAction;
   const mobilePrimaryAction = props.dictation?.active
     ? dictationSendAction
-    : props.canAbort && !hasSendableContent
-      ? abortAction
-      : hasComposedContent
-        ? sendAction
-        : props.onToggleVoice
-          ? mobileTalkAction
-          : sendAction;
-  const primaryActions =
-    mobilePrimaryAction === desktopPrimaryAction
+    : hasComposedContent
+      ? sendAction
+      : props.onToggleVoice
+        ? mobileTalkAction
+        : sendAction;
+  // Stop keeps the trailing edge and its DOM identity throughout an active run.
+  // A ready follow-up appears before it without replacing the cancellation target.
+  const primaryActions = props.canAbort
+    ? html`<span class="chat-mobile-primary-action chat-desktop-primary-action">
+        ${props.dictation?.active ? dictationSendAction : hasSendableContent ? sendAction : nothing}
+        ${abortAction}
+      </span>`
+    : mobilePrimaryAction === desktopPrimaryAction
       ? html`<span class="chat-mobile-primary-action chat-desktop-primary-action"
           >${desktopPrimaryAction}</span
         >`

@@ -9,7 +9,11 @@ import type {
   ModelCompatConfig,
   ModelDefinitionConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { asNonArrayRecord, filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNonArrayRecord,
+  asPositiveSafeInteger,
+  filterStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const BASETEN_MANIFEST_CATALOG = manifest.modelCatalog.providers.baseten;
@@ -80,11 +84,6 @@ type BasetenLiveModelRow = {
   supported_features?: unknown;
 };
 
-function readPositiveInteger(value: unknown): number | undefined {
-  const number = typeof value === "number" ? value : Number(value);
-  return Number.isSafeInteger(number) && number > 0 ? number : undefined;
-}
-
 function readPerTokenPrice(value: unknown): number | undefined {
   if (typeof value !== "number" && (typeof value !== "string" || !value.trim())) {
     return undefined;
@@ -152,9 +151,13 @@ function projectLiveModel(
       cacheWrite: fallback?.cost.cacheWrite ?? 0,
     },
     contextWindow:
-      readPositiveInteger(row.context_length) ?? fallback?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+      asPositiveSafeInteger(Number(row.context_length)) ??
+      fallback?.contextWindow ??
+      DEFAULT_CONTEXT_WINDOW,
     maxTokens:
-      readPositiveInteger(row.max_completion_tokens) ?? fallback?.maxTokens ?? DEFAULT_MAX_TOKENS,
+      asPositiveSafeInteger(Number(row.max_completion_tokens)) ??
+      fallback?.maxTokens ??
+      DEFAULT_MAX_TOKENS,
     compat,
   };
 }

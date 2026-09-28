@@ -1,8 +1,8 @@
 import childProcess from "node:child_process";
 import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { NODE_WORKER_CAPACITY_MAX } from "../infra/node-runner-inventory.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
+import { NODE_WORKER_CAPACITY_MAX } from "../shared/node-list-parse.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,

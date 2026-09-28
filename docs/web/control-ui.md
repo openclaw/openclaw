@@ -66,6 +66,9 @@ not whether the active run’s narration survives a history refresh. Completed
 dashboard turns collapse their narration and tool activity under **Worked for …**
 above the answer. Expanding it restores the sequence with the existing tool-call
 groups. When no run duration is available, the heading reads **Worked**.
+The heading includes the total tool-call count followed by any failures, such as
+**Worked · 200 tool calls · 20 failed**. Calls without failures still show the
+total; turns without tool calls omit it.
 
 Consecutive tool activity shares one expandable log, including when background
 work resumes in a new run. Visible messages, media, and conversation markers
@@ -199,7 +202,8 @@ agent switcher. This enables **team mode**, a browser preference that is off by
 default. The top row becomes a workspace header with the configured Gateway display
 name, or **OpenClaw**, and the OpenClaw mark. Its menu contains **Show one agent**,
 **Agent settings**, and the existing documentation, help, community, and changelog
-links. Sessions appear under collapsible agent headers in configured roster order,
+links. Pinned sessions stay in **Pages**, using their agent's avatar as the icon.
+Other sessions appear under collapsible agent headers in configured roster order,
 which stays stable as activity changes. **Home** disappears from Pages: click an agent header's avatar or name to
 open that agent's main chat. The separate collapse control only folds its sessions.
 The top **+**, labeled **New conversation**, opens an agent menu with avatars and names in

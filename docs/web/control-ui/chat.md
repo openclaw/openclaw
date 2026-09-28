@@ -328,7 +328,7 @@ Run-error banners offer **Refresh** to reload the conversation without resending
 
   </Accordion>
   <Accordion title="Stop and abort">
-    - Click **Stop**. Runs with an exact local run ID call `chat.abort`; when selected-session state reports active work but the Control UI has no local run ID, it calls `sessions.abort` instead. For non-global sessions, that selected-session path also discards queued follow-ups so they cannot restart work after the stop.
+    - Click **Stop**. It stays available beside a ready follow-up while you draft or attach files, without clearing or sending that draft. Runs with an exact local run ID call `chat.abort`; when selected-session state reports active work but the Control UI has no local run ID, it calls `sessions.abort` instead. For non-global sessions, that selected-session path also discards queued follow-ups so they cannot restart work after the stop.
     - Exact-run Stop cancels that parent's associated sub-agents and Swarm collectors, including their descendants. Successful cancellation prevents selected queued children from starting while running siblings stop; it leaves unrelated parent turns and session-wide queues alone.
     - If Stop reports incomplete descendant cancellation, inspect the remaining native subagent runs with `/subagents list` and ask the agent to retry their cancellation with `subagents`. Do not treat the parent's stopped state as confirmation that every child stopped or that runtime cleanup was instantaneous. See [Sub-agent stopping](/tools/subagents#stopping) for scope details.
     - While a run is active, normal follow-ups use the Gateway's effective `messages.queue` mode. `steer` injects into the running turn; other modes keep the browser's durable queued delivery. If the Gateway queues an input instead of steering it, the message appears above the composer until consumed or canceled. Reconnecting also recovers queued inputs from older history pages without changing the page you are viewing. Once the Gateway accepts input for an existing session, its database owns the approved input until it reaches the transcript. Collected messages are retired together with their combined transcript entry. Unconsumed input survives a Gateway restart as interrupted input requiring an explicit resend. Click **Steer** on a browser-owned queued message to inject it manually; removing a server-owned queued message requests its cancellation. Text already streamed in an open chat stays before the steering message across history refreshes and reconnects; subsequent updates show only the continuation below it.
@@ -643,7 +643,8 @@ Clicking a reply's quoted original opens its containing **Worked for…** group,
 scrolls to the original message, and briefly highlights it.
 
 On wide desktop panes, the conversation position rail provides keyboard shortcuts
-to messages. Tab enters at the current message, or the first marker if no message
+to messages. In right-to-left interface languages, the rail uses the right gutter
+and its previews open toward the conversation. Tab enters at the current message, or the first marker if no message
 is current. ArrowUp and ArrowDown move focus; Home and End go to the first and last
 markers. Enter or Space jumps to the focused message. Tab or Shift+Tab leaves the
 rail in one step, and Escape closes the preview and returns focus to the transcript.

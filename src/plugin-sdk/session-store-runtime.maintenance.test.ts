@@ -1,7 +1,8 @@
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import { observeSessionMaintenanceCompletion } from "../config/sessions/session-accessor.sqlite-maintenance.test-support.js";
 import { getSessionEntry, patchSessionEntry } from "./session-store-runtime.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -30,6 +31,9 @@ describe("plugin session store maintenance", () => {
       seed(oldSessionKey, "session-old", now - 3 * DAY_MS);
       seed(activeSessionKey, "session-active", now);
 
+      const done = observeSessionMaintenanceCompletion(
+        path.join(path.dirname(storePath), "openclaw-agent.sqlite"),
+      );
       await patchSessionEntry({
         sessionKey: activeSessionKey,
         storePath,
@@ -45,13 +49,9 @@ describe("plugin session store maintenance", () => {
         update: () => ({ model: "gpt-5.6-luna" }),
       });
 
-      await vi.waitFor(
-        () => {
-          expect(getSessionEntry({ sessionKey: modelRunSessionKey, storePath }) != null).toBe(
-            modelRunSessionPresent,
-          );
-        },
-        { timeout: 5_000 },
+      await done;
+      expect(getSessionEntry({ sessionKey: modelRunSessionKey, storePath }) != null).toBe(
+        modelRunSessionPresent,
       );
     },
   );

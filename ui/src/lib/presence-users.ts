@@ -120,15 +120,9 @@ export function projectPresenceViewers(
   );
 }
 
-export function projectOnlinePresenceViewers(
-  value: unknown,
-  authenticatedSelfUser?: AuthenticatedUser | null,
-  selfInstanceId?: string,
-): readonly PresenceViewer[] {
+export function projectOnlinePresenceViewers(value: unknown): readonly PresenceViewer[] {
   const now = Date.now();
-  return projectPresenceViewers(value, authenticatedSelfUser, selfInstanceId).toSorted((a, b) =>
-    comparePresenceViewers(a, b, now),
-  );
+  return projectPresencePayload(value).users.toSorted((a, b) => comparePresenceViewers(a, b, now));
 }
 
 export function hasSessionPresenceViewers(

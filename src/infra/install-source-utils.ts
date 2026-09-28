@@ -18,6 +18,7 @@ import { resolveUserPath } from "../utils.js";
 import { resolveArchiveKind } from "./archive.js";
 import { pathExists } from "./fs-safe.js";
 import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
+import { resolveNpmCommand } from "./npm-command.js";
 import { applyNpmFreshnessBypassEnv, type NpmProjectInstallEnvOptions } from "./npm-install-env.js";
 import {
   isExactSemverVersion,
@@ -99,11 +100,14 @@ export async function loadNpmPackageVersions({
   signal?: AbortSignal;
   killProcessTree?: boolean;
 }): Promise<string[] | null> {
-  const versions = await runCommandWithTimeout(["npm", "view", packageName, "versions", "--json"], {
-    ...commandOptions,
-    timeoutMs: Math.max(timeoutMs ?? 0, 60_000),
-    env: createNpmMetadataEnv(),
-  });
+  const versions = await runCommandWithTimeout(
+    resolveNpmCommand(["view", packageName, "versions", "--json"]),
+    {
+      ...commandOptions,
+      timeoutMs: Math.max(timeoutMs ?? 0, 60_000),
+      env: createNpmMetadataEnv(),
+    },
+  );
   if (versions.code !== 0) {
     return null;
   }
@@ -197,8 +201,7 @@ export async function resolveNpmSpecMetadata(params: {
     }
 > {
   const res = await runCommandWithTimeout(
-    [
-      "npm",
+    resolveNpmCommand([
       "view",
       params.spec,
       "name",
@@ -207,7 +210,7 @@ export async function resolveNpmSpecMetadata(params: {
       "dist.shasum",
       "openclaw",
       "--json",
-    ],
+    ]),
     {
       timeoutMs: Math.max(params.timeoutMs ?? 60_000, 60_000),
       signal: params.signal,
@@ -397,15 +400,14 @@ export async function packNpmSpecToArchive(params: {
     }
 > {
   const res = await runCommandWithTimeout(
-    [
-      "npm",
+    resolveNpmCommand([
       "pack",
       params.spec,
       "--ignore-scripts",
       "--json",
       "--dry-run=false",
       `--pack-destination=${params.cwd}`,
-    ],
+    ]),
     {
       timeoutMs: resolveInstallWorkTimeoutMs(
         params.workTimeoutMs,
@@ -476,7 +478,7 @@ export async function resolveNpmPackArchiveMetadata(params: {
   const archiveMetadataTimeoutMs =
     archiveStat && archiveStat.size > 100 * 1024 * 1024 ? 300_000 : 60_000;
   const res = await runCommandWithTimeout(
-    ["npm", "pack", archivePath, "--ignore-scripts", "--dry-run", "--json"],
+    resolveNpmCommand(["pack", archivePath, "--ignore-scripts", "--dry-run", "--json"]),
     {
       timeoutMs: Math.max(params.timeoutMs ?? archiveMetadataTimeoutMs, archiveMetadataTimeoutMs),
       signal: params.signal,

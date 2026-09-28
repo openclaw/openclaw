@@ -1214,18 +1214,14 @@ openclaw-chat-video-player {
   padding: 0;
   border: 0;
   border-radius: 999px;
-  color: var(--accent-foreground);
-  background: var(--accent);
+  color: var(--primary-foreground);
+  background: var(--primary);
   cursor: var(--cursor-action);
   transition: background-color 120ms ease;
 }
 
-:root:not([data-theme-mode="light"]) .chat-audio-player__toggle {
-  color: var(--media-bg);
-}
-
 .chat-audio-player__toggle:hover {
-  background: var(--accent-hover);
+  background: var(--primary-hover);
 }
 
 .chat-audio-player__toggle:focus-visible {
@@ -1355,7 +1351,7 @@ openclaw-chat-video-player {
 
 .chat-audio-player__volume:hover {
   color: var(--text-strong);
-  background: color-mix(in srgb, var(--media-foreground) 10%, transparent);
+  background: color-mix(in srgb, var(--text) 10%, transparent);
 }
 
 .chat-audio-player__volume:focus-visible {
@@ -3028,6 +3024,7 @@ openclaw-chat-ci-details {
 @media (max-width: 560px) {
   .agent-chat__input--chat .chat-mobile-primary-action {
     margin-inline-start: var(--chat-mobile-row-action-gap);
+    gap: var(--chat-mobile-row-action-gap);
   }
 
   .agent-chat__input--chat

@@ -161,6 +161,12 @@ in the causal root list; test, cleanup, and upload transport failures remain blo
 The review retains `tests.result: "fail"` with exact
 `tests.preExistingCi` head/run/attempt attribution. Ordinary merge admission refuses
 that review; the confirmed admin route must verify the same failed attempt.
+An explicitly attributed Node root reported as cancelled qualifies only with its
+matching live GitHub Actions check-run and complete deadline/cancellation annotations,
+consistent head/suite/timestamps, elapsed deadline, one cancelled test step, no
+additional failed steps, and unchanged workflow. Retain that cancelled status in
+the root proof; it is not fail-fast collateral or passing coverage. Manual or
+unverified cancellation remains refused.
 Branch-caused or unattributed failures, other required checks, security, and
 required reviews remain blocking.
 Exact-head `github_pending` preparation remains pending. GraphQL owns
