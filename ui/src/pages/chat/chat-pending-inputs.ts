@@ -236,7 +236,10 @@ function reconcilePendingInputPage(
   const { page: displayPage, acceptedRunIds } = reconcileChatInputCustody(state, page, receipts);
   const settled = new Set([
     ...(receipts ?? [])
-      .filter((receipt) => receipt.state === "consumed")
+      .filter(
+        (receipt) =>
+          receipt.state === "consumed" || (receipt.state === "pending" && receipt.cancelled),
+      )
       .map((receipt) => receipt.runId),
     ...displayPage.items.filter((input) => input.state === "cancelled").map((input) => input.runId),
   ]);

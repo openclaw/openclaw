@@ -294,57 +294,60 @@ suite.define(() => {
   });
 
   it("shows persisted user messages after opening History and scrolling mixed history", async () => {
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const baseTs = Date.now() - 100_000;
-    const currentSessionMessages = [
-      {
-        content: [{ text: "Current session placeholder", type: "text" }],
-        role: "assistant",
-        timestamp: baseTs - 1,
-      },
-    ];
-    const historyMessages = Array.from({ length: 70 }, (_, index) => ({
-      content: [
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const baseTs = Date.now() - 100_000;
+      const currentSessionMessages = [
         {
-          text: `${index % 2 === 0 ? "User history question" : "Assistant history answer"} ${index}\n${"history detail line\n".repeat(4)}`,
-          type: index % 2 === 0 ? "input_text" : "output_text",
+          content: [{ text: "Current session placeholder", type: "text" }],
+          role: "assistant",
+          timestamp: baseTs - 1,
         },
-      ],
-      role: index % 2 === 0 ? "user" : "assistant",
-      timestamp: baseTs + index,
-    }));
-    const gateway = await installMockGateway(page, {
-      // Background prefetch and foreground startup must read the same session transcript.
-      sessionTranscripts: {
-        "agent:main:session-a": { messages: currentSessionMessages },
-        "agent:main:session-b": { messages: historyMessages },
-      },
-      methodResponses: {
-        "sessions.list": chatSessionListResponse([
+      ];
+      const historyMessages = Array.from({ length: 70 }, (_, index) => ({
+        content: [
           {
-            key: "agent:main:session-a",
-            sessionId: "control-ui-e2e-history-session-a",
-            kind: "direct",
-            label: "Session A",
-            updatedAt: 2,
+            text: `${index % 2 === 0 ? "User history question" : "Assistant history answer"} ${index}\n${"history detail line\n".repeat(4)}`,
+            type: index % 2 === 0 ? "input_text" : "output_text",
           },
-          {
-            key: "agent:main:session-b",
-            sessionId: "control-ui-e2e-history-session-b",
-            kind: "direct",
-            label: "Session B",
-            updatedAt: 1,
-          },
-        ]),
-      },
-      sessionKey: "agent:main:session-a",
-    });
+        ],
+        role: index % 2 === 0 ? "user" : "assistant",
+        timestamp: baseTs + index,
+      }));
+      const gateway = await installMockGateway(page, {
+        // A stays fixed while B's shared history/startup snapshot grows below.
+        historyMessages: currentSessionMessages,
+        sessionTranscripts: {
+          "agent:main:session-a": { messages: currentSessionMessages },
+        },
+        deferredMethods: ["chat.history"],
+        methodResponses: {
+          "sessions.list": chatSessionListResponse([
+            {
+              key: "agent:main:session-a",
+              sessionId: "control-ui-e2e-history-session-a",
+              kind: "direct",
+              label: "Session A",
+              updatedAt: 2,
+            },
+            {
+              key: "agent:main:session-b",
+              sessionId: "control-ui-e2e-history-session-b",
+              kind: "direct",
+              label: "Session B",
+              updatedAt: 1,
+            },
+          ]),
+        },
+        sessionKey: "agent:main:session-a",
+      });
 
-    try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
       await page.getByText("Current session placeholder").waitFor({ timeout: 10_000 });
 
+      // Settle the short prefetched snapshot before startup expands the transcript.
+      await waitForRequests(gateway, "chat.history", 1, { sessionKey: "agent:main:session-b" });
+      await gateway.resolveDeferred("chat.history");
+      await gateway.deferNext("chat.startup", { sessionKey: "agent:main:session-b" });
       const startupCountBeforeSwitch = (await gateway.getRequests("chat.startup")).length;
       await page
         .locator(
@@ -361,6 +364,9 @@ suite.define(() => {
         sessionKey: "agent:main:session-b",
       });
       const activeThread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+      await activeThread.getByText("Current session placeholder").waitFor({ timeout: 10_000 });
+      await gateway.setHistoryMessages(historyMessages);
+      await gateway.resolveDeferred("chat.startup");
       await activeThread.getByText("User history question 68").waitFor({
         timeout: 10_000,
       });
@@ -398,9 +404,7 @@ suite.define(() => {
           { timeout: 10_000 },
         )
         .toBe(true);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    });
   });
 
   it("keeps evicted paginated history stable when returning to a session", async () => {

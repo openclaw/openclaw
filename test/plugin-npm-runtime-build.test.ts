@@ -43,16 +43,19 @@ function expectPluginNpmRuntimeBuildPlan(
 }
 
 describe("plugin npm runtime build planning", () => {
-  it("keeps newer compatibility bindings out of frozen source roots that predate them", async () => {
+  it("keeps newer compatibility bindings out of frozen source roots that predate their files or exports", async () => {
     const frozenRoot = tempDirs.make("openclaw-plugin-runtime-frozen-root-");
     const packageDir = path.join(frozenRoot, "extensions", "frozen-fixture");
+    const channelsDir = path.join(frozenRoot, "src", "channels");
     mkdirSync(packageDir, { recursive: true });
+    mkdirSync(channelsDir, { recursive: true });
     writeFileSync(
       path.join(frozenRoot, "package.json"),
       JSON.stringify({
         name: "openclaw",
         version: "1.0.0",
         exports: {
+          "./plugin-sdk/channel-mention-gating": "./dist/plugin-sdk/channel-mention-gating.js",
           "./plugin-sdk/runtime-doctor-migrations":
             "./dist/plugin-sdk/runtime-doctor-migrations.js",
         },
@@ -70,7 +73,14 @@ describe("plugin npm runtime build planning", () => {
     );
     writeFileSync(
       path.join(packageDir, "index.ts"),
-      'export { normalizeChannelConfigEntries } from "openclaw/plugin-sdk/runtime-doctor-migrations";\n',
+      [
+        'export { normalizeChannelConfigEntries } from "openclaw/plugin-sdk/runtime-doctor-migrations";',
+        'export { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-mention-gating";',
+      ].join("\n"),
+    );
+    writeFileSync(
+      path.join(channelsDir, "mention-gating.ts"),
+      "export function resolveInboundMentionDecision() { return true; }\n",
     );
 
     const plan = expectPluginNpmRuntimeBuildPlan(
@@ -78,6 +88,9 @@ describe("plugin npm runtime build planning", () => {
     );
     expect(readFileSync(path.join(packageDir, plan.runtimeExtensions[0]!), "utf8")).toContain(
       "openclaw/plugin-sdk/runtime-doctor-migrations",
+    );
+    expect(readFileSync(path.join(packageDir, plan.runtimeExtensions[0]!), "utf8")).toContain(
+      "openclaw/plugin-sdk/channel-mention-gating",
     );
   });
 

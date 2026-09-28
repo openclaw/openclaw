@@ -413,7 +413,10 @@ worker retirement even after their capture files are removed, so actual source o
 configuration revisions can still retain module memory during that lifetime. Agent
 credentials and configured model facts travel with each request; catalog jobs do
 not rebuild the agent workspace. Discovery reuses the registrations already
-acquired by that context. Replacement releases them after admitted work settles.
+acquired by that context. The first catalog request prepares registrations for the
+agent's known configured and credential providers together; only the requested
+providers run catalog hooks. Newly observed owners extend that context without
+discarding earlier owners. Replacement releases them after admitted work settles.
 Successfully disposed registrations leave their plugin caches.
 
 Catalog observation is passive. Inventory requests can ask the catalog owner to

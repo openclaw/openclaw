@@ -608,6 +608,7 @@ export function writeSessionEntry(
     {
       sessionKey,
       entry: normalizedEntry,
+      previousEntry: canonicalPreviousEntry,
       ...(!options.allowStoredAliases
         ? {
             facts: {

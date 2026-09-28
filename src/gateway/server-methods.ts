@@ -43,7 +43,10 @@ import {
   type GatewayMethodRegistry,
 } from "./methods/registry.js";
 import { canSelectQuestion } from "./question-access.js";
-import { coreGatewayHandlers } from "./server-methods/core-handlers.js";
+import {
+  coreGatewayHandlers,
+  gatewayRouterUploadPolicyError,
+} from "./server-methods/core-handlers.js";
 import { authorizeAuthenticatedProfileForMethod } from "./server-methods/gateway-client-identity.js";
 import { prepareGatewayRequestHandler } from "./server-methods/lazy-core-handlers.js";
 import { authorizeGatewayMethod } from "./server-methods/method-authorization.js";
@@ -243,6 +246,10 @@ export async function authorizeGatewayRequestPreDispatch(params: {
     const scopeAuthorization = authorizeMethod();
     if (scopeAuthorization.error) {
       return { error: scopeAuthorization.error };
+    }
+    const uploadError = gatewayRouterUploadPolicyError(params, params.methodRegistry);
+    if (uploadError) {
+      return { error: uploadError };
     }
     // GitHub-backed connections receive hello before remote account resolution. Profile-owned
     // methods must cross this single router fence before session authorization or handler work.
@@ -593,11 +600,9 @@ export async function handleGatewayRequest(
         ? opts.methodRegistry
         : createRequestGatewayMethodRegistry(opts.extraHandlers);
     const requestMutationAuthority = readGatewayRequestMutationAuthority(opts);
+    const requestFacts = { method: req.method, requestParams: req.params, client, context };
     const authorization = await authorizeGatewayRequestPreDispatch({
-      method: req.method,
-      requestParams: req.params,
-      client,
-      context,
+      ...requestFacts,
       methodRegistry,
       expectedProfileBinding: profileBinding,
       hasCurrentClientAuthority,
@@ -663,6 +668,13 @@ export async function handleGatewayRequest(
       : respondAuthorized;
     const invokeHandler = async () => {
       const preparedHandler = await prepareGatewayRequestHandler(handler, entry);
+      // Lazy preparation may yield across a hot config change. Keep the router fence
+      // unless the canonical owner reconciles accepted input before new admission.
+      const uploadError = gatewayRouterUploadPolicyError(requestFacts, methodRegistry);
+      if (uploadError) {
+        respond(false, undefined, uploadError);
+        return;
+      }
       const handlerOptions = bindGatewayRequestHandlerMutationAuthority(
         opts,
         {

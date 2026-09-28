@@ -36,6 +36,7 @@ import type {
   readSessionTranscriptModelContext,
   SessionModelContextLimits,
 } from "./session-accessor.sqlite-model-context.js";
+import type { listSessionPendingInputReceipts } from "./session-accessor.sqlite-pending-input-receipts.js";
 import type { loadTranscriptReadSnapshotSync } from "./session-accessor.sqlite-read.js";
 import type {
   SessionEntryReplacementSelection,
@@ -278,6 +279,16 @@ type SessionProgressCardWorkerInput = {
   env: NodeJS.ProcessEnv;
 };
 
+type SessionPendingInputReceiptsWorkerInput = {
+  kind: "session-pending-input-receipts";
+  database: { agentId: string; path: string };
+  agentId: string;
+  sessionKey: string;
+  sessionId: string;
+  runIds: readonly string[];
+  env: NodeJS.ProcessEnv;
+};
+
 type SessionUsageCacheWorkerInput = {
   kind: "usage-cache";
   database: { agentId: string; path: string };
@@ -451,6 +462,7 @@ export type SessionHistoryWorkerInput =
   | SessionMembersWorkerInput
   | SessionMembershipFactsWorkerInput
   | SessionProgressCardWorkerInput
+  | SessionPendingInputReceiptsWorkerInput
   | SessionEntryListWorkerInput
   | SessionEntryReadWorkerInput
   | SessionDiagnosticTextWorkerInput
@@ -503,6 +515,10 @@ export type SessionTranscriptWorkerValues = {
   "session-members": SessionMember[];
   "session-membership-facts": SessionMembershipFacts;
   "session-progress-card": { kind: "session-progress-card"; card: ProgressCard | null };
+  "session-pending-input-receipts": {
+    kind: "session-pending-input-receipts";
+    receipts: ReturnType<typeof listSessionPendingInputReceipts>;
+  };
   "session-entry-list": SessionEntryListWorkerResult;
   "session-entry-read": SessionEntryReadWorkerResult;
   "session-diagnostic-text": {
@@ -629,6 +645,9 @@ export type SessionHistoryWorkerDatabase = {
   readProgressCard: (
     input: Omit<SessionProgressCardWorkerInput, "kind" | "database">,
   ) => Promise<ProgressCard | null>;
+  readPendingInputReceipts: (
+    input: Omit<SessionPendingInputReceiptsWorkerInput, "kind" | "database">,
+  ) => Promise<ReturnType<typeof listSessionPendingInputReceipts>>;
   readUsageCache: (
     input: Omit<SessionUsageCacheWorkerInput, "kind" | "database">,
   ) => Promise<SessionCostUsageCacheReadResult>;

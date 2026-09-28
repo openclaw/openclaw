@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { markInboundContextLabel } from "../../../../src/auto-reply/reply/inbound-context-marker.js";
 import { createRequireRecord } from "../../../../test/helpers/record.js";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
+import { prependUniqueNativeMessages } from "../../lib/chat/history-message-identity.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import * as toolCards from "../../lib/chat/tool-cards.ts";
 import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
@@ -26,6 +27,7 @@ import {
   setExpansionState,
   syncToolCardExpansionState,
 } from "./chat-thread.ts";
+import { publishChatSessionProjectionMessages } from "./history-merge.ts";
 import { rememberLiveTerminalRun } from "./terminal-message-identity.ts";
 import { resolveChatProjectionRunId } from "./tool-stream-status.ts";
 
@@ -1879,6 +1881,43 @@ describe("buildCachedChatItems working spark", () => {
 });
 
 describe("buildCachedChatItems", () => {
+  it("reuses absent canvas previews through older-page merges and invalidates replacements", () => {
+    const output = JSON.stringify({ exitCode: 0, output: "current" });
+    const current = toolResultMessage("current-call", "custom", output, 2, {
+      __openclaw: { id: "current" },
+    });
+    const olderOutput = JSON.stringify({ exitCode: 0, output: "older" });
+    const older = toolResultMessage("older-call", "custom", olderOutput, 1, {
+      __openclaw: { id: "older" },
+    });
+    const owner = { sessionKey: "preview-pages", chatMessages: [current] as unknown[] };
+    const prepare = vi.spyOn(toolCards, "extractToolPreview");
+    const rebuild = () =>
+      buildCachedChatItems(
+        createProps({ paneId: "preview-pages", messages: [...owner.chatMessages] }),
+      );
+    try {
+      rebuild();
+      rebuild();
+      expect(prepare.mock.calls.filter(([text]) => text === output)).toHaveLength(1);
+      publishChatSessionProjectionMessages(
+        owner,
+        prependUniqueNativeMessages([older, { ...current }], owner.chatMessages),
+      );
+      expect(owner.chatMessages).toHaveLength(2);
+      expect(owner.chatMessages[1]).toBe(current);
+      rebuild();
+      expect(prepare.mock.calls.filter(([text]) => text === output)).toHaveLength(1);
+      expect(prepare.mock.calls.filter(([text]) => text === olderOutput)).toHaveLength(1);
+      publishChatSessionProjectionMessages(owner, [older, { ...current }]);
+      rebuild();
+      expect(prepare.mock.calls.filter(([text]) => text === output)).toHaveLength(2);
+    } finally {
+      prepare.mockRestore();
+      resetChatThreadState("preview-pages");
+    }
+  });
+
   it("does not inspect ordinary transcript messages for tool previews", () => {
     const messages = [userMessage("hello", 1_000), assistantMessage("reply", 1_001)];
     const previewExtraction = vi.spyOn(threadItems, "extractChatMessagePreview");
