@@ -329,6 +329,21 @@ none of them are spoken as part of the transcript. Momentary 3.8 vocal tags use
 angle brackets, such as `<laugh>` or `<short pause>`; sustained delivery such as
 whispering belongs in `audioProfile`.
 
+Set `speakers` to exactly two `{ speaker, voice, style? }` entries to cast a
+dialogue. Only lines that start with one of those two names followed by a colon
+begin a turn, and the name is not spoken. Every other line is spoken as part of
+the current turn, including ordinary colon-prefixed prose such as
+`Budget: 10 dollars` and any unconfigured label such as `Alice: Hi`. Words
+before the first label are spoken by that first speaker, not dropped. A
+transcript with no configured labels stays on the single-voice path.
+Multi-speaker dialogue requires `gemini-3.8-flash-tts` or
+`gemini-3.8-flash-lite-tts`.
+
+```text
+Puck: Headphones on. <laugh> We opened it.
+Kore: It is waiting at the maintainer gate.
+```
+
 Gemini 3.1 and 2.5 preview TTS still use `generateContent`. Those models keep
 the older behavior: `audioProfile` is prepended to the transcript, and
 expressive tags use square brackets such as `[whispers]`. An unknown
@@ -349,6 +364,10 @@ To use Google as the default TTS provider:
         model: "gemini-3.8-flash-tts",
         speakerVoice: "Kore",
         audioProfile: "Speak professionally with a calm tone.",
+        speakers: [
+          { speaker: "Puck", voice: "Puck", style: "bright" },
+          { speaker: "Kore", voice: "Kore", style: "whispered" },
+        ],
       },
     },
   },
