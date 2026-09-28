@@ -5,7 +5,6 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -221,18 +220,247 @@ export async function resolveCreateTarget(
     });
     const catalog = result.catalogs.find((candidate) => candidate.id === catalogId);
     const terminal = catalog?.capabilities.startTerminal;
+    const terminalHosts = catalog?.hosts
+      .filter((host) => host.canStartTerminal === true)
+      .map(({ hostId, label }) => ({ hostId, label }));
     return catalog && terminal === true
       ? {
           model: "",
           catalogLabel: catalog.label,
           startTerminal: true,
-          terminalHosts: catalog.hosts
-            .filter((host) => host.canStartTerminal === true)
-            .map(({ hostId, label }) => ({ hostId, label })),
+          terminalHosts,
         }
       : undefined;
   } catch {
     return undefined;
+  }
+}
+
+export type CatalogDraftOwnerSnapshot = {
+  context: ApplicationContext | undefined;
+  data: NewSessionRouteData | undefined;
+  isConnected?: boolean;
+  submitting: boolean;
+  pendingPlacementSessionKey: string;
+  visibility?: "normal" | "incognito" | "draft";
+};
+
+type CatalogSelectionSnapshot = CatalogDraftOwnerSnapshot & {
+  agentId: string;
+  agentAvailable: boolean;
+  remotePlacement: boolean;
+};
+
+export function pickerTarget(data?: NewSessionRouteData) {
+  return data?.catalogId
+    ? {
+        groupId: "cliAgents",
+        value: data.catalogId,
+        label: data.catalogLabel || data.catalogId,
+        description: t("newSession.nativeTerminalHint"),
+      }
+    : undefined;
+}
+
+export class CatalogTargetSelection {
+  constructor(
+    private readonly read: () => CatalogSelectionSnapshot,
+    private readonly onTargetSelect:
+      | ((data: NewSessionRouteData, isCurrent: () => boolean) => Promise<boolean>)
+      | undefined,
+    private readonly notify: () => void,
+    private readonly onHostChange: () => void,
+  ) {}
+
+  terminalHostId = "gateway:local";
+  private terminalHostInitialized = false;
+
+  get terminalOnNode(): boolean {
+    return this.terminalHostId.startsWith("node:");
+  }
+
+  selectTerminalHost(hostId: string) {
+    if (this.read().submitting) {
+      return;
+    }
+    this.terminalHostInitialized = true;
+    if (hostId === this.terminalHostId) {
+      return;
+    }
+    this.terminalHostId = hostId;
+    this.onHostChange();
+    this.notify();
+  }
+
+  synchronizeTerminalHosts() {
+    const hosts = this.data?.terminalHosts;
+    if (this.terminalHostInitialized || !hosts?.length) {
+      return;
+    }
+    this.selectTerminalHost(
+      hosts.find((host) => host.hostId === this.terminalHostId)?.hostId ?? hosts[0]!.hostId,
+    );
+  }
+
+  reset() {
+    this.clear();
+    this.terminalHostId = "gateway:local";
+    this.terminalHostInitialized = false;
+  }
+
+  // Only this explicit picker handoff may keep the draft across a changed route key.
+  private targetSelection:
+    | { sourceRouteKey: string; routeKey: string; data: NewSessionRouteData }
+    | undefined;
+
+  get data(): NewSessionRouteData | undefined {
+    const data = this.read().data;
+    const key = data ? routeKey(data) : routeKeyFromSearch(window.location.search);
+    return this.targetSelection &&
+      [this.targetSelection.sourceRouteKey, this.targetSelection.routeKey].includes(key)
+      ? this.targetSelection.data
+      : data;
+  }
+
+  get transitionPending(): boolean {
+    return this.targetSelection !== undefined;
+  }
+
+  isTargetTransition(key: string): boolean {
+    return this.targetSelection?.routeKey === key;
+  }
+
+  private captureTargetSelection(ownsSelection: () => boolean) {
+    const source = this.read();
+    const pathname = window.location.pathname;
+    const sourceLocation = routeKeyFromSearch(window.location.search);
+    const context = source.context;
+    const gateway = context?.gateway;
+    const snapshot = gateway?.snapshot;
+    const client = snapshot?.client;
+    const agentId = source.agentId;
+    const sourceRouteKey = routeKey(source.data);
+    const hello = snapshot?.hello;
+    const identity = snapshot?.selfUser?.id;
+    const connection = gateway?.connection;
+    const connectionRevision = gateway?.connectionRevision;
+    let destination = "";
+    let finished = false;
+    const isCurrent = () => {
+      const now = this.read();
+      const key = now.data ? routeKey(now.data) : routeKeyFromSearch(window.location.search);
+      return (
+        !finished &&
+        ownsSelection() &&
+        window.location.pathname === pathname &&
+        [sourceLocation, destination].includes(routeKeyFromSearch(window.location.search)) &&
+        now.context === context &&
+        now.isConnected !== false &&
+        !now.submitting &&
+        !now.pendingPlacementSessionKey &&
+        now.visibility === source.visibility &&
+        now.remotePlacement === source.remotePlacement &&
+        now.agentId === agentId &&
+        [sourceRouteKey, destination].includes(key) &&
+        context?.gateway === gateway &&
+        gateway?.connection === connection &&
+        gateway?.connectionRevision === connectionRevision &&
+        gateway?.snapshot.phase === "connected" &&
+        gateway.snapshot.client === client &&
+        gateway.snapshot.hello === hello &&
+        gateway.snapshot.selfUser?.id === identity
+      );
+    };
+    return {
+      source: source.data,
+      sourceAgentAvailable: source.agentAvailable,
+      nativeDisabledReason:
+        source.visibility && source.visibility !== "normal"
+          ? t("newSession.terminalVisibilityUnsupported")
+          : source.remotePlacement
+            ? t("newSession.terminalPlacementUnsupported")
+            : undefined,
+      agentId,
+      client,
+      isCurrent,
+      commit: async (data: NewSessionRouteData) => {
+        if (!isCurrent()) {
+          return false;
+        }
+        destination = routeKey(data);
+        this.targetSelection = { sourceRouteKey, routeKey: destination, data };
+        this.notify();
+        try {
+          const accepted = await this.onTargetSelect?.(data, isCurrent);
+          return accepted === true && isCurrent();
+        } finally {
+          finished = true;
+          if (this.targetSelection?.data === data) {
+            this.targetSelection = undefined;
+          }
+          this.notify();
+        }
+      },
+    };
+  }
+
+  async selectCatalogTarget(catalogId: string, ownsSelection: () => boolean) {
+    const owner = this.captureTargetSelection(ownsSelection);
+    if (!owner.client || !owner.agentId || !owner.sourceAgentAvailable || !owner.isCurrent()) {
+      return undefined;
+    }
+    if (owner.nativeDisabledReason) {
+      return owner.nativeDisabledReason;
+    }
+    const target = await resolveCreateTarget(owner.client, catalogId, owner.agentId);
+    if (!owner.isCurrent()) {
+      return undefined;
+    }
+    if (!target) {
+      return false;
+    }
+    if (!target.terminalHosts?.length) {
+      return t("newSession.nativeHostsUnavailable");
+    }
+    const accepted = await owner.commit({
+      ...owner.source,
+      agentId: owner.agentId,
+      requestedAgentId: owner.agentId,
+      requestedModel: undefined,
+      catalogId,
+      ...target,
+    });
+    if (!accepted) {
+      return undefined;
+    }
+    this.terminalHostInitialized = false;
+    this.synchronizeTerminalHosts();
+    return true;
+  }
+
+  async selectModelTarget(model: string, ownsSelection: () => boolean): Promise<boolean> {
+    if (!isTarget(this.data)) {
+      return false;
+    }
+    const owner = this.captureTargetSelection(ownsSelection);
+    const accepted = await owner.commit({
+      ...owner.source,
+      agentId: owner.agentId,
+      requestedAgentId: owner.agentId,
+      requestedModel: model || undefined,
+      catalogId: "",
+      catalogLabel: "",
+      startTerminal: false,
+      model,
+    });
+    if (accepted && this.terminalOnNode) {
+      this.selectTerminalHost("gateway:local");
+    }
+    return accepted;
+  }
+
+  clear() {
+    this.targetSelection = undefined;
   }
 }
 
@@ -258,52 +486,32 @@ export class CatalogTargetDiscovery {
 
   async select(
     catalogId: string,
-    owner: {
-      gateway: ApplicationContext["gateway"] | undefined;
-      client: GatewayBrowserClient | null | undefined;
-      agentId: string;
-      isCurrent: () => boolean;
-    },
-    onSelect: (data: NewSessionRouteData, isCurrent: () => boolean) => void,
+    select: (id: string, isCurrent: () => boolean) => Promise<boolean | string | undefined>,
+    isCurrent: () => boolean,
   ) {
     const selection = { catalogId, status: "loading" as const };
     const discovery = this.state;
-    const connection = owner.gateway?.connection;
-    const revision = owner.gateway?.connectionRevision;
-    const isCurrent = () =>
-      this.state === discovery &&
-      owner.gateway?.connection === connection &&
-      owner.gateway?.connectionRevision === revision &&
-      owner.isCurrent();
-    if (!owner.client || !isCurrent()) {
-      return false;
-    }
+    const ownsSelection = () => this.state === discovery && isCurrent();
     this.selection = selection;
     this.notify();
-    const target = await resolveCreateTarget(owner.client, catalogId, owner.agentId);
-    if (!isCurrent()) {
+    const accepted = await select(catalogId, ownsSelection);
+    if (!ownsSelection()) {
       if (this.selection === selection) {
         this.clearSelection();
         this.notify();
       }
       return false;
     }
-    const error = !target
-      ? t("newSession.catalogUnavailable")
-      : !target.terminalHosts?.length
-        ? t("newSession.nativeHostsUnavailable")
+    this.selection =
+      accepted === false || typeof accepted === "string"
+        ? {
+            catalogId,
+            status: "error",
+            error: typeof accepted === "string" ? accepted : t("newSession.catalogUnavailable"),
+          }
         : undefined;
-    this.selection = error ? { catalogId, status: "error", error } : undefined;
     this.notify();
-    if (!target || error) {
-      return false;
-    }
-    // Metadata outlives the busy row until navigation consumes it.
-    onSelect(
-      { agentId: owner.agentId, requestedAgentId: owner.agentId, catalogId, ...target },
-      isCurrent,
-    );
-    return true;
+    return accepted === true;
   }
 
   private requestId = 0;
@@ -400,7 +608,7 @@ export class CatalogTargetDiscovery {
     }
   }
 
-  groups(): readonly ChatModelPickerTargetGroup[] | undefined {
+  groups(target?: NewSessionRouteData): readonly ChatModelPickerTargetGroup[] | undefined {
     const discovery = this.state;
     if (
       discovery.status === "idle" ||
@@ -422,28 +630,18 @@ export class CatalogTargetDiscovery {
                 error:
                   this.selection?.catalogId === id && this.selection.status === "error"
                     ? this.selection.error
-                    : undefined,
+                    : target?.catalogId === id &&
+                        (!target.startTerminal || target.terminalHosts?.length === 0)
+                      ? target.terminalHosts?.length === 0
+                        ? t("newSession.nativeHostsUnavailable")
+                        : t("newSession.catalogUnavailable")
+                      : undefined,
               }))
             : [],
         status: discovery.status,
       },
     ];
   }
-}
-
-function renderTarget(data?: NewSessionRouteData) {
-  if (!isTarget(data)) {
-    return nothing;
-  }
-  const ready = isResolvedTarget(data);
-  const label = data?.catalogLabel || data?.catalogId || "";
-  return html`<span
-    class="new-session-page__trigger new-session-page__runtime"
-    title=${ready ? t("newSession.nativeTerminalHint") : t("newSession.catalogUnavailable")}
-  >
-    <span class="new-session-page__target-icon" aria-hidden="true">${icons.terminal}</span>
-    <span class="new-session-page__trigger-label">${label}</span>
-  </span>`;
 }
 
 export function renderBar(params: {
@@ -454,11 +652,12 @@ export function renderBar(params: {
   onRetry: () => void;
   groupPending?: boolean;
 }) {
-  const pending = isPendingRouteTarget(params.data) || params.groupPending === true;
+  const pending =
+    Boolean(params.data?.group && params.data.groupStatus !== "resolved") ||
+    params.groupPending === true;
   return html`
     <div class="new-session-page__triggers">
-      ${renderTarget(params.data)} ${isTarget(params.data) ? nothing : params.agentSelect}
-      ${params.placeSelect}
+      ${params.agentSelect} ${params.placeSelect}
       ${
         pending
           ? html`<span class="new-session-page__catalog-unavailable">

@@ -321,7 +321,7 @@ describe("DraftSubmissionFlow native terminal", () => {
       request: async () => terminalOpenResult("native-node"),
     });
     mountNativeTerminal(context);
-    place.selectTerminalHost("node:chosen");
+    place.catalogSelection.selectTerminalHost("node:chosen");
     expect(flow.submitDisabledReason()).toBeTruthy();
     place.applyFolder("/node/existing-project");
     const persistPreference = vi.spyOn(gateway, "persistPreference");
@@ -349,7 +349,7 @@ describe("DraftSubmissionFlow native terminal", () => {
     await flow.submit();
     expect(flow.blockedSubmitNotice()).toContain("Native CLI host unavailable");
     expect(request).not.toHaveBeenCalled();
-    expect(place.terminalHostId).toBe("node:chosen");
+    expect(place.catalogSelection.terminalHostId).toBe("node:chosen");
     expect(place.folder).toBe("/node/existing-project");
 
     // Same-route revalidation can retire the capability without changing the chosen node.
@@ -361,7 +361,7 @@ describe("DraftSubmissionFlow native terminal", () => {
     place.applyFolder("/node/revalidated-project");
     expect(request).not.toHaveBeenCalled();
     expect(persistPreference).not.toHaveBeenCalled();
-    expect(place.terminalHostId).toBe("node:chosen");
+    expect(place.catalogSelection.terminalHostId).toBe("node:chosen");
     expect(place.folder).toBe("/node/revalidated-project");
     await flow.submit();
     expect(flow.blockedSubmitNotice()).toBe("This session target is unavailable.");
@@ -369,56 +369,66 @@ describe("DraftSubmissionFlow native terminal", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it.each(["disabled", "attachments", "overrides", "mentions", "missing method", "non-admin"])(
-    "native launch fails visibly for %s without Chat fallback",
-    async (failure) => {
-      const { context, flow, request } = createDraftFixture({
-        scopes: failure === "non-admin" ? ["operator.write"] : ["operator.admin"],
-        methods:
-          failure === "missing method"
-            ? ["sessions.create"]
-            : ["sessions.catalog.startTerminal", "terminal.open"],
-        data: {
-          agentId: "main",
-          requestedAgentId: "main",
-          catalogId: "codex",
-          model: "",
-          catalogLabel: "Codex",
-          startTerminal: true,
-          terminalHosts: [{ hostId: "gateway:local", label: "Local" }],
-        },
-      });
-      if (failure === "disabled") {
-        context.config.current.cliAgentsEnabled = false;
-      }
-      if (failure === "attachments") {
-        stubObjectUrls("blob:native-attachment");
-        flow.attachmentDraft.replace([registerTextPayload("native-attachment")]);
-      }
-      if (failure === "overrides") {
-        flow.capabilities.setToolOverrides({ skills: { release: false } });
-      }
-      const message =
-        failure === "mentions" ? "@Alex do not turn this into Chat" : "do not turn this into Chat";
-      flow.setMessage(
-        message,
-        failure === "mentions" ? [{ profileId: "profile-alex", start: 0, end: 5 }] : undefined,
+  it.each([
+    "disabled",
+    "attachments",
+    "overrides",
+    "mentions",
+    "missing method",
+    "non-admin",
+    "incognito",
+    "draft",
+  ])("native launch fails visibly for %s without Chat fallback", async (failure) => {
+    const { context, flow, request } = createDraftFixture({
+      scopes: failure === "non-admin" ? ["operator.write"] : ["operator.admin"],
+      methods:
+        failure === "missing method"
+          ? ["sessions.create"]
+          : ["sessions.catalog.startTerminal", "terminal.open"],
+      data: {
+        agentId: "main",
+        requestedAgentId: "main",
+        catalogId: "codex",
+        model: "",
+        catalogLabel: "Codex",
+        startTerminal: true,
+        terminalHosts: [{ hostId: "gateway:local", label: "Local" }],
+      },
+    });
+    if (failure === "incognito" || failure === "draft") {
+      flow.setVisibility(failure);
+    }
+    if (failure === "disabled") {
+      context.config.current.cliAgentsEnabled = false;
+    }
+    if (failure === "attachments") {
+      stubObjectUrls("blob:native-attachment");
+      flow.attachmentDraft.replace([registerTextPayload("native-attachment")]);
+    }
+    if (failure === "overrides") {
+      flow.capabilities.setToolOverrides({ skills: { release: false } });
+    }
+    const message =
+      failure === "mentions" ? "@Alex do not turn this into Chat" : "do not turn this into Chat";
+    flow.setMessage(
+      message,
+      failure === "mentions" ? [{ profileId: "profile-alex", start: 0, end: 5 }] : undefined,
+    );
+    await flow.submit();
+    expect(flow.blockedSubmitNotice()).toBeTruthy();
+    expect(context.sessions.createResult).not.toHaveBeenCalled();
+    // The shared recovery picker may read models, but a blocked native start never writes.
+    expect(request.mock.calls.filter(([method]) => method !== "models.list")).toEqual([]);
+    expect(flow.message).toBe(message);
+    if (failure === "mentions") {
+      expect(flow.mentions).toEqual([{ profileId: "profile-alex", start: 0, end: 5 }]);
+      expect(flow.blockedSubmitNotice()).toBe(
+        "Human mentions are not available in this mode. Remove the selected mentions or send from a normal chat.",
       );
-      await flow.submit();
-      expect(flow.blockedSubmitNotice()).toBeTruthy();
-      expect(context.sessions.createResult).not.toHaveBeenCalled();
-      expect(request).not.toHaveBeenCalled();
-      expect(flow.message).toBe(message);
-      if (failure === "mentions") {
-        expect(flow.mentions).toEqual([{ profileId: "profile-alex", start: 0, end: 5 }]);
-        expect(flow.blockedSubmitNotice()).toBe(
-          "Human mentions are not available in this mode. Remove the selected mentions or send from a normal chat.",
-        );
-      }
-      if (failure === "overrides") {
-        flow.capabilities.setToolOverrides(null);
-        expect(flow.canSubmit()).toBe(true);
-      }
-    },
-  );
+    }
+    if (failure === "overrides") {
+      flow.capabilities.setToolOverrides(null);
+      expect(flow.canSubmit()).toBe(true);
+    }
+  });
 });

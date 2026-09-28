@@ -104,8 +104,9 @@ export async function submitDraftInTerminal(options: {
   const terminalInput = {
     catalogId,
     agentId,
-    hostId: place.terminalHostId,
-    cwd: place.folder.trim() || (place.terminalOnNode ? "" : place.workspacePath()),
+    hostId: place.catalogSelection.terminalHostId,
+    cwd:
+      place.folder.trim() || (place.catalogSelection.terminalOnNode ? "" : place.workspacePath()),
     initialMessage,
     worktree: place.worktree,
     worktreeName: place.worktreeName,

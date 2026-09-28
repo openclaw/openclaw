@@ -61,6 +61,46 @@ afterEach(() => {
 });
 
 describe("chat attachment route handoff", () => {
+  it("cancels only its exact prepared entry, preserving replacements and shared payload custody", () => {
+    const fixture = createApplicationGateway();
+    const { gateway } = fixture;
+    const owner = { recoveryScope: "owner-a", recoveryScopeReady: true } as GatewayBrowserClient;
+    fixture.publish({ ...gateway.snapshot, phase: "connected", client: owner });
+    const handoff = createChatAttachmentHandoff(gateway);
+    const shared = storedAttachment("cancel-shared", "text/plain", false);
+    const key = { owner, paneId: "new-session-draft", scopeKey: "target" };
+    const prepare = (message: string, scopeKey = key.scopeKey) =>
+      handoff.prepare({
+        ...key,
+        scopeKey,
+        reviewPrivateDraft: reviewPrivateComposerDraft,
+        message,
+        attachments: [shared],
+        fallbacks: {},
+      });
+    try {
+      const cancelOld = prepare("old attempt");
+      const cancelReplacement = prepare("newer attempt");
+      const cancelSibling = prepare("other route", "sibling");
+      cancelOld?.();
+      expect(handoff.consume(key)?.message).toBe("newer attempt");
+      const cancelPending = prepare("pending attempt");
+      cancelReplacement?.();
+      expect(handoff.retainedAttachmentIds([shared])).toEqual(new Set([shared.id]));
+      cancelPending?.();
+      expect(handoff.consume(key)).toBeNull();
+      expect(getChatAttachmentDataUrl(shared)).not.toBeNull();
+      expect(handoff.retainedAttachmentIds([shared])).toEqual(new Set([shared.id]));
+      cancelSibling?.();
+      expect(handoff.consume({ ...key, scopeKey: "sibling" })).toBeNull();
+      expect(getChatAttachmentDataUrl(shared)).toBeNull();
+      cancelPending?.();
+      cancelSibling?.();
+    } finally {
+      handoff.dispose();
+    }
+  });
+
   it("keeps prepared target metadata connection-scoped without taking live composer payloads", () => {
     const fixture = createApplicationGateway();
     const { gateway } = fixture;

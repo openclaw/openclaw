@@ -134,9 +134,9 @@ export function renderNewSessionPlaceControls({
     nativeTerminal
       ? renderNewSessionTerminalHost({
           hosts: data?.terminalHosts,
-          hostId: place.terminalHostId,
+          hostId: place.catalogSelection.terminalHostId,
           submitting,
-          onSelect: (hostId) => place.selectTerminalHost(hostId),
+          onSelect: (hostId) => place.catalogSelection.selectTerminalHost(hostId),
         })
       : renderWhereChip({
           idPrefix,
@@ -189,7 +189,7 @@ export function renderNewSessionPlaceControls({
           },
         })
   }${
-    nativeTerminal && place.terminalOnNode
+    nativeTerminal && place.catalogSelection.terminalOnNode
       ? html`<label class="new-session-page__select new-session-page__menu-field"
           ><span>${t("newSession.terminalNodeFolder")}</span
           ><input
@@ -253,7 +253,9 @@ export function renderNewSessionPlaceControls({
           onClose: () => browser.close(),
         })
   }${
-    checkoutState && !place.freshWorkspace && !(nativeTerminal && place.terminalOnNode)
+    checkoutState &&
+    !place.freshWorkspace &&
+    !(nativeTerminal && place.catalogSelection.terminalOnNode)
       ? renderCheckoutChip({
           idPrefix,
           state: checkoutState,

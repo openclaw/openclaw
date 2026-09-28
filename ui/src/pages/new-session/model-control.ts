@@ -5,8 +5,6 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import type { DurableDraftModelSelection } from "../../lib/chat/composer-draft-store.runtime.ts";
 import { buildQualifiedChatModelValue } from "../../lib/chat/model-ref.ts";
-import { normalizeChatFastModeInput } from "../../lib/chat/model-select-state.ts";
-import { normalizeThinkingOptionValue } from "../../lib/chat/thinking.ts";
 import {
   hasUnrestrictedModelCatalogSnapshot,
   invalidateModelCatalogCache,
@@ -19,8 +17,9 @@ import { requiresChatModelSetup } from "../chat/chat-model-setup.ts";
 import { renderChatModelAccountControl } from "../chat/components/chat-model-account-control.ts";
 import { renderChatModelControls } from "../chat/components/chat-model-controls.ts";
 import { navigateToModelProvider } from "../model-providers/navigation.ts";
-import { CatalogTargetDiscovery } from "./catalog-target.ts";
+import { CatalogTargetDiscovery, pickerTarget } from "./catalog-target.ts";
 import type { DraftCloudProfile } from "./discovery.ts";
+import type { NewSessionRouteData } from "./location.ts";
 import {
   NewSessionModelSelection,
   type ModelSelectionChange,
@@ -42,6 +41,7 @@ import {
 import { hasNewSessionModelPreference, type NewSessionPreference } from "./preferences.ts";
 
 type NewSessionMetadataClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
+type TargetSelect<Result> = (value: string, isCurrent: () => boolean) => Promise<Result>;
 
 export class NewSessionModelControl extends NewSessionModelSelection {
   private selectionGeneration = 0;
@@ -68,8 +68,10 @@ export class NewSessionModelControl extends NewSessionModelSelection {
   constructor(
     private readonly notify: () => void,
     onSelectionChange: ModelSelectionChange = () => undefined,
-    private readonly onCatalogTargetSelect: Parameters<CatalogTargetDiscovery["select"]>[2] = () =>
-      undefined,
+    private readonly onCatalogTargetSelect: TargetSelect<boolean | string | undefined> = async () =>
+      false,
+    private readonly onModelTargetSelect: TargetSelect<boolean> = async () => false,
+    private readonly selectionLocked: () => boolean = () => false,
   ) {
     super(onSelectionChange);
     this.catalogTargets = new CatalogTargetDiscovery(notify);
@@ -294,8 +296,9 @@ export class NewSessionModelControl extends NewSessionModelSelection {
   }
 
   cancelCatalogSelection() {
-    this.selectionGeneration += 1;
+    const generation = ++this.selectionGeneration;
     this.catalogTargets.clearSelection();
+    return () => generation === this.selectionGeneration;
   }
 
   invalidate(resetSelection = false) {
@@ -584,6 +587,7 @@ export class NewSessionModelControl extends NewSessionModelSelection {
     agentId: string;
     context: ApplicationContext | undefined;
     sending: boolean;
+    catalogTarget?: NewSessionRouteData;
   }) {
     const snapshot = options.context?.gateway.snapshot;
     const sessionKey = `new-session:${normalizeAgentId(options.agentId)}`;
@@ -604,7 +608,8 @@ export class NewSessionModelControl extends NewSessionModelSelection {
         client &&
         scope &&
         this.ownsMetadata(client, scope) &&
-        this.metadataState.accountSelection === accountSelection,
+        this.metadataState.accountSelection === accountSelection &&
+        !this.selectionLocked(),
       );
     return renderChatModelControls({
       ...modelControls,
@@ -637,18 +642,20 @@ export class NewSessionModelControl extends NewSessionModelSelection {
       loading: false,
       modelCatalog: this.catalog,
       modelOverrides: { [sessionKey]: this.effectiveModel || null },
-      modelPickerTargetGroups: this.catalogTargets.groups(),
-      modelSwitching: false,
+      modelPickerTargetGroups: this.catalogTargets.groups(options.catalogTarget),
+      selectedTarget: pickerTarget(options.catalogTarget),
+      modelSwitching: this.selectionLocked(),
       sending: options.sending,
       sessionKey,
       selectedSession: undefined,
       selectedAgentRuntime: this.agentRuntime,
       sessionsResult: agentDefaultsAvailable ? sourceResult : null,
       stream: null,
-      onModelSelect: (value, _sessionKey, agentRuntime) => {
-        this.cancelCatalogSelection();
-        this.initialModelPending = false;
-        this.restoringPreference = false;
+      onModelSelect: async (value, _sessionKey, agentRuntime) => {
+        if (this.selectionLocked()) {
+          return;
+        }
+        const isCurrent = this.cancelCatalogSelection();
         const selection = reconcileDraftModelSelection({
           model: value,
           agentRuntime: agentRuntime ?? undefined,
@@ -659,13 +666,15 @@ export class NewSessionModelControl extends NewSessionModelSelection {
           modelSelectionPolicy: this.metadataState.modelSelectionPolicy,
           catalog: this.catalog,
         });
-        if (
-          selection.model === this.effectiveModel &&
-          selection.agentRuntime === this.agentRuntime &&
-          selection.fastMode === this.fastMode &&
-          normalizeThinkingOptionValue(selection.thinkingLevel) ===
-            normalizeThinkingOptionValue(this.thinkingLevel)
-        ) {
+        const accepted =
+          !options.catalogTarget?.catalogId ||
+          (await this.onModelTargetSelect(selection.model, isCurrent));
+        if (!accepted || !isCurrent()) {
+          return;
+        }
+        this.initialModelPending = false;
+        this.restoringPreference = false;
+        if (this.matchesSelection(selection, this.effectiveModel)) {
           return;
         }
         this.metadataState.displayOnly = false;
@@ -689,24 +698,11 @@ export class NewSessionModelControl extends NewSessionModelSelection {
         this.onDraftSelectionChange?.();
       },
       onModelPickerTargetSelect: (groupId, catalogId) => {
-        if (groupId !== "cliAgents") {
-          return Promise.resolve(false);
+        if (groupId !== "cliAgents" || this.selectionLocked()) {
+          return false;
         }
-        const generation = ++this.selectionGeneration;
-        const agentId = this.agentId;
-        const isCurrent = () =>
-          Boolean(
-            generation === this.selectionGeneration &&
-            agentId === this.agentId &&
-            client &&
-            scope &&
-            this.ownsMetadata(client, scope),
-          );
-        return this.catalogTargets.select(
-          catalogId,
-          { gateway: options.context?.gateway, client, agentId, isCurrent },
-          this.onCatalogTargetSelect,
-        );
+        const isCurrent = this.cancelCatalogSelection();
+        return this.catalogTargets.select(catalogId, this.onCatalogTargetSelect, isCurrent);
       },
       onModelPickerTargetRetry: (groupId) => {
         if (groupId === "cliAgents") {
@@ -714,22 +710,26 @@ export class NewSessionModelControl extends NewSessionModelSelection {
         }
       },
       onThinkingSelect: (value) => {
+        if (this.selectionLocked()) {
+          return;
+        }
         this.cancelCatalogSelection();
         this.restoringPreference = false;
-        this.thinkingLevel = value;
-        this.markExplicitSelection();
-        this.persistSelection();
-        this.onDraftSelectionChange?.();
+        this.setThinkingPreference(value);
       },
       onFastModeSelect: (value) => {
+        if (this.selectionLocked()) {
+          return;
+        }
         this.cancelCatalogSelection();
         this.restoringPreference = false;
-        this.fastModeSelected = true;
-        this.fastMode = normalizeChatFastModeInput(value);
-        this.persistSelection();
+        this.setFastModePreference(value);
         this.notify();
       },
       onContextWindowSelect: (value) => {
+        if (this.selectionLocked()) {
+          return;
+        }
         this.cancelCatalogSelection();
         this.restoringPreference = false;
         this.contextWindow = value;

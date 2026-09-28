@@ -47,7 +47,14 @@ import { renderAgentSelect, renderNewSessionPlaceControls } from "./target-contr
 
 registerNewSessionSetupEnglish();
 
-const { activateDraft, restoreDraft, restoreDraftOwner, retainDraft } = drafts;
+const {
+  activateDraft,
+  restoreDraft,
+  restoreDraftOwner,
+  retainDraft,
+  prepareTargetTransition,
+  completeTargetTransition,
+} = drafts;
 
 const attachmentPanelElement = {
   tagName: "openclaw-chat-detail-panel",
@@ -108,7 +115,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
   private readonly subscriptions: SubscriptionsController;
   private readonly titlePreparation = new NewSessionTitleController(this, () => ({
     context: this.context,
-    data: this.data,
+    data: this.place.data,
     place: this.place,
     submission: this.submission,
     dictating: this.dictation.active,
@@ -131,6 +138,36 @@ export class NewSessionPage extends OpenClawLightDomElement {
         onInvalidate: () => {
           this.closeAttachmentPanel();
           this.connectMachine?.close();
+        },
+        onTargetSelect: async (data, isCurrent) => {
+          const context = this.context;
+          if (!context || !isCurrent()) {
+            return false;
+          }
+          const params = new URLSearchParams();
+          if (data.requestedAgentId) {
+            params.set("agent", data.requestedAgentId);
+          }
+          if (data.catalogId) {
+            params.set("catalog", data.catalogId);
+          } else if (data.requestedModel) {
+            params.set("model", data.requestedModel);
+          }
+          if (data.group) {
+            params.set("group", data.group);
+          }
+          const cancel = prepareTargetTransition(context, data, isCurrent);
+          try {
+            await context.navigateAndWait("new-session", {
+              search: params.size ? "?" + params.toString() : "",
+            });
+            await this.updateComplete;
+            return isCurrent() && catalog.routeKey(this.data) === catalog.routeKey(data);
+          } catch {
+            return false;
+          } finally {
+            cancel?.();
+          }
         },
         onRecoveryReady: (gatewayUrl, recoveryScope) =>
           restoreDraftOwner(this.submission, gatewayUrl, recoveryScope),
@@ -267,7 +304,14 @@ export class NewSessionPage extends OpenClawLightDomElement {
 
   private disposeDraft() {
     forgetInstantThreadPage(this.data, this);
-    retainDraft(this.context, this.submission, this.openedFor, this.messageOwnerKey);
+    const destination = catalog.routeKeyFromSearch(window.location.search);
+    retainDraft(
+      this.context,
+      this.submission,
+      this.openedFor,
+      this.messageOwnerKey,
+      this.place.catalogSelection.isTargetTransition(destination) ? destination : undefined,
+    );
     this.draft.disconnect();
   }
 
@@ -303,11 +347,27 @@ export class NewSessionPage extends OpenClawLightDomElement {
     this.place.modelControl.loadCatalogTargets(
       this.context,
       agentsReady && this.place.agentId ? (this.place.selectedAgent()?.id ?? "") : "",
-      this.context?.config.current.cliAgentsEnabled === true && !catalog.isTarget(this.data),
+      this.context?.config.current.cliAgentsEnabled === true,
     );
     const openKey = this.routeOwnerKey();
     const resolvedAgentId = this.data?.agentId ?? "";
     const groupDefaults = catalog.groupDefaultsKey(this.data);
+    if (this.openedFor !== openKey && this.place.catalogSelection.isTargetTransition(openKey)) {
+      // The picker keeps the same composer and choices; only this owned handoff moves its scope.
+      // A cached destination can render before its loader reads the newly admitted target.
+      if (!this.data || this.data !== this.place.data) {
+        return;
+      }
+      if (this.context && completeTargetTransition(this.context, this.submission, openKey)) {
+        this.openedFor = openKey;
+        this.messageOwnerKey = openKey;
+        this.openedGroupDefaults = groupDefaults;
+        this.openedAgentId = resolvedAgentId;
+        this.place.catalogSelection.clear();
+        this.requestUpdate();
+        return;
+      }
+    }
     if (this.openedFor !== openKey) {
       // Ordinary drafts release previews on reset and restore through durable storage.
       if (this.openedFor !== null && this.submission.visibility === "incognito") {
@@ -371,7 +431,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
     const agents = this.place.agents();
     const sessions = this.context?.sessions;
     return catalog.renderBar({
-      data: this.data,
+      data: this.place.data,
       groupPending: catalog.isGroupRoutePending(this.data, sessions),
       agentSelect:
         agents.length > 1
@@ -380,7 +440,10 @@ export class NewSessionPage extends OpenClawLightDomElement {
               agentId: this.place.agentId,
               agentIdentity: this.context?.agentIdentity,
               disabled:
-                this.submission.submitting || Boolean(this.submission.pendingPlacement.sessionKey),
+                this.submission.submitting ||
+                Boolean(this.submission.pendingPlacement.sessionKey) ||
+                this.place.catalogSelection.transitionPending ||
+                catalog.isTarget(this.place.data),
               onSelect: (agentId) => this.place.selectAgentId(agentId),
               onOpenChange: (open) => {
                 this.agentPickerOpen = open;
@@ -389,10 +452,10 @@ export class NewSessionPage extends OpenClawLightDomElement {
           : nothing,
       placeSelect: renderNewSessionPlaceControls({
         context: this.context,
-        data: this.data,
+        data: this.place.data,
         gateway: this.gateway,
         place: this.place,
-        submitting: this.submission.submitting,
+        submitting: this.submission.submitting || this.place.catalogSelection.transitionPending,
         pendingPlacement: Boolean(this.submission.pendingPlacement.sessionKey),
         onConnectMachine: () => this.openConnectMachine(),
         onNavigate: (route, options) => this.context?.navigate(route, options),
@@ -424,7 +487,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       dictation: this.dictation,
       titlePreparation: this.titlePreparation,
       draftOwnerKey: this.routeOwnerKey(),
-      isCatalogTarget: catalog.isTarget(this.data),
+      isCatalogTarget: catalog.isTarget(this.place.data),
       renderTargetBar: () => this.renderTargetBar(),
       requestUpdate: () => this.requestUpdate(),
       onMessage: (message, mentions) => this.setMessageFromUser(message, mentions),
@@ -442,7 +505,6 @@ export class NewSessionPage extends OpenClawLightDomElement {
       assistantName: agent ? normalizeAgentTargetLabel(agent, identity) : "",
       assistantAvatar: resolveAgentTextAvatar(agent ?? {}, identity),
       assistantAvatarUrl: resolveAgentAvatarUrl(agent ?? {}, identity),
-      // Runtime availability belongs to its control, never the agent header.
       hint: t("newSession.hint"),
       composer: this.renderDraftBlock(),
       hideSecondaryContent: this.submission.visibility === "incognito",
@@ -494,7 +556,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
         }"
       >
         ${
-          catalog.isTarget(this.data)
+          catalog.isTarget(this.place.data) || this.place.catalogSelection.transitionPending
             ? nothing
             : renderNewSessionIncognitoControl(
                 this.submission,

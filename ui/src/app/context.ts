@@ -97,11 +97,12 @@ export type ApplicationChatAttachmentHandoff = {
       replyTarget?: ChatReplyTarget | null;
       mentions?: readonly HumanMention[];
       newSessionDraft?: NewSessionDraftHandoff;
+      newSessionDraftTransfer?: true;
       newSessionTarget?: { data: NewSessionRouteData; isCurrent: () => boolean };
       incognito?: boolean;
       reviewPrivateDraft: typeof reviewPrivateComposerDraft;
     },
-  ): void;
+  ): (() => void) | undefined;
   consume(handoff: ChatAttachmentHandoffKey): {
     attachments: ChatAttachment[];
     fallbacks: Record<string, ChatComposerMemoryFallback>;
@@ -111,6 +112,7 @@ export type ApplicationChatAttachmentHandoff = {
     replyTarget?: ChatReplyTarget | null;
     mentions?: readonly HumanMention[];
     newSessionDraft?: NewSessionDraftHandoff;
+    newSessionDraftTransfer?: true;
     newSessionTarget?: { data: NewSessionRouteData; isCurrent: () => boolean };
   } | null;
   peekNewSessionTarget(handoff: ChatAttachmentHandoffKey): NewSessionRouteData | undefined;

@@ -1,5 +1,10 @@
 import type { FastMode, GatewayAgentRow } from "../../api/types.ts";
 import type { DurableDraftModelSelection } from "../../lib/chat/composer-draft-store.runtime.ts";
+import {
+  normalizeChatFastModeInput,
+  type ChatFastModeSelectValue,
+} from "../../lib/chat/model-select-state.ts";
+import { normalizeThinkingOptionValue } from "../../lib/chat/thinking.ts";
 import { reconcileDraftModelSelection } from "./model-target.ts";
 import type { NewSessionPreference } from "./preferences.ts";
 
@@ -37,6 +42,32 @@ export class NewSessionModelSelection {
     this.explicitSelection = false;
     this.restoredSelection = false;
     this.fastModeSelected = false;
+  }
+
+  protected matchesSelection(
+    selection: ReturnType<typeof reconcileDraftModelSelection>,
+    model: string,
+  ) {
+    return (
+      selection.model === model &&
+      selection.agentRuntime === this.agentRuntime &&
+      selection.fastMode === this.fastMode &&
+      normalizeThinkingOptionValue(selection.thinkingLevel) ===
+        normalizeThinkingOptionValue(this.thinkingLevel)
+    );
+  }
+
+  protected setThinkingPreference(value: string) {
+    this.thinkingLevel = value;
+    this.markExplicitSelection();
+    this.persistSelection();
+    this.onDraftSelectionChange?.();
+  }
+
+  protected setFastModePreference(value: ChatFastModeSelectValue) {
+    this.fastModeSelected = true;
+    this.fastMode = normalizeChatFastModeInput(value);
+    this.persistSelection();
   }
 
   protected applyModelSelection(selection: ReturnType<typeof reconcileDraftModelSelection>) {

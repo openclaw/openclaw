@@ -3,6 +3,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { newSessionModelSearch } from "./model-location.ts";
+import { load } from "./route-loader.ts";
 import { page } from "./route.ts";
 
 // The loader is exercised through the page contract so route.ts keeps its
@@ -57,6 +58,31 @@ function createContext(params: {
 }
 
 describe("new-session route catalog target", () => {
+  it("uses the prepared picker target once without rescanning, but reloads direct route readiness", async () => {
+    const { context, request } = createContext({ assistantAgentId: "main", agentsList: null });
+    const data: NewSessionRouteData = {
+      agentId: "main",
+      requestedAgentId: "main",
+      catalogId: "codex",
+      catalogLabel: "Codex",
+      model: "",
+      startTerminal: true,
+      terminalHosts: [{ hostId: "gateway:local", label: "Gateway" }],
+    };
+    const peekNewSessionTarget = vi.fn(() => data);
+    Object.assign(context, { chatAttachmentHandoff: { peekNewSessionTarget } });
+    expect(await load(context, "?agent=main&catalog=codex", "navigation")).toBe(data);
+    expect(request).not.toHaveBeenCalled();
+    expect(peekNewSessionTarget).toHaveBeenCalledOnce();
+    await load(context, "?agent=main&catalog=codex", "revalidate");
+    expect(request).toHaveBeenCalledExactlyOnceWith("sessions.catalog.list", {
+      agentId: "main",
+      catalogId: "codex",
+      limitPerHost: 1,
+    });
+    expect(peekNewSessionTarget).toHaveBeenCalledOnce();
+  });
+
   it.each(["current", "failed"] as const)(
     "does not resolve catalog routes from a warm roster after %s discovery",
     async (outcome) => {

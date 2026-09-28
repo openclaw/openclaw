@@ -20,6 +20,7 @@ type FixtureOptions = {
   scopes?: string[];
   selfUser?: { id: string };
   data?: NewSessionRouteData;
+  onTargetSelect?: (data: NewSessionRouteData, isCurrent: () => boolean) => Promise<boolean>;
   request?: (method: string, params?: unknown) => Promise<unknown>;
   modelCatalog?: (params?: unknown) => Promise<unknown>;
 };
@@ -156,12 +157,14 @@ export function createDraftFixture(options: FixtureOptions = {}) {
       context,
       data: options.data,
       submitting: flow?.submitting ?? false,
+      visibility: flow?.visibility ?? "normal",
       pendingPlacementSessionKey: flow?.pendingPlacement.sessionKey ?? "",
     }),
     {
       requestUpdate: vi.fn(),
       onError: (error) => flow?.setError(error),
       onClearError: (error) => flow?.clearError(error),
+      onTargetSelect: options.onTargetSelect,
     },
   );
   const requestUpdate = vi.fn();

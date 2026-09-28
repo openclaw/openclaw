@@ -623,7 +623,6 @@ describe("new-session composer sizing lifecycle", () => {
         canSubmit: true,
         context: undefined,
         draftOwnerKey: "draft:one",
-        isCatalogTarget: true,
         message: "typed",
         modelControl: new NewSessionModelControl(() => undefined),
         requiresModifier: false,
@@ -649,7 +648,6 @@ describe("new-session composer sizing lifecycle", () => {
         canSubmit: true,
         context: undefined,
         draftOwnerKey: "draft:one",
-        isCatalogTarget: true,
         message: "restored programmatically",
         modelControl: new NewSessionModelControl(() => undefined),
         requiresModifier: false,
@@ -720,9 +718,11 @@ describe("new-session composer attachment drops", () => {
 
   it("keeps page-level incognito out of the composer when drafts are unavailable", () => {
     const { composer } = renderComposer();
-    const switches = composer.querySelectorAll<HTMLButtonElement>('[role="switch"]');
+    const visibilitySwitches = composer.querySelectorAll<HTMLButtonElement>(
+      '[role="switch"][aria-label="Incognito"], [role="switch"][aria-label^="Draft"]',
+    );
 
-    expect(switches).toHaveLength(0);
+    expect(visibilitySwitches).toHaveLength(0);
   });
 
   it("lets one draft pill replace page-level incognito", () => {
@@ -732,7 +732,9 @@ describe("new-session composer attachment drops", () => {
       visibility: "draft",
       onVisibilityChange,
     });
-    const draftPill = composer.querySelector<HTMLButtonElement>('[role="switch"]');
+    const draftPill = composer.querySelector<HTMLButtonElement>(
+      '[role="switch"][aria-label="Draft"]',
+    );
     const visibleDraftButtons = Array.from(
       composer.querySelectorAll<HTMLButtonElement>(".agent-chat__composer-footer button"),
     ).filter((button) => button.textContent?.trim() === "Draft");

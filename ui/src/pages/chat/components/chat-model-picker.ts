@@ -59,6 +59,7 @@ type ChatModelPickerParams = {
   modelOptions: ChatModelPickerOption[];
   open?: boolean;
   targetGroups?: readonly ChatModelPickerTargetGroup[];
+  selectedTarget?: { groupId: string; value: string; label: string; description?: string };
   selectedModelValue: string;
   selectedAgentRuntime?: string;
   /** Pin recorded on the session row; only then does an unavailable Default row reset. */
@@ -128,11 +129,16 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
   // sits between boxes that exist, so nothing reserves space either. A status
   // label replaces the model name outright, and a provider mark next to
   // "Loading..." would claim an identity the trigger is not showing.
-  const triggerProviderIcon =
-    !params.triggerLoading &&
-    !params.triggerStatusLabel &&
-    triggerModelOption &&
-    hasProviderBrandIcon(triggerModelOption.provider)
+  const triggerProviderIcon = params.selectedTarget
+    ? html`<span
+        class="chat-controls__trigger-provider-icon chat-controls__target-icon"
+        aria-hidden="true"
+        >${icons.terminal}</span
+      >`
+    : !params.triggerLoading &&
+        !params.triggerStatusLabel &&
+        triggerModelOption &&
+        hasProviderBrandIcon(triggerModelOption.provider)
       ? renderProviderBrandIcon(triggerModelOption.provider, {
           className: "chat-controls__trigger-provider-icon",
         })
@@ -254,7 +260,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
         }`}
         aria-busy=${params.triggerLoading || params.triggerStarting ? "true" : "false"}
         aria-disabled=${params.disabled ? "true" : "false"}
-        title=${params.disabledReason?.trim() || nothing}
+        title=${params.disabledReason?.trim() || params.selectedTarget?.description || nothing}
         @click=${(event: MouseEvent) => {
           if (params.disabled) {
             event.preventDefault();
@@ -520,6 +526,9 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                           entry,
                                           groupId: group.id,
                                           groupLabel: group.label,
+                                          selected:
+                                            params.selectedTarget?.groupId === group.id &&
+                                            params.selectedTarget.value === entry.value,
                                           index: orderedOptions.length + targetIndex,
                                           onSelect: selectTarget,
                                         }),

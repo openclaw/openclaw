@@ -123,7 +123,7 @@ suite.define(() => {
     }
   });
 
-  it("routes a Labs-enabled CLI agent picker row through catalog-target mode", async () => {
+  it("keeps the composer and draft while selecting a native CLI target", async () => {
     if (captureCliAgentsProof) {
       await mkdir(path.join(suite.artifactDir, "cli-agents-picker"), { recursive: true });
     }
@@ -202,6 +202,11 @@ suite.define(() => {
         );
       }
 
+      const message = page.locator(".new-session-page__message");
+      await message.fill("Keep this prompt across target changes");
+      const composer = page.locator(".new-session-page__composer");
+      const bounds = await composer.boundingBox();
+      const textarea = await message.elementHandle();
       await cliGroup.getByRole("option", { name: "Claude Code" }).click();
       await expect.poll(() => new URL(page.url()).searchParams.get("catalog")).toBe("claude");
       await expect
@@ -215,13 +220,23 @@ suite.define(() => {
         requestHasParam(request, "catalogId", "claude"),
       );
       expect(targetRequest?.params).not.toHaveProperty("metadataOnly");
-      await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
-      expect(await page.locator('[data-chat-model-select="true"]').count()).toBe(0);
+      expect(
+        (await gateway.getRequests("sessions.catalog.list")).filter((request) =>
+          requestHasParam(request, "catalogId", "claude"),
+        ),
+      ).toHaveLength(1);
+      expect(await message.inputValue()).toBe("Keep this prompt across target changes");
+      expect(await textarea!.evaluate((element) => element.isConnected)).toBe(true);
+      expect(await composer.boundingBox()).toEqual(bounds);
+      await pollLocatorText(page.locator('[data-chat-model-select="true"]')).toContain(
+        "Claude Code",
+      );
+      expect(await page.locator('[data-chat-model-select="true"]').count()).toBe(1);
       if (captureCliAgentsProof) {
         await writeFile(
           path.join(suite.artifactDir, "cli-agents-picker", "catalog-target.png"),
           await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-            page.locator(".new-session-page__runtime"),
+            page.locator('[data-chat-model-select="true"]'),
           ]),
         );
       }
@@ -272,7 +287,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}new?catalog=claude`);
-      await page.locator(".new-session-page__runtime").waitFor();
+      await page.locator('[data-chat-model-select="true"]').waitFor();
 
       expect(await page.locator(".new-session-page__start-split").count()).toBe(0);
       await page.locator(".new-session-page__message").fill("keep the normal path");
@@ -355,7 +370,9 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}new?agent=research&catalog=claude`);
-      await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
+      await pollLocatorText(page.locator('[data-chat-model-select="true"]')).toContain(
+        "Claude Code",
+      );
       expect(await page.locator(".new-session-page__start-split").count()).toBe(0);
 
       await page.locator("#new-session-checkout-trigger").click();
@@ -376,7 +393,7 @@ suite.define(() => {
       await page.locator(".new-session-page__message").fill("  inspect the checkout  ");
 
       expect(await page.getByRole("button", { name: "Add attachment" }).count()).toBe(0);
-      expect(await page.locator('[data-chat-model-select="true"]').count()).toBe(0);
+      expect(await page.locator('[data-chat-model-select="true"]').count()).toBe(1);
       if (captureCliAgentsProof) {
         await writeFile(
           path.join(suite.artifactDir, "cli-agents-picker", "terminal-primary.png"),
@@ -473,7 +490,9 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}new?catalog=claude`);
-      await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
+      await pollLocatorText(page.locator('[data-chat-model-select="true"]')).toContain(
+        "Claude Code",
+      );
       await page.locator(".new-session-page__message").fill("keep this draft");
       await page.getByRole("button", { name: "Start in terminal" }).click();
 
@@ -724,7 +743,7 @@ suite.define(() => {
 
       const message = page.locator(".new-session-page__message");
       await message.fill("keep this reconnect draft");
-      await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("claude");
+      await pollLocatorText(page.locator('[data-chat-model-select="true"]')).toContain("claude");
       await expect.poll(() => message.inputValue()).toBe("keep this reconnect draft");
       await expect
         .poll(() =>
@@ -750,7 +769,9 @@ suite.define(() => {
           timeout: 10_000,
         })
         .toBe(3);
-      await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
+      await pollLocatorText(page.locator('[data-chat-model-select="true"]')).toContain(
+        "Claude Code",
+      );
       await expect.poll(() => message.inputValue()).toBe("keep this reconnect draft");
       await pollLocatorText(page.locator(".new-session-page").getByRole("heading")).toContain(
         "Research",

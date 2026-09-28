@@ -100,7 +100,7 @@ describe("new-session model runtime", () => {
                 id: "anthropic",
                 label: "Claude Code",
                 capabilities: { startTerminal: true },
-                hosts: [{ hostId: "gateway:local", label: "Gateway", canStartTerminal: true }],
+                hosts: [],
               },
               {
                 id: "history-only",
@@ -145,10 +145,8 @@ describe("new-session model runtime", () => {
       .querySelector<HTMLButtonElement>('[data-chat-model-target="anthropic"]')
       ?.click();
 
-    await Promise.resolve();
-    await Promise.resolve();
     expect(onCatalogTargetSelect).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ catalogId: "anthropic", startTerminal: true }),
+      "anthropic",
       expect.any(Function),
     );
   });
