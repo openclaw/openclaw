@@ -71,7 +71,7 @@ describe("browser page text route", () => {
     expect(pageText).not.toHaveBeenCalled();
   });
 
-  it.each(["text", "requests", "errors"])(
+  it.each(["requests", "errors"])(
     "rejects existing-session %s with a supported alternative",
     async (route) => {
       setBrowserControlServerProfiles(

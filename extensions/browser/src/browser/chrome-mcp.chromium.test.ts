@@ -17,6 +17,7 @@ import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
 import { resolveBrowserConfig } from "./config.js";
 import { getPlaywrightCore } from "./playwright-core.runtime.js";
 import { registerBrowserAgentActRoutes } from "./routes/agent.act.js";
+import { registerBrowserAgentDebugRoutes } from "./routes/agent.debug.js";
 import { registerBrowserAgentSnapshotRoutes } from "./routes/agent.snapshot.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./routes/test-helpers.js";
 import { createBrowserRouteContext, type BrowserServerState } from "./server-context.js";
@@ -73,6 +74,83 @@ async function withMcpBrowser(
 describe.runIf(process.env.OPENCLAW_BROWSER_MCP_E2E === "1")(
   "pinned Chrome MCP in Chromium",
   () => {
+    it("reads bounded page text through the existing-session route with evaluation disabled", async () => {
+      await withMcpBrowser(async ({ page, context: browserContext, profile, profileName }) => {
+        const url = `http://127.0.0.1:${await getFreePort()}/page-text`;
+        await browserContext.route(url, (route) =>
+          route.fulfill({
+            contentType: "text/html; charset=utf-8",
+            body: `<!doctype html><body>Outside<main>Main<article>Article<span hidden>Hidden</span></article></main>
+              <section class="selected">abcd😀正文</section><section class="selected">Second</section>
+              <button onclick="this.textContent='Done'">Continue</button></body>`,
+          }),
+        );
+        await page.goto(url);
+        const tabs = await listChromeMcpTabs(profileName, profile, { timeoutMs: 30_000 });
+        const target = { profileName, profile, targetId: tabs[0]!.targetId, timeoutMs: 10_000 };
+        const snapshot = await takeChromeMcpSnapshot(target);
+        const buttonRef = snapshotRef(snapshot, "button", "Continue");
+        const state: BrowserServerState = {
+          port: 0,
+          resolved: resolveBrowserConfig({
+            defaultProfile: profileName,
+            evaluateEnabled: false,
+            ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
+            profiles: {
+              [profileName]: { ...profile, driver: "existing-session", color: "#123456" },
+            },
+          }),
+          profiles: new Map(),
+        };
+        const routes = createBrowserRouteApp();
+        registerBrowserAgentDebugRoutes(
+          routes.app,
+          createBrowserRouteContext({ getState: () => state }),
+        );
+        const readText = async (query: Record<string, unknown> = {}) => {
+          const response = createBrowserRouteResponse();
+          await routes.getHandlers.get("/text")!(
+            { params: {}, query: { profile: profileName, targetId: target.targetId, ...query } },
+            response.res,
+          );
+          expect(response.statusCode, JSON.stringify(response.body)).toBe(200);
+          return response.body;
+        };
+        expect(await readText()).toMatchObject({
+          ok: true,
+          url,
+          text: "Article",
+          truncated: false,
+        });
+        expect(await readText({ selector: ".selected", maxChars: "5" })).toMatchObject({
+          text: "abcd",
+          truncated: true,
+        });
+        expect(await readText({ selector: ".selected" })).toMatchObject({
+          text: "abcd😀正文",
+          truncated: false,
+        });
+        await clickChromeMcpElement({ ...target, uid: buttonRef });
+        await expect(page.getByRole("button", { name: "Done" }).textContent()).resolves.toBe(
+          "Done",
+        );
+        await page.locator("article").evaluate((element) => element.remove());
+        expect(await readText()).toMatchObject({ text: "Main", truncated: false });
+        await page.locator("main").evaluate((element) => element.remove());
+        expect(await readText()).toMatchObject({
+          text: expect.stringContaining("Outside"),
+          truncated: false,
+        });
+        const invalidSelector = createBrowserRouteResponse();
+        await routes.getHandlers.get("/text")!(
+          { params: {}, query: { profile: profileName, selector: "[" } },
+          invalidSelector.res,
+        );
+        expect(invalidSelector.statusCode).toBe(500);
+        expect(invalidSelector.body).toMatchObject({ error: expect.stringContaining("selector") });
+      });
+    }, 120_000);
+
     it("preserves native input, option values, and operation outcomes", async () => {
       await withMcpBrowser(async ({ page, profile, profileName }) => {
         await page.setContent(`<!doctype html>

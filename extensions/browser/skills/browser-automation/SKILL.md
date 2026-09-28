@@ -21,7 +21,7 @@ Use this skill when you need the `browser` tool for anything beyond a single pag
    - `suggestedTargetId` is the label when one exists, otherwise the stable `tabId` handle like `t1`.
    - Avoid relying on raw DevTools `targetId` except for immediate diagnostics; it can change under Chromium target replacement.
 3. Read before you click:
-   - For “read the page and answer X,” use `action="text"` with optional `selector` and `maxChars` for bounded visible prose (first selector match, otherwise article/main/body). On existing-session profiles, use `snapshot` instead. Efficient snapshots omit most prose.
+   - For “read the page and answer X,” use `action="text"` with optional `selector` and `maxChars` for bounded visible prose, including on `profile="user"` and other existing-session profiles. It reads the first selector match, or article/main/body when no selector is supplied. Narrow the selector if the result reports `truncated`. Efficient snapshots omit most prose.
    - For virtualized lists, scroll through each segment, capture only the relevant rows, then merge the results.
    - Use `action="snapshot"` on the intended `targetId`.
    - Add snapshot `query` to find lines containing all query tokens, ignoring case; matching lines keep their refs.

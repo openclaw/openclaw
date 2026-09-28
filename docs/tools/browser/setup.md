@@ -88,10 +88,11 @@ Plugin-bundled skills are listed in the agent's available skills when the
 plugin is enabled. The full skill instructions load on demand, so routine
 turns do not pay the full token cost.
 
-For page text, use a selector-scoped snapshot or `act:evaluate` that returns
-only the relevant text or structured data, then let the active agent model
-reason over that bounded result. Use efficient snapshots for controls and
-action discovery; they intentionally omit most non-interactive prose.
+For page text, use `action="text"` with an optional `selector` and `maxChars`
+to return bounded visible prose, including on the signed-in `user` profile.
+Let the active agent model reason over that result. Use efficient snapshots
+for controls and action discovery; they intentionally omit most
+non-interactive prose.
 
 ## Missing browser command or tool
 

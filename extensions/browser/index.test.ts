@@ -368,18 +368,10 @@ describe("browser plugin", () => {
     const actions = (properties.action as { enum?: string[] }).enum;
     const actKinds = (properties.kind as { enum?: string[] }).enum;
 
-    for (const action of [
-      "pdf",
-      "download",
-      "waitfordownload",
-      "requests",
-      "errors",
-      "text",
-      "emulate",
-    ]) {
+    for (const action of ["pdf", "download", "waitfordownload", "requests", "errors", "emulate"]) {
       expect(actions).not.toContain(action);
     }
-    expect(actions).toEqual(expect.arrayContaining(["snapshot", "screenshot"]));
+    expect(actions).toEqual(expect.arrayContaining(["snapshot", "screenshot", "text"]));
     expect(actKinds).not.toContain("batch");
     expect((properties.actions as { description?: string }).description).toBeUndefined();
     expect((properties.stopOnError as { description?: string }).description).toBeUndefined();

@@ -106,6 +106,7 @@ Agent use:
 
 - Use `profile="user"` when you need the user's logged-in browser state.
 - If you use a custom existing-session profile, pass that explicit profile name.
+- Use `action="text"` to read bounded visible prose from the live page. An optional native CSS `selector` chooses its first match; Playwright selector extensions and shadow-root traversal are not supported. Without a selector, extraction uses the first `article`, `main`, or `body`. `maxChars` defaults to 40,000 characters and can set a smaller limit. Use `snapshot` when you need controls and refs for actions.
 - Only choose this mode when the user is at the computer to approve the attach
   prompt.
 - The Gateway or node host starts the packaged Chrome DevTools MCP server on its own runtime, Node or Bun.
@@ -196,6 +197,6 @@ Compared to the managed `openclaw` profile, existing-session drivers are more co
 - **Actions** - `click`, `type`, `hover`, `scrollIntoView`, `drag`, and `select` require snapshot refs (no CSS selectors). `click-coords` sends native input at visible viewport coordinates without a snapshot ref, supporting left clicks and double clicks. Right/middle buttons and nonzero delays return an unsupported-operation error. `click` is left-button only (no button overrides or modifiers). `type` does not support `slowly=true`; use `fill` or `press`. `press` does not support `delayMs`. `type`, `hover`, `scrollIntoView`, `drag`, `select`, and `fill` do not support per-call `timeoutMs` overrides; `evaluate` does. `select` accepts one exact HTML option value, including empty or whitespace values; duplicate display labels do not change which value is selected. `batch` is not supported; send actions individually.
 - **Wait / upload / dialog** - `wait --url` supports exact, substring, and glob patterns (same as managed); `wait --load networkidle` is not supported on existing-session profiles (it works on managed and raw/remote CDP profiles). Upload hooks require `ref` or `inputRef` and do not support CSS `element`; pass multiple paths when the page's file input accepts multiple files. Dialog hooks do not support timeout overrides or `dialogId`.
 - **Dialog visibility** - Managed browser action responses include `blockedByDialog` and `browserState.dialogs.pending` when an action opens a modal dialog; snapshots also include pending dialog state. Respond with `browser dialog --accept/--dismiss --dialog-id <id>` while a dialog is pending. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
-- **Playwright-only features** - PDF export, download interception, `responsebody`, and the agent actions `requests`, `errors`, `text`, and `emulate` require a Playwright-backed profile, such as the managed `openclaw` profile. Use `snapshot` to inspect an existing-session page.
+- **Playwright-only features** - PDF export, download interception, `responsebody`, and the agent actions `requests`, `errors`, and `emulate` require a Playwright-backed profile, such as the managed `openclaw` profile. Page-text extraction with `action="text"` works on existing-session profiles without Playwright.
 
 </Accordion>

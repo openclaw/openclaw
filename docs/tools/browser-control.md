@@ -24,6 +24,7 @@ agent tools, but nothing listens on the loopback control port.
 - Profiles: `GET /profiles`, `POST /profiles/create`, `DELETE /profiles/:name`
 - Tabs: `GET /tabs`, `POST /tabs/open`, `POST /tabs/focus`, `DELETE /tabs/:targetId`, `POST /tabs/action`
 - Snapshot/screenshot/stream: `GET /snapshot`, `POST /screenshot`, `POST /screencast`
+- Page text: `GET /text` with optional `selector` and `maxChars`; returns bounded `text` and `truncated`
 - Actions: `POST /navigate`, `POST /act`
 - Hooks: `POST /hooks/file-chooser`, `POST /hooks/dialog`
 - Downloads: `POST /download`, `POST /wait/download`
@@ -189,6 +190,7 @@ What still works without Playwright:
   WebSocket is available
 - Page screenshots for `existing-session` / Chrome MCP profiles
 - `existing-session` ref-based screenshots (`--ref`) from snapshot output
+- Page-text extraction for `existing-session` / Chrome MCP profiles
 
 What still needs Playwright:
 

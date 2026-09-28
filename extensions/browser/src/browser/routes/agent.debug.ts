@@ -6,9 +6,9 @@ import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { PwAiModule } from "../pw-ai-module.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import { readBody, resolveProfileContext, withPlaywrightRouteContext } from "./agent.shared.js";
+import { registerBrowserAgentTextRoutes } from "./agent.text.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import { resolveWritableOutputPathOrRespond } from "./output-paths.js";
-import { readRoutePositiveInteger } from "./route-numeric.js";
 import type { BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { jsonError, toBoolean, toStringOrEmpty } from "./utils.js";
 
@@ -99,17 +99,7 @@ export function registerBrowserAgentDebugRoutes(
     EXISTING_SESSION_LIMITS.requests,
   );
 
-  register(
-    "get",
-    "/text",
-    "page text",
-    (input) => {
-      const selector = normalizeOptionalString(input.selector);
-      const maxChars = readRoutePositiveInteger(input.maxChars, "maxChars");
-      return (pw, target) => pw.getPageTextViaPlaywright({ ...target, selector, maxChars });
-    },
-    EXISTING_SESSION_LIMITS.text,
-  );
+  registerBrowserAgentTextRoutes(app, ctx);
 
   register("get", "/dialogs", "dialog state", () => async (pw, { cdpUrl, targetId }) => ({
     browserState: await pw.getObservedBrowserStateViaPlaywright({
