@@ -1,5 +1,6 @@
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import type { QaThinkingLevel } from "../../qa-thinking.js";
+import type { QaMockContinuationHold } from "../mock-openai/mock-openai-request-log.js";
 import type { QaTerminalRequesterSettlement } from "../mock-openai/terminal-requester-settlement.js";
 import type { MockProviderVariant } from "./mock-provider-variant.js";
 
@@ -25,6 +26,7 @@ export type QaMockProviderServer = {
   baseUrl: string;
   sessionObserverUrl?: string;
   terminalRequesters?: QaTerminalRequesterSettlement;
+  holdNextContinuation?: (sessionId: string, signal: AbortSignal) => QaMockContinuationHold;
   stop(): Promise<void>;
 };
 

@@ -10,7 +10,6 @@ import {
   dispatchQaHttpRequest,
   writeQaRequestBodyLimitError,
 } from "../../bus-server.js";
-import { resolveQaDebugRequestCursor } from "../shared/debug-request-cursor.js";
 import { writeJson } from "../shared/http-json.js";
 import {
   listMockCodexModelInfos,
@@ -32,9 +31,7 @@ import {
 import {
   type ResponsesInputItem,
   type StreamEvent,
-  type MockOpenAiRequestSnapshot,
   type MockOpenAiRequestSnapshotBase,
-  type MockOpenAiRequestSnapshotInput,
   type MockOpenAiRequestKind,
   type MockCompactionSummaryFaultMode,
   type AnthropicMessagesRequest,
@@ -108,7 +105,6 @@ import {
   sourceDiscoveryReadPathForProvider,
   subagentHandoffTaskForProvider,
   subagentFanoutTaskForProvider,
-  MOCK_OPENAI_DEBUG_REQUEST_LIMIT,
   readBody,
   parseJsonObjectBody,
   transcriptionTextForAudioRequest,
@@ -176,6 +172,7 @@ import {
   extractCurrentImageRequest,
   parseToolOutputJson,
 } from "./mock-openai-input.js";
+import { createMockOpenAiRequestLog } from "./mock-openai-request-log.js";
 import { attachQaMockResponsesWebSocketServer } from "./mock-openai-responses-websocket.js";
 import {
   buildSlackOwnedRequesterEvents,
@@ -2019,18 +2016,7 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
   const terminalRequesterSettleGate = createTerminalRequesterSettleGate();
   const servedCompactionSummaryFaultMarkers = new Set<string>();
   const scenarioStateFor = createQaMockScenarioStateStore();
-  let lastRequest: MockOpenAiRequestSnapshot | null = null;
-  const requests: MockOpenAiRequestSnapshot[] = [];
-  let nextRequestCursor = 1;
-  const recordRequest = (snapshot: MockOpenAiRequestSnapshotInput) => {
-    const recorded = { ...snapshot, cursor: nextRequestCursor++ };
-    lastRequest = recorded;
-    requests.push(recorded);
-    if (requests.length > MOCK_OPENAI_DEBUG_REQUEST_LIMIT) {
-      requests.splice(0, requests.length - MOCK_OPENAI_DEBUG_REQUEST_LIMIT);
-    }
-    return recorded;
-  };
+  const requestLog = createMockOpenAiRequestLog();
   const inflightRequests = new Map<number, { prompt: string; allInputText: string }>();
   let nextInflightRequestId = 1;
   const imageGenerationRequests: Array<Record<string, unknown>> = [];
@@ -2097,7 +2083,7 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
       !scenarioState.compactionOverflowInjected
     ) {
       scenarioState.compactionOverflowInjected = true;
-      recordRequest({
+      requestLog.record({
         ...requestSnapshotBase,
         outcome: "error",
         errorCode: "context_length_exceeded",
@@ -2190,7 +2176,7 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
             retryAfterSeconds: 120,
           }
         : undefined);
-    recordRequest({
+    const recorded = requestLog.record({
       ...requestSnapshotBase,
       outcome:
         failure || events.some((event) => event.type === "response.failed") ? "error" : "success",
@@ -2214,6 +2200,10 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
       !QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE.test(prompt);
     if (repeatedRequestRecovery) {
       scenarioState.repeatedRequestRecoveryAttempts += 1;
+    }
+    const held = requestLog.waitForContinuation(recorded);
+    if (held) {
+      await held;
     }
     return {
       events,
@@ -2266,34 +2256,7 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
         });
         return;
       }
-      if (req.method === "GET" && url.pathname === "/debug/last-request") {
-        writeJson(res, 200, lastRequest ?? { ok: false, error: "no request recorded" });
-        return;
-      }
-      if (req.method === "GET" && url.pathname === "/debug/request-cursor") {
-        writeJson(res, 200, { cursor: nextRequestCursor - 1 });
-        return;
-      }
-      if (req.method === "GET" && url.pathname === "/debug/requests") {
-        const afterText = url.searchParams.get("after");
-        if (afterText === null) {
-          writeJson(res, 200, requests);
-          return;
-        }
-        const after = resolveQaDebugRequestCursor(
-          afterText,
-          requests[0]?.cursor ?? nextRequestCursor,
-          nextRequestCursor - 1,
-        );
-        if (typeof after !== "number") {
-          writeJson(res, after.status, after.body);
-          return;
-        }
-        writeJson(
-          res,
-          200,
-          requests.filter((request) => request.cursor > after),
-        );
+      if (req.method === "GET" && requestLog.handleGet(url, res)) {
         return;
       }
       if (req.method === "GET" && url.pathname === "/debug/inflight-requests") {
@@ -2448,9 +2411,11 @@ export async function startQaMockOpenAiServer(params?: QaMockOpenAiServerOptions
     baseUrl,
     sessionObserverUrl,
     terminalRequesters: { settle: terminalRequesterSettleGate.settle },
+    holdNextContinuation: requestLog.holdNextContinuation,
     async stop() {
       unregisterSessionObserver();
       terminalRequesterSettleGate.stop();
+      requestLog.stop();
       await responsesWebSocket.close();
       await closeQaHttpServer(server);
     },

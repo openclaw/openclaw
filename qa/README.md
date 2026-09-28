@@ -47,3 +47,21 @@ environment sanitization, current-owner checks, and decision evidence.
 The maintained test-file runner expands `${repoRoot}` to the selected checkout
 and `${outputDir}` to the scenario's artifact directory. Script scenarios can
 pass these as distinct arguments without embedding a campaign path or SHA.
+
+## Holding a mock provider continuation
+
+Private QA Lab flows using `mock-openai` can call
+`env.mock.holdNextContinuation(sessionId, signal)` before starting a turn.
+Pass the flow's existing `signal`; only one hold may be active per provider.
+Await `hold.reached` for `{ cursor, sessionId, toolOutputCallId }`, then use
+`hold.release()` to send the planned response or `hold.cancel()` to discard it.
+The checkpoint identifies the next tool continuation for the exact transport
+session, after request recording and before any response bytes. Compaction and
+other sessions do not consume it. The cursor indexes the existing `/debug/requests`
+log for this provider lifetime; it is not a durable Gateway run or receipt ID.
+Collect those identities separately through their authoritative interfaces.
+
+A hold captures one request. Reconnected/replacement requests proceed normally;
+cancel the old hold in the scenario's `finally` after interrupting its caller.
+Scenario cancellation and provider shutdown also settle pending holds. This
+control is absent from model tools, Gateway RPC and ordinary plugin SDK exports.
