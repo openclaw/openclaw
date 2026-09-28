@@ -1,4 +1,5 @@
 import path from "node:path";
+import { createChannelInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { closeOpenClawStateDatabaseForTest } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
@@ -11,6 +12,7 @@ import { expect, it, vi } from "vitest";
 import { IMessageRpcClient, createIMessageRpcClient } from "./client.js";
 import { monitorIMessageProvider } from "./monitor.js";
 import { resolveIMessageInboundDecision } from "./monitor/inbound-processing.js";
+import { createIMessageDurableIngress } from "./monitor/ingress.js";
 import { getIMessageRuntime } from "./runtime.js";
 import { installIMessageStateRuntimeForTest } from "./test-support/runtime.js";
 
@@ -28,6 +30,14 @@ vi.mock("./monitor/inbound-processing.js", async (importOriginal) => ({
     reason: "dmPolicy disabled",
   })),
 }));
+vi.mock("./monitor/ingress.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./monitor/ingress.js")>();
+  return { ...actual, createIMessageDurableIngress: vi.fn(actual.createIMessageDurableIngress) };
+});
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
+  return { ...actual, createChannelInboundDebouncer: vi.fn(actual.createChannelInboundDebouncer) };
+});
 
 it("changes iMessage batching delay without replacing the attached RPC client", async () => {
   installIMessageStateRuntimeForTest();
@@ -53,6 +63,9 @@ it("changes iMessage batching delay without replacing the attached RPC client", 
     return client;
   });
   const abort = new AbortController();
+  vi.useFakeTimers({
+    toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"],
+  });
   const monitor = monitorIMessageProvider({
     config: cfg,
     abortSignal: abort.signal,
@@ -90,31 +103,38 @@ it("changes iMessage batching delay without replacing the attached RPC client", 
   };
   try {
     await Promise.race([ready.promise, monitor]);
+    const [ingressResult] = vi.mocked(createIMessageDurableIngress).mock.results;
+    const [debouncerResult] = vi.mocked(createChannelInboundDebouncer).mock.results;
+    if (ingressResult?.type !== "return" || debouncerResult?.type !== "return") {
+      throw new Error("Expected the iMessage ingress and debounce owners");
+    }
+    const ingress = ingressResult.value;
+    const { debouncer } = debouncerResult.value;
     enqueue("immediate");
-    await vi.waitFor(() => expect(bodies()).toEqual(["immediate"]));
+    await ingress.waitForIdle();
+    await debouncer.drain();
+    expect(bodies()).toEqual(["immediate"]);
     publish(500);
-    const started = performance.now();
     enqueue("first");
     enqueue("second");
-    await new Promise((resolve) => {
-      setTimeout(resolve, 50);
-    });
+    await ingress.waitForIdle();
+    await vi.advanceTimersByTimeAsync(499);
     expect(bodies()).toEqual(["immediate"]);
-    await vi.waitFor(() => expect(bodies()).toEqual(["immediate", "first second"]));
-    const delayedElapsedMs = performance.now() - started;
+    await vi.advanceTimersByTimeAsync(1);
+    await debouncer.drain();
+    expect(bodies()).toEqual(["immediate", "first second"]);
     publish(0);
     enqueue("after disable");
-    await vi.waitFor(() =>
-      expect(bodies()).toEqual(["immediate", "first second", "after disable"]),
-    );
+    await ingress.waitForIdle();
+    await debouncer.drain();
+    expect(bodies()).toEqual(["immediate", "first second", "after disable"]);
     console.log(
       "MONITOR_DEBOUNCE_PROOF " +
         JSON.stringify({
           channel: "imessage",
           pid: process.pid,
-          clock: "real",
+          clock: "fake",
           delaysMs: [0, 500, 0],
-          delayedElapsedMs,
           bodies: bodies(),
           clientsCreated: vi.mocked(createIMessageRpcClient).mock.calls.length,
         }),
@@ -122,9 +142,13 @@ it("changes iMessage batching delay without replacing the attached RPC client", 
     expect(createIMessageRpcClient).toHaveBeenCalledTimes(1);
   } finally {
     abort.abort();
-    await monitor;
-    clearRuntimeConfigSnapshot();
-    closeOpenClawStateDatabaseForTest();
-    vi.restoreAllMocks();
+    try {
+      await monitor;
+    } finally {
+      vi.useRealTimers();
+      clearRuntimeConfigSnapshot();
+      closeOpenClawStateDatabaseForTest();
+      vi.restoreAllMocks();
+    }
   }
 });

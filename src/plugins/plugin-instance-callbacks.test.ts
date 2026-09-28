@@ -3,12 +3,41 @@ import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { createPluginRuntimeStore } from "../plugin-sdk/runtime-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { getPluginValueInstance } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 
 describe("plugin value invocation ownership", () => {
+  it("preserves a custom then receiver and its exact owned continuation", async () => {
+    const instance = new PluginInstance("custom-continuation");
+    const source = Promise.resolve("finished");
+    let continuation: Promise<unknown> | undefined;
+    const calls: Array<{ receiver: unknown; arguments: number }> = [];
+    const then = function (this: Promise<string>, ...args: Parameters<Promise<string>["then"]>) {
+      calls.push({ receiver: this, arguments: args.length });
+      continuation = Promise.prototype.then.apply(this, args);
+      return continuation;
+    };
+    Object.defineProperty(then, "call", {
+      get() {
+        throw new Error("then.call must not be inspected");
+      },
+    });
+    // oxlint-disable-next-line unicorn/no-thenable -- Exercise a plugin-defined continuation without changing native assimilation.
+    void Object.defineProperty(source, "then", { value: then });
+    try {
+      const result = instance.run(() => source);
+      expect(result).toBe(continuation);
+      expect(getPluginValueInstance(result)).toBe(instance);
+      expect(calls).toEqual([{ receiver: source, arguments: 2 }]);
+      expect(await result).toBe("finished");
+    } finally {
+      await instance.dispose();
+    }
+  });
+
   it.each(["function", "iterator"] as const)(
     "keeps Promise inspection and assimilation in %s admission",
     async (surface) => {
@@ -719,6 +748,44 @@ describe("collection data classification", () => {
       await instance.dispose();
       expect(() => retained()).toThrow("reloaded or disabled");
       expect(instance.wrap(source)).toBe(source);
+    } finally {
+      await instance.dispose();
+    }
+  });
+
+  it("reclassifies changed realm constructors without releasing retained calls", async () => {
+    const source: { left: { value: number }; right: { value: number } } = runInNewContext(
+      "({ left: { value: 1 }, right: { value: 2 } })",
+    );
+    const prototype = Object.getPrototypeOf(source);
+    const constructor = Reflect.get(prototype, "constructor");
+    const instance = new PluginInstance("mutable-realm-constructor");
+    try {
+      expect(instance.wrap(source)).toBe(source);
+      Reflect.set(prototype, "constructor", () => 42);
+      const view = instance.wrap(source);
+      expect(view).not.toBe(source);
+      const retained: () => number = Reflect.get(view.left, "constructor");
+      expect(retained()).toBe(42);
+      Reflect.set(prototype, "constructor", constructor);
+      expect(instance.wrap(source)).toBe(source);
+      await instance.dispose();
+      expect(() => retained()).toThrow("reloaded or disabled");
+    } finally {
+      Reflect.set(prototype, "constructor", constructor);
+      await instance.dispose();
+    }
+  });
+
+  it("distinguishes native kinds sharing a prototype within one graph", async () => {
+    const instance = new PluginInstance("shared-prototype-kinds");
+    const array = Object.setPrototypeOf([], Object.prototype);
+    const source = { plain: { value: 1 }, array };
+    try {
+      expect(instance.wrap(source)).not.toBe(source);
+      Object.setPrototypeOf(array, Array.prototype);
+      expect(instance.wrap(source)).toBe(source);
+      expect(structuredClone(source)).toEqual({ plain: { value: 1 }, array: [] });
     } finally {
       await instance.dispose();
     }

@@ -1024,6 +1024,32 @@ img.chat-avatar {
   min-width: 0;
 }
 
+.agent-chat__typing-row {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  opacity: 1;
+  transition:
+    grid-template-rows var(--duration-normal) var(--ease-out),
+    opacity var(--duration-normal) linear;
+}
+
+.agent-chat__typing-row-content {
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Fade the text before closing its space so glyphs never get visibly squeezed.
+   The lifecycle supplies the remaining exit budget and owns final removal. */
+.agent-chat__typing-row[data-exiting] {
+  grid-template-rows: minmax(0, 0fr);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity calc(var(--chat-typing-exit-duration) * 0.4) linear,
+    grid-template-rows calc(var(--chat-typing-exit-duration) * 0.6)
+      calc(var(--chat-typing-exit-duration) * 0.4) var(--ease-in-out);
+}
+
 .chat-group.user.chat-group--typing .chat-bubble {
   background: color-mix(in srgb, var(--chat-bubble-background) 65%, var(--bg));
 }
@@ -1087,6 +1113,16 @@ img.chat-avatar {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .agent-chat__typing-row,
+  .agent-chat__typing-row[data-exiting] {
+    transition: none;
+  }
+
+  .agent-chat__typing-row[data-exiting] {
+    grid-template-rows: minmax(0, 1fr);
+    opacity: 1;
+  }
+
   .agent-chat__typing-preview-text::after,
   .agent-chat__typing-bubble > span {
     animation: none;

@@ -1,14 +1,26 @@
 import { formatErrorMessage } from "../../infra/errors.js";
+import { verifyPackageUpdateRecovery } from "../../infra/update-global.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import {
   loadUpdateRecovery,
   UpdateRecoveryRequiredError,
 } from "../../infra/update-run-recovery.js";
+import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
+
+export function readOriginalUpdateRecovery(
+  params: Pick<MutableUpdateExecutionParams, "installKind" | "root">,
+  timeoutMs: number,
+) {
+  return params.installKind === "git"
+    ? readCurrentGitUpdateRecovery(params.root, timeoutMs)
+    : verifyPackageUpdateRecovery(params.root);
+}
 
 /** Refuse retained recovery before any package-only effects or diagnostic writes. */
 export function assertUpdateCommandRecovery(opts: UpdateCommandOptions): void {

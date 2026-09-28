@@ -1,5 +1,6 @@
-// Restart catch-up must not resurrect slots that predate a schedule edit.
 import { describe, expect, it, vi } from "vitest";
+// Restart catch-up must not resurrect slots that predate a schedule edit.
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "./service.test-harness.js";
 
@@ -19,6 +20,8 @@ describe("CronService restart catch-up after a schedule change", () => {
     const lastRunUnderOldSchedule = Date.parse("2026-07-27T16:00:00.000Z"); // 27 Jul 19:00 +03
     const createService = () =>
       new CronService({
+        scheduler: createTestGatewayScheduler(),
+        nowMs: () => Date.now(),
         storePath: store.storePath,
         cronEnabled: true,
         log: noopLogger,
@@ -118,6 +121,7 @@ describe("CronService restart catch-up after a schedule change", () => {
       ],
     });
     const service = new CronService({
+      scheduler: createTestGatewayScheduler(),
       storePath: store.storePath,
       cronEnabled: true,
       log: noopLogger,
@@ -166,6 +170,7 @@ describe("CronService restart catch-up after a schedule change", () => {
     });
     const createService = () =>
       new CronService({
+        scheduler: createTestGatewayScheduler(),
         storePath: store.storePath,
         cronEnabled: true,
         log: noopLogger,

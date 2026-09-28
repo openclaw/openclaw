@@ -1,6 +1,3 @@
-/**
- * Browser CLI inspection commands for screenshots and snapshots.
- */
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Command } from "commander";
@@ -45,8 +42,9 @@ function parseBrowserChoiceOption<const T extends string>(
   label: string,
   choices: readonly T[],
 ): T | undefined {
-  if ((choices as readonly string[]).includes(value)) {
-    return value as T;
+  const choice = choices.find((candidate) => candidate === value);
+  if (choice !== undefined) {
+    return choice;
   }
   defaultRuntime.error(danger(`Invalid ${label}: expected ${choices.join(" or ")}`));
   defaultRuntime.exit(1);
@@ -69,7 +67,6 @@ function resolveBrowserInspectTimeout(
   return { parent: { ...parent, timeout: String(timeoutMs) }, timeoutMs };
 }
 
-/** Registers Browser screenshot and snapshot commands. */
 export function registerBrowserInspectCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -232,9 +229,8 @@ export function registerBrowserInspectCommands(
           return;
         }
 
-        const nodes = "nodes" in result ? result.nodes : [];
         defaultRuntime.log(
-          nodes
+          result.nodes
             .map((n) => {
               const indent = "  ".repeat(Math.min(20, n.depth));
               const name = n.name ? ` "${n.name}"` : "";

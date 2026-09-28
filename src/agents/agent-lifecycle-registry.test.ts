@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   readAgentDeletionRecoveryHolds,
   reconstructAgentDeletionJournal,
@@ -32,10 +32,30 @@ import {
   claimCompletedAgentDeletion,
   isAgentDeletionBlocked,
   matchesAgentLifecycleBinding,
-  withAgentDeletion,
+  withAgentDeletion as withAgentDeletionRuntime,
 } from "./agent-lifecycle-registry.js";
 
 const tempDirs: string[] = [];
+
+async function withAgentDeletion<T>(
+  ...[agentId, run, options]: Parameters<typeof withAgentDeletionRuntime<T>>
+): Promise<T> {
+  // Lifecycle assertions await the real worker, independent of host startup load.
+  // Keep lease expiry and fresh Atomics acknowledgements on real Date/performance clocks.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    return await withAgentDeletionRuntime(
+      agentId,
+      async (begin) => {
+        vi.useRealTimers();
+        return await run(begin);
+      },
+      options,
+    );
+  } finally {
+    vi.useRealTimers();
+  }
+}
 
 function createOptions() {
   const stateDir = fs.realpathSync(
@@ -57,6 +77,7 @@ function createEntry(agentId: string) {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   for (const dir of tempDirs.splice(0)) {

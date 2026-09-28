@@ -28,17 +28,8 @@ import {
   type SessionUpstreamLink,
 } from "./session-upstream-links.kernel.js";
 
-export type SessionStateEventInput = {
-  sessionKey: string;
-  sessionId?: string;
-  agentId: string;
-  kind: SessionStateEventKind;
-  actorType: SessionStateActorType;
-  actorId?: string;
-  runId?: string;
+export type SessionStateEventInput = Omit<SessionStateEventRecord, "sequence" | "occurredAt"> & {
   dedupeKey?: string;
-  summary: string;
-  payload?: Record<string, unknown>;
   occurredAt?: number;
   watcherSessionKeys?: readonly string[];
   watcherStorePaths?: Readonly<Record<string, string>>;

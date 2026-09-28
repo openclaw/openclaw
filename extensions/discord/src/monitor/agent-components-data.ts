@@ -1,4 +1,5 @@
 import { logError } from "openclaw/plugin-sdk/logging-core";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   parseDiscordComponentCustomId,
   parseDiscordModalCustomId,
@@ -13,15 +14,12 @@ function readParsedComponentId(data: ComponentData): unknown {
   if (!data || typeof data !== "object") {
     return undefined;
   }
-  return "cid" in data
-    ? (data as Record<string, unknown>).cid
-    : (data as Record<string, unknown>).componentId;
+  return "cid" in data ? data.cid : data.componentId;
 }
 
 function normalizeComponentId(value: unknown): string | undefined {
   if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed ? trimmed : undefined;
+    return normalizeOptionalString(value);
   }
   if (typeof value === "number" && Number.isFinite(value)) {
     return String(value);
@@ -62,8 +60,7 @@ export function parseDiscordComponentData(
     return null;
   }
   const rawComponentId = readParsedComponentId(data);
-  const rawModalId =
-    "mid" in data ? (data as { mid?: unknown }).mid : (data as { modalId?: unknown }).modalId;
+  const rawModalId = "mid" in data ? data.mid : data.modalId;
   let componentId = normalizeComponentId(rawComponentId);
   let modalId = normalizeComponentId(rawModalId);
   if (!componentId && customId) {
@@ -81,8 +78,7 @@ export function parseDiscordComponentData(
 
 export function parseDiscordModalId(data: ComponentData, customId?: string): string | null {
   if (data && typeof data === "object") {
-    const rawModalId =
-      "mid" in data ? (data as { mid?: unknown }).mid : (data as { modalId?: unknown }).modalId;
+    const rawModalId = "mid" in data ? data.mid : data.modalId;
     const modalId = normalizeComponentId(rawModalId);
     if (modalId) {
       return modalId;
@@ -103,13 +99,7 @@ export function resolveInteractionCustomId(
   if (!("data" in interaction.rawData)) {
     return undefined;
   }
-  const data = (interaction.rawData as { data?: { custom_id?: unknown } }).data;
-  const customId = data?.custom_id;
-  if (typeof customId !== "string") {
-    return undefined;
-  }
-  const trimmed = customId.trim();
-  return trimmed ? trimmed : undefined;
+  return normalizeOptionalString(interaction.rawData.data?.custom_id);
 }
 
 export function mapSelectValues(entry: DiscordComponentEntry, values: string[]): string[] {

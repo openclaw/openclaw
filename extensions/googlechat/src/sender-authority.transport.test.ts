@@ -163,62 +163,56 @@ describe("Google Chat sender authority through real guarded HTTP", () => {
     },
   );
 
-  it.each(["preferred", "generic"] as const)(
-    "%s send stops after an awaited DM lookup without marking preparation as dispatch",
-    async (route) => {
-      const authority = createAuthority();
-      const lookup = createDeferred<ServerResponse>();
-      const dispatch = vi.fn(async () => {});
-      await withChatServer(
-        (request, response) => {
-          if (request.method === "GET") {
-            lookup.resolve(response);
-          } else {
-            respondWithMessage(request, response);
-          }
-        },
-        async (requests) => {
-          const sending = send(
-            route,
-            { assertDirectAdapterHandoff: authority.assert, onPlatformSendDispatch: dispatch },
-            "users/alice@example.test",
-          ).catch((error: unknown) => error);
-          const response = await lookup.promise;
-          expect(dispatch).not.toHaveBeenCalled();
-          authority.revoke();
-          response.end(JSON.stringify({ name: "spaces/AAA" }));
-          expect(await sending).toBe(authority.error);
-          expect(requests.map(({ method, path }) => ({ method, path }))).toEqual([
-            {
-              method: "GET",
-              path: "/v1/spaces:findDirectMessage?name=users%2Falice%40example.test",
-            },
-          ]);
-          expect(dispatch).not.toHaveBeenCalled();
-        },
-      );
-    },
-  );
-
-  it.each(["preferred", "generic"] as const)(
-    "%s send rechecks authority after the asynchronous dispatch callback",
-    async (route) => {
-      const authority = createAuthority();
-      const dispatch = vi.fn(async () => {
-        await Promise.resolve();
+  it("preferred send stops after an awaited DM lookup without marking preparation as dispatch", async () => {
+    const authority = createAuthority();
+    const lookup = createDeferred<ServerResponse>();
+    const dispatch = vi.fn(async () => {});
+    await withChatServer(
+      (request, response) => {
+        if (request.method === "GET") {
+          lookup.resolve(response);
+        } else {
+          respondWithMessage(request, response);
+        }
+      },
+      async (requests) => {
+        const sending = send(
+          "preferred",
+          { assertDirectAdapterHandoff: authority.assert, onPlatformSendDispatch: dispatch },
+          "users/alice@example.test",
+        ).catch((error: unknown) => error);
+        const response = await lookup.promise;
+        expect(dispatch).not.toHaveBeenCalled();
         authority.revoke();
-      });
-      await withChatServer(respondWithMessage, async (requests) => {
-        const outcome = await send(route, {
-          assertDirectAdapterHandoff: authority.assert,
-          onPlatformSendDispatch: dispatch,
-        }).catch((error: unknown) => error);
-        expect(outcome).toBe(authority.error);
-        expect(dispatch).toHaveBeenCalledOnce();
-        expect(requests).toEqual([]);
-      });
-    },
-  );
+        response.end(JSON.stringify({ name: "spaces/AAA" }));
+        expect(await sending).toBe(authority.error);
+        expect(requests.map(({ method, path }) => ({ method, path }))).toEqual([
+          {
+            method: "GET",
+            path: "/v1/spaces:findDirectMessage?name=users%2Falice%40example.test",
+          },
+        ]);
+        expect(dispatch).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  it("generic send rechecks authority after the asynchronous dispatch callback", async () => {
+    const authority = createAuthority();
+    const dispatch = vi.fn(async () => {
+      await Promise.resolve();
+      authority.revoke();
+    });
+    await withChatServer(respondWithMessage, async (requests) => {
+      const outcome = await send("generic", {
+        assertDirectAdapterHandoff: authority.assert,
+        onPlatformSendDispatch: dispatch,
+      }).catch((error: unknown) => error);
+      expect(outcome).toBe(authority.error);
+      expect(dispatch).toHaveBeenCalledOnce();
+      expect(requests).toEqual([]);
+    });
+  });
 
   it("blocks a redirected POST with only the synchronous handoff callback", async () => {
     const authority = createAuthority();

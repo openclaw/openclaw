@@ -110,14 +110,7 @@ export function renderDesktopDocumentView(options: DesktopDocumentViewOptions) {
 
   return html`
     <section class="desktop-document" aria-label=${t("desktop.title")}>
-      ${renderDesktopPanelContent({
-        state: options.state,
-        notice: options.notice,
-        picker: options.picker,
-        recovery: options.recovery,
-        credentials: options.credentials,
-        connection,
-      })}
+      ${renderDesktopPanelContent({ ...options, connection })}
     </section>
   `;
 }

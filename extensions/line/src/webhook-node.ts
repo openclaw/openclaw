@@ -15,7 +15,7 @@ const LINE_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const LINE_WEBHOOK_PREAUTH_MAX_BODY_BYTES = 64 * 1024;
 const LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS = 5_000;
 
-export async function readLineWebhookRequestBody(
+async function readLineWebhookRequestBody(
   req: IncomingMessage,
   maxBytes = LINE_WEBHOOK_MAX_BODY_BYTES,
   timeoutMs = LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS,

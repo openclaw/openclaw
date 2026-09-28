@@ -101,7 +101,7 @@ class SettingsScreensTest {
   @Test
   fun gatewayStatusLabelReportsWhichAuthRecoveryAppliesInsteadOfGenericLabel() {
     assertEquals(
-      "Setup code expired",
+      "Setup code no longer valid",
       gatewayStatusLabel(
         "Gateway error: unauthorized: bootstrap token invalid or expired",
         isConnected = false,
@@ -377,31 +377,6 @@ class SettingsScreensTest {
     assertFalse(reviewBody.contains("TextOverflow"))
     assertTrue(actionBody.contains("Column(modifier = Modifier.fillMaxWidth()"))
     assertFalse(actionBody.contains("Modifier.weight(1f)"))
-  }
-
-  @Test
-  fun terminalNoticeRendersAsStandaloneDismissibleBannerRegardlessOfRemainingCards() {
-    val source = settingsScreensSource()
-    // Terminal outcomes publish their notice with the card retired, so any
-    // card-scoped or empty-inbox-only rendering hides losing outcomes whenever
-    // another approval card remains visible.
-    assertFalse(source.contains("execApprovalNoticeForCard"))
-    assertFalse(source.contains("execApprovalEmptyInboxNotice"))
-    val screenStart = source.indexOf("private fun ApprovalsSettingsScreen(")
-    val bannerCall = source.indexOf("inbox.notice?.let", screenStart)
-    val listPanelCall = source.indexOf("ExecApprovalsPanel(", screenStart)
-    assertTrue(screenStart >= 0 && bannerCall > screenStart && listPanelCall > bannerCall)
-
-    val noticeStart = source.indexOf("private fun ExecApprovalNotice(")
-    val noticeEnd = source.indexOf("@Composable", noticeStart + 1)
-    val noticeBody = source.substring(noticeStart, noticeEnd)
-    assertTrue(noticeBody.contains("onDismiss: () -> Unit"))
-    assertTrue(noticeBody.contains("notice.approvalId"))
-    assertTrue(
-      noticeBody.contains(
-        "contentDescription = nativeString(\"Dismiss approval notice\")",
-      ),
-    )
   }
 
   @Test

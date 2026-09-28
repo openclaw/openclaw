@@ -3,37 +3,6 @@ import path from "node:path";
 export function testApiLifecycleFixtureFiles(repoRoot: string): Record<string, string> {
   const sourcePath = (name: string) => JSON.stringify(path.join(repoRoot, "src", name));
   const files: Record<string, string> = {};
-  for (const generation of ["producer", "observer"]) {
-    files[`05-${generation === "producer" ? "c" : "d"}-task-registry.test.ts`] = `
-import { expect, it, vi } from "vitest";
-import { emitAgentEvent } from ${sourcePath("infra/agent-events.ts")};
-import { prepareTaskRegistryRead } from ${sourcePath("tasks/task-registry-read.ts")};
-import * as listenerState from ${sourcePath("tasks/task-registry-listener-state.ts")};
-import { configureInMemoryTaskStoresForTests, createTaskFixture } from ${sourcePath("tasks/task-registry.test-support.ts")};
-it("receives task events in the ${generation} file", async () => {
-  configureInMemoryTaskStoresForTests();
-  const runId = "runner-task-${generation}";
-  const task = createTaskFixture("cli", {
-    runId,
-    task: "Observe task events across file cleanup",
-    notifyPolicy: "silent",
-  });
-  emitAgentEvent({ runId, stream: "tool", data: { phase: "start", name: "read" } });
-  const read = await prepareTaskRegistryRead();
-  expect(read?.getTaskById(task.taskId)).toMatchObject({ toolUseCount: 1, lastToolName: "read" });
-  ${
-    generation === "producer"
-      ? `vi.spyOn(listenerState, "resetTaskRegistryListenerState").mockImplementation(() => {});
-  vi.spyOn(vi, "resetModules");
-  expect(vi.resetModules()).toBe(vi);
-  emitAgentEvent({ runId, stream: "tool", data: { phase: "start", name: "after-reset" } });
-  const afterReset = await prepareTaskRegistryRead();
-  expect(afterReset?.getTaskById(task.taskId)).toMatchObject({ toolUseCount: 2, lastToolName: "after-reset" });`
-      : ""
-  }
-});
-`;
-  }
   for (const [prefix, generation] of [
     ["09-d", "producer"],
     ["09-e", "observer"],
@@ -43,7 +12,6 @@ it("receives task events in the ${generation} file", async () => {
         ? `
 // Check during collection before imports can overwrite the previous generation.
 const remainingKeys = [
-  "openclaw.beforeToolCallBlockedErrorTestApi",
   "openclaw.staleAuthOrderTestApi",
   "openclaw.bashProcessRegistryTestApi",
   "openclaw.diagnosticRunActivityTestApi",
@@ -62,8 +30,6 @@ expect(redactPriorValues(priorError, () => "***")).toBe(priorError);
 import { createRequire } from "node:module";
 import { afterAll, describe, expect, it } from "vitest";
 ${observeCleanup}
-const { createBeforeToolCallBlockedError } = await import(${sourcePath("agents/agent-tools.before-tool-call.test-support.ts")});
-const { isBeforeToolCallBlockedError } = await import(${sourcePath("agents/agent-tools.before-tool-call.wrapper.ts")});
 const { repairStaleConfiguredAuthOrders } = await import(${sourcePath("commands/doctor/shared/stale-auth-order.test-support.ts")});
 const registry = await import(${sourcePath("agents/bash-process-registry.ts")});
 const { resetProcessRegistryForTests } = await import(${sourcePath("agents/bash-process-registry.test-support.ts")});
@@ -82,13 +48,9 @@ const { markDiagnosticToolStartedForTest } = await import(${sourcePath("logging/
 const { resolveGlobalSingleton } = await import(${sourcePath("shared/global-singleton.ts")});
 const { registerSecretValueForRedaction, redactRegisteredSecretValues } = await import(${sourcePath("logging/secret-redaction-registry.ts")});
 describe("${generation} test API consumers", () => {
-  async function verifyConsumers(message: string): Promise<void> {
+  async function verifyConsumers(): Promise<void> {
     registerSecretValueForRedaction("identity");
     expect(redactRegisteredSecretValues("session identity is locked", () => "***")).toBe("session *** is locked");
-    const blocked = createBeforeToolCallBlockedError(message);
-    expect(blocked.message).toBe(message);
-    expect(isBeforeToolCallBlockedError(blocked)).toBe(true);
-    expect(isBeforeToolCallBlockedError(new Error(message))).toBe(false);
     registry.addSession(createProcessSessionFixture({ id: "captured", backgrounded: true }));
     replacement.addSession(createProcessSessionFixture({ id: "replacement", backgrounded: true }));
     try {
@@ -102,7 +64,7 @@ describe("${generation} test API consumers", () => {
     const controller = new AbortController();
     nativeCron.registerActiveCronTaskRun({ runId: "native-fixture", controller });
     native.api.resetActiveCronTaskRunsForTests();
-    expect(nativeCron.cancelActiveCronTaskRun({ runId: "native-fixture" })).toBe(false);
+    expect(nativeCron.abortActiveCronTaskRuns()).toBe(0);
     expect(controller.signal.aborted).toBe(false);
     const cfg = { auth: { order: { "fixture-provider": [] } } };
     expect(repairStaleConfiguredAuthOrders({ cfg, stores: [] })).toEqual({
@@ -110,17 +72,17 @@ describe("${generation} test API consumers", () => {
       changes: [],
     });
   }
-  it.each(["first test", "second test"])("keeps test API consumers usable in %s", async (phase) => {
-    await verifyConsumers(phase);
+  it.each(["first test", "second test"])("keeps test API consumers usable in %s", async () => {
+    await verifyConsumers();
   });
   afterAll(async () => {
-    await verifyConsumers("afterAll");
+    await verifyConsumers();
     console.info("test API lifecycle: ${generation} afterAll passed");
   });
   const cleanupKey = Symbol("fixture resource teardown");
   resolveGlobalSingleton(cleanupKey, () => ({}), async () => {
     try {
-      await verifyConsumers("resource teardown");
+      await verifyConsumers();
       const key = Symbol.for("openclaw.diagnosticRunActivityTestApi");
       const priorApi = Reflect.get(globalThis, key);
       resetDiagnosticRunActivityForTest();

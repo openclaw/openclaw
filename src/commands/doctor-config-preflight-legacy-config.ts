@@ -206,18 +206,10 @@ async function maybeMigrateLegacyConfig(): Promise<string[]> {
     // missing config
   }
 
-  const legacyCandidates = [path.join(home, ".clawdbot", "clawdbot.json")];
-  let legacyPath: string | null = null;
-  for (const candidate of legacyCandidates) {
-    try {
-      await fs.access(candidate);
-      legacyPath = candidate;
-      break;
-    } catch {
-      // continue
-    }
-  }
-  if (!legacyPath) {
+  const legacyPath = path.join(home, ".clawdbot", "clawdbot.json");
+  try {
+    await fs.access(legacyPath);
+  } catch {
     return changes;
   }
 

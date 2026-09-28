@@ -180,20 +180,7 @@ function drawEye(ctx: CanvasRenderingContext2D, center: Point, openness: number,
     ctx.restore();
   }
 
-  if (pose.dizzy > 0) {
-    const angle = pose.dizzyPhase * TAU + (center.x > 60 ? Math.PI : 0);
-    const dot = {
-      x: shifted.x + Math.cos(angle) * 3.4,
-      y: shifted.y + Math.sin(angle) * 2.6,
-    };
-    ctx.save();
-    ctx.globalAlpha *= pose.dizzy;
-    ctx.fillStyle = EYE_GLOW;
-    ctx.fill(ellipsePath(dot, 1.8, 1.8));
-    ctx.restore();
-  }
-
-  const glowVisibility = pose.eyeGlowOpacity * openness * (1 - pose.happyEyes) * (1 - pose.dizzy);
+  const glowVisibility = pose.eyeGlowOpacity * openness * (1 - pose.happyEyes);
   if (glowVisibility <= 0.01) {
     return;
   }

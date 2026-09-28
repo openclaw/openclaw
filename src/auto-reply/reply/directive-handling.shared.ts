@@ -10,7 +10,7 @@ import {
   sessionSnapshotChangesApplied,
 } from "../../config/sessions/session-snapshot-merge.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
-import { SYSTEM_MARK, prefixSystemMessage } from "../../infra/system-message.js";
+import { SYSTEM_MARK } from "../../infra/system-message.js";
 import { applyTraceOverride, applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { ReplyPayload } from "../types.js";
@@ -43,13 +43,7 @@ export const DIRECTIVE_ACK_MESSAGES = {
   },
 } as const;
 
-export const formatDirectiveAck = (text: string): string => {
-  return prefixSystemMessage(text);
-};
-
-const formatOptionsLine = (options: string) => `Options: ${options}.`;
-export const withOptions = (line: string, options: string) =>
-  `${line}\n${formatOptionsLine(options)}`;
+export const withOptions = (line: string, options: string) => `${line}\nOptions: ${options}.`;
 
 export const formatElevatedRuntimeHint = () =>
   `${SYSTEM_MARK} Runtime is direct; sandboxing does not apply.`;

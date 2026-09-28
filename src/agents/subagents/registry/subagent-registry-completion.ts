@@ -5,18 +5,13 @@
  */
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
-import {
-  SUBAGENT_KILL_TASK_ERROR,
-  type DetachedTaskTerminalState,
-} from "../../../tasks/detached-task-runtime-contract.js";
-import { resolveRequiredCompletionTerminalResult } from "../../../tasks/task-completion-contract.js";
-import { resolveSubagentCompletionResultText } from "../completion/subagent-completion-result.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
+import { SUBAGENT_KILL_TASK_ERROR, type SubagentTerminalState } from "./subagent-control.types.js";
 import {
-  SUBAGENT_ENDED_REASON_KILLED,
   SUBAGENT_ENDED_OUTCOME_ERROR,
   SUBAGENT_ENDED_OUTCOME_OK,
   SUBAGENT_ENDED_OUTCOME_TIMEOUT,
+  SUBAGENT_ENDED_REASON_KILLED,
   SUBAGENT_TARGET_KIND_SUBAGENT,
   type SubagentLifecycleEndedOutcome,
   type SubagentLifecycleEndedReason,
@@ -26,9 +21,9 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 const log = createSubsystemLogger("agents/subagent-registry-completion");
 
 /** Classify execution independently of reply capture, including cancelled yielded runs. */
-export function resolveSubagentTaskTerminalStatus(
+function resolveSubagentTaskTerminalStatus(
   entry: SubagentRunRecord,
-): DetachedTaskTerminalState["status"] | undefined {
+): SubagentTerminalState["status"] | undefined {
   const outcome = entry.execution.outcome;
   if (
     typeof entry.execution.endedAt !== "number" ||
@@ -50,10 +45,10 @@ export function resolveSubagentTaskTerminalStatus(
       : "failed";
 }
 
-/** Returns the complete task projection only after completion capture has settled. */
+/** Returns terminal execution facts only after completion capture has settled. */
 export function resolveFinalizedSubagentTaskState(
   entry: SubagentRunRecord,
-): DetachedTaskTerminalState | undefined {
+): SubagentTerminalState | undefined {
   const endedAt = entry.execution.endedAt;
   const outcome = entry.execution.outcome;
   const completion = entry.completion;
@@ -65,40 +60,15 @@ export function resolveFinalizedSubagentTaskState(
   ) {
     return undefined;
   }
-  const progressSummary = resolveSubagentCompletionResultText(entry);
-  if (status === "cancelled") {
-    return {
-      status: "cancelled",
-      endedAt,
-      lastEventAt: endedAt,
-      error: SUBAGENT_KILL_TASK_ERROR,
-      progressSummary,
-      terminalSummary: null,
-    };
-  }
-  if (status === "succeeded") {
-    const terminal =
-      entry.expectsCompletionMessage !== true
-        ? {}
-        : entry.delivery?.disposition === "intentional_non_delivery"
-          ? { terminalOutcome: "succeeded" as const, terminalSummary: null }
-          : resolveRequiredCompletionTerminalResult(progressSummary);
-    return {
-      status: "succeeded",
-      endedAt,
-      lastEventAt: endedAt,
-      progressSummary,
-      terminalSummary: terminal.terminalSummary ?? null,
-      terminalOutcome: terminal.terminalOutcome,
-    };
-  }
   return {
     status,
     endedAt,
-    lastEventAt: endedAt,
-    error: outcome?.status === "error" ? outcome.error : undefined,
-    progressSummary,
-    terminalSummary: null,
+    error:
+      status === "cancelled"
+        ? SUBAGENT_KILL_TASK_ERROR
+        : outcome?.status === "error"
+          ? outcome.error
+          : undefined,
   };
 }
 

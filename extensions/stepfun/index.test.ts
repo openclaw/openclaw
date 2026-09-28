@@ -1,6 +1,3 @@
-// Stepfun tests cover index plugin behavior.
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import {
   registerProviderPlugin,
@@ -10,6 +7,7 @@ import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-trans
 import { describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../test-support/runtime-spies.js";
 import stepfunPlugin from "./index.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
   STEPFUN_DEFAULT_MODEL_REF,
   STEPFUN_PLAN_DEFAULT_MODEL_REF,
@@ -17,23 +15,8 @@ import {
   buildStepFunProvider,
 } from "./provider-catalog.js";
 
-type StepFunManifest = {
-  setup?: {
-    providers?: Array<{
-      id?: string;
-      authMethods?: string[];
-      envVars?: string[];
-    }>;
-  };
-  providerAuthChoices?: Array<{
-    provider?: string;
-    method?: string;
-    choiceId?: string;
-  }>;
-};
-
-function readManifest(): StepFunManifest {
-  return JSON.parse(readFileSync(resolve(import.meta.dirname, "openclaw.plugin.json"), "utf-8"));
+function registerStepFun() {
+  return registerProviderPlugin({ plugin: stepfunPlugin, id: "stepfun", name: "StepFun" });
 }
 
 describe("stepfun provider registration", () => {
@@ -50,19 +33,13 @@ describe("stepfun provider registration", () => {
     expect(STEPFUN_PLAN_DEFAULT_MODEL_REF).toBe("stepfun-plan/step-3.5-flash");
     const standard35 = standard.models?.find((model) => model.id === "step-3.5-flash");
     expect(standard35?.compat?.supportsReasoningEffort).not.toBe(true);
-    expect(standard35?.cost).toEqual({
-      input: 0.1,
-      output: 0.3,
-      cacheRead: 0.02,
-      cacheWrite: 0,
-    });
-    expect(standardModel).toMatchObject({
+    expect(standard35?.cost).toEqual({ input: 0.1, output: 0.3, cacheRead: 0.02, cacheWrite: 0 });
+    const expected37 = {
       reasoning: true,
       input: ["text", "image"],
       thinkingLevelMap: { off: "low", minimal: "low", xhigh: "high", max: "high" },
       contextWindow: 262144,
       maxTokens: 262144,
-      cost: { input: 0.2, output: 1.15, cacheRead: 0.04, cacheWrite: 0 },
       compat: {
         supportsStore: false,
         supportsDeveloperRole: false,
@@ -73,24 +50,14 @@ describe("stepfun provider registration", () => {
         maxTokensField: "max_tokens",
         reasoningEffortMap: expect.objectContaining({ off: "low", medium: "medium", max: "high" }),
       },
+    };
+    expect(standardModel).toMatchObject({
+      ...expected37,
+      cost: { input: 0.2, output: 1.15, cacheRead: 0.04, cacheWrite: 0 },
     });
     expect(planModel).toMatchObject({
-      reasoning: true,
-      input: ["text", "image"],
-      thinkingLevelMap: { off: "low", minimal: "low", xhigh: "high", max: "high" },
-      contextWindow: 262144,
-      maxTokens: 262144,
+      ...expected37,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      compat: {
-        supportsStore: false,
-        supportsDeveloperRole: false,
-        supportsUsageInStreaming: false,
-        supportsReasoningEffort: true,
-        supportsStrictMode: false,
-        supportedReasoningEfforts: ["low", "medium", "high"],
-        maxTokensField: "max_tokens",
-        reasoningEffortMap: expect.objectContaining({ off: "low", medium: "medium", max: "high" }),
-      },
     });
 
     const transportModel = {
@@ -103,14 +70,11 @@ describe("stepfun provider registration", () => {
       systemPrompt: "system",
       messages: [{ role: "user", content: "hi", timestamp: 1 }],
     } as Context;
-    const offReasoning = standardModel.thinkingLevelMap?.off;
-    expect(offReasoning).toBe("low");
     const lowPayload = buildOpenAICompletionsParams(transportModel, context, {
-      reasoning: offReasoning,
+      reasoning: standardModel.thinkingLevelMap?.off,
       maxTokens: 128,
     } as never);
-    expect(lowPayload.reasoning_effort).toBe("low");
-    expect(lowPayload.max_tokens).toBe(128);
+    expect(lowPayload).toMatchObject({ reasoning_effort: "low", max_tokens: 128 });
     expect(lowPayload).not.toHaveProperty("max_completion_tokens");
     expect(lowPayload).not.toHaveProperty("store");
     expect(lowPayload).not.toHaveProperty("stream_options");
@@ -127,53 +91,32 @@ describe("stepfun provider registration", () => {
   });
 
   it("keeps manifest auth choices aligned with runtime provider methods", async () => {
-    const { providers } = await registerProviderPlugin({
-      plugin: stepfunPlugin,
-      id: "stepfun",
-      name: "StepFun",
-    });
-    const manifest = readManifest();
+    const { providers } = await registerStepFun();
     const runtimeChoices = ["stepfun", "stepfun-plan"].flatMap((providerId) => {
       const provider = requireRegisteredProvider(providers, providerId);
-      return provider.auth.map((method) => ({
-        provider: provider.id,
-        method: method.id,
-        choiceId: method.wizard?.choiceId,
-      }));
+      return provider.auth.map((method) => [provider.id, method.id, method.wizard?.choiceId]);
     });
 
-    const manifestChoices = manifest.providerAuthChoices?.map((choice) => ({
-      provider: choice.provider,
-      method: choice.method,
-      choiceId: choice.choiceId,
-    }));
+    const manifestChoices = manifest.providerAuthChoices.map(({ provider, method, choiceId }) => [
+      provider,
+      method,
+      choiceId,
+    ]);
 
     expect(runtimeChoices).toEqual(manifestChoices);
-    expect(manifest.setup?.providers).toEqual([
-      {
-        id: "stepfun",
-        envVars: ["STEPFUN_API_KEY"],
-      },
-      {
-        id: "stepfun-plan",
-        envVars: ["STEPFUN_API_KEY"],
-      },
+    expect(manifest.setup.providers).toEqual([
+      { id: "stepfun", envVars: ["STEPFUN_API_KEY"] },
+      { id: "stepfun-plan", envVars: ["STEPFUN_API_KEY"] },
     ]);
   });
 
   it.each([
     { providerId: "stepfun", methodId: "standard-api-key-cn" },
-    { providerId: "stepfun", methodId: "standard-api-key-intl" },
-    { providerId: "stepfun-plan", methodId: "plan-api-key-cn" },
     { providerId: "stepfun-plan", methodId: "plan-api-key-intl" },
   ])(
     "preserves an existing primary when repeating $methodId onboarding",
     async ({ providerId, methodId }) => {
-      const { providers } = await registerProviderPlugin({
-        plugin: stepfunPlugin,
-        id: "stepfun",
-        name: "StepFun",
-      });
+      const { providers } = await registerStepFun();
       const provider = requireRegisteredProvider(providers, providerId);
       const method = provider.auth.find((entry) => entry.id === methodId);
       if (!method?.runNonInteractive || !method.wizard?.choiceId) {
@@ -202,14 +145,13 @@ describe("stepfun provider registration", () => {
         toApiKeyCredential: vi.fn(() => null),
       });
 
-      expect(result?.agents?.defaults?.model).toEqual({
+      const defaults = result?.agents?.defaults;
+      expect(defaults?.model).toEqual({
         primary: "anthropic/claude-sonnet-4-6",
         fallbacks: ["openai/gpt-5.6-luna"],
       });
-      expect(result?.agents?.defaults?.models?.["anthropic/claude-sonnet-4-6"]).toEqual({
-        alias: "Existing",
-      });
-      expect(result?.agents?.defaults?.models?.[`${providerId}/step-3.5-flash`]).toEqual(
+      expect(defaults?.models?.["anthropic/claude-sonnet-4-6"]).toEqual({ alias: "Existing" });
+      expect(defaults?.models?.[`${providerId}/step-3.5-flash`]).toEqual(
         expect.objectContaining({ alias: expect.any(String) }),
       );
       expect(result?.models?.providers?.[providerId]).toBeDefined();

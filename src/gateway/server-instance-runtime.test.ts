@@ -49,6 +49,43 @@ function createRegistry(handlers: GatewayRequestHandlers) {
 }
 
 describe("createGatewayInstanceRuntime", () => {
+  it.each([false, true])(
+    "revalidates recovery authority across admission (dedicated principal=%s)",
+    async (dedicatedPrincipal) => {
+      const context = createContext();
+      const payload = { runId: "bound-recovery", status: "ok", summary: "completed" };
+      context.dedupe.set("agent:bound-recovery", { ts: Date.now(), ok: true, payload });
+      const runtime = createGatewayInstanceRuntime({
+        getContext: () => context,
+        getMethodRegistry: () => createRegistry({}),
+        isDispatchAvailable: () => true,
+      });
+      let requesterCurrent = true;
+      const options = {
+        expectFinal: true,
+        ...(dedicatedPrincipal
+          ? { internalDeliveryMediaUrls: ["https://example.test/media"] }
+          : {}),
+        assertAdmissionCurrent: () => {
+          if (!requesterCurrent) {
+            throw new Error("Recovery requester retired");
+          }
+        },
+      };
+      const request = { message: "completed media", idempotencyKey: "bound-recovery" };
+      try {
+        await expect(runtime.recovery.dispatchAgent(request, undefined, options)).resolves.toEqual(
+          payload,
+        );
+        const pending = runtime.recovery.dispatchAgent(request, undefined, options);
+        requesterCurrent = false;
+        await expect(pending).rejects.toThrow("Recovery requester retired");
+      } finally {
+        runtime.close();
+      }
+    },
+  );
+
   it("uses the typed recovery path and fails closed when the owning instance closes", async () => {
     let available = false;
     const rawAgent = vi.fn<NonNullable<GatewayRequestHandlers["agent"]>>(({ respond }) => {

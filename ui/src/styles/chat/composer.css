@@ -3687,8 +3687,3 @@ html[dir="rtl"] .chat-attachment-loading > span {
     min-height: 44px;
   }
 }
-.chat-talk-voice-picker {
-  flex: 0 1 9rem;
-  min-width: 0;
-  max-width: 9rem;
-}

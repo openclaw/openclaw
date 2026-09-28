@@ -4,10 +4,14 @@ import OpenAI from "openai";
 import type {
   AgentReasoningParam,
   AgentSessionEvent,
+  AgentToolParam,
   HostedEnvironmentFileParam,
 } from "openai/resources/beta/agents/agents";
+import type { EventCreateParams } from "openai/resources/beta/agents/sessions/events";
 import type { Turn } from "openai/resources/beta/agents/sessions/turns";
 import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
+import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { z } from "zod";
 
@@ -36,7 +40,10 @@ const sessionSchema = z.looseObject({
   status: z.enum(["idle", "in_progress", "requires_action", "failed"]),
   error: z.string().nullable(),
   usage: usageSchema.nullable().optional(),
-  environment: z.looseObject({ type: z.literal("openai_hosted"), id: z.string().min(1) }),
+  environment: z.union([
+    z.looseObject({ type: z.literal("openai_hosted"), id: z.string().min(1) }),
+    z.looseObject({ type: z.literal("none") }),
+  ]),
   required_actions: z.array(
     z.union([
       functionCallSchema,
@@ -128,13 +135,6 @@ const eventSchema = z.looseObject({
 export type AgentsApiEvent = z.infer<typeof eventSchema>;
 export type AgentsApiItem = z.infer<typeof itemSchema>;
 export type AgentsApiFunctionCall = z.infer<typeof functionCallSchema>;
-export type AgentsApiFunctionDeclaration = {
-  type: "function";
-  name: string;
-  description: string;
-  parameters: Record<string, unknown>;
-  defer_loading?: boolean;
-};
 export type AgentsApiInputFile = HostedEnvironmentFileParam.HostedEnvironmentFileParamInline;
 export type AgentsApiArtifact = z.infer<typeof artifactSchema>;
 export type AgentsApiFunctionResult =
@@ -149,6 +149,7 @@ export class AgentsApiClient {
   constructor(
     apiKey: string,
     private readonly assertCurrent: () => void,
+    assertRequestCurrent: () => void = assertCurrent,
   ) {
     const agents = new OpenAI({
       apiKey,
@@ -167,7 +168,7 @@ export class AgentsApiClient {
           url: input instanceof Request ? input.url : String(input),
           init,
           signal: init?.signal ?? undefined,
-          beforeRequest: this.assertCurrent,
+          beforeRequest: assertRequestCurrent,
         });
         const response = responseWithRelease(guarded.response, guarded.release);
         try {
@@ -188,7 +189,7 @@ export class AgentsApiClient {
     instructions: string,
     model: string,
     options?: {
-      functions?: AgentsApiFunctionDeclaration[];
+      functions?: AgentToolParam.AgentToolConfigParamFunction[];
       files?: AgentsApiInputFile[];
       reasoning?: AgentReasoningParam;
     },
@@ -208,6 +209,34 @@ export class AgentsApiClient {
     );
     this.assertCurrent();
     return session.id;
+  }
+
+  async createIsolated(
+    signal: AbortSignal,
+    instructions: string,
+    input: string,
+    model: string,
+    reasoning: AgentReasoningParam,
+  ) {
+    const session = await this.sessions.create(
+      {
+        agent: { model, instructions, reasoning, tools: [], multi_agent: { enabled: false } },
+        environment: { type: "none" },
+        input,
+        vault_ids: [],
+      },
+      { signal, headers: { "Idempotency-Key": randomUUID() } },
+    );
+    this.assertCurrent();
+    return session;
+  }
+
+  async deleteSession(sessionId: string, signal: AbortSignal): Promise<void> {
+    const deleted = await this.sessions.delete(sessionId, { signal });
+    this.assertCurrent();
+    if (deleted.id !== sessionId || !deleted.deleted) {
+      throw new Error("Agents API did not delete the requested isolated session");
+    }
   }
 
   async setReasoningEffort(
@@ -263,14 +292,12 @@ export class AgentsApiClient {
     if (session.status !== "requires_action") {
       return [];
     }
-    const calls: AgentsApiFunctionCall[] = [];
-    for (const action of session.required_actions) {
+    return session.required_actions.map((action) => {
       if (action.type !== "function_call") {
         throw new Error("Agents API hosted prototype cannot reconnect an environment_connection");
       }
-      calls.push(action);
-    }
-    return calls;
+      return action;
+    });
   }
 
   async toolResult(
@@ -279,24 +306,20 @@ export class AgentsApiClient {
     result: AgentsApiFunctionResult,
     signal: AbortSignal,
   ): Promise<void> {
-    await this.sessions.events.create(
+    await this.submitEvents(
       sessionId,
-      {
-        events: [
-          {
-            type: "agent.session.input.tool_result",
-            turn_id: call.turn_id,
-            call_id: call.call_id,
-            ...(result.success
-              ? { success: true, output: result.output }
-              : { success: false, error: result.error }),
-          },
-        ],
-        "Idempotency-Key": randomUUID(),
-      },
-      { signal },
+      [
+        {
+          type: "agent.session.input.tool_result",
+          turn_id: call.turn_id,
+          call_id: call.call_id,
+          ...(result.success
+            ? { success: true, output: result.output }
+            : { success: false, error: result.error }),
+        },
+      ],
+      signal,
     );
-    this.assertCurrent();
   }
 
   async turn(sessionId: string, turnId: string, signal: AbortSignal): Promise<Turn> {
@@ -459,32 +482,20 @@ export class AgentsApiClient {
   }
 
   async message(sessionId: string, text: string, signal: AbortSignal): Promise<void> {
-    await this.sessions.events.create(
+    await this.submitEvents(
       sessionId,
-      {
-        events: [
-          {
-            type: "agent.session.input.message",
-            input: [{ role: "user", content: [{ type: "input_text", text }] }],
-          },
-        ],
-        "Idempotency-Key": randomUUID(),
-      },
-      { signal },
+      [
+        {
+          type: "agent.session.input.message",
+          input: [{ role: "user", content: [{ type: "input_text", text }] }],
+        },
+      ],
+      signal,
     );
-    this.assertCurrent();
   }
 
   async cancel(sessionId: string, signal: AbortSignal): Promise<void> {
-    await this.sessions.events.create(
-      sessionId,
-      {
-        events: [{ type: "agent.session.input.cancel" }],
-        "Idempotency-Key": randomUUID(),
-      },
-      { signal },
-    );
-    this.assertCurrent();
+    await this.submitEvents(sessionId, [{ type: "agent.session.input.cancel" }], signal);
     // The input acknowledgement is not a settlement barrier for hosted work.
     while (true) {
       const session = await this.session(sessionId, signal);
@@ -514,6 +525,37 @@ export class AgentsApiClient {
       }
     }
     return items;
+  }
+
+  private async submitEvents(
+    sessionId: string,
+    events: EventCreateParams["events"],
+    signal: AbortSignal,
+  ): Promise<void> {
+    // Retry this submission, not a new turn: its payload and key must stay together.
+    const params: EventCreateParams = { events, "Idempotency-Key": randomUUID() };
+    await retryAsync(
+      async () => {
+        signal.throwIfAborted();
+        this.assertCurrent();
+        await this.sessions.events.create(sessionId, params, { signal });
+      },
+      {
+        attempts: 3,
+        minDelayMs: 500,
+        maxDelayMs: 5_000,
+        jitter: 0.25,
+        shouldRetry: (error) =>
+          !signal.aborted &&
+          error instanceof OpenAI.APIError &&
+          error.status !== undefined &&
+          error.status >= 500 &&
+          error.status < 600 &&
+          error.headers?.get("x-should-retry") !== "false",
+        sleep: (ms) => sleepWithAbort(ms, signal),
+      },
+    );
+    this.assertCurrent();
   }
 }
 

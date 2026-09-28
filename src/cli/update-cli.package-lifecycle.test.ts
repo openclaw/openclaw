@@ -193,7 +193,7 @@ describe("update-cli", () => {
     const tempDir = createCaseDir("openclaw-update");
     const nodeModules = path.join(tempDir, "lib", "node_modules");
     const pkgRoot = path.join(nodeModules, "openclaw");
-    mockPackageInstallStatus(tempDir);
+    mockPackageInstallStatus(pkgRoot);
     await writeOpenClawPackageFixture(pkgRoot, "2026.3.23", {
       inventory: true,
     });
@@ -236,8 +236,10 @@ describe("update-cli", () => {
       vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(entryPath);
       const targetShim = path.join(prefix, "bin", "openclaw");
       if (failure !== "verification") {
+        const oldLauncher = path.join(pkgRoot, "openclaw.mjs");
+        await fs.writeFile(oldLauncher, "old shim\n");
         await fs.mkdir(path.dirname(targetShim), { recursive: true });
-        await fs.writeFile(targetShim, "old shim\n");
+        await fs.symlink(path.relative(path.dirname(targetShim), oldLauncher), targetShim);
       }
       let stagedShim: string | undefined;
       const prototype = Object.getPrototypeOf(await fsSafeRoot(tempDir)) as Root;

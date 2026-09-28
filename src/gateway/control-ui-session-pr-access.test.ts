@@ -5,16 +5,13 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { deleteSessionEntryLifecycle } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import {
-  captureStateDatabaseCoordinatorRuntime,
-  withStateDatabaseCoordinatorRuntimeDirectory,
-} from "../infra/state-database-coordinator.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db.js";
 import * as stateReadWorker from "../state/openclaw-state-read-worker.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -67,29 +64,24 @@ async function withFixture(
   // Only the physical stores survive; every case owns its reader, projection and session rows.
   sharedState ??= await createOpenClawTestState({ scenario: "minimal" });
   sharedState.applyEnv();
-  await withStateDatabaseCoordinatorRuntimeDirectory(
-    { ...captureStateDatabaseCoordinatorRuntime(), keepAlive: false },
-    async () => {
-      const work = new AsyncWorkScope();
-      let fixture: Awaited<ReturnType<typeof createFixture>> | undefined;
+  const work = new AsyncWorkScope();
+  let fixture: Awaited<ReturnType<typeof createFixture>> | undefined;
+  try {
+    await work.track(async () => {
+      fixture = await createFixture(scope, false, initialSessionPatch);
       try {
-        await work.track(async () => {
-          fixture = await createFixture(scope, false, initialSessionPatch);
-          try {
-            await run(fixture);
-          } finally {
-            await fixture.close();
-          }
-        });
+        await run(fixture);
       } finally {
-        try {
-          await work.drain();
-        } finally {
-          await fixture?.removeSessions();
-        }
+        await fixture.close();
       }
-    },
-  );
+    });
+  } finally {
+    try {
+      await work.drain();
+    } finally {
+      await fixture?.removeSessions();
+    }
+  }
 }
 
 function frames(socket: ReturnType<typeof createGatewayWsTestSocket>) {
@@ -280,6 +272,7 @@ describe("registered session PR subscriptions", () => {
       const load = vi.fn<Load>(async () => snapshot);
       const broadcast = vi.fn();
       const subscriptions = createControlUiSessionPullRequestSubscriptions({
+        scheduler: createTestGatewayScheduler(),
         broadcastToConnIds: broadcast,
         load,
         prepareRead: async (_connId, session) => async () => {
@@ -428,9 +421,6 @@ describe("registered session PR subscriptions", () => {
   ] as const)(
     "keeps a shared load for an unchanged viewer when the other $retired retires (delayed=$delayed)",
     async ({ retired, delayed }) => {
-      if (delayed) {
-        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      }
       try {
         await withFixture("operator.read", async (f) => {
           const entered = createDeferredCore();
@@ -468,7 +458,7 @@ describe("registered session PR subscriptions", () => {
               f.access.abort(new Error("Original access retired"));
             }
             if (delayed) {
-              await vi.advanceTimersByTimeAsync(10_000);
+              await f.clock.advanceBy(10_000);
               await entered.promise;
               expect(
                 frames(peer.socket),
@@ -916,7 +906,6 @@ it.each(["concurrency limit", "earlier refresh", "refresh timer", "publication"]
         const lookedUp: string[] = [];
         const activeLoads = waitingOn === "concurrency limit" ? 4 : 1;
         if (waitingOn === "refresh timer") {
-          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
           release.resolve();
         }
         vi.stubGlobal(
@@ -977,7 +966,7 @@ it.each(["concurrency limit", "earlier refresh", "refresh timer", "publication"]
           release.resolve();
           const settled = Promise.all([f.subscriptions.pollNow(), queuedRefresh]);
           if (waitingOn === "refresh timer") {
-            await vi.advanceTimersByTimeAsync(10_000);
+            await f.clock.advanceBy(10_000);
           }
           await settled;
           await retirement;

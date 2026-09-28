@@ -488,10 +488,6 @@
           - "extensions/onepassword/**"
           - "docs/plugins/onepassword.md"
           - "docs/plugins/reference/onepassword.md"
-"extensions: webhooks":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/webhooks/**"
 "extensions: web-readability":
   - changed-files:
       - any-glob-to-any-file:

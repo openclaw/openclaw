@@ -1,10 +1,3 @@
-/**
- * Browser storage and context mutation routes.
- *
- * Parses and applies cookies, local/session storage, geolocation, permissions,
- * and related browser-context mutations for the selected profile/tab.
- */
-
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import {
   asNullableRecord,
@@ -24,17 +17,8 @@ import { jsonError, readHttpOrigin, toBoolean, toStringOrEmpty } from "./utils.j
 
 type StorageKind = "local" | "session";
 
-type GeolocationOptions = {
-  clear: boolean;
-  latitude?: number;
-  longitude?: number;
-  accuracy?: number;
-  origin?: string;
-};
-
 type CookieSetOptions = Parameters<PwAiModule["cookiesSetViaPlaywright"]>[0]["cookie"];
 
-/** Parse the supported browser storage bucket names. */
 function parseStorageKind(raw: string): StorageKind | null {
   if (raw === "local" || raw === "session") {
     return raw;
@@ -69,7 +53,6 @@ function readOptionalHttpOrigin(raw: unknown): string | undefined {
   return origin;
 }
 
-/** Parse cookie options accepted by browser storage mutation routes. */
 function parseCookieSetOptions(cookie: Record<string, unknown>): CookieSetOptions {
   return {
     name: toStringOrEmpty(cookie.name),
@@ -87,8 +70,7 @@ function parseCookieSetOptions(cookie: Record<string, unknown>): CookieSetOption
   };
 }
 
-/** Parse geolocation override options accepted by context mutation routes. */
-function parseGeolocationOptions(body: Record<string, unknown>): GeolocationOptions {
+function parseGeolocationOptions(body: Record<string, unknown>) {
   const clear = toBoolean(body.clear) ?? false;
   if (clear) {
     return { clear };
@@ -110,13 +92,12 @@ function parseGeolocationOptions(body: Record<string, unknown>): GeolocationOpti
   if (accuracy !== undefined && accuracy < 0) {
     throw new Error("accuracy must be non-negative.");
   }
-  if (!clear && (latitude === undefined || longitude === undefined)) {
+  if (latitude === undefined || longitude === undefined) {
     throw new Error("latitude and longitude are required (or set clear=true)");
   }
   return { clear, latitude, longitude, accuracy, origin };
 }
 
-/** Register storage and browser-context mutation endpoints. */
 export function registerBrowserAgentStorageRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,

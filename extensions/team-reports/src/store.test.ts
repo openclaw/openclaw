@@ -5,7 +5,9 @@ import path from "node:path";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterEach, describe, expect, it } from "vitest";
+import { describePeriod } from "./periods.js";
 import { githubCounts as counts } from "./reports.fixtures.js";
+import { buildRoster } from "./roster.js";
 import { teamReportsSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { createTeamReportsStore, type TeamReportsStore } from "./store.js";
 import type { PeriodDescriptor, ReportDocument, SummaryDocument } from "./types.js";
@@ -591,4 +593,57 @@ describe("Team Reports storage", () => {
     expect((await store.listPersonDays("alice")).map((day) => day.dayKey)).toEqual(["2026-08-17"]);
     expect((await store.listRuns()).map((run) => run.id)).toEqual(["running"]);
   });
+});
+
+it("upserts streamed activity across batches and aggregates newest duplicate comments", async () => {
+  const { store } = await openStore();
+  const period = describePeriod("day", "2026-08-20");
+  const comment = {
+    kind: "issue_comment" as const,
+    actor: "alice",
+    repo: "example/app",
+    atMs: period.sinceMs + 1,
+    title: "Old title",
+    body: "Same discussion",
+    url: "https://github.com/example/app/issues/1#comment-1",
+  };
+  await store.resetActivity();
+  await store.appendActivity({ source: "github", entries: [{ key: "first", value: comment }] });
+  await store.appendActivity({
+    source: "github",
+    entries: [
+      { key: "first", value: { ...comment, title: "Updated title" } },
+      {
+        key: "second",
+        value: {
+          ...comment,
+          atMs: period.sinceMs + 2,
+          title: "Newest discussion",
+          url: "https://github.com/example/app/issues/2#comment-2",
+        },
+      },
+      { key: "third", value: { ...comment, actor: "bob" } },
+    ],
+  });
+  const options = {
+    period,
+    nowMs: period.untilMs,
+    orgs: ["example"],
+    roster: buildRoster([{ github: ["alice"] }, { github: ["bob"] }]),
+    githubStatus: { ok: true, warnings: [], stats: {} },
+  };
+  const aggregated = await store.aggregateActivity(options);
+  expect(aggregated.totals.github.issueComments).toBe(2);
+  expect(aggregated.members.find((member) => member.login === "alice")?.github.items).toEqual([
+    {
+      kind: "issue_comment",
+      actor: "alice",
+      repo: "example/app",
+      atMs: period.sinceMs + 2,
+      title: "Newest discussion",
+      url: "https://github.com/example/app/issues/2#comment-2",
+    },
+  ]);
+  await store.resetActivity();
+  expect((await store.aggregateActivity(options)).totals.github.total).toBe(0);
 });

@@ -175,7 +175,7 @@ describe("requireValidConfig", () => {
     });
 
     expect(config).toBeNull();
-    expect(runtime.error).toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith("Fix: openclaw doctor --fix");
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(runtime.log).not.toHaveBeenCalled();
   });
@@ -214,27 +214,6 @@ describe("requireValidConfig", () => {
       "Fix: This is a plugin packaging issue, not a local config problem.\nUpdate or reinstall the plugin after the publisher ships compiled JavaScript, or disable/uninstall the plugin until then.",
     );
     expect(runtime.error).not.toHaveBeenCalledWith("Fix: openclaw doctor --fix");
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-  });
-
-  it("keeps doctor fix advice for normal invalid config failures", async () => {
-    readConfigFileSnapshot.mockResolvedValue({
-      path: "/tmp/openclaw.json",
-      exists: true,
-      valid: false,
-      raw: "{}",
-      parsed: {},
-      sourceConfig: {},
-      config: {},
-      issues: [{ path: "gateway.mode", message: "Expected 'local' or 'remote'" }],
-      legacyIssues: [],
-    });
-    const runtime = createTestRuntime();
-
-    const config = await requireValidConfig(runtime);
-
-    expect(config).toBeNull();
-    expect(runtime.error).toHaveBeenCalledWith("Fix: openclaw doctor --fix");
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 });

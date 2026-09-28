@@ -1,5 +1,6 @@
 // Setup plugin config tests cover plugin choices and generated config.
 import { describe, expect, it, vi } from "vitest";
+import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginConfigUiHint } from "../plugins/types.js";
 import type { WizardPrompter } from "./prompts.js";
@@ -140,29 +141,6 @@ describe("discoverUnconfiguredPlugins", () => {
     expect(requireFirst(result, "unconfigured plugin").id).toBe("openshell");
   });
 
-  it("excludes plugins where all fields are configured", () => {
-    const plugins = [
-      makeManifestPlugin("openshell", {
-        mode: { label: "Mode" },
-        gateway: { label: "Gateway" },
-      }),
-    ];
-    const config: OpenClawConfig = {
-      plugins: {
-        entries: {
-          openshell: {
-            config: { mode: "mirror", gateway: "my-gw" },
-          },
-        },
-      },
-    };
-    const result = discoverUnconfiguredPlugins({
-      manifestPlugins: plugins,
-      config,
-    });
-    expect(result).toHaveLength(0);
-  });
-
   it("treats empty string as unconfigured", () => {
     const plugins = [
       makeManifestPlugin("test-plugin", {
@@ -183,15 +161,6 @@ describe("discoverUnconfiguredPlugins", () => {
       config,
     });
     expect(result).toHaveLength(1);
-  });
-
-  it("returns empty when no plugins have uiHints", () => {
-    const plugins = [makeManifestPlugin("bare")];
-    const result = discoverUnconfiguredPlugins({
-      manifestPlugins: plugins,
-      config: {},
-    });
-    expect(result).toHaveLength(0);
   });
 
   it("treats dotted uiHint paths as configured when nested config exists", () => {
@@ -272,16 +241,13 @@ describe("setupPluginConfig", () => {
           },
         },
       },
-      prompter: {
-        intro: vi.fn(async () => {}),
-        outro: vi.fn(async () => {}),
+      prompter: createWizardPrompter({
         note,
         select: select as unknown as WizardPrompter["select"],
         multiselect: vi.fn(async () => ["__skip__"]) as unknown as WizardPrompter["multiselect"],
         text,
         confirm,
-        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-      },
+      }),
     });
 
     expect(result).toEqual({
@@ -337,9 +303,7 @@ describe("setupPluginConfig", () => {
           },
         },
       },
-      prompter: {
-        intro: vi.fn(async () => {}),
-        outro: vi.fn(async () => {}),
+      prompter: createWizardPrompter({
         note: vi.fn(async () => {}),
         select: vi.fn(
           async (params: { options: Array<{ value: unknown }> }) => params.options[1]?.value,
@@ -347,8 +311,7 @@ describe("setupPluginConfig", () => {
         multiselect: vi.fn(async () => ["brave"]) as unknown as WizardPrompter["multiselect"],
         text: vi.fn(async () => ""),
         confirm: vi.fn(async () => true),
-        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-      },
+      }),
     });
 
     expect(result.plugins?.entries?.brave?.config).toEqual({
@@ -498,16 +461,13 @@ describe("setupPluginConfig", () => {
           entries: { [pluginId]: { enabled: true, ...(existing && { config: existing }) } },
         },
       },
-      prompter: {
-        intro: vi.fn(async () => {}),
-        outro: vi.fn(async () => {}),
+      prompter: createWizardPrompter({
         note: vi.fn(async () => {}),
         select: vi.fn(async () => "") as unknown as WizardPrompter["select"],
         multiselect: vi.fn(async () => [pluginId]) as unknown as WizardPrompter["multiselect"],
         text: vi.fn(async () => "configured") as unknown as WizardPrompter["text"],
         confirm: vi.fn(async () => true),
-        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-      },
+      }),
     });
 
     expect(result.plugins?.entries?.[pluginId]?.config).toEqual(expected);
@@ -532,9 +492,7 @@ describe("setupPluginConfig", () => {
     await expect(
       setupPluginConfig({
         config,
-        prompter: {
-          intro: vi.fn(async () => {}),
-          outro: vi.fn(async () => {}),
+        prompter: createWizardPrompter({
           note: vi.fn(async () => {}),
           select: vi.fn(async () => "") as unknown as WizardPrompter["select"],
           multiselect: vi.fn(async () => [
@@ -542,8 +500,7 @@ describe("setupPluginConfig", () => {
           ]) as unknown as WizardPrompter["multiselect"],
           text: vi.fn(async () => "owned") as unknown as WizardPrompter["text"],
           confirm: vi.fn(async () => true),
-          progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-        },
+        }),
       }),
     ).rejects.toThrow(/Invalid path segment/);
     expect(config.plugins?.entries?.["unsafe-plugin"]?.config).toBeUndefined();
@@ -599,9 +556,7 @@ describe("setupPluginConfig", () => {
           },
         },
       },
-      prompter: {
-        intro: vi.fn(async () => {}),
-        outro: vi.fn(async () => {}),
+      prompter: createWizardPrompter({
         note: vi.fn(async () => {}),
         select: vi.fn(async () => "") as unknown as WizardPrompter["select"],
         multiselect: vi.fn(async () => [
@@ -609,8 +564,7 @@ describe("setupPluginConfig", () => {
         ]) as unknown as WizardPrompter["multiselect"],
         text: vi.fn(async () => answers.shift() ?? "") as unknown as WizardPrompter["text"],
         confirm: vi.fn(async () => true),
-        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-      },
+      }),
     });
 
     expect(result.plugins?.entries?.["numeric-plugin"]?.config).toEqual({

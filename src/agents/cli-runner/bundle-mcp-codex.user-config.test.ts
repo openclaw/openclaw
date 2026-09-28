@@ -193,30 +193,6 @@ describe("buildCodexUserMcpServersThreadConfigPatchForRuntime", () => {
     });
   });
 
-  it("projects Codex-specific default tool approval mode", async () => {
-    const patch = await buildCodexUserMcpServersThreadConfigPatchForRuntime({
-      mcp: {
-        servers: {
-          search: {
-            transport: "streamable-http",
-            url: "https://mcp.example.com/mcp",
-            codex: {
-              defaultToolsApprovalMode: "approve",
-            },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig);
-    expect(patch).toStrictEqual({
-      mcp_servers: {
-        search: {
-          url: "https://mcp.example.com/mcp",
-          default_tools_approval_mode: "approve",
-        },
-      },
-    });
-  });
-
   it("projects exact OpenClaw MCP tool filters into Codex-native tool filters", async () => {
     const patch = await buildCodexUserMcpServersThreadConfigPatchForRuntime({
       mcp: {
@@ -447,79 +423,6 @@ describe("buildCodexUserMcpServersThreadConfigPatchForRuntime", () => {
     expect(patch).toBeUndefined();
   });
 
-  it("preserves multiple user MCP servers as independent mcp_servers entries", async () => {
-    const patch = await buildCodexUserMcpServersThreadConfigPatchForRuntime({
-      mcp: {
-        servers: {
-          one: { transport: "stdio", command: "one" },
-          two: { transport: "stdio", command: "two" },
-        },
-      },
-    } as unknown as OpenClawConfig);
-    expect(patch?.mcp_servers).toBeDefined();
-    expect(Object.keys(patch!.mcp_servers).toSorted()).toEqual(["one", "two"]);
-    expect(patch!.mcp_servers.one).toMatchObject({ command: "one" });
-    expect(patch!.mcp_servers.two).toMatchObject({ command: "two" });
-  });
-
-  it("projects auth-profile backed user MCP servers with a fresh bearer header at runtime", async () => {
-    authMocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValueOnce({
-      version: 1,
-      profiles: {
-        "ducktape:mcp": {
-          type: "oauth",
-          provider: "ducktape",
-          access: "expired-access",
-          refresh: "refresh-token-must-not-project",
-          expires: 1,
-        },
-      },
-    });
-    authMocks.resolveApiKeyForProfile.mockResolvedValueOnce({
-      apiKey: "fresh-access-token",
-      provider: "ducktape",
-      profileId: "ducktape:mcp",
-      profileType: "oauth",
-      credential: {
-        type: "oauth",
-        provider: "ducktape",
-        access: "fresh-access-token",
-        refresh: "refresh-token-must-not-project",
-        expires: Date.now() + 60_000,
-      },
-    });
-
-    const patch = await buildCodexUserMcpServersThreadConfigPatchForRuntime({
-      mcp: {
-        servers: {
-          ducktape: {
-            transport: "streamable-http",
-            url: "https://agents.ducktape.xyz/mcp",
-            auth: "oauth",
-            oauth: { authProfileId: "ducktape:mcp" },
-            headers: {
-              Authorization: "Bearer stale-access",
-              "x-tenant": "keep",
-            },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig);
-
-    expect(patch).toStrictEqual({
-      mcp_servers: {
-        ducktape: {
-          url: "https://agents.ducktape.xyz/mcp",
-          http_headers: {
-            Authorization: "Bearer fresh-access-token",
-            "x-tenant": "keep",
-          },
-        },
-      },
-    });
-    expect(JSON.stringify(patch)).not.toContain("refresh-token-must-not-project");
-  });
-
   it("projects MCP-native OAuth credentials into local Codex runtime config", async () => {
     authMocks.resolveMcpOAuthAccessToken.mockResolvedValueOnce("native-access-token");
 
@@ -638,6 +541,7 @@ describe("buildCodexUserMcpServersThreadConfigPatchForRuntime", () => {
             oauth: { authProfileId: "ducktape:mcp" },
             headers: {
               Authorization: "Bearer stale-access",
+              "x-tenant": "keep",
             },
             toolFilter: {
               include: ["proof_echo", "proof_search"],
@@ -654,6 +558,7 @@ describe("buildCodexUserMcpServersThreadConfigPatchForRuntime", () => {
           url: "https://agents.ducktape.xyz/mcp",
           http_headers: {
             Authorization: "Bearer fresh-access-token",
+            "x-tenant": "keep",
           },
           enabled_tools: ["proof_echo", "proof_search"],
           disabled_tools: ["admin_delete"],

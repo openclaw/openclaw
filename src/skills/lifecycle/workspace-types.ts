@@ -70,27 +70,18 @@ export type ClawHubSkillVerificationLock = {
   signature?: unknown;
 };
 
-type ClawHubSkillLockEntry = {
+type ClawHubSkillLockEntry = Omit<
+  ClawHubSkillOrigin,
+  "version" | "slug" | "installedVersion" | "registry"
+> & {
   version: string;
-  installedAt: number;
   registry?: string;
-  ownerHandle?: string;
-  requestedReference?: string;
-  trustState?: ClawHubSkillsShTrustState;
-  sourceUrl?: string;
-  artifact?: ClawHubSkillDownloadedArtifactLock;
-  skillFile?: ClawHubSkillFileLock;
-  fileTreeSha256?: string;
   verification?: ClawHubSkillVerificationLock;
 };
 
-export type ClawHubSkillOrigin = {
+export type ClawHubSkillOrigin = ClawHubSkillRef & {
   version: 1;
   registry: string;
-  slug: string;
-  ownerHandle?: string;
-  requestedReference?: string;
-  trustState?: ClawHubSkillsShTrustState;
   installedVersion: string;
   installedAt: number;
   sourceUrl?: string;
@@ -114,12 +105,8 @@ export type ClawHubSkillRef = {
 export type ClawHubSkillVerificationSelector = "installed-version" | "version" | "tag" | "latest";
 
 export type ClawHubSkillVerificationTargetResult =
-  | {
+  | (ClawHubSkillRef & {
       ok: true;
-      slug: string;
-      ownerHandle?: string;
-      requestedReference?: string;
-      trustState?: ClawHubSkillsShTrustState;
       baseUrl: string;
       version: string | undefined;
       tag: string | undefined;
@@ -130,7 +117,7 @@ export type ClawHubSkillVerificationTargetResult =
         skillDir: string | undefined;
         installedVersion: string | undefined;
       };
-    }
+    })
   | { ok: false; error: string };
 
 export type ClawHubSkillInstallPreflightResult =
@@ -138,28 +125,20 @@ export type ClawHubSkillInstallPreflightResult =
   | { ok: false; code: string; error: string };
 
 export type TrackedUpdateTarget =
-  | {
+  | (ClawHubSkillRef & {
       ok: true;
-      slug: string;
-      ownerHandle?: string;
-      requestedReference?: string;
-      trustState?: ClawHubSkillsShTrustState;
       baseUrl?: string;
       previousVersion: string | null;
-    }
+    })
   | { ok: false; slug: string; error: string };
 
-export type ClawHubSkillUninstallPlan = {
+export type ClawHubSkillUninstallPlan = ClawHubSkillFileState & {
   workspaceDir: string;
   // Replan from the registry identity so publisher/source changes cannot retarget deletion.
   requestedRef: string;
-  slug: string;
   version: string;
   installedAt: number;
   targetDir: string;
-  skillFilePath: string;
-  skillFileSha256: string;
-  fileTreeSha256: string;
 };
 
 export type ClawHubSkillUninstallPlanResult =
@@ -280,23 +259,12 @@ export type WorkspaceSkillLifecycle = {
 };
 
 export type ClawHubSkillStatusLink =
-  | {
+  | (Omit<ClawHubSkillOrigin, "version"> & {
       status: "linked";
       valid: true;
-      registry: string;
-      slug: string;
-      ownerHandle?: string;
-      requestedReference?: string;
-      trustState?: ClawHubSkillsShTrustState;
-      installedVersion: string;
-      installedAt: number;
       originPath: string;
       lockPath: string;
-      sourceUrl?: string;
-      artifact?: ClawHubSkillDownloadedArtifactLock;
-      skillFile?: ClawHubSkillFileLock;
-      fileTreeSha256?: string;
-    }
+    })
   | {
       status: "invalid";
       valid: false;

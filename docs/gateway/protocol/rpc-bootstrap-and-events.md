@@ -28,8 +28,10 @@ the snapshot is being built. Reconcile those events with the response and issue
 a trailing `sessions.list` refresh when needed, including when an event only
 invalidates the cached list. Reconnects require a new subscription and snapshot.
 
-The Gateway keeps durable session metadata in memory and fills materialized rows
-incrementally. Committed owner changes refresh affected rows; there is no
+The Gateway keeps durable session metadata in memory and finishes its initial
+row materialization before normal startup completes. Reconnecting clients can
+read the initial roster as soon as the Gateway is ready. Committed owner changes
+refresh affected rows incrementally; there is no
 completed-page cache or one-second staleness window. Keyed descriptions,
 resolution, and chat startup prepare their requested row without waiting for the
 bulk refresh. Newly admitted or replaced stores load their metadata once, and
@@ -63,9 +65,18 @@ count.
 ## Common event families
 
 - `chat`: UI chat updates such as `chat.inject` and other transcript-only chat
-  events. In protocol v4, delta payloads carry `deltaText`; `message` remains
-  the cumulative assistant snapshot. Non-prefix replacements set
-  `replace=true` and use `deltaText` as the replacement text.
+  events. A `state: "delta"` payload carries the append in `deltaText`.
+  The first text frame delivered to a recipient for a run also includes the
+  complete `message` snapshot, including when that recipient attaches mid-run
+  or reconnects. Later append frames omit `message`. A supplied snapshot is
+  authoritative and already includes `deltaText`; do not append the delta twice.
+  Non-prefix replacements set `replace=true` and use `deltaText` as the entire
+  replacement text, including an empty string to clear it. Replacements and
+  canvas or media changes that require a new baseline include a complete snapshot.
+  Clients retain non-text message blocks across ordinary text appends. Final,
+  aborted, and error events retain their existing complete-message and intentional
+  message-omission semantics. Pending appends are concatenated in order; tool and
+  terminal boundaries flush pending text before settlement.
   Failed runs (`state: "error"`) may include `errorDetail` alongside the coarse
   `errorKind` and human-readable `errorMessage`. This closed object has seven
   optional fields: `provider`, `model`, `failoverReason`,
@@ -77,6 +88,14 @@ count.
   Raw bodies, raw previews, and diagnostic hashes are never included in
   `errorDetail`. Runs without provider observations omit it; successful and
   canceled events do not carry it. This is an additive protocol-v4 field.
+- `agent`: assistant text events use `data.delta` for appends. Optional `data.text`
+  is an authoritative snapshot of that assistant item and already includes the
+  delta. The first delivered text event, replacement/item boundaries, and media
+  updates retain snapshots where needed. Honor `data.replace`, including empty
+  replacements, and keep assistant item text separate from the display-projected
+  `chat` stream. Subscribe to one text projection for a display; consuming both
+  streams into one accumulator duplicates output. In-process agent observers
+  retain their cumulative-text contract.
 - `session.message`, `session.operation`, `session.tool`: transcript, in-flight
   session operation, and event-stream updates for a subscribed session.
 - `session.approval`: sanitized pending and terminal approval truth for an
@@ -106,21 +125,49 @@ count.
   take precedence when present. Merge an existing
   roster member's snapshot locally when the query's membership and pagination
   window remain valid. The Control UI reuses lifecycle and ordinary `patch`,
-  `placement`, `send`, `steer`, `agent.run.started`, `agent.input.settled`, `run-capacity`, and
+  `participants`, `placement`, `send`, `steer`, `agent.run.started`, `agent.input.settled`, `run-capacity`, and
   `chat.title` snapshots for held rows with unchanged identity, archive,
   pin, owner, and parent facts and nondecreasing recency. Keyed `sessions.changed`
   and `session.message` publications also carry `ancestorSessions`, an array of
-  refreshed full rows for the affected navigation, control, requester, and swarm
-  ancestors. The projection walks existing parent references up to the roots,
+  full rows for the affected navigation, control, requester, and swarm ancestors,
+  and may carry `ancestorSessionRefs` for unchanged ancestor presentations already
+  delivered on that connection. References never appear inside `ancestorSessions`.
+  The projection walks existing parent references up to the roots,
   deduplicates physical row identities, and stops cycles. Each ancestor passes
   the same per-viewer visibility filter and presentation as `sessions.list`;
   invisible intermediates do not prevent delivery of visible ancestors above them.
-  The array contains at most 64 ancestors. If an ancestor cannot be resolved or the traversal exceeds that bound,
-  the field is omitted so clients retain authoritative refresh behavior. An empty
-  array certifies that there are no visible ancestors. This is an additive
-  protocol-v4 field; it does not change subscription scope or list membership.
-  Clients apply the child and held ancestor rows together, honoring each row's
-  identity and clock. In these complete snapshots, omitted optional row facts
+  The two arrays together contain at most 64 ancestors. If an ancestor cannot be
+  resolved or the traversal exceeds that bound, both fields are omitted so clients
+  retain authoritative refresh behavior. The presence of `ancestorSessions`
+  certifies complete visible ancestor coverage across both arrays; an empty array
+  certifies no visible ancestors only when `ancestorSessionRefs` is also absent or
+  empty. These are additive protocol-v4 fields; they do not change subscription
+  scope or list membership and require no capability negotiation.
+  Full ancestor rows carry an opaque `ancestorRevision`; each reference contains
+  `key`, `revision`, and `snapshotAt`, with `sessionId` and `agentId` when present
+  on the full row. Before adding the revision tag, the Gateway compares the exact
+  connection-specific presented row, excluding only `snapshotAt`. A reference
+  certifies that the presentation identified by `revision` remains unchanged.
+  Clients retain a referenced row only when they still hold that exact admitted
+  presentation with matching identity, then advance its clock without changing
+  its other facts. The Control UI binds the revision to the immutable admitted
+  row only after confirming that its facts match the full presented row. A list
+  replacement or local row change loses that proof, even if its sampling clock
+  happens to match. Missing rows, generation or revision mismatches, and uncertain
+  presentation ownership require the existing authoritative refresh path.
+  The Gateway bounds this per-connection record and sends full rows after first
+  delivery, a successful list read, reconnect, resubscribe, reset/delete, changed presentation or visibility,
+  eviction, or uncertain delivery. Unsubscribe and disconnect clear the record;
+  session deletion invalidates remembered ancestors.
+  Older web clients ignore the additive reference field. Because `ancestorSessions`
+  contains full rows only, they cannot apply a reference as a partial row and erase
+  held fields. Missing ancestor snapshots cause their existing authoritative
+  `sessions.list` refresh. Bundled same-origin Control UI build admission prevents
+  version skew; custom roots, development UIs, and cross-origin clients can use
+  this correct but slower path. Native Apple and Android clients, the TUI, and
+  the SDK do not reconcile ancestor rows and retain their existing behavior.
+  Clients apply the child and held full ancestor rows together, honoring each row's
+  identity and clock. In full snapshots, omitted optional row facts
   clear previously held values, including child links, swarm summaries, and
   descendant-running flags. Non-null legacy top-level row fields do not fill
   omissions in a complete, viewer-filtered row. Explicit null clearing receipts
@@ -135,6 +182,11 @@ count.
   availability, and loaded cron bindings can produce broad invalidations.
   Activity-summary-only publications update opted-in Activity consumers; shared
   session and agent rosters do not refetch for those recap-only changes.
+  Prepared row publications yield between bounded slices during bursts. Pending
+  activity-summary updates for the same session generation share the latest
+  snapshot; lifecycle, capacity, transcript, deletion, and clearing receipts remain
+  distinct. Publication rechecks row readiness after each yield, and shutdown joins
+  admitted publications before disposing their projection.
   Authorized incognito descriptions and events use the same row presentation from
   transient process-local state. Incognito rows remain excluded from the session
   roster, and queued events cannot cross a reset or database replacement.

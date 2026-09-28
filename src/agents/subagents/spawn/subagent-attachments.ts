@@ -1,8 +1,3 @@
-/**
- * Subagent inline attachment staging.
- *
- * Validates base64/utf8 payloads, writes private receipt files, and resolves inherited workspace paths.
- */
 import crypto from "node:crypto";
 import path from "node:path";
 import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/number-coercion";
@@ -21,6 +16,7 @@ import {
   resolveSubagentSessionAttachmentRootDir,
   SANDBOX_SUBAGENT_ATTACHMENTS_MOUNT,
 } from "../subagent-attachment-paths.js";
+import type { SpawnSubagentParams, SpawnSubagentResult } from "./subagent-spawn-contract.js";
 
 export { cleanupMaterializedSubagentAttachments } from "../subagent-attachment-cleanup.js";
 
@@ -50,12 +46,7 @@ function decodeStrictBase64(value: string, maxDecodedBytes: number): Buffer | nu
   return decoded;
 }
 
-type SubagentInlineAttachment = {
-  name: string;
-  content: string;
-  encoding?: "utf8" | "base64";
-  mimeType?: string;
-};
+type SubagentInlineAttachment = NonNullable<SpawnSubagentParams["attachments"]>[number];
 
 type AcpInlineImageAttachment = {
   mediaType: string;
@@ -70,18 +61,7 @@ type AttachmentLimits = {
   retainOnSessionKeep: boolean;
 };
 
-type SubagentAttachmentReceiptFile = {
-  name: string;
-  bytes: number;
-  sha256: string;
-};
-
-type SubagentAttachmentReceipt = {
-  count: number;
-  totalBytes: number;
-  files: SubagentAttachmentReceiptFile[];
-  relDir: string;
-};
+type SubagentAttachmentReceipt = NonNullable<SpawnSubagentResult["attachments"]>;
 
 type MaterializeSubagentAttachmentsResult =
   | {
@@ -383,7 +363,7 @@ export async function materializeSubagentAttachments(params: {
     params.assertActive?.();
     const attachmentStore = privateFileStore(absRootDir);
 
-    const files: SubagentAttachmentReceiptFile[] = [];
+    const files: SubagentAttachmentReceipt["files"] = [];
     for (const { name, buf, bytes } of prepared.attachments) {
       const sha256 = crypto.createHash("sha256").update(buf).digest("hex");
       params.assertActive?.();

@@ -88,10 +88,6 @@ export class DiscordActivitiesRuntime {
       (accountId) => this.resolveAccount(accountId, cfg) !== null,
     );
   }
-
-  isAccountEnabled(accountId: string, cfg = this.currentConfig()): boolean {
-    return this.resolveAccount(accountId, cfg) !== null;
-  }
 }
 
 let activeRuntime: DiscordActivitiesRuntime | undefined;

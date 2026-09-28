@@ -166,74 +166,6 @@ function mergePropertySchemas(existing: unknown, incoming: unknown): unknown {
   return existing;
 }
 
-type FlattenableVariantKey = "anyOf" | "oneOf";
-type TopLevelConditionalKey = FlattenableVariantKey | "allOf";
-
-function hasTopLevelArrayKeyword(
-  schemaRecord: Record<string, unknown>,
-  key: TopLevelConditionalKey,
-): boolean {
-  return Array.isArray(schemaRecord[key]);
-}
-
-function getFlattenableVariantKey(
-  schemaRecord: Record<string, unknown>,
-): FlattenableVariantKey | null {
-  if (hasTopLevelArrayKeyword(schemaRecord, "anyOf")) {
-    return "anyOf";
-  }
-  if (hasTopLevelArrayKeyword(schemaRecord, "oneOf")) {
-    return "oneOf";
-  }
-  return null;
-}
-
-function getTopLevelConditionalKey(
-  schemaRecord: Record<string, unknown>,
-): TopLevelConditionalKey | null {
-  return (
-    getFlattenableVariantKey(schemaRecord) ??
-    (hasTopLevelArrayKeyword(schemaRecord, "allOf") ? "allOf" : null)
-  );
-}
-
-function hasTopLevelObjectSchema(
-  schemaRecord: Record<string, unknown>,
-  conditionalKey: TopLevelConditionalKey | null,
-): boolean {
-  return (
-    schemaRecord.type === "object" &&
-    isSchemaRecord(schemaRecord.properties) &&
-    conditionalKey === null
-  );
-}
-
-function isObjectLikeSchemaMissingType(
-  schemaRecord: Record<string, unknown>,
-  conditionalKey: TopLevelConditionalKey | null,
-): boolean {
-  return (
-    !("type" in schemaRecord) &&
-    (isSchemaRecord(schemaRecord.properties) || Array.isArray(schemaRecord.required)) &&
-    conditionalKey === null
-  );
-}
-
-function isTypedObjectSchemaMissingValidProperties(
-  schemaRecord: Record<string, unknown>,
-  conditionalKey: TopLevelConditionalKey | null,
-): boolean {
-  return (
-    schemaRecord.type === "object" &&
-    !isSchemaRecord(schemaRecord.properties) &&
-    conditionalKey === null
-  );
-}
-
-function isTrulyEmptySchema(schemaRecord: Record<string, unknown>): boolean {
-  return Object.keys(schemaRecord).length === 0;
-}
-
 type ArrayItemsMode = "add" | "omit" | "normalize";
 
 function normalizeArraySchemaItems(schema: unknown, mode: ArrayItemsMode): unknown {
@@ -276,7 +208,7 @@ function normalizeArraySchemaItems(schema: unknown, mode: ArrayItemsMode): unkno
       key === "items" &&
       allowsArray &&
       isSchemaRecord(value) &&
-      isTrulyEmptySchema(value)
+      Object.keys(value).length === 0
     ) {
       delete normalized.items;
       changed = true;
@@ -443,14 +375,6 @@ function normalizeToolParameterSchemaUncached(
   schema: unknown,
   options?: ToolParameterSchemaOptions,
 ): TSchema {
-  // Provider quirks:
-  // - Gemini rejects several JSON Schema keywords, so we scrub those.
-  // - OpenAI rejects function tool schemas unless the *top-level* is `type: "object"`.
-  //   (TypeBox root unions compile to `{ anyOf: [...] }` without `type`).
-  // - Anthropic expects full JSON Schema draft 2020-12 compliance.
-  // - xAI's documented tool-schema contract rejects contains-count bounds.
-  //
-  // Normalize once here so callers can always pass `tools` through unchanged.
   const normalizedProvider = normalizeLowercaseStringOrEmpty(options?.modelProvider);
   const normalizedModelId = normalizeLowercaseStringOrEmpty(options?.modelId);
   const normalizedToolSchemaProfile = normalizeLowercaseStringOrEmpty(
@@ -491,60 +415,46 @@ function normalizeToolParameterSchemaUncached(
       arrayItemsCompatibleSchema = cleanSchemaForLlamacppGbnf(arrayItemsCompatibleSchema);
     }
     if (isGeminiProvider && !isAnthropicProvider) {
-      const geminiCompatibleSchema = cleanSchemaForGemini(arrayItemsCompatibleSchema);
-      return unsupportedToolSchemaKeywords.size > 0
-        ? (stripUnsupportedSchemaKeywords(
-            geminiCompatibleSchema,
-            unsupportedToolSchemaKeywords,
-          ) as TSchema)
-        : geminiCompatibleSchema;
+      arrayItemsCompatibleSchema = cleanSchemaForGemini(arrayItemsCompatibleSchema);
     }
     if (unsupportedToolSchemaKeywords.size > 0) {
-      return stripUnsupportedSchemaKeywords(
+      arrayItemsCompatibleSchema = stripUnsupportedSchemaKeywords(
         arrayItemsCompatibleSchema,
         unsupportedToolSchemaKeywords,
-      ) as TSchema;
+      );
     }
     return arrayItemsCompatibleSchema as TSchema;
   }
 
-  const conditionalKey = getTopLevelConditionalKey(schemaRecord);
-  const flattenableVariantKey = getFlattenableVariantKey(schemaRecord);
-
-  if (hasTopLevelObjectSchema(schemaRecord, conditionalKey)) {
-    return applyProviderCleaning(schemaRecord);
-  }
-
-  if (isObjectLikeSchemaMissingType(schemaRecord, conditionalKey)) {
-    return applyProviderCleaning({
-      ...schemaRecord,
-      type: "object",
-      properties: isSchemaRecord(schemaRecord.properties) ? schemaRecord.properties : {},
-    });
-  }
-
-  if (isTypedObjectSchemaMissingValidProperties(schemaRecord, conditionalKey)) {
-    return applyProviderCleaning({ ...schemaRecord, properties: {} });
+  const flattenableVariantKey = Array.isArray(schemaRecord.anyOf)
+    ? "anyOf"
+    : Array.isArray(schemaRecord.oneOf)
+      ? "oneOf"
+      : undefined;
+  if (!flattenableVariantKey && !Array.isArray(schemaRecord.allOf)) {
+    const hasProperties = isSchemaRecord(schemaRecord.properties);
+    if (schemaRecord.type === "object") {
+      return applyProviderCleaning(
+        hasProperties ? schemaRecord : { ...schemaRecord, properties: {} },
+      );
+    }
+    if (!("type" in schemaRecord) && (hasProperties || Array.isArray(schemaRecord.required))) {
+      return applyProviderCleaning({
+        ...schemaRecord,
+        type: "object",
+        properties: hasProperties ? schemaRecord.properties : {},
+      });
+    }
   }
 
   if (!flattenableVariantKey) {
-    if (isTrulyEmptySchema(schemaRecord)) {
-      // Handle the proven MCP no-parameter case: a truly empty schema object.
-      return applyProviderCleaning({ type: "object", properties: {} });
-    }
-    if (conditionalKey === "allOf") {
-      // Top-level `allOf` is not safely flattenable with the same heuristics we
-      // use for unions. Keep it explicit rather than silently rewriting it.
-      return applyProviderCleaning(inlinedSchema);
-    }
-    return applyProviderCleaning(inlinedSchema);
+    // MCP's empty no-parameter schema needs an object root; preserve explicit allOf schemas.
+    return applyProviderCleaning(
+      Object.keys(schemaRecord).length === 0 ? { type: "object", properties: {} } : inlinedSchema,
+    );
   }
   const variants = schemaRecord[flattenableVariantKey] as unknown[];
-  // Seed mergedProperties with the root-declared properties so branch properties
-  // merge *into* them instead of replacing them. Otherwise a root `required`
-  // field that is not re-declared in any branch would be dropped from
-  // `properties` while staying `required`, producing an unsatisfiable schema
-  // when `additionalProperties` is false (#128743).
+  // Root-required properties must survive branch merging when additionalProperties is false.
   const mergedProperties: Record<string, unknown> = isSchemaRecord(schemaRecord.properties)
     ? { ...schemaRecord.properties }
     : {};
@@ -587,11 +497,12 @@ function normalizeToolParameterSchemaUncached(
             .map(([key]) => key)
         : undefined;
 
-  const nextSchema: Record<string, unknown> = { ...schemaRecord };
   const flattenedSchema = {
     type: "object",
-    ...(typeof nextSchema.title === "string" ? { title: nextSchema.title } : {}),
-    ...(typeof nextSchema.description === "string" ? { description: nextSchema.description } : {}),
+    ...(typeof schemaRecord.title === "string" ? { title: schemaRecord.title } : {}),
+    ...(typeof schemaRecord.description === "string"
+      ? { description: schemaRecord.description }
+      : {}),
     properties:
       Object.keys(mergedProperties).length > 0 ? mergedProperties : (schemaRecord.properties ?? {}),
     ...(mergedRequired && mergedRequired.length > 0 ? { required: mergedRequired } : {}),
@@ -599,11 +510,7 @@ function normalizeToolParameterSchemaUncached(
       "additionalProperties" in schemaRecord ? schemaRecord.additionalProperties : true,
   };
 
-  // Flatten union schemas into a single object schema:
-  // - Gemini doesn't allow top-level `type` together with `anyOf`.
-  // - OpenAI rejects schemas without top-level `type: "object"`.
-  // - Anthropic accepts proper JSON Schema with constraints.
-  // Merging properties preserves useful enums like `action` while keeping schemas portable.
+  // Gemini and OpenAI require an object root; retain discriminator enums while flattening.
   return applyProviderCleaning(flattenedSchema);
 }
 

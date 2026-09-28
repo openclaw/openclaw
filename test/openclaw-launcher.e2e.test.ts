@@ -932,6 +932,96 @@ describe("openclaw launcher", () => {
     },
   );
 
+  it.runIf(process.env.OPENCLAW_TEST_BUN_LAUNCHER === "1" && hasBunRuntime())(
+    "keeps real Bun update config reads in one child per handoff",
+    async () => {
+      const { writeStableRootRuntimeAliases } = await import("../scripts/runtime-postbuild.mts");
+      const root = await makeLauncherFixture(fixtures);
+      const dist = path.join(root, "dist");
+      const events = path.join(root, "config-reader-events.jsonl");
+      await fs.writeFile(path.join(root, "package.json"), '{"type":"module"}');
+      await fs.writeFile(
+        path.join(dist, "observe-reader.mjs"),
+        `import { appendFileSync } from "node:fs";
+export function record(kind) {
+  appendFileSync(${JSON.stringify(events)}, JSON.stringify({ kind, pid: process.pid, ppid: process.ppid }) + "\\n");
+}
+record("entry");
+const parent = Number(process.env.OPENCLAW_TEST_CONFIG_PARENT_PID);
+// Bound the unfixed regression before a grandchild can launch another reader.
+if (process.pid !== parent && process.ppid !== parent) throw new Error("Unexpected config reader grandchild");
+`,
+      );
+      await fs.writeFile(
+        path.join(dist, "io.runtime-Candidate.mjs"),
+        `import { record } from "./observe-reader.mjs";
+record("runtime");
+console.log("reader stdout diagnostic");
+process.stdout.write("reader stdout chunk\\n");
+function snapshot() {
+  return { pid: process.pid, ppid: process.ppid, bun: process.versions.bun, marker: process.env.OPENCLAW_CONFIG_READ_CHILD, text: "🦞 café" };
+}
+export function createConfigIO() { return { loadConfig: snapshot }; }
+export async function readConfigFileSnapshot() { return snapshot(); }
+export function readCurrentConfigForPolicyCheck() { return snapshot(); }
+`,
+      );
+      writeStableRootRuntimeAliases({ rootDir: root });
+      await fs.appendFile(path.join(dist, "io.runtime.js"), '\nimport "./observe-reader.mjs";\n');
+      const result = spawnSync(
+        process.env.BUN_BIN ?? "bun",
+        [
+          "--eval",
+          `process.env.OPENCLAW_TEST_CONFIG_PARENT_PID = String(process.pid);
+const runtime = await import(${JSON.stringify(pathToFileURL(path.join(dist, "io.runtime.js")).href)});
+const asyncRead = await runtime.readConfigFileSnapshot();
+const syncRead = runtime.createConfigIO().loadConfig();
+console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, marker: process.env.OPENCLAW_CONFIG_READ_CHILD ?? null, reads: [asyncRead, syncRead] }));`,
+        ],
+        {
+          cwd: root,
+          env: launcherEnv({
+            HOME: root,
+            NODE_OPTIONS: undefined,
+            OPENCLAW_STATE_DIR: root,
+            OPENCLAW_UPDATE_IN_PROGRESS: "1",
+            OPENCLAW_CONFIG_READ_CHILD: undefined,
+          }),
+          encoding: "utf8",
+          timeout: 10_000,
+        },
+      );
+      const observed = (await fs.readFile(events, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr + JSON.stringify(observed)).toBe(0);
+      const output = JSON.parse(result.stdout);
+      expect(output.marker).toBeNull();
+      expect(output.bun).toEqual(expect.any(String));
+      expect(
+        new Set([output.parent, ...output.reads.map((read: { pid: number }) => read.pid)]).size,
+      ).toBe(3);
+      for (const read of output.reads) {
+        expect(read).toEqual({
+          pid: expect.any(Number),
+          ppid: output.parent,
+          bun: output.bun,
+          marker: "1",
+          text: "🦞 café",
+        });
+      }
+      expect(observed).toEqual([
+        { kind: "entry", pid: output.parent, ppid: expect.any(Number) },
+        ...output.reads.flatMap((read: { pid: number; ppid: number }) => [
+          { kind: "entry", pid: read.pid, ppid: read.ppid },
+          { kind: "runtime", pid: read.pid, ppid: read.ppid },
+        ]),
+      ]);
+    },
+  );
+
   it("uses precomputed root help when plugin config does not invalidate it", async () => {
     const fixtureRoot = await makeLauncherFixture(fixtures);
     await fs.writeFile(
@@ -986,7 +1076,7 @@ describe("openclaw launcher", () => {
     expect(result.stdout).toBe(`PRECOMPUTED ${params.command} help\n`);
   });
 
-  it.each(["config", "doctor", "gateway", "models", "plugins", "sessions", "tasks"])(
+  it.each(["config", "doctor", "gateway", "models", "plugins", "sessions"])(
     "uses precomputed %s help before loading the runtime entry",
     async (command) => {
       const fixtureRoot = await makeLauncherFixture(fixtures);
@@ -1015,6 +1105,29 @@ describe("openclaw launcher", () => {
       expect(result.stdout).toBe(`PRECOMPUTED ${command} help\n`);
     },
   );
+
+  it("does not serve stale cached help for the retired Tasks command", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtures);
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "cli-startup-metadata.json"),
+      JSON.stringify({ subcommandHelpText: { tasks: "STALE Tasks help\n" } }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "entry.js"),
+      "process.stdout.write('RUNTIME ENTRY\\n');\n",
+      "utf8",
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [path.join(fixtureRoot, "openclaw.mjs"), "tasks", "--help"],
+      { cwd: fixtureRoot, env: launcherEnv(), encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("RUNTIME ENTRY\n");
+  });
 
   it("uses precomputed subcommand help with leading root options", async () => {
     const fixtureRoot = await makeLauncherFixture(fixtures);

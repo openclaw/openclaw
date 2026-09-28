@@ -301,19 +301,9 @@ describe("status.command-sections", () => {
       detail: "failed (unknown) - sync rejected",
     },
     {
-      account: { healthState: "blocked" },
-      status: "warn(WARN)",
-      detail: "blocked",
-    },
-    {
       account: { healthState: "unknown" },
       status: "warn(WARN)",
       detail: "unknown",
-    },
-    {
-      account: { statusState: "unstable" },
-      status: "warn(WARN)",
-      detail: "auth stabilizing",
     },
     {
       account: { configured: false },

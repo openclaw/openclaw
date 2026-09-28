@@ -24,13 +24,19 @@ import { createManagerIndexFixture } from "./manager-index.test-support.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 
+const openLocks = () =>
+  openMemoryCoreStateStore<ShortTermLockEntry>({
+    namespace: SHORT_TERM_LOCK_NAMESPACE,
+    maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
+  });
+
 describe("memory workspace release recovery", () => {
   const fixture = createManagerIndexFixture({
     getMemorySearchManager,
     closeAllMemorySearchManagers,
   });
 
-  it("recovers the next sync after a settled SQLite lease-release failure", async () => {
+  async function setupIndex() {
     const cfg = fixture.createConfig({
       provider: "none",
       sources: ["memory"],
@@ -41,14 +47,16 @@ describe("memory workspace release recovery", () => {
     const database = Reflect.get(manager, "db") as DatabaseSync;
     const readPublished = () =>
       database.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path, id").all();
+    return { cfg, manager, database, readPublished };
+  }
+
+  it("recovers the next sync after a settled SQLite lease-release failure", async () => {
+    const { cfg, manager, database, readPublished } = await setupIndex();
     const publishedBeforeFailure = readPublished();
     expect(publishedBeforeFailure.length).toBeGreaterThan(0);
     const state = openOpenClawStateDatabase();
     const key = memoryCoreWorkspaceStateKey(fixture.paths.workspace);
-    const locks = openMemoryCoreStateStore<ShortTermLockEntry>({
-      namespace: SHORT_TERM_LOCK_NAMESPACE,
-      maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
-    });
+    const locks = openLocks();
     await fs.writeFile(
       path.join(fixture.paths.memory, "2026-01-12.md"),
       "# Log\nCerulean corrected memory survives recovery.\n",
@@ -58,32 +66,14 @@ describe("memory workspace release recovery", () => {
       WHEN OLD.plugin_id = 'memory-core' AND OLD.namespace = 'short-term-locks'
       BEGIN SELECT RAISE(ABORT, 'injected workspace cleanup failure'); END;
     `);
-    const timings: Record<string, unknown> = {};
     try {
-      const started = performance.now();
-      const failed = await manager.sync({ reason: "cli", force: true }).then(
-        () => undefined,
-        (error: unknown) => error,
-      );
-      timings.initialFailureMs = performance.now() - started;
-      timings.initialError = String(failed);
-      expect(failed).toBeInstanceOf(Error);
+      await expect(manager.sync({ reason: "cli", force: true })).rejects.toBeInstanceOf(Error);
       expect(readPublished()).toEqual(publishedBeforeFailure);
       state.db.exec("DROP TRIGGER fail_memory_workspace_release");
       const orphan = await locks.lookup(key);
-      timings.orphanAgeMs = orphan ? Date.now() - orphan.acquiredAt : null;
-      timings.orphanOwnerMatchesProcess = orphan?.owner.startsWith(`${process.pid}:`);
       expect(orphan).toBeDefined();
 
-      const retryStarted = performance.now();
-      const retry = await manager.sync({ reason: "cli", force: true }).then(
-        () => ({ ok: true as const }),
-        (error: unknown) => ({ ok: false as const, error: String(error) }),
-      );
-      timings.retryMs = performance.now() - retryStarted;
-      timings.retry = retry;
-      console.log("memory-workspace-release-stress", JSON.stringify(timings));
-      expect(retry).toEqual({ ok: true });
+      await expect(manager.sync({ reason: "cli", force: true })).resolves.toBeUndefined();
       expect(readPublished()).toEqual([
         {
           path: "memory/2026-01-12.md",
@@ -105,25 +95,13 @@ describe("memory workspace release recovery", () => {
   });
 
   it("recovers after a real external state writer exceeds lease cleanup's SQLite budget", async () => {
-    const cfg = fixture.createConfig({
-      provider: "none",
-      sources: ["memory"],
-      vectorEnabled: false,
-    });
-    const manager = await fixture.getFreshManager(cfg, "cli");
-    await manager.sync({ reason: "cli", force: true });
-    const database = Reflect.get(manager, "db") as DatabaseSync;
-    const readPublished = () =>
-      database.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path, id").all();
+    const { cfg, manager, database, readPublished } = await setupIndex();
     const original = readPublished();
     await manager.sync({ reason: "cli", force: true });
     expect(readPublished()).toEqual(original);
     const state = openOpenClawStateDatabase();
     const key = memoryCoreWorkspaceStateKey(fixture.paths.workspace);
-    const locks = openMemoryCoreStateStore<ShortTermLockEntry>({
-      namespace: SHORT_TERM_LOCK_NAMESPACE,
-      maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
-    });
+    const locks = openLocks();
     expect(await locks.lookup(key)).toBeUndefined();
     await fs.writeFile(
       path.join(fixture.paths.memory, "2026-01-12.md"),
@@ -184,15 +162,11 @@ describe("memory workspace release recovery", () => {
       await held.promise;
       return result;
     });
-    const timings: Record<string, unknown> = {};
     try {
-      const started = performance.now();
       const initial = await manager.sync({ reason: "cli", force: true }).then(
         () => undefined,
         (error: unknown) => error,
       );
-      timings.initialMs = performance.now() - started;
-      timings.initialError = String(initial);
       expect(await writerExited).toBe(0);
       expect(writerEvents).toEqual(["held", "released"]);
       gate.mockRestore();
@@ -209,20 +183,9 @@ describe("memory workspace release recovery", () => {
         expect(initial).toBeInstanceOf(Error);
         expect(readPublished()).toEqual(original);
       }
-      const orphan = await locks.lookup(key);
-      timings.orphanAgeMs = orphan ? Date.now() - orphan.acquiredAt : null;
-      timings.orphanOwnerMatchesProcess = orphan?.owner.startsWith(`${process.pid}:`);
       expect(state.db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
       expect(database.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-      const retryStarted = performance.now();
-      const retry = await manager.sync({ reason: "cli", force: true }).then(
-        () => ({ ok: true as const }),
-        (error: unknown) => ({ ok: false as const, error: String(error) }),
-      );
-      timings.retryMs = performance.now() - retryStarted;
-      timings.retry = retry;
-      console.log("memory-workspace-contention-stress", JSON.stringify(timings));
-      expect(retry).toEqual({ ok: true });
+      await expect(manager.sync({ reason: "cli", force: true })).resolves.toBeUndefined();
       expect(readPublished()).toEqual(expectedPublication);
       expect(await locks.lookup(key)).toBeUndefined();
       await manager.close();
@@ -245,15 +208,12 @@ describe("memory workspace release recovery", () => {
     const workspace = fixture.paths.workspace;
     const key = memoryCoreWorkspaceStateKey(workspace);
     const originalState = openOpenClawStateDatabase();
-    const originalLocks = openMemoryCoreStateStore<ShortTermLockEntry>({
-      namespace: SHORT_TERM_LOCK_NAMESPACE,
-      maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
-    });
+    const originalLocks = openLocks();
     const otherEnv = {
       ...process.env,
       OPENCLAW_STATE_DIR: path.join(fixture.paths.root, "other-state"),
     };
-    let otherLocks: ReturnType<typeof openMemoryCoreStateStore<ShortTermLockEntry>> | undefined;
+    let otherLocks: ReturnType<typeof openLocks> | undefined;
     try {
       await withMemoryWorkspaceLock(workspace, async () => {
         originalState.db.exec(`
@@ -270,10 +230,7 @@ describe("memory workspace release recovery", () => {
       }
 
       await configureMemoryCoreDreamingStateForTests(otherEnv);
-      otherLocks = openMemoryCoreStateStore<ShortTermLockEntry>({
-        namespace: SHORT_TERM_LOCK_NAMESPACE,
-        maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
-      });
+      otherLocks = openLocks();
       await otherLocks.register(key, completed);
       const otherTask = vi.fn(async () => "must not run");
       await expect(withMemoryWorkspaceLock(workspace, otherTask)).rejects.toMatchObject({

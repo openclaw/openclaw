@@ -5,7 +5,7 @@ import { movePathWithCopyFallback } from "@openclaw/fs-safe/atomic";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { root as fsSafeRoot } from "@openclaw/fs-safe/root";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { hasErrnoCode } from "./errors.js";
+import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { isRemovalIoError, removePathWithinRoot } from "./fs-safe-remove.js";
 import { retainMutationAuthority } from "./mutation-authority.js";
 import {
@@ -14,6 +14,7 @@ import {
   packageLauncherDifferences,
 } from "./package-update-integrity.js";
 import type { StagedPackageSwapParams } from "./package-update-swap-contract.js";
+import { UPDATE_CLEANUP_BUDGET_MS } from "./update-maintenance.js";
 
 export const PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS = "allow" as const;
 const log = createSubsystemLogger("update/package-launchers");
@@ -112,7 +113,11 @@ export async function activateStagedNpmPackageRoot(
   );
 }
 
-export function removePackagePath(target: string, assertCurrent = () => {}): Promise<void> {
+export function removePackagePath(
+  target: string,
+  assertCurrent = () => {},
+  signal?: AbortSignal,
+): Promise<void> {
   const assertOwner = retainMutationAuthority(assertCurrent);
   assertOwner();
   if (!fsSync.lstatSync(target, { throwIfNoEntry: false })) {
@@ -125,6 +130,7 @@ export function removePackagePath(target: string, assertCurrent = () => {}): Pro
     force: true,
     symlinks: "unlink",
     assertBeforeMutation: assertOwner,
+    signal,
   });
 }
 
@@ -424,6 +430,7 @@ export async function discardPackageUpdateBackup(
   label: string,
   globalRoot: string,
   assertCaller = () => {},
+  cleanupDeadlineAtMs = performance.now() + UPDATE_CLEANUP_BUDGET_MS,
 ): Promise<string | null> {
   const assertCurrent = retainMutationAuthority(assertCaller);
   assertCurrent();
@@ -450,15 +457,33 @@ export async function discardPackageUpdateBackup(
       assertPackagePathIdentity(backup, backupIdentity);
     }
   });
+  const cleanupExpired = new Error("Obsolete backup cleanup budget expired");
+  const cleanup = new AbortController();
   try {
-    await removePackagePath(backup, assertBackup);
+    // Stop further retirement work at its next custody check, but join every
+    // pending filesystem operation before reporting retained material.
+    await removePackagePath(
+      backup,
+      () => {
+        assertBackup();
+        if (performance.now() >= cleanupDeadlineAtMs) {
+          // Revalidation must preserve filesystem errors; abort only at removal dispatch.
+          cleanup.abort(cleanupExpired);
+        }
+      },
+      cleanup.signal,
+    );
     return null;
   } catch (error) {
     assertBackup();
     // A path/authority refusal is not an ordinary obsolete-backup cleanup error.
     // Keep it at its original name instead of moving unowned bytes to retirement.
-    if (!isRemovalIoError(error)) {
+    if (error !== cleanupExpired && !isRemovalIoError(error)) {
       throw error;
+    }
+    const expiredMessage = `cleanup budget expired after ${UPDATE_CLEANUP_BUDGET_MS}ms; preserved ${label} at ${backupPath} for delayed cleanup${error === cleanupExpired ? "" : `; ${formatErrorMessage(error)}`}`;
+    if (error === cleanupExpired || performance.now() >= cleanupDeadlineAtMs) {
+      return fsSync.lstatSync(backup, { throwIfNoEntry: false }) ? expiredMessage : null;
     }
     const retiredPath = path.join(
       retiredParent,
@@ -470,6 +495,9 @@ export async function discardPackageUpdateBackup(
       assertBackup();
       assertPackagePathIdentity(backup, backupIdentity);
       assertPackagePathIdentity(retiredPath, undefined);
+      if (performance.now() >= cleanupDeadlineAtMs) {
+        return expiredMessage;
+      }
       await fs.rename(backup, retiredPath);
       assertParents();
       assertPackagePathIdentity(retiredPath, backupIdentity);
@@ -489,12 +517,19 @@ export async function discardPackageLauncherBackup(
   snapshot: PackageLauncherBackup,
   globalRoot: string,
   assertCurrent?: () => void,
+  cleanupDeadlineAtMs?: number,
 ): Promise<string | null> {
   if (snapshot.failedCopy) {
     return `failed copy retained at ${snapshot.failedCopy}; inspect it before retrying`;
   }
   return snapshot.backupDir
-    ? await discardPackageUpdateBackup(snapshot.backupDir, "shim backup", globalRoot, assertCurrent)
+    ? await discardPackageUpdateBackup(
+        snapshot.backupDir,
+        "shim backup",
+        globalRoot,
+        assertCurrent,
+        cleanupDeadlineAtMs,
+      )
     : null;
 }
 

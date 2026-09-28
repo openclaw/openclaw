@@ -42,43 +42,64 @@ const { PreparedModelRuntimeOwnerNotPublishedError } = await vi.importActual<
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+async function setupPublishedGeneration(withAuth = false) {
+  const config = {
+    ...(withAuth
+      ? { auth: { profiles: { test: { provider: "openai", mode: "api_key" as const } } } }
+      : {}),
+    agents: { entries: { default: { thinkingDefault: "high" as const } } },
+  };
+  const metadataSnapshot = createPluginMetadataSnapshot({
+    config,
+    manifestRegistry: { plugins: [], diagnostics: [] },
+  });
+  const makeGeneration = () =>
+    ({
+      configuredCatalogEntries: [],
+      inlineProviderModels: [],
+      pluginMetadataSnapshot: metadataSnapshot,
+    }) satisfies PreparedModelRuntimePluginGeneration;
+  const pluginGeneration = makeGeneration();
+  const { resolveAgentConfig } = await vi.importActual<
+    typeof import("../../agents/agent-scope-config.js")
+  >("../../agents/agent-scope-config.js");
+  resolveAgentConfigMock.mockImplementation(resolveAgentConfig);
+  mockRunCronFallbackPassthrough();
+  const owner = {
+    agentId: "default",
+    agentDir: "/tmp/dispatch-agent-dir",
+    workspaceDir: "/tmp/workspace",
+    config,
+    metadataSnapshot,
+    modelCatalog: { entries: [], routeVariants: [] },
+  };
+  const dispatchRuntime = {
+    agentId: "default",
+    agentDir: "/tmp/dispatch-agent-dir",
+    workspaceDir: "/tmp/dispatch-workspace",
+    config,
+    modelCatalog: { entries: [], routeVariants: [] },
+    pluginGeneration,
+  };
+  return {
+    config,
+    metadataSnapshot,
+    makeGeneration,
+    pluginGeneration,
+    owner,
+    dispatchRuntime,
+    release: vi.fn(async () => {}),
+  };
+}
+
 describe("runCronIsolatedAgentTurn plugin generation carry", () => {
   setupRunCronIsolatedAgentTurnSuite();
 
   it("admits the published generation and keeps it active through embedded execution", async () => {
-    const config = {
-      agents: { entries: { default: { thinkingDefault: "high" as const } } },
-    };
-    const metadataSnapshot = createPluginMetadataSnapshot({
-      config,
-      manifestRegistry: { plugins: [], diagnostics: [] },
-    });
-    const pluginGeneration = {
-      configuredCatalogEntries: [],
-      inlineProviderModels: [],
-      pluginMetadataSnapshot: metadataSnapshot,
-    } satisfies PreparedModelRuntimePluginGeneration;
-    const { resolveAgentConfig } = await vi.importActual<
-      typeof import("../../agents/agent-scope-config.js")
-    >("../../agents/agent-scope-config.js");
-    resolveAgentConfigMock.mockImplementation(resolveAgentConfig);
-    loadModelCatalogOwnerMock.mockResolvedValue({
-      agentId: "default",
-      agentDir: "/tmp/dispatch-agent-dir",
-      workspaceDir: "/tmp/workspace",
-      config,
-      metadataSnapshot,
-      modelCatalog: { entries: [], routeVariants: [] },
-    });
-    preparedRuntimeMocks.loadDispatchRuntime.mockResolvedValue({
-      agentId: "default",
-      agentDir: "/tmp/dispatch-agent-dir",
-      workspaceDir: "/tmp/dispatch-workspace",
-      config,
-      modelCatalog: { entries: [], routeVariants: [] },
-      pluginGeneration,
-    });
-    const release = vi.fn(async () => {});
+    const { config, metadataSnapshot, pluginGeneration, owner, dispatchRuntime, release } =
+      await setupPublishedGeneration();
+    loadModelCatalogOwnerMock.mockResolvedValue(owner);
+    preparedRuntimeMocks.loadDispatchRuntime.mockResolvedValue(dispatchRuntime);
     const selectedGeneration = {
       ...pluginGeneration,
       pluginRegistry: createEmptyPluginRegistry(),
@@ -88,7 +109,6 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
       pluginGeneration: selectedGeneration,
       [Symbol.asyncDispose]: release,
     });
-    mockRunCronFallbackPassthrough();
     const afterRun = createDeferred();
     let borrowedAfterClose: Promise<unknown> | undefined;
     let embeddedRunGeneration: unknown = "not-captured";
@@ -137,22 +157,8 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
   });
 
   it("admits a warmed full catalog against the same generation's static dispatch catalog", async () => {
-    const config = {
-      agents: { entries: { default: { thinkingDefault: "high" as const } } },
-    };
-    const metadataSnapshot = createPluginMetadataSnapshot({
-      config,
-      manifestRegistry: { plugins: [], diagnostics: [] },
-    });
-    const pluginGeneration = {
-      configuredCatalogEntries: [],
-      inlineProviderModels: [],
-      pluginMetadataSnapshot: metadataSnapshot,
-    } satisfies PreparedModelRuntimePluginGeneration;
-    const { resolveAgentConfig } = await vi.importActual<
-      typeof import("../../agents/agent-scope-config.js")
-    >("../../agents/agent-scope-config.js");
-    resolveAgentConfigMock.mockImplementation(resolveAgentConfig);
+    const { config, metadataSnapshot, pluginGeneration, dispatchRuntime, release } =
+      await setupPublishedGeneration();
     const fullModelCatalog = {
       entries: [
         { provider: "openai", id: "gpt-5.4", reasoning: true },
@@ -162,24 +168,18 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
     };
     const readFullModelCatalog = vi.fn(() => fullModelCatalog);
     preparedRuntimeMocks.loadDispatchRuntime.mockResolvedValue({
-      agentId: "default",
-      agentDir: "/tmp/dispatch-agent-dir",
-      workspaceDir: "/tmp/dispatch-workspace",
-      config,
+      ...dispatchRuntime,
       modelCatalog: {
         entries: [{ provider: "openai", id: "gpt-5.4", reasoning: true }],
         routeVariants: [],
       },
       readFullModelCatalog,
-      pluginGeneration,
     });
-    const release = vi.fn(async () => {});
     preparedRuntimeMocks.acquireRuntime.mockResolvedValue({
       snapshot: { config, metadataSnapshot, pluginRegistry: createEmptyPluginRegistry() },
       pluginGeneration: { ...pluginGeneration, pluginRegistry: createEmptyPluginRegistry() },
       [Symbol.asyncDispose]: release,
     });
-    mockRunCronFallbackPassthrough();
 
     await expect(
       runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture({ cfg: config, agentId: "default" })),
@@ -192,18 +192,8 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
   });
 
   it("keeps model selection on the dispatch generation when the owner read would advance", async () => {
-    const config = {
-      agents: { entries: { default: { thinkingDefault: "high" as const } } },
-    };
-    const metadataSnapshot = createPluginMetadataSnapshot({
-      config,
-      manifestRegistry: { plugins: [], diagnostics: [] },
-    });
-    const generationA = {
-      configuredCatalogEntries: [],
-      inlineProviderModels: [],
-      pluginMetadataSnapshot: metadataSnapshot,
-    } satisfies PreparedModelRuntimePluginGeneration;
+    const fixture = await setupPublishedGeneration();
+    const { config, metadataSnapshot, pluginGeneration: generationA, release } = fixture;
     const modelCatalogA = {
       entries: [{ provider: "openai", id: "gpt-5.4", reasoning: true }],
       routeVariants: [],
@@ -212,34 +202,21 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
       entries: [{ provider: "openai", id: "gpt-5.6-sol", reasoning: true }],
       routeVariants: [],
     };
-    const { resolveAgentConfig } = await vi.importActual<
-      typeof import("../../agents/agent-scope-config.js")
-    >("../../agents/agent-scope-config.js");
-    resolveAgentConfigMock.mockImplementation(resolveAgentConfig);
     loadModelCatalogMock.mockResolvedValue([]);
     loadModelCatalogOwnerMock.mockResolvedValue({
-      agentId: "default",
-      agentDir: "/tmp/dispatch-agent-dir",
-      workspaceDir: "/tmp/workspace",
-      config,
-      metadataSnapshot,
+      ...fixture.owner,
       modelCatalog: modelCatalogB,
     });
     preparedRuntimeMocks.loadDispatchRuntime.mockResolvedValue({
-      agentId: "default",
-      agentDir: "/tmp/dispatch-agent-dir",
+      ...fixture.dispatchRuntime,
       workspaceDir: "/tmp/workspace",
-      config,
       modelCatalog: modelCatalogA,
-      pluginGeneration: generationA,
     });
-    const release = vi.fn(async () => {});
     preparedRuntimeMocks.acquireRuntime.mockResolvedValue({
       snapshot: { config, metadataSnapshot, pluginRegistry: createEmptyPluginRegistry() },
       pluginGeneration: generationA,
       [Symbol.asyncDispose]: release,
     });
-    mockRunCronFallbackPassthrough();
 
     await expect(
       runCronIsolatedAgentTurn(
@@ -261,52 +238,19 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
   });
 
   it("retains the admitted runtime when a generation publishes during auth preparation", async () => {
-    const config = {
-      auth: {
-        profiles: { test: { provider: "openai", mode: "api_key" as const } },
-      },
-      agents: { entries: { default: { thinkingDefault: "high" as const } } },
-    };
-    const metadataSnapshot = createPluginMetadataSnapshot({
-      config,
-      manifestRegistry: { plugins: [], diagnostics: [] },
-    });
-    const generationA = {
-      configuredCatalogEntries: [],
-      inlineProviderModels: [],
-      pluginMetadataSnapshot: metadataSnapshot,
-    } satisfies PreparedModelRuntimePluginGeneration;
-    const generationB = {
-      configuredCatalogEntries: [],
-      inlineProviderModels: [],
-      pluginMetadataSnapshot: metadataSnapshot,
-    } satisfies PreparedModelRuntimePluginGeneration;
+    const fixture = await setupPublishedGeneration(true);
+    const { config, metadataSnapshot, pluginGeneration: generationA, release } = fixture;
+    const generationB = fixture.makeGeneration();
     let publishedGeneration: PreparedModelRuntimePluginGeneration = generationA;
-    const { resolveAgentConfig } = await vi.importActual<
-      typeof import("../../agents/agent-scope-config.js")
-    >("../../agents/agent-scope-config.js");
-    resolveAgentConfigMock.mockImplementation(resolveAgentConfig);
-    loadModelCatalogOwnerMock.mockResolvedValue({
-      agentId: "default",
-      agentDir: "/tmp/dispatch-agent-dir",
-      workspaceDir: "/tmp/workspace",
-      config,
-      metadataSnapshot,
-      modelCatalog: { entries: [], routeVariants: [] },
-    });
+    loadModelCatalogOwnerMock.mockResolvedValue(fixture.owner);
     preparedRuntimeMocks.loadDispatchRuntime.mockImplementation(async () => ({
-      agentId: "default",
-      agentDir: "/tmp/dispatch-agent-dir",
-      workspaceDir: "/tmp/dispatch-workspace",
-      config,
-      modelCatalog: { entries: [], routeVariants: [] },
+      ...fixture.dispatchRuntime,
       pluginGeneration: publishedGeneration,
     }));
     resolveSessionAuthSelectionMock.mockImplementation(async () => {
       publishedGeneration = generationB;
       return undefined;
     });
-    const release = vi.fn(async () => {});
     preparedRuntimeMocks.acquireRuntime.mockImplementation(async (input, options) => {
       if (options?.pluginGeneration !== publishedGeneration) {
         throw new PreparedModelRuntimeOwnerNotPublishedError(
@@ -320,7 +264,6 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
         [Symbol.asyncDispose]: release,
       };
     });
-    mockRunCronFallbackPassthrough();
 
     await expect(
       runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture({ cfg: config, agentId: "default" })),
@@ -334,26 +277,9 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
   });
 
   it("keeps catalog-derived selection on the admitted generation after publication", async () => {
-    const config = {
-      auth: {
-        profiles: { test: { provider: "openai", mode: "api_key" as const } },
-      },
-      agents: { entries: { default: { thinkingDefault: "high" as const } } },
-    };
-    const metadataSnapshot = createPluginMetadataSnapshot({
-      config,
-      manifestRegistry: { plugins: [], diagnostics: [] },
-    });
-    const generationA = {
-      configuredCatalogEntries: [],
-      inlineProviderModels: [],
-      pluginMetadataSnapshot: metadataSnapshot,
-    } satisfies PreparedModelRuntimePluginGeneration;
-    const generationB = {
-      configuredCatalogEntries: [],
-      inlineProviderModels: [],
-      pluginMetadataSnapshot: metadataSnapshot,
-    } satisfies PreparedModelRuntimePluginGeneration;
+    const fixture = await setupPublishedGeneration(true);
+    const { config, metadataSnapshot, pluginGeneration: generationA, release } = fixture;
+    const generationB = fixture.makeGeneration();
     const modelCatalogA = {
       entries: [{ provider: "openai", id: "gpt-5.4", reasoning: true }],
       routeVariants: [],
@@ -361,23 +287,12 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
     const modelCatalogB = { entries: [], routeVariants: [] };
     let publishedGeneration: PreparedModelRuntimePluginGeneration = generationA;
     let publishedModelCatalog = modelCatalogA;
-    const { resolveAgentConfig } = await vi.importActual<
-      typeof import("../../agents/agent-scope-config.js")
-    >("../../agents/agent-scope-config.js");
-    resolveAgentConfigMock.mockImplementation(resolveAgentConfig);
     loadModelCatalogOwnerMock.mockResolvedValue({
-      agentId: "default",
-      agentDir: "/tmp/dispatch-agent-dir",
-      workspaceDir: "/tmp/workspace",
-      config,
-      metadataSnapshot,
+      ...fixture.owner,
       modelCatalog: modelCatalogA,
     });
     preparedRuntimeMocks.loadDispatchRuntime.mockImplementation(async () => ({
-      agentId: "default",
-      agentDir: "/tmp/dispatch-agent-dir",
-      workspaceDir: "/tmp/dispatch-workspace",
-      config,
+      ...fixture.dispatchRuntime,
       modelCatalog: publishedModelCatalog,
       pluginGeneration: publishedGeneration,
     }));
@@ -389,9 +304,8 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
     preparedRuntimeMocks.acquireRuntime.mockResolvedValue({
       snapshot: { config, metadataSnapshot, pluginRegistry: createEmptyPluginRegistry() },
       pluginGeneration: generationA,
-      [Symbol.asyncDispose]: vi.fn(async () => {}),
+      [Symbol.asyncDispose]: release,
     });
-    mockRunCronFallbackPassthrough();
 
     await expect(
       runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture({ cfg: config, agentId: "default" })),
@@ -402,48 +316,20 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
   });
 
   it("keeps provider-scoped thinking on the admitted generation after publication", async () => {
-    const config = {
-      auth: {
-        profiles: { test: { provider: "openai", mode: "api_key" as const } },
-      },
-      agents: { entries: { default: { thinkingDefault: "high" as const } } },
-    };
-    const metadataSnapshot = createPluginMetadataSnapshot({
-      config,
-      manifestRegistry: { plugins: [], diagnostics: [] },
-    });
-    const generationA = {
-      configuredCatalogEntries: [],
-      inlineProviderModels: [],
-      pluginMetadataSnapshot: metadataSnapshot,
-    } satisfies PreparedModelRuntimePluginGeneration;
-    const generationB = {
-      configuredCatalogEntries: [],
-      inlineProviderModels: [],
-      pluginMetadataSnapshot: metadataSnapshot,
-    } satisfies PreparedModelRuntimePluginGeneration;
+    const fixture = await setupPublishedGeneration(true);
+    const { config, metadataSnapshot, pluginGeneration: generationA, release } = fixture;
+    const generationB = fixture.makeGeneration();
     const unresolvedCatalog = { entries: [], routeVariants: [] };
     let publishedGeneration: PreparedModelRuntimePluginGeneration = generationA;
-    const { resolveAgentConfig } = await vi.importActual<
-      typeof import("../../agents/agent-scope-config.js")
-    >("../../agents/agent-scope-config.js");
-    resolveAgentConfigMock.mockImplementation(resolveAgentConfig);
     loadModelCatalogOwnerMock.mockResolvedValue({
-      agentId: "default",
-      agentDir: "/tmp/dispatch-agent-dir",
-      workspaceDir: "/tmp/workspace",
-      config,
-      metadataSnapshot,
+      ...fixture.owner,
       modelCatalog: unresolvedCatalog,
     });
     loadModelCatalogMock.mockResolvedValue([
       { provider: "openai", id: "gpt-5.4", reasoning: true },
     ]);
     preparedRuntimeMocks.loadDispatchRuntime.mockImplementation(async () => ({
-      agentId: "default",
-      agentDir: "/tmp/dispatch-agent-dir",
-      workspaceDir: "/tmp/dispatch-workspace",
-      config,
+      ...fixture.dispatchRuntime,
       modelCatalog: unresolvedCatalog,
       pluginGeneration: publishedGeneration,
     }));
@@ -454,9 +340,8 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
     preparedRuntimeMocks.acquireRuntime.mockResolvedValue({
       snapshot: { config, metadataSnapshot, pluginRegistry: createEmptyPluginRegistry() },
       pluginGeneration: generationA,
-      [Symbol.asyncDispose]: vi.fn(async () => {}),
+      [Symbol.asyncDispose]: release,
     });
-    mockRunCronFallbackPassthrough();
 
     await expect(
       runCronIsolatedAgentTurn(

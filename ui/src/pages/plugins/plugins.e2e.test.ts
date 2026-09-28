@@ -518,7 +518,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         .locator(".plugin-catalog-chips button")
         .allTextContents();
       expect(categoryLabels.map((label) => label.trim()).join(" | ")).toBe(
-        "All | Featured | Trending | Channels | Models | Agent runtimes | Memory | Context | Voice | Web | Media | Security | Integrations | Developer tools | Infrastructure | Documents & files | Inbox & collaboration | Productivity | Scheduling | Finance & payments | Sales & marketing | Data & analytics | Agent orchestration | Research | Other",
+        "All | Featured | Trending | Channels | Models | Agent runtimes | Memory | Context | Voice | Web | Computer use | Media | Security | Integrations | Developer tools | Infrastructure | Documents & files | Inbox & collaboration | Productivity | Scheduling | Finance & payments | Sales & marketing | Data & analytics | Agent orchestration | Research",
       );
       const sections = explore.locator(".plugin-catalog-section");
       expect((await sections.locator("h2").allTextContents()).slice(0, 2)).toEqual([
@@ -614,7 +614,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     }
   });
 
-  it("keeps every Uncategorized card visible at the mobile shelf limit", async () => {
+  it("hides Other and Uncategorized shelves on mobile while retaining search results", async () => {
     const context = await newContext({ height: 852, width: 393 });
     const page = await context.newPage();
     const uncategorized = Array.from({ length: 3 }, (_, index) => ({
@@ -629,16 +629,25 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     const featuredOverviewItems = discoveryResult.items
       .filter((plugin) => plugin.catalog.featured)
       .slice(0, 2);
-    await installMockGateway(page, {
+    const other = {
+      ...matrixDiscoveryPlugin,
+      id: "ch_b3RoZXI",
+      catalog: { ...matrixDiscoveryPlugin.catalog, name: "Other plugin", categories: ["other"] },
+    };
+    const gateway = await installMockGateway(page, {
       featureMethods: pluginMethods,
       methodResponses: {
         ...pluginMethodResponses(),
         "plugins.catalog.browse": {
           cases: [
             {
+              match: { query: "uncategorized" },
+              response: { items: uncategorized },
+            },
+            {
               match: { intent: "all", pageSize: 100 },
               response: {
-                items: [...featuredOverviewItems, ...uncategorized],
+                items: [...featuredOverviewItems, ...uncategorized, other],
                 categories: discoveryResult.categories,
               },
             },
@@ -651,8 +660,10 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}plugins`);
       const explore = page.getByRole("region", { name: "Explore plugins" });
       const featuredSection = explore.locator('[data-catalog-section="featured"]');
-      const unmatched = explore.locator('[data-catalog-section="uncategorized"]');
-      await unmatched.getByRole("link", { name: "Uncategorized 3" }).waitFor();
+      await featuredSection.waitFor();
+      expect(await explore.locator('[data-catalog-section="uncategorized"]').count()).toBe(0);
+      expect(await explore.locator('[data-catalog-section="other"]').count()).toBe(0);
+      expect(await explore.getByRole("button", { name: "Other", exact: true }).count()).toBe(0);
 
       const visibleCardCount = async (selector: string) =>
         page
@@ -663,11 +674,13 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       expect(await visibleCardCount('[data-catalog-section="featured"] .plugin-catalog-card')).toBe(
         2,
       );
-      expect(
-        await visibleCardCount('[data-catalog-section="uncategorized"] .plugin-catalog-card'),
-      ).toBe(3);
       expect(await featuredSection.getByRole("button", { name: "View all" }).count()).toBe(1);
-      expect(await unmatched.getByRole("button", { name: "View all" }).count()).toBe(0);
+
+      await explore.getByRole("searchbox", { name: "Search plugins" }).fill("uncategorized");
+      await gateway.waitForRequest("plugins.catalog.browse", { match: { query: "uncategorized" } });
+      await explore.getByRole("link", { name: "Uncategorized 3", exact: true }).waitFor();
+      expect(await visibleCardCount(".plugin-catalog-grid--results .plugin-catalog-card")).toBe(3);
+      expect(await explore.locator(".plugin-catalog-section").count()).toBe(0);
     } finally {
       await context.close();
     }

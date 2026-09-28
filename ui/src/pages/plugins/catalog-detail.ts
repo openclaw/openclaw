@@ -15,6 +15,7 @@ import { renderPluginDetailShell } from "./detail-shell.ts";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
   renderPluginCapabilitySection,
+  renderPluginDeclaredCapabilities,
   renderPluginMetadata,
   renderPluginPublisher,
   renderPluginAskAction,
@@ -74,6 +75,7 @@ function renderDetail(result: PluginDiscoveryDetailResult, props: PluginCatalogD
     icon: renderArtTile(plugin.id, plugin.catalog.name, {
       iconUrl: packageIcon,
       authorIconUrl: authorIcon,
+      whiteBackground: plugin.catalog.official && Boolean(packageIcon),
       loading: Boolean(
         (plugin.catalog.imageUrl && props.iconLoading?.(plugin.catalog.imageUrl)) ||
         (detail.author?.imageUrl && props.iconLoading?.(detail.author.imageUrl)),
@@ -97,6 +99,7 @@ function renderDetail(result: PluginDiscoveryDetailResult, props: PluginCatalogD
     identity: renderPluginPublisher(result),
     sidebar: renderPluginMetadata(result),
     panel: html`${renderPluginRowMessage(props.message, { busy: props.busy, onContinue: props.canInstall ? props.onContinueInstall : undefined })}
+    ${renderPluginDeclaredCapabilities(detail.contracts, detail.uiCapabilities)}
     ${props.skillsSection ?? renderPluginCapabilitySection(t("pluginsPage.detailTabs.skills"), detail.skills, icons.bookOpenText)}
     ${renderPluginCapabilitySection(
       t("pluginsPage.detailTools"),

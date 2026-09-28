@@ -3,7 +3,6 @@ import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import type {
   OpenClawPluginApi,
   OpenClawPluginNodeHostCommand,
-  OpenClawPluginNodeInvokePolicy,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { isSubagentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
@@ -201,16 +200,6 @@ export function createSessionShareNodeCommands(
         }
         return JSON.stringify({ threadId: session.sessionKey, ...page });
       },
-    },
-  ];
-}
-
-export function createSessionShareNodeInvokePolicies(): OpenClawPluginNodeInvokePolicy[] {
-  return [
-    {
-      commands: SESSION_SHARE_COMMANDS,
-      defaultPlatforms: ["macos", "linux", "windows"],
-      handle: (context) => context.invokeNode(),
     },
   ];
 }

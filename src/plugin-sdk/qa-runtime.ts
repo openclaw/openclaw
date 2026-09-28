@@ -59,21 +59,14 @@ export async function visitQaSqliteTranscriptEvents(
 
 /** Release only this QA root's parent stores before its files are removed. */
 export async function closeQaRuntimeStores(tempRoot: string): Promise<void> {
-  const [
-    auth,
-    { closeOpenClawAgentDatabasesAsync },
-    state,
-    { openClawStateDatabaseCache },
-    paths,
-    { closeIdleSqliteCoordinators },
-  ] = await Promise.all([
-    import("../agents/auth-profiles/sqlite.js"),
-    import("../state/openclaw-agent-db.js"),
-    import("../state/openclaw-state-db.js"),
-    import("../state/openclaw-state-db-cache.js"),
-    import("../state/openclaw-state-db.paths.js"),
-    import("../infra/sqlite-coordinator.js"),
-  ]);
+  const [auth, { closeOpenClawAgentDatabasesAsync }, state, { openClawStateDatabaseCache }, paths] =
+    await Promise.all([
+      import("../agents/auth-profiles/sqlite.js"),
+      import("../state/openclaw-agent-db.js"),
+      import("../state/openclaw-state-db.js"),
+      import("../state/openclaw-state-db-cache.js"),
+      import("../state/openclaw-state-db.paths.js"),
+    ]);
   // Agent close releases leases through shared state. Keep that owner alive
   // until every scoped handle closes, or exit-time release can recreate the root.
   auth.closeAuthProfileReadPool({ kind: "root", rootPath: tempRoot });
@@ -86,10 +79,12 @@ export async function closeQaRuntimeStores(tempRoot: string): Promise<void> {
   if (openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity(statePath)) {
     await state.closeOpenClawStateDatabaseByPathAsync(statePath);
   }
-  closeIdleSqliteCoordinators(tempRoot);
 }
 
-type QaRuntimeSurface = {
+type QaRuntimeSurface = Pick<
+  ReturnType<typeof loadQaRunnerRuntimeModule>,
+  "defaultQaRuntimeModelForMode" | "createQaLiveLaneGateway"
+> & {
   acquireQaCredentialLease: <TPayload>(options: {
     env?: NodeJS.ProcessEnv;
     kind: string;
@@ -104,20 +99,6 @@ type QaRuntimeSurface = {
     release(): Promise<void>;
     source: "convex" | "env";
   }>;
-  defaultQaRuntimeModelForMode: (
-    mode: string,
-    options?: {
-      alternate?: boolean;
-      preferredLiveModel?: string;
-    },
-  ) => string;
-  createQaLiveLaneGateway: () => {
-    start: (...args: unknown[]) => Promise<unknown>;
-    stop: () => Promise<{
-      process: "never-spawned" | "confirmed-stopped" | "unconfirmed";
-      errors: unknown[];
-    }>;
-  };
   startQaCredentialLeaseHeartbeat: (lease: {
     heartbeat(): Promise<void>;
     heartbeatIntervalMs: number;
@@ -250,15 +231,7 @@ function renderQaDockerCommandFailure(command: string, args: string[], error: un
 }
 
 function normalizeDockerServiceStatus(row?: { Health?: string; State?: string }) {
-  const health = row?.Health?.trim();
-  if (health) {
-    return health;
-  }
-  const state = row?.State?.trim();
-  if (state) {
-    return state;
-  }
-  return "unknown";
+  return row?.Health?.trim() || row?.State?.trim() || "unknown";
 }
 
 function firstDockerOutputLine(stdout: string) {

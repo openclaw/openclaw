@@ -3,6 +3,7 @@ import type { ConnectionOptions } from "node:tls";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { readFileHandleBounded } from "openclaw/plugin-sdk/file-access-runtime";
 import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
 import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
@@ -426,12 +427,9 @@ function createGoogleAuthFetch(): FetchLike {
         statusText: response.statusText,
       });
     } finally {
-      // The size guard can reject before the stream is touched, leaving an
-      // unread body. Start cancellation before release; awaiting it can
-      // deadlock when debug capture tees the stream.
-      if (!response.bodyUsed) {
-        void response.body?.cancel().catch(() => undefined);
-      }
+      // The reader releases its lock before cancellation. Capture tees can
+      // retain cancellation until dispatcher release, so do not await it.
+      void response.body?.cancel().catch(() => undefined);
       await release();
     }
   };
@@ -446,44 +444,16 @@ async function readGoogleAuthResponseBytes(response: Response): Promise<Uint8Arr
     }
   }
 
-  const reader = response.body?.getReader();
-  if (!reader) {
+  if (!response.body) {
     throw new Error(
       "Google auth response body stream unavailable; refusing to buffer unbounded response.",
     );
   }
 
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      if (!value) {
-        continue;
-      }
-      total += value.byteLength;
-      if (total > MAX_GOOGLE_AUTH_RESPONSE_BYTES) {
-        throw new Error(`Google auth response exceeds ${MAX_GOOGLE_AUTH_RESPONSE_BYTES} bytes.`);
-      }
-      chunks.push(value);
-    }
-  } finally {
-    // A capture tee can retain cancellation until the caller releases its request.
-    void reader.cancel().catch(() => undefined);
-    reader.releaseLock();
-  }
-
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
+  return await readResponseWithLimit(response, MAX_GOOGLE_AUTH_RESPONSE_BYTES, {
+    onOverflow: () =>
+      new Error(`Google auth response exceeds ${MAX_GOOGLE_AUTH_RESPONSE_BYTES} bytes.`),
+  });
 }
 
 export async function loadGoogleAuthRuntime(): Promise<GoogleAuthRuntime> {

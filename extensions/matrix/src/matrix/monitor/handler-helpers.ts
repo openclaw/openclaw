@@ -173,16 +173,7 @@ export function resolveMatrixInboundMediaContent(content: RoomMessageEventConten
 }
 
 export function isMatrixAudioMediaEnabled(cfg: CoreConfig): boolean {
-  const tools = cfg.tools as
-    | {
-        media?: {
-          audio?: {
-            enabled?: boolean;
-          };
-        };
-      }
-    | undefined;
-  return tools?.media?.audio?.enabled !== false;
+  return cfg.tools?.media?.audio?.enabled !== false;
 }
 
 export function shouldDeferMatrixAudioPreflightForRoomIngress(params: {

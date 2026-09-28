@@ -64,7 +64,7 @@ export async function sendTypingTelegram(
   }
   try {
     return await withTelegramApiContext(opts, async (context): Promise<{ ok: true }> => {
-      const { cfg, account, api } = context;
+      const { cfg, api } = context;
       const chatId = await resolveAndPersistChatId({
         cfg,
         api,
@@ -74,7 +74,6 @@ export async function sendTypingTelegram(
       });
       const requestWithDiag = createTelegramRequestWithDiag({
         cfg,
-        account,
         retry: opts.retry,
         verbose: opts.verbose,
         shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "action" }),

@@ -82,6 +82,22 @@ function setGatewayAuthNoneForTest() {
   });
 }
 
+function createUpgradeServer(maxPayload = 1024) {
+  const clients = new GatewayClientRegistry();
+  const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
+  const httpServer = createGatewayHttpServer({
+    clients,
+    controlUiEnabled: false,
+    controlUiBasePath: "/__control__",
+    openAiChatCompletionsEnabled: false,
+    openResponsesEnabled: false,
+    handleHooksRequest: async () => false,
+    resolvedAuth,
+  });
+  const wss = new WebSocketServer({ maxPayload, noServer: true });
+  return { clients, resolvedAuth, httpServer, wss };
+}
+
 async function requestUpgradeRejection(
   port: number,
   path = "/",
@@ -135,18 +151,7 @@ async function expectIdlePreauthSocketClose() {
 
 describe("gateway pre-auth hardening", () => {
   it("reserves the public worker path before plugin upgrade routing", async () => {
-    const clients = new GatewayClientRegistry();
-    const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
-    const httpServer = createGatewayHttpServer({
-      clients,
-      controlUiEnabled: false,
-      controlUiBasePath: "/__control__",
-      openAiChatCompletionsEnabled: false,
-      openResponsesEnabled: false,
-      handleHooksRequest: async () => false,
-      resolvedAuth,
-    });
-    const wss = new WebSocketServer({ maxPayload: 1024, noServer: true });
+    const { clients, resolvedAuth, httpServer, wss } = createUpgradeServer();
     const pluginUpgrade = vi.fn(async () => false);
     const accepted = new Promise<GatewayIngressWebSocket>((resolve) => {
       wss.once("connection", (socket) => resolve(socket as GatewayIngressWebSocket));
@@ -191,18 +196,7 @@ describe("gateway pre-auth hardening", () => {
   });
 
   it("rejects unattributable proxy traffic on the public worker path", async () => {
-    const clients = new GatewayClientRegistry();
-    const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
-    const httpServer = createGatewayHttpServer({
-      clients,
-      controlUiEnabled: false,
-      controlUiBasePath: "/__control__",
-      openAiChatCompletionsEnabled: false,
-      openResponsesEnabled: false,
-      handleHooksRequest: async () => false,
-      resolvedAuth,
-    });
-    const wss = new WebSocketServer({ maxPayload: 1024, noServer: true });
+    const { clients, resolvedAuth, httpServer, wss } = createUpgradeServer();
     const accepted = vi.fn();
     wss.on("connection", accepted);
     attachGatewayUpgradeHandler({
@@ -237,18 +231,7 @@ describe("gateway pre-auth hardening", () => {
   });
 
   it("admits the production worker client over the public path without a gateway challenge", async () => {
-    const clients = new GatewayClientRegistry();
-    const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
-    const httpServer = createGatewayHttpServer({
-      clients,
-      controlUiEnabled: false,
-      controlUiBasePath: "/__control__",
-      openAiChatCompletionsEnabled: false,
-      openResponsesEnabled: false,
-      handleHooksRequest: async () => false,
-      resolvedAuth,
-    });
-    const wss = new WebSocketServer({ maxPayload: 64 * 1024, noServer: true });
+    const { clients, resolvedAuth, httpServer, wss } = createUpgradeServer(64 * 1024);
     const preauthConnectionBudget = createPreauthConnectionBudget(1);
     const workerConnectionService: WorkerConnectionService = {
       admitWorker: vi.fn(async () => ({
@@ -365,18 +348,7 @@ describe("gateway pre-auth hardening", () => {
   });
 
   it("rejects the reserved worker path when worker admission is unavailable", async () => {
-    const clients = new GatewayClientRegistry();
-    const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
-    const httpServer = createGatewayHttpServer({
-      clients,
-      controlUiEnabled: false,
-      controlUiBasePath: "/__control__",
-      openAiChatCompletionsEnabled: false,
-      openResponsesEnabled: false,
-      handleHooksRequest: async () => false,
-      resolvedAuth,
-    });
-    const wss = new WebSocketServer({ maxPayload: 1024, noServer: true });
+    const { clients, resolvedAuth, httpServer, wss } = createUpgradeServer();
     wss.on("connection", (socket) => socket.close());
     attachGatewayUpgradeHandler({
       httpServer,
@@ -407,18 +379,7 @@ describe("gateway pre-auth hardening", () => {
   it.each(["draining", "prepared"] as const)(
     "rejects public worker websocket upgrades while suspension is %s",
     async (phase) => {
-      const clients = new GatewayClientRegistry();
-      const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
-      const httpServer = createGatewayHttpServer({
-        clients,
-        controlUiEnabled: false,
-        controlUiBasePath: "/__control__",
-        openAiChatCompletionsEnabled: false,
-        openResponsesEnabled: false,
-        handleHooksRequest: async () => false,
-        resolvedAuth,
-      });
-      const wss = new WebSocketServer({ maxPayload: 1024, noServer: true });
+      const { clients, resolvedAuth, httpServer, wss } = createUpgradeServer();
       attachGatewayUpgradeHandler({
         httpServer,
         wss,
@@ -453,18 +414,7 @@ describe("gateway pre-auth hardening", () => {
   );
 
   it("rejects upgrades before websocket handlers attach (pre-auth budget enforced, then released)", async () => {
-    const clients = new GatewayClientRegistry();
-    const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
-    const httpServer = createGatewayHttpServer({
-      clients,
-      controlUiEnabled: false,
-      controlUiBasePath: "/__control__",
-      openAiChatCompletionsEnabled: false,
-      openResponsesEnabled: false,
-      handleHooksRequest: async () => false,
-      resolvedAuth,
-    });
-    const wss = new WebSocketServer({ maxPayload: 1024, noServer: true });
+    const { clients, resolvedAuth, httpServer, wss } = createUpgradeServer();
     attachGatewayUpgradeHandler({
       httpServer,
       wss,
@@ -562,18 +512,7 @@ describe("gateway pre-auth hardening", () => {
   );
 
   it("opens only the startup generation core preauth transport during restart drain", async () => {
-    const clients = new GatewayClientRegistry();
-    const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
-    const httpServer = createGatewayHttpServer({
-      clients,
-      controlUiEnabled: false,
-      controlUiBasePath: "/__control__",
-      openAiChatCompletionsEnabled: false,
-      openResponsesEnabled: false,
-      handleHooksRequest: async () => false,
-      resolvedAuth,
-    });
-    const wss = new WebSocketServer({ maxPayload: 1024, noServer: true });
+    const { clients, resolvedAuth, httpServer, wss } = createUpgradeServer();
     wss.on("connection", (socket) => {
       socket.send(
         JSON.stringify({

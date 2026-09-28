@@ -40,7 +40,8 @@ const desktopPanelStyles = css`
     height: 18px;
     flex-shrink: 0;
   }
-  .desktop-audio-button:disabled {
+  .desktop-audio-button:disabled,
+  .desktop-audio-button[aria-disabled="true"] {
     opacity: 0.5;
   }
   .desktop-touch-toolbar .desktop-audio-label {

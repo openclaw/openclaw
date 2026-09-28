@@ -1,15 +1,7 @@
-import type {
-  SessionPermissionMode,
-  SessionsPatchParams,
-} from "../../../../packages/gateway-protocol/src/index.js";
-import type { FastMode, SessionsPatchResult } from "../../api/types.ts";
+import type { SessionsPatchParams } from "../../../../packages/gateway-protocol/src/index.js";
+import type { SessionsPatchResult } from "../../api/types.ts";
 
-export type SessionToolOverrides = {
-  mcpServers?: Record<string, boolean>;
-  mcpToolsDeny?: Record<string, string[]>;
-  skills?: Record<string, boolean>;
-  webSearch?: boolean;
-};
+export type { SessionToolOverrides } from "../../../../packages/gateway-protocol/src/index.js";
 
 export type SessionPatch = Pick<
   SessionsPatchParams,
@@ -19,26 +11,25 @@ export type SessionPatch = Pick<
   | "expectedSandboxMode"
   | "expectedPermissionMode"
   | "expectedLifecycleRevision"
-> & {
-  label?: string | null;
-  icon?: string | null;
-  color?: string | null;
-  category?: string | null;
-  boardFace?: "chat" | "dashboard";
-  boardPresentation?: "split" | "expanded" | null;
-  model?: string | null;
-  agentRuntime?: string | null;
-  contextWindow?: string | null;
-  thinkingLevel?: string | null;
-  fastMode?: FastMode | null;
-  verboseLevel?: string | null;
-  reasoningLevel?: string | null;
-  permissionMode?: SessionPermissionMode | null;
-  toolOverrides?: SessionToolOverrides | null;
-  archived?: boolean;
-  pinned?: boolean;
-  unread?: boolean;
-};
+  | "label"
+  | "icon"
+  | "color"
+  | "category"
+  | "boardFace"
+  | "boardPresentation"
+  | "model"
+  | "agentRuntime"
+  | "contextWindow"
+  | "thinkingLevel"
+  | "fastMode"
+  | "verboseLevel"
+  | "reasoningLevel"
+  | "permissionMode"
+  | "toolOverrides"
+  | "archived"
+  | "pinned"
+  | "unread"
+>;
 
 export type SessionPatchOptions = {
   agentId?: string;
@@ -50,6 +41,15 @@ export type SessionPatchOptions = {
   ownsModelOverride?: () => boolean;
   /** Capture the current connection now, but dispatch only after this tail settles. */
   waitFor?: Promise<unknown>;
+  /** Same-tail acknowledgements identify queued targets independently of dispatch readiness. */
+  predecessorReceipt?: {
+    read: () => SessionPatchResult | null;
+    subscribe: (onConfirmed: () => void) => () => void;
+  };
+  /** Publish the write receipt before list reconciliation can fail. */
+  onConfirmed?: (result: SessionPatchResult) => void;
+  /** Called for a rejected settings write while it still owns a pending field. */
+  onRejected?: (error: unknown) => void;
   /** Revalidate explicit user intent after the settings tail, before dispatch. */
   canDispatch?: () => boolean;
   /**

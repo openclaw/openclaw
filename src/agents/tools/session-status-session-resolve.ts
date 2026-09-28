@@ -1,4 +1,3 @@
-// Status-tool session resolution helpers keep storage lookup out of the tool body.
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveSessionEntryCandidateTarget, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -11,7 +10,6 @@ type ResolvedStatusSessionEntry = {
   persisted: boolean;
 };
 
-/** Resolves one status lookup against ordered tool-local session key candidates. */
 export function resolveSessionStatusEntry(params: {
   agentId: string;
   alias: string;
@@ -39,12 +37,8 @@ export function resolveSessionStatusEntry(params: {
   }
   if (includeAliasFallback && internal !== keyRaw) {
     candidates.push(internal);
-  }
-  if (includeAliasFallback && !keyRaw.startsWith("agent:")) {
-    const agentInternal = `agent:${params.agentId}:${internal}`;
-    const agentRaw = `agent:${params.agentId}:${keyRaw}`;
-    if (agentInternal !== agentRaw) {
-      candidates.push(agentInternal);
+    if (!keyRaw.startsWith("agent:")) {
+      candidates.push(`agent:${params.agentId}:${internal}`);
     }
   }
   if (includeAliasFallback && (keyRaw === "main" || keyRaw === "current")) {
@@ -84,13 +78,6 @@ export function resolveStoreScopedRequesterKey(params: {
   return parsed.rest === params.mainKey ? params.mainKey : params.requesterKey;
 }
 
-function synthesizeImplicitCurrentSessionEntry(): SessionEntry {
-  return {
-    sessionId: "",
-    updatedAt: Date.now(),
-  };
-}
-
 /** Returns a synthesized current-session entry without writing it to storage. */
 export function resolveImplicitCurrentSessionFallback(params: {
   agentId: string;
@@ -108,7 +95,7 @@ export function resolveImplicitCurrentSessionFallback(params: {
     cfg: params.cfg,
     fallback: {
       sessionKey: fallbackKey,
-      entry: synthesizeImplicitCurrentSessionEntry(),
+      entry: { sessionId: "", updatedAt: Date.now() },
     },
   });
   return resolved
@@ -135,16 +122,15 @@ export function listImplicitDefaultDirectFallbackKeys(params: {
   }
   const channel = parts[0];
   const peerParts = parts.slice(3);
-  if (!channel || peerParts.length === 0) {
+  if (!channel) {
     return [];
   }
-  const candidates = [
+  return uniqueStrings([
     `agent:${parsed.agentId}:${channel}:direct:${peerParts.join(":")}`,
     buildAgentMainSessionKey({
       agentId: parsed.agentId,
       mainKey: params.mainKey,
     }),
     params.mainKey,
-  ];
-  return uniqueStrings(candidates);
+  ]);
 }

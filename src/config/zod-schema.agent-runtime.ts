@@ -494,10 +494,8 @@ const ToolSearchSchema = z
       .object({
         /** Enable compact search/call cataloging for large tool sets. */
         enabled: z.boolean().optional(),
-        /** Exposed model surface. "code" exposes tool_search_code; "tools" exposes structured fallback tools; "directory" keeps a bounded directory plus selected schemas visible while deferring the rest behind search/describe/call. */
-        mode: z.enum(["code", "tools", "directory"]).optional(),
-        /** Timeout in milliseconds for one tool_search_code execution. Runtime clamps to 1s..60s. */
-        codeTimeoutMs: z.number().int().positive().optional(),
+        /** Exposed model surface. "tools" exposes structured search/describe/call tools; "directory" keeps a bounded directory plus selected schemas visible while deferring the rest behind search/describe/call. */
+        mode: z.enum(["tools", "directory"]).optional(),
         /** Default search result count when the model omits a limit. Runtime clamps to maxSearchLimit. */
         searchDefaultLimit: z.number().int().positive().optional(),
         /** Maximum search result count. Runtime clamps to 1..50. */
@@ -620,6 +618,18 @@ const CommonToolPolicyFields = {
   toolsBySender: ToolPolicyBySenderSchema,
 };
 
+const NestedToolPolicySchema = z.object({ tools: ToolPolicySchema }).strict().optional();
+
+const ElevatedToolsSchema = z
+  .object({
+    /** Enable or disable elevated mode (default: true). */
+    enabled: z.boolean().optional(),
+    /** Approved senders for /elevated (per-provider allowlists). */
+    allowFrom: ElevatedAllowFromSchema,
+  })
+  .strict()
+  .optional();
+
 const MessageToolConfigSchema = z
   .object({
     crossContext: z
@@ -687,15 +697,7 @@ const AgentToolsSchema = z
     /** Per-agent swarm override; merges over the top-level tools.swarm config. */
     swarm: SwarmSchema,
     /** Per-agent elevated exec gate (can only further restrict global tools.elevated). */
-    elevated: z
-      .object({
-        /** Enable or disable elevated mode for this agent (default: true). */
-        enabled: z.boolean().optional(),
-        /** Approved senders for /elevated (per-provider allowlists). */
-        allowFrom: ElevatedAllowFromSchema,
-      })
-      .strict()
-      .optional(),
+    elevated: ElevatedToolsSchema,
     /** Exec tool defaults for this agent. */
     exec: ToolExecSchema,
     /** Complete per-agent GitHub CLI identity and Git author override. */
@@ -706,12 +708,7 @@ const AgentToolsSchema = z
     loopDetection: ToolLoopDetectionSchema,
     /** Message tool configuration for this agent. */
     message: MessageToolConfigSchema,
-    sandbox: z
-      .object({
-        tools: ToolPolicySchema,
-      })
-      .strict()
-      .optional(),
+    sandbox: NestedToolPolicySchema,
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -790,14 +787,7 @@ export const ToolsSchema = z
       .strict()
       .optional(),
     /** Elevated exec permissions for the host machine. */
-    elevated: z
-      .object({
-        /** Enable or disable elevated mode (default: true). */
-        enabled: z.boolean().optional(),
-        allowFrom: ElevatedAllowFromSchema,
-      })
-      .strict()
-      .optional(),
+    elevated: ElevatedToolsSchema,
     /** Exec tool defaults. */
     exec: ToolExecSchema,
     fs: ToolFsSchema,
@@ -816,13 +806,9 @@ export const ToolsSchema = z
       })
       .strict()
       .optional(),
+    subagents: NestedToolPolicySchema,
     /** Sandbox tool policy defaults (deny wins). */
-    sandbox: z
-      .object({
-        tools: ToolPolicySchema,
-      })
-      .strict()
-      .optional(),
+    sandbox: NestedToolPolicySchema,
     /** sessions_spawn tool configuration. */
     sessions_spawn: z
       .object({

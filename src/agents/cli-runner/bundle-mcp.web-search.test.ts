@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import type { SessionToolOverrides } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CliBundleMcpMode } from "../../plugins/types.js";
@@ -65,8 +65,9 @@ async function nativeSearchDisabled(
   return settings.tools?.exclude?.includes("google_web_search") === true;
 }
 
-describe.each(modes)("CLI provider selection: %s", (mode) => {
-  it("disables native search for a pinned provider while preserving the managed MCP server", async () => {
+it.each(modes)(
+  "%s disables pinned native search while preserving the managed MCP server",
+  async (mode) => {
     const prepared = await prepare(mode, { provider: "parallel-free" });
     expect(await nativeSearchDisabled(mode, prepared)).toBe(true);
     expect(await nativeSearchDisabled(mode, prepared, true)).toBe(true);
@@ -85,38 +86,50 @@ describe.each(modes)("CLI provider selection: %s", (mode) => {
       expect(settings.mcpServers.openclaw).toBeDefined();
       expect(JSON.stringify(settings.mcpServers)).not.toContain("web_search");
     }
-  });
+  },
+);
 
-  it("invalidates a native search session when its search provider is pinned", async () => {
-    const automatic = await prepare(mode);
-    const pinned = await prepare(mode, { provider: "brave" });
-    expect(await nativeSearchDisabled(mode, automatic)).toBe(false);
-    expect(automatic.mcpResumeHash).not.toBe(pinned.mcpResumeHash);
-    expect(
-      resolveCliSessionReuse({
-        binding: {
-          sessionId: "native-session",
-          mcpResumeHash: automatic.mcpResumeHash,
-          authEpochVersion: 1,
-        },
+it("invalidates a native search session when its search provider is pinned", async () => {
+  const mode = "claude-config-file";
+  const automatic = await prepare(mode);
+  const pinned = await prepare(mode, { provider: "brave" });
+  expect(await nativeSearchDisabled(mode, automatic)).toBe(false);
+  expect(automatic.mcpResumeHash).not.toBe(pinned.mcpResumeHash);
+  expect(
+    resolveCliSessionReuse({
+      binding: {
+        sessionId: "native-session",
+        mcpResumeHash: automatic.mcpResumeHash,
         authEpochVersion: 1,
-        mcpResumeHash: pinned.mcpResumeHash,
-      }),
-    ).toMatchObject({ mode: "invalidate", invalidatedReason: "mcp" });
-  });
+      },
+      authEpochVersion: 1,
+      mcpResumeHash: pinned.mcpResumeHash,
+    }),
+  ).toMatchObject({ mode: "invalidate", invalidatedReason: "mcp" });
+});
 
-  it.each([
-    {
-      name: "global disable overrides stale session enable",
-      search: { enabled: false },
-      overrides: { webSearch: true },
-    },
-    { name: "session disable", search: undefined, overrides: { webSearch: false } },
-    { name: "explicit provider", search: { provider: "brave" }, overrides: undefined },
-  ])("enforces $name without bundle MCP", async ({ search, overrides }) => {
-    const prepared = await prepare(mode, search, overrides, false);
-    expect(await nativeSearchDisabled(mode, prepared)).toBe(true);
-  });
+it.each([
+  {
+    name: "global disable overrides stale session enable",
+    mode: "claude-config-file",
+    search: { enabled: false },
+    overrides: { webSearch: true },
+  },
+  {
+    name: "session disable",
+    mode: "gemini-system-settings",
+    search: undefined,
+    overrides: { webSearch: false },
+  },
+  {
+    name: "explicit provider",
+    mode: "codex-config-overrides",
+    search: { provider: "brave" },
+    overrides: undefined,
+  },
+] as const)("enforces $name without bundle MCP", async ({ mode, search, overrides }) => {
+  const prepared = await prepare(mode, search, overrides, false);
+  expect(await nativeSearchDisabled(mode, prepared)).toBe(true);
 });
 
 it.each([false, true])(

@@ -22,6 +22,7 @@ import {
 } from "../infra/agent-run-registry.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "./agent-runtime-approval-authority.js";
 import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
@@ -147,6 +148,8 @@ describe("MCP automation creator capture", () => {
         vi.spyOn(pluginTools, "resolveOpenClawPluginToolsForOptions").mockReturnValue([tool]);
       }
       const cron = new CronService({
+        scheduler: createTestGatewayScheduler(),
+        nowMs: () => Date.now(),
         storePath,
         cronEnabled: false,
         defaultAgentId: "main",

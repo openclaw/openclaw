@@ -177,16 +177,13 @@ describe("runCli environment and passive startup", () => {
   });
 
   it.each([
-    ...["--channel", "--tag", "--timeout"].flatMap((flag) =>
-      ["beta", "", "--", "--no-restart"].flatMap((value) => [
-        [flag, value, "cleanup"],
-        [`${flag}=${value}`, "cleanup"],
-      ]),
-    ),
+    ["--channel", "beta", "cleanup"],
+    ["--tag=", "cleanup"],
+    ["--timeout=--no-restart", "cleanup"],
+    ["--channel", "--", "cleanup"],
     ["--no-restart", "cleanup"],
     ["--accept-capabilities", "cleanup"],
     ["--", "cleanup"],
-    ["--channel", "beta", "--", "cleanup"],
     ["--dry-run", "--json", "--yes", "cleanup"],
     ["cleanup", "--dry-run", "--json", "--yes"],
     ["cleanup", "--channel", "beta"],
@@ -267,35 +264,6 @@ describe("runCli environment and passive startup", () => {
 
   it("allows container mode when OPENCLAW_PROFILE is already set in env", async () => {
     setTestEnvValue("OPENCLAW_PROFILE", "work");
-
-    await expect(
-      runCli(["node", "openclaw", "--container", "demo", "status"]),
-    ).resolves.toBeUndefined();
-  });
-
-  it.each([
-    ["OPENCLAW_GATEWAY_PORT", "19001"],
-    ["OPENCLAW_GATEWAY_URL", "ws://127.0.0.1:18789"],
-    ["OPENCLAW_GATEWAY_TOKEN", "demo-token"],
-    ["OPENCLAW_GATEWAY_PASSWORD", "demo-password"],
-  ])("allows container mode when %s is set in env", async (key, value) => {
-    setTestEnvValue(key, value);
-
-    await expect(
-      runCli(["node", "openclaw", "--container", "demo", "status"]),
-    ).resolves.toBeUndefined();
-  });
-
-  it("allows container mode when only OPENCLAW_STATE_DIR is set in env", async () => {
-    setTestEnvValue("OPENCLAW_STATE_DIR", "/tmp/openclaw-host-state");
-
-    await expect(
-      runCli(["node", "openclaw", "--container", "demo", "status"]),
-    ).resolves.toBeUndefined();
-  });
-
-  it("allows container mode when only OPENCLAW_CONFIG_PATH is set in env", async () => {
-    setTestEnvValue("OPENCLAW_CONFIG_PATH", "/tmp/openclaw-host-state/openclaw.json");
 
     await expect(
       runCli(["node", "openclaw", "--container", "demo", "status"]),

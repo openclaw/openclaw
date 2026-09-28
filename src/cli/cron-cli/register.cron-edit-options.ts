@@ -4,9 +4,9 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { isSystemMonitorDeclaration } from "../../cron/system-owned-declaration.js";
 import type { CronJob } from "../../cron/types.js";
-import { isSystemOwnedCronPayloadKind } from "../../cron/types.js";
 import { CronCliError } from "./cron-cli-error.js";
 import {
+  assertCronTimeoutSupported,
   parseCronCommandArgv,
   parseCronCommandEnv,
   parseCronIntegerOption,
@@ -127,25 +127,17 @@ export async function resolveCronEditPayloadDeliveryPatch(
   const hasScriptSpecificPayloadField =
     Boolean(scriptPath) || scriptTimeoutSeconds !== undefined || scriptToolBudget !== undefined;
   if (hasTimeoutSeconds && hasScriptSpecificPayloadField) {
-    throw new CronCliError("Use --script-timeout-seconds for script jobs, not --timeout-seconds.");
+    assertCronTimeoutSupported("script");
   }
   if (hasTimeoutSeconds && hasSystemEventPatch) {
-    throw new CronCliError("--timeout-seconds is not supported for systemEvent jobs.");
+    assertCronTimeoutSupported("systemEvent");
   }
   let timeoutOnlyPayloadKind: "agentTurn" | "command" | undefined;
   if (hasTimeoutSeconds && !hasCommandSpecificPayloadField && !hasAgentTurnSpecificPayloadField) {
     const existingJob = await loadExistingJob();
     const existingKind = existingJob.payload.kind;
-    if (existingKind === "script") {
-      throw new CronCliError(
-        "Use --script-timeout-seconds for script jobs, not --timeout-seconds.",
-      );
-    }
-    if (
-      existingKind === "systemEvent" ||
-      isSystemOwnedCronPayloadKind(existingKind) ||
-      isSystemMonitorDeclaration(existingJob.declarationKey)
-    ) {
+    assertCronTimeoutSupported(existingKind);
+    if (isSystemMonitorDeclaration(existingJob.declarationKey)) {
       throw new CronCliError(`--timeout-seconds is not supported for ${existingKind} jobs.`);
     }
     timeoutOnlyPayloadKind = existingKind;

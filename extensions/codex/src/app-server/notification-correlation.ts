@@ -1,11 +1,6 @@
-/**
- * Correlates Codex app-server notifications with the active thread/turn so
- * projectors can ignore global or stale events without losing diagnostics.
- */
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 
-/** Returns true when a notification payload belongs to the exact active thread and turn. */
 export function isCodexNotificationForTurn(
   value: JsonValue | undefined,
   threadId: string,
@@ -34,12 +29,9 @@ export function readCodexNotificationThreadId(record: JsonObject): string | unde
   );
 }
 
-/** Reads a turn id from either top-level notification params or nested turn payloads. */
 export function readCodexNotificationTurnId(record: JsonObject): string | undefined {
-  return readNestedTurnId(record) ?? normalizeOptionalString(record.turnId);
-}
-
-function readNestedTurnId(record: JsonObject): string | undefined {
-  const turn = record.turn;
-  return isJsonObject(turn) ? normalizeOptionalString(turn.id) : undefined;
+  return (
+    (isJsonObject(record.turn) ? normalizeOptionalString(record.turn.id) : undefined) ??
+    normalizeOptionalString(record.turnId)
+  );
 }

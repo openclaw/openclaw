@@ -80,6 +80,32 @@ export function prepareTsgoCommand(
   };
 }
 
+/** The caller holds artifact ownership until this compiler and its output are joined. */
+export async function runPreparedTsgoCommand(
+  command: NonNullable<ReturnType<typeof prepareTsgoCommand>>,
+): Promise<number> {
+  try {
+    const tsBuildInfoFile = readFlagValue(command.args, "--tsBuildInfoFile");
+    if (tsBuildInfoFile) {
+      fs.mkdirSync(path.dirname(path.resolve(command.cwd, tsBuildInfoFile)), { recursive: true });
+    }
+    // Managed cleanup forwards SIGTERM before bounded SIGKILL escalation, then
+    // joins the compiler group and output before reporting a timeout.
+    return await runManagedCommand({
+      ...command,
+      requireProcessTreeExit: process.platform !== "win32",
+    });
+  } catch (error) {
+    if ((error as { code?: string } | undefined)?.code !== "ETIMEDOUT") {
+      throw error;
+    }
+    console.error(
+      `[tsgo] no completion after ${command.timeoutMs}ms; killed the tsgo process tree. Raise OPENCLAW_TSGO_TIMEOUT_MS for intentionally longer builds, or unset it to disable the watchdog.`,
+    );
+    return 1;
+  }
+}
+
 async function main(): Promise<void> {
   let command: ReturnType<typeof prepareTsgoCommand>;
   try {
@@ -92,31 +118,11 @@ async function main(): Promise<void> {
   if (!command) {
     return;
   }
-  try {
-    // Preflight must refuse or skip before installed bootstrap dependencies load.
-    // Output mutation and the compiler still remain inside their checkout owner.
-    const { withDistArtifactOwnership } = await import("./lib/dist-artifact-ownership.mts");
-    await withDistArtifactOwnership(command.cwd, async () => {
-      const tsBuildInfoFile = readFlagValue(command.args, "--tsBuildInfoFile");
-      if (tsBuildInfoFile) {
-        fs.mkdirSync(path.dirname(path.resolve(command.cwd, tsBuildInfoFile)), { recursive: true });
-      }
-      // Managed cleanup forwards SIGTERM before bounded SIGKILL escalation, then
-      // joins the compiler group and output before reporting a timeout.
-      process.exitCode = await runManagedCommand({
-        ...command,
-        requireProcessTreeExit: process.platform !== "win32",
-      });
-    });
-  } catch (error) {
-    if ((error as { code?: string } | undefined)?.code !== "ETIMEDOUT") {
-      throw error;
-    }
-    console.error(
-      `[tsgo] no completion after ${command.timeoutMs}ms; killed the tsgo process tree. Raise OPENCLAW_TSGO_TIMEOUT_MS for intentionally longer builds, or unset it to disable the watchdog.`,
-    );
-    process.exitCode = 1;
-  }
+  // Preflight must refuse or skip before installed bootstrap dependencies load.
+  const { withDistArtifactOwnership } = await import("./lib/dist-artifact-ownership.mts");
+  process.exitCode = await withDistArtifactOwnership(command.cwd, () =>
+    runPreparedTsgoCommand(command),
+  );
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {

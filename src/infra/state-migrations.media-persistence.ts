@@ -453,7 +453,7 @@ export async function migrateLegacyMediaPersistence(
       params.onPreparedTargets?.([]);
       return advisory;
     }
-    await withAgentDatabaseMaintenanceLease({ env }, async (maintenance) => {
+    await withAgentDatabaseMaintenanceLease({ env, processBound: true }, async (maintenance) => {
       const discovery = resolveAgentDatabaseMigrationTargets({
         changes,
         configuredAgentDatabaseTargets: params.configuredAgentDatabaseTargets ?? [],

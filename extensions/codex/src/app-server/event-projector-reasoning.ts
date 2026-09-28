@@ -7,7 +7,7 @@ import {
   splitPlanText,
 } from "./event-projector-values.js";
 import type { CodexNativePlan } from "./plan-compaction-state.js";
-import type { CodexThreadItem, JsonObject } from "./protocol.js";
+import { isJsonObject, type CodexThreadItem, type JsonObject } from "./protocol.js";
 
 type ReasoningDeltaMethod = "item/reasoning/summaryTextDelta" | "item/reasoning/textDelta";
 
@@ -78,15 +78,14 @@ export class CodexReasoningProjection {
     const explanation = readNullableString(params, "explanation");
     const plan = Array.isArray(params.plan)
       ? params.plan.flatMap((entry) => {
-          if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+          if (!isJsonObject(entry)) {
             return [];
           }
-          const record = entry as JsonObject;
-          const step = readString(record, "step");
+          const step = readString(entry, "step");
           if (!step) {
             return [];
           }
-          return [{ step, status: normalizePlanStepStatus(readString(record, "status")) }];
+          return [{ step, status: normalizePlanStepStatus(readString(entry, "status")) }];
         })
       : undefined;
     const planText = [

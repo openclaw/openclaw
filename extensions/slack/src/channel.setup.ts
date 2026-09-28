@@ -1,6 +1,6 @@
+import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { isSlackSetupAccountConfigured } from "./account-configured.js";
 import type { ResolvedSlackAccount } from "./accounts.js";
-import type { ChannelPlugin } from "./channel-api.js";
 import { slackBaseConfigAdapter } from "./config-adapter.js";
 import { SlackChannelConfigSchema } from "./config-schema.js";
 import { slackSetupContract, createSlackSetupWizardProxy } from "./setup-core.js";

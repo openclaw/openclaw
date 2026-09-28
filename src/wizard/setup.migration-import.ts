@@ -67,6 +67,33 @@ const loadMigrationContextModule = createLazyRuntimeModule(
 
 const loadConfigPathsModule = createLazyRuntimeModule(() => import("../config/paths.js"));
 
+async function detectSetupMigrationSource(
+  provider: MigrationProviderPlugin,
+  ctx: MigrationProviderContext,
+): Promise<SetupMigrationDetection | undefined> {
+  if (!provider.detect) {
+    return undefined;
+  }
+  try {
+    const detection = await provider.detect(ctx);
+    if (detection.found) {
+      return {
+        providerId: provider.id,
+        label: detection.label ?? provider.label,
+        ...(detection.source ? { source: detection.source } : {}),
+        ...(detection.message ? { message: detection.message } : {}),
+      };
+    }
+  } catch (error) {
+    // Detection is advisory; one failing provider must not prevent onboarding
+    // from offering other migration sources.
+    ctx.logger.debug?.(
+      `Migration provider ${provider.id} detection failed: ${formatErrorMessage(error)}`,
+    );
+  }
+  return undefined;
+}
+
 export async function detectSetupMigrationSources(params: {
   config: OpenClawConfig;
   runtime: RuntimeEnv;
@@ -94,29 +121,13 @@ export async function detectSetupMigrationSources(params: {
       const logger = createMigrationLogger(params.runtime);
       const detections: SetupMigrationDetection[] = [];
       for (const provider of providers) {
-        if (!provider.detect) {
-          continue;
-        }
-        try {
-          const detection = await provider.detect({
-            config: params.config,
-            stateDir,
-            logger,
-          });
-          if (detection.found) {
-            detections.push({
-              providerId: provider.id,
-              label: detection.label ?? provider.label,
-              ...(detection.source ? { source: detection.source } : {}),
-              ...(detection.message ? { message: detection.message } : {}),
-            });
-          }
-        } catch (error) {
-          // Detection is advisory; one failing provider must not prevent onboarding
-          // from offering other migration sources.
-          logger.debug?.(
-            `Migration provider ${provider.id} detection failed: ${formatErrorMessage(error)}`,
-          );
+        const detection = await detectSetupMigrationSource(provider, {
+          config: params.config,
+          stateDir,
+          logger,
+        });
+        if (detection) {
+          detections.push(detection);
         }
       }
       return { detections, providerDescriptors: providers.map(describeSetupMigrationProvider) };
@@ -441,28 +452,14 @@ export async function runSetupMigrationImport(params: {
         });
         const migrationLogger = createMigrationLogger(params.runtime);
         const selectedDetections = [...params.detections];
-        if (
-          resolvedProvider.provider.detect &&
-          !selectedDetections.some((detection) => detection.providerId === providerId)
-        ) {
-          try {
-            const detection = await resolvedProvider.provider.detect({
-              config: resolvedProvider.baseConfig,
-              stateDir,
-              logger: migrationLogger,
-            });
-            if (detection.found) {
-              selectedDetections.push({
-                providerId,
-                label: detection.label ?? resolvedProvider.provider.label,
-                ...(detection.source ? { source: detection.source } : {}),
-                ...(detection.message ? { message: detection.message } : {}),
-              });
-            }
-          } catch (error) {
-            migrationLogger.debug?.(
-              `Migration provider ${providerId} detection failed: ${formatErrorMessage(error)}`,
-            );
+        if (!selectedDetections.some((detection) => detection.providerId === providerId)) {
+          const detection = await detectSetupMigrationSource(resolvedProvider.provider, {
+            config: resolvedProvider.baseConfig,
+            stateDir,
+            logger: migrationLogger,
+          });
+          if (detection) {
+            selectedDetections.push(detection);
           }
         }
         const sourceDefault = resolveImportSourceDefault({

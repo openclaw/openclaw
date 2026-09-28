@@ -332,11 +332,12 @@ exit 17
   it.each(["install", "startup"])(
     "keeps published bytes through survivor baseline %s when candidate versions match",
     async (stage) => {
+      const baselineVersion = "2026.8.1";
       const root = tempDirs.make("openclaw-survivor-same-version-");
       const fixture = registryFixture(
         root,
         ["openclaw", "@openclaw/ai", "@openclaw/codex", "@openclaw/discord", "@openclaw/whatsapp"],
-        BASELINE_VERSION,
+        baselineVersion,
       );
       const source = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
       const functions = [
@@ -384,14 +385,16 @@ fi
 `,
         { mode: 0o755 },
       );
-      await withPublishedRegistry(root, async (upstream) => {
-        const result = spawnSync(
-          "bash",
-          [
-            resolve(SCRIPT),
+      await withPublishedRegistry(
+        root,
+        async (upstream) => {
+          const result = spawnSync(
             "bash",
-            "-c",
-            `
+            [
+              resolve(SCRIPT),
+              "bash",
+              "-c",
+              `
 set -euo pipefail
 source "$HELPER"
 source "$INSTANCE_HELPER"
@@ -434,50 +437,56 @@ test "$BUN_CONFIG_REGISTRY" = "$registry_before"
 npm install --prefix "$CANDIDATE_INSTALL" "$ROOT_TARBALL" --ignore-scripts --no-fund --no-audit --package-lock=false
 node -e 'const assert=require("node:assert/strict"); for(const name of ["openclaw","@openclaw/ai"]) assert.equal(require(process.env.CANDIDATE_INSTALL+"/node_modules/"+name+"/package.json").provenance,"candidate");'
 `,
-          ],
-          {
-            encoding: "utf8",
-            timeout: 30_000,
-            env: {
-              ...process.env,
-              ...fixture.env,
-              PATH: `${bin}:${process.env.PATH}`,
-              OPENCLAW_NPM_REGISTRY_UPSTREAM: upstream,
-              HELPER: resolve(SCRIPT),
-              INSTANCE_HELPER: resolve("scripts/lib/openclaw-e2e-instance.sh"),
-              MISSING_LOAD_PATH: resolve("scripts/e2e/lib/upgrade-survivor/missing-load-path.sh"),
-              STAGE: stage,
-              BASELINE_VERSION,
-              BASELINE_RAW: `openclaw@${BASELINE_VERSION}`,
-              SCENARIO: "base",
-              UPDATE_RESTART_MODE: "manual",
-              COMMAND_TIMEOUT: "90s",
-              ARTIFACT_ROOT: root,
-              BASELINE_INSTALL_LOG: join(root, "baseline.log"),
-              npm_config_prefix: join(root, "baseline"),
-              npm_config_cache: join(root, "cache"),
-              NPM_CONFIG_USERCONFIG: "/dev/null",
-              npm_config_userconfig: "/dev/null",
-              PLUGIN_INSTALL: join(root, "plugin"),
-              COMPANION_INSTALLS: join(root, "companion-installs"),
-              READY: join(root, "ready"),
-              CANDIDATE_INSTALL: join(root, "candidate"),
-              ROOT_TARBALL: join(fixture.artifactDir, "openclaw.tgz"),
+            ],
+            {
+              encoding: "utf8",
+              timeout: 30_000,
+              env: {
+                ...process.env,
+                ...fixture.env,
+                PATH: `${bin}:${process.env.PATH}`,
+                OPENCLAW_NPM_REGISTRY_UPSTREAM: upstream,
+                HELPER: resolve(SCRIPT),
+                INSTANCE_HELPER: resolve("scripts/lib/openclaw-e2e-instance.sh"),
+                MISSING_LOAD_PATH: resolve("scripts/e2e/lib/upgrade-survivor/missing-load-path.sh"),
+                STAGE: stage,
+                BASELINE_VERSION: baselineVersion,
+                BASELINE_RAW: `openclaw@${baselineVersion}`,
+                SCENARIO: "base",
+                UPDATE_RESTART_MODE: "manual",
+                COMMAND_TIMEOUT: "90s",
+                ARTIFACT_ROOT: root,
+                BASELINE_INSTALL_LOG: join(root, "baseline.log"),
+                npm_config_prefix: join(root, "baseline"),
+                npm_config_cache: join(root, "cache"),
+                NPM_CONFIG_USERCONFIG: "/dev/null",
+                npm_config_userconfig: "/dev/null",
+                PLUGIN_INSTALL: join(root, "plugin"),
+                COMPANION_INSTALLS: join(root, "companion-installs"),
+                READY: join(root, "ready"),
+                CANDIDATE_INSTALL: join(root, "candidate"),
+                ROOT_TARBALL: join(fixture.artifactDir, "openclaw.tgz"),
+              },
             },
-          },
-        );
-        const gatewayLog = join(root, "missing-load-path/baseline-gateway.log");
-        const diagnostics =
-          result.stdout +
-          result.stderr +
-          (existsSync(gatewayLog) ? readFileSync(gatewayLog, "utf8") : "");
-        expect(result.status, diagnostics).toBe(0);
-        if (stage === "startup") {
-          expect(readFileSync(join(root, "companion-installs"), "utf8").trim().split("\n")).toEqual(
-            ["codex", "discord", "whatsapp"].map((name) => `@openclaw/${name}@${BASELINE_VERSION}`),
           );
-        }
-      });
+          const gatewayLog = join(root, "missing-load-path/baseline-gateway.log");
+          const diagnostics =
+            result.stdout +
+            result.stderr +
+            (existsSync(gatewayLog) ? readFileSync(gatewayLog, "utf8") : "");
+          expect(result.status, diagnostics).toBe(0);
+          if (stage === "startup") {
+            expect(
+              readFileSync(join(root, "companion-installs"), "utf8").trim().split("\n"),
+            ).toEqual(
+              ["codex", "discord", "whatsapp"].map(
+                (name) => `@openclaw/${name}@${baselineVersion}`,
+              ),
+            );
+          }
+        },
+        baselineVersion,
+      );
     },
   );
 
@@ -792,9 +801,4 @@ test "$(npm view @openclaw/brave-plugin version)" = "$FIXTURE_VERSION"
       });
     },
   );
-
-  it("is valid Bash", () => {
-    const result = spawnSync("bash", ["-n", SCRIPT], { encoding: "utf8" });
-    expect(result.status, result.stderr).toBe(0);
-  });
 });

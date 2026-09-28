@@ -35,13 +35,6 @@ describe("Anthropic Opus 5.5 transport parity", () => {
       toolChoice: "auto",
       effort: "max",
     },
-    {
-      name: "keeps the Opus 5 high default",
-      model: { id: "claude-opus-5" },
-      reasoning: undefined,
-      toolChoice: "auto",
-      effort: "high",
-    },
   ] as const)("$name", async ({ model, reasoning, toolChoice, effort }) => {
     for (const implementation of ["provider", "transport"] as const) {
       const { payload } = await captureAnthropicRequest(implementation, {

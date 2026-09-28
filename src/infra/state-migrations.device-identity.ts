@@ -5,19 +5,16 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { acquireDeviceIdentityCoordinator } from "./device-identity-coordinator.js";
 import {
   normalizeLegacyDeviceIdentity,
   type NormalizedLegacyDeviceIdentity,
 } from "./device-identity-legacy.js";
 import {
   readStoredDeviceIdentityReadOnly,
-  resolveDeviceIdentityStore,
   validateStoredDeviceIdentity,
   type DeviceIdentity,
 } from "./device-identity-store.js";
 import { deriveEd25519PrivateKeyRaw, deriveEd25519PublicKeyRaw } from "./ed25519-signature.js";
-import { formatErrorMessage } from "./errors.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -38,6 +35,7 @@ import {
   type LegacyMigrationReceipt,
 } from "./state-migrations.receipts.js";
 import {
+  LegacyMigrationSourceClaim,
   legacyMigrationSourceSnapshotsMatch as snapshotsMatch,
   readLegacyMigrationSourceSnapshot,
   resolveLegacyMigrationRelativePath,
@@ -272,29 +270,6 @@ async function removePath(params: {
   await params.stateRoot.remove(relativeLegacyPath(params.stateDir, params.sourcePath));
 }
 
-async function restoreClaim(params: {
-  stateRoot: Root;
-  stateDir: string;
-  sourcePath: string;
-  claimPath: string;
-}): Promise<string | null> {
-  try {
-    if (!(await params.stateRoot.exists(relativeLegacyPath(params.stateDir, params.claimPath)))) {
-      return null;
-    }
-    if (await params.stateRoot.exists(relativeLegacyPath(params.stateDir, params.sourcePath))) {
-      return `source path already exists: ${params.sourcePath}`;
-    }
-    await params.stateRoot.move(
-      relativeLegacyPath(params.stateDir, params.claimPath),
-      relativeLegacyPath(params.stateDir, params.sourcePath),
-    );
-    return null;
-  } catch (error) {
-    return String(error);
-  }
-}
-
 async function cleanupReceiptSources(params: {
   stateRoot: Root;
   stateDir: string;
@@ -405,12 +380,24 @@ async function migrateWithExclusiveStateOwnership(params: {
     };
   }
 
-  const hasSource = await params.stateRoot.exists(
-    relativeLegacyPath(params.stateDir, params.detected.sourcePath),
-  );
-  const hasClaim = await params.stateRoot.exists(
-    relativeLegacyPath(params.stateDir, params.detected.claimPath),
-  );
+  const source = new LegacyMigrationSourceClaim<LegacySourceSnapshot>({
+    stateRoot: params.stateRoot,
+    stateDir: params.stateDir,
+    sourcePath: params.detected.sourcePath,
+    label: "device identity",
+    includeFilePath: false,
+    readSnapshot: (candidate) =>
+      readLegacySourceSnapshot({
+        stateRoot: params.stateRoot,
+        stateDir: params.stateDir,
+        sourcePath: candidate,
+      }),
+  });
+
+  await source.recoverLinkedMove();
+
+  const hasSource = await source.exists();
+  const hasClaim = await source.exists(true);
   if (hasSource && hasClaim) {
     return {
       changes: [],
@@ -430,11 +417,7 @@ async function migrateWithExclusiveStateOwnership(params: {
 
   let snapshot: LegacySourceSnapshot;
   try {
-    snapshot = await readLegacySourceSnapshot({
-      stateRoot: params.stateRoot,
-      stateDir: params.stateDir,
-      sourcePath: activePath,
-    });
+    snapshot = await source.read(activePath === params.detected.claimPath);
   } catch (error) {
     return {
       changes: [],
@@ -442,42 +425,22 @@ async function migrateWithExclusiveStateOwnership(params: {
     };
   }
 
-  if (activePath === params.detected.sourcePath) {
-    try {
-      params.beforeClaim?.(params.detected.sourcePath);
-      await params.stateRoot.move(
-        relativeLegacyPath(params.stateDir, params.detected.sourcePath),
-        relativeLegacyPath(params.stateDir, params.detected.claimPath),
-      );
-      const claimed = await readLegacySourceSnapshot({
-        stateRoot: params.stateRoot,
-        stateDir: params.stateDir,
-        sourcePath: params.detected.claimPath,
-      });
-      if (!snapshotsMatch(snapshot, claimed)) {
-        throw new Error("legacy device identity changed before Doctor could claim it");
-      }
-      snapshot = claimed;
-    } catch (error) {
-      const restoreError = await restoreClaim({ ...params, ...params.detected });
-      return {
-        changes: [],
-        warnings: [
-          `Failed migrating legacy device identity: ${String(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
-        ],
-      };
-    }
-  }
-
   let result: ReturnType<typeof importAndRecordReceipt>;
   try {
+    if (activePath === params.detected.sourcePath) {
+      snapshot = await source.claim({
+        snapshot,
+        mismatchMessage: "legacy device identity changed before Doctor could claim it",
+        beforeClaim: () => params.beforeClaim?.(params.detected.sourcePath),
+      });
+    }
     result = importAndRecordReceipt({
       env: params.env,
       sourcePath: params.detected.sourcePath,
       snapshot,
     });
   } catch (error) {
-    const restoreError = await restoreClaim({ ...params, ...params.detected });
+    const restoreError = await source.restore();
     return {
       changes: [],
       warnings: [
@@ -488,26 +451,19 @@ async function migrateWithExclusiveStateOwnership(params: {
 
   try {
     params.beforeCleanup?.();
-    if (
-      await params.stateRoot.exists(relativeLegacyPath(params.stateDir, params.detected.sourcePath))
-    ) {
+    if (await source.exists()) {
       throw new Error("legacy device identity source reappeared during import");
     }
-    const finalSnapshot = await readLegacySourceSnapshot({
-      stateRoot: params.stateRoot,
-      stateDir: params.stateDir,
-      sourcePath: params.detected.claimPath,
-    });
+    const finalSnapshot = await source.read(true);
     if (!snapshotsMatch(snapshot, finalSnapshot)) {
       throw new Error("legacy device identity claim changed after SQLite import");
     }
     verifyCanonicalIdentity(finalSnapshot.identity, params.env);
-    await removePath({ ...params, sourcePath: params.detected.claimPath });
-    if (
-      await params.stateRoot.exists(relativeLegacyPath(params.stateDir, params.detected.claimPath))
-    ) {
-      throw new Error("legacy device identity Doctor claim remains after cleanup");
-    }
+    await source.remove({
+      removeSource: params.removeSource,
+      sourceReappearedMessage: "legacy device identity source reappeared during import",
+      claimRemainingMessage: "legacy device identity Doctor claim remains after cleanup",
+    });
     markLegacyMigrationSourceRemoved(result.sourceKey, params.env);
   } catch (error) {
     return {
@@ -543,28 +499,13 @@ export async function migrateLegacyDeviceIdentity(params: {
   if (params.doctorOnlyStateMigrations !== true) {
     return { changes: [], warnings: [] };
   }
-  let identityCoordinator: ReturnType<typeof acquireDeviceIdentityCoordinator> | undefined;
   return await withLegacyMigrationStateLock({
     stateDir: params.stateDir,
     env: params.env,
     label: "legacy device identity",
     releaseLabel: "Device identity",
     errorLabel: "Failed reading legacy device identity state",
-    beforeRelease: () => identityCoordinator?.release(),
     run: async (env) => {
-      try {
-        identityCoordinator = acquireDeviceIdentityCoordinator({
-          databasePath: resolveDeviceIdentityStore({ env, identityKey: IDENTITY_KEY }).databasePath,
-          stateDir: params.stateDir,
-        });
-      } catch (error) {
-        return {
-          changes: [],
-          warnings: [
-            `Failed migrating legacy device identity: identity state is busy (${formatErrorMessage(error)}).`,
-          ],
-        };
-      }
       if (hasLegacyDeviceIdentityPath(params.detected)) {
         const stateRoot = await root(params.stateDir, {
           hardlinks: "reject",

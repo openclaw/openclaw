@@ -99,9 +99,21 @@ export async function writeReadScopeMedia<T extends { id: string }>(params: {
   let settlement: Promise<void> | undefined;
   let assertOwnedFile: ((filePath: string) => void) | undefined;
   let cleanupAtExit: (() => void) | undefined;
+  let assertCustody: (() => void) | undefined;
   const resource = {
     get key() {
       return finalId ? path.join(params.dir, finalId) : temporaryPath;
+    },
+    onDelegated: (assertCurrent?: () => void) => {
+      const previous = assertCustody;
+      assertCustody = () => {
+        previous?.();
+        assertCurrent?.();
+      };
+      // A native metadata commit may outlive the ordinary reply or process exit.
+      if (cleanupAtExit) {
+        exitCleanups.delete(cleanupAtExit);
+      }
     },
     assertCurrent: () => {
       if (settlement) {
@@ -131,6 +143,7 @@ export async function writeReadScopeMedia<T extends { id: string }>(params: {
               try {
                 await mediaRoot.remove(name, {
                   assertBeforeMutation: () => {
+                    assertCustody?.();
                     assertMediaDirectory();
                     assertOwnedFile?.(path.join(mediaRoot.rootReal, name));
                   },

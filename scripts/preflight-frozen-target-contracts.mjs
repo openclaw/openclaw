@@ -627,6 +627,7 @@ async function planWorkflowAdmission(input) {
   }
   // The recorded inventory stays optional: targets predating it keep the postbuild check.
   if (possibleLanes.some(isUpdateFirstHopCompatLane)) {
+    sourcePaths.add("scripts/lib/update-compat-inventory.json");
     sourcePaths.add("scripts/runtime-postbuild.mts");
   }
   if (possibleLanes.includes("update-corrupt-plugin")) {
@@ -1178,6 +1179,7 @@ async function preflightFrozenTargetContracts(input, workflow = false, verifiedT
     if (consumer === "update-corrupt-plugin") {
       required(sources.tooling, "scripts/lib/update-compat-contract.mjs");
       required(sources.tooling, "scripts/lib/openclaw-e2e-instance.sh");
+      required(sources.tooling, "scripts/lib/docker-e2e-watchdog.mjs");
       required(sources.tooling, "scripts/lib/direct-run.mjs");
     }
     if (consumer === "upgrade-survivor" && allow) {

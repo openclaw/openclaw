@@ -111,12 +111,12 @@ function hasNestedSecretRef(value: unknown): boolean {
     return true;
   }
   if (Array.isArray(value)) {
-    return value.some((entry) => hasNestedSecretRef(entry));
+    return value.some(hasNestedSecretRef);
   }
   if (!value || typeof value !== "object") {
     return false;
   }
-  return Object.values(value).some((entry) => hasNestedSecretRef(entry));
+  return Object.values(value).some(hasNestedSecretRef);
 }
 
 function hasAgentRuntimeSecretRefs(params: {
@@ -125,50 +125,31 @@ function hasAgentRuntimeSecretRefs(params: {
   channel?: string;
 }): boolean {
   const { config } = params;
-  if (hasNestedSecretRef(config.models?.providers)) {
-    return true;
-  }
-  if (hasNestedSecretRef(config.memory?.search?.remote)) {
-    return true;
-  }
-  if (
+  return (
+    hasNestedSecretRef(config.models?.providers) ||
+    hasNestedSecretRef(config.memory?.search?.remote) ||
     listAgentEntries(config).some((agent) =>
       hasNestedSecretRef({
         memoryRemote: agent.memory?.search?.remote,
         tts: agent.tts,
       }),
-    )
-  ) {
-    return true;
-  }
-  if (hasNestedSecretRef(config.tts)) {
-    return true;
-  }
-  if (hasNestedSecretRef(config.skills?.entries)) {
-    return true;
-  }
-  if (hasNestedSecretRef(config.tools?.web?.search)) {
-    return true;
-  }
-  if (
-    config.plugins?.entries &&
-    Object.values(config.plugins.entries).some((entry) =>
+    ) ||
+    hasNestedSecretRef(config.tts) ||
+    hasNestedSecretRef(config.skills?.entries) ||
+    hasNestedSecretRef(config.tools?.web?.search) ||
+    Object.values(config.plugins?.entries ?? {}).some((entry) =>
       hasNestedSecretRef({
         webSearch: entry?.config?.webSearch,
         webFetch: entry?.config?.webFetch,
       }),
+    ) ||
+    hasNestedSecretRef(
+      params.includeChannelTargets
+        ? config.channels
+        : params.channel
+          ? (config.channels as Record<string, unknown> | undefined)?.[params.channel]
+          : undefined,
     )
-  ) {
-    return true;
-  }
-  if (params.includeChannelTargets) {
-    return hasNestedSecretRef(config.channels);
-  }
-  if (!params.channel) {
-    return false;
-  }
-  return hasNestedSecretRef(
-    (config.channels as Record<string, unknown> | undefined)?.[params.channel],
   );
 }
 

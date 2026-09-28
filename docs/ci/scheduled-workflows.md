@@ -1,5 +1,5 @@
 ---
-summary: "Performance, QA Lab, CodeQL, maintenance jobs, and ClawSweeper forwarding"
+summary: "Performance, QA Lab, CodeQL, Security Review, maintenance jobs, and ClawSweeper forwarding"
 title: "Scheduled and maintenance workflows"
 read_when:
   - You are changing ClawSweeper dispatch or GitHub activity forwarding
@@ -18,12 +18,23 @@ survivor all run against that revision. Node tests use the compact main inventor
 Full Release Validation and ordinary manual CI retain `validation_tier=full`
 by default. They additionally run release-only tooling/runtime/UI tests,
 minimum-Node compatibility, iOS screenshots, native Release builds, Android
-packaging, and all six Docker seed scenarios. Hourly iOS retains its full
-`ios-build (tests)` simulator phase and Swift lint; Android retains phone/Wear
-tests and lint. The Docker survivor uses the existing main smoke package,
+packaging, and all six Docker seed scenarios. Hourly iOS retains
+`ios-build (tests)`: Swift lint, Rust tests, voice cleanup, native Access, and
+the complete focused app/notification lifecycle inventory. Managed attachment
+UI/export proof, Watch operation simulator suites, and Watch delivery UI proof
+run only in full-tier manual/release validation, with every case and assertion
+retained there. Android retains phone/Wear tests and lint. The Docker survivor uses the existing main smoke package,
 including runtime, assets, public SDK declarations, and tarball integrity.
 The manual SDK API diff report stays manual-only: a scheduled tip has no change
 range to compare.
+
+Main-tier iOS builds target the selected simulator's native architecture and
+disable compiler indexing, as PR smoke already does. Voice and lifecycle tests
+disable Xcode's verbose diagnostic collection while retaining their logs and
+xcresult bundles. Full-tier manual/release validation keeps universal simulator
+builds and failure diagnostics. This removes duplicate architecture work and
+diagnostic stalls observed in 76–94-minute hourly jobs; it does not establish a
+new completion bound.
 
 Scheduled CI uses automatic-main [runner placement](/ci/runners), including
 hybrid placement on the first attempt when configured. Native runner labels,
@@ -41,6 +52,14 @@ Each scheduled run starts independently so an older iOS simulator phase cannot
 hold the next hourly core checks. Only scheduled `ios-build` jobs share a
 non-canceling slot: the active proof finishes while GitHub replaces a pending
 iOS job when another arrives. Arrival order need not match revision order.
+At the aggregate owner, `openclaw/ci-gate` accepts a selected `ios-build` result
+of `cancelled` only for scheduled `openclaw/openclaw` runs on `main`, and emits
+an “Hourly iOS proof coalesced” notice. A real iOS failure or unexpected skip
+still fails the gate, as does cancellation of another selected lane. Manual
+and PR iOS cancellations retain their existing failure policy. A passing gate
+with this notice delegates iOS proof to a later scheduled job; it does not
+validate iOS at the canceled revision. GitHub's workflow-level conclusion can
+still be `cancelled` even when the aggregate succeeds.
 Manual/release CI stays independent, and security-only pushes cannot cancel
 scheduled work. CI remains available during release validation;
 `OPENCLAW_RELEASE_PRIORITY_RUN` does not control admission.
@@ -136,8 +155,9 @@ be disabled after inactivity. Main-tier CI deliberately rechecks unchanged
 SHAs rather than introducing a separate last-success ledger. A failure can be
 retried at the next hourly opportunity, and manual dispatch remains available.
 If iOS proof takes longer than an hour, later hourly runs can finish their other
-checks while waiting for that slot. A superseded pending iOS job leaves its run
-non-green and cannot qualify Docs Agent. Those completed checks still consume
+checks while waiting for that slot. A superseded pending iOS job can leave its
+aggregate green with delegated iOS proof, but cannot qualify Docs Agent.
+Those completed checks still consume
 runner time; per-run worker limits do not bound concurrent hourly runs together.
 The slot does not cover manual/PR iOS jobs or runs admitted by an older workflow.
 This removes workflow admission blocking, not runner-capacity waits. No measured
@@ -300,6 +320,52 @@ improvement ratio and at least five of its seven pairs individually meet that
 ratio. Otherwise it reports per-lane evidence without a broad improvement
 claim. Artifacts use only the trusted workflow run ID and attempt in their name;
 the exact baseline and candidate commits remain recorded inside the artifact.
+
+## Security Review reconciler
+
+Every ten minutes, Security Review reconciles CI completions
+from five minutes before the previous successful scheduled pass started until
+five minutes ago (sixty-minute fallback, twelve-hour cap). Passes tile without gaps;
+late or dropped cron ticks only widen the next window, up to the cap. Run listing
+covers creation times from three hours before the window through the current time.
+GitHub caps each filtered query at 1,000 results, so the resolver bisects ranges
+whose reported total exceeds that limit. Each smaller range is paged until a short
+page, and its distinct run count must cover the total reported on its first page.
+Ten full pages or fewer distinct runs than reported fail the pass before any
+status publication or matrix output, retaining the anchor for a complete retry.
+Inclusive range endpoints are separated by one second, and run IDs are deduplicated
+across pages and slices. A range shorter than ten minutes that still exceeds
+1,000 runs fails before status publication or matrix output, so the covered window
+does not advance. The next pass rescans from the last successful pass.
+Scheduled resolver passes share one
+concurrency group without canceling an active pass; GitHub keeps one
+pending pass, which still starts from the last successful window.
+Each pass selects at most 100 PR heads, oldest CI completion first, with run ID
+breaking ties, and stops reading statuses when the cap is reached. If candidates
+remain, the `reconcile-backlog` job fails the workflow after the selected reviews
+finish. This keeps the same anchor: reviewed heads have fresh statuses, allowing
+the next scheduled pass to select the remainder from the same window.
+
+After a reconciler outage longer than twelve hours, older lost completions need
+a new push or a Security Review rerun.
+
+A CI rerun keeps its original creation time. A rerun of a run created more than
+three hours before the window relies on its own completion delivery; if that is
+lost, a new push or a Security Review rerun recovers it.
+
+Wholly skipped CI runs are ignored. The resolver reads status history in reverse
+chronological order and uses only the newest `openclaw/ci-gate` status from
+`github-actions[bot]` with creator type `Bot`. Other publishers are ignored.
+Normal review runs only when that Actions-owned status is missing, older than
+CI completion, or pending. Only a
+non-pending status created at or after CI completion is settled and stops
+reselection. Every pending status remains eligible, including a review wait
+published after a pre-completion CI read. Tiled windows bound the harmless extra
+review when a head legitimately waits on newer in-progress CI.
+It never checks out PR code and uses one hosted
+`ubuntu-24.04` resolver job per pass, run-list reads plus paginated
+status-history reads per newly completed head, and no Blacksmith registrations.
+See [Security review checks](/ci/pipeline#security-review-checks).
 
 ## QA Lab
 

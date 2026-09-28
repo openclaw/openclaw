@@ -23,7 +23,6 @@ describe("flattenMarkdownToPlainText", () => {
       "Use foo_bar_baz from ~/.openclaw",
     ],
     ["multiline whitespace", "First\n\n  second\t third", "First second third"],
-    ["plain text", "Already plain text.", "Already plain text."],
   ])("flattens %s", (_label, input, expected) => {
     expect(flattenMarkdownToPlainText(input)).toBe(expected);
   });

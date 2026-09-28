@@ -15,8 +15,6 @@ type CodexContextProjection = {
   developerInstructionAddition?: string;
   promptText: string;
   promptContextRange?: CodexProjectedContextRange;
-  assembledMessages: AgentMessage[];
-  prePromptMessageCount: number;
   imageGroups?: CodexProjectedImageGroup[];
 };
 
@@ -115,7 +113,6 @@ export function isCodexDurableCustomMessage(message: AgentMessage): boolean {
 /** Projects assembled OpenClaw context-engine messages into Codex prompt inputs. */
 export async function projectContextEngineAssemblyForCodex(params: {
   assembledMessages: AgentMessage[];
-  originalHistoryMessages: AgentMessage[];
   prompt: string;
   systemPromptAddition?: string;
   maxRenderedContextChars?: number;
@@ -154,8 +151,6 @@ export async function projectContextEngineAssemblyForCodex(params: {
       : {}),
     promptText,
     ...(promptContextRange ? { promptContextRange } : {}),
-    assembledMessages: params.assembledMessages,
-    prePromptMessageCount: params.originalHistoryMessages.length,
     ...(context.imageGroups.length && promptPrefix
       ? {
           imageGroups: context.imageGroups.map((group) => ({
@@ -188,35 +183,13 @@ export function resolveCodexContextEngineProjectionMaxChars(params: {
   return normalizeRenderedContextMaxChars(scaledChars);
 }
 
-/** Returns the fixed reserve used for Codex context-engine projections. */
-export function resolveCodexContextEngineProjectionReserveTokens(): number {
-  return DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS;
-}
-
-// Continuity projections run without an active context engine, so nothing ever
-// compacts what they render: a projection sized near the whole window leaves the
-// fresh native thread at the rotation threshold, forcing the next turn to rotate
-// and re-project the transcript again. Reserving half the window keeps the
-// thread alive for later delta turns instead.
+// Reserve half the window so no-engine continuity leaves room for later delta turns.
 const CONTINUITY_PROJECTION_RESERVE_RATIO = 0.5;
-// Codex reports input tokens only after a turn (codex-rs/protocol/src/protocol.rs
-// TokenUsage.input_tokens) and bounds turn input by characters, not tokens
-// (codex-rs/protocol/src/user_input.rs MAX_USER_INPUT_TEXT_CHARS), so a projection cannot
-// be priced in verified tokens before it is sent. The remedy is feedback: each completed
-// turn records the density this session's content actually exhibited (prompt chars sent
-// vs provider-reported input tokens, persisted on the thread binding), and the next
-// continuity cap is sized from that observed ratio. capChars = budgetTokens × ratio means
-// real token cost ≈ budget for ANY density, which is the headroom invariant the fuse
-// needs. Before the first sample exists, the empirical default below applies — measured
-// on a real projection (703,134 chars for 226,146 input tokens = 3.11), where the shared
-// APPROX_RENDERED_CHARS_PER_TOKEN = 4 overshot by ~29%.
+// Native input tokens arrive after the turn; calibrate future character budgets from
+// observed density. The default rounds down a measured 703,134 chars / 226,146 tokens.
 const CONTINUITY_EMPIRICAL_CHARS_PER_TOKEN = 3;
-// Calibration is monotone: an observed sample may only TIGHTEN the cap below the
-// empirical default, never loosen it. A session whose content later shifts denser, a
-// sample poisoned by a non-continuity turn, or a stale sample therefore degrades at
-// worst to the uncalibrated behavior, not past it. The numerator also undercounts the
-// native turn's full input (tools and base instructions are not in the prompt text),
-// which biases the measured ratio low - again the tighter, safe direction.
+// Samples only tighten the default cap. Uncounted tool/instruction overhead also
+// lowers the measured ratio, preserving conservative headroom.
 const CONTINUITY_MIN_CHARS_PER_TOKEN = 0.5;
 const CONTINUITY_MAX_CHARS_PER_TOKEN = CONTINUITY_EMPIRICAL_CHARS_PER_TOKEN;
 // Only projection-dominated turns give a usable density sample; short prompts are
@@ -545,7 +518,7 @@ function renderMessageBody(
   if (message.role === "compactionSummary" || message.role === "branchSummary") {
     return truncateText(message.summary.trim(), options.maxTextPartChars);
   }
-  if (!hasMessageContent(message)) {
+  if (!("content" in message)) {
     return "";
   }
   const toolResult = message.role === "toolResult";
@@ -621,7 +594,7 @@ function renderToolCallPayload(record: Record<string, unknown>): Record<string, 
   const payload: Record<string, unknown> = pickToolPayloadMetadata(record);
   const input = record.input ?? record.arguments;
   if (input !== undefined) {
-    payload.inputShape = summarizeToolInputShape(input);
+    payload.inputShape = projectToolPayloadValue(input, "shape");
   }
   return payload;
 }
@@ -632,7 +605,7 @@ function renderToolResultPayload(record: Record<string, unknown>): Record<string
     if (TOOL_PAYLOAD_METADATA_KEYS.has(key)) {
       continue;
     }
-    payload[key] = redactPreservedToolValue(key, value);
+    payload[key] = projectToolPayloadValue(value, "content", key);
   }
   return payload;
 }
@@ -657,63 +630,36 @@ function pickToolPayloadMetadata(record: Record<string, unknown>): Record<string
   return payload;
 }
 
-// Tool-call inputs can contain shell commands and credentials. For bootstrap
-// continuity, retain object structure and primitive types instead of values.
-function summarizeToolInputShape(value: unknown, seen = new WeakSet<object>()): unknown {
-  if (value === null) {
-    return null;
-  }
-  if (Array.isArray(value)) {
-    if (seen.has(value)) {
-      return "[Circular]";
-    }
-    seen.add(value);
-    return value.map((entry) => summarizeToolInputShape(entry, seen));
-  }
-  if (value && typeof value === "object") {
-    if (seen.has(value)) {
-      return "[Circular]";
-    }
-    seen.add(value);
-    const out: Record<string, unknown> = {};
-    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-      out[key] = summarizeToolInputShape(child, seen);
-    }
-    return out;
-  }
-  return `[${typeof value}]`;
-}
-
-// Tool results are the useful carried context for a fresh Codex thread, so keep
-// their content while applying the same text/field redaction used for tool logs.
-function redactPreservedToolValue(
-  key: string,
+// Inputs retain shape only; results retain useful content with log redaction.
+// Both projections preserve the same object order and repeated-reference marker.
+function projectToolPayloadValue(
   value: unknown,
+  mode: "shape" | "content",
+  key = "",
   seen = new WeakSet<object>(),
 ): unknown {
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+  if (
+    mode === "content" &&
+    (typeof value === "string" || typeof value === "number" || typeof value === "boolean")
+  ) {
     const text = String(value);
     const redacted = redactSensitiveFieldValue(key, redactToolPayloadText(text));
     return redacted === text ? value : redacted;
   }
-  if (value === null || value === undefined) {
+  if (value === null || (mode === "content" && value === undefined)) {
     return value;
-  }
-  if (Array.isArray(value)) {
-    if (seen.has(value)) {
-      return "[Circular]";
-    }
-    seen.add(value);
-    return value.map((entry) => redactPreservedToolValue(key, entry, seen));
   }
   if (value && typeof value === "object") {
     if (seen.has(value)) {
       return "[Circular]";
     }
     seen.add(value);
+    if (Array.isArray(value)) {
+      return value.map((entry) => projectToolPayloadValue(entry, mode, key, seen));
+    }
     const out: Record<string, unknown> = {};
-    for (const [childKey, child] of Object.entries(value as Record<string, unknown>)) {
-      out[childKey] = redactPreservedToolValue(childKey, child, seen);
+    for (const [childKey, child] of Object.entries(value)) {
+      out[childKey] = projectToolPayloadValue(child, mode, childKey, seen);
     }
     return out;
   }
@@ -726,10 +672,6 @@ function stableJson(value: unknown): string {
   } catch {
     return "[unserializable payload omitted]";
   }
-}
-
-function hasMessageContent(message: AgentMessage): message is AgentMessage & { content: unknown } {
-  return "content" in message;
 }
 
 function normalizeRenderedContextMaxChars(value: unknown): number {

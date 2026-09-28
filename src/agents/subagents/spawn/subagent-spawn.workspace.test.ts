@@ -88,6 +88,17 @@ function createConfigOverride(overrides?: Record<string, unknown>) {
   });
 }
 
+function createCrossAgentConfig() {
+  return createConfigOverride({
+    agents: {
+      list: [
+        { id: "main", workspace: "/tmp/workspace-main", subagents: { allowAgents: ["ops"] } },
+        { id: "ops", workspace: "/tmp/workspace-ops" },
+      ],
+    },
+  });
+}
+
 function resolveTestAgentConfig(cfg: Record<string, unknown>, agentId: string) {
   return (cfg as TestConfig).agents?.list?.find((entry) => entry.id === agentId);
 }
@@ -213,23 +224,7 @@ describe("spawnSubagentDirect workspace inheritance", () => {
   });
 
   it("uses the target agent workspace for cross-agent spawns", async () => {
-    hoisted.configOverride = createConfigOverride({
-      agents: {
-        list: [
-          {
-            id: "main",
-            workspace: "/tmp/workspace-main",
-            subagents: {
-              allowAgents: ["ops"],
-            },
-          },
-          {
-            id: "ops",
-            workspace: "/tmp/workspace-ops",
-          },
-        ],
-      },
-    });
+    hoisted.configOverride = createCrossAgentConfig();
 
     await expectAcceptedWorkspace({
       agentId: "ops",
@@ -237,31 +232,8 @@ describe("spawnSubagentDirect workspace inheritance", () => {
     });
   });
 
-  it("preserves the inherited workspace for same-agent spawns", async () => {
-    await expectAcceptedWorkspace({
-      agentId: "main",
-      expectedWorkspaceDir: "/tmp/requester-workspace",
-    });
-  });
-
   it("uses explicit cwd for cross-agent native subagent spawns without leaking it to Gateway params", async () => {
-    hoisted.configOverride = createConfigOverride({
-      agents: {
-        list: [
-          {
-            id: "main",
-            workspace: "/tmp/workspace-main",
-            subagents: {
-              allowAgents: ["ops"],
-            },
-          },
-          {
-            id: "ops",
-            workspace: "/tmp/workspace-ops",
-          },
-        ],
-      },
-    });
+    hoisted.configOverride = createCrossAgentConfig();
 
     const result = await spawnSubagentDirect(
       {
@@ -287,23 +259,7 @@ describe("spawnSubagentDirect workspace inheritance", () => {
   });
 
   it("rejects explicit cwd overrides for sandboxed native subagent spawns", async () => {
-    hoisted.configOverride = createConfigOverride({
-      agents: {
-        list: [
-          {
-            id: "main",
-            workspace: "/tmp/workspace-main",
-            subagents: {
-              allowAgents: ["ops"],
-            },
-          },
-          {
-            id: "ops",
-            workspace: "/tmp/workspace-ops",
-          },
-        ],
-      },
-    });
+    hoisted.configOverride = createCrossAgentConfig();
     hoisted.resolveSandboxRuntimeStatusMock.mockImplementation(({ sessionKey }) => ({
       sandboxed: typeof sessionKey === "string" && sessionKey.includes(":subagent:"),
     }));

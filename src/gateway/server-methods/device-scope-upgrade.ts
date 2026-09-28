@@ -63,7 +63,7 @@ export const scopeUpgradeHandlers: GatewayRequestHandlers = {
       respondDeviceRequired(respond);
       return;
     }
-    const requestedScopes = normalizeDeviceAuthScopes((params as { scopes: string[] }).scopes);
+    const requestedScopes = normalizeDeviceAuthScopes(params.scopes);
     if (!requestedScopes.every(isOperatorScope)) {
       respond(
         false,
@@ -180,8 +180,7 @@ export const scopeUpgradeHandlers: GatewayRequestHandlers = {
       respondDeviceRequired(respond);
       return;
     }
-    const requestId = (params as { requestId: string }).requestId;
-    const result = await context.scopeUpgradeCoordinator?.wait(requestId, owner);
+    const result = await context.scopeUpgradeCoordinator?.wait(params.requestId, owner);
     if (!result) {
       respond(
         false,

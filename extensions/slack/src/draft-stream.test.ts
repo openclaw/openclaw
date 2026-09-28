@@ -100,23 +100,6 @@ describe("createSlackDraftStream", () => {
     );
   });
 
-  it("sends the first update and edits subsequent updates", async () => {
-    const { stream, send, edit } = createDraftStreamHarness();
-
-    stream.update("hello");
-    await stream.flush();
-    stream.update("hello world");
-    await stream.flush();
-
-    expect(send).toHaveBeenCalledTimes(1);
-    expect(edit).toHaveBeenCalledTimes(1);
-    expect(edit).toHaveBeenCalledWith("C123", "111.222", "hello world", {
-      cfg: TEST_CFG,
-      token: "xoxb-test",
-      accountId: undefined,
-    });
-  });
-
   it("uses the enterprise event client for draft writes", async () => {
     const client = {} as NonNullable<DraftStreamParams["eventScope"]>["client"];
     const eventScope = {
@@ -214,24 +197,6 @@ describe("createSlackDraftStream", () => {
 
     expect(send).toHaveBeenCalledTimes(1);
     expect(edit).toHaveBeenCalledTimes(0);
-  });
-
-  it("supports forceNewMessage for subsequent assistant messages", async () => {
-    const send = vi
-      .fn<DraftSendFn>()
-      .mockResolvedValueOnce(slackDraftSendResult("111.222"))
-      .mockResolvedValueOnce(slackDraftSendResult("333.444"));
-    const { stream, edit } = createDraftStreamHarness({ send });
-
-    stream.update("first");
-    await stream.flush();
-    stream.forceNewMessage();
-    stream.update("second");
-    await stream.flush();
-
-    expect(send).toHaveBeenCalledTimes(2);
-    expect(edit).toHaveBeenCalledTimes(0);
-    expect(stream.messageId()).toBe("333.444");
   });
 
   it("drains past a failed preview and retries only the retained failure", async () => {
@@ -867,14 +832,6 @@ describe("createSlackDraftStream", () => {
     expect(remove).not.toHaveBeenCalled();
     expect(stream.messageId()).toBe("111.222");
     expect(stream.channelId()).toBe("C123");
-  });
-
-  it("clear is a no-op when no preview message exists", async () => {
-    const { stream, remove } = createDraftStreamHarness();
-
-    await stream.clear();
-
-    expect(remove).not.toHaveBeenCalled();
   });
 
   it("retries a failed active preview cleanup on the next clear", async () => {

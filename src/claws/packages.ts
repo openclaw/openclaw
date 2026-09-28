@@ -1,10 +1,10 @@
-import { tmpdir } from "node:os";
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
 import { resolveClawHubInstallConfirmation } from "../cli/clawhub-install-confirmation.js";
 import { resolvePluginCapabilityConsentCliOptions } from "../cli/plugin-capability-consent.js";
 import { createPluginInstallLogger } from "../cli/plugins-command-helpers.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { installPluginFromClawHub } from "../plugins/clawhub.js";
 import { PLUGIN_ARTIFACT_ADAPTER_IDENTITY } from "../plugins/install-artifact-inspection.js";
 import { installManagedPlugin } from "../plugins/management-mutations.js";
@@ -130,7 +130,7 @@ async function probeClawPluginArtifact(
     return await probePlugin(request);
   }
   const workspace = await tempWorkspace({
-    rootDir: tmpdir(),
+    rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "openclaw-claw-plugin-probe-",
   });
   try {

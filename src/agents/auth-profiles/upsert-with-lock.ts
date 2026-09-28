@@ -137,6 +137,11 @@ function supersedesOAuthRefreshGenerationObservedAtAdmission(params: {
 type PersistAuthProfileBatchParams = {
   /** Revalidate the calling operation after lock acquisition, at the write boundary. */
   beforeWrite?: () => void;
+  /** Revalidate a targeted profile identity under the same transaction as the write. */
+  validateCurrentCredential?: (
+    profileId: string,
+    credential: AuthProfileCredential | undefined,
+  ) => void;
   profiles: readonly {
     profileId: string;
     credential: AuthProfileCredential;
@@ -205,6 +210,7 @@ export async function persistAuthProfileBatch(
             loadPersistedAuthProfileStore(params.agentDir, { database }) ??
             ({ version: AUTH_STORE_VERSION, profiles: {} } satisfies AuthProfileStore);
           for (const [profileId, entry] of profiles) {
+            params.validateCurrentCredential?.(profileId, next.profiles[profileId]);
             if (!entry.replaceExisting && Object.hasOwn(next.profiles, profileId)) {
               continue;
             }

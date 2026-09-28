@@ -377,19 +377,9 @@
     "embeddingProviders": ["openai"],
     "mediaUnderstandingProviders": ["openai"],
     "imageGenerationProviders": ["openai"],
-    "videoGenerationProviders": ["openai"],
     "usageProviders": ["openai"]
   },
   "imageGenerationProviderMetadata": {
-    "openai": {
-      "authSignals": [
-        {
-          "provider": "openai"
-        }
-      ]
-    }
-  },
-  "videoGenerationProviderMetadata": {
     "openai": {
       "authSignals": [
         {

@@ -49,6 +49,7 @@ import {
 } from "../plugins/plugin-lifecycle-lease.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
+import { OpenClawStateLeaseAcquisitionError } from "../state/openclaw-state-lease-error.js";
 import { createConfigAppliedRevisionTracker } from "./config-applied-revision.js";
 import { diffConfigPaths, diffGatewayReloadPaths } from "./config-diff.js";
 import {
@@ -63,52 +64,24 @@ import type {
   GatewayConfigReloader,
   GatewayHotReloadApplication,
 } from "./config-reload-status.types.js";
+import type {
+  GatewayConfigReloadTransactionOwnership,
+  InProcessConfigCandidate,
+  PreparedGatewayConfigCandidate,
+} from "./config-reload.types.js";
 import {
   assertReloadPublicationCurrent,
   GatewayConfigReloadSupersededError,
 } from "./server-reload-contracts.js";
 
 export type { GatewayReloadPlan } from "./config-reload-plan.js";
+export type { GatewayConfigReloadTransactionOwnership } from "./config-reload.types.js";
 const MISSING_CONFIG_RETRY_DELAY_MS = 150;
 const MISSING_CONFIG_MAX_RETRIES = 2;
+const LEASE_RETRY_INITIAL_DELAY_MS = 250;
+const LEASE_RETRY_MAX_DELAY_MS = 5_000;
 
 type PluginInstallRecords = Record<string, PluginInstallRecord>;
-
-type InProcessConfigCandidate = {
-  config: OpenClawConfig;
-  compareConfig: OpenClawConfig;
-  persistedHash: string;
-  afterWrite?: ConfigWriteNotification["afterWrite"];
-  preparedCandidate?: ConfigWriteNotification["preparedCandidate"];
-  runtimeRefresh?: RuntimeConfigSnapshotRefreshOptions;
-  application?: RuntimeConfigWriteApplicationClaim;
-  epoch: number;
-  snapshot: ConfigFileSnapshot;
-};
-
-export type GatewayConfigReloadTransactionOwnership = {
-  isCurrent: () => boolean;
-  checkpoint: () => Promise<void>;
-  withRestartPreparation: <T>(
-    run: (ownership: GatewayConfigReloadTransactionOwnership) => Promise<T>,
-  ) => Promise<T>;
-  assertInvokerOwned?: () => void;
-  markRuntimeCommitted: (runtimeConfig: OpenClawConfig, plan: GatewayReloadPlan) => void;
-  commitRuntimeEnv: () => void;
-  publishRuntimeEnv: () => void;
-  rollbackRuntimeEnv: () => void;
-  reapplyRuntimeOverlays: (config: OpenClawConfig) => OpenClawConfig;
-  runtimeEnv?: NonNullable<ConfigWriteNotification["preparedCandidate"]>["runtimeEnv"];
-  runtimeRefresh?: RuntimeConfigSnapshotRefreshOptions;
-};
-
-type PreparedGatewayConfigCandidate = {
-  runtimeConfig: OpenClawConfig;
-  compareConfig: OpenClawConfig;
-  runtimeEnv?: NonNullable<ConfigWriteNotification["preparedCandidate"]>["runtimeEnv"];
-  reapplyRuntimeOverlays?: (config: OpenClawConfig) => OpenClawConfig;
-  reapplyCompareOverlays?: (config: OpenClawConfig) => OpenClawConfig;
-};
 
 function asPluginInstallConfig(records: PluginInstallRecords): OpenClawConfig {
   return {
@@ -238,6 +211,7 @@ export function startGatewayConfigReloader(opts: {
     resolveGatewayReloadSettings(config, opts.testDebounceMs);
   let settings = resolveSettings(currentConfig);
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  let leaseRetryDelayMs = 0;
   let pending = false;
   let running = false;
   let stopped = false;
@@ -380,9 +354,7 @@ export function startGatewayConfigReloader(opts: {
     if (debounceTimer) {
       clearTimeout(debounceTimer);
     }
-    debounceTimer = setTimeout(() => {
-      startTrackedReload();
-    }, wait);
+    debounceTimer = setTimeout(startTrackedReload, Math.max(wait, leaseRetryDelayMs));
   };
   const schedule = () => {
     scheduleAfter(pendingInProcessConfig ? 0 : settings.debounceMs);
@@ -521,6 +493,7 @@ export function startGatewayConfigReloader(opts: {
       if (isCurrent()) {
         clearReloadTimer();
         pending = false;
+        leaseRetryDelayMs = 0;
         source.accept(transactionEpoch);
       }
       return { runtime, isCurrent };
@@ -821,6 +794,7 @@ export function startGatewayConfigReloader(opts: {
       return completeApplication();
     }
     const plan = buildGatewayReloadPlan(changedPaths, {
+      pluginLifecycle,
       noopPaths: [...configInstallMetadata.noopPaths, ...installMetadata.noopPaths],
       forceChangedPaths: [
         ...configInstallMetadata.forceChangedPaths,
@@ -831,20 +805,6 @@ export function startGatewayConfigReloader(opts: {
       previousCompareConfig: currentCompareConfig,
       candidateCompareConfig: nextCompareConfig,
     });
-    if (pluginLifecycle) {
-      plan.pluginLifecycle = pluginLifecycle;
-      plan.reloadPlugins = true;
-      const unrelatedRestart = plan.restartReasons.find(
-        (path) => path !== "plugins" && !path.startsWith("plugins."),
-      );
-      if (unrelatedRestart) {
-        throw new Error(
-          `Cannot apply plugin change while ${unrelatedRestart} requires a Gateway restart.`,
-        );
-      }
-      plan.restartGateway = false;
-      plan.restartReasons = [];
-    }
     if (nextSettings.mode === "off" && !pluginLifecycle) {
       opts.log.info("config reload disabled (gateway.reload.mode=off)");
       await commitReloadBaseline({ runtimeApplied: false });
@@ -1192,18 +1152,40 @@ export function startGatewayConfigReloader(opts: {
   }
 
   function startTrackedReload(): void {
+    if (stopped || !initialized) {
+      return;
+    }
     if (running || watcherReload) {
       pending = true;
       return;
     }
+    let enteredReload = false;
     // Management enters with the lease held, then takes the config queue. A watcher
     // must use the same order, including when its timer inherited a writer's context.
     const reload = runOutsidePluginLifecycleLease(() =>
       withPluginLifecycleLease({ signal: lifecycle.signal }, async (lease) => {
+        enteredReload = true;
+        leaseRetryDelayMs = 0;
         await runReload(() => lease.assertOwned());
       }),
     ).catch((error: unknown) => {
-      if (!stopped) {
+      if (stopped) {
+        return;
+      }
+      if (
+        !enteredReload &&
+        error instanceof OpenClawStateLeaseAcquisitionError &&
+        error.outcome.kind === "store-unavailable" &&
+        (error.outcome.reason === "lifecycle-busy" || error.outcome.reason === "sqlite-busy")
+      ) {
+        pending = true;
+        leaseRetryDelayMs = Math.min(
+          LEASE_RETRY_MAX_DELAY_MS,
+          leaseRetryDelayMs ? leaseRetryDelayMs * 2 : LEASE_RETRY_INITIAL_DELAY_MS,
+        );
+        opts.log.warn(`config reload retry in ${leaseRetryDelayMs}ms: ${String(error)}`);
+      } else {
+        leaseRetryDelayMs = 0;
         opts.log.error(`config reload failed: ${String(error)}`);
       }
     });
@@ -1292,6 +1274,7 @@ export function startGatewayConfigReloader(opts: {
             pluginIds: params.pluginIds,
             reason: params.reason,
             operationId,
+            ...(params.waitForDrain ? { waitForDrain: true, drainSignal: params.drainSignal } : {}),
             expectedSourceDigests: params.expectedSourceDigests,
             expectedInstallHashes: params.expectedInstallHashes,
           },

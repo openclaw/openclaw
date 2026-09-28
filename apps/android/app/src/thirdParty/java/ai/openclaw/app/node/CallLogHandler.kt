@@ -5,14 +5,14 @@ import android.Manifest
 import android.content.Context
 import android.provider.CallLog
 import androidx.core.content.ContextCompat
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonArray
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 
 private const val DEFAULT_CALL_LOG_LIMIT = 25
 
+@Serializable
 internal data class CallLogRecord(
   val number: String?,
   val cachedName: String?,
@@ -22,15 +22,16 @@ internal data class CallLogRecord(
 )
 
 internal data class CallLogSearchRequest(
-  val limit: Int, // Number of records to return
-  val offset: Int, // Offset value
-  val cachedName: String?, // Search by contact name
-  val number: String?, // Search by phone number
-  val date: Long?, // Search by time (timestamp, deprecated, use dateStart/dateEnd)
-  val dateStart: Long?, // Query start time (timestamp)
-  val dateEnd: Long?, // Query end time (timestamp)
-  val duration: Long?, // Search by duration (seconds)
-  val type: Int?, // Search by call log type
+  val limit: Int,
+  val offset: Int,
+  val cachedName: String?,
+  val number: String?,
+  // Legacy exact timestamp; range queries use dateStart/dateEnd.
+  val date: Long?,
+  val dateStart: Long?,
+  val dateEnd: Long?,
+  val duration: Long?, // Seconds.
+  val type: Int?,
 )
 
 internal interface CallLogDataSource {
@@ -63,7 +64,6 @@ private object SystemCallLogDataSource : CallLogDataSource {
         CallLog.Calls.TYPE,
       )
 
-    // Build selection and selectionArgs for filtering
     val selections = mutableListOf<String>()
     val selectionArgs = mutableListOf<String>()
 
@@ -77,7 +77,6 @@ private object SystemCallLogDataSource : CallLogDataSource {
       selectionArgs.add(buildCallLogLikeArg(it))
     }
 
-    // Support time range query
     if (request.dateStart != null && request.dateEnd != null) {
       selections.add("${CallLog.Calls.DATE} >= ? AND ${CallLog.Calls.DATE} <= ?")
       selectionArgs.add(request.dateStart.toString())
@@ -125,14 +124,10 @@ private object SystemCallLogDataSource : CallLogDataSource {
         val durationIndex = cursor.getColumnIndex(CallLog.Calls.DURATION)
         val typeIndex = cursor.getColumnIndex(CallLog.Calls.TYPE)
 
-        // Skip offset rows
-        if (request.offset > 0 && cursor.moveToPosition(request.offset - 1)) {
-          // Successfully moved to offset position
-        }
+        if (request.offset > 0) cursor.moveToPosition(request.offset - 1)
 
         val out = mutableListOf<CallLogRecord>()
-        var count = 0
-        while (cursor.moveToNext() && count < request.limit) {
+        while (cursor.moveToNext() && out.size < request.limit) {
           out +=
             CallLogRecord(
               number = cursor.getString(numberIndex),
@@ -141,41 +136,22 @@ private object SystemCallLogDataSource : CallLogDataSource {
               duration = cursor.getLong(durationIndex),
               type = cursor.getInt(typeIndex),
             )
-          count++
         }
         return out
       }
   }
 }
 
-internal fun escapeCallLogSqlLikeLiteral(value: String): String =
-  buildString(value.length) {
-    for (ch in value) {
-      when (ch) {
-        '\\', '%', '_' -> {
-          append('\\')
-          append(ch)
-        }
-
-        else -> {
-          append(ch)
-        }
-      }
-    }
-  }
-
 internal fun buildCallLogCachedNameLikeSelection(): String = "${CallLog.Calls.CACHED_NAME} LIKE ? ESCAPE '\\'"
 
 internal fun buildCallLogNumberLikeSelection(): String = "${CallLog.Calls.NUMBER} LIKE ? ESCAPE '\\'"
 
-internal fun buildCallLogLikeArg(value: String): String = "%${escapeCallLogSqlLikeLiteral(value)}%"
+internal fun buildCallLogLikeArg(value: String): String = "%${escapeSqlLikeLiteral(value)}%"
 
-class CallLogHandler private constructor(
+class CallLogHandler internal constructor(
   private val appContext: Context,
-  private val dataSource: CallLogDataSource,
+  private val dataSource: CallLogDataSource = SystemCallLogDataSource,
 ) {
-  constructor(appContext: Context) : this(appContext = appContext, dataSource = SystemCallLogDataSource)
-
   fun handleCallLogSearch(paramsJson: String?): GatewaySession.InvokeResult {
     if (!dataSource.hasReadPermission(appContext)) {
       return GatewaySession.InvokeResult.error(
@@ -193,16 +169,7 @@ class CallLogHandler private constructor(
 
     return try {
       val callLogs = dataSource.search(appContext, request)
-      GatewaySession.InvokeResult.ok(
-        buildJsonObject {
-          put(
-            "callLogs",
-            buildJsonArray {
-              callLogs.forEach { add(callLogJson(it)) }
-            },
-          )
-        }.toString(),
-      )
+      GatewaySession.InvokeResult.ok(Json.encodeToString(mapOf("callLogs" to callLogs)))
     } catch (err: Throwable) {
       GatewaySession.InvokeResult.error(
         code = "CALL_LOG_UNAVAILABLE",
@@ -212,21 +179,7 @@ class CallLogHandler private constructor(
   }
 
   private fun parseSearchRequest(paramsJson: String?): CallLogSearchRequest? {
-    if (paramsJson.isNullOrBlank()) {
-      return CallLogSearchRequest(
-        limit = DEFAULT_CALL_LOG_LIMIT,
-        offset = 0,
-        cachedName = null,
-        number = null,
-        date = null,
-        dateStart = null,
-        dateEnd = null,
-        duration = null,
-        type = null,
-      )
-    }
-
-    val params = parseJsonParamsObject(paramsJson) ?: return null
+    val params = if (paramsJson.isNullOrBlank()) JsonObject(emptyMap()) else parseJsonParamsObject(paramsJson) ?: return null
 
     val limit =
       ((params["limit"] as? JsonPrimitive)?.content?.toIntOrNull() ?: DEFAULT_CALL_LOG_LIMIT)
@@ -253,21 +206,5 @@ class CallLogHandler private constructor(
       duration = duration,
       type = type,
     )
-  }
-
-  private fun callLogJson(callLog: CallLogRecord): JsonObject =
-    buildJsonObject {
-      put("number", JsonPrimitive(callLog.number))
-      put("cachedName", JsonPrimitive(callLog.cachedName))
-      put("date", JsonPrimitive(callLog.date))
-      put("duration", JsonPrimitive(callLog.duration))
-      put("type", JsonPrimitive(callLog.type))
-    }
-
-  companion object {
-    internal fun forTesting(
-      appContext: Context,
-      dataSource: CallLogDataSource,
-    ): CallLogHandler = CallLogHandler(appContext = appContext, dataSource = dataSource)
   }
 }

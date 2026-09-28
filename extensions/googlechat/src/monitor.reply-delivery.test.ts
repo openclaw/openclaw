@@ -1,10 +1,9 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Googlechat tests cover monitor.reply delivery plugin behavior.
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
-import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
-import { GoogleChatApiError } from "./api.js";
 import type { GoogleChatCoreRuntime } from "./monitor-types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -46,15 +45,13 @@ function createCore(params?: {
   } as unknown as GoogleChatCoreRuntime;
 }
 
-let createGoogleChatTypingMessage: typeof import("./monitor-reply-delivery.js").createGoogleChatTypingMessage;
 let deliverGoogleChatReply: typeof import("./monitor-reply-delivery.js").deliverGoogleChatReply;
 
 beforeEach(async () => {
   vi.clearAllMocks();
   mocks.sendGoogleChatMessage.mockResolvedValue(null);
   mocks.updateGoogleChatMessage.mockResolvedValue({});
-  ({ createGoogleChatTypingMessage, deliverGoogleChatReply } =
-    await import("./monitor-reply-delivery.js"));
+  ({ deliverGoogleChatReply } = await import("./monitor-reply-delivery.js"));
 });
 
 afterAll(() => {
@@ -97,32 +94,6 @@ describe("Google Chat reply delivery", () => {
     expect(statusSink).not.toHaveBeenCalled();
   });
 
-  it("sends the first chunk after a confirmed missing typing placeholder", async () => {
-    const core = createCore({ chunks: ["first chunk", "second chunk"] });
-    mocks.updateGoogleChatMessage.mockRejectedValueOnce(
-      new GoogleChatApiError(404, "Google Chat API 404: message not found"),
-    );
-
-    await deliverGoogleChatReply({
-      payload: { text: "two chunks", replyToId: "spaces/AAA/threads/root" },
-      account,
-      spaceId: "spaces/AAA",
-      runtime: createRuntimeSpies(),
-      core,
-      config,
-      typingMessage: createGoogleChatTypingMessage({
-        messageName: "spaces/AAA/messages/typing",
-        requestedThreadName: "spaces/AAA/threads/root",
-        deliveredThreadName: "spaces/AAA/threads/root",
-      }),
-    });
-
-    expect(mocks.sendGoogleChatMessage.mock.calls.map((call) => call[0]?.text)).toEqual([
-      "first chunk",
-      "second chunk",
-    ]);
-  });
-
   it("continues later chunks in the provider fallback thread", async () => {
     const core = createCore({ chunks: ["first chunk", "second chunk"] });
     const runtime = createRuntimeSpies();
@@ -152,42 +123,6 @@ describe("Google Chat reply delivery", () => {
       thread: "spaces/AAA/threads/requested",
     });
     expect(mocks.sendGoogleChatMessage).toHaveBeenNthCalledWith(2, {
-      account,
-      space: "spaces/AAA",
-      text: "second chunk",
-      thread: "spaces/AAA/threads/fallback",
-    });
-  });
-
-  it("continues after a fallback typing placeholder in its delivered thread", async () => {
-    const core = createCore({ chunks: ["first chunk", "second chunk"] });
-    const runtime = createRuntimeSpies();
-    mocks.sendGoogleChatMessage.mockResolvedValueOnce({
-      messageName: "spaces/AAA/messages/second",
-      threadName: "spaces/AAA/threads/fallback",
-    });
-
-    await deliverGoogleChatReply({
-      payload: { text: "two chunks", replyToId: "spaces/AAA/threads/requested" },
-      account,
-      spaceId: "spaces/AAA",
-      runtime,
-      core,
-      config,
-      typingMessage: createGoogleChatTypingMessage({
-        messageName: "spaces/AAA/messages/typing",
-        requestedThreadName: "spaces/AAA/threads/requested",
-        deliveredThreadName: "spaces/AAA/threads/fallback",
-      }),
-    });
-
-    expect(mocks.updateGoogleChatMessage).toHaveBeenCalledWith({
-      account,
-      messageName: "spaces/AAA/messages/typing",
-      text: "first chunk",
-    });
-    expect(mocks.sendGoogleChatMessage).toHaveBeenCalledOnce();
-    expect(mocks.sendGoogleChatMessage).toHaveBeenCalledWith({
       account,
       space: "spaces/AAA",
       text: "second chunk",

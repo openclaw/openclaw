@@ -60,8 +60,9 @@ internal turns suppress project-doc loading and that fallback carrier.
 
 OpenClaw developer instructions cover OpenClaw runtime concerns: source-channel
 delivery, OpenClaw dynamic tools, ACP delegation, adapter context, and the
-active agent workspace profile files. With the OpenClaw-managed bundled stdio
-app-server using standard OpenAI endpoints, skill catalogs, persona files, and tool-routed `MEMORY.md` guidance
+active agent workspace profile files. With an OpenClaw-managed direct stdio
+app-server, including a Desktop executable selected for Computer Use, skill
+catalogs, persona files, memory-provider instructions, and tool-routed `MEMORY.md` guidance
 are appended to the parent model request instructions by a private inference
 relay. Native base and catalog instructions remain unchanged; this new context
 is not written to native conversation history or automatically inherited by
@@ -76,7 +77,11 @@ references once the complete block has been submitted. References dropped or
 truncated by prompt fitting are introduced again on a later turn. Process-local
 tracking resets when the Gateway restarts.
 
-Custom commands, Desktop attachments, external Unix/WebSocket app-server
+The memory plugin receives the complete available tool set, including deferred
+plugin tools, when preparing its instructions. That policy does not depend on
+legacy memory tool names or workspace-file routing.
+
+Custom commands, Desktop proxy attachments, external Unix/WebSocket app-server
 connections, non-OpenAI native providers, custom upstream endpoints, unsupported
 native accounts, locked upstreams, and native `features.respect_system_proxy` profiles retain their existing
 collaboration carrier. Managed relay requests use the Gateway's HTTP(S) proxy

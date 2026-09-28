@@ -348,7 +348,6 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   [CONTRACTS_CHANNEL_SESSION_VITEST_CONFIG, 50],
   [CONTRACTS_CHANNEL_REGISTRY_VITEST_CONFIG, 35],
   [CONTRACTS_PLUGIN_VITEST_CONFIG, 20],
-  ["test/vitest/vitest.tasks.config.ts", 165],
   [CHANNEL_VITEST_CONFIG, 164],
   [UNIT_FAST_VITEST_CONFIG, 160],
   [UNIT_FAST_ISOLATED_VITEST_CONFIG, 159],
@@ -467,7 +466,6 @@ const PROCESS_VITEST_CONFIG = "test/vitest/vitest.process.config.ts";
 const RUNTIME_CONFIG_VITEST_CONFIG = "test/vitest/vitest.runtime-config.config.ts";
 const SECRETS_VITEST_CONFIG = "test/vitest/vitest.secrets.config.ts";
 const SHARED_CORE_VITEST_CONFIG = "test/vitest/vitest.shared-core.config.ts";
-const TASKS_VITEST_CONFIG = "test/vitest/vitest.tasks.config.ts";
 const PACKAGE_CONTRACT_VITEST_CONFIG = "test/vitest/vitest.package-contract.config.ts";
 const TOOLING_DOCKER_VITEST_CONFIG = "test/vitest/vitest.tooling-docker.config.ts";
 const TOOLING_ISOLATED_VITEST_CONFIG = "test/vitest/vitest.tooling-isolated.config.ts";
@@ -528,7 +526,6 @@ const VITEST_CONFIG_BY_KIND: Record<string, string> = {
   process: PROCESS_VITEST_CONFIG,
   secrets: SECRETS_VITEST_CONFIG,
   sharedCore: SHARED_CORE_VITEST_CONFIG,
-  tasks: TASKS_VITEST_CONFIG,
   tui: TUI_VITEST_CONFIG,
   tuiPty: TUI_PTY_VITEST_CONFIG,
   mediaUnderstanding: MEDIA_UNDERSTANDING_VITEST_CONFIG,
@@ -1556,7 +1553,6 @@ const exactSourceDirectoryRoots = [
   "src/process",
   "src/secrets",
   "src/shared",
-  "src/tasks",
   "src/tui",
   "src/utils",
   "src/wizard",
@@ -2764,6 +2760,22 @@ const pluginSdkEntryOwners = [
 // Keep only genuinely ambiguous paths explicit; conventional discovery owns
 // unambiguous scripts and direct imports without a second inventory.
 const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
+  // The native gate/check handoff crosses processes outside the import graph.
+  ["scripts/check.mts", ["check", "pr-gate-base"]],
+  [
+    "scripts/pr-lib/gates.sh",
+    [
+      "pr-correction-preparation",
+      "pr-crabbox-gate-plan",
+      "pr-main-refresh",
+      "pr-merge-hosted",
+      "pr-metadata",
+      "pr-prepare-gates",
+      "pr-prepare-preflight",
+      "pr-wrappers",
+      "pr-gate-base",
+    ],
+  ],
   [".github/workflows/ci.yml", ["ci-platform-checkout", "ci-linux-git", "ci-git-owner"]],
   [".github/actions/setup-android-toolchain/action.yml", [workflowPlanning]],
   [".github/workflows/docs-sync-publish.yml", ["docs-sync-publish"]],
@@ -2866,6 +2878,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   ],
   ["scripts/lib/managed-child-process.mts", ["managed-child-process", "lint-status"]],
   ["scripts/lib/dist-artifact-ownership.mts", ["dist-artifact-ownership", "lint-status"]],
+  ["scripts/lib/dist-artifact-lock.mts", ["dist-artifact-ownership", "lint-status"]],
   ["scripts/docker-e2e-rerun.mts", ["docker-e2e-helper-cli"]],
   ["scripts/openclaw-postpack.mjs", [TOOLING_VITEST_CONFIG]],
   ["scripts/package-manifest.mjs", ["test/openclaw-prepack.test.ts"]],
@@ -4357,9 +4370,6 @@ function classifyTarget(arg: string, cwd: string, beforeDatabaseWorkerOwnership 
   }
   if (isPathAtOrUnder(relative, "src/shared")) {
     return "sharedCore";
-  }
-  if (isPathAtOrUnder(relative, "src/tasks")) {
-    return "tasks";
   }
   if (isPathAtOrUnder(relative, "src/tui")) {
     return "tui";

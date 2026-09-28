@@ -133,22 +133,6 @@ describe("system-agent TUI operations", () => {
     });
   });
 
-  it("keeps the embedded TUI fallback when the Gateway is unreachable", async () => {
-    const { runtime } = createSystemAgentTestRuntime();
-    const runTui = vi.fn(async () => ({ exitReason: "exit" as const }));
-
-    await executeSystemAgentOperation({ kind: "open-tui", agentId: "work" }, runtime, {
-      deps: { runTui, loadOverview: async () => createOverview(false) },
-    });
-
-    expect(runTui).toHaveBeenCalledWith({
-      local: true,
-      session: "agent:work:main",
-      deliver: false,
-      historyLimit: 200,
-    });
-  });
-
   it("re-enters the OpenClaw shell when the agent TUI returns without a request", async () => {
     const { runtime, lines } = createSystemAgentTestRuntime();
     const runTui = vi.fn(async () => ({

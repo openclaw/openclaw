@@ -40,7 +40,7 @@ describe("volatile session tab cleanup across Browser plugin bundles", () => {
       route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9999" } as const,
       profile: "remote",
     };
-    first.trackSessionBrowserTab(tab);
+    await first.trackSessionBrowserTab(tab);
     const started = createDeferred<void>();
     const finish = createDeferred<void>();
     const closeTab = vi.fn<CloseTab>(async () => {
@@ -51,7 +51,7 @@ describe("volatile session tab cleanup across Browser plugin bundles", () => {
     const params = { sessionKeys: [tab.sessionKey], closeTab, isCurrent: () => current };
     const closing = first.closeTrackedBrowserTabsForSessions(params);
     await started.promise;
-    follower.trackSessionBrowserTab(tab);
+    await follower.trackSessionBrowserTab(tab);
     const waiting = follower.closeTrackedBrowserTabsForSessions(params);
     try {
       current = false;
@@ -71,7 +71,7 @@ describe("volatile session tab cleanup across Browser plugin bundles", () => {
   it("shares one close attempt and releases a failed reservation for retry", async () => {
     const first = await freshRegistry("first");
     const duplicate = await freshRegistry("duplicate");
-    first.trackSessionBrowserTab({
+    await first.trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "bridge-tab",
       route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9999" },

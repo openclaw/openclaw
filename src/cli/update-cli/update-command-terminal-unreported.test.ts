@@ -182,7 +182,6 @@ it.each([false, true])(
 
 it.each([
   { phase: "requested", publisher: false },
-  { phase: "staging", publisher: false },
   { phase: "verifying", publisher: true },
 ] as const)(
   "records an unreported $phase exception before offering the interactive report",

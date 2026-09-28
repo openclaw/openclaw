@@ -110,6 +110,7 @@ import {
   triggerInternalHookMock,
 } from "./compact.hooks.harness.js";
 import {
+  createCompactHooksAuthStorage,
   createCompactHooksPreparedModelRuntime,
   type CompactHooksQueuedCompaction,
 } from "./compact.hooks.metadata.test-support.js";
@@ -118,12 +119,13 @@ import {
   clearActiveEmbeddedRun,
   isEmbeddedAgentRunActive,
   isEmbeddedAgentRunHandleActive,
+  queueEmbeddedAgentMessageWithOutcomeAsync,
   setActiveEmbeddedRun,
 } from "./runs.js";
 
 let compactEmbeddedAgentSessionDirect: typeof import("./compact.js").compactEmbeddedAgentSessionDirect;
 let compactEmbeddedAgentSession: CompactHooksQueuedCompaction;
-let compactTesting: typeof import("./compact.js").testing;
+let compactTesting: typeof import("./compact.hooks.owner-test-support.js");
 let onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 let onInternalSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onInternalSessionTranscriptUpdate;
 let diagnosticEvents: typeof import("../../infra/diagnostic-events.js");
@@ -258,7 +260,7 @@ function mockResolvedModel(params?: {
             : { compat: { supportsTools: params.supportsTools } }),
         },
         error: null,
-        authStorage: { setRuntimeApiKey: vi.fn() },
+        authStorage: createCompactHooksAuthStorage(),
         modelRegistry: {},
       };
     },
@@ -347,7 +349,11 @@ const sessionHook = (action: string): SessionHookEvent | undefined =>
     return event?.type === "session" && event.action === action;
   })?.[0] as SessionHookEvent | undefined;
 
-async function runCompactionHooks(params: { sessionKey: string; messageProvider?: string }) {
+async function runCompactionHooks(params: {
+  sessionKey: string;
+  messageProvider?: string;
+  onHookMessages?: Parameters<typeof compactTesting.runCompactionHooks>[0]["onHookMessages"];
+}) {
   // Build metrics through the production helper so hook payload assertions stay
   // aligned with compaction token accounting.
   const originalMessages = sessionMessages.slice(1) as AgentMessage[];
@@ -358,7 +364,8 @@ async function runCompactionHooks(params: { sessionKey: string; messageProvider?
     estimateTokensFn: estimateTokensMock as (message: AgentMessage) => number,
   });
 
-  const hookState = await compactTesting.runBeforeCompactionHooks({
+  await compactTesting.runCompactionHooks({
+    phase: "before",
     hookRunner,
     sessionId: TEST_SESSION_ID,
     sessionKey: params.sessionKey,
@@ -366,14 +373,15 @@ async function runCompactionHooks(params: { sessionKey: string; messageProvider?
     workspaceDir: TEST_WORKSPACE_DIR,
     messageProvider: params.messageProvider,
     metrics: beforeMetrics,
+    onHookMessages: params.onHookMessages,
   });
 
-  await compactTesting.runAfterCompactionHooks({
+  await compactTesting.runCompactionHooks({
+    phase: "after",
     hookRunner,
     sessionId: TEST_SESSION_ID,
     sessionAgentId: "main",
-    hookSessionKey: hookState.hookSessionKey,
-    missingSessionKey: hookState.missingSessionKey,
+    sessionKey: params.sessionKey,
     workspaceDir: TEST_WORKSPACE_DIR,
     messageProvider: params.messageProvider,
     messageCountAfter: 1,
@@ -383,19 +391,20 @@ async function runCompactionHooks(params: { sessionKey: string; messageProvider?
     summaryLength: "summary".length,
     tokensBefore: 120,
     firstKeptEntryId: "entry-1",
+    onHookMessages: params.onHookMessages,
   });
 }
 
 beforeAll(async () => {
   const loaded = await loadCompactHooksHarness();
-  [diagnosticEvents, diagnosticRunActivity] = await Promise.all([
+  [diagnosticEvents, diagnosticRunActivity, compactTesting] = await Promise.all([
     import("../../infra/diagnostic-events.js"),
     import("../../logging/diagnostic-run-activity.js"),
+    import("./compact.hooks.owner-test-support.js"),
   ]);
   compactEmbeddedAgentSessionDirect = (params) =>
     loaded.compactEmbeddedAgentSessionDirect({ agentId: "main", ...params });
   compactEmbeddedAgentSession = loaded.compactEmbeddedAgentSession;
-  compactTesting = loaded.testing;
   onSessionTranscriptUpdate = loaded.onSessionTranscriptUpdate;
   onInternalSessionTranscriptUpdate = loaded.onInternalSessionTranscriptUpdate;
   TEST_STORE_PATH = await compactionFixture.prepare();
@@ -1092,7 +1101,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     resolveModelMock.mockReturnValue({
       model: undefined,
       error: "stop after bootstrap",
-      authStorage: { setRuntimeApiKey: vi.fn() },
+      authStorage: createCompactHooksAuthStorage(),
       modelRegistry: {},
     } as never);
 
@@ -1148,7 +1157,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     resolveModelMock.mockReturnValue({
       model: undefined,
       error: "stop after bootstrap",
-      authStorage: { setRuntimeApiKey: vi.fn() },
+      authStorage: createCompactHooksAuthStorage(),
       modelRegistry: {},
     } as never);
 
@@ -1591,7 +1600,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       signal: new AbortController().signal,
       effectiveModel: { provider: "openai", id: "fake", api: "responses", input: [] } as never,
       resolvedApiKey: undefined,
-      authStorage: { setRuntimeApiKey: vi.fn() },
+      authStorage: createCompactHooksAuthStorage(),
       config: undefined,
       provider: "openai",
       modelId: "gpt-5.4",
@@ -1659,7 +1668,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       signal: new AbortController().signal,
       effectiveModel: { provider: "openai", id: "fake", api: "responses", input: [] } as never,
       resolvedApiKey: undefined,
-      authStorage: { setRuntimeApiKey: vi.fn() },
+      authStorage: createCompactHooksAuthStorage(),
       config: undefined,
       provider: "openai",
       modelId: "gpt-5.6-sol",
@@ -1956,7 +1965,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       logicalRef: { provider, model: modelId },
       model: { provider: "openai", api: "openai-responses", id: "fake", input: [] },
       error: null,
-      authStorage: { setRuntimeApiKey: vi.fn() },
+      authStorage: createCompactHooksAuthStorage(),
       modelRegistry: {},
     }));
     createOpenClawCodingToolsMock.mockReturnValueOnce([
@@ -3192,32 +3201,8 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       const hookEvent = event as { action?: string; messages?: string[] };
       hookEvent.messages?.push(`${hookEvent.action} notice`);
     });
-    const beforeMetrics = compactTesting.buildBeforeCompactionHookMetrics({
-      originalMessages: sessionMessages.slice(1) as AgentMessage[],
-      currentMessages: sessionMessages.slice(1) as AgentMessage[],
-      estimateTokensFn: estimateTokensMock as (message: AgentMessage) => number,
-    });
-
-    const hookState = await compactTesting.runBeforeCompactionHooks({
-      hookRunner,
-      sessionId: TEST_SESSION_ID,
+    await runCompactionHooks({
       sessionKey: "agent:main:session-1",
-      sessionAgentId: "main",
-      workspaceDir: TEST_WORKSPACE_DIR,
-      metrics: beforeMetrics,
-      onHookMessages,
-    });
-    await compactTesting.runAfterCompactionHooks({
-      hookRunner,
-      sessionId: TEST_SESSION_ID,
-      sessionAgentId: "main",
-      hookSessionKey: hookState.hookSessionKey,
-      missingSessionKey: hookState.missingSessionKey,
-      workspaceDir: TEST_WORKSPACE_DIR,
-      messageCountAfter: 1,
-      tokensAfter: 10,
-      compactedCount: 1,
-      sessionFile: TEST_SESSION_KEY,
       onHookMessages,
     });
 
@@ -3591,7 +3576,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
             input: [],
           },
           error: null,
-          authStorage: { setRuntimeApiKey: vi.fn() },
+          authStorage: createCompactHooksAuthStorage(),
           modelRegistry: {},
         };
       },
@@ -4059,7 +4044,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
 
   it("disposes the context engine once when route materialization rejects", async () => {
     const dispose = vi.fn(async () => {});
-    const authStorage = { setRuntimeApiKey: vi.fn() };
+    const authStorage = createCompactHooksAuthStorage();
     resolveContextEngineMock.mockResolvedValue({
       info: { ownsCompaction: true },
       compact: contextEngineCompactMock,
@@ -4114,7 +4099,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
   it("stops preparation when host authority expires during model resolution before route rematerialization", async () => {
     const modelResolutionStarted = createDeferred();
     const releaseModelResolution = createDeferred();
-    const authStorage = { setRuntimeApiKey: vi.fn() };
+    const authStorage = createCompactHooksAuthStorage();
     let hostActive = true;
     resolveModelAsyncMock.mockImplementationOnce(async (provider, modelId) => {
       modelResolutionStarted.resolve(undefined);
@@ -6562,6 +6547,57 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(hookRunner.runBeforeCompaction).not.toHaveBeenCalled();
     expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
     expect(isEmbeddedAgentRunHandleActive(TEST_SESSION_ID)).toBe(false);
+  });
+
+  it("skips a faulty compacting probe and cancels the live compaction behind it", async () => {
+    const faultyAbort = vi.fn();
+    const faultyHandle = {
+      kind: "embedded" as const,
+      queueMessage: async () => {},
+      isStreaming: () => true,
+      isCompacting: () => {
+        throw new Error("compaction probe unavailable");
+      },
+      abort: faultyAbort,
+    };
+    setActiveEmbeddedRun("session-faulty-probe", faultyHandle, "agent:main:faulty-probe");
+    const pending = mockPendingContextEngineCompaction();
+    try {
+      const resultPromise = compactEmbeddedAgentSession(
+        wrappedCompactionArgs({ trigger: "manual" }),
+      );
+      await pending.started.promise;
+      expect(isEmbeddedAgentRunHandleActive(TEST_SESSION_ID)).toBe(true);
+
+      // An unreadable compaction state fails closed: the caller keeps the same
+      // structured rejection a genuinely compacting run returns, and the probe
+      // exception never reaches the steering caller.
+      await expect(
+        queueEmbeddedAgentMessageWithOutcomeAsync("session-faulty-probe", "steer"),
+      ).resolves.toMatchObject({ queued: false, reason: "compacting" });
+      await expect(
+        queueEmbeddedAgentMessageWithOutcomeAsync(TEST_SESSION_ID, "steer"),
+      ).resolves.toMatchObject({ queued: false, reason: "compacting" });
+
+      // A restart sweep walks past the unreadable handle and cancels the
+      // compaction that is really running behind it.
+      expect(abortEmbeddedAgentRun(undefined, { mode: "compacting", reason: "restart" })).toBe(
+        true,
+      );
+      expect(faultyAbort).not.toHaveBeenCalled();
+      expect(isEmbeddedAgentRunHandleActive("session-faulty-probe")).toBe(true);
+      expect(pending.signal?.aborted).toBe(true);
+
+      await expect(resultPromise).resolves.toMatchObject({
+        ok: false,
+        compacted: false,
+        reason: expect.stringContaining("abort"),
+      });
+      expect(isEmbeddedAgentRunHandleActive(TEST_SESSION_ID)).toBe(false);
+    } finally {
+      pending.release.resolve(undefined);
+      clearActiveEmbeddedRun("session-faulty-probe", faultyHandle, "agent:main:faulty-probe");
+    }
   });
 
   it.each([
