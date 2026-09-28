@@ -26,11 +26,9 @@ import {
   readArtifactRecord,
   writeArtifactRecord,
 } from "./lib/build-artifact-cache.mts";
+import { runCancelableCommand } from "./lib/cancelable-command.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
-import {
-  distArtifactEntryArgs,
-  withDistArtifactOwnership,
-} from "./lib/dist-artifact-ownership.mts";
+import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
 import { toErrorObject } from "./lib/error-format.mts";
 import { BOUNDARY_CACHE_ROOT, BoundaryInputSnapshot } from "./lib/extension-boundary-inputs.mts";
 import { prepareExtensionBoundaryProjects } from "./lib/extension-boundary-projects.mts";
@@ -42,6 +40,7 @@ import {
 } from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
+import { prepareExtensionPackageBoundaryArtifacts } from "./prepare-extension-package-boundary-artifacts.mts";
 
 type BoundaryMode = "all" | "compile" | "canary";
 type StepOutputCapture = { text: string; truncatedChars: number };
@@ -67,6 +66,7 @@ type StepFailureParams = {
 };
 type StepResult = { stdout: string; stderr: string; elapsedMs: number };
 type RunNodeStepParams = {
+  signal?: AbortSignal;
   env?: NodeJS.ProcessEnv;
   abortController?: AbortController;
   onFailure?: (error: ReturnType<typeof attachStepFailureMetadata>) => void;
@@ -82,9 +82,6 @@ type BoundaryStep = {
 type BoundaryCheckParams = { rootDir?: string; processObject?: Pick<EventEmitter, "on" | "off"> };
 const repoRoot = resolveRepoRoot(import.meta.url);
 const compilerWorker = resolve(repoRoot, "scripts/compile-extension-boundary.mts");
-const prepareBoundaryArtifactsArgs = distArtifactEntryArgs(
-  resolve(repoRoot, "scripts/prepare-extension-package-boundary-artifacts.mts"),
-);
 const extensionPackageBoundaryBaseConfig = "../tsconfig.package-boundary.base.json";
 const FAILURE_OUTPUT_TAIL_LINES = 40;
 const STEP_OUTPUT_MAX_CHARS = 256 * 1024;
@@ -326,7 +323,12 @@ export async function runNodeStepAsync(
       stdio: ["ignore", "pipe", "pipe"],
       shell: false,
       timeoutMs: resolvedTimeoutMs,
-      signal: params.abortController?.signal,
+      signal: params.signal
+        ? AbortSignal.any([
+            params.signal,
+            ...(params.abortController ? [params.abortController.signal] : []),
+          ])
+        : params.abortController?.signal,
       abortKillGraceMs: 0,
       requireProcessTreeExit: process.platform !== "win32",
       onSignal(signal) {
@@ -352,6 +354,7 @@ export async function runNodeStepAsync(
       process.exitCode = signalExitCode(receivedSignal);
       throw new Error(`${label} interrupted by ${receivedSignal}`);
     }
+    params.signal?.throwIfAborted();
     if (code !== 0) {
       throw Object.assign(new Error(`${label} failed with exit code ${code}`), {
         code: "NONZERO_EXIT",
@@ -401,14 +404,18 @@ export async function runNodeStepAsync(
 /**
  * Runs boundary check steps with bounded concurrency.
  */
-export async function runNodeStepsWithConcurrency(steps: BoundaryStep[], concurrency: number) {
+export async function runNodeStepsWithConcurrency(
+  steps: BoundaryStep[],
+  concurrency: number,
+  signal?: AbortSignal,
+) {
   const abortController = new AbortController();
   let firstFailure: unknown = null;
   const failures: unknown[] = [];
   await pMap(
     steps,
     async (step) => {
-      if (abortController.signal.aborted) {
+      if (abortController.signal.aborted || signal?.aborted) {
         return;
       }
       try {
@@ -416,6 +423,7 @@ export async function runNodeStepsWithConcurrency(steps: BoundaryStep[], concurr
         const result = await runNodeStepAsync(step.label, step.args, step.timeoutMs, {
           env: step.env,
           abortController,
+          signal,
           onFailure(error) {
             firstFailure ??= error;
           },
@@ -438,6 +446,7 @@ export async function runNodeStepsWithConcurrency(steps: BoundaryStep[], concurr
       ? new AggregateError(failures, primary.message, { cause: primary })
       : primary;
   }
+  signal?.throwIfAborted();
 }
 
 /**
@@ -495,12 +504,19 @@ function resolveBoundaryInputReceiptPath(extensionId: string, rootDir = repoRoot
 function resolveBoundaryTsStampPath(extensionId: string, rootDir = repoRoot) {
   return resolve(rootDir, BOUNDARY_CACHE_ROOT, "compile", `${extensionId}.json`);
 }
-async function runCompileCheck(extensionIds: string[]) {
+async function runCompileCheck(extensionIds: string[], signal: AbortSignal) {
   const prepStartedAt = Date.now();
   process.stdout.write(
     `preparing plugin-sdk boundary artifacts for ${extensionIds.length} plugins\n`,
   );
-  await runNodeStepAsync("plugin-sdk boundary prep", prepareBoundaryArtifactsArgs, 420_000);
+  // One deadline covers preparation and admission; no outer timer kills its
+  // owner before the compiler and asynchronous locks have been joined.
+  await prepareExtensionPackageBoundaryArtifacts(
+    [],
+    process.env,
+    AbortSignal.any([signal, AbortSignal.timeout(420_000)]),
+  );
+  signal.throwIfAborted();
   const prepElapsedMs = Date.now() - prepStartedAt;
   const compileStartedAt = Date.now();
   const availableParallelism = os.availableParallelism();
@@ -598,7 +614,8 @@ async function runCompileCheck(extensionIds: string[]) {
     );
   }
   if (steps.length > 0) {
-    await runNodeStepsWithConcurrency(steps, concurrency);
+    await runNodeStepsWithConcurrency(steps, concurrency, signal);
+    signal.throwIfAborted();
     const after = new BoundaryInputSnapshot(repoRoot, metadataInputs);
     const records = completed.map((unit) =>
       Object.assign(unit, {
@@ -626,10 +643,11 @@ async function runCompileCheck(extensionIds: string[]) {
   };
 }
 
-async function runCanaryCheck(extensionIds: string[]) {
+async function runCanaryCheck(extensionIds: string[], signal: AbortSignal) {
   const startedAt = Date.now();
   const results = await Promise.allSettled(
     extensionIds.map(async (extensionId, index) => {
+      signal.throwIfAborted();
       const { canaryPath, tsconfigPath } = resolveCanaryArtifactPaths(extensionId);
 
       cleanupCanaryArtifacts(extensionId);
@@ -670,6 +688,7 @@ async function runCanaryCheck(extensionIds: string[]) {
             }),
           ],
           120_000,
+          { signal },
         );
         throw new Error(
           `${extensionId} canary unexpectedly passed\n${result.stdout}${result.stderr}`,
@@ -707,7 +726,8 @@ async function runCanaryCheck(extensionIds: string[]) {
 /**
  * Runs the extension package TypeScript boundary check.
  */
-async function runBoundaryCheck(argv: string[]) {
+async function runBoundaryCheck(argv: string[], signal: AbortSignal) {
+  signal.throwIfAborted();
   const startedAt = Date.now();
   const mode = parseMode(argv);
   const optInExtensionIds = collectOptInExtensionIds();
@@ -726,11 +746,13 @@ async function runBoundaryCheck(argv: string[]) {
     cleanupCanaryArtifactsForExtensions(cleanupExtensionIds);
     if (mode === "all" || mode === "compile") {
       ({ prepElapsedMs, compileCount, skippedCompileCount, compileElapsedMs, compileTimings } =
-        await runCompileCheck(optInExtensionIds));
+        await runCompileCheck(optInExtensionIds, signal));
     }
     if (shouldRunCanary) {
-      ({ canaryElapsedMs } = await runCanaryCheck(canaryExtensionIds));
+      signal.throwIfAborted();
+      ({ canaryElapsedMs } = await runCanaryCheck(canaryExtensionIds, signal));
     }
+    signal.throwIfAborted();
     process.stdout.write(
       formatBoundaryCheckSuccessSummary({
         mode,
@@ -755,9 +777,18 @@ async function runBoundaryCheck(argv: string[]) {
 }
 
 export async function main(argv: string[] = process.argv.slice(2)) {
-  return withDistArtifactOwnership(repoRoot, () => runBoundaryCheck(argv));
+  return runCancelableCommand((signal) =>
+    withDistArtifactOwnership(
+      repoRoot,
+      async () => {
+        await runBoundaryCheck(argv, signal);
+        return 0;
+      },
+      signal,
+    ),
+  );
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
-  await main();
+  process.exitCode = await main();
 }

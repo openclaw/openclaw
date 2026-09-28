@@ -155,7 +155,14 @@ export const withDistArtifactOwnership: WithDistArtifactOwnership = async (
   const directory = resolveDistArtifactLockPath(fs.realpathSync(rootDir));
   if (directory === inheritedOwnershipPath) {
     signal?.throwIfAborted();
-    return await run();
+    try {
+      return await run();
+    } catch (error) {
+      // A CLI can turn this error into an exit status before the entry launcher sees it.
+      // Record uncertain cleanup at the ownership boundary so the parent retains the lock.
+      retainUnjoinedDistArtifactWork(directory, error);
+      throw error;
+    }
   }
   const lock = await acquireDistArtifactOwnership(rootDir, true, signal);
   try {

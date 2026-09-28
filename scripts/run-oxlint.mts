@@ -8,13 +8,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import JSON5 from "json5";
 import type { DummyRuleMap, OxlintConfig } from "oxlint";
+import { runCancelableCommand } from "./lib/cancelable-command.mts";
 import { limitsAreAdvisory, reportLimitViolations } from "./lib/check-limits.mts";
 import { parseStaticDiagnostics } from "./lib/ci-static-check-evidence.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
-import {
-  distArtifactEntryArgs,
-  withDistArtifactOwnership,
-} from "./lib/dist-artifact-ownership.mts";
+import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
 import {
   applyLocalOxlintPolicy,
   resolveLocalCheckEnv,
@@ -22,12 +20,9 @@ import {
 } from "./lib/local-check-runtime.mts";
 import { createManagedCommandInvocation, runManagedCommand } from "./lib/managed-child-process.mts";
 import { readProcessMemoryCapacity } from "./lib/process-memory.mts";
+import { prepareExtensionPackageBoundaryArtifacts } from "./prepare-extension-package-boundary-artifacts.mts";
 import { resolvePathEnvKey } from "./windows-cmd-helpers.mjs";
 
-const PREPARE_EXTENSION_BOUNDARY_ARGS = distArtifactEntryArgs(
-  path.resolve("scripts", "prepare-extension-package-boundary-artifacts.mts"),
-  ["--mode=package-boundary"],
-);
 const OXLINT_PREPARE_SKIP_FLAGS = new Set([
   "--help",
   "-h",
@@ -144,6 +139,7 @@ async function runWithAdvisoryLimits(
   bin: string,
   args: string[],
   env: NodeJS.ProcessEnv,
+  signal?: AbortSignal,
 ): Promise<OxlintRunResult> {
   const configOption = oxlintOption(args, "--config", "-c");
   const configPath = path.resolve(configOption.value ?? ".oxlintrc.json");
@@ -151,6 +147,7 @@ async function runWithAdvisoryLimits(
     bin,
     args,
     env,
+    signal,
     requireProcessTreeExit: process.platform !== "win32",
   };
   const evidenceId = env.OPENCLAW_CI_STATIC_EVIDENCE_ID;
@@ -517,27 +514,15 @@ function resolveOxlintToolchainEnv(
   };
 }
 
-async function prepareExtensionPackageBoundaryArtifacts(env: NodeJS.ProcessEnv) {
-  const status = await runManagedCommand({
-    bin: process.execPath,
-    shell: false,
-    args: PREPARE_EXTENSION_BOUNDARY_ARGS,
-    env,
-    requireProcessTreeExit: process.platform !== "win32",
-  });
-
-  if (status !== 0) {
-    throw new Error(`prepare-extension-package-boundary-artifacts failed with exit code ${status}`);
-  }
-}
-
 /**
  * Applies wrapper policy and runs oxlint with the final argument list.
  */
 async function runOxlint(
   argv: string[] = process.argv.slice(2),
   runtimeEnv: NodeJS.ProcessEnv = process.env,
+  signal?: AbortSignal,
 ): Promise<OxlintRunResult> {
+  signal?.throwIfAborted();
   const focusedConfig = argv.includes(OPENCLAW_FOCUSED_CONFIG_FLAG);
   const oxlintArgs = argv.filter((arg) => arg !== OPENCLAW_FOCUSED_CONFIG_FLAG);
   const localEnv = resolveLocalCheckEnv(runtimeEnv);
@@ -580,12 +565,14 @@ async function runOxlint(
 
   if (needsArtifactPreparation) {
     // Declaration compilation owns its Go policy; lint limits belong to the oxlint child.
-    await prepareExtensionPackageBoundaryArtifacts(localEnv);
+    await prepareExtensionPackageBoundaryArtifacts(["--mode=package-boundary"], localEnv, signal);
   }
+  signal?.throwIfAborted();
   return await runWithAdvisoryLimits(
     oxlintPath,
     finalArgs,
     resolveOxlintToolchainEnv(oxlintPath, env),
+    signal,
   );
 }
 
@@ -593,13 +580,18 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   const argv = process.argv.slice(2);
   // Skip-prepare callers still consume shared declarations. Source-only lint
   // remains independent; sharded lint inherits its parent's owner.
-  const result =
-    !argv.includes(OPENCLAW_FOCUSED_CONFIG_FLAG) &&
-    shouldPrepareExtensionPackageBoundaryArtifacts(argv)
-      ? await withDistArtifactOwnership(process.cwd(), () => runOxlint(argv))
-      : await runOxlint(argv);
-  process.exitCode = result.status;
-  if (result.evidence) {
+  let result: OxlintRunResult | undefined;
+  process.exitCode = await runCancelableCommand(async (signal) => {
+    const run = () => runOxlint(argv, process.env, signal);
+    result =
+      !argv.includes(OPENCLAW_FOCUSED_CONFIG_FLAG) &&
+      shouldPrepareExtensionPackageBoundaryArtifacts(argv)
+        ? await withDistArtifactOwnership(process.cwd(), run, signal)
+        : await run();
+    signal.throwIfAborted();
+    return result.status;
+  });
+  if (result?.evidence && process.exitCode === result.status) {
     console.log(`\n[ci-static:oxlint:leaf] ${JSON.stringify(result.evidence)}`);
   }
 }

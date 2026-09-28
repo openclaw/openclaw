@@ -13,6 +13,7 @@ import {
   resolveRepoToolBinPath,
 } from "../../scripts/lib/local-check-runtime.mts";
 import { resolveTsxImport } from "../../scripts/lib/tsx-cli-shim.mjs";
+import { installDistArtifactScripts } from "./dist-artifact-fixture.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -486,6 +487,12 @@ describe("local-check-runtime", () => {
     "keeps prep and oxlint resource policies separate with $name",
     ({ goEnv, prepGoEnv, lintGoEnv }) => {
       const cwd = createTempDir("openclaw-oxlint-go-limit-");
+      fs.writeFileSync(path.join(cwd, "package.json"), '{"type":"module"}');
+      fs.writeFileSync(path.join(cwd, "pnpm-workspace.yaml"), "packages: []\n");
+      installDistArtifactScripts(cwd, ["run-oxlint.mts"], {
+        compiler: false,
+        dependencies: ["@openclaw/fs-safe", "json5"],
+      });
       const binDir = path.join(cwd, "node_modules", ".bin");
       const scriptsDir = path.join(cwd, "scripts");
       const capturePath = path.join(cwd, "children.jsonl");
@@ -498,7 +505,7 @@ fs.appendFileSync(process.env.CAPTURE_PATH, JSON.stringify({ step, goEnv, args: 
 `;
       fs.writeFileSync(
         path.join(scriptsDir, "prepare-extension-package-boundary-artifacts.mts"),
-        `import fs from "node:fs";\nconst step = "prep";\n${captureSource}`,
+        `import fs from "node:fs";\nexport async function prepareExtensionPackageBoundaryArtifacts(args, env) { const step = "prep";\n${captureSource.replaceAll("process.env", "env").replace("process.argv.slice(2)", "args")} }\n`,
         "utf8",
       );
       fs.writeFileSync(
@@ -515,7 +522,7 @@ fs.appendFileSync(process.env.CAPTURE_PATH, JSON.stringify({ step, goEnv, args: 
 
       const result = spawnSync(
         process.execPath,
-        [path.resolve("scripts/run-oxlint.mjs"), "--tsconfig", "extensions/tsconfig.json"],
+        [path.join(cwd, "scripts/run-oxlint.mts"), "--tsconfig", "extensions/tsconfig.json"],
         { cwd, encoding: "utf8", env },
       );
 

@@ -21,8 +21,11 @@ import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { waitForDead } from "../helpers/process-wait.js";
 import { installDistArtifactScripts as installScripts } from "./dist-artifact-fixture.js";
 import {
+  hasSemanticTestBackend,
   materializeNativeCompiler,
   overrideNativeFixtureExecutable,
+  semanticFixtureEnv,
+  stopSemanticFixtureScopes,
 } from "./native-boundary-fixture.js";
 import { createFixture as createDeclarationFixture } from "./tsdown-declaration-fixture.js";
 
@@ -114,6 +117,7 @@ async function runWithProcesses(
       script: string,
       args?: string[],
       resourceOwner?: ReturnType<typeof createVitestResourceOwner>,
+      semantic?: boolean,
     ) => {
       waiting: Promise<void>;
       done: Promise<{ code: unknown; output: string }>;
@@ -148,6 +152,7 @@ async function runWithProcesses(
   const children: ReturnType<typeof spawn>[] = [];
   const completions: Promise<unknown>[] = [];
   const diagnostics: (() => string)[] = [];
+  const semanticRoots = new Set<string>();
   let cleanupPromise: Promise<void> | undefined;
   const cleanup = () =>
     (cleanupPromise ??= fixture.verifyCleanup(async () => {
@@ -161,6 +166,14 @@ async function runWithProcesses(
         }
       }
       await Promise.allSettled(completions);
+      const scopeFailures: unknown[] = [];
+      for (const root of semanticRoots) {
+        try {
+          stopSemanticFixtureScopes(root);
+        } catch (error) {
+          scopeFailures.push(error);
+        }
+      }
       // Crash cases deliberately orphan a compiler; its barrier closes before
       // process exit. Join that process too before deleting the fixture.
       const orphans = await Promise.allSettled(
@@ -175,6 +188,7 @@ async function runWithProcesses(
       const failures = orphans.flatMap((result) =>
         result.status === "rejected" ? [result.reason] : [],
       );
+      failures.push(...scopeFailures);
       if (failures.length) {
         throw new AggregateError(failures, "Fixture orphan cleanup unverified");
       }
@@ -208,13 +222,15 @@ async function runWithProcesses(
         socket.on('data', () => socket.end());
       `,
       waitEvent,
-      start: (root, script, args, resourceOwner) => {
+      start: (root, script, args, resourceOwner, semantic = false) => {
         signal.throwIfAborted();
+        if (semantic) semanticRoots.add(root);
         const commandArgs = [script, ...(args ?? [])];
         const child = spawn(testNodeExecPath, commandArgs, {
           cwd: root,
           env: {
             ...process.env,
+            ...(semantic ? semanticFixtureEnv(root) : {}),
             ...(resourceOwner
               ? { TMPDIR: resourceOwner.root, TMP: resourceOwner.root, TEMP: resourceOwner.root }
               : {}),
@@ -293,9 +309,7 @@ describe("native check launchers in paths with spaces", () => {
         const nativeJob = "src/process/supervisor/service-child-windows-job-native.ts";
         write(root, nativeJob, fs.readFileSync(path.join(sourceRoot, nativeJob), "utf8"));
         const compiler = script === "run-tsgo-core-test-shards.mts";
-        const workload = compiler
-          ? "node_modules/typescript/compiler.mjs"
-          : "scripts/prepare-extension-package-boundary-artifacts.mts";
+        const workload = compiler ? "node_modules/typescript/compiler.mjs" : "tools/prepare.mjs";
         const observed = path.join(root, "child.json");
         const settled = path.join(root, "child-settled");
         const consumed = path.join(root, "lint-consumed");
@@ -323,6 +337,18 @@ describe("native check launchers in paths with spaces", () => {
           if (process.platform === "win32") {
             write(root, `${workload}.cmd`, `@"${testNodeExecPath}" "%~dp0compiler.mjs" %*\r\n`);
           }
+        } else {
+          write(
+            root,
+            "scripts/prepare-extension-package-boundary-artifacts.mts",
+            `
+import { runManagedCommand } from "./lib/managed-child-process.mts";
+export async function prepareExtensionPackageBoundaryArtifacts(args, env, signal) {
+  const status = await runManagedCommand({ bin: process.execPath, args: ["tools/prepare.mjs", ...args], env, signal, requireProcessTreeExit: true });
+  signal?.throwIfAborted();
+  if (status !== 0) throw new Error("fixture preparation failed: " + status);
+}`,
+          );
         }
         const lint = write(
           root,
@@ -357,15 +383,14 @@ describe("native check launchers in paths with spaces", () => {
         const lock = resolveDistArtifactLockPath(root);
         expect(fs.existsSync(path.join(lock, "owner.json"))).toBe(true);
         if (!compiler) {
-          expect(fs.readdirSync(lock)).toContain(`child-${child.pid}`);
+          // Preparation now shares the command's owner rather than nesting a claim.
+          expect(fs.readdirSync(lock).filter((name) => name.startsWith("child-"))).toEqual([]);
         }
         expect(fs.existsSync(settled)).toBe(false);
         expect(fs.existsSync(consumed)).toBe(false);
         gate.write("continue");
         const result = await command.done;
-        expect(result.code, result.output).toBe(
-          script === "run-oxlint.mts" && exitCode !== 0 ? 1 : exitCode,
-        );
+        expect(result.code, result.output).toBe(!compiler && exitCode !== 0 ? 1 : exitCode);
         expect(fs.readFileSync(settled, "utf8")).toBe("settled");
         expect(fs.existsSync(consumed)).toBe(!compiler && exitCode === 0);
         expect(() => process.kill(child.pid, 0)).toThrow();
@@ -981,88 +1006,92 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
     }, signal);
   }, 30_000);
 
-  it("holds real SDK declaration preparation through lint consumption and canonical cleanup", async ({
-    signal,
-  }) => {
-    await withProcesses(async ({ checkpoint, waitEvent, start }) => {
-      const root = createCheckout();
-      installCompiler(root);
-      // Entrypoints resolve this fixture as their checkout. SDK and plugin
-      // sources let the lint consumer distinguish the narrow preparation mode.
-      installScripts(
-        root,
-        [
-          "run-oxlint.mts",
-          "run-tsgo.mts",
-          "prepare-extension-package-boundary-artifacts.mts",
-          "compile-extension-boundary.mts",
-        ],
-        { dependencies: ["tsx", "@openclaw/fs-safe", "json5"] },
-      );
-      write(root, "tsconfig.json", "{}");
-      write(
-        root,
-        "packages/plugin-sdk/tsconfig.json",
-        JSON.stringify({
-          extends: "../../tsconfig.plugin-sdk.dts.json",
-          compilerOptions: { outDir: "dist", tsBuildInfoFile: "dist/.tsbuildinfo" },
-        }),
-      );
-      for (const [name, entryName] of BOUNDARY_PLUGIN_UNITS) {
-        const entry = `${entryName}.ts`;
-        write(root, `extensions/${name}/${entry}`, "export interface Plugin { id: string }\n");
+  it.runIf(hasSemanticTestBackend())(
+    "holds real SDK declaration preparation through lint consumption and canonical cleanup",
+    async ({ signal }) => {
+      await withProcesses(async ({ checkpoint, waitEvent, start }) => {
+        const root = createCheckout();
+        installCompiler(root);
+        // Entrypoints resolve this fixture as their checkout. SDK and plugin
+        // sources let the lint consumer distinguish the narrow preparation mode.
+        installScripts(
+          root,
+          [
+            "run-oxlint.mts",
+            "run-tsgo.mts",
+            "prepare-extension-package-boundary-artifacts.mts",
+            "compile-extension-boundary.mts",
+          ],
+          { dependencies: ["tsx", "@openclaw/fs-safe", "json5"] },
+        );
+        write(root, "tsconfig.json", "{}");
         write(
           root,
-          `extensions/${name}/tsconfig.json`,
-          JSON.stringify({ compilerOptions: { types: [] }, files: [entry] }),
+          "packages/plugin-sdk/tsconfig.json",
+          JSON.stringify({
+            extends: "../../tsconfig.plugin-sdk.dts.json",
+            compilerOptions: { outDir: "dist", tsBuildInfoFile: "dist/.tsbuildinfo" },
+          }),
         );
-      }
-      const lint = write(
-        root,
-        "node_modules/.bin/oxlint",
-        `#!/usr/bin/env node
+        for (const [name, entryName] of BOUNDARY_PLUGIN_UNITS) {
+          const entry = `${entryName}.ts`;
+          write(root, `extensions/${name}/${entry}`, "export interface Plugin { id: string }\n");
+          write(
+            root,
+            `extensions/${name}/tsconfig.json`,
+            JSON.stringify({ compilerOptions: { types: [] }, files: [entry] }),
+          );
+        }
+        const lint = write(
+          root,
+          "node_modules/.bin/oxlint",
+          `#!/usr/bin/env node
         const fs = require('node:fs');
         const sdk = 'packages/plugin-sdk/dist/src/plugin-sdk/qa-channel-protocol.d.ts';
         if (!fs.readFileSync(sdk, 'utf8').includes('interface Channel')) process.exit(2);
         if (fs.existsSync('.artifacts/extension-package-boundary/plugins')) process.exit(3);
         ${checkpoint("lint-consuming")}
       `,
-      );
-      fs.chmodSync(lint, 0o755);
-      write(root, "dist/still-consumed.txt", "owned by lint");
-      installBuildCheckpoint(root, checkpoint("lint-build-started"));
-      const consumer = start(root, path.join(root, "scripts/run-oxlint.mts"), [
-        "--tsconfig",
-        "extensions/tsconfig.json",
-        "extensions",
-      ]);
-      const ready = await consumer.event("lint-consuming");
-      expect(
-        fs.readFileSync(
-          path.join(root, "packages/plugin-sdk/dist/src/plugin-sdk/qa-channel-protocol.d.ts"),
-          "utf8",
-        ),
-      ).toContain("interface Channel");
-      expect(fs.existsSync(path.join(root, ".artifacts/extension-package-boundary/plugins"))).toBe(
-        false,
-      );
-      const build = start(root, path.join(sourceRoot, "scripts/tsdown-build.mts"), buildArgs);
-      await Promise.race([build.waiting, waitEvent("lint-build-started"), build.done]);
-      expect(
-        fs.existsSync(path.join(root, "dist/still-consumed.txt")),
-        "cleanup must wait through dependent lint",
-      ).toBe(true);
-      ready.write("continue");
-      expect(await consumer.done).toMatchObject({ code: 0 });
-      (await build.event("lint-build-started")).write("continue");
-      expect(await build.done).toMatchObject({ code: 0 });
-      expect(fs.existsSync(path.join(root, "dist/still-consumed.txt"))).toBe(false);
-      expect(
-        fs.readFileSync(
-          path.join(root, "packages/plugin-sdk/dist/src/plugin-sdk/qa-channel-protocol.d.ts"),
-          "utf8",
-        ),
-      ).toContain("interface Channel");
-    }, signal);
-  }, 30_000);
+        );
+        fs.chmodSync(lint, 0o755);
+        write(root, "dist/still-consumed.txt", "owned by lint");
+        installBuildCheckpoint(root, checkpoint("lint-build-started"));
+        const consumer = start(
+          root,
+          path.join(root, "scripts/run-oxlint.mts"),
+          ["--tsconfig", "extensions/tsconfig.json", "extensions"],
+          undefined,
+          true,
+        );
+        const ready = await consumer.event("lint-consuming");
+        expect(
+          fs.readFileSync(
+            path.join(root, "packages/plugin-sdk/dist/src/plugin-sdk/qa-channel-protocol.d.ts"),
+            "utf8",
+          ),
+        ).toContain("interface Channel");
+        expect(
+          fs.existsSync(path.join(root, ".artifacts/extension-package-boundary/plugins")),
+        ).toBe(false);
+        const build = start(root, path.join(sourceRoot, "scripts/tsdown-build.mts"), buildArgs);
+        await Promise.race([build.waiting, waitEvent("lint-build-started"), build.done]);
+        expect(
+          fs.existsSync(path.join(root, "dist/still-consumed.txt")),
+          "cleanup must wait through dependent lint",
+        ).toBe(true);
+        ready.write("continue");
+        expect(await consumer.done).toMatchObject({ code: 0 });
+        (await build.event("lint-build-started")).write("continue");
+        expect(await build.done).toMatchObject({ code: 0 });
+        expect(fs.existsSync(path.join(root, "dist/still-consumed.txt"))).toBe(false);
+        expect(
+          fs.readFileSync(
+            path.join(root, "packages/plugin-sdk/dist/src/plugin-sdk/qa-channel-protocol.d.ts"),
+            "utf8",
+          ),
+        ).toContain("interface Channel");
+      }, signal);
+    },
+    30_000,
+  );
 });

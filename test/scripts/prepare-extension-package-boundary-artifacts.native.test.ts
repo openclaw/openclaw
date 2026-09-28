@@ -7,19 +7,31 @@ import { BOUNDARY_PLUGIN_UNITS } from "../../scripts/lib/extension-boundary-inpu
 import { runNodeStep } from "../../scripts/prepare-extension-package-boundary-artifacts.mts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import {
+  hasSemanticTestBackend,
   installNativeAncestorTypes,
   materializeNativeCompiler,
   resolveNativeFixtureShortPath,
+  semanticFixtureEnv,
+  stopSemanticFixtureScopes,
   writeNativeFixtureFile,
 } from "./native-boundary-fixture.js";
 
 const fixture = createFixtureLifetime();
-afterEach(() => fixture.cleanup());
+const semanticRoots = new Set<string>();
+afterEach(async () => {
+  for (const root of semanticRoots) {
+    stopSemanticFixtureScopes(root);
+  }
+  semanticRoots.clear();
+  await fixture.cleanup();
+});
 
 function createPreparationFixture(mode: "package-boundary" | "all", signal: AbortSignal) {
   const ancestor = fs.realpathSync.native(fixture.createTempDir("native-preparer-"));
   const root = path.join(ancestor, ".claude/worktrees/validation");
   fs.mkdirSync(root, { recursive: true });
+  const semanticEnv = semanticFixtureEnv(root);
+  semanticRoots.add(root);
   const native = materializeNativeCompiler(root);
   const write = (file: string, text: string) => {
     signal.throwIfAborted();
@@ -98,7 +110,9 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
     const abort = () => abortController.abort(signal.reason);
     signal.addEventListener("abort", abort, { once: true });
     try {
-      await fixture.track(runNodeStep(label, args, 30_000, { bin, env, abortController }));
+      await fixture.track(
+        runNodeStep(label, args, 30_000, { bin, env: { ...semanticEnv, ...env }, abortController }),
+      );
       signal.throwIfAborted();
     } finally {
       signal.removeEventListener("abort", abort);
@@ -118,7 +132,32 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
 }
 
 describe("native declaration preparation", () => {
-  it.for([
+  it.runIf(hasSemanticTestBackend())(
+    "contains the real declaration worker and releases admission after emit",
+    async ({ signal }) => {
+      const f = createPreparationFixture("package-boundary", signal);
+      fs.appendFileSync(
+        path.join(f.root, "scripts/compile-extension-boundary.mts"),
+        `
+const group = fs.readFileSync("/proc/self/cgroup", "utf8").trim().split("::")[1];
+const limits = Object.fromEntries(["memory.max", "memory.swap.max", "memory.oom.group"].map(name => [name, fs.readFileSync("/sys/fs/cgroup" + group + "/" + name, "utf8").trim()]));
+fs.writeFileSync(".artifacts/observed-memory.json", JSON.stringify(limits));
+`,
+      );
+      await fixture.run(() => f.run());
+      const limits = JSON.parse(
+        fs.readFileSync(path.join(f.root, ".artifacts/observed-memory.json"), "utf8"),
+      );
+      expect(Number(limits["memory.max"])).toBeGreaterThanOrEqual(512 * 1024 ** 2);
+      expect(Number(limits["memory.max"])).toBeLessThanOrEqual(8 * 1024 ** 3);
+      expect(limits["memory.swap.max"]).toBe("0");
+      expect(limits["memory.oom.group"]).toBe("1");
+      expect(readArtifactRecord(f.recordPath)).toBeDefined();
+      expect(fs.readdirSync(path.join(f.root, ".cache/openclaw/semantic-checks"))).toEqual([]);
+    },
+  );
+
+  it.runIf(hasSemanticTestBackend()).for([
     { name: "Windows 8.3 short entry", entry: true, workspace: false },
     { name: "Windows 8.3 workspace junction", entry: false, workspace: true },
     { name: "Windows 8.3 short entry and workspace junction", entry: true, workspace: true },
@@ -235,7 +274,7 @@ describe("native declaration preparation", () => {
     },
   );
 
-  it.for(["package-boundary", "all"] as const)(
+  it.runIf(hasSemanticTestBackend()).for(["package-boundary", "all"] as const)(
     "preserves outputs on compile failure and prunes obsolete declarations after repair (%s)",
     { timeout: 30_000 },
     (mode, { signal }) =>
@@ -316,7 +355,7 @@ describe("native declaration preparation", () => {
       }),
   );
 
-  it.for(["src/nested.ts", "package.json"])(
+  it.runIf(hasSemanticTestBackend()).for(["src/nested.ts", "package.json"])(
     "rejects %s mutated after native emit without publishing or pruning",
     { timeout: 30_000 },
     (input, { signal }) =>
@@ -349,7 +388,7 @@ describe("native declaration preparation", () => {
       }),
   );
 
-  it.for(["SDK", "plugin batch"] as const)(
+  it.runIf(hasSemanticTestBackend()).for(["SDK", "plugin batch"] as const)(
     "isolates the %s from ancestor types and rejects ancestor-only dependencies without pruning",
     { timeout: 30_000 },
     (owner, { signal }) =>

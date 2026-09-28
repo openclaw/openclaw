@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import fs, { type Dirent } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { runCancelableCommand } from "./lib/cancelable-command.mts";
 import {
   distArtifactEntryArgs,
   withDistArtifactOwnership,
@@ -16,11 +17,11 @@ import {
 } from "./lib/local-check-runtime.mts";
 import {
   inspectManagedProcessGroup,
-  runManagedCommand,
   terminateManagedChild,
   waitForManagedProcessGroupExit,
 } from "./lib/managed-child-process.mts";
 import { readProcessMemoryCapacity } from "./lib/process-memory.mts";
+import { prepareExtensionPackageBoundaryArtifacts } from "./prepare-extension-package-boundary-artifacts.mts";
 import { shouldPrepareExtensionPackageBoundaryArtifacts } from "./run-oxlint.mts";
 
 const DEFAULT_EXTENSION_CHUNK_SIZE = 8;
@@ -37,7 +38,7 @@ const FAST_LOCAL_CHECK_MIN_MEMORY_BYTES = 48 * 1024 ** 3;
 const EXTENSION_TS_CONFIG = "extensions/tsconfig.json";
 const EXTENSIONS_DIR = "extensions";
 const OXLINT_SOURCE_FILE_PATTERN = /\.[cm]?[jt]sx?$/;
-const PARENT_TERMINATION_SIGNALS = ["SIGINT", "SIGTERM"] satisfies NodeJS.Signals[];
+const PARENT_TERMINATION_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] satisfies NodeJS.Signals[];
 
 type OxlintShard = { name: string; args: string[] };
 type ShardStripe = { index: number; total: number };
@@ -376,6 +377,14 @@ export async function main(
   extraArgs: string[] = process.argv.slice(2),
   runtimeEnv: NodeJS.ProcessEnv = process.env,
 ) {
+  return runCancelableCommand((signal) => runOxlintShards(extraArgs, runtimeEnv, signal));
+}
+
+async function runOxlintShards(
+  extraArgs: string[],
+  runtimeEnv: NodeJS.ProcessEnv,
+  signal: AbortSignal,
+) {
   const runner = path.resolve("scripts", "run-oxlint.mts");
   const shardArgs = parseShardRunnerArgs(extraArgs);
   const env = resolveLocalCheckEnv(runtimeEnv);
@@ -406,21 +415,11 @@ export async function main(
   const evidenceId = env.OPENCLAW_CI_STATIC_EVIDENCE === "1" ? randomUUID() : undefined;
   let completed = 0;
   const run = async () => {
+    signal.throwIfAborted();
     if (needsArtifacts) {
-      const code = await runManagedCommand({
-        bin: process.execPath,
-        shell: false,
-        args: distArtifactEntryArgs(
-          path.resolve("scripts/prepare-extension-package-boundary-artifacts.mts"),
-          ["--mode=package-boundary"],
-        ),
-        env,
-        requireProcessTreeExit: process.platform !== "win32",
-      });
-      if (code !== 0) {
-        return code;
-      }
+      await prepareExtensionPackageBoundaryArtifacts(["--mode=package-boundary"], env, signal);
     }
+    signal.throwIfAborted();
     const shardConcurrency = resolveOxlintShardConcurrency({
       env,
       platform: process.platform,
@@ -444,7 +443,10 @@ export async function main(
     completed = results.completed;
     return results.statuses.find((status) => status !== 0) ?? 0;
   };
-  const status = needsArtifacts ? await withDistArtifactOwnership(process.cwd(), run) : await run();
+  const status = needsArtifacts
+    ? await withDistArtifactOwnership(process.cwd(), run, signal)
+    : await run();
+  signal.throwIfAborted();
   if (evidenceId && completed === selectedShards.length && !isParentTerminationRequested()) {
     console.log(
       `[ci-static:oxlint:completion] ${JSON.stringify({
@@ -1067,7 +1069,7 @@ function scheduleParentTerminationForceKill() {
 }
 
 function getSignalExitCode(signal: NodeJS.Signals) {
-  return signal === "SIGINT" ? 130 : 143;
+  return signal === "SIGINT" ? 130 : signal === "SIGHUP" ? 129 : 143;
 }
 
 function isNodeErrorCode(error: unknown, code: string) {

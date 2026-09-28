@@ -55,6 +55,7 @@ export function waitForFile(file) {
     "lib/check-limits.mts",
     "lib/ci-static-check-evidence.mjs",
     "lib/direct-run.mjs",
+    "lib/cancelable-command.mts",
     "lib/dist-artifact-ownership.mts",
     "lib/dist-artifact-lock.mts",
     "lib/record-shared.mjs",
@@ -108,7 +109,10 @@ export function waitForFile(file) {
       deps: { neverBundle: ["p-map", "@openclaw/fs-safe"] },
       // These POSIX fixtures omit optional Windows Job and declaration compiler runtimes.
       inputOptions: {
+        // Output preserves the source tree; keep these unique fixture imports verbatim.
+        makeAbsoluteExternalsRelative: false,
         external: (id, importer) =>
+          id === "./prepare-extension-package-boundary-artifacts.mts" ||
           (id === "./managed-windows-job.mts" &&
             importer === path.join(root, "scripts/lib/managed-child-process.mts")) ||
           (id === "./tsdown-declaration-boundary.mts" &&
@@ -173,7 +177,21 @@ else if (mode === "wait") {
     );
     fs.chmodSync(bin, 0o755);
   }
-  write("scripts/prepare-extension-package-boundary-artifacts.mts", toolSource("prepare"));
+  write("tools/prepare.mjs", toolSource("prepare"));
+  write(
+    "scripts/prepare-extension-package-boundary-artifacts.mts",
+    `
+import { runManagedCommand } from "./lib/managed-child-process.js";
+export async function prepareExtensionPackageBoundaryArtifacts(args, env, signal) {
+  const status = await runManagedCommand({ bin: process.execPath, args: ["tools/prepare.mjs", ...args], env, signal, requireProcessTreeExit: true });
+  if (${JSON.stringify(phase === "prepare" ? mode : "success")} === "unjoined") {
+    throw Object.assign(new Error("fixture cleanup unverified"), { processTreeState: "indeterminate" });
+  }
+  signal?.throwIfAborted();
+  if (status !== 0) throw new Error("fixture preparation failure: " + status);
+}
+`,
+  );
   write("scripts/control-ui-i18n-verify.ts", toolSource("i18n"));
   const probe = write(
     "trailer-probe.mjs",

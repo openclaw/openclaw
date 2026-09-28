@@ -12,6 +12,7 @@ import {
   readArtifactRecord,
   writeArtifactRecord,
 } from "./lib/build-artifact-cache.mts";
+import { runCancelableCommand } from "./lib/cancelable-command.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
 import {
@@ -27,15 +28,18 @@ import {
   isLocalCheckEnabled,
   resolveLocalCheckEnv,
 } from "./lib/local-check-runtime.mts";
-import { runManagedCommand, signalExitCode } from "./lib/managed-child-process.mts";
+import { hasUnjoinedWork, runManagedCommand } from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { pluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
+import { runSemanticCheck } from "./lib/semantic-check-admission.mts";
 import { resolveTsgoTimeoutMs } from "./run-tsgo.mts";
 const repoRoot = resolveRepoRoot(import.meta.url);
 const compilerWorker = path.join(repoRoot, "scripts/compile-extension-boundary.mts");
 const DEFAULT_NODE_STEP_ABORT_KILL_GRACE_MS = 1_000;
 type NodeStepParams = {
+  signal?: AbortSignal;
+  semantic?: boolean;
   bin?: string;
   shell?: boolean;
   windowsVerbatimArguments?: boolean;
@@ -49,8 +53,6 @@ type NodeStep = Omit<NodeStepParams, "abortController"> & {
   label: string;
   timeoutMs: number;
 };
-const activeNodeSteps = new Set<Promise<number>>();
-let nodeStepParentSignal: NodeJS.Signals | undefined;
 export function parseMode(argv: string[] = process.argv.slice(2)) {
   const mode = argv.find((arg) => arg.startsWith("--mode="))?.slice("--mode=".length) ?? "all";
   if (mode !== "all" && mode !== "package-boundary") {
@@ -69,7 +71,7 @@ export function resolveBoundaryRootShimsTimeoutMs(env: NodeJS.ProcessEnv = proce
  */
 export function createPrefixedOutputWriter(
   label: string,
-  target: { write(chunk: string): void },
+  target: { write(chunk: string): boolean | void },
   onLine?: (line: string) => boolean,
 ) {
   let buffered = "";
@@ -77,16 +79,25 @@ export function createPrefixedOutputWriter(
 
   return {
     write(chunk: string) {
+      let ready = true;
       buffered += chunk;
       while (true) {
         const newlineIndex = buffered.indexOf("\n");
         if (newlineIndex === -1) {
-          return;
+          if (Buffer.byteLength(buffered) > 64 * 1024) {
+            buffered = "";
+            throw new Error(`${label} output line exceeded 64 KiB`);
+          }
+          return ready;
         }
         const line = buffered.slice(0, newlineIndex + 1);
+        if (Buffer.byteLength(line) > 64 * 1024) {
+          buffered = "";
+          throw new Error(`${label} output line exceeded 64 KiB`);
+        }
         buffered = buffered.slice(newlineIndex + 1);
         if (onLine?.(line) !== false) {
-          target.write(`${prefix}${line}`);
+          ready = target.write(`${prefix}${line}`) !== false && ready;
         }
       }
     },
@@ -107,13 +118,17 @@ export async function runNodeStep(
   timeoutMs: number,
   params: NodeStepParams = {},
 ) {
-  if (params.abortController?.signal.aborted || nodeStepParentSignal) {
+  params.signal?.throwIfAborted();
+  if (params.abortController?.signal.aborted) {
     throw new Error(`${label} canceled before starting`);
   }
   const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, MAX_TIMER_TIMEOUT_MS);
+  let receivedSignal: NodeJS.Signals | undefined;
+  const outputAbort = new AbortController();
+  const outputListeners = new Set<() => void>();
   const stdoutWriter = createPrefixedOutputWriter(label, process.stdout, params.onStdoutLine);
   const stderrWriter = createPrefixedOutputWriter(label, process.stderr);
-  const command = runManagedCommand({
+  const command = (params.semantic ? runSemanticCheck : runManagedCommand)({
     bin: params.bin ?? process.execPath,
     args,
     cwd: repoRoot,
@@ -124,51 +139,94 @@ export async function runNodeStep(
     // Artifact writers must finish before stamps, dependent readers, or lock release.
     requireProcessTreeExit: process.platform !== "win32",
     timeoutMs: resolvedTimeoutMs,
-    signal: params.abortController?.signal,
+    signal: AbortSignal.any([
+      outputAbort.signal,
+      ...[params.signal, params.abortController?.signal].filter(
+        (signal): signal is AbortSignal => signal !== undefined,
+      ),
+    ]),
     abortKillGraceMs: Math.max(
       0,
       Math.floor(params.abortKillGraceMs ?? DEFAULT_NODE_STEP_ABORT_KILL_GRACE_MS),
     ),
     onSignal(signal) {
-      nodeStepParentSignal ??= signal;
+      receivedSignal ??= signal;
     },
     onReady(child) {
       // This invocation explicitly requests both output pipes above.
       child.stdout!.setEncoding("utf8");
       child.stderr!.setEncoding("utf8");
-      child.stdout!.on("data", (chunk: string) => stdoutWriter.write(chunk));
-      child.stderr!.on("data", (chunk: string) => stderrWriter.write(chunk));
+      for (const [stream, writer, target] of [
+        [child.stdout!, stdoutWriter, process.stdout],
+        [child.stderr!, stderrWriter, process.stderr],
+      ] as const) {
+        stream.on("data", (chunk: string) => {
+          if (!outputAbort.signal.aborted) {
+            try {
+              if (!writer.write(chunk)) {
+                stream.pause();
+                const remove = () => {
+                  target.off("drain", resume);
+                };
+                const resume = () => {
+                  outputListeners.delete(remove);
+                  stream.resume();
+                };
+                target.once("drain", resume);
+                outputListeners.add(remove);
+              }
+            } catch (error) {
+              outputAbort.abort(error);
+            }
+          }
+        });
+      }
     },
   });
-  activeNodeSteps.add(command);
+  const failures: unknown[] = [];
   try {
     const code = await command;
+    if (receivedSignal) {
+      throw new DOMException(`${label} interrupted by ${receivedSignal}`, "AbortError");
+    }
+    params.signal?.throwIfAborted();
+    outputAbort.signal.throwIfAborted();
     if (code !== 0) {
       throw new Error(`${label} failed with exit code ${code}`);
     }
   } catch (error) {
     const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
     const failure =
-      code === "ETIMEDOUT"
-        ? new Error(`${label} timed out after ${resolvedTimeoutMs}ms`, { cause: error })
-        : code === "ABORT_ERR"
-          ? new Error(`${label} canceled after sibling failure`, { cause: error })
-          : error;
-    if (nodeStepParentSignal && code === "EPROCESSGROUP_CLEANUP_FAILED") {
-      console.error(failure);
-    }
+      code === "ABORT_ERR" && outputAbort.signal.aborted
+        ? outputAbort.signal.reason
+        : code === "ETIMEDOUT"
+          ? new Error(`${label} timed out after ${resolvedTimeoutMs}ms`, { cause: error })
+          : code === "ABORT_ERR"
+            ? Object.assign(new Error(`${label} canceled`, { cause: error }), { code: "ABORT_ERR" })
+            : error;
     if (params.abortController && !params.abortController.signal.aborted) {
       params.abortController.abort(failure);
     }
-    throw failure;
+    failures.push(failure);
   } finally {
-    stdoutWriter.flush();
-    stderrWriter.flush();
-    activeNodeSteps.delete(command);
-    // The last sibling exits only after all managed cancellation has joined.
-    if (nodeStepParentSignal && activeNodeSteps.size === 0) {
-      process.exit(signalExitCode(nodeStepParentSignal));
+    for (const remove of outputListeners) {
+      remove();
     }
+    // Output failure must not hide an unjoined compiler from artifact ownership.
+    for (const writer of [stdoutWriter, stderrWriter]) {
+      try {
+        writer.flush();
+      } catch (error) {
+        failures.push(error);
+        params.abortController?.abort(error);
+      }
+    }
+  }
+  if (failures.length > 1) {
+    throw new AggregateError(failures, `${label} failed while draining output`);
+  }
+  if (failures.length) {
+    throw failures[0];
   }
 }
 
@@ -176,6 +234,12 @@ export async function runNodeStep(
  * Runs independent artifact steps together and aborts siblings on first failure.
  */
 export async function runNodeStepsInParallel(steps: NodeStep[]) {
+  // Compiler work owns the host admission slot; do not retain sibling compiler
+  // state and output while another step is active.
+  if (steps.some((step) => step.semantic)) {
+    await runNodeSteps(steps);
+    return;
+  }
   const abortController = new AbortController();
   const results = await Promise.allSettled(
     steps.map((step) =>
@@ -191,12 +255,7 @@ export async function runNodeStepsInParallel(steps: NodeStep[]) {
   if (failures.length > 0) {
     const primary = abortController.signal.reason ?? failures[0];
     const cleanupFailures = failures.filter(
-      (error: unknown) =>
-        error &&
-        typeof error === "object" &&
-        "code" in error &&
-        error.code === "EPROCESSGROUP_CLEANUP_FAILED" &&
-        error !== primary,
+      (error: unknown) => hasUnjoinedWork(error) && error !== primary,
     );
     if (cleanupFailures.length > 0) {
       throw new AggregateError(
@@ -209,10 +268,10 @@ export async function runNodeStepsInParallel(steps: NodeStep[]) {
 }
 
 /**
- * Chooses serial or parallel artifact execution based on local check policy.
+ * Serialize compiler steps everywhere; generic steps retain the local policy.
  */
 export async function runNodeSteps(steps: NodeStep[], env: NodeJS.ProcessEnv = process.env) {
-  if (!isLocalCheckEnabled(env)) {
+  if (!steps.some((step) => step.semantic) && !isLocalCheckEnabled(env)) {
     await runNodeStepsInParallel(steps);
     return;
   }
@@ -222,9 +281,14 @@ export async function runNodeSteps(steps: NodeStep[], env: NodeJS.ProcessEnv = p
   }
 }
 
-async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process.argv.slice(2)) {
+export async function prepareExtensionPackageBoundaryArtifacts(
+  argv: string[] = process.argv.slice(2),
+  runtimeEnv: NodeJS.ProcessEnv = process.env,
+  signal?: AbortSignal,
+) {
+  signal?.throwIfAborted();
   const mode = parseMode(argv);
-  const { env: compilerEnv } = applyLocalTsgoPolicy([], resolveLocalCheckEnv(process.env), {
+  const { env: compilerEnv } = applyLocalTsgoPolicy([], resolveLocalCheckEnv(runtimeEnv), {
     logicalCpuCount: os.availableParallelism(),
     totalMemoryBytes: os.totalmem(),
   });
@@ -256,6 +320,7 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
     }),
   );
   for (const batch of batches) {
+    signal?.throwIfAborted();
     if (!batch.length) {
       continue;
     }
@@ -306,10 +371,12 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
         unit.startedAt = Date.now();
         return {
           label: `${unit.id} boundary dts`,
+          semantic: true,
+          signal,
           args: unit.args,
           env: compilerEnv,
           timeoutMs: Math.min(
-            unit.id === "plugin-sdk" ? resolveBoundaryRootShimsTimeoutMs() : 300_000,
+            unit.id === "plugin-sdk" ? resolveBoundaryRootShimsTimeoutMs(compilerEnv) : 300_000,
             compilerTimeoutMs ?? Number.POSITIVE_INFINITY,
           ),
           onStdoutLine(line: string) {
@@ -321,7 +388,9 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
           },
         };
       }),
+      compilerEnv,
     );
+    signal?.throwIfAborted();
     if (!pending.length) {
       continue;
     }
@@ -365,6 +434,27 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
-  // The private entry must observe cleanup metadata before releasing its claim.
-  await withDistArtifactOwnership(repoRoot, () => prepareExtensionPackageBoundaryArtifacts());
+  // Keep the CLI alive through compiler extinction and asynchronous lock release.
+  try {
+    process.exitCode = await runCancelableCommand((signal) =>
+      withDistArtifactOwnership(
+        repoRoot,
+        async () => {
+          await prepareExtensionPackageBoundaryArtifacts(
+            process.argv.slice(2),
+            process.env,
+            signal,
+          );
+          return 0;
+        },
+        signal,
+      ),
+    );
+  } catch (error) {
+    console.error(error);
+    process.exitCode = 1;
+  }
+  if (process.exitCode) {
+    console.error(`[boundary-prep] FAILED (exit ${process.exitCode})`);
+  }
 }

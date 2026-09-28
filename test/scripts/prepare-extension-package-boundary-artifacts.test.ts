@@ -56,6 +56,20 @@ async function waitForFile(
 }
 
 describe("prepare-extension-package-boundary-artifacts", () => {
+  it("bounds a child output stream that never finishes its line", () => {
+    const writer = createPrefixedOutputWriter("boundary", { write() {} });
+    expect(() => writer.write("x".repeat(64 * 1024 + 1))).toThrow("output line exceeded");
+  });
+  it("propagates slow output backpressure after complete lines", () => {
+    let count = 0;
+    const writer = createPrefixedOutputWriter("boundary", {
+      write() {
+        return ++count > 2;
+      },
+    });
+    expect(writer.write("first\nsecond\nthird\n")).toBe(false);
+    expect(writer.write("fourth\n")).toBe(true);
+  });
   it("prefixes each completed line and flushes the trailing partial line", () => {
     let output = "";
     const writer = createPrefixedOutputWriter("boundary", {
@@ -412,7 +426,8 @@ describe("prepare-extension-package-boundary-artifacts", () => {
         ].join("\n");
         const runnerScript = [
           `import { runNodeStep } from ${JSON.stringify(moduleHref)};`,
-          `await runNodeStep("signal-group-prep", ["--eval", ${JSON.stringify(parentScript)}], 60_000, { abortKillGraceMs: 100 });`,
+          `import { runCancelableCommand } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/cancelable-command.mts")).href)};`,
+          `process.exitCode = await runCancelableCommand(async signal => { try { await runNodeStep("signal-group-prep", ["--eval", ${JSON.stringify(parentScript)}], 60_000, { abortKillGraceMs: 100, signal }); return 0; } finally { console.error("caller cleanup joined"); } });`,
         ].join("\n");
         const runner = spawn(process.execPath, ["--input-type=module", "--eval", runnerScript], {
           stdio: "ignore",
@@ -524,7 +539,10 @@ child.once("message", () => process.exit(${exitCode}));
         try {
           pid = Number(await waitForFile(readyPath, 4_000));
           abortController.abort();
-          await expect(command).rejects.toThrow("canceled-zero canceled after sibling failure");
+          await expect(command).rejects.toMatchObject({
+            message: "canceled-zero canceled",
+            code: "ABORT_ERR",
+          });
           expect(fs.readFileSync(stoppedPath, "utf8")).toBe("zero");
           expect(isProcessAlive(pid)).toBe(false);
         } finally {

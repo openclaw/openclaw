@@ -112,7 +112,10 @@ describe("check-extension-package-tsc-boundary", () => {
       'export const value: number = "invalid";\n',
     );
     // Hold preparation fixed; scheduling, config parsing, and compilation remain real.
-    write("scripts/prepare-extension-package-boundary-artifacts.mts", "export {};\n");
+    write(
+      "scripts/prepare-extension-package-boundary-artifacts.mts",
+      "export async function prepareExtensionPackageBoundaryArtifacts() {}\n",
+    );
     for (const file of [
       "check-extension-package-tsc-boundary.mts",
       "compile-extension-boundary.mts",
