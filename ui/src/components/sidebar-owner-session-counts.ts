@@ -35,7 +35,9 @@ export class SidebarOwnerSessionCounts {
     this.dispose();
     const scope = sessions?.captureConnectionScope();
     if (!sessions || !scope) {
-      if (wasActive) this.changed();
+      if (wasActive) {
+        this.changed();
+      }
       return;
     }
     this.source = sessions;
@@ -71,7 +73,9 @@ export class SidebarOwnerSessionCounts {
   refresh(): void {
     const observation = this.observation;
     const settled = () => {
-      if (this.observation === observation) this.accept?.();
+      if (this.observation === observation) {
+        this.accept?.();
+      }
     };
     // Failure is published by the observation. Once the initial attempt settles,
     // a later event-driven successful refresh may also recover the display.
