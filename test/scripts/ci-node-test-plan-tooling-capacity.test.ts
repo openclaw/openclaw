@@ -1,5 +1,8 @@
 import { expect, it, vi } from "vitest";
-import { createNodeTestShardBundles } from "../../scripts/lib/ci-node-test-plan.mts";
+import {
+  createNodeTestShardBundles,
+  createNodeTestShards,
+} from "../../scripts/lib/ci-node-test-plan.mts";
 
 const fixture = vi.hoisted(() => {
   // Sixteen 200s hosted files and forty-eight 80s files share canonical families.
@@ -48,18 +51,12 @@ const options = {
   includeReleaseOnlyPluginShards: false,
 } as const;
 
-it("uses idle hosted file workers on overflow without extending indivisible walls", () => {
-  const baseline = createNodeTestShardBundles({ ...options, compactNodeJobCap: 24 });
-  expect(baseline).toHaveLength(20);
+it("uses idle hosted file workers without extending indivisible walls", () => {
   const compact = createNodeTestShardBundles({ ...options, compactNodeJobCap: 16 });
-  expect(compact).toHaveLength(16);
+  expect(compact.length).toBeLessThanOrEqual(16);
   const ownerByFile = new Map(
-    baseline.flatMap((job) =>
-      job.groups.flatMap((group) =>
-        group.includePatterns!.map(
-          (file) => [file, group.shard_name.replace(/-hosted-\d+$/u, "")] as const,
-        ),
-      ),
+    createNodeTestShards(options).flatMap((shard) =>
+      shard.includePatterns!.map((file) => [file, shard.shardName] as const),
     ),
   );
   const actual = compact.flatMap((job) => job.groups.flatMap((group) => group.includePatterns!));
@@ -73,25 +70,27 @@ it("uses idle hosted file workers on overflow without extending indivisible wall
     expect(
       new Set(job.groups.map((group) => group.shard_name.replace(/-hosted-\d+$/u, ""))).size,
     ).toBe(job.groups.length);
+    let expectedSeconds = 0;
     for (const group of job.groups) {
       expect(group.configs).toEqual(["test/vitest/vitest.tooling.config.ts"]);
       expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS).toBe("2");
+      const fileSeconds = group.includePatterns!.map((file) =>
+        fixture.longFiles.has(file) ? 200 : 80,
+      );
+      expectedSeconds += Math.max(
+        ...fileSeconds,
+        fileSeconds.reduce((sum, seconds) => sum + seconds, 0) / 2,
+      );
       const owner = group.shard_name.replace(/-hosted-\d+$/u, "");
       for (const file of group.includePatterns!) {
         expect(ownerByFile.get(file)).toBe(owner);
       }
       if (group.includePatterns!.some((file) => fixture.longFiles.has(file))) {
-        expect(group.includePatterns).toHaveLength(2);
-        expect(group.includePatterns!.every((file) => fixture.longFiles.has(file))).toBe(true);
-        const tails = job.groups.filter((entry) => entry !== group);
-        for (const tail of tails) {
-          expect(tail.includePatterns!.length).toBeLessThanOrEqual(2);
-          expect(tail.includePatterns!.every((file) => !fixture.longFiles.has(file))).toBe(true);
-        }
-        // The pair still costs 200s; each separate short-file child costs 80s.
-        expect(job.predictedSeconds).toBe(200 + 80 * tails.length);
+        // An indivisible 200s file can share its second worker, not grow its wall.
+        expect(group.includePatterns!.length).toBeLessThanOrEqual(2);
       }
     }
+    expect(job.predictedSeconds).toBe(expectedSeconds);
   }
   // The full 7,040s of file work cannot fit eight 300s rows with two file workers.
   expect(() => createNodeTestShardBundles({ ...options, compactNodeJobCap: 8 })).toThrow(

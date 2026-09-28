@@ -840,7 +840,7 @@ const COMPACT_BLACKSMITH_SPLIT_OWNERS = new Set([
 const EXCLUSIVE_COMPACT_GROUP_RE =
   /^core-tooling(?:-\d+(?:-hosted-\d+)?|-isolated)$|^core-runtime-tui-pty$|^agentic-gateway-core-(?:runtime|inventory)$|^agentic-cli(?:-hosted-\d+|-process(?:-hosted-\d+)?)?$/u;
 // Exclusive bins run serially, so their packed estimate is their wall clock.
-// An indivisible file above this budget must not acquire additional serial wall time.
+// An indivisible file above this budget must not acquire additional work.
 const COMPACT_EXCLUSIVE_JOB_SECONDS = 150;
 const COMPACT_HYBRID_SERIAL_CLI_JOB_SECONDS = 250;
 
@@ -3706,16 +3706,17 @@ function splitOversizedCompactGroup(
           patterns.toSorted(
             (a, b) => weightForValue(b) - weightForValue(a) || discoveryOrder(a, b),
           ),
-          // Overflow may fill the pinned workers beside an indivisible file,
-          // but cannot extend its wall, workers, or the serial job ceiling.
-          (bin, file) =>
-            batchWeight([...bin, file]) <=
-            (splitHostedToolingTails
-              ? Math.max(
-                  secondsCap,
-                  Math.min(COMPACT_SERIAL_NODE_TEST_JOB_SECONDS, batchWeight(bin)),
-                )
-              : secondsCap),
+          (bin, file) => {
+            const combinedSeconds = batchWeight([...bin, file]);
+            // Fill an indivisible file's spare worker without increasing its
+            // cost, but keep files above the whole-job budget alone.
+            return (
+              combinedSeconds <= secondsCap ||
+              (bin.length === 1 &&
+                combinedSeconds <= COMPACT_SERIAL_NODE_TEST_JOB_SECONDS &&
+                combinedSeconds <= batchWeight(bin))
+            );
+          },
         ).map((batch) => batch.toSorted(discoveryOrder));
       // Full children plus small tails can strand a whole row even when the
       // files fit. On overflow, expose smaller file envelopes for placement.
