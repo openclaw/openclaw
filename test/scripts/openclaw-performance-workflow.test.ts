@@ -1376,14 +1376,16 @@ printf '%s\\n' \
     );
     const prepare = findStep("Set up Node environment");
     const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
-    const provision = action.runs.steps.find((step: WorkflowStep) =>
-      step.run?.includes("systemd-run --user --scope"),
+    const provisionEntry = action.runs.steps.find((step: WorkflowStep) =>
+      step.run?.includes("semantic-memory.sh"),
     )?.run;
+    const provision = readFileSync(".github/actions/setup-node-env/semantic-memory.sh", "utf8");
     const stepNames = steps.map((step) => step.name);
 
     expect(managedServiceLanes).toEqual(["true", "true", "false"]);
     expect(prepare.if).toBe("steps.lane.outputs.run == 'true'");
     expect(prepare.with?.["semantic-checks"]).toBe("${{ matrix.managed_service }}");
+    expect(provisionEntry).toBe('bash "$GITHUB_ACTION_PATH/semantic-memory.sh"');
     expect(provision).toContain("set -euo pipefail");
     expect(provision).toContain('test "$(ps -p 1 -o comm= | xargs)" = systemd');
     expect(provision).toContain("sudo -n systemctl is-active --quiet systemd-logind.service");

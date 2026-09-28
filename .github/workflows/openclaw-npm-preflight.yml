@@ -143,6 +143,7 @@ jobs:
           persist-credentials: false
           sparse-checkout: |
             .github/actions/git-owner
+            .github/actions/setup-node-env
             scripts
 
       - name: Setup supported Node runtime
@@ -163,11 +164,14 @@ jobs:
           fi
           node .release-harness/scripts/package-source-preflight.mjs "${args[@]}"
 
+      # Tagged sources may predate containment; runner setup belongs to the trusted harness.
+      - name: Prepare semantic check containment
+        run: bash .release-harness/.github/actions/setup-node-env/semantic-memory.sh
+
       - name: Setup Node environment
         id: setup-node-env
         uses: ./.github/actions/setup-node-env
         with:
-          semantic-checks: "true"
           cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"

@@ -21,7 +21,6 @@ it.each([
     ],
   ],
   ["vitest-cache-warm.yml", ["warm"]],
-  ["openclaw-npm-preflight.yml", ["check_openclaw_npm"]],
   ["ci-check-testbox.yml", ["check"]],
 ] as const)("opts semantic CI jobs into kernel containment in %s", (file, jobs) => {
   const workflow = parse(readFileSync(`.github/workflows/${file}`, "utf8")) as Workflow;
@@ -44,26 +43,23 @@ it("keeps privileged provisioning in opted-in Linux CI setup", () => {
   const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
   expect(action.inputs["semantic-checks"].default).toBe("false");
   const setup = action.runs.steps.find((step: { run?: string }) =>
-    step.run?.includes("systemd-run --user --scope"),
+    step.run?.includes("semantic-memory.sh"),
   );
   expect(setup.if).toBe("runner.os == 'Linux' && inputs.semantic-checks == 'true'");
   expect(setup.shell).toBe("bash");
-  expect(setup.run).toContain("--property=MemoryMax=67108864 --property=MemorySwapMax=0");
-  expect(setup.run).toContain("--property=OOMPolicy=kill --property=RuntimeMaxSec=10");
-  expect(setup.run).toContain('test "$(cat "/sys/fs/cgroup$group/memory.max")" = 67108864');
-  expect(setup.run).toContain('test "$(cat "/sys/fs/cgroup$group/memory.swap.max")" = 0');
-  expect(setup.run).toContain('test "$(cat "/sys/fs/cgroup$group/memory.oom.group")" = 1');
+  const script = readFileSync(".github/actions/setup-node-env/semantic-memory.sh", "utf8");
+  expect(script).toContain("--property=MemoryMax=67108864 --property=MemorySwapMax=0");
+  expect(script).toContain("--property=OOMPolicy=kill --property=RuntimeMaxSec=10");
+  expect(script).toContain('test "$(cat "/sys/fs/cgroup$group/memory.max")" = 67108864');
+  expect(script).toContain('test "$(cat "/sys/fs/cgroup$group/memory.swap.max")" = 0');
+  expect(script).toContain('test "$(cat "/sys/fs/cgroup$group/memory.oom.group")" = 1');
 });
 
 it.runIf(process.platform !== "win32")("rejects an unsupported runner with setup guidance", () => {
-  const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
-  const setup = action.runs.steps.find((step: { run?: string }) =>
-    step.run?.includes("systemd-run --user --scope"),
-  );
   const script = [
     "ps() { printf 'not-systemd\\n'; }",
     "sudo() { echo 'unexpected sudo' >&2; return 99; }",
-    setup.run,
+    readFileSync(".github/actions/setup-node-env/semantic-memory.sh", "utf8"),
   ].join("\n");
   const result = spawnSync("bash", ["-c", script], {
     encoding: "utf8",
@@ -74,4 +70,25 @@ it.runIf(process.platform !== "win32")("rejects an unsupported runner with setup
   expect(result.stderr).toContain("::error::Semantic checks require systemd");
   expect(result.stderr).toContain("https://docs.openclaw.ai/ci");
   expect(result.stderr).not.toContain("unexpected sudo");
+});
+
+it("qualifies tagged source with the workflow-pinned containment script", () => {
+  const workflow = parse(readFileSync(".github/workflows/openclaw-npm-preflight.yml", "utf8"));
+  const steps = workflow.jobs.check_openclaw_npm.steps;
+  const source = steps.find((step: { name?: string }) => step.name === "Checkout");
+  const harness = steps.find(
+    (step: { name?: string }) => step.name === "Checkout trusted package source preflight",
+  );
+  const probe = steps.find(
+    (step: { name?: string }) => step.name === "Prepare semantic check containment",
+  );
+  const setup = steps.find((step: { name?: string }) => step.name === "Setup Node environment");
+  expect(source.with.ref).toBe("${{ inputs.tag }}");
+  expect(harness.with.ref).toBe("${{ github.workflow_sha }}");
+  expect(harness.with.path).toBe(".release-harness");
+  expect(harness.with["sparse-checkout"].split("\n")).toContain(".github/actions/setup-node-env");
+  expect(probe.run).toBe("bash .release-harness/.github/actions/setup-node-env/semantic-memory.sh");
+  expect(steps.indexOf(harness)).toBeLessThan(steps.indexOf(probe));
+  expect(steps.indexOf(probe)).toBeLessThan(steps.indexOf(setup));
+  expect(setup.with["semantic-checks"]).toBeUndefined();
 });
