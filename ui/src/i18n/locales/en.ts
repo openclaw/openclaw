@@ -4073,8 +4073,6 @@ export const en: TranslationMap & {
       realtimeTalkCancellationRejected: "Realtime output cancellation was not accepted.",
       realtimeTalkMissingTurnIdentity: "Realtime output is missing its turn identity.",
       realtimeTalkRequiresMicrophone: "Realtime voice input requires browser microphone access.",
-      realtimeTalkRequiresSecureOrigin:
-        "The browser will only prompt for the microphone on localhost, 127.0.0.1, or HTTPS. Open this Control UI at one of those addresses.",
       selectedMicrophoneUnavailable:
         "The selected microphone is unavailable. Choose another input or System default.",
       selectedCameraUnavailable:

@@ -1,9 +1,6 @@
 import { encodeWavPcm16Mono, floatToPcm16, resampleFloat32Mono } from "../../lib/pcm-wav.ts";
 import { RealtimeTalkPcmInputPump } from "../chat/talk/audio.ts";
-import {
-  RealtimeTalkInputController,
-  RealtimeTalkSelectedMicrophoneError,
-} from "../chat/talk/input.ts";
+import { RealtimeTalkInputController } from "../chat/talk/input.ts";
 
 export const TTS_CLIP_TARGET_SAMPLE_RATE_HZ = 24_000;
 export const TTS_CLIP_MAX_DURATION_MS = 30_000;
@@ -44,16 +41,7 @@ export class TtsClipRecorder {
     this.onLevel = options.onLevel;
     const input = new RealtimeTalkInputController(() => undefined);
     this.input = input;
-    let media;
-    try {
-      media = await input.open(options.deviceId);
-    } catch (error) {
-      if (options.deviceId?.trim() && error instanceof RealtimeTalkSelectedMicrophoneError) {
-        media = await input.open(undefined);
-      } else {
-        throw error;
-      }
-    }
+    const media = await input.open(options.deviceId);
     const context = new AudioContext({ sampleRate: TTS_CLIP_TARGET_SAMPLE_RATE_HZ });
     this.context = context;
     if (context.state === "suspended") {

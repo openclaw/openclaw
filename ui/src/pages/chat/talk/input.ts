@@ -240,11 +240,7 @@ async function openRealtimeTalkInput(
 ): Promise<MediaStream> {
   const devices = globalThis.navigator?.mediaDevices;
   if (!devices?.getUserMedia) {
-    throw new Error(
-      globalThis.isSecureContext === false
-        ? t("chat.composer.realtimeTalkRequiresSecureOrigin")
-        : t("chat.composer.realtimeTalkRequiresMicrophone"),
-    );
+    throw new Error(t("chat.composer.realtimeTalkRequiresMicrophone"));
   }
   let acquisition: { stream: MediaStream } | { failure: string };
   try {

@@ -344,12 +344,16 @@ export function createGoogleSpeechVoiceMethods(deps: GoogleVoiceMethodDeps): {
       if (!transport.apiKey) {
         return staticGoogleVoices();
       }
-      return await listGoogleProjectVoices({
-        apiKey: transport.apiKey,
-        baseUrl: transport.baseUrl,
-        request: transport.request,
-        timeoutMs: req.timeoutMs ?? 30_000,
-      });
+      try {
+        return await listGoogleProjectVoices({
+          apiKey: transport.apiKey,
+          baseUrl: transport.baseUrl,
+          request: transport.request,
+          timeoutMs: req.timeoutMs ?? 30_000,
+        });
+      } catch {
+        return staticGoogleVoices();
+      }
     },
     designVoice: async (req) => {
       const transport = await resolveTransport(req);

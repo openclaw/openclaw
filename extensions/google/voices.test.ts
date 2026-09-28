@@ -29,6 +29,24 @@ function jsonResponse(body: unknown): Response {
 }
 
 describe("Google project voices", () => {
+  it("keeps the static catalog when the project list fails", async () => {
+    fetchWithTimeoutMock.mockRejectedValue(
+      Object.assign(
+        new Error(
+          "ProviderHttpError: Google voices request failed (503): The service is currently unavailable. [code=UNAVAILABLE]",
+        ),
+        { status: 503, statusCode: 503, code: "UNAVAILABLE" },
+      ),
+    );
+    const provider = buildGoogleSpeechProvider();
+    const voices = await provider.listVoices?.({
+      providerConfig: { apiKey: "***" },
+      timeoutMs: 5_000,
+    });
+    expect(voices?.some((voice) => voice.id === "Achernar")).toBe(true);
+    expect(voices?.some((voice) => voice.id === "Kore")).toBe(true);
+  });
+
   it("keeps the static catalog when Google is not configured", async () => {
     const provider = buildGoogleSpeechProvider();
     const voices = await provider.listVoices?.({ providerConfig: {} });
