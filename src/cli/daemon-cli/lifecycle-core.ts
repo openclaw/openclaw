@@ -4,6 +4,7 @@ import { readBestEffortConfig } from "../../config/config.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import { checkTokenDrift } from "../../daemon/service-audit.js";
 import { readGatewayServiceLoadState } from "../../daemon/service-load-state.js";
+import { collectGatewayServiceStartRepairIssues } from "../../daemon/service-start-repair.js";
 import type { GatewayServiceRestartResult } from "../../daemon/service-types.js";
 import type {
   GatewayServiceStartRepairIssue,
@@ -12,7 +13,7 @@ import type {
 } from "../../daemon/service.js";
 import {
   describeGatewayServiceRestart,
-  inspectGatewayServiceStartRepair,
+  readGatewayServiceState,
   startGatewayService,
 } from "../../daemon/service.js";
 import { renderSystemdUnavailableHints } from "../../daemon/systemd-hints.js";
@@ -547,11 +548,8 @@ export async function runServiceRestart(params: {
 
   if (loaded && !handledRecovery && params.repairLoadedService) {
     try {
-      const { state, issues } = await inspectGatewayServiceStartRepair(
-        params.service,
-        { env: process.env },
-        params.expectedPort,
-      );
+      const state = await readGatewayServiceState(params.service, { env: process.env });
+      const issues = collectGatewayServiceStartRepairIssues(state, params.expectedPort);
       if (issues.length > 0) {
         await prepareGatewayRestartIntent();
         handledRepair = await params.repairLoadedService({

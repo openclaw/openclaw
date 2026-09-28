@@ -116,6 +116,12 @@ the node's supervisor. Recovery keeps capacity occupied while the previous owner
 finishes stopping its commands. An upgraded node host preserves the released
 startup message and detached process-group ownership for older worker bundles.
 
+Installed node hosts package the POSIX launch helpers separately to reduce
+per-turn startup work. Update and restart the node host to receive this
+improvement. The worker still waits for its durable launch receipt before
+starting a turn, and cleanup continues to hold its worker slot until the
+process tree is gone.
+
 The picker derives every device row from `environments.list`. Every selected
 runtime requires an available, connected paired session host. OpenClaw worker
 turns additionally require captured exec-policy support and valid exact worker
@@ -228,6 +234,11 @@ If the platform is unsupported, neither engine works, or the daemon changes,
 session hosting or the affected launch fails visibly instead of falling back to
 an unisolated worker. Install or start the engine, verify `docker version` or
 `podman version`, and restart the node host.
+
+Before each container launch, daemon identity revalidation allows up to 30 seconds.
+If an engine command times out, the launch error names the engine and operation
+(for example, `docker info`) and its deadline. It omits command arguments and
+environment values. Check that operation against the selected daemon before retrying.
 
 The default image is `node:24.21.0-slim`; the engine pulls it on first use when it
 is not already present. Set `nodeHost.workerRuns.containerImage` to choose a

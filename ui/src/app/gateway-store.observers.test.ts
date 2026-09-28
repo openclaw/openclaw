@@ -334,13 +334,13 @@ describe("application gateway observer ownership", () => {
     ]);
   });
 
-  it("never logs a presence event after its snapshot observer replaces the client", () => {
+  it("never logs a metadata event after its snapshot observer replaces the client", () => {
     const { gateway, current } = createGatewayStore();
     const logged = vi.fn();
     const delivered = vi.fn();
     let replaced = false;
     gateway.subscribe((snapshot) => {
-      if (snapshot.selfUser?.id === "retired-owner" && !replaced) {
+      if (snapshot.usagePublications?.main?.usageUpdatedAt === 1 && !replaced) {
         replaced = true;
         gateway.connect();
       }
@@ -353,10 +353,8 @@ describe("application gateway observer ownership", () => {
 
     retired.opts.onEvent?.({
       ...createGatewayEvent(1),
-      event: "presence",
-      payload: {
-        presence: [{ instanceId: retired.opts.instanceId, user: { id: "retired-owner" } }],
-      },
+      event: "chat.metadata.changed",
+      payload: { agentId: "main", usageUpdatedAt: 1 },
     });
 
     expect(replaced).toBe(true);

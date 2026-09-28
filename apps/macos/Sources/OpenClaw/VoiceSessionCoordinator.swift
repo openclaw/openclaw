@@ -30,7 +30,6 @@ final class VoiceSessionCoordinator {
     {
         let token = UUID()
         self.logger.info("coordinator start token=\(token.uuidString) source=\(source.rawValue) len=\(text.count)")
-        let attributedText = attributed ?? VoiceWakeOverlayController.shared.makeAttributed(from: text)
         let session = Session(
             token: token,
             text: text,
@@ -41,7 +40,7 @@ final class VoiceSessionCoordinator {
             token: token,
             source: source,
             transcript: text,
-            attributed: attributedText,
+            attributed: attributed,
             forwardEnabled: forwardEnabled,
             isFinal: false)
         return token
@@ -75,12 +74,10 @@ final class VoiceSessionCoordinator {
             self.session?.voiceWakeTrigger = voiceWakeTrigger
         }
 
-        let attributed = VoiceWakeOverlayController.shared.makeAttributed(from: text)
         VoiceWakeOverlayController.shared.presentFinal(
             token: token,
             transcript: text,
-            autoSendAfter: autoSendAfter,
-            attributed: attributed)
+            autoSendAfter: autoSendAfter)
     }
 
     func sendNow(token: UUID, reason: String = "explicit") {

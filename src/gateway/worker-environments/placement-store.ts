@@ -43,6 +43,7 @@ import {
   type WorkerSessionPlacementState,
 } from "./placement-state.js";
 import {
+  observePlacementAuthority,
   preparePlacementTurnClaimAuthority,
   publishPlacementTurnClaimCleared,
   publishPlacementTurnClaimState,
@@ -146,6 +147,31 @@ export function createWorkerSessionPlacementStore(
       return preparePlacementTurnClaimAuthority(path, claim, (sessionIds) =>
         store.readProjection(sessionIds, { current: true }),
       );
+    },
+
+    async prepareRuntimeRefresh(sessionIdInput: string) {
+      const sessionId = required(sessionIdInput, "session id");
+      const observation = observePlacementAuthority(path, sessionId);
+      try {
+        const result = await executeExistingOpenClawStateRead(
+          { path },
+          { type: "workers.placementProjection", sessionIds: [sessionId], conflictBindings: [] },
+          { current: true },
+        );
+        if (!result?.ok || result.type !== "workers.placementProjection") {
+          throw new Error("Worker placement projection source is unavailable");
+        }
+        observation.assertCurrent();
+        return {
+          placement: result.result.projection.placements.get(sessionId),
+          move: result.result.projection.moves.get(sessionId),
+          pendingResult: result.result.projection.pendingResults.get(sessionId),
+          ...observation,
+        };
+      } catch (error) {
+        observation.release();
+        throw error;
+      }
     },
 
     async readProjection(

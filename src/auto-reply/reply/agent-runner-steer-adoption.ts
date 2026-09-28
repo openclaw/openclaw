@@ -204,6 +204,12 @@ export async function runActiveReplySteer(
           followupRun.run.inputProvenance.kind === "external_user"),
       terminalReplyExpectation: followupRun.run.terminalReplyExpectation,
       toolAuthorityFingerprint: params.toolAuthorityFingerprint,
+      personalToolParticipant: {
+        operatorAuthority: followupRun.operatorAuthority,
+        senderId: followupRun.run.senderId,
+        senderName: followupRun.run.senderName,
+        gatewayUiCommandTarget: followupRun.run.gatewayUiCommandTarget,
+      },
       ...(params.pendingInputAuthorityFingerprint
         ? { pendingInputAuthorityFingerprint: params.pendingInputAuthorityFingerprint }
         : {}),

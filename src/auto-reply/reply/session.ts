@@ -52,10 +52,8 @@ import {
 import {
   DEFAULT_RESET_TRIGGERS,
   SESSION_TOTAL_TOKENS_VERSION,
-  type GroupKeyResolution,
   type InternalSessionEntry,
   type SessionEntry,
-  type SessionScope,
 } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -132,10 +130,7 @@ import {
   maybeRetireLegacyMainDeliveryRoute,
   resolveSessionDeliveryRoute,
 } from "./session-delivery.js";
-import {
-  createReplySessionEntryHandle,
-  type ReplySessionEntryHandle,
-} from "./session-entry-handle.js";
+import { createReplySessionEntryHandle } from "./session-entry-handle.js";
 import {
   buildSessionEndHookPayload,
   buildSessionStartHookPayload,
@@ -146,6 +141,7 @@ import {
   ReplySessionInitConflictError,
   runWithSessionInitConflictRetry,
 } from "./session-init-conflict-retry.js";
+import type { SessionInitResult } from "./session-init.types.js";
 import {
   canReplaceRestartTombstoneFromParent,
   prepareReplySessionParentFork,
@@ -164,29 +160,6 @@ function hasProviderOwnedSession(entry: SessionEntry | undefined): boolean {
   const provider = normalizeOptionalString(entry?.providerOverride ?? entry?.modelProvider);
   return Boolean(provider && getCliSessionBinding(entry, provider));
 }
-
-export type SessionInitResult = {
-  sessionCtx: TemplateContext;
-  sessionEntry: SessionEntry;
-  initialSessionEntry?: SessionEntry;
-  previousSessionEntry?: SessionEntry;
-  previousSessionMemory?: SessionMemoryTranscript;
-  previousSessionResetMessages?: unknown[];
-  sessionEntryHandle: ReplySessionEntryHandle;
-  sessionStore: Record<string, SessionEntry>;
-  sessionKey: string;
-  sessionId: string;
-  isNewSession: boolean;
-  resetTriggered: boolean;
-  systemSent: boolean;
-  abortedLastRun: boolean;
-  storePath: string;
-  sessionScope: SessionScope;
-  groupResolution?: GroupKeyResolution;
-  isGroup: boolean;
-  bodyStripped?: string;
-  triggerBodyNormalized: string;
-};
 
 type InitSessionStateParams = {
   providerReviewAcknowledgment?: import("../../sessions/provider-review.js").ProviderReviewAcknowledgment;
@@ -208,6 +181,7 @@ type InitSessionStateAttemptContext = {
   isSystemEvent: boolean;
   retargetedSession: boolean;
   sessionKey: string;
+  storeWriterIdentity?: string;
   sessionCtxForState: FinalizedRuntimeMsgContext;
   storePath: string;
 };
@@ -426,12 +400,26 @@ async function initSessionStateAttempt(
     }
   }
   params.signal?.throwIfAborted();
+  // Creation hooks, parent forks, and legacy-main retirement can touch other sessions.
+  const storeWriterIdentity =
+    snapshot.currentEntry &&
+    params.newlyCreatedSessionId !== snapshot.currentEntry.sessionId &&
+    !parentSessionKey &&
+    (params.cfg.session?.dmScope ?? "main") === "main"
+      ? attemptContext.sessionKey
+      : undefined;
   // Guarded revision checks only serialize correctly when the snapshot and
   // commit share the same writer lane.
   const attempt = await runExclusiveSessionStoreWrite(
     attemptContext.storePath,
     async () =>
-      await initSessionStateAttemptLocked(params, attemptContext, staleSnapshotRetried, undefined),
+      await initSessionStateAttemptLocked(
+        params,
+        { ...attemptContext, storeWriterIdentity },
+        staleSnapshotRetried,
+        undefined,
+      ),
+    { identities: storeWriterIdentity ? [storeWriterIdentity] : undefined },
   );
   if (attempt.kind === "complete") {
     return attempt.result;
@@ -647,6 +635,13 @@ async function initSessionStateAttemptLocked(
     ctx,
   });
   const entry = initializationSnapshot.currentEntry;
+  if (
+    attemptContext.storeWriterIdentity &&
+    (!entry || params.newlyCreatedSessionId === entry.sessionId)
+  ) {
+    // Reacquire store-wide before a newly observed creation can invoke arbitrary hooks.
+    throw new ReplySessionInitConflictError(sessionKey);
+  }
   const createdNewEntry = entry === undefined;
   const parentSessionKey = normalizeOptionalString(ctx.ParentSessionKey);
   const parentForkSourceEntry =

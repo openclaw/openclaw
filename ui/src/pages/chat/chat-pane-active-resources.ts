@@ -14,7 +14,10 @@ import {
 import { latestBrowserTabCards } from "../../lib/chat/browser-tab-preview.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
-import type { SessionRowObservation } from "../../lib/sessions/session-capability.ts";
+import type {
+  SessionCapability,
+  SessionRowObservation,
+} from "../../lib/sessions/session-capability.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { resolveChatPaneDesktopTarget } from "./chat-pane-placement.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -29,6 +32,7 @@ import {
 type ResourceSlot = "desktop" | "browser";
 export type ActiveResourceOwner = {
   client: GatewayBrowserClient;
+  sessions: Pick<SessionCapability, "describe">;
   observation: SessionRowObservation;
   sessionKey: string;
   agentId?: string;
@@ -139,6 +143,7 @@ export class ChatPaneActiveResources {
         !parseCatalogSessionKey(sessionKey)
         ? {
             client,
+            sessions: state.sessions,
             observation,
             sessionKey,
             agentId,
@@ -226,14 +231,14 @@ export class ChatPaneActiveResources {
     read.promise = (async () => {
       while (current()) {
         const reconcile = owner.observation.captureReconcile();
-        const { session } = await owner.client.request<{ session?: GatewaySessionRow }>(
-          "sessions.describe",
+        const { session } = await owner.sessions.describe(
           { key: owner.sessionKey, ...(owner.agentId ? { agentId: owner.agentId } : {}) },
+          { client: owner.client },
         );
         if (!current()) {
           return null;
         }
-        const outcome = reconcile(session);
+        const outcome = reconcile(session ?? undefined);
         if (outcome.status === "current") {
           return outcome.row;
         }

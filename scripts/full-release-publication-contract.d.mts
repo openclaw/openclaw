@@ -6,8 +6,8 @@ export type ValidationPurpose =
   | "main-qualification"
   | "postpublish-confidence";
 export interface PublicationSelection {
-  route: "normal" | "prepared" | "extended-stable" | "alpha";
-  npmDistTag: "alpha" | "beta" | "latest" | "extended-stable";
+  route: "normal" | "prepared" | "extended-stable";
+  npmDistTag: "beta" | "latest" | "extended-stable";
   publishOpenclawNpm: boolean;
   pluginPublishScope: "selected" | "all-publishable";
   plugins: string[];

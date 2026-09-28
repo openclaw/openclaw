@@ -697,6 +697,7 @@ describe("mutable update execution", () => {
           state.windowsTaskAutoStartRecovery = {
             suspended: Promise.resolve(true),
             beginMutation,
+            assertRecoveryCurrent: () => {},
             restore: vi.fn(async () => {}),
             handoff: vi.fn(),
             complete: vi.fn(async () => {}),

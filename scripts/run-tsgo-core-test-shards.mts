@@ -16,6 +16,7 @@ import {
   selectTsgoCoreTestShards,
   selectChangedTsgoCoreTestShards,
   selectChangedCiTsgoGraphs,
+  resolveChangedCiTsgoInputs,
   resolveCiTsgoGraphs,
   TSGO_CI_GRAPHS,
   TSGO_CORE_TEST_SHARDS,
@@ -172,6 +173,9 @@ export async function createChangedCiTypeCheckPlan(
   options: { cwd?: string } = {},
 ) {
   const cwd = realpathSync(options.cwd ?? repoRoot);
+  if (!resolveChangedCiTsgoInputs(paths, (file) => existsSync(path.resolve(cwd, file)))) {
+    return { mode: "full", graphs: TSGO_CI_GRAPHS };
+  }
   const { inspectCiTsgoCheckGraphs } = await import("./check-tsgo-core-boundary.mts");
   const inspected = await inspectCiTsgoCheckGraphs({ cwd });
   const selected = paths.every((file) => existsSync(path.resolve(cwd, file)))

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { createServer } from "node:http";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect } from "vitest";
@@ -58,16 +59,78 @@ describe("pinned pnpm cold bootstrap", () => {
     expect(fs.readFileSync(f.calls, "utf8").trim().split("\n")).toHaveLength(2);
   });
 
-  it("stops on a download error without retrying or publishing cache state", async ({
-    command,
-  }) => {
-    const f = createPnpmArchiveFixture(command);
-    const result = await f.run({ CURL_FIXTURE_EXIT: "22" });
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("Cannot download pinned pnpm archive");
-    expect(result.stdout).toBe("");
-    expect(fs.readFileSync(f.calls, "utf8").trim().split("\n")).toHaveLength(1);
-    expect(fs.readdirSync(f.runner)).toEqual([]);
+  it.for([
+    {
+      name: "recovers a transient response",
+      status: 503,
+      failures: 1,
+      attempts: 2,
+      succeeds: true,
+    },
+    {
+      name: "bounds persistent transient failures",
+      status: 503,
+      failures: 4,
+      attempts: 3,
+      succeeds: false,
+    },
+    {
+      name: "does not retry permanent failures",
+      status: 404,
+      failures: 4,
+      attempts: 1,
+      succeeds: false,
+    },
+  ])("$name with real curl", async ({ status, failures, attempts, succeeds }, { command }) => {
+    await command.lifetime.run(async () => {
+      const server = createServer();
+      try {
+        await new Promise<void>((resolve, reject) => {
+          server.once("error", reject);
+          server.listen(0, "127.0.0.1", resolve);
+        });
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          throw new Error("Registry fixture did not acquire a TCP port");
+        }
+        const f = createPnpmArchiveFixture(command, {
+          registryUrl: `http://127.0.0.1:${address.port}`,
+        });
+        let wrapperAttempts = 0;
+        server.on("request", (request, response) => {
+          const name = path.basename(request.url ?? "");
+          if (name === "pnpm-12.5.1.tgz" && ++wrapperAttempts <= failures) {
+            response.writeHead(status).end();
+            return;
+          }
+          response.end(fs.readFileSync(path.join(f.registry, name)));
+        });
+        const result = await f.run();
+        expect(wrapperAttempts).toBe(attempts);
+        if (succeeds) {
+          expect(result.status, result.stderr).toBe(0);
+          expect(
+            fs.readFileSync(path.join(result.stdout.trim(), "v1/pnpm/12.5.1/pnpm"), "utf8"),
+          ).toBe("wrapper-fixture\n");
+          expect(fs.readFileSync(path.join(f.store, "toolchain/pnpm-12.5.1.tgz"))).toEqual(
+            fs.readFileSync(path.join(f.registry, "pnpm-12.5.1.tgz")),
+          );
+        } else {
+          expect(result.status).not.toBe(0);
+          expect(result.stderr).toContain("Cannot download pinned pnpm archive");
+          expect(result.stdout).toBe("");
+          expect(fs.readdirSync(f.runner)).toEqual([]);
+          expect(fs.readdirSync(f.store)).toEqual([]);
+        }
+      } finally {
+        server.closeAllConnections();
+        if (server.listening) {
+          await new Promise<void>((resolve, reject) => {
+            server.close((error) => (error ? reject(error) : resolve()));
+          });
+        }
+      }
+    });
   });
 
   it("downloads authenticated registry archives when both the store and image are empty", async ({

@@ -498,7 +498,7 @@ it.each([
             if (
               "sessionKey" in publication &&
               publication.sessionKey === scope.sessionKey &&
-              publication.facts?.kind === "unchanged"
+              publication.facts?.kind === "owner"
             ) {
               publicationObserved = true;
               if (change === "runtime stored facts") {
