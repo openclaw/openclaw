@@ -345,8 +345,6 @@ export function renderAppSidebarPagesHead(host: AppSidebarRenderHost) {
   `;
 }
 
-export { renderAppSidebarOnline } from "./app-sidebar-online.ts";
-
 /** Zone 5: product chrome recedes to one slim footer bar. */
 export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
   const connectionStatus = host.connectionStatus;
