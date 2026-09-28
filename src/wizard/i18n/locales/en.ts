@@ -1198,6 +1198,7 @@ export const en = {
       outroSeeded:
         "Onboarding complete. Web UI seeded in the background; open it anytime with the dashboard link above.",
       quickstartNodeRuntime: "QuickStart uses Node for the Gateway service (stable + supported).",
+      quickstartBunRuntime: "QuickStart uses Bun for the Gateway service.",
       reinstall: "Reinstall",
       rerunInstallDaemon: "Or rerun with: {command}",
       restart: "Restart",

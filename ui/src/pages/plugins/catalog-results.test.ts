@@ -438,6 +438,55 @@ describe("renderPluginCatalogResults", () => {
     expect(container.querySelector('[data-plugin-id="uncategorized-plugin"]')).not.toBeNull();
   });
 
+  it("shows model providers in both their purpose and derived Media shelves", () => {
+    const providers = ["novita", "zai"].map((id) =>
+      plugin(id, {
+        catalog: {
+          name: id === "zai" ? "Z.AI" : "Novita",
+          official: true,
+          categories: ["models", "media"],
+        },
+      }),
+    );
+    const plain = plugin("text-only", {
+      catalog: { name: "Text only", official: true, categories: ["models"] },
+    });
+    const container = mount(
+      baseProps({
+        featured: [],
+        trending: [],
+        result: { items: [...providers, plain] },
+        categories: [
+          {
+            slug: "models",
+            label: "Models",
+            description: "Model providers",
+            icon: "brain",
+            order: 0,
+          },
+          {
+            slug: "media",
+            label: "Media",
+            description: "Media providers",
+            icon: "palette",
+            order: 1,
+          },
+        ],
+      }),
+    );
+    for (const id of ["novita", "zai"]) {
+      expect(
+        container.querySelectorAll('[data-catalog-section="models"] [data-plugin-id="' + id + '"]'),
+      ).toHaveLength(1);
+      expect(
+        container.querySelectorAll('[data-catalog-section="media"] [data-plugin-id="' + id + '"]'),
+      ).toHaveLength(1);
+    }
+    expect(
+      container.querySelector('[data-catalog-section="media"] [data-plugin-id="text-only"]'),
+    ).toBeNull();
+  });
+
   it("orders each category by its own pins before downloads and truncation", () => {
     const items = Array.from({ length: 9 }, (_, index) =>
       plugin(`popular-${index}`, {

@@ -162,6 +162,15 @@ const broadUnitFastCandidatePatterns = prepareGlobPatterns(
 const ownerRoutedUnitTestPatterns = [
   ...gatewayPluginTestFiles,
   ...cliProcessTestFiles,
+  // Planner inventory proofs retain their tooling timing and worker policy
+  // when their source and fixtures are split across ownership files.
+  "test/scripts/ci-changed-node-test-plan.test.ts",
+  "test/scripts/ci-changed-node-test-plan.config-fallback.test.ts",
+  "test/scripts/ci-changed-node-test-plan.dependency-hubs.test.ts",
+  "test/scripts/ci-changed-node-test-plan.dependency-inputs.test.ts",
+  "test/scripts/ci-changed-node-test-plan.policy.test.ts",
+  "test/scripts/ci-changed-node-test-plan.process-owners.test.ts",
+  "test/scripts/ci-changed-node-test-plan.source-owners.test.ts",
   // Real Git process-tree fixtures stay in tooling even when their
   // subprocess harness moves into shared test support.
   "test/scripts/ci-git-owner.test.ts",

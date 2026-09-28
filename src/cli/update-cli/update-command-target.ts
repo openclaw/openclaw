@@ -1,6 +1,7 @@
 import path from "node:path";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveStateDir } from "../../config/paths.js";
+import { isBunRuntime } from "../../daemon/runtime-binary.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { SqliteReadOnlyInspectionContentionError } from "../../infra/sqlite-readonly-worker-protocol.js";
@@ -69,10 +70,8 @@ import {
   recordUpdateCommandTarget,
   type prepareUpdateCommand,
 } from "./update-command-run.js";
-import {
-  resolveManagedServicePackageUpdatePlan,
-  type ManagedServiceRootRedirect,
-} from "./update-command-service-plan.js";
+import type { ManagedServiceRootRedirect } from "./update-command-service-context-types.js";
+import { resolveManagedServicePackageUpdatePlan } from "./update-command-service-plan.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service.js";
 import { reportPreMutationUpdateResult } from "./update-command-terminal.js";
 
@@ -114,7 +113,7 @@ function printManagedServicePackageUpdatePlan(params: {
       ),
     );
     if (nodeRunner) {
-      defaultRuntime.log(theme.muted(`Managed gateway service Node: ${nodeRunner}`));
+      defaultRuntime.log(theme.muted(`Managed gateway service runtime: ${nodeRunner}`));
     }
   } else if (params.serviceRoot) {
     defaultRuntime.log(
@@ -125,12 +124,12 @@ function printManagedServicePackageUpdatePlan(params: {
   } else if (nodeRunner) {
     defaultRuntime.log(
       theme.warn(
-        `Current Node (${resolveNodeRunner()}) differs from the managed gateway service Node (${nodeRunner}).`,
+        `Current runtime (${resolveNodeRunner()}) differs from the managed gateway service runtime (${nodeRunner}).`,
       ),
     );
     defaultRuntime.log(
       theme.muted(
-        "Using the managed service Node for this update so the gateway can start after the upgrade.",
+        "Using the managed service runtime for this update so the gateway can start after the upgrade.",
       ),
     );
   }
@@ -336,7 +335,7 @@ export async function resolveUpdateCommandTarget(
       let packageRuntimeTarget: { version: string; nodeEngine: string | null } | undefined;
       let managedServiceRootRedirect: ManagedServiceRootRedirect | null = null;
       let managedServiceRoot: string | undefined;
-      // The service's Node can differ even when its package root matches the shell.
+      // The service runtime can differ even when its package root matches the shell.
       let managedServiceNodeRunner: string | undefined;
       let packageUpdateNodeRunner: string | undefined;
       let serviceUnitTarget: string | undefined;
@@ -420,7 +419,10 @@ export async function resolveUpdateCommandTarget(
             target: { kind: updateInstallKind, tag, installationMethod: `${manager}-global` },
           });
           packageInstallTarget = await resolveGlobalInstallTarget({
-            manager,
+            manager:
+              manager === "bun" && packageUpdateNodeRunner && isBunRuntime(packageUpdateNodeRunner)
+                ? { manager, command: packageUpdateNodeRunner }
+                : manager,
             runCommand: runCommandWithTimeout,
             timeoutMs: updateStepTimeoutMs,
             pkgRoot: root,

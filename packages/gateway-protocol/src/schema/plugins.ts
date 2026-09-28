@@ -277,6 +277,8 @@ export const PluginCatalogEntrySchema = closedObject({
   runtime: Type.Optional(PluginRuntimeStatusSchema),
   /** Ordered package or registry categories; the first category is primary. */
   categories: Type.Optional(Type.Array(NonEmptyString, { minItems: 1, maxItems: 3 })),
+  /** Additional browse memberships derived from enabled plugins' declared capabilities. */
+  capabilityCategories: Type.Optional(Type.Array(NonEmptyString, { uniqueItems: true })),
   /** Compatibility projection of the primary category. */
   category: Type.Optional(NonEmptyString),
   /** True when the plugin has an install record and can be removed via plugins.uninstall. */
