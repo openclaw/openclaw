@@ -15,8 +15,6 @@ import type {
   MeetingRuntimeOwner,
   MeetingRuntimeParams,
   MeetingRuntimeProbeResults,
-  MeetingRuntimeRequest,
-  MeetingRuntimeSession,
   MeetingRuntimeSpeechBlockedReason,
 } from "./runtime-facade-types.js";
 import type { MeetingProbeContext } from "./runtime-probes.js";
@@ -26,7 +24,12 @@ import {
   type MeetingSessionRuntimeHandles,
   type MeetingSessionRuntimeJoinContext,
 } from "./session-runtime.js";
-import type { MeetingBrowserTab, MeetingPluginChromeHealth } from "./session-types.js";
+import type {
+  MeetingBrowserTab,
+  MeetingPluginChromeHealth,
+  MeetingPluginJoinRequest,
+  MeetingPluginSession,
+} from "./session-types.js";
 
 const nowIso = () => new Date().toISOString();
 
@@ -39,8 +42,8 @@ export function createMeetingRuntimeFacade<
 >(
   options: MeetingRuntimeFacadeOptions<Config, Transport, Mode, Health, Results>,
 ): MeetingRuntimeFacadeConstructor<Config, Transport, Mode, Health, Results> {
-  type Session = MeetingRuntimeSession<Transport, Mode, Health>;
-  type Request = MeetingRuntimeRequest<Transport, Mode>;
+  type Session = MeetingPluginSession<Transport, Mode, Health>;
+  type Request = MeetingPluginJoinRequest<Transport, Mode>;
   type SessionRuntime = MeetingRuntimeOwner<Transport, Mode, Health>;
   type JoinContext = MeetingSessionRuntimeJoinContext<
     Session,

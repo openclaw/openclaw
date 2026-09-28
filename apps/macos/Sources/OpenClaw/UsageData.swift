@@ -78,7 +78,7 @@ extension GatewayUsageSummary {
                     displayName: provider.displayName,
                     plan: provider.plan,
                     windowLabel: window.label,
-                    usedPercent: window.usedPercent,
+                    usedPercent: window.usedPercent.isFinite ? min(100, max(0, window.usedPercent)) : nil,
                     resetAt: window.resetAt.map { Date(timeIntervalSince1970: $0 / 1000) },
                     errorText: nil)
             }

@@ -525,6 +525,15 @@ largest family and 64 MiB for restoration while migrated originals remain.
 Hard-linked database or journal files refuse before migration because restoring
 one pathname cannot safely restore every alias.
 
+Settled, verified successful activation removes the current update's database
+snapshots, together with the old package backup. Rollback, failed or unverified
+completion, and restore refusal keep them. Cleanup failures produce a maintenance warning with
+the retained path. Older snapshot directories remain untouched because their
+ownership and successful outcome cannot be proven from existing receipts;
+Doctor reports older npm snapshot directories with their size and removal command.
+Confirm no update is in progress and inspect their update reports and recovery
+state before removing them manually.
+
 If the Gateway was confirmed stopped during capture and the update fails before
 the candidate is allowed to start, restoration also requires matching database
 write evidence. Doctor checks the captured file generations before migrations
@@ -553,7 +562,8 @@ provided by this check.
 If Doctor cannot provide write evidence, rollback requires the last verified
 database generations to remain unchanged.
 Snapshots taken while a Gateway may still be writing, including with
-`--no-restart`, remain available for manual recovery with a warning. They never
+`--no-restart`, remain available for manual recovery with a warning until verified
+successful activation. They never
 become eligible for automatic restoration just because that Gateway later exits.
 
 This protection belongs to the updater already running. Installing it does not
@@ -615,6 +625,13 @@ authority. These temporary validation snapshots are not a full-state backup;
 see [Rollback](/install/updating#rollback).
 If schema state cannot be verified, rollback is refused with
 `rollback-state-unverified`; unknown state never counts as schema-neutral.
+
+If an update fails before activation, recovery observes the existing Gateway once
+without waiting for startup or restarting it. Native service and listener checks
+share the update's existing observation allowance; their elapsed time does not
+consume the separate short health-request timeout. An explicit shorter probe
+allowance and the overall deadline still apply. This correction takes effect
+when the installed updater includes it, not in an older updater already running.
 
 ### Restart handoff
 
@@ -923,6 +940,10 @@ the sentinel.
     Every activated Git build runs post-update checks in a fresh process, including when local commits already ahead of upstream rebase without changing the commit or version. Activation captures the built commit and runtime content digest. At convergence completion, the update records one comparison against that activated runtime, including when finalization runs in the migrated candidate worker. A changed identity is reported as a verification failure.
 
     The previous checkout and runtime remain available until final verification completes. A late verification failure restores the original configuration, source, and runtime and restarts a previously verified running service when the state-safety checks permit rollback. Incompatible state changes or independent source edits refuse destructive restoration and retain the named backups for recovery.
+
+    Retained Git rollback keeps this checkout attached to its original branch while restoring the source tree and rewriting the branch ref. Git refuses another worktree's attempt to check out that branch during restoration. If another worktree already holds the original branch when rollback starts, restoration stops and retains the runtime backup. The attached checkout protects conflicting, untracked, and ignored files and preserves staged and unstaged edits in unchanged files. Rollback requires a usable branch reflog before rewriting; an unavailable reflog refuses restoration with source untouched and the runtime backup retained. After rewriting, rollback verifies the reflog transition. A concurrent ref change retains the runtime backup and reports the expected, current, and reflog-previous commits. Recovery suggests restoring the previous ref only while the branch still points to the rollback commit; a later write instead directs you to inspect the reflog and keep the newest intended commit. The retained transaction still refuses completion if it detects independent source edits.
+
+    Retained rollback keeps any dev branch created by the update and reports a cleanup hint with the commit at which it was created. It restores the original branch or detached checkout and runtime without deleting a branch that another worktree may be claiming. Once no worktree uses the retained branch, inspect it and use the reported `git branch -d` command to remove it. This protection runs in the installed updater; installing a newer candidate cannot change an older updater's rollback behavior on that first update.
 
     If restoring the previous Git runtime fails, the Gateway stays stopped and the failed rollback step records the filesystem error. Pending originals remain in sibling `<runtime>.openclaw-update-<id>.tmp/previous` directories. Preserve those backups and repair the installation before restarting; cleanup does not delete an unrestored original.
 

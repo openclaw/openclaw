@@ -20,6 +20,47 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 import { createConfigWriteAuthorityGuard } from "./write-authority.js";
 import { captureConfigWriteLockGuard } from "./write-lock.js";
 
+export type ConfigFileWritePathSnapshot = {
+  targetPath: string;
+  entries: Array<
+    | { path: string; kind: "missing-directory" }
+    | { path: string; kind: "existing"; dev: string; ino: string; link?: string }
+  >;
+};
+
+/** The captured path facts survive an update's delegated finalizer; they grant no write authority. */
+export function assertConfigFileWritePathSnapshot(
+  snapshot: ConfigFileWritePathSnapshot,
+  ioFs: typeof fs,
+): void {
+  const conflict = () =>
+    new ConfigMutationConflictError("included config target changed since last load", {
+      retryable: false,
+    });
+  for (const expected of snapshot.entries) {
+    const stat = ioFs.lstatSync(expected.path, { bigint: true, throwIfNoEntry: false });
+    if (expected.kind === "missing-directory") {
+      if (stat && !stat.isDirectory()) {
+        throw conflict();
+      }
+      continue;
+    }
+    if (
+      !stat ||
+      stat.dev.toString() !== expected.dev ||
+      stat.ino.toString() !== expected.ino ||
+      (expected.link === undefined
+        ? !stat.isDirectory()
+        : !stat.isSymbolicLink() || ioFs.readlinkSync(expected.path) !== expected.link)
+    ) {
+      throw conflict();
+    }
+  }
+  if (ioFs.lstatSync(snapshot.targetPath, { throwIfNoEntry: false })?.isSymbolicLink()) {
+    throw conflict();
+  }
+}
+
 /** Pin path lookups without pinning the regular file this write will replace. */
 export function captureConfigFileWritePathProof(
   filePath: string,
@@ -84,32 +125,23 @@ export function captureConfigFileWritePathProof(
   }
   capture(filePath);
   capture(targetPath);
-  const assertCurrent = () => {
-    for (const [entry, expected] of facts) {
-      const stat = ioFs.lstatSync(entry, { bigint: true, throwIfNoEntry: false });
-      if (expected.kind === "missing-directory") {
-        if (stat && !stat.isDirectory()) {
-          throw conflict();
-        }
-        continue;
-      }
-      if (
-        !stat ||
-        stat.dev !== expected.dev ||
-        stat.ino !== expected.ino ||
-        (expected.link === undefined
-          ? !stat.isDirectory()
-          : !stat.isSymbolicLink() || ioFs.readlinkSync(entry) !== expected.link)
-      ) {
-        throw conflict();
-      }
-    }
-    if (ioFs.lstatSync(targetPath, { throwIfNoEntry: false })?.isSymbolicLink()) {
-      throw conflict();
-    }
+  const snapshot: ConfigFileWritePathSnapshot = {
+    targetPath,
+    entries: [...facts].map(([entry, fact]) =>
+      fact.kind === "missing-directory"
+        ? { path: entry, kind: fact.kind }
+        : {
+            path: entry,
+            kind: fact.kind,
+            dev: fact.dev.toString(),
+            ino: fact.ino.toString(),
+            link: fact.link,
+          },
+    ),
   };
+  const assertCurrent = () => assertConfigFileWritePathSnapshot(snapshot, ioFs);
   assertCurrent();
-  return { path: filePath, assertCurrent };
+  return { path: filePath, snapshot, assertCurrent };
 }
 
 type ConfigFileWriteIdentity = Pick<fs.BigIntStats, "dev" | "ino">;

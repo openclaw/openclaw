@@ -12,16 +12,19 @@ import {
   formatNodeRunnerUpdateRequired,
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
+  NODE_WORKER_STATUS_WAIT_VERSION,
   resolveNodeWorkerExecutionIssue,
 } from "../../infra/node-runner-inventory.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import {
   nodeWorkerPlanHash,
+  NODE_WORKER_STATUS_WAIT_MAX_MS,
   parseNodeWorkerLaunchInput,
   parseNodeWorkerSupervisorReceipt,
   type NodeWorkerLaunchInput,
   type NodeWorkerSupervisorIdentity,
   type NodeWorkerSupervisorReceipt,
+  nodeWorkerTurnMatchesIdentity,
 } from "../../worker/node-supervisor-protocol.js";
 import {
   parseWorkerAdmissionDeadlineResult,
@@ -100,12 +103,7 @@ class NodeWorkerLaunchTransportError extends Error {
 function isTerminalReceipt(
   receipt: NodeWorkerSupervisorReceipt,
 ): receipt is TerminalNodeWorkerSupervisorReceipt {
-  return (
-    receipt.state === "completed" ||
-    receipt.state === "failed" ||
-    receipt.state === "interrupted" ||
-    receipt.state === "cancelled"
-  );
+  return receipt.state !== "pending" && receipt.state !== "running";
 }
 
 function snapshotLaunchInput(input: NodeWorkerLaunchInput): NodeWorkerLaunchInput {
@@ -160,9 +158,6 @@ export function measureNodeWorkerLaunchBytes(nodeId: string, input: NodeWorkerLa
 }
 
 function expectedIdentity(input: NodeWorkerLaunchInput): NodeWorkerSupervisorIdentity {
-  if (input.launchId !== input.descriptor.assignment.turnId) {
-    throw new Error("node worker launch ID must match the durable turn ID");
-  }
   return {
     launchId: input.launchId,
     planHash: nodeWorkerPlanHash(input),
@@ -174,19 +169,14 @@ function expectedIdentity(input: NodeWorkerLaunchInput): NodeWorkerSupervisorIde
   };
 }
 
-function receiptMatchesIdentity(
+function validateReceipt(
   receipt: NodeWorkerSupervisorReceipt,
   expected: NodeWorkerSupervisorIdentity,
-): boolean {
-  return (
-    receipt.launchId === expected.launchId &&
-    receipt.planHash === expected.planHash &&
-    receipt.environmentId === expected.environmentId &&
-    receipt.sessionId === expected.sessionId &&
-    receipt.ownerEpoch === expected.ownerEpoch &&
-    receipt.placementGeneration === expected.placementGeneration &&
-    receipt.runId === expected.runId
-  );
+): NodeWorkerSupervisorReceipt {
+  if (!nodeWorkerTurnMatchesIdentity(receipt, expected)) {
+    throw new Error("node worker supervisor receipt identity mismatch");
+  }
+  return receipt;
 }
 
 function parseInvokeReceipt(
@@ -295,11 +285,11 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
       | typeof NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND
       | typeof NODE_WORKER_SUPERVISOR_STATUS_COMMAND
       | typeof NODE_WORKER_SUPERVISOR_CANCEL_COMMAND;
-    payload: unknown;
+    payload: NodeWorkerLaunchInput | NodeWorkerSupervisorIdentity | { launchId: string };
     isAuthorized: () => boolean;
     deadline: OperationDeadline;
     onDispatchReady?: () => void;
-  }): Promise<NodeWorkerSupervisorReceipt | null> => {
+  }): Promise<{ receipt: NodeWorkerSupervisorReceipt | null; statusWait: boolean }> => {
     if (!params.isAuthorized()) {
       throw new NodeWorkerLaunchTransportError(
         "APPROVAL_AUTHORITY_CLOSED",
@@ -345,18 +335,25 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
       }
       // A retained environment already owns its slot. The node arbitrates new physical
       // launches atomically; its advertised free-slot count cannot reject turn reuse.
+      const statusWait = node.workerHost.statusWait === NODE_WORKER_STATUS_WAIT_VERSION;
       const operation = transport.invoke({
         node,
         command: params.command,
-        params: params.payload,
+        params:
+          params.command === NODE_WORKER_SUPERVISOR_STATUS_COMMAND && statusWait
+            ? {
+                ...params.payload,
+                // Leave time for receipt delivery and transport authority revalidation.
+                waitMs: Math.min(
+                  NODE_WORKER_STATUS_WAIT_MAX_MS,
+                  Math.max(1, Math.floor(rpcBudgetMs * 0.75)),
+                ),
+              }
+            : params.payload,
         timeoutMs: rpcBudgetMs,
         signal,
         idempotencyKey:
-          params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND &&
-          typeof params.payload === "object" &&
-          params.payload !== null &&
-          "launchId" in params.payload &&
-          typeof params.payload.launchId === "string"
+          params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND
             ? params.payload.launchId
             : undefined,
         isDispatchAuthorized: params.isAuthorized,
@@ -376,7 +373,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
           ),
         );
       }
-      return parseInvokeReceipt(result.payloadJSON);
+      return { receipt: parseInvokeReceipt(result.payloadJSON), statusWait };
     } catch (error) {
       if (rpcController?.signal.aborted && !params.deadline.signal.aborted) {
         throw new NodeWorkerLaunchTransportError("TIMEOUT", "node worker RPC timed out");
@@ -385,16 +382,6 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     } finally {
       clearTimeout(rpcTimer);
     }
-  };
-
-  const validateReceipt = (
-    receipt: NodeWorkerSupervisorReceipt,
-    expected: NodeWorkerSupervisorIdentity,
-  ): NodeWorkerSupervisorReceipt => {
-    if (!receiptMatchesIdentity(receipt, expected)) {
-      throw new Error("node worker supervisor receipt identity mismatch");
-    }
-    return receipt;
   };
 
   const waitBeforeRetry = async (params: {
@@ -426,7 +413,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
           throw new Error("node worker cancellation authority closed before terminal settlement");
         }
         try {
-          const receipt = await invoke({
+          const { receipt } = await invoke({
             deviceId: params.request.deviceId,
             command: NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
             payload: params.expected,
@@ -507,8 +494,9 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
         if (!stableRequest.isDispatchAuthorized()) {
           throw new Error("node worker launch authority closed");
         }
+        const launchMayAlreadyExist = mayHaveLaunched;
         try {
-          const receipt = await invoke({
+          const { receipt, statusWait } = await invoke({
             deviceId: stableRequest.deviceId,
             command: pollStatus
               ? NODE_WORKER_SUPERVISOR_STATUS_COMMAND
@@ -573,8 +561,25 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
             }
             pollStatus = true;
             delayMs = pollIntervalMs;
+            // Older node hosts retain timed polling; negotiated waits wake on durable settlement.
+            if (statusWait) {
+              continue;
+            }
           }
         } catch (error) {
+          // Supervisors answer INVALID_REQUEST before retaining any admission, turn, or child
+          // for a launch ID they have not seen. Launch IDs are minted per turn plan, so only an
+          // earlier dispatch in this call could have registered it; cancelling would otherwise
+          // poll a null receipt until its deadline.
+          if (
+            !pollStatus &&
+            !launchMayAlreadyExist &&
+            error instanceof NodeWorkerLaunchTransportError &&
+            error.code === "INVALID_REQUEST"
+          ) {
+            mayHaveLaunched = false;
+            throw error;
+          }
           if (
             deadline.signal.aborted ||
             (!dispatchReady && availabilityDeadline.signal.aborted) ||

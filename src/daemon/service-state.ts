@@ -5,6 +5,7 @@ import { readScheduledTaskCommand } from "./schtasks-layout.js";
 import { readStartupEntryState } from "./schtasks-runtime.js";
 import { mergeGatewayServiceEnv } from "./service-env-merge.js";
 import {
+  assertServiceInspectionFallbackAllowed,
   ServiceInspectionError,
   ServiceOwnershipRefusalError,
   findServiceOwnershipRefusal,
@@ -178,13 +179,7 @@ async function readGatewayServiceStateWithBinding(
     : await service
         .isAbsent?.({ env: baseEnv, timeoutMs: remainingTimeoutMs() })
         .catch((error: unknown) => {
-          if (hasCommandProcessCleanupError(error)) {
-            throw error;
-          }
-          const refusal = findServiceOwnershipRefusal(error);
-          if (refusal) {
-            throw refusal;
-          }
+          assertServiceInspectionFallbackAllowed(error);
           return false;
         });
   // Initial systemd absence proves no manager; strict absence below only proves no unit.
@@ -218,13 +213,7 @@ async function readGatewayServiceStateWithBinding(
             },
           })
           .catch((error: unknown) => {
-            if (hasCommandProcessCleanupError(error)) {
-              throw error;
-            }
-            const refusal = findServiceOwnershipRefusal(error);
-            if (refusal) {
-              throw refusal;
-            }
+            assertServiceInspectionFallbackAllowed(error);
             return null;
           });
   const mergedEnv = mergeGatewayServiceEnv(
@@ -255,13 +244,7 @@ async function readGatewayServiceStateWithBinding(
     absent = await service
       .isAbsent({ env, timeoutMs: remaining, strictCommandAbsent: true })
       .catch((error: unknown) => {
-        if (hasCommandProcessCleanupError(error)) {
-          throw error;
-        }
-        const refusal = findServiceOwnershipRefusal(error);
-        if (refusal) {
-          throw refusal;
-        }
+        assertServiceInspectionFallbackAllowed(error);
         return false;
       });
     systemdReadBinding?.verify();
@@ -294,13 +277,10 @@ async function readGatewayServiceStateWithBinding(
           .hasInstalledDefinition?.({ env: statusEnv, timeoutMs: remainingTimeoutMs() })
           .catch((error: unknown) => {
             // Strict command absence cannot erase a failed installed-definition read.
-            if (args.requireEffective || hasCommandProcessCleanupError(error)) {
+            if (args.requireEffective) {
               throw error;
             }
-            const refusal = findServiceOwnershipRefusal(error);
-            if (refusal) {
-              throw refusal;
-            }
+            assertServiceInspectionFallbackAllowed(error);
             return false;
           }) ?? false);
   const readLoadState = async () =>
@@ -334,13 +314,7 @@ async function readGatewayServiceStateWithBinding(
             ...(args.requireLoadedCommand ? { requireLoaded: true } : {}),
           })
           .catch((error: unknown) => {
-            if (hasCommandProcessCleanupError(error)) {
-              throw error;
-            }
-            const refusal = findServiceOwnershipRefusal(error);
-            if (refusal) {
-              throw refusal;
-            }
+            assertServiceInspectionFallbackAllowed(error);
             return { kind: "unknown", reason: "inspection-failed" } as const;
           })
       : undefined;

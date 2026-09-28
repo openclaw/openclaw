@@ -1,4 +1,3 @@
-import { setImmediate } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
@@ -9,14 +8,16 @@ import {
 } from "./placement-dispatch-coordinator.test-support.js";
 
 it.each([false, true])(
-  "keeps joined recovery behind the reporting baseline and settles it on failure=%s",
+  "reports the sweep without fencing independent recovery behind its baseline (report fails=%s)",
   async (reportFails) => {
     const reading = createDeferredCore();
     const finishRead = createDeferredCore();
     const reportError = new Error("synthetic reporting failure");
     let state = "provisioning";
     let reported = false;
-    const reconcile = vi.fn(async () => {});
+    const reconcile = vi.fn(async () => {
+      state = "reclaimed";
+    });
     const coordinated = coordinateWorkerPlacementDispatch(
       createCoordinatorTestService({
         reconcile,
@@ -44,11 +45,12 @@ it.each([false, true])(
       state = "active";
     });
     try {
-      await setImmediate();
-      expect(state).toBe("provisioning");
-      finishRead.resolve();
-      await Promise.all([sweepOutcome, recovery]);
+      await recovery;
       expect(state).toBe("active");
+      expect(reconcile).not.toHaveBeenCalled();
+      finishRead.resolve();
+      await sweepOutcome;
+      expect(state).toBe(reportFails ? "active" : "reclaimed");
       expect(reported).toBe(!reportFails);
       expect(reconcile).toHaveBeenCalledTimes(reportFails ? 0 : 1);
     } finally {
@@ -58,7 +60,7 @@ it.each([false, true])(
   },
 );
 
-it("reports joined recovery before releasing the reconciliation fence", async () => {
+it("reports completed sweep work while independent recovery and destruction settle", async () => {
   const operationStarted = createDeferredCore();
   const finishOperation = createDeferredCore();
   const recoveryStarted = createDeferredCore();
@@ -67,6 +69,7 @@ it("reports joined recovery before releasing the reconciliation fence", async ()
   const finishReport = createDeferredCore();
   const events: string[] = [];
   let reported: string[] | undefined;
+  let sweepSettled = false;
   const destructionError = new Error("synthetic environment teardown failure");
   const destroy = vi.fn(async () => {
     events.push("destroy");
@@ -95,7 +98,9 @@ it("reports joined recovery before releasing the reconciliation fence", async ()
       }
     },
   );
-  const sweep = coordinated.reconcile();
+  const sweep = coordinated.reconcile().then(() => {
+    sweepSettled = true;
+  });
   await operationStarted.promise;
   const recovery = coordinated.resumeProvisioning(PROVISIONING_PLACEMENT, async () => {
     recoveryStarted.resolve();
@@ -106,18 +111,20 @@ it("reports joined recovery before releasing the reconciliation fence", async ()
   const destructionOutcome = expect(destroying).rejects.toBe(destructionError);
   try {
     await recoveryStarted.promise;
+    await destructionOutcome;
+    expect(events).toEqual(["destroy"]);
     finishOperation.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
-    finishRecovery.resolve();
     await reportCaptured.promise;
-    expect(reported).toEqual(["sweep", "recovery"]);
-    expect(destroy).not.toHaveBeenCalled();
+    expect(reported).toEqual(["destroy", "sweep"]);
+    finishRecovery.resolve();
+    await recovery;
+    expect(sweepSettled).toBe(false);
+    expect(destroy).toHaveBeenCalledOnce();
   } finally {
     finishOperation.resolve();
     finishRecovery.resolve();
     finishReport.resolve();
     await Promise.all([sweep, recovery, destructionOutcome]);
   }
-  expect(events).toEqual(["sweep", "recovery", "destroy"]);
+  expect(events).toEqual(["destroy", "sweep", "recovery"]);
 });

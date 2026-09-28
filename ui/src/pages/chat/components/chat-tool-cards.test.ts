@@ -27,18 +27,6 @@ function requireFirstMockArg(
   return arg;
 }
 
-function selectText(element: Element) {
-  const range = document.createRange();
-  range.selectNodeContents(element);
-  const selection = window.getSelection();
-  selection?.removeAllRanges();
-  selection?.addRange(range);
-}
-
-function pointerClick(element: Element) {
-  element.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
-}
-
 describe("tool-cards", () => {
   it("routes MCP App previews through the dedicated double-iframe host", async () => {
     const container = document.createElement("div");
@@ -103,36 +91,6 @@ describe("tool-cards", () => {
     );
 
     expect(container.querySelector("iframe")).not.toBeNull();
-  });
-
-  it("keeps selected summary text from toggling the disclosure", () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    const toggle = vi.fn();
-    render(
-      renderToolCard(
-        {
-          id: "msg:selectable",
-          name: "web_search",
-          args: { query: "openclaw" },
-        },
-        { messageKey: "test-message", expanded: false, onToggleExpanded: toggle },
-      ),
-      container,
-    );
-
-    const summary = container.querySelector<HTMLButtonElement>(".chat-tool-msg-summary");
-    const label = summary?.querySelector(".chat-tool-msg-summary__label");
-    expect(summary).not.toBeNull();
-    expect(label).not.toBeNull();
-    selectText(label!);
-    pointerClick(summary!);
-    expect(toggle).not.toHaveBeenCalled();
-
-    window.getSelection()?.removeAllRanges();
-    pointerClick(summary!);
-    expect(toggle).toHaveBeenCalledWith("msg:selectable");
-    container.remove();
   });
 
   it("keeps a running card closed by default", () => {

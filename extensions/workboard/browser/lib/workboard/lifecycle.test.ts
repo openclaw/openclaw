@@ -50,6 +50,5 @@ it("uses only the current session for lifecycle even when a historical attempt i
   ).toMatchObject({
     session: current,
     state: "succeeded",
-    targetStatus: "review",
   });
 });
