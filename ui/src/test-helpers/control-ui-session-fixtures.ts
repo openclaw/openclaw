@@ -550,13 +550,37 @@ export function createControlUiSessionFixtures(
       ? { ok: true, ...only }
       : { ok: false, ...(matches.length ? { candidates: matches.slice(0, 10) } : {}) };
   };
+  // History publishes a full row replacement. An unseeded wire-only fixture
+  // has no canonical metadata to publish until its caller declares the row.
+  const sessionInfo = (key: string) =>
+    listed.has(canonicalKey(key)) ? sample(read(key), Date.now()) : undefined;
   return {
     read,
     resolve,
-    // History publishes a full row replacement. An unseeded wire-only fixture
-    // has no canonical metadata to publish until its caller declares the row.
-    sessionInfo: (key: string) =>
-      listed.has(canonicalKey(key)) ? sample(read(key), Date.now()) : undefined,
+    sessionInfo,
+    readResponse(
+      method: "sessions.resolve" | "sessions.describe" | "session.members.listEvidence",
+      params: unknown,
+      scenario: { sessionKey: string; allowedSessionVisibilities: readonly string[] },
+    ) {
+      if (method === "sessions.resolve") {
+        return resolve(isRecord(params) ? params : {});
+      }
+      const field = method === "sessions.describe" ? "key" : "sessionKey";
+      const requestedKey = isRecord(params) ? params[field] : undefined;
+      const key = typeof requestedKey === "string" ? requestedKey : scenario.sessionKey;
+      if (method === "sessions.describe") {
+        return { session: sessionInfo(key) ?? null };
+      }
+      const row = read(key);
+      return {
+        sessionKey: row.key,
+        members: [],
+        identities: [],
+        role: row.sharingRole ?? "admin",
+        allowedVisibilities: scenario.allowedSessionVisibilities,
+      };
+    },
     patch,
     commitAbort,
     trackRun,

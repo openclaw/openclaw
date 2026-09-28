@@ -69,7 +69,7 @@ describe("reply turn recovery admission", () => {
       .spyOn(recoveryOwnerRelease, "scheduleMainSessionRecoveryPendingTarget")
       .mockImplementation(() => {});
     let restoreAccessor: (() => void) | undefined;
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       const sessionKey = "agent:main:telegram:topic:deferred-recovery-release";
       const sessionId = "interrupted-session";
@@ -97,12 +97,15 @@ describe("reply turn recovery admission", () => {
         return;
       }
       const applySessionEntryReplacements = sessionAccessor.applySessionEntryReplacements;
+      const failedWrites = Array.from({ length: 3 }, () => createDeferred());
       let failures = 0;
       const accessorSpy = vi
         .spyOn(sessionAccessor, "applySessionEntryReplacements")
         .mockImplementation(async (params) => {
-          if (failures < 3) {
+          const failedWrite = failedWrites[failures];
+          if (failedWrite) {
             failures += 1;
+            failedWrite.resolve();
             throw new Error("SQLite session entry changed before replacement");
           }
           return await applySessionEntryReplacements(params);
@@ -120,7 +123,12 @@ describe("reply turn recovery admission", () => {
       void successor.then(() => {
         successorSettled = true;
       });
-      await vi.advanceTimersByTimeAsync(100);
+      for (const [index, failedWrite] of failedWrites.entries()) {
+        await failedWrite.promise;
+        if (index < failedWrites.length - 1) {
+          await vi.advanceTimersByTimeAsync(25 * 2 ** index);
+        }
+      }
       // Worker I/O settles on real turns, not fake-clock advancement. No later
       // retry timer is advanced while joining the successor admission.
       const admitted = await successor;
@@ -140,8 +148,8 @@ describe("reply turn recovery admission", () => {
     } finally {
       try {
         restoreAccessor?.();
-        await vi.runOnlyPendingTimersAsync();
-        // Timer drainage starts the repair; its real SQLite work settles separately.
+        // Start the deferred repair without firing unrelated database lease deadlines.
+        await vi.advanceTimersByTimeAsync(1_000);
         await Promise.all(deferredReleases);
       } finally {
         scheduled.mockRestore();

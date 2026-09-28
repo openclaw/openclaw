@@ -199,8 +199,7 @@ Decision identifies a blocking failure for that child. The release
 branch accepts its final package version or a matching beta prerelease.
 A numeric correction branch also accepts the base package only when its
 published base tag resolves to the exact Validation SHA.
-Exact alpha tags remain supported for Tideclaw. The release profile defaults to
-beta for beta candidates and exact alpha tags, and stable otherwise; pass
+The release profile defaults to beta for beta candidates and stable otherwise; pass
 -f release_profile=full for the broad advisory sweep. Focused retries must use
 one controller rerun_group; the removed release-checks aggregate and the direct
 child's manual qa aggregate are not accepted.`);
@@ -490,6 +489,13 @@ export function parseArgs(argv: string[]) {
   if (Object.hasOwn(args.inputs, "trusted_workflow_json")) {
     throw new Error("SHA-pinned release validation reserves trusted_workflow_json");
   }
+  if (
+    args.targetRef.includes("-alpha.") ||
+    args.targetRef.includes("tideclaw/alpha/") ||
+    args.trustedWorkflowRef.includes("tideclaw/alpha/")
+  ) {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
   const targetContext = parseReleaseContextRef(args.targetRef);
   if (args.targetRef && !targetContext) {
     throw new Error("--target-ref must be a canonical OpenClaw release branch or tag");
@@ -667,7 +673,10 @@ function targetVersionForTarget(
 }
 
 function releaseProfileForVersion(version: string): "beta" | "stable" {
-  return /-(?:alpha|beta)\.[1-9][0-9]*$/u.test(version) ? "beta" : "stable";
+  if (version.includes("-alpha.")) {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
+  return /-beta\.[1-9][0-9]*$/u.test(version) ? "beta" : "stable";
 }
 
 export function releaseProfileForTarget(
@@ -1817,7 +1826,8 @@ async function main() {
   const targetSha = resolveTargetSha(args.sha, args.targetRef);
   preflightTargetShaFetch(targetSha);
   const targetVersion = targetVersionForTarget(targetSha);
-  args.inputs.release_profile ??= releaseProfileForVersion(targetVersion);
+  const targetProfile = releaseProfileForVersion(targetVersion);
+  args.inputs.release_profile ??= targetProfile;
   args.inputs.allow_unreleased_changelog ??= args.targetRef ? "false" : "true";
   const targetContextRef = verifyTargetRef(args.targetRef, targetSha, targetVersion);
   const workflowSha = resolveTrustedWorkflowSha(args.workflowSha, args.trustedWorkflowRef);

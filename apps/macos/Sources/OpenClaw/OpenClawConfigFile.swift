@@ -148,36 +148,31 @@ enum OpenClawConfigFile {
                 let blocking = self.configWriteBlockingReasons(suspicious).filter {
                     !(allowGatewayModeRemoval && $0 == "gateway-mode-removed")
                 }
+                var auditFields: [String: Any] = [
+                    "configPath": url.path,
+                    "existsBefore": previousData != nil,
+                    "previousBytes": previousBytes ?? NSNull(),
+                    "nextBytes": nextBytes,
+                    "previousDev": self.fileSystemNumber(previousAttributes?[.systemNumber]) ?? NSNull(),
+                    "previousIno": self.fileSystemNumber(previousAttributes?[.systemFileNumber]) ?? NSNull(),
+                    "previousMode": self.posixMode(previousAttributes?[.posixPermissions]) ?? NSNull(),
+                    "previousNlink": self.fileAttributeInt(previousAttributes?[.referenceCount]) ?? NSNull(),
+                    "previousUid": self.fileAttributeInt(previousAttributes?[.ownerAccountID]) ?? NSNull(),
+                    "previousGid": self.fileAttributeInt(previousAttributes?[.groupOwnerAccountID]) ?? NSNull(),
+                    "hasMetaBefore": hadMetaBefore,
+                    "hasMetaAfter": self.hasMeta(output),
+                    "gatewayModeBefore": gatewayModeBefore ?? NSNull(),
+                    "gatewayModeAfter": gatewayModeAfter ?? NSNull(),
+                    "preservedGatewayAuth": preservedGatewayAuth,
+                    "suspicious": suspicious,
+                ]
                 if !blocking.isEmpty {
                     let rejectedPath = self.persistRejectedConfigWrite(data: data, configURL: url)
                     self.logger.warning("config write rejected (\(blocking.joined(separator: ", "))) at \(url.path)")
-                    self.appendConfigAudit(event: "config.write", fields: [
-                        "result": "rejected",
-                        "configPath": url.path,
-                        "existsBefore": previousData != nil,
-                        "previousBytes": previousBytes ?? NSNull(),
-                        "nextBytes": nextBytes,
-                        "previousDev": self.fileSystemNumber(previousAttributes?[.systemNumber]) ?? NSNull(),
-                        "nextDev": NSNull(),
-                        "previousIno": self.fileSystemNumber(previousAttributes?[.systemFileNumber]) ?? NSNull(),
-                        "nextIno": NSNull(),
-                        "previousMode": self.posixMode(previousAttributes?[.posixPermissions]) ?? NSNull(),
-                        "nextMode": NSNull(),
-                        "previousNlink": self.fileAttributeInt(previousAttributes?[.referenceCount]) ?? NSNull(),
-                        "nextNlink": NSNull(),
-                        "previousUid": self.fileAttributeInt(previousAttributes?[.ownerAccountID]) ?? NSNull(),
-                        "nextUid": NSNull(),
-                        "previousGid": self.fileAttributeInt(previousAttributes?[.groupOwnerAccountID]) ?? NSNull(),
-                        "nextGid": NSNull(),
-                        "hasMetaBefore": hadMetaBefore,
-                        "hasMetaAfter": self.hasMeta(output),
-                        "gatewayModeBefore": gatewayModeBefore ?? NSNull(),
-                        "gatewayModeAfter": gatewayModeAfter ?? NSNull(),
-                        "preservedGatewayAuth": preservedGatewayAuth,
-                        "suspicious": suspicious,
-                        "blocking": blocking,
-                        "rejectedPath": rejectedPath ?? NSNull(),
-                    ])
+                    auditFields["result"] = "rejected"
+                    auditFields["blocking"] = blocking
+                    auditFields["rejectedPath"] = rejectedPath ?? NSNull()
+                    self.appendConfigWriteAudit(fields: auditFields, nextAttributes: nil)
                     return false
                 }
                 try FileManager().createDirectory(
@@ -188,31 +183,8 @@ enum OpenClawConfigFile {
                 if !suspicious.isEmpty {
                     self.logger.warning("config write anomaly (\(suspicious.joined(separator: ", "))) at \(url.path)")
                 }
-                self.appendConfigAudit(event: "config.write", fields: [
-                    "result": "success",
-                    "configPath": url.path,
-                    "existsBefore": previousData != nil,
-                    "previousBytes": previousBytes ?? NSNull(),
-                    "nextBytes": nextBytes,
-                    "previousDev": self.fileSystemNumber(previousAttributes?[.systemNumber]) ?? NSNull(),
-                    "nextDev": self.fileSystemNumber(nextAttributes?[.systemNumber]) ?? NSNull(),
-                    "previousIno": self.fileSystemNumber(previousAttributes?[.systemFileNumber]) ?? NSNull(),
-                    "nextIno": self.fileSystemNumber(nextAttributes?[.systemFileNumber]) ?? NSNull(),
-                    "previousMode": self.posixMode(previousAttributes?[.posixPermissions]) ?? NSNull(),
-                    "nextMode": self.posixMode(nextAttributes?[.posixPermissions]) ?? NSNull(),
-                    "previousNlink": self.fileAttributeInt(previousAttributes?[.referenceCount]) ?? NSNull(),
-                    "nextNlink": self.fileAttributeInt(nextAttributes?[.referenceCount]) ?? NSNull(),
-                    "previousUid": self.fileAttributeInt(previousAttributes?[.ownerAccountID]) ?? NSNull(),
-                    "nextUid": self.fileAttributeInt(nextAttributes?[.ownerAccountID]) ?? NSNull(),
-                    "previousGid": self.fileAttributeInt(previousAttributes?[.groupOwnerAccountID]) ?? NSNull(),
-                    "nextGid": self.fileAttributeInt(nextAttributes?[.groupOwnerAccountID]) ?? NSNull(),
-                    "hasMetaBefore": hadMetaBefore,
-                    "hasMetaAfter": self.hasMeta(output),
-                    "gatewayModeBefore": gatewayModeBefore ?? NSNull(),
-                    "gatewayModeAfter": gatewayModeAfter ?? NSNull(),
-                    "preservedGatewayAuth": preservedGatewayAuth,
-                    "suspicious": suspicious,
-                ])
+                auditFields["result"] = "success"
+                self.appendConfigWriteAudit(fields: auditFields, nextAttributes: nextAttributes)
                 self.observeConfigRead(data: data, root: output, configURL: url, valid: true)
                 return true
             } catch {
@@ -793,6 +765,20 @@ extension OpenClawConfigFile {
         nextEntry["lastObservedSuspiciousSignature"] = signature
         state = self.setConfigHealthEntry(state: state, configPath: configURL.path, entry: nextEntry)
         self.configHealthState = state
+    }
+
+    private static func appendConfigWriteAudit(
+        fields: [String: Any],
+        nextAttributes: [FileAttributeKey: Any]?)
+    {
+        var fields = fields
+        fields["nextDev"] = self.fileSystemNumber(nextAttributes?[.systemNumber]) ?? NSNull()
+        fields["nextIno"] = self.fileSystemNumber(nextAttributes?[.systemFileNumber]) ?? NSNull()
+        fields["nextMode"] = self.posixMode(nextAttributes?[.posixPermissions]) ?? NSNull()
+        fields["nextNlink"] = self.fileAttributeInt(nextAttributes?[.referenceCount]) ?? NSNull()
+        fields["nextUid"] = self.fileAttributeInt(nextAttributes?[.ownerAccountID]) ?? NSNull()
+        fields["nextGid"] = self.fileAttributeInt(nextAttributes?[.groupOwnerAccountID]) ?? NSNull()
+        self.appendConfigAudit(event: "config.write", fields: fields)
     }
 
     private static func appendConfigAudit(event: String, fields: [String: Any]) {
