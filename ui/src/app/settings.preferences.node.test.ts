@@ -16,6 +16,7 @@ import {
   resetServerUiPrefsSync,
   resolveServerUiPrefState,
 } from "./server-prefs.ts";
+import { dismissChatInputRecoveryKey } from "./settings-input-recovery.ts";
 import {
   loadLocalUserIdentity,
   patchSettings,
@@ -27,6 +28,28 @@ import {
 
 describe("settings preference persistence", () => {
   installSettingsStorageLifecycle();
+
+  it("publishes saved-attempt dismissals synchronously and preserves them in later preference writes", () => {
+    setTestLocation({ protocol: "https:", host: "gateway.example", pathname: "/" });
+    const initial = loadSettings();
+    const { gateway } = createGatewayStoreTestStore({ settings: initial });
+    const theme = createApplicationTheme(initial, gateway);
+    let snapshot = theme.settings;
+    const unsubscribe = theme.subscribe(() => {
+      snapshot = theme.settings;
+    });
+    try {
+      expect(dismissChatInputRecoveryKey(initial.gatewayUrl, "viewer/session/saved")).toBe(true);
+      expect(snapshot.chatInputRecoveryDismissed).toEqual(["viewer/session/saved"]);
+      saveSettings({ ...snapshot, token: "", themeMode: "light" });
+      expect(loadSettings(initial.gatewayUrl).chatInputRecoveryDismissed).toEqual([
+        "viewer/session/saved",
+      ]);
+    } finally {
+      unsubscribe();
+      theme.dispose();
+    }
+  });
 
   it("preserves an older browser-panel preference through external opt-in, reload, and opt-out", () => {
     setTestLocation({ protocol: "https:", host: "gateway.example", pathname: "/" });

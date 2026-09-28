@@ -81,6 +81,8 @@ export function placeChatInputs(
       props.workspaceSyncPendingRunIds,
       props.workerSetupPending,
       props.messageRecovery,
+      // Search inspects saved custody; it does not restore it to the live conversation.
+      props.searchOpen === true && Boolean(props.searchQuery?.trim()),
     );
     const first = inputItems[0];
     if (!first) {

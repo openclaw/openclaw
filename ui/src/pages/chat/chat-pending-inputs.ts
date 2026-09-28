@@ -22,6 +22,7 @@ import {
   getChatSessionProjection,
   readChatSessionProjectionScope,
   reconcileChatInputCustody,
+  selectChatInputDisplay,
 } from "./history-merge.ts";
 import type { PendingInputStatus } from "./system-notice-kinds.ts";
 
@@ -37,7 +38,13 @@ type PendingInputView = {
   sessionId: string | null;
   agentId: string | undefined;
   page: ChatPendingInputsPage;
-  /** Live custody receipts keep the queue independent of retained-input pagination. */
+  /** Connection that confirmed the published custody, not the latest read attempt. */
+  client: ChatState["client"];
+  connectionEpoch: number;
+  threadItems?: ChatPendingInputsPage["items"];
+  /** Accepted custody includes running inputs without a waiting-queue marker. */
+  activeInputs: ChatPendingInputsPage["items"];
+  /** Waiting chips derive from that custody, independently of retained-page browsing. */
   queuedInputs: ChatPendingInputsPage["items"];
   receiptRunIds: string[];
   queuedCount: number;
@@ -49,34 +56,119 @@ type PendingInputView = {
   request?: PendingInputRequest;
 };
 const pendingInputViews = new WeakMap<ChatState, PendingInputView>();
+const EMPTY_INPUTS: ChatPendingInputsPage["items"] = [];
 
-function reconcileQueuedInputs(
-  queued: ChatPendingInputsPage["items"],
+function chatInputNeedsRecovery(
+  input: ChatPendingInputsPage["items"][number],
+  browserInputs: readonly ChatQueueItem[] = [],
+): boolean {
+  return (
+    input.state === "cancelled" ||
+    (input.state === "interrupted" &&
+      !browserInputs.some(
+        (item) =>
+          input.runId &&
+          item.sendRunId === input.runId &&
+          item.sendState !== "failed" &&
+          item.sendState !== "held",
+      ))
+  );
+}
+
+/** Live custody stays visible independently of the retained page being inspected. */
+export function getChatDisplayPendingInputs(state: ChatState): ChatPendingInputsPage["items"] {
+  const view = getChatPendingInputs(state);
+  if (!view) {
+    return EMPTY_INPUTS;
+  }
+  return [
+    ...view.page.items.filter((input) => !input.queued && !hasLiveChatInputCustody(state, input)),
+    ...view.activeInputs,
+  ];
+}
+
+/** Saved-input pagination must not create transcript scroll or unread intent. */
+export function getChatThreadPendingInputs(state: ChatState): ChatPendingInputsPage["items"] {
+  const view = getChatPendingInputs(state);
+  if (!view) {
+    return EMPTY_INPUTS;
+  }
+  const display = selectChatInputDisplay(
+    state.chatMessages,
+    state.chatQueue,
+    getChatDisplayPendingInputs(state),
+  );
+  const inputs = [
+    ...display.pendingInputs.filter((input) => !chatInputNeedsRecovery(input, state.chatQueue)),
+    ...display.queuedInputs,
+  ];
+  if (
+    view.threadItems?.length === inputs.length &&
+    view.threadItems.every((input, index) => input === inputs[index])
+  ) {
+    return view.threadItems;
+  }
+  return (view.threadItems = inputs.length ? inputs : EMPTY_INPUTS);
+}
+
+/** Accepted custody supersedes a stale retained-page copy, including running inputs. */
+export function hasLiveChatInputCustody(
+  state: ChatState,
+  input: ChatPendingInputsPage["items"][number],
+): boolean {
+  return (
+    getChatPendingInputs(state)?.activeInputs.some(
+      (queued) => queued.id === input.id || Boolean(input.runId && queued.runId === input.runId),
+    ) === true
+  );
+}
+
+export function getChatRecoveryInputs(state: ChatState): ChatPendingInputsPage["items"] {
+  return selectChatInputDisplay(
+    state.chatMessages,
+    state.chatQueue,
+    getChatDisplayPendingInputs(state),
+  ).pendingInputs.filter((input) => chatInputNeedsRecovery(input, state.chatQueue));
+}
+
+function reconcileActiveInputs(
+  active: ChatPendingInputsPage["items"],
   page: ChatPendingInputsPage,
   receipts?: ChatInputReceipts,
   queriedRunIds: readonly string[] = [],
 ): ChatPendingInputsPage["items"] {
-  if (page.queuedCount === 0) {
-    return [];
-  }
   const completePage = page.nextBefore === undefined && page.items.length === page.total;
   const observed = new Map(receipts?.map((receipt) => [receipt.runId, receipt]));
   const queried = new Set(receipts === undefined ? [] : queriedRunIds);
-  const current = new Map((completePage ? [] : queued).map((input) => [input.id, input]));
+  const current = new Map(
+    (completePage ? [] : active)
+      .filter(
+        (input) =>
+          page.queuedCount !== 0 ||
+          !input.queued ||
+          observed.get(input.runId ?? "")?.state === "pending",
+      )
+      .map((input) => [input.id, input]),
+  );
   for (const input of page.items) {
-    if (input.queued) {
+    for (const [id, previous] of current) {
+      if (id === input.id || (input.runId && previous.runId === input.runId)) {
+        current.delete(id);
+      }
+    }
+    if (input.state === "queued") {
       current.set(input.id, input);
-    } else {
-      current.delete(input.id);
     }
   }
   // Ordinary consumption deletes custody. An exact queried absence retires its
-  // queue projection even when the transcript has advanced beyond that message.
-  return [...current.values()].filter((input) => {
+  // accepted-input projection even after the transcript advances beyond that message.
+  return [...current.values()].flatMap((input) => {
     const receipt = input.runId ? observed.get(input.runId) : undefined;
-    return receipt
-      ? receipt.state === "pending" && receipt.queued
-      : !input.runId || !queried.has(input.runId);
+    if (receipt?.state === "consumed" || (!receipt && input.runId && queried.has(input.runId))) {
+      return [];
+    }
+    const queued = page.queuedCount === 0 ? undefined : receipt ? receipt.queued : input.queued;
+    return [input.queued === queued ? input : { ...input, queued }];
   });
 }
 
@@ -121,10 +213,14 @@ export function buildPendingInputItems(
   workspaceSyncPendingRunIds: readonly string[] = [],
   workerSetupPending = false,
   messageRecovery?: ChatMessageRecovery,
+  includeInactive = false,
 ): ChatItem[] {
   // Custody records stay outside active-run ordering until the writer promotes them.
   const items: ChatItem[] = [];
   for (const input of inputs) {
+    if (!includeInactive && chatInputNeedsRecovery(input, browserInputs)) {
+      continue;
+    }
     if (
       searchQuery?.trim() &&
       !messageMatchesSearchQuery(input.message, searchQuery, messageRecovery)
@@ -193,7 +289,7 @@ function collectChatInputRunIds(state: ChatState): string[] {
     readChatSessionProjectionScope(state, { agentId: resolveUiSelectedSessionAgentId(state) }),
   );
   const runIds = [
-    ...(getChatPendingInputs(state)?.queuedInputs.map((input) => input.runId) ?? []),
+    ...(getChatPendingInputs(state)?.activeInputs.map((input) => input.runId) ?? []),
     ...projection.entries
       .filter((entry) => entry.pending && entry.identity?.role === "user")
       .map((entry) => entry.pendingRunId),
@@ -286,18 +382,22 @@ export function applyChatPendingInputs(
 ): void {
   const displayPage = reconcilePendingInputPage(state, page, options.receipts);
   let view = getChatPendingInputs(state);
-  const queuedInputs = reconcileQueuedInputs(
-    view?.queuedInputs ?? [],
+  const activeInputs = reconcileActiveInputs(
+    view?.activeInputs ?? [],
     displayPage,
     options.receipts,
     options.queriedRunIds,
   );
+  const queuedInputs = activeInputs.filter((input) => input.queued);
   if (!view) {
     view = {
       sessionKey: state.sessionKey,
       sessionId: state.currentSessionId ?? null,
       agentId: resolveUiSelectedSessionAgentId(state),
       page: displayPage,
+      client: state.client,
+      connectionEpoch: state.connectionEpoch,
+      activeInputs,
       queuedInputs,
       receiptRunIds: [],
       queuedCount: displayPage.queuedCount ?? 0,
@@ -309,6 +409,7 @@ export function applyChatPendingInputs(
     };
     pendingInputViews.set(state, view);
   } else {
+    view.activeInputs = activeInputs;
     view.queuedInputs = queuedInputs;
     view.queuedCount = displayPage.queuedCount ?? 0;
     view.queueBefore = displayPage.nextBefore;
@@ -318,6 +419,8 @@ export function applyChatPendingInputs(
     }
     if (view.before === undefined) {
       view.page = displayPage;
+      view.client = state.client;
+      view.connectionEpoch = state.connectionEpoch;
       view.error = undefined;
     }
     // Latest custody updates ownership immediately, but cannot take over browsing.
@@ -383,17 +486,20 @@ async function requestPendingInputPage(
         continue;
       }
       const page = reconcilePendingInputPage(state, result.pendingInputs, result.inputReceipts);
-      view.queuedInputs = reconcileQueuedInputs(
-        view.queuedInputs,
+      view.activeInputs = reconcileActiveInputs(
+        view.activeInputs,
         page,
         result.inputReceipts,
         inputRunIds,
       );
+      view.queuedInputs = view.activeInputs.filter((input) => input.queued);
       view.queuedCount = page.queuedCount ?? view.queuedCount;
       rotateInputReceipts(state, view, inputRunIds);
       if (request.kind !== "discovery") {
         view.page = page;
         view.before = request.before;
+        view.client = request.client;
+        view.connectionEpoch = request.connectionEpoch;
       }
       if (request.kind === "discovery" || request.before === undefined) {
         view.queueBefore = page.nextBefore;

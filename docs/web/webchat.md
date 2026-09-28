@@ -57,9 +57,27 @@ waits in durable pending-input custody, including during workspace preparation.
 An optional `messageSeq` comes only from a committed transcript receipt. Clients
 must not predict it from history length or treat `status: "started"` as persistence.
 The Control UI replaces its provisional source with accepted custody, then with
-the canonical row. Accepted inputs stay below saved conversation history until
-they are committed to the transcript. Its renderer keeps a loaded local preview in the same image
-element during this handoff while canonical media metadata and image bytes load.
+the canonical row. Live queued inputs stay in the composer queue, independently
+of browsing older saved attempts. Actively resuming inputs retain their normal
+conversation presentation until committed. Interrupted and
+cancelled requests that will not run automatically appear as inactive rows in the
+existing composer queue, with **Not started** or **Cancelled** badges. They do not
+join the runnable outbox, block queued work, change its order, or send automatically.
+Expand a saved row to inspect its text and available attachments without sending it.
+Explicit conversation search still finds matching loaded saved attempts with their
+original status; clearing search returns them to queue-only presentation.
+System notices and forwarded messages retain their original identity and cannot be
+resent as a new human prompt. **Send** explicitly submits a complete user prompt
+through the normal send owner; **Discard** hides that queue row for the current
+viewer in this browser. It does not cancel accepted work or delete shared history.
+When the browser already owns a held or failed attempt, its existing native
+Retry/Discard controls remain authoritative instead of adding a second saved row.
+An unavailable or incomplete payload is reported instead of sending a partial
+prompt. Browsing saved attempts does not replace active custody or change the
+conversation’s unread position.
+
+During canonical media handoff, the renderer keeps a loaded local preview in the
+same image element while canonical media metadata and image bytes load.
 Authoritative text, media replacements, and removals still win. Unavailable or
 access-denied media shows a visible reason.
 Once custody, a consumption record, or a committed user-message receipt retires

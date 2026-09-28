@@ -11,6 +11,7 @@ import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
+import { createChatInputRecoveryQueueProps } from "./chat-input-recovery-view.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import {
   availableSidebarSlots,
@@ -26,6 +27,7 @@ import { renderChat, type ChatProps } from "./chat-view.ts";
 import { publishChatWorkContext } from "./chat-work-context.ts";
 import { renderChatDetailSlot } from "./components/chat-detail-slot.ts";
 import { renderChatImageLightbox } from "./components/chat-image-lightbox.ts";
+import { renderChatQueueRecoveryDetails } from "./components/chat-queue-recovery-details.ts";
 import {
   renderSessionWorkspaceRail,
   type SessionWorkspaceProps,
@@ -138,6 +140,18 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
         isSidebarSlotVisible(sidebarLayout, "conversation"),
       latestBrowserTabs: this.active && this.presented ? latestBrowserTabs : undefined,
       historyState: catalog ? undefined : state,
+      recoveryQueue: catalog
+        ? undefined
+        : createChatInputRecoveryQueueProps(
+            state,
+            chatProps.canSend &&
+              !chatProps.suggestionComposer &&
+              !chatProps.selectedSession?.providerReview,
+            (input, inspection) =>
+              renderChatQueueRecoveryDetails(input, inspection, chatProps, () =>
+                state.requestUpdate?.(),
+              ),
+          ),
       header: nothing,
     });
     const primary = html`<div class="chat-pane-primary-column">${chat}</div>`;

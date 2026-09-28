@@ -30,6 +30,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-export-attribution.e2e.test.ts",
+  "ui/src/e2e/chat-input-recovery.e2e.test.ts",
   "ui/src/e2e/chat-json-tree.e2e.test.ts",
   "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",

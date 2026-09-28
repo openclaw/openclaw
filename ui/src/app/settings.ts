@@ -20,6 +20,7 @@ import { normalizeChatSplitLayout } from "../pages/chat/split-layout-persistence
 import type { ChatSplitLayout } from "../pages/chat/split-layout-types.ts";
 import { resolveControlUiPaths } from "./browser.ts";
 import { parseImportedCustomTheme, type ImportedCustomTheme } from "./custom-theme.ts";
+import { normalizeChatMessageMaxWidth } from "./settings-message-width.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
 import { normalizeTypefaceOverride, type TypefaceId } from "./typography.ts";
 import { normalizeLocalUserIdentity, type LocalUserIdentity } from "./user-identity.ts";
@@ -62,51 +63,7 @@ type PersistedUiSettings = Omit<
 export const TEXT_SCALE_STOPS = [90, 100, 110, 125, 140] as const;
 export type TextScaleStop = (typeof TEXT_SCALE_STOPS)[number];
 
-const CSS_WIDTH_KEYWORDS = new Set(["none", "min-content", "max-content"]);
-const CSS_WIDTH_FUNCTIONS = new Set(["calc", "clamp", "fit-content", "max", "min"]);
-const CSS_WIDTH_UNITS = new Set(["ch", "em", "rem", "vh", "vmax", "vmin", "vw", "px"]);
-const CSS_WIDTH_ALLOWED_CHARS = /^[0-9A-Za-z.%+\-*/(),\s]+$/;
-const CSS_WIDTH_IDENTIFIER_RE = /[A-Za-z][A-Za-z0-9-]*/g;
-const CSS_WIDTH_SIMPLE_RE = /^(?:\d+(?:\.\d+)?|\.\d+)(?:px|rem|em|ch|vw|vh|vmin|vmax|%)$/i;
-const CSS_WIDTH_MAX_LENGTH = 96;
-
-function hasAllowedWidthIdentifiers(value: string): boolean {
-  for (const match of value.matchAll(CSS_WIDTH_IDENTIFIER_RE)) {
-    const identifier = match[0].toLowerCase();
-    if (
-      !CSS_WIDTH_FUNCTIONS.has(identifier) &&
-      !CSS_WIDTH_KEYWORDS.has(identifier) &&
-      !CSS_WIDTH_UNITS.has(identifier)
-    ) {
-      return false;
-    }
-  }
-  return true;
-}
-
-export function normalizeChatMessageMaxWidth(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.trim().replace(/\s+/g, " ");
-  if (normalized.length === 0) {
-    return undefined;
-  }
-  if (normalized.length > CSS_WIDTH_MAX_LENGTH) {
-    return undefined;
-  }
-  if (CSS_WIDTH_KEYWORDS.has(normalized.toLowerCase()) || CSS_WIDTH_SIMPLE_RE.test(normalized)) {
-    return normalized;
-  }
-  if (
-    !CSS_WIDTH_ALLOWED_CHARS.test(normalized) ||
-    !CSS.supports("max-width", normalized) ||
-    !hasAllowedWidthIdentifiers(normalized)
-  ) {
-    return undefined;
-  }
-  return /^(?:calc|clamp|fit-content|max|min)\(.+\)$/i.test(normalized) ? normalized : undefined;
-}
+export { normalizeChatMessageMaxWidth } from "./settings-message-width.ts";
 
 const CHAT_SEND_SHORTCUTS = ["enter", "modifier-enter"] as const;
 export type ChatSendShortcut = (typeof CHAT_SEND_SHORTCUTS)[number];
@@ -197,6 +154,8 @@ export type UiSettings = {
   chatCollapseTaskProgress?: boolean;
   chatSendShortcut?: ChatSendShortcut;
   chatFollowUpMode?: ChatFollowUpMode; // Default handling for messages sent while a run is active
+  // Browser-local opaque viewer/session/input keys; never message payloads or queue state.
+  chatInputRecoveryDismissed?: string[];
   catalogOpenTarget?: CatalogOpenTarget;
   realtimeTalkInputDeviceId?: string;
   realtimeTalkVideoDeviceId?: string;
@@ -543,6 +502,9 @@ export function loadUiPreferences(
       ),
       talkCameraAutoEnable:
         typeof parsed.talkCameraAutoEnable === "boolean" ? parsed.talkCameraAutoEnable : undefined,
+      chatInputRecoveryDismissed: normalizeChatInputRecoveryDismissals(
+        parsed.chatInputRecoveryDismissed,
+      ),
       chatSplitLayout: normalizeChatSplitLayout(parsed.chatSplitLayout),
       chatWorkspaceDock: normalizeChatWorkspaceDock(parsed.chatWorkspaceDock),
       boardSessionViews: normalizeBoardSessionViews(parsed.boardSessionViews),
@@ -601,8 +563,8 @@ export function loadUiPreferences(
   }
 }
 
-export function saveSettings(next: UiSettings) {
-  persistSettings(next);
+export function saveSettings(next: UiSettings): boolean {
+  return persistSettings(next);
 }
 
 // Single change seam over the one write channel every settings mutation uses;
@@ -626,6 +588,13 @@ export function patchSettings(
   });
   settingsChangeListener?.(previous, next);
   return next;
+}
+
+export function normalizeChatInputRecoveryDismissals(value: unknown): string[] | undefined {
+  const keys = normalizeUniqueTrimmedStringList(value)
+    .filter((key) => key.length <= 8192)
+    .slice(-512);
+  return keys.length ? keys : undefined;
 }
 
 export function loadLocalUserIdentity(): LocalUserIdentity {
@@ -686,6 +655,9 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     chatCollapseTaskProgress: next.chatCollapseTaskProgress === true ? true : undefined,
     chatSendShortcut: next.chatSendShortcut === "modifier-enter" ? "modifier-enter" : undefined,
     chatFollowUpMode: normalizeChatFollowUpModeOverride(next.chatFollowUpMode),
+    chatInputRecoveryDismissed: normalizeChatInputRecoveryDismissals(
+      next.chatInputRecoveryDismissed,
+    ),
     catalogOpenTarget: next.catalogOpenTarget === "terminal" ? "terminal" : undefined,
     realtimeTalkInputDeviceId: normalizeOptionalString(next.realtimeTalkInputDeviceId),
     realtimeTalkVideoDeviceId: normalizeOptionalString(next.realtimeTalkVideoDeviceId),
@@ -756,4 +728,5 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
   if (owner && gatewayOriginScope(owner.gatewayUrl()) === scope) {
     owner.refresh();
   }
+  return unpersistedSettings === null;
 }

@@ -512,3 +512,85 @@
     -webkit-line-clamp: 1;
   }
 }
+
+/* Saved attempts share the tray, but never acquire runnable-row controls. */
+.chat-queue__item--recovery .chat-queue__badge {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
+  color: var(--muted);
+}
+
+.chat-queue__recovery-row[data-recovery-state="interrupted"] .chat-queue__badge {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
+
+.chat-queue__recovery-meta {
+  grid-column: 1;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-queue__recovery-send {
+  color: var(--text);
+}
+
+.chat-queue__recovery-error {
+  padding: 6px 12px;
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.chat-queue__recovery-paging {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 4px 8px;
+  border-top: 1px solid var(--chat-queue-divider);
+}
+
+.chat-queue__recovery-row {
+  border-bottom: 1px solid var(--chat-queue-divider);
+}
+
+.chat-queue__recovery-row:last-child {
+  border-bottom: 0;
+}
+
+.chat-queue__recovery-row > summary {
+  list-style: none;
+  border-bottom: 0;
+  cursor: var(--cursor-action);
+}
+
+.chat-queue__recovery-row > summary::marker {
+  content: "";
+}
+
+.chat-queue__recovery-row > summary:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+.chat-queue__recovery-row[open] > summary .chat-queue__leading svg {
+  transform: rotate(90deg);
+}
+
+.chat-queue__recovery-detail {
+  --chat-footer-disclosure-opacity: 1;
+  --chat-footer-disclosure-pointer-events: auto;
+  max-height: min(40vh, 320px);
+  overflow: auto;
+  padding: 8px 12px 12px;
+  overscroll-behavior: contain;
+}
+
+.chat-queue__recovery-hint {
+  color: var(--muted);
+  font-size: 12px;
+}

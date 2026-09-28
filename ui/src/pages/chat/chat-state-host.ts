@@ -15,6 +15,7 @@ import type {
 } from "../../lib/chat/chat-types.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import type { PendingChatAbort } from "./chat-abort-request.ts";
+import type { ChatInputRecoveryDismissals } from "./chat-input-recovery-contract.ts";
 import type { PullRequestRefreshHost } from "./chat-pull-request-refresh.ts";
 import type { ChatRealtimeState } from "./chat-realtime.ts";
 import type { ChatSendTimingEntry } from "./chat-send-ack.ts";
@@ -40,6 +41,7 @@ export type ChatPageHost = ChatHost &
   ChatRealtimeState &
   PullRequestRefreshHost &
   SessionWorkspaceHost & {
+    chatInputRecoveryDismissals?: ChatInputRecoveryDismissals;
     reviewQueuedMessageEdit?: () => void;
     captureComposerRecoveryReload?: () => () => Promise<boolean>;
     chatMetadataIsPresented?: () => boolean;

@@ -10,7 +10,7 @@ import { showToast } from "../../lib/toast.ts";
 import { releaseDisplacedChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { disposeSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
-import { getChatPendingInputs } from "./chat-pending-inputs.ts";
+import { getChatThreadPendingInputs } from "./chat-pending-inputs.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
@@ -41,7 +41,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   private privateDraftReview: { controller: AbortController; isCurrent: () => boolean } | undefined;
   private previousChatLoading = false;
   private previousChatMessages: unknown[] = [];
-  private previousPendingInputs: ChatPendingInputsPage | undefined;
+  private previousPendingInputs: ChatPendingInputsPage["items"] | undefined;
   private inputScope: { sessionKey: string; sessionId: string | null } | undefined;
   private readonly seenInputKeys = new Set<string>();
   private previousChatToolMessages: Record<string, unknown>[] = [];
@@ -145,7 +145,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       this.seenInputKeys.clear();
     }
     this.stateValue = state;
-    const pendingInputs = getChatPendingInputs(state)?.page;
+    const pendingInputs = getChatThreadPendingInputs(state);
     this.observeInputArrivals(state, pendingInputs);
     this.previousPendingInputs = pendingInputs;
     state.canRestoreComposer = () => this.stateValue === state && this.composerPersistence.active;
@@ -462,7 +462,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
 
   private observeInputArrivals(
     state: TState,
-    pendingInputs: ChatPendingInputsPage | undefined,
+    pendingInputs: ChatPendingInputsPage["items"],
   ): boolean {
     const sessionId = state.currentSessionId ?? null;
     const changedScope =
@@ -513,7 +513,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       remoteInputArrived ||= !changedScope && state.chatHasAutoScrolled;
     };
     state.chatMessages.forEach((message) => observe(message));
-    pendingInputs?.items.forEach((input) => observe(input.message, input.runId));
+    pendingInputs.forEach((input) => observe(input.message, input.runId));
     return remoteInputArrived;
   }
 
@@ -522,7 +522,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     if (!state) {
       return;
     }
-    const pendingInputs = getChatPendingInputs(state)?.page;
+    const pendingInputs = getChatThreadPendingInputs(state);
     const remoteInputArrived = this.observeInputArrivals(state, pendingInputs);
     const messagesChanged =
       this.previousPendingInputs !== pendingInputs ||

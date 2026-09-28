@@ -51,7 +51,7 @@ afterEach(() => resetChatThreadState());
 
 describe("system notices through pending-to-history promotion", () => {
   it.each(["interrupted", "cancelled"] as const)(
-    "shows one accurate recovery notice when the request is %s before starting",
+    "keeps %s recovery searchable without putting it back in the normal transcript",
     (state) => {
       const message = {
         ...baseMessage,
@@ -60,7 +60,8 @@ describe("system notices through pending-to-history promotion", () => {
       expect(render([], pending(message))).toMatchObject([
         { kind: "notice", label: "System · restart recovery" },
       ]);
-      expect(render([], pending(message, state))).toMatchObject([
+      expect(render([], pending(message, state))).toEqual([]);
+      expect(render([], pending(message, state), "Continue")).toMatchObject([
         {
           kind: "notice",
           label: "System · restart recovery",
@@ -68,6 +69,9 @@ describe("system notices through pending-to-history promotion", () => {
           startsTurn: true,
         },
       ]);
+      expect(render([], pending(message, state), "unrelated")).toEqual([]);
+      expect(render([], pending(message, state), " ")).toEqual([]);
+      expect(render([], pending(message, state))).toEqual([]);
       expect(render([message], pending(message, state))).toMatchObject([
         {
           kind: "notice",

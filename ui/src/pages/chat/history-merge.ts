@@ -421,7 +421,24 @@ export function selectChatInputDisplay(
     userIdentities.set(messages, identities);
   }
   const { userIds, sendKeys } = identities;
-  const accepted = new Set(inputs.map((input) => input.runId));
+  // Inactive custody does not replace a held/failed browser owner: that owner
+  // may still block successors and owns Retry/Remove. Hiding it behind a dismissible
+  // saved row would leave the real outbox blocked without a visible recovery action.
+  const localRecoveryRunIds = new Set(
+    queue
+      .filter((item) => item.sendState === "held" || item.sendState === "failed")
+      .map((item) => item.sendRunId),
+  );
+  const serverInputs = inputs.filter(
+    (input) =>
+      !(
+        input.state !== "queued" &&
+        !input.queued &&
+        input.runId &&
+        localRecoveryRunIds.has(input.runId)
+      ),
+  );
+  const accepted = new Set(serverInputs.map((input) => input.runId));
   return {
     queue: queue.filter(
       (item) =>
@@ -430,13 +447,13 @@ export function selectChatInputDisplay(
           !sendKeys.has(item.sendRunId) &&
           !sendKeys.has(`${item.sendRunId}:user`)),
     ),
-    pendingInputs: inputs.filter(
+    pendingInputs: serverInputs.filter(
       (input) =>
         !userIds.has(input.id) &&
         !input.queued &&
         asNullableRecord(input.message)?.display !== false,
     ),
-    queuedInputs: inputs.filter((input) => !userIds.has(input.id) && input.queued),
+    queuedInputs: serverInputs.filter((input) => !userIds.has(input.id) && input.queued),
   };
 }
 

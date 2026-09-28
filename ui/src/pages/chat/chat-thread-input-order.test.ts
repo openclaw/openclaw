@@ -132,36 +132,30 @@ describe("transcript input order", () => {
     ]).toEqual([expected, expected]);
   });
 
-  it.each(
-    (["queued", "interrupted", "cancelled"] as const).flatMap((state) =>
-      [
-        { label: "equal", timestamps: [20, 20] as const },
-        { label: "reversed", timestamps: [30, 20] as const },
-      ].map((clock) => ({ state, label: clock.label, timestamps: clock.timestamps })),
-    ),
-  )(
-    "preserves server $state input order and attached notices with $label timestamps",
-    ({ state, timestamps }) => {
-      const notice =
-        state === "interrupted"
-          ? "Interrupted before the agent started it. It will not run automatically; copy it and send again."
-          : state === "cancelled"
-            ? "Cancelled before the agent started it. It will not run automatically; copy it and send again."
-            : null;
-      const expectedInputs = ["First accepted input", "Second accepted input"].flatMap((text) =>
-        notice ? [text, notice] : [text],
-      );
+  it.each([
+    { label: "equal", timestamps: [20, 20] as const },
+    { label: "reversed", timestamps: [30, 20] as const },
+  ])("preserves active server input order with $label timestamps", ({ timestamps }) => {
+    expect(
+      visibleRows({
+        pendingInputs: [
+          acceptedInput("First accepted input", timestamps[0]),
+          acceptedInput("Second accepted input", timestamps[1]),
+        ],
+      }),
+    ).toEqual(["Existing conversation", "First accepted input", "Second accepted input"]);
+  });
 
-      expect(
-        visibleRows({
-          pendingInputs: [
-            acceptedInput("First accepted input", timestamps[0], state),
-            acceptedInput("Second accepted input", timestamps[1], state),
-          ],
-        }),
-      ).toEqual(["Existing conversation", ...expectedInputs]);
-    },
-  );
+  it("keeps saved attempts out of the normal transcript but available to search", () => {
+    const pendingInputs = [
+      acceptedInput("Interrupted input", 30, "interrupted"),
+      acceptedInput("Cancelled input", 20, "cancelled"),
+    ];
+    expect(visibleRows({ pendingInputs })).toEqual(["Existing conversation"]);
+    const matches = visibleRows({ pendingInputs, searchOpen: true, searchQuery: "Interrupted" });
+    expect(matches).toContain("Interrupted input");
+    expect(matches).not.toContain("Cancelled input");
+  });
 
   it("preserves a reordered queue when its first input receives custody", () => {
     const first = { ...queuedInput("Moved first", 30), orderKey: 10 };

@@ -11,6 +11,9 @@ import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { discardChatRecoveryInput } from "./chat-input-recovery-actions.ts";
+import { createChatInputRecoveryQueueProps } from "./chat-input-recovery-view.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import {
   input,
   makeChatPageHost,
@@ -22,29 +25,278 @@ import {
   applyChatPendingInputs,
   clearChatPendingInputs,
   getChatPendingInputs,
+  getChatRecoveryInputs,
+  getChatThreadPendingInputs,
   loadChatPendingInputs,
   readChatInputRunIds,
 } from "./chat-pending-inputs.ts";
 import { admitQueuedMessageForSession } from "./chat-queue.ts";
+import { flushChatQueueForEvent } from "./chat-send-actions.ts";
 import { retireDeliveredQueuedUserTurn } from "./chat-send-support.ts";
+import { ChatStateController } from "./chat-state-controller.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 import { renderChatView } from "./chat-view.test-helpers.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
 import { listStoredChatOutboxes } from "./composer-persistence.ts";
+import * as scroll from "./scroll.ts";
 import { cacheChatSessionSnapshot, type ChatMessageCache } from "./session-message-cache.ts";
 
 beforeEach(() => {
   installTranscriptDomMocks();
   vi.stubGlobal("sessionStorage", createStorageMock());
+  vi.stubGlobal("localStorage", createStorageMock());
 });
 afterEach(() => {
   resetTranscriptTestDom();
 });
 
 describe("server-owned pending input pagination", () => {
+  it.each(["interrupted", "cancelled"] as const)(
+    "keeps a restored held owner actionable beside %s custody",
+    async (state) => {
+      const host = makeChatPageHost({
+        sessionKey,
+        currentSessionId: sessionId,
+        selfUser: { id: "viewer", name: "Viewer" },
+        requestHandlers: {},
+      });
+      const unsubscribe = chatOutboxOwner(host).subscribe(host);
+      try {
+        const custody = { ...input, state };
+        const saved = { ...input, id: "unrelated-saved", runId: "unrelated-run" };
+        applyChatPendingInputs(host, { items: [custody, saved], total: 2, queuedCount: 0 });
+        // Browser recovery can publish its retained owner after the server page arrives.
+        for (const item of [
+          {
+            id: "held-owner",
+            text: "Held delivery",
+            createdAt: 1,
+            sendRunId: input.runId,
+            sendState: "held" as const,
+            sendAttempts: 1,
+          },
+          {
+            id: "successor",
+            text: "Blocked successor",
+            createdAt: 2,
+            sendRunId: "successor-run",
+            sendState: "waiting-idle" as const,
+          },
+        ]) {
+          expect(
+            admitQueuedMessageForSession(host, captureChatOutboxAdmission(host, sessionKey), {
+              ...item,
+              sessionKey,
+              sessionId,
+            }),
+          ).toBe(true);
+        }
+        const before = structuredClone(listStoredChatOutboxes(host));
+        const paint = () =>
+          renderChatView({
+            historyState: host,
+            sessionKey,
+            messages: host.chatMessages,
+            queue: host.chatQueue,
+            recoveryQueue: createChatInputRecoveryQueueProps(host, true),
+            onQueueRetry: (id) => {
+              void host.retryQueuedChatMessage(id);
+            },
+            onQueueRemove: host.removeQueuedMessage,
+          });
+        let container = paint();
+        expect(
+          container.querySelectorAll('.chat-send-status[data-send-state="held"]'),
+        ).toHaveLength(1);
+        expect(container.querySelector(".chat-send-status__retry")).not.toBeNull();
+        expect(container.querySelectorAll("[data-chat-queue-item=successor]")).toHaveLength(1);
+        expect(container.querySelectorAll("[data-chat-recovery-input]")).toHaveLength(1);
+        expect(getChatRecoveryInputs(host)).toEqual([saved]);
+
+        // A saved-attempt dismissal cannot conceal the only action for a FIFO blocker.
+        discardChatRecoveryInput(host, input.id);
+        expect(listStoredChatOutboxes(host)).toEqual(before);
+        container
+          .querySelector<HTMLButtonElement>("[data-chat-recovery-input] .chat-queue__remove")
+          ?.click();
+        await flushChatQueueForEvent(host);
+        container = paint();
+        expect(container.querySelector("[data-chat-recovery-input]")).toBeNull();
+        expect(container.querySelector(".chat-send-status__retry")).not.toBeNull();
+        expect(listStoredChatOutboxes(host)).toEqual(before);
+        expect(
+          host.request.mock.calls.filter(
+            ([method]) => method === "chat.send" || method === "chat.abort",
+          ),
+        ).toEqual([]);
+
+        // Only the local owner's explicit native action removes its delivery barrier.
+        host.connected = false;
+        const discard = expectDefined(
+          container.querySelector<HTMLButtonElement>(".chat-send-status__discard"),
+          "local discard action",
+        );
+        discard.click();
+        expect(host.chatQueue.map((item) => item.id)).toEqual(["successor"]);
+        expect(
+          listStoredChatOutboxes(host).flatMap((outbox) => outbox.queue.map((item) => item.id)),
+        ).toEqual(["successor"]);
+      } finally {
+        unsubscribe();
+      }
+    },
+  );
+
+  it("does not schedule scrolling or unread intent for recovery-only publications", () => {
+    const schedule = vi.spyOn(scroll, "scheduleCommittedChatScroll");
+    const controller = new ChatStateController<ChatPageHost>({
+      addController: () => {},
+      removeController: () => {},
+      requestUpdate: vi.fn(),
+      updateComplete: Promise.resolve(true),
+    });
+    const host = makeChatPageHost({
+      sessionKey,
+      currentSessionId: sessionId,
+      chatHasAutoScrolled: true,
+      chatUserNearBottom: true,
+      requestHandlers: {},
+    });
+    controller.hostConnected();
+    host.renderLifecycle = controller.createRenderLifecycle();
+    controller.attach(host);
+    try {
+      const empty = getChatThreadPendingInputs(host);
+      for (const state of ["interrupted", "cancelled"] as const) {
+        applyChatPendingInputs(host, { items: [{ ...input, state }], total: 1 });
+        controller.hostUpdated();
+        expect(getChatThreadPendingInputs(host)).toBe(empty);
+        expect(host.chatFollowLocked).toBe(false);
+        expect(host.chatUserNearBottom).toBe(true);
+      }
+      expect(schedule).not.toHaveBeenCalled();
+      applyChatPendingInputs(host, {
+        items: [{ ...input, state: "queued", queued: true }],
+        total: 1,
+        queuedCount: 1,
+      });
+      expect(host.chatFollowLocked).toBe(true);
+      expect(host.chatUserNearBottom).toBe(false);
+    } finally {
+      controller.hostDisconnected();
+      schedule.mockRestore();
+    }
+  });
+
+  it.each(["waiting", "running"] as const)(
+    "browses saved records without replacing %s custody or its scroll identity",
+    async (state) => {
+      const waiting = state === "waiting";
+      const older = { ...input, id: "older", runId: "older-run" };
+      const accepted = {
+        ...input,
+        id: "accepted",
+        state: "queued" as const,
+        queued: waiting ? (true as const) : undefined,
+        message: { role: "user", content: "Current accepted input" },
+      };
+      const host = makeChatHost({
+        sessionKey,
+        currentSessionId: sessionId,
+        requestHandlers: {
+          "chat.history": () => ({
+            sessionId,
+            pendingInputs: { items: [older], total: 2, queuedCount: waiting ? 1 : 0 },
+          }),
+        },
+      });
+      applyChatPendingInputs(host, {
+        items: [accepted],
+        total: 2,
+        nextBefore: 2,
+        queuedCount: waiting ? 1 : 0,
+      });
+      const active = getChatThreadPendingInputs(host);
+      expect(active).toEqual([accepted]);
+      await loadChatPendingInputs(host, 2);
+      expect(getChatRecoveryInputs(host)).toEqual([older]);
+      expect(getChatThreadPendingInputs(host)).toBe(active);
+      const container = renderChatView({ historyState: host, sessionKey });
+      expect(container.textContent).toContain("Current accepted input");
+      expect(container.querySelectorAll(".chat-queue__item")).toHaveLength(waiting ? 1 : 0);
+      const next = { ...accepted, id: "next", runId: "next-run" };
+      applyChatPendingInputs(host, {
+        items: [accepted, next],
+        total: 3,
+        nextBefore: 2,
+        queuedCount: waiting ? 2 : 0,
+      });
+      expect(getChatThreadPendingInputs(host)).toEqual([accepted, next]);
+      expect(getChatPendingInputs(host)?.page.items).toEqual([older]);
+    },
+  );
+
+  it("rereads a superseded same-input page but still accepts a fresh cancellation", async () => {
+    const stale = createDeferred<unknown>();
+    const active = { ...input, state: "queued" as const };
+    const cancelled = { ...input, state: "cancelled" as const };
+    let reads = 0;
+    let current: typeof active | typeof cancelled = active;
+    const host = makeChatHost({
+      sessionKey,
+      currentSessionId: sessionId,
+      requestHandlers: {
+        "chat.history": () =>
+          ++reads === 1
+            ? stale.promise
+            : {
+                sessionId,
+                pendingInputs: { items: [current], total: 2, queuedCount: 0 },
+                inputReceipts: [{ runId: input.runId, state: "pending" }],
+              },
+      },
+    });
+    applyChatPendingInputs(host, { items: [input], total: 2, nextBefore: 2, queuedCount: 0 });
+    const navigation = loadChatPendingInputs(host, 2);
+    applyChatPendingInputs(host, { items: [active], total: 2, queuedCount: 0 });
+    stale.resolve({ sessionId, pendingInputs: { items: [input], total: 2, queuedCount: 0 } });
+    await navigation;
+    expect(reads).toBe(2);
+    expect(getChatThreadPendingInputs(host)).toEqual([active]);
+    expect(getChatRecoveryInputs(host)).toEqual([]);
+
+    current = cancelled;
+    await loadChatPendingInputs(host, 2);
+    expect(getChatThreadPendingInputs(host)).toEqual([]);
+    expect(getChatRecoveryInputs(host)).toEqual([cancelled]);
+  });
+
+  it("binds recovery actions to the confirmed page rather than a reconnect read attempt", async () => {
+    const response = createDeferred<{ sessionId: string; pendingInputs: ChatPendingInputsPage }>();
+    const host = makeChatHost({
+      sessionKey,
+      currentSessionId: sessionId,
+      requestHandlers: { "chat.history": () => response.promise },
+    });
+    applyChatPendingInputs(host, page);
+    const view = expectDefined(getChatPendingInputs(host), "published pending page");
+    const publishedEpoch = view.connectionEpoch;
+    host.connectionEpoch += 1;
+    const loading = loadChatPendingInputs(host, 2);
+    expect(view.client).toBe(host.client);
+    expect(view.connectionEpoch).toBe(publishedEpoch);
+    expect(view.page).toBe(page);
+    const older = { ...input, id: "older", runId: "older-run" };
+    response.resolve({ sessionId, pendingInputs: { items: [older], total: 2 } });
+    await loading;
+    expect(view.connectionEpoch).toBe(host.connectionEpoch);
+    expect(view.page.items).toEqual([older]);
+  });
+
   it.each(["empty-queue", "complete-page", "partial-page-receipts"] as const)(
     "retires consumed server queue chips outside the transcript window using %s",
     async (source) => {
