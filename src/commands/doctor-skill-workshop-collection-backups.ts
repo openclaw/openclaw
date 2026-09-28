@@ -166,15 +166,6 @@ function isReadOnlyRehearsalBackup(
   ].some((filePath) => isUpdateRehearsalReadOnlyPath(filePath, env));
 }
 
-export function inferWorkspaceOwnerAgentId(
-  config: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
-  workspaceDir: string,
-): string | undefined {
-  const workspaceMatches = listWorkspaceOwnerAgentIds(config, env, workspaceDir);
-  return workspaceMatches.length === 1 ? workspaceMatches[0] : undefined;
-}
-
 export function listWorkspaceOwnerAgentIds(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,

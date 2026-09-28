@@ -1,12 +1,11 @@
 // Shared contracts for Gateway startup plugin collection and planning.
-import { normalizePluginsConfigWithRegistry } from "./plugin-registry-contributions.js";
+export type { NormalizedPluginsConfig } from "./config-normalization-shared.js";
 
 export type GatewayStartupPluginPlan = {
   channelPluginIds: readonly string[];
   pluginIds: readonly string[];
 };
 
-export type NormalizedPluginsConfig = ReturnType<typeof normalizePluginsConfigWithRegistry>;
 type GenerationProviderContractKey =
   | "imageGenerationProviders"
   | "videoGenerationProviders"

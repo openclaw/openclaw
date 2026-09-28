@@ -4,6 +4,7 @@ import { resolveStateDir } from "../../config/paths.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { hasActiveGatewayStateOwner } from "../../infra/gateway-state-owner.js";
+import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import {
   createUpdateDatabaseBackup,
@@ -24,13 +25,13 @@ import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-err
 type Progress = MutableUpdateExecutionParams["progress"];
 
 export async function captureUpdateDatabases(params: {
-  backupRoot: string;
+  transaction: PackageUpdateTransaction;
   execution: MutableUpdateExecutionParams;
   context: OwnedManagedUpdateContext | undefined;
   assertCurrent: () => void;
 }) {
   const startedAt = Date.now();
-  const { execution, context } = params;
+  const { execution, context, transaction } = params;
   const env = context?.env ?? execution.opts.run!.env;
   params.assertCurrent();
   const source = await readUpdateCandidateSource(env, execution.legacyConfigPlan);
@@ -57,7 +58,7 @@ export async function captureUpdateDatabases(params: {
   try {
     const capture = async () => {
       params.assertCurrent();
-      let backupRoot = params.backupRoot;
+      let backupRoot = transaction.databaseBackupRoot ?? transaction.backupRoot;
       if (execution.updateInstallKind === "git" && !execution.switchToGit) {
         // Database recovery outlives runtime retirement and stays outside the Git source fence.
         const artifactRoot = path.join(execution.root, ".artifacts");

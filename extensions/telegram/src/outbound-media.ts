@@ -34,7 +34,6 @@ type TelegramOutboundMediaPlan = {
   isVideoNote: boolean;
   fileName: string;
   file: InputFile;
-  caption?: string;
   htmlCaption?: string;
   plainCaption?: string;
   followUpText?: string;
@@ -125,7 +124,6 @@ export function prepareTelegramOutboundMedia(params: {
     isVideoNote,
     fileName,
     file: new InputFile(params.media.buffer, fileName),
-    caption,
     htmlCaption,
     plainCaption: resolveTelegramPlainCaption(
       caption && params.textMode === "html" ? telegramHtmlToPlainTextFallback(caption) : caption,

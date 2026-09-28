@@ -18,7 +18,7 @@ import {
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
+import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import {
   readUpdateStateSchemaVersions,
   resolveUpdateStateContentVersion,
@@ -529,6 +529,7 @@ export async function rollbackFailedUpdate(params: {
       resolveGatewayService(),
       recoveryEnv,
       params.timeoutMs,
+      { managerUid: restoredService.serviceManagerUid, assertCurrent },
     );
     let verdict = await revalidateManagedGatewayServiceAfterUpdate({
       state,

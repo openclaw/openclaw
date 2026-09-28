@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { imageMimeFromFormat } from "@openclaw/media-core/mime";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
@@ -87,7 +88,7 @@ function computerActIdempotencyKey(params: {
   if (params.purpose) {
     parts.push(params.purpose);
   }
-  const digest = crypto.createHash("sha256").update(JSON.stringify(parts)).digest("hex");
+  const digest = sha256Hex(JSON.stringify(parts));
   // The automatic read shares a tool-call id with input, but must never replay its result.
   if (params.purpose) {
     return `computer.observation:v1:${digest}`;

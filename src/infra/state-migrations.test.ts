@@ -990,7 +990,7 @@ describe("state migrations", () => {
           code: "ENOENT",
         });
       }
-      closeOpenClawStateDatabaseForTest();
+      await closeStateDatabaseForTest();
 
       const writer = new DatabaseSync(databasePath);
       if (workshopTables === "absent") {

@@ -10,6 +10,7 @@ import { withSqliteWorkerCleanupFailure } from "../../infra/sqlite-worker-broker
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import type { WorkerTaskOptions, WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
@@ -52,8 +53,63 @@ import type {
   SessionHistoryWorkerInput,
   SessionRowPresenceWorkerInput,
 } from "./session-transcript-worker.types.js";
+import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 export type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.types.js";
+
+const log = createSubsystemLogger("sessions/history-worker");
+const historyPrewarms = new WeakMap<
+  HistoryDatabaseResource,
+  { promise: Promise<void>; pending: boolean; retiredSequence: number }
+>();
+
+export function isSessionHistoryWorkerCold(): boolean {
+  return historyLane.pending === 0 && historyLane.nativeSequence <= historyLane.retiredSequence;
+}
+
+/** Reuse normal reader custody; repeated warmups never refresh the idle deadline. */
+export async function prewarmSessionHistoryWorker(
+  options: OpenClawAgentDatabaseOptions,
+): Promise<void> {
+  try {
+    const resource = acquireHistoryDatabaseResource(options);
+    const existing = historyPrewarms.get(resource);
+    if (
+      existing &&
+      (existing.pending ||
+        (!historyLane.rotation &&
+          existing.retiredSequence === historyLane.retiredSequence &&
+          resource.nativeSequences.has(historyLane)))
+    ) {
+      return await existing.promise;
+    }
+    const completion = createDeferredCore();
+    const prewarm = {
+      promise: completion.promise,
+      pending: true,
+      retiredSequence: historyLane.retiredSequence,
+    };
+    historyPrewarms.set(resource, prewarm);
+    void withSessionHistoryWorkerDatabase(options, (owner) =>
+      owner.prewarm({
+        env: captureSessionTranscriptStorageEnvironment(options.env ?? process.env),
+      }),
+    ).then(
+      () => {
+        prewarm.pending = false;
+        completion.resolve();
+      },
+      (error: unknown) => {
+        historyPrewarms.delete(resource);
+        log.debug(`Session history worker prewarm failed: ${String(error)}`);
+        completion.resolve();
+      },
+    );
+    await completion.promise;
+  } catch (error) {
+    log.debug(`Session history worker prewarm failed: ${String(error)}`);
+  }
+}
 
 type SessionCostUsageWorkerOptions = Pick<
   WorkerTaskOptions<UsageCostWorkerInput>,

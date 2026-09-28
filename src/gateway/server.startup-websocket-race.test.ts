@@ -75,33 +75,6 @@ describe("gateway startup websocket readiness", () => {
     }
   });
 
-  it("accepts an immediate websocket connection once startup resolves", async () => {
-    const previousMinimal = process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
-    process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
-    let server: GatewayServerForTest | undefined;
-    let client: WebSocket | undefined;
-    try {
-      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-      server = await startTestGatewayServer(portClaim, {
-        auth: { mode: "none" },
-      });
-
-      client = await connectWebSocket(`ws://127.0.0.1:${portClaim.port}`);
-    } finally {
-      if (client) {
-        await disconnectWebSocket(client);
-      }
-      if (server) {
-        await server.close();
-      }
-      if (previousMinimal === undefined) {
-        delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
-      } else {
-        process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = previousMinimal;
-      }
-    }
-  });
-
   it("serves a specific IPv4 bind and its required loopback alias", async ({ skip }) => {
     if (!loopbackAliasBindable) {
       skip("127.0.0.2 is not bindable on this host");

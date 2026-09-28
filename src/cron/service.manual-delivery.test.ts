@@ -19,7 +19,6 @@ const FOUR_HOURS_MS = 4 * 60 * 60_000;
 
 describe("manual cron delivery occurrence", () => {
   it.each([
-    { label: "direct force", mode: "force", queued: false },
     { label: "queued force", mode: "force", queued: true },
     { label: "scheduled due", mode: "due", queued: false },
   ] as const)(

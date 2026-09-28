@@ -1,8 +1,3 @@
-/**
- * sessions_history built-in tool.
- *
- * Reads bounded, redacted session transcript history after session visibility filtering.
- */
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
@@ -132,34 +127,6 @@ function truncateHistoryText(
   return { text: `${cut}\n…(truncated)…`, truncated: true, redacted };
 }
 
-function sanitizeHistoryContentBlock(
-  block: unknown,
-  maxChars: number,
-): {
-  block: unknown;
-  truncated: boolean;
-  redacted: boolean;
-} {
-  if (!block || typeof block !== "object") {
-    return { block, truncated: false, redacted: false };
-  }
-  const entry = { ...(block as Record<string, unknown>) };
-  let truncated = false;
-  let redacted = false;
-  const fields =
-    entry.type === "thinking" ? ["text", "thinking", "partialJson"] : ["text", "partialJson"];
-  for (const field of fields) {
-    const value = entry[field];
-    if (typeof value === "string") {
-      const res = truncateHistoryText(value, maxChars);
-      entry[field] = res.text;
-      truncated ||= res.truncated;
-      redacted ||= res.redacted;
-    }
-  }
-  return { block: entry, truncated, redacted };
-}
-
 function sanitizeHistoryMessage(
   message: unknown,
   maxChars = SESSIONS_HISTORY_TEXT_MAX_CHARS,
@@ -174,6 +141,12 @@ function sanitizeHistoryMessage(
   const entry = { ...(message as Record<string, unknown>) };
   let truncated = false;
   let redacted = false;
+  const sanitizeText = (text: string) => {
+    const result = truncateHistoryText(text, maxChars);
+    truncated ||= result.truncated;
+    redacted ||= result.redacted;
+    return result.text;
+  };
   // Tool result details often contain very large nested payloads.
   for (const field of ["details", "usage", "cost"]) {
     if (field in entry) {
@@ -183,21 +156,25 @@ function sanitizeHistoryMessage(
   }
 
   if (typeof entry.content === "string") {
-    const res = truncateHistoryText(entry.content, maxChars);
-    entry.content = res.text;
-    truncated ||= res.truncated;
-    redacted ||= res.redacted;
+    entry.content = sanitizeText(entry.content);
   } else if (Array.isArray(entry.content)) {
-    const updated = entry.content.map((block) => sanitizeHistoryContentBlock(block, maxChars));
-    entry.content = updated.map((item) => item.block);
-    truncated ||= updated.some((item) => item.truncated);
-    redacted ||= updated.some((item) => item.redacted);
+    entry.content = entry.content.map((block: unknown) => {
+      if (!block || typeof block !== "object") {
+        return block;
+      }
+      const content = { ...(block as Record<string, unknown>) };
+      const fields =
+        content.type === "thinking" ? ["text", "thinking", "partialJson"] : ["text", "partialJson"];
+      for (const field of fields) {
+        if (typeof content[field] === "string") {
+          content[field] = sanitizeText(content[field]);
+        }
+      }
+      return content;
+    });
   }
   if (typeof entry.text === "string") {
-    const res = truncateHistoryText(entry.text, maxChars);
-    entry.text = res.text;
-    truncated ||= res.truncated;
-    redacted ||= res.redacted;
+    entry.text = sanitizeText(entry.text);
   }
   return { message: entry, truncated, redacted };
 }

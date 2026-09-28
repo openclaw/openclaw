@@ -619,16 +619,16 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
     args = parseBuildAllArgs(process.argv.slice(2));
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
-    process.exit(2);
+    process.exitCode = 2;
   }
   if (args?.help) {
     console.log(buildAllUsage());
-  } else {
+  } else if (args) {
     const result = await withDistArtifactOwnership(process.cwd(), () =>
       runBuildAllSteps(args.profile),
     );
     if (result.exitCode !== 0) {
-      process.exit(result.exitCode);
+      process.exitCode = result.exitCode;
     }
   }
 }

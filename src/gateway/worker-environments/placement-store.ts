@@ -124,7 +124,11 @@ export function createWorkerSessionPlacementStore(
   const store = {
     ...createPlacementWorkspaceReservationOps(runtime),
     ...createPlacementTurnClaimOps(runtime),
-    ...createPlacementTurnClaimWorkerOps({ path, now: options.now }),
+    ...createPlacementTurnClaimWorkerOps({
+      path,
+      instanceId: runtime.instanceId,
+      now: options.now,
+    }),
     ...createPlacementPendingFailureOps(runtime),
     ...createPlacementMoveOps(runtime),
     ...createPlacementWorkspaceJournalOps(runtime),
@@ -204,6 +208,8 @@ export function createWorkerSessionPlacementStore(
         ...projection,
         placements: byRequestedId(placements),
         moves: byRequestedId(projection.moves),
+        pendingResults: byRequestedId(projection.pendingResults),
+        workspaceJournalOwnerSessionIds: byRequestedSet(projection.workspaceJournalOwnerSessionIds),
         workspaceResultReconcilingSessionIds: byRequestedSet(
           projection.workspaceResultReconcilingSessionIds,
         ),
@@ -211,6 +217,18 @@ export function createWorkerSessionPlacementStore(
           projection.workspaceRecoveryPendingSessionIds,
         ),
       };
+    },
+
+    async readRecoveryCandidates() {
+      const result = await executeExistingOpenClawStateRead(
+        { path },
+        { type: "workers.placementRecoveryCandidates" },
+        { current: true },
+      );
+      if (!result || !result.ok || result.type !== "workers.placementRecoveryCandidates") {
+        throw new Error("Worker placement recovery candidates source is unavailable");
+      }
+      return result.candidates;
     },
 
     getMany(sessionIds: readonly string[]): ReadonlyMap<string, WorkerSessionPlacementRecord> {

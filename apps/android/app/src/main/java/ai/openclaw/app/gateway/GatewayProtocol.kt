@@ -976,6 +976,8 @@ enum class GatewayMethod(
   PresenceActivity("presence.activity"),
   PresenceQuery("presence.query"),
   UsersMerge("users.merge"),
+  GatewayStopRequest("gateway.stop.request"),
+  DiagnosticsHeapSnapshot("diagnostics.heapSnapshot"),
 }
 
 enum class GatewayEvent(

@@ -39,6 +39,16 @@ const enLogin = {
         stepSharedSecret:
           "For trusted local operator access, use the shared Gateway token or password.",
       },
+      accessDenied: {
+        title: "No access to this Gateway",
+        summary:
+          "You're signed in, but this Gateway hasn't granted your account access, or that access has ended.",
+        stepAdmin:
+          "Ask a Gateway administrator to assign your profile a role, or to grant or restore your access.",
+        stepFindProfile:
+          "Administrators can find your profile with openclaw users list --json, then assign a role with users.setRole.",
+        stepReconnect: "This page reconnects on its own once access is granted.",
+      },
       authRequired: {
         title: "This Gateway expects its token",
         passwordTitle: "This Gateway expects its password",

@@ -270,7 +270,7 @@ describe("doctor Skill Workshop collection backup migration", () => {
         path.join("skill-workshop", "proposals", record.id, "PROPOSAL.md"),
         proposalContent,
       );
-      seedLegacyV15ProposalRows(testState.env, [
+      await seedLegacyV15ProposalRows(testState.env, [
         {
           record,
           workspaceDir,

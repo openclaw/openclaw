@@ -1,5 +1,6 @@
 import { appendFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { createKnownMainRed } from "./ci-known-main-red.mjs";
 
 const TERMINAL_FAILURES = new Set(["failure", "timed_out"]);
 const CONTROL_JOBS = new Set(["pr-fail-fast", "openclaw/ci-gate"]);
@@ -51,14 +52,16 @@ function plannedCheckJobCount(planners) {
 }
 
 /**
- * @param {{repository: string, runId: number, runAttempt: number,
+ * @param {{repository: string, headRepository?: string, runId: number, runAttempt: number,
  * pullRequestNumber: number, headSha: string, expectedJobCount: number,
  * preflightCheckJobCount: number, checkPlanExpected: boolean, token: string,
- * recordFailure: (job: {id: number, name: string, runAttempt: number}) => void}} options
+ * recordFailure: (job: {id: number, name: string, runAttempt: number}) => void,
+ * recordKnownMainRed?: (jobs: {id: number, mainRunId: number}[]) => void}} options
  */
 export async function monitorPrFailure(options) {
   const {
     repository,
+    headRepository = repository,
     runId,
     runAttempt,
     pullRequestNumber,
@@ -70,6 +73,7 @@ export async function monitorPrFailure(options) {
   } = options;
   if (
     !/^[\w.-]+\/[\w.-]+$/u.test(repository) ||
+    !/^[\w.-]+\/[\w.-]+$/u.test(headRepository) ||
     !/^[a-f0-9]{40}$/u.test(headSha) ||
     ![runId, runAttempt, pullRequestNumber, expectedJobCount].every(
       (value) => Number.isSafeInteger(value) && value > 0,
@@ -95,6 +99,9 @@ export async function monitorPrFailure(options) {
   const root = `https://api.github.com/repos/${repository}`;
   /** @param {string} route @param {string} [method] */
   const request = async (route, method = "GET") => {
+    if (method !== "GET" && headRepository !== repository) {
+      throw new Error("Fork PR failure observation is read-only");
+    }
     const response = await fetch(`${root}${route}`, {
       method,
       headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}` },
@@ -114,7 +121,7 @@ export async function monitorPrFailure(options) {
     run.head_sha === headSha &&
     run.path === ".github/workflows/ci.yml" &&
     record(run.repository).full_name === repository &&
-    record(run.head_repository).full_name === repository;
+    record(run.head_repository).full_name === headRepository;
   const initial = await request(runRoute);
   if (!matchesRun(initial)) {
     throw new Error("PR cancellation run identity changed");
@@ -122,6 +129,8 @@ export async function monitorPrFailure(options) {
   if (initial.status === "completed") {
     return "completed";
   }
+  let mainRed = createKnownMainRed(options);
+  const knownJobs = new Map();
   const workflowId = initial.workflow_id;
   const runNumber = initial.run_number;
   const branch = initial.head_branch;
@@ -140,8 +149,9 @@ export async function monitorPrFailure(options) {
     if (
       pull.state !== "open" ||
       pull.draft ||
+      pull.auto_merge ||
       head.sha !== headSha ||
-      record(head.repo).full_name !== repository ||
+      record(head.repo).full_name !== headRepository ||
       record(base.repo).full_name !== repository ||
       head.ref !== branch
     ) {
@@ -158,7 +168,7 @@ export async function monitorPrFailure(options) {
         return (
           run.event === "pull_request" &&
           run.workflow_id === workflowId &&
-          record(run.head_repository).full_name === repository &&
+          record(run.head_repository).full_name === headRepository &&
           run.head_branch === branch &&
           typeof run.run_number === "number" &&
           run.run_number > runNumber
@@ -173,7 +183,7 @@ export async function monitorPrFailure(options) {
   };
 
   while (observationDeadline === undefined || Date.now() < observationDeadline) {
-    /** @type {Map<number, {id: number, name: string, status: string, conclusion: string | null, completedAt: string | null}>} */
+    /** @type {Map<number, {id: number, name: string, status: string, conclusion: string | null, completedAt: string | null, steps: unknown}>} */
     const jobs = new Map();
     /** @type {Map<number, Record<string, unknown>>} */
     const checkPlanners = new Map();
@@ -220,6 +230,7 @@ export async function monitorPrFailure(options) {
             status: job.status,
             conclusion: job.conclusion,
             completedAt: typeof job.completed_at === "string" ? job.completed_at : null,
+            steps: job.steps,
           });
         }
       }
@@ -228,17 +239,31 @@ export async function monitorPrFailure(options) {
       }
     }
     const rows = [...jobs.values()];
-    const failed = rows
+    const failures = rows
       .filter(
         (job) =>
           job.status === "completed" &&
           job.conclusion !== null &&
           TERMINAL_FAILURES.has(job.conclusion),
       )
-      .toSorted((a, b) => (a.completedAt ?? "").localeCompare(b.completedAt ?? ""))[0];
+      .toSorted((a, b) => (a.completedAt ?? "").localeCompare(b.completedAt ?? ""));
+    let failed;
+    for (const job of failures) {
+      if (!knownJobs.has(job.id)) {
+        knownJobs.set(job.id, await mainRed.classifyJob(job));
+      }
+      if (!knownJobs.get(job.id).known) {
+        failed = job;
+        break;
+      }
+    }
     if (failed) {
       if (!(await isCurrent())) {
         return "superseded";
+      }
+      // Fork observation stays read-only even if repository settings grant more scope.
+      if (headRepository !== repository) {
+        return "failure-observed";
       }
       // Record the verified cause before the one write. An accepted request can
       // lose its response; ci-gate must still fail rather than skip in that case.
@@ -255,6 +280,17 @@ export async function monitorPrFailure(options) {
     if (rows.some((job) => job.conclusion === "cancelled")) {
       return "externally-cancelled";
     }
+    if (
+      rows.some(
+        (job) =>
+          job.status === "completed" &&
+          job.conclusion !== "success" &&
+          job.conclusion !== "skipped" &&
+          !knownJobs.get(job.id)?.known,
+      )
+    ) {
+      return "unclassified-result";
+    }
     // Failure observation starts immediately; only clean completion waits for
     // the installed planner's successful, attempt-bound inventory publication.
     const checkCount = checkPlanExpected
@@ -267,16 +303,36 @@ export async function monitorPrFailure(options) {
       checkCount === undefined ? undefined : expectedJobCount - preflightCheckJobCount + checkCount;
     const selectedRows = rows.filter((job) => job.conclusion !== "skipped");
     const completedCount = selectedRows.filter((job) => job.status === "completed").length;
-    if (finalJobCount !== undefined && completedCount >= finalJobCount) {
+    if (
+      finalJobCount !== undefined &&
+      completedCount >= finalJobCount &&
+      (failures.length === 0 || completedCount === selectedRows.length)
+    ) {
+      if (failures.length > 0) {
+        // The final receipt must use the latest completed main run, not an
+        // exemption cached while the remaining PR jobs were still executing.
+        mainRed = createKnownMainRed(options);
+        const receipts = [];
+        for (const job of failures) {
+          const decision = await mainRed.classifyJob(job);
+          if (!decision.known) {
+            return "main-evidence-changed";
+          }
+          receipts.push({ id: job.id, mainRunId: decision.mainRunId });
+        }
+        options.recordKnownMainRed?.(receipts);
+      }
       return "completed";
     }
     if (
+      failures.length === 0 &&
       finalJobCount !== undefined &&
       selectedRows.length === finalJobCount &&
       completedCount === finalJobCount - 1 &&
-      selectedRows.length - completedCount === 1
+      selectedRows.length - completedCount === 1 &&
+      !selectedRows.some((job) => job.status !== "completed" && mainRed.canClassifyJob(job))
     ) {
-      // The gate still awaits this job; no sibling workload remains to cancel.
+      // The gate owns an ineligible final job; eligible failures still need observation.
       return "last-job-remaining";
     }
     // Keep broad observation cheap; an admitted final tail must not add another 30s to CI.
@@ -301,6 +357,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   try {
     const reason = await monitorPrFailure({
       repository: process.env.GITHUB_REPOSITORY ?? "",
+      headRepository: process.env.OPENCLAW_CI_PR_HEAD_REPOSITORY ?? "",
       runId: Number(process.env.GITHUB_RUN_ID),
       runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
       pullRequestNumber: Number(process.env.OPENCLAW_CI_PR_NUMBER),
@@ -321,7 +378,28 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
         );
         recordedFailure = true;
       },
+      recordKnownMainRed(jobs) {
+        appendFileSync(
+          process.env.GITHUB_OUTPUT,
+          `known_main_red_attempt=${process.env.GITHUB_RUN_ATTEMPT}\n`,
+        );
+        for (const job of jobs) {
+          console.log(
+            `::notice title=known main red, owned by main::PR job ${job.id} matches main run ${job.mainRunId}; all other selected jobs completed.`,
+          );
+          appendFileSync(
+            process.env.GITHUB_STEP_SUMMARY,
+            `Known main red, owned by main: PR job ${job.id}, hourly main run ${job.mainRunId}.\n`,
+          );
+        }
+      },
     });
+    if (reason === "unclassified-result") {
+      console.error(
+        "::error title=Unclassified CI result::A completed job has an unsupported result; inspect this attempt's job conclusions.",
+      );
+      process.exitCode = 1;
+    }
     console.log(`PR failure monitor: ${reason}`);
   } catch (error) {
     // Observation failures must not turn otherwise healthy CI red. Tests and

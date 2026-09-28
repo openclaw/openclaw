@@ -706,7 +706,7 @@ export async function finalizeSetupWizard(
       { resolveDefaultModelAuthStatus, resolveDefaultModelCatalogFacts },
       { loadPreparedModelCatalogSnapshot },
     ] = await Promise.all([
-      import("../commands/auth-choice.js"),
+      import("../commands/auth-choice.model-check.js"),
       import("../agents/prepared-model-catalog.js"),
     ]);
     const modelCatalog = await loadPreparedModelCatalogSnapshot({

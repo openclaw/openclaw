@@ -49,10 +49,7 @@ function hasDuplicateJsonObjectKeys(text) {
     } else if (char === "[") {
       stack.push(null);
       expectingKey = false;
-    } else if (char === "}") {
-      stack.pop();
-      expectingKey = false;
-    } else if (char === "]") {
+    } else if (char === "}" || char === "]") {
       stack.pop();
       expectingKey = false;
     } else if (char === ",") {

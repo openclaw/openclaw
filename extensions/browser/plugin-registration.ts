@@ -12,7 +12,6 @@ import type {
   OpenClawPluginSecurityAuditCollector,
   OpenClawPluginService,
   OpenClawPluginToolContext,
-  OpenClawPluginToolFactory,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createSubsystemLogger, isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import { registerBrowserCliMetadata } from "./cli-metadata.js";
@@ -61,7 +60,7 @@ const loadBrowserUploadCleanupRuntimeModule = createLazyRuntimeSurface(
 function deriveChatTypeFromSessionKey(
   sessionKey: string | undefined,
 ): "direct" | "group" | "channel" | undefined {
-  const tokens = new Set(sessionKey?.toLowerCase().split(":").filter(Boolean) ?? []);
+  const tokens = new Set(sessionKey?.toLowerCase().split(":") ?? []);
   if (tokens.has("group")) {
     return "group";
   }
@@ -303,10 +302,10 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
       maxEntries: 1,
     }),
   );
-  api.registerTool(((ctx: OpenClawPluginToolContext) => {
+  api.registerTool((ctx: OpenClawPluginToolContext) => {
     const config = ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config;
     return createLazyBrowserTool(createBrowserToolOptions(ctx), config);
-  }) as OpenClawPluginToolFactory);
+  });
   registerBrowserCliMetadata(api);
   api.registerGatewayMethod(
     BROWSER_REQUEST_GATEWAY_METHOD,

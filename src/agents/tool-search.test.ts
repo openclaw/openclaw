@@ -1597,7 +1597,7 @@ describe("Tool Search", () => {
     const result = await call.execute("call-1", { id: described.id, args: { value: "ship" } });
 
     expect(alpha.execute).toHaveBeenCalledWith(
-      "tool_search_code:call-1:fake_create_ticket:1",
+      "tool_call:call-1:fake_create_ticket:1",
       { value: "ship" },
       expect.any(AbortSignal),
       undefined,
@@ -2294,7 +2294,7 @@ describe("Tool Search", () => {
       args: { action: "send", message: "hello" },
     });
     expect(target.execute).toHaveBeenCalledWith(
-      "tool_search_code:call-schema-directory:fake_message:1",
+      "tool_call:call-schema-directory:fake_message:1",
       { action: "send", message: "hello" },
       expect.objectContaining({ aborted: false }),
       undefined,
@@ -2846,7 +2846,7 @@ describe("Tool Search", () => {
     );
     await call.execute("call-hooks", { id: "fake_hooked", args: { value: "ok" } });
     const targetCall = mockCall(vi.mocked(target.execute));
-    expect(targetCall[0]).toBe("tool_search_code:call-hooks:fake_hooked:1");
+    expect(targetCall[0]).toBe("tool_call:call-hooks:fake_hooked:1");
     expect(targetCall[1]).toEqual({ value: "ok" });
     expect(targetCall[2]).toBeInstanceOf(AbortSignal);
     expect(targetCall[3]).toBeUndefined();
@@ -2888,9 +2888,9 @@ describe("Tool Search", () => {
     await call.execute("call-repeated", { id: target.name, args: { value: "two" } });
     await call.execute("call-repeated-again", { id: target.name, args: { value: "three" } });
     expect(vi.mocked(target.execute).mock.calls.map(([id, input]) => ({ id, input }))).toEqual([
-      { id: "tool_search_code:call-repeated:fake_repeated:1", input: { value: "one" } },
-      { id: "tool_search_code:call-repeated:fake_repeated:2", input: { value: "two" } },
-      { id: "tool_search_code:call-repeated-again:fake_repeated:3", input: { value: "three" } },
+      { id: "tool_call:call-repeated:fake_repeated:1", input: { value: "one" } },
+      { id: "tool_call:call-repeated:fake_repeated:2", input: { value: "two" } },
+      { id: "tool_call:call-repeated-again:fake_repeated:3", input: { value: "three" } },
     ]);
   });
 
@@ -2944,9 +2944,7 @@ describe("Tool Search", () => {
     expect(executeInput.toolName).toBe("fake_lifecycle");
     expect(executeInput.source).toBe("openclaw");
     expect(executeInput.sourceName).toBe("fake-catalog");
-    expect(executeInput.toolCallId).toBe(
-      "tool_search_code:call-lifecycle-structured:fake_lifecycle:1",
-    );
+    expect(executeInput.toolCallId).toBe("tool_call:call-lifecycle-structured:fake_lifecycle:1");
     expect(executeInput.parentToolCallId).toBe("call-lifecycle-structured");
     expect(executeInput.input).toEqual({ value: "structured" });
     expect(executeInput.signal).toBeInstanceOf(AbortSignal);
