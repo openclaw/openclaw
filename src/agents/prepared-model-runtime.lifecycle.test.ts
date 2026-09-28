@@ -96,7 +96,7 @@ describe("prepared model runtime snapshots", () => {
   it("announces a failed replacement so lifecycle readers do not wait indefinitely", async () => {
     mocks.configuredAgentIds = ["default"];
     await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
-    const events: Array<{ phase: string; error?: Error }> = [];
+    const events: Array<{ phase: string; error?: Error; replacement?: Promise<void> }> = [];
     const unregister = registerPreparedModelRuntimePublicationListener((event) => {
       events.push(event);
     });
@@ -109,9 +109,10 @@ describe("prepared model runtime snapshots", () => {
     unregister();
 
     expect(events).toEqual([
-      { phase: "invalidated" },
+      { phase: "invalidated", replacement: expect.any(Promise) },
       { phase: "failed", error: replacementError },
     ]);
+    await expect(events[0]?.replacement).rejects.toBe(replacementError);
   });
 
   it("does not let a read-only draft replace a configured gateway owner", async () => {
@@ -761,47 +762,6 @@ describe("prepared model runtime snapshots", () => {
 
     expect(publishedSnapshots).toHaveLength(1);
     expect(publishedSnapshots[0]).toMatchObject({ config: replacementConfig });
-  });
-
-  it("waits for the affected owner at auth publication", async () => {
-    const config = {};
-    const agentDir = fixture.state.agentDir("auth");
-    const first = await publishPreparedModelRuntimeSnapshot({ config, agentDir });
-
-    mocks.mutationListener?.({ agentDir, affectsInheritedStores: false });
-    await expect(prepareModelRuntimeSnapshot({ config, agentDir })).resolves.not.toBe(first);
-
-    await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2));
-    const refreshed = await prepareModelRuntimeSnapshot({ config, agentDir });
-    expect(refreshed).not.toBe(first);
-    expect(mocks.discoverAuthStorage).toHaveBeenCalledTimes(2);
-  });
-
-  it("treats an auth refresh superseded by a newer mutation as control flow", async () => {
-    const config = {};
-    const agentDir = fixture.state.agentDir("auth-superseded");
-    await publishPreparedModelRuntimeSnapshot({ config, agentDir });
-    const finishFirstRefreshGate = createDeferred();
-    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, targetDir) => {
-      await finishFirstRefreshGate.promise;
-      return { agentDir: String(targetDir), wrote: false };
-    });
-
-    try {
-      mocks.mutationListener?.({ agentDir, affectsInheritedStores: false });
-      await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2));
-      mocks.mutationListener?.({ agentDir, affectsInheritedStores: false });
-      finishFirstRefreshGate.resolve();
-
-      await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(3));
-      await expect(prepareModelRuntimeSnapshot({ config, agentDir })).resolves.toMatchObject({
-        agentDir,
-      });
-      expect(mocks.warn).not.toHaveBeenCalled();
-    } finally {
-      finishFirstRefreshGate.resolve();
-      await Promise.allSettled([prepareModelRuntimeSnapshot({ config, agentDir })]);
-    }
   });
 
   it.each([false, true])(

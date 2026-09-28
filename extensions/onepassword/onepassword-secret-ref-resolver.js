@@ -41,10 +41,6 @@ function parseRequest(input) {
   };
 }
 
-function resolveSecretReference(id) {
-  return resolveOnePasswordSecretReference(id);
-}
-
 async function resolveOpCommand() {
   const command = process.env.CLAW_1PASSWORD_OP?.trim();
   if (command && !path.isAbsolute(command)) {
@@ -233,7 +229,11 @@ async function resolveFromOnePassword(ids) {
   const token = readServiceAccountToken();
   await runWithConcurrency(ids, OP_READ_CONCURRENCY, async (id) => {
     try {
-      response.values[id] = await runOpRead(opCommand, token, resolveSecretReference(id));
+      response.values[id] = await runOpRead(
+        opCommand,
+        token,
+        resolveOnePasswordSecretReference(id),
+      );
     } catch (error) {
       response.errors[id] = {
         message: errorMessage(error),

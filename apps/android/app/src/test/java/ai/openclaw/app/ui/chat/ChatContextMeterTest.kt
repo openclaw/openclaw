@@ -1,9 +1,9 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.chat.ChatDeliveryMirror
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatMessageCost
-import ai.openclaw.app.chat.ChatMessageUsage
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatThinkingLevelOption
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
@@ -136,7 +136,7 @@ class ChatContextMeterTest {
   }
 
   @Test
-  fun optionalUsageUsesNewestRealAssistantAndOnlyObservedValues() {
+  fun latestCostUsesNewestRealAssistantAndOnlyObservedValues() {
     val costs =
       ChatMessageCost(
         input = 0.003456,
@@ -144,21 +144,16 @@ class ChatContextMeterTest {
         cacheRead = 0.0015,
         cacheWrite = 0.0,
       )
-    val usage = ChatMessageUsage(input = 18_420, output = 840, cacheRead = 76_500)
     val messages =
       listOf(
         message(role = "user"),
-        message(role = "assistant", usage = usage, cost = costs),
+        message(role = "assistant", cost = costs),
         message(role = "assistant", provider = "openclaw", model = "gateway-injected", cost = ChatMessageCost()),
+        message(role = "assistant", cost = ChatMessageCost()).copy(deliveryMirror = ChatDeliveryMirror(kind = "channel-final")),
+        message(role = "assistant", cost = ChatMessageCost()).copy(isSyntheticDisplay = true),
       )
 
-    assertEquals(usage, latestChatMessageUsage(messages))
     assertEquals(costs, latestChatMessageCost(messages))
-    assertEquals(
-      listOf("Input cost" to 0.003456, "Output cost" to 0.018, "Cache read cost" to 0.0015, "Cache write cost" to 0.0),
-      availableChatCostStats(costs),
-    )
-    assertEquals(listOf("Est. cost" to 0.0225), availableChatCostStats(ChatMessageCost(total = 0.0225)))
     assertEquals(costs, latestChatMessageCost(messages + message(role = "user")))
 
     val withoutSessionCost =
@@ -168,7 +163,6 @@ class ChatContextMeterTest {
         listOf(ChatSessionEntry(key = "main", updatedAtMs = 1L)),
       )
     assertNull(withoutSessionCost.estimatedCostUsd)
-    assertEquals(0.0225, latestChatMessageCost(listOf(message(role = "assistant", cost = ChatMessageCost(total = 0.0225))))?.total)
   }
 
   @Test
@@ -196,42 +190,14 @@ class ChatContextMeterTest {
   }
 
   @Test
-  fun latestRunUsesCumulativeSessionTotalsAcrossModelCalls() {
-    val session =
-      ChatSessionEntry(
-        key = "main",
-        updatedAtMs = 2L,
-        inputTokens = 18_420L,
-        outputTokens = 840L,
-        estimatedCostUsd = 0.022956,
-      )
-    val finalModelCall =
-      message(
-        role = "assistant",
-        usage = ChatMessageUsage(input = 2_100L, output = 160L, cacheRead = 76_500L),
-        cost = ChatMessageCost(input = 0.003, output = 0.004, cacheRead = 0.0015, total = 0.0085),
-      )
-
-    val usage = resolveChatContextUsage("main", "main", listOf(session))
-
-    assertEquals(18_420L, usage.inputTokens)
-    assertEquals(840L, usage.outputTokens)
-    assertEquals(0.022956, usage.estimatedCostUsd)
-    assertEquals(76_500L, latestChatMessageUsage(listOf(finalModelCall))?.cacheRead)
-    assertEquals(0.0085, latestChatMessageCost(listOf(finalModelCall))?.total)
-  }
-
-  @Test
-  fun modelCallDetailsClearAtBoundariesWithoutInheritingOlderUsage() {
-    val old = message("assistant", usage = ChatMessageUsage(input = 1200L), cost = ChatMessageCost(total = 0.01))
+  fun modelCallCostsClearAtBoundariesWithoutInheritingOlderCosts() {
+    val old = message("assistant", cost = ChatMessageCost(input = 0.01))
     for (kind in listOf("compaction", "reset")) {
       val boundary = message("system").copy(transcriptMarker = ChatTranscriptMarker(kind = kind))
-      assertNull(latestChatMessageUsage(listOf(old, boundary)))
       assertNull(latestChatMessageCost(listOf(old, boundary)))
-      val next = message("assistant", usage = ChatMessageUsage(output = 160L))
-      assertEquals(ChatMessageUsage(output = 160L), latestChatMessageUsage(listOf(old, boundary, next)))
-      assertNull(latestChatMessageCost(listOf(old, boundary, next)))
-      assertNull(latestChatMessageUsage(listOf(old, boundary, message("assistant"))))
+      val next = message("assistant", cost = ChatMessageCost(output = 0.003))
+      assertEquals(ChatMessageCost(output = 0.003), latestChatMessageCost(listOf(old, boundary, next)))
+      assertNull(latestChatMessageCost(listOf(old, boundary, message("assistant"))))
     }
   }
 
@@ -239,7 +205,6 @@ class ChatContextMeterTest {
     role: String,
     provider: String? = null,
     model: String? = null,
-    usage: ChatMessageUsage? = null,
     cost: ChatMessageCost? = null,
   ) = ChatMessage(
     id = "$role-${provider.orEmpty()}-${model.orEmpty()}",
@@ -248,7 +213,6 @@ class ChatContextMeterTest {
     timestampMs = null,
     provider = provider,
     model = model,
-    usage = usage,
     cost = cost,
   )
 

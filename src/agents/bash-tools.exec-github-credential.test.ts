@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
@@ -79,8 +80,13 @@ beforeEach(async () => {
   );
   command = [process.execPath, fixture].map(quoteCliArg).join(" ");
   boundary.prepare.mockReset();
+  // Credential outcomes depend on child completion, not instrumented startup speed.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  vi.spyOn(performance, "now").mockReturnValue(0);
 });
 afterEach(async () => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
   await supervisor.shutdown();
   resetProcessRegistryForTests();
   await fs.rm(root, { recursive: true, force: true });

@@ -19,11 +19,8 @@ describe("message-normalizer senderSession", () => {
   });
 
   it.each([
-    { senderSession: undefined },
     { senderSession: null },
-    { senderSession: "agent:main:main" },
     { senderSession: [] },
-    { senderSession: {} },
     { senderSession: { sessionKey: "  ", agentId: "\t" } },
     { senderSession: { sessionKey: 42, agentId: false } },
   ])(

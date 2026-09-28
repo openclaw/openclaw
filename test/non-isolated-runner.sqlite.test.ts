@@ -19,7 +19,7 @@ async function verifySqliteOwnerRetirement(signal: AbortSignal) {
   try {
     const vitestDir = path.dirname(require.resolve("vitest/package.json"));
     await fs.symlink(path.dirname(vitestDir), path.join(root, "node_modules"), "junction");
-    const files = sqliteLifecycleFixtureFiles(repoRoot);
+    const files = sqliteLifecycleFixtureFiles();
     for (const [name, content] of Object.entries(files)) {
       await fs.writeFile(path.join(root, name), content);
     }

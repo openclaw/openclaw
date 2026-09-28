@@ -42,7 +42,7 @@ describe.each(["active", "scoped"] as const)("heartbeat owner in %s registry", (
     await withPluginRuntimeRegistryScope(
       scope === "scoped" ? telegramRegistry : undefined,
       async () => {
-        expect(hasResolvableHeartbeatOwnerRoute({ cfg })).toBe(true);
+        expect(await hasResolvableHeartbeatOwnerRoute({ cfg })).toBe(true);
         expect(
           await resolveHeartbeatDeliveryTargetWithSessionRoute({ cfg, agentId: "main" }),
         ).toMatchObject({ channel: "telegram", to: "telegram:1234567890", chatType: "direct" });

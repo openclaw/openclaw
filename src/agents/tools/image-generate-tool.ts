@@ -1,6 +1,5 @@
 /** Runs image generation, persistence, and detached completion. */
 import { Type } from "typebox";
-import { getRuntimeConfig } from "../../config/config.js";
 import type {
   ImageGenerationOpenAIOptions,
   ImageGenerationProvider,
@@ -19,6 +18,7 @@ import {
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
   readToolStringParam,
+  type AnyAgentTool,
 } from "./common.js";
 import {
   createImageGenerateDuplicateGuardResult,
@@ -27,7 +27,6 @@ import {
 } from "./image-generate-tool.actions.js";
 import {
   executeImageGenerationJob,
-  loadImageGenerationReferences,
   inferImageGenerationResolution,
   normalizeImageGenerationAspectRatio,
   normalizeImageGenerationResolution,
@@ -36,22 +35,20 @@ import { createDefaultMediaGenerateBackgroundScheduler } from "./media-generate-
 import {
   imageGenerationTaskLifecycle,
   prepareMediaGenerationTask,
+  resolveMediaGenerateToolContext,
   type MediaGenerateToolOptions,
   type ImageGenerationTaskHandle,
 } from "./media-generate-background.js";
 import { acquireImageGenerationToolProviders } from "./media-generation-tool-providers.js";
 import {
   buildMediaReferenceDetails,
-  hasGenerationToolAvailability,
+  loadMediaToolReferences,
   normalizeMediaReferenceInputs,
   readGenerationTimeoutMs,
-  resolveMediaToolSandboxConfig,
-  resolveRemoteMediaSsrfPolicy,
   resolveGenerateAction,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
 import type { ToolModelConfig } from "./model-config.helpers.js";
-import type { AnyAgentTool } from "./tool-runtime.helpers.js";
 
 const DEFAULT_COUNT = 1;
 const MAX_COUNT = 4;
@@ -229,29 +226,6 @@ function normalizeProviderOptions(
     : undefined;
 }
 
-function normalizeReferenceImages(args: Record<string, unknown>): string[] {
-  return normalizeMediaReferenceInputs({
-    args,
-    singularKey: "image",
-    pluralKey: "images",
-    maxCount: MAX_REFERENCE_IMAGE_INPUTS,
-    label: "reference images",
-  });
-}
-
-function resolveSelectedImageGenerationProvider(params: {
-  providers: ImageGenerationProvider[];
-  imageGenerationModelConfig: ToolModelConfig;
-  modelOverride?: string;
-}): ImageGenerationProvider | undefined {
-  return resolveSelectedCapabilityProvider({
-    providers: params.providers,
-    modelConfig: params.imageGenerationModelConfig,
-    modelOverride: params.modelOverride,
-    parseModelRef: parseImageGenerationModelRef,
-  });
-}
-
 function resolveSelectedImageGenerationModelId(params: {
   selectedProvider: ImageGenerationProvider | undefined;
   imageGenerationModelConfig: ToolModelConfig;
@@ -312,28 +286,11 @@ const defaultScheduleImageGenerateBackgroundWork = createDefaultMediaGenerateBac
 });
 
 export function createImageGenerateTool(options?: MediaGenerateToolOptions): AnyAgentTool | null {
-  const cfg = options?.config ?? getRuntimeConfig();
-  const preparedProviders = options?.preparedModelRuntime?.mediaCapabilityProviders
-    ?.imageGenerationProviders
-    ? [...options.preparedModelRuntime.mediaCapabilityProviders.imageGenerationProviders]
-    : undefined;
-  if (
-    !hasGenerationToolAvailability({
-      cfg,
-      agentDir: options?.agentDir,
-      workspaceDir: options?.workspaceDir,
-      authStore: options?.authProfileStore,
-      modelConfig: cfg.agents?.defaults?.mediaModels?.image,
-      providerKey: "imageGenerationProviders",
-      providers: preparedProviders,
-    })
-  ) {
+  const context = resolveMediaGenerateToolContext("imageGenerationProviders", options);
+  if (!context) {
     return null;
   }
-  const sandboxConfig = resolveMediaToolSandboxConfig(
-    options?.sandbox,
-    options?.fsPolicy?.workspaceOnly,
-  );
+  const { cfg, sandboxConfig } = context;
   const scheduleBackgroundWork =
     options?.scheduleBackgroundWork ?? defaultScheduleImageGenerateBackgroundWork;
 
@@ -387,9 +344,15 @@ export function createImageGenerateTool(options?: MediaGenerateToolOptions): Any
           explicitModelConfig,
         }) => {
           const imageGenerationProviders = acquired.providers;
-          const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
+          const remoteMediaSsrfPolicy = effectiveCfg.tools?.web?.fetch?.ssrfPolicy;
 
-          const imageInputs = normalizeReferenceImages(params);
+          const imageInputs = normalizeMediaReferenceInputs({
+            args: params,
+            singularKey: "image",
+            pluralKey: "images",
+            maxCount: MAX_REFERENCE_IMAGE_INPUTS,
+            label: "reference images",
+          });
           const filename = readToolStringParam(params, "filename");
           const size = readToolStringParam(params, "size");
           const aspectRatio = normalizeImageGenerationAspectRatio(
@@ -415,10 +378,11 @@ export function createImageGenerateTool(options?: MediaGenerateToolOptions): Any
             "background",
           );
           const providerOptions = normalizeProviderOptions(params);
-          const selectedProvider = resolveSelectedImageGenerationProvider({
+          const selectedProvider = resolveSelectedCapabilityProvider({
             providers: imageGenerationProviders,
-            imageGenerationModelConfig,
+            modelConfig: imageGenerationModelConfig,
             modelOverride: model,
+            parseModelRef: parseImageGenerationModelRef,
           });
           const explicitModelRef = parseImageGenerationModelRef(model);
           const primaryModelRef = parseImageGenerationModelRef(imageGenerationModelConfig.primary);
@@ -467,17 +431,26 @@ export function createImageGenerateTool(options?: MediaGenerateToolOptions): Any
             inputImageCount: imageInputs.length,
           });
           const referenceMaxBytes = resolveGeneratedMediaMaxBytes(effectiveCfg, "image");
-          const loadedReferenceImages = await loadImageGenerationReferences({
-            imageInputs,
+          const loadedReferenceImages = await loadMediaToolReferences({
+            inputs: imageInputs,
+            toolName: "image_generate",
+            expectedKind: "image",
             maxBytes: referenceMaxBytes,
             workspaceDir: options?.workspaceDir,
             cwd: options?.cwd,
             fsPolicy: options?.fsPolicy,
-            sandboxConfig,
+            sandbox: sandboxConfig,
             ssrfPolicy: remoteMediaSsrfPolicy,
             signal,
+            mapMedia: (media) => ({
+              buffer: media.buffer,
+              mimeType:
+                ("contentType" in media && media.contentType) ||
+                ("mimeType" in media && media.mimeType) ||
+                "image/png",
+            }),
           });
-          const inputImages = loadedReferenceImages.map((entry) => entry.sourceImage);
+          const inputImages = loadedReferenceImages.map((entry) => entry.source);
           const modeCaps =
             inputImages.length > 0
               ? selectedProvider?.capabilities.edit
@@ -514,7 +487,7 @@ export function createImageGenerateTool(options?: MediaGenerateToolOptions): Any
                   entries: loadedReferenceImages,
                   singleKey: "image",
                   pluralKey: "images",
-                  getResolvedInput: (entry) => entry.resolvedImage,
+                  getResolvedInput: (entry) => entry.resolvedInput,
                 }),
                 ...(model ? { model } : {}),
                 ...(resolution ? { resolution } : {}),

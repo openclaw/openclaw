@@ -150,24 +150,22 @@ export function hasTrackedActiveSessionRun(params: {
   canonicalKey: string;
   agentId?: string;
   defaultAgentId?: string;
-  excludeRunIds?: ReadonlySet<string>;
 }): boolean {
   const activeRuns = collectTrackedActiveSessionRuns(params.context);
   return activeRuns.some(
     (active) =>
-      !params.excludeRunIds?.has(active.runId) &&
-      (isTrackedActiveSessionRunForKey(
+      isTrackedActiveSessionRunForKey(
         active,
         params.canonicalKey,
         params.agentId,
         params.defaultAgentId,
       ) ||
-        isTrackedActiveSessionRunForKey(
-          active,
-          params.requestedKey,
-          params.agentId,
-          params.defaultAgentId,
-        )),
+      isTrackedActiveSessionRunForKey(
+        active,
+        params.requestedKey,
+        params.agentId,
+        params.defaultAgentId,
+      ),
   );
 }
 

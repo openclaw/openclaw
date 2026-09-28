@@ -1,7 +1,7 @@
 // Logger env tests cover log level and transport behavior from environment config.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
-import { getResolvedConsoleSettings } from "./console.js";
+import { getConsoleSettings } from "./console.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import { getResolvedLoggerSettings, resetLogger, setLoggerOverride } from "./logger.js";
 import { loggingState } from "./state.js";
@@ -54,7 +54,7 @@ describe("OPENCLAW_LOG_LEVEL", () => {
       file: testLogPath,
       maxFileBytes: defaultMaxFileBytes,
     });
-    expect(getResolvedConsoleSettings()).toEqual({
+    expect(getConsoleSettings()).toEqual({
       level: "debug",
       style: "json",
     });
@@ -72,7 +72,7 @@ describe("OPENCLAW_LOG_LEVEL", () => {
 
     expect(getResolvedLoggerSettings().level).toBe("error");
     expect(getResolvedLoggerSettings().maxFileBytes).toBe(defaultMaxFileBytes);
-    expect(getResolvedConsoleSettings().level).toBe("warn");
+    expect(getConsoleSettings().level).toBe("warn");
     expect(getResolvedLoggerSettings().level).toBe("error");
 
     const warnings = stderrSpy.mock.calls
@@ -92,7 +92,7 @@ describe("OPENCLAW_LOG_LEVEL", () => {
     process.env.OPENCLAW_LOG_LEVEL = "nope";
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
-    expect(getResolvedConsoleSettings().level).toBe("info");
+    expect(getConsoleSettings().level).toBe("info");
 
     const warning = stderrSpy.mock.calls
       .map(([firstArg]) => String(firstArg))

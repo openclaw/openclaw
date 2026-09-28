@@ -13,74 +13,97 @@ import {
 } from "../../config/runtime-snapshot.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { persistRequestedUpdateChannel } from "./update-command-config.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-it.each([true, false])(
-  "rolls back an include channel when config selection changes during refresh (handled=%s)",
-  async (handled) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      await state.writeConfig({
-        plugins: { enabled: false },
-        update: { $include: "./channel.json" },
-      });
-      const include = state.statePath("channel.json");
-      const original = '{"channel":"stable"}\n';
-      await fs.writeFile(include, original);
-      const originalRoot = await fs.readFile(state.configPath, "utf8");
-      const snapshot = await readConfigFileSnapshot({ skipPluginValidation: true, observe: false });
-      expect(snapshot.valid).toBe(true);
-      setRuntimeConfigSnapshot(snapshot.runtimeConfig, snapshot.sourceConfig);
-      const previousRuntime = getRuntimeConfigSnapshot();
-      const notified = vi.fn();
-      const unsubscribe = registerRuntimeConfigWriteListener(notified);
-      const refresh = vi.fn(async () => {
-        await Promise.resolve();
-        process.env.OPENCLAW_CONFIG_PATH = state.statePath("reselected.json");
-        return handled;
-      });
-      setRuntimeConfigSnapshotRefreshHandler({ preflight: () => true, refresh });
-      try {
-        await expect(
-          persistRequestedUpdateChannel({ configSnapshot: snapshot, requestedChannel: "beta" }),
-        ).rejects.toMatchObject({ name: "ConfigWritePostCommitError", rollbackStatus: "restored" });
-        expect(refresh).toHaveBeenCalledOnce();
-        expect(notified).not.toHaveBeenCalled();
-        expect(getRuntimeConfigSnapshot()).toBe(previousRuntime);
-        expect(await fs.readFile(include, "utf8")).toBe(original);
-        expect(await fs.readFile(`${include}.bak`, "utf8")).toBe(original);
-        expect(await fs.readFile(state.configPath, "utf8")).toBe(originalRoot);
-      } finally {
-        process.env.OPENCLAW_CONFIG_PATH = state.configPath;
-        unsubscribe();
-        setRuntimeConfigSnapshotRefreshHandler(null);
-        resetConfigRuntimeState();
-      }
+const raw = '{"channel":"stable"}\n';
+
+async function createExecutorPaths(state: OpenClawTestState) {
+  const control = state.path("control");
+  const root = state.path("install");
+  await fs.mkdir(control, { mode: 0o700 });
+  await fs.mkdir(root);
+  vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
+  return { control, root };
+}
+
+async function writeChannelFixture(
+  state: OpenClawTestState,
+  relativePath = "./channel.json",
+  extraConfig: Record<string, unknown> = {},
+) {
+  await state.writeConfig({
+    plugins: { enabled: false },
+    update: { $include: relativePath },
+    ...extraConfig,
+  });
+  const include = state.statePath(relativePath);
+  await fs.mkdir(path.dirname(include), { recursive: true });
+  await fs.writeFile(include, raw);
+  const originalRoot = await fs.readFile(state.configPath, "utf8");
+  const snapshot = await readConfigFileSnapshot({ skipPluginValidation: true, observe: false });
+  return { include, originalRoot, snapshot };
+}
+
+function revokeExecutor(control: string, root: string) {
+  const db = new DatabaseSync(path.join(control, "managed-update-handoffs.sqlite"));
+  try {
+    db.prepare("UPDATE managed_update_handoffs SET owner=? WHERE install_root=?").run(
+      "replacement",
+      root,
+    );
+  } finally {
+    db.close();
+  }
+}
+
+it("rolls back an include channel when config selection changes during refresh", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const { include, originalRoot, snapshot } = await writeChannelFixture(state);
+    expect(snapshot.valid).toBe(true);
+    setRuntimeConfigSnapshot(snapshot.runtimeConfig, snapshot.sourceConfig);
+    const previousRuntime = getRuntimeConfigSnapshot();
+    const notified = vi.fn();
+    const unsubscribe = registerRuntimeConfigWriteListener(notified);
+    const refresh = vi.fn(async () => {
+      await Promise.resolve();
+      process.env.OPENCLAW_CONFIG_PATH = state.statePath("reselected.json");
+      return false;
     });
-  },
-);
+    setRuntimeConfigSnapshotRefreshHandler({ preflight: () => true, refresh });
+    try {
+      await expect(
+        persistRequestedUpdateChannel({ configSnapshot: snapshot, requestedChannel: "beta" }),
+      ).rejects.toMatchObject({ name: "ConfigWritePostCommitError", rollbackStatus: "restored" });
+      expect(refresh).toHaveBeenCalledOnce();
+      expect(notified).not.toHaveBeenCalled();
+      expect(getRuntimeConfigSnapshot()).toBe(previousRuntime);
+      expect(await fs.readFile(include, "utf8")).toBe(raw);
+      expect(await fs.readFile(`${include}.bak`, "utf8")).toBe(raw);
+      expect(await fs.readFile(state.configPath, "utf8")).toBe(originalRoot);
+    } finally {
+      process.env.OPENCLAW_CONFIG_PATH = state.configPath;
+      unsubscribe();
+      setRuntimeConfigSnapshotRefreshHandler(null);
+      resetConfigRuntimeState();
+    }
+  });
+});
 
 it("changes an include-owned requested update channel under a live executor", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const control = state.path("control");
-    const root = state.path("install");
-    await fs.mkdir(control, { mode: 0o700 });
-    await fs.mkdir(root);
-    vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
-    await state.writeConfig({
-      plugins: { enabled: false },
-      update: { $include: "./channel.json" },
-      logging: { $include: "./logging.json" },
-    });
-    const include = state.statePath("channel.json");
-    await fs.writeFile(include, '{"channel":"stable"}\n');
+    const { root } = await createExecutorPaths(state);
     const unrelated = state.statePath("logging.json");
     await fs.writeFile(unrelated, '{"level":"info"}\n');
-    const originalRoot = await fs.readFile(state.configPath, "utf8");
-    const snapshot = await readConfigFileSnapshot({ skipPluginValidation: true, observe: false });
+    const { include, originalRoot, snapshot } = await writeChannelFixture(state, "./channel.json", {
+      logging: { $include: "./logging.json" },
+    });
     expect(snapshot.valid).toBe(true);
     expect(snapshot.config.update?.channel).toBe("stable");
     const run = createUpdateRun({ trigger: "cli" }, { env: state.env });
@@ -104,7 +127,7 @@ it("changes an include-owned requested update channel under a live executor", as
     expect(JSON.parse(await fs.readFile(include, "utf8")).channel).toBe("beta");
     expect(await fs.readFile(state.configPath, "utf8")).toBe(originalRoot);
     expect(await fs.readFile(unrelated, "utf8")).toBe('{"level":"info"}\n');
-    expect(await fs.readFile(`${include}.bak`, "utf8")).toBe('{"channel":"stable"}\n');
+    expect(await fs.readFile(`${include}.bak`, "utf8")).toBe(raw);
   });
 });
 
@@ -112,22 +135,12 @@ it.each(["expired", "revoked", "parent-replaced"] as const)(
   "requested include channel refuses %s authority after awaited preparation",
   async (fault) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const control = state.path("control");
-      const root = state.path("install");
-      await fs.mkdir(control);
-      await fs.mkdir(root);
-      vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
-      await state.writeConfig({
-        plugins: { enabled: false },
-        update: { $include: "./fragments/channel.json" },
-      });
-      const dir = state.statePath("fragments");
-      await fs.mkdir(dir);
-      const include = path.join(dir, "channel.json");
-      const raw = '{"channel":"stable"}\n';
-      await fs.writeFile(include, raw);
-      const originalRoot = await fs.readFile(state.configPath, "utf8");
-      const snapshot = await readConfigFileSnapshot({ skipPluginValidation: true, observe: false });
+      const { control, root } = await createExecutorPaths(state);
+      const { include, originalRoot, snapshot } = await writeChannelFixture(
+        state,
+        "./fragments/channel.json",
+      );
+      const dir = path.dirname(include);
       const run = createUpdateRun({ trigger: "cli" }, { env: state.env });
       let reached = false;
       const now = Date.now();
@@ -142,15 +155,7 @@ it.each(["expired", "revoked", "parent-replaced"] as const)(
               vi.spyOn(Date, "now").mockReturnValue(now + 120_000);
             }
             if (fault === "revoked") {
-              const db = new DatabaseSync(path.join(control, "managed-update-handoffs.sqlite"));
-              try {
-                db.prepare("UPDATE managed_update_handoffs SET owner=? WHERE install_root=?").run(
-                  "replacement",
-                  root,
-                );
-              } finally {
-                db.close();
-              }
+              revokeExecutor(control, root);
             }
             if (fault === "parent-replaced") {
               syncFs.renameSync(dir, `${dir}-old`);
@@ -191,11 +196,7 @@ it.each(["expired", "revoked", "parent-replaced"] as const)(
 
 it("migrates a nested internal sandbox fragment under the original executor", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const control = state.path("control");
-    const root = state.path("install");
-    await fs.mkdir(control);
-    await fs.mkdir(root);
-    vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
+    const { root } = await createExecutorPaths(state);
     await state.writeConfig({
       plugins: { enabled: false },
       agents: { entries: { main: { $include: "./agent-parent.json" } } },
@@ -203,7 +204,7 @@ it("migrates a nested internal sandbox fragment under the original executor", as
     const parent = state.statePath("agent-parent.json");
     const fragment = state.statePath("agent.json");
     const parentRaw = '{"$include":"./agent.json"}\n';
-    const fragmentRaw = '{"sandbox":{"perSession":true}}\n';
+    const fragmentRaw = '{"sandbox":{"browser":{"enableNoVnc":true}}}\n';
     await fs.writeFile(parent, parentRaw);
     await fs.writeFile(fragment, fragmentRaw);
     const rootRaw = await fs.readFile(state.configPath, "utf8");
@@ -213,12 +214,12 @@ it("migrates a nested internal sandbox fragment under the original executor", as
       const io = createConfigIO({ observe: false, pluginValidation: "skip" });
       const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
       const next = structuredClone(snapshot.sourceConfig);
-      const sandbox = next.agents?.entries?.main?.sandbox;
-      if (!sandbox) {
-        throw new Error("missing authored legacy sandbox");
+      const browser = next.agents?.entries?.main?.sandbox?.browser;
+      if (!browser) {
+        throw new Error("missing authored legacy sandbox browser");
       }
-      sandbox.scope = "session";
-      Reflect.deleteProperty(sandbox, "perSession");
+      browser.noVncEnabled = true;
+      Reflect.deleteProperty(browser, "enableNoVnc");
       await replaceConfigFile({
         snapshot,
         nextConfig: next,
@@ -227,13 +228,13 @@ it("migrates a nested internal sandbox fragment under the original executor", as
           assertCurrent: fence.assertCurrent,
           skipPluginValidation: true,
           inputBase: "source",
-          unsetPaths: [["agents", "entries", "main", "sandbox", "perSession"]],
+          unsetPaths: [["agents", "entries", "main", "sandbox", "browser", "enableNoVnc"]],
         },
       });
       fence.assertCurrent();
     });
     expect(JSON.parse(await fs.readFile(fragment, "utf8"))).toEqual({
-      sandbox: { scope: "session" },
+      sandbox: { browser: { noVncEnabled: true } },
     });
     expect(await fs.readFile(`${fragment}.bak`, "utf8")).toBe(fragmentRaw);
     expect(await fs.readFile(parent, "utf8")).toBe(parentRaw);
@@ -245,20 +246,8 @@ it.each(["revoked", "replacement"] as const)(
   "records committed include state without unauthorized rollback after %s",
   async (fault) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const control = state.path("control");
-      const root = state.path("install");
-      await fs.mkdir(control);
-      await fs.mkdir(root);
-      vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
-      await state.writeConfig({
-        plugins: { enabled: false },
-        update: { $include: "./channel.json" },
-      });
-      const fragment = state.statePath("channel.json");
-      const raw = '{"channel":"stable"}\n';
-      await fs.writeFile(fragment, raw);
-      const rootRaw = await fs.readFile(state.configPath, "utf8");
-      const snapshot = await readConfigFileSnapshot({ skipPluginValidation: true, observe: false });
+      const { control, root } = await createExecutorPaths(state);
+      const { include: fragment, originalRoot, snapshot } = await writeChannelFixture(state);
       const run = createUpdateRun({ trigger: "cli" }, { env: state.env });
       let reached = false;
       let committed = "";
@@ -271,15 +260,7 @@ it.each(["revoked", "replacement"] as const)(
             reached = true;
             committed = syncFs.readFileSync(fragment, "utf8");
             if (fault === "revoked") {
-              const db = new DatabaseSync(path.join(control, "managed-update-handoffs.sqlite"));
-              try {
-                db.prepare("UPDATE managed_update_handoffs SET owner=? WHERE install_root=?").run(
-                  "replacement",
-                  root,
-                );
-              } finally {
-                db.close();
-              }
+              revokeExecutor(control, root);
             } else {
               rename(fragment, `${fragment}.owned`);
               syncFs.writeFileSync(fragment, committed);
@@ -322,7 +303,7 @@ it.each(["revoked", "replacement"] as const)(
       expect(JSON.parse(committed).channel).toBe("beta");
       expect(await fs.readFile(fragment, "utf8")).toBe(committed);
       expect(await fs.readFile(`${fragment}.bak`, "utf8")).toBe(raw);
-      expect(await fs.readFile(state.configPath, "utf8")).toBe(rootRaw);
+      expect(await fs.readFile(state.configPath, "utf8")).toBe(originalRoot);
     });
   },
 );

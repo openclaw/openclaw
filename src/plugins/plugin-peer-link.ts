@@ -259,7 +259,6 @@ async function ensureRealNodeModulesDir(params: {
 async function linkOpenClawPeerDependency(params: {
   hostRoot: string;
   installedDir: string;
-  peerName: string;
   logger: PluginPeerLinkLogger;
   beforePersistentApply?: () => void;
   beforePersistentEffect?: () => void | Promise<void>;
@@ -269,7 +268,7 @@ async function linkOpenClawPeerDependency(params: {
     return "skipped";
   }
 
-  const linkPath = path.join(nodeModulesDir, params.peerName);
+  const linkPath = path.join(nodeModulesDir, "openclaw");
   const expectedTarget = (await safeRealpath(params.hostRoot)) ?? params.hostRoot;
   const currentTarget = await safeRealpath(linkPath);
   if (currentTarget === expectedTarget) {
@@ -278,7 +277,7 @@ async function linkOpenClawPeerDependency(params: {
 
   const warn = (error: unknown): "skipped" => {
     params.beforePersistentApply?.();
-    params.logger.warn?.(`Failed to symlink peerDependency "${params.peerName}": ${String(error)}`);
+    params.logger.warn?.(`Failed to symlink peerDependency "openclaw": ${String(error)}`);
     return "skipped";
   };
   let existing: Stats | null;
@@ -292,9 +291,7 @@ async function linkOpenClawPeerDependency(params: {
     if (
       existing &&
       !existing.isSymbolicLink() &&
-      (params.peerName !== "openclaw" ||
-        !existing.isDirectory() ||
-        (await readPackageName(linkPath)) !== "openclaw")
+      (!existing.isDirectory() || (await readPackageName(linkPath)) !== "openclaw")
     ) {
       params.logger.warn?.(
         `Skipping openclaw peerDependency link because ${linkPath} already exists and is not a symlink.`,
@@ -323,7 +320,7 @@ async function linkOpenClawPeerDependency(params: {
   params.beforePersistentApply?.();
   try {
     symlinkSync(params.hostRoot, linkPath, "junction");
-    params.logger.info?.(`Linked peerDependency "${params.peerName}" -> ${params.hostRoot}`);
+    params.logger.info?.(`Linked peerDependency "openclaw" -> ${params.hostRoot}`);
     return "linked";
   } catch (error) {
     return warn(error);
@@ -349,8 +346,7 @@ export async function linkOpenClawPeerDependencies(params: {
   beforePersistentApply?: () => void;
   beforePersistentEffect?: () => void | Promise<void>;
 }): Promise<{ repaired: number; skipped: number }> {
-  const peers = Object.keys(params.peerDependencies).filter((name) => name === "openclaw");
-  if (peers.length === 0) {
+  if (!Object.keys(params.peerDependencies).includes("openclaw")) {
     return { repaired: 0, skipped: 0 };
   }
 
@@ -365,31 +361,15 @@ export async function linkOpenClawPeerDependencies(params: {
     params.logger.warn?.(
       "Could not locate openclaw package root to symlink peerDependencies; plugin may fail to resolve openclaw at runtime.",
     );
-    return { repaired: 0, skipped: peers.length };
+    return { repaired: 0, skipped: 1 };
   }
 
-  let repaired = 0;
-  let skipped = 0;
-  for (const peerName of peers) {
-    const result = await linkOpenClawPeerDependency({
-      hostRoot,
-      installedDir: params.installedDir,
-      peerName,
-      logger: params.logger,
-      beforePersistentApply: params.beforePersistentApply,
-      beforePersistentEffect: params.beforePersistentEffect,
-    });
-    if (result === "linked") {
-      repaired += 1;
-    } else if (result === "skipped") {
-      skipped += 1;
-    }
-  }
-  return { repaired, skipped };
+  const result = await linkOpenClawPeerDependency({ ...params, hostRoot });
+  return { repaired: result === "linked" ? 1 : 0, skipped: result === "skipped" ? 1 : 0 };
 }
 
 /**
- * Repair registry-owned installs named by the authoritative install ledger.
+ * Repair registered package installs named by the authoritative install ledger.
  * Local/path installs and symlink escapes remain developer-owned and are never mutated.
  */
 export async function reconcileRegisteredOpenClawHostLinks(params: {
@@ -415,7 +395,10 @@ export async function reconcileRegisteredOpenClawHostLinks(params: {
   for (const [pluginId, record] of Object.entries(params.installRecords).toSorted(
     ([left], [right]) => left.localeCompare(right),
   )) {
-    if ((record.source !== "npm" && record.source !== "clawhub") || !record.installPath?.trim()) {
+    if (
+      (record.source !== "npm" && record.source !== "clawhub" && record.source !== "archive") ||
+      !record.installPath?.trim()
+    ) {
       continue;
     }
 

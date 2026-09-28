@@ -1,3 +1,4 @@
+import { Session } from "node:inspector/promises";
 import { performance } from "node:perf_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
@@ -12,6 +13,7 @@ import * as deltaEvents from "../../config/sessions/session-accessor.sqlite-hist
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "../chat-abort.js";
+import { serializeGatewayFrame } from "../serialized-json.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { identifiedClient } from "./sessions-read-cache.test-support.js";
@@ -304,4 +306,118 @@ it.runIf(process.env.OPENCLAW_DB_WORKER_BENCH === "1")(
       }
     });
   },
+);
+
+it.runIf(process.env.OPENCLAW_DB_WORKER_BENCH === "1").each([16, 32])(
+  "measures 200 one-megabyte worker history replies (%i source messages)",
+  async (sourceMessages) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:reply-bench",
+        sessionId: "reply-bench",
+      };
+      replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      await replaceTranscriptEvents(scope, [{ type: "session", version: 3, id: scope.sessionId }]);
+      await appendTranscriptMessages(scope, {
+        messages: Array.from({ length: sourceMessages }, (_, index) => ({
+          eventId: `message-${index}`,
+          now: index + 1,
+          message: {
+            role: "assistant",
+            content: [
+              { type: "text", text: `Synthetic ${index}: 漢字🤖\\"\n` + "x".repeat(65_000) },
+            ],
+          },
+        })),
+      });
+      await waitForSessionTranscriptProjection(scope);
+      vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+      const context = await createHistoryReadContext();
+      let acceptsSerializedJson = false;
+      const request = async (): Promise<string | Buffer> => {
+        const response: { encoded?: string | Buffer } = {};
+        await chatHistoryHandlers["chat.history"]!({
+          params: { sessionKey: scope.sessionKey, maxChars: 100_000, maxBytes: 1_048_576 },
+          context,
+          client: null,
+          acceptsSerializedJson,
+          req: { type: "req", id: "reply-bench", method: "chat.history" },
+          isWebchatConnect: () => false,
+          respond: (ok, payload, error) => {
+            if (!ok) {
+              throw new Error(JSON.stringify(error));
+            }
+            response.encoded = serializeGatewayFrame({
+              type: "res",
+              id: "reply-bench",
+              ok,
+              payload,
+            });
+          },
+        });
+        return expectDefined(response.encoded, "history response");
+      };
+      let objectGolden = "";
+      for (acceptsSerializedJson of [false, true]) {
+        let encoded = await request();
+        for (let index = 1; index < 5; index++) {
+          encoded = await request();
+        }
+        const golden = encoded.toString();
+        if (!acceptsSerializedJson) {
+          objectGolden = golden;
+        }
+        expect(golden === objectGolden).toBe(true);
+        expect(JSON.parse(golden).payload.messages).toHaveLength(16);
+        expect(Buffer.byteLength(golden)).toBeGreaterThan(1_000_000);
+        const inspector = new Session();
+        inspector.connect();
+        try {
+          await inspector.post("HeapProfiler.startSampling", {
+            samplingInterval: 32768,
+            includeObjectsCollectedByMajorGC: true,
+            includeObjectsCollectedByMinorGC: true,
+          });
+          const cpu = process.threadCpuUsage();
+          const start = performance.now();
+          for (let index = 0; index < 200; index++) {
+            encoded = await request();
+          }
+          const wallMs = performance.now() - start;
+          const elapsed = process.threadCpuUsage(cpu);
+          const { profile } = await inspector.post("HeapProfiler.stopSampling");
+          const allocated = (node: typeof profile.head): number =>
+            node.selfSize + node.children.reduce((total, child) => total + allocated(child), 0);
+          const sites: Array<{ name: string; bytes: number }> = [];
+          const walk = (node: typeof profile.head) => {
+            if (node.selfSize) {
+              sites.push({ name: node.callFrame.functionName, bytes: node.selfSize });
+            }
+            for (const child of node.children) {
+              walk(child);
+            }
+          };
+          walk(profile.head);
+          console.log(
+            JSON.stringify({
+              mode: acceptsSerializedJson ? "encoded" : "objects",
+              sourceMessages,
+              reads: 200,
+              responseBytes: Buffer.byteLength(golden),
+              mainAllocatedBytesPerRead: allocated(profile.head) / 200,
+              mainCpuMsPerRead: (elapsed.user + elapsed.system) / 200_000,
+              wallMsPerRead: wallMs / 200,
+              topSites: sites.toSorted((a, b) => b.bytes - a.bytes).slice(0, 12),
+            }),
+          );
+          expect(encoded.toString() === golden).toBe(true);
+          expect(Buffer.isBuffer(encoded)).toBe(acceptsSerializedJson);
+        } finally {
+          inspector.disconnect();
+        }
+      }
+    });
+  },
+  120_000,
 );

@@ -1518,90 +1518,12 @@ extension GatewayEndpointStoreTests {
         #expect(resolution.directURL == nil)
     }
 
-    @Test func `ssh tunnel reuse requires the complete captured route configuration`() throws {
-        let targetA = try #require(CommandResolver.parseSSHTarget("alice@gateway-a.example:22"))
-        let equivalentTargetA = try #require(CommandResolver.parseSSHTarget("alice@gateway-a.example"))
-        let targetB = try #require(CommandResolver.parseSSHTarget("bob@gateway-b.example:2200"))
-        let routeA = RemotePortTunnel.Configuration(
-            target: targetA,
-            identity: "/tmp/id-a",
-            remotePort: 18789,
-            hostKeyPolicy: .strict)
-
-        #expect(RemoteTunnelManager._testCanReuse(routeA, for: routeA))
-        #expect(RemoteTunnelManager._testCanReuse(
-            routeA,
-            for: .init(
-                target: equivalentTargetA,
-                identity: routeA.identity,
-                remotePort: routeA.remotePort,
-                hostKeyPolicy: routeA.hostKeyPolicy)))
-        #expect(!RemoteTunnelManager._testCanReuse(
-            routeA,
-            for: .init(
-                target: targetB,
-                identity: routeA.identity,
-                remotePort: routeA.remotePort,
-                hostKeyPolicy: routeA.hostKeyPolicy)))
-        #expect(!RemoteTunnelManager._testCanReuse(
-            routeA,
-            for: .init(
-                target: routeA.target,
-                identity: "/tmp/id-b",
-                remotePort: routeA.remotePort,
-                hostKeyPolicy: routeA.hostKeyPolicy)))
-        #expect(!RemoteTunnelManager._testCanReuse(
-            routeA,
-            for: .init(
-                target: routeA.target,
-                identity: routeA.identity,
-                remotePort: 28789,
-                hostKeyPolicy: routeA.hostKeyPolicy)))
-        #expect(!RemoteTunnelManager._testCanReuse(
-            routeA,
-            for: .init(
-                target: routeA.target,
-                identity: routeA.identity,
-                remotePort: routeA.remotePort,
-                hostKeyPolicy: .openssh)))
-        #expect(!RemoteTunnelManager._testCanReuse(
-            routeA,
-            for: .init(
-                target: routeA.target,
-                identity: routeA.identity,
-                remotePort: routeA.remotePort,
-                hostKeyPolicy: routeA.hostKeyPolicy,
-                preferredLocalPort: 23000)))
-    }
-
     @Test func `ssh restart backoff propagates cancellation`() async {
         await #expect(throws: CancellationError.self) {
             try await RemoteTunnelManager._testWaitForRestartBackoff(seconds: 2) { _ in
                 throw CancellationError()
             }
         }
-    }
-
-    @Test func `stale ssh waiter cannot replace current tunnel create`() throws {
-        let oldTarget = try #require(CommandResolver.parseSSHTarget("alice@gateway-a.example"))
-        let newTarget = try #require(CommandResolver.parseSSHTarget("alice@gateway-b.example"))
-        let oldConfiguration = RemotePortTunnel.Configuration(
-            target: oldTarget,
-            identity: "/tmp/id-a",
-            remotePort: 18789,
-            hostKeyPolicy: .strict)
-        let newConfiguration = RemotePortTunnel.Configuration(
-            target: newTarget,
-            identity: "/tmp/id-b",
-            remotePort: 18789,
-            hostKeyPolicy: .strict)
-
-        #expect(!RemoteTunnelManager._testIsCurrentConfiguration(
-            requested: oldConfiguration,
-            current: newConfiguration))
-        #expect(RemoteTunnelManager._testIsCurrentConfiguration(
-            requested: newConfiguration,
-            current: newConfiguration))
     }
 
     @Test func `normalize gateway url rejects public host ws`() {

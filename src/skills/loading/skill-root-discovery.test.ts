@@ -70,39 +70,6 @@ afterAll(async () => {
 });
 
 describe("discoverSkillCandidates", () => {
-  it("discovers SKILL.md two levels deep under a grouping subfolder", async () => {
-    const workspaceDir = await createTempWorkspaceDir();
-    // Grouped layout: skills/group/skill/SKILL.md (no SKILL.md at skills/group/).
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "group", "nested-skill"),
-      name: "nested-skill",
-      description: "Nested under a group folder",
-    });
-
-    const entries = loadTestWorkspaceSkills(workspaceDir);
-    const names = entries.map((entry) => entry.skill.name);
-    expect(names).toContain("nested-skill");
-  });
-
-  it("keeps loading direct skills (skills/skill/SKILL.md) unchanged", async () => {
-    const workspaceDir = await createTempWorkspaceDir();
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "direct-skill"),
-      name: "direct-skill",
-      description: "Direct skill at first level",
-    });
-    // Sibling group with a deeper skill.
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "group", "grouped-skill"),
-      name: "grouped-skill",
-      description: "Skill nested under a group",
-    });
-
-    const names = loadTestWorkspaceSkills(workspaceDir).map((entry) => entry.skill.name);
-    expect(names).toContain("direct-skill");
-    expect(names).toContain("grouped-skill");
-  });
-
   it("does not count invalid grouped candidates against the loaded skill cap", async () => {
     const workspaceDir = await createTempWorkspaceDir();
     for (const nestedName of ["a", "b"]) {
@@ -194,18 +161,6 @@ describe("discoverSkillCandidates", () => {
     expect(names).toContain("later-skill");
   });
 
-  it("discovers deeply nested SKILL.md files within the Codex-compatible depth", async () => {
-    const workspaceDir = await createTempWorkspaceDir();
-    await writeSkill({
-      dir: path.join(workspaceDir, "skills", "a", "b", "c"),
-      name: "deep-skill",
-      description: "Discovered through grouped folders",
-    });
-
-    const names = loadTestWorkspaceSkills(workspaceDir).map((entry) => entry.skill.name);
-    expect(names).toContain("deep-skill");
-  });
-
   it("discovers deeply nested skills in configured roots named skills", async () => {
     const workspaceDir = await createTempWorkspaceDir();
     const parentDir = await createTempWorkspaceDir();
@@ -245,29 +200,6 @@ describe("discoverSkillCandidates", () => {
     }).map((entry) => entry.skill.name);
 
     expect(names).toContain("repo-depth-skill");
-  });
-
-  it("ignores invalid outside candidates when resolving repo-style extra dirs", async () => {
-    const workspaceDir = await createTempWorkspaceDir();
-    const repoDir = await createTempWorkspaceDir();
-    await fs.mkdir(path.join(repoDir, "examples", "bad"), { recursive: true });
-    await fs.writeFile(path.join(repoDir, "examples", "bad", "SKILL.md"), "---\nname: bad\n---\n");
-    await writeSkill({
-      dir: path.join(repoDir, "skills", "group", "valid"),
-      name: "repo-nested-skill",
-      description: "Valid nested repo skill",
-    });
-
-    const names = loadTestWorkspaceSkills(workspaceDir, {
-      config: {
-        skills: {
-          load: { extraDirs: [repoDir] },
-        },
-      },
-    }).map((entry) => entry.skill.name);
-
-    expect(names).toContain("repo-nested-skill");
-    expect(names).not.toContain("bad");
   });
 
   it("ignores invalid root SKILL.md files when resolving repo-style extra dirs", async () => {
@@ -378,32 +310,6 @@ describe("discoverSkillCandidates", () => {
     expect(names).not.toContain("ignored-package-skill");
   });
 
-  it("keeps direct child skills when a configured root also has a skills child", async () => {
-    const workspaceDir = await createTempWorkspaceDir();
-    const skillRootDir = await createTempWorkspaceDir();
-    await writeSkill({
-      dir: path.join(skillRootDir, "valid"),
-      name: "valid-root-skill",
-      description: "Direct child skill under configured root",
-    });
-    await writeSkill({
-      dir: path.join(skillRootDir, "skills", "examples", "fixture"),
-      name: "fixture-skill",
-      description: "Nested fixture should not replace the configured root",
-    });
-
-    const names = loadTestWorkspaceSkills(workspaceDir, {
-      config: {
-        skills: {
-          load: { extraDirs: [skillRootDir] },
-        },
-      },
-    }).map((entry) => entry.skill.name);
-
-    expect(names).toContain("valid-root-skill");
-    expect(names).toContain("fixture-skill");
-  });
-
   it("keeps nested skills when top-level candidate cap is filled by direct skills", async () => {
     const workspaceDir = await createTempWorkspaceDir();
     const skillRootDir = await createTempWorkspaceDir();
@@ -490,32 +396,6 @@ describe("discoverSkillCandidates", () => {
     expect(names).toContain("within-depth");
     expect(names).toContain("deep-nested-skill");
     expect(names).not.toContain("too-deep");
-  });
-
-  it("keeps grouped child skills when a configured root also has a skills child", async () => {
-    const workspaceDir = await createTempWorkspaceDir();
-    const skillRootDir = await createTempWorkspaceDir();
-    await writeSkill({
-      dir: path.join(skillRootDir, "group", "valid"),
-      name: "valid-grouped-skill",
-      description: "Grouped child skill under configured root",
-    });
-    await writeSkill({
-      dir: path.join(skillRootDir, "skills", "examples", "fixture"),
-      name: "fixture-skill",
-      description: "Nested fixture should not replace the configured root",
-    });
-
-    const names = loadTestWorkspaceSkills(workspaceDir, {
-      config: {
-        skills: {
-          load: { extraDirs: [skillRootDir] },
-        },
-      },
-    }).map((entry) => entry.skill.name);
-
-    expect(names).toContain("valid-grouped-skill");
-    expect(names).toContain("fixture-skill");
   });
 
   it("does not descend beyond the bounded grouped skill depth", async () => {

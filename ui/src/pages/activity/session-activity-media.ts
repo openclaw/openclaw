@@ -288,63 +288,95 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
     if (!entry || !owner || !client) {
       return nothing;
     }
-    const showMedia =
-      this.displayedImages.length > 0 || entry.error || entry.cursor || entry.omitted;
+    const hasImages = this.displayedImages.length > 0;
+    const older =
+      entry.cursor && entry.images.length < 4 && !entry.error
+        ? [
+            html`<button
+              class="activity-feed__note-action"
+              ?disabled=${Boolean(entry.pending)}
+              @click=${this.load}
+            >
+              ${entry.pending ? t("common.loading") : t("activity.images.older")}
+            </button>`,
+          ]
+        : [];
+    const showNote = Boolean(entry.error || entry.omitted) || (!hasImages && Boolean(entry.cursor));
+    const note = html`${entry.omitted ? html`<span>${t("activity.images.incomplete")}</span>` : nothing}${
+      entry.error
+        ? html`<span role="status">${t("activity.images.failed")}</span
+            ><button
+              class="activity-feed__note-action"
+              ?disabled=${Boolean(entry.pending)}
+              @click=${this.load}
+            >
+              ${t("common.retry")}
+            </button>`
+        : hasImages
+          ? nothing
+          : older
+    }`;
     const imageIdentity = this.imageIdentity;
     const agentId = this.agentId;
     return html`
       ${
-        showMedia
+        hasImages || showNote
           ? html`<div class="activity-feed__media">
-              ${renderMessageImages(this.displayedImages, {
-                sessionKey: this.sessionKey,
-                agentId: this.agentId,
-                connectionEpoch: owner.epoch,
-                policyKey: assistantMediaPolicyKey(this.session),
-                resourceBasePath: this.context.resourceBasePath,
-                authToken: resolveControlUiAuthToken({
-                  hello,
-                  settings: { token: gateway.connection.token },
-                  password: gateway.connection.password,
-                }),
-                onRequestUpdate: this.refresh,
-                onRequestOpenImage: () => ++this.imageRequest,
-                onOpenImage: (item, version) => {
-                  if (
-                    !this.isConnected ||
-                    this.owner !== owner ||
-                    this.imageIdentity !== imageIdentity ||
-                    gateway.snapshot.client !== client ||
-                    gateway.snapshot.hello !== hello ||
-                    gateway.snapshot.phase !== "connected" ||
-                    version !== this.imageRequest
-                  ) {
-                    item.release?.();
-                    return;
-                  }
-                  this.lightbox?.release?.();
-                  this.lightbox = item;
-                  this.requestUpdate();
-                },
-                resolveArtifactDownload: async (params) => {
-                  const result = await client.request<ArtifactsDownloadResult>(
-                    "artifacts.download",
-                    {
-                      ...params,
-                      agentId,
-                    },
-                  );
-                  return gateway.snapshot.client === client &&
-                    gateway.snapshot.hello === hello &&
-                    gateway.snapshot.phase === "connected" &&
-                    result.url
-                    ? { url: result.url, expiresAt: result.expiresAt }
-                    : null;
-                },
-              })}
-              ${entry.error ? html`<span role="status">${t("activity.images.failed")}</span><button class="btn btn--sm" @click=${this.load}>${t("common.retry")}</button>` : nothing}
-              ${entry.cursor && entry.images.length < 4 && !entry.error ? html`<button class="btn btn--sm" ?disabled=${Boolean(entry.pending)} @click=${this.load}>${entry.pending ? t("common.loading") : t("activity.images.older")}</button>` : nothing}
-              ${entry.omitted ? html`<span class="activity-feed__media-note">${t("activity.images.incomplete")}</span>` : nothing}
+              ${
+                hasImages
+                  ? renderMessageImages(
+                      this.displayedImages,
+                      {
+                        sessionKey: this.sessionKey,
+                        agentId: this.agentId,
+                        connectionEpoch: owner.epoch,
+                        policyKey: assistantMediaPolicyKey(this.session),
+                        resourceBasePath: this.context.resourceBasePath,
+                        authToken: resolveControlUiAuthToken({
+                          hello,
+                          settings: { token: gateway.connection.token },
+                          password: gateway.connection.password,
+                        }),
+                        onRequestUpdate: this.refresh,
+                        onRequestOpenImage: () => ++this.imageRequest,
+                        onOpenImage: (item, version) => {
+                          if (
+                            !this.isConnected ||
+                            this.owner !== owner ||
+                            this.imageIdentity !== imageIdentity ||
+                            gateway.snapshot.client !== client ||
+                            gateway.snapshot.hello !== hello ||
+                            gateway.snapshot.phase !== "connected" ||
+                            version !== this.imageRequest
+                          ) {
+                            item.release?.();
+                            return;
+                          }
+                          this.lightbox?.release?.();
+                          this.lightbox = item;
+                          this.requestUpdate();
+                        },
+                        resolveArtifactDownload: async (params) => {
+                          const result = await client.request<ArtifactsDownloadResult>(
+                            "artifacts.download",
+                            {
+                              ...params,
+                              agentId,
+                            },
+                          );
+                          return gateway.snapshot.client === client &&
+                            gateway.snapshot.hello === hello &&
+                            gateway.snapshot.phase === "connected" &&
+                            result.url
+                            ? { url: result.url, expiresAt: result.expiresAt }
+                            : null;
+                        },
+                      },
+                      older,
+                    )
+                  : nothing
+              }
+              ${showNote ? html`<div class="activity-feed__note">${note}</div>` : nothing}
             </div>`
           : nothing
       }

@@ -613,9 +613,6 @@ export class ShellChromeOwner {
     this.toggleNavigationSurface(shellNavDrawerTriggerFromEvent(event));
   };
 
-  readonly openApprovals = (): void =>
-    void window.dispatchEvent(new CustomEvent(SHELL_APPROVALS_OPEN_EVENT));
-
   private readonly handleApprovalsOpen = (event: Event): void => {
     const host = this.host;
     const descriptor = lazyShellEvent(SHELL_APPROVALS_OPEN_EVENT, event);

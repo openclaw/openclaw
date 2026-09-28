@@ -86,16 +86,20 @@ const subagentCompletionEvent: AgentInternalEvent = {
 };
 
 describe("AgentParamsSchema", () => {
-  it("accepts the backend expected-session binding", () => {
-    expect(
-      Value.Check(AgentParamsSchema, {
-        message: "resume",
-        sessionKey: "agent:main:main",
-        expectedExistingSessionId: "session-1",
-        idempotencyKey: "recovery-1",
-      }),
-    ).toBe(true);
-  });
+  it.each([undefined, null, "requester-generation"])(
+    "accepts the backend expected-session binding with revision %s",
+    (revision) => {
+      expect(
+        Value.Check(AgentParamsSchema, {
+          message: "resume",
+          sessionKey: "agent:main:main",
+          expectedExistingSessionId: "session-1",
+          expectedExistingSessionLifecycleRevision: revision,
+          idempotencyKey: "recovery-1",
+        }),
+      ).toBe(true);
+    },
+  );
 
   it("rejects host-owned delivery media constraints from public requests", () => {
     expect(

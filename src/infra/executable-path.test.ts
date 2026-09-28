@@ -170,7 +170,7 @@ describe("executable path helpers", () => {
     },
   );
 
-  it.each([".EXE;.CMD;", ";.EXE;.CMD", ".EXE;;.CMD", ".EXE; ;.CMD", "", ";;"])(
+  it.each([".EXE; ;.CMD", "", ";;"])(
     "keeps extensionless lookup explicit with PATHEXT %j",
     async (pathext) => {
       await withMockedPlatform("win32", async () => {

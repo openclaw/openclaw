@@ -31,9 +31,12 @@ import {
 } from "../../agents/prepared-model-runtime.js";
 import { projectProviderModelRouteConfig } from "../../agents/provider-model-route.js";
 import { registerProviderStreamForModel } from "../../agents/provider-stream.js";
+import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import { prepareSimpleCompletionModel } from "../../agents/simple-completion-runtime.js";
 import { normalizeUsage, hasObservedModelUsage } from "../../agents/usage.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEventForRunContext } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -65,16 +68,16 @@ import {
   type WorkerInferenceModelIdentity,
 } from "./inference-terminal-message.js";
 import { createWorkerToolCallStream } from "./inference-tool-call-stream.js";
-import { resolveWorkerSessionTarget, type ResolvedWorkerSessionTarget } from "./session-target.js";
 import { boundedWorkerError, formatWorkerInferenceError } from "./worker-error.js";
 
 type WorkerInferenceStreamEvent = WorkerInferenceEventParams["event"];
+type WorkerInferenceSessionTarget = BoundAgentRunSessionTarget & { sessionEntry: SessionEntry };
 export type WorkerInferenceExecutor = import("./inference.js").WorkerInferenceExecutor;
 export type WorkerInferenceExecutionParams = Parameters<WorkerInferenceExecutor>[0];
 
 type WorkerInferenceUsageParams = {
   config: OpenClawConfig;
-  target: ResolvedWorkerSessionTarget;
+  target: WorkerInferenceSessionTarget;
   request: WorkerInferenceStartParams;
   model: Model;
   usage: Usage;
@@ -82,25 +85,17 @@ type WorkerInferenceUsageParams = {
   trace: DiagnosticTraceContext;
 };
 
-function copyTool(tool: NonNullable<WorkerInferenceContext["tools"]>[number]): Tool | undefined {
-  if (!isRecord(tool.parameters) || tool.parameters.type !== "object") {
-    return undefined;
-  }
-  return {
-    name: tool.name,
-    description: tool.description,
-    parameters: structuredClone(tool.parameters) as TSchema,
-  };
-}
-
 function buildContext(context: WorkerInferenceContext): Context | undefined {
   const tools: Tool[] = [];
   for (const tool of context.tools ?? []) {
-    const copied = copyTool(tool);
-    if (!copied) {
+    if (!isRecord(tool.parameters) || tool.parameters.type !== "object") {
       return undefined;
     }
-    tools.push(copied);
+    tools.push({
+      name: tool.name,
+      description: tool.description,
+      parameters: structuredClone(tool.parameters) as TSchema,
+    });
   }
   return {
     ...(context.systemPrompt !== undefined ? { systemPrompt: context.systemPrompt } : {}),
@@ -246,10 +241,11 @@ function emitWorkerInferenceUsage(params: WorkerInferenceUsageParams): void {
 }
 
 async function resolveApprovedModel(params: {
-  target: ResolvedWorkerSessionTarget;
+  target: WorkerInferenceSessionTarget;
   request: WorkerInferenceStartParams;
   signal: AbortSignal;
   runtimeSnapshot: PreparedModelRuntimeSnapshot;
+  assertCurrent: () => void;
 }): Promise<
   | {
       provider: string;
@@ -337,9 +333,10 @@ async function resolveApprovedModel(params: {
       harnessRuntime: harnessPolicy.runtime,
       agentDir,
       sessionEntry: target.sessionEntry,
-      sessionStore: target.sessionStore,
+      sessionStore: { [target.sessionKey]: target.sessionEntry },
       sessionKey: target.sessionKey,
       storePath: target.storePath,
+      assertCommitAllowed: params.assertCurrent,
       isNewSession: false,
     });
     const selectedProfileId = sessionSelection?.profileId;
@@ -408,10 +405,11 @@ export const executeWorkerInference: WorkerInferenceExecutor = async (params) =>
     return inferenceError("cancelled");
   }
   const config = params.config ?? getRuntimeConfig();
-  const target = resolveWorkerSessionTarget(config, request.sessionId);
-  if (!target) {
+  const sessionEntry = loadSessionEntry(params.sessionTarget);
+  if (sessionEntry?.sessionId !== request.sessionId) {
     return inferenceError("session-not-attached");
   }
+  const target = { ...params.sessionTarget, sessionEntry };
   const runContext = getAgentRunContext(request.runId);
   const context = buildContext(request.context);
   if (!context) {
@@ -430,6 +428,12 @@ export const executeWorkerInference: WorkerInferenceExecutor = async (params) =>
     request,
     signal,
     runtimeSnapshot: runtimeLease.snapshot,
+    assertCurrent: () => {
+      signal.throwIfAborted();
+      if (!params.isCurrent()) {
+        throw new Error("Worker inference source is no longer current");
+      }
+    },
   });
   if (!approved) {
     return inferenceError("model-not-approved");

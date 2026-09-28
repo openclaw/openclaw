@@ -4,7 +4,6 @@ import type { GatewayRequestHandlers } from "../gateway/server-methods/types.js"
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
-import type { DetachedTaskLifecycleRuntimeRegistration } from "../tasks/detached-task-runtime-contract.js";
 import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareRuntime,
@@ -113,7 +112,7 @@ export type PluginToolRegistration = PluginRegistrationOwner & {
   /** Explicitly registered required-authority context, never inferred from plugin identity. */
   contextVersion?: 2;
   names: string[];
-  declaredNames?: string[];
+  declaredNames?: ReadonlySet<string>;
   optional: boolean;
   /** Loader-owned provenance. Missing values are conservative legacy registrations. */
   origin?: PluginOrigin;
@@ -129,6 +128,17 @@ type PluginCliRegistration = PluginRegistrationOwner & {
 export type PluginHttpRouteRegistration = {
   /** Retired ingress awaiting a lifecycle replacement; responds with Retry-After. */
   handoff?: true;
+  /** Compatibility endpoints retained by live holders or route handoffs. */
+  legacyListeners?: readonly {
+    port: number;
+    host?: string;
+    /** Shipped listener-liveness response: exact raw path, status 200, body "ok". */
+    health?: { path: string; contentType?: string };
+    /** Shipped Node HTTP deadlines in milliseconds; omission keeps Node defaults. */
+    timeouts?: { headers: number; request: number; socket: number };
+  }[];
+  /** Endpoints retained only by a handoff, without a live holder. */
+  legacyListenerHandoffs?: PluginHttpRouteRegistration["legacyListeners"];
   pluginId?: string;
   path: string;
   handler: OpenClawPluginHttpRouteHandler;
@@ -391,6 +401,7 @@ export type PluginRecord = {
   contracts?: PluginManifestContracts;
   dashboard?: PluginManifestDashboard;
   controlUi?: PluginManifestControlUi;
+  uiCapabilities?: PluginManifestRecord["uiCapabilities"];
   mcpServers?: Record<string, PluginManifestMcpServer>;
   memorySlotSelected?: boolean;
   dependencyStatus?: PluginDependencyStatus;
@@ -431,7 +442,6 @@ export type PluginRegistry = {
     pluginId: string;
     host: import("../decisions/provider-host.js").DecisionProviderHost;
   }>;
-  detachedTaskRuntimes: DetachedTaskLifecycleRuntimeRegistration[];
   legacyInternalHooks: PluginLegacyInternalHookRegistration[];
   memoryCapabilities: MemoryPluginCapabilityRegistration[];
   memoryCorpusSupplements: MemoryCorpusSupplementRegistration[];
@@ -477,7 +487,7 @@ export type PluginRegistryParams = {
   coreGatewayMethodNames?: readonly string[];
   runtime: PluginRuntime;
   /** Synchronous factory binding supplied by loaders or direct registry composition roots. */
-  resolveCapabilityCatalogContext?: () => import("./capability-catalog-context.types.js").PluginCapabilityCatalogContext;
+  resolveCapabilityCatalogContext?: () => import("./capability-catalog-context.types.js").PluginCapabilityCatalogHostContext;
   /** Process-owner policy for registering catalogs that may fall back to HOME. */
   allowProcessHomeSessionCatalogs?: boolean;
   hostServices?: {

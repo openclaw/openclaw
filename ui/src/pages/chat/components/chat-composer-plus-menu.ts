@@ -2,9 +2,10 @@ import { html, nothing, type TemplateResult } from "lit";
 import type { ToolsEffectiveEntry, ToolsEffectiveResult } from "../../../api/types.ts";
 import { pathForRoute } from "../../../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../../../app/context.ts";
-import "@awesome.me/webawesome/dist/components/switch/switch.js";
 import { icons } from "../../../components/icons.ts";
+import "@awesome.me/webawesome/dist/components/switch/switch.js";
 import { t } from "../../../i18n/index.ts";
+import { registerMcpEnglish } from "../../../i18n/locales/en-mcp.ts";
 import type { McpServerSummary } from "../../../lib/config/mcp-servers.ts";
 import { formatUiExternalText } from "../../../lib/format-error.ts";
 import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
@@ -36,6 +37,8 @@ import {
   menuDivider,
 } from "./chat-composer-menu-rows.ts";
 
+registerMcpEnglish();
+
 export type ChatComposerPlusMenuView =
   | "root"
   | "skills"
@@ -65,7 +68,6 @@ type ChatComposerRootToggle = {
 type MenuRoute = "mcp" | "plugins" | "skills";
 
 type ChatComposerPlusMenuProps = {
-  attachments: ChatAttachmentControlsProps;
   showCapabilities: boolean;
   basePath: string;
   disabled: boolean;
@@ -99,7 +101,6 @@ type ChatComposerPlusMenuProps = {
 
 export type ChatComposerCapabilityMenuProps = Omit<
   ChatComposerPlusMenuProps,
-  | "attachments"
   | "disabled"
   | "open"
   | "view"
@@ -153,17 +154,7 @@ function renderRootView(props: ChatComposerPlusMenuProps) {
   // Core gates managed and Codex-native search. Config sniffing misses env/native providers;
   // without a provider, this session override is a harmless no-op.
   return html`
-    ${attachments} ${menuDivider()}
-    ${rootToggles.map((toggle) =>
-      renderCapabilityToggleRow({
-        value: toggle.value,
-        label: toggle.label,
-        icon: toggle.icon,
-        checked: toggle.checked,
-        disabled: toggle.disabled,
-        title: toggle.title,
-      }),
-    )}
+    ${attachments} ${menuDivider()} ${rootToggles.map(renderCapabilityToggleRow)}
     ${
       props.showCapabilities
         ? html`<wa-dropdown-item class="agent-chat__capability-menu-item" value="open-skills">
@@ -644,18 +635,13 @@ export function renderChatComposerPlusMenu(props: {
 }) {
   const capabilityMenu = props.capabilityMenu;
   return renderChatComposerPlusMenuContent({
-    attachments: props.attachments,
+    ...props,
+    ...capabilityMenu,
     showCapabilities: capabilityMenu !== undefined,
     basePath: capabilityMenu?.basePath ?? "",
-    disabled: props.disabled,
-    open: props.open,
-    view: props.view,
-    toolOverrides: props.toolOverrides,
     skills: capabilityMenu?.skills ?? null,
     skillsLoading: capabilityMenu?.skillsLoading ?? false,
     skillsError: capabilityMenu?.skillsError ?? false,
-    library: capabilityMenu?.library,
-    libraryDialog: capabilityMenu?.libraryDialog,
     mcpServers: capabilityMenu?.mcpServers ?? [],
     toolsEffectiveResult: capabilityMenu?.toolsEffectiveResult ?? null,
     toolsEffectiveLoading: capabilityMenu?.toolsEffectiveLoading ?? false,
@@ -665,14 +651,8 @@ export function renderChatComposerPlusMenu(props: {
     mutationBlockedReason: capabilityMenu?.mutationBlockedReason ?? null,
     canAdmin: capabilityMenu?.canAdmin ?? false,
     adminBlockedReason: capabilityMenu?.adminBlockedReason ?? null,
-    rootToggles: props.rootToggles,
-    addServerDialog: capabilityMenu?.addServerDialog,
-    onOpenChange: props.onOpenChange,
-    onViewChange: props.onViewChange,
     onLoadSkills: capabilityMenu?.onLoadSkills ?? (() => {}),
     onPatchToolOverrides: capabilityMenu?.onPatchToolOverrides ?? (() => {}),
     onNavigate: capabilityMenu?.onNavigate ?? (() => {}),
-    onAddServer: capabilityMenu?.onAddServer,
-    onOpenToolAccess: capabilityMenu?.onOpenToolAccess,
   });
 }

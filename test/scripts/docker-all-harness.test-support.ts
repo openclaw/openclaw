@@ -25,6 +25,8 @@ export function copyDockerSchedulerHarness(root: string) {
     "vitest-resource-ownership.mts",
     "official-external-channel-catalog.json",
     "release-version.mjs",
+    "update-compat-inventory.json",
+    "update-first-hop-lanes.mjs",
     "sleep.mjs",
     "upgrade-survivor-policy.mjs",
     "upgrade-survivor-scenarios.json",

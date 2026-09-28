@@ -14,10 +14,7 @@ export type WorkerBrowserRuntime = {
     agentSessionKey?: string;
     agentDir?: string;
     workspaceDir: string;
-  }) => Promise<{
-    tool: AnyAgentTool;
-    dispose: () => Promise<void>;
-  }>;
+  }) => Promise<WorkerBrowserToolRuntime>;
 };
 
 type WorkerBrowserToolRuntime = {
@@ -72,7 +69,7 @@ export async function createWorkerBrowserToolRuntime(
     });
   return await browserRuntime.createAttachedBrowserToolRuntime({
     cdpUrl: params.descriptor.cdpUrl,
-    ensureAttachTarget: async () => await runWorkerBrowserLauncher(params.descriptor),
+    ensureAttachTarget: () => runWorkerBrowserLauncher(params.descriptor),
     agentSessionKey: params.sessionKey,
     agentDir: params.stateDir,
     workspaceDir: params.workspaceDir,

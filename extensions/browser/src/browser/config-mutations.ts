@@ -5,10 +5,10 @@
  * canonical config writer while preserving port allocation rules.
  */
 import { isDeepStrictEqual } from "node:util";
-import { mutateConfigFile } from "../config/config.js";
-import type { BrowserProfileConfig } from "../config/config.js";
+import type { BrowserProfileConfig } from "openclaw/plugin-sdk/config-contracts";
+import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
+import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import { deriveDefaultBrowserCdpPortRange } from "../config/port-defaults.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import { assertCdpEndpointAllowed } from "./cdp.helpers.js";
 import {
   getOwnBrowserProfile,
@@ -74,11 +74,10 @@ export async function persistBrowserControlCredential(
   });
 }
 
-/** Create and persist a browser profile config with allocated color and CDP port. */
+/** Create and persist a browser profile config with an allocated CDP port. */
 export async function createBrowserProfileConfig(params: {
   name: string;
   resolved: ResolvedBrowserConfig;
-  color?: string;
   parsedCdpUrl?: string;
   userDataDir?: string;
   driver?: "openclaw" | "existing-session";

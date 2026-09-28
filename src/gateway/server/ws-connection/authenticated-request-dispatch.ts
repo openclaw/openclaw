@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -79,7 +80,11 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
   let deviceCredentialMutationBarrier: Promise<void> | undefined;
 
   const closeInvalidatedClient = (client: GatewayWsClient, method: string): boolean => {
-    const policyChanged = !isGatewayAuthPolicyCurrent(client.authPolicyGeneration);
+    const policyChanged = !isGatewayAuthPolicyCurrent(
+      client.authPolicyGeneration,
+      undefined,
+      client.authenticatedUserId,
+    );
     if (!client.invalidated && !policyChanged) {
       return false;
     }
@@ -136,6 +141,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       isGatewayAuthPolicyCurrent(
         client.authPolicyGeneration,
         sourceContext.getCommittedRuntimeConfig?.() ?? sourceContext.getRuntimeConfig(),
+        client.authenticatedUserId,
       );
     const clientAuthority = captureGatewayDeviceRevocation(
       context,
@@ -174,6 +180,15 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       client.connectionSignal,
       client.connect.role === "operator" && (!client.usesSharedGatewayAuth || generationState)
         ? {
+            dependencies: {
+              client,
+              context: sourceContext,
+              authPolicyGeneration: client.authPolicyGeneration,
+              sharedGenerationOwner: client.usesSharedGatewayAuth ? generationState : undefined,
+              sharedGeneration: client.usesSharedGatewayAuth
+                ? client.sharedGatewaySessionGeneration
+                : undefined,
+            },
             isCurrent: () =>
               hasCurrentGatewayPolicyClientSource(client) && isCommittedPolicyCurrent(),
             subscribe: (onRevoked) => {
@@ -332,10 +347,12 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       const executeRequest = async () => {
         diagnostics?.bindTrace();
         let entry: GatewayRequestEntry | undefined;
-        // Most UI/SDK RPCs outlive a reconnect. Companion asks are the exception:
-        // without their requester there is no safe recipient for a late answer.
+        // Ordinary mutations survive reconnects; an explicit reload wait instead
+        // belongs to its requester so disconnect can release its admission fence.
         const cancelOnDisconnect =
           req.method === "sessions.companion.ask" ||
+          (req.method === "plugins.reload" &&
+            asOptionalRecord(req.params)?.waitForDrain === true) ||
           (req.method === "node.invoke" &&
             client.connect.client.id === GATEWAY_CLIENT_IDS.CLI &&
             client.connect.client.mode === GATEWAY_CLIENT_MODES.CLI);
@@ -383,7 +400,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
           // deadline. Operator requests share bounded starts without serializing completion.
           if (client.connect.role === "operator") {
             diagnostics?.startQueue();
-            const start = scheduleGatewayRequestStart(frameBytes);
+            const start = scheduleGatewayRequestStart(frameBytes, req, connId);
             if (!start) {
               respondWithAuthority(
                 false,
@@ -413,6 +430,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
                 {
                   req,
                   respond: respondWithAuthority,
+                  acceptsSerializedJson: true,
                   client,
                   isWebchatConnect: params.isWebchatConnect,
                   hasCurrentClientAuthority,

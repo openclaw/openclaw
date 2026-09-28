@@ -2,8 +2,8 @@
 import { randomUUID } from "node:crypto";
 import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { toErrorObject } from "../infra/errors.js";
 import {
   CHROME_MCP_SESSION_TARGET_PREFIX,
   CHROME_MCP_SNAPSHOT_REF_PREFIX,
@@ -123,20 +123,13 @@ async function withChromeMcpOperationLock<T>(
   }
 }
 
-export function clearChromeMcpSnapshotRefsForTarget(
-  routing: ChromeMcpRoutingState,
-  targetId: string,
-): void {
-  routing.snapshotsByTarget.delete(targetId);
-}
-
 function updateChromeMcpTargetMappings(
   routing: ChromeMcpRoutingState,
   targetIdByPageId: Map<number, string>,
 ): void {
   for (const [pageId, targetId] of routing.targetIdByPageId) {
     if (!targetIdByPageId.has(pageId)) {
-      clearChromeMcpSnapshotRefsForTarget(routing, targetId);
+      routing.snapshotsByTarget.delete(targetId);
     }
   }
   routing.targetIdByPageId = targetIdByPageId;
@@ -146,11 +139,7 @@ function updateChromeMcpTargetMappings(
 function validateChromeMcpSnapshotRefs(root: ChromeMcpSnapshotNode) {
   const documents = new Map<string, { document: ChromeMcpSnapshotNode; documentUid?: string }>();
   const pending = [{ node: root, document: root, documentUid: normalizeOptionalString(root.id) }];
-  while (pending.length > 0) {
-    const current = pending.pop();
-    if (!current) {
-      break;
-    }
+  for (let current = pending.pop(); current; current = pending.pop()) {
     const role = current.node.role?.trim().toLowerCase();
     const document = role === "rootwebarea" ? current.node : current.document;
     const documentUid =
@@ -220,11 +209,7 @@ export function registerChromeMcpSnapshot(
     parent?: ChromeMcpSnapshotNode[];
     index?: number;
   }> = [{ source: root }];
-  while (stack.length > 0) {
-    const current = stack.pop();
-    if (!current) {
-      break;
-    }
+  for (let current = stack.pop(); current; current = stack.pop()) {
     const wrapped = wrapNode(current.source);
     if (current.parent && current.index !== undefined) {
       current.parent[current.index] = wrapped;

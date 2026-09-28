@@ -3,7 +3,10 @@ import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
-import { hasConfiguredUnavailableCredentialStatus } from "../account-snapshot-fields.js";
+import {
+  CREDENTIAL_STATUS_KEYS,
+  hasConfiguredUnavailableCredentialStatus,
+} from "../account-snapshot-fields.js";
 import type { ChannelAccountSnapshot } from "../plugins/types.public.js";
 
 export type RuntimeChannelStatusPayload = {
@@ -11,14 +14,6 @@ export type RuntimeChannelStatusPayload = {
 };
 
 type RuntimeChannelAccount = Record<string, unknown>;
-
-const CREDENTIAL_STATUS_KEYS = [
-  "tokenStatus",
-  "botTokenStatus",
-  "appTokenStatus",
-  "signingSecretStatus",
-  "userTokenStatus",
-] as const;
 
 function readRuntimeAccountsByChannel(payload: unknown): Record<string, unknown> {
   return asRecord(asRecord(payload).channelAccounts);

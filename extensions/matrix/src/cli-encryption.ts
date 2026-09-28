@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import * as cli from "./cli-shared.js";
-import { resolveMatrixAccount, resolveMatrixAccountConfig } from "./matrix/accounts.js";
+import { resolveMatrixAccountAsync, resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import * as verificationActions from "./matrix/actions/verification.js";
 import { resolveMatrixRoomKeyBackupIssue } from "./matrix/backup-health.js";
 import { resolveMatrixConfigPath, updateMatrixAccountConfig } from "./matrix/config-update.js";
@@ -58,7 +58,7 @@ async function setupMatrixEncryption(params: {
 }): Promise<MatrixCliEncryptionSetupResult> {
   const { accountId, cfg } = cli.resolveMatrixCliAccountContext(params.account);
   const publishConfig = cli.createMatrixCliAccountConfigPublisher({ accountId, previousCfg: cfg });
-  const account = resolveMatrixAccount({ cfg, accountId });
+  const account = await resolveMatrixAccountAsync({ cfg, accountId });
   if (!account.configured) {
     throw new Error(
       `Matrix account "${accountId}" is not configured; run ${cli.formatMatrixCliCommand(
@@ -168,29 +168,18 @@ export function registerMatrixEncryptionCommands(root: Command): void {
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
     .action(
-      async (options: {
-        account?: string;
-        recoveryKey?: string;
-        recoveryKeyStdin?: boolean;
-        forceResetCrossSigning?: boolean;
-        verbose?: boolean;
-        json?: boolean;
-      }) => {
-        await cli.runMatrixCliCommand({
-          verbose: options.verbose === true,
-          json: options.json === true,
+      async (
+        options: cli.MatrixCliOptions &
+          Parameters<typeof setupMatrixEncryption>[0] & { recoveryKeyStdin?: boolean },
+      ) => {
+        await cli.runMatrixCliCommand(options, {
           run: async () =>
             await setupMatrixEncryption({
               account: options.account,
-              recoveryKey: await cli.resolveMatrixCliRecoveryKeyInput({
-                recoveryKey: options.recoveryKey,
-                recoveryKeyStdin: options.recoveryKeyStdin,
-              }),
+              recoveryKey: await cli.resolveMatrixCliRecoveryKeyInput(options),
               forceResetCrossSigning: options.forceResetCrossSigning === true,
             }),
-          onText: (result, verbose) => {
-            printMatrixEncryptionSetupResult(result, verbose);
-          },
+          onText: printMatrixEncryptionSetupResult,
           onJson: (result) => ({ success: result.bootstrap.success, ...result }),
           shouldFail: (result) => !result.bootstrap.success,
           errorPrefix: "Encryption setup failed",

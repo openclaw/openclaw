@@ -388,20 +388,6 @@ describe("MCP App gateway bridge", () => {
     expect(activeRuntime.pendingMcpAppModelContext).toBeUndefined();
   });
 
-  it("rechecks a board widget grant before updating model context", async () => {
-    view.authorizeAppInteraction = vi.fn(async () => false);
-    const respond = await invoke("mcp.app.updateModelContext", {
-      sessionKey: "agent:main:main",
-      viewId: "cv_app",
-      content: [{ type: "text", text: "blocked" }],
-    });
-
-    expect(respond.mock.calls[0]?.[0]).toBe(false);
-    expect(view.authorizeAppInteraction).toHaveBeenCalledOnce();
-    const activeRuntime = mocks.peekSessionMcpRuntime.mock.results[0]?.value;
-    expect(activeRuntime.pendingMcpAppModelContext).toBeUndefined();
-  });
-
   it("rechecks current widget authority for every interactive capability", async () => {
     const activeRuntime = runtime();
     mocks.peekSessionMcpRuntime.mockReturnValue(activeRuntime);
@@ -432,6 +418,8 @@ describe("MCP App gateway bridge", () => {
     });
     expect(resource.mock.calls[0]?.[0]).toBe(false);
     expect(view.authorizeAppInteraction).toHaveBeenCalledTimes(7);
+    expect(activeRuntime).not.toHaveProperty("pendingMcpAppModelContext");
+    expect(activeRuntime.callTool).not.toHaveBeenCalled();
     expect(activeRuntime.listResources).not.toHaveBeenCalled();
     expect(activeRuntime.listResourceTemplates).not.toHaveBeenCalled();
     expect(activeRuntime.readResource).not.toHaveBeenCalled();
@@ -515,19 +503,6 @@ describe("MCP App gateway bridge", () => {
 
     const denied = await invoke("mcp.app.callTool", { ...params, toolName: "app-only" });
     expect(denied.mock.calls[0]?.[0]).toBe(false);
-  });
-
-  it("rechecks a board widget grant before every App tool call", async () => {
-    view.authorizeAppInteraction = vi.fn(async () => false);
-    const denied = await invoke("mcp.app.callTool", {
-      sessionKey: "agent:main:main",
-      viewId: "cv_app",
-      toolName: "shared",
-    });
-
-    expect(denied.mock.calls[0]?.[0]).toBe(false);
-    expect(view.authorizeAppInteraction).toHaveBeenCalledOnce();
-    expect(mocks.peekSessionMcpRuntime.mock.results[0]?.value.callTool).not.toHaveBeenCalled();
   });
 
   it.each([

@@ -5,14 +5,13 @@
  * token/password for local control when safe to persist one.
  */
 import crypto from "node:crypto";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveGatewayAuth, ensureGatewayStartupAuth } from "openclaw/plugin-sdk/gateway-runtime";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { getRuntimeConfig } from "../config/config.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { resolveGatewayAuth } from "../gateway/auth.js";
-import { ensureGatewayStartupAuth } from "../gateway/startup-auth.js";
 import { persistBrowserControlCredential } from "./config-mutations.js";
 
 /** Auth material accepted by browser-control HTTP middleware and clients. */

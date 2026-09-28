@@ -1,6 +1,7 @@
 import path from "node:path";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { itemNotification, turnCompleted } from "./protocol.test-helpers.js";
 import {
   createParams,
   createStartedThreadHarness,
@@ -14,7 +15,6 @@ setupRunAttemptTestHooks();
 describe("saved assistant occurrence settlement", () => {
   it.each([
     { label: "completed", status: "completed" as const, error: undefined },
-    { label: "failed", status: "failed" as const, error: "codex exploded" },
     {
       label: "failed after commentary",
       status: "failed" as const,
@@ -66,20 +66,15 @@ describe("saved assistant occurrence settlement", () => {
       await harness.waitForMethod("turn/start");
 
       if (commentary) {
-        await harness.notify({
-          method: "item/completed",
-          params: {
-            threadId: "thread-1",
-            turnId: "turn-1",
-            item: {
-              id: "commentary-1",
-              type: "agentMessage",
-              phase: "commentary",
-              text: "Earlier commentary",
-              status: "completed",
-            },
-          },
-        });
+        await harness.notify(
+          itemNotification("item/completed", {
+            id: "commentary-1",
+            type: "agentMessage",
+            phase: "commentary",
+            text: "Earlier commentary",
+            status: "completed",
+          }),
+        );
       }
 
       if (barrier || multiple) {
@@ -89,10 +84,7 @@ describe("saved assistant occurrence settlement", () => {
           phase: "final_answer",
           text: "Earlier final",
         };
-        await harness.notify({
-          method: "item/started",
-          params: { threadId: "thread-1", turnId: "turn-1", item: { ...earlier, text: "" } },
-        });
+        await harness.notify(itemNotification("item/started", { ...earlier, text: "" }));
         await harness.notify({
           method: "item/agentMessage/delta",
           params: {
@@ -102,29 +94,20 @@ describe("saved assistant occurrence settlement", () => {
             delta: earlier.text,
           },
         });
-        await harness.notify({
-          method: "item/completed",
-          params: { threadId: "thread-1", turnId: "turn-1", item: earlier },
-        });
+        await harness.notify(itemNotification("item/completed", earlier));
         if (barrier) {
           const sleep = { id: "sleep-1", type: "sleep", durationMs: 250 };
-          await harness.notify({
-            method: "item/started",
-            params: { threadId: "thread-1", turnId: "turn-1", item: sleep },
-          });
-          await harness.notify({
-            method: "item/completed",
-            params: { threadId: "thread-1", turnId: "turn-1", item: sleep },
-          });
+          await harness.notify(itemNotification("item/started", sleep));
+          await harness.notify(itemNotification("item/completed", sleep));
         }
-        await harness.notify({
-          method: "item/started",
-          params: {
-            threadId: "thread-1",
-            turnId: "turn-1",
-            item: { id: "msg-1", type: "agentMessage", phase: "final_answer", text: "" },
-          },
-        });
+        await harness.notify(
+          itemNotification("item/started", {
+            id: "msg-1",
+            type: "agentMessage",
+            phase: "final_answer",
+            text: "",
+          }),
+        );
       }
 
       await harness.notify({
@@ -139,19 +122,14 @@ describe("saved assistant occurrence settlement", () => {
       if (status === "completed") {
         await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       } else {
-        await harness.notify({
-          method: "turn/completed",
-          params: {
-            threadId: "thread-1",
-            turnId: "turn-1",
-            turn: {
-              id: "turn-1",
-              status,
-              items: [],
-              error: { message: error },
-            },
-          },
-        });
+        await harness.notify(
+          turnCompleted({
+            id: "turn-1",
+            status,
+            items: [],
+            error: { message: error },
+          }),
+        );
       }
       const result = await run;
 

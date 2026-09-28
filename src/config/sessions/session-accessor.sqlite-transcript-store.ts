@@ -21,7 +21,7 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import {
   createTranscriptIdentityReader,
-  findTranscriptEventInDatabase,
+  findAssistantTranscriptEventInDatabase,
   readEventTimestamp,
   readTranscriptEventId,
   readTranscriptEventMessage,
@@ -54,7 +54,6 @@ import {
 } from "./session-transcript-projection-append.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { copyRetainedTranscriptPayload } from "./session-transcript-retained-data.js";
-import { createSessionTranscriptHeader } from "./transcript-header.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 import {
   createTranscriptEventInserter,
@@ -69,6 +68,7 @@ type TranscriptAppendOptions = {
   eventJson?: string;
   preparedPayload?: PreparedTranscriptPayload;
   allowStoredAlias?: boolean;
+  onPlaceholderInserted?: (placeholder: { sessionKey: string; sessionId: string }) => void;
   idempotencyKeyMode?: "dedupe" | "preserve-owner" | "relocate-owner";
   onProjectionReconcileNeeded?: () => void;
   scheduleProjectionReconcile?: boolean;
@@ -184,6 +184,7 @@ function appendTranscriptEvent(
   } else {
     ensureTranscriptSessionRoot(database, scope, createdAt, {
       allowStoredAlias: options.allowStoredAlias === true,
+      onPlaceholderInserted: options.onPlaceholderInserted,
     });
     ensureTranscriptGenerationInTransaction(database, scope.sessionId);
     cursor.initialized = true;
@@ -261,10 +262,9 @@ export function scheduleTranscriptProjectionReconcile(
     return;
   }
   // Dirty state is durable: a missed post-commit kick is recovered by startup/search reconciliation.
-  deferOpenClawAgentPostCommitPublication(database, () =>
+  deferOpenClawAgentPostCommitPublication(database, (databaseOptions) =>
     startSessionTranscriptIndexReconcile({
-      agentId: database.agentId,
-      path: database.path,
+      ...databaseOptions,
       preferredSessionId: sessionId,
     }),
   );
@@ -361,30 +361,6 @@ function appendTranscriptEventRowInTransaction(
   }
   state.insertIdentity({ ...identity, seq, createdAt });
   return true;
-}
-
-export function ensureTranscriptHeader(
-  database: OpenClawAgentDatabase,
-  scope: ResolvedTranscriptScope,
-  cwd: string | undefined,
-): void {
-  const db = getSessionKysely(database.db);
-  const existing = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("transcript_events")
-      .select("seq")
-      .where("session_id", "=", scope.sessionId)
-      .limit(1),
-  );
-  if (existing) {
-    return;
-  }
-  appendTranscriptEventInTransaction(
-    database,
-    scope,
-    createSessionTranscriptHeader({ cwd, sessionId: scope.sessionId }),
-  );
 }
 
 export function replaceSqliteTranscriptEventsInTransaction(
@@ -656,10 +632,7 @@ export function readTranscriptMessageByScopedIdempotencyKey(
   if (lookup !== "scan-assistant") {
     return readTranscriptMessageByIdempotencyKey(database, scope, idempotencyKey);
   }
-  const found = findTranscriptEventInDatabase(database, scope.sessionId, (event) => {
-    const message = readTranscriptEventMessage(event);
-    return message?.role === "assistant" && message.idempotencyKey === idempotencyKey;
-  });
+  const found = findAssistantTranscriptEventInDatabase(database, scope.sessionId, idempotencyKey);
   if (!found) {
     return undefined;
   }

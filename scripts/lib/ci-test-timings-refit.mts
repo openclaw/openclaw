@@ -2,17 +2,28 @@ import { stripVTControlCharacters } from "node:util";
 import { decodeNodeTestGroups } from "./ci-node-test-groups-codec.mts";
 import {
   isRuntimePlacementTiming,
+  isRuntimePlacementIncludePatterns,
   runtimePlacementTimingIdentity,
   type CiTestTimings,
   type RuntimePlacementTiming,
 } from "./ci-test-timings-schema.mts";
-import { parseCompactSplitTimingKey } from "./vitest-shard-metadata.mts";
+import {
+  createExtensionTestTimingKey,
+  splitExtensionTestProcessTargets,
+} from "./extension-test-plan.mts";
+import { isConstrainedCiCheckHost } from "./local-check-runtime.mts";
+import {
+  createCompactSplitTimingGeneration,
+  parseCompactSplitTimingKey,
+} from "./vitest-shard-metadata.mts";
 
 export type CiTimingRun = {
   id: number;
   createdAt: string;
-  /** Failed workflows supply positive samples, never evidence that absent keys disappeared. */
+  /** Failed workflows and selected PR plans never prove absent keys disappeared. */
   completeInventory: boolean;
+  /** The workflow/job SHA identifies the PR head, while tests run its merge-ref. */
+  pullRequestMergeRef?: boolean;
   logs: (
     | { kind: "uiE2e" | "repoE2e"; text: string }
     | { kind: "compact" | "tooling"; text: string; labels: string[] }
@@ -20,31 +31,52 @@ export type CiTimingRun = {
 };
 
 type Samples = Map<string, number[]>;
+type WorkerCeilings = Map<string, Set<number | "unspecified" | "ambiguous">>;
 
 type RuntimeTimingGroup = {
   shard_name: string;
   timing_key?: string;
   configs: string[];
-  includePatterns: string[];
+  includePatterns?: string[] | null;
   env?: Record<string, string>;
+  fallbackMaxWorkers?: number;
+  minTotalMemoryBytes?: number;
 };
 
 function readRuntimeTimingGroups(text: string): RuntimeTimingGroup[] {
   const encoded = new Set(
     [
       ...text.matchAll(
-        /\d{4}-\d\d-\d\dT[\d:.]+Z\s+OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: (\S+)$/gmu,
+        /^\d{4}-\d\d-\d\dT[\d:.]+Z\s+OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: (\S+)$/gmu,
       ),
     ].map((match) => match[1]!),
   );
-  if (encoded.size !== 1) {
+  if (encoded.size > 1) {
     return [];
   }
   try {
-    const groups = decodeNodeTestGroups([...encoded][0]!);
+    const jsonEnv = (key: string): unknown => {
+      const value = readLogEnv(text, key);
+      if (value === null) {
+        throw new Error(`Ambiguous ${key}`);
+      }
+      return value ? JSON.parse(value) : undefined;
+    };
+    // Singleton matrix rows use the same executor without a packed group descriptor.
+    const groups: unknown[] =
+      encoded.size === 1
+        ? decodeNodeTestGroups([...encoded][0]!)
+        : [
+            {
+              shard_name: readLogEnv(text, "OPENCLAW_VITEST_SHARD_NAME"),
+              configs: jsonEnv("OPENCLAW_NODE_TEST_CONFIGS_JSON"),
+              includePatterns: jsonEnv("OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON"),
+              env: jsonEnv("OPENCLAW_NODE_TEST_ENV_JSON") ?? undefined,
+            },
+          ];
     const strings = (value: unknown): value is string[] =>
       Array.isArray(value) && value.every((entry) => typeof entry === "string");
-    return groups.filter((group): group is RuntimeTimingGroup => {
+    const validGroups = groups.filter((group): group is RuntimeTimingGroup => {
       if (typeof group !== "object" || group === null) {
         return false;
       }
@@ -55,16 +87,26 @@ function readRuntimeTimingGroups(text: string): RuntimeTimingGroup[] {
         "configs" in group &&
         strings(group.configs) &&
         group.configs.length > 0 &&
-        "includePatterns" in group &&
-        strings(group.includePatterns) &&
-        group.includePatterns.length > 0 &&
+        (!("includePatterns" in group) ||
+          group.includePatterns === null ||
+          strings(group.includePatterns)) &&
+        (!("fallbackMaxWorkers" in group) ||
+          (typeof group.fallbackMaxWorkers === "number" &&
+            Number.isSafeInteger(group.fallbackMaxWorkers) &&
+            group.fallbackMaxWorkers > 0)) &&
+        (!("minTotalMemoryBytes" in group) ||
+          (typeof group.minTotalMemoryBytes === "number" &&
+            Number.isSafeInteger(group.minTotalMemoryBytes) &&
+            group.minTotalMemoryBytes > 0)) &&
         (!("env" in group) ||
+          group.env === undefined ||
           (typeof group.env === "object" &&
             group.env !== null &&
             !Array.isArray(group.env) &&
             Object.values(group.env).every((value) => typeof value === "string")))
       );
     });
+    return validGroups.length === groups.length ? validGroups : [];
   } catch {
     // Historical/malformed descriptors cannot supply a placement identity.
     return [];
@@ -88,6 +130,85 @@ function recordSample(samples: Samples, key: string, value: number) {
 
 function seconds(value: string, unit: string): number {
   return Number(value) / (unit === "ms" ? 1000 : 1);
+}
+
+function parseWorkerCeiling(value: unknown): number | null | undefined {
+  if (value === undefined || value === "") {
+    return undefined;
+  }
+  if (typeof value !== "string" || !/^[1-9]\d*$/u.test(value)) {
+    return null;
+  }
+  const workers = Number(value);
+  return Number.isSafeInteger(workers) ? workers : null;
+}
+
+function intersectWorkerCeilings(...values: (number | null | undefined)[]) {
+  if (values.includes(null)) {
+    return null;
+  }
+  const ceilings = values.filter((value): value is number => typeof value === "number");
+  return ceilings.length > 0 ? Math.min(...ceilings) : undefined;
+}
+
+function readLogEnv(text: string, key: string): string | null | undefined {
+  const values = new Set(
+    [
+      ...text.matchAll(
+        new RegExp(
+          `^\\d{4}-\\d\\d-\\d\\dT[\\d:.]+Z\\s+${key}: ([\\[{]\\n[\\s\\S]*?\\n[\\]}]|[^\\n]*)$`,
+          "gmu",
+        ),
+      ),
+    ].map((match) => match[1]!.trim()),
+  );
+  return values.size > 1 ? null : [...values][0];
+}
+
+function readJobWorkerCeiling(text: string) {
+  const inherited = parseWorkerCeiling(readLogEnv(text, "OPENCLAW_VITEST_MAX_WORKERS"));
+  const encoded = readLogEnv(text, "OPENCLAW_NODE_TEST_ENV_JSON");
+  if (encoded === null) {
+    return null;
+  }
+  let override: number | null | undefined;
+  if (encoded) {
+    try {
+      const value: unknown = JSON.parse(encoded);
+      if (value !== null) {
+        override =
+          typeof value === "object" && !Array.isArray(value)
+            ? parseWorkerCeiling(
+                "OPENCLAW_VITEST_MAX_WORKERS" in value
+                  ? value.OPENCLAW_VITEST_MAX_WORKERS
+                  : undefined,
+              )
+            : null;
+      }
+    } catch {
+      return null;
+    }
+  }
+  return intersectWorkerCeilings(inherited, override);
+}
+
+function readWorkerResources(text: string) {
+  const matches = [
+    ...text.matchAll(
+      /^\d{4}-\d\d-\d\dT[\d:.]+Z\s+\[shard:resources\] logicalCpuCount=(\d+) totalMemoryBytes=(\d+) requested plans=(\d+) admitted plans=(\d+)$/gmu,
+    ),
+  ];
+  if (matches.length !== 1) {
+    return undefined;
+  }
+  const values = matches[0]!.slice(1).map(Number);
+  if (
+    !values.every((value) => Number.isSafeInteger(value) && value > 0) ||
+    values[3]! > values[2]!
+  ) {
+    return undefined;
+  }
+  return { logicalCpuCount: values[0]!, totalMemoryBytes: values[1]!, admittedPlans: values[3]! };
 }
 
 function readE2eLog(text: string, samples: Samples, overhead?: number[]) {
@@ -129,18 +250,140 @@ function readE2eLog(text: string, samples: Samples, overhead?: number[]) {
   }
 }
 
+function readSingletonExtensionInvocations(
+  lines: readonly string[],
+  config: string,
+  files: readonly string[],
+): Map<string, number> | undefined {
+  const declared = new Set(files);
+  const measured = new Map<string, number>();
+  let active:
+    | {
+        started: number;
+        files: Set<string>;
+        runs: number;
+        summaries: number;
+        durations: number;
+        duration?: number;
+      }
+    | undefined;
+  let verified = false;
+  let passed = false;
+  const finish = (ended: number) => {
+    if (!active) {
+      return false;
+    }
+    const [file] = active.files;
+    const elapsed = (ended - active.started) / 1000;
+    if (
+      active.files.size !== 1 ||
+      file === undefined ||
+      !declared.has(file) ||
+      measured.has(file) ||
+      active.runs !== 1 ||
+      active.summaries !== 1 ||
+      active.durations !== 1 ||
+      active.duration === undefined ||
+      !Number.isFinite(active.duration) ||
+      !Number.isFinite(elapsed) ||
+      active.duration > elapsed ||
+      elapsed <= 0
+    ) {
+      return false;
+    }
+    measured.set(file, elapsed);
+    active = undefined;
+    return true;
+  };
+  for (const line of lines) {
+    const record = /^(\d{4}-\d\d-\d\dT[\d:.]+Z)\s+\[shard:[^\]]+\]\s+(.*)$/u.exec(line);
+    if (!record) {
+      continue;
+    }
+    const timestamp = Date.parse(record[1]!);
+    if (!Number.isFinite(timestamp)) {
+      return undefined;
+    }
+    const body = record[2]!.trim();
+    const start = /^\[test\] starting (\S+)$/u.exec(body);
+    if (start) {
+      if (verified || start[1] !== config || (active && !finish(timestamp))) {
+        return undefined;
+      }
+      active = { started: timestamp, files: new Set(), runs: 0, summaries: 0, durations: 0 };
+      continue;
+    }
+    if (body === "[vitest-workers] verifying completed generation before cleanup") {
+      if (verified || !finish(timestamp)) {
+        return undefined;
+      }
+      verified = true;
+      continue;
+    }
+    const completion = /^\[test\] passed (\d+) Vitest shards? in [\d.]+s$/u.exec(body);
+    if (completion) {
+      if (!verified || passed || Number(completion[1]) !== files.length) {
+        return undefined;
+      }
+      passed = true;
+      continue;
+    }
+    if (/^RUN\s+v\S+/u.test(body)) {
+      if (!active) {
+        return undefined;
+      }
+      active.runs += 1;
+    }
+    const file =
+      /^✓\s+(?:\|[^|]+\||\S+)\s+(\S+\.(?:test|spec)\.[cm]?[jt]sx?)(?:\s+>|\s+\(\d+ tests?)/u.exec(
+        body,
+      );
+    if (file && active) {
+      active.files.add(file[1]!);
+    }
+    if (/^Test Files\b/u.test(body)) {
+      if (!active || !/^Test Files\s+1 passed\s+\(1\)$/u.test(body)) {
+        return undefined;
+      }
+      active.summaries += 1;
+    }
+    if (/^Duration\b/u.test(body)) {
+      const duration = /^Duration\s+([\d.]+)(m?s)(?:\s|$)/u.exec(body);
+      if (!active || !duration) {
+        return undefined;
+      }
+      active.durations += 1;
+      active.duration = seconds(duration[1]!, duration[2]!);
+    }
+  }
+  return verified && passed && measured.size === declared.size ? measured : undefined;
+}
+
 function readCompactLog(
   text: string,
   labels: string[],
   samples: { blacksmith: Samples; github: Samples },
   runtimeSamples: { blacksmith: Samples; github: Samples },
   runtimeDescriptors: Map<string, RuntimePlacementTiming>,
+  workerCeilings: { blacksmith: WorkerCeilings; github: WorkerCeilings },
+  exactInventoryOnly: boolean,
 ) {
   const profile = labels.some((label) => label.startsWith("blacksmith-")) ? "blacksmith" : "github";
   const starts = new Map<string, number>();
+  const ambiguousStarts = new Set<string>();
   const descriptors = readRuntimeTimingGroups(text);
   const runtimeModes = new Map<string, "runtime" | "private-qa">();
+  const singletonLogs = new Map<string, { key: string; lines: string[] }>();
+  const jobWorkerCeiling = readJobWorkerCeiling(text);
+  const resources = readWorkerResources(text);
+  const runnerEnvironment = readLogEnv(text, "RUNNER_ENVIRONMENT");
+  const frozenTarget = readLogEnv(text, "FROZEN_TARGET");
+  const jobExtraArgs = readLogEnv(text, "OPENCLAW_NODE_TEST_VITEST_ARGS_JSON");
   for (const line of text.split("\n")) {
+    const output = /^\d{4}-\d\d-\d\dT[\d:.]+Z\s+\[shard:([^\]]+)\]/u.exec(line);
+    if (output) {
+      singletonLogs.get(output[1]!)?.lines.push(line);
+    }
     const readiness =
       /\[shard:([^\]]+)\] \[test\] preparing (runtime|private-qa) runtime before Vitest workers/u.exec(
         line,
@@ -156,7 +399,7 @@ function readCompactLog(
       }
     }
     const event =
-      /(\d{4}-\d\d-\d\dT[\d:.]+Z)\s+.*?\[shard:([^\]]+)\] (begin|end \(exit (\d+)\))/u.exec(line);
+      /^(\d{4}-\d\d-\d\dT[\d:.]+Z)\s+\[shard:([^\]]+)\] (begin|end \(exit (\d+)\))$/u.exec(line);
     if (!event) {
       continue;
     }
@@ -165,24 +408,184 @@ function readCompactLog(
     const action = event[3]!;
     const exitCode = event[4];
     if (action === "begin") {
+      if (starts.has(key)) {
+        ambiguousStarts.add(key);
+      }
       starts.set(key, Date.parse(timestamp));
       runtimeModes.delete(key);
+      const matches = descriptors.filter((group) => (group.timing_key ?? group.shard_name) === key);
+      const descriptor = matches.length === 1 ? matches[0] : undefined;
+      if (
+        descriptor?.shard_name.startsWith("changed-extensions-config") &&
+        descriptor.configs.length === 1 &&
+        isRuntimePlacementIncludePatterns(descriptor.includePatterns)
+      ) {
+        const processes = splitExtensionTestProcessTargets(
+          descriptor.configs[0]!,
+          descriptor.includePatterns,
+        );
+        if (
+          processes.length === descriptor.includePatterns.length &&
+          processes.every((files) => files.length === 1)
+        ) {
+          singletonLogs.set(descriptor.shard_name, { key, lines: [] });
+        }
+      }
       continue;
     }
     const started = starts.get(key);
-    if (exitCode === "0" && started !== undefined) {
+    if (exitCode === "0" && started !== undefined && !ambiguousStarts.has(key)) {
       // Preserve the workload as executed. Packed plans may be serial or
       // concurrent, and admission must use the wrapper span it actually ran.
-      recordSample(samples[profile], key, (Date.parse(timestamp) - started) / 1000);
       const matches = descriptors.filter((group) => (group.timing_key ?? group.shard_name) === key);
-      if (matches.length === 1) {
-        const group = matches[0]!;
+      const group = matches.length === 1 ? matches[0] : undefined;
+      // Runtime subsets inherit the envelope's worker pin, but their files
+      // cannot supply a full-envelope runtime placement observation.
+      const workerMatches = descriptors.filter(
+        (entry) =>
+          (entry.timing_key ?? entry.shard_name) === key.replace(/^(?:bun|node-subset):/u, ""),
+      );
+      const workerGroup = workerMatches.length === 1 ? workerMatches[0] : undefined;
+      let workerCeiling = intersectWorkerCeilings(
+        jobWorkerCeiling,
+        parseWorkerCeiling(workerGroup?.env?.OPENCLAW_VITEST_MAX_WORKERS),
+      );
+      const fallback = workerGroup?.fallbackMaxWorkers;
+      if (
+        workerGroup !== undefined &&
+        fallback !== undefined &&
+        (typeof workerCeiling !== "number" || workerCeiling > fallback)
+      ) {
+        const eligibleResources =
+          resources &&
+          !isConstrainedCiCheckHost(resources) &&
+          resources.admittedPlans === 1 &&
+          resources.totalMemoryBytes >= (workerGroup.minTotalMemoryBytes ?? 0);
+        const fallbackApplies =
+          (resources && !eligibleResources) ||
+          runnerEnvironment === "github-hosted" ||
+          frozenTarget === "true";
+        const measuredHost =
+          eligibleResources && runnerEnvironment === "self-hosted" && frozenTarget === "false";
+        workerCeiling = fallbackApplies
+          ? intersectWorkerCeilings(workerCeiling, fallback)
+          : measuredHost
+            ? workerCeiling
+            : null;
+      }
+      const namedWorkers = [...key.matchAll(/#(?:workers|file-parallel)-([1-9]\d*)(?=#|$)/gu)];
+      const splitTiming = parseCompactSplitTimingKey(key);
+      const requiresWorkerCeiling =
+        namedWorkers.length > 0 || (exactInventoryOnly && splitTiming !== undefined);
+      if (
+        (requiresWorkerCeiling && typeof workerCeiling !== "number") ||
+        (typeof workerCeiling === "number" &&
+          namedWorkers.some((match) => Number(match[1]) !== workerCeiling))
+      ) {
+        // A fallback or incomplete receipt cannot refresh the requested worker identity.
+        workerCeiling = null;
+      }
+      const extensionGroup = group?.shard_name.startsWith("changed-extensions-config") === true;
+      const selectedFiles = group?.includePatterns;
+      const hasExactSelection =
+        isRuntimePlacementIncludePatterns(selectedFiles) &&
+        (jobExtraArgs === undefined || jobExtraArgs === "[]") &&
+        group?.env?.OPENCLAW_NODE_TEST_VITEST_ARGS_JSON === undefined;
+      let matchesSplitSelection = false;
+      if (group && splitTiming && hasExactSelection) {
+        const selectedKey = createCompactSplitTimingGeneration({
+          configs: group.configs,
+          env: group.env,
+          parentShardName: key,
+          stripes: [selectedFiles],
+        }).timingKeys[0]!;
+        matchesSplitSelection = key.endsWith(
+          selectedKey.slice(selectedKey.lastIndexOf("#include-")),
+        );
+      }
+      let exactKey: string | undefined;
+      if (group && !splitTiming && typeof workerCeiling === "number" && hasExactSelection) {
+        const env = { ...group.env, OPENCLAW_VITEST_MAX_WORKERS: String(workerCeiling) };
+        if (extensionGroup && group.configs.length === 1) {
+          exactKey = createExtensionTestTimingKey(group.configs[0]!, selectedFiles, env);
+        } else if (workerCeiling === 2 && key.endsWith("#file-parallel-2")) {
+          // PR descriptors prove this selected inventory, never an unsplit family total.
+          // Eight-worker command placement rewrites the name after its selector is made.
+          exactKey = createCompactSplitTimingGeneration({
+            configs: group.configs,
+            env,
+            parentShardName: key,
+            stripes: [selectedFiles],
+          }).timingKeys[0];
+        }
+      }
+      const singletonLog = group && singletonLogs.get(group.shard_name);
+      if (
+        extensionGroup &&
+        exactKey &&
+        group &&
+        singletonLog?.key === key &&
+        !runtimeModes.has(key)
+      ) {
+        const invocations = readSingletonExtensionInvocations(
+          singletonLog.lines,
+          group.configs[0]!,
+          group.includePatterns!,
+        );
+        if (invocations) {
+          const total = [...invocations.values()].reduce((sum, value) => sum + value, 0);
+          const overhead = (Date.parse(timestamp) - started) / 1000 - total;
+          if (overhead >= 0) {
+            const env = { ...group.env, OPENCLAW_VITEST_MAX_WORKERS: String(workerCeiling) };
+            for (const [file, duration] of invocations) {
+              recordSample(
+                samples[profile],
+                createExtensionTestTimingKey(
+                  group.configs[0]!,
+                  [file],
+                  env,
+                  "singleton-invocation",
+                )!,
+                duration,
+              );
+            }
+            recordSample(
+              samples[profile],
+              createExtensionTestTimingKey(group.configs[0]!, [], env, "wrapper-overhead")!,
+              overhead,
+            );
+          }
+        }
+      }
+      const measuredKeys = [
+        ...(!extensionGroup && (!exactInventoryOnly || matchesSplitSelection) ? [key] : []),
+        ...(exactKey ? [exactKey] : []),
+      ];
+      for (const measuredKey of measuredKeys) {
+        const measuredSplit = parseCompactSplitTimingKey(measuredKey);
+        for (const identity of [measuredKey, measuredSplit?.parentShardName]) {
+          if (identity === undefined) {
+            continue;
+          }
+          const observed = workerCeilings[profile].get(identity) ?? new Set();
+          observed.add(workerCeiling === null ? "ambiguous" : (workerCeiling ?? "unspecified"));
+          workerCeilings[profile].set(identity, observed);
+        }
+        // An unsplit PR key does not prove that its full owner inventory ran.
+        recordSample(samples[profile], measuredKey, (Date.parse(timestamp) - started) / 1000);
+      }
+      if (group && workerCeiling !== null) {
         const observation = {
           configs: group.configs,
           env: Object.fromEntries(
-            Object.entries(group.env ?? {}).toSorted(([a], [b]) => a.localeCompare(b)),
+            Object.entries({
+              ...group.env,
+              ...(workerCeiling === undefined
+                ? {}
+                : { OPENCLAW_VITEST_MAX_WORKERS: String(workerCeiling) }),
+            }).toSorted(([a], [b]) => a.localeCompare(b)),
           ),
-          includePatterns: group.includePatterns.toSorted(),
+          includePatterns: group.includePatterns?.toSorted(),
           pretestBuildMode: runtimeModes.get(key),
           seconds: Math.max(1, Math.round((Date.parse(timestamp) - started) / 1000)),
         };
@@ -194,6 +597,11 @@ function readCompactLog(
       }
     }
     starts.delete(key);
+    for (const [shard, log] of singletonLogs) {
+      if (log.key === key) {
+        singletonLogs.delete(shard);
+      }
+    }
   }
 }
 
@@ -229,12 +637,12 @@ function readToolingLog(text: string, samples: Samples) {
           cases: new Map(),
           files: new Map(),
           complete: false,
-          declaredFiles: new Set(descriptor.includePatterns),
+          declaredFiles: new Set(descriptor.includePatterns ?? []),
           singletonFile:
             !active.has(shard) &&
             descriptor.configs.length === 1 &&
             descriptor.configs[0] === "test/vitest/vitest.tooling.config.ts" &&
-            descriptor.includePatterns.length === 1
+            descriptor.includePatterns?.length === 1
               ? descriptor.includePatterns[0]
               : undefined,
           fileSummaryCount: 0,
@@ -322,7 +730,11 @@ function runtimePlacementSecondsMap(observations: readonly RuntimePlacementTimin
   );
 }
 
-function recordCompleteParentSamples(samples: Samples, observedParents: Set<string>) {
+function recordCompleteParentSamples(
+  samples: Samples,
+  observedParents: Set<string>,
+  foldParents: boolean,
+) {
   const generations = new Map<
     string,
     { parent: string; expected: number; parts: Map<number, number> }
@@ -333,6 +745,11 @@ function recordCompleteParentSamples(samples: Samples, observedParents: Set<stri
       continue;
     }
     observedParents.add(parsed.parentShardName);
+    // A selected PR subset can share the reduced full inventory's parent name.
+    // Its exact child key is evidence; completeness of that subset is not.
+    if (!foldParents || parsed.parentShardName.startsWith("extension-test:")) {
+      continue;
+    }
     const generation = generations.get(parsed.generationKey) ?? {
       parent: parsed.parentShardName,
       expected: parsed.expectedParts,
@@ -360,10 +777,15 @@ function refitMap(
   contributingRuns = 0,
   observedParents?: Set<string>,
   minimumSamples = 2,
+  retainReleaseCosts = false,
 ) {
   const next = Object.fromEntries(
     Object.entries(previous).filter(
-      ([key]) => contributingRuns < MIN_PRUNE_RUNS || samples.has(key) || observedParents?.has(key),
+      ([key]) =>
+        (retainReleaseCosts && key.startsWith("release-full-")) ||
+        contributingRuns < MIN_PRUNE_RUNS ||
+        samples.has(key) ||
+        observedParents?.has(key),
     ),
   );
   for (const [key, values] of samples) {
@@ -411,6 +833,10 @@ export function refitTestTimings(
     blacksmith: new Map<string, number[]>(),
     github: new Map<string, number[]>(),
   };
+  const workerCeilings = {
+    blacksmith: new Map<string, Set<number | "unspecified" | "ambiguous">>(),
+    github: new Map<string, Set<number | "unspecified" | "ambiguous">>(),
+  };
   const runtimeDescriptors = new Map<string, RuntimePlacementTiming>(
     Object.values(previous?.runtimePlacementTimings ?? {})
       .flat()
@@ -422,6 +848,7 @@ export function refitTestTimings(
     if (retained) {
       retained.logs.push(...run.logs);
       retained.completeInventory = retained.completeInventory && run.completeInventory;
+      retained.pullRequestMergeRef ||= run.pullRequestMergeRef;
     } else {
       uniqueRuns.set(run.id, { ...run, logs: [...run.logs] });
     }
@@ -440,20 +867,43 @@ export function refitTestTimings(
       github: new Map<string, number[]>(),
     };
     for (const log of run.logs) {
-      const text = stripVTControlCharacters(log.text);
+      // `gh run view --log` adds job/step columns outside the timestamped record.
+      // A timestamped child line may quote that format; its contents stay nested.
+      const text = stripVTControlCharacters(log.text).replace(
+        /^(?!\d{4}-\d\d-\d\dT[\d:.]+Z(?:\s|$))[^\t\r\n]+\t[^\t\r\n]+\t(?=\d{4}-\d\d-\d\dT[\d:.]+Z(?:\s|$))/gmu,
+        "",
+      );
       if (log.kind === "tooling") {
         const profile = log.labels.some((label) => label.startsWith("blacksmith-"))
           ? "toolingBlacksmith"
           : "toolingGithub";
         readToolingLog(text, current[profile]);
       } else if (log.kind === "compact") {
-        readCompactLog(text, log.labels, current, currentRuntime, runtimeDescriptors);
+        readCompactLog(
+          text,
+          log.labels,
+          current,
+          currentRuntime,
+          runtimeDescriptors,
+          workerCeilings,
+          run.pullRequestMergeRef === true,
+        );
+        if (run.pullRequestMergeRef) {
+          const profile = log.labels.some((label) => label.startsWith("blacksmith-"))
+            ? "toolingBlacksmith"
+            : "toolingGithub";
+          readToolingLog(text, current[profile]);
+        }
       } else {
         readE2eLog(text, current[log.kind], log.kind === "uiE2e" ? overhead : undefined);
       }
     }
     for (const profile of ["blacksmith", "github"] as const) {
-      recordCompleteParentSamples(current[profile], observedParents[profile]);
+      recordCompleteParentSamples(
+        current[profile],
+        observedParents[profile],
+        !run.pullRequestMergeRef,
+      );
       for (const [identity, values] of currentRuntime[profile]) {
         recordSample(runtimeSamples[profile], identity, median(values));
       }
@@ -477,6 +927,20 @@ export function refitTestTimings(
     }
   }
 
+  const rejectedWorkerKeys = { blacksmith: [] as string[], github: [] as string[] };
+  for (const profile of ["blacksmith", "github"] as const) {
+    for (const [key, ceilings] of workerCeilings[profile]) {
+      if (ceilings.size > 1 || ceilings.has("ambiguous")) {
+        // Historical keys can omit inherited job caps. Do not average unlike
+        // execution policies or turn rejected evidence into a pruning signal.
+        samples[profile].delete(key);
+        observedParents[profile].add(key);
+        rejectedWorkerKeys[profile].push(key);
+      }
+    }
+    rejectedWorkerKeys[profile].sort();
+  }
+
   const completeInventoryRuns = new Set(
     [...uniqueRuns.values()].filter((run) => run.completeInventory).map((run) => run.id),
   );
@@ -490,6 +954,7 @@ export function refitTestTimings(
     measuredOverhead === undefined ||
     (oldOverhead !== undefined && Math.abs(measuredOverhead - oldOverhead) <= oldOverhead * 0.15);
   const runIds = [...new Set(runs.map((run) => run.id))].toSorted((a, b) => a - b);
+  const pullRequestRunIds = runs.filter((run) => run.pullRequestMergeRef).map((run) => run.id);
   function refitRuntime(profile: "blacksmith" | "github"): RuntimePlacementTiming[] {
     return Object.entries(
       refitMap(
@@ -514,6 +979,8 @@ export function refitTestTimings(
         previous?.compactGroupSeconds.github,
         pruningRunCount("github"),
         observedParents.github,
+        2,
+        true,
       ),
     },
     repoE2eFileSeconds: refitMap(
@@ -527,7 +994,7 @@ export function refitTestTimings(
     },
     source: options.seedTooling
       ? `tooling seed from successful pull_request CI merge-ref runs: ${runIds.join(", ")}; retained other timings: ${previous?.source ?? "none"}`
-      : `median of successful timing jobs from ${runIds.length} CI and release-check runs: ${runIds.join(", ")}`,
+      : `median of successful timing jobs from ${runIds.length} CI and release-check runs: ${runIds.join(", ")}${pullRequestRunIds.length > 0 ? `; pull_request merge-ref runs: ${[...new Set(pullRequestRunIds)].toSorted((a, b) => a - b).join(", ")}` : ""}`,
     // PR plans may select only part of tooling. Absence is not evidence that
     // a file disappeared; preserve unobserved measurements across those windows.
     toolingFileSeconds: {
@@ -615,6 +1082,7 @@ export function refitTestTimings(
     timings,
     changes: changes.toSorted((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)),
     runIds,
+    rejectedWorkerKeys,
     contributingRunIds: {
       blacksmith: [...contributingRuns.blacksmith].toSorted((a, b) => a - b),
       github: [...contributingRuns.github].toSorted((a, b) => a - b),

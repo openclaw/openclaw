@@ -1,5 +1,6 @@
 import { Cron } from "croner";
 import { describe, expect, it, vi } from "vitest";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "./service.test-harness.js";
 import * as scheduleMaintenance from "./service/schedule-maintenance.js";
 import { createCronServiceState } from "./service/state.js";
@@ -51,6 +52,7 @@ async function runTimer(jobs: CronJob[], nowMs: number) {
   const store = await makeStorePath();
   await writeCronStoreSnapshot({ storePath: store.storePath, jobs });
   const state = createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
     storePath: store.storePath,
     cronEnabled: true,
     log: logger,
@@ -74,7 +76,7 @@ async function runTimer(jobs: CronJob[], nowMs: number) {
   } finally {
     maintenance.mockRestore();
     if (state.timer) {
-      clearTimeout(state.timer);
+      state.timer.cancel();
       state.timer = null;
     }
   }
@@ -147,6 +149,7 @@ describe("cron timer maintenance admission", () => {
     expect(before.store.jobs).toHaveLength(1_000);
     const revision = getCronJobsStoreRevision(storePath);
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       storePath,
       cronEnabled: true,
       log: logger,
@@ -156,10 +159,7 @@ describe("cron timer maintenance admission", () => {
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
     state.schedulerStarted = true;
-    // These spies delegate to Croner and the suite's timer implementation.
-    // Observe the real tick after fixture persistence, including its final armed timer.
     const previousRuns = vi.spyOn(Cron.prototype, "previousRuns");
-    const timers = vi.spyOn(globalThis, "setTimeout");
     const maintenance = vi.spyOn(scheduleMaintenance, "recomputeUnownedCronSchedules");
     sqliteTransactionLabels.length = 0;
     try {
@@ -176,18 +176,13 @@ describe("cron timer maintenance admission", () => {
       expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
       expect(state.queuedRunReservationsByJobId.size).toBe(0);
       expect(state.running).toBe(false);
-      const armedCall = timers.mock.results.findIndex(
-        (result) => result.type === "return" && result.value === state.timer,
-      );
-      expect(armedCall).toBeGreaterThanOrEqual(0);
-      expect(timers.mock.calls[armedCall]?.[1]).toBe(60_000);
+      expect(state.deps.scheduler.nextWakeAtMs).toBe(nowMs + 60_000);
       expect(previousRuns).toHaveBeenCalledTimes(0);
     } finally {
       previousRuns.mockRestore();
-      timers.mockRestore();
       maintenance.mockRestore();
       if (state.timer) {
-        clearTimeout(state.timer);
+        state.timer.cancel();
         state.timer = null;
       }
     }

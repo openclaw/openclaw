@@ -27,14 +27,6 @@ const autoMigrateLegacyPluginDoctorState = vi.hoisted(() =>
     warnings: [],
   })),
 );
-const autoMigrateLegacyTaskStateSidecars = vi.hoisted(() =>
-  vi.fn(async (): Promise<StateMigrationResult> => ({
-    migrated: true,
-    skipped: false,
-    changes: ["task-imported"],
-    warnings: [],
-  })),
-);
 const migrateLegacyMediaPersistence = vi.hoisted(() =>
   vi.fn(() => ({ changes: [], warnings: [] })),
 );
@@ -85,7 +77,6 @@ vi.mock("../infra/state-migrations.doctor.js", async () => ({
 
 vi.mock("../infra/state-migrations.state-dir.js", () => ({
   autoMigrateLegacyStateDir,
-  autoMigrateLegacyTaskStateSidecars,
 }));
 
 vi.mock("../infra/state-migrations.plugin-doctor.js", () => ({
@@ -166,7 +157,7 @@ describe("runDoctorConfigPreflight state migration input", () => {
     );
   });
 
-  it("does not skip a retired custom cron partition on a pristine state root", async () => {
+  it("preserves a retired custom cron partition with invalid Gateway config", async () => {
     const sourceConfig = {
       gateway: { mode: "local", port: "not-a-port" },
       agents: {
@@ -198,7 +189,6 @@ describe("runDoctorConfigPreflight state migration input", () => {
     await runDoctorConfigPreflight({
       migrateLegacyConfig: false,
       invalidConfigNote: false,
-      skipPristineCoreStateMigrations: true,
     });
 
     expect(repairLegacyCronStoreWithoutPrompt).toHaveBeenCalledWith({
@@ -342,9 +332,7 @@ describe("runDoctorConfigPreflight state migration input", () => {
       env: process.env,
       doctorOnlyStateMigrations: true,
     });
-    expect(autoMigrateLegacyTaskStateSidecars).toHaveBeenCalledWith({ env: process.env });
     expect(note).toHaveBeenCalledWith("- plugin-imported", "Doctor changes");
-    expect(note).toHaveBeenCalledWith("- task-imported", "Doctor changes");
   });
 
   it("runs config-independent state migration for invalid config", async () => {
@@ -385,6 +373,5 @@ describe("runDoctorConfigPreflight state migration input", () => {
       cfg: expect.objectContaining({ cron: { store: "/tmp/legacy-cron.json" } }),
       migrateCodexModelRefs: false,
     });
-    expect(autoMigrateLegacyTaskStateSidecars).not.toHaveBeenCalled();
   });
 });

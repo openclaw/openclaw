@@ -5,7 +5,7 @@ import {
   createSupersededActorError,
   ensureManagerRuntimeHandle,
 } from "./manager.runtime-handle-ensure.js";
-import { baseCfg, createRuntime, type SessionAcpMeta } from "./manager.test-helpers.js";
+import { baseCfg, createRuntime, readySessionMeta } from "./manager.test-helpers.js";
 import type { WriteManagerSessionMeta } from "./manager.types.js";
 
 describe("reset during ensured runtime metadata publication", () => {
@@ -18,14 +18,10 @@ describe("reset during ensured runtime metadata publication", () => {
     let current = true;
     let ensures = 0;
     let writes = 0;
-    let persisted: SessionAcpMeta = {
-      backend: "acpx",
-      agent: "codex",
+    let persisted = readySessionMeta({
       runtimeSessionName: "stored-runtime",
-      mode: "persistent",
-      state: "idle",
       lastActivityAt: 1,
-    };
+    });
     state.ensureSession.mockImplementation(async () => {
       const id = ++ensures;
       return {
@@ -51,7 +47,10 @@ describe("reset during ensured runtime metadata publication", () => {
       ...target,
       cfg: baseCfg,
       meta: persisted,
-      deps: { requireRuntimeBackend: () => ({ id: "acpx", runtime: state.runtime }) },
+      deps: {
+        requireRuntimeBackend: () => ({ id: "acpx", runtime: state.runtime }),
+        loadSessionEntryAsync: async () => null,
+      },
       runtimeHandles: cache,
       writeSessionMeta,
     };

@@ -358,8 +358,11 @@
   "modelPricing": {
     "providers": {
       "anthropic": {
-        "openRouter": {
-          "modelIdTransforms": ["version-dots"]
+        "modelsDev": {
+          "provider": "anthropic"
+        },
+        "liteLLM": {
+          "provider": "anthropic"
         }
       }
     }

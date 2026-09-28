@@ -4,6 +4,12 @@ import type { CoreConfig } from "../types.js";
 import { withAuthorizedMatrixReadTarget } from "./read-policy.js";
 import type { MatrixClient } from "./sdk.js";
 
+vi.mock("openclaw/plugin-sdk/plugin-state-store-runtime", () => ({
+  createPluginStateSyncKeyedStore: () => {
+    throw new Error("read policy must not read credential storage");
+  },
+}));
+
 function createClient(
   members: string[],
   directFlag: boolean | null = null,
@@ -388,35 +394,6 @@ describe("Matrix read policy", () => {
           },
         } as CoreConfig,
         roomId: "!unmatched:example.org",
-        opts: { client },
-        run: async () => "ok",
-      }),
-    ).resolves.toBe("ok");
-  });
-
-  it("matches configured room aliases before applying direct-message policy", async () => {
-    const client = createClient(
-      ["@bot:example.org", "@alice:example.org", "@bob:example.org"],
-      null,
-      {
-        canonicalAlias: "#ops:example.org",
-      },
-    );
-
-    await expect(
-      withAuthorizedMatrixReadTarget({
-        cfg: {
-          channels: {
-            matrix: {
-              groupPolicy: "allowlist",
-              groups: {
-                "#ops:example.org": {},
-              },
-              dm: { policy: "disabled" },
-            },
-          },
-        } as CoreConfig,
-        roomId: "!ops:example.org",
         opts: { client },
         run: async () => "ok",
       }),

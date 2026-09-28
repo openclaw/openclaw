@@ -35,7 +35,6 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
-import { findTaskByRunId, getTaskById } from "../../tasks/task-registry.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
@@ -95,7 +94,7 @@ function createGuardedStopFixture() {
       request: { sessionKey, agentId: "ops" },
       client: { connId: "owner", connect: { scopes: ["operator.admin"] } },
     });
-  const child = (runId: string, requesterSessionKey = parent.sessionKey) => {
+  const child = async (runId: string, requesterSessionKey = parent.sessionKey) => {
     const scope = seed(`agent:ops:subagent:${runId}`, "ops", `${runId}-session`);
     const groupId = `guarded-stop-${runId}`;
     expect(
@@ -106,7 +105,7 @@ function createGuardedStopFixture() {
         activeRunIds: [`${runId}-capacity`],
       }),
     ).toBe(true);
-    registerSubagentRun({
+    const registration = registerSubagentRun({
       runId,
       childSessionKey: scope.sessionKey,
       requesterSessionKey,
@@ -119,6 +118,9 @@ function createGuardedStopFixture() {
       queued: true,
       expectsCompletionMessage: false,
     });
+    if (registration) {
+      await registration;
+    }
     const start = vi.fn(async () => {});
     activateSwarmRun({
       groupId,
@@ -227,7 +229,7 @@ it.each(["replacement", "branch"] as const)(
   "typed Stop fences descendants after a parent %s and settles only its captured output",
   async (change) => {
     const test = createGuardedStopFixture();
-    const child = test.child("original-child");
+    const child = await test.child("original-child");
     const parent = createActiveRun(test.parent.sessionKey, test.parent);
     test.context.chatAbortControllers.set("parent", parent);
     test.context.chatRunState.getOrCreate("parent").buffer = "captured parent partial";
@@ -279,7 +281,7 @@ it.each(["replacement", "branch"] as const)(
       expect(test.otherRun.controller.signal.aborted).toBe(false);
       expect(test.context.chatAbortControllers.get("successor")).toBe(successor);
       expect(test.context.chatQueuedTurns.get("successor-queued")).toBe(successorQueue);
-      const successorDescendant = expectDefined(successorChild, "successor descendant");
+      const successorDescendant = await expectDefined(successorChild, "successor descendant");
       for (const selected of [child, successorDescendant]) {
         expect(getSubagentRunByChildSessionKey(selected.sessionKey)?.execution.status).toBe(
           "queued",
@@ -309,12 +311,16 @@ it.each(["replacement", "branch"] as const)(
       }
       await vi.waitFor(() => {
         expect(child.start).toHaveBeenCalledOnce();
-        expect(successorChild?.start).toHaveBeenCalledOnce();
+        expect(successorDescendant.start).toHaveBeenCalledOnce();
       });
     } finally {
-      for (const runId of ["original-child", "successor-child"]) {
-        releaseSwarmRun(`${runId}-capacity`);
-        releaseSwarmRun(runId);
+      try {
+        await successorChild;
+      } finally {
+        for (const runId of ["original-child", "successor-child"]) {
+          releaseSwarmRun(`${runId}-capacity`);
+          releaseSwarmRun(runId);
+        }
       }
     }
   },
@@ -326,7 +332,7 @@ it.each(["during drain", "after abort"] as const)(
     const test = createGuardedStopFixture();
     const child = test.seed("agent:ops:subagent:authority-child", "ops", "authority-child-session");
     const runId = "authority-child";
-    registerSubagentRun({
+    await registerSubagentRun({
       runId,
       childSessionKey: child.sessionKey,
       requesterSessionKey: test.parent.sessionKey,
@@ -337,7 +343,6 @@ it.each(["during drain", "after abort"] as const)(
       cleanup: "keep",
       expectsCompletionMessage: false,
     });
-    const task = expectDefined(findTaskByRunId(runId), "child task");
     const parent = createActiveRun(test.parent.sessionKey, test.parent);
     test.context.chatAbortControllers.set("parent", parent);
     const controller = new AbortController();
@@ -392,9 +397,9 @@ it.each(["during drain", "after abort"] as const)(
       expect(onInterrupt).toHaveBeenCalledOnce();
       expect(controller.signal.aborted).toBe(accepted);
       expect(abort).toHaveBeenCalledTimes(Number(accepted));
-      expect(getTaskById(task.taskId)?.status).toBe(accepted ? "cancelled" : "running");
       const retained = expectDefined(loadSubagentRegistryFromSqlite().get(runId), "retained child");
       expect(retained.killIntent).toBeUndefined();
+      expect(retained.execution.status).toBe(accepted ? "terminal" : "running");
       expect(loadSessionEntryReadOnly(child)?.abortedLastRun === true).toBe(accepted);
       expect(test.otherRun.controller.signal.aborted).toBe(false);
     } finally {
@@ -410,11 +415,11 @@ it.each(["during drain", "after abort"] as const)(
 
 it("typed Stop cannot acquire a replacement collector after projection readiness yields", async () => {
   const test = createGuardedStopFixture();
-  const collector = test.child("collector");
+  const collector = await test.child("collector");
   expect(isSubagentRunQueued(getLatestLiveSubagentRunByChildSessionKey(collector.sessionKey))).toBe(
     true,
   );
-  const descendant = test.child("collector-descendant", collector.sessionKey);
+  const descendant = await test.child("collector-descendant", collector.sessionKey);
   const old = createActiveRun(collector.sessionKey, collector);
   test.context.chatAbortControllers.set("old-collector", old);
   test.context.chatRunState.getOrCreate("old-collector").buffer = "old collector partial";
@@ -521,7 +526,7 @@ it.each(
         sessionKey: childSessionKey,
         defaultSessionId: `${runId}-session`,
       });
-      registerSubagentRun({
+      await registerSubagentRun({
         runId,
         childSessionKey,
         requesterSessionKey: sessionKey,

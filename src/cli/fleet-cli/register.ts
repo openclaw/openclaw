@@ -1,18 +1,11 @@
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { InvalidArgumentError, type Command } from "commander";
 import { validateDiskSize } from "../../fleet/cell-profile.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import type { FleetCreateOptions } from "../../fleet/service.runtime.js";
+import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { collectOption, parseStrictPositiveIntOption } from "../program/helpers.js";
 
-type FleetRuntimeModule = typeof import("./commands.runtime.js");
-
-const fleetRuntimeLoader = createLazyImportLoader<FleetRuntimeModule>(
-  () => import("./commands.runtime.js"),
-);
-
-function loadFleetRuntime(): Promise<FleetRuntimeModule> {
-  return fleetRuntimeLoader.load();
-}
+const loadFleetRuntime = createLazyPromise(() => import("./commands.runtime.js"));
 
 function parseContainerRuntime(value: string): "docker" | "podman" {
   if (value === "docker" || value === "podman") {
@@ -95,23 +88,7 @@ export function registerFleetCli(program: Command): void {
     .option("--no-start", "Create the container without starting it")
     .option("--json", "Output JSON", false)
     .action(
-      async (
-        tenant: string,
-        options: {
-          image: string;
-          runtime: "docker" | "podman";
-          port?: number;
-          memory: string;
-          cpus: string;
-          disk?: string;
-          network: "bridge" | "internal";
-          pidsLimit: number;
-          env: string[];
-          gatewayToken?: string;
-          start: boolean;
-          json: boolean;
-        },
-      ) => {
+      async (tenant: string, options: Omit<FleetCreateOptions, "tenant"> & { json: boolean }) => {
         const runtime = await loadFleetRuntime();
         await runtime.runFleetCreateCommand({ tenant, ...options });
       },

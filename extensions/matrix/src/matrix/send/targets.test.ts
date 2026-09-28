@@ -47,28 +47,6 @@ beforeEach(() => {
 });
 
 describe("resolveMatrixRoomId", () => {
-  it("uses m.direct when available", async () => {
-    const userId = "@user:example.org";
-    const client = makeMappedDirectClient({ userId, roomId: "!room:example.org" });
-
-    const roomId = await resolveMatrixRoomId(client, userId);
-
-    expect(roomId).toBe("!room:example.org");
-    expect(client["getJoinedRooms"]).toHaveBeenCalledTimes(1);
-    expect(client["setAccountData"]).not.toHaveBeenCalled();
-  });
-
-  it("falls back to joined rooms and persists m.direct", async () => {
-    const userId = "@fallback:example.org";
-    const roomId = "!room:example.org";
-    const client = makeFallbackDirectClient({ userId, roomIds: [roomId] });
-
-    const resolved = await resolveMatrixRoomId(client, userId);
-
-    expect(resolved).toBe(roomId);
-    expect(client["setAccountData"]).toHaveBeenCalledWith(EventType.Direct, { [userId]: [roomId] });
-  });
-
   it.each(["@fallback:example.org", "user:@fallback:example.org"])(
     "preserves send mapping repair after cached read resolution of %s",
     async (target) => {
@@ -199,6 +177,8 @@ describe("resolveMatrixRoomId", () => {
 
     expect(resolved).toBe(roomId);
     expect(client["resolveRoom"]).not.toHaveBeenCalled();
+    expect(client["getJoinedRooms"]).toHaveBeenCalledTimes(1);
+    expect(client["setAccountData"]).not.toHaveBeenCalled();
   });
 
   it("scopes direct-room cache per Matrix client", async () => {
@@ -229,6 +209,75 @@ describe("resolveMatrixRoomId", () => {
 
     expect(clientA["getAccountData"]).toHaveBeenCalledTimes(1);
     expect(clientB["getAccountData"]).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])(
+    "evicts the oldest direct room despite a cache hit with persistDirectMapping=%s",
+    async (persistDirectMapping) => {
+      const directRooms = Object.fromEntries(
+        Array.from({ length: 1025 }, (_, index) => [
+          `@user-${index}:example.org`,
+          [`!room-${index}:example.org`],
+        ]),
+      );
+      const membersByRoom = new Map(
+        Array.from({ length: 1025 }, (_, index): [string, string[]] => [
+          `!room-${index}:example.org`,
+          [BOT_USER_ID, `@user-${index}:example.org`],
+        ]),
+      );
+      const getAccountData = vi.fn<MatrixClient["getAccountData"]>().mockResolvedValue(directRooms);
+      const getJoinedRooms = vi.fn<MatrixClient["getJoinedRooms"]>().mockResolvedValue([]);
+      const getJoinedRoomMembers = vi
+        .fn<MatrixClient["getJoinedRoomMembers"]>()
+        .mockImplementation(async (roomId) => membersByRoom.get(roomId) ?? []);
+      const client = makeMappedDirectClient({
+        userId: "@user-0:example.org",
+        roomId: "!room-0:example.org",
+        extra: { getAccountData, getJoinedRooms, getJoinedRoomMembers },
+      });
+      const resolve = (index: number) =>
+        resolveMatrixRoomId(client, `@user-${index}:example.org`, { persistDirectMapping });
+
+      for (let index = 0; index < 1024; index += 1) {
+        await expect(resolve(index)).resolves.toBe(`!room-${index}:example.org`);
+      }
+      await expect(resolve(0)).resolves.toBe("!room-0:example.org");
+      expect(getAccountData).toHaveBeenCalledTimes(1024);
+      expect(getJoinedRooms).toHaveBeenCalledTimes(1024);
+
+      await expect(resolve(1024)).resolves.toBe("!room-1024:example.org");
+      // Check the survivor before refetching the victim causes another eviction.
+      await expect(resolve(1)).resolves.toBe("!room-1:example.org");
+      expect(getAccountData).toHaveBeenCalledTimes(1025);
+      expect(getJoinedRooms).toHaveBeenCalledTimes(1025);
+      await expect(resolve(0)).resolves.toBe("!room-0:example.org");
+      expect(getAccountData).toHaveBeenCalledTimes(1026);
+      expect(getJoinedRooms).toHaveBeenCalledTimes(1026);
+      expect(client["setAccountData"]).not.toHaveBeenCalled();
+    },
+  );
+
+  it("caches a usable direct room after an ordinary mapping write failure", async () => {
+    const userId = "@write-failure:example.org";
+    const roomId = "!write-failure:example.org";
+    const getJoinedRooms = vi.fn<MatrixClient["getJoinedRooms"]>().mockResolvedValue([roomId]);
+    const setAccountData = vi
+      .fn<MatrixClient["setAccountData"]>()
+      .mockRejectedValue(new Error("mapping write failed"));
+    const client = makeFallbackDirectClient({
+      userId,
+      roomIds: [roomId],
+      extra: { getJoinedRooms, setAccountData },
+    });
+
+    await expect(resolveMatrixRoomId(client, userId)).resolves.toBe(roomId);
+    await expect(resolveMatrixRoomId(client, userId)).resolves.toBe(roomId);
+
+    expect(getJoinedRooms).toHaveBeenCalledTimes(1);
+    expect(setAccountData).toHaveBeenCalledExactlyOnceWith(EventType.Direct, {
+      [userId]: [roomId],
+    });
   });
 
   it("ignores m.direct entries that point at shared rooms", async () => {

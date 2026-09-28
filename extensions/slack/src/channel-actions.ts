@@ -8,7 +8,7 @@ import type { SlackActionContext } from "./action-context.js";
 import { handleSlackMessageAction } from "./message-action-dispatch.js";
 import { extractSlackToolSend } from "./message-actions.js";
 import { describeSlackMessageTool } from "./message-tool-api.js";
-import { formatSlackTarget, parseSlackTarget, resolveSlackChannelId } from "./target-parsing.js";
+import { parseSlackTarget } from "./target-parsing.js";
 
 type SlackActionInvoke = (
   action: Record<string, unknown>,
@@ -84,8 +84,6 @@ export function createSlackActions(
       return await handleSlackMessageAction({
         providerId,
         ctx,
-        normalizeChannelId: normalizeSlackActionChannelTarget,
-        includeReadThreadId: true,
         invoke: async (action, cfg, toolContext) => {
           const actionContext = resolveSlackActionContext(ctx, toolContext);
           return await (options?.invoke
@@ -95,12 +93,6 @@ export function createSlackActions(
       });
     },
   };
-}
-
-function normalizeSlackActionChannelTarget(raw: string): string {
-  const target = parseSlackTarget(raw, { defaultKind: "channel" });
-  const channelId = resolveSlackChannelId(raw);
-  return formatSlackTarget({ teamId: target?.teamId, kind: "channel", id: channelId });
 }
 
 function shouldUseWorkspaceAwareSlackActionSend(

@@ -1,10 +1,9 @@
+import { once } from "node:events";
 import { parentPort, workerData } from "node:worker_threads";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
-import { configureSqliteWalMaintenance } from "../../infra/sqlite-wal.js";
 import {
   markSqliteReclamationSettled,
   waitForSqliteReclamationCommit,
-  waitForSqliteReclamationParentRelease,
 } from "./session-accessor.sqlite-reclamation-commit.js";
 
 type CommitFixture = {
@@ -12,7 +11,6 @@ type CommitFixture = {
   gate: SharedArrayBuffer;
   progress: SharedArrayBuffer;
   holdAfterApproval?: boolean;
-  checkpointAfterCommit?: boolean;
   outcome?: "rollback" | "exit-before-commit" | "exit-after-commit";
 };
 
@@ -20,24 +18,21 @@ const port = parentPort;
 if (!port) {
   throw new Error("commit fixture requires a Worker parent port");
 }
-
 const fixture = workerData as CommitFixture;
 const progress = new Int32Array(fixture.progress);
+await once(port, "message");
+const admitted = once(port, "message");
+port.postMessage({ type: "admission-request", operationId: 1, admissionId: 1 });
+await admitted;
 const database = openNodeSqliteDatabase(fixture.databasePath);
-const maintenance = fixture.checkpointAfterCommit
-  ? configureSqliteWalMaintenance(database, {
-      databasePath: fixture.databasePath,
-      checkpointIntervalMs: 0,
-      busyTimeoutMs: 0,
-    })
-  : undefined;
 database.exec("BEGIN IMMEDIATE; UPDATE proof SET value = 2");
 try {
-  waitForSqliteReclamationCommit(fixture.gate, () => port.postMessage("commit-request"));
-  Atomics.store(progress, 0, 1);
-  Atomics.notify(progress, 0);
+  waitForSqliteReclamationCommit(fixture.gate, () =>
+    port.postMessage({ type: "commit-request", operationId: 1 }),
+  );
   if (fixture.holdAfterApproval) {
-    Atomics.wait(progress, 1, 0);
+    // Failure watchdog: a blocking parent cannot release this gate. Passing tests never time out.
+    Atomics.wait(progress, 0, 0, 1_500);
   }
   if (fixture.outcome === "exit-before-commit") {
     process.exit(7);
@@ -49,27 +44,13 @@ try {
   if (fixture.outcome === "exit-after-commit") {
     process.exit(9);
   }
-  if (maintenance) {
-    Atomics.wait(progress, 1, 0);
-    waitForSqliteReclamationParentRelease(fixture.gate);
-    port.postMessage({
-      checkpointCompleted: maintenance.checkpoint(),
-      health: maintenance.health,
-      parentRelease: Atomics.load(new Int32Array(fixture.gate), 0),
-    });
-  }
-} catch (error) {
+} catch {
   if (database.isTransaction) {
     database.exec("ROLLBACK");
   }
-  port.postMessage({
-    error: String(error),
-    parentRelease: Atomics.load(new Int32Array(fixture.gate), 0),
-  });
 } finally {
-  maintenance?.close();
   database.close();
   markSqliteReclamationSettled(fixture.gate);
-  Atomics.store(progress, 0, 2);
-  Atomics.notify(progress, 0);
 }
+port.postMessage({ type: "reclaimed", operationId: 1, result: true, settled: true });
+port.close();

@@ -58,7 +58,7 @@ suite.define(() => {
         const vitalsBefore = (await gateway.getRequests("system.info")).length;
         await gateway.setMethodResponse("system.info", info(0.6));
         try {
-          await page.clock.runFor(2_000);
+          await page.clock.runFor(10_000);
           await expect.poll(() => cpu.textContent(), { timeout: 8_000 }).toContain("60%");
           expect((await gateway.getRequests("system.info")).length).toBeGreaterThan(vitalsBefore);
           expect((await gateway.getRequests("sessions.list", { activeOnly: true })).length).toBe(

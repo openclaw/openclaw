@@ -39,7 +39,6 @@ function fixture(
       state: crabboxState,
       warn,
       policy,
-      runArgs: ({ id }) => ["run", "--id", id, "--script-stdin"],
       runCommand: async (argv) => {
         calls.push(argv);
         const override = onCommand?.(argv);

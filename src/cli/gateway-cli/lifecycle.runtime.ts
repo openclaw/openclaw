@@ -35,6 +35,7 @@ export {
   completeForegroundUpdateHandoffAfterClose,
   captureForegroundUpdateHandoffStop,
   requestManagedServiceUpdateHandoffPark,
+  waitForSystemServiceUpdateHandoffs,
 } from "../../infra/update-managed-service-handoff.js";
 export { resetGatewaySuspendCoordinatorForLifecycleRestart } from "../../infra/gateway-suspend-coordinator.js";
 export { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -65,7 +66,6 @@ export {
   waitForActiveCronTaskRuns,
 } from "../../cron/service/active-run-cancellation.js";
 export { markGatewayDraining, resetAllLanes } from "../../process/command-queue.js";
-export { reloadTaskRuntimeStateFromStore } from "../../tasks/runtime-internal.js";
 export { abortPendingChannelReloads } from "../../gateway/server-reload-generation.js";
 
 export async function stopGatewayManagedProviderLocalServices(): Promise<void> {

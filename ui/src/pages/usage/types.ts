@@ -1,8 +1,6 @@
 import type { CostUsageSummary } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
-import type { UsageRetryState } from "../../lib/incomplete-usage-retry.ts";
-// Control UI view renders usageTypes screen content.
 import type {
   CostUsageDailyEntry,
   ProviderUsageSummary,
@@ -78,13 +76,12 @@ type UsageDataState = {
   exporting: boolean;
   error: string | null;
   sessions: UsageSessionEntry[];
-  agents: string[];
   creatorOptions: NonNullable<SessionsUsageResult["creatorOptions"]>;
   sessionsLimitReached: boolean; // True if 1000 session cap was hit
   totals: UsageTotals | null;
   aggregates: UsageAggregates | null;
   costDaily: CostDailyEntry[];
-  cacheRefresh: UsageRetryState;
+  cacheRefresh: "complete" | "retrying" | "failed";
   providerUsage: ProviderUsageSummary["providers"];
   /** The gateway never converged the refresh; the empty list is not an answer. */
   providerUsageStalled: boolean;
@@ -98,7 +95,6 @@ type UsageFilterState = {
   selectedSessions: string[]; // Support multiple session selection
   selectedDays: string[]; // Support multiple day selection
   selectedHours: number[]; // Support multiple hour selection
-  agentId: string | null;
   creatorKey: string | null;
   query: string;
   queryDraft: string;
@@ -112,7 +108,6 @@ type UsageDisplayState = {
   sessionSortDir: "asc" | "desc";
   recentSessions: string[];
   sessionsTab: "all" | "recent";
-  visibleColumns: UsageColumnId[];
   contextExpanded: boolean;
   headerPinned: boolean;
 };
@@ -143,7 +138,6 @@ type UsageCallbacks = {
     onStartDateChange: (date: string) => void;
     onEndDateChange: (date: string) => void;
     onScopeChange: (scope: "instance" | "family") => void;
-    onAgentChange: (agentId: string | null) => void;
     onCreatorChange: (creatorKey: string | null) => void;
     onRefresh: () => void;
     onTimeZoneChange: (zone: "local" | "utc") => void;
@@ -165,7 +159,6 @@ type UsageCallbacks = {
     onSessionSortChange: (sort: "tokens" | "cost" | "recent" | "messages" | "errors") => void;
     onSessionSortDirChange: (dir: "asc" | "desc") => void;
     onSessionsTabChange: (tab: "all" | "recent") => void;
-    onToggleColumn: (column: UsageColumnId) => void;
   };
   details: {
     onToggleContextExpanded: () => void;

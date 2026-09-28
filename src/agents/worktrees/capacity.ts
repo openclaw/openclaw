@@ -12,10 +12,7 @@ export function requireWorktreeDiskSpace(
   purpose: string,
   snapshot = false,
 ): void {
-  const volumes = new Map<
-    number,
-    { path: string; available: number; total: number; bytes: number }
-  >();
+  const volumes = new Map<number, { path: string; available: number; bytes: number }>();
   for (const demand of demands) {
     const space = tryReadDiskSpace(demand.path);
     if (!space || space.totalBytes === null) {
@@ -32,16 +29,13 @@ export function requireWorktreeDiskSpace(
       volumes.set(device, {
         path: space.checkedPath,
         available: space.availableBytes,
-        total: space.totalBytes,
         bytes: demand.bytes,
       });
     }
   }
   for (const volume of volumes.values()) {
     // Cleanup must still be possible below the operational reserve, but never without snapshot room.
-    const reserve = snapshot
-      ? 128 * 1024 ** 2
-      : Math.max(4 * GiB, Math.min(volume.total / 10, 16 * GiB));
+    const reserve = snapshot ? 128 * 1024 ** 2 : 4 * GiB;
     const required = reserve + volume.bytes;
     if (!Number.isSafeInteger(Math.ceil(required)) || volume.available < required) {
       throw new Error(

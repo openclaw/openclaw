@@ -1,21 +1,16 @@
 import type { Message } from "grammy/types";
+import { firstDefined } from "openclaw/plugin-sdk/allow-from";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
+import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
 import { resolveTelegramAccount, resolveTelegramMediaRuntimeOptions } from "./accounts.js";
-import { firstDefined, isSenderAllowed, normalizeAllowFrom } from "./bot-access.js";
+import { isSenderAllowed, normalizeAllowFrom } from "./bot-access.js";
 import {
-  buildSyntheticContext,
-  buildSyntheticTextMessage,
   createTelegramMessageContextRuntime,
   createTelegramMessageSessionRuntime,
-  formatTelegramAmbientTranscriptBody,
-  latestPromptContextAmbientWatermark,
-  latestPromptContextMinTimestampMs,
-  normalizePromptContextMinTimestampMs,
-  promptContextBoundaryOptions,
   type TelegramPromptContextMessageSelection,
 } from "./bot-handlers.message-context.js";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
@@ -47,7 +42,6 @@ import {
   commitTelegramMessageDispatchReplay,
   createTelegramMessageDispatchReplayGuard,
   releaseTelegramMessageDispatchReplay,
-  type TelegramMessageDispatchReplayClaim,
 } from "./message-dispatch-dedupe.js";
 import {
   resolveTelegramInboundMediaUri,
@@ -152,16 +146,16 @@ export function createTelegramMessagePipeline({
     },
   });
   const mergeDispatchDedupeClaims = (
-    ...groups: Array<readonly TelegramMessageDispatchReplayClaim[] | undefined>
+    ...groups: Array<readonly ChannelReplayClaimHandle[] | undefined>
   ) => [...new Set(groups.flatMap((group) => group ?? []))];
   const releaseDispatchDedupeClaims = (
-    claims: readonly TelegramMessageDispatchReplayClaim[],
+    claims: readonly ChannelReplayClaimHandle[],
     error?: unknown,
   ) => {
     releaseTelegramMessageDispatchReplay({ claims, error });
   };
   const commitDispatchDedupeClaims = async (
-    claims: readonly TelegramMessageDispatchReplayClaim[],
+    claims: readonly ChannelReplayClaimHandle[],
     options: { requirePersistent?: boolean } = {},
   ) => {
     await commitTelegramMessageDispatchReplay({ guard: replayGuard, claims, ...options });
@@ -212,9 +206,7 @@ export function createTelegramMessagePipeline({
   const claimMessageDispatchDedupe = async (
     msg: Message,
     botUserId: number,
-  ): Promise<
-    { process: true; claims: TelegramMessageDispatchReplayClaim[] } | { process: false }
-  > => {
+  ): Promise<{ process: true; claims: ChannelReplayClaimHandle[] } | { process: false }> => {
     const claim = await claimTelegramMessageDispatchReplay({
       guard: replayGuard,
       accountId,
@@ -336,7 +328,7 @@ export function createTelegramMessagePipeline({
     promptContextMessageSelection?: TelegramPromptContextMessageSelection;
     storeAllowFrom: string[];
     options?: TelegramMessageContextOptions;
-    dispatchDedupeClaims?: TelegramMessageDispatchReplayClaim[];
+    dispatchDedupeClaims?: ChannelReplayClaimHandle[];
     spooledReplayParticipants?: readonly TelegramSpooledReplayDeferredParticipant[];
     spooledReplayAbortSignal?: AbortSignal;
   }): Promise<TelegramMessageProcessingResult> => {
@@ -578,10 +570,6 @@ export function createTelegramMessagePipeline({
 
   return {
     resolveMediaRuntime,
-    normalizePromptContextMinTimestampMs,
-    promptContextBoundaryOptions,
-    latestPromptContextMinTimestampMs,
-    latestPromptContextAmbientWatermark,
     mergeDispatchDedupeClaims,
     releaseDispatchDedupeClaims,
     buildFailedProcessingResult,
@@ -589,9 +577,6 @@ export function createTelegramMessagePipeline({
     createSpooledReplayParticipantForBufferedWork,
     spooledReplayOptions,
     claimMessageDispatchDedupe,
-    buildSyntheticTextMessage,
-    buildSyntheticContext,
-    formatTelegramAmbientTranscriptBody,
     resolveTelegramSessionState,
     resolvePromptContextAmbientWatermark,
     recordMessageForReplyChain,

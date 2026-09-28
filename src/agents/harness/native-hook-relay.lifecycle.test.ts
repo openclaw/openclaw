@@ -23,6 +23,16 @@ import {
   testing,
 } from "./native-hook-relay.js";
 
+function relayParams(runId: string, sessionId = runId) {
+  return { provider: "codex", sessionId, runId } satisfies Parameters<
+    typeof registerNativeHookRelay
+  >[0];
+}
+
+function readRecord({ relayId }: { relayId: string }) {
+  return store.readNativeHookRelayBridgeRecord({ relayId });
+}
+
 afterEach(async () => {
   await testing.clearNativeHookRelaysForTests();
   resetGlobalHookRunner();
@@ -51,9 +61,7 @@ it.each(["deferred outcome", "rejection"] as const)(
       };
     });
     const relay = registerNativeHookRelay({
-      provider: "codex",
-      sessionId: "synchronous-abort",
-      runId: "synchronous-abort",
+      ...relayParams("synchronous-abort"),
       signal: controller.signal,
       runBeforeToolCall: policy,
     });
@@ -75,17 +83,13 @@ it.each(["deferred outcome", "rejection"] as const)(
   },
 );
 
-it.each([
-  { name: "tuple collision", toolIds: ["b:c", "c"] },
-  { name: "relay prefix", toolIds: ["one", "two"] },
-])("keeps deferred approvals with their exact relay across $name", async ({ toolIds }) => {
+it("keeps deferred approvals with their exact relay across tuple collisions", async () => {
+  const toolIds = ["b:c", "c"];
   const callbacks = [vi.fn(), vi.fn()];
   const relays = ["a", "a:b"].map((relayId, index) =>
     registerNativeHookRelay({
-      provider: "codex",
+      ...relayParams("tuple-run", "tuple-session"),
       relayId,
-      sessionId: "tuple-session",
-      runId: "tuple-run",
       runBeforeToolCall: async () => ({
         blocked: false,
         params: {},
@@ -127,10 +131,8 @@ it.each([
 
 it("detaches both approval maps before a cancellation callback installs a successor", async () => {
   const relay = registerNativeHookRelay({
-    provider: "codex",
+    ...relayParams("old"),
     relayId: "reentrant",
-    sessionId: "old",
-    runId: "old",
   });
   const key = JSON.stringify([relay.relayId, "call"]);
   const held = createDeferredCore<{
@@ -154,10 +156,8 @@ it("detaches both approval maps before a cancellation callback installs a succes
   let successor: ReturnType<typeof registerNativeHookRelay> | undefined;
   const onResolution = vi.fn(() => {
     successor = registerNativeHookRelay({
-      provider: "codex",
+      ...relayParams("new"),
       relayId: relay.relayId,
-      sessionId: "new",
-      runId: "new",
     });
     setNativeHookRelayPreToolUseApproval({
       relayId: relay.relayId,
@@ -219,9 +219,7 @@ it("cancels disconnected HTTP policy work without retiring the relay or storing 
     const cancelled = createDeferredCore();
     const onResolution = vi.fn(() => cancelled.resolve());
     const relay = registerOwnedNativeHookRelay({
-      provider: "codex",
-      sessionId: "http-disconnect",
-      runId: "http-disconnect",
+      ...relayParams("http-disconnect"),
       runBeforeToolCall: async ({ signal }) => {
         entered.resolve(signal);
         await release.promise;
@@ -237,7 +235,7 @@ it("cancels disconnected HTTP policy work without retiring the relay or storing 
       },
     });
     await relay.ready;
-    const record = await store.readNativeHookRelayBridgeRecord({ relayId: relay.relayId });
+    const record = await readRecord(relay);
     if (!record) {
       throw new Error("fixture bridge missing");
     }
@@ -315,11 +313,7 @@ it("does not start a permission approval after cancellation during file preparat
     );
     const requester = vi.fn(async () => "allow" as const);
     testing.setNativeHookRelayPermissionApprovalRequesterForTests(requester);
-    const relay = registerOwnedNativeHookRelay({
-      provider: "codex",
-      sessionId: "permission-disconnect",
-      runId: "permission-disconnect",
-    });
+    const relay = registerOwnedNativeHookRelay(relayParams("permission-disconnect"));
     await relay.ready;
     const abort = new AbortController();
     const pending = invokeNativeHookRelay(
@@ -367,11 +361,7 @@ it("keeps command preparation synchronous while readiness waits for locator publ
       await resume.promise;
       await write(params);
     });
-    const relay = registerOwnedNativeHookRelay({
-      provider: "codex",
-      sessionId: "ready-publication",
-      runId: "ready-publication",
-    });
+    const relay = registerOwnedNativeHookRelay(relayParams("ready-publication"));
     let ready = false;
     const readiness = relay.ready.then(() => {
       ready = true;
@@ -380,14 +370,10 @@ it("keeps command preparation synchronous while readiness waits for locator publ
       expect(typeof relay.commandForEvent("post_tool_use")).toBe("string");
       await entered.promise;
       expect(ready).toBe(false);
-      expect(Boolean(await store.readNativeHookRelayBridgeRecord({ relayId: relay.relayId }))).toBe(
-        false,
-      );
+      expect(await readRecord(relay)).toBeUndefined();
       resume.resolve();
       await readiness;
-      expect(Boolean(await store.readNativeHookRelayBridgeRecord({ relayId: relay.relayId }))).toBe(
-        true,
-      );
+      expect(await readRecord(relay)).toBeTruthy();
     } finally {
       resume.resolve();
       await readiness;
@@ -402,17 +388,11 @@ it("joins unregister when listener startup has not completed", async () => {
     vi.spyOn(Server.prototype, "listen").mockImplementation(function (this: Server) {
       return this;
     });
-    const relay = registerOwnedNativeHookRelay({
-      provider: "codex",
-      sessionId: "close-startup",
-      runId: "close-startup",
-    });
+    const relay = registerOwnedNativeHookRelay(relayParams("close-startup"));
     relay.unregister();
     await relay.drain();
     await expect(relay.ready).rejects.toThrow("stale registration");
-    expect(Boolean(await store.readNativeHookRelayBridgeRecord({ relayId: relay.relayId }))).toBe(
-      false,
-    );
+    expect(await readRecord(relay)).toBeUndefined();
   });
 });
 
@@ -436,9 +416,7 @@ it.each(["listener", "publication"] as const)(
         reason: "fixture policy denied",
       }));
       const relay = registerOwnedNativeHookRelay({
-        provider: "codex",
-        sessionId: `${stage}-failure`,
-        runId: `${stage}-failure`,
+        ...relayParams(`${stage}-failure`),
         allowedEvents: ["pre_tool_use"],
         runBeforeToolCall: policy,
       });
@@ -463,9 +441,7 @@ it.each(["listener", "publication"] as const)(
           },
         });
         expect(policy).toHaveBeenCalledOnce();
-        expect(
-          await store.readNativeHookRelayBridgeRecord({ relayId: relay.relayId }),
-        ).toBeUndefined();
+        expect(await readRecord(relay)).toBeUndefined();
       } finally {
         relay.unregister();
         await relay.drain();
@@ -488,9 +464,7 @@ it("renews logical invocation beyond its original expiry when the listener is un
       reason: "renewed policy denied",
     }));
     const relay = registerOwnedNativeHookRelay({
-      provider: "codex",
-      sessionId: "logical-renewal",
-      runId: "logical-renewal",
+      ...relayParams("logical-renewal"),
       ttlMs: 60_000,
       allowedEvents: ["pre_tool_use"],
       runBeforeToolCall: policy,
@@ -519,9 +493,7 @@ it("renews logical invocation beyond its original expiry when the listener is un
       });
       expect(policy).toHaveBeenCalledOnce();
       expect(relay.expiresAtMs).toBeGreaterThan(originalExpiry + 1);
-      expect(
-        await store.readNativeHookRelayBridgeRecord({ relayId: relay.relayId }),
-      ).toBeUndefined();
+      expect(await readRecord(relay)).toBeUndefined();
     } finally {
       clock.mockRestore();
       relay.unregister();
@@ -549,10 +521,8 @@ it.each(["cancellation", "replacement", "foreground retirement"] as const)(
       const host = await createAdmittedHostCapabilityTestFixture({ runId: "prepare-retirement" });
       const abort = new AbortController();
       const relay = registerOwnedNativeHookRelay({
-        provider: "codex",
+        ...relayParams("prepare-retirement"),
         relayId: "prepare-retirement",
-        sessionId: "prepare-retirement",
-        runId: "prepare-retirement",
         signal: abort.signal,
         allowedEvents: ["pre_tool_use"],
         runBeforeToolCall: host.hostCapabilities.runBeforeToolCall,
@@ -583,10 +553,8 @@ it.each(["cancellation", "replacement", "foreground retirement"] as const)(
           abort.abort();
         } else if (retirement === "replacement") {
           successor = registerOwnedNativeHookRelay({
-            provider: "codex",
+            ...relayParams("prepare-successor", "prepare-retirement"),
             relayId: relay.relayId,
-            sessionId: "prepare-retirement",
-            runId: "prepare-successor",
           });
         } else {
           relay.unregister();
@@ -610,9 +578,7 @@ it.each(["cancellation", "replacement", "foreground retirement"] as const)(
           expect(testing.getNativeHookRelayRegistrationForTests(relay.relayId)?.runId).toBe(
             "prepare-successor",
           );
-          expect(
-            await store.readNativeHookRelayBridgeRecord({ relayId: relay.relayId }),
-          ).toBeDefined();
+          expect(await readRecord(relay)).toBeDefined();
         }
       } finally {
         resume.resolve();
@@ -634,10 +600,8 @@ it.each(["cancellation", "replacement", "foreground retirement"] as const)(
 it("rejects oversized direct bridge responses", async () => {
   await withOpenClawTestState({ label: "relay-oversized-response" }, async () => {
     const relay = registerOwnedNativeHookRelay({
-      provider: "codex",
+      ...relayParams("run-1", "session-1"),
       relayId: "codex-oversized-bridge-response",
-      sessionId: "session-1",
-      runId: "run-1",
       allowedEvents: ["pre_tool_use"],
     });
     const server = new Server((_req, res) => {
@@ -646,7 +610,7 @@ it("rejects oversized direct bridge responses", async () => {
     });
     try {
       await relay.ready;
-      const record = await store.readNativeHookRelayBridgeRecord({ relayId: relay.relayId });
+      const record = await readRecord(relay);
       if (!record) {
         throw new Error("test bridge registration unavailable");
       }
@@ -696,13 +660,59 @@ it("rejects oversized direct bridge responses", async () => {
   });
 });
 
+it("binds direct bridge tokens to the relay they were issued for", async () => {
+  await withOpenClawTestState({ label: "relay-token-binding" }, async () => {
+    const first = registerOwnedNativeHookRelay({
+      ...relayParams("run-1", "session-1"),
+      relayId: "codex-first-bridge-session",
+      allowedEvents: ["pre_tool_use"],
+    });
+    const second = registerOwnedNativeHookRelay({
+      ...relayParams("run-2", "session-2"),
+      relayId: "codex-second-bridge-session",
+      allowedEvents: ["pre_tool_use"],
+    });
+    try {
+      await Promise.all([first.ready, second.ready]);
+      const firstRecord = await readRecord(first);
+      if (!firstRecord) {
+        throw new Error("test bridge registration unavailable");
+      }
+      await store.writeNativeHookRelayBridgeRecord({
+        record: { ...firstRecord, relayId: second.relayId, expiresAtMs: Date.now() + 10_000 },
+      });
+      // Cold locator startup must not consume this token-binding fixture's caller deadline.
+      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+      try {
+        await expect(
+          invokeNativeHookRelayBridge({
+            provider: "codex",
+            relayId: second.relayId,
+            generation: second.generation,
+            event: "pre_tool_use",
+            timeoutMs: 500,
+            rawPayload: {
+              hook_event_name: "PreToolUse",
+              tool_name: "Bash",
+              tool_input: { command: "pnpm test" },
+            },
+          }),
+        ).rejects.toThrow("native hook relay bridge target mismatch");
+        expect(testing.getNativeHookRelayInvocationsForTests()).toStrictEqual([]);
+      } finally {
+        clock.mockRestore();
+      }
+    } finally {
+      first.unregister();
+      second.unregister();
+      await Promise.all([first.drain(), second.drain()]);
+    }
+  });
+});
+
 it("does not start transport when locator lookup consumes the caller deadline", async () => {
   await withOpenClawTestState({ label: "relay-lookup-deadline" }, async () => {
-    const relay = registerOwnedNativeHookRelay({
-      provider: "codex",
-      sessionId: "lookup-deadline",
-      runId: "lookup-deadline",
-    });
+    const relay = registerOwnedNativeHookRelay(relayParams("lookup-deadline"));
     await relay.ready;
     const entered = createDeferredCore();
     const resume = createDeferredCore();
@@ -743,42 +753,10 @@ it("does not start transport when locator lookup consumes the caller deadline", 
   });
 });
 
-it("allows a later renewal after one storage renewal fails", async () => {
-  await withOpenClawTestState({ label: "relay-renewal-recovery" }, async () => {
-    const relay = registerOwnedNativeHookRelay({
-      provider: "codex",
-      sessionId: "renewal-recovery",
-      runId: "renewal-recovery",
-      ttlMs: 60_000,
-    });
-    await relay.ready;
-    vi.spyOn(store, "renewOrRestoreNativeHookRelayBridgeRecord").mockRejectedValueOnce(
-      new Error("fixture renewal failed"),
-    );
-    const expiresAtMs = relay.expiresAtMs;
-    try {
-      relay.renew(120_000);
-      await expect(relay.drain()).rejects.toThrow("fixture renewal failed");
-      expect(relay.expiresAtMs).toBe(expiresAtMs);
-
-      relay.renew(180_000);
-      await relay.drain();
-      const renewed = await store.readNativeHookRelayBridgeRecord({ relayId: relay.relayId });
-      expect(renewed?.expiresAtMs).toBe(relay.expiresAtMs);
-      expect(relay.expiresAtMs).toBeGreaterThan(expiresAtMs);
-    } finally {
-      relay.unregister();
-      await relay.drain();
-    }
-  });
-});
-
 it("joins a renewal accepted while an earlier drain reports failure", async () => {
   await withOpenClawTestState({ label: "relay-drain-renewal-race" }, async () => {
     const relay = registerOwnedNativeHookRelay({
-      provider: "codex",
-      sessionId: "drain-renewal-race",
-      runId: "drain-renewal-race",
+      ...relayParams("drain-renewal-race"),
       ttlMs: 60_000,
     });
     await relay.ready;
@@ -817,9 +795,12 @@ it("joins a renewal accepted while an earlier drain reports failure", async () =
     try {
       await entered.promise;
       expect(settled).toBe(false);
+      expect(relay.expiresAtMs).toBe(expiresAtMs);
       resume.resolve();
       await expect(draining).rejects.toBe(failure);
       expect(relay.expiresAtMs).toBeGreaterThan(expiresAtMs);
+      const renewed = await readRecord(relay);
+      expect(renewed?.expiresAtMs).toBe(relay.expiresAtMs);
     } finally {
       resume.resolve();
       await Promise.allSettled([draining]);
@@ -855,11 +836,7 @@ it("removes the locator after an admitted publication finishes during unregister
         }
       },
     );
-    const relay = registerNativeHookRelay({
-      provider: "codex",
-      sessionId: "publication-close",
-      runId: "publication-close",
-    });
+    const relay = registerNativeHookRelay(relayParams("publication-close"));
     try {
       await entered.promise;
       relay.unregister();
@@ -867,9 +844,7 @@ it("removes the locator after an admitted publication finishes during unregister
       resume.resolve();
       await published.promise;
       await deleted.promise;
-      expect(Boolean(await store.readNativeHookRelayBridgeRecord({ relayId: relay.relayId }))).toBe(
-        false,
-      );
+      expect(await readRecord(relay)).toBeUndefined();
     } finally {
       resume.resolve();
       await published.promise;
@@ -907,59 +882,17 @@ it("does not restore an old locator when renewal finishes after unregister", asy
         }
       },
     );
-    const relay = registerOwnedNativeHookRelay({
-      provider: "codex",
-      sessionId: "renewal-close",
-      runId: "renewal-close",
-    });
+    const relay = registerOwnedNativeHookRelay(relayParams("renewal-close"));
     try {
       await relay.ready;
-      expect(Boolean(await store.readNativeHookRelayBridgeRecord({ relayId: relay.relayId }))).toBe(
-        true,
-      );
+      expect(await readRecord(relay)).toBeTruthy();
       relay.renew(60_000);
       await entered.promise;
       relay.unregister();
       resume.resolve();
       await renewed.promise;
       await deleted.promise;
-      expect(Boolean(await store.readNativeHookRelayBridgeRecord({ relayId: relay.relayId }))).toBe(
-        false,
-      );
-    } finally {
-      resume.resolve();
-      relay.unregister();
-      await testing.clearNativeHookRelaysForTests();
-    }
-  });
-});
-
-it("does not publish renewal expiry before the durable renewal succeeds", async () => {
-  await withOpenClawTestState({ label: "relay-renewal-expiry" }, async () => {
-    const entered = createDeferredCore();
-    const resume = createDeferredCore();
-    const renew = store.renewOrRestoreNativeHookRelayBridgeRecord;
-    vi.spyOn(store, "renewOrRestoreNativeHookRelayBridgeRecord").mockImplementation(
-      async (params) => {
-        entered.resolve();
-        await resume.promise;
-        return await renew(params);
-      },
-    );
-    const relay = registerOwnedNativeHookRelay({
-      provider: "codex",
-      sessionId: "renewal-expiry",
-      runId: "renewal-expiry",
-    });
-    try {
-      await relay.ready;
-      expect(Boolean(await store.readNativeHookRelayBridgeRecord({ relayId: relay.relayId }))).toBe(
-        true,
-      );
-      const expiresAtMs = relay.expiresAtMs;
-      relay.renew(60_000);
-      await entered.promise;
-      expect(relay.expiresAtMs).toBe(expiresAtMs);
+      expect(await readRecord(relay)).toBeUndefined();
     } finally {
       resume.resolve();
       relay.unregister();

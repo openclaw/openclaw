@@ -161,15 +161,7 @@ export async function preflightWorkspaceApplyImpl(params: {
         continue;
       }
       const localAncestor = await localNode(ancestor);
-      const localStructurallyMatchesBase =
-        localAncestor?.type === "directory" && baseAncestor?.type === "directory"
-          ? true
-          : sameEntry(localAncestor, baseAncestor);
-      const localStructurallyMatchesCurrent =
-        localAncestor?.type === "directory" && currentAncestor?.type === "directory"
-          ? true
-          : sameEntry(localAncestor, currentAncestor);
-      if (!localStructurallyMatchesBase && !localStructurallyMatchesCurrent) {
+      if (!sameEntry(localAncestor, baseAncestor) && !sameEntry(localAncestor, currentAncestor)) {
         conflicts.add(ancestor);
         blockingConflicts.add(ancestor);
         localAncestorConflict = true;

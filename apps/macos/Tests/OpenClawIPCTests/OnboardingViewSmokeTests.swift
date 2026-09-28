@@ -207,11 +207,9 @@ struct OnboardingViewSmokeTests {
         #expect(OnboardingController.windowStyleMask.contains(.resizable))
 
         let baseline = OnboardingView.contentHeight(
-            for: OnboardingView.windowHeight,
-            usesCompactHero: false)
+            for: OnboardingView.windowHeight)
         let taller = OnboardingView.contentHeight(
-            for: OnboardingView.windowHeight + 200,
-            usesCompactHero: false)
+            for: OnboardingView.windowHeight + 200)
 
         #expect(taller - baseline == 200)
     }
@@ -226,10 +224,9 @@ struct OnboardingViewSmokeTests {
     }
 
     @Test func `short onboarding window keeps a usable scrollable page`() {
-        let short = OnboardingView.contentHeight(for: 626, usesCompactHero: false)
+        let short = OnboardingView.contentHeight(for: 626)
         let preferred = OnboardingView.contentHeight(
-            for: OnboardingView.windowHeight,
-            usesCompactHero: false)
+            for: OnboardingView.windowHeight)
 
         #expect(short == 409)
         #expect(short < preferred)

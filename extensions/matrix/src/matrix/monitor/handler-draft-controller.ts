@@ -2,12 +2,15 @@ import {
   createChannelProgressDraftCompositor,
   createLivePreviewLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
-import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
+import type {
+  BlockReplyContext,
+  GetReplyOptions,
+  ReplyPayload,
+} from "openclaw/plugin-sdk/reply-runtime";
 import type { CoreConfig, MatrixConfig, MatrixStreamingMode, ReplyToMode } from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
 import { formatMatrixToolProgressMarkdownCode } from "./handler-helpers.js";
 import { loadMatrixDraftStream, type MatrixDraftStreamHandle } from "./handler-runtime.js";
-import type { BlockReplyContext, ReplyPayload } from "./runtime-api.js";
 
 export async function createMatrixDraftController(params: {
   streaming: MatrixStreamingMode;
@@ -54,9 +57,8 @@ export async function createMatrixDraftController(params: {
         }),
       )
     : undefined;
-  const shouldStreamPreviewToolProgress = Boolean(draftStream) && previewToolProgressEnabled;
   const shouldSuppressDefaultToolProgressMessages =
-    Boolean(draftStream) && (shouldStreamPreviewToolProgress || params.streaming === "progress");
+    Boolean(draftStream) && (previewToolProgressEnabled || progressDraftStreaming);
   type PendingDraftBoundary = {
     messageGeneration: number;
     endOffset: number;
@@ -118,12 +120,8 @@ export async function createMatrixDraftController(params: {
       suppressDefaultToolProgressMessages: true,
       progressPreambleEnabled: true,
       commentaryProgressEnabled: progressDraft.commentaryProgressEnabled,
-      onToolStart: async (payload) => {
-        return await progressDraft.pushToolEvent(payload);
-      },
-      onItemEvent: async (payload) => {
-        return await progressDraft.pushItemEvent(payload);
-      },
+      onToolStart: progressDraft.pushToolEvent,
+      onItemEvent: progressDraft.pushItemEvent,
       onPlanUpdate: async (payload) => {
         if (payload.phase !== "update") {
           return false;
@@ -133,9 +131,7 @@ export async function createMatrixDraftController(params: {
           explanationFormat: payload.explanationFormat,
         });
       },
-      onApprovalEvent: async (payload) => {
-        return await progressDraft.pushApprovalEvent(payload);
-      },
+      onApprovalEvent: (payload) => progressDraft.pushApprovalEvent(payload),
     };
   };
 
@@ -143,9 +139,6 @@ export async function createMatrixDraftController(params: {
     const nextDraftBoundaryOffset = pendingDraftBoundaries.find(
       (boundary) => boundary.messageGeneration === currentDraftMessageGeneration,
     )?.endOffset;
-    if (nextDraftBoundaryOffset === undefined) {
-      return latestDraftFullText.slice(currentDraftBlockOffset);
-    }
     return latestDraftFullText.slice(currentDraftBlockOffset, nextDraftBoundaryOffset);
   };
 
@@ -227,9 +220,6 @@ export async function createMatrixDraftController(params: {
       progressDraft.beginNewTurn({ force: true });
     },
     currentReplyToId: () => currentDraftReplyToId,
-    setCurrentReplyToId: (replyToId: string | undefined) => {
-      currentDraftReplyToId = replyToId;
-    },
     resetReplyToIdForNextBlock: () => {
       currentDraftReplyToId = replyToMode === "all" ? draftReplyToId : undefined;
     },

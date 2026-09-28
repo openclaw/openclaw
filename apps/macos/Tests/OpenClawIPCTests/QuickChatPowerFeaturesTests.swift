@@ -164,6 +164,27 @@ struct QuickChatPowerFeaturesTests {
         #expect(snapshot.defaultProvider == "deepseek")
     }
 
+    @Test(arguments: [false, true])
+    func `restricted controls project a saved forbidden model onto the server default`(hasDefault: Bool) throws {
+        let policy = try JSONDecoder().decode(OpenClawChatModelSelectionPolicy.self, from: Data(
+            """
+            {"restricted":true,"defaultModel":\(hasDefault ? "\"fixture/allowed\"" : "null")}
+            """.utf8))
+        let sessions = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: Data(
+            #"{"sessions":[{"key":"agent:main:main","model":"historical","modelProvider":"fixture"}]}"#.utf8))
+        let snapshot = QuickChatModelControlLogic.snapshot(
+            target: .init(sessionKey: "agent:main:main", agentID: nil),
+            models: [.init(modelID: "allowed", name: "Allowed", provider: "fixture", contextWindow: nil)],
+            sessions: sessions,
+            agents: nil,
+            modelSelectionPolicy: policy)
+
+        #expect(snapshot.currentModelSelectionID == (hasDefault ? "fixture/allowed" : nil))
+        #expect(snapshot.defaultProvider == (hasDefault ? "fixture" : nil))
+        #expect(sessions.sessions.first?.model == "historical")
+        #expect(sessions.sessions.first?.modelProvider == "fixture")
+    }
+
     @Test func `model patch decision only patches an explicit unapplied selection`() {
         #expect(QuickChatModelControlLogic.modelPatchDecision(
             selectionID: nil,

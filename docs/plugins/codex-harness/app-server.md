@@ -42,6 +42,18 @@ already running elsewhere:
 }
 ```
 
+Ask OpenClaw can verify an already configured model through an explicitly
+configured WebSocket or Unix socket app-server. The initial Codex setup and
+sign-in flow still requires local stdio; finish sign-in on the remote host and
+configure the remote endpoint before using this verification path.
+Remote verification binds the selected endpoint,
+connection credentials, and initialized Codex identity. It trusts that configured
+service; it does not attest the remote executable's bytes. OpenClaw rechecks the
+connection selection before reuse and compares the initialized identity on a
+new connection before starting a thread. Endpoint, credential, version, or
+reported Codex home/platform changes require fresh inference verification.
+Model, authentication, managed requirements, and tool-policy checks still apply.
+
 WebSocket transport proactively establishes the app-server connection at
 gateway startup and limits the opening handshake to 10 seconds. An idle
 connection sends a WebSocket ping every 20 seconds and allows 20 seconds for its
@@ -251,6 +263,10 @@ Codex may discover shared `$HOME/.agents/skills` and
 `$HOME/.agents/plugins/marketplace.json` entries. With
 `appServer.homeScope: "user"`, OpenClaw instead uses the native user Codex
 home and its existing account without injecting an OpenClaw auth profile.
+Canonical `openai/*` chats on a user-home stdio or Unix connection also retain
+the native configured model provider; select the model with the canonical
+OpenClaw model ref. Explicit non-OpenAI providers remain explicit. Prepared
+route compatibility and subscription/API-key account checks still apply.
 
 If a deployment needs additional environment isolation, add those
 variables to `appServer.clearEnv`:

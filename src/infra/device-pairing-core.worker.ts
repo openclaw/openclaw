@@ -36,11 +36,7 @@ export function executeDevicePairingCoreMutation(
     case "devicePairing.removeRole":
       return core.removePairedDeviceRoleInWorker(command.input);
     case "devicePairing.updateMetadata":
-      return core.updatePairedDeviceMetadataInWorker(
-        command.input.deviceId,
-        command.input.patch,
-        command.input.nowMs,
-      );
+      return core.updatePairedDeviceMetadataInWorker(command.input.deviceId, command.input.patch);
     case "devicePairing.updatePresence":
       return core.updatePairedDevicePresenceInWorker(
         command.input.deviceId,

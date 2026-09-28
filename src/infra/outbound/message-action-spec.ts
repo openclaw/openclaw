@@ -218,16 +218,10 @@ export function actionHasResourceReference(
     return false;
   }
   const deliveryAliases = new Set(aliases.deliveryTargetAliases);
-  return aliases.aliases.some((alias) => {
-    if (deliveryAliases.has(alias)) {
-      return false;
-    }
-    const value = params[alias];
-    if (typeof value === "string") {
-      return Boolean(normalizeOptionalString(value));
-    }
-    return typeof value === "number" && Number.isFinite(value);
-  });
+  return aliases.aliases.some(
+    (alias) =>
+      !deliveryAliases.has(alias) && normalizeOptionalStringifiedId(params[alias]) !== undefined,
+  );
 }
 
 /**
@@ -245,28 +239,10 @@ export function actionHasTarget(
   params: Record<string, unknown>,
   options?: ActionTargetAliasOptions,
 ): boolean {
-  const to = normalizeOptionalString(params.to) ?? "";
-  if (to) {
+  if (hasNonEmptyString(params.to) || hasNonEmptyString(params.channelId)) {
     return true;
   }
-  const channelId = normalizeOptionalString(params.channelId) ?? "";
-  if (channelId) {
-    return true;
-  }
-  const specs = listActionTargetAliasSpecs(action, params, options);
-  if (specs.length === 0) {
-    return false;
-  }
-  return specs.some((spec) =>
-    spec.aliases.some((alias) => {
-      const value = params[alias];
-      if (typeof value === "string") {
-        return Boolean(normalizeOptionalString(value));
-      }
-      if (typeof value === "number") {
-        return Number.isFinite(value);
-      }
-      return false;
-    }),
+  return listActionTargetAliasSpecs(action, params, options).some((spec) =>
+    spec.aliases.some((alias) => normalizeOptionalStringifiedId(params[alias]) !== undefined),
   );
 }

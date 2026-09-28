@@ -7,6 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import {
   readSqliteTranscriptPayload,
   sqliteTranscriptPayloadColumns,
+  transcriptIdentity,
 } from "../../../lib/sqlite-transcript-payload.mjs";
 
 function readJson(file) {
@@ -91,35 +92,18 @@ function sessionIdentities(index) {
     .toSorted((a, b) => a.sessionKey.localeCompare(b.sessionKey));
 }
 
-function transcriptIdentity(event) {
-  // Doctor repairs metadata; the fixture's text-only turn must retain event IDs and messages.
-  return {
-    type: event.type,
-    id: event.id,
-    ...(event.type === "message"
-      ? {
-          role: event.message.role,
-          textHash: hashBytes(
-            JSON.stringify(
-              typeof event.message.content === "string"
-                ? [event.message.content]
-                : event.message.content
-                    .filter((part) => part.type === "text")
-                    .map((part) => part.text),
-            ),
-          ),
-        }
-      : {}),
-  };
-}
-
-function readSeededAgents(stateDir, configFile) {
+function readSeededAgents(stateDir, configFile, artifactRoot) {
   const config = readJson(configFile);
   const entries =
     config.agents?.entries ??
     Object.fromEntries((config.agents?.list ?? []).map((entry) => [entry.id, entry]));
   const agentIds = Object.keys(entries).toSorted();
-  assert.deepEqual(agentIds, ["main", "ops"], "legacy operator seeded agent roster changed");
+  const nativeEligibility = path.join(artifactRoot, "native-assignment-eligibility.json");
+  const expectedAgentIds =
+    fs.existsSync(nativeEligibility) && readJson(nativeEligibility).status === "required"
+      ? ["main", "native-proof", "ops"]
+      : ["main", "ops"];
+  assert.deepEqual(agentIds, expectedAgentIds, "legacy operator seeded agent roster changed");
   return agentIds.map((agentId) => {
     const agentRoot = path.join(stateDir, "agents", agentId);
     if (entries[agentId].agentDir) {
@@ -206,7 +190,16 @@ function assertSeededAgents(snapshot) {
         .filter((name) => name.endsWith(".json"))
         .flatMap((name) => {
           const manifest = readJson(path.join(manifestDir, name));
-          return manifest.completedAt && !manifest.failedAt ? manifest.targets : [];
+          if (!manifest.completedAt || manifest.failedAt) {
+            return [];
+          }
+          const consumed = manifest.restore?.consumedArchives ?? [];
+          for (const target of manifest.targets) {
+            target.completedMoves = target.completedMoves.filter(
+              (move) => !consumed.includes(move.archivePath),
+            );
+          }
+          return manifest.targets;
         })
     : [];
   for (const agent of snapshot.agents) {
@@ -334,7 +327,7 @@ function prepare(baselineVersion, candidateTarball, stateDir, snapshotFile, conf
     candidateSchemaVersions: manifest.openclaw.schemaVersions,
     stateDir,
     databases: readSchemas(stateDir),
-    agents: readSeededAgents(stateDir, configFile),
+    agents: readSeededAgents(stateDir, configFile, path.dirname(snapshotFile)),
   };
   fs.writeFileSync(snapshotFile, `${JSON.stringify(snapshot, null, 2)}\n`);
   return "success";

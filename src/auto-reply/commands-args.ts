@@ -16,9 +16,7 @@ function normalizeArgValue(value: unknown): string | undefined {
     text = normalizeOptionalString(value) ?? "";
   } else if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
     text = normalizeOptionalString(String(value)) ?? "";
-  } else if (typeof value === "symbol") {
-    text = normalizeOptionalString(value.toString()) ?? "";
-  } else if (typeof value === "function") {
+  } else if (typeof value === "symbol" || typeof value === "function") {
     text = normalizeOptionalString(value.toString()) ?? "";
   } else {
     // Objects and arrays are rare but preserve structured test values losslessly enough for text.
@@ -44,47 +42,21 @@ function formatActionArgs(
   return path && includesPath ? `${action} ${path}` : action;
 }
 
-const formatQueueArgs: CommandArgsFormatter = (values) => {
-  const mode = normalizeArgValue(values.mode);
-  const debounce = normalizeArgValue(values.debounce);
-  const cap = normalizeArgValue(values.cap);
-  const drop = normalizeArgValue(values.drop);
+function formatNamedArgs(
+  values: CommandArgValues,
+  names: readonly string[],
+  separator: string,
+  positional?: string,
+): string | undefined {
   const parts: string[] = [];
-  if (mode) {
-    parts.push(mode);
-  }
-  if (debounce) {
-    parts.push(`debounce:${debounce}`);
-  }
-  if (cap) {
-    parts.push(`cap:${cap}`);
-  }
-  if (drop) {
-    parts.push(`drop:${drop}`);
+  for (const name of names) {
+    const value = normalizeArgValue(values[name]);
+    if (value) {
+      parts.push(name === positional ? value : `${name}${separator}${value}`);
+    }
   }
   return parts.length > 0 ? parts.join(" ") : undefined;
-};
-
-const formatExecArgs: CommandArgsFormatter = (values) => {
-  const host = normalizeArgValue(values.host);
-  const security = normalizeArgValue(values.security);
-  const ask = normalizeArgValue(values.ask);
-  const node = normalizeArgValue(values.node);
-  const parts: string[] = [];
-  if (host) {
-    parts.push(`host=${host}`);
-  }
-  if (security) {
-    parts.push(`security=${security}`);
-  }
-  if (ask) {
-    parts.push(`ask=${ask}`);
-  }
-  if (node) {
-    parts.push(`node=${node}`);
-  }
-  return parts.length > 0 ? parts.join(" ") : undefined;
-};
+}
 
 /** Command-specific serializers used when rebuilding slash-command text from parsed args. */
 export const COMMAND_ARG_FORMATTERS: Record<string, CommandArgsFormatter> = {
@@ -92,6 +64,6 @@ export const COMMAND_ARG_FORMATTERS: Record<string, CommandArgsFormatter> = {
   mcp: formatActionArgs,
   plugins: (values) => formatActionArgs(values, ["show", "get", "enable", "disable"]),
   debug: (values) => formatActionArgs(values, []),
-  queue: formatQueueArgs,
-  exec: formatExecArgs,
+  queue: (values) => formatNamedArgs(values, ["mode", "debounce", "cap", "drop"], ":", "mode"),
+  exec: (values) => formatNamedArgs(values, ["host", "security", "ask", "node"], "="),
 };

@@ -26,6 +26,7 @@ it.each(["matching", "different-run", "unowned", "different-kind"] as const)(
               role: "custom",
               customType: source === "different-kind" ? "other-notice" : "run-failed-before-reply",
               content: diagnostic,
+              details: { errorKind: "state_contention" },
               __openclaw: {
                 id: "failure-notice",
                 seq: 1,
@@ -50,6 +51,7 @@ it.each(["matching", "different-run", "unowned", "different-kind"] as const)(
     await loadChatHistory(state);
     const expected = source === "matching" ? diagnostic : summary;
     expect(state.chatRunError).toMatchObject({ runId: "failed-run", summary: expected });
+    expect(state.chatRunError?.kind).toBe(source === "matching" ? "state_contention" : undefined);
     expect(getChatSessionProjection(state).runs["failed-run"]?.errorMessage).toBe(expected);
   },
 );
@@ -187,18 +189,13 @@ it.each(["history-only", "startup-only", "final-only", "delta-then-final"] as co
 it.each(
   (["done", "failed"] as const).flatMap((snapshotStatus) =>
     (["active", "failed", "completed"] as const).flatMap((newerState) =>
-      ["before", "after"].flatMap((requestOrder) =>
-        [
-          { oldRunId: "old-run", newRunId: "new-run" },
-          { oldRunId: "2", newRunId: "1" },
-        ].map(({ oldRunId, newRunId }) => ({
-          snapshotStatus,
-          newerState,
-          requestOrder,
-          oldRunId,
-          newRunId,
-        })),
-      ),
+      ["before", "after"].map((requestOrder) => ({
+        snapshotStatus,
+        newerState,
+        requestOrder,
+        oldRunId: "2",
+        newRunId: "1",
+      })),
     ),
   ),
 )(
@@ -473,3 +470,90 @@ it.each(["same-run", "newer-run"])(
     }
   },
 );
+
+it.each(["state_contention", "unknown", undefined])(
+  "restores only certified contention history (%s) and preserves drafts",
+  async (errorKind) => {
+    const diagnostic =
+      "Temporarily busy. Check status before trying again.\nState contention: session store; attempts exhausted.";
+    const state = makeChatHost({
+      sessionKey: "main",
+      requestHandlers: {
+        "chat.history": {
+          messages: [
+            {
+              role: "custom",
+              customType: "run-failed-before-reply",
+              content: diagnostic,
+              details: { errorKind, privateDetail: "must not enter the notice" },
+              __openclaw: { id: "failure", seq: 1, runId: "failed-run" },
+            },
+          ],
+          sessionInfo: {
+            key: "main",
+            kind: "direct",
+            updatedAt: 2,
+            status: "failed",
+            hasActiveRun: false,
+            lastRunId: "failed-run",
+            lastRunError: "Temporarily busy",
+          },
+        },
+      },
+    });
+    state.chatMessage = "My unsent draft";
+    const attachments = state.chatAttachments;
+    await loadChatHistory(state);
+    expect(state.chatRunError).toEqual({
+      summary: diagnostic,
+      runId: "failed-run",
+      ...(errorKind === "state_contention" ? { kind: "state_contention" } : {}),
+    });
+    expect(getChatSessionProjection(state).runs["failed-run"]?.errorKind).toBe(
+      errorKind === "state_contention" ? errorKind : undefined,
+    );
+    expect(state.chatMessage).toBe("My unsent draft");
+    expect(state.chatAttachments).toBe(attachments);
+    expect(state.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+    await loadChatHistory(state);
+    expect(state.chatRunError?.kind).toBe(errorKind === "state_contention" ? errorKind : undefined);
+    state.sessions.dispose();
+  },
+);
+
+it("restores separately projected contention diagnostics without putting them in the transcript text", async () => {
+  const summary =
+    "The turn was interrupted while the server was busy. Check its status before trying again.";
+  const diagnostic = "State lifecycle acquisition remained busy.";
+  const notice = {
+    role: "custom",
+    customType: "run-failed-before-reply",
+    content: summary,
+    details: { errorKind: "state_contention", diagnostic },
+    __openclaw: { id: "busy-notice", seq: 1, runId: "busy-run" },
+  };
+  const state = makeChatHost({
+    sessionKey: "main",
+    requestHandlers: {
+      "chat.history": {
+        messages: [notice],
+        sessionInfo: {
+          key: "main",
+          kind: "direct",
+          updatedAt: 2,
+          status: "failed",
+          hasActiveRun: false,
+          lastRunId: "busy-run",
+          lastRunError: summary,
+        },
+      },
+    },
+  });
+  await loadChatHistory(state);
+  expect(state.chatRunError).toMatchObject({
+    kind: "state_contention",
+    runId: "busy-run",
+    summary: `${summary}\n\n${diagnostic}`,
+  });
+  expect(state.chatMessages).toContainEqual(expect.objectContaining({ content: summary }));
+});

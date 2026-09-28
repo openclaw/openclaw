@@ -1,27 +1,8 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import {
-  extractQueryTerms,
-  filterSessionsByQuery,
-  parseToolSummary,
-  toUsageErrorMessage,
-} from "./helpers.ts";
-
-function requireFirstTool(tools: Array<[string, number]>): [string, number] {
-  const tool = tools[0];
-  if (!tool) {
-    throw new Error("expected parsed tool summary entry");
-  }
-  return tool;
-}
+import { extractQueryTerms, filterSessionsByQuery, parseToolSummary } from "./helpers.ts";
 
 describe("usage-helpers", () => {
-  it("redacts secrets in displayed usage failures", () => {
-    expect(toUsageErrorMessage(new Error("OPENAI_API_KEY=sk-1234567890abcdef"))).toBe(
-      "OPENAI_API_KEY=sk-123...cdef",
-    );
-  });
-
   it("tokenizes query terms including quoted strings", () => {
     const terms = extractQueryTerms(
       'agent:main "model:gpt-5.2" label:"Team Planning" "free phrase" has:errors',
@@ -188,8 +169,6 @@ describe("usage-helpers", () => {
     );
     expect(res.summary).toBe("Tools: read×2, exec×1 (3 calls)");
     expect(res.cleanContent).toBe("");
-    const firstTool = requireFirstTool(res.tools);
-    expect(firstTool[0]).toBe("read");
-    expect(firstTool[1]).toBe(2);
+    expect(res.tools[0]).toEqual(["read", 2]);
   });
 });

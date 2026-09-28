@@ -19,6 +19,7 @@ import { sessionRetryDelayMs } from "./session-retry.ts";
 import { createSessionRosterCacheLifecycle } from "./session-roster-cache-lifecycle.ts";
 import type { SessionRosterCacheOptions } from "./session-roster-cache.ts";
 import { createSessionRosterRefresh } from "./session-roster-refresh.ts";
+import { sanitizeSessionRow } from "./session-row-reconcile.ts";
 import type { SessionRunTerminal } from "./session-run-terminal.ts";
 import { createSessionScopedOperations } from "./session-scoped-operations.ts";
 import { createSessionThinkingClaims } from "./session-thinking-claims.ts";
@@ -141,7 +142,7 @@ export function createSessionCapability(
     } else if (errorSource || next.error !== state.error) {
       publishedErrorSource = errorSource ?? "operation";
     }
-    roster.bindOwner(next.result, next.agentId);
+    roster.observations.bindOwner(next.result, next.agentId);
     state = next;
     if (reconnectListRevision === null || canonicalListRevision >= reconnectListRevision) {
       presentation = {
@@ -172,15 +173,19 @@ export function createSessionCapability(
     owner = roster.primaryList(),
   ): SessionsListResult | null => {
     // Row selection cannot undo a newer field fact; pending local choices apply last.
-    const projected = permissions.apply(result, roster.rowRevision, owner.scope.agentId);
+    const projected = permissions.apply(
+      result,
+      roster.observations.rowRevision,
+      owner.scope.agentId,
+    );
     const annotated = swarmActivity.decorate(projected);
     // Preserve receipts before a pending intent makes another tracked copy.
-    roster.inherit(annotated, projected);
+    roster.observations.inherit(annotated, projected);
     const decorated = deletions.apply(
       mutations.applyPendingRows(mutations.applyConfirmedArchives(annotated), owner.scope.agentId),
       owner,
     );
-    roster.inherit(decorated, result);
+    roster.observations.inherit(decorated, result);
     return decorated;
   };
 
@@ -232,14 +237,22 @@ export function createSessionCapability(
     observerError: () => sessionEventSubscriptionError,
     decorate: decorateRows,
     reconcileList: (result, revision, agentId) => {
-      const admitted = deletions.reconcileList(result, revision, agentId);
-      const sources = roster.observeReadRows(admitted?.sessions ?? [], revision, agentId);
+      const admitted = deletions.reconcileList(
+        result ? { ...result, sessions: result.sessions.map(sanitizeSessionRow) } : result,
+        revision,
+        agentId,
+      );
+      const sources = roster.observations.observeReadRows(
+        admitted?.sessions ?? [],
+        revision,
+        agentId,
+      );
       const projected = permissions.reconcileList(admitted, revision, agentId);
-      roster.inherit(projected, admitted);
+      roster.observations.inherit(projected, admitted);
       if (!projected) {
         return projected;
       }
-      const sessions = roster.projectRows(projected.sessions);
+      const sessions = roster.observations.projectRows(projected.sessions);
       sessions.forEach((row, index) => {
         const source = sources[index];
         if (source) {
@@ -290,20 +303,22 @@ export function createSessionCapability(
     connection,
     snapshot: () => gateway.snapshot,
     findRow: (matches) => {
-      const row = roster.publishedRow(matches);
-      return row ? roster.projectFields(row) : undefined;
+      const row = roster.observations.publishedRow(matches);
+      return row ? roster.observations.projectFields(row) : undefined;
     },
     readState: () => state,
     publish: publishMutation,
-    copyRow: roster.copyRow,
-    stageManagedResults: roster.stageManagedResults,
+    copyRow: roster.observations.copyRow,
+    stageManagedResults: roster.observations.stageManagedResults,
     reconcileMutation: roster.reconcileMutation,
-    publishedRow: (key) => roster.publishedRow((row) => row.key === key),
-    archiveFields: roster,
+    publishedRow: (key) => roster.observations.publishedRow((row) => row.key === key),
+    archiveFields: roster.observations,
     readRevision: () => roster.requestRevision,
     redecorateLists: roster.redecorateLists,
+    notifyPendingChange: notifySubscribers,
     notifyCreated,
     clearThink: thinkingClaims.clear,
+    suspendThink: thinkingClaims.suspend,
     claimPermissionProjection: permissions.claim,
     capturePatchFields: (target) => capturePatchFields(target),
     retirePullRequestSummary,
@@ -315,7 +330,7 @@ export function createSessionCapability(
     requestRevision: () => roster.requestRevision,
     readState: () => state,
     publish: publishMutation,
-    publishedRow: roster.publishedRow,
+    publishedRow: roster.observations.publishedRow,
     redecorateLists: roster.redecorateLists,
     invalidateLists: roster.scheduleEvent,
     reconcileMutation: roster.reconcileMutation,
@@ -400,7 +415,7 @@ export function createSessionCapability(
       }
     }
     const previous = state.result;
-    const { result, changed, notify } = roster.stageRunTerminal(terminal, captured);
+    const { result, changed, notify } = roster.observations.stageRunTerminal(terminal, captured);
     if (result !== previous) {
       publishReconciledState({ ...state, result });
     }
@@ -618,8 +633,8 @@ export function createSessionCapability(
     reconcile,
     captureReconcile,
     observeRow,
-    inheritRow: roster.inheritRow,
-    projectRows: roster.projectRows,
+    inheritRow: roster.observations.inheritRow,
+    projectRows: roster.observations.projectRows,
     reconcileRunTerminal,
     refresh: roster.refresh,
     invalidate: roster.scheduleEvent,
@@ -636,6 +651,7 @@ export function createSessionCapability(
     assignOwner: mutations.assignOwner,
     retireModelOverride: mutations.retireModelOverride,
     think: thinkingClaims.get,
+    settingsPreview: mutations.settingsPreview,
     patchRowLocal: mutations.patchRowLocal,
     isPreparedWorkSession: mutations.isPreparedWorkSession,
     pullRequestSummary,

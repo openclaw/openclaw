@@ -1,5 +1,4 @@
 import { parseStrictFiniteNumber, parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
-// Elevenlabs provider module implements model/runtime integration.
 import type { PluginCapabilityCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
@@ -19,8 +18,9 @@ import {
 } from "openclaw/plugin-sdk/speech-provider";
 import {
   asBoolean,
-  asFiniteNumber,
+  asFiniteNumberInRange,
   asOptionalRecord,
+  asSafeIntegerInRange,
   normalizeOptionalString as trimToUndefined,
   normalizeLowercaseStringOrEmpty,
   parseBooleanValue,
@@ -75,30 +75,16 @@ type ElevenLabsProviderConfig = {
   };
 };
 
-function parseNumberValue(value: string): number | undefined {
-  return parseStrictFiniteNumber(value);
-}
-
 function normalizeVoiceSetting(value: unknown, min: number, max: number): number | undefined {
-  const number = asFiniteNumber(value);
-  return number !== undefined && number >= min && number <= max ? number : undefined;
+  return asFiniteNumberInRange(value, { min, max });
 }
 
 function normalizeElevenLabsSeed(value: unknown): number | undefined {
-  const seed = asFiniteNumber(value);
-  return seed !== undefined && Number.isSafeInteger(seed) && seed >= 0 && seed <= 4_294_967_295
-    ? seed
-    : undefined;
+  return asSafeIntegerInRange(value, { min: 0, max: 4_294_967_295 });
 }
 
 function normalizeElevenLabsLatencyTier(value: unknown): number | undefined {
-  const latencyTier = asFiniteNumber(value);
-  return latencyTier !== undefined &&
-    Number.isSafeInteger(latencyTier) &&
-    latencyTier >= 0 &&
-    latencyTier <= 4
-    ? latencyTier
-    : undefined;
+  return asSafeIntegerInRange(value, { min: 0, max: 4 });
 }
 
 const ELEVENLABS_OUTPUT_FAMILIES = new Set(["opus", "mp3", "pcm", "ulaw", "alaw", "wav"]);
@@ -119,26 +105,26 @@ function resolveElevenLabsOutputPlan(req: SpeechSynthesisRequest): {
   };
 }
 
+function definedSettings<T extends Record<string, unknown>>(settings: T): Partial<T> {
+  const defined = { ...settings };
+  for (const key in defined) {
+    if (defined[key] === undefined) {
+      delete defined[key];
+    }
+  }
+  return defined;
+}
+
 function normalizeVoiceSettings(
-  rawVoiceSettings: Record<string, unknown> | undefined,
+  raw: Record<string, unknown> | undefined,
 ): Partial<ElevenLabsProviderConfig["voiceSettings"]> {
-  return {
-    ...(normalizeVoiceSetting(rawVoiceSettings?.stability, 0, 1) == null
-      ? {}
-      : { stability: normalizeVoiceSetting(rawVoiceSettings?.stability, 0, 1) }),
-    ...(normalizeVoiceSetting(rawVoiceSettings?.similarityBoost, 0, 1) == null
-      ? {}
-      : { similarityBoost: normalizeVoiceSetting(rawVoiceSettings?.similarityBoost, 0, 1) }),
-    ...(normalizeVoiceSetting(rawVoiceSettings?.style, 0, 1) == null
-      ? {}
-      : { style: normalizeVoiceSetting(rawVoiceSettings?.style, 0, 1) }),
-    ...(asBoolean(rawVoiceSettings?.useSpeakerBoost) == null
-      ? {}
-      : { useSpeakerBoost: asBoolean(rawVoiceSettings?.useSpeakerBoost) }),
-    ...(normalizeVoiceSetting(rawVoiceSettings?.speed, 0.5, 2) == null
-      ? {}
-      : { speed: normalizeVoiceSetting(rawVoiceSettings?.speed, 0.5, 2) }),
-  };
+  return definedSettings({
+    stability: normalizeVoiceSetting(raw?.stability, 0, 1),
+    similarityBoost: normalizeVoiceSetting(raw?.similarityBoost, 0, 1),
+    style: normalizeVoiceSetting(raw?.style, 0, 1),
+    useSpeakerBoost: asBoolean(raw?.useSpeakerBoost),
+    speed: normalizeVoiceSetting(raw?.speed, 0.5, 2),
+  });
 }
 
 function normalizeElevenLabsProviderConfig(
@@ -167,22 +153,9 @@ function normalizeElevenLabsProviderConfig(
 }
 
 function readElevenLabsProviderConfig(config: SpeechProviderConfig): ElevenLabsProviderConfig {
-  const defaults = normalizeElevenLabsProviderConfig({});
-  const voiceSettings = asOptionalRecord(config.voiceSettings);
-  return {
-    apiKey: trimToUndefined(config.apiKey) ?? defaults.apiKey,
-    baseUrl: normalizeElevenLabsBaseUrl(trimToUndefined(config.baseUrl) ?? defaults.baseUrl),
-    voiceId: trimToUndefined(config.voiceId) ?? defaults.voiceId,
-    modelId: normalizeElevenLabsTtsModelId(trimToUndefined(config.modelId)) ?? defaults.modelId,
-    seed: normalizeElevenLabsSeed(config.seed) ?? defaults.seed,
-    applyTextNormalization:
-      trimToUndefined(config.applyTextNormalization) ?? defaults.applyTextNormalization,
-    languageCode: trimToUndefined(config.languageCode) ?? defaults.languageCode,
-    voiceSettings: {
-      ...defaults.voiceSettings,
-      ...normalizeVoiceSettings(voiceSettings),
-    },
-  };
+  return normalizeElevenLabsProviderConfig({
+    elevenlabs: { ...config, apiKey: trimToUndefined(config.apiKey) },
+  });
 }
 
 function resolveElevenLabsApiKey(...candidates: Array<string | undefined>): string | undefined {
@@ -213,17 +186,6 @@ function mergeVoiceSettingsOverride(
       ...asOptionalRecord(ctx.currentOverrides?.voiceSettings),
       ...next,
     },
-  };
-}
-
-function resolveVoiceSettingsOverride(
-  base: ElevenLabsProviderConfig["voiceSettings"],
-  overrides: unknown,
-): ElevenLabsProviderConfig["voiceSettings"] {
-  const voiceSettings = asOptionalRecord(overrides);
-  return {
-    ...base,
-    ...normalizeVoiceSettings(voiceSettings),
   };
 }
 
@@ -269,7 +231,7 @@ function parseDirectiveToken(
           return { handled: true };
         }
         const setting = ctx.key.startsWith("similarity") ? "similarityBoost" : ctx.key;
-        const value = parseNumberValue(ctx.value);
+        const value = parseStrictFiniteNumber(ctx.value);
         if (value == null) {
           return { handled: true, warnings: [`invalid ${setting} value`] };
         }
@@ -416,7 +378,10 @@ function resolveElevenLabsTtsRequest(
       trimToUndefined(overrides.applyTextNormalization) ?? config.applyTextNormalization,
     languageCode: trimToUndefined(overrides.languageCode) ?? config.languageCode,
     latencyTier: options.latencyTier,
-    voiceSettings: resolveVoiceSettingsOverride(config.voiceSettings, overrides.voiceSettings),
+    voiceSettings: {
+      ...config.voiceSettings,
+      ...normalizeVoiceSettings(asOptionalRecord(overrides.voiceSettings)),
+    },
     timeoutMs: req.timeoutMs,
   };
 }
@@ -442,29 +407,15 @@ export function buildElevenLabsSpeechProvider({
         ...(trimToUndefined(talkProviderConfig.baseUrl) == null
           ? {}
           : { baseUrl: normalizeElevenLabsBaseUrl(trimToUndefined(talkProviderConfig.baseUrl)) }),
-        ...(trimToUndefined(talkProviderConfig.voiceId) == null
-          ? {}
-          : { voiceId: trimToUndefined(talkProviderConfig.voiceId) }),
-        ...(trimToUndefined(talkProviderConfig.modelId) == null
-          ? {}
-          : {
-              modelId: normalizeElevenLabsTtsModelId(trimToUndefined(talkProviderConfig.modelId)),
-            }),
-        ...(normalizeElevenLabsSeed(talkProviderConfig.seed) == null
-          ? {}
-          : { seed: normalizeElevenLabsSeed(talkProviderConfig.seed) }),
-        ...(trimToUndefined(talkProviderConfig.applyTextNormalization) == null
-          ? {}
-          : {
-              applyTextNormalization: normalizeApplyTextNormalization(
-                trimToUndefined(talkProviderConfig.applyTextNormalization),
-              ),
-            }),
-        ...(trimToUndefined(talkProviderConfig.languageCode) == null
-          ? {}
-          : {
-              languageCode: normalizeLanguageCode(trimToUndefined(talkProviderConfig.languageCode)),
-            }),
+        ...definedSettings({
+          voiceId: trimToUndefined(talkProviderConfig.voiceId),
+          modelId: normalizeElevenLabsTtsModelId(trimToUndefined(talkProviderConfig.modelId)),
+          seed: normalizeElevenLabsSeed(talkProviderConfig.seed),
+          applyTextNormalization: normalizeApplyTextNormalization(
+            trimToUndefined(talkProviderConfig.applyTextNormalization),
+          ),
+          languageCode: normalizeLanguageCode(trimToUndefined(talkProviderConfig.languageCode)),
+        }),
         voiceSettings: {
           ...base.voiceSettings,
           ...normalizeVoiceSettings(talkVoiceSettings),
@@ -475,36 +426,20 @@ export function buildElevenLabsSpeechProvider({
       const normalize = trimToUndefined(params.normalize);
       const language = normalizeLowercaseStringOrEmpty(trimToUndefined(params.language));
       const latencyTier = normalizeElevenLabsLatencyTier(params.latencyTier);
-      const voiceSettings = {
-        ...(normalizeVoiceSetting(params.speed, 0.5, 2) == null
-          ? {}
-          : { speed: normalizeVoiceSetting(params.speed, 0.5, 2) }),
-        ...(normalizeVoiceSetting(params.stability, 0, 1) == null
-          ? {}
-          : { stability: normalizeVoiceSetting(params.stability, 0, 1) }),
-        ...(normalizeVoiceSetting(params.similarity, 0, 1) == null
-          ? {}
-          : { similarityBoost: normalizeVoiceSetting(params.similarity, 0, 1) }),
-        ...(normalizeVoiceSetting(params.style, 0, 1) == null
-          ? {}
-          : { style: normalizeVoiceSetting(params.style, 0, 1) }),
-        ...(asBoolean(params.speakerBoost) == null
-          ? {}
-          : { useSpeakerBoost: asBoolean(params.speakerBoost) }),
-      };
+      const voiceSettings = normalizeVoiceSettings({
+        speed: params.speed,
+        stability: params.stability,
+        similarityBoost: params.similarity,
+        style: params.style,
+        useSpeakerBoost: params.speakerBoost,
+      });
       return {
-        ...(trimToUndefined(params.voiceId) == null
-          ? {}
-          : { voiceId: trimToUndefined(params.voiceId) }),
-        ...(trimToUndefined(params.modelId) == null
-          ? {}
-          : { modelId: normalizeElevenLabsTtsModelId(trimToUndefined(params.modelId)) }),
-        ...(trimToUndefined(params.outputFormat) == null
-          ? {}
-          : { outputFormat: trimToUndefined(params.outputFormat) }),
-        ...(normalizeElevenLabsSeed(params.seed) == null
-          ? {}
-          : { seed: normalizeElevenLabsSeed(params.seed) }),
+        ...definedSettings({
+          voiceId: trimToUndefined(params.voiceId),
+          modelId: normalizeElevenLabsTtsModelId(trimToUndefined(params.modelId)),
+          outputFormat: trimToUndefined(params.outputFormat),
+          seed: normalizeElevenLabsSeed(params.seed),
+        }),
         ...(normalize == null
           ? {}
           : { applyTextNormalization: normalizeApplyTextNormalization(normalize) }),

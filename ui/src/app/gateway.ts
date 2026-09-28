@@ -1,6 +1,7 @@
 import type { GatewaySuspension } from "../../../packages/gateway-protocol/src/schema/gateway-suspend.js";
 import type { PluginsUiDescriptorsResult } from "../../../packages/gateway-protocol/src/schema/plugins.js";
 import type { ControlUiBootstrapProfileHint } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import type { SessionCostUsagePublication } from "../../../src/shared/usage-types.js";
 import type { EventLogEntry } from "../api/event-log.ts";
 import type { GatewayBrowserClient, GatewayEventListener, GatewayHelloOk } from "../api/gateway.ts";
 import type { AuthenticatedUser } from "./user-profile.ts";
@@ -23,6 +24,9 @@ export type ApplicationGatewaySnapshot = {
   /** Transport identity stays stable while plugin capability fields are refreshed. */
   hello: GatewayHelloOk | null;
   pluginCapabilities?: PluginsUiDescriptorsResult | null;
+  usagePublications?: Readonly<
+    Record<string, Readonly<Omit<SessionCostUsagePublication, "agentId"> & { committedAt: number }>>
+  >;
   canvasPluginSurfaceUrl: string | null;
   assistantAgentId: string | null;
   sessionKey: string;
@@ -49,6 +53,7 @@ export type ApplicationGateway = {
   readonly snapshot: ApplicationGatewaySnapshot;
   readonly connection: ApplicationGatewayConnection;
   readonly connectionRevision: number;
+  /** Raw history is captured only while subscribeEventLog has consumers. */
   readonly eventLog: readonly EventLogEntry[];
   /** Advances when the connection or authentication context retires diagnostic history. */
   readonly eventLogRevision: number;

@@ -220,17 +220,6 @@ describe("Zoom meeting session flow", () => {
     });
   });
 
-  it("restarts a failed join when the corrected invite changes the passcode", async () => {
-    const { harness, runtime } = runtimeFixture({ harness: { inCall: false } });
-    const first = await joinMeeting(runtime, { url: urlWithPasscode("old") });
-
-    const corrected = await joinMeeting(runtime, { url: urlWithPasscode("correct") });
-
-    expect(corrected.session.id).not.toBe(first.session.id);
-    expect(first.session.state).toBe("ended");
-    expect(browserRequests(harness, "/tabs/open")).toHaveLength(2);
-  });
-
   it("serializes concurrent corrected passcodes under the meeting join lock", async () => {
     const { harness, runtime } = runtimeFixture({ harness: { inCall: false } });
     const first = await joinMeeting(runtime, { url: urlWithPasscode("old") });

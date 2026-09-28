@@ -2,8 +2,8 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatUpdateDoctorConfigChange } from "./update-doctor-config.js";
 import { UPDATE_RUN_DIAGNOSTIC_LIMIT, UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 import { summarizeUpdateStepFailure, type UpdateRunStep } from "./update-run-record.js";
-import type { UpdateRunResult, UpdateStepResult } from "./update-runner-types.js";
-import type { UpdateSnapshotCapacity } from "./update-snapshot-capacity.js";
+import type { UpdateRunResult } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 type ResultStep = Omit<UpdateStepResult, "command" | "cwd" | "durationMs" | "recoverySteps">;
 
@@ -49,15 +49,15 @@ export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] 
     ? {
         ...capacity,
         candidates: capacity.candidates.slice(0, 3).map((candidate) => {
-          const copied: UpdateSnapshotCapacity["candidates"][number] = {
+          const projected: (typeof capacity.candidates)[number] = {
             kind: candidate.kind,
             availableBytes: candidate.availableBytes,
             directory: text(candidate.directory),
           };
           if (candidate.allocationError) {
-            copied.allocationError = text(candidate.allocationError);
+            projected.allocationError = text(candidate.allocationError);
           }
-          return copied;
+          return projected;
         }),
         selection: capacity.selection
           ? { ...capacity.selection, directory: text(capacity.selection.directory) }
@@ -118,14 +118,32 @@ export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] 
   ];
 }
 
-export function updateRunWarningMessages(steps: readonly UpdateRunStep[]): string[] {
-  return steps.flatMap((step) =>
+export function updateRunWarningMessages(
+  steps: readonly UpdateRunStep[],
+  maxMessages?: number,
+): string[] {
+  const messages = steps.flatMap((step) =>
     (step.step === "reconcile:settle" ||
       (step.status === "completed" && step.step.startsWith("warning:"))) &&
     step.detail
       ? [step.detail]
       : [],
   );
+  if (maxMessages === undefined) {
+    return messages;
+  }
+  // The operator's restart command must survive later advisory Doctor warnings.
+  const serviceWarning = steps.findLast(
+    (step) => step.step === "warning:managed-service-reconciliation" && step.status === "completed",
+  )?.detail;
+  return (
+    serviceWarning
+      ? [
+          serviceWarning,
+          ...messages.filter((message) => message !== serviceWarning).slice(1 - maxMessages),
+        ]
+      : messages.slice(-maxMessages)
+  ).slice(0, maxMessages);
 }
 
 /** Shared bounded receipt for history and rollback-readable diagnostics. */

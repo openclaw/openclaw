@@ -11,16 +11,15 @@ const context: Context = {
   messages: [{ role: "user", content: "Hello", timestamp: 1 }],
 };
 
-describe.each(["openai-responses", "azure-openai-responses"] as const)("%s prompt role", (api) => {
+describe("Responses prompt role", () => {
   it.each([
-    { reasoning: true, supportsDeveloperRole: undefined, role: "developer" },
-    { reasoning: true, supportsDeveloperRole: false, role: "system" },
-    { reasoning: true, supportsDeveloperRole: true, role: "developer" },
-    { reasoning: false, supportsDeveloperRole: undefined, role: "system" },
-    { reasoning: false, supportsDeveloperRole: true, role: "system" },
-  ])(
-    "uses $role with reasoning=$reasoning and developer=$supportsDeveloperRole",
-    ({ reasoning, supportsDeveloperRole, role }) => {
+    ["openai-responses", true, undefined, "developer"],
+    ["openai-responses", true, false, "system"],
+    ["azure-openai-responses", true, true, "developer"],
+    ["azure-openai-responses", false, true, "system"],
+  ] as const)(
+    "%s with reasoning=%s and developer=%s uses %s",
+    (api, reasoning, supportsDeveloperRole, role) => {
       const model: Model = {
         id: "synthetic-opaque",
         name: "Synthetic name",

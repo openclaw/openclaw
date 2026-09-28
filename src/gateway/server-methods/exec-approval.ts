@@ -43,6 +43,7 @@ import {
 } from "../operator-approval-standing-grants.js";
 import { resolveGrantExpiryDaysConfig } from "../standing-grant-expiry-config.js";
 import { createApprovalRequestAuthority } from "./approval-request-authority.js";
+import { handlePendingApprovalRequestWithDelivery } from "./approval-request-delivery.js";
 import {
   handleApprovalWaitDecision,
   bindApprovalRequesterMetadata,
@@ -54,7 +55,6 @@ import {
   respondPendingApprovalLookupError,
   resolvePendingApprovalRecord,
 } from "./approval-shared.js";
-import { handlePendingExecApprovalRequest } from "./exec-approval-request-delivery.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -446,7 +446,8 @@ export function createExecApprovalHandlers(
       if (!registration) {
         return;
       }
-      await handlePendingExecApprovalRequest({
+      await handlePendingApprovalRequestWithDelivery({
+        approvalKind: "exec",
         manager,
         record,
         respond,

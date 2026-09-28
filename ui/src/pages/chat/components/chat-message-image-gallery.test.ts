@@ -7,6 +7,8 @@ import { ImageLightboxGalleryController } from "../../../components/image-lightb
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import { renderMessageImages } from "./chat-message-images.ts";
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
+import { createMessageGroup, createUserMessage } from "./chat-message.test-support.ts";
+import { renderMessageGroup } from "./chat-message.ts";
 
 let container: HTMLDivElement;
 let onRequestUpdate: () => void;
@@ -26,6 +28,77 @@ afterEach(() => {
 });
 
 describe("message image gallery loading", () => {
+  it("renders canonical inbound transcript images through the authenticated media route", async () => {
+    const source = `media://inbound/${crypto.randomUUID()}.png`;
+    const filename = "café 雪 🦞.png";
+    const available = createDeferred();
+    const opened = createDeferred();
+    const onOpenImage = vi.fn(() => opened.resolve());
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const mediaUrl = new URL(url, "http://control.test");
+      expect(mediaUrl.searchParams.get("source")).toBe(source);
+      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer test-auth-token");
+      return new Response(
+        JSON.stringify({
+          available: true,
+          mediaTicket: "ticket-inbound",
+          mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
+        }),
+        { headers: { "Content-Type": "application/json" } },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const message = createUserMessage("", {
+      id: "user-inbound-media-ref",
+      __openclaw: { media: [{ path: source, contentType: "image/png", fileName: filename }] },
+    });
+    const group = createMessageGroup(message, "user");
+    const draw = () =>
+      render(
+        renderMessageGroup(group, {
+          showReasoning: true,
+          showToolCalls: false,
+          assistantName: "OpenClaw",
+          assistantAvatar: null,
+          resourceBasePath: "/openclaw",
+          assistantAttachmentAuthToken: "test-auth-token",
+          onRequestUpdate,
+          onOpenImage,
+        }),
+        container,
+      );
+    const observer = new MutationObserver(() => {
+      if (container.querySelector(".chat-message-image")) {
+        available.resolve();
+      }
+    });
+    observer.observe(container, { childList: true, subtree: true });
+    try {
+      draw();
+      await available.promise;
+    } finally {
+      observer.disconnect();
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const expectedSrc = `/openclaw/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&mediaTicket=ticket-inbound&${new URLSearchParams({ filename })}`;
+    expect(
+      container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
+    ).toBe(expectedSrc);
+    const tile = container.querySelector<HTMLButtonElement>(".chat-message-image-button");
+    expect(tile).not.toBeNull();
+    expect(tile?.getAttribute("aria-label")).toBe(`Open image ${filename}`);
+    expect(container.querySelector(".chat-message-image")?.getAttribute("alt")).toBe(filename);
+    tile!.click();
+    await opened.promise;
+    expect(onOpenImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        src: new URL(expectedSrc, window.location.href).href,
+        title: filename,
+      }),
+    );
+  });
+
   it("opens the cached preview immediately, upgrades after decoding, and reuses the full image", async () => {
     const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
     const full = createDeferred<Response>();
@@ -189,7 +262,7 @@ describe("message image gallery loading", () => {
             renderMessageImages(
               [
                 { url: "data:image/png;base64,cG5n", alt: "First image" },
-                { url: source, alt: "Managed neighbor" },
+                { url: source, alt: "Managed neighbor", fileName: "neighbor.png" },
               ],
               { onOpenImage, onRequestUpdate },
             ),
@@ -255,7 +328,7 @@ describe("message image gallery loading", () => {
         renderMessageImages(
           [
             { url: "data:image/png;base64,cG5n", alt: "First image" },
-            { url: localSource, alt: "Local neighbor" },
+            { url: localSource, fileName: "Local neighbor.png" },
           ],
           { onOpenImage, onRequestUpdate, sessionKey: "main", resourceBasePath: "/openclaw" },
         ),
@@ -298,7 +371,7 @@ describe("message image gallery loading", () => {
       if (removeOwner) {
         expect(result).toBeNull();
       } else {
-        expect(result?.title).toBe("Local neighbor");
+        expect(result?.title).toBe("Local neighbor.png");
         const url = new URL(result!.src, window.location.href);
         expect(url.pathname).toBe("/openclaw/__openclaw__/assistant-media");
         expect(url.searchParams.get("source")).toBe(localSource);

@@ -1,4 +1,3 @@
-// Fal provider module implements model/runtime integration.
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import {
   downloadGeneratedMusicAsset,
@@ -25,10 +24,6 @@ const FAL_MUSIC_MODELS = [
   FAL_ACE_STEP_MODEL,
   FAL_STABLE_AUDIO_MODEL,
 ] as const;
-
-function resolveFalMusicModel(model: string | undefined): string {
-  return normalizeOptionalString(model) ?? DEFAULT_FAL_MUSIC_MODEL;
-}
 
 function buildFalMinimaxBody(req: MusicGenerationRequest): Record<string, unknown> {
   const lyrics = normalizeOptionalString(req.lyrics);
@@ -140,7 +135,7 @@ export function buildFalMusicGenerationProvider(): MusicGenerationProvider {
 
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         await resolveFalHttpRequestConfig({ req, capability: "audio" });
-      const model = resolveFalMusicModel(req.model);
+      const model = normalizeOptionalString(req.model) ?? DEFAULT_FAL_MUSIC_MODEL;
       const { response, release } = await postJsonRequest({
         url: `${baseUrl}/${model}`,
         headers,

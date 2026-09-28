@@ -23,6 +23,9 @@ beforeEach(() => {
 });
 
 describe("normalizeThinkLevel", () => {
+  it("accepts Maximum labels as canonical max", () => {
+    expect(normalizeThinkLevel(" Maximum ")).toBe("max");
+  });
   it("normalizes the documented none alias to off", () => {
     expect(normalizeThinkLevel("none")).toBe("off");
   });

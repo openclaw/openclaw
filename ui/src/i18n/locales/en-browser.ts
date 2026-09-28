@@ -4,6 +4,7 @@ import { en } from "./en.ts";
 // Browser consumers register their fallback without taxing UI startup.
 const enBrowser = {
   browser: {
+    dashboardSessionShared: "You and your agent share this isolated session browser",
     dashboardShared: "You and your agent share this browser page",
     dashboardStopped: "This dashboard's browser is stopped.",
     dashboardStopping: "Browser stop is pending. Retry to finish closing its tab.",
@@ -18,6 +19,7 @@ const enBrowser = {
     downloading: "Downloading…",
     downloadFile: "Download file",
     inputLabel: "Browser input: click a field in the page, then type or paste",
+    manualTextCorrection: "Autocorrect is unavailable in browser control. Edit the text directly.",
     errors: {
       pasteFailed: "Could not paste. Reconnect to a managed browser and try again.",
       requestFailed: "Browser request failed: {error}",

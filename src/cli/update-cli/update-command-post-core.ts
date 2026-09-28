@@ -4,12 +4,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { stripVTControlCharacters } from "node:util";
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeTriageUpdateFailure } from "../../commands/triage-update.js";
 import { resolveStateDir } from "../../config/paths.js";
 import {
   createPluginInstallRecordMap,
+  parsePluginInstallRecordMap,
   serializePluginInstallRecordMap,
   setPluginInstallRecordMapEntry,
 } from "../../config/plugin-install-record-map.js";
@@ -53,11 +52,9 @@ import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.j
 import { runExec } from "../../process/exec.js";
 import { VERSION } from "../../version.js";
 import { readPackageVersion, resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
-import {
-  normalizePluginInstallRecordMap,
-  writePostCoreSourceConfigFile,
-} from "./update-command-config.js";
+import { writePostCoreSourceConfigFile } from "./update-command-config.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
+import { releaseLegacySourceLock } from "./update-command-runtime.js";
 import { isPackageManagerUpdateMode } from "./update-command-service-command.js";
 import {
   disableUpdatedPackageCompileCacheEnv,
@@ -76,35 +73,26 @@ type PostCoreUpdateFailure = {
   failureFacts?: UpdateFailureFact[];
 };
 
-export async function postCoreUpdateParentOwnsCompletion(
-  resultPath: string | undefined,
-): Promise<boolean> {
-  if (!resultPath) {
-    return false;
-  }
-  // Transient handoff only; absent preserves the shipped child-owned completion contract.
-  const handoff = await readJsonIfExists<{ completionOwner?: string }>(
-    path.join(path.dirname(resultPath), "handoff.json"),
-  );
-  return handoff?.completionOwner === "parent";
-}
-
 /** Restore operator intent only when the private handoff matches this child command. */
-export async function resolvePostCoreUpdateOperatorOptions(params: {
+export async function resolvePostCoreUpdateHandoff(params: {
   opts: UpdateCommandOptions;
   resultPath: string | undefined;
-}): Promise<UpdateCommandOptions> {
-  if (!params.resultPath || params.opts.timeout === undefined) {
-    return params.opts;
+}): Promise<{ opts: UpdateCommandOptions; parentOwnsCompletion: boolean }> {
+  // Transient handoff only; absent preserves the shipped child-owned completion contract.
+  const handoff = params.resultPath
+    ? await readJsonIfExists<{ completionOwner?: string; sourceRuntimePrepared?: boolean }>(
+        path.join(path.dirname(params.resultPath), "handoff.json"),
+      )
+    : undefined;
+  let opts =
+    typeof handoff?.sourceRuntimePrepared === "boolean"
+      ? { ...params.opts, sourceRuntimePrepared: handoff.sourceRuntimePrepared }
+      : params.opts;
+  // Shipped parents have no provenance. Their received deadline remains explicit-looking.
+  if (opts.timeout !== undefined && isOmittedUpdateTimeout(opts.timeout, handoff)) {
+    opts = { ...opts, timeout: undefined };
   }
-  const handoff = await readJsonIfExists<unknown>(
-    path.join(path.dirname(params.resultPath), "handoff.json"),
-  );
-  if (!isOmittedUpdateTimeout(params.opts.timeout, handoff)) {
-    // Shipped parents have no provenance. Their received deadline remains explicit-looking.
-    return params.opts;
-  }
-  return { ...params.opts, timeout: undefined };
+  return { opts, parentOwnsCompletion: handoff?.completionOwner === "parent" };
 }
 
 export async function writePostCoreUpdateFailureFile(
@@ -181,50 +169,17 @@ export async function readPostCorePluginInstallRecordsFile(
     );
   }
   try {
-    return normalizePluginInstallRecordMap(parsed);
+    const records = parsePluginInstallRecordMap(parsed);
+    if (!records) {
+      throw new Error("Invalid plugin install record map");
+    }
+    return records;
   } catch (err) {
     throw new Error(
       `Invalid plugin install records in handoff file: ${filePath}. Run openclaw doctor to inspect and repair plugin installation state.`,
       { cause: err },
     );
   }
-}
-
-async function execFileStdout(file: string, args: string[]): Promise<string | undefined> {
-  return await runExec(file, args, { logOutput: false, timeoutMs: 1000 }).then(
-    ({ stdout }) => stdout,
-    () => undefined,
-  );
-}
-
-async function readProcessStartTimeMs(pid: number): Promise<number | undefined> {
-  if (!Number.isInteger(pid) || pid <= 0) {
-    return undefined;
-  }
-  const raw =
-    process.platform === "win32"
-      ? await execFileStdout("powershell.exe", [
-          "-NoProfile",
-          "-NonInteractive",
-          "-Command",
-          `[Console]::Out.Write((Get-Process -Id ${pid}).StartTime.ToUniversalTime().ToString("o"))`,
-        ])
-      : await execFileStdout("ps", ["-o", "lstart=", "-p", String(pid)]);
-  if (!raw) {
-    return undefined;
-  }
-  const parsed = Date.parse(raw.trim().replace(/\s+/g, " "));
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-export async function resolvePostCoreUpdateStartedAtMs(
-  env: NodeJS.ProcessEnv,
-): Promise<number | undefined> {
-  const fromEnv = parseStrictPositiveInteger(env[POST_CORE_UPDATE_STARTED_AT_ENV] ?? "");
-  if (fromEnv !== undefined) {
-    return fromEnv;
-  }
-  return await readProcessStartTimeMs(process.ppid);
 }
 
 async function readPostCoreUpdateResultFile(
@@ -327,6 +282,7 @@ export function preparePostCorePluginInstallRecordsForFreshProcess(params: {
 
 export async function continuePostCoreUpdateInFreshProcess(params: {
   root: string;
+  sourceRuntimePrepared?: boolean;
   channel: UpdateChannel;
   requestedChannel: UpdateChannel | null;
   opts: UpdateCommandOptions;
@@ -376,7 +332,10 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
   }
   // Older targets need the existing allowance. New targets recover operator intent
   // from the private handoff instead of treating this compatibility value as explicit.
-  const handoff = createUpdateTimeoutHandoff(params.opts.timeout, params.timeoutMs);
+  const handoff = {
+    ...createUpdateTimeoutHandoff(params.opts.timeout, params.timeoutMs),
+    sourceRuntimePrepared: params.sourceRuntimePrepared,
+  };
   const serializedTimeout = handoff.timeout.serialized;
   argv.push("--timeout", serializedTimeout);
   const resultDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-post-core-"));
@@ -440,7 +399,9 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
       await fs.writeFile(sentinelPath, JSON.stringify(sentinel), { mode: 0o600 });
       handoffEnv[CONTROL_PLANE_UPDATE_SENTINEL_META_ENV] = sentinelPath;
     }
+    await releaseLegacySourceLock(params.root, params.opts.run?.sourceArtifactLock);
     const child = spawn(nodeRunner, argv, {
+      cwd: params.root,
       stdio: childStdio,
       env: {
         ...handoffEnv,
@@ -606,15 +567,6 @@ export function shouldResumePostCoreUpdateInFreshProcess(params: {
   if (params.installKindChanged === true || isPackageManagerUpdateMode(result.mode)) {
     return true;
   }
-  if (result.mode !== "git") {
-    return false;
-  }
-  const beforeSha = normalizeOptionalString(result.before?.sha);
-  const afterSha = normalizeOptionalString(result.after?.sha);
-  if (beforeSha && afterSha && beforeSha !== afterSha) {
-    return true;
-  }
-  const beforeVersion = normalizeOptionalString(result.before?.version);
-  const afterVersion = normalizeOptionalString(result.after?.version);
-  return Boolean(beforeVersion && afterVersion && beforeVersion !== afterVersion);
+  // Successful Git activation replaces dist even when local commits leave HEAD unchanged.
+  return result.mode === "git";
 }

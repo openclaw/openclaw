@@ -1,3 +1,4 @@
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
   adaptScopedAccountAccessor,
   createScopedDmSecurityResolver,
@@ -42,7 +43,6 @@ import { matrixApprovalCapability } from "./approval-native.js";
 import { createMatrixPairingText, createMatrixProbeAccount } from "./channel-account-paths.js";
 import { createMatrixMessageAdapter } from "./channel-message-adapter.js";
 import { matrixPluginBase } from "./channel.setup.js";
-import { DEFAULT_ACCOUNT_ID } from "./config-adapter.js";
 import {
   legacyConfigRules as MATRIX_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig as normalizeMatrixCompatibilityConfig,
@@ -77,8 +77,6 @@ import {
   resolveMatrixInboundConversation,
 } from "./thread-binding-api.js";
 import type { CoreConfig, MatrixConfig } from "./types.js";
-// Mutex for serializing account startup (workaround for concurrent dynamic import race condition)
-let matrixStartupLock: Promise<void> = Promise.resolve();
 
 const loadMatrixChannelRuntime = createLazyRuntimeNamedExport(
   () => import("./channel.runtime.js"),
@@ -86,18 +84,13 @@ const loadMatrixChannelRuntime = createLazyRuntimeNamedExport(
 );
 
 const loadMatrixDoctorModule = createLazyRuntimeModule(() => import("./doctor.js"));
-
-function buildMatrixTrafficStatusSummary(
-  snapshot?: {
-    lastInboundAt?: number | null;
-    lastOutboundAt?: number | null;
-  } | null,
-) {
-  return {
-    lastInboundAt: snapshot?.lastInboundAt ?? null,
-    lastOutboundAt: snapshot?.lastOutboundAt ?? null,
-  };
-}
+// Share the import across account starts; the monitor pulls in the reply pipeline.
+const loadMatrixMonitorModule = createLazyRuntimeModule(() =>
+  import("./matrix/monitor/index.js").catch((error: unknown) => {
+    loadMatrixMonitorModule.clear();
+    throw error;
+  }),
+);
 
 const matrixDoctor: ChannelDoctorAdapter = {
   dmAllowFromMode: "nestedOnly",
@@ -383,12 +376,7 @@ const matrixChannelOutbound: ChannelOutboundAdapter = {
       },
     },
   },
-  shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload }) =>
-    shouldSuppressLocalMatrixExecApprovalPrompt({
-      cfg,
-      accountId,
-      payload,
-    }),
+  shouldSuppressLocalPayloadPrompt: shouldSuppressLocalMatrixExecApprovalPrompt,
   ...createRuntimeOutboundDelegates({
     getRuntime: loadMatrixChannelRuntime,
     renderPresentation: {
@@ -463,11 +451,9 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
           const target = resolveMatrixTargetIdentity(to);
           return target ? (target.kind === "user" ? "direct" : "channel") : undefined;
         },
-        resolveInboundConversation: ({ to, conversationId, threadId }) =>
-          resolveMatrixInboundConversation({ to, conversationId, threadId }),
-        resolveDeliveryTarget: ({ conversationId, parentConversationId }) =>
-          resolveMatrixDeliveryTarget({ conversationId, parentConversationId }),
-        resolveOutboundSessionRoute: (params) => resolveMatrixOutboundSessionRoute(params),
+        resolveInboundConversation: resolveMatrixInboundConversation,
+        resolveDeliveryTarget: resolveMatrixDeliveryTarget,
+        resolveOutboundSessionRoute: resolveMatrixOutboundSessionRoute,
         resolveConversationRouteOwner: resolveMatrixConversationRouteOwner,
         targetResolver: {
           looksLikeId: (raw) => {
@@ -517,13 +503,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
             conversationId,
             parentConversationId,
           }),
-        resolveCommandConversation: ({ threadId, originatingTo, commandTo, fallbackTo }) =>
-          resolveMatrixCommandConversation({
-            threadId,
-            originatingTo,
-            commandTo,
-            fallbackTo,
-          }),
+        resolveCommandConversation: resolveMatrixCommandConversation,
       },
       status: createComputedAccountStatusAdapter<ResolvedMatrixAccount, MatrixProbe>({
         defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
@@ -532,11 +512,8 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
           buildProbeChannelStatusSummary(snapshot, { baseUrl: snapshot.baseUrl ?? null }),
         probeAccount: async ({ account, timeoutMs, cfg }) =>
           await createMatrixProbeAccount({
-            resolveMatrixAuth: async ({ cfg: cfgLocal, accountId }) =>
-              (await loadMatrixChannelRuntime()).resolveMatrixAuth({
-                cfg: cfgLocal,
-                accountId,
-              }),
+            resolveMatrixAuth: async (params) =>
+              (await loadMatrixChannelRuntime()).resolveMatrixAuth(params),
             probeMatrix: async (params) =>
               await (await loadMatrixChannelRuntime()).probeMatrix(params),
           })({
@@ -552,7 +529,8 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
           extra: {
             baseUrl: account.homeserver,
             lastProbeAt: runtime?.lastProbeAt ?? null,
-            ...buildMatrixTrafficStatusSummary(runtime),
+            lastInboundAt: runtime?.lastInboundAt ?? null,
+            lastOutboundAt: runtime?.lastOutboundAt ?? null,
           },
         }),
       }),
@@ -567,31 +545,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
             `[${account.accountId}] starting provider (${account.homeserver ?? "matrix"})`,
           );
 
-          // Serialize startup: wait for any previous startup to complete import phase.
-          // This works around a race condition with concurrent dynamic imports.
-          //
-          // INVARIANT: The import() below cannot hang because:
-          // 1. It only loads local ESM modules with no circular awaits
-          // 2. Module initialization is synchronous (no top-level await in ./matrix/monitor/index.js)
-          // 3. The lock only serializes the import phase, not the provider startup
-          const previousLock = matrixStartupLock;
-          let releaseLock: () => void = () => {};
-          matrixStartupLock = new Promise<void>((resolve) => {
-            releaseLock = resolve;
-          });
-          await previousLock;
-
-          // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
-          // Wrap in try/finally to ensure lock is released even if import fails.
-          let monitorMatrixProvider: typeof import("./matrix/monitor/index.js").monitorMatrixProvider;
-          try {
-            const module = await import("./matrix/monitor/index.js");
-            monitorMatrixProvider = module.monitorMatrixProvider;
-          } finally {
-            // Release lock after import completes or fails
-            releaseLock();
-          }
-
+          const { monitorMatrixProvider } = await loadMatrixMonitorModule();
           return monitorMatrixProvider({
             runtime: ctx.runtime,
             channelRuntime: ctx.channelRuntime,

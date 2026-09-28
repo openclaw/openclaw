@@ -11,7 +11,6 @@ import {
 import { hasNativeBrowserBridge } from "./native-browser-host.ts";
 import { webKitHostWindow, type WebKitHostMessages } from "./native-webkit-bridge.ts";
 
-type NativeLinkTarget = "external";
 type NativeLinkPoster = (message: WebKitHostMessages["openclawLink"]) => void;
 
 const NATIVE_UPDATE_DECLINED_EVENT = "openclaw:native-update-declined";
@@ -73,13 +72,9 @@ function trustedExternalAppUrl(event: MouseEvent): { anchor: HTMLAnchorElement; 
   }
 }
 
-function postNativeLink(
-  postMessage: NativeLinkPoster,
-  url: URL,
-  target: NativeLinkTarget,
-): boolean {
+function postNativeLink(postMessage: NativeLinkPoster, url: URL): boolean {
   try {
-    postMessage({ type: "open-link", url: url.href, target });
+    postMessage({ type: "open-link", url: url.href, target: "external" });
     return true;
   } catch {
     return false;
@@ -92,7 +87,7 @@ export function postNativeExternalLink(url: string): boolean {
     return false;
   }
   try {
-    return postNativeLink(poster, new URL(url), "external");
+    return postNativeLink(poster, new URL(url));
   } catch {
     return false;
   }
@@ -152,6 +147,15 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
     menu?.remove();
     menu = null;
   };
+  const openInline = (url: URL) => {
+    if (hasNativeBrowserBridge() && options.canPresentBrowserPanel?.() === false) {
+      if (postMessage) {
+        postNativeLink(postMessage, url);
+      }
+    } else {
+      openBrowserPanel(url);
+    }
+  };
   const showMenu = async (event: MouseEvent, anchor: HTMLAnchorElement, url: URL) => {
     closeMenu();
     const request = menuRequest;
@@ -168,16 +172,8 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
       x: event.clientX,
       y: event.clientY,
       close: closeMenu,
-      openExternal: () => postMessage && postNativeLink(postMessage, url, "external"),
-      openInline: () => {
-        if (hasNativeBrowserBridge() && options.canPresentBrowserPanel?.() === false) {
-          if (postMessage) {
-            postNativeLink(postMessage, url, "external");
-          }
-        } else {
-          openBrowserPanel(url);
-        }
-      },
+      openExternal: () => postMessage && postNativeLink(postMessage, url),
+      openInline: () => openInline(url),
     });
   };
 
@@ -188,7 +184,7 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
       if (
         postMessage &&
         shouldHandleNavigationClick(event) &&
-        postNativeLink(postMessage, webLink.url, "external")
+        postNativeLink(postMessage, webLink.url)
       ) {
         closeMenu();
         event.preventDefault();
@@ -202,13 +198,7 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
         : shouldHandleControlUiBrowserActivation(event)) &&
       (hasNativeBrowserBridge() || options.shouldOpenInControlUiBrowser?.())
     ) {
-      if (hasNativeBrowserBridge() && options.canPresentBrowserPanel?.() === false) {
-        if (postMessage) {
-          postNativeLink(postMessage, webLink.url, "external");
-        }
-      } else {
-        openBrowserPanel(webLink.url);
-      }
+      openInline(webLink.url);
       closeMenu();
       event.preventDefault();
       return;
@@ -217,7 +207,7 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
       return;
     }
     const appLink = trustedExternalAppUrl(event);
-    if (!appLink || !postNativeLink(postMessage, appLink.url, "external")) {
+    if (!appLink || !postNativeLink(postMessage, appLink.url)) {
       return;
     }
     closeMenu();

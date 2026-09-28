@@ -146,12 +146,6 @@ describe("session catalog entry snapshots", () => {
 
   it.each([
     [" BLUE ", "blue"],
-    ["default", undefined],
-    ["reset", undefined],
-    ["none", undefined],
-    ["gray", undefined],
-    ["grey", undefined],
-    ["#ff0000", undefined],
     ["invalid", undefined],
     [undefined, undefined],
   ])("projects provider color %s to its canonical wire value", (color, expected) => {
@@ -358,6 +352,45 @@ describe("session catalog entry snapshots", () => {
         },
       ],
     });
+  });
+
+  it("reuses planning revisions until entries or configuration change", async () => {
+    const key = "agent:main:alpha-adopted";
+    setEntries([{ sessionKey: key, entry: { label: "Before" } }]);
+    let cfg = {};
+    const context = bindSessionRowProjection({ getRuntimeConfig: () => cfg }, () => projection);
+    const revisions: Array<object | undefined> = [];
+    const labels: Array<string | undefined> = [];
+    const catalog = provider("alpha", key);
+    const list = catalog.list;
+    catalog.list = async (params) => {
+      revisions.push(params.sessionEntries?.revision);
+      labels.push(params.sessionEntries?.entriesForCatalog?.()[0]?.entry.label);
+      return list(params);
+    };
+    hoisted.activeRegistry.sessionCatalogs.push({ provider: catalog });
+    const poll = async () => {
+      const respond = vi.fn();
+      await sessionCatalogHandlers["sessions.catalog.list"]!({
+        params: {},
+        respond,
+        context,
+      } as never);
+      expect(respond.mock.calls[0]?.[0]).toBe(true);
+    };
+    await poll();
+    await poll();
+    expect(revisions[0]).toBeDefined();
+    expect(revisions[1]).toBe(revisions[0]);
+    setEntries([{ sessionKey: key, entry: { label: "After", updatedAt: 2 } }]);
+    await poll();
+    expect(revisions[2]).not.toBe(revisions[1]);
+    await poll();
+    expect(revisions[3]).toBe(revisions[2]);
+    cfg = {};
+    await poll();
+    expect(revisions[4]).not.toBe(revisions[3]);
+    expect(labels).toEqual(["Before", "Before", "After", "After", "After"]);
   });
 
   it("projects inherited profile creators from stored provenance, not provider metadata", () => {

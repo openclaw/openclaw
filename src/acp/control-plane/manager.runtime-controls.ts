@@ -177,6 +177,7 @@ export async function applyManagerRuntimeControls(params: {
   getCachedRuntimeState: (sessionKey: string) => CachedRuntimeState | null;
   isCurrentActor?: () => boolean;
   onOptionsChanged: (options: AcpSessionRuntimeOptions) => Promise<void>;
+  onModelApplied?: (model: string | undefined) => void;
 }): Promise<void> {
   const isCurrentActor = params.isCurrentActor ?? (() => true);
   if (!isCurrentActor()) {
@@ -264,6 +265,16 @@ export async function applyManagerRuntimeControls(params: {
             });
             if (!isCurrentActor()) {
               throw createSupersededActorError(params.sessionKey);
+            }
+            if (key === resolveRuntimeConfigOptionKey("model", capabilities.configOptionKeys)) {
+              const applied = result?.configOptions.find((option) => option.id === key);
+              params.onModelApplied?.(
+                result
+                  ? typeof applied?.currentValue === "string"
+                    ? applied.currentValue
+                    : undefined
+                  : value,
+              );
             }
             const accepted = reconcileAcceptedRuntimeOptions(
               options,

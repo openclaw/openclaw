@@ -39,7 +39,7 @@ scenario:
     - The interrupted work reconstructs automatically under a host-owned restart-safe policy, hides the non-replay-safe probe, and emits its marker exactly once without a resend notice or manual follow-up.
   docsRefs:
     - docs/gateway/configuration.md
-    - docs/automation/tasks.md
+    - docs/concepts/session.md
     - docs/channels/qa-channel.md
   codeRefs:
     - extensions/qa-lab/src/suite-runtime-agent-process.ts

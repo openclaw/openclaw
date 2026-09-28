@@ -214,6 +214,7 @@ export class SessionCatalogListLifetime {
       this.publishers.delete(releasePublisher);
     };
     this.publishers.add(releasePublisher);
+    this.pending += 1;
     const settle = () => {
       pending -= 1;
       this.pending -= 1;
@@ -227,33 +228,37 @@ export class SessionCatalogListLifetime {
       // Completion callbacks can arrive from a different async context; both owners
       // belong to this listing, and finishListing releases zero-background lists.
       this.releaseRoot ??= retainGatewayRootWorkAdmissionContinuation() ?? undefined;
-      return await run({
-        signal,
-        onHost: (host) => {
-          if (this.active()) {
-            publish?.(host);
-          }
-        },
-        waitUntil: (completion) => {
-          if (!listing) {
-            throw new Error("Session catalog completion registration is closed");
-          }
-          // Retirement closes delivery, not accounting for work already started.
-          // Join the publication finalizer before the Gateway releases its dependencies.
-          pending += 1;
-          this.pending += 1;
-          void trackWork(() => completion.then(settle, settle));
-        },
-      });
+      return await trackWork(() =>
+        run({
+          signal,
+          onHost: (host) => {
+            if (this.active()) {
+              publish?.(host);
+            }
+          },
+          waitUntil: (completion) => {
+            if (!listing) {
+              throw new Error("Session catalog completion registration is closed");
+            }
+            // Retirement closes delivery, not accounting for work already started.
+            // Join the publication finalizer before the Gateway releases its dependencies.
+            pending += 1;
+            this.pending += 1;
+            void trackWork(() => completion.then(settle, settle));
+          },
+        }),
+      );
     } catch (error) {
       releasePublisher();
       controller.abort(error);
       throw error;
     } finally {
       listing = false;
+      this.pending -= 1;
       if (pending === 0) {
         releasePublisher();
       }
+      this.finish();
     }
   }
 

@@ -1,25 +1,17 @@
-// Lmstudio provider module implements model/runtime integration.
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
   hasConfiguredSecretInput,
   normalizeOptionalSecretInput,
 } from "openclaw/plugin-sdk/provider-auth";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER } from "./defaults.js";
 
 export function hasLmstudioAuthorizationHeader(headers: unknown): boolean {
-  if (!headers || typeof headers !== "object" || Array.isArray(headers)) {
-    return false;
-  }
-  for (const [headerName, headerValue] of Object.entries(headers)) {
-    if (headerName.trim().toLowerCase() !== "authorization") {
-      continue;
-    }
-    if (hasConfiguredSecretInput(headerValue)) {
-      return true;
-    }
-  }
-  return false;
+  return Object.entries(asOptionalRecord(headers) ?? {}).some(
+    ([name, value]) =>
+      name.trim().toLowerCase() === "authorization" && hasConfiguredSecretInput(value),
+  );
 }
 
 export function resolveLmstudioProviderAuthMode(

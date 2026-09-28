@@ -63,6 +63,8 @@ export class WorkerRunnerCapacityError extends Error {
 export type WorkerTunnelRequest = {
   environmentId: string;
   ownerEpoch: number;
+  /** Initiating-operation authority; established tunnel custody is independent. */
+  authorize?: () => void;
 };
 
 /** Provider teardown fences local work first; only its confirmed result releases physical ownership. */
@@ -89,6 +91,8 @@ export type WorkerLocalWorkspaceSyncRequest = {
   gitAuthor?: { name?: string; email?: string };
   /** Immutable project identity from the owning environment's provisioning snapshot. */
   projectKey?: string;
+  /** Initiating-operation authority, never retained by the connected tunnel. */
+  authorize?: () => void;
 };
 
 type WorkerRepositoryCheckpointPayload = {
@@ -136,6 +140,8 @@ type WorkerRepositoryWorkspaceSource = {
 };
 
 export type WorkerWorkspaceSyncRequest = {
+  /** Live initiating operation; retained workspace custody uses its independent owner. */
+  authorize?: () => void;
   sessionId: string;
   sessionKey?: string;
   generation: number;
@@ -162,6 +168,7 @@ export type WorkerLocalWorkspaceReconcileRequest = {
   remoteWorkspaceDir: string;
   baseManifestRef: string;
   journal: WorkerWorkspaceReconciliationJournalAdapter;
+  assertCurrent?: () => void;
   stagedResult?: {
     ref: string;
     record(ref: string): void;
@@ -176,10 +183,12 @@ export type WorkerWorkspaceReconcileRequest = {
         kind: "local";
         path: string;
         journal: WorkerWorkspaceReconciliationJournalAdapter;
+        assertCurrent?: () => void;
         stagedResult?: WorkerLocalWorkspaceReconcileRequest["stagedResult"];
       }
     | {
         kind: "repository";
+        authorize?: () => void;
         referenceManifestRef: string;
         prepareCheckpoint(
           payload: WorkerRepositoryCheckpointPayload,

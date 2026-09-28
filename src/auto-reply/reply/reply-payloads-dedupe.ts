@@ -129,10 +129,6 @@ function normalizeProviderForComparison(value?: string): string | undefined {
   return normalizeAnyChannelId(trimmed) || normalizeLowercaseStringOrEmpty(trimmed);
 }
 
-function normalizeThreadIdForComparison(value?: string | number | null): string | undefined {
-  return stringifyRouteThreadId(value);
-}
-
 function normalizeTargetForDedupe(provider: string, rawTarget?: string): string | undefined {
   const fallback = normalizeOptionalString(rawTarget);
   if (!fallback) {
@@ -187,7 +183,7 @@ function targetsMatchForDedupe(params: {
     return pluginMatch({
       originTarget: params.originTarget,
       targetKey: params.targetKey,
-      targetThreadId: normalizeThreadIdForComparison(params.targetThreadId),
+      targetThreadId: stringifyRouteThreadId(params.targetThreadId),
     });
   }
   return params.targetKey === params.originTarget;
@@ -203,8 +199,8 @@ function resolveOriginThreadIdForPayload(params: {
   replyToCurrent?: boolean;
   replyDelivery?: ReplyDeliveryContext;
 }): string | undefined {
-  const originThreadId = normalizeThreadIdForComparison(params.originatingThreadId);
-  const replyToId = normalizeThreadIdForComparison(params.replyToId);
+  const originThreadId = stringifyRouteThreadId(params.originatingThreadId);
+  const replyToId = stringifyRouteThreadId(params.replyToId);
   const resolveReplyTransport = getChannelPlugin(params.provider)?.threading?.resolveReplyTransport;
   if (!params.config || !resolveReplyTransport) {
     return originThreadId;
@@ -220,21 +216,14 @@ function resolveOriginThreadIdForPayload(params: {
     replyDelivery: params.replyDelivery,
   });
   if (transport?.threadId != null) {
-    return normalizeThreadIdForComparison(transport.threadId) ?? originThreadId;
+    return stringifyRouteThreadId(transport.threadId) ?? originThreadId;
   }
   // An explicit null means the provider transports its conversation thread
   // through replyToId. Undefined reply ids remain native message references.
   if (transport?.threadId === null) {
-    return normalizeThreadIdForComparison(transport.replyToId);
+    return stringifyRouteThreadId(transport.replyToId);
   }
   return originThreadId;
-}
-
-/** Returns true when message-tool route evidence says source replies should be deduped. */
-export function shouldDedupeMessagingToolRepliesForRoute(
-  params: MessagingToolDedupeRouteParams,
-): boolean {
-  return getMatchingMessagingToolReplyTargets(params).length > 0;
 }
 
 /** Finds message-tool sends that target the same channel/account/thread as the source reply. */

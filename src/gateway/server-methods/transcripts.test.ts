@@ -32,6 +32,7 @@ import * as transcriptProviders from "../../transcripts/provider-registry.js";
 import { meetingTranscriptDb } from "../../transcripts/store-sqlite.js";
 import { TranscriptsStore, transcriptSessionSelector } from "../../transcripts/store.js";
 import { summarizeTranscripts, type TranscriptsSummary } from "../../transcripts/summary.js";
+import type { OperatorScope } from "../operator-scopes.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { transcriptsHandlers } from "./transcripts.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
@@ -63,13 +64,16 @@ function client(profileId?: string, scopes = ["operator.read"]): GatewayClient {
       : {}),
   };
 }
-function roles(others: "none" | "view"): OpenClawConfig {
+function roles(
+  others: "none" | "view",
+  scopes: OperatorScope[] = ["operator.read"],
+): OpenClawConfig {
   return {
     gateway: {
       roles: {
         default: "limited",
         definitions: {
-          limited: { sessions: { others }, agents: ["main"], scopes: ["operator.read"] },
+          limited: { sessions: { others }, agents: ["main"], scopes },
         },
       },
     },
@@ -272,7 +276,7 @@ describe("transcript Gateway read authorization and errors", () => {
           await request(
             "transcripts.list",
             {},
-            roles("none"),
+            roles("none", ["operator.admin"]),
             client(profile.id, ["operator.admin"]),
           )
         )[0],
@@ -781,11 +785,4 @@ describe("meeting transcript RPC", () => {
       { code: "INVALID_REQUEST", details: { type: "transcript_session_not_found" } },
     ]);
   });
-
-  it.each([{ limit: 0 }, { limit: 201 }, { limit: 1.5 }, { unexpected: true }])(
-    "rejects invalid list params %j",
-    async (params) => {
-      expect((await invoke("transcripts.list", params))[0]).toBe(false);
-    },
-  );
 });

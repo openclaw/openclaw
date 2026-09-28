@@ -10,7 +10,6 @@ import {
   buildPluginNpmSecurityScanReport,
   constrainPluginNpmSecurityScanReport,
   loadPluginNpmSecurityArtifacts,
-  listPluginNpmSecurityArtifacts,
   listPublishablePluginPackages,
   normalizePackedFindingPath,
   resolveCandidatePluginPackageDir,
@@ -292,6 +291,37 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
     ).toMatchObject({ layout: null, status: "fail" });
   });
 
+  it("matches the recorded 2026.8.33 source inventory and layout", () => {
+    const findings = [
+      "@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/sandbox-child.ts",
+      "@openclaw/codex:dangerous-exec:src/app-server/transport-process-snapshot.ts",
+      "@openclaw/acpx:dangerous-exec:src/codex-auth-bridge.ts",
+      "@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.mjs",
+      "@openclaw/codex:dangerous-exec:src/app-server/transport-stdio.ts",
+      "@openclaw/codex:dangerous-exec:src/doctor.ts",
+      "@openclaw/discord:dangerous-exec:src/voice/audio.ts",
+      "@openclaw/imessage:dangerous-exec:src/client.ts",
+      "@openclaw/llama-cpp-provider:dangerous-exec:src/llama-server-install.ts",
+      "@openclaw/mxc-sandbox:dangerous-exec:src/readiness.ts",
+      "@openclaw/mxc-sandbox:dangerous-exec:src/readiness.ts",
+      "@openclaw/raft:dangerous-exec:src/gateway.ts",
+      "@openclaw/signal:dangerous-exec:src/daemon.ts",
+      "@openclaw/voice-call:dangerous-exec:src/tunnel.ts",
+    ];
+    const report = buildPluginNpmSecurityScanReport({
+      candidateSha: CANDIDATE_SHA,
+      packageResults: syntheticResultsForFindings(findings),
+      targetContextRef: "extended-stable/2026.8.33",
+      toolingSha: TOOLING_SHA,
+    });
+
+    expect(report).toMatchObject({
+      errors: [],
+      layout: "extended-stable-2026.8.33",
+      status: "pass",
+    });
+  });
+
   it("matches the recorded 2026.7.33 inert package scan inventory exactly", () => {
     // syntheticResultsForFindings returns freshly built results that nothing else
     // holds, so these are assigned in place rather than respread per element.
@@ -387,7 +417,7 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
     },
   );
 
-  it.each([null, 0, 2, 3, 4])(
+  it.each([null, 0, 3, 4])(
     "requires exactly three reviewed one-shot fixture spawns when packed: %s",
     async (count) => {
       const packageName = "@openclaw/codex";
@@ -1172,22 +1202,22 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
       files: { "index.js": "export const value = 1;\n" },
       packageName: "@openclaw/test-identity",
     });
+    const loaded = loadPluginNpmSecurityArtifacts({
+      artifactRoot: artifact.artifactRoot,
+      candidateSha: CANDIDATE_SHA,
+      expectedPackages: [artifact.expectedPackage],
+      toolingSha: TOOLING_SHA,
+    });
+    expect(loaded.ingestionErrors).toEqual([]);
+    expect(loaded.artifacts.map((entry) => entry.packageName)).toEqual(["@openclaw/test-identity"]);
     expect(
-      listPluginNpmSecurityArtifacts({
-        artifactRoot: artifact.artifactRoot,
-        candidateSha: CANDIDATE_SHA,
-        expectedPackages: [artifact.expectedPackage],
-        toolingSha: TOOLING_SHA,
-      }).map((entry) => entry.packageName),
-    ).toEqual(["@openclaw/test-identity"]);
-    expect(() =>
-      listPluginNpmSecurityArtifacts({
+      loadPluginNpmSecurityArtifacts({
         artifactRoot: artifact.artifactRoot,
         candidateSha: CANDIDATE_SHA,
         expectedPackages: [],
         toolingSha: TOOLING_SHA,
-      }),
-    ).toThrow("unexpected entries");
+      }).ingestionErrors,
+    ).toEqual(["Plugin security artifact root contains 1 unexpected entries."]);
   });
 
   it("retains valid package scans when a sibling artifact is malformed", async () => {

@@ -2,7 +2,6 @@ import path from "node:path";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { PluginInstanceUnavailableError } from "../plugins/plugin-instance-error.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import {
@@ -17,6 +16,8 @@ import {
   type PreparedModelRuntimeBuildResult,
 } from "./prepared-model-runtime.build.js";
 import {
+  assertPreparedModelRuntimeInputCurrent,
+  isPreparedModelRuntimePluginLifecycleFailure,
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimePublicationSupersededError,
 } from "./prepared-model-runtime.errors.js";
@@ -139,22 +140,15 @@ export function resolveConfiguredOwner(
   return candidates.length === 1 ? candidates[0] : undefined;
 }
 
-function resolveCommittedConfiguredOwner(
-  owners: Map<string, PreparedModelRuntimeOwner>,
-  input: PreparedModelRuntimeInput,
-): PreparedModelRuntimeOwner | undefined {
-  const candidates = findConfiguredOwnerCandidates(owners, input).filter(
-    (owner) => owner.snapshot && !owner.needsRefresh && !owner.pending,
-  );
-  return candidates.length === 1 ? candidates[0] : undefined;
-}
-
 export function rebindInputToCommittedConfiguredOwner(
   owners: Map<string, PreparedModelRuntimeOwner>,
   rawInput: PreparedModelRuntimeInput,
 ): PreparedModelRuntimeInput {
   const input = normalizePreparedModelRuntimeInput(rawInput);
-  const owner = resolveCommittedConfiguredOwner(owners, input);
+  const candidates = findConfiguredOwnerCandidates(owners, input).filter(
+    (owner) => owner.snapshot && !owner.needsRefresh && !owner.pending,
+  );
+  const owner = candidates.length === 1 ? candidates[0] : undefined;
   if (!owner) {
     throw new PreparedModelRuntimeOwnerNotPublishedError(
       `prepared model runtime owner was not committed after replacement for ${input.agentDir}`,
@@ -684,11 +678,7 @@ export async function publishModelRuntimeSnapshot(
     },
     {
       published: (isGenerationCurrent) => {
-        if (!isGenerationCurrent()) {
-          throw new PreparedModelRuntimePublicationSupersededError(
-            `prepared model runtime publication was superseded for ${input.agentDir}`,
-          );
-        }
+        assertPreparedModelRuntimeInputCurrent(input, isGenerationCurrent);
         snapshot = owner.snapshot!;
         owner.pendingPluginGeneration = undefined;
         owner.pending = undefined;
@@ -699,7 +689,7 @@ export async function publishModelRuntimeSnapshot(
           if (!owner.snapshot) {
             retirePreparedModelRuntimeOwnerIfUnused(owners, key, owner);
           }
-        } else if (refreshError instanceof PluginInstanceUnavailableError) {
+        } else if (isPreparedModelRuntimePluginLifecycleFailure(refreshError)) {
           // A reload can revoke a plugin during awaited preparation, before the next build guard.
           throw new PreparedModelRuntimePublicationSupersededError(
             `prepared model runtime publication was superseded for ${input.agentDir}`,

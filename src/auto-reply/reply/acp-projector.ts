@@ -14,12 +14,12 @@ import { prefixSystemMessage } from "../../infra/system-message.js";
 import { truncateUtf16WithEllipsis as truncateText } from "../../shared/text-truncate.js";
 import type { ReplyPayload } from "../types.js";
 import {
-  type AcpHiddenBoundarySeparator,
   isAcpTagVisible,
   resolveAcpProjectionSettings,
   resolveAcpStreamingConfig,
 } from "./acp-stream-settings.js";
 import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
+import type { AcpDispatchDeliveryMeta } from "./dispatch-acp-delivery.types.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 
 const ACP_BLOCK_REPLY_TIMEOUT_MS = 15_000;
@@ -30,13 +30,6 @@ const ACP_LIVE_HARD_FLUSH_CHARS = 480;
 
 const HIDDEN_BOUNDARY_TAGS = new Set<AcpSessionUpdateTag>(["tool_call", "tool_call_update"]);
 
-type AcpProjectedDeliveryMeta = {
-  tag?: AcpSessionUpdateTag;
-  toolCallId?: string;
-  toolStatus?: string;
-  allowEdit?: boolean;
-};
-
 type ToolLifecycleState = {
   started: boolean;
   terminal: boolean;
@@ -45,92 +38,37 @@ type ToolLifecycleState = {
 
 type BufferedToolDelivery = {
   payload: ReplyPayload;
-  meta?: AcpProjectedDeliveryMeta;
+  meta?: AcpDispatchDeliveryMeta;
 };
 
-function hashText(text: string): string {
-  return text.trim();
-}
-
-function normalizeToolStatus(status: string | undefined): string | undefined {
-  const normalized = normalizeOptionalLowercaseString(status);
-  return normalized || undefined;
-}
-
-function resolveHiddenBoundarySeparatorText(mode: AcpHiddenBoundarySeparator): string {
-  if (mode === "space") {
-    return " ";
-  }
-  if (mode === "newline") {
-    return "\n";
-  }
-  if (mode === "paragraph") {
-    return "\n\n";
-  }
-  return "";
-}
-
 function shouldInsertSeparator(params: {
-  separator: string;
+  separator: " " | "\n\n";
   previousTail: string | undefined;
   nextText: string;
 }): boolean {
-  if (!params.separator) {
+  if (!params.previousTail || /^\s/.test(params.nextText)) {
     return false;
   }
-  if (!params.nextText) {
-    return false;
-  }
-  const firstChar = params.nextText[0];
-  if (typeof firstChar === "string" && /\s/.test(firstChar)) {
-    return false;
-  }
-  const tail = params.previousTail ?? "";
-  if (!tail) {
-    return false;
-  }
-  if (params.separator === " " && /\s$/.test(tail)) {
-    return false;
-  }
-  if ((params.separator === "\n" || params.separator === "\n\n") && tail.endsWith("\n")) {
-    return false;
-  }
-  return true;
+  return params.separator === " "
+    ? !/\s$/.test(params.previousTail)
+    : !params.previousTail.endsWith("\n");
 }
 
 function shouldFlushLiveBufferOnBoundary(text: string): boolean {
-  if (!text) {
-    return false;
-  }
-  if (text.length >= ACP_LIVE_HARD_FLUSH_CHARS) {
-    return true;
-  }
-  if (text.endsWith("\n\n")) {
-    return true;
-  }
-  if (/[.!?][)"'`]*\s$/.test(text)) {
-    return true;
-  }
-  if (text.length >= ACP_LIVE_SOFT_FLUSH_CHARS && /\s$/.test(text)) {
-    return true;
-  }
-  return false;
+  return (
+    text.length >= ACP_LIVE_HARD_FLUSH_CHARS ||
+    text.endsWith("\n\n") ||
+    /[.!?][)"'`]*\s$/.test(text) ||
+    (text.length >= ACP_LIVE_SOFT_FLUSH_CHARS && /\s$/.test(text))
+  );
 }
 
 function shouldFlushLiveBufferOnIdle(text: string): boolean {
-  if (!text) {
-    return false;
-  }
-  if (text.length >= ACP_LIVE_IDLE_MIN_CHARS) {
-    return true;
-  }
-  if (/[.!?][)"'`]*$/.test(text.trimEnd())) {
-    return true;
-  }
-  if (text.includes("\n")) {
-    return true;
-  }
-  return false;
+  return (
+    text.length >= ACP_LIVE_IDLE_MIN_CHARS ||
+    /[.!?][)"'`]*$/.test(text.trimEnd()) ||
+    text.includes("\n")
+  );
 }
 
 function renderToolSummaryText(
@@ -160,11 +98,6 @@ function renderToolSummaryText(
   return formatToolSummary(display);
 }
 
-type AcpReplyProjector = {
-  onEvent: (event: AcpRuntimeEvent) => Promise<void>;
-  flush: (force?: boolean) => Promise<void>;
-};
-
 export function createAcpReplyProjector(params: {
   cfg: OpenClawConfig;
   shouldSendToolSummaries: boolean;
@@ -173,14 +106,15 @@ export function createAcpReplyProjector(params: {
   deliver: (
     kind: ReplyDispatchKind,
     payload: ReplyPayload,
-    meta?: AcpProjectedDeliveryMeta,
+    meta?: AcpDispatchDeliveryMeta,
   ) => Promise<boolean>;
   getConversationContext?: () => string | undefined;
   onProgress?: () => void;
   provider?: string;
   accountId?: string;
-}): AcpReplyProjector {
+}) {
   const settings = resolveAcpProjectionSettings(params.cfg);
+  const hiddenBoundarySeparator = settings.hiddenBoundarySeparator === "space" ? " " : "\n\n";
   const streaming = resolveAcpStreamingConfig({
     cfg: params.cfg,
     provider: params.provider,
@@ -237,10 +171,7 @@ export function createAcpReplyProjector(params: {
   };
 
   const flushLiveBuffer = (opts?: { force?: boolean; idle?: boolean }) => {
-    if (settings.deliveryMode !== "live") {
-      return;
-    }
-    if (!liveBufferText) {
+    if (settings.deliveryMode !== "live" || !liveBufferText) {
       return;
     }
     if (opts?.idle && !shouldFlushLiveBufferOnIdle(liveBufferText)) {
@@ -256,7 +187,7 @@ export function createAcpReplyProjector(params: {
     if (settings.deliveryMode !== "live") {
       return;
     }
-    if (liveIdleFlushMs <= 0 || !liveBufferText) {
+    if (!liveBufferText) {
       return;
     }
     clearLiveIdleTimer();
@@ -299,11 +230,7 @@ export function createAcpReplyProjector(params: {
     await blockReplyPipeline.flush({ force });
   };
 
-  const emitSystemStatus = async (
-    text: string,
-    meta?: AcpProjectedDeliveryMeta,
-    opts?: { dedupe?: boolean },
-  ) => {
+  const emitSystemStatus = async (text: string, opts?: { dedupe?: boolean }) => {
     if (!shouldSendToolSummaries()) {
       return;
     }
@@ -312,7 +239,7 @@ export function createAcpReplyProjector(params: {
       return;
     }
     const formatted = prefixSystemMessage(bounded);
-    const hash = hashText(formatted);
+    const hash = formatted.trim();
     const shouldDedupe = settings.repeatSuppression && opts?.dedupe !== false;
     if (shouldDedupe && lastStatusHash === hash) {
       return;
@@ -320,11 +247,10 @@ export function createAcpReplyProjector(params: {
     if (settings.deliveryMode === "final_only") {
       pendingToolDeliveries.push({
         payload: { text: formatted },
-        meta,
       });
     } else {
       await flush(true);
-      await params.deliver("tool", { text: formatted }, meta);
+      await params.deliver("tool", { text: formatted });
     }
     lastStatusHash = hash;
   };
@@ -333,7 +259,7 @@ export function createAcpReplyProjector(params: {
     if (!event.tag || !HIDDEN_BOUNDARY_TAGS.has(event.tag)) {
       return;
     }
-    const status = normalizeToolStatus(event.status);
+    const status = normalizeOptionalLowercaseString(event.status);
     const isTerminal = resolveAcpToolTerminalOutcome(status) !== undefined;
     pendingHiddenBoundary = pendingHiddenBoundary || event.tag === "tool_call" || isTerminal;
   };
@@ -343,15 +269,11 @@ export function createAcpReplyProjector(params: {
       markHiddenToolBoundary(event);
       return;
     }
-    if (!isAcpTagVisible(settings, event.tag)) {
-      return;
-    }
-
     const renderedToolSummary = renderToolSummaryText(event, params.shouldSendFullToolDetails);
     const toolSummary = truncateText(renderedToolSummary, settings.maxSessionUpdateChars);
-    const hash = hashText(renderedToolSummary);
+    const hash = renderedToolSummary.trim();
     const toolCallId = normalizeOptionalString(event.toolCallId);
-    const status = normalizeToolStatus(event.status);
+    const status = normalizeOptionalLowercaseString(event.status);
     const isTerminal = resolveAcpToolTerminalOutcome(status) !== undefined;
     const isStart = status === "in_progress" || event.tag === "tool_call";
 
@@ -383,10 +305,8 @@ export function createAcpReplyProjector(params: {
       }
     }
 
-    const deliveryMeta: AcpProjectedDeliveryMeta = {
-      ...(event.tag ? { tag: event.tag } : {}),
+    const deliveryMeta: AcpDispatchDeliveryMeta = {
       ...(toolCallId ? { toolCallId } : {}),
-      ...(status ? { toolStatus: status } : {}),
       allowEdit: Boolean(toolCallId && event.tag === "tool_call_update"),
     };
     if (settings.deliveryMode === "final_only") {
@@ -407,15 +327,7 @@ export function createAcpReplyProjector(params: {
       return;
     }
     truncationNoticeEmitted = true;
-    await emitSystemStatus(
-      "output truncated",
-      {
-        tag: "session_info_update",
-      },
-      {
-        dedupe: false,
-      },
-    );
+    await emitSystemStatus("output truncated", { dedupe: false });
   };
 
   // One projector serves one dispatch; terminal settlement belongs to tryDispatchAcpReply.
@@ -435,12 +347,12 @@ export function createAcpReplyProjector(params: {
       if (
         pendingHiddenBoundary &&
         shouldInsertSeparator({
-          separator: resolveHiddenBoundarySeparatorText(settings.hiddenBoundarySeparator),
+          separator: hiddenBoundarySeparator,
           previousTail: lastVisibleOutputTail,
           nextText: text,
         })
       ) {
-        text = `${resolveHiddenBoundarySeparatorText(settings.hiddenBoundarySeparator)}${text}`;
+        text = `${hiddenBoundarySeparator}${text}`;
       }
       pendingHiddenBoundary = false;
       if (emittedOutputChars >= settings.maxOutputChars) {
@@ -482,15 +394,13 @@ export function createAcpReplyProjector(params: {
         const usageTuple =
           typeof event.used === "number" && typeof event.size === "number"
             ? `${event.used}/${event.size}`
-            : hashText(event.text);
+            : event.text.trim();
         if (usageTuple === lastUsageTuple) {
           return;
         }
         lastUsageTuple = usageTuple;
       }
-      await emitSystemStatus(event.text, event.tag ? { tag: event.tag } : undefined, {
-        dedupe: true,
-      });
+      await emitSystemStatus(event.text);
       return;
     }
 

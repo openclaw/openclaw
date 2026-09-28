@@ -185,7 +185,7 @@ export async function runHandlerBoundaryProof() {
   };
 }
 
-export async function createFixturePlugin() {
+async function createFixturePlugin() {
   // openclaw-temp-dir: standalone producer removes this fixture root in its finally block
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cached-health-tool-"));
   const pluginDir = path.join(root, FIXTURE_PLUGIN_ID);
@@ -230,7 +230,7 @@ export async function createFixturePlugin() {
   return { pluginDir, cleanup: () => fs.rm(root, { recursive: true, force: true }) };
 }
 
-export function withFixturePlugin(config: OpenClawConfig, pluginDir: string): OpenClawConfig {
+function withFixturePlugin(config: OpenClawConfig, pluginDir: string): OpenClawConfig {
   return {
     ...config,
     plugins: {

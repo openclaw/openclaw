@@ -32,9 +32,18 @@ This skill does not install a migration phase. Missing access or a safe capabili
 
 ## Retain ownership through acceptance
 
-Keep the original explicit update request and its approval through clarifications, busy deferral, failure, rollback, and recovery until full native acceptance or a concrete external/access blocker requiring outside action. Clarification does not create a new request or approval gate; superseded historical holds do not override current authorization. Respect a current user pause or cancellation. A restored incumbent is recovery, not completion of the requested update.
+Treat every authorized update request, including a brief ping to update, as an execution obligation until the requested release passes full native acceptance. An acknowledgment, status reply, successful build, restored incumbent, blocker report, or landed repair PR does not complete that obligation. Follow-up pings and clarifications retain the same request and approval; they do not reset ownership or require the requester to ask again. Respect an explicit pause or cancellation.
 
-Inspect the exact invocation and reconcile its journal before continuing through the same owner. Before ending a turn with work pending, establish an active observation/completion path or a supported continuation through the existing owner, and return with acceptance or the exact blocker without another user prompt. A cadence alone is not proof that this request will resume. If no continuation path is available, report that specific blocker; do not promise unattended follow-through. Preserve safeguards and evidence rather than retrying blindly or creating another scheduler.
+When the update fails or defers, repeat this loop until it succeeds:
+
+1. Inspect the exact native outcome, invocation, journal, and current owner; diagnose the cause rather than blindly retrying. For an expected busy or deferred outcome with no confirmed defect, observe the existing owner and use its supported continuation or retry path; skip repair and PR landing.
+2. For a confirmed owned defect, repair the owning invariant in the best coherent way, including connected lifecycle and recovery defects. Do not substitute a workaround, weaker guard, or success-shaped status for a fix.
+3. When a repair is needed, reproduce the failure, prove the repair, obtain review, and land the repair PR through normal CI and landing gates.
+4. Reconcile custody again and redo the update through the canonical owner. Verify the requested release’s full native acceptance; if it fails again, return to diagnosis.
+
+A genuine access or external dependency may pause the blocked action, but not close the request or transfer its ownership. Name the dependency and its owner, pursue supported coordination, and continue independent authorized repair work. Preserve the existing approval for continuation once the dependency is resolved; do not ask for another routine update request or bypass access, ownership, persistence, or recovery safeguards.
+
+Inspect the exact invocation and reconcile its journal before continuing through the same owner. Before ending a turn with work pending, establish an active observation/completion path or a supported continuation through the existing owner. Proactively return with the next actionable result without another user prompt; reporting a blocker is a checkpoint, not task completion. A cadence alone is not proof that this request will resume. If no continuation path is available, report that specific blocker; do not promise unattended follow-through. Preserve safeguards and evidence rather than retrying blindly or creating another scheduler.
 
 ## Notify only around actual downtime
 

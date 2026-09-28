@@ -49,17 +49,20 @@ describe("diffs tool rendered output guards", () => {
       imageHtml: "",
     });
 
-    const screenshotter = createPngScreenshotter({
-      assertHtml: (html) => {
+    const screenshotHtml = vi.fn<DiffScreenshotter["screenshotHtml"]>(
+      async ({ html, outputPath }) => {
         expect(html).toBe("");
+        await fs.mkdir(path.dirname(outputPath), { recursive: true });
+        await fs.writeFile(outputPath, Buffer.from("png"));
+        return outputPath;
       },
-    });
+    );
 
     const tool = createDiffsTool({
       getConfig: () => ({}),
       store,
       defaults: DEFAULT_DIFFS_TOOL_DEFAULTS,
-      screenshotter,
+      screenshotter: { screenshotHtml },
     });
 
     const result = await tool.execute?.("tool-empty-image-html", {
@@ -68,25 +71,7 @@ describe("diffs tool rendered output guards", () => {
       mode: "file",
     });
 
-    expect(screenshotter["screenshotHtml"]).toHaveBeenCalledTimes(1);
+    expect(screenshotHtml).toHaveBeenCalledTimes(1);
     expect((result.details as Record<string, unknown>).filePath).toMatch(/preview\.png$/);
   });
 });
-
-function createPngScreenshotter(
-  params: {
-    assertHtml?: (html: string) => void;
-  } = {},
-): DiffScreenshotter {
-  const screenshotHtml: DiffScreenshotter["screenshotHtml"] = vi.fn(
-    async ({ html, outputPath }: { html: string; outputPath: string }) => {
-      params.assertHtml?.(html);
-      await fs.mkdir(path.dirname(outputPath), { recursive: true });
-      await fs.writeFile(outputPath, Buffer.from("png"));
-      return outputPath;
-    },
-  );
-  return {
-    screenshotHtml,
-  };
-}

@@ -250,7 +250,10 @@ it.each([
   expect(outcome).toMatchObject(
     changes ? { code: "SESSION_WORK_START_CHANGED" } : { name: "AbortError" },
   );
-  if (scenario === "child-over-base-stable" || direct) {
+  if (scenario === "child-over-base-stable") {
+    // Reply admission uses the final observation as the selected binding.
+    expect(admissionReads).toEqual([childConversation, baseConversation]);
+  } else if (direct) {
     expect(admissionReads).toEqual(
       expect.arrayContaining([
         expect.objectContaining(childConversation),

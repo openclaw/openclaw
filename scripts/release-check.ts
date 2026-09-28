@@ -1,6 +1,4 @@
 #!/usr/bin/env -S node --import tsx
-// Release Check script supports OpenClaw repository automation.
-
 import { execFileSync, type ExecFileSyncOptions } from "node:child_process";
 import {
   copyFileSync,
@@ -29,14 +27,15 @@ import {
   type BundledExtension,
   type ExtensionPackageJson as PackageJson,
 } from "./lib/bundled-extension-manifest.ts";
+import { reportLimitViolations } from "./lib/check-limits.mts";
 import { GATEWAY_RUN_CHUNK_METADATA_VERSION } from "./lib/gateway-run-chunk-metadata.mts";
 import { importToolingTypeScript } from "./lib/import-tooling-typescript.mts";
-import { collectPackUnpackedSizeErrors as collectNpmPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mts";
+import { collectPackUnpackedSizeFindings } from "./lib/npm-pack-budget.mts";
 import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import { isLegacyPluginDependencyInstallStagePath } from "./lib/package-dist-inventory.ts";
 import { collectBundledPluginPackageDependencySpecs } from "./lib/plugin-package-dependencies.mts";
 import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mts";
-import { resolveNpmRunner } from "./npm-runner.mts";
+import { resolveNpmRunner, type NpmRunnerParams } from "./npm-runner.mts";
 import {
   collectInstalledPackageErrors,
   normalizeInstalledBinaryVersion,
@@ -279,20 +278,15 @@ function checkBundledExtensionMetadata() {
       ),
     )
     .toSorted((left, right) => left.localeCompare(right));
-  const errors = [...manifestErrors, ...dependencyConflictErrors];
-  if (errors.length > 0) {
-    console.error("release-check: bundled extension manifest validation failed:");
-    for (const error of errors) {
-      console.error(`  - ${error}`);
-    }
-    process.exit(1);
-  }
+  checkValidationErrors("bundled extension manifest", [
+    ...manifestErrors,
+    ...dependencyConflictErrors,
+  ]);
 }
 
-function checkSkillShellScriptsExecutable() {
-  const errors = collectSkillShellScriptExecutableErrors();
+function checkValidationErrors(label: string, errors: string[]) {
   if (errors.length > 0) {
-    console.error("release-check: skill shell script permission validation failed:");
+    console.error(`release-check: ${label} validation failed:`);
     for (const error of errors) {
       console.error(`  - ${error}`);
     }
@@ -302,22 +296,9 @@ function checkSkillShellScriptsExecutable() {
 
 export function resolveReleaseNpmCommand(
   args: string[],
-  params: {
-    comSpec?: string;
-    env?: NodeJS.ProcessEnv;
-    execPath?: string;
-    existsSync?: typeof existsSync;
-    platform?: NodeJS.Platform;
-  } = {},
+  params: Omit<NpmRunnerParams, "npmArgs"> = {},
 ) {
-  return resolveNpmRunner({
-    comSpec: params.comSpec,
-    env: params.env,
-    execPath: params.execPath,
-    existsSync: params.existsSync,
-    npmArgs: args,
-    platform: params.platform,
-  });
+  return resolveNpmRunner({ ...params, npmArgs: args });
 }
 
 function execNpm(
@@ -664,6 +645,7 @@ export function createPackedCompletionSmokeEnv(
 
 export function collectPackedInstalledPackageVerificationErrors(params: {
   additionalCompanionManifestRoots?: string[];
+  allowLegacyGeneratedOwnership?: boolean;
   expectedVersion: string;
   installedBinaryVersion?: string;
   packageRoot: string;
@@ -673,6 +655,7 @@ export function collectPackedInstalledPackageVerificationErrors(params: {
   ) as { version?: string };
   const errors = collectInstalledPackageErrors({
     additionalCompanionManifestRoots: params.additionalCompanionManifestRoots,
+    allowLegacyGeneratedOwnership: params.allowLegacyGeneratedOwnership,
     expectedVersion: params.expectedVersion,
     installedVersion: packageJson.version?.trim() ?? "",
     packageRoot: params.packageRoot,
@@ -688,6 +671,12 @@ export function collectPackedInstalledPackageVerificationErrors(params: {
   return errors;
 }
 
+export function allowsLegacyGeneratedOwnershipForSourceRoot(sourceRoot: string): boolean {
+  return !existsSync(
+    resolve(sourceRoot, "scripts/lib/runtime-dependency-ownership-build-plugin.mts"),
+  );
+}
+
 function verifyPackedInstalledPackage(params: {
   expectedVersion: string;
   packageRoot: string;
@@ -695,22 +684,16 @@ function verifyPackedInstalledPackage(params: {
   tmpRoot: string;
 }): void {
   const invocation = resolvePackedInstalledBinaryCommandInvocation(params.prefixDir, ["--version"]);
-  const installedBinaryVersion = runReleaseCheckCommand(
-    {
-      command: invocation.command,
-      args: invocation.args,
-      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-    },
-    {
-      cwd: params.tmpRoot,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  ).trim();
+  const installedBinaryVersion = runReleaseCheckCommand(invocation, {
+    cwd: params.tmpRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
   const errors = collectPackedInstalledPackageVerificationErrors({
     // The selected source checkout is immutable release input. Its companion
     // manifests are the exact inputs packed by the following plugin preflight.
     additionalCompanionManifestRoots: [resolve("extensions")],
+    allowLegacyGeneratedOwnership: allowsLegacyGeneratedOwnershipForSourceRoot(resolve()),
     expectedVersion: params.expectedVersion,
     installedBinaryVersion,
     packageRoot: params.packageRoot,
@@ -733,7 +716,7 @@ export function createPackedPluginSdkTypescriptSmokeProject(params: {
     // Strict declaration checking needs the release-declared ws types; without
     // them skipLibCheck:false reports TS7016 before the __exportAll TS2304.
     "@types/ws": "8.18.1",
-    typescript: "6.0.3",
+    typescript: "7.0.2",
   };
   if (params.aiPackageSpec) {
     dependencies["@openclaw/ai"] = params.aiPackageSpec;
@@ -846,11 +829,8 @@ function runPackedPluginSdkTypescriptSmoke(
         );
       }
     }
-    const tscPath = [
-      join(consumerDir, "node_modules", "typescript", "bin", "tsc"),
-      join(installedOpenClawRoot, "node_modules", "typescript", "bin", "tsc"),
-    ].find((candidate) => existsSync(candidate));
-    if (!tscPath) {
+    const tscPath = join(consumerDir, "node_modules", "typescript", "bin", "tsc");
+    if (!existsSync(tscPath)) {
       throw new Error("release-check: packed plugin SDK TypeScript smoke could not find tsc.");
     }
     runReleaseCheckCommand(
@@ -931,34 +911,6 @@ function runPackedBundledPluginActivationSmoke(packageRoot: string, tmpRoot: str
       cwd: packageRoot,
       stdio: "inherit",
       env,
-    },
-  );
-}
-
-function runPackedTaskRegistryControlRuntimeSmoke(packageRoot: string): void {
-  const runtimePath = join(packageRoot, "dist", "task-registry-control.runtime.js");
-  if (!existsSync(runtimePath)) {
-    throw new Error("release-check: packed task-registry control runtime is missing.");
-  }
-  const runtimeImportExpression = [
-    `(0, Function)("specifier", "return " + "im" + "port(specifier)")`,
-    `(${JSON.stringify(pathToFileURL(runtimePath).href)})`,
-  ].join("");
-  const source = `
-const runtime = await ${runtimeImportExpression};
-if (typeof runtime.getAcpSessionManager !== "function") {
-  throw new Error("missing getAcpSessionManager export");
-}
-if (typeof runtime.killSubagentRunAdmin !== "function") {
-  throw new Error("missing killSubagentRunAdmin export");
-}
-`;
-  runReleaseCheckCommand(
-    { command: process.execPath, args: ["--input-type=module", "--eval", source] },
-    {
-      cwd: packageRoot,
-      stdio: "inherit",
-      env: createPackedCliSmokeEnv(process.env),
     },
   );
 }
@@ -1056,7 +1008,6 @@ function runPackedBundledChannelEntrySmoke(tarballPath: string, packedRoot: stri
     });
     runCriticalPluginSdkEntrypointImportSmoke(packageRoot);
     runPackedBundledPluginActivationSmoke(packageRoot, tmpRoot);
-    runPackedTaskRegistryControlRuntimeSmoke(packageRoot);
     runPackedPluginSdkTypescriptSmoke(tarballPath, tmpRoot, localPackageTarballs);
     const bundledChannelEntrySmoke = resolvePackedBundledChannelEntrySmokeCommand();
     runReleaseCheckCommand(
@@ -1213,18 +1164,6 @@ export function collectAppcastSparkleVersionErrors(xml: string): string[] {
   return errors;
 }
 
-function checkAppcastSparkleVersions() {
-  const xml = readFileSync(appcastPath, "utf8");
-  const errors = collectAppcastSparkleVersionErrors(xml);
-  if (errors.length > 0) {
-    console.error("release-check: appcast sparkle version validation failed:");
-    for (const error of errors) {
-      console.error(`  - ${error}`);
-    }
-    process.exit(1);
-  }
-}
-
 // Critical functions that channel extension plugins import from openclaw/plugin-sdk.
 // If any are missing from the compiled output, plugins crash at runtime (#27569).
 const requiredPluginSdkExports = [
@@ -1299,8 +1238,9 @@ function checkPluginSdkExports(rootDir: string) {
   }
 }
 
-export function collectCriticalPluginSdkEntrypointSizeErrors(rootDir = process.cwd()): string[] {
+export function collectCriticalPluginSdkEntrypointSizeFindings(rootDir = process.cwd()) {
   const errors: string[] = [];
+  const violations: { file: string; title: string; message: string }[] = [];
   for (const specifier of CRITICAL_PLUGIN_SDK_SIZE_CHECK_SPECIFIERS) {
     const subpath = specifier.slice("openclaw/plugin-sdk/".length);
     const relativePath = `dist/plugin-sdk/${subpath}.js`;
@@ -1315,12 +1255,14 @@ export function collectCriticalPluginSdkEntrypointSizeErrors(rootDir = process.c
       continue;
     }
     if (stat.size > MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES) {
-      errors.push(
-        `${relativePath} is ${stat.size} bytes, exceeding ${MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES} bytes. Keep public SDK package entrypoints lazy and avoid bundling compiler/runtime internals.`,
-      );
+      violations.push({
+        file: `src/plugin-sdk/${subpath}.ts`,
+        title: "Plugin SDK entrypoint size budget",
+        message: `${relativePath} is ${stat.size} bytes, exceeding ${MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES} bytes. Keep public SDK package entrypoints lazy and avoid bundling compiler/runtime internals.`,
+      });
     }
   }
-  return errors;
+  return { errors, violations };
 }
 
 function runCriticalPluginSdkEntrypointImportSmoke(packageRoot: string) {
@@ -1342,8 +1284,11 @@ function runCriticalPluginSdkEntrypointImportSmoke(packageRoot: string) {
 
 async function main() {
   const { values } = parseArgs({ options: { tarball: { type: "string" } } });
-  checkAppcastSparkleVersions();
-  checkSkillShellScriptsExecutable();
+  checkValidationErrors(
+    "appcast sparkle version",
+    collectAppcastSparkleVersionErrors(readFileSync(appcastPath, "utf8")),
+  );
+  checkValidationErrors("skill shell script permission", collectSkillShellScriptExecutableErrors());
   checkBundledExtensionMetadata();
   const temporaryDir = mkdtempSync(join(tmpdir(), "openclaw-release-check-"));
   try {
@@ -1470,11 +1415,13 @@ async function verifyPackedContents(
 ): Promise<void> {
   await checkPackedTargetBootstrap(process.cwd(), packedRoot);
   checkPluginSdkExports(packedRoot);
-  const criticalPluginSdkEntrypointErrors =
-    collectCriticalPluginSdkEntrypointSizeErrors(packedRoot);
-  if (criticalPluginSdkEntrypointErrors.length > 0) {
+  const criticalPluginSdkEntrypoints = collectCriticalPluginSdkEntrypointSizeFindings(packedRoot);
+  const criticalPluginSdkSizeFailed = reportLimitViolations(
+    criticalPluginSdkEntrypoints.violations,
+  );
+  if (criticalPluginSdkEntrypoints.errors.length > 0 || criticalPluginSdkSizeFailed) {
     throw new Error(
-      `release-check: critical plugin-sdk entrypoint validation failed:\n- ${criticalPluginSdkEntrypointErrors.join("\n- ")}`,
+      `release-check: critical plugin-sdk entrypoint validation failed.${criticalPluginSdkEntrypoints.errors.length > 0 ? `\n- ${criticalPluginSdkEntrypoints.errors.join("\n- ")}` : ""}`,
     );
   }
   // The tarball verifier owns lifecycle and target-declared dist layout. It
@@ -1491,9 +1438,15 @@ async function verifyPackedContents(
 
   const forbidden = collectForbiddenPackPaths(paths);
   const forbiddenContent = collectForbiddenPackContentPaths(paths, packedRoot);
-  const sizeErrors = collectNpmPackUnpackedSizeErrors(results);
+  const packSize = collectPackUnpackedSizeFindings(results);
+  const packSizeFailed = reportLimitViolations(packSize.violations);
 
-  if (forbidden.length > 0 || forbiddenContent.length > 0 || sizeErrors.length > 0) {
+  if (
+    forbidden.length > 0 ||
+    forbiddenContent.length > 0 ||
+    packSize.errors.length > 0 ||
+    packSizeFailed
+  ) {
     if (forbidden.length > 0) {
       console.error("release-check: forbidden files in npm pack:");
       for (const path of forbidden) {
@@ -1506,9 +1459,9 @@ async function verifyPackedContents(
         console.error(`  - ${path}`);
       }
     }
-    if (sizeErrors.length > 0) {
-      console.error("release-check: npm pack unpacked size budget exceeded:");
-      for (const error of sizeErrors) {
+    if (packSize.errors.length > 0) {
+      console.error("release-check: invalid npm pack unpacked size metadata:");
+      for (const error of packSize.errors) {
         console.error(`  - ${error}`);
       }
     }

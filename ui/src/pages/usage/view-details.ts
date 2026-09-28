@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
+import { icons } from "../../components/icons.ts";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/tooltip.ts";
@@ -14,6 +15,7 @@ import type {
   SessionLogRole,
   TimeSeriesPoint,
   UsageContextDetail,
+  UsageProps,
   UsageSessionEntry,
 } from "./types.ts";
 import { USAGE_TOKEN_CATEGORIES } from "./view-chart.ts";
@@ -78,51 +80,31 @@ function computeFilteredUsage(
   };
 }
 
-function renderSessionDetailPanel(
+export function renderSessionDetailPanel(
   session: UsageSessionEntry,
-  timeSeries: { points: TimeSeriesPoint[] } | null,
-  timeSeriesLoading: boolean,
-  timeSeriesStatus: PanelRefreshStatus,
-  timeSeriesMode: "cumulative" | "per-turn",
-  onTimeSeriesModeChange: (mode: "cumulative" | "per-turn") => void,
-  timeSeriesBreakdownMode: "total" | "by-type",
-  onTimeSeriesBreakdownChange: (mode: "total" | "by-type") => void,
-  timeSeriesCursorStart: number | null,
-  timeSeriesCursorEnd: number | null,
-  onTimeSeriesCursorRangeChange: (start: number | null, end: number | null) => void,
-  startDate: string,
-  endDate: string,
-  selectedDays: string[],
-  timeZone: "local" | "utc",
-  sessionLogs: SessionLogEntry[] | null,
-  sessionLogsLoading: boolean,
-  sessionLogsStatus: PanelRefreshStatus,
-  sessionLogsExpanded: boolean,
-  onToggleSessionLogsExpanded: () => void,
-  logFilters: {
-    roles: SessionLogRole[];
-    tools: string[];
-    hasTools: boolean;
-    query: string;
-  },
-  onLogFilterRolesChange: (next: SessionLogRole[]) => void,
-  onLogFilterToolsChange: (next: string[]) => void,
-  onLogFilterHasToolsChange: (next: boolean) => void,
-  onLogFilterQueryChange: (next: string) => void,
-  onLogFilterClear: () => void,
-  context: UsageContextDetail,
+  detail: UsageProps["detail"],
+  callbacks: UsageProps["callbacks"]["details"],
+  range: Pick<UsageProps["filters"], "startDate" | "endDate" | "selectedDays" | "timeZone">,
   contextExpanded: boolean,
-  onToggleContextExpanded: () => void,
   onClose: () => void,
 ) {
   const label = session.label || session.key;
   const displayLabel = label.length > 50 ? truncateUtf16Safe(label, 50) + "…" : label;
   const usage = session.usage;
+  const { timeSeriesCursorStart, timeSeriesCursorEnd } = detail;
 
   const hasRange = timeSeriesCursorStart !== null && timeSeriesCursorEnd !== null;
   const filteredUsage =
-    timeSeriesCursorStart !== null && timeSeriesCursorEnd !== null && timeSeries?.points && usage
-      ? computeFilteredUsage(usage, timeSeries.points, timeSeriesCursorStart, timeSeriesCursorEnd)
+    timeSeriesCursorStart !== null &&
+    timeSeriesCursorEnd !== null &&
+    detail.timeSeries?.points &&
+    usage
+      ? computeFilteredUsage(
+          usage,
+          detail.timeSeries.points,
+          timeSeriesCursorStart,
+          timeSeriesCursorEnd,
+        )
       : undefined;
   const headerStats = filteredUsage
     ? { totalTokens: filteredUsage.totalTokens, totalCost: filteredUsage.totalCost }
@@ -162,11 +144,11 @@ function renderSessionDetailPanel(
         </div>
         <openclaw-tooltip .content=${t("usage.details.close")}>
           <button
-            class="btn btn--sm btn--ghost"
+            class="btn btn--sm btn--ghost session-detail-close"
             @click=${onClose}
             aria-label=${t("usage.details.close")}
           >
-            ×
+            ${icons.x}
           </button>
         </openclaw-tooltip>
       </div>
@@ -186,8 +168,8 @@ function renderSessionDetailPanel(
           session,
           filteredUsage,
           hasRange
-            ? sessionLogsStatus.hasLoaded && sessionLogs
-              ? sessionLogs.filter((log) =>
+            ? detail.sessionLogsStatus.hasLoaded && detail.sessionLogs
+              ? detail.sessionLogs.filter((log) =>
                   isLogInRange(log, timeSeriesCursorStart, timeSeriesCursorEnd),
                 )
               : null
@@ -195,39 +177,39 @@ function renderSessionDetailPanel(
         )}
         <div class="session-detail-row">
           ${renderTimeSeriesCompact(
-            timeSeries,
-            timeSeriesLoading,
-            timeSeriesStatus,
-            timeSeriesMode,
-            onTimeSeriesModeChange,
-            timeSeriesBreakdownMode,
-            onTimeSeriesBreakdownChange,
-            startDate,
-            endDate,
-            selectedDays,
-            timeZone,
+            detail.timeSeries,
+            detail.timeSeriesLoading,
+            detail.timeSeriesStatus,
+            detail.timeSeriesMode,
+            callbacks.onTimeSeriesModeChange,
+            detail.timeSeriesBreakdownMode,
+            callbacks.onTimeSeriesBreakdownChange,
+            range.startDate,
+            range.endDate,
+            range.selectedDays,
+            range.timeZone,
             timeSeriesCursorStart,
             timeSeriesCursorEnd,
-            onTimeSeriesCursorRangeChange,
+            callbacks.onTimeSeriesCursorRangeChange,
           )}
         </div>
         <div class="session-detail-bottom">
           ${renderSessionLogsCompact(
-            sessionLogs,
-            sessionLogsLoading,
-            sessionLogsStatus,
-            sessionLogsExpanded,
-            onToggleSessionLogsExpanded,
-            logFilters,
-            onLogFilterRolesChange,
-            onLogFilterToolsChange,
-            onLogFilterHasToolsChange,
-            onLogFilterQueryChange,
-            onLogFilterClear,
+            detail.sessionLogs,
+            detail.sessionLogsLoading,
+            detail.sessionLogsStatus,
+            detail.sessionLogsExpanded,
+            callbacks.onToggleSessionLogsExpanded,
+            detail.logFilters,
+            callbacks.onLogFilterRolesChange,
+            callbacks.onLogFilterToolsChange,
+            callbacks.onLogFilterHasToolsChange,
+            callbacks.onLogFilterQueryChange,
+            callbacks.onLogFilterClear,
             hasRange ? timeSeriesCursorStart : null,
             hasRange ? timeSeriesCursorEnd : null,
           )}
-          ${renderContextPanel(context, usage, contextExpanded, onToggleContextExpanded)}
+          ${renderContextPanel(detail.context, usage, contextExpanded, callbacks.onToggleContextExpanded)}
         </div>
       </div>
     </div>
@@ -611,5 +593,3 @@ function renderSessionLogsCompact(
     </div>
   `;
 }
-
-export { renderSessionDetailPanel };

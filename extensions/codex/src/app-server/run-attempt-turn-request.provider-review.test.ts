@@ -21,7 +21,6 @@ vi.mock("./attempt-diagnostics.js", () => ({
   createCodexModelCallDiagnosticEmitter: () => ({ setRequestPayloadBytes: vi.fn() }),
   utf8JsonByteLength: () => 1,
 }));
-vi.mock("./binding-connection.js", () => ({ assertCodexSessionRuntimeOwnership: vi.fn() }));
 vi.mock("./client-runtime.js", () => ({
   prepareCodexWorkspaceReferences: () => ({
     include: !references.delivered,
@@ -44,7 +43,9 @@ vi.mock("./run-attempt-lifecycle.js", () => ({
   emitCodexAppServerEvent: vi.fn(),
   withCodexAppServerFastModeServiceTier: (value: unknown) => value,
 }));
-vi.mock("./run-attempt-state.js", () => ({ joinPresentSections: () => "developer instructions" }));
+vi.mock("./developer-instruction-sections.js", () => ({
+  joinPresentSections: () => "developer instructions",
+}));
 vi.mock("./thread-lifecycle.js", () => ({
   buildTurnStartParams: (_params: unknown, options: { threadId: string; promptText: string }) => ({
     threadId: options.threadId,
@@ -162,7 +163,6 @@ async function prepare(
     prompt: {
       turnState,
       systemPromptReport: { injectedWorkspaceFiles: [] },
-      codexModelInputHistoryMessages: [],
       contextImageGroups: [],
       buildRenderedCodexDeveloperInstructions: () => "developer instructions",
       refreshWorkspaceReferences: (include: boolean) => {
@@ -187,6 +187,7 @@ async function prepare(
             usesSupervisionConnection,
             runAbortController: new AbortController(),
             assertCurrent: vi.fn(),
+            bindModelExecution: vi.fn(),
           },
         },
       },
@@ -238,8 +239,14 @@ function changeSelection(attempt: Awaited<ReturnType<typeof prepare>>, kind: Sel
   }
 }
 async function start(acknowledged: boolean) {
-  const attempt = await prepare(acknowledged ? createAcknowledgment().acknowledgment : undefined);
+  const host = acknowledged ? createAcknowledgment() : undefined;
+  const attempt = await prepare(host?.acknowledgment);
   await attempt.prepared.startCodexTurn();
+  if (host) {
+    expect(host.acknowledgment.read().phase).toBe("accepted");
+  }
+  expect(cleanup.interrupt).not.toHaveBeenCalled();
+  expect(attempt.releaseCurrentRoute).not.toHaveBeenCalled();
   return attempt.request.mock.calls.find(([method]) => method === "turn/start")?.[1].input;
 }
 
@@ -345,12 +352,10 @@ describe("native acknowledged turn requests", () => {
     expect(attempt.releaseCurrentRoute).toHaveBeenCalledOnce();
   });
 
-  it.each([true, false])("accepts a stable tuple (supervision: %s)", async (supervised) => {
+  it("accepts a stable managed tuple without a live supervision owner", async () => {
     const host = createAcknowledgment();
-    const attempt = await prepare(host.acknowledgment, createNativeThread(), supervised);
-    if (!supervised) {
-      delete attempt.resources.state.thread.liveThreadOwnership;
-    }
+    const attempt = await prepare(host.acknowledgment, createNativeThread(), false);
+    delete attempt.resources.state.thread.liveThreadOwnership;
     await expect(attempt.prepared.startCodexTurn()).resolves.toMatchObject({
       turn: { turn: { id: "new-turn", status: "inProgress" } },
       upstreamUserText: "literal steer",

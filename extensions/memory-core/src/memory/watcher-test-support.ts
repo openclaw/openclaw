@@ -36,7 +36,7 @@ export function createMemoryWatcherTestFactories() {
   }
 
   type NativeEvent = "error";
-  type NativeCallback = (eventType: string, filename: string | null) => void;
+  type NativeCallback = (eventType: string, filename: string | null) => void | Promise<void>;
   type NativeErrorCallback = (err: Error) => void;
   function createMockNativeWatcher(
     dir: string,
@@ -57,7 +57,7 @@ export function createMemoryWatcherTestFactories() {
       }),
       close: vi.fn(() => undefined),
       emit: (eventType: string, filename: string | null) => {
-        listener(eventType, filename);
+        return listener(eventType, filename);
       },
       emitError: (err: Error) => {
         for (const handler of errorHandlers) {
@@ -96,4 +96,14 @@ export function createMemoryWatcherTestFactories() {
   (globalThis as Record<PropertyKey, unknown>)[chokidarKey] = result.watchMock;
   (globalThis as Record<PropertyKey, unknown>)[nativeKey] = result.nativeWatchMock;
   return result;
+}
+
+export async function advanceWatchSync(
+  sync: { mockImplementationOnce: (callback: () => Promise<void>) => unknown },
+  milliseconds = 1_500,
+) {
+  const observed = Promise.withResolvers<void>();
+  sync.mockImplementationOnce(async () => observed.resolve());
+  await vi.advanceTimersByTimeAsync(milliseconds);
+  await observed.promise;
 }

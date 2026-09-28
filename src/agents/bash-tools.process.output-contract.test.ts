@@ -1,10 +1,9 @@
 import { Value } from "typebox/value";
-import ts from "typescript";
 import { afterEach, expect, it, vi } from "vitest";
+import { typeCheckSources } from "../../test/helpers/typescript.js";
 import { addSession, appendOutput, markExited } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
-import { createProcessTool } from "./bash-tools.process.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
   createCodeModeHarness,
@@ -20,48 +19,45 @@ afterEach(async () => {
   resetProcessRegistryForTests();
 });
 
-it.each([createProcessTool, createLazyProcessTool])(
-  "declares process results across listing, input, completion, logs, and failures (%#)",
-  async (createTool) => {
-    const tool = createTool();
-    const session = createProcessSessionFixture({ id: "contract-process", backgrounded: true });
-    session.stdin = { write: vi.fn((_data, done) => done?.(null)), end: vi.fn(), destroyed: false };
-    addSession(session);
-    appendOutput(session, "stdout", "first\nsecond\n");
-    const invoke = async (action: string, extra: Record<string, unknown> = {}) => {
-      const result = await tool.execute(action, { action, sessionId: session.id, ...extra });
-      expect(tool.outputSchema).toBeDefined();
-      expect(Value.Check(tool.outputSchema!, result.details), JSON.stringify(result.details)).toBe(
-        true,
-      );
-      return result;
-    };
-    await invoke("list");
-    await invoke("poll");
-    await invoke("log", { offset: 1, limit: 1 });
-    await invoke("write", { data: "hello" });
-    await invoke("send-keys", { literal: "world" });
-    await invoke("submit");
-    await invoke("paste", { text: "paste" });
-    await invoke("paste");
-    await invoke("kill");
-    markExited(session, null, "SIGTERM", "killed", "manual-cancel");
-    await invoke("list");
-    await invoke("poll");
-    await invoke("log");
-    await invoke("clear");
-    await invoke("poll");
-    const completed = createProcessSessionFixture({ id: "contract-completed", backgrounded: true });
-    addSession(completed);
-    markExited(completed, 0, null, "completed", "exit");
-    await invoke("remove", { sessionId: completed.id });
-    await invoke("invalid");
-    expect(Value.Check(tool.outputSchema!, { status: "failed" })).toBe(false);
-    expect(
-      Value.Check(tool.outputSchema!, { status: "completed", sessions: [{ sessionId: 42 }] }),
-    ).toBe(false);
-  },
-);
+it("declares lazy process results across listing, input, completion, logs, and failures", async () => {
+  const tool = createLazyProcessTool();
+  const session = createProcessSessionFixture({ id: "contract-process", backgrounded: true });
+  session.stdin = { write: vi.fn((_data, done) => done?.(null)), end: vi.fn(), destroyed: false };
+  addSession(session);
+  appendOutput(session, "stdout", "first\nsecond\n");
+  const invoke = async (action: string, extra: Record<string, unknown> = {}) => {
+    const result = await tool.execute(action, { action, sessionId: session.id, ...extra });
+    expect(tool.outputSchema).toBeDefined();
+    expect(Value.Check(tool.outputSchema!, result.details), JSON.stringify(result.details)).toBe(
+      true,
+    );
+    return result;
+  };
+  await invoke("list");
+  await invoke("poll");
+  await invoke("log", { offset: 1, limit: 1 });
+  await invoke("write", { data: "hello" });
+  await invoke("send-keys", { literal: "world" });
+  await invoke("submit");
+  await invoke("paste", { text: "paste" });
+  await invoke("paste");
+  await invoke("kill");
+  markExited(session, null, "SIGTERM", "killed", "manual-cancel");
+  await invoke("list");
+  await invoke("poll");
+  await invoke("log");
+  await invoke("clear");
+  await invoke("poll");
+  const completed = createProcessSessionFixture({ id: "contract-completed", backgrounded: true });
+  addSession(completed);
+  markExited(completed, 0, null, "completed", "exit");
+  await invoke("remove", { sessionId: completed.id });
+  await invoke("invalid");
+  expect(Value.Check(tool.outputSchema!, { status: "failed" })).toBe(false);
+  expect(
+    Value.Check(tool.outputSchema!, { status: "completed", sessions: [{ sessionId: 42 }] }),
+  ).toBe(false);
+});
 
 it("composes lazy process actions through generated declarations and JavaScript", async () => {
   const session = createProcessSessionFixture({ id: "typed-process", backgrounded: true });
@@ -90,11 +86,10 @@ it("composes lazy process actions through generated declarations and JavaScript"
   expect(declaration).toMatchObject({ status: "completed" });
   const file = declaration.value as { content: string };
   const fileName = "/process-consumer.ts";
-  const source = ts.createSourceFile(
-    fileName,
+  const source =
     file.content +
-      composition +
-      `
+    composition +
+    `
 async function checkContracts(action: "list" | "poll", input: Parameters<typeof process>[0]) {
   const poll = await process({ action: "poll", sessionId: "typed-process" });
   if (!("error" in poll)) {
@@ -130,20 +125,8 @@ async function checkContracts(action: "list" | "poll", input: Parameters<typeof 
   // @ts-expect-error Broad inputs preserve all possible output branches.
   dynamic.aggregated.toUpperCase();
 }
-`,
-    ts.ScriptTarget.ESNext,
-    true,
-  );
-  const options = { noEmit: true, strict: true, types: [], target: ts.ScriptTarget.ESNext };
-  const host = ts.createCompilerHost(options);
-  const original = host.getSourceFile.bind(host);
-  host.getSourceFile = (name, ...args) => (name === fileName ? source : original(name, ...args));
-  const program = ts.createProgram([fileName], options, host);
-  expect(
-    ts
-      .getPreEmitDiagnostics(program)
-      .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")),
-  ).toEqual([]);
+`;
+  expect(typeCheckSources({ [fileName]: source })).toEqual([]);
   const result = await waitUntilCompleted({
     details: resultDetails(
       await h.tools[0]!.execute("typed-process", {

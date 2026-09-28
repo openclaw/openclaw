@@ -1,6 +1,7 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { html } from "lit";
 import { GatewayRequestError, type GatewayEventFrame } from "../../api/gateway.ts";
+import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 
 export type CustodianEventNudge = {
@@ -54,11 +55,7 @@ export function reconcileCustodianEventNudge(
   if (event.event !== "health") {
     return [current, pending];
   }
-  const next = classifyCustodianEventNudge(event);
-  if (!pending) {
-    return [next, null];
-  }
-  return [next, pending];
+  return [classifyHealth(event.payload), pending];
 }
 
 function eventNudgeText(nudge: CustodianEventNudge): string {
@@ -96,7 +93,7 @@ export function renderCustodianEventNudge(params: {
       aria-label=${t("custodian.nudge.dismiss")}
       @click=${params.onDismiss}
     >
-      ×
+      ${icons.x}
     </button>
   </div>`;
 }
@@ -123,7 +120,7 @@ export function renderCustodianChannelOnboardingNudge(params: {
       aria-label=${t("custodian.nudge.channelSetupDismiss")}
       @click=${params.onDismiss}
     >
-      ×
+      ${icons.x}
     </button>
   </div>`;
 }
@@ -152,7 +149,7 @@ export function renderCustodianChannelOnboardingError(params: {
       aria-label=${t("custodian.nudge.channelSetupDismiss")}
       @click=${params.onDismiss}
     >
-      ×
+      ${icons.x}
     </button>
   </div>`;
 }
@@ -177,10 +174,6 @@ function hasUnavailableAuth(account: UnknownRecord): boolean {
   return CHANNEL_AUTH_STATUS_KEYS.some((key) => account[key] === "configured_unavailable");
 }
 
-function hasFailedProbe(account: UnknownRecord): boolean {
-  return asRecord(account.probe)?.ok === false;
-}
-
 function classifyChannelAccount(
   channelId: string,
   label: string,
@@ -200,15 +193,7 @@ function classifyChannelAccount(
   }
   const healthState =
     typeof account.healthState === "string" ? account.healthState.trim().toLowerCase() : undefined;
-  if (healthState === "terminal-disconnect") {
-    return {
-      severity: 3,
-      kind: "channel-degraded",
-      channelLabel: label,
-      message: `what happened with ${canonical}?`,
-    };
-  }
-  if (hasFailedProbe(account)) {
+  if (healthState === "terminal-disconnect" || asRecord(account.probe)?.ok === false) {
     return {
       severity: 3,
       kind: "channel-degraded",
@@ -305,11 +290,4 @@ function classifyHealth(payload: unknown): CustodianEventNudge | null {
     }
   }
   return best;
-}
-
-/** Only Gateway health failures produce presence nudges; success/info events stay silent. */
-function classifyCustodianEventNudge(
-  event: Pick<GatewayEventFrame, "event" | "payload">,
-): CustodianEventNudge | null {
-  return event.event === "health" ? classifyHealth(event.payload) : null;
 }

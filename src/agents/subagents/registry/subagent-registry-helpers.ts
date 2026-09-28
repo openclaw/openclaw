@@ -176,7 +176,7 @@ export async function persistSubagentSessionTiming(
       }
       if (lastRunError) {
         next.lastRunError = lastRunError;
-      } else if (status === "done") {
+      } else if (status === "done" || status === "interrupted") {
         delete next.lastRunError;
       }
       if (status && status !== "killed") {
@@ -254,7 +254,9 @@ export function updateSubagentArchiveAtMs(entry: SubagentRunRecord, cfg?: OpenCl
         ? entry.completion.capturedAt
         : endedAt
     : entry.cleanup === "delete" && entry.pauseReason !== "sessions_yield"
-      ? endedAt
+      ? entry.delivery?.discardReason === "task-missing"
+        ? (entry.delivery.discardedAt ?? endedAt)
+        : endedAt
       : undefined;
   const archiveAfterMs =
     entry.spawnMode === "session" || completedAt === undefined

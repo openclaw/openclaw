@@ -136,15 +136,23 @@ class SystemsPage extends OpenClawLightDomElement {
   @property({ attribute: false }) routeData?: SystemsRouteData;
   @property({ type: Boolean }) presented = true;
   private activeController: SystemsController | undefined;
-  private readonly poll = new PollController(this, 15_000, () => {
-    if (
-      this.presented &&
-      document.visibilityState !== "hidden" &&
-      (this.routeData?.controller.showStats || this.routeData?.controller.showDetails)
-    ) {
-      void this.routeData?.controller.refreshTelemetry();
-    }
-  });
+  private readonly poll = new PollController(
+    this,
+    15_000,
+    () => {
+      const controller = this.routeData?.controller;
+      if (!this.presented || !controller) {
+        return;
+      }
+      if (controller.needsInventoryRefresh) {
+        void controller.refresh();
+      } else if (controller.showStats || controller.showDetails) {
+        void controller.refreshTelemetry();
+      }
+    },
+    true,
+    "visible",
+  );
 
   constructor() {
     super();
@@ -318,7 +326,7 @@ class SystemsPage extends OpenClawLightDomElement {
             `
           : nothing
       }
-      ${!enabled && !ready ? html`<button class="systems-text-button" ?disabled=${controller.loading || !controller.connected} @click=${() => void controller.refresh()}>${t("systems.desktopSetupCheckAgain")}</button>` : nothing}
+      ${!enabled && !ready ? html`<button class="systems-text-button" ?disabled=${controller.loading || !controller.connected} @click=${() => void controller.refresh("manual")}>${t("systems.desktopSetupCheckAgain")}</button>` : nothing}
     </div>`;
   }
 
@@ -403,7 +411,7 @@ class SystemsPage extends OpenClawLightDomElement {
           ${icons.panelRightOpen}
         </button>
       </header>
-      ${controller.error ? html`<div class="systems-callout systems-callout--error" role="alert">${controller.error}<button @click=${() => void controller.refresh()} ?disabled=${controller.loading}>${t("common.retry")}</button></div>` : nothing}
+      ${controller.error ? html`<div class="systems-callout systems-callout--error" role="alert">${controller.error}<button @click=${() => void controller.refresh("manual")} ?disabled=${controller.loading}>${t("common.retry")}</button></div>` : nothing}
       ${!controller.connected ? html`<div class="systems-callout" role="status">${t("systems.offlineGateway")}</div>` : nothing}
       ${
         auxiliaryErrors.length

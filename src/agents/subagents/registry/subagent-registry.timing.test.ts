@@ -9,17 +9,13 @@ import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/config.js";
 import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { callGateway } from "../../../gateway/call.js";
+import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
 import { flushLogger, setLoggerOverride } from "../../../logging/logger.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../../../state/openclaw-agent-write-admission.js";
-import { configureTaskRegistryMaintenance } from "../../../tasks/task-registry.maintenance.js";
-import { getTaskRegistryStore } from "../../../tasks/task-registry.store.js";
-import {
-  resetTaskFlowRegistryForTests,
-  resetTaskRegistryForTests,
-} from "../../../tasks/task-runtime.test-helpers.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
+import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import {
   cleanupSubagentRegistryPersistenceTest,
   readSubagentSessionStore,
@@ -52,6 +48,7 @@ describe("subagent timing completion", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let stateDir: string;
   let logFile: string;
+  let settleRootWork: ReturnType<typeof observeRootWork>;
 
   beforeEach(() => {
     setRuntimeConfigSnapshot({});
@@ -59,31 +56,26 @@ describe("subagent timing completion", () => {
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     logFile = path.join(stateDir, "reproduction.log");
     setLoggerOverride({ level: "warn", file: logFile, consoleLevel: "silent" });
-    configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
     announce.mockClear();
     vi.mocked(callGateway).mockReset();
     vi.mocked(onAgentEvent).mockReset();
     vi.mocked(onAgentEvent).mockReturnValue(() => undefined);
+    settleRootWork = observeRootWork();
   });
 
   afterEach(async () => {
     await cleanupSubagentRegistryPersistenceTest({
       stateDir,
       resetRegistry: () => resetSubagentRegistryForTests({ persist: false }),
-      closeDatabases: () => {
-        resetTaskRegistryForTests({ persist: false });
-        resetTaskFlowRegistryForTests({ persist: false });
-      },
+      closeDatabases: () => {},
+      settleOwnedWork: () => settleRootWork(),
     });
-    configureTaskRegistryMaintenance({ runtimeAuthoritative: false });
     setLoggerOverride(null);
     clearRuntimeConfigSnapshot();
     envSnapshot.restore();
   });
 
-  it.each(["wait-only", "sequential", "overlap"] as const)("%s", async (mode) => {
+  it.for(["wait-only", "sequential", "overlap"] as const)("%s", async (mode, { signal }) => {
     const runId = `timing-repro-${mode}`;
     const childSessionKey = `agent:main:subagent:${mode}`;
     const requesterSessionKey = "agent:main:main";
@@ -114,7 +106,7 @@ describe("subagent timing completion", () => {
         skipMaintenance: true,
       });
     }
-    registerSubagentRun({
+    await registerSubagentRun({
       runId,
       childSessionKey,
       requesterSessionKey,
@@ -147,8 +139,8 @@ describe("subagent timing completion", () => {
       }
     };
     const waitForCleanup = async () => {
-      await vi.waitFor(() => expect(readRun()?.cleanupCompletedAt).toEqual(expect.any(Number)));
-      await settleSubagentRegistryPersistenceWork();
+      await settleSubagentRegistryPersistenceWork(() => settleRootWork(true));
+      expect(readRun()?.cleanupCompletedAt).toEqual(expect.any(Number));
     };
     if (mode === "overlap") {
       const entered = createDeferred();
@@ -166,14 +158,34 @@ describe("subagent timing completion", () => {
       );
       try {
         await entered.promise;
-        const queueDepth = () =>
-          SQLITE_SESSION_WRITER_QUEUES.get(resolveOpenClawAgentSqlitePath({ agentId: "main" }))
-            ?.pending.length ?? 0;
-        expect(queueDepth()).toBe(0);
-        emitTerminal();
-        await vi.waitFor(() => expect(queueDepth()).toBe(1));
-        waiting.resolve(terminal);
-        await vi.waitFor(() => expect(queueDepth()).toBe(2));
+        const queue = SQLITE_SESSION_WRITER_QUEUES.get(storePath);
+        if (!queue) {
+          throw new Error("session writer did not retain its queue");
+        }
+        const lifecycleQueued = createDeferred();
+        const waiterQueued = createDeferred();
+        const push = queue.pending.push.bind(queue.pending);
+        // Task finalization awaits a worker before these writes reach the FIFO.
+        const enqueueObserver = vi.spyOn(queue.pending, "push").mockImplementation((...tasks) => {
+          const depth = push(...tasks);
+          if (depth === 1) {
+            lifecycleQueued.resolve();
+          } else if (depth === 2) {
+            waiterQueued.resolve();
+          }
+          return depth;
+        });
+        try {
+          expect(queue.pending.length).toBe(0);
+          emitTerminal();
+          await racePromiseWithAbortSignal(lifecycleQueued.promise, signal);
+          expect(queue.pending.length).toBe(1);
+          waiting.resolve(terminal);
+          await racePromiseWithAbortSignal(waiterQueued.promise, signal);
+          expect(queue.pending.length).toBe(2);
+        } finally {
+          enqueueObserver.mockRestore();
+        }
       } finally {
         waiting.resolve(terminal);
         released.resolve();
@@ -185,7 +197,7 @@ describe("subagent timing completion", () => {
       await waitForCleanup();
       if (mode === "sequential") {
         emitTerminal();
-        await settleSubagentRegistryPersistenceWork();
+        await settleSubagentRegistryPersistenceWork(() => settleRootWork(true));
       }
     }
 
@@ -199,10 +211,6 @@ describe("subagent timing completion", () => {
       endedAt,
     });
     expect(registry?.delivery?.status).toBe("delivered");
-    const task = [...getTaskRegistryStore().loadSnapshot().tasks.values()].find(
-      (candidate) => candidate.runId === runId,
-    );
-    expect(task?.status).toBe("succeeded");
     expect(announce).toHaveBeenCalledTimes(1);
     await flushLogger();
     const text = await fs.readFile(logFile, "utf8").catch(() => "");

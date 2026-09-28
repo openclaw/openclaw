@@ -102,40 +102,9 @@ stop_gateway() {
 }
 
 write_journey_plugin() {
-  local dir="$1"
-  local id="$2"
-  local version="$3"
-  local method="$4"
-  local name="$5"
-  local cli_root="$6"
-  local cli_output="$7"
-
-  mkdir -p "$dir"
-  node - "$dir" "$id" "$version" "$method" "$name" "$cli_root" "$cli_output" <<'NODE'
-const fs = require("node:fs");
-const path = require("node:path");
-
-const [dir, id, version, method, name, cliRoot, cliOutput] = process.argv.slice(2);
-fs.writeFileSync(
-  path.join(dir, "package.json"),
-  `${JSON.stringify(
-    {
-      name: `@openclaw/${id}`,
-      version,
-      openclaw: { extensions: ["./index.js"] },
-    },
-    null,
-    2,
-  )}\n`,
-);
-fs.writeFileSync(
-  path.join(dir, "index.js"),
-  `module.exports = { id: ${JSON.stringify(id)}, name: ${JSON.stringify(name)}, register(api) { api.registerGatewayMethod(${JSON.stringify(method)}, async () => ({ ok: true })); api.registerCli(({ program }) => { const root = program.command(${JSON.stringify(cliRoot)}).description(${JSON.stringify(`${name} fixture command`)}); root.command("ping").description("Print fixture ping output").action(() => { console.log(${JSON.stringify(cliOutput)}); }); }, { descriptors: [{ name: ${JSON.stringify(cliRoot)}, description: ${JSON.stringify(`${name} fixture command`)}, hasSubcommands: true }] }); }, };\n`,
-);
-fs.writeFileSync(
-  path.join(dir, "openclaw.plugin.json"),
-  `${JSON.stringify({ id, configSchema: { type: "object", properties: {} } }, null, 2)}\n`,
-);
+  node --input-type=module - "$@" <<'NODE'
+import { writeCliPlugin } from "./scripts/e2e/lib/fixtures/plugins.mjs";
+writeCliPlugin(process.argv.slice(2), null);
 NODE
 }
 

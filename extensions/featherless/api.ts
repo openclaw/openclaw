@@ -8,7 +8,7 @@ export {
   FEATHERLESS_DYNAMIC_CONTEXT_WINDOW,
   FEATHERLESS_DYNAMIC_MAX_TOKENS,
   buildFeatherlessCatalogModels,
+  buildFeatherlessProvider,
   isFeatherlessCatalogModelId,
 } from "./models.js";
 export { applyFeatherlessConfig } from "./onboard.js";
-export { buildFeatherlessProvider } from "./provider-catalog.js";

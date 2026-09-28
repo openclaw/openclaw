@@ -2,6 +2,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
 import type { MeetingAudioBackend } from "./audio-backend.js";
 import type {
+  MeetingChromeLaunchParams,
+  MeetingChromeRecoveryParams,
+} from "./chrome-transport-types.js";
+import type {
   MeetingBrowserJoinSession,
   MeetingPlatformAdapter,
   MeetingPlatformRuntimeMetadata,
@@ -57,28 +61,16 @@ type MeetingRuntimeLaunchResult<Health extends MeetingBrowserHealth> = {
   tab?: MeetingBrowserTab;
 };
 
-type MeetingRuntimeLaunchParams<Config extends MeetingPluginConfig, Mode extends string> = {
-  runtime: PluginRuntime;
-  config: Config;
-  fullConfig: OpenClawConfig;
-  meetingSessionId: string;
-  requesterSessionKey?: string;
-  mode: Mode;
-  trackedTargetId?: string;
-  url: string;
-  logger: RuntimeLogger;
-};
-
 type MeetingRuntimeTransport<
   Config extends MeetingPluginConfig,
   Mode extends string,
   Health extends MeetingBrowserHealth,
 > = {
   launchInChrome(
-    params: MeetingRuntimeLaunchParams<Config, Mode>,
+    params: MeetingChromeLaunchParams<Config, Mode>,
   ): Promise<MeetingRuntimeLaunchResult<Health>>;
   launchOnNode(
-    params: MeetingRuntimeLaunchParams<Config, Mode>,
+    params: MeetingChromeLaunchParams<Config, Mode>,
   ): Promise<MeetingRuntimeLaunchResult<Health> & { nodeId: string }>;
   leaveInBrowser(params: {
     runtime: PluginRuntime;
@@ -97,20 +89,7 @@ type MeetingRuntimeTransport<
     nodeId?: string;
     tab: MeetingBrowserTab;
   }): Promise<MeetingTranscriptSnapshot>;
-  recoverCurrentTab(params: {
-    runtime: PluginRuntime;
-    config: Config;
-    fullConfig?: OpenClawConfig;
-    meetingSessionId?: string;
-    mode: Mode;
-    nodeId?: string;
-    readOnly?: boolean;
-    trackedMeetingUrl?: string;
-    trackedTargetId?: string;
-    transport: "chrome" | "chrome-node";
-    timeoutMs?: number;
-    url?: string;
-  }): Promise<{
+  recoverCurrentTab(params: MeetingChromeRecoveryParams<Config, Mode>): Promise<{
     browser?: Health;
     found: boolean;
     message: string;

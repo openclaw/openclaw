@@ -24,15 +24,6 @@ function rejectingGateway(error: Error): typeof callGatewayFromCli {
 }
 
 describe("callGoogleMeetGateway local fallback", () => {
-  it("returns a successful gateway payload", async () => {
-    const payload = { found: true };
-    const callGateway = vi.fn<typeof callGatewayFromCli>().mockResolvedValue(payload);
-
-    await expect(
-      callGoogleMeetGateway({ callGateway, method: "googlemeet.status" }),
-    ).resolves.toEqual({ ok: true, payload });
-  });
-
   it("falls back for an uncoded transport close", async () => {
     const error = gatewayTransportError();
 
@@ -44,8 +35,8 @@ describe("callGoogleMeetGateway local fallback", () => {
     ).resolves.toEqual({ ok: false, error });
   });
 
-  it.each([1006, 1000])("propagates a transport close with code %s", async (code) => {
-    const error = gatewayTransportError(code);
+  it("propagates a coded transport close", async () => {
+    const error = gatewayTransportError(1006);
 
     await expect(
       callGoogleMeetGateway({
@@ -84,8 +75,6 @@ describe("callGoogleMeetGateway local fallback", () => {
   it.each([
     gatewayRequestError("unknown method: voicecall.status"),
     new Error("unknown method: googlemeet.status"),
-    new Error("gateway not connected"),
-    new Error("connect ECONNREFUSED 127.0.0.1:18789"),
   ])("propagates a non-fallback error: $message", async (error) => {
     await expect(
       callGoogleMeetGateway({

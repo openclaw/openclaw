@@ -46,7 +46,6 @@ type ModelSetupViewProps = {
   credentialChoices?: readonly string[];
   onClose?: () => void;
   onDiscoveryShown?: () => void;
-  onConnectChoice?: (authChoice?: string) => void;
   detecting?: boolean;
   detectionError?: string | null;
   page: ModelSetupPageState;

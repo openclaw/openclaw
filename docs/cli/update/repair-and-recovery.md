@@ -68,6 +68,11 @@ history; replacing the code alone cannot undo a migration. The original
 failed update still exits nonzero after the agent finishes, even if the repair
 succeeds.
 
+After activation succeeds, a failure to read or publish update reporting leaves
+the updated installation in place. Reporting failures do not trigger package
+rollback. The command still exits nonzero when required finalization cannot
+complete; follow its recovery guidance after the owning updater exits.
+
 Dry runs and commands rejected by the initial argument, external-supervisor,
 state-store ownership, handoff identity, or immutable-config checks do not
 collect diagnostics or start an agent. Once those checks pass, failed metadata,
@@ -76,6 +81,44 @@ when installation is blocked. This includes an update that cannot safely stop
 its parent Gateway process. Diagnosis preserves that refusal: it does not stop the
 Gateway, retry the update, or bypass safety checks. See
 [Update troubleshooting](/install/update-troubleshooting).
+
+### Retained updater runtime
+
+An update can retain its running code in an `openclaw-update-runtime-*` directory
+beside the installation or in the system temporary directory. The updater settles
+its workers and removes that directory after success, failure, an exception, or
+`SIGINT`/`SIGTERM`, including failures while reporting the outcome. If a worker
+cannot settle or removal fails, it records `Runtime retained at <path>: <reason>`
+and leaves cleanup available to Doctor. A cleanup warning does not replace the
+original update outcome.
+
+Retention copies plugin manifests and files inspected by plugin safety checks,
+so retaining the updater does not make the checkout's plugins fail hardlink
+validation. Other runtime files remain hardlinked when supported.
+
+These lifecycle and copying changes apply when the installed updater supports
+them; installing a newer candidate cannot change the updater already running.
+After that updater exits, run the newer `openclaw doctor --fix` from the original
+checkout to locate its sibling runtime directories. Doctor also checks known
+temporary directories, including the managed service's `TMPDIR`. Recognized
+runtime projections are disposable; Doctor removes them when no worker still
+uses them. If ownership or process liveness cannot be verified, Doctor preserves
+the directory and reports the reason.
+
+## Candidate Doctor stack overflow
+
+Chat-triggered updates to 2026.9.6 can fail with `authority-check-failed: Maximum
+call stack size exceeded`, sometimes preceded by `Update history reconciliation
+could not complete`. This is a candidate Doctor authority-check defect; it can
+happen on the first update, without migrated state or earlier failed runs.
+The corrective candidate can run through the installed updater with retained
+history intact. Running the older installation's standalone Doctor cannot fix
+code in the candidate package.
+
+There is no supported command to reset retained update history. `update repair`
+finishes interrupted finalization, and `update cleanup` retires eligible recovery
+originals; neither clears the run ledger. Keep history and backups rather than
+deleting database rows to work around this failure.
 
 ## `update repair`
 
@@ -92,6 +135,11 @@ openclaw update repair --json
 openclaw update repair --accept-capabilities
 ```
 
+When repair runs under Bun, its fresh Doctor, config validation, readiness,
+completion, and non-interactive failure-diagnostic commands use that same Bun
+executable. Node and command-shim invocations keep their existing Node selection
+policy. Managed-service runtime selection remains owned by the service configuration.
+
 If an older updater publishes the new core but then reports
 `update-executor-settlement-failed` with `Parent executor is suspended for its candidate.`,
 wait for that updater to exit and run `openclaw update repair --yes --json` from
@@ -99,6 +147,13 @@ the updated installation, preserving its profile and state/config overrides.
 This finishes Doctor and post-core convergence through a fresh owner. Check the
 repair result before restarting an already stopped Gateway through its service
 owner. Updating the candidate cannot change the older updater already in memory.
+
+When a managed Gateway was already stopped before standalone repair, repair leaves
+it offline and warns that you must run `openclaw gateway start` to bring it online.
+If its service definition points to a different installation, repair instead reports
+the installation repair command. These maintenance warnings also appear in
+`postUpdate.doctor.warnings`; otherwise successful finalization reports
+`status: "warning"` and exits successfully.
 
 | Flag                                             | Description                                                                                                                                                                                                                                                                                      |
 | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -148,6 +203,13 @@ because the updater owns service changes. They preserve an operator's
 `OPENCLAW_SERVICE_REPAIR_POLICY=external` selection and retain Gateway/state
 coordinators and agent-database lease checks. An external deployment owner still
 owns stopping and restarting its Gateway.
+
+Automatic repair finishes its embedded agent turn and releases that turn's database
+and process resources before asking the update owner to run Doctor or update repair.
+This prevents the repair agent's own credential writes from blocking maintenance.
+Other live agent leases still block repair. Maintenance preserves the original
+Gateway activation intent, including `--no-restart` and intentional stops. A
+successful maintenance command alone does not verify the original symptom.
 
 Repair invoked within the owning update can continue when its inherited run ID
 and live process identity match that owner. Standalone repair records the same

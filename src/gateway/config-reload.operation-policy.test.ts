@@ -41,6 +41,7 @@ describe("Gateway operation policy reload", () => {
     "gateway.controlUi.enabled",
     "gateway.controlUi.environment.label",
     "gateway.controlUi.communityInvite",
+    "gateway.controlUi.newSessionModelDefaults",
     "gateway.controlUi.github.token",
     "gateway.controlUi.sessionObserver",
     "gateway.controlUi.embedSandbox",

@@ -1,8 +1,7 @@
 import type { ProgressContinuationState } from "../../../channels/progress-continuation.js";
-import { captureTaskProgressContinuationForRequesterTurn } from "../../../tasks/task-progress-requester.js";
-import { scheduleYieldedSubagentRunProgress } from "../../../tasks/task-registry-progress.js";
 /** Settles durable child ownership when the spawning requester turn ends. */
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
+import { promoteFollowupYield } from "../completion/session-followup-completion.js";
 import {
   captureRequesterCronAuthority,
   promoteRequesterCronAuthority,
@@ -256,14 +255,7 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
   if (params.requesterYielded && !requesterAlreadyDeliveredFinal) {
     rearmGeneration =
       Math.max(0, ...entries.map((entry) => entry.requesterSettleWake?.rearmGeneration ?? 0)) + 1;
-    const progressOperationId = (
-      params.progressPresentation ??
-      captureTaskProgressContinuationForRequesterTurn({
-        requesterSessionKey,
-        requesterAgentId: params.requesterAgentId,
-        requesterTurnRunId,
-      })
-    )?.operationId;
+    const progressOperationId = params.progressPresentation?.operationId;
     for (const entry of entries) {
       const existing = entry.requesterSettleWake;
       const completionEnded = typeof entry.execution.endedAt === "number";
@@ -353,6 +345,7 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
     throw error;
   }
 
+  promoteFollowupYield({ requesterTurnRunId, entries, rearmGeneration });
   promoteRequesterCronAuthority({ requesterTurnRunId, batch: entries, rearmGeneration });
   if (rearmGeneration !== undefined && params.requesterAgentId) {
     promoteRequesterFinalAttachment({
@@ -362,11 +355,6 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
       batchRunIds,
       rearmGeneration,
     });
-  }
-  if (rearmGeneration !== undefined) {
-    for (const entry of entries) {
-      scheduleYieldedSubagentRunProgress(entry);
-    }
   }
   for (const entry of entries) {
     if (

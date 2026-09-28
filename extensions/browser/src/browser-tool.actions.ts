@@ -1,14 +1,10 @@
-/**
- * Browser agent tool action executors.
- *
- * Converts model-facing parameters into browser control client calls and wraps
- * browser-originated text as untrusted content before returning it to agents.
- */
+/** Browser actions wrap page-controlled text as untrusted content before returning it to agents. */
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
 } from "openclaw/plugin-sdk/param-readers";
+import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import type { BrowserProxyRequest } from "./browser-node-proxy.js";
 import {
   browserAct,
@@ -41,7 +37,6 @@ import {
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
 } from "./browser/constants.js";
-import { formatErrorMessage } from "./infra/errors.js";
 
 type BrowserActRequest = Parameters<typeof browserAct>[1];
 
@@ -269,7 +264,6 @@ function readBrowserBatchAbort(result: unknown): BrowserBatchAbort | null {
   return { reason, afterAction, url, skipped };
 }
 
-/** True when an /act response reports a cross-document navigation. */
 function actObservedNavigation(result: unknown, aborted: BrowserBatchAbort | null): boolean {
   if (aborted?.reason === "navigation") {
     return true;
@@ -283,7 +277,6 @@ function actObservedNavigation(result: unknown, aborted: BrowserBatchAbort | nul
   );
 }
 
-/** Execute browser console retrieval and wrap page-controlled messages. */
 export async function executeConsoleAction(params: {
   input: Record<string, unknown>;
   baseUrl?: string;
@@ -304,43 +297,29 @@ export async function executeConsoleAction(params: {
   return formatConsoleToolResult(result);
 }
 
-/** Read recent network requests, keeping counts aligned with the bounded payload. */
-export async function executeRequestsAction(
+/** Read browser debug logs, keeping counts aligned with the bounded payload. */
+export async function executeDebugLogAction(
+  kind: "requests" | "errors",
   params: Parameters<typeof executeConsoleAction>[0],
 ): Promise<AgentToolResult<unknown>> {
   const { input, baseUrl, profile, proxyRequest, signal } = params;
-  const targetId = normalizeOptionalString(input.targetId);
-  const filter = normalizeOptionalString(input.filter);
-  const clear = typeof input.clear === "boolean" ? input.clear : undefined;
   const limit =
     readPositiveIntegerParam(input, "limit", { message: "limit must be a positive integer." }) ??
     50;
-  const result = await browserRequests(proxyRequest ?? baseUrl, {
-    targetId,
-    filter,
-    clear,
+  const options = {
+    targetId: normalizeOptionalString(input.targetId),
+    clear: typeof input.clear === "boolean" ? input.clear : undefined,
     profile,
     signal,
-  });
-  return formatBrowserDebugLogResult("requests", result, result.requests, limit);
-}
-
-/** Read recent page errors, keeping counts aligned with the bounded payload. */
-export async function executeErrorsAction(
-  params: Parameters<typeof executeConsoleAction>[0],
-): Promise<AgentToolResult<unknown>> {
-  const { input, baseUrl, profile, proxyRequest, signal } = params;
-  const targetId = normalizeOptionalString(input.targetId);
-  const clear = typeof input.clear === "boolean" ? input.clear : undefined;
-  const limit =
-    readPositiveIntegerParam(input, "limit", { message: "limit must be a positive integer." }) ??
-    50;
-  const result = await browserErrors(proxyRequest ?? baseUrl, {
-    targetId,
-    clear,
-    profile,
-    signal,
-  });
+  };
+  if (kind === "requests") {
+    const result = await browserRequests(proxyRequest ?? baseUrl, {
+      ...options,
+      filter: normalizeOptionalString(input.filter),
+    });
+    return formatBrowserDebugLogResult(kind, result, result.requests, limit);
+  }
+  const result = await browserErrors(proxyRequest ?? baseUrl, options);
   return formatBrowserDebugLogResult("errors", result, result.errors, limit);
 }
 
@@ -431,39 +410,26 @@ export async function executeDownloadAction(params: {
   profile?: string;
   proxyRequest: BrowserProxyRequest | null;
   signal?: AbortSignal;
-  onTabActivity?: (targetId: string | undefined) => void;
+  onTabActivity?: (targetId: string | undefined) => void | Promise<void>;
 }): Promise<AgentToolResult<unknown>> {
   const { action, input, baseUrl, profile, proxyRequest } = params;
   const targetId = normalizeOptionalString(input.targetId);
   const timeoutMs = normalizePositiveTimeoutMs(input.timeoutMs);
-  const download = action === "download";
-  const request = download
-    ? {
-        kind: "download" as const,
-        body: {
+  const options = { targetId, timeoutMs, profile, signal: params.signal };
+  const result =
+    action === "download"
+      ? await browserDownload(proxyRequest ?? baseUrl, {
+          ...options,
           ref: readStringParam(input, "ref", { required: true }),
           path: readStringParam(input, "path", { required: true }),
-          targetId,
-          timeoutMs,
-        },
-      }
-    : {
-        kind: "waitfordownload" as const,
-        body: { path: readStringParam(input, "path"), targetId, timeoutMs },
-      };
-  const result =
-    request.kind === "download"
-      ? await browserDownload(proxyRequest ?? baseUrl, {
-          ...request.body,
-          profile,
-          signal: params.signal,
         })
       : await browserWaitForDownload(proxyRequest ?? baseUrl, {
-          ...request.body,
-          profile,
-          signal: params.signal,
+          ...options,
+          path: readStringParam(input, "path"),
         });
-  params.onTabActivity?.(readStringValue((result as { targetId?: unknown }).targetId) ?? targetId);
+  await params.onTabActivity?.(
+    readStringValue((result as { targetId?: unknown }).targetId) ?? targetId,
+  );
   return formatBrowserExternalToolResult({ kind: "download", payload: result });
 }
 
@@ -475,8 +441,8 @@ export async function executeActAction(params: {
   usesChromeMcp: boolean;
   proxyRequest: BrowserProxyRequest | null;
   signal?: AbortSignal;
-  onTabActivity?: (targetId: string | undefined) => void;
-  onTabClose?: (targetId: string | undefined) => void;
+  onTabActivity?: (targetId: string | undefined) => void | Promise<void>;
+  onTabClose?: (targetId: string | undefined) => void | Promise<void>;
 }): Promise<AgentToolResult<unknown>> {
   const { request, baseUrl, profile, proxyRequest } = params;
   if ("timeoutMs" in request && request.timeoutMs !== undefined) {
@@ -493,7 +459,7 @@ export async function executeActAction(params: {
       effectiveRequest.kind === "close" || aborted?.reason === "closed"
         ? params.onTabClose
         : params.onTabActivity;
-    onTabResult?.(resolvedTargetId);
+    await onTabResult?.(resolvedTargetId);
     const formatted = formatActToolResult(result, aborted);
     if (!actObservedNavigation(result, aborted)) {
       return formatted;
@@ -509,19 +475,21 @@ export async function executeActAction(params: {
       signal: params.signal,
     });
   };
-  const dispatchAndFinishAct = async (actionRequest: BrowserActRequest) => {
+  const dispatchAct = async (actionRequest: BrowserActRequest) => {
     const result = await browserAct(proxyRequest ?? baseUrl, actionRequest, {
       profile,
       signal: params.signal,
     });
-    return await finishActResult(
+    return {
       result,
-      readStringValue((result as { targetId?: unknown }).targetId) ??
+      targetId:
+        readStringValue((result as { targetId?: unknown }).targetId) ??
         readStringValue(actionRequest.targetId),
-    );
+    };
   };
+  let dispatched: Awaited<ReturnType<typeof dispatchAct>>;
   try {
-    return await dispatchAndFinishAct(effectiveRequest);
+    dispatched = await dispatchAct(effectiveRequest);
   } catch (err) {
     const proxyRoute = proxyRequest?.route();
     const usesChromeMcp = proxyRequest
@@ -555,7 +523,8 @@ export async function executeActAction(params: {
         canRetryChromeActAfterSoleTargetRefresh(effectiveRequest) &&
         tabs.length === 1
       ) {
-        return await dispatchAndFinishAct(retryRequest);
+        const retried = await dispatchAct(retryRequest);
+        return await finishActResult(retried.result, retried.targetId);
       }
       if (tabRefreshError) {
         throw new Error(
@@ -582,6 +551,7 @@ export async function executeActAction(params: {
     }
     throw err;
   }
+  return await finishActResult(dispatched.result, dispatched.targetId);
 }
 
 function formatActToolResult(

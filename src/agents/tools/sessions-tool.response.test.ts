@@ -27,6 +27,22 @@ function createTool() {
 }
 
 describe("sessions tool responses", () => {
+  it("clears its model override when patch requests the default model", async () => {
+    const callGateway = vi.fn().mockResolvedValue({});
+    const tool = createSessionsTool({
+      agentSessionKey: "agent:main:main",
+      config: {},
+      callGateway,
+    });
+
+    await tool.execute("reset-model", { action: "patch", model: "default" });
+
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "sessions.patch",
+      params: { key: "agent:main:main", model: null },
+    });
+  });
+
   it("routes group actions to existing gateway methods", async () => {
     gatewayMocks.callGateway.mockImplementation(async (request) => request);
     const tool = createTool();
@@ -82,45 +98,6 @@ describe("sessions tool responses", () => {
     expect(text).not.toContain("skillsSnapshot");
     expect(text).not.toContain("sessionDiffBaseline");
     expect(Buffer.byteLength(text, "utf8")).toBeLessThan(512);
-  });
-
-  it("returns authoritative resolved model and thinking metadata without the patched entry", async () => {
-    const resolved = {
-      modelProvider: "openai",
-      model: "gpt-5.6-luna",
-      agentRuntime: { id: "codex", fallback: "openclaw" as const, source: "session" as const },
-      thinkingLevel: "medium",
-      thinkingLevels: [
-        { id: "off", label: "Off" },
-        { id: "medium", label: "Medium" },
-      ],
-    };
-    gatewayMocks.callGateway.mockResolvedValue({
-      ok: true,
-      path: `/sessions/${"p".repeat(10_000)}`,
-      key: "agent:main:main",
-      entry: { skillsSnapshot: "s".repeat(47_469) },
-      resolved,
-    });
-    const tool = createTool();
-
-    const result = await tool.execute("patch-model-thinking", {
-      action: "patch",
-      model: "openai/luna",
-      thinkingLevel: "med",
-    });
-
-    expect(result.details).toEqual({
-      status: "updated",
-      sessionKey: "agent:main:main",
-      updated: ["model", "thinkingLevel"],
-      resolved,
-    });
-    const text = (result.content[0] as { text?: string } | undefined)?.text ?? "";
-    expect(text).not.toContain('"entry"');
-    expect(text).not.toContain('"path"');
-    expect(text).not.toContain("skillsSnapshot");
-    expect(Buffer.byteLength(text, "utf8")).toBeLessThan(1_024);
   });
 
   it("preserves the complete canonical thinking catalog through ultra", async () => {

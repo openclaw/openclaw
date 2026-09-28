@@ -5,7 +5,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildRealtimeTalkLiveCommand,
-  buildRealtimeTalkLiveEvidence,
   createRealtimeTalkResultParser,
   parseRealtimeTalkLiveOptions,
   runRealtimeTalkLiveProducer,
@@ -163,30 +162,6 @@ describe("realtime Talk live QA producer", () => {
 
     expect(evidence.entries[0]?.result.status).toBe("fail");
     expect(evidence.entries[0]?.result.failure?.reason).toContain("openai-backend-bridge=failed");
-  });
-
-  it("builds catalog-compatible evidence for the live scenario", async () => {
-    const options = await makeOptions();
-    const evidence = buildRealtimeTalkLiveEvidence({
-      env: { OPENCLAW_QA_REF: "test-ref" },
-      options,
-      result: {
-        details: "proof passed",
-        durationMs: 10,
-        status: "pass",
-      },
-    });
-
-    expect(evidence.entries[0]).toMatchObject({
-      test: {
-        id: "openai-realtime-talk-live",
-        source: { path: "test/e2e/qa-lab/media/realtime-talk-live.ts" },
-      },
-      result: {
-        status: "pass",
-        timing: { wallMs: 10 },
-      },
-    });
   });
 });
 

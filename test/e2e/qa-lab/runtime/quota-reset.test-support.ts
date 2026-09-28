@@ -6,7 +6,7 @@ import path from "node:path";
 import { zstdDecompressSync } from "node:zlib";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, type TestContext } from "vitest";
+import { expect } from "vitest";
 import { WebSocketServer } from "ws";
 import { createExternalAuthRuntime } from "../../../../src/agents/auth-profiles/external-auth.js";
 import {
@@ -550,7 +550,10 @@ export async function startQuotaProvider(source: BlockSource, responseText: stri
 }
 
 export async function createQuotaResetFixture(
-  context: TestContext,
+  context: {
+    onTestFinished: (cleanup: () => void | Promise<void>) => void;
+    onTestFailed: (report: () => void | Promise<void>) => void;
+  },
   {
     source,
     expiresDuringBlock = false,

@@ -3,6 +3,7 @@ import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion"
 import { resolveCronCompletionStatus } from "../completion-status.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import type { CronRunLogEntry } from "../run-log-types.js";
+import type { InterruptedStartupRun } from "../store/run-recovery.types.js";
 import type { CronJob, CronRunStatus } from "../types.js";
 import { maybeAutoDisableCronJobAfterRunFailure } from "./auto-disable.js";
 import { finalizeCronFailureNotifications, resolveFailureAlert } from "./failure-alerts.js";
@@ -16,14 +17,6 @@ import {
 import { applyTriggerRunResult } from "./timer-trigger.js";
 
 export const STARTUP_INTERRUPTED_ERROR = "cron: job interrupted by gateway restart";
-
-export type InterruptedStartupRun = {
-  jobId: string;
-  taskRunId?: string;
-  runAtMs: number;
-  durationMs: number;
-  replacementAtMs?: number;
-};
 
 function resolveOneShotReplacementAtMs(job: CronJob, runningAtMs: number): number | undefined {
   if (job.schedule.kind !== "at" || !job.enabled) {
@@ -255,7 +248,7 @@ export function restoreFinalizedStartupRun(params: {
   }
   state.deps.log.info(
     { jobId: job.id, runningAtMs, status: entry.status },
-    "cron: restored finalized task-ledger run on startup",
+    "cron: restored finalized run history on startup",
   );
   return {
     shouldDelete,

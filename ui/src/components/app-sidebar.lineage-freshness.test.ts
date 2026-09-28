@@ -820,9 +820,15 @@ describe("sidebar routed-lineage freshness", () => {
             ).toBe(false);
             return;
           }
-          expect(
-            sidebar.sessionData.sessionsResult?.sessions.find((row) => row.key === key),
-          ).toMatchObject({
+          const listedRow = sidebar.sessionData.sessionsResult?.sessions.find(
+            (row) => row.key === key,
+          );
+          expect({
+            label: listedRow?.label,
+            derivedTitle: listedRow?.derivedTitle,
+            lastMessagePreview: listedRow?.lastMessagePreview,
+            status: listedRow?.status,
+          }).toStrictEqual({
             ...presentation("Latest filtered child"),
             status: "done",
           });
