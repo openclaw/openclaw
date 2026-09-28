@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as openClawRoot from "../infra/openclaw-root.js";
 import {
   isForeignBundledPluginRoot,
+  resolveBundledDirFromPackageRoot,
   resolveBundledPluginsDir,
   resolveSourceCheckoutDependencyDiagnostic,
 } from "./bundled-dir.js";
@@ -228,7 +229,7 @@ describe("resolveBundledPluginsDir", () => {
       },
     ],
     [
-      "prefers built dist/extensions in a pnpm git checkout outside vitest",
+      "keeps source hosts on source bundled plugins outside vitest",
       {
         prefix: "openclaw-bundled-dir-git-built-",
         hasExtensions: true,
@@ -239,7 +240,7 @@ describe("resolveBundledPluginsDir", () => {
         hasPnpmWorkspace: true,
       },
       {
-        expectedRelativeDir: path.join("dist", "extensions"),
+        expectedRelativeDir: "extensions",
       },
     ],
     [
@@ -256,7 +257,7 @@ describe("resolveBundledPluginsDir", () => {
       },
     ],
     [
-      "prefers built dist/extensions during tsx-driven pnpm source execution",
+      "keeps tsx source hosts on source bundled plugins",
       {
         prefix: "openclaw-bundled-dir-tsx-built-",
         hasExtensions: true,
@@ -267,7 +268,7 @@ describe("resolveBundledPluginsDir", () => {
         hasPnpmWorkspace: true,
       },
       {
-        expectedRelativeDir: path.join("dist", "extensions"),
+        expectedRelativeDir: "extensions",
         execArgv: ["--import", "tsx"],
       },
     ],
@@ -286,13 +287,19 @@ describe("resolveBundledPluginsDir", () => {
     ],
   ] as const)("%s", (_name, layout, expectation) => {
     const repoRoot = createOpenClawRoot(layout);
-    if (expectation.expectedRelativeDir === path.join("dist-runtime", "extensions")) {
+    if ("hasDistExtensions" in layout && layout.hasDistExtensions) {
       seedBundledPluginTree(repoRoot, path.join("dist", "extensions"));
+    }
+    if ("hasDistRuntimeExtensions" in layout && layout.hasDistRuntimeExtensions) {
       seedBundledPluginTree(repoRoot, path.join("dist-runtime", "extensions"));
-    } else if (expectation.expectedRelativeDir === path.join("dist", "extensions")) {
-      seedBundledPluginTree(repoRoot, path.join("dist", "extensions"));
-    } else if (expectation.expectedRelativeDir === "extensions") {
+    }
+    if ("hasExtensions" in layout && layout.hasExtensions) {
       seedBundledPluginTree(repoRoot, "extensions");
+    }
+    if ("hasPnpmWorkspace" in layout && layout.hasPnpmWorkspace && "hasDistExtensions" in layout) {
+      expect(resolveBundledDirFromPackageRoot(repoRoot)).toBe(
+        path.join(repoRoot, "dist", "extensions"),
+      );
     }
     expectResolvedBundledDirFromRoot({
       repoRoot,
@@ -438,9 +445,8 @@ describe("resolveBundledPluginsDir", () => {
     expect(withPluginCache(owner, resolveBundledPluginsDir)).toBe(sourceDir);
     expect(resolveRoot).not.toHaveBeenCalled();
 
-    expect(withPluginCache(createPluginCache(), resolveBundledPluginsDir)).toBe(
-      path.join(repoRoot, "dist", "extensions"),
-    );
+    expect(withPluginCache(createPluginCache(), resolveBundledPluginsDir)).toBe(sourceDir);
+    expect(resolveRoot).toHaveBeenCalled();
     expect(withPluginCache(owner, resolveBundledPluginsDir)).toBe(sourceDir);
   });
 

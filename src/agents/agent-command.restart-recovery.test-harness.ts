@@ -1,20 +1,36 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
 import type { Mock } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { agentCommand } from "./agent-command.js";
 import type { CommandSessionEntryFixture } from "./agent-command.live-model-switch.test-helpers.js";
+import {
+  createAgentHarnessCompletionScope,
+  withAgentHarnessCompletionAdmission,
+} from "./agent-harness-completion-scope.js";
+import { resolveEmbeddedRunTerminal } from "./embedded-agent-runner/run/terminal-resolution.js";
+import { makeTerminalInput } from "./embedded-agent-runner/run/terminal-resolution.test-support.js";
+import { createAgentRunRestartAbortError } from "./run-termination.js";
+import {
+  buildEmbeddedRunnerAssistant,
+  makeEmbeddedRunnerAttempt,
+} from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
 
 type AgentCommandRecoveryFixture = {
   state: {
     runAgentAttemptMock: Mock;
+    resolveAgentDeliveryPlanWithSessionRouteMock: Mock;
+    commandWarnMock: Mock;
+    emitAgentEventMock: Mock;
     deliverAgentCommandResultMock: Mock;
     persistSessionEntryMock: Mock<(...args: unknown[]) => Promise<unknown>>;
+    loadSessionEntryMock: Mock;
     resolvedSessionKeyMock?: string;
   };
   agentCommand: typeof agentCommand;
@@ -27,9 +43,85 @@ type AgentCommandRecoveryFixture = {
   makeSuccessResult: (provider: string, model: string) => unknown;
 };
 
+export async function withStoredAgentCommandRecoverySession(
+  fixture: AgentCommandRecoveryFixture,
+  run: (scope: { agentId: string; sessionKey: string; storePath: string }) => Promise<void>,
+): Promise<void> {
+  await withOpenClawTestState({ label: "command-recovery-delivery" }, async (testState) => {
+    const scope = {
+      agentId: "default",
+      sessionKey: "agent:default:main",
+      storePath: path.join(testState.sessionsDir("default"), "sessions.json"),
+    };
+    const { entry } = fixture.setupBareStoredSession({}, scope.storePath, scope.sessionKey);
+    fixture.state.resolvedSessionKeyMock = scope.sessionKey;
+    await sessionAccessor.replaceSessionEntry(scope, entry);
+    const { persistAgentSession: persist } = await vi.importActual<
+      typeof import("./command/attempt-execution.shared.js")
+    >("./command/attempt-execution.shared.js");
+    fixture.state.persistSessionEntryMock.mockImplementation(async (...args: unknown[]) =>
+      persist(args[0] as Parameters<typeof persist>[0]),
+    );
+    fixture.state.loadSessionEntryMock.mockImplementation(sessionAccessor.loadSessionEntry);
+    await run(scope);
+  });
+}
+
 export function registerAgentCommandRecoveryCases(
   getFixture: () => AgentCommandRecoveryFixture,
 ): void {
+  it.each([false, true])(
+    "preserves rejected best-effort delivery intent without private diagnostics (Incognito: %s)",
+    async (incognito) => {
+      const {
+        state,
+        agentCommand,
+        setupSingleAttemptFallback,
+        setupBareStoredSession,
+        makeSuccessResult,
+      } = getFixture();
+      setupSingleAttemptFallback();
+      state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+      const now = Date.now();
+      setupBareStoredSession(incognito ? { incognito: true, createdAt: now, updatedAt: now } : {});
+      state.resolveAgentDeliveryPlanWithSessionRouteMock.mockResolvedValueOnce({
+        baseDelivery: {},
+        resolvedChannel: "discord",
+        resolvedTo: "channel:missing",
+        deliveryTargetMode: "explicit",
+        targetResolutionError: new Error('Unknown Discord target "channel:missing"'),
+      });
+
+      await expect(
+        agentCommand({
+          message: "hello",
+          channel: "discord",
+          to: "channel:missing",
+          deliver: true,
+          bestEffortDeliver: true,
+        }),
+      ).resolves.toMatchObject({ payloads: [{ text: "ok" }] });
+
+      expect(state.runAgentAttemptMock).toHaveBeenCalled();
+      expect(state.commandWarnMock).toHaveBeenCalledWith(
+        expect.stringContaining("delivery preflight failed"),
+      );
+      const diagnostics = JSON.stringify(state.commandWarnMock.mock.calls);
+      if (incognito) {
+        expect(diagnostics).not.toContain("channel:missing");
+      } else {
+        expect(diagnostics).toContain("channel:missing");
+      }
+      expect(state.deliverAgentCommandResultMock).toHaveBeenCalledWith(
+        expect.objectContaining({ opts: expect.objectContaining({ deliver: true }) }),
+      );
+      const pendingEntries = state.persistSessionEntryMock.mock.calls
+        .map((call) => (call[0] as { entry?: SessionEntry }).entry)
+        .filter((entry): entry is SessionEntry => entry?.pendingFinalDelivery !== undefined);
+      expect(pendingEntries).toEqual([]);
+    },
+  );
+
   it("persists and clears current run delivery context for restart recovery", async () => {
     const {
       state,
@@ -69,46 +161,76 @@ export function registerAgentCommandRecoveryCases(
     expect(stored?.restartRecoveryDeliveryContext).toBeUndefined();
   });
 
-  it("clears the admitted completion claim when cancellation wins after its commit", async () => {
+  it("does not capture restart status as a final before the outer signal aborts", async () => {
+    const { state, agentCommand, setupSingleAttemptFallback, setupBareStoredSession } =
+      getFixture();
+    setupSingleAttemptFallback();
+    setupBareStoredSession();
+    const controller = new AbortController();
+    const assistant = buildEmbeddedRunnerAssistant({
+      stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "pending-wait", name: "exec", arguments: {} }],
+    });
+    const attempt = makeEmbeddedRunnerAttempt({
+      terminal: {
+        kind: "aborted",
+        source: "runtime",
+        failure: { error: createAgentRunRestartAbortError(), source: "prompt" },
+      },
+      assistantTexts: [],
+      lastAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      lastToolError: { toolName: "exec", error: "Tool execution aborted" },
+    });
+    const input = makeTerminalInput({
+      attempt,
+      payloadsWithToolMedia: [{ text: "Gateway restarting…" }],
+      runParams: { abortSignal: controller.signal, authProfileStateMode: "read-only" },
+    });
+    const terminal = await resolveEmbeddedRunTerminal(input);
+    expect(terminal.action).toBe("complete");
+    if (terminal.action !== "complete") {
+      throw new Error("Restart interruption must not retry the model");
+    }
+    expect(terminal.result.meta).toMatchObject({ aborted: true, stopReason: "restart" });
+    expect(input.activateInternalPrompt).not.toHaveBeenCalled();
+    state.runAgentAttemptMock.mockResolvedValue(terminal.result);
+
+    await expect(
+      agentCommand({
+        message: "continue after the pending wait",
+        to: "+1234567890",
+        abortSignal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError", code: "OPENCLAW_RESTART_ABORT" });
+
+    expect(controller.signal.aborted).toBe(false);
+    expect(state.runAgentAttemptMock).toHaveBeenCalledOnce();
+    expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
+    const persistedEntries = state.persistSessionEntryMock.mock.calls.map(
+      (call) => (call[0] as { entry?: SessionEntry }).entry,
+    );
+    expect(persistedEntries.some((entry) => entry?.pendingFinalDelivery !== undefined)).toBe(false);
+    expect(state.emitAgentEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "lifecycle",
+        data: expect.objectContaining({ phase: "error", aborted: true, stopReason: "restart" }),
+      }),
+    );
+  });
+
+  it("clears the native admitted completion claim when cancellation wins after its commit", async () => {
     const { state, agentCommand, setupSingleAttemptFallback, setupBareStoredSession } =
       getFixture();
     const stateDir = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-claim-cancel-")),
     );
-    const { createAgentHarnessTaskRuntime } =
-      await import("../plugin-sdk/agent-harness-task-runtime.js");
-    const { createAgentHarnessTaskRuntimeScope } =
-      await import("../tasks/agent-harness-task-runtime-scope.js");
-    const { markTaskTerminalById, getTaskById } = await import("../tasks/task-registry.js");
-    const { resetTaskRegistryForTests } = await import("../tasks/task-registry.test-support.js");
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        resetTaskRegistryForTests();
         const sessionKey = "agent:default:main";
         const sourceRunId = "announce:harness:cancel-after-commit";
         const childRunId = "harness:cancel-child";
-        const runtime = createAgentHarnessTaskRuntime({
-          runtime: "subagent",
-          taskKind: "example-native",
-          scope: createAgentHarnessTaskRuntimeScope({ requesterSessionKey: sessionKey }),
-        });
-        const task = runtime.createRunningTaskRun({
-          runId: childRunId,
-          sourceId: childRunId,
-          task: "work",
-          requesterAgentId: "default",
-          notifyPolicy: "silent",
-        });
-        runtime.finalizeTaskRunByRunId({
-          runId: childRunId,
-          status: "succeeded",
-          endedAt: Date.now(),
-          terminalSummary: "result",
-        });
-        runtime.setDetachedTaskDeliveryStatusByRunId({
-          runId: childRunId,
-          deliveryStatus: "pending",
-        });
+        const controller = new AbortController();
         setupSingleAttemptFallback();
         const storePath = path.join(stateDir, "agents/default/sessions/sessions.json");
         const { entry } = setupBareStoredSession({}, storePath, sessionKey);
@@ -120,37 +242,53 @@ export function registerAgentCommandRecoveryCases(
         let committed = false;
         state.persistSessionEntryMock.mockImplementation(async (...args: unknown[]) => {
           const result = await persist(args[0] as Parameters<typeof persist>[0]);
-          if (!committed && result?.restartRecoveryHarnessCompletion?.taskId === task.taskId) {
+          if (!committed && result?.restartRecoveryHarnessCompletion?.taskRunId === childRunId) {
             committed = true;
-            markTaskTerminalById({ taskId: task.taskId, status: "cancelled", endedAt: Date.now() });
+            controller.abort();
           }
           return result;
         });
         await expect(
-          agentCommand({
-            message: "child finished",
-            sessionKey,
-            runId: sourceRunId,
-            channel: "discord",
-            to: "discord:dm:123",
-            deliver: true,
-            inputProvenance: {
-              kind: "inter_session",
-              sourceTool: "agent_harness_task",
-              sourceChannel: "internal",
+          withAgentHarnessCompletionAdmission(
+            {
+              scope: createAgentHarnessCompletionScope({
+                requesterSessionKey: sessionKey,
+                requesterAgentId: "default",
+              }),
               sourceSessionKey: childRunId,
+              sourceRunId,
+              requesterSessionId: entry.sessionId,
+              requesterLifecycleRevision: entry.lifecycleRevision,
+              isSourceCurrent: () => !controller.signal.aborted,
             },
-          }),
+            () =>
+              agentCommand({
+                message: "child finished",
+                abortSignal: controller.signal,
+                assertSourceCurrent: () => controller.signal.throwIfAborted(),
+                sessionKey,
+                runId: sourceRunId,
+                channel: "discord",
+                to: "discord:dm:123",
+                deliver: true,
+                inputProvenance: {
+                  kind: "inter_session",
+                  sourceTool: "agent_harness_task",
+                  sourceChannel: "internal",
+                  sourceSessionKey: childRunId,
+                },
+              }),
+          ),
         ).rejects.toThrow();
         expect(committed).toBe(true);
         expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
         const saved = sessionAccessor.loadSessionEntry({ sessionKey, storePath });
         expect(saved?.restartRecoveryDeliveryRunId).toBeUndefined();
         expect(saved?.restartRecoveryHarnessCompletion).toBeUndefined();
-        expect(getTaskById(task.taskId)?.status).toBe("cancelled");
+        expect(controller.signal.aborted).toBe(true);
+        expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
       });
     } finally {
-      resetTaskRegistryForTests();
       await closeOpenClawAgentDatabasesAsync();
       await fs.rm(stateDir, { recursive: true, force: true });
     }

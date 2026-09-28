@@ -4,9 +4,9 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import * as directoryDurability from "../infra/directory-durability.js";
+import * as migrationArtifact from "../infra/session-sqlite-migration-artifact.js";
 import { ExitError } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import * as migrationArtifact from "./doctor-session-sqlite-artifact.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
@@ -144,7 +144,7 @@ describe("runDoctorSessionSqlite", () => {
             sessionSqliteStore: store.storePath,
             json: true,
           }),
-        ).rejects.toThrow(/hard-linked|publication paths changed/);
+        ).rejects.toThrow(/hard-linked|archive identity or contents changed/);
         expect(fs.readFileSync(move.sourcePath)).toEqual(before);
         expect(fs.readFileSync(move.archivePath)).toEqual(before);
         expect(fs.statSync(move.sourcePath).nlink).toBe(fault === "third-link" ? 3 : 2);

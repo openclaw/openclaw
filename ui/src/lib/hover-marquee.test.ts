@@ -121,6 +121,70 @@ describe("hover marquee measurement budget", () => {
       true,
     );
     expect(operations.lastIndexOf("read")).toBeLessThan(operations.indexOf("write"));
+
+    Object.defineProperty(labels[0]!, "clientWidth", { configurable: true, value: 0 });
+    operations.length = 0;
+    clock.resize(labels[0]!);
+    clock.resize(labels[1]!);
+    clock.flush();
+    expect(labels[0]!.classList.contains("hover-marquee--overflowing")).toBe(false);
+    expect(labels[1]!.classList.contains("hover-marquee--overflowing")).toBe(true);
+    expect(operations).toEqual(["read", "write", "write"]);
+  });
+
+  it("avoids style resolution at zero width and resumes through the existing resize observer", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const clock = measurementClock();
+    const { labels, container } = denseTitles(1);
+    const label = labels[0]!;
+    const host = container.querySelector("a")!;
+    let width = 0;
+    Object.defineProperty(label, "clientWidth", { configurable: true, get: () => width });
+    const style = vi.spyOn(globalThis, "getComputedStyle");
+    const expectNoLabelStyleRead = () =>
+      expect(style.mock.calls.filter(([element]) => element === label)).toEqual([]);
+    const expectResting = () => {
+      expect(label.classList.contains("hover-marquee--overflowing")).toBe(false);
+      expect(label.classList.contains("hover-marquee--scrolling")).toBe(false);
+      expect(label.style.getPropertyValue("--hover-marquee-shift")).toBe("");
+      expect(label.style.getPropertyValue("--hover-marquee-duration")).toBe("");
+      expect(vi.getTimerCount()).toBe(0);
+    };
+    host.tabIndex = 0;
+    host.focus();
+    // Reused jsdom windows retain mouse modality from earlier files.
+    host.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    expect(document.activeElement).toBe(host);
+    expect(host.matches(":focus-visible")).toBe(true);
+    // Focusing collapses jsdom's selection and queues a separate selectionchange event.
+    vi.advanceTimersByTime(0);
+    clock.flush();
+    expectResting();
+    expectNoLabelStyleRead();
+
+    for (const revealBeforeHiding of [false, true]) {
+      width = 100;
+      clock.resize(label);
+      clock.flush();
+      expect(label.classList.contains("hover-marquee--overflowing")).toBe(true);
+      expect(label.style.getPropertyValue("--hover-marquee-shift")).not.toBe("");
+      expect(label.style.getPropertyValue("--hover-marquee-duration")).not.toBe("");
+      expect(vi.getTimerCount()).toBe(1);
+      if (revealBeforeHiding) {
+        vi.advanceTimersByTime(500);
+        clock.flush();
+        expect(label.classList.contains("hover-marquee--scrolling")).toBe(true);
+      }
+      style.mockClear();
+      width = 0;
+      clock.resize(label);
+      clock.flush();
+      expectResting();
+      vi.advanceTimersByTime(500);
+      clock.flush();
+      expectResting();
+      expectNoLabelStyleRead();
+    }
   });
 
   it("skips unchanged titles but refreshes content, class, direction, and viewport changes", async () => {

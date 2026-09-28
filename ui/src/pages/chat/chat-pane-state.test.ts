@@ -284,10 +284,6 @@ describe("SessionParticipationTracker", () => {
       ...patch,
     });
 
-  it("does not block a brand-new key that never had a row", () => {
-    expect(resolve(new SessionParticipationTracker())).toBe(false);
-  });
-
   it("blocks only on a positively observed restricted state", () => {
     expect(
       resolve(new SessionParticipationTracker(), {

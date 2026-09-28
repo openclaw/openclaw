@@ -9,7 +9,7 @@ import { spawnNodeEvalSync } from "../test-utils/node-process.js";
 import { agentDatabaseModuleIdentityEntrypoints } from "./openclaw-agent-db-module-identity-runtime.test-support.js";
 import { agentWorkerStoreFixtureEntrypoint } from "./openclaw-agent-worker-store.runtime.test-support.js";
 
-it("shares agent ownership, worker publication, reclamation queues, and commit observers across transformed SDK modules", async () => {
+it("shares agent ownership, worker publication, reclamation queues, and commit observers across native SDK imports from transformed plugins", async () => {
   const repo = process.cwd();
   let hostUrl = resolveRuntimeWorkerUrl(agentDatabaseModuleIdentityEntrypoints.host);
   let sdkUrl = resolveRuntimeWorkerUrl(agentDatabaseModuleIdentityEntrypoints.sdk);
@@ -123,15 +123,14 @@ it("shares agent ownership, worker publication, reclamation queues, and commit o
           const modulePath = path.join(root, "plugin.ts");
           plugin = host.getCachedPluginModuleLoader({
             modulePath, rootDir: root, importerUrl: import.meta.url, tryNative: false,
-            transformOpenClawDependencies: true,
             aliasMap: { "openclaw/plugin-sdk/sqlite-runtime": ${JSON.stringify(fileURLToPath(sdkUrl))} },
           })(modulePath);
-          assert.notEqual(plugin.openOpenClawAgentDatabase, nativeSdk.openOpenClawAgentDatabase,
-            "transformed SDK evaluates a separate graph");
+          assert.equal(plugin.openOpenClawAgentDatabase, nativeSdk.openOpenClawAgentDatabase,
+            "plugin transformation retains the native SDK owner");
           borrowed = plugin.borrowOpenClawAgentDatabase(options);
-          assert.equal(physicalOpens, 1, "transformed borrowing must not physically reopen the agent database");
-          assert.equal(integrityScans, 1, "transformed borrowing must not repeat integrity validation");
-          assert.equal(borrowed.db === canonical.db, true, "transformed SDK shares the exact owner connection");
+          assert.equal(physicalOpens, 1, "plugin borrowing must not physically reopen the agent database");
+          assert.equal(integrityScans, 1, "plugin borrowing must not repeat integrity validation");
+          assert.equal(borrowed.db === canonical.db, true, "plugin SDK shares the exact owner connection");
           for (const name of ["runExclusiveSqliteTranscriptArchiveWorker", "runExclusiveSqliteSessionReclamation"]) {
             let release;
             const gate = new Promise(resolve => { release = resolve; });
@@ -141,7 +140,7 @@ it("shares agent ownership, worker publication, reclamation queues, and commit o
             const second = plugin[name](async () => { order.push("plugin"); });
             try {
               await new Promise(resolve => setImmediate(resolve));
-              assert.deepEqual(order, ["host"], name + " must serialize both module graphs");
+              assert.deepEqual(order, ["host"], name + " must serialize host and plugin calls");
             } finally {
               release();
               await Promise.all([first, second]);
@@ -149,7 +148,7 @@ it("shares agent ownership, worker publication, reclamation queues, and commit o
             assert.deepEqual(order, ["host", "plugin"]);
           }
           assert.equal(nativeSdk.getNodeSqliteKysely(canonical.db) === plugin.getNodeSqliteKysely(canonical.db), true,
-            "native and transformed queries share the connection cache lifecycle");
+            "native and plugin queries share the connection cache lifecycle");
 
           const db = canonical.db;
           db.exec("CREATE TABLE module_identity_entries (id TEXT PRIMARY KEY)");
@@ -159,7 +158,7 @@ it("shares agent ownership, worker publication, reclamation queues, and commit o
             assert.deepEqual(sdk.executeSqliteQuerySync(db, query).rows, []);
           }
           assert.equal(db.queryPrepares - preparesBefore, 2,
-            "transformed queries reuse the owner's admitted statement cache");
+            "plugin queries reuse the owner's admitted statement cache");
           const rows = () => db.prepare("SELECT id FROM module_identity_entries ORDER BY id").all().map(row => row.id);
           const insert = id => db.prepare("INSERT INTO module_identity_entries VALUES (?)").run(id);
           const publications = [];
@@ -204,7 +203,7 @@ it("shares agent ownership, worker publication, reclamation queues, and commit o
           assert.equal(host.openOpenClawAgentDatabase(hotOptions).db === hotBorrow.db, true);
           hotBorrow.release();
           assert.notEqual(host.readOpenClawAgentDatabaseRegistryToken(), registryToken,
-            "transformed registration invalidates native discovery");
+            "plugin registration invalidates native discovery");
           assert.deepEqual(host.listOpenClawRegisteredAgentDatabases().map(entry => entry.agentId), ["hot-created", "main"]);
 
           borrowed.release();
@@ -222,8 +221,8 @@ it("shares agent ownership, worker publication, reclamation queues, and commit o
             moduleUrl: new URL(${JSON.stringify(publicationUrl.href)}),
             input: undefined,
           };
-          assert.notEqual(plugin.openOpenClawAgentSqliteWorkerStore, nativeSdk.openOpenClawAgentSqliteWorkerStore,
-            "publication clients must enter independently evaluated SDK graphs");
+          assert.equal(plugin.openOpenClawAgentSqliteWorkerStore, nativeSdk.openOpenClawAgentSqliteWorkerStore,
+            "plugin publication clients retain the native SDK owner");
           for (const sdk of [nativeSdk, plugin]) {
             publicationClients.push(await sdk.openOpenClawAgentSqliteWorkerStore(options, borrowed.db, publicationModule));
           }
@@ -234,10 +233,10 @@ it("shares agent ownership, worker publication, reclamation queues, and commit o
           const nativeThread = await append(publicationClients[0], "native");
           assert.ok(nativeThread > 0, "publication executes on its native Worker");
           assert.equal(await append(publicationClients[1], "transformed"), nativeThread,
-            "both SDK graphs borrow the same canonical native execution owner");
+            "host and plugin clients borrow the same canonical native execution owner");
           await publicationClients[0].close();
           assert.equal(await append(publicationClients[1], "after-native-client-close"), nativeThread,
-            "closing one graph's publication client preserves the other graph's owner");
+            "closing the host publication client preserves the plugin client's owner");
           assert.deepEqual(
             publicationDatabase.db.prepare("SELECT value FROM worker_proof ORDER BY rowid").all().map(row => row.value),
             ["native", "transformed", "after-native-client-close"],

@@ -143,36 +143,40 @@ export function completeFollowupRunLifecycle(
   run: FollowupLifecycleRun,
   disposition?: "consumed",
 ): void {
-  run.steerPending?.settle(false);
-  const lifecycle = run.turnAdoptionLifecycle;
+  try {
+    run.steerPending?.settle(false);
+  } finally {
+    // A failed steer notification must not strand already-detached lifecycle custody.
+    const lifecycle = run.turnAdoptionLifecycle;
 
-  const finish = () => {
-    if (!lifecycle || completedTurnAdoptionLifecycleCallbacks.has(lifecycle)) {
-      return;
-    }
-    completedTurnAdoptionLifecycleCallbacks.add(lifecycle);
-    // Async onAbandoned work must contain its own rejections; core guarantees a
-    // non-rejecting promise. onSettled must still run after a synchronous throw.
-    try {
-      if (disposition !== "consumed" && !admittedTurnAdoptionLifecycles.has(lifecycle)) {
-        lifecycle.onAbandoned?.();
+    const finish = () => {
+      if (!lifecycle || completedTurnAdoptionLifecycleCallbacks.has(lifecycle)) {
+        return;
       }
-    } finally {
-      lifecycle.onSettled?.();
+      completedTurnAdoptionLifecycleCallbacks.add(lifecycle);
+      // Async onAbandoned work must contain its own rejections; core guarantees a
+      // non-rejecting promise. onSettled must still run after a synchronous throw.
+      try {
+        if (disposition !== "consumed" && !admittedTurnAdoptionLifecycles.has(lifecycle)) {
+          lifecycle.onAbandoned?.();
+        }
+      } finally {
+        lifecycle.onSettled?.();
+      }
+    };
+
+    if (lifecycle && !completedTurnAdoptionLifecycles.has(lifecycle)) {
+      deferredHeartbeatStops.get(lifecycle)?.();
+      completedTurnAdoptionLifecycles.add(lifecycle);
     }
-  };
 
-  if (lifecycle && !completedTurnAdoptionLifecycles.has(lifecycle)) {
-    deferredHeartbeatStops.get(lifecycle)?.();
-    completedTurnAdoptionLifecycles.add(lifecycle);
+    const admission = lifecycle ? admittingTurnAdoptionLifecycles.get(lifecycle) : undefined;
+    if (!admission) {
+      finish();
+    } else {
+      // Completion closes future admission immediately, but the callback waits for
+      // the in-flight admission attempt so adoption and abandonment cannot race.
+      void admission.then(finish, finish).catch(() => {});
+    }
   }
-
-  const admission = lifecycle ? admittingTurnAdoptionLifecycles.get(lifecycle) : undefined;
-  if (!admission) {
-    finish();
-    return;
-  }
-  // Completion closes future admission immediately, but the callback waits for
-  // the in-flight admission attempt so adoption and abandonment cannot race.
-  void admission.then(finish, finish).catch(() => {});
 }

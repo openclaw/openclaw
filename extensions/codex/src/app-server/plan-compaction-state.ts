@@ -7,7 +7,7 @@ import type { CodexAppServerClient } from "./client.js";
 import { isJsonObject } from "./protocol.js";
 
 type AgentEvent = Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0];
-type StoredPlan = { markdown?: string; steps: AgentPlanStep[] };
+export type CodexNativePlan = { markdown?: string; steps: AgentPlanStep[] };
 
 const RESTORED_PLAN_PREAMBLE =
   "OpenClaw restored the session progress card after context compaction. " +
@@ -20,7 +20,7 @@ const RESTORED_PLAN_MAX_MARKDOWN_BYTES = 2 * 1024;
 const RESTORED_PLAN_MAX_PAYLOAD_BYTES = 32 * 1024;
 const RESTORED_PLAN_TRUNCATION_SUFFIX = "…";
 
-export function canonicalizeNativeProgressCardInput(input: StoredPlan): {
+export function canonicalizeNativeProgressCardInput(input: CodexNativePlan): {
   markdown?: string;
   plan: AgentPlanStep[];
 } {
@@ -53,7 +53,7 @@ export function canonicalizeNativeProgressCardInput(input: StoredPlan): {
 
 /** Retains the latest projected plan so Codex compaction cannot discard it. */
 export class CodexCompactionPlanState {
-  private latestPlan: StoredPlan | undefined;
+  private latestPlan: CodexNativePlan | undefined;
 
   record(event: AgentEvent): void {
     if (event.stream !== "plan") {
@@ -102,7 +102,7 @@ export class CodexCompactionPlanState {
   }
 }
 
-function readBoundedPlan(markdownValue: unknown, stepsValue: unknown): StoredPlan | undefined {
+function readBoundedPlan(markdownValue: unknown, stepsValue: unknown): CodexNativePlan | undefined {
   const canonical = canonicalizeNativeProgressCardInput({
     ...(typeof markdownValue === "string" ? { markdown: markdownValue } : {}),
     steps: readPlanSteps(stepsValue),
@@ -127,7 +127,7 @@ function readBoundedPlan(markdownValue: unknown, stepsValue: unknown): StoredPla
     : undefined;
 }
 
-function serializePlan(plan: StoredPlan): string {
+function serializePlan(plan: CodexNativePlan): string {
   return JSON.stringify({ markdown: plan.markdown, plan: plan.steps });
 }
 

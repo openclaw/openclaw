@@ -10,6 +10,7 @@ import { resolveIsConfigReadOnly } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveClawHubBaseUrl } from "../infra/clawhub-client.js";
 import { fetchClawHubPluginVersionCategories } from "../infra/clawhub-plugin-catalog.js";
+import { resolvePluginActivationSourceConfig } from "./activation-source-config.js";
 import { resolvePendingPluginCapabilityReview } from "./capability-consent.js";
 import {
   buildPluginCapabilitySummary,
@@ -32,7 +33,10 @@ import {
   createInstalledPluginEnabledPredicate,
   isInstalledPluginEnabled,
 } from "./installed-plugin-index.js";
-import { readInstalledPluginOverview } from "./installed-plugin-overview.js";
+import {
+  projectPluginOverviewCapabilities,
+  readInstalledPluginOverview,
+} from "./installed-plugin-overview.js";
 import { createInstalledPluginOwnershipResolver } from "./installed-plugin-package-ownership.js";
 import {
   type ManagedPluginIconSource,
@@ -237,6 +241,9 @@ export const listManagedPlugins = withManagedPluginCache(
     officialCatalog?: OfficialCatalogResult;
     metadata?: PluginMetadataSnapshot;
   }): Promise<ManagedPluginCatalog> => {
+    // Manifest schemas describe authored SecretRefs, not resolved runtime strings.
+    // Retain the paired source before hosted catalog I/O can publish another generation.
+    const sourceConfig = resolvePluginActivationSourceConfig({ config: params.config });
     const env = params.env ?? process.env;
     const workspace = resolvePluginControlPlaneWorkspace({ config: params.config, env });
     const metadata = params.metadata ?? resolveManagedPluginMetadata(params.config, env);
@@ -302,7 +309,7 @@ export const listManagedPlugins = withManagedPluginCache(
             ? { ...localCatalog, ...officialCatalogMetadata }
             : localCatalog;
       const setup = resolvePluginConfigEnablement({
-        config: params.config,
+        config: sourceConfig,
         pluginId: record.pluginId,
         manifest,
       });
@@ -507,6 +514,7 @@ export const listManagedPlugins = withManagedPluginCache(
         id: pluginId,
         name: resolveOfficialExternalPluginLabel(entry),
         ...(packageName ? { packageName } : {}),
+        ...(clawhub ? { clawhubPackage: clawhub.name } : {}),
         ...(description ? { description } : {}),
         ...(version ? { version } : {}),
         ...(kind ? { kind } : {}),
@@ -683,6 +691,9 @@ export const inspectManagedPlugin = withManagedPluginCache(
       },
       ...summary,
       components: emptyInstalledPluginComponents(),
+      overview: {
+        capabilities: projectPluginOverviewCapabilities(summary.declared, manifest?.uiCapabilities),
+      },
       reviewToken: computeDeclaredSurfaceHash(summary.declared),
     };
   },

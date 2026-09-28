@@ -572,9 +572,17 @@ export async function stageProviderAuthCandidate(
           return { error: "This provider login requires an interactive setup session." };
         }
         throwIfSetupInferenceCancelled(params);
+        const store = interactive
+          ? loadAuthProfileStoreWithoutExternalProfiles(ctx.agentDir)
+          : undefined;
         let result = await waitForProviderAuth(
           runProviderPluginAuthMethodUnpersisted({
             config: loaded.config,
+            existingProfiles: store
+              ? Object.entries(store.profiles)
+                  .filter(([, credential]) => credential.provider === loaded.provider.id)
+                  .map(([profileId, credential]) => ({ profileId, credential }))
+              : undefined,
             runtime: params.runtime,
             method,
             agentDir: ctx.agentDir,

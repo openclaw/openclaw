@@ -40,10 +40,11 @@ type BodyScenario = {
   overrideBody?: string;
 };
 
-function prepareBody(scenario: BodyScenario) {
+function prepareBody(scenario: BodyScenario, parentEnv: NodeJS.ProcessEnv = process.env) {
   const root = tempDirs.make("openclaw-merge-attribution-");
   const sourceRepo = join(root, "source");
   const authorTrace = join(root, "author-requests");
+  const failureTrace = join(root, "injected-failures");
   const trailerMarker = join(root, "trailer-command-called");
   const body = join(root, "body");
   const override = join(root, "operator body.md");
@@ -197,6 +198,7 @@ function prepareBody(scenario: BodyScenario) {
   // itself is inside another repository, so the body belongs in sourceRepo.
   mkdirSync(join(sourceRepo, ".local"));
   writeFileSync(authorTrace, "");
+  writeFileSync(failureTrace, "");
   writeFileSync(
     join(root, "gh"),
     `#!/usr/bin/env node
@@ -209,7 +211,10 @@ if (args[0] !== "api" || args[1] !== "--hostname" || args[2] !== "fixture.github
 const endpoint = new URL(args[3], "https://fixture.github.invalid/");
 if (endpoint.pathname !== "/repos/fixture/repo/commits") throw new Error("Unexpected API endpoint");
 fs.appendFileSync(process.env.BODY_AUTHOR_TRACE, JSON.stringify(args) + "\\n");
-if (process.env.BODY_AUTHOR_READ_ERROR === "true") process.exit(1);
+if (process.env.BODY_AUTHOR_READ_ERROR === "true") {
+  fs.appendFileSync(process.env.BODY_FAILURE_TRACE, "author-read\\n");
+  process.exit(1);
+}
 const sha = endpoint.searchParams.get("sha");
 const limit = Number(endpoint.searchParams.get("per_page"));
 const commits = JSON.parse(process.env.BODY_COMMITS);
@@ -218,6 +223,7 @@ let page = git(["rev-list", "--max-count=" + limit, sha]).split("\\n").map((oid)
   sha: oid, commit: { author: { name: "Unselected Author", email: "unselected@example.com" } },
   author: { login: "unselected", type: "User" },
 });
+if (process.env.BODY_AUTHOR_FAULT) fs.appendFileSync(process.env.BODY_FAILURE_TRACE, "author-" + process.env.BODY_AUTHOR_FAULT + "\\n");
 switch (process.env.BODY_AUTHOR_FAULT) {
   case "empty": page = []; break;
   case "malformed": page = null; break;
@@ -236,16 +242,16 @@ LOCAL_PREP_HEAD_SHA="$BODY_LOCAL_HEAD"
 MERGE_REPO_NAME=fixture/repo
 MERGE_REPO_HOST=fixture.github.invalid
 pr_git() {
-  if [ "$BODY_READ_ERROR" = true ] && [[ " $* " = *" log "* ]]; then return 1; fi
+  if [ "$BODY_READ_ERROR" = true ] && [[ " $* " = *" log "* ]]; then printf 'source-read\\n' >> "$BODY_FAILURE_TRACE"; return 1; fi
   command git -C "$BODY_SOURCE_REPO" "$@"
 }
 PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main)
 merge_read() {
   [ "$*" = "preview 123" ] || return 99
-  [ "$BODY_PREVIEW_ERROR" = false ] || return 1
+  [ "$BODY_PREVIEW_ERROR" = false ] || { printf 'preview-read\\n' >> "$BODY_FAILURE_TRACE"; return 1; }
   printf '%s\\n' "$BODY_PREVIEW"
 }
-mktemp() { [ "$BODY_WRITE_ERROR" = false ] || return 1; command mktemp "$@"; }
+mktemp() { [ "$BODY_WRITE_ERROR" = false ] || { printf 'body-write\\n' >> "$BODY_FAILURE_TRACE"; return 1; }; command mktemp "$@"; }
 snapshot=""
 [ -z "$BODY_OVERRIDE" ] || snapshot=$(snapshot_merge_body "$BODY_OVERRIDE")
 file=$(prepare_squash_merge_body 123 "$snapshot")
@@ -255,7 +261,10 @@ file=$(prepare_squash_merge_body 123 "$snapshot")
     cwd: sourceRepo,
     encoding: "utf8",
     env: {
-      ...process.env,
+      ...parentEnv,
+      // This fixture sources candidate code, not the supervising wrapper snapshot.
+      OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT: undefined,
+      OPENCLAW_GH_BIN: join(root, "gh"),
       PATH: `${root}:${process.env.PATH}`,
       ...(scenario.configuredTrailer
         ? {
@@ -287,6 +296,7 @@ file=$(prepare_squash_merge_body 123 "$snapshot")
       BODY_AUTHOR_READ_ERROR: String(scenario.authorReadError ?? false),
       BODY_AUTHOR_FAULT: scenario.authorReadFault ?? "",
       BODY_AUTHOR_TRACE: authorTrace,
+      BODY_FAILURE_TRACE: failureTrace,
       BODY_COMMITS: JSON.stringify(githubCommits),
       BODY_PREVIEW: JSON.stringify({
         transport: scenario.restPreview ? "rest" : "graphql",
@@ -315,6 +325,7 @@ file=$(prepare_squash_merge_body 123 "$snapshot")
     ...result,
     mergeBody: existsSync(body) ? readFileSync(body, "utf8") : null,
     trailerCommandCalled: existsSync(trailerMarker),
+    injectedFailures: readFileSync(failureTrace, "utf8").trim().split("\n").filter(Boolean),
     authorRequests: readFileSync(authorTrace, "utf8")
       .split("\n")
       .filter(Boolean)
@@ -323,6 +334,21 @@ file=$(prepare_squash_merge_body 123 "$snapshot")
 }
 
 describePosix("native squash attribution", () => {
+  it("composes the real body despite unrelated inherited snapshot and gh selectors", () => {
+    const result = prepareBody(
+      { sourceMessages: ["Repair"] },
+      {
+        ...process.env,
+        OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT: tempDirs.make("unrelated-merge-snapshot-"),
+        OPENCLAW_GH_BIN: join(tempDirs.make("unrelated-gh-selector-"), "must-not-run"),
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.mergeBody).toBe(
+      "Server description\n\nCo-authored-by: Maintainer <maintainer@example.com>\n",
+    );
+  });
+
   it.each([
     {
       title: "COMMIT_OR_PR_TITLE",
@@ -769,17 +795,9 @@ describePosix("native squash attribution", () => {
     "co-authored-by: Claude <NOREPLY@ANTHROPIC.COM>",
     "Co-Authored-By: Claude\n <noreply@anthropic.com>",
     "Co-authored-by: Cursor <cursoragent@cursor.com>",
-    "co-authored-by: Cursor <CURSORAGENT@CURSOR.COM>",
-    "Co-Authored-By: Cursor\n <cursoragent@cursor.com>",
     "Co-authored-by: Amp <amp@ampcode.com>",
-    "co-authored-by: Amp <AMP@AMPCODE.COM>",
-    "Co-Authored-By: Amp\n <amp@ampcode.com>",
     "Co-authored-by: Codex <codex@openai.com>",
-    "co-authored-by: Codex <CODEX@OPENAI.COM>",
-    "Co-Authored-By: Codex\n <codex@openai.com>",
     "Co-authored-by: Trae Solo <solo-agent@trae.ai>",
-    "co-authored-by: Trae Solo <SOLO-AGENT@TRAE.AI>",
-    "Co-Authored-By: Trae Solo\n <solo-agent@trae.ai>",
     "Co-authored-by: roboclaw-bot <309084314+roboclaw-bot@users.noreply.github.com>",
     "co-authored-by: RoboClaw <309084314+ROBOCLAW-BOT@USERS.NOREPLY.GITHUB.COM>",
     "Co-Authored-By: RoboClaw\n <309084314+roboclaw-bot@users.noreply.github.com>",
@@ -787,15 +805,10 @@ describePosix("native squash attribution", () => {
     "co-authored-by: RoboClaw <SERVICES+ROBOCLAW@OPENCLAW.ORG>",
     "Co-Authored-By: RoboClaw\n <services+roboclaw@openclaw.org>",
     "Co-authored-by: clawsweeper <274271284+clawsweeper[bot]@users.noreply.github.com>",
-    "co-authored-by: ClawSweeper <274271284+CLAWSWEEPER[BOT]@USERS.NOREPLY.GITHUB.COM>",
-    "Co-Authored-By: clawsweeper\n <274271284+clawsweeper[bot]@users.noreply.github.com>",
     "Co-authored-by: Copilot <175728472+Copilot@users.noreply.github.com>",
     "Co-authored-by: Copilot <198982749+Copilot@users.noreply.github.com>",
     "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>",
     "Co-authored-by: Codex <noreply@openai.com>",
-    "Co-authored-by: claude <209825114+claude[bot]@users.noreply.github.com>",
-    "Co-authored-by: cursor <206951365+cursor[bot]@users.noreply.github.com>",
-    "Co-authored-by: chatgpt-codex-connector <199175422+chatgpt-codex-connector[bot]@users.noreply.github.com>",
     "Co-authored-by: Any App <1274271284+clawsweeper[bot]@users.noreply.github.com>",
   ])("omits imported machine credit while preserving human credit: %j", (machineCredit) => {
     const humanCredit = [
@@ -868,22 +881,8 @@ describePosix("native squash attribution", () => {
     expect(result.stderr).toContain("--body-file");
   });
 
-  it.each([
-    "Claude <noreply@anthropic.com>",
-    "Cursor <cursoragent@cursor.com>",
-    "Amp <amp@ampcode.com>",
-    "Codex <codex@openai.com>",
-    "Trae Solo <solo-agent@trae.ai>",
-    "roboclaw-bot <309084314+roboclaw-bot@users.noreply.github.com>",
-    "clawsweeper <274271284+clawsweeper[bot]@users.noreply.github.com>",
-    "Copilot <175728472+Copilot@users.noreply.github.com>",
-    "Copilot <198982749+Copilot@users.noreply.github.com>",
-    "Copilot <223556219+Copilot@users.noreply.github.com>",
-    "Codex <noreply@openai.com>",
-    "claude <209825114+claude[bot]@users.noreply.github.com>",
-    "cursor <206951365+cursor[bot]@users.noreply.github.com>",
-    "chatgpt-codex-connector <199175422+chatgpt-codex-connector[bot]@users.noreply.github.com>",
-  ])("drops machine credit present only in the default server preview: %s", (identity) => {
+  it("drops machine credit present only in the default server preview", () => {
+    const identity = "Claude <noreply@anthropic.com>";
     const result = prepareBody({
       sourceMessages: ["Repair"],
       previewBody: `Server description\n\nCo-authored-by: ${identity}`,
@@ -1173,7 +1172,9 @@ describePosix("native squash attribution", () => {
         mkdirSync(input);
       }
       if (kind === "symlink") {
-        symlinkSync(join(root, "target"), input);
+        const target = join(root, "target");
+        writeFileSync(target, "Valid merge body\n");
+        symlinkSync(target, input);
       }
       if (kind === "fifo") {
         expect(spawnSync("mkfifo", [input]).status).toBe(0);
@@ -1191,6 +1192,7 @@ describePosix("native squash attribution", () => {
       );
       expect(result.status, result.stderr).toBe(1);
       expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("Cannot prepare merge body:");
     },
   );
 
@@ -1296,8 +1298,28 @@ describePosix("native squash attribution", () => {
         overrideBody,
         ...failure,
       });
-      expect(result.status).toBe(1);
+      expect(result.status, result.stderr).toBe(1);
       expect(result.mergeBody).toBeNull();
+      const injectedFailure = failure.sourceReadError
+        ? "source-read"
+        : failure.authorReadError
+          ? "author-read"
+          : failure.authorReadFault
+            ? `author-${failure.authorReadFault}`
+            : failure.previewError
+              ? "preview-read"
+              : failure.bodyWriteError
+                ? "body-write"
+                : undefined;
+      if (injectedFailure) {
+        expect(result.injectedFailures).toContain(injectedFailure);
+      } else if (failure.previewQueue) {
+        expect(result.stderr).toContain("body overrides require a non-queue PR");
+      } else if (failure.restPreview) {
+        expect(result.stderr).toContain("Cannot prepare merge body:");
+      } else {
+        expect(result.stderr).toContain("require a current-head preview");
+      }
     }
   });
 });

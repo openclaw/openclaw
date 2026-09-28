@@ -227,7 +227,7 @@ async function withWorkboardSqliteDatabase(
 
 describe("WorkboardStore", () => {
   it("emits one monotonic change after each visible mutation", async () => {
-    const store = createWorkboardSqliteTestStore();
+    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
     const changes = vi.fn();
     store.subscribeChanges(changes);
 
@@ -241,7 +241,7 @@ describe("WorkboardStore", () => {
   });
 
   it("does not emit for no-op commands and isolates listener failures", async () => {
-    const store = createWorkboardSqliteTestStore();
+    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
     const changes = vi.fn(() => {
       throw new Error("listener failed");
     });
@@ -259,7 +259,7 @@ describe("WorkboardStore", () => {
     const {
       store,
       stores: { subscriptions },
-    } = createWorkboardSqliteTestHarness();
+    } = createWorkboardSqliteTestHarness({ createStores: createKernelStores });
     subscriptions.entries = async () => {
       throw new Error("subscription cleanup failed");
     };
@@ -1246,14 +1246,13 @@ describe("WorkboardStore", () => {
     expect(card.position).toBe(0);
   });
 
-  it("keeps initial session, run, and task links when creating cards", async () => {
+  it("keeps initial native session and run links when creating cards", async () => {
     const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
 
     const card = await store.create({
       title: "Follow up",
       sessionKey: "agent:main:dashboard:1",
       runId: "run-1",
-      taskId: "task-1",
       execution: {
         id: "exec-1",
         kind: "agent-session",
@@ -1270,7 +1269,6 @@ describe("WorkboardStore", () => {
     expect(card).toMatchObject({
       sessionKey: "agent:main:dashboard:1",
       runId: "run-1",
-      taskId: "task-1",
       execution: {
         engine: "claude",
         mode: "manual",
@@ -3525,7 +3523,7 @@ describe("WorkboardStore", () => {
   });
 
   it("keeps archived cards out of diagnostics without rewriting their history", async () => {
-    const store = createWorkboardSqliteTestStore();
+    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
     const card = await store.create({ title: "Archived completed work", status: "done" });
     const now = Date.now();
 
@@ -4010,7 +4008,7 @@ describe("WorkboardStore", () => {
     const {
       store,
       stores: { subscriptions },
-    } = createWorkboardSqliteTestHarness();
+    } = createWorkboardSqliteTestHarness({ createStores: createKernelStores });
     const historical = await store.create({
       title: "Archived notifications",
       boardId: "ops",
@@ -4070,7 +4068,7 @@ describe("WorkboardStore", () => {
     const {
       store,
       stores: { subscriptions },
-    } = createWorkboardSqliteTestHarness();
+    } = createWorkboardSqliteTestHarness({ createStores: createKernelStores });
     const card = await store.create({ title: "Notify me", boardId: "ops" });
     const subscription = await store.subscribeNotifications({
       boardId: "ops",
@@ -4158,7 +4156,7 @@ describe("WorkboardStore", () => {
   });
 
   it("does not skip same-millisecond notification events after cursor advancement", async () => {
-    const store = createWorkboardSqliteTestStore();
+    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
     await store.create({
       title: "First same-ms event",
       boardId: "ops",
@@ -4206,7 +4204,7 @@ describe("WorkboardStore", () => {
   });
 
   it("does not skip unsequenced notifications after a sequenced same-millisecond event", async () => {
-    const store = createWorkboardSqliteTestStore();
+    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
     await store.create({
       title: "Sequenced notification",
       boardId: "ops",
@@ -4260,7 +4258,7 @@ describe("WorkboardStore", () => {
   });
 
   it("drains large same-millisecond notification batches without replaying delivered ids", async () => {
-    const store = createWorkboardSqliteTestStore();
+    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
     for (let index = 0; index < 205; index += 1) {
       await store.create({
         title: `Same-ms event ${index}`,
@@ -4298,7 +4296,7 @@ describe("WorkboardStore", () => {
   });
 
   it("filters replayed notification events by session and run subscriptions", async () => {
-    const store = createWorkboardSqliteTestStore();
+    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
     const matching = await store.create({
       title: "Matching session",
       boardId: "ops",
@@ -4347,7 +4345,7 @@ describe("WorkboardStore", () => {
   });
 
   it("replays card-scoped subscriptions without requiring the board id", async () => {
-    const store = createWorkboardSqliteTestStore();
+    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
     const card = await store.create({ title: "Ops card", boardId: "ops" });
     const subscription = await store.subscribeNotifications({
       cardId: card.id,
@@ -4364,7 +4362,7 @@ describe("WorkboardStore", () => {
   });
 
   it("replays stale metadata as stale notification events", async () => {
-    const store = createWorkboardSqliteTestStore();
+    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
     await store.create({
       title: "Stale card",
       boardId: "ops",
@@ -4454,7 +4452,7 @@ describe("WorkboardStore", () => {
   );
 
   it("does not mutate archived ready cards during repeated dispatch", async () => {
-    const store = createWorkboardSqliteTestStore();
+    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
     const card = await store.create({
       title: "Archived ready work",
       status: "ready",

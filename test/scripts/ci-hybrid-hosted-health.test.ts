@@ -87,14 +87,26 @@ describe("hybrid hosted assignment health", () => {
 
   it.each([
     { status: "queued", runner_id: null, started_at: null },
-    { status: "completed", runner_id: 12, started_at: at(20) },
+    { status: "completed", runner_id: 12, started_at: at(0) },
   ])("falls back on $status assignment stalls", async (job) => {
-    mockActions([preflight({ completed_at: at(200) }), sentinel(job)]);
+    mockActions([preflight({ completed_at: at(60) }), sentinel(job)]);
     await expect(inspect()).resolves.toMatchObject({
       healthy: false,
       reason: "hosted-assignment-stalled",
       sampledJobs: 1,
     });
+  });
+
+  it.each<[number, boolean]>([
+    [59, true],
+    [60, false],
+    [179, false],
+  ])("admits optional hosted checks after %s seconds: %s", async (wait, healthy) => {
+    mockActions([
+      preflight({ completed_at: at(500) }),
+      sentinel({ created_at: at(wait + 10), started_at: at(10) }),
+    ]);
+    await expect(inspect()).resolves.toMatchObject({ healthy, maxWaitSeconds: wait });
   });
 
   it("uses job creation when a sentinel is created after preflight", async () => {
@@ -105,7 +117,10 @@ describe("hybrid hosted assignment health", () => {
   it.each([
     [preflight({ run_attempt: 1 }), sentinel()],
     [preflight(), sentinel({ run_attempt: 1 })],
-    [preflight(), sentinel({ runner_id: null, status: "queued", started_at: null })],
+    [
+      preflight(),
+      sentinel({ created_at: at(20), runner_id: null, status: "queued", started_at: null }),
+    ],
     [preflight(), sentinel({ conclusion: "skipped" })],
     [preflight(), sentinel({ labels: ["self-hosted", "ubuntu-24.04"] })],
     [preflight(), sentinel({ started_at: at(1_801) })],

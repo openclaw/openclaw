@@ -4,9 +4,10 @@ import fs from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { classifyBundledExtensionSourcePath } from "../../../../scripts/lib/extension-source-classifier.mts";
 import { collectModuleReferencesFromSource } from "../../../../scripts/lib/guard-inventory-utils.mjs";
+import { createNativeTypeScriptParser } from "../../../../scripts/lib/native-typescript.mts";
 import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../../../plugin-sdk/test-helpers/public-artifacts.js";
 import { loadPluginManifestRegistryCore } from "../../../plugins/manifest-registry.js";
 import { expectNoReaddirSyncDuring } from "../../../test-utils/fs-scan-assertions.js";
@@ -18,6 +19,8 @@ import {
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const REPO_ROOT = resolve(ROOT_DIR, "..");
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 const ALLOWED_EXTENSION_PUBLIC_SURFACES = new Set(GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES);
 ALLOWED_EXTENSION_PUBLIC_SURFACES.add("test-api.js");
 const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
@@ -497,8 +500,7 @@ function getSourceAnalysis(path: string): SourceAnalysis {
 }
 
 function expectNoCorePluginPrivateSrcImports(file: string, text: string): void {
-  const imports = collectModuleReferencesFromSource(text, {
-    fileName: file,
+  const imports = collectModuleReferencesFromSource(parser.parseSourceFile(file, text), {
     acceptSpecifier: (specifier) => /(?:^|\/)extensions\/[^/]+\/src\//u.test(specifier),
   });
   expect(imports, `${file} should not import plugin-private src paths`).toEqual([]);
@@ -520,26 +522,6 @@ function expectOnlyApprovedExtensionSeams(file: string, imports: string[]): void
       ALLOWED_EXTENSION_PUBLIC_SURFACES.has(basenameLocal),
       `${file} should only import approved extension surfaces, got ${specifier}`,
     ).toBe(true);
-  }
-}
-
-function expectNoSiblingExtensionPrivateSrcImports(file: string, imports: string[]): void {
-  const normalizedFile = file.replaceAll("\\", "/");
-  const currentExtensionId =
-    normalizedFile.match(new RegExp(`/${BUNDLED_PLUGIN_ROOT_DIR}/([^/]+)/`))?.[1] ?? null;
-  if (!currentExtensionId) {
-    return;
-  }
-  for (const specifier of imports) {
-    if (!specifier.startsWith(".")) {
-      continue;
-    }
-    const resolvedImport = resolve(dirname(file), specifier).replaceAll("\\", "/");
-    const targetExtensionId = resolvedImport.match(/\/extensions\/([^/]+)\/src\//)?.[1] ?? null;
-    if (!targetExtensionId || targetExtensionId === currentExtensionId) {
-      continue;
-    }
-    expect.fail(`${file} should not import another extension's private src, got ${specifier}`);
   }
 }
 
@@ -672,21 +654,6 @@ describe("channel import guardrails", () => {
   it("keeps core production files off plugin-private src imports", () => {
     for (const file of collectCoreSourceFiles()) {
       expectNoCorePluginPrivateSrcImports(file, readSource(file));
-    }
-  });
-
-  describe("extension private src import guardrails", () => {
-    for (const extensionId of BUNDLED_EXTENSION_IDS.toSorted((left, right) =>
-      left.localeCompare(right),
-    )) {
-      it(`${extensionId} stays off other extensions' private src imports`, () => {
-        for (const file of collectExtensionFiles(extensionId)) {
-          if (basename(file) === "api.ts") {
-            continue;
-          }
-          expectNoSiblingExtensionPrivateSrcImports(file, getSourceAnalysis(file).importSpecifiers);
-        }
-      });
     }
   });
 

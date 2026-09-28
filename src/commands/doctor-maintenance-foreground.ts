@@ -1,15 +1,13 @@
 import { TICK_INTERVAL_MS } from "../gateway/server-constants.js";
 import { acquireWithWait } from "../infra/acquire-with-wait.js";
+import { acquireGatewayLock, GatewayLockError } from "../infra/gateway-lock.js";
 import { readGatewayOwnerLease } from "../infra/gateway-owner-lease.js";
 import {
   GATEWAY_SERVICE_STOP_TIMEOUT_MS,
   GATEWAY_SHUTDOWN_RESERVE_MS,
 } from "../infra/gateway-shutdown-budget.js";
+import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
 import { resolveGatewayRestartDeferralTimeoutMs } from "../infra/restart-budget.js";
-import {
-  acquireGatewayMaintenanceCoordinator,
-  StateDatabaseCoordinatorContentionError,
-} from "../infra/state-database-coordinator.js";
 import { readStateLeaseProcessOwnerStatus } from "../infra/state-lease-process-owner.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
@@ -17,18 +15,42 @@ import { sleep } from "../utils/sleep.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 import { isDoctorUpdateRepairMode, resolveDoctorRepairMode } from "./doctor-repair-mode.js";
 
-export async function acquireDoctorGatewayMaintenanceCoordinator(
+export async function acquireDoctorGatewayMaintenanceOwner(
   databasePath: string,
   env: NodeJS.ProcessEnv,
-  params: { options: DoctorOptions; runtime: RuntimeEnv; assertCurrent?: () => void },
+  params: {
+    options: DoctorOptions;
+    runtime: RuntimeEnv;
+    assertCurrent?: () => void;
+    deadlineMs?: number;
+  },
 ) {
   const updateRepair = isDoctorUpdateRepairMode(resolveDoctorRepairMode(params.options));
   let foreground: ReturnType<typeof readGatewayOwnerLease>;
   let ownerlessDeadlineMs: number | undefined;
   return await acquireWithWait({
-    acquire: () => {
+    acquire: async () => {
       params.assertCurrent?.();
-      return acquireGatewayMaintenanceCoordinator({ databasePath, busyTimeoutMs: 0 });
+      try {
+        const owner = await acquireGatewayLock({
+          env,
+          role: "sqlite-maintenance",
+          allowInTests: true,
+          timeoutMs: 0,
+        });
+        if (!owner) {
+          throw new Error(`Doctor could not acquire maintenance ownership for ${databasePath}`);
+        }
+        return owner;
+      } catch (error) {
+        if (
+          error instanceof GatewayLockError &&
+          error.cause instanceof GatewayStateOwnerContentionError
+        ) {
+          throw error.cause;
+        }
+        throw error;
+      }
     },
     shouldRetry: (error) => {
       // A delegated updater may reach Doctor before its replaced foreground
@@ -36,8 +58,7 @@ export async function acquireDoctorGatewayMaintenanceCoordinator(
       if (
         !updateRepair ||
         !params.assertCurrent ||
-        !(error instanceof StateDatabaseCoordinatorContentionError) ||
-        error.family !== "gateway-lifecycle"
+        !(error instanceof GatewayStateOwnerContentionError)
       ) {
         return false;
       }
@@ -81,11 +102,13 @@ export async function acquireDoctorGatewayMaintenanceCoordinator(
     },
     // Installation replacement is an unsupervised restart: detection, drain,
     // then server close and process exit each retain their owner's allowance.
-    deadlineMs:
+    deadlineMs: Math.min(
+      params.deadlineMs ?? Infinity,
       performance.now() +
-      TICK_INTERVAL_MS +
-      resolveGatewayRestartDeferralTimeoutMs() +
-      GATEWAY_SERVICE_STOP_TIMEOUT_MS,
+        TICK_INTERVAL_MS +
+        resolveGatewayRestartDeferralTimeoutMs() +
+        GATEWAY_SERVICE_STOP_TIMEOUT_MS,
+    ),
     pollIntervalMs: 100,
     maxPollIntervalMs: 1_000,
     sleep: (ms) =>

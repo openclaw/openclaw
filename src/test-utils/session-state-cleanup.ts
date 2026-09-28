@@ -8,7 +8,8 @@ import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lif
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 
-export async function cleanupSessionStateForTest(
+/** Settle case-owned work while a suite fixture retains its database workers. */
+export async function drainSessionStateForTest(
   options: { stateDir?: string; rootPath?: string } = {},
 ): Promise<void> {
   await drainSessionStoreWriterQueuesForTest();
@@ -20,6 +21,12 @@ export async function cleanupSessionStateForTest(
   }
   await drainFileLockStateForTest();
   clearSessionStoreCacheForTest();
+}
+
+export async function cleanupSessionStateForTest(
+  options: { stateDir?: string; rootPath?: string } = {},
+): Promise<void> {
+  await drainSessionStateForTest(options);
   if (!options.stateDir) {
     return;
   }

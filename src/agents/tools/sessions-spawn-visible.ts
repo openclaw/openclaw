@@ -14,12 +14,12 @@ import {
 } from "../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveControlUiSessionUrl } from "../../config/control-ui-link-base.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ADMIN_SCOPE } from "../../gateway/method-scopes.js";
 import { resolveWorkspacePathContainment } from "../../gateway/server-methods/workspace-path-containment.js";
-import { resolveGatewaySessionStoreTarget } from "../../gateway/session-utils-store-lookup.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
 import { resolveWorkerPlacementDestination } from "../../gateway/worker-environments/placement-destination.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import {
@@ -51,7 +51,7 @@ import {
   resolveConfiguredSubagentRunTimeoutSeconds,
   resolveSubagentModelAndThinkingPlan,
 } from "../subagents/spawn/subagent-spawn-plan.js";
-import { readRequesterModel } from "../subagents/spawn/subagent-spawn-requester-prefs.js";
+import { readRequesterPreferences } from "../subagents/spawn/subagent-spawn-requester-prefs.js";
 import { buildSubagentTaskMessage } from "../subagents/spawn/subagent-system-prompt.js";
 import { resolveSubagentTargetPolicy } from "../subagents/spawn/subagent-target-policy.js";
 import { resolveAgentTimeoutMs } from "../timeout.js";
@@ -64,6 +64,7 @@ import {
   type InProcessGatewayCaller,
 } from "./in-process-gateway.js";
 import { startVisibleCloudSession } from "./sessions-spawn-cloud.js";
+import { resolveVisibleSessionOwner } from "./sessions-spawn-visible-owner.js";
 
 const SessionsSpawnPlacementSchema = Type.Union([
   Type.Object({ kind: Type.Literal("local") }, { additionalProperties: false }),
@@ -261,16 +262,18 @@ export async function maybeSpawnVisibleSession(params: {
     agentSessionKey: params.options?.agentSessionKey,
     completionOwnerKey: params.options?.completionOwnerKey,
   });
-  const requesterTarget = resolveGatewaySessionStoreTarget({
+  const assertActive =
+    params.options?.assertActive ?? (() => params.options?.signal?.throwIfAborted());
+  const requesterTarget = await resolveGatewaySessionStoreTargetInWorker({
     cfg,
     key: ownership.completionRequesterSessionKey,
     agentId: params.options?.requesterAgentIdOverride,
+    assertActive,
   });
-  const completionRequesterSessionId = loadSessionEntryReadOnly({
-    storePath: requesterTarget.storePath,
-    sessionKey: requesterTarget.canonicalKey,
-    clone: false,
-  })?.sessionId;
+  assertActive();
+  const requesterEntry = requesterTarget.store[requesterTarget.canonicalKey];
+  const completionRequesterSessionId = requesterEntry?.sessionId;
+  const completionRequesterLifecycleRevision = requesterEntry?.lifecycleRevision;
   const requesterKey = ownership.controllerSessionKey;
   const callerDepth = getSubagentDepthFromSessionStore(requesterKey, {
     cfg,
@@ -379,13 +382,17 @@ export async function maybeSpawnVisibleSession(params: {
     inheritedModel:
       targetAgentId === requesterAgentId
         ? (params.options?.requesterModel ??
-          readRequesterModel({
-            cfg,
-            requesterInternalKey: requesterKey,
-            requesterAgentId,
-          }))
+          (
+            await readRequesterPreferences({
+              cfg,
+              requesterInternalKey: requesterKey,
+              requesterAgentId,
+              assertActive,
+            })
+          ).model)
         : undefined,
   });
+  assertActive();
   if (modelPlan.status === "error") {
     return { status: "error", error: modelPlan.error };
   }
@@ -401,6 +408,7 @@ export async function maybeSpawnVisibleSession(params: {
           hasFallbackOrigin: initialSessionPatch.modelOverrideFallbackOriginModel !== undefined,
         }
       : undefined;
+  assertActive();
   const reservation = reserveChildAdmissionSlot({
     controllerSessionKey: requesterKey,
     resolveAdmission: (pendingChildren) => {
@@ -434,6 +442,9 @@ export async function maybeSpawnVisibleSession(params: {
             actor: { type: "agent", id: requesterAgentId },
             requesterSessionKey: requesterKey,
             completionOwnerSessionKey: ownership.completionRequesterSessionKey,
+            ...(params.options?.sessionPermissionPolicy
+              ? { inheritedPermissionMode: params.options.sessionPermissionPolicy.mode }
+              : {}),
             ...(spawnModelAutoSelection ? { spawnModelAutoSelection } : {}),
             inheritedToolPolicy: {
               version: 1,
@@ -447,7 +458,7 @@ export async function maybeSpawnVisibleSession(params: {
     let response: {
       key?: string;
       sessionId?: string;
-      entry?: { lifecycleRevision?: string };
+      entry?: Pick<SessionEntry, "createdActor" | "lifecycleRevision" | "owner">;
       runStarted?: boolean;
       runId?: string;
       runError?: unknown;
@@ -476,9 +487,6 @@ export async function maybeSpawnVisibleSession(params: {
         // Declared spawn lineage: without it the child persists as a depth-0 root
         // and could spawn past maxSpawnDepth.
         spawnDepth: callerDepth + 1,
-        ...(params.options?.sessionPermissionPolicy
-          ? { permissionMode: params.options.sessionPermissionPolicy.mode }
-          : {}),
         ...(params.raw.context === "fork" ? { fork: true } : {}),
         ...(spawnedCwd ? { cwd: spawnedCwd } : {}),
         ...(projectId ? { projectId } : {}),
@@ -625,33 +633,42 @@ export async function maybeSpawnVisibleSession(params: {
       if (placement) {
         params.options?.assertActive?.();
       }
-      (params.options?.registerRun ?? registerSubagentRun)({
-        runId,
-        requesterTurnRunId: params.options?.requesterTurnRunId,
-        childSessionKey,
-        controllerSessionKey: ownership.controllerSessionKey,
-        requesterSessionKey: ownership.completionRequesterSessionKey,
-        completionRequesterSessionId,
-        requesterOrigin: normalizeDeliveryContext({
-          channel: params.options?.agentChannel,
-          accountId: params.options?.agentAccountId,
-          to:
-            params.options?.currentMessagingTarget ??
-            params.options?.currentChannelId ??
-            params.options?.agentTo,
-          threadId: params.options?.currentThreadTs ?? params.options?.agentThreadId,
-        }),
-        requesterDisplayKey: ownership.completionRequesterDisplayKey,
-        task: params.task,
-        taskName: params.taskName,
-        agentId: targetAgentId,
-        requesterAgentId,
-        cleanup: "keep",
-        label: params.label || undefined,
-        runTimeoutSeconds,
-        expectsCompletionMessage: params.expectsCompletionMessage,
-        spawnMode: "run",
-      });
+      await (params.options?.registerRun ?? registerSubagentRun)(
+        {
+          runId,
+          requesterTurnRunId: params.options?.requesterTurnRunId,
+          childSessionKey,
+          controllerSessionKey: ownership.controllerSessionKey,
+          requesterSessionKey: ownership.completionRequesterSessionKey,
+          completionRequesterSessionId,
+          completionRequesterLifecycleRevision,
+          requesterOrigin: normalizeDeliveryContext({
+            channel: params.options?.agentChannel,
+            accountId: params.options?.agentAccountId,
+            to:
+              params.options?.currentMessagingTarget ??
+              params.options?.currentChannelId ??
+              params.options?.agentTo,
+            threadId: params.options?.currentThreadTs ?? params.options?.agentThreadId,
+          }),
+          requesterDisplayKey: ownership.completionRequesterDisplayKey,
+          task: params.task,
+          taskName: params.taskName,
+          agentId: targetAgentId,
+          requesterAgentId,
+          cleanup: "keep",
+          label: params.label || undefined,
+          runTimeoutSeconds,
+          expectsCompletionMessage: params.expectsCompletionMessage,
+          spawnMode: "run",
+        },
+        {
+          assertCurrent: () => {
+            params.options?.signal?.throwIfAborted();
+            params.options?.assertActive?.();
+          },
+        },
+      );
     } catch (error) {
       if (placement) {
         await terminateCloudRun(childSessionKey, runId);
@@ -684,11 +701,15 @@ export async function maybeSpawnVisibleSession(params: {
       cleanup: "keep",
       ...(response.placement ? { placement: response.placement } : {}),
       ...(sessionUrl ? { sessionUrl } : {}),
-      owner: {
-        type: "agent",
-        id: requesterAgentId,
-        ...(ownerLabel ? { label: ownerLabel } : {}),
-      },
+      owner: resolveVisibleSessionOwner(
+        response.entry,
+        {
+          type: "agent",
+          id: requesterAgentId,
+          ...(ownerLabel ? { label: ownerLabel } : {}),
+        },
+        cfg,
+      ),
     };
   } finally {
     reservation.release();

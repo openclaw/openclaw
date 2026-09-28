@@ -1,3 +1,5 @@
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -8,6 +10,7 @@ import {
   removeTempDirectory,
   removeTempDirectoryAsync,
 } from "./sqlite-readonly-location-cleanup.js";
+import { beginSqliteSnapshotRetirement } from "./sqlite-snapshot-retirement.js";
 import {
   createSqliteSnapshotStagingDirectory,
   createSqliteSnapshotStagingDirectorySync,
@@ -56,6 +59,120 @@ it("preserves a live nested snapshot when its parent starts cleanup first", asyn
     await removeTempDirectoryAsync(child);
     await removeTempDirectoryAsync(parent);
   }
+});
+
+it.skipIf(process.platform === "win32").each(["", "openclaw"])(
+  "cleans an interrupted allocation beneath an exclusively owned parent (%s)",
+  async (layout) => {
+    const { cache, source } = createFixture();
+    const parent = createSqliteSnapshotStagingDirectorySync(cache);
+    const payload = path.join(parent, "database.sqlite");
+    fs.copyFileSync(source, payload);
+    const root = layout ? path.join(parent, layout) : parent;
+    if (layout) {
+      fs.mkdirSync(root);
+    }
+    const child = spawn(
+      process.execPath,
+      [
+        "--import",
+        import.meta.resolve("tsx"),
+        "--input-type=module",
+        "-e",
+        `import fs from 'node:fs'; import path from 'node:path';
+         import { prepareSqliteReadOnlyLocationSyncInProcess } from ${JSON.stringify(new URL("./sqlite-readonly-location.ts", import.meta.url).href)};
+         const make = fs.mkdtempSync;
+         fs.mkdtempSync = (...args) => {
+           const directory = make(...args);
+           if (path.dirname(directory) === ${JSON.stringify(root)}) {
+             fs.writeSync(1, 'allocated');
+             process.kill(process.pid, 'SIGSTOP');
+           }
+           return directory;
+         };
+         prepareSqliteReadOnlyLocationSyncInProcess(${JSON.stringify(source)}, ${JSON.stringify(root)});`,
+      ],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
+    let stderr = "";
+    child.stderr.on("data", (data) => {
+      stderr += String(data);
+    });
+    const closed = once(child, "close");
+    let allocated: string | undefined;
+    try {
+      await Promise.race([
+        once(child.stdout, "data"),
+        closed.then(() => {
+          throw new Error(`Snapshot child closed before allocation: ${stderr}`);
+        }),
+      ]);
+      const directories = fs
+        .readdirSync(root, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory());
+      expect(directories).toHaveLength(1);
+      allocated = path.join(root, directories[0]!.name);
+      expect(fs.readdirSync(allocated)).toEqual([]);
+      expect(await removeTempDirectoryAsync(parent)).toBe(false);
+      assertReadable(payload);
+      child.kill("SIGKILL");
+      expect(await closed).toEqual([null, "SIGKILL"]);
+      expect(await removeTempDirectoryAsync(parent)).toBe(true);
+      expect(fs.existsSync(parent)).toBe(false);
+      assertReadable(source);
+    } finally {
+      child.kill("SIGKILL");
+      await closed;
+      if (allocated && fs.existsSync(allocated) && fs.readdirSync(allocated).length === 0) {
+        fs.rmdirSync(allocated);
+      }
+      await removeTempDirectoryAsync(parent);
+    }
+  },
+);
+
+it.each([
+  { parentName: "openclaw-sqlite-readonly-v2-Parent", layout: "", artifact: "operator.txt" },
+  {
+    parentName: "openclaw-sqlite-readonly-v2-Parent",
+    layout: "",
+    artifact: "owner.sqlite-journal",
+  },
+  { parentName: "openclaw-sqlite-readonly-v2-Parent", layout: "other", artifact: undefined },
+  { parentName: "generic", layout: "", artifact: undefined },
+])(
+  "retains an unowned nested directory ($parentName/$layout, $artifact)",
+  ({ parentName, layout, artifact }) => {
+    const { cache, source } = createFixture();
+    const parent = path.join(cache, parentName);
+    const orphan = path.join(parent, layout, "openclaw-sqlite-readonly-v2-Orphan");
+    fs.mkdirSync(orphan, { recursive: true });
+    const payload = path.join(parent, "database.sqlite");
+    fs.copyFileSync(source, payload);
+    if (artifact) {
+      fs.writeFileSync(path.join(orphan, artifact), "retain");
+    }
+    const token = acquireSqliteStagingToken(parent, "create");
+    try {
+      expect(() => beginSqliteSnapshotRetirement(parent, { token })).toThrow(
+        "SQLite snapshot token ownership is unknown",
+      );
+      assertReadable(payload);
+      expect(fs.existsSync(orphan)).toBe(true);
+    } finally {
+      token();
+    }
+  },
+);
+
+it("requires ownership of an empty retirement root", () => {
+  const { cache } = createFixture();
+  const directory = path.join(cache, "openclaw-sqlite-readonly-v2-Orphan");
+  fs.mkdirSync(directory);
+  expect(() => beginSqliteSnapshotRetirement(directory)).toThrow(
+    "SQLite snapshot token ownership is unknown",
+  );
+  expect(fs.existsSync(directory)).toBe(true);
 });
 
 it.each([false, true])(

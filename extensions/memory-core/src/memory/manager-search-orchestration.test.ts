@@ -32,32 +32,6 @@ describe("memory index", () => {
     trackManager,
   } = fixture;
 
-  async function expectHybridKeywordSearchFindsMemory(
-    cfg: Parameters<typeof getMemorySearchManager>[0]["cfg"],
-  ) {
-    const manager = await getFreshManager(cfg);
-    try {
-      const status = manager.status();
-      if (!status.fts?.available) {
-        return;
-      }
-
-      await manager.sync({ reason: "test" });
-      const results = await manager.search("zebra");
-      expect(results.length).toBeGreaterThan(0);
-      expect(results[0]?.path).toContain("memory/2026-01-12.md");
-    } finally {
-      await manager.close?.();
-    }
-  }
-
-  it.each([0, 0.35])(
-    "finds keyword matches through default hybrid search at minimum score %s",
-    async (minScore) => {
-      await expectHybridKeywordSearchFindsMemory(createCfg({ minScore }));
-    },
-  );
-
   it("keeps a dirty status manager read-only while searching published results", async () => {
     const cfg = createCfg({ provider: "none", minScore: 0 });
     const writer = await getFreshManager(cfg, "cli");
@@ -149,8 +123,8 @@ describe("memory index", () => {
     expect(results.some((result) => result.path.endsWith("memory/2026-01-12.md"))).toBe(true);
   });
 
-  it("fails search after bounded query embedding retries are exhausted", async () => {
-    const cfg = createCfg({});
+  it("fails search after bounded query embedding retries are exhausted for an explicit provider", async () => {
+    const cfg = createCfg({ provider: "openai" });
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
 
@@ -177,6 +151,38 @@ describe("memory index", () => {
 
     await expect(manager.search("alpha")).rejects.toThrow("fetch failed");
     expect(queryCalls).toBe(3);
+  });
+
+  it("falls back to keyword results after bounded query embedding retries are exhausted with unset provider", async () => {
+    const cfg = createCfg({});
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+
+    let queryCalls = 0;
+    (
+      manager as unknown as {
+        provider: EmbeddingProvider;
+      }
+    ).provider = {
+      id: "mock",
+      model: "mock-embed",
+      embed: async () => {
+        queryCalls += 1;
+        throw new Error("TypeError: fetch failed | other side closed");
+      },
+      embedBatch: async (texts) => texts.map(() => [1, 0, 0, 0]),
+      close: async () => {},
+    };
+    (
+      manager as unknown as {
+        waitForEmbeddingRetry: (delayMs: number, action: string) => Promise<void>;
+      }
+    ).waitForEmbeddingRetry = async () => {};
+
+    const results = await manager.search("alpha");
+
+    expect(queryCalls).toBe(3);
+    expect(results.some((result) => result.path.endsWith("memory/2026-01-12.md"))).toBe(true);
   });
 
   it("keeps a healthy local provider active when the caller cancels search", async () => {
@@ -321,15 +327,14 @@ describe("memory index", () => {
     const manager = await getPersistentManager(
       createCfg({
         minScore: 0,
+        vectorEnabled: false,
       }),
     );
     await manager.sync({ reason: "test" });
 
     const fields = manager as unknown as {
       db: DatabaseSync;
-      ensureVectorReady: (dimensions?: number) => Promise<boolean>;
     };
-    fields.ensureVectorReady = async () => false;
     const insertChunk = fields.db.prepare(
       "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     );
@@ -368,11 +373,15 @@ describe("memory index", () => {
     const healthyResults = await manager.search("alpha");
     expect(healthyResults.some((result) => result.path === "memory/2026-01-12.md")).toBe(true);
 
-    fields.ensureVectorReady = async () => {
-      throw new Error("vector store unavailable");
-    };
-    const degradedResults = await manager.search("alpha");
-    expect(degradedResults.some((result) => result.path === "memory/2026-01-12.md")).toBe(true);
+    const unavailable = vi
+      .spyOn(memoryCpuWorkerRuntime, "runMemoryVectorFallback")
+      .mockRejectedValueOnce(new Error("vector store unavailable"));
+    try {
+      const degradedResults = await manager.search("alpha");
+      expect(degradedResults.some((result) => result.path === "memory/2026-01-12.md")).toBe(true);
+    } finally {
+      unavailable.mockRestore();
+    }
   });
 
   it("supplements thin strict FTS results for conversational queries", async () => {

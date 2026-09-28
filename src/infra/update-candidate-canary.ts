@@ -15,7 +15,10 @@ import { readPackageVersion } from "./package-json.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveSqliteInspectionBudget } from "./sqlite-readonly-worker.js";
 import { launchCanary, terminateCanary, waitBounded } from "./update-candidate-canary-process.js";
-import { waitForUpdateCandidateReadiness } from "./update-candidate-canary-readiness.js";
+import {
+  observeUpdateCandidateStartup,
+  waitForUpdateCandidateReadiness,
+} from "./update-candidate-canary-readiness.js";
 import {
   prepareUpdateCandidateRehearsal,
   type UpdateCandidateRehearsal,
@@ -39,9 +42,10 @@ import {
   type UpdateFailureFact,
 } from "./update-failure-facts.js";
 import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
+import type { UpdateRunStep } from "./update-run-record.js";
 import { resolveUpdateDoctorExecutionPolicy } from "./update-runner-doctor.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
 import { UpdateSnapshotCapacityError } from "./update-snapshot-capacity.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 type CanaryPhase =
   | "snapshot"
@@ -86,12 +90,14 @@ export async function validateUpdateCandidateCanary(params: {
   assertCurrent?: () => void;
   /** Emit at completion; replaying after the canary shifts persisted step timestamps. */
   onStep?: (step: UpdateStepResult) => void;
+  onProgress?: (step: UpdateRunStep) => void;
 }): Promise<CanaryResult> {
   const started = Date.now();
   let rehearsal: UpdateCandidateRehearsal | undefined;
   const sourceEnv = params.env ?? process.env;
   const logTail: string[] = [];
   const stepLogTail: string[] = [];
+  const startupWarnings: string[] = [];
   let activeStep = { name: "candidate-runtime", command: "Checking update runtime" };
   let stepStartedAt = started;
   let activeLintStep: UpdateStepResult | undefined;
@@ -108,6 +114,7 @@ export async function validateUpdateCandidateCanary(params: {
           directory === rehearsal.stateDir
             ? "candidate-state-cleanup"
             : "candidate-plugin-inventory-cleanup",
+        onProgress: params.onProgress,
         onWarning: (step) => {
           steps.push(step);
           params.onStep?.(step);
@@ -224,6 +231,7 @@ export async function validateUpdateCandidateCanary(params: {
       nodeRunner: params.nodeRunner,
       timeoutMs: params.timeoutMs,
       signal: params.signal,
+      onProgress: params.onProgress,
     });
     // Copying private state has its own size/progress budget; preserve the
     // runtime validation budget after large snapshots finish.
@@ -234,6 +242,7 @@ export async function validateUpdateCandidateCanary(params: {
       durationMs: snapshotDuration,
       exitCode: 0,
       snapshotCapacity: rehearsal.snapshotCapacity,
+      diagnostics: rehearsal.snapshotDiagnostics,
     };
     steps.push(snapshotStep);
     params.onStep?.(snapshotStep);
@@ -557,16 +566,34 @@ export async function validateUpdateCandidateCanary(params: {
     startBudget();
     remaining();
     const args = ["gateway", "run", "--update-canary", "--bind", "loopback"];
-    const running = launch(entry, [...args, "--port", String(port)]);
+    const startupProgress = observeUpdateCandidateStartup({ env, stateDir: params.stateDir });
+    const processExit = new AbortController();
+    const running = launch(entry, [...args, "--port", String(port)], {
+      onLine: startupProgress.onLine,
+    });
+    const abortExited = () => processExit.abort();
+    running.child.once("exit", abortExited);
+    running.child.once("error", abortExited);
     try {
       const probeFailure = await waitForUpdateCandidateReadiness({
         port,
         workDeadline,
         started,
         signal: params.signal,
+        processExitSignal: processExit.signal,
         assertCurrent: params.assertCurrent,
-        hasExited: running.hasExited,
+        hasExited: () => running.processExited() || running.hasExited(),
         getExitReason: running.firstStderrLine,
+        startupProgress: startupProgress.milestones,
+        onWarning: (message) => {
+          startupWarnings.push(message);
+          capture(message);
+          params.onProgress?.({
+            step: "warning:candidate-gateway-startup",
+            status: "completed",
+            detail: message,
+          });
+        },
         env,
         stateDir: params.stateDir,
         onEndpoint: (endpoint) => {
@@ -582,6 +609,7 @@ export async function validateUpdateCandidateCanary(params: {
         cwd: params.root,
         durationMs: Date.now() - stepStartedAt,
         exitCode: probeFailure ? null : 0,
+        ...(startupWarnings.length ? { warnings: startupWarnings } : {}),
         ...(probeFailure
           ? {
               advisory: { kind: "candidate-runtime-unavailable", message: probeFailure.message },
@@ -592,7 +620,11 @@ export async function validateUpdateCandidateCanary(params: {
       steps.push(step);
       params.onStep?.(step);
     } finally {
-      await stopCanary(running, "candidate-gateway-startup", deadline);
+      await stopCanary(
+        running,
+        "candidate-gateway-startup",
+        Math.max(deadline, Date.now() + Math.min(2_000, Math.floor(budget / 10))),
+      );
     }
     return {
       status: "ok",
@@ -624,6 +656,9 @@ export async function validateUpdateCandidateCanary(params: {
     }
     if (error instanceof UpdateSnapshotCapacityError) {
       failed.snapshotCapacity = error.capacity;
+    }
+    if (startupWarnings.length) {
+      failed.warnings = startupWarnings;
     }
     failed.failureFacts ??= [
       createUpdateFailureFact(

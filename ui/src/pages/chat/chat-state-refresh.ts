@@ -14,6 +14,10 @@ import {
 } from "../../lib/chat/chat-metadata-store.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
+import {
+  hasUnrestrictedModelCatalogSnapshot,
+  isModelCatalogRetired,
+} from "../../lib/model-catalog-cache.ts";
 import { loadModelCatalog, peekModelCatalog } from "../../lib/model-catalog-store.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { reconcileSessionHistory } from "../../lib/sessions/reconcile.ts";
@@ -72,12 +76,8 @@ export function retireChatMetadataRequests(host: ChatPageHost): void {
   metadataBindings.get(host)?.catalogRequest?.controller.abort();
   metadataBindings.get(host)?.unsubscribe();
   metadataBindings.delete(host);
-  host.chatModelCatalog = [];
-  host.chatModelCatalogError = null;
-  host.chatModelCatalogRefreshFailed = undefined;
-  host.chatModelCatalogPendingProviders = undefined;
+  applyChatModelCatalog(host);
   host.chatModelsLoading = false;
-  host.chatAccountSelection = null;
 }
 
 function scheduleChatMetadataRefresh(callback: () => void) {
@@ -192,6 +192,7 @@ function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {
             binding.catalogRequest?.controller.abort();
             binding.catalogRequest = undefined;
             host.chatModelsLoading = false;
+            applyCachedChatModelCatalog(host, binding);
           }
           binding.sessionFactsInvalidated ||= update.refreshSessionFacts;
           void refreshChatMetadata(host, { automatic: true });
@@ -220,6 +221,7 @@ function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {
     ),
   };
   metadataBindings.set(host, binding);
+  host.chatModelCatalogInitialized = hasUnrestrictedModelCatalogSnapshot(client);
   const cached = peekChatMetadata(client, scope);
   if (cached) {
     applyRemoteSlashCommandsResult({ client, agentId: scope.agentId, result: cached });
@@ -473,17 +475,26 @@ async function loadChatModelCatalog(
   return promise;
 }
 
-function applyChatModelCatalog(host: ChatPageHost, result: ModelCatalogResult) {
-  host.chatModelCatalog = result.models;
-  host.chatAccountSelection = result.accountSelection ?? null;
+function applyChatModelCatalog(host: ChatPageHost, result?: ModelCatalogResult) {
+  host.chatModelCatalog = result?.models ?? [];
+  host.chatModelCatalogInitialized =
+    result !== undefined || hasUnrestrictedModelCatalogSnapshot(host.client);
+  host.chatModelSelectionPolicy = result?.modelSelectionPolicy;
+  host.chatModelCatalogRetired = false;
+  host.chatAccountSelection = result?.accountSelection ?? null;
   host.chatModelCatalogError = null;
-  host.chatModelCatalogRefreshFailed = result.refreshFailed;
-  host.chatModelCatalogPendingProviders = result.pendingProviders;
+  host.chatModelCatalogRefreshFailed = result?.refreshFailed;
+  host.chatModelCatalogPendingProviders = result?.pendingProviders;
 }
 
 function applyCachedChatModelCatalog(host: ChatPageHost, binding: ChatMetadataBinding): boolean {
   const fresh = peekModelCatalog(binding.client, binding.scope);
   const result = fresh ?? peekModelCatalog(binding.client, binding.scope, { allowStale: true });
+  if (!result && binding.isCurrent() && isModelCatalogRetired(binding.client, binding.scope)) {
+    applyChatModelCatalog(host);
+    host.chatModelCatalogRetired = true;
+    host.requestUpdate?.();
+  }
   if (!result || !binding.isCurrent()) {
     return false;
   }
@@ -631,8 +642,16 @@ async function refreshChat(
     }
     const runReconciled = reconcileChatRunFromSessionRow(host, sessionInfo, {
       publishRunStatus: true,
+      historyRun:
+        history.observation.run &&
+        history.sessionInfo.hasActiveRun === false &&
+        !isSessionRunActive(history.sessionInfo) &&
+        !history.inFlightRun &&
+        history.sessionInfo.sessionId === history.observation.run.sessionId
+          ? history.observation.run
+          : null,
     });
-    if (!runReconciled) {
+    if (!runReconciled && !host.chatRunId && host.chatStream == null) {
       reconcileChatRunFromCurrentSessionRow(host, { publishRunStatus: true });
     }
   });

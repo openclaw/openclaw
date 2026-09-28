@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -91,6 +92,7 @@ module.exports = { id: "disposal-proof", register(api) {
         },
       });
       fs.writeFileSync(configPath, config);
+      const doctorHealth = resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.doctorHealth);
       const env = {
         PATH: process.env.PATH,
         SystemRoot: process.env.SystemRoot,
@@ -102,6 +104,10 @@ module.exports = { id: "disposal-proof", register(api) {
         }),
         OPENCLAW_UPDATE_IN_PROGRESS: "0",
         OPENCLAW_NO_RESPAWN: "1",
+        // The Doctor API must share the selected child generation, including its SDK.
+        OPENCLAW_BUNDLED_PLUGINS_DIR: path.dirname(path.dirname(fileURLToPath(doctorHealth))),
+        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+        VITEST: "1",
         NO_COLOR: "1",
       };
       const report = createDeferredCore<unknown>();

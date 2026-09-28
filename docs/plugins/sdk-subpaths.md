@@ -51,7 +51,7 @@ host and view types). The contract and Control UI subpaths are browser safe;
 
 | Subpath                             | Key exports                                                                                                                                                                                             |
 | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `plugin-sdk/plugin-entry`           | `definePluginEntry`, `PluginCapabilityCatalog`, `PluginCapabilityCatalogEntry`, `PluginCapabilityCatalogContext`                                                                                        |
+| `plugin-sdk/plugin-entry`           | `definePluginEntry`, `PluginCapabilityCatalog`, `PluginCapabilityCatalogEntry`, `PluginCapabilityCatalogContext`, `PluginCapabilityCatalogHostEntry`, `PluginCapabilityCatalogHostContext`              |
 | `plugin-sdk/core`                   | `defineChannelPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase`, `defineSetupPluginEntry`, `buildChannelConfigSchema`, `buildJsonChannelConfigSchema`, `resolveTailscalePublishedHost` |
 | `plugin-sdk/provider-entry`         | Private-local after July 2026; `defineSingleProviderPluginEntry`                                                                                                                                        |
 | `plugin-sdk/migration`              | Private-local after July 2026; Migration provider item helpers such as `createMigrationItem`, reason constants, item status markers, redaction helpers, and `summarizeMigrationItems`                   |
@@ -80,7 +80,7 @@ non-enumerable internal methods. The host registers descriptors through the norm
 registrar, preserving its ownership and registration lifecycle.
 
 The export may instead be a synchronous factory receiving
-`PluginCapabilityCatalogContext`. It supplies native host operations for readiness,
+`PluginCapabilityCatalogHostContext`. It supplies native host operations for readiness,
 auth resolution, provider headers, bounded HTTP responses, WebSocket transcription,
 and capture/logging. Pass the operations used by a provider into its shared factory;
 keep synchronous constructors and invoke the operations only when needed. This
@@ -88,6 +88,14 @@ avoids transforming host runtime modules through the plugin source loader during
 catalog construction or connection setup. Construction must not query auth stores,
 start sessions, or import broad host or plugin runtime modules. Cold discovery does
 not receive a live broker; active registrations retain their broker-bound behavior.
+
+`PluginCapabilityCatalogHostContext` requires `captureWsEventAsync`; use
+`PluginCapabilityCatalogHostEntry` for factories that consume it. The shipped
+`PluginCapabilityCatalogContext` and `PluginCapabilityCatalogEntry` types remain
+available, including the deprecated synchronous `captureWsEvent` member. Callbacks
+accepting the legacy context remain assignable to host registration callbacks:
+the host supplies all legacy fields plus the async capability. Host composition
+owns these operations; catalog validation does not load capture runtime to add them.
 
 See [manifest capability catalogs](/plugins/manifest#capability-catalogs) for family
 coverage, compatibility, artifact selection, and failure behavior.
@@ -175,7 +183,7 @@ new code; see the per-row notes below.
     | `plugin-sdk/interactive-runtime` | Semantic message presentation, delivery, and legacy interactive reply helpers. See [Message Presentation](/plugins/message-presentation) |
     | `plugin-sdk/question-gateway-runtime` | Resolve runtime-authored `ask_user` choices through the Gateway from channel interaction handlers |
     | `plugin-sdk/channel-inbound` | Shared inbound helpers for event classification, context building, formatting, roots, debounce, mention matching, mention-policy, and inbound logging |
-    | `plugin-sdk/channel-inbound-debounce` | Narrow inbound debounce helpers |
+    | `plugin-sdk/channel-inbound-debounce` | Keyed inbound batching with pending-aware `resolveDebounceMs`, optional `canAppend` batch boundaries, and `maxWaitMs` (defaults to five initial quiet windows, never shorter than the first quiet window). `shouldBuffer(item)` checks admission synchronously before `enqueue(item)`. Cancellation includes sealed batches waiting for dispatch, but not active work. |
     | `plugin-sdk/channel-mention-gating` | Private-local after July 2026; Narrow mention-policy, mention marker, and mention text helpers without the broader inbound runtime surface |
     | `plugin-sdk/channel-streaming-config` | Dependency-light channel streaming config readers (`getChannelStreamingConfigObject`, `resolveChannelStreamingNativeTransport`) for doctor contract closures and other control-plane paths that must not load the reply pipeline |
     | `plugin-sdk/channel-send-result` | Reply result types |
@@ -268,6 +276,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/channel-secret-basic-runtime` | Narrow secret-contract exports and target-registry builders for non-TTS channel/plugin secret surfaces |
     | `plugin-sdk/channel-secret-tts-runtime` | Private-local after July 2026; Narrow nested channel TTS secret assignment helpers |
     | `plugin-sdk/secret-ref-runtime` | Narrow SecretRef typing, resolution, setup-plan construction, and setup CLI scaffolding for plugin-owned secret providers |
+    | `plugin-sdk/secret-egress-runtime` | Private official-plugin runtime; command-scoped protected model credentials, public CA transfer, and revocable HTTPS egress through `withConfiguredModelEgress`; not a third-party plugin API |
     | `plugin-sdk/security-runtime` | Deprecated broad barrel for trust, DM gating, root-bounded file/path helpers including create-only writes, sync/async atomic file replacement, sibling temp writes, cross-device move fallback, private file-store helpers, symlink-parent guards, external-content, `redactSensitiveText`, constant-time secret comparison, and secret-collection helpers; prefer focused security/SSRF/secret subpaths |
     | `plugin-sdk/ssrf-policy` | Host allowlist and private-network SSRF policy helpers |
     | `plugin-sdk/ssrf-dispatcher` | Private-local after July 2026; Narrow pinned-dispatcher helpers without the broad infra runtime surface |
@@ -333,7 +342,9 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/runtime-env` | Narrow runtime env, logger, timeout, retry, and backoff helpers |
     | `plugin-sdk/browser-cdp` | Private host runtime; `parseBrowserHttpUrl` and `redactCdpUrl` for Browser URL handling. JavaScript-only package export, not a typed third-party SDK contract. |
     | `plugin-sdk/browser-config` | Private-local after July 2026; Supported browser config facade for normalized profile/defaults, CDP URL parsing, and browser-control auth helpers |
-    | `plugin-sdk/agent-harness-task-runtime` | Private-local after July 2026; Generic task lifecycle and completion delivery helpers for harness-backed agents using a host-issued task scope |
+    | `plugin-sdk/agent-harness-completion` | Private-local JavaScript-only host runtime for official harness plugins; native completion delivery using a host-issued requester scope, retained completion custody, and a source-bound event sink; no generic Task lifecycle |
+    | `plugin-sdk/agent-harness-session-runtime` | Private-local JavaScript-only host runtime for official harness plugins; binding leases, generation admission, initialization rollback, and transactional deletion; not a third-party plugin API |
+    | `plugin-sdk/agent-harness-attempt-runtime` | Private-local JavaScript-only host runtime for official harness plugins; execution/settlement deadlines, cancellation, and lifecycle/event publication; not a third-party plugin API |
     | `plugin-sdk/agent-harness-runtime` | Agent-harness runtime helpers, including the bounded `agentHarnessStructuredInput` form/URL compilation and execution surface. `acquireSessionWriteLock`, `resolveSessionWriteLockAcquireTimeoutMs`, `resolveSessionWriteLockOptions`, and `SessionWriteLockAcquireTimeoutConfig` are deprecated no-op compatibility exports scheduled for removal in the 2026.10 release train. They no longer block or create lock sidecars; harnesses should rely on OpenClaw's per-session lane plus the durable writer claim and in-transaction fence. |
     | `plugin-sdk/codex-mcp-projection` | Private-local after July 2026; Bundled Codex helper for projecting user MCP server config into Codex thread config; not for third-party plugins |
     | `plugin-sdk/native-hook-relay-runtime` | Private-local bundled runtime helper for retained native direct-child hook policy; not for third-party plugins |
@@ -344,7 +355,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/plugin-runtime` | Deprecated broad barrel for plugin command/hook/http/interactive helpers; prefer focused plugin runtime subpaths |
     | `plugin-sdk/hook-runtime` | Deprecated broad barrel for webhook/internal hook pipeline helpers; prefer focused hook/plugin runtime subpaths |
     | `plugin-sdk/lazy-runtime` | Lazy runtime import/binding helpers such as `createLazyRuntimeModule`, `createLazyRuntimeMethod`, and `createLazyRuntimeSurface` |
-    | `plugin-sdk/process-runtime` | Private-local after July 2026; bounded process execution with per-stream and aggregate output caps, opt-in stream-error termination, configurable TERM-to-KILL grace, and `prepareSecretInputStdio` for one-shot credential descriptors |
+    | `plugin-sdk/process-runtime` | Private-local after July 2026; bounded process execution with per-stream and aggregate output caps, opt-in stream-error termination, configurable TERM-to-KILL grace, `prepareSecretInputStdio` for one-shot credential descriptors, and `createCpuTrackedWorker` for shared Worker resource and lifecycle diagnostics |
     | `plugin-sdk/node-host` | Private-local after July 2026; Node-host executable resolution and PTY resume helpers |
     | `plugin-sdk/node-selection-runtime` | Private-local bundled runtime facade for shared capability-gated node selection policy |
     | `plugin-sdk/cli-argv` | Dependency-light root-option parsing for CLI metadata, including `getRootOptionAwareCommandPath` and `consumeRootOptionToken` |
@@ -352,7 +363,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/node-cli-runtime` | Shared node CLI Gateway options, invoke envelope, terminal presentation, and authorization-hint error handling for plugin-owned node commands |
     | `plugin-sdk/qa-runner-runtime` | Private-local after July 2026; Supported facade exposing plugin QA scenarios through the CLI command surface |
     | `plugin-sdk/tts-runtime` | Private-local after July 2026; Supported facade for text-to-speech config schemas and runtime helpers |
-    | `plugin-sdk/gateway-config-runtime` | Private-local bundled runtime facade for dependency-light Gateway port resolution (`resolveGatewayPort`); not for third-party plugins |
+    | `plugin-sdk/gateway-config-runtime` | Private-local bundled runtime facade for dependency-light Gateway port resolution (`resolveGatewayPort`), probe-path classification (`classifyGatewayProbePath`), and protected-path checks (`resolvePluginRoutePathContext`, `isProtectedPluginRoutePathFromContext`); not for third-party plugins |
     | `plugin-sdk/gateway-method-runtime` | Caller-scoped Gateway dispatch for authenticated plugin HTTP routes and RPC handlers that declare `contracts.gatewayMethodDispatch: ["authenticated-request"]` |
     | `plugin-sdk/gateway-runtime` | Gateway client, event-loop-ready client start helper, gateway CLI RPC, gateway protocol errors, advertised LAN host resolution, and channel-status patch helpers |
     | `plugin-sdk/websocket-runtime` | Node-compatible `WebSocket`, `WebSocketServer`, and `createWebSocketStream` exports backed by the installed `ws` package, plus one-time observer tickets, WebSocket keepalive, and upgrade rejection helpers. Use this subpath when a plugin needs the full Node `ws` option and event contract across supported runtimes. |
@@ -376,7 +387,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/sqlite-runtime` | Private-local after July 2026; SQLite agent-schema, path, transaction, and shared-handle borrowing helpers for first-party runtime. Type-only `Generated` and `Selectable` model generated columns and selected rows in Kysely table definitions. `compileSqliteQueryBindings` compiles fixed Kysely SQL with fresh bindings for caller-owned native statements; statement lifetime stays with the caller. `iterateSqliteQuerySync` streams Kysely query rows for incremental decoding; consume the iterator before closing its database. `sqliteStringSet` binds string membership as one SQLite JSON table-valued query parameter, preserving one query snapshot without a variable-count placeholder list. `borrowOpenClawAgentDatabase` returns `{ db, release }`; active borrows prevent cache eviction, `release()` does not close the handle, and explicit owner disposal still revokes it. `withOpenClawAgentDatabaseAsync` admits a connection asynchronously and retains its original identity through the operation’s settlement; it does not move callback execution off the caller thread. |
     | `plugin-sdk/sqlite-worker-runtime` | Private-local native SQLite, Kysely query, synchronous transaction, and operation-admission primitives for worker backends and their shared helpers. `runSqliteDeferredTransactionSync` groups synchronous reads into one SQLite snapshot; its callback must not return a Promise. Imports existing owners directly so workers do not load host database lifecycle code. Host store creation and lifecycle coordination remain on `sqlite-runtime`. |
     | `plugin-sdk/cron-store-runtime` | Private-local after July 2026; Cron store path/load/save helpers |
-    | `plugin-sdk/state-paths` | State/OAuth dir path helpers |
+    | `plugin-sdk/state-paths` | Canonical config/state/OAuth path helpers. `resolveConfigPath(env?, stateDir?, homedir?)` returns the selected local config path without loading config or opening the state database. It honors `OPENCLAW_CONFIG_PATH` (including home-relative expansion), the selected state directory, and existing legacy config candidates before canonical fallback. It may inspect filesystem existence; it does not create files, validate config contents, or establish path ownership/permission authority. Use it for pre-config native bootstrap selection instead of copying path policy; callers still enforce their filesystem and lifecycle admission checks. |
     | `plugin-sdk/plugin-state-runtime` | Private-local after July 2026; Plugin-scoped keyed-state and BLOB contracts plus connection pragma, verified WAL maintenance, and atomic STRICT-schema migration helpers. Plugin-state leases were removed; use SQLite transactions and keyed stores instead |
     | `plugin-sdk/routing` | Route/session-key/account binding helpers such as `resolveAgentRoute`, `buildAgentSessionKey`, and `resolveDefaultAgentBoundAccountId`. Use `normalizeAgentId` when omitted input should resolve to `main`; use the Result-returning `normalizeAgentIdStrict` for an explicitly supplied ID that must not fall back to the default agent. |
     | `plugin-sdk/status-helpers` | Shared channel/account status summary helpers, runtime-state defaults, and issue metadata helpers |
@@ -390,7 +401,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/tool-results` | Typed text and JSON agent tool result builders |
     | `plugin-sdk/tool-send` | Extract canonical send target fields from tool args |
     | `plugin-sdk/sandbox` | Private-local after July 2026; Sandbox backend types and SSH/OpenShell command helpers, including fail-fast exec command preflight and `resolveReadOnlyWorkspaceSkillMounts` for canonical read-only skill overlays in writable workspaces |
-    | `plugin-sdk/temp-path` | Shared temp-download path helpers and private secure temp workspaces |
+    | `plugin-sdk/temp-path` | Shared temp-download path helpers and private secure temp workspaces. `buildRandomTempFilePath` retains relative `tmpDir` paths and trims an optional `uuid`; blank values generate a UUID, while nonblank values must be safe filename components. `sanitizeTempFileName` adds a suffix to reserved Windows device names, preserving their extension. |
     | `plugin-sdk/logging-core` | Subsystem logger and redaction helpers |
     | `plugin-sdk/markdown-table-runtime` | Private-local after July 2026; Markdown table mode and conversion helpers |
     | `plugin-sdk/model-session-runtime` | Model/session override helpers such as `applyModelOverrideToSessionEntry` and `resolveAgentMaxConcurrent` |
@@ -405,7 +416,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/acp-binding-resolve-runtime` | Private-local after July 2026; Read-only ACP binding resolution without lifecycle startup imports |
     | `plugin-sdk/boolean-param` | Loose boolean param reader |
     | `plugin-sdk/dangerous-name-runtime` | Private-local after July 2026; Dangerous-name matching resolution helpers |
-    | `plugin-sdk/device-bootstrap` | Device bootstrap and pairing token helpers, including `BOOTSTRAP_HANDOFF_OPERATOR_SCOPES` |
+    | `plugin-sdk/device-bootstrap` | Device bootstrap and pairing token helpers, including `BOOTSTRAP_HANDOFF_OPERATOR_SCOPES`. Async `resolvePairingGatewayUrl(config, options)` resolves the advertised WebSocket endpoint without issuing credentials and returns `{ url, source }` or `{ error }`. Pass `env`, `networkInterfaces`, optional `publicUrl` for the pairing override, and an optional `runCommandWithTimeout` for Tailscale discovery. Default `publicOriginPreference: "fallback"` preserves device routes: `publicUrl`, preferred remote URL, Tailscale, non-preferred remote URL, bind-derived address, then `gateway.publicOrigin` before the loopback-only error. Cloud enrollment passes `publicOriginPreference: "prefer"` to select `publicOrigin` after `publicUrl` and before discovery. `preferRemoteUrl` moves the remote URL ahead of Tailscale; `useLocalGateway` omits it. Default `urlPathMode: "preserve"` keeps context paths in fully qualified URLs for join codes, QR setup, and cloud enrollment; `/pair` passes `urlPathMode: "origin-only"` to retain its prior URL mapping. The shared lazy runtime binder defers loading the resolver until invocation. |
     | `plugin-sdk/extension-shared` | Shared passive-channel, status, and ambient proxy helper primitives |
     | `plugin-sdk/models-provider-runtime` | `/models` command/provider reply helpers. Display `ModelsProviderData.refreshWarning` alongside usable choices, and use `MODEL_PICKER_CHANGED_MESSAGE` when a saved menu choice is no longer available. |
     | `plugin-sdk/skill-commands-runtime` | Synchronous Skill command listing. Remote workspaces expose Gateway-owned Skills only; menus do not wait for the Harness. |
@@ -413,10 +424,10 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/agent-harness` | Experimental trusted-plugin surface for low-level agent harnesses: harness types, active-run steer/abort helpers, OpenClaw tool bridge helpers, runtime-plan tool policy helpers, terminal outcome classification, tool progress formatting/detail helpers, and attempt result utilities |
     | `plugin-sdk/async-lock-runtime` | Private-local after July 2026; Process-local async lock helper for small runtime state files |
     | `plugin-sdk/channel-activity-runtime` | Private-local after July 2026; Channel activity telemetry helper |
-    | `plugin-sdk/concurrency-runtime` | Private-local after July 2026; Bounded async task concurrency (`runTasksWithConcurrency`) and cancellable permit admission (`createPermitPool`) with caller-owned release |
+    | `plugin-sdk/concurrency-runtime` | Private-local after July 2026; Bounded async task concurrency (`runTasksWithConcurrency`), cancellable permit admission (`createPermitPool`), and lifecycle-owned work (`AsyncWorkScope`). Owners stop new admission and await `drain()` before releasing resources; work scopes do not grant execution authority. |
     | `plugin-sdk/dedupe-runtime` | In-memory and persistent-backed dedupe cache helpers |
     | `plugin-sdk/delivery-queue-runtime` | Private-local after July 2026; Outbound pending-delivery drain helper |
-    | `plugin-sdk/file-access-runtime` | Private-local after July 2026; Safe local-file, path-containment, temp-root, media-source path, directory-durability, and borrowed-handle I/O: `readFileHandleBounded` reads through EOF under a byte cap; `readFileWindowFully` fills a positional buffer through short reads; `writeFileWindowFully` completes short writes without truncation, synchronization, or rollback; `sha256File` streams a bounded SHA-256 digest from a path or borrowed handle. Borrowed handles stay open. `resolvePathPrefixSync` observes a canonical existing prefix and raw missing suffix, following physical symlink traversal without authorizing later access. |
+    | `plugin-sdk/file-access-runtime` | Private-local after July 2026; Safe local-file, path-containment, temp-root, media-source path, directory-durability, and borrowed-handle I/O: `readFileHandleBounded` reads through EOF under a byte cap; `readFileWindowFully` fills a positional buffer through short reads; `writeFileWindowFully` completes short writes without truncation, synchronization, or rollback; `sha256File` streams a bounded SHA-256 digest from a path or borrowed handle. Borrowed handles stay open. `tempFile` creates an owned temporary child directory for staging; its default cleanup checks directory identity before removal. `resolvePathPrefixSync` observes a canonical existing prefix and raw missing suffix, following physical symlink traversal without authorizing later access. |
     | `plugin-sdk/heartbeat-runtime` | Private-local after July 2026; Heartbeat wake, event, and visibility helpers |
     | `plugin-sdk/expect-runtime` | Private-local after July 2026; Required-value assertion helper for provable runtime invariants |
     | `plugin-sdk/number-runtime` | Private-local after July 2026; Numeric coercion helper |
@@ -430,7 +441,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/diagnostic-runtime` | Diagnostic flag, event, trace-context, and low-cardinality dimension normalization helpers |
     | `plugin-sdk/error-runtime` | Error graph, formatting, unknown-value coercion, shared error classification helpers, `PlatformMessageNotDispatchedError`, `isApprovalNotFoundError` |
     | `plugin-sdk/fetch-runtime` | Private-local after July 2026; Wrapped fetch, proxy, EnvHttpProxyAgent option, and pinned lookup helpers |
-    | `plugin-sdk/proxy-capture` | Debug proxy capture configuration, SQLite-backed capture storage and read-only access, HTTP/WebSocket capture events, and capture lifecycle helpers |
+    | `plugin-sdk/proxy-capture` | Debug proxy configuration, async capture storage and noncreating readers, HTTP/WebSocket capture events, lifecycle helpers, and shipped synchronous compatibility APIs; see [async capture](/plugins/sdk-subpaths#asynchronous-proxy-capture) |
     | `plugin-sdk/runtime-fetch` | Private-local after July 2026; Dispatcher-aware runtime fetch without proxy/guarded-fetch imports |
     | `plugin-sdk/blob-runtime` | Private official-plugin runtime; Exact Buffer views for synchronous Blob construction |
     | `plugin-sdk/inline-image-data-url-runtime` | Private-local after July 2026; Inline image data URL sanitizer and signature sniffing helpers without the broad media runtime surface |
@@ -477,7 +488,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/speech-settings` | Lightweight TTS config resolution and normalization primitives without provider registries or synthesis runtime |
     | `plugin-sdk/realtime-transcription` | Private-local after July 2026; Realtime transcription provider types, registry helpers, and shared WebSocket session helper |
     | `plugin-sdk/realtime-transcription-session` | Private-local JavaScript-only host runtime for official plugins; shared WebSocket session construction and types without loading the host provider registry. Use this for provider implementation imports. |
-    | `plugin-sdk/realtime-bootstrap-context` | Private-local after July 2026; Realtime profile bootstrap helper for bounded `IDENTITY.md`, `USER.md`, and `SOUL.md` context injection |
+    | `plugin-sdk/realtime-bootstrap-context` | Private-local after July 2026; `resolveRealtimeBootstrapContextInstructions` loads bounded profile context, with optional workspace-relative `files: readonly string[]` and `maxChars` (default `12000`). `resolveRealtimeVoiceAgentContextInstructions` adds the always-present agent-context paragraph and configured identity when `includeIdentity: true` (default `false`). Default profile names and their type remain available as `REALTIME_BOOTSTRAP_CONTEXT_FILE_NAMES` and `RealtimeBootstrapContextFileName`. |
     | `plugin-sdk/realtime-voice-audio-queue` | Private-local JavaScript-only host runtime for bundled or separately published official plugins; narrow bounded audio queue seam for lazy realtime voice provider facades without importing the broader realtime voice runtime; not for third-party plugins |
     | `plugin-sdk/realtime-voice-playback` | Private official-plugin facade for audio audibility and output activity tracking. Source workers avoid session runtimes; published plugins use the established `realtime-voice` host binding for compatibility. |
     | `plugin-sdk/realtime-voice-provider` | Private-local JavaScript-only host runtime for official plugins; provider types, audio formats/codecs, audio energy and output activity, response outcomes, and connection lifecycle primitives without host provider registries or agent-consult execution. Media workers use this surface to keep host session runtimes off their startup path. |
@@ -554,6 +565,63 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
 
   </Accordion>
 </AccordionGroup>
+
+## Asynchronous proxy capture
+
+Use `initializeDebugProxyCaptureAsync`, `captureHttpExchangeAsync`,
+`captureWsEventAsync`, and `finalizeDebugProxyCaptureAsync` from
+`openclaw/plugin-sdk/proxy-capture` for runtime capture. Await initialization,
+direct store operations, and capture calls wherever the owning flow permits.
+HTTP capture reads a cloned response body: waiting for that read must not delay
+handing the original response to its caller. WebSocket event callbacks likewise
+leave capture completion to their lifecycle owner.
+
+The published 2026.9.6 host does not expose these async capture operations. Plugins
+supporting that host must read optional diagnostic operations from the SDK module
+namespace and check availability before calling them. Ordinary channel or provider
+operations continue without those diagnostics; configured proxy routing still
+applies. Do not fall back to synchronous capture writes. Features that require
+capture storage or readback must report an unavailable capability instead of
+claiming successful capture. Remove these availability checks when the plugin's
+minimum supported host includes the async operations.
+
+For long-lived streams, observe capture completion separately and let the runtime
+finalizer settle it during cleanup. If a maintenance callback returns or awaits
+the capture Promise, maintenance waits for that body capture too. Use the capture
+signal when the owning request must end its read before EOF.
+
+The capture owner immediately observes callback-only writes, reports and retains
+failures, and rethrows them during async finalization. Plugin invocation wrappers
+can return a derived Promise, so an ignored callback call must also observe the
+final returned Promise, for example
+`void captureWsEventAsync(event, settings).catch(() => {});`. This observer does
+not change the capture API's original rejecting Promise or replace awaited
+`finalizeDebugProxyCaptureAsync(settings)` at shutdown.
+
+Acquire an async store with `await acquireDebugProxyCaptureStoreAsync({ env })`
+and always `await lease.release()` in `finally`. Finalize the runtime capture
+owner and release owned leases before closing its database. Direct canonical
+database maintenance close intentionally invalidates capture admission; it does
+not substitute for capture finalization and draining. Doctor and migration
+maintenance owners drain their own capture work before releasing their execution
+claims. A shared session ends only when its last claim closes; the surrounding
+runtime retains its own claim. Async capture finalization targets the whole
+selected session. For inspection, use
+`createDebugProxyCaptureReaderAsync({ env })`: construction does not open a
+database, and its async `getSessionEvents` and `readBlob` methods read existing
+state without creating a missing database, returning `[]` or `null` when absent.
+
+Synchronous capture writers, initialization/finalization, and store
+constructors/accessors remain deprecated compatibility APIs for shipped plugins.
+Migrate their callers and lifecycle cleanup together; removal requires a breaking
+Plugin SDK release. Mixing legacy synchronous writes with async commands does
+not establish one global order: synchronous writes may interleave between async
+commands. `finalizeDebugProxyCapture` synchronously settles the session's legacy
+capture readers and writes and releases their stores. If the host also uses
+async capture, its claims and fetch capture remain active until their async
+lifecycle cleanup completes. Later legacy capture calls stay inactive until
+explicit initialization. Use `await finalizeDebugProxyCaptureAsync(settings)`
+when the caller owns shutdown of the whole mixed session.
 
 ## Related
 

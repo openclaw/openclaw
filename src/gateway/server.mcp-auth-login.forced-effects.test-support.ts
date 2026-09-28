@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
@@ -8,12 +9,14 @@ import type { McpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
 import * as oauthProvider from "../agents/mcp-oauth-provider.js";
 import * as oauthStore from "../agents/mcp-oauth-store.js";
 import * as oauthCoordinator from "../agents/mcp-oauth.js";
+import { withMcpOAuthProviderForTest } from "../agents/mcp-oauth.test-support.js";
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
 import { writeConfigFile } from "../config/config.js";
 import type { McpServerConfig } from "../config/types.mcp.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { whenAdmittedWizardSessionSettled } from "./server-methods/setup-admission.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
+import { registerMcpAuthCommitEffects } from "./server.mcp-auth-login.commit-effects.test-support.js";
 import { rpcReq } from "./test-helpers.server.js";
 
 export type McpAuthEffectEndpoint = {
@@ -76,6 +79,7 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
     const observeProvider = (
       observe: (
         provider: Awaited<ReturnType<typeof oauthProvider.createMcpOAuthClientProvider>>,
+        login: oauthProvider.McpOAuthLoginLifecycle,
       ) => void,
     ) => {
       const create = oauthProvider.createMcpOAuthClientProvider;
@@ -84,7 +88,7 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
         .mockImplementation(async (params) => {
           const provider = await create(params);
           if (params.login) {
-            observe(provider);
+            observe(provider, params.login);
           }
           return provider;
         });
@@ -189,16 +193,15 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
         } else {
           delete cached.authorizationServerMetadata;
         }
-        const seedProvider = await oauthProvider.createMcpOAuthClientProvider({
-          identity: identity(),
+        await withMcpOAuthProviderForTest({ identity: identity() }, async (provider) => {
+          await expectDefined(
+            provider.saveDiscoveryState?.bind(provider),
+            "canonical discovery writer",
+          )(cached);
         });
-        await expectDefined(
-          seedProvider.saveDiscoveryState?.bind(seedProvider),
-          "canonical discovery writer",
-        )(cached);
         const before = await stored();
         const beforeRequests = requests.length;
-        const saves: Parameters<NonNullable<typeof seedProvider.saveDiscoveryState>>[0][] = [];
+        const saves: OAuthDiscoveryState[] = [];
         observeProvider((provider) => {
           const save = expectDefined(
             provider.saveDiscoveryState?.bind(provider),
@@ -515,6 +518,20 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
       );
     }
 
+    registerMcpAuthCommitEffects({
+      identity,
+      resourceUrl: () => resourceUrl,
+      seed,
+      stored,
+      begin,
+      callback,
+      start,
+      finishError,
+      revoke,
+      observeLogin: (observe) => observeProvider((_provider, login) => observe(login)),
+      registerRestore: (restore) => restoreEffects.push(restore),
+    });
+
     it("rejects verifier publication after the real PKCE digest resolves under revoked authority", async () => {
       const entered = createDeferredCore();
       const release = createDeferredCore();
@@ -619,8 +636,8 @@ export function registerMcpAuthForcedEffects(fixture: McpAuthForcedEffectFixture
         const insert = oauthStore.writeMcpOAuthPendingAuthorization;
         const spy = vi
           .spyOn(oauthStore, "writeMcpOAuthPendingAuthorization")
-          .mockImplementation((...args) => {
-            insert(...args);
+          .mockImplementation(async (...args) => {
+            await insert(...args);
             publishedPending.push(args[1]);
           });
         restoreEffects.push(() => spy.mockRestore());

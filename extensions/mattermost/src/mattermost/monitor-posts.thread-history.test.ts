@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { deleteSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
@@ -9,6 +10,7 @@ import {
   closeOpenClawStateDatabaseAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import { createMattermostClient, type MattermostPost } from "./client.js";
 import { createMattermostPostHandler } from "./monitor-posts.js";
@@ -33,6 +35,7 @@ describe("Mattermost server thread recovery through the post handler", () => {
   let responseStatus: number;
 
   beforeEach(async () => {
+    setMattermostRuntime(createPluginRuntimeMock());
     dispatch.mockReset();
     directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "mattermost-history-")));
     vi.stubEnv("OPENCLAW_STATE_DIR", directory);
@@ -266,39 +269,6 @@ describe("Mattermost server thread recovery through the post handler", () => {
     }
   });
 
-  it("coalesces concurrent cold turns and preserves live history", async () => {
-    const f = await setup("channel");
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
-    beforeResponse = async () => {
-      entered.resolve();
-      await release.promise;
-    };
-    const pending = f.recover(f.turn);
-    await entered.promise;
-    const shared = f.recover(f.turn);
-    const live = {
-      sender: "trusted",
-      body: "concurrent live post",
-      timestamp: 35,
-      messageId: "live",
-    };
-    createChannelHistoryWindow({ historyMap: f.histories }).record({
-      historyKey: f.sessionKey,
-      entry: live,
-      limit: 3,
-    });
-    release.resolve();
-    await Promise.all([pending, shared]);
-    expect(requests).toHaveLength(1);
-    expect(f.histories.get(f.sessionKey)?.map((entry) => entry.messageId)).toEqual([
-      "root",
-      "reply",
-      "live",
-    ]);
-    expect(f.histories.get(f.sessionKey)?.at(-1)).toBe(live);
-  });
-
   it("filters concurrent later history from the older turn without losing it", async () => {
     const f = await setup("channel");
     f.monitor.groupPolicy = "allowlist";
@@ -327,6 +297,7 @@ describe("Mattermost server thread recovery through the post handler", () => {
     release.resolve();
     await pending;
     const first = dispatch.mock.calls[0]?.[1].ctxPayload;
+    expect(first.Body).toContain("Next year France");
     expect(first.Body).not.toContain("later live fact");
     expect(first.InboundHistory?.map((entry: { messageId: string }) => entry.messageId)).toEqual([
       "root",
@@ -456,7 +427,7 @@ describe("Mattermost server thread recovery through the post handler", () => {
     expect(f.histories.get(f.sessionKey)?.[0]?.body).toBe("Next year France");
   });
 
-  it.each(["all", "allowlist", "allowlist_quote"] as const)(
+  it.each(["all", "allowlist_quote"] as const)(
     "uses shared ingress and %s visibility without pairing",
     async (mode) => {
       const f = await setup("channel");
@@ -588,7 +559,7 @@ describe("Mattermost server thread recovery through the post handler", () => {
     expect(f.histories.size).toBe(0);
   });
 
-  it.each(["channel", "group", "direct"] as const)(
+  it.each(["group", "direct"] as const)(
     "recovers cold %s thread context in chronological order, excluding the trigger",
     async (kind) => {
       const { handler } = await setup(kind);

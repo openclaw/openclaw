@@ -39,9 +39,9 @@ it("starts the pacing receiver measurement only after consuming encoded source a
     constructing.resolve();
     return releaseEncoder.promise;
   });
-  const started = vi.fn(() => played.resolve());
+  const onPacket = vi.fn(() => played.resolve());
   const { port1, port2 } = new MessageChannel();
-  const receiver = startDiscordPacingReceiver(port1, new SharedArrayBuffer(4), started);
+  const receiver = startDiscordPacingReceiver(port1, new SharedArrayBuffer(8), onPacket);
   const audio = Buffer.alloc(960 * 6);
   for (let sample = 0; sample < audio.length / 2; sample += 1) {
     audio.writeInt16LE(
@@ -53,13 +53,11 @@ it("starts the pacing receiver measurement only after consuming encoded source a
     const acknowledged = once(port2, "message");
     port2.postMessage({ type: "audio", audio }, []);
     await Promise.all([constructing.promise, acknowledged]);
-    expect(receiver.times).toEqual([]);
-    expect(started).not.toHaveBeenCalled();
+    expect(onPacket).not.toHaveBeenCalled();
 
     releaseEncoder.resolve(encoder);
     await played.promise;
-    expect(receiver.times).toHaveLength(1);
-    expect(started).toHaveBeenCalledOnce();
+    expect(onPacket).toHaveBeenCalledExactlyOnceWith({ mainBlocked: false });
   } finally {
     releaseEncoder.resolve(encoder);
     receiver.close();

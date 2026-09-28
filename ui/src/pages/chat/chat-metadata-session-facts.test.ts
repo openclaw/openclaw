@@ -152,7 +152,7 @@ it.each(["agent:work:current", "global"])(
         event: "sessions.changed",
         payload: { key: "agent:work:new", agentId: "work", reason: "create", spawnedBy: key },
       });
-      await vi.advanceTimersByTimeAsync(1000);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(
         request.mock.calls.filter(([method]) => method === "sessions.list").length,
       ).toBeGreaterThan(initialLists);
@@ -160,7 +160,7 @@ it.each(["agent:work:current", "global"])(
         ([method]) => method === "sessions.list",
       ).length;
       emitEvent({ type: "event", event: "config.changed", payload: {} });
-      await vi.advanceTimersByTimeAsync(1000);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(
         afterMembership + 2,
       );

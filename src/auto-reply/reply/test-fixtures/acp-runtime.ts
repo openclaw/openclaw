@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-// Test fixture helpers for constructing ACP runtime session metadata.
+// Test fixtures for ACP runtime sessions, bindings, and reply delivery.
 import type { SessionAcpMeta } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ReplyDispatcher } from "../reply-dispatcher.types.js";
@@ -75,6 +75,49 @@ export function createAcpSessionMeta(overrides?: Partial<SessionAcpMeta>): Sessi
       acpxSessionId: "acpx-session-1",
       source: "status",
       lastUpdatedAt: Date.now(),
+    },
+    ...overrides,
+  };
+}
+
+export type AcpTestSessionBinding = {
+  bindingId: string;
+  targetSessionKey: string;
+  targetKind: "subagent" | "session";
+  conversation: {
+    channel: string;
+    accountId: string;
+    conversationId: string;
+    parentConversationId?: string;
+  };
+  status: "active";
+  boundAt: number;
+  metadata?: {
+    agentId?: string;
+    label?: string;
+    boundBy?: string;
+    webhookId?: string;
+  };
+};
+
+export function createAcpTestSessionBinding(
+  overrides?: Partial<AcpTestSessionBinding>,
+): AcpTestSessionBinding {
+  return {
+    bindingId: "default:thread-created",
+    targetSessionKey: "agent:codex:acp:s1",
+    targetKind: "session",
+    conversation: {
+      channel: "discord",
+      accountId: "default",
+      conversationId: "thread-created",
+      parentConversationId: "parent-1",
+    },
+    status: "active",
+    boundAt: Date.now(),
+    metadata: {
+      agentId: "codex",
+      boundBy: "user-1",
     },
     ...overrides,
   };

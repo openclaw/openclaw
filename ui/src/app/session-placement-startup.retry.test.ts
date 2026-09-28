@@ -4,10 +4,13 @@ import { GatewayRequestError } from "../api/gateway.ts";
 import { requestCloudWorkerStop } from "../components/cloud-worker-stop.runtime.ts";
 import {
   readSessionPlacementRecovery,
+  pauseSessionPlacementRecovery,
+  type SessionPlacementRecovery,
   writeSessionPlacementRecovery,
 } from "../lib/sessions/session-placement-recovery.ts";
 import { resetWorkingProgress } from "../pages/chat/chat-progress.ts";
 import { buildChatItems } from "../pages/chat/chat-thread-build.ts";
+import createApplicationPlacementStartupRuntime from "./session-placement-startup.runtime.ts";
 import {
   createPlacementStartupHarness,
   createStartupPlacement,
@@ -37,6 +40,65 @@ async function restorePausedStartup(request: ReturnType<typeof vi.fn>) {
 }
 
 describe("initial turn Retry after slow placement recovery", () => {
+  it.each(["pre-runtime", "runtime"] as const)(
+    "retains initial-turn identity until derived content changes in the %s getter",
+    async (getter) => {
+      const moduleLoad = createDeferred<{
+        default: typeof createApplicationPlacementStartupRuntime;
+      }>();
+      const dispatch = createDeferred<unknown>();
+      const { startup, input } = createPlacementStartupHarness(
+        vi.fn(() => dispatch.promise),
+        getter === "pre-runtime" ? { loadRuntime: () => moduleLoad.promise } : {},
+      );
+      const recovery: SessionPlacementRecovery = {
+        ...input.recovery,
+        phase: "paused",
+        reason: "not-sent",
+        error: "Worker setup failed",
+      };
+      expect(writeSessionPlacementRecovery(recovery)).toBe(true);
+      try {
+        startup.start({ ...input, recovery });
+        if (getter === "runtime") {
+          await flushStartupMicrotasks();
+        }
+        const first = startup.get(recovery.sessionKey)?.initialTurn;
+        expect(startup.get(recovery.sessionKey)?.initialTurn).toBe(first);
+        expect(first).toMatchObject({ sendState: "failed", sendError: recovery.error });
+
+        recovery.error = "Worker setup failed again";
+        const changed = startup.get(recovery.sessionKey)?.initialTurn;
+        expect(changed).not.toBe(first);
+        expect(changed).toMatchObject({ sendState: "failed", sendError: recovery.error });
+        expect(startup.get(recovery.sessionKey)?.initialTurn).toBe(changed);
+
+        startup.pause(recovery.sessionKey, "Worker stopped", {
+          readSessionPlacementRecovery,
+          pauseSessionPlacementRecovery,
+        });
+        const paused = startup.get(recovery.sessionKey)?.initialTurn;
+        expect(paused).not.toBe(changed);
+        expect(paused).toMatchObject({ sendState: "failed", sendError: "Worker stopped" });
+        expect(startup.get(recovery.sessionKey)?.initialTurn).toBe(paused);
+
+        if (getter === "runtime") {
+          startup.retry(recovery.sessionKey);
+          const retried = startup.get(recovery.sessionKey)?.initialTurn;
+          expect(retried).not.toBe(paused);
+          expect(retried?.sendState).toBe("sending");
+          expect(retried).not.toHaveProperty("sendError");
+          expect(startup.get(recovery.sessionKey)?.initialTurn).toBe(retried);
+        }
+      } finally {
+        startup.dispose();
+        moduleLoad.resolve({ default: createApplicationPlacementStartupRuntime });
+        dispatch.resolve({ placement: createStartupPlacement("active", 2) });
+        await flushStartupMicrotasks();
+      }
+    },
+  );
+
   it("reuses a worker that becomes active after recovery times out and sends only once", async () => {
     vi.useFakeTimers();
     let placement = createStartupPlacement("provisioning", 1);

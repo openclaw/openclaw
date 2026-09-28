@@ -1,6 +1,10 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
-import type { ResponsesInputItem, StreamEvent } from "./mock-openai-contracts.js";
+import type {
+  MockOpenAiCodeModeExecSurface,
+  ResponsesInputItem,
+  StreamEvent,
+} from "./mock-openai-contracts.js";
 import { findNamedToolDefinition, hasToolDefinition } from "./mock-openai-directives.js";
 import { extractPlannedToolArgs, extractPlannedToolName } from "./mock-openai-events.js";
 import {
@@ -54,11 +58,9 @@ function decodeCodeModeTarget(code: string | undefined) {
   }
 }
 
-type CodeModeExecSurface = "native" | "guest";
-
 export function resolveCodeModeExecSurface(
   body: Record<string, unknown>,
-): CodeModeExecSurface | null {
+): MockOpenAiCodeModeExecSurface | null {
   const tools = [
     ...(Array.isArray(body.tools) ? body.tools : []),
     ...(Array.isArray(body.dynamicTools) ? body.dynamicTools : []),
@@ -354,7 +356,7 @@ function readProgressCommandOutput(input: ResponsesInputItem[], command: string,
       /(?:^|\n\n)Approval required\. I sent approval DMs to the approvers for this account\.$/u.test(
         text,
       ) ||
-      /(?:^|\n\n)Exec approval is required, but no interactive approval client is currently available\.\n\nApprove it from the Web UI or terminal UI[^\n]* Print the Control UI URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox\.[^\n]* Then retry the command\. You can usually leave execApprovals\.approvers unset when owner config already identifies the approvers\.$/u.test(
+      /(?:^|\n\n)Exec approval is required, but no interactive approval client is currently available\.\n\nApprove it from the Web UI[^\n]* Print the Control UI URL with `openclaw dashboard --no-open`, open it in a browser, then use the approval inbox\.[^\n]* Then retry the command\. You can usually leave execApprovals\.approvers unset when owner config already identifies the approvers\.$/u.test(
         text,
       ) ||
       unknownNotice)
@@ -463,7 +465,11 @@ export function buildScenarioToolCallEvents(
     if (definition?.type === "custom" && typeof args.input === "string") {
       return buildCustomToolCallEventsWithInput(name, args.input, namespace);
     }
-    return buildRawToolCallEventsWithArgs(name, args, namespace);
+    const callArgs =
+      name === "exec" && typeof args.code === "string"
+        ? { title: "Run the QA fixture step", ...args }
+        : args;
+    return buildRawToolCallEventsWithArgs(name, callArgs, namespace);
   }
   const encodedTarget = encodeCodeModeTarget(name, args);
   if (resolveCodeModeExecSurface(body) === "native") {
@@ -484,6 +490,7 @@ export function buildScenarioToolCallEvents(
     );
   }
   return buildRawToolCallEventsWithArgs("exec", {
+    title: "Run the QA fixture step",
     code: [
       `// ${QA_CODE_MODE_TARGET_MARKER}${encodedTarget}`,
       `const targetName = ${JSON.stringify(name)};`,

@@ -1,36 +1,34 @@
 import { expect, it, vi, type Mock } from "vitest";
-import type { setDetachedTaskDeliveryStatusByRunId } from "../../../tasks/detached-task-runtime.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import type {
   blockSubagentCompletionDelivery,
   settleRequesterCompletionBatch,
 } from "../completion/subagent-completion-admission.store.js";
-import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
-import { clearSubagentPendingDelivery } from "./subagent-registry-lifecycle-delivery.js";
+import { clearSubagentPendingDelivery } from "./subagent-delivery-state.js";
+import {
+  SUBAGENT_ENDED_REASON_COMPLETE,
+  SUBAGENT_ENDED_REASON_KILLED,
+} from "./subagent-lifecycle-events.js";
 import type {
   SubagentLifecycleController,
   SubagentLifecycleOptions,
 } from "./subagent-registry-lifecycle.js";
 import { markRequesterTurnYieldedInRuns } from "./subagent-registry-requester-yield.js";
-import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 
-export function mockBlockedCompletionDeliveryOwner(
-  completionDeliveryMocks: {
-    blockSubagentCompletionDelivery: Mock<typeof blockSubagentCompletionDelivery>;
-    settleRequesterCompletionBatch: Mock<typeof settleRequesterCompletionBatch>;
-    runsByEntry: WeakMap<SubagentRunRecord, Map<string, SubagentRunRecord>>;
-  },
-  taskExecutorMocks: {
-    setDetachedTaskDeliveryStatusByRunId: Mock<typeof setDetachedTaskDeliveryStatusByRunId>;
-  },
-): void {
+export function mockBlockedCompletionDeliveryOwner(completionDeliveryMocks: {
+  blockSubagentCompletionDelivery: Mock<typeof blockSubagentCompletionDelivery>;
+  settleRequesterCompletionBatch: Mock<typeof settleRequesterCompletionBatch>;
+  runsByEntry: WeakMap<SubagentRunRecord, Map<string, SubagentRunRecord>>;
+}): void {
   completionDeliveryMocks.settleRequesterCompletionBatch.mockImplementation(
-    ({
+    async ({
       entries,
       outcome,
     }: Parameters<
       typeof import("../completion/subagent-completion-admission.store.js").settleRequesterCompletionBatch
     >[0]) => {
-      for (const { subagent, taskId } of entries) {
+      for (const { subagent } of entries) {
         if (subagent.pauseReason !== "sessions_yield") {
           // The store publishes a newly decoded receipt even when already delivered.
           if (outcome.delivered && subagent.delivery) {
@@ -50,14 +48,9 @@ export function mockBlockedCompletionDeliveryOwner(
                 announcedAt: deliveredAt,
               };
               clearSubagentPendingDelivery(subagent);
-              taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId({
-                runId: subagent.taskRunId ?? subagent.runId,
-                deliveryStatus: "delivered",
-              });
             } else {
-              completionDeliveryMocks.blockSubagentCompletionDelivery({
+              await completionDeliveryMocks.blockSubagentCompletionDelivery({
                 subagent,
-                taskId: taskId ?? "",
                 reason: outcome.error ?? outcome.reason ?? "requester settle wake failed",
                 disposition: outcome.disposition,
               });
@@ -77,7 +70,7 @@ export function mockBlockedCompletionDeliveryOwner(
     },
   );
   completionDeliveryMocks.blockSubagentCompletionDelivery.mockImplementation(
-    ({
+    async ({
       subagent,
       reason,
       suspendedReason,
@@ -155,7 +148,7 @@ export function registerPrivateCompletionSettlementTests({
       const runSubagentAnnounceFlow = vi.fn<SubagentLifecycleOptions["runSubagentAnnounceFlow"]>(
         async (params) => {
           if (params.signal?.aborted) {
-            params.onDeliveryResult?.({ delivered: false, path: "none" });
+            await params.onDeliveryResult?.({ delivered: false, path: "none" });
             return "retryable";
           }
           return params.isCompletionOwnedByRequesterYield?.()
@@ -214,6 +207,117 @@ export function registerPrivateCompletionSettlementTests({
         expect(entry.delivery?.lastDropReason).toBeUndefined();
       } finally {
         controller.clearScheduledResumeTimers();
+      }
+    },
+  );
+}
+
+export function registerNativeCompletionAuthorityTest({
+  createRunEntry,
+  createLifecycleController,
+  completeRun,
+  helperMocks,
+}: {
+  createRunEntry: (overrides?: Partial<SubagentRunRecord>) => SubagentRunRecord;
+  createLifecycleController: (
+    options: { entry: SubagentRunRecord } & Partial<SubagentLifecycleOptions>,
+  ) => SubagentLifecycleController;
+  completeRun: (
+    controller: SubagentLifecycleController,
+    entry: SubagentRunRecord,
+    options?: Pick<SubagentCompletionRequest, "triggerCleanup" | "terminalReply" | "endedAt">,
+  ) => Promise<void>;
+  helperMocks: { persistSubagentSessionTiming: Mock<() => Promise<void>> };
+}) {
+  it("emits one progress end event at the canonical terminal transition", async () => {
+    const entry = createRunEntry({ expectsCompletionMessage: false });
+    const emitSubagentProgressEndedForRun = vi.fn(async () => {});
+    const controller = createLifecycleController({ entry, emitSubagentProgressEndedForRun });
+    const completion = {
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "ok" as const },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      triggerCleanup: false,
+    };
+
+    await controller.completeSubagentRun(completion);
+    await controller.completeSubagentRun(completion);
+
+    expect(emitSubagentProgressEndedForRun).toHaveBeenCalledTimes(1);
+    expect(emitSubagentProgressEndedForRun).toHaveBeenCalledWith(entry);
+  });
+
+  it("keeps provisional cancellation when a repeated success has no producer reply evidence", async () => {
+    const entry = createRunEntry({
+      expectsCompletionMessage: true,
+      execution: {
+        status: "terminal",
+        endedAt: 4_000,
+        outcome: { status: "error", error: "killed" },
+      },
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
+      suppressAnnounceReason: "killed",
+      killReconciliation: {
+        killedAt: 4_000,
+        suppressTaskDelivery: true,
+      },
+      completion: { required: true, resultText: null, capturedAt: 4_000 },
+    });
+    const marker = entry.killReconciliation;
+    const original = structuredClone(entry);
+    const controller = createLifecycleController({ entry });
+    await completeRun(controller, entry, {
+      endedAt: 4_001,
+      terminalReply: undefined,
+      triggerCleanup: false,
+    });
+    expect(entry).toEqual(original);
+    expect(entry.killReconciliation).toBe(marker);
+    expect(helperMocks.persistSubagentSessionTiming).not.toHaveBeenCalled();
+  });
+  it.each(["replacement", "cancellation"] as const)(
+    "does not commit a captured result after native %s takes ownership",
+    async (transition) => {
+      const entry = createRunEntry({ expectsCompletionMessage: false });
+      const runs = new Map([[entry.runId, entry]]);
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const persistOrThrow = vi.fn();
+      const controller = createLifecycleController({
+        entry,
+        runs,
+        persistOrThrow,
+        captureSubagentCompletionReply: async () => {
+          entered.resolve();
+          await release.promise;
+          return "old result";
+        },
+      });
+      const pending = completeRun(controller, entry, {
+        terminalReply: undefined,
+        triggerCleanup: false,
+      });
+      try {
+        await entered.promise;
+        const successor =
+          transition === "replacement" ? createRunEntry({ runId: entry.runId }) : entry;
+        successor.execution = {
+          status: "terminal",
+          endedAt: 5_000,
+          outcome: { status: "error", error: "cancelled" },
+        };
+        runs.set(entry.runId, successor);
+        const execution = successor.execution;
+        release.resolve();
+        await pending;
+        expect(runs.get(entry.runId)).toBe(successor);
+        expect(successor.execution).toBe(execution);
+        expect(persistOrThrow).not.toHaveBeenCalled();
+        expect(helperMocks.persistSubagentSessionTiming).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        await pending;
       }
     },
   );

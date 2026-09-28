@@ -25,6 +25,7 @@ import {
 } from "./host-hook-runtime.js";
 import type { PluginHostCleanupReason } from "./host-hooks.js";
 import { getPluginInstance, runPluginCleanup } from "./plugin-instance-scope.js";
+import type { PluginInstanceDisposalResult } from "./plugin-instance.types.js";
 import { getPluginRecordRegistry } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { getActivePluginRegistry } from "./runtime.js";
@@ -371,7 +372,7 @@ export function createPluginHostRegistryRetirement(params: {
       : undefined;
     // Instance disposal retains its real completion even when this caller receives a self-ack.
     // Rollback may already have started the exact instance disposal before registry retirement.
-    const completion = instance
+    const completion: Promise<PluginInstanceDisposalResult> = instance
       ? instance.dispose(instance.disposing ? undefined : cleanup)
       : Promise.resolve()
           .then(cleanup)
@@ -385,7 +386,7 @@ export function createPluginHostRegistryRetirement(params: {
       }
       const disposed = await (instance ? instance.dispose() : completion);
       const failures = [...result.failures];
-      appendPluginInstanceCleanupFailures(failures, pluginId, disposed.errors);
+      appendPluginInstanceCleanupFailures(failures, pluginId, disposed);
       return {
         cleanupCount: result.cleanupCount,
         failures,

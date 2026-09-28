@@ -1,7 +1,11 @@
 import type { ServerResponse } from "node:http";
 import type { PluginGatewayAccessAuthority } from "../plugins/gateway-access-policy.types.js";
 import type { GatewayAuthResult } from "./auth.js";
-import { sendGatewayAuthFailure, sendJson } from "./http-common.js";
+import {
+  prepareGatewayHttpErrorResponse,
+  sendGatewayAuthFailure,
+  sendJson,
+} from "./http-common.js";
 import {
   GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE,
   hasCurrentGatewayOperatorAccess,
@@ -15,6 +19,9 @@ export function sendGatewayHttpAuthFailure(
     sendGatewayAuthFailure(res, authResult);
     return;
   }
+  if (!prepareGatewayHttpErrorResponse(res, "Forbidden")) {
+    return;
+  }
   sendJson(res, 403, {
     error: { message: GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE, type: "forbidden" },
   });
@@ -23,7 +30,7 @@ export function sendGatewayHttpAuthFailure(
 /** The listener belongs to this response, never to a reusable keep-alive socket. */
 export function bindHttpOperatorAccessAuthority(
   res: ServerResponse,
-  authority: PluginGatewayAccessAuthority | undefined,
+  authority: PluginGatewayAccessAuthority | null | undefined,
 ): boolean {
   if (!authority) {
     return true;

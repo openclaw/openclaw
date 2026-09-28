@@ -16,7 +16,7 @@ import {
 } from "./register.onboard.js";
 
 const SYSTEM_AGENT_OPTION_NAMES = new Set(["message", "yes", "json"]);
-const BASELINE_OPTION_NAMES = new Set(["baseline", "workspace", "json"]);
+const BASELINE_OPTION_NAMES = new Set(["baseline", "workspace", "skipBootstrap", "json"]);
 
 type SetupRoute = "onboarding" | "system-agent";
 
@@ -37,13 +37,6 @@ export function resolveSetupCommandRoute(input: {
     return "system-agent";
   }
   return "onboarding";
-}
-
-function hasExplicitOnboardingOption(command: Command): boolean {
-  return command.options.some((option) => {
-    const name = option.attributeName();
-    return !SYSTEM_AGENT_OPTION_NAMES.has(name) && command.getOptionValueSource(name) === "cli";
-  });
 }
 
 async function runSystemAgentEntry(
@@ -77,7 +70,11 @@ async function runOnboardingEntry(
     }
     const { setupCommand } = await import("../../commands/setup.js");
     await setupCommand(
-      { workspace: readStringValue(options.workspace), json: Boolean(options.json) },
+      {
+        workspace: readStringValue(options.workspace),
+        skipBootstrap: options.skipBootstrap === true,
+        json: Boolean(options.json),
+      },
       runtime,
     );
     return;
@@ -151,7 +148,8 @@ export function registerSetupCommand(program: Command): void {
     const { defaultRuntime } = await import("../../runtime.js");
     await runCommandWithRuntime(defaultRuntime, async () => {
       const options = rawOptions as Record<string, unknown>;
-      const hasOnboardingFlag = hasExplicitOnboardingOption(commandRuntime);
+      const hasOnboardingFlag =
+        listExplicitOptionFlagsExcept(commandRuntime, SYSTEM_AGENT_OPTION_NAMES).length > 0;
       const hasSystemAgentRequest = hasExplicitOptions(commandRuntime, ["message", "yes"]);
       let configured = false;
       if (!hasOnboardingFlag && !hasSystemAgentRequest) {

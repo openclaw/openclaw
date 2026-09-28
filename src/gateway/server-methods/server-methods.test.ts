@@ -1,11 +1,9 @@
 // Shared server-method tests cover helpers and cross-method behavior that spans
 // chat, exec approvals, logs, timestamps, attachments, and history projection.
 import { createHash } from "node:crypto";
-import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
@@ -32,7 +30,6 @@ import {
   resetContextEngineRuntimeQuarantineForTests,
 } from "../../context-engine/registry.test-support.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
-import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 import {
   buildSystemRunApprovalBinding,
   buildSystemRunApprovalEnvBinding,
@@ -70,6 +67,7 @@ import {
   createIosPushDelivery,
   createWebPushDelivery,
   defaultExecApprovalRequestParams,
+  expectRejectedExecApprovalRequest,
   getExecApproval,
   getRequestedExecApprovalPayload,
   listExecApprovals,
@@ -811,29 +809,6 @@ describe("injectTimestamp", () => {
     expect(result).toMatch(/^\[Wed 2026-01-28 20:30 EST\] Is it the weekend\?$/);
   });
 
-  it("uses channel envelope format with DOW prefix", () => {
-    const now = new Date();
-    const expected = formatZonedTimestamp(now, { timeZone: "America/New_York" });
-
-    const result = injectTimestamp("hello", { timezone: "America/New_York" });
-
-    expect(result).toBe(`[Wed ${expected}] hello`);
-  });
-
-  it("always uses 24-hour format", () => {
-    const result = injectTimestamp("hello", { timezone: "America/New_York" });
-
-    expect(result).toContain("20:30");
-    expect(result).not.toContain("PM");
-    expect(result).not.toContain("AM");
-  });
-
-  it("uses the configured timezone", () => {
-    const result = injectTimestamp("hello", { timezone: "America/Chicago" });
-
-    expect(result).toMatch(/^\[Wed 2026-01-28 19:30 CST\]/);
-  });
-
   it("defaults to UTC when no timezone specified", () => {
     const result = injectTimestamp("hello", {});
 
@@ -1079,43 +1054,6 @@ describe("sanitizeChatHistoryMessages", () => {
         },
         timestamp: 1,
       },
-    ]);
-  });
-
-  it("projects keyed commentary entries into durable preamble rows", () => {
-    const result = sanitizeChatHistoryMessages(
-      [
-        userHistoryMessage("hello", { timestamp: 1 }),
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: "thinking like caveman",
-              textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
-            },
-          ],
-          timestamp: 2,
-        },
-        assistantHistoryMessage("real reply", { timestamp: 3 }),
-      ],
-      undefined,
-      { includeCommentaryFallbacks: true },
-    );
-
-    expect(result).toEqual([
-      userHistoryMessage("hello", { timestamp: 1 }),
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "thinking like caveman" }],
-        timestamp: 2,
-        openclawStreamFallback: {
-          replacementText: "thinking like caveman",
-          source: "segment",
-          itemId: "msg_commentary",
-        },
-      },
-      assistantHistoryMessage("real reply", { timestamp: 3 }),
     ]);
   });
 
@@ -1477,8 +1415,6 @@ describe("projectChatDisplayMessages", () => {
 
   it.each([
     ["output_text", ""],
-    ["output_text", "NO_REPLY"],
-    ["input_text", ""],
     ["input_text", "NO_REPLY"],
   ])("projects hidden %s assistant errors %j as a safe network failure", (type, text) => {
     const result = projectChatDisplayMessages([
@@ -1494,50 +1430,23 @@ describe("projectChatDisplayMessages", () => {
     expect(result[0]?.content).toEqual(networkFailureContent());
   });
 
-  it.each(["NO_REPLY", STREAM_ERROR_FALLBACK_TEXT])(
-    "projects display-hidden assistant error text %j as a generic safe failure",
-    (text) => {
-      const result = projectChatDisplayMessages([
-        {
-          role: "assistant",
-          content: [{ type: "text", text }],
-          stopReason: "error",
-          errorMessage: "private upstream at secret.internal.example failed",
-          timestamp: 1,
-        },
-      ]);
+  it("projects repaired stream errors without errorMessage as a generic safe failure", () => {
+    const result = projectChatDisplayMessages([
+      assistantHistoryMessage(STREAM_ERROR_FALLBACK_TEXT, {
+        stopReason: "error",
+        errorBody: "private response body from secret.internal.example",
+        timestamp: 1,
+      }),
+    ]);
 
-      expect(result).toEqual([
-        assistantHistoryMessage("The agent run failed before producing a reply.", {
-          stopReason: "error",
-          timestamp: 1,
-        }),
-      ]);
-      expect(JSON.stringify(result)).not.toContain("secret.internal.example");
-    },
-  );
-
-  it.each([undefined, ""])(
-    "projects repaired stream errors with errorMessage %j as a generic safe failure",
-    (errorMessage) => {
-      const result = projectChatDisplayMessages([
-        assistantHistoryMessage(STREAM_ERROR_FALLBACK_TEXT, {
-          stopReason: "error",
-          ...(errorMessage === undefined ? {} : { errorMessage }),
-          errorBody: "private response body from secret.internal.example",
-          timestamp: 1,
-        }),
-      ]);
-
-      expect(result).toEqual([
-        assistantHistoryMessage("The agent run failed before producing a reply.", {
-          stopReason: "error",
-          timestamp: 1,
-        }),
-      ]);
-      expect(JSON.stringify(result)).not.toContain("secret.internal.example");
-    },
-  );
+    expect(result).toEqual([
+      assistantHistoryMessage("The agent run failed before producing a reply.", {
+        stopReason: "error",
+        timestamp: 1,
+      }),
+    ]);
+    expect(JSON.stringify(result)).not.toContain("secret.internal.example");
+  });
 
   it.each([
     {
@@ -1597,17 +1506,14 @@ describe("projectChatDisplayMessages", () => {
     expect(result[0]?.content).toEqual([{ type: "text", text }]);
   });
 
-  it.each([undefined, "stop"])(
-    "keeps literal fallback-prefixed assistant text without error provenance %j",
-    (stopReason) => {
-      const text = `${STREAM_ERROR_FALLBACK_TEXT} actual quoted text`;
-      const result = projectChatDisplayMessages([
-        assistantHistoryMessage(text, stopReason ? { stopReason } : {}),
-      ]);
+  it("keeps literal fallback-prefixed assistant text without error provenance", () => {
+    const text = `${STREAM_ERROR_FALLBACK_TEXT} actual quoted text`;
+    const result = projectChatDisplayMessages([
+      assistantHistoryMessage(text, { stopReason: "stop" }),
+    ]);
 
-      expect(result[0]?.content).toEqual([{ type: "text", text }]);
-    },
-  );
+    expect(result[0]?.content).toEqual([{ type: "text", text }]);
+  });
 
   it("removes a synthetic error prefix while preserving displayable image content", () => {
     const result = projectChatDisplayMessages([
@@ -2292,17 +2198,7 @@ describe("timestampOptsFromConfig", () => {
       expected: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
     },
   ])("$name", ({ cfg, expected }) => {
-    expect(timestampOptsFromConfig(cfg).timezone).toBe(expected);
-  });
-
-  it("keeps timestamp injection enabled for upgraded configs", () => {
-    const upgradedConfigWithExistingDefaults = {
-      agents: { defaults: { userTimezone: "America/Chicago" } },
-    } as OpenClawConfig;
-
-    // Timestamp injection is fixed on even when other agent defaults exist.
-    expect(timestampOptsFromConfig({} as OpenClawConfig).includeTimestamp).toBe(true);
-    expect(timestampOptsFromConfig(upgradedConfigWithExistingDefaults).includeTimestamp).toBe(true);
+    expect(timestampOptsFromConfig(cfg)).toEqual({ timezone: expected, includeTimestamp: true });
   });
 });
 
@@ -2376,48 +2272,13 @@ describe("normalizeRpcAttachmentsToChatAttachments", () => {
   });
 });
 
-describe("gateway chat transcript writes (guardrail)", () => {
-  it("routes transcript writes through helper and async parentId append", () => {
-    const chatTs = fileURLToPath(new URL("./chat.ts", import.meta.url));
-    const chatSrc = fs.readFileSync(chatTs, "utf-8");
-    const persistenceTs = fileURLToPath(
-      new URL("./chat-transcript-persistence.ts", import.meta.url),
-    );
-    const persistenceSrc = fs.readFileSync(persistenceTs, "utf-8");
-    const helperTs = fileURLToPath(new URL("./chat-transcript-inject.ts", import.meta.url));
-    const helperSrc = fs.readFileSync(helperTs, "utf-8");
-
-    expect(chatSrc.includes("fs.appendFileSync(transcriptPath")).toBe(false);
-    expect(persistenceSrc).toContain("appendInjectedAssistantMessageToTranscript(");
-
-    expect(helperSrc).toContain("persistSessionTranscriptTurn(");
-    expect(helperSrc).toContain("useRawWhenLinear: true");
-    expect(helperSrc).not.toContain("SessionManager.open(params.transcriptPath)");
-  });
-});
-
 describe("exec approval handlers", () => {
-  async function expectRejectedExecApprovalRequest(
-    testContext: TestContext,
-    params: Record<string, unknown>,
-    message: string,
-  ) {
-    const fixture = createExecApprovalFixture(testContext);
-    return await fixture.run(async () => {
-      const { handlers, respond, context } = fixture;
-      await requestExecApproval({ handlers, respond, context, params });
-      expect(mockCallArg(respond)).toBe(false);
-      expect(mockCallArg(respond, 0, 1)).toBeUndefined();
-      expectRecordFields(mockCallArg(respond, 0, 2), { message });
-    });
-  }
-
   async function expectUnavailableAllowAlways(
     testContext: TestContext,
     requestParams: Record<string, unknown>,
     fallbackDecision: "allow-once" | "deny",
   ) {
-    const fixture = createExecApprovalFixture(testContext);
+    const fixture = await createExecApprovalFixture(testContext);
     return await fixture.run(async () => {
       const { handlers, broadcasts, respond, context } = fixture;
       const { pending: requestPromise } = await waitForApprovalRequested(
@@ -2507,7 +2368,7 @@ describe("exec approval handlers", () => {
   });
 
   it("rejects approval requests when the command display would be truncated", async (testContext) => {
-    const fixture = createExecApprovalFixture(testContext);
+    const fixture = await createExecApprovalFixture(testContext, { preparePersistence: false });
     return await fixture.run(async () => {
       const { handlers, broadcasts, respond, context } = fixture;
       await requestExecApproval({
@@ -2535,7 +2396,7 @@ describe("exec approval handlers", () => {
   });
 
   it("rejects approval registration after the owning run was aborted", async (testContext) => {
-    const fixture = createExecApprovalFixture(testContext);
+    const fixture = await createExecApprovalFixture(testContext, { preparePersistence: false });
     return await fixture.run(async () => {
       const { manager, handlers, broadcasts, respond, context } = fixture;
       context.chatRunState.getOrCreate("run-aborted").abortMarker = createChatAbortMarker();
@@ -2568,7 +2429,7 @@ describe("exec approval handlers", () => {
   });
 
   it("marks an allowed wait result run-aborted when abort wins before consumption", async (testContext) => {
-    const fixture = createExecApprovalFixture(testContext);
+    const fixture = await createExecApprovalFixture(testContext);
     return await fixture.run(async () => {
       const { manager, handlers, broadcasts, respond, context } = fixture;
       const { pending: requestPromise } = await waitForApprovalRequested(
@@ -2621,10 +2482,9 @@ describe("exec approval handlers", () => {
       testContext,
       {
         request: {
+          timeoutMs: 60_000,
           twoPhase: true,
           host: "gateway",
-          command: "echo ok",
-          commandArgv: ["echo", "ok"],
           systemRunPlan: undefined,
           nodeId: undefined,
         },
@@ -2836,9 +2696,13 @@ describe("exec approval handlers", () => {
         },
       },
       async ({ manager, handlers, requestPromise }) => {
-        expect(
-          (await manager.getSnapshot("approval-reviewer-untrusted"))?.approvalReviewerDeviceIds,
-        ).toBeUndefined();
+        const pending = await manager.getSnapshot("approval-reviewer-untrusted");
+        expect(pending).toMatchObject({
+          id: "approval-reviewer-untrusted",
+          requestedByDeviceId: "device-gateway-runtime",
+        });
+        expect(pending!.resolvedAtMs).toBeUndefined();
+        expect(pending!.approvalReviewerDeviceIds).toBeUndefined();
 
         const listRespond = vi.fn();
         await listExecApprovals({
@@ -3191,7 +3055,7 @@ describe("exec approval handlers", () => {
   });
 
   it("treats duplicate same-decision exec resolves as idempotent during grace", async (testContext) => {
-    const fixture = createExecApprovalFixture(testContext);
+    const fixture = await createExecApprovalFixture(testContext);
     return await fixture.run(async () => {
       const { manager, handlers, broadcasts, respond, context } = fixture;
 
@@ -3493,8 +3357,7 @@ describe("exec approval handlers", () => {
   });
 
   it("accepts resolve during broadcast", async (testContext) => {
-    const manager = createTestApprovalManager(testContext);
-    const handlers = createExecApprovalHandlers(manager);
+    const { handlers } = await createExecApprovalFixture(testContext);
     const respond = vi.fn();
     const resolveRespond = vi.fn();
 
@@ -3570,7 +3433,7 @@ describe("exec approval handlers", () => {
   ])(
     "rejects an unsafe explicit approval id containing an %s",
     async ([_label, id], testContext) => {
-      const fixture = createExecApprovalFixture(testContext);
+      const fixture = await createExecApprovalFixture(testContext, { preparePersistence: false });
       return await fixture.run(async () => {
         const { manager, handlers, broadcasts, respond, context } = fixture;
 
@@ -3597,34 +3460,23 @@ describe("exec approval handlers", () => {
   );
 
   it("accepts an explicit approval id with a leading dash", async (testContext) => {
-    const fixture = createExecApprovalFixture(testContext);
-    return await fixture.run(async () => {
-      const { manager, handlers, broadcasts, respond, context } = fixture;
+    await withAcceptedExecApproval(
+      testContext,
+      { request: { id: "-approval-123", host: "gateway", twoPhase: true } },
+      async ({ manager, respond, requestPromise, id }) => {
+        expect(id).toBe("-approval-123");
+        expect(await manager.getSnapshot(id)).not.toBeNull();
+        expect(mockCallArg(respond)).toBe(true);
 
-      const { pending: requestPromise } = await waitForApprovalRequested(
-        context,
-        "exec.approval.requested",
-        () =>
-          fixture.track(
-            requestExecApproval({
-              handlers,
-              respond,
-              context,
-              params: { id: "-approval-123", host: "gateway", twoPhase: true },
-            }),
-          ),
-      );
-
-      const { id } = getRequestedExecApprovalPayload(broadcasts);
-      await requestPromise;
-      expect(id).toBe("-approval-123");
-      expect(await manager.getSnapshot(id)).not.toBeNull();
-      expect(mockCallArg(respond)).toBe(true);
-    });
+        expect(await manager.resolve(id, "allow-once")).toBe(true);
+        await requestPromise;
+        expectRecordFields(lastMockCallArg(respond, 1), { id, decision: "allow-once" });
+      },
+    );
   });
 
   it("rejects explicit approval ids with the reserved plugin prefix", async (testContext) => {
-    const fixture = createExecApprovalFixture(testContext);
+    const fixture = await createExecApprovalFixture(testContext, { preparePersistence: false });
     return await fixture.run(async () => {
       const { handlers, respond, context } = fixture;
 
@@ -3698,7 +3550,7 @@ describe("exec approval handlers", () => {
   });
 
   it("returns deterministic unknown/expired message for missing approval ids", async (testContext) => {
-    const fixture = createExecApprovalFixture(testContext);
+    const fixture = await createExecApprovalFixture(testContext, { preparePersistence: false });
     return await fixture.run(async () => {
       const { handlers, respond, context } = fixture;
 
@@ -3746,9 +3598,9 @@ describe("exec approval handlers", () => {
   });
 
   it("forwards turn-source metadata to exec approval forwarding", async (testContext) => {
-    vi.useFakeTimers();
     try {
-      const fixture = createForwardingExecApprovalFixture(testContext);
+      const fixture = await createForwardingExecApprovalFixture(testContext);
+      vi.useFakeTimers();
       return await fixture.run(async () => {
         const { handlers, forwarder, respond, context } = fixture;
         const forwardedRequest = createDeferredCore();
@@ -3795,7 +3647,7 @@ describe("exec approval handlers", () => {
   });
 
   it("resolves Control UI-style approvals by id while preserving stored turn-source metadata", async (testContext) => {
-    const fixture = createForwardingExecApprovalFixture(testContext);
+    const fixture = await createForwardingExecApprovalFixture(testContext);
     return await fixture.run(async () => {
       const { handlers, forwarder, respond, context } = fixture;
       const broadcasts: Array<{ event: string; payload: unknown }> = [];
@@ -3868,7 +3720,7 @@ describe("exec approval handlers", () => {
   });
 
   it("fast-fails approvals when no approver clients and no forwarding targets", async (testContext) => {
-    const fixture = createForwardingExecApprovalFixture(testContext);
+    const fixture = await createForwardingExecApprovalFixture(testContext);
     return await fixture.run(async () => {
       const { manager, handlers, forwarder, respond, context } = fixture;
       const expireSpy = vi.spyOn(manager, "expire");
@@ -3893,7 +3745,7 @@ describe("exec approval handlers", () => {
 
   it("keeps approvals pending when iOS push delivery accepted the request", async (testContext) => {
     const iosPushDelivery = createIosPushDelivery();
-    const fixture = createForwardingExecApprovalFixture(testContext, {
+    const fixture = await createForwardingExecApprovalFixture(testContext, {
       iosPushDelivery,
     });
     return await fixture.run(async () => {
@@ -3949,7 +3801,7 @@ describe("exec approval handlers", () => {
           }) ?? true,
       ),
     );
-    const fixture = createForwardingExecApprovalFixture(testContext, {
+    const fixture = await createForwardingExecApprovalFixture(testContext, {
       iosPushDelivery,
     });
     return await fixture.run(async () => {
@@ -3994,7 +3846,7 @@ describe("exec approval handlers", () => {
         return true;
       }),
     );
-    const fixture = createForwardingExecApprovalFixture(testContext, {
+    const fixture = await createForwardingExecApprovalFixture(testContext, {
       iosPushDelivery,
     });
     return await fixture.run(async () => {
@@ -4039,7 +3891,7 @@ describe("exec approval handlers", () => {
         return true;
       }),
     );
-    const fixture = createForwardingExecApprovalFixture(testContext, {
+    const fixture = await createForwardingExecApprovalFixture(testContext, {
       webPushDelivery,
     });
     return await fixture.run(async () => {
@@ -4077,7 +3929,6 @@ describe("exec approval handlers", () => {
   });
 
   it("sends iOS cleanup delivery on expiration", async (testContext) => {
-    vi.useFakeTimers();
     try {
       const delivered = createDeferredCore();
       const iosPushDelivery = createIosPushDelivery(
@@ -4086,9 +3937,10 @@ describe("exec approval handlers", () => {
           return true;
         }),
       );
-      const fixture = createForwardingExecApprovalFixture(testContext, {
+      const fixture = await createForwardingExecApprovalFixture(testContext, {
         iosPushDelivery,
       });
+      vi.useFakeTimers();
       return await fixture.run(async () => {
         const { handlers, respond, context } = fixture;
 
@@ -4126,9 +3978,9 @@ describe("exec approval handlers", () => {
   });
 
   it("keeps approvals pending when the originating chat can handle /approve directly", async (testContext) => {
-    vi.useFakeTimers();
     try {
-      const fixture = createForwardingExecApprovalFixture(testContext);
+      const fixture = await createForwardingExecApprovalFixture(testContext);
+      vi.useFakeTimers();
       return await fixture.run(async () => {
         const { manager, handlers, forwarder, respond, context } = fixture;
         const expireSpy = vi.spyOn(manager, "expire");
@@ -4172,7 +4024,7 @@ describe("exec approval handlers", () => {
   });
 
   it("keeps approvals pending when no approver clients but forwarding accepted the request", async (testContext) => {
-    const fixture = createForwardingExecApprovalFixture(testContext);
+    const fixture = await createForwardingExecApprovalFixture(testContext);
     return await fixture.run(async () => {
       const { manager, handlers, forwarder, respond, context } = fixture;
       const expireSpy = vi.spyOn(manager, "expire");

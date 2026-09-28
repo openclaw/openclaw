@@ -13,17 +13,20 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { repairCanonicalSessionKeys } from "./doctor-session-canonical-keys.js";
 
 const receipts: SessionPendingInputReceipt[] = [];
-afterEach(() => {
+afterEach(async () => {
   for (const receipt of receipts.splice(0)) {
     receipt.finish("interrupted");
   }
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
 });
 
@@ -32,8 +35,10 @@ function fixture(stateDir: string, alias = false) {
   const sourceAgent = alias ? "main" : "ops";
   const sourcePath = path.join(stateDir, `${sourceAgent}.sqlite`);
   const destinationPath = path.join(stateDir, "main.sqlite");
-  const sourceKey = alias ? "agent:main:main" : "agent:main:private-parent";
-  const canonicalKey = alias ? "agent:main:work" : sourceKey;
+  const sourceKey = alias
+    ? "agent:main:matrix:channel:!parent:example.org"
+    : "agent:main:private-parent";
+  const canonicalKey = alias ? "agent:main:matrix:channel:!Parent:example.org" : sourceKey;
   const sessionId = "private-parent-generation";
   const cfg: OpenClawConfig = {
     agents: { ownership: "explicit", entries: { main: {}, ops: {} } },
@@ -115,6 +120,7 @@ describe("Doctor canonical completion receipt repair", () => {
         f.database(true).db.exec("DROP TABLE session_input_completions");
       }
       rotateAgentEventLifecycleGeneration();
+      await closeOpenClawAgentDatabasesAsync(stateDir);
       closeOpenClawAgentDatabasesForTest();
 
       expect(
@@ -122,6 +128,7 @@ describe("Doctor canonical completion receipt repair", () => {
       ).toMatchObject({ repairedGroups: 1 });
       expect(f.rows(true)).toEqual(before);
       expect(f.rows()).toEqual([]);
+      await closeOpenClawAgentDatabasesAsync(stateDir);
       closeOpenClawAgentDatabasesForTest();
       const retry = await f.stage(true);
       if (final) {
@@ -154,7 +161,20 @@ describe("Doctor canonical completion receipt repair", () => {
       f.create();
       (await f.stage()).complete!(stopped);
       const before = f.rows();
+      f.database()
+        .db.prepare(
+          "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.delivery', json(?)) WHERE session_key = ?",
+        )
+        .run(
+          JSON.stringify(
+            normalizeSessionDeliveryState({
+              context: { channel: "matrix", to: "!Parent:example.org" },
+            }),
+          ),
+          f.scope().sessionKey,
+        );
       rotateAgentEventLifecycleGeneration();
+      await closeOpenClawAgentDatabasesAsync(stateDir);
       closeOpenClawAgentDatabasesForTest();
       await repairCanonicalSessionKeys({ apply: true, cfg: f.cfg, env: f.env });
       for (const row of before) {
@@ -180,6 +200,7 @@ describe("Doctor canonical completion receipt repair", () => {
         destination.finish("interrupted");
         const retained = sourceFinal ? f.rows() : f.rows(true);
         rotateAgentEventLifecycleGeneration();
+        await closeOpenClawAgentDatabasesAsync(stateDir);
         closeOpenClawAgentDatabasesForTest();
         await repairCanonicalSessionKeys({ apply: true, cfg: f.cfg, env: f.env });
         expect(f.rows(true)).toEqual(retained);
@@ -198,6 +219,7 @@ describe("Doctor canonical completion receipt repair", () => {
       const source = f.rows();
       const destination = f.rows(true);
       rotateAgentEventLifecycleGeneration();
+      await closeOpenClawAgentDatabasesAsync(stateDir);
       closeOpenClawAgentDatabasesForTest();
       await expect(
         repairCanonicalSessionKeys({ apply: true, cfg: f.cfg, env: f.env }),
@@ -221,6 +243,7 @@ describe("Doctor canonical completion receipt repair", () => {
       const source = f.rows();
       const destination = f.rows(true);
       rotateAgentEventLifecycleGeneration();
+      await closeOpenClawAgentDatabasesAsync(stateDir);
       closeOpenClawAgentDatabasesForTest();
       await expect(
         repairCanonicalSessionKeys({ apply: true, cfg: f.cfg, env: f.env }),
@@ -236,6 +259,7 @@ describe("Doctor canonical completion receipt repair", () => {
       f.create();
       f.database().db.exec("DROP TABLE session_input_completions");
       f.database(true).db.exec("DROP TABLE session_input_completions");
+      await closeOpenClawAgentDatabasesAsync(stateDir);
       closeOpenClawAgentDatabasesForTest();
       await repairCanonicalSessionKeys({ apply: true, cfg: f.cfg, env: f.env });
       expect(

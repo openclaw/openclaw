@@ -12,6 +12,10 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { inspectTelegramConversationRouteOwner } from "./conversation-route-owner.js";
+import {
+  inspectTelegramConversationRoute,
+  touchTelegramConversationRoute,
+} from "./conversation-route.js";
 
 describe("inspectTelegramConversationRouteOwner", () => {
   let adapter: SessionBindingAdapter;
@@ -84,6 +88,66 @@ describe("inspectTelegramConversationRouteOwner", () => {
       }),
     ).toEqual({ kind: "agent", agentId: "runtime" });
     expect(touch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "unchanged",
+    "reassigned",
+    "replaced",
+    "reassigned during touch",
+    "replaced during touch",
+  ])("touches only the captured native binding after authorization: %s", async (change) => {
+    const touch = vi.fn();
+    let targetSessionKey = "agent:original:bound";
+    let boundAt = 1;
+    const touchAsync = vi.fn(async () => {
+      await Promise.resolve();
+      if (change === "reassigned during touch") {
+        targetSessionKey = "agent:replacement:bound";
+      } else if (change === "replaced during touch") {
+        boundAt = 2;
+      }
+    });
+    registerSessionBindingAdapter({
+      channel: "telegram",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation: (conversation) => ({
+        bindingId: "binding-topic",
+        targetSessionKey,
+        targetKind: "session",
+        conversation,
+        status: "active",
+        boundAt,
+      }),
+      touch,
+      ...(change.endsWith("during touch") ? { touchAsync } : {}),
+    });
+    const inspected = inspectTelegramConversationRoute({
+      cfg: { channels: { telegram: { accounts: { default: {} } } } },
+      accountId: "default",
+      chatId: -100123,
+      isGroup: true,
+      threadSpec: { scope: "forum", id: 42 },
+    });
+    expect(touch).not.toHaveBeenCalled();
+    if (change === "reassigned") {
+      targetSessionKey = "agent:replacement:bound";
+    }
+    if (change === "replaced") {
+      boundAt = 2;
+    }
+    if (change === "unchanged") {
+      await touchTelegramConversationRoute(inspected);
+      expect(touch).toHaveBeenCalledWith("binding-topic", undefined);
+    } else {
+      await expect(touchTelegramConversationRoute(inspected)).rejects.toThrow(
+        "command route changed",
+      );
+      expect(touch).not.toHaveBeenCalled();
+    }
+    expect(touchAsync).toHaveBeenCalledTimes(change.endsWith("during touch") ? 1 : 0);
+    expect(inspected.route.sessionKey).toBe("agent:original:bound");
   });
 
   it("reports a temporary adapter gap only while thread bindings are enabled", () => {

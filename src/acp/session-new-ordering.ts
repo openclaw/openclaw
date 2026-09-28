@@ -87,7 +87,7 @@ export class AcpSessionNewOrdering {
           this.provisionalClaims.delete(claimed);
         }
         if (messageObject?.error === undefined) {
-          this.establish(claimed);
+          this.establishedSessionIds.add(claimed);
         }
         // A rejection retires only this claim. Recognition persists exactly when
         // the session is confirmed or another claim on it is still outstanding.
@@ -99,7 +99,7 @@ export class AcpSessionNewOrdering {
       emit(message);
       const establishedSessionId = readSessionId(messageObject?.result);
       if (establishedSessionId) {
-        this.establish(establishedSessionId);
+        this.establishedSessionIds.add(establishedSessionId);
         // Release this session's backlog immediately rather than only the run at the
         // head of the global queue. Sessions are independent streams, so holding one
         // behind another buys no ordering the client can observe, while it does delay
@@ -141,10 +141,6 @@ export class AcpSessionNewOrdering {
       return false;
     }
     return this.pendingNewSessionRequestIds.size > 0;
-  }
-
-  private establish(sessionId: string): void {
-    this.establishedSessionIds.add(sessionId);
   }
 
   private enqueue(

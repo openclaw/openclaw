@@ -10,7 +10,6 @@ import {
   classifyCodeModeMatrixCell,
   modelCellPrefix,
   parseCodeModeMatrixOptions,
-  reserveCodeModeMatrixOutputDir,
   runCodeModeModelMatrix,
   validateQaEvidenceSummaryJson,
   type CodeModeMatrixCellResult,
@@ -32,6 +31,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 const option = (name) => process.argv[process.argv.indexOf(name) + 1];
 const workspace = option("--cwd");
+if (process.argv.includes("--local-model-lean")) throw new Error("unexpected lean profile");
+const config = JSON.parse(await fs.readFile(option("--config"), "utf8"));
+if (config.agents.defaults.models[option("--model")].agentRuntime.id !== "openclaw"
+  || config.agents.defaults.fastModeDefault !== false
+  || config.tools.codeMode.executor !== "node"
+  || config.tools.toolSearch !== undefined) throw new Error("benchmark controls drifted");
 const prompt = process.argv[4];
 let calls = 0;
 const read = async (name) => {
@@ -83,85 +88,6 @@ console.log(JSON.stringify({
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe("Code Mode model matrix runtime and output admission", () => {
-  it("rejects a dirty frozen runtime before building or dispatching any model", async () => {
-    const root = tempDirs.make("openclaw-code-mode-frozen-runtime-");
-    const options = parseCodeModeMatrixOptions(
-      [
-        "--model",
-        "openai/gpt-5.6-luna",
-        "--runtime-dir",
-        root,
-        "--output-dir",
-        "artifacts/frozen",
-        "--dry-run",
-      ],
-      root,
-    );
-    await expect(
-      runCodeModeModelMatrix(options, {
-        readSourceIdentity: async () => ({
-          gitSha: "dirty",
-          sourceDirty: true,
-          sourcePatchSha256: "patch",
-        }),
-        buildCliArtifacts: async () => {
-          throw new Error("must not build a frozen runtime");
-        },
-        runCell: async () => {
-          throw new Error("must not dispatch a dirty runtime");
-        },
-      }),
-    ).rejects.toThrow("clean committed checkout");
-    await expect(fs.stat(path.join(root, "artifacts/frozen"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-  });
-
-  it("reserves a fresh output path without symlink traversal", async () => {
-    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-output-test-"));
-    try {
-      const existing = path.join(repoRoot, "existing");
-      await fs.mkdir(existing);
-      await expect(reserveCodeModeMatrixOutputDir(repoRoot, existing)).rejects.toThrow(
-        "must not already exist",
-      );
-
-      const outside = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-outside-test-"));
-      const linked = path.join(repoRoot, "linked");
-      await fs.symlink(outside, linked, process.platform === "win32" ? "junction" : "dir");
-      await expect(
-        reserveCodeModeMatrixOutputDir(repoRoot, path.join(linked, "results")),
-      ).rejects.toThrow("must not traverse symlinks");
-      await fs.rm(outside, { force: true, recursive: true });
-    } finally {
-      await fs.rm(repoRoot, { force: true, recursive: true });
-    }
-  });
-
-  it("allows only one concurrent run to reserve an output path", async () => {
-    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-reserve-test-"));
-    try {
-      const outputDir = path.join(repoRoot, "nested", "results");
-      const attempts = await Promise.allSettled([
-        reserveCodeModeMatrixOutputDir(repoRoot, outputDir),
-        reserveCodeModeMatrixOutputDir(repoRoot, outputDir),
-      ]);
-
-      expect(attempts.filter((attempt) => attempt.status === "fulfilled")).toHaveLength(1);
-      const rejected = attempts.find((attempt) => attempt.status === "rejected");
-      expect(rejected).toMatchObject({
-        status: "rejected",
-        reason: expect.objectContaining({
-          message: expect.stringContaining("must not already exist"),
-        }),
-      });
-    } finally {
-      await fs.rm(repoRoot, { force: true, recursive: true });
-    }
-  });
-});
-
 describe("Code Mode model matrix provider setup", () => {
   it("adds the documented non-secret marker only for local Ollama runs", () => {
     expect(buildCodeModeMatrixAgentEnv("ollama/qwen3.5:9b", "/runtime", {})).toMatchObject({
@@ -177,6 +103,38 @@ describe("Code Mode model matrix provider setup", () => {
     expect(buildCodeModeMatrixAgentEnv("huggingface/model", "/runtime", {}).OLLAMA_API_KEY).toBe(
       undefined,
     );
+    const isolated = buildCodeModeMatrixAgentEnv("ollama/fixture", "/runtime", {
+      HOME: "/operator",
+      CODEX_HOME: "/operator/codex",
+      OPENCLAW_CONFIG_PATH: "/operator/config",
+      UNRELATED_TOKEN: "synthetic-unrelated-value",
+      PATH: "/bin",
+    });
+    expect(isolated.PATH).toBe("/bin");
+    expect(isolated).not.toHaveProperty("HOME");
+    expect(isolated).not.toHaveProperty("CODEX_HOME");
+    expect(isolated).not.toHaveProperty("OPENCLAW_CONFIG_PATH");
+    expect(isolated).not.toHaveProperty("UNRELATED_TOKEN");
+  });
+
+  it("rejects competing credentials and non-API-key provider routes", () => {
+    expect(() =>
+      buildCodeModeMatrixAgentEnv("openai/fixture", "/runtime", {
+        OPENAI_API_KEY: "synthetic-primary",
+        CODEX_API_KEY: "synthetic-competitor",
+      }),
+    ).toThrow("Ambiguous benchmark authentication");
+    expect(() =>
+      buildCodeModeMatrixAgentEnv("anthropic/fixture", "/runtime", {
+        ANTHROPIC_OAUTH_TOKEN: "synthetic-oauth",
+      }),
+    ).toThrow("requires an API-key environment input");
+    const env = buildCodeModeMatrixAgentEnv("anthropic/fixture", "/runtime", {
+      ANTHROPIC_API_KEY: "synthetic-selected",
+      OPENAI_API_KEY: "synthetic-unrelated",
+    });
+    expect(env.ANTHROPIC_API_KEY).toBe("synthetic-selected");
+    expect(env).not.toHaveProperty("OPENAI_API_KEY");
   });
 });
 
@@ -200,94 +158,67 @@ describe("Code Mode model matrix classification", () => {
     sessionId: "session",
   } satisfies Parameters<typeof classifyCodeModeMatrixCell>[0]["envelope"];
 
-  it("requires engagement, tool execution, effect, and exact final text", () => {
-    expect(
-      classifyCodeModeMatrixCell({
-        diagnostics: "",
-        effectPassed: true,
-        envelope: successEnvelope,
-        expected: "CM-EXPECTED",
-        mode: "code",
-        model: "ollama/qwen3.5:9b",
-        task: "read",
-      }),
-    ).toEqual({
-      failureCategory: null,
-      passed: true,
-      oracle: {
-        answer: true,
-        effect: true,
-        engagement: true,
-        identity: true,
-        toolExecution: true,
-      },
+  function classify(overrides: Partial<Parameters<typeof classifyCodeModeMatrixCell>[0]>) {
+    return classifyCodeModeMatrixCell({
+      diagnostics: "",
+      effectPassed: true,
+      envelope: successEnvelope,
+      expected: "CM-EXPECTED",
+      mode: "code",
+      model: "ollama/qwen3.5:9b",
+      task: "read",
+      ...overrides,
     });
-  });
+  }
 
-  it("keeps provider failures distinct from model task failures", () => {
+  it.each([
+    ["HTTP 402 payment required", "credits depleted", "provider_billing"],
+    ["HTTP 403", "You do not have access to this model", "model_unavailable"],
+    ["HTTP 403", "Invalid API key", "provider_auth"],
+    ["HTTP 403", "Forbidden", "provider_auth"],
+  ])("classifies %s with %s as %s", (diagnostics, message, category) => {
     expect(
-      classifyCodeModeMatrixCell({
-        diagnostics: "HTTP 402 payment required",
+      classify({
+        diagnostics,
         effectPassed: false,
         envelope: {
           ...successEnvelope,
           ok: false,
           status: "error",
           final: "",
-          error: { kind: "error_payload", message: "credits depleted" },
+          error: { kind: "error_payload", message },
         },
-        expected: "CM-EXPECTED",
-        mode: "code",
-        model: "ollama/qwen3.5:9b",
-        task: "read",
       }).failureCategory,
-    ).toBe("provider_billing");
+    ).toBe(category);
   });
 
   it("does not fail a successful run because diagnostics mention a recovered provider error", () => {
     expect(
-      classifyCodeModeMatrixCell({
+      classify({
         diagnostics: "recovered after a transient network socket error",
-        effectPassed: true,
-        envelope: successEnvelope,
-        expected: "CM-EXPECTED",
-        mode: "code",
-        model: "ollama/qwen3.5:9b",
-        task: "read",
       }).failureCategory,
     ).toBeNull();
   });
 
   it("fails a successful envelope when JSON stdout has trailing output", () => {
     expect(
-      classifyCodeModeMatrixCell({
+      classify({
         diagnostics: "unexpected stdout after JSON: noisy log",
-        effectPassed: true,
-        envelope: successEnvelope,
-        expected: "CM-EXPECTED",
-        mode: "code",
-        model: "ollama/qwen3.5:9b",
         stdoutContractValid: false,
-        task: "read",
       }).failureCategory,
     ).toBe("harness_error");
   });
 
   it("classifies a direct read with extra prose as an answer mismatch", () => {
     expect(
-      classifyCodeModeMatrixCell({
-        diagnostics: "",
-        effectPassed: true,
+      classify({
         envelope: {
           ...successEnvelope,
           bridgeCalls: { search: 0, describe: 0, call: 0 },
           codeModeEngaged: false,
           final: "The value is CM-EXPECTED.",
         },
-        expected: "CM-EXPECTED",
         mode: "direct",
-        model: "ollama/qwen3.5:9b",
-        task: "read",
       }),
     ).toMatchObject({
       failureCategory: "answer_mismatch",
@@ -298,18 +229,13 @@ describe("Code Mode model matrix classification", () => {
   it("requires outer tool-call evidence for direct and automatic cells", () => {
     for (const mode of ["direct", "auto"] as const) {
       expect(
-        classifyCodeModeMatrixCell({
-          diagnostics: "",
-          effectPassed: true,
+        classify({
           envelope: {
             ...successEnvelope,
             codeModeEngaged: mode === "auto",
             toolSummary: { calls: 0, tools: [] },
           },
-          expected: "CM-EXPECTED",
           mode,
-          model: "ollama/qwen3.5:9b",
-          task: "read",
         }).failureCategory,
       ).toBe("tool_execution");
     }
@@ -317,19 +243,14 @@ describe("Code Mode model matrix classification", () => {
 
   it("uses outer tool-call evidence for automatic cells that engage Code Mode", () => {
     expect(
-      classifyCodeModeMatrixCell({
-        diagnostics: "",
-        effectPassed: true,
+      classify({
         envelope: {
           ...successEnvelope,
           bridgeCalls: { search: 1, describe: 1, call: 0 },
           codeModeEngaged: true,
           toolSummary: { calls: 1, tools: ["exec"] },
         },
-        expected: "CM-EXPECTED",
         mode: "auto",
-        model: "ollama/qwen3.5:9b",
-        task: "read",
       }),
     ).toMatchObject({
       failureCategory: null,
@@ -340,54 +261,35 @@ describe("Code Mode model matrix classification", () => {
 
   it("keeps nested bridge-call evidence mandatory for forced Code Mode", () => {
     expect(
-      classifyCodeModeMatrixCell({
-        diagnostics: "",
-        effectPassed: true,
+      classify({
         envelope: {
           ...successEnvelope,
           bridgeCalls: { search: 1, describe: 1, call: 0 },
           toolSummary: { calls: 1, tools: ["exec"] },
         },
-        expected: "CM-EXPECTED",
-        mode: "code",
-        model: "ollama/qwen3.5:9b",
-        task: "read",
       }).failureCategory,
     ).toBe("tool_execution");
   });
 
   it("rejects forced Code Mode runs that never engaged", () => {
     expect(
-      classifyCodeModeMatrixCell({
-        diagnostics: "",
-        effectPassed: true,
+      classify({
         envelope: { ...successEnvelope, codeModeEngaged: false },
-        expected: "CM-EXPECTED",
-        mode: "code",
-        model: "ollama/qwen3.5:9b",
-        task: "read",
       }).failureCategory,
     ).toBe("activation");
   });
 
   it("rejects a successful response from a different model route", () => {
     expect(
-      classifyCodeModeMatrixCell({
-        diagnostics: "",
-        effectPassed: true,
+      classify({
         envelope: { ...successEnvelope, model: "fallback-model" },
-        expected: "CM-EXPECTED",
-        mode: "code",
-        model: "ollama/qwen3.5:9b",
-        task: "read",
       }).failureCategory,
     ).toBe("model_mismatch");
   });
 
   it("reports an agent error before evaluating missing activation metadata", () => {
     expect(
-      classifyCodeModeMatrixCell({
-        diagnostics: "",
+      classify({
         effectPassed: false,
         envelope: {
           ...successEnvelope,
@@ -397,10 +299,6 @@ describe("Code Mode model matrix classification", () => {
           codeModeEngaged: undefined,
           error: { kind: "agent_error", message: "run failed" },
         },
-        expected: "CM-EXPECTED",
-        mode: "code",
-        model: "ollama/qwen3.5:9b",
-        task: "read",
       }).failureCategory,
     ).toBe("agent_error");
   });
@@ -423,6 +321,8 @@ describe("Code Mode model matrix extended fixtures", () => {
         [
           "--model",
           "fixture/model",
+          "--concurrency",
+          "1",
           "--repetitions",
           "1",
           "--keep-state",
@@ -777,6 +677,7 @@ describe("Code Mode model matrix artifacts", () => {
     const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-code-mode-matrix-test-"));
     try {
       let calls = 0;
+      let initialBuildRead = true;
       const result = await runCodeModeModelMatrix(
         {
           allowFailures: false,
@@ -795,8 +696,10 @@ describe("Code Mode model matrix artifacts", () => {
           buildCliArtifacts: async () => {},
           now: () => new Date("2026-07-28T12:00:00Z"),
           readBuildSha256: async () => {
-            const entries = await fs.readdir(path.join(repoRoot, "artifacts"));
-            expect(entries).toEqual([]);
+            if (initialBuildRead) {
+              expect(await fs.readdir(path.join(repoRoot, "artifacts"))).toEqual([]);
+              initialBuildRead = false;
+            }
             return "build123";
           },
           readGitSha: async () => "abc123",

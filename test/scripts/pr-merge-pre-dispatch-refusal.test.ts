@@ -4,6 +4,10 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  policyTimeoutCapture,
+  policyTimeoutQualification,
+} from "./pr-merge-policy-timeout.test-support.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
 const helper = join(process.cwd(), "scripts/pr-lib/merge-pre-dispatch-refusal.mjs");
@@ -42,6 +46,101 @@ const hash = (text: string) =>
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 
 describePosix("operator-qualified pre-dispatch evidence", () => {
+  it.each([
+    "approved",
+    "uninspected",
+    "diagnostics-not-requested",
+    "wrong-producer",
+    "wrong-command",
+    "wrong-version",
+    "wrong-revision",
+    "wrong-executable",
+    "missing-source",
+    "extra-source",
+    ...Object.keys(policyTimeoutQualification.sourceSha256).map((path) => `source:${path}`),
+    "policy-denial",
+    "other-class",
+    "extra-text",
+    "extra-newline",
+    "missing-newline",
+    "diagnostic",
+    "child-started",
+    "response-headers",
+  ])("bounds the inspected initial policy timeout: %s", (fault) => {
+    const root = temps.make("pr-policy-timeout-evidence-");
+    const directory = join(root, "evidence");
+    mkdirSync(directory);
+    mkdirSync(join(root, ".local"));
+    const sourceSha256: Record<string, string> = { ...policyTimeoutQualification.sourceSha256 };
+    if (fault.startsWith("source:")) {
+      sourceSha256[fault.slice("source:".length)] = "0".repeat(64);
+    }
+    if (fault === "missing-source") {
+      delete sourceSha256["cmd/octopool/gh.go"];
+    }
+    if (fault === "extra-source") {
+      sourceSha256["cmd/octopool/unknown.go"] = "0".repeat(64);
+    }
+    let contents = policyTimeoutCapture;
+    if (fault === "policy-denial") {
+      contents = refusal;
+    }
+    if (fault === "other-class") {
+      contents = contents.replace("class=timeout", "class=server_validation");
+    }
+    if (fault === "extra-text") {
+      contents += "mutation accepted\n";
+    }
+    if (fault === "extra-newline") {
+      contents += "\n";
+    }
+    if (fault === "missing-newline") {
+      contents = contents.trimEnd();
+    }
+    if (fault === "diagnostic" || fault === "child-started") {
+      contents +=
+        fault === "diagnostic"
+          ? diagnostic
+          : diagnostic.replace("child_started=false", "child_started=true");
+    }
+    if (fault === "response-headers") {
+      contents = contents.replace(")\n", " http_status=504)\n");
+    }
+    const proof = {
+      ...policyTimeoutQualification,
+      outcome,
+      capture: hash(contents),
+      inspected: fault !== "uninspected",
+      diagnosticsEnabled: fault !== "diagnostics-not-requested",
+      producer: fault === "wrong-producer" ? "gh" : policyTimeoutQualification.producer,
+      command: fault === "wrong-command" ? "pr view" : policyTimeoutQualification.command,
+      version: fault === "wrong-version" ? "0.7.2" : policyTimeoutQualification.version,
+      sourceRevision:
+        fault === "wrong-revision" ? "a".repeat(40) : policyTimeoutQualification.sourceRevision,
+      executableSha256:
+        fault === "wrong-executable" ? "a".repeat(64) : policyTimeoutQualification.executableSha256,
+      sourceSha256,
+    };
+    writeFileSync(join(root, ".local", capture), contents);
+    writeFileSync(join(directory, capture), contents);
+    writeFileSync(join(directory, "qualification.json"), JSON.stringify(proof));
+    const result = spawnSync(node, [helper, directory, outcome, JSON.stringify(record)], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    if (fault === "approved") {
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        kind: proof.kind,
+        capture,
+        files: { [capture]: proof.capture },
+      });
+    } else {
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stdout).toBe("");
+    }
+  });
+
   it.each([
     "historical",
     "historical-0.7.1",

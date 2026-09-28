@@ -339,16 +339,12 @@ export async function runBridgeRequest(params: {
             yieldMs: Math.max(1, Math.min(1_000, Math.floor(params.remainingMs / 4))),
           };
         }
-        const called = await params.runtime.callExactId(binding.id, input, {
+        value = await params.runtime.callExactValue(binding.id, input, {
           recoverySurface: "catalog",
           parentToolCallId: params.parentToolCallId,
           signal: params.signal,
           onUpdate: params.onUpdate,
         });
-        value =
-          isRecord(called.result) && "details" in called.result
-            ? called.result.details
-            : called.result;
         break;
       }
       case "nodes": {
@@ -379,6 +375,7 @@ export async function runBridgeRequest(params: {
               parentToolCallId: params.parentToolCallId,
               signal: params.signal,
               onUpdate: params.onUpdate,
+              mcpNamespaceGuest: true,
             });
             const guestResult = consumeMcpCodeModeGuestResult(called.result);
             if (guestResult === undefined) {

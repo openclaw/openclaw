@@ -3,11 +3,7 @@ import { repeat } from "lit/directives/repeat.js";
 import { html as staticHtml, literal } from "lit/static-html.js";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
-import {
-  serializeSidebarEntry,
-  type NavigationRouteId,
-  type SidebarZoneEntry,
-} from "../app-navigation.ts";
+import { serializeSidebarEntry, titleForRoute, type SidebarZoneEntry } from "../app-navigation.ts";
 import { isRouteId, isSessionRouteId } from "../app-route-paths.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import type { NativeGateway, NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
@@ -25,7 +21,8 @@ import {
 } from "../lib/keyboard-shortcut-contract.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import {
-  isPresenceViewerIdle,
+  presenceViewerActivity,
+  presenceActivityLabel,
   presenceViewerLabel,
   projectOnlinePresenceViewers,
 } from "../lib/presence-users.ts";
@@ -57,6 +54,7 @@ import {
 import { renderSessionGlyph, renderSessionUnreadBadge } from "./session-glyph.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 import { formatSidebarBuildSubtitle } from "./sidebar-build-chip-format.ts";
+import { renderSidebarReorderMenu } from "./sidebar-reorder.ts";
 
 export type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
   activePluginTabId: string;
@@ -111,7 +109,7 @@ function renderSidebarAgentCard(host: AppSidebarRenderHost) {
       .menuUnread=${menuUnread}
       .switcherAvailable=${cardAgents.length > 1}
       .onToggleMenu=${(trigger: HTMLElement) => host.sidebarMenus.toggleAgentMenu(trigger)}
-      .onMenuPointerEnter=${(trigger: HTMLElement, event: PointerEvent) =>
+      .onMenuPointerMove=${(trigger: HTMLElement, event: PointerEvent) =>
         host.sidebarMenus.scheduleAgentMenuHoverOpen(trigger, event)}
       .onMenuPointerLeave=${() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
       @contextmenu=${(event: MouseEvent) => {
@@ -138,7 +136,7 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost) {
         aria-haspopup="menu"
         aria-expanded=${String(menuOpen)}
         aria-label="${name} · ${t("agentChip.workspaceMenuLabel")}"
-        @pointerenter=${(event: PointerEvent) => {
+        @pointermove=${(event: PointerEvent) => {
           if (event.currentTarget instanceof HTMLElement) {
             host.sidebarMenus.scheduleAgentMenuHoverOpen(event.currentTarget, event);
           }
@@ -424,6 +422,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
           ? nothing
           : html`<div class="sidebar-online__list">
               ${repeat(users, presenceUserKey, (user) => {
+                const activityState = presenceViewerActivity(user);
                 const activity = personActivityLink(
                   user.identity?.id,
                   routing,
@@ -437,12 +436,14 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
                 >
                   <${tag}
                     class="sidebar-online__person ${
-                      isPresenceViewerIdle(user) ? "sidebar-online__person--away" : ""
+                      activityState === "idle" ? "sidebar-online__person--away" : ""
                     }"
                     type=${activity ? nothing : "button"}
                     href=${activity?.href ?? nothing}
                     @click=${activity?.open ?? nothing}
                     data-online-user-id=${user.id}
+                    data-presence-activity=${activityState}
+                    aria-description=${presenceActivityLabel(activityState)}
                     data-person-card-key=${presenceUserKey(user)}
                     data-person-card-trigger
                     aria-haspopup="dialog"
@@ -458,6 +459,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
                       aria-hidden="true"
                     ></openclaw-viewer-avatar>
                     <span class="sidebar-online__person-name">${presenceViewerLabel(user)}</span>
+                    <span class="sidebar-online__person-status" aria-hidden="true">${t(activityState === "active" ? "presence.active" : activityState === "idle" ? "presence.idle" : "presence.rosterTitle")}</span>
                     <span class="sidebar-online__person-action" aria-hidden="true"
                       >${icons.chevronRight}</span
                     >
@@ -493,7 +495,6 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
     : gateway
       ? `${gateway.name}${gatewayPrimaryTag ? `, ${gatewayPrimaryTag}` : ""}`
       : buildSubtitle;
-  const accessibleDetail = identityDetail;
   const announcement = statusLabel ?? (host.connected ? t("nav.gateway.connected") : "");
   return html`
     <div class="sidebar-footer-bar sidebar-footer-bar--one-action">
@@ -502,7 +503,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
         class="sidebar-identity-card"
         aria-haspopup="menu"
         aria-expanded=${String(host.sidebarMenus.identityMenuPosition !== null)}
-        aria-label=${accessibleDetail ? `${identityMenuLabel}: ${accessibleDetail}` : identityMenuLabel}
+        aria-label=${identityDetail ? `${identityMenuLabel}: ${identityDetail}` : identityMenuLabel}
         @click=${(event: MouseEvent) =>
           host.sidebarMenus.toggleIdentityMenu(event.currentTarget as HTMLElement)}
       >
@@ -548,7 +549,11 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
               >`
             : nothing
         }
-        ${renderAppSidebarAttention(host)}
+        <openclaw-sidebar-attention
+          .activeRouteId=${host.activeRouteId}
+          .onNavigate=${host.onNavigate}
+          .watchUpdateProgress=${host.watchUpdateProgress}
+        ></openclaw-sidebar-attention>
       </span>
     </div>
   `;
@@ -583,6 +588,14 @@ export function renderAppSidebarZoneEntry(
             ? host.renderPinnedSidebarSession(sessionRows.get(entry.key)!)
             : nothing;
   const draggable = entry.type === "route" || entry.type === "plugin";
+  const label =
+    entry.type === "route"
+      ? titleForRoute(entry.route)
+      : entry.type === "session"
+        ? (sessionRows.get(entry.key)?.label ?? entry.key)
+        : (pluginTab?.label ??
+          host.pluginNavigation().find((item) => item.key === entry.key)?.value.label ??
+          entry.key);
   return html`
     <div
       class="sidebar-zone-entry ${dropPosition ? `sidebar-zone-entry--drop-${dropPosition}` : ""} ${
@@ -605,6 +618,15 @@ export function renderAppSidebarZoneEntry(
       @drop=${(event: DragEvent) => host.sessionOrganizer.handleSidebarZoneDrop(event, serialized)}
     >
       ${content}
+      ${renderSidebarReorderMenu({
+        label,
+        kind: "entry",
+        onMove: async (target, position) => {
+          host.sessionOrganizer.writeSidebarEntryAt(serialized, target, position);
+          host.requestUpdate();
+          await host.updateComplete;
+        },
+      })}
     </div>
   `;
 }
@@ -624,12 +646,4 @@ function renderAppSidebarPluginTab(host: AppSidebarRenderHost, tab: GatewayContr
         active: host.activeRouteId === "plugin" && host.activePluginTabId === key,
         onNavigate: (location) => host.onNavigate?.("plugin", location),
       });
-}
-
-function renderAppSidebarAttention(host: AppSidebarRenderHost) {
-  return html`<openclaw-sidebar-attention
-    .activeRouteId=${host.activeRouteId}
-    .onNavigate=${(routeId: NavigationRouteId) => host.onNavigate?.(routeId)}
-    .watchUpdateProgress=${host.watchUpdateProgress}
-  ></openclaw-sidebar-attention>`;
 }

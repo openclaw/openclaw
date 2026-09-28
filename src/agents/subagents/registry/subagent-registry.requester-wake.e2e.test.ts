@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import { getRuntimeConfig } from "../../../config/config.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
+import { callGateway } from "../../../gateway/call.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
-import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import { getAgentEventLifecycleGeneration, onAgentEvent } from "../../../infra/agent-events.js";
 import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
@@ -14,6 +17,7 @@ import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import type { deliverAgentCommandResult } from "../../command/delivery.js";
 import type { EmbeddedAgentRunResult } from "../../embedded-agent-runner/types.js";
 import "../spawn/subagent-spawn-model.mocks.shared.js";
+import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import { createSubagentRunParams } from "../../subagent-test-fixtures.test-helpers.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -28,11 +32,12 @@ import { announceTesting as subagentAnnounceTesting } from "../announce/subagent
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import * as completionStore from "../completion/subagent-completion-admission.store.js";
 import { registerRequesterFinalAttachment } from "../requester-final-attachment.js";
+import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type {
   GatewayRequest,
-  LifecycleEvent,
   SessionStoreEntry,
 } from "./subagent-registry.lifecycle-fixture.test-support.js";
+import { createLifecycleWaits } from "./subagent-registry.lifecycle-waits.test-support.js";
 import { registerRequesterWakeSettlementBoundaryTests } from "./subagent-registry.requester-wake-settlement.test-support.js";
 import * as registry from "./subagent-registry.test-helpers.js";
 
@@ -49,9 +54,10 @@ type GatewayResponse = {
   result?: Partial<EmbeddedAgentRunResult> & { deliveryStatus?: Partial<GatewayDeliveryStatus> };
 };
 
-let lifecycleHandler: ((event: LifecycleEvent) => void) | undefined;
+let lifecycleHandler: Parameters<typeof onAgentEvent>[0] | undefined;
 let agentCallGates = new Map<string, Promise<void>>();
 let releaseAgentCallGate: (() => void) | undefined;
+let agentCallObserved = createDeferred();
 let chatHistoryBySessionKey = new Map<string, Array<Record<string, unknown>>>();
 let sessionStore: Record<string, SessionStoreEntry> = {};
 let sessionStorePath: string;
@@ -78,6 +84,8 @@ const callGatewayMock = vi.fn(async (request: GatewayRequest): Promise<GatewayRe
     return { messages: chatHistoryBySessionKey.get(request.params?.sessionKey ?? "") ?? [] };
   }
   if (request.method === "agent") {
+    agentCallObserved.resolve();
+    agentCallObserved = createDeferred();
     const sourceSessionKey = request.params?.inputProvenance?.sourceSessionKey;
     const gate = sourceSessionKey ? agentCallGates.get(sourceSessionKey) : undefined;
     if (gate) {
@@ -96,13 +104,46 @@ const callGatewayMock = vi.fn(async (request: GatewayRequest): Promise<GatewayRe
   return {};
 });
 
-const loadConfigMock = vi.fn(() => ({
-  agents: {
-    defaults: { subagents: { archiveAfterMinutes: 0 } },
-    list: [{ id: "main" }, { id: "research" }],
-  },
-  session: { mainKey: "main", scope: "per-sender" },
-}));
+const loadConfigMock = vi.mocked(getRuntimeConfig);
+
+vi.mock("../../../config/config.js", { spy: true });
+vi.mock("../../../gateway/call.js", { spy: true });
+vi.mock("../../../infra/agent-events.js", { spy: true });
+vi.mock("../../runtime-plugins.js", async () => {
+  const { createEmptyPluginRegistry } = await import("../../../plugins/registry-empty.js");
+  return {
+    loadAgentRuntimePluginRegistryHandle: vi.fn<
+      typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle
+    >(() => createEmptyPluginRegistry()),
+  };
+});
+vi.mock("../announce/subagent-announce.requester-settle-wake.js", { spy: true });
+
+const { maybeWakeRequesterAfterAllChildrenSettled: wakeRequester } = await vi.importActual<
+  typeof import("../announce/subagent-announce.requester-settle-wake.js")
+>("../announce/subagent-announce.requester-settle-wake.js");
+
+function createGatewayContext() {
+  const recoveryRuntime: GatewayRequestContext["recoveryRuntime"] = {
+    dispatchAgent: (params, timeoutMs) => callGateway({ method: "agent", params, timeoutMs }),
+    waitForAgent: (params, timeoutMs, signal) =>
+      callGateway({ method: "agent.wait", params, timeoutMs, signal }),
+    dispatchSessionMethod: (method, params, options) =>
+      callGateway({
+        method,
+        params,
+        timeoutMs: options?.timeoutMs,
+        signal: options?.signal,
+        assertDispatchCurrent: options?.assertCurrent,
+      }),
+    sendRecoveryNotice: async () => {
+      throw new Error("Unexpected recovery notice");
+    },
+  };
+  const context = { recoveryRuntime } as GatewayRequestContext;
+  context.resolveGatewayContext = () => context;
+  return context;
+}
 
 vi.mock("../../../config/sessions.js", async () => ({
   ...(await import("../../../config/sessions/targets.js")),
@@ -118,7 +159,7 @@ vi.mock("../../../config/sessions/session-accessor.js", async (importOriginal) =
   ...(await importOriginal<typeof import("../../../config/sessions/session-accessor.js")>()),
   loadSessionEntry: (scope: { sessionKey: string }) => sessionStore[scope.sessionKey],
   // Timing writes must share the synthetic session fixture used by reads.
-  // Subagent and task settlement below still use their real SQLite stores.
+  // Subagent settlement below still uses its real SQLite store.
   patchSessionEntryCore: async (
     ...[scope, update, options = {}]: Parameters<
       typeof import("../../../config/sessions/session-accessor.js").patchSessionEntryCore
@@ -158,6 +199,12 @@ vi.mock("../spawn/subagent-depth.js", () => ({
 describe("requester settle wake product flow", () => {
   let previousFastTestEnv: string | undefined;
   let testState: OpenClawTestState;
+  let settleRootWork: ReturnType<typeof observeRootWork>;
+  const { flushAsync, waitForDeliveredCleanup } = createLifecycleWaits(MAIN_REQUESTER_SESSION_KEY);
+  const flushOwnedWork = async () => {
+    await flushAsync();
+    await settleRootWork(true);
+  };
 
   beforeEach(async () => {
     testState = await createOpenClawTestState({ scenario: "minimal", applyEnv: true });
@@ -172,7 +219,14 @@ describe("requester settle wake product flow", () => {
       session: { mainKey: "main", scope: "per-sender" },
     });
     callGatewayMock.mockClear();
+    vi.mocked(callGateway).mockImplementation(callGatewayMock as typeof callGateway);
+    vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
+    vi.mocked(onAgentEvent).mockImplementation((handler) => {
+      lifecycleHandler = handler;
+      return () => {};
+    });
     agentCallGates = new Map();
+    agentCallObserved = createDeferred();
     chatHistoryBySessionKey = new Map();
     rejectNextRequesterWake = false;
     rejectNextRequesterWakePersistence = false;
@@ -196,43 +250,34 @@ describe("requester settle wake product flow", () => {
       sessionStore[MAIN_REQUESTER_SESSION_KEY]!,
     );
     vi.useFakeTimers();
+    settleRootWork = observeRootWork();
     const settle = completionStore.settleRequesterCompletionBatch;
-    vi.spyOn(completionStore, "settleRequesterCompletionBatch").mockImplementation((params) => {
-      if (rejectNextRequesterWakePersistence) {
-        rejectNextRequesterWakePersistence = false;
-        throw new Error("database is locked");
-      }
-      settle(params);
-    });
-    registry.testing.setDepsForTest({
-      callGateway: callGatewayMock as typeof import("../../../gateway/call.js").callGateway,
-      getRuntimeConfig:
-        loadConfigMock as typeof import("../../../config/config.js").getRuntimeConfig,
-      loadAgentRuntimePluginRegistryHandle: () => undefined,
-      onAgentEvent: ((handler: typeof lifecycleHandler) => {
-        lifecycleHandler = handler;
-        return () => {};
-      }) as unknown as typeof import("../../../infra/agent-events.js").onAgentEvent,
-      maybeWakeRequesterAfterAllChildrenSettled: async (params) => {
-        if (rejectNextRequesterWake) {
-          rejectNextRequesterWake = false;
-          rejectNextRequesterWakePersistence = armRequesterWakePersistenceFailure;
-          armRequesterWakePersistenceFailure = false;
-          throw new Error("requester wake rejected before attempt admission");
+    vi.spyOn(completionStore, "settleRequesterCompletionBatch").mockImplementation(
+      async (params) => {
+        if (rejectNextRequesterWakePersistence) {
+          rejectNextRequesterWakePersistence = false;
+          throw new Error("database is locked");
         }
-        return await maybeWakeRequesterAfterAllChildrenSettled(params);
+        return settle(params);
       },
+    );
+    vi.mocked(maybeWakeRequesterAfterAllChildrenSettled).mockImplementation(async (params) => {
+      if (rejectNextRequesterWake) {
+        rejectNextRequesterWake = false;
+        rejectNextRequesterWakePersistence = armRequesterWakePersistenceFailure;
+        armRequesterWakePersistenceFailure = false;
+        throw new Error("requester wake rejected before attempt admission");
+      }
+      return await wakeRequester(params);
     });
     subagentAnnounceTesting.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../../../gateway/call.js").callGateway,
-      getRuntimeConfig:
-        loadConfigMock as typeof import("../../../config/config.js").getRuntimeConfig,
+      getRuntimeConfig: loadConfigMock,
     });
     subagentAnnounceDeliveryTesting.setDepsForTest({
       sendMessage: sendMessageMock,
       callGateway: callGatewayMock as typeof import("../../../gateway/call.js").callGateway,
-      getRuntimeConfig:
-        loadConfigMock as typeof import("../../../config/config.js").getRuntimeConfig,
+      getRuntimeConfig: loadConfigMock,
       loadSessionEntry: ({ sessionKey }) => sessionStore[sessionKey],
       getRequesterSessionActivity: (requesterSessionKey: string) => ({
         sessionId: sessionStore[requesterSessionKey]?.sessionId,
@@ -241,8 +286,7 @@ describe("requester settle wake product flow", () => {
     });
     subagentAnnounceOutputTesting.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../../../gateway/call.js").callGateway,
-      getRuntimeConfig:
-        loadConfigMock as typeof import("../../../config/config.js").getRuntimeConfig,
+      getRuntimeConfig: loadConfigMock,
       readSubagentSessionEntry: (_storePath, sessionKey) => sessionStore[sessionKey],
       resolveAgentIdFromSessionKey: (key) => key?.match(/^agent:([^:]+)/)?.[1] ?? "main",
       resolveSessionStorePathCore: () => sessionStorePath,
@@ -253,27 +297,28 @@ describe("requester settle wake product flow", () => {
     // Failed assertions must also release the delivery owned by this test.
     releaseAgentCallGate?.();
     releaseAgentCallGate = undefined;
-    await vi.advanceTimersByTimeAsync(0);
-    lifecycleHandler = undefined;
-    subagentAnnounceDeliveryTesting.setDepsForTest();
-    subagentAnnounceOutputTesting.setDepsForTest();
-    subagentAnnounceTesting.setDepsForTest();
-    registry.testing.setDepsForTest();
-    registry.resetSubagentRegistryForTests({ persist: false });
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-    if (previousFastTestEnv === undefined) {
-      delete process.env.OPENCLAW_TEST_FAST;
-    } else {
-      process.env.OPENCLAW_TEST_FAST = previousFastTestEnv;
+    try {
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+      } finally {
+        await settleRootWork();
+      }
+    } finally {
+      lifecycleHandler = undefined;
+      subagentAnnounceDeliveryTesting.setDepsForTest();
+      subagentAnnounceOutputTesting.setDepsForTest();
+      subagentAnnounceTesting.setDepsForTest();
+      registry.resetSubagentRegistryForTests({ persist: false });
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+      if (previousFastTestEnv === undefined) {
+        delete process.env.OPENCLAW_TEST_FAST;
+      } else {
+        process.env.OPENCLAW_TEST_FAST = previousFastTestEnv;
+      }
+      await testState.cleanup();
     }
-    await testState.cleanup();
   });
-
-  const flushAsync = async () => {
-    await Promise.resolve();
-    await Promise.resolve();
-  };
 
   const getAgentCalls = () =>
     (callGatewayMock.mock.calls as [GatewayRequest][])
@@ -286,43 +331,9 @@ describe("requester settle wake product flow", () => {
     );
 
   const waitForAgentCallCount = async (expectedCount: number) => {
-    for (let attempt = 0; attempt < 80; attempt += 1) {
-      if (getAgentCalls().length >= expectedCount) {
-        return;
-      }
-      await vi.advanceTimersByTimeAsync(100);
-      await flushAsync();
+    while (getAgentCalls().length < expectedCount) {
+      await agentCallObserved.promise;
     }
-    throw new Error(`expected ${expectedCount} agent calls, got ${getAgentCalls().length}`);
-  };
-
-  const waitForDeliveredCleanup = async (
-    runId: string,
-    options?: { allowPendingRequesterSettleWake?: boolean },
-  ) => {
-    for (let attempt = 0; attempt < 80; attempt += 1) {
-      const run = registry.getSubagentRunByRunId(runId);
-      if (
-        run?.delivery?.status === "delivered" &&
-        typeof run.cleanupCompletedAt === "number" &&
-        (options?.allowPendingRequesterSettleWake === true || run.requesterSettleWake === undefined)
-      ) {
-        return;
-      }
-      await vi.advanceTimersByTimeAsync(1);
-      await flushAsync();
-    }
-    const run = registry.getSubagentRunByRunId(runId);
-    throw new Error(
-      "run " +
-        runId +
-        " did not finish delivered cleanup: " +
-        JSON.stringify({
-          delivery: run?.delivery,
-          wake: run?.requesterSettleWake,
-          cleanup: run?.cleanupCompletedAt,
-        }),
-    );
   };
 
   const spawnVisibleChild = async (params: {
@@ -370,6 +381,8 @@ describe("requester settle wake product flow", () => {
     lifecycleHandler({
       stream: "lifecycle",
       runId,
+      seq: 1,
+      ts: Date.now(),
       sessionKey: childSessionKey,
       data: {
         phase: "end",
@@ -395,10 +408,8 @@ describe("requester settle wake product flow", () => {
     "settles overlapping caller turns with $firstCompleted first ($binding ownership, yielded=$yieldedParent)",
     async ({ firstCompleted, binding, yieldedParent }) => {
       vi.setSystemTime(100_000);
-      const context = {} as GatewayRequestContext;
-      context.resolveGatewayContext = () => context;
-      const otherContext = {} as GatewayRequestContext;
-      otherContext.resolveGatewayContext = () => otherContext;
+      const context = createGatewayContext();
+      const otherContext = createGatewayContext();
       registry.initSubagentRegistry();
       const activate = () => {
         // Standalone registration can be wholly unbound, but cannot mix ambient
@@ -481,41 +492,58 @@ describe("requester settle wake product flow", () => {
       expect(resolvers[1]?.()).toBe(
         binding === "same" ? context : binding === "distinct" ? otherContext : undefined,
       );
+      activate();
+      activate();
+      children.forEach((child, index) => {
+        expect(getGatewayContextResolver(registry.getSubagentRunByRunId(child.runId)!)).toBe(
+          resolvers[index],
+        );
+      });
       const completionOrder = firstCompleted === "alpha" ? children : children.toReversed();
       const first = completionOrder[0]!;
       const second = completionOrder[1]!;
       emitCompleted(first.runId, first.childSessionKey, `${first.name} complete`);
+      await flushOwnedWork();
+      await waitForDeliveredCleanup(first.runId, {
+        allowPendingRequesterSettleWake: first.name !== yieldedParent,
+      });
+      expect(registry.getSubagentRunByRunId(second.runId)).toMatchObject({
+        execution: { status: "running" },
+        delivery: { status: "pending" },
+      });
+      expect(getRequesterWakeCalls()).toHaveLength(first.name === yieldedParent ? 1 : 0);
       if (first.name === yieldedParent) {
-        // Yielded completion stays owned by its frozen wake until every child settles.
-        await vi.waitFor(() =>
-          expect(registry.getSubagentRunByRunId(first.runId)).toMatchObject({
-            execution: { status: "terminal" },
-            cleanupCompletedAt: expect.any(Number),
-            requesterSettleWake: { rearmGeneration: 1 },
-          }),
-        );
-      } else {
-        await waitForDeliveredCleanup(first.runId, { allowPendingRequesterSettleWake: true });
+        const wake = getRequesterWakeCalls()[0]?.params;
+        expect(wake?.inputProvenance?.sourceSessionKey).toBe(first.childSessionKey);
+        expect(wake?.message).toContain(`${first.name} complete`);
+        expect(wake?.message).not.toContain(`${second.name} complete`);
+        const completed = registry.getSubagentRunByRunId(first.runId)!;
+        expect(completed.execution.status).toBe("terminal");
+        expect(getGatewayContextResolver(completed)).toBeUndefined();
       }
-      expect(getRequesterWakeCalls()).toHaveLength(0);
       activate();
       activate();
       children.forEach((child, index) => {
         const row = registry.getSubagentRunByRunId(child.runId)!;
-        expect(getGatewayContextResolver(row)).toBe(resolvers[index]);
+        if (child !== first || first.name !== yieldedParent) {
+          expect(getGatewayContextResolver(row)).toBe(resolvers[index]);
+        }
         expect(row.requesterTurnRunId).toBeUndefined();
       });
       emitCompleted(second.runId, second.childSessionKey, `${second.name} complete`);
+      await flushOwnedWork();
       await waitForDeliveredCleanup(second.runId, { allowPendingRequesterSettleWake: true });
       activate();
       await registry.testing.sweepOnceForTests();
       await vi.advanceTimersByTimeAsync(30_000);
+      await flushOwnedWork();
       expect(getRequesterWakeCalls()).toHaveLength(binding === "same" ? 1 : 0);
       for (const child of children) {
-        expect(registry.getSubagentRunByRunId(child.runId)).toMatchObject({
+        const entry = registry.getSubagentRunByRunId(child.runId);
+        expect(entry).toMatchObject({
           delivery: { status: "delivered" },
-          requesterSettleWake: undefined,
         });
+        expect(entry?.requesterSettleWake).toBeUndefined();
       }
     },
   );
@@ -653,10 +681,11 @@ describe("requester settle wake product flow", () => {
       );
     }
     for (const child of [alpha, beta]) {
-      expect(registry.getSubagentRunByRunId(child.runId)).toMatchObject({
+      const entry = registry.getSubagentRunByRunId(child.runId);
+      expect(entry).toMatchObject({
         delivery: { status: "delivered" },
-        requesterSettleWake: undefined,
       });
+      expect(entry?.requesterSettleWake).toBeUndefined();
     }
 
     agentCallGates.delete(beta.childSessionKey);
@@ -684,8 +713,7 @@ describe("requester settle wake product flow", () => {
     "preserves serial continuation without replaying an accepted wave ($runtime, next child accepted=$acceptNextChild, requester final=$attachRequesterFinal)",
     async ({ runtime, acceptNextChild, attachRequesterFinal }) => {
       vi.setSystemTime(100_000);
-      const context = {} as GatewayRequestContext;
-      context.resolveGatewayContext = () => context;
+      const context = createGatewayContext();
       registry.initSubagentRegistry();
       registry.activateSubagentRegistry(() => context);
       const alpha = {
@@ -886,7 +914,19 @@ describe("requester settle wake product flow", () => {
             await yieldTurn(initialRequesterTurnRunId, [alpha]);
             attachment?.releaseProvisional();
             emitCompleted(alpha.runId, alpha.childSessionKey, "alpha findings");
-            await vi.waitFor(() => expect(firstWakeReturned).toBe(true));
+            await flushOwnedWork();
+            await vi.waitFor(() => {
+              expect(firstWakeReturned).toBe(true);
+              if (!acceptNextChild) {
+                expect(
+                  registry.getSubagentRunByRunId(alpha.runId)?.requesterSettleWake,
+                ).toMatchObject({
+                  status: "pending",
+                  attemptCount: 1,
+                  nextAttemptAt: expect.any(Number),
+                });
+              }
+            });
             await vi.advanceTimersByTimeAsync(0);
             expect(getRequesterWakeCalls()).toHaveLength(1);
             expect(visibleFinals).toBe(0);
@@ -909,9 +949,11 @@ describe("requester settle wake product flow", () => {
             }
             // Cross both native retry deadlines; a transferred obligation must not
             // start an extra parent turn, while an empty failed handoff must recover.
+            await flushOwnedWork();
             await vi.advanceTimersByTimeAsync(151_000);
             await registry.testing.sweepOnceForTests();
             await vi.advanceTimersByTimeAsync(0);
+            await flushOwnedWork();
             for (const child of acceptNextChild ? [alpha, beta] : [alpha]) {
               await waitForDeliveredCleanup(child.runId);
             }
@@ -949,6 +991,7 @@ describe("requester settle wake product flow", () => {
     requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
     spawnVisibleChild,
     emitCompleted,
+    flushOwnedWork,
     waitForDeliveredCleanup,
     getRequesterWakeCalls,
     useGlobalSessionScope: () => {

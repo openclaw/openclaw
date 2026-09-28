@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import type { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -12,7 +13,10 @@ import {
   claimOpenClawAgentDatabaseLease,
   releaseOpenClawAgentDatabaseLease,
 } from "./openclaw-agent-db-lease.js";
-import { retainAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
+import {
+  closeCachedOpenClawAgentDatabase,
+  retainAgentDatabase,
+} from "./openclaw-agent-db-lifecycle.js";
 import {
   getOpenClawAgentDatabaseValidation,
   invalidateOpenClawAgentDatabaseValidation,
@@ -24,17 +28,26 @@ import {
   openOpenClawAgentDatabase,
   recordOpenClawAgentDatabaseOpenFailure,
 } from "./openclaw-agent-db.js";
+import { removeAgentIntegrityMetadataForTest } from "./openclaw-agent-db.test-support.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-contract.js";
 import { createAgentDatabaseNativeGeneration } from "./openclaw-agent-execution-native.js";
+import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
+import * as verification from "./openclaw-database-verify.js";
 import {
   clearOpenClawAgentIntegrityVerification,
-  resolveQuarantineStorePath,
+  readOpenClawAgentIntegrityVerification,
 } from "./openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
+import {
+  resolveOpenClawStateSqlitePath,
+  resolveQuarantineStorePath,
+} from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+import * as stateWorkerStore from "./openclaw-state-worker-store.js";
 
 const counter = vi.hoisted(() => ({
   path: "",
@@ -48,7 +61,7 @@ vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
     const prepare = DatabaseSync.prototype.prepare;
     DatabaseSync.prototype.prepare = function(sql) {
       const statement = prepare.call(this, sql);
-      const match = /^PRAGMA (integrity_check|foreign_key_check);?$/i.exec(sql.trim());
+      const match = /^PRAGMA (integrity_check|foreign_key_check)(?:[(]'sqlite_schema'[)])?;?$/i.exec(sql.trim());
       if (this.location() === workerData.testIntegrityPath && match) {
         for (const method of ["all", "get", "iterate", "run"]) {
           const execute = statement[method].bind(statement);
@@ -95,14 +108,173 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
+it.each(["confirmed close", "native exit"] as const)(
+  "uses native close evidence before recovering an agent lease (%s)",
+  async (outcome) => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-native-close-") };
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const shared = openOpenClawStateDatabase({ env });
+    const leases = () =>
+      shared.db
+        .prepare("SELECT lease_id FROM agent_database_leases WHERE path = ? ORDER BY lease_id")
+        .all(database.path);
+    const hostLeases = leases();
+    expect(hostLeases).toHaveLength(1);
+    const context = captureOpenClawStateWorkerContext({ env });
+    const assertCurrent = () => context.admission.assertCurrent();
+    const source: AgentDatabaseRequestExecutionSource = {
+      assertCurrent,
+      createAdmission: (binding) => () => ({
+        nativeLocations: binding.nativeLocations,
+        admission: createSqliteWorkerOperationAdmission((request, grant) => {
+          binding.authorize(request);
+          assertCurrent();
+          if (!grant()) {
+            throw new Error("Native close fixture lost admission");
+          }
+        }, binding.attachment),
+      }),
+    };
+    const generation = createAgentDatabaseNativeGeneration(
+      database.agentId,
+      database.path,
+      context,
+      assertCurrent,
+      assertCurrent,
+      undefined,
+      () => {},
+    );
+    const workers: Worker[] = [];
+    const observeWorker = (worker: Worker) => workers.push(worker);
+    const cleanup = vi.spyOn(stateWorkerStore, "openOpenClawStateWorkerCleanupStore");
+    process.on("worker", observeWorker);
+    try {
+      await expect(generation.run(source, async () => "opened")).resolves.toBe("opened");
+      expect(leases()).toHaveLength(2);
+      process.off("worker", observeWorker);
+      if (outcome === "native exit") {
+        expect(workers.length).toBeGreaterThan(0);
+        await Promise.all(workers.map((worker) => worker.terminate()));
+        expect(leases()).toHaveLength(2);
+      }
+      await generation.close();
+      expect(leases()).toEqual(hostLeases);
+      expect(cleanup).toHaveBeenCalledTimes(outcome === "confirmed close" ? 0 : 1);
+    } finally {
+      process.off("worker", observeWorker);
+      try {
+        await generation.close();
+      } finally {
+        cleanup.mockRestore();
+      }
+    }
+  },
+);
+
+it.each(["settled", "pending"] as const)(
+  "prepares missing storage after an existing-only miss (%s)",
+  async (timing) => {
+    const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-prepare-missing-")) };
+    const execution = captureOpenClawAgentDatabaseExecution({ agentId: "main", env });
+    const source: AgentDatabaseRequestExecutionSource = {
+      assertCurrent: () => execution.assertCurrent(),
+      createAdmission(binding) {
+        return () => ({
+          nativeLocations: binding.nativeLocations,
+          admission: createSqliteWorkerOperationAdmission((request, grant) => {
+            binding.authorize(request);
+            execution.assertCurrent();
+            if (!grant()) {
+              throw new Error("Missing database fixture lost admission");
+            }
+          }, binding.attachment),
+        });
+      },
+    };
+    try {
+      const missing = execution.runExisting(source, async () => "unexpected");
+      if (timing === "settled") {
+        expect(await missing).toBeUndefined();
+      }
+      const preparing = execution.prepare(source);
+      expect(await missing).toBeUndefined();
+      await preparing;
+      expect(fs.existsSync(execution.path)).toBe(true);
+      expect(await execution.runExisting(source, async () => "opened")).toBe("opened");
+    } finally {
+      await execution.release();
+    }
+  },
+);
+
+it("opens an unconfigured external store without reconstructing unknown deletion history", async () => {
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-worker-missing-history-") };
+  const external = tempDirs.make("agent-worker-external-history-");
+  const pathname = path.join(external, "retained.sqlite");
+  const retained = openOpenClawAgentDatabase({
+    agentId: "main",
+    path: pathname,
+    env: { OPENCLAW_STATE_DIR: tempDirs.make("agent-worker-fixture-owner-") },
+  });
+  retained.db.exec("INSERT INTO auth_profile_state VALUES ('preserved', '{\"ok\":true}', 1)");
+  closeOpenClawAgentDatabaseByPath(pathname);
+  const bytes = fs.readFileSync(pathname);
+  const context = captureOpenClawStateWorkerContext({ env });
+  const assertCurrent = () => context.admission.assertCurrent();
+  const source: AgentDatabaseRequestExecutionSource = {
+    assertCurrent,
+    createAdmission: (binding) => () => ({
+      nativeLocations: binding.nativeLocations,
+      admission: createSqliteWorkerOperationAdmission((request, grant) => {
+        binding.authorize(request);
+        assertCurrent();
+        if (!grant()) {
+          throw new Error("External store fixture lost its admission");
+        }
+      }, binding.attachment),
+    }),
+  };
+  const generation = createAgentDatabaseNativeGeneration(
+    "main",
+    pathname,
+    context,
+    assertCurrent,
+    assertCurrent,
+    undefined,
+    () => {},
+  );
+  const opening = await Promise.allSettled([generation.run(source, async () => "opened")]);
+  const closing = await Promise.allSettled([generation.close()]);
+  expect(opening).toEqual([{ status: "fulfilled", value: "opened" }]);
+  expect(closing).toEqual([{ status: "fulfilled", value: undefined }]);
+  expect(fs.readFileSync(pathname)).toEqual(bytes);
+  expect(fs.readdirSync(external)).toEqual(["retained.sqlite"]);
+  const shared = openNodeSqliteDatabase(resolveOpenClawStateSqlitePath(env), { readOnly: true });
+  try {
+    expect(
+      shared.prepare("SELECT name FROM sqlite_schema WHERE name = 'agent_deletion_journal'").get(),
+    ).toBeUndefined();
+  } finally {
+    shared.close();
+  }
+});
+
 it.each([
   "verified",
+  "two-leases",
+  "two-leases-missing-metadata",
+  "two-leases-stale",
+  "two-leases-unknown-owner",
+  "two-leases-unclean",
+  "prepared-existing",
   "invalidated",
   "failed",
   "revoked-before-grant",
   "missing-metadata",
   "version-mismatch",
   "closed-host",
+  "closed-host-blocked",
+  "closed-host-blocked-last",
   "closed-host-revoked",
   "closed-host-replaced",
 ] as const)("native execution borrows only current host integrity proof (%s)", async (proof) => {
@@ -113,13 +285,43 @@ it.each([
   counter.checks = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
   const context = captureOpenClawStateWorkerContext({ env });
   const closedHost = proof.startsWith("closed-host");
-  const siblingLease = closedHost
-    ? claimOpenClawAgentDatabaseLease({ agentId: database.agentId, path: database.path, env })
-    : undefined;
+  const siblingLease =
+    (closedHost && proof !== "closed-host-blocked-last") || proof.startsWith("two-leases")
+      ? claimOpenClawAgentDatabaseLease({ agentId: database.agentId, path: database.path, env })
+      : undefined;
+  if (proof === "two-leases") {
+    expect(readOpenClawAgentIntegrityVerification(database.path, env)?.clean_close).toBe(0);
+  }
+  if (proof === "two-leases-missing-metadata") {
+    removeAgentIntegrityMetadataForTest(env);
+  }
+  if (proof === "two-leases-stale" || proof === "two-leases-unknown-owner") {
+    openOpenClawStateDatabase({ env })
+      .db.prepare("UPDATE agent_database_leases SET owner_start_time = ? WHERE lease_id = ?")
+      .run(proof === "two-leases-stale" ? -1 : null, siblingLease!);
+  } else if (proof === "two-leases-unclean") {
+    releaseOpenClawAgentDatabaseLease(siblingLease!, { env });
+  }
   const claim: OpenClawAgentDatabaseClaim | undefined = closedHost
     ? undefined
     : createOpenClawAgentDatabaseClaim(database, retainAgentDatabase(database.db));
-  if (closedHost) {
+  if (proof === "closed-host-blocked" || proof === "closed-host-blocked-last") {
+    database.db.exec("INSERT INTO auth_profile_state VALUES ('checkpoint', '{}', 1)");
+    const reader = openNodeSqliteDatabase(database.path, { readOnly: true });
+    try {
+      reader.exec("BEGIN");
+      reader
+        .prepare("SELECT state_json FROM auth_profile_state WHERE state_key='checkpoint'")
+        .get();
+      database.db.exec("UPDATE auth_profile_state SET updated_at=2 WHERE state_key='checkpoint'");
+      closeCachedOpenClawAgentDatabase(database, { eviction: true });
+      expect(database.walMaintenance.health?.state).toBe("blocked");
+      expect(database.db.isOpen).toBe(false);
+      expect(readOpenClawAgentIntegrityVerification(database.path, env)?.clean_close).toBe(0);
+    } finally {
+      reader.close();
+    }
+  } else if (closedHost) {
     closeOpenClawAgentDatabaseByPath(database.path);
   }
   const assertCurrent = () => {
@@ -150,7 +352,7 @@ it.each([
           if (!grant()) {
             throw new Error("Native integrity fixture lost its retained admission");
           }
-        }),
+        }, binding.attachment),
       });
     },
   };
@@ -180,21 +382,35 @@ it.each([
       store.close();
     }
   }
+  const quickCheck = vi.spyOn(verification, "requestOpenClawAgentDatabaseQuickCheck");
   try {
     if (proof === "failed") {
-      await expect(generation.runExisting(source, async () => "opened")).rejects.toThrow(
+      await expect(generation.run(source, async () => "opened")).rejects.toThrow(
         "OpenClaw agent database claim is no longer current",
       );
       expect(getOpenClawAgentDatabaseValidation(database)).toBeUndefined();
       expect(Array.from(new Int32Array(counter.checks))).toEqual([0, 0]);
       return;
     }
-    await expect(generation.runExisting(source, async () => "opened")).resolves.toBe("opened");
+    await expect(
+      generation.run(source, async () => "opened", undefined, proof === "prepared-existing"),
+    ).resolves.toBe("opened");
+    expect(quickCheck).not.toHaveBeenCalled();
     expect(Array.from(new Int32Array(counter.checks))).toEqual(
-      proof === "verified" || proof === "closed-host" ? [0, 0] : [1, 1],
+      proof === "verified" ||
+        proof === "prepared-existing" ||
+        proof === "closed-host" ||
+        proof === "closed-host-blocked" ||
+        proof === "closed-host-blocked-last" ||
+        proof === "two-leases" ||
+        proof === "two-leases-missing-metadata" ||
+        proof === "version-mismatch"
+        ? [0, 0]
+        : [1, 1],
     );
     expect(revokedBeforeGrant).toBe(proof === "revoked-before-grant");
   } finally {
+    quickCheck.mockRestore();
     try {
       await generation.close();
     } finally {
@@ -203,5 +419,8 @@ it.each([
         releaseOpenClawAgentDatabaseLease(siblingLease, { env }, "read-only");
       }
     }
+  }
+  if (proof === "closed-host-blocked-last") {
+    expect(readOpenClawAgentIntegrityVerification(database.path, env)?.clean_close).toBe(1);
   }
 });

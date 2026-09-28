@@ -4,7 +4,6 @@
  * Lists directory entries through local or injected operations with bounded output rendering.
  */
 import { readdir } from "node:fs/promises";
-import { Type } from "typebox";
 import type { DirectoryEntry } from "../../../infra/directory-entries.js";
 import { toErrorObject } from "../../../infra/errors.js";
 import type { AgentTool } from "../../runtime/index.js";
@@ -21,15 +20,9 @@ import {
 } from "./render-utils.js";
 import type { LsToolDetails, LsToolInput } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
+import { lsSchema } from "./tool-schemas.js";
 import { DEFAULT_MAX_BYTES } from "./truncate.js";
 
-const lsSchema = Type.Object({
-  path: Type.Optional(Type.String({ description: "Directory; default cwd." })),
-  limit: Type.Optional(Type.Number({ description: "Max entries; default 500." })),
-  after: Type.Optional(
-    Type.String({ description: "Filename cursor returned by the previous page." }),
-  ),
-});
 const DEFAULT_LIMIT = 500;
 
 /**
@@ -92,16 +85,7 @@ export function createLsToolDefinition(
       "List directory entries in binary filename order, including dotfiles and links. Names are JSON-quoted; / marks actual directories. Pass the returned after cursor with the same path to continue.",
     promptSnippet: "List directory contents",
     parameters: lsSchema,
-    async execute(
-      toolCallId,
-      { path, limit, after }: LsToolInput,
-      signal?: AbortSignal,
-      onUpdate?,
-      ctx?,
-    ) {
-      void toolCallId;
-      void onUpdate;
-      void ctx;
+    async execute(_toolCallId, { path, limit, after }, signal, _onUpdate, _ctx) {
       if (signal?.aborted) {
         throw new Error("Operation aborted");
       }

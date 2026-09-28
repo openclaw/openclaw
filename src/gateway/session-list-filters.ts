@@ -19,7 +19,7 @@ import {
   isCronSessionDisplayKey,
   isSystemCreatedSessionRow,
 } from "../shared/session-list-visibility.js";
-import type { SessionOwnerFacetIdentity } from "../shared/session-types.js";
+import type { SessionActivityPulse, SessionOwnerFacetIdentity } from "../shared/session-types.js";
 import type { SynchronousWork } from "../shared/synchronous-work.js";
 import {
   projectSessionOwner,
@@ -51,6 +51,7 @@ export type SessionListFilteredEntries = {
   people?: SessionsListResult["people"];
   peopleIncomplete?: boolean;
   peopleSessionCount?: number;
+  activityPulse?: SessionActivityPulse;
   involvingProfileId?: string;
 };
 
@@ -58,12 +59,14 @@ export type SessionListFilterParams = {
   cfg: OpenClawConfig;
   entries: Iterable<SessionEntryPair>;
   candidatesPrepared?: boolean;
+  entriesSorted?: boolean;
   getTarget: SessionListTargetLookup;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   opts: SessionsListParams;
   now: number;
   userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
   configuredAgentIds?: ReadonlySet<string>;
+  identityNames?: ReadonlyMap<string, string>;
   getRowContext: SessionListRowContextProvider;
   entryFilter?: (key: string, entry: SessionEntry) => boolean;
   restrictProfileReferences?: boolean;
@@ -73,8 +76,31 @@ export type SessionListFilterParams = {
   shouldYield?: () => boolean;
 };
 
+/** The predicate and its cache key consume the same membership dependencies. */
+export function projectSessionListCandidateOptions(opts: SessionsListParams) {
+  return {
+    includeGlobal: opts.includeGlobal,
+    includeUnknown: opts.includeUnknown,
+    spawnedBy: opts.spawnedBy,
+    label: opts.label,
+    boardFace: opts.boardFace,
+    agentId: opts.agentId,
+    excludeCron: opts.excludeCron,
+    excludeSystem: opts.excludeSystem,
+    excludeSubagents: opts.excludeSubagents,
+    archived: opts.archived,
+    requireLastInteraction: opts.requireLastInteraction,
+    projectId: opts.projectId,
+    workspaceDir: opts.workspaceDir,
+    group: opts.group,
+    pinned: opts.pinned,
+  };
+}
+
 export function* filterSessionCandidateEntries(
-  params: SessionListFilterParams,
+  params: Omit<SessionListFilterParams, "opts"> & {
+    opts: ReturnType<typeof projectSessionListCandidateOptions>;
+  },
 ): SynchronousWork<SessionEntryPair[]> {
   const { opts, now, shouldYield } = params;
   let rowContext: SessionListRowContext | undefined;
@@ -178,6 +204,32 @@ export function* filterSessionCandidateEntries(
   return candidateEntries;
 }
 
+const ACTIVITY_PULSE_MAX_WINDOW_MS = 25 * 3_600_000;
+
+function createActivityPulse(opts: SessionsListParams): SessionActivityPulse | undefined {
+  const since = opts.activityPulseSince;
+  if (since === undefined || !Number.isFinite(since) || since < 0) {
+    return undefined;
+  }
+  // The window sizes the bucket array, so a caller-supplied end is only honored within the
+  // longest civil day (25 hours on a DST fall-back day); anything else falls back to 24 hours.
+  const until =
+    opts.activityPulseUntil !== undefined &&
+    Number.isFinite(opts.activityPulseUntil) &&
+    opts.activityPulseUntil > since &&
+    opts.activityPulseUntil - since <= ACTIVITY_PULSE_MAX_WINDOW_MS
+      ? opts.activityPulseUntil
+      : since + 24 * 3_600_000;
+  return {
+    since,
+    until,
+    hours: Array.from({ length: Math.max(1, Math.ceil((until - since) / 3_600_000)) }, () => 0),
+    sessions: 0,
+    started: 0,
+    running: 0,
+  };
+}
+
 export function* filterSessionEntries(
   params: SessionListFilterParams,
 ): SynchronousWork<SessionListFilteredEntries> {
@@ -199,6 +251,8 @@ export function* filterSessionEntries(
   const people = new Map<string, NonNullable<SessionsListResult["people"]>[number]>();
   let peopleSessionCount = 0;
   let peopleIncomplete = false;
+  const activityPulse = createActivityPulse(opts);
+  const pulsePeople = activityPulse && opts.includePeople ? new Set<string>() : undefined;
   const configuredAgentIds = params.configuredAgentIds ?? new Set(listAgentIds(cfg));
   const identities =
     params.userProfileIdentityById ?? new Map<string, SessionActorProfileIdentity | undefined>();
@@ -219,13 +273,16 @@ export function* filterSessionEntries(
   const involvingActorId = normalizeOptionalString(params.involvingActorId);
 
   // The caller owns these resident entries and their prepared visibility filter.
+  const filterCandidates = params.candidatesPrepared && !opts.involvingProfileId;
   const visibleEntries: SessionEntryPair[] = [];
-  for (const pair of params.entries) {
-    if (params.entryFilter?.(...pair) ?? true) {
-      visibleEntries.push(pair);
-    }
-    if (shouldYield?.()) {
-      yield;
+  if (!filterCandidates) {
+    for (const pair of params.entries) {
+      if (params.entryFilter?.(pair[0], pair[1]) ?? true) {
+        visibleEntries.push(pair);
+      }
+      if (shouldYield?.()) {
+        yield;
+      }
     }
   }
   const allowedProfileIds =
@@ -255,14 +312,22 @@ export function* filterSessionEntries(
   }
   const selectedProfileId = profileReference?.value;
 
-  const candidateEntries = params.candidatesPrepared
-    ? visibleEntries
-    : yield* filterSessionCandidateEntries({ ...params, entries: visibleEntries, getRowContext });
+  const candidateEntries = filterCandidates
+    ? params.entries
+    : params.candidatesPrepared
+      ? visibleEntries
+      : yield* filterSessionCandidateEntries({
+          ...params,
+          opts: projectSessionListCandidateOptions(opts),
+          entries: visibleEntries,
+          getRowContext,
+        });
   // Excluded rows must not participate in search or ownership resolution.
   const matchesSearch = search
     ? createSessionListSearchMatcher({
         cfg,
         search,
+        identityNames: params.identityNames,
         now,
         getTarget: params.getTarget,
         modelCatalog: params.modelCatalog instanceof Map ? params.modelCatalog : undefined,
@@ -270,12 +335,33 @@ export function* filterSessionEntries(
         projectActiveRun: params.projectActiveRun,
       })
     : undefined;
+  const matchesInvolvement = (
+    entry: SessionEntry,
+    effectiveOwner: NonNullable<ReturnType<typeof projectOwner>>["actor"] | undefined,
+    profileId: string,
+    personal: boolean,
+  ) => {
+    const state = projectSessionProfileInvolvement(entry, profileId, identities);
+    return (
+      !(personal && state?.hidden) &&
+      (Boolean(state?.lastMention || (personal && state?.hidden === false)) ||
+        (effectiveOwner?.identity?.type === "profile" &&
+          effectiveOwner.identity.id === profileId) ||
+        projectParticipants(entry, identities, cfg).has(
+          JSON.stringify({ type: "profile", id: profileId }),
+        ))
+    );
+  };
 
   for (const pair of candidateEntries) {
     if (shouldYield?.()) {
       yield;
     }
-    const [key, entry] = pair;
+    const key = pair[0];
+    const entry = pair[1];
+    if (filterCandidates && params.entryFilter?.(key, entry) === false) {
+      continue;
+    }
     if (matchesSearch && !matchesSearch(key, entry)) {
       continue;
     }
@@ -304,22 +390,9 @@ export function* filterSessionEntries(
         continue;
       }
     }
-    let participants: ReturnType<typeof projectParticipants> | undefined;
-    const matchesInvolvement = (profileId: string, personal: boolean) => {
-      const state = projectSessionProfileInvolvement(entry, profileId, identities);
-      return (
-        !(personal && state?.hidden) &&
-        (Boolean(state?.lastMention || (personal && state?.hidden === false)) ||
-          (effectiveOwner?.identity?.type === "profile" &&
-            effectiveOwner.identity.id === profileId) ||
-          (participants ??= projectParticipants(entry, identities, cfg)).has(
-            JSON.stringify({ type: "profile", id: profileId }),
-          ))
-      );
-    };
     if (
       profileRelation?.relationship === "involving" &&
-      !matchesInvolvement(profileRelation.profileId, false)
+      !matchesInvolvement(entry, effectiveOwner, profileRelation.profileId, false)
     ) {
       continue;
     }
@@ -333,9 +406,14 @@ export function* filterSessionEntries(
       continue;
     }
     // Preserve the existing viewer-independent owner facet; explicit relations still narrow it.
-    if (involvingActorId && !matchesInvolvement(involvingActorId, true)) {
+    if (involvingActorId && !matchesInvolvement(entry, effectiveOwner, involvingActorId, true)) {
       continue;
     }
+    const activityTs = activityPulse ? sessionActivityTimestamp(entry) : 0;
+    const inPulse =
+      activityPulse !== undefined &&
+      activityTs >= activityPulse.since &&
+      activityTs < activityPulse.until;
     if (opts.includePeople || opts.involvingProfileId) {
       const associated = projectPeople(entry, identities, effectiveOwner);
       peopleSessionCount += 1;
@@ -359,6 +437,27 @@ export function* filterSessionEntries(
           continue;
         }
       }
+      if (inPulse && pulsePeople) {
+        for (const person of associated) {
+          pulsePeople.add(person.identity.id);
+        }
+      }
+    }
+    if (activityPulse) {
+      // "Running now" is present tense: a run that started before midnight still counts.
+      const agentId = expectDefined(params.getTarget(key), "pulse row owner").agentId;
+      activityPulse.running += Number(
+        params.projectActiveRun?.(key, entry, agentId)?.active === true,
+      );
+    }
+    if (inPulse) {
+      const hour = Math.min(
+        activityPulse.hours.length - 1,
+        Math.floor((activityTs - activityPulse.since) / 3_600_000),
+      );
+      activityPulse.hours[hour] = (activityPulse.hours[hour] ?? 0) + 1;
+      activityPulse.sessions += 1;
+      activityPulse.started += Number((entry.createdAt ?? -1) >= activityPulse.since);
     }
     if (
       effectiveOwner?.identity?.type === "profile" &&
@@ -373,12 +472,16 @@ export function* filterSessionEntries(
     people.values(),
     selectedProfileId,
   );
+  if (activityPulse && pulsePeople) {
+    activityPulse.people = pulsePeople.size;
+  }
   return {
     entries,
     ownerEntries,
     ownerFacet: sortSessionOwnerFacet(ownerFacet),
     // Empty time/search windows do not invalidate a resolved person link.
     involvingProfileId: selectedProfileId,
+    ...(activityPulse ? { activityPulse } : {}),
     ...(opts.includePeople
       ? {
           people: visiblePeople,

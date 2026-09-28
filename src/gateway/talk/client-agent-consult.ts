@@ -290,7 +290,7 @@ export function createTalkClientAgentConsultRunner(params: {
     const getAdditionalSystemPrompt = () => confirmationRetryContext;
     const runtime = owner
       ? createOwnedAgentRuntime(owner, assertCurrent, getAdditionalSystemPrompt)
-      : assertCurrent || source === "native-delegation"
+      : assertCurrent || source === "native-delegation" || confirmationGrant
         ? createTalkClientAgentRuntime({
             config: params.config,
             ...(params.ownerConnId ? { rawSourceRef: params.ownerConnId } : {}),
@@ -350,13 +350,11 @@ export function createTalkClientAgentConsultRunner(params: {
                 config: params.config,
               });
             }
-            if (source === "native-delegation") {
-              confirmationObservation = observeClientVoiceConfirmationRun({
-                agentId,
-                voiceSessionId,
-                runId,
-              });
-            }
+            confirmationObservation = observeClientVoiceConfirmationRun({
+              agentId,
+              voiceSessionId,
+              runId,
+            });
             if (owner) {
               assertCurrent?.();
               owner.identity = { runId, sessionId };
@@ -380,8 +378,7 @@ export function createTalkClientAgentConsultRunner(params: {
             }
             if (
               confirmationGrant &&
-              bindAuthorizedClientVoiceConfirmation({ grant: confirmationGrant, runId }) &&
-              source === "native-delegation"
+              bindAuthorizedClientVoiceConfirmation({ grant: confirmationGrant, runId })
             ) {
               confirmationRetryContext = confirmationGrant.retryContext;
             }
@@ -429,7 +426,9 @@ export function createTalkClientAgentConsultRunner(params: {
       )
       .then((result) => {
         yielded = result.yielded === true;
-        const confirmationReply = confirmationObservation?.readReply();
+        const confirmationReply = confirmationObservation?.readReply({
+          includeConfirmationId: source === "tool-call",
+        });
         return confirmationReply ? { ...result, text: confirmationReply } : result;
       })
       .finally(() => {

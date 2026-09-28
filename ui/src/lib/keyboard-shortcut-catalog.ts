@@ -59,7 +59,6 @@ const KEYBOARD_SHORTCUT_SECTIONS = [
     keyboardShortcutEntry("workspaceFiles", KEYBOARD_SHORTCUT_COMBOS.workspaceFiles),
     keyboardShortcutEntry("sideChat", KEYBOARD_SHORTCUT_COMBOS.sideChat),
     keyboardShortcutEntry("browserPanel", KEYBOARD_SHORTCUT_COMBOS.browserPanel),
-    keyboardShortcutEntry("tasksPanel", KEYBOARD_SHORTCUT_COMBOS.tasksPanel),
     keyboardShortcutEntry("desktopPanel", KEYBOARD_SHORTCUT_COMBOS.desktopPanel),
     keyboardShortcutEntry("discussionPanel", KEYBOARD_SHORTCUT_COMBOS.discussionPanel),
     keyboardShortcutEntry("dashboardPanel", KEYBOARD_SHORTCUT_COMBOS.dashboardPanel),
@@ -73,6 +72,16 @@ const KEYBOARD_SHORTCUT_SECTIONS = [
     keyboardShortcutEntry("zoomIn", KEYBOARD_SHORTCUT_COMBOS.zoomIn),
     keyboardShortcutEntry("zoomOut", KEYBOARD_SHORTCUT_COMBOS.zoomOut),
     keyboardShortcutEntry("zoomReset", KEYBOARD_SHORTCUT_COMBOS.zoomReset),
+    keyboardShortcutEntry(
+      "panImageHorizontal",
+      KEYBOARD_SHORTCUT_COMBOS.imagePanLeft,
+      KEYBOARD_SHORTCUT_COMBOS.imagePanRight,
+    ),
+    keyboardShortcutEntry(
+      "panImageVertical",
+      KEYBOARD_SHORTCUT_COMBOS.imagePanUp,
+      KEYBOARD_SHORTCUT_COMBOS.imagePanDown,
+    ),
   ]),
   keyboardShortcutSection("approvals", [
     keyboardShortcutEntry("approveOnce", KEYBOARD_SHORTCUT_COMBOS.modifiedEnter),

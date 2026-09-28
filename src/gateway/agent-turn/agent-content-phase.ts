@@ -1,7 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
+import { readAcpSessionEntryAsync } from "../../acp/runtime/session-meta.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
@@ -36,6 +36,7 @@ import {
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
+import { resolveSessionStoreIdentity } from "../session-store-key.js";
 import {
   loadSessionEntry,
   resolveGatewayModelSupportsImages,
@@ -49,22 +50,6 @@ type ExplicitRecipientSession = Awaited<
     typeof import("../../infra/outbound/agent-delivery.js").resolveAgentExplicitRecipientSession
   >
 >;
-
-type AgentContentPhaseResult = {
-  agentId?: string;
-  requestedSessionKey?: string;
-  effectiveTranscriptInputText: string;
-  message: string;
-  images: ChatImageContent[];
-  imageOrder: PromptImageOrderEntry[];
-  media: MediaFact[];
-  offloadedRefs: OffloadedRef[];
-  replyTo: string;
-  recipientChannel?: string;
-  recipientAccountId?: string;
-  recipientThreadId?: string | number;
-  to: string;
-};
 
 export async function prepareAgentContentPhase(params: {
   request: AgentRunRequest;
@@ -84,12 +69,13 @@ export async function prepareAgentContentPhase(params: {
   modelOverride?: string;
   explicitRecipientSession?: ExplicitRecipientSession;
   knownAgents: string[];
-}): Promise<AgentContentPhaseResult | undefined> {
+  assertAdmissionCurrent?: () => void;
+}) {
   const transcriptInputText = (params.request.message ?? "").trim();
   let message = params.isRawModelRun
     ? transcriptInputText
     : annotateInterSessionPromptText(transcriptInputText, params.inputProvenance);
-  let images: AgentContentPhaseResult["images"] = [];
+  let images: ChatImageContent[] = [];
   let imageOrder: PromptImageOrderEntry[] = [];
   let media: MediaFact[] = [];
   let offloadedRefs: OffloadedRef[] = [];
@@ -123,32 +109,33 @@ export async function prepareAgentContentPhase(params: {
     let baseProvider: string | undefined;
     let baseModel: string | undefined;
     let catalogAgentId = agentId;
-    let requestedAcpMeta: ReturnType<typeof readAcpSessionMeta>;
+    let isConfirmedAcpSession = false;
     if (params.requestedSessionKeyRaw) {
-      const {
-        cfg,
-        entry,
-        canonicalKey,
-        agentId: sessionAgentId,
-      } = loadSessionEntry(params.requestedSessionKeyRaw, {
-        ...(agentId ? { agentId } : {}),
-        clone: false,
-        projection: "list",
+      const target = resolveSessionStoreIdentity({
+        cfg: params.cfg,
+        sessionKey: params.requestedSessionKeyRaw,
+        agentId,
       });
-      catalogAgentId = sessionAgentId;
-      const modelRef = resolveSessionModelRef(cfg, entry, sessionAgentId);
+      const session = await readAcpSessionEntryAsync({
+        cfg: params.cfg,
+        agentId: target.agentId,
+        sessionKey: target.canonicalKey,
+        assertCurrent: params.assertAdmissionCurrent,
+      });
+      params.assertAdmissionCurrent?.();
+      catalogAgentId = target.agentId;
+      const modelRef = resolveSessionModelRef(
+        session?.cfg ?? params.cfg,
+        session?.entry,
+        target.agentId,
+      );
       baseProvider = modelRef.provider;
       baseModel = modelRef.model;
-      requestedAcpMeta = readAcpSessionMeta({
-        cfg,
-        agentId: sessionAgentId,
-        sessionKey: canonicalKey,
-      });
+      isConfirmedAcpSession =
+        params.request.acpTurnSource === "manual_spawn" &&
+        isAcpSessionKey(params.requestedSessionKeyRaw) &&
+        session?.acp != null;
     }
-    const isConfirmedAcpSession =
-      params.request.acpTurnSource === "manual_spawn" &&
-      isAcpSessionKey(params.requestedSessionKeyRaw) &&
-      requestedAcpMeta != null;
     supportsInlineImages = isConfirmedAcpSession
       ? true
       : await resolveGatewayModelSupportsImages({
@@ -232,6 +219,7 @@ export async function prepareAgentContentPhase(params: {
   }
 
   if (params.normalizedAttachments.length > 0) {
+    params.assertAdmissionCurrent?.();
     try {
       const parsed = await parseMessageWithAttachments(message, params.normalizedAttachments, {
         maxBytes: resolveChatAttachmentMaxBytes(params.cfg),

@@ -1,3 +1,4 @@
+import { finalizeActiveDebugProxyCaptures } from "../proxy-capture/runtime-cleanup.js";
 import type { CliHarnessCleanup } from "./runtime-cleanup-scope.js";
 
 // Match Gateway's harness/MCP shutdown grace; local-provider TERM/KILL already
@@ -47,6 +48,11 @@ export async function runCliDisposer(
 
 export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<void> {
   const runCleanup = cleanup?.pluginResources?.runCleanup;
+  if (cleanup) {
+    const scheduledWork = cleanup.scheduler.stop();
+    await runCliDisposer("scheduled-work", () => scheduledWork, runCleanup);
+    await scheduledWork;
+  }
   const finalizers: Record<string, () => Promise<void>> = {
     "agent-harnesses": async () => {
       const { listRegisteredAgentHarnesses, disposeRegisteredAgentHarnesses } =
@@ -109,6 +115,7 @@ export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<vo
         await closeActiveMemorySearchManagersCore();
       }
     },
+    "proxy-capture": finalizeActiveDebugProxyCaptures,
     "agent-databases": async () => {
       const { hasOpenClawAgentDatabaseAsyncResources } =
         await import("../state/openclaw-agent-db-resources.js");

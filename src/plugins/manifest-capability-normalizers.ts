@@ -1,9 +1,13 @@
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
-import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
+import {
+  normalizeOptionalTrimmedStringList,
+  normalizeTrimmedStringList,
+} from "../../packages/normalization-core/src/string-normalization.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { isRecord } from "../utils.js";
 import { PLUGIN_MANIFEST_CONTRACT_KEYS } from "./manifest-contract-keys.js";
 import type {
+  DecisionProviderCapabilities,
   PluginManifest,
   PluginManifestCapabilityProviderAuthSignal,
   PluginManifestCapabilityProviderConfigSignal,
@@ -26,61 +30,89 @@ import type {
   PluginManifestTranscriptSource,
 } from "./manifest-types.js";
 
+// Accept only bounded declarative facts; unknown or malformed fields never enter tool guidance.
+function normalizeDecisionCapabilities(value: unknown): DecisionProviderCapabilities | undefined {
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.questionTypes) ||
+    value.questionTypes.length === 0 ||
+    value.questionTypes.length > 3 ||
+    !value.questionTypes.every(
+      (kind) => kind === "boolean" || kind === "choice" || kind === "score",
+    )
+  ) {
+    return undefined;
+  }
+  const capabilities: DecisionProviderCapabilities = {
+    questionTypes: [...new Set<"boolean" | "choice" | "score">(value.questionTypes)],
+  };
+  // Limits are provider facts, not host admission overrides.
+  for (const key of [
+    "maxQuestions",
+    "maxChoiceAlternatives",
+    "maxScoreLevels",
+    "maxInputTokens",
+  ] as const) {
+    const limit = value[key];
+    if (typeof limit === "number" && Number.isSafeInteger(limit) && limit > 0) {
+      capabilities[key] = limit;
+    }
+  }
+  if (
+    value.inputTokenScope === "encoded-question" ||
+    value.inputTokenScope === "state-plus-each-criterion"
+  ) {
+    capabilities.inputTokenScope = value.inputTokenScope;
+  }
+  if (typeof value.requiresBooleanCriteria === "boolean") {
+    capabilities.requiresBooleanCriteria = value.requiresBooleanCriteria;
+  }
+  if (value.confidence === "provider-specific" || value.confidence === "none") {
+    capabilities.confidence = value.confidence;
+  }
+  return capabilities;
+}
+
+/** Normalize provider-owned model descriptors without importing provider code. */
 export function normalizeManifestDecisionModels(
   value: unknown,
   providers: readonly string[] | undefined,
 ): PluginManifestDecisionModel[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const models: PluginManifestDecisionModel[] = [];
   const seen = new Set<string>();
-  for (const entry of value) {
-    if (!isRecord(entry)) {
-      continue;
-    }
+  return normalizeManifestObjectList(value, (entry) => {
     const provider = normalizeOptionalString(entry.provider);
     const id = normalizeOptionalString(entry.id);
     const name = normalizeOptionalString(entry.name);
     if (!provider || !id || !name || !providers?.includes(provider)) {
-      continue;
+      return undefined;
     }
     const ref = `${provider}/${id}`;
-    if (!seen.has(ref)) {
-      models.push({ provider, id, name });
-      seen.add(ref);
+    if (seen.has(ref)) {
+      return undefined;
     }
-  }
-  return models.length ? models : undefined;
+    const capabilities = normalizeDecisionCapabilities(entry.capabilities);
+    seen.add(ref);
+    return { provider, id, name, ...(capabilities ? { capabilities } : {}) };
+  });
 }
 
 /** Endpoint restrictions constrain a provider alias without changing stored credential identity. */
 export function normalizeManifestProviderAuthAliases(
   value: unknown,
 ): PluginManifest["providerAuthAliases"] {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const aliases: NonNullable<PluginManifest["providerAuthAliases"]> = Object.create(null);
-  for (const [key, entry] of Object.entries(value)) {
-    const alias = normalizeOptionalString(key);
-    if (!alias || isBlockedObjectKey(alias)) {
-      continue;
-    }
+  return normalizeManifestRecord(value, (entry) => {
     if (typeof entry === "string") {
-      const provider = normalizeOptionalString(entry);
-      if (provider) {
-        aliases[alias] = provider;
-      }
-    } else if (isRecord(entry)) {
+      return normalizeOptionalString(entry);
+    }
+    if (isRecord(entry)) {
       const provider = normalizeOptionalString(entry.provider);
       const baseUrls = normalizeTrimmedStringList(entry.baseUrls);
       if (provider && baseUrls.length > 0) {
-        aliases[alias] = { provider, baseUrls };
+        return { provider, baseUrls };
       }
     }
-  }
-  return Object.keys(aliases).length > 0 ? aliases : undefined;
+    return undefined;
+  });
 }
 
 function isPluginToolProfile(profile: string): profile is PluginManifestToolProfile {
@@ -90,60 +122,22 @@ function isPluginToolProfile(profile: string): profile is PluginManifestToolProf
 }
 
 export function normalizeStringListRecord(value: unknown): Record<string, string[]> | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const normalized: Record<string, string[]> = Object.create(null);
-  for (const [key, rawValues] of Object.entries(value)) {
-    const providerId = normalizeOptionalString(key) ?? "";
-    if (!providerId || isBlockedObjectKey(providerId)) {
-      continue;
-    }
-    const values = normalizeTrimmedStringList(rawValues);
-    if (values.length === 0) {
-      continue;
-    }
-    normalized[providerId] = values;
-  }
-  return Object.keys(normalized).length > 0 ? normalized : undefined;
+  return normalizeManifestRecord(value, normalizeOptionalTrimmedStringList);
 }
 
 export function normalizeManifestStringRecord(value: unknown): Record<string, string> | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const normalized: Record<string, string> = Object.create(null);
-  for (const [rawKey, rawValue] of Object.entries(value)) {
-    const key = normalizeOptionalString(rawKey) ?? "";
-    const valueLocal = normalizeOptionalString(rawValue) ?? "";
-    if (!key || isBlockedObjectKey(key) || !valueLocal) {
-      continue;
-    }
-    normalized[key] = valueLocal;
-  }
-  return Object.keys(normalized).length > 0 ? normalized : undefined;
+  return normalizeManifestRecord(value, normalizeOptionalString);
 }
 
 export function normalizeManifestMcpServers(
   value: unknown,
 ): Record<string, PluginManifestMcpServer> | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const normalized: Record<string, PluginManifestMcpServer> = Object.create(null);
-  for (const [rawName, rawServer] of Object.entries(value)) {
-    const name = normalizeOptionalString(rawName) ?? "";
-    if (!name || isBlockedObjectKey(name) || !isRecord(rawServer)) {
-      continue;
-    }
-    normalized[name] = { ...rawServer };
-  }
-  return Object.keys(normalized).length > 0 ? normalized : undefined;
+  return normalizeNamedMetadataRecord(value, (server) => ({ ...server }));
 }
 
-function normalizeNamedMetadataRecord<T>(
+function normalizeManifestRecord<T>(
   value: unknown,
-  normalizeEntry: (entry: Record<string, unknown>, id: string) => T | undefined,
+  normalizeEntry: (entry: unknown, id: string) => T | undefined,
 ): Record<string, T> | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -151,15 +145,38 @@ function normalizeNamedMetadataRecord<T>(
   const normalized: Record<string, T> = Object.create(null);
   for (const [rawId, rawEntry] of Object.entries(value)) {
     const id = normalizeOptionalString(rawId) ?? "";
-    const entry =
-      !id || isBlockedObjectKey(id) || !isRecord(rawEntry)
-        ? undefined
-        : normalizeEntry(rawEntry, id);
+    const entry = !id || isBlockedObjectKey(id) ? undefined : normalizeEntry(rawEntry, id);
     if (entry) {
       normalized[id] = entry;
     }
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+export function normalizeNamedMetadataRecord<T>(
+  value: unknown,
+  normalizeEntry: (entry: Record<string, unknown>, id: string) => T | undefined,
+): Record<string, T> | undefined {
+  return normalizeManifestRecord(value, (entry, id) =>
+    isRecord(entry) ? normalizeEntry(entry, id) : undefined,
+  );
+}
+
+export function normalizeManifestObjectList<T>(
+  value: unknown,
+  normalizeEntry: (entry: Record<string, unknown>) => T | undefined,
+): T[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const normalized: T[] = [];
+  for (const entry of value) {
+    const result = isRecord(entry) ? normalizeEntry(entry) : undefined;
+    if (result !== undefined) {
+      normalized.push(result);
+    }
+  }
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 export function normalizeManifestTranscriptSources(
@@ -307,25 +324,17 @@ function normalizeProviderBaseUrlGuard(
 function normalizeCapabilityProviderAuthSignals(
   value: unknown,
 ): PluginManifestCapabilityProviderAuthSignal[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const signals: PluginManifestCapabilityProviderAuthSignal[] = [];
-  for (const rawSignal of value) {
-    if (!isRecord(rawSignal)) {
-      continue;
-    }
+  return normalizeManifestObjectList(value, (rawSignal) => {
     const provider = normalizeOptionalString(rawSignal.provider);
     if (!provider) {
-      continue;
+      return undefined;
     }
     const providerBaseUrl = normalizeProviderBaseUrlGuard(rawSignal.providerBaseUrl);
-    signals.push({
+    return {
       provider,
       ...(providerBaseUrl ? { providerBaseUrl } : {}),
-    });
-  }
-  return signals.length > 0 ? signals : undefined;
+    };
+  });
 }
 
 function normalizeCapabilityProviderModeConfigSignal(
@@ -350,17 +359,10 @@ function normalizeCapabilityProviderModeConfigSignal(
 function normalizeCapabilityProviderConfigSignals(
   value: unknown,
 ): PluginManifestCapabilityProviderConfigSignal[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const signals: PluginManifestCapabilityProviderConfigSignal[] = [];
-  for (const rawSignal of value) {
-    if (!isRecord(rawSignal)) {
-      continue;
-    }
+  return normalizeManifestObjectList(value, (rawSignal) => {
     const rootPath = normalizeOptionalString(rawSignal.rootPath);
     if (!rootPath) {
-      continue;
+      return undefined;
     }
     const overlayPath = normalizeOptionalString(rawSignal.overlayPath);
     const overlayMapPath = normalizeOptionalString(rawSignal.overlayMapPath);
@@ -375,11 +377,8 @@ function normalizeCapabilityProviderConfigSignals(
       ...(requiredAny.length > 0 ? { requiredAny } : {}),
       ...(mode ? { mode } : {}),
     } satisfies PluginManifestCapabilityProviderConfigSignal;
-    if (required.length > 0 || requiredAny.length > 0 || mode) {
-      signals.push(signal);
-    }
-  }
-  return signals.length > 0 ? signals : undefined;
+    return required.length > 0 || requiredAny.length > 0 || mode ? signal : undefined;
+  });
 }
 
 function normalizeCapabilityProviderMetadataEntry(
@@ -465,48 +464,31 @@ function isManifestConfigLiteral(value: unknown): value is PluginManifestConfigL
 function normalizeManifestDangerousConfigFlags(
   value: unknown,
 ): PluginManifestDangerousConfigFlag[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const normalized: PluginManifestDangerousConfigFlag[] = [];
-  for (const entry of value) {
-    if (!isRecord(entry)) {
-      continue;
-    }
+  return normalizeManifestObjectList(value, (entry) => {
     const pathValue = normalizeOptionalString(entry.path) ?? "";
-    if (!pathValue || !isManifestConfigLiteral(entry.equals)) {
-      continue;
-    }
-    normalized.push({ path: pathValue, equals: entry.equals });
-  }
-  return normalized.length > 0 ? normalized : undefined;
+    return pathValue && isManifestConfigLiteral(entry.equals)
+      ? { path: pathValue, equals: entry.equals }
+      : undefined;
+  });
 }
 
 function normalizeManifestSecretInputPaths(
   value: unknown,
 ): PluginManifestSecretInputPath[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const normalized: PluginManifestSecretInputPath[] = [];
-  for (const entry of value) {
-    if (!isRecord(entry)) {
-      continue;
-    }
+  return normalizeManifestObjectList(value, (entry) => {
     const pathLocal = normalizeOptionalString(entry.path) ?? "";
     if (!pathLocal) {
-      continue;
+      return undefined;
     }
     const expected = entry.expected === "string" ? entry.expected : undefined;
     const ownerKind =
       entry.ownerKind === "capability" || entry.ownerKind === "route" ? entry.ownerKind : undefined;
-    normalized.push({
+    return {
       path: pathLocal,
       ...(expected ? { expected } : {}),
       ...(ownerKind ? { ownerKind } : {}),
-    });
-  }
-  return normalized.length > 0 ? normalized : undefined;
+    };
+  });
 }
 
 export function normalizeManifestConfigContracts(
@@ -522,17 +504,14 @@ export function normalizeManifestConfigContracts(
   const secretInputPaths = rawSecretInputs
     ? normalizeManifestSecretInputPaths(rawSecretInputs.paths)
     : undefined;
-  const secretInputs =
-    secretInputPaths && secretInputPaths.length > 0
-      ? ({
-          ...(rawSecretInputs?.bundledDefaultEnabled === true
-            ? { bundledDefaultEnabled: true }
-            : rawSecretInputs?.bundledDefaultEnabled === false
-              ? { bundledDefaultEnabled: false }
-              : {}),
-          paths: secretInputPaths,
-        } satisfies PluginManifestSecretInputContracts)
-      : undefined;
+  const secretInputs = secretInputPaths
+    ? ({
+        ...(typeof rawSecretInputs?.bundledDefaultEnabled === "boolean"
+          ? { bundledDefaultEnabled: rawSecretInputs.bundledDefaultEnabled }
+          : {}),
+        paths: secretInputPaths,
+      } satisfies PluginManifestSecretInputContracts)
+    : undefined;
   const configContracts = {
     ...(compatibilityMigrationPaths.length > 0 ? { compatibilityMigrationPaths } : {}),
     ...(compatibilityRuntimePaths.length > 0 ? { compatibilityRuntimePaths } : {}),

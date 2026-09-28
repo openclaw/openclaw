@@ -1,11 +1,18 @@
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
+import {
+  captureGatewayRootWorkAdmissionContinuationScope,
+  GatewayDrainingError,
+  type GatewayRootWorkAdmissionContinuationScope,
+} from "../../process/gateway-work-admission.js";
 import * as stateRead from "../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { cronStoreKey } from "../store/key.js";
 import {
   claimCronRunReceiptInDatabase,
   prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.js";
+import { prepareCronRunReceiptWriteSchema } from "../store/run-receipt-write-admission.js";
 import type { CronRunRecoveryProposal } from "../store/run-recovery-read.types.js";
 import type { CronRunRecoveryResult } from "../store/run-recovery.types.js";
 import type { CronJob } from "../types.js";
@@ -68,6 +75,7 @@ export function makeCronRecoveryState(
   overrides: RecoveryStateOverrides = {},
 ) {
   return createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
     storePath,
     cronEnabled: true,
     log,
@@ -89,8 +97,33 @@ export function claimCronRecoveryReceipt(storePath: string, job: CronJob, starte
   return runOpenClawStateWriteTransaction(({ db }) =>
     claimCronRunReceiptInDatabase({
       database: db,
+      receiptSchema: prepareCronRunReceiptWriteSchema(db),
       prepared,
       resolveAgentId: (current) => current.agentId ?? "alpha",
     }),
   );
+}
+
+export function observeCronTimerAdmissions(state: CronServiceState) {
+  const scopes: GatewayRootWorkAdmissionContinuationScope[] = [];
+  state.deps.runSchedulerOwned = async (run) => {
+    // Borrow the tick's exact root without extending its lifetime. Process-wide
+    // counts can change when unrelated work settles, or conceal an offsetting leak.
+    const scope = captureGatewayRootWorkAdmissionContinuationScope();
+    expect(scope).not.toBeNull();
+    scopes.push(scope!);
+    return await run();
+  };
+  return {
+    async expectActive() {
+      expect(scopes).toHaveLength(1);
+      await expect(scopes[0]!.run(async () => true)).resolves.toBe(true);
+    },
+    async expectReleased(count: number) {
+      expect(scopes).toHaveLength(count);
+      for (const scope of scopes) {
+        await expect(scope.run(async () => undefined)).rejects.toThrow(GatewayDrainingError);
+      }
+    },
+  };
 }

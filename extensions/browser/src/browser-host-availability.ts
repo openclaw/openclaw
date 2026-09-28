@@ -1,10 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { getRuntimeConfigSourceSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { getBrowserControlState } from "./browser-control-state.js";
 import { resolveBrowserExecutableForPlatform } from "./browser/chrome.executables.js";
 import { isChromeReachable } from "./browser/chrome.js";
 import { resolveBrowserConfig, resolveProfile } from "./browser/config.js";
 import { getBrowserProfileCapabilities } from "./browser/profile-capabilities.js";
-import { getRuntimeConfigSourceSnapshot } from "./config/config.js";
 
 /** Inspect local capability before routing, without launching or replaying a browser action. */
 export async function isBrowserHostAvailable(

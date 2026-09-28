@@ -3,6 +3,7 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import {
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -158,8 +159,113 @@ function captureDiagnosticEvents(
 
 describe("AgentHarness lifecycle runner", () => {
   afterEach(() => {
+    resetAgentEventsForTest();
     resetDiagnosticEventsForTest();
   });
+
+  it.each([
+    ["openclaw", false],
+    ["openclaw", true],
+    ["codex", false],
+    ["codex", true],
+  ] as const)(
+    "captures completed %s commentary with content capture %s",
+    async (id, captureContent) => {
+      const params = createAttemptParams();
+      params.config = { diagnostics: { otel: { enabled: true, captureContent } } };
+      const diagnostics = captureDiagnosticEvents((evt) => evt.type === "agent.commentary");
+      const text = "visible commentary " + "x".repeat(20_000);
+      const emit = (data: Record<string, unknown>, runId = params.runId) =>
+        emitAgentEvent({ runId, stream: "item", data });
+      const preamble = { kind: "preamble", itemId: "item-1", progressText: text };
+      const harness: AgentHarness = {
+        id,
+        label: id,
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: async () => {
+          // Native transports can notify from an unrelated async scope.
+          runWithDiagnosticTraceContext(undefined, () => {
+            emit({ ...preamble, phase: "update" });
+            emit({ ...preamble, phase: "end" }, "another-run");
+            emit({ ...preamble, kind: "analysis", phase: "end" });
+            emit({ ...preamble, phase: "end" });
+            emit({ ...preamble, phase: "end" });
+          });
+          return createAttemptResult();
+        },
+      };
+      try {
+        await runWithDiagnosticTraceContext(createDiagnosticTrace(), () =>
+          runAgentHarnessLifecycleAttempt(harness, params),
+        );
+        emit({ ...preamble, itemId: "after-completion", phase: "end" });
+        await flushDiagnosticEvents();
+        expect(diagnostics.events).toHaveLength(1);
+        const captured = diagnostics.events[0];
+        expect(captured?.event).toMatchObject({
+          type: "agent.commentary",
+          harnessId: id,
+          itemId: "item-1",
+          trace: createDiagnosticTrace(),
+          textLength: text.length,
+          contentCaptured: captureContent,
+          contentTruncated: captureContent,
+        });
+        expect(JSON.stringify(captured?.event)).not.toContain("visible commentary");
+        expect(captured?.privateData).toEqual(
+          captureContent
+            ? {
+                modelContent: {
+                  outputMessages: [
+                    { role: "assistant", content: [{ type: "text", text: text.slice(0, 16_384) }] },
+                  ],
+                },
+              }
+            : {},
+        );
+      } finally {
+        diagnostics.unsubscribe();
+      }
+    },
+  );
+
+  it.each(["attempt", "finalization"] as const)(
+    "disposes commentary after a failed %s",
+    async (operation) => {
+      const params = createAttemptParams();
+      const diagnostics = captureDiagnosticEvents((evt) => evt.type === "agent.commentary");
+      const emit = (itemId: string) =>
+        emitAgentEvent({
+          runId: params.runId,
+          stream: "item",
+          data: { kind: "preamble", itemId, phase: "end", progressText: "Checking files." },
+        });
+      const execute = async (): Promise<never> => {
+        emit("during-run");
+        throw new Error("failed turn");
+      };
+      const harness: AgentHarness = {
+        id: "codex",
+        label: "Codex",
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: execute,
+      };
+      try {
+        await expect(
+          runWithDiagnosticTraceContext(createDiagnosticTrace(), () =>
+            operation === "attempt"
+              ? runAgentHarnessLifecycleAttempt(harness, params)
+              : runAgentHarnessLifecycleFinalization(harness, createFinalizationParams(), execute),
+          ),
+        ).rejects.toThrow("failed turn");
+        emit("after-error");
+        await flushDiagnosticEvents();
+        expect(diagnostics.events).toHaveLength(1);
+      } finally {
+        diagnostics.unsubscribe();
+      }
+    },
+  );
 
   it("runs a harness attempt without changing attempt params", async () => {
     const params = createAttemptParams();

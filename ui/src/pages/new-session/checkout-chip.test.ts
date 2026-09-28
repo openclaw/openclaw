@@ -33,14 +33,6 @@ describe("Checkout chip state", () => {
     {
       destination: "remote",
       worktree: true,
-      worktreeAvailable: true,
-      headBranch: "main",
-      baseRef: "main",
-      label: "New worktree from main",
-    },
-    {
-      destination: "remote",
-      worktree: true,
       worktreeAvailable: false,
       baseRef: "",
       label: "New worktree",
@@ -72,20 +64,6 @@ describe("Checkout chip state", () => {
     {
       destination: "local",
       worktree: true,
-      worktreeAvailable: true,
-      baseRef: "release",
-      label: "New worktree from release",
-    },
-    {
-      destination: "local",
-      worktree: true,
-      worktreeAvailable: true,
-      baseRef: "",
-      label: "New worktree",
-    },
-    {
-      destination: "local",
-      worktree: true,
       worktreeAvailable: false,
       baseRef: "",
       label: "New worktree",
@@ -102,6 +80,7 @@ describe("Checkout chip state", () => {
     { worktree: true, remotePlacement: false, repository: false },
     { worktree: true, remotePlacement: true, repository: false },
     { worktree: false, remotePlacement: true, repository: true },
+    { worktree: false, remotePlacement: true, repository: true, emptyBranches: true },
     {
       worktree: true,
       remotePlacement: false,
@@ -109,8 +88,8 @@ describe("Checkout chip state", () => {
       idPrefix: "palette-session-1",
     },
   ])(
-    "offers explicit checkout choices (worktree=$worktree, remote=$remotePlacement)",
-    ({ worktree, remotePlacement, repository, idPrefix }) => {
+    "offers explicit checkout choices (worktree=$worktree, remote=$remotePlacement, emptyBranches=$emptyBranches)",
+    ({ worktree, remotePlacement, repository, idPrefix, emptyBranches }) => {
       const container = document.createElement("div");
       const onSelectWorktree = vi.fn();
       const onBaseRefInput = vi.fn();
@@ -127,10 +106,12 @@ describe("Checkout chip state", () => {
           worktreeAvailable: true,
           branches: {
             repoRoot: "/repo",
-            branches: [
-              { name: "main", kind: "local" },
-              { name: "release/next", kind: "local" },
-            ],
+            branches: emptyBranches
+              ? []
+              : [
+                  { name: "main", kind: "local" },
+                  { name: "release/next", kind: "local" },
+                ],
             headBranch: "feature",
           },
           branchesLoading: false,
@@ -151,6 +132,20 @@ describe("Checkout chip state", () => {
         }),
         container,
       );
+
+      if (worktree || repository) {
+        const baseRef = container.querySelector("input")!;
+        if (emptyBranches) {
+          expect(baseRef.hasAttribute("role")).toBe(false);
+          expect(baseRef.hasAttribute("aria-expanded")).toBe(false);
+          expect(container.querySelector('[role="listbox"]')).toBeNull();
+        } else {
+          expect(baseRef.getAttribute("role")).toBe("combobox");
+          expect(container.querySelector('[role="listbox"]')?.getAttribute("aria-label")).toBe(
+            "From",
+          );
+        }
+      }
 
       if (repository) {
         expect(container.querySelector('[data-value="checkout"]')).toBeNull();

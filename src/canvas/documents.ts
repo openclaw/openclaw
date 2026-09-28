@@ -2,8 +2,9 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { resolveStateDir } from "../config/paths.js";
-import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
 import { root as fsRoot } from "../infra/fs-safe.js";
 import { escapeHtml } from "../shared/html-escape.js";
 import { resolveUserPath } from "../utils.js";
@@ -64,23 +65,14 @@ function buildPdfWrapper(url: string): string {
   return `<!doctype html><html><body style="margin:0;background:#e5e7eb;"><object data="${escaped}" type="application/pdf" style="width:100%;height:100vh;border:0;"><iframe src="${escaped}" style="width:100%;height:100vh;border:0;"></iframe><p style="padding:16px;font:14px system-ui,sans-serif;">Unable to render PDF preview. <a href="${escaped}" target="_blank" rel="noopener noreferrer">Open PDF</a>.</p></object></body></html>`;
 }
 
-function hasControlCharacter(value: string): boolean {
-  for (const char of value) {
-    const code = char.charCodeAt(0);
-    if (code < 0x20 || code === 0x7f) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function normalizeLogicalPath(value: string): string {
   const normalized = value.replaceAll("\\", "/").replace(/^\/+/, "");
   const parts = normalized.split("/").filter(Boolean);
   if (
     parts.length === 0 ||
     parts.some(
-      (part) => part === "." || part === ".." || part.includes(":") || hasControlCharacter(part),
+      (part) =>
+        part === "." || part === ".." || part.includes(":") || containsAsciiControlCharacter(part),
     )
   ) {
     throw new Error("canvas document logicalPath invalid");
@@ -181,12 +173,10 @@ async function pruneCanvasDocumentsForScope(params: {
   );
 }
 
-/** Resolves the on-disk directory for one Canvas document id. */
 function resolveCanvasDocumentDir(documentId: string, options?: { stateDir?: string }): string {
   return path.join(resolveCanvasDocumentsDir(options?.stateDir), documentId);
 }
 
-/** Builds the hosted URL path for a Canvas document entrypoint. */
 function buildCanvasDocumentEntryUrl(documentId: string, entrypoint: string): string {
   const normalizedEntrypoint = normalizeLogicalPath(entrypoint);
   const encodedEntrypoint = normalizedEntrypoint
@@ -255,9 +245,7 @@ async function copyAssets(
     const logicalPath = normalizeLogicalPath(asset.logicalPath);
     const sourcePath = asset.sourcePath.startsWith("~")
       ? resolveUserPath(asset.sourcePath)
-      : path.isAbsolute(asset.sourcePath)
-        ? path.resolve(asset.sourcePath)
-        : path.resolve(workspaceDir, asset.sourcePath);
+      : path.resolve(workspaceDir, asset.sourcePath);
     await root.copyIn(logicalPath, sourcePath);
     copied.push({
       logicalPath,
@@ -277,22 +265,21 @@ async function materializeEntrypoint(
   if (!entrypoint) {
     throw new Error("canvas document entrypoint required");
   }
-  if (entrypoint.type === "html") {
-    const fileName = "index.html";
-    await root.write(fileName, entrypoint.value);
+  const writeHtml = async (html: string) => {
+    await root.write("index.html", html);
     return {
-      localEntrypoint: fileName,
-      entryUrl: buildCanvasDocumentEntryUrl(path.basename(rootDir), fileName),
+      localEntrypoint: "index.html",
+      entryUrl: buildCanvasDocumentEntryUrl(path.basename(rootDir), "index.html"),
     };
+  };
+  if (entrypoint.type === "html") {
+    return writeHtml(entrypoint.value);
   }
   if (entrypoint.type === "url") {
     if (input.kind === "document" && isPdfPathLike(entrypoint.value)) {
-      const fileName = "index.html";
-      await root.write(fileName, buildPdfWrapper(entrypoint.value));
       return {
-        localEntrypoint: fileName,
+        ...(await writeHtml(buildPdfWrapper(entrypoint.value))),
         externalUrl: entrypoint.value,
-        entryUrl: buildCanvasDocumentEntryUrl(path.basename(rootDir), fileName),
       };
     }
     return { externalUrl: entrypoint.value, entryUrl: entrypoint.value };
@@ -300,9 +287,7 @@ async function materializeEntrypoint(
 
   const resolvedPath = entrypoint.value.startsWith("~")
     ? resolveUserPath(entrypoint.value)
-    : path.isAbsolute(entrypoint.value)
-      ? path.resolve(entrypoint.value)
-      : path.resolve(workspaceDir, entrypoint.value);
+    : path.resolve(workspaceDir, entrypoint.value);
 
   if (input.kind === "image" || input.kind === "video_asset") {
     const copiedName = sanitizeUntrustedFileName(path.basename(resolvedPath), "asset");
@@ -311,21 +296,13 @@ async function materializeEntrypoint(
       input.kind === "image"
         ? `<!doctype html><html><body style="margin:0;background:#0f172a;display:flex;align-items:center;justify-content:center;"><img src="${escapeHtml(copiedName)}" style="max-width:100%;max-height:100vh;object-fit:contain;" /></body></html>`
         : `<!doctype html><html><body style="margin:0;background:#0f172a;"><video src="${escapeHtml(copiedName)}" controls autoplay style="width:100%;height:100vh;object-fit:contain;background:#000;"></video></body></html>`;
-    await root.write("index.html", wrapper);
-    return {
-      localEntrypoint: "index.html",
-      entryUrl: buildCanvasDocumentEntryUrl(path.basename(rootDir), "index.html"),
-    };
+    return writeHtml(wrapper);
   }
 
   const fileName = sanitizeUntrustedFileName(path.basename(resolvedPath), "document");
   await root.copyIn(fileName, resolvedPath);
   if (input.kind === "document" && isPdfPathLike(fileName)) {
-    await root.write("index.html", buildPdfWrapper(fileName));
-    return {
-      localEntrypoint: "index.html",
-      entryUrl: buildCanvasDocumentEntryUrl(path.basename(rootDir), "index.html"),
-    };
+    return writeHtml(buildPdfWrapper(fileName));
   }
   return {
     localEntrypoint: fileName,

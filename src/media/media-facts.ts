@@ -43,10 +43,6 @@ export type MediaFactInput = {
 
 const RUNTIME_PROMPT_MEDIA_FACTS = Symbol.for("openclaw.runtimePromptMediaFacts");
 
-function normalizeNonNegativeNumber(value: number | null | undefined): number | undefined {
-  return asFiniteNumberInRange(value, { min: 0 });
-}
-
 /** Attaches facts to a runtime prompt message without changing serialized/model-visible bytes. */
 export function attachRuntimePromptMediaFacts<T extends object>(
   message: T,
@@ -391,7 +387,7 @@ function normalizeMediaFact<TInput extends MediaFactInput>(
       (isGenericBinaryMediaContentType(contentType) ? undefined : kindFromMime(contentType)),
     fileName: normalizeOptionalString(input.fileName),
     ...(input.origin === "paste" || input.origin === "file" ? { origin: input.origin } : {}),
-    sizeBytes: normalizeNonNegativeNumber(input.sizeBytes),
+    sizeBytes: asFiniteNumberInRange(input.sizeBytes, { min: 0 }),
     ...(durationMs ? { durationMs } : {}),
     ...(width ? { width } : {}),
     ...(height ? { height } : {}),
@@ -459,8 +455,7 @@ function resolveMediaFactsWithPrecedence(
   return Array.from({ length: count }, (_, index) => {
     const fact = canonical[index];
     const legacyPath = paths[index] ?? (index === 0 ? source.MediaPath : undefined);
-    const legacyUrl =
-      urls[index] ?? (paths.length > 0 || index === 0 ? source.MediaUrl : undefined);
+    const legacyUrl = urls[index] ?? (index === 0 ? source.MediaUrl : undefined);
     const legacyContentType =
       normalizeOptionalString(types[index]) ?? (index === 0 ? source.MediaType : undefined);
     return normalizeMediaFact(

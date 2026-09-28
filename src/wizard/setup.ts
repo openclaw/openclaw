@@ -325,46 +325,36 @@ async function runSetupWizardOnce(
 
   const localPort = quickstartGateway.port;
   const localUrl = `ws://127.0.0.1:${localPort}`;
-  let localGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-  try {
-    const resolvedGatewayToken = await resolveSetupSecretInputString({
-      config: baseConfig,
-      value: quickstartGateway.token,
-      path: "gateway.auth.token",
-      env: process.env,
-    });
-    if (resolvedGatewayToken) {
-      localGatewayToken = resolvedGatewayToken;
+  const resolveLocalProbeSecret = async (
+    key: "token" | "password",
+    fallback: string | undefined,
+  ) => {
+    const field = `gateway.auth.${key}`;
+    try {
+      return (
+        (await resolveSetupSecretInputString({
+          config: baseConfig,
+          value: quickstartGateway[key],
+          path: field,
+          env: process.env,
+        })) || fallback
+      );
+    } catch (error) {
+      await prompter.note(
+        [t("wizard.setup.secretRefProbeFailed", { field }), formatErrorMessage(error)].join("\n"),
+        t("wizard.gateway.auth"),
+      );
+      return fallback;
     }
-  } catch (error) {
-    await prompter.note(
-      [
-        t("wizard.setup.secretRefProbeFailed", { field: "gateway.auth.token" }),
-        formatErrorMessage(error),
-      ].join("\n"),
-      t("wizard.gateway.auth"),
-    );
-  }
-  let localGatewayPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
-  try {
-    const resolvedGatewayPassword = await resolveSetupSecretInputString({
-      config: baseConfig,
-      value: quickstartGateway.password,
-      path: "gateway.auth.password",
-      env: process.env,
-    });
-    if (resolvedGatewayPassword) {
-      localGatewayPassword = resolvedGatewayPassword;
-    }
-  } catch (error) {
-    await prompter.note(
-      [
-        t("wizard.setup.secretRefProbeFailed", { field: "gateway.auth.password" }),
-        formatErrorMessage(error),
-      ].join("\n"),
-      t("wizard.gateway.auth"),
-    );
-  }
+  };
+  const localGatewayToken = await resolveLocalProbeSecret(
+    "token",
+    process.env.OPENCLAW_GATEWAY_TOKEN,
+  );
+  const localGatewayPassword = await resolveLocalProbeSecret(
+    "password",
+    process.env.OPENCLAW_GATEWAY_PASSWORD,
+  );
 
   const localProbe = await onboardHelpers.probeGatewayReachable({
     url: localUrl,

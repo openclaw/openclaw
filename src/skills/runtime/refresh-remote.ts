@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { AgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import type { WorkspaceSkillSourcePlan } from "../loading/workspace-skill-sources.js";
 import { bumpSkillsSnapshotVersion } from "./refresh-state.js";
 
@@ -24,6 +25,10 @@ export function ensureRemoteSkillsWatcher(params: {
   sourcePlan: WorkspaceSkillSourcePlan;
 }): void {
   const { watcherKey, workspaceDir, access } = params;
+  const drainSignal = getGatewayRestartDrainSignal();
+  if (drainSignal.aborted) {
+    return;
+  }
   const request = {
     sourcePlan: params.sourcePlan,
     executionWorkspaceDir: params.executionWorkspaceDir,
@@ -50,8 +55,10 @@ export function ensureRemoteSkillsWatcher(params: {
   if (!watch) {
     return;
   }
-  const isCurrent = () =>
-    remoteWatchers.get(watcherKey) === state && !state.controller.signal.aborted;
+  // The remote subscription owns a node invocation. Retire it when drain begins,
+  // before shutdown waits for invocations to settle and eventually closes watchers.
+  const signal = AbortSignal.any([state.controller.signal, drainSignal]);
+  const isCurrent = () => remoteWatchers.get(watcherKey) === state && !signal.aborted;
   const task = runInSkillsWatcherContext(async () => {
     try {
       await watch(
@@ -62,22 +69,29 @@ export function ensureRemoteSkillsWatcher(params: {
           }
           if (event === "unavailable") {
             state.unavailable = true;
+          } else if (event === "available") {
+            // Recovery has already reconciled outage edits through change events.
+            // Coverage alone restores reuse without inventing a content revision.
+            state.unavailable = false;
+            return;
           }
           bumpSkillsSnapshotVersion({
             workspaceDir,
             reason: "remote-node",
           });
         },
-        state.controller.signal,
+        signal,
       );
     } catch (error) {
       if (isCurrent()) {
         log.warn(`remote skills watcher stopped (${workspaceDir}): ${String(error)}`);
       }
     } finally {
-      if (isCurrent()) {
+      if (remoteWatchers.get(watcherKey) === state) {
         remoteWatchers.delete(watcherKey);
-        bumpSkillsSnapshotVersion({ workspaceDir, reason: "remote-node" });
+        if (!signal.aborted) {
+          bumpSkillsSnapshotVersion({ workspaceDir, reason: "remote-node" });
+        }
       }
     }
   });

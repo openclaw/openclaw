@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
@@ -41,7 +42,6 @@ import {
   loadSessionEntry,
   loadTranscriptEvents,
   patchSessionEntryCore,
-  recordSessionParticipant,
   replaceSessionEntry,
   replaceTranscriptEventsSync,
 } from "./session-accessor.js";
@@ -51,6 +51,7 @@ import {
   withSqliteSessionDeletions,
 } from "./session-accessor.sqlite-deletion.js";
 import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { applySessionStoreProjection } from "./session-accessor.sqlite-projection.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
@@ -623,6 +624,8 @@ describe("session deletion and native owner state", () => {
 
   it("publishes committed deletion when personal publication receipt cleanup fails", async () => {
     await seed();
+    const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
+    const file = statSync(target.path, { bigint: true });
     const owner = nativeOwner();
     const cleanupError = new Error("injected receipt cleanup failure");
     vi.spyOn(
@@ -640,7 +643,14 @@ describe("session deletion and native owner state", () => {
       expect(read()).toBeUndefined();
       expect(bindings.has(sessionKey)).toBe(false);
       expect(identityListener.mock.calls).toEqual([
-        [{ agentId: "main", kind: "delete", previous: { sessionId, sessionKeys: [sessionKey] } }],
+        [
+          {
+            agentId: "main",
+            databaseIdentity: `${file.dev}:${file.ino}`,
+            kind: "delete",
+            previous: { sessionId, sessionKeys: [sessionKey] },
+          },
+        ],
       ]);
     } finally {
       unsubscribe();

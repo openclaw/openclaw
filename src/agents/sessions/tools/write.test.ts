@@ -5,9 +5,24 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
+import { applyPatch } from "diff";
+import { Type } from "typebox";
+import { Value } from "typebox/value";
 import { afterEach, describe, expect, it } from "vitest";
-import { generateDiffString, generateUnifiedPatch } from "./edit-diff.js";
+import { WriteToolOutputSchema } from "./tool-schemas.js";
 import { createWriteTool, type WriteOperations } from "./write.js";
+
+const WritePatchReceiptSchema = Type.Extract(
+  WriteToolOutputSchema,
+  Type.Object({ patch: Type.String() }),
+);
+
+function expectApplicablePatch(details: unknown, oldContent: string, content: string) {
+  if (!Value.Check(WritePatchReceiptSchema, details)) {
+    throw new Error("Expected a changed-file receipt with a patch");
+  }
+  expect(applyPatch(oldContent, details.patch)).toBe(content);
+}
 
 describe("write tool", () => {
   let tmpDir = "";
@@ -238,15 +253,14 @@ describe("write tool", () => {
     const tool = createWriteTool(tmpDir);
 
     const result = await tool.execute("call-1", { path: "created.txt", content }, undefined);
-    const diffResult = generateDiffString("", content);
-
     expect(result.details).toEqual({
       changed: true,
       created: true,
-      diff: diffResult.diff,
-      patch: generateUnifiedPatch("created.txt", "", content),
-      firstChangedLine: diffResult.firstChangedLine,
+      diff: "+1 first\n+2 second",
+      patch: expect.stringContaining("--- created.txt\n+++ created.txt\n"),
+      firstChangedLine: 1,
     });
+    expectApplicablePatch(result.details, "", content);
   });
 
   it("keeps oversized created-file details bounded", async () => {
@@ -267,8 +281,6 @@ describe("write tool", () => {
     const tool = createWriteTool(tmpDir);
 
     const result = await tool.execute("call-1", { path: "different.txt", content }, undefined);
-    const diffResult = generateDiffString(oldContent, content);
-
     expect(result.content[0]).toEqual({
       type: "text",
       text: `Successfully wrote ${Buffer.byteLength(content, "utf8")} bytes to different.txt`,
@@ -276,23 +288,56 @@ describe("write tool", () => {
     expect(result.details).toEqual({
       changed: true,
       created: false,
-      diff: diffResult.diff,
-      patch: generateUnifiedPatch("different.txt", oldContent, content),
-      firstChangedLine: diffResult.firstChangedLine,
+      diff: "-1 old\n+1 new 😀",
+      patch: expect.stringContaining("--- different.txt\n+++ different.txt\n"),
+      firstChangedLine: 1,
     });
+    expectApplicablePatch(result.details, oldContent, content);
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe(content);
   });
 
   it.each([
-    { name: "insert at start", oldContent: "a\nb\n", content: "first\na\nb\n" },
-    { name: "delete at end", oldContent: "a\nb\nlast\n", content: "a\nb\n" },
-    { name: "empty overwrite", oldContent: "last\n", content: "" },
-    { name: "remove final newline", oldContent: "last\n", content: "last" },
-    { name: "add final newline", oldContent: "last", content: "last\n" },
+    {
+      name: "insert at start",
+      oldContent: "a\nb\n",
+      content: "first\na\nb\n",
+      diff: "+1 first\n 2 a\n 3 b",
+      firstChangedLine: 1,
+    },
+    {
+      name: "delete at end",
+      oldContent: "a\nb\nlast\n",
+      content: "a\nb\n",
+      diff: " 1 a\n 2 b\n-3 last",
+      firstChangedLine: 3,
+    },
+    {
+      name: "empty overwrite",
+      oldContent: "last\n",
+      content: "",
+      diff: "-1 last",
+      firstChangedLine: 1,
+    },
+    {
+      name: "remove final newline",
+      oldContent: "last\n",
+      content: "last",
+      diff: "-1 last\n+1 last",
+      firstChangedLine: 1,
+    },
+    {
+      name: "add final newline",
+      oldContent: "last",
+      content: "last\n",
+      diff: "-1 last\n+1 last",
+      firstChangedLine: 1,
+    },
     {
       name: "CRLF and Unicode without final newline",
       oldContent: "café 🦀\r\n日本語 e\u0301\r\nlast",
       content: "café 😀\r\n日本語 é\r\nlast",
+      diff: "-1 café 🦀\r\n-2 日本語 e\u0301\r\n+1 café 😀\r\n+2 日本語 é\r\n 3 last",
+      firstChangedLine: 1,
     },
     ...[7, 8, 9].map((gap) => {
       const middle = Array.from({ length: gap }, (_, i) => `context-${i}\n`).join("");
@@ -300,25 +345,29 @@ describe("write tool", () => {
         name: `${gap} context lines between edits`,
         oldContent: `before\n${middle}after\n`,
         content: `BEFORE\n${middle}AFTER\n`,
+        diff: expect.stringContaining("- 1 before\n+ 1 BEFORE"),
+        firstChangedLine: 1,
       };
     }),
-  ])("preserves both receipt formats for $name", async ({ oldContent, content }) => {
-    const filePath = await createTempPath("receipt.txt");
-    await fs.writeFile(filePath, oldContent, "utf8");
-    const tool = createWriteTool(tmpDir);
+  ])(
+    "preserves both receipt formats for $name",
+    async ({ oldContent, content, diff, firstChangedLine }) => {
+      const filePath = await createTempPath("receipt.txt");
+      await fs.writeFile(filePath, oldContent, "utf8");
+      const tool = createWriteTool(tmpDir);
 
-    const result = await tool.execute("call-1", { path: "receipt.txt", content }, undefined);
-    const diffResult = generateDiffString(oldContent, content);
-
-    expect(result.details).toEqual({
-      changed: true,
-      created: false,
-      diff: diffResult.diff,
-      patch: generateUnifiedPatch("receipt.txt", oldContent, content),
-      firstChangedLine: diffResult.firstChangedLine,
-    });
-    await expect(fs.readFile(filePath)).resolves.toEqual(Buffer.from(content, "utf8"));
-  });
+      const result = await tool.execute("call-1", { path: "receipt.txt", content }, undefined);
+      expect(result.details).toEqual({
+        changed: true,
+        created: false,
+        diff,
+        patch: expect.stringContaining("--- receipt.txt\n+++ receipt.txt\n"),
+        firstChangedLine,
+      });
+      expectApplicablePatch(result.details, oldContent, content);
+      await expect(fs.readFile(filePath)).resolves.toEqual(Buffer.from(content, "utf8"));
+    },
+  );
 
   it.each([1999, 2000, 2001])(
     "preserves the overwrite receipt budget at edit distance %i",
@@ -332,14 +381,14 @@ describe("write tool", () => {
       const result = await tool.execute("call-1", { path: "edit-limit.txt", content }, undefined);
 
       if (editDistance <= 2000) {
-        const diffResult = generateDiffString(oldContent, content);
         expect(result.details).toEqual({
           changed: true,
           created: false,
-          diff: diffResult.diff,
-          patch: generateUnifiedPatch("edit-limit.txt", oldContent, content),
-          firstChangedLine: diffResult.firstChangedLine,
+          diff: expect.stringContaining("    1 anchor\n+   2 added"),
+          patch: expect.any(String),
+          firstChangedLine: 2,
         });
+        expectApplicablePatch(result.details, oldContent, content);
       } else {
         expect(result.details).toEqual({ changed: true, created: false });
       }

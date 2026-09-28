@@ -218,7 +218,10 @@ describe("shared publication committed notifications", () => {
         },
         () => {},
       );
-      const execution = claimRepositoryGitHubPublication(row, "instance", () => {});
+      const execution = claimRepositoryGitHubPublication(row, "instance", {
+        assertCustody: () => {},
+        assertCurrent: () => {},
+      });
       execution.recordEffect("push");
       execution.recordEffect("push", { headCommit: NEW_HEAD });
       execution.recordEffect("pull_request");
@@ -264,7 +267,10 @@ describe("shared publication committed notifications", () => {
         }),
         () => {},
       );
-      const execution = claimRepositoryGitHubPublication(row, "instance", () => {});
+      const execution = claimRepositoryGitHubPublication(row, "instance", {
+        assertCustody: () => {},
+        assertCurrent: () => {},
+      });
       execution.recordEffect("push");
       execution.recordEffect("push", { headCommit: NEW_HEAD });
       execution.interrupt();
@@ -290,7 +296,10 @@ describe("shared publication committed notifications", () => {
     try {
       expect(() =>
         runOpenClawStateWriteTransaction(() => {
-          const execution = claimRepositoryGitHubPublication(row, "instance", () => {});
+          const execution = claimRepositoryGitHubPublication(row, "instance", {
+            assertCustody: () => {},
+            assertCurrent: () => {},
+          });
           execution.recordEffect("push");
           expect(observer).not.toHaveBeenCalled();
           throw new Error("rollback");
@@ -301,9 +310,13 @@ describe("shared publication committed notifications", () => {
         status: "requested",
         last_effect: null,
       });
+      const assertRevoked = () => {
+        throw new Error("revoked");
+      };
       expect(() =>
-        claimRepositoryGitHubPublication(row, "instance", () => {
-          throw new Error("revoked");
+        claimRepositoryGitHubPublication(row, "instance", {
+          assertCustody: assertRevoked,
+          assertCurrent: assertRevoked,
         }),
       ).toThrow("revoked");
       expect(observer).not.toHaveBeenCalled();

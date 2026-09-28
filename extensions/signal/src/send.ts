@@ -1,5 +1,4 @@
 import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
-// Signal plugin module implements send behavior.
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,
@@ -22,6 +21,7 @@ import { resolveSignalAccount } from "./accounts.js";
 import { signalRpcRequest, type SignalTransportKind } from "./client-adapter.js";
 import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
 import { normalizeSignalMessagingTarget } from "./normalize.js";
+import { isSignalQuoteMetadataRejection } from "./quote-rejection.js";
 import { registerSignalReplyContext } from "./reply-authors.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
 
@@ -144,35 +144,14 @@ type SignalTargetParams = {
   username?: string[];
 };
 
-type SignalTargetAllowlist = {
-  recipient?: boolean;
-  group?: boolean;
-  username?: boolean;
-};
-
-function buildTargetParams(
-  target: SignalTarget,
-  allow: SignalTargetAllowlist,
-): SignalTargetParams | null {
+function buildTargetParams(target: SignalTarget): SignalTargetParams {
   if (target.type === "recipient") {
-    if (!allow.recipient) {
-      return null;
-    }
     return { recipient: [target.recipient] };
   }
   if (target.type === "group") {
-    if (!allow.group) {
-      return null;
-    }
     return { groupId: target.groupId };
   }
-  if (target.type === "username") {
-    if (!allow.username) {
-      return null;
-    }
-    return { username: [target.username] };
-  }
-  return null;
+  return { username: [target.username] };
 }
 
 function createSignalSendReceipt(params: {
@@ -254,39 +233,6 @@ function resolveSignalQuoteParams(opts: SignalSendOpts):
   };
 }
 
-function isSignalQuoteMetadataRejection(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  const normalized = normalizeLowercaseStringOrEmpty(message);
-  const rpcCode = /^signal rpc (-?\d+):/u.exec(normalized)?.[1];
-  if (rpcCode !== undefined) {
-    if (rpcCode !== "-32602") {
-      return false;
-    }
-  } else {
-    const restStatusText = /^signal rest (\d{3}):/u.exec(normalized)?.[1];
-    if (!restStatusText) {
-      return false;
-    }
-    const restStatus = Number(restStatusText);
-    // Only a definitive provider rejection makes replaying the send safe.
-    if (restStatus < 400 || restStatus >= 500 || restStatus === 408 || restStatus === 429) {
-      return false;
-    }
-  }
-  if (!normalized.includes("quote")) {
-    return false;
-  }
-  return (
-    normalized.includes("reject") ||
-    normalized.includes("invalid") ||
-    normalized.includes("unrecognized") ||
-    normalized.includes("unsupported") ||
-    normalized.includes("not found") ||
-    normalized.includes("no such") ||
-    normalized.includes("unknown")
-  );
-}
-
 export async function sendMessageSignal(
   to: string,
   text: string,
@@ -365,15 +311,7 @@ export async function sendMessageSignal(
     params.attachments = attachments;
   }
 
-  const targetParams = buildTargetParams(target, {
-    recipient: true,
-    group: true,
-    username: true,
-  });
-  if (!targetParams) {
-    throw new Error("Signal recipient is required");
-  }
-  Object.assign(params, targetParams);
+  Object.assign(params, buildTargetParams(target));
 
   const quote = resolveSignalQuoteParams(opts);
   const sendOpts = {
@@ -437,14 +375,11 @@ export async function sendTypingSignal(
 ): Promise<boolean> {
   const accountInfo = await resolveSignalRpcAccountInfo(opts);
   const { baseUrl, account } = resolveSignalRpcContext(opts, accountInfo);
-  const targetParams = buildTargetParams(parseTarget(to), {
-    recipient: true,
-    group: true,
-  });
-  if (!targetParams) {
+  const target = parseTarget(to);
+  if (target.type === "username") {
     return false;
   }
-  const params: Record<string, unknown> = { ...targetParams };
+  const params: Record<string, unknown> = buildTargetParams(target);
   if (account) {
     params.account = account;
   }
@@ -469,14 +404,12 @@ export async function sendReadReceiptSignal(
   }
   const accountInfo = await resolveSignalRpcAccountInfo(opts);
   const { baseUrl, account } = resolveSignalRpcContext(opts, accountInfo);
-  const targetParams = buildTargetParams(parseTarget(to), {
-    recipient: true,
-  });
-  if (!targetParams) {
+  const target = parseTarget(to);
+  if (target.type !== "recipient") {
     return false;
   }
   const params: Record<string, unknown> = {
-    ...targetParams,
+    ...buildTargetParams(target),
     targetTimestamp,
     type: opts.type ?? "read",
   };

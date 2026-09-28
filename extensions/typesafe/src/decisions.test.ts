@@ -18,7 +18,7 @@ const context = () => ({
   signal: new AbortController().signal,
   deadlineMonotonicMs: performance.now() + 500,
 });
-const config = { apiKey: "synthetic-key", model: "jev-test", timeoutMs: 2000 };
+const config = { apiKey: "synthetic-key", timeoutMs: 2000 };
 beforeEach(() => {
   vi.mocked(evaluate).mockReset();
 });

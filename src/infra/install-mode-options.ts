@@ -16,7 +16,7 @@ export type TimedInstallModeOptions<TLogger> = InstallModeOptions<TLogger> & {
 /** Keep a deliberate work deadline separate from bounded metadata/probe defaults. */
 export function resolveInstallWorkTimeoutMs(
   workTimeoutMs: number | null | undefined,
-  defaultTimeoutMs: number,
+  defaultTimeoutMs: number | undefined,
 ): number | undefined {
   return workTimeoutMs === null ? undefined : (workTimeoutMs ?? defaultTimeoutMs);
 }

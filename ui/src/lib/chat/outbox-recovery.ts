@@ -1,3 +1,4 @@
+import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import { getSafeSessionStorage } from "../../local-storage.ts";
 import { resolveUiConversationIdentity, hasUiSessionDefaults } from "../sessions/session-key.ts";
 import {
@@ -49,6 +50,7 @@ export function captureChatOutboxRecoveryDestination(
     !storage ||
     !hasUiSessionDefaults(state) ||
     state.selectedChatSessionIncognito ||
+    isIncognitoSessionKey(scope.sessionKey) ||
     (state.connected && state.client && !state.client.recoveryScopeReady)
   ) {
     return null;
@@ -104,7 +106,7 @@ export function restoreChatOutboxRecovery(
     }
     const key = storedChatOutboxScopeKey(scope);
     const existing = store.sessions[key];
-    if (existing?.draft || existing?.goalMode || existing?.queue?.length) {
+    if (existing?.draft || existing?.goalMode || existing?.replyTarget || existing?.queue?.length) {
       return "conflict";
     }
     const session = entry.session;
@@ -118,9 +120,11 @@ export function restoreChatOutboxRecovery(
       queue: session.queue?.map((item) =>
         Object.assign({}, item, scope, {
           sendState:
-            (item.sendAttempts ?? 0) > 0 || item.sendState === "unconfirmed"
-              ? "unconfirmed"
-              : "failed",
+            item.sendState === "held"
+              ? "held"
+              : (item.sendAttempts ?? 0) > 0 || item.sendState === "unconfirmed"
+                ? "unconfirmed"
+                : "failed",
           sendError:
             item.sendError ??
             "Recovered message. Review this destination and retry only if it did not arrive.",

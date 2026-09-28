@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
@@ -21,14 +20,17 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import {
+  projectExistingAgentDatabaseTargets,
+  resolveTargetSqliteOptions,
+} from "../infra/session-sqlite-migration-readers.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
-  resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { resolveTargetSqliteOptions } from "./doctor-session-sqlite-readers.js";
 import { ReadOnlySqliteTranscriptReader } from "./doctor-session-sqlite-transcript-readers.js";
+import { countLabel } from "./doctor-state-integrity-format.js";
 
 const NOTE_TITLE = "Session transcript headers";
 
@@ -198,10 +200,6 @@ function assertRepairPreservedEvents(params: {
   }
 }
 
-function formatCount(count: number, singular: string): string {
-  return `${count} ${singular}${count === 1 ? "" : "s"}`;
-}
-
 /** Reports or repairs canonical SQLite transcripts whose first header was never persisted. */
 export async function noteSessionTranscriptHeaderHealth(params: {
   cfg: OpenClawConfig;
@@ -212,14 +210,13 @@ export async function noteSessionTranscriptHeaderHealth(params: {
   let found = 0;
   let repaired = 0;
 
-  const seenPaths = new Set<string>();
-  for (const target of resolveAllAgentSessionStoreTargetsSync(params.cfg, { env })) {
+  for (const target of projectExistingAgentDatabaseTargets(
+    resolveAllAgentSessionStoreTargetsSync(params.cfg, { env }),
+    env,
+    params.cfg,
+  )) {
     const databaseOptions = resolveTargetSqliteOptions(target, env);
-    const sqlitePath = resolveOpenClawAgentSqlitePath(databaseOptions);
-    if (seenPaths.has(sqlitePath) || !fs.existsSync(sqlitePath)) {
-      continue;
-    }
-    seenPaths.add(sqlitePath);
+    const sqlitePath = target.sqlitePath;
     let readDatabase: DatabaseSync | undefined;
     try {
       // Each snapshot exhausts or closes its iterators before repair, so this read-only
@@ -331,13 +328,13 @@ export async function noteSessionTranscriptHeaderHealth(params: {
 
   if (params.shouldRepair && repaired > 0) {
     note(
-      `- Prepended missing headers to ${formatCount(repaired, "session transcript")}.`,
+      `- Prepended missing headers to ${countLabel(repaired, "session transcript")}.`,
       NOTE_TITLE,
     );
   } else if (!params.shouldRepair && found > 0) {
     note(
       [
-        `- Found ${formatCount(found, "canonical session transcript")} without a header.`,
+        `- Found ${countLabel(found, "canonical session transcript")} without a header.`,
         `- Run "openclaw doctor --fix" to repair ${found === 1 ? "it" : "them"} before resuming the session.`,
       ].join("\n"),
       NOTE_TITLE,

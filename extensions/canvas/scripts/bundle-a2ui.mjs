@@ -1,8 +1,4 @@
 #!/usr/bin/env node
-/**
- * Bundles the Canvas A2UI web app and writes a hash for tracked inputs.
- */
-
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -47,12 +43,6 @@ function normalizePath(filePath) {
   return filePath.split(path.sep).join("/");
 }
 
-/** Returns whether a path should participate in the A2UI bundle input hash. */
-export function isBundleHashInputPath(filePath, repoRoot = rootDir) {
-  return Boolean(filePath && repoRoot);
-}
-
-/** Returns local Rolldown CLI candidates for the current install layout. */
 export function getLocalRolldownCliCandidates(repoRoot = rootDir) {
   return [
     path.join(repoRoot, "node_modules", "rolldown", "bin", "cli.mjs"),
@@ -70,7 +60,6 @@ export function getLocalRolldownCliCandidates(repoRoot = rootDir) {
   ];
 }
 
-/** Returns repository paths that define the A2UI bundle hash inputs. */
 export function getBundleHashRepoInputPaths(repoRoot = rootDir) {
   return [
     path.join(repoRoot, "package.json"),
@@ -79,7 +68,6 @@ export function getBundleHashRepoInputPaths(repoRoot = rootDir) {
   ];
 }
 
-/** Compares paths after normalizing separators to POSIX slashes. */
 export function compareNormalizedPaths(left, right) {
   const normalizedLeft = normalizePath(left);
   const normalizedRight = normalizePath(right);
@@ -93,9 +81,6 @@ export function compareNormalizedPaths(left, right) {
 }
 
 async function walkFiles(entryPath, files) {
-  if (!isBundleHashInputPath(entryPath)) {
-    return;
-  }
   const stat = await fs.stat(entryPath);
   if (!stat.isDirectory()) {
     files.push(entryPath);
@@ -121,13 +106,11 @@ export function listTrackedInputFiles(runGit, repoRoot = rootDir) {
   if (result.status !== 0) {
     return null;
   }
-  const trackedFiles = result.stdout
+  return result.stdout
     .split("\n")
     .filter(Boolean)
     .map((filePath) => path.join(repoRoot, filePath))
-    .filter((filePath) => existsSync(filePath))
-    .filter((filePath) => isBundleHashInputPath(filePath));
-  return trackedFiles;
+    .filter((filePath) => existsSync(filePath));
 }
 
 async function computeHash() {
@@ -219,11 +202,10 @@ async function main() {
     )
   ).find(Boolean);
 
+  const configPath = path.join(a2uiAppDir, "rolldown.config.mjs");
   if (localRolldownCli) {
-    const configPath = path.join(a2uiAppDir, "rolldown.config.mjs");
     runStep(process.execPath, [localRolldownCli, "-c", configPath]);
   } else {
-    const configPath = path.join(a2uiAppDir, "rolldown.config.mjs");
     runPnpm(["-s", "exec", "rolldown", "-c", configPath]);
   }
 

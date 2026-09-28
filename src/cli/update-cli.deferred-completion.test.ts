@@ -51,23 +51,7 @@ describe("update-cli child-owned deferred completion", () => {
     mockPostDoctorSnapshot,
     runPostCoreUpdate,
     lastReplaceConfigCall,
-    setupPostCoreConfigFixture,
   } = installDeferredCompletionFixture();
-  const mockLegacyPostCoreDoctor = () => {
-    // Legacy parents run migration Doctor before the child probes the parent's start time.
-    vi.mocked(runExec).mockImplementationOnce(async (file, args) => {
-      expect(file).toBe(process.execPath);
-      expect(args).toEqual([
-        path.join(process.cwd(), "dist", "index.js"),
-        "doctor",
-        "--repair",
-        "--non-interactive",
-        "--no-workspace-suggestions",
-        "--yes",
-      ]);
-      return { stdout: "", stderr: "" };
-    });
-  };
 
   it("legacy post-core resume completes Doctor without running core update", async () => {
     readPackageVersion.mockResolvedValue("2026.9.4");
@@ -141,11 +125,12 @@ describe("update-cli child-owned deferred completion", () => {
   });
 
   it("completes convergence-only post-core changes for a legacy parent", async () => {
-    runPostCorePluginConvergenceSpy.mockResolvedValueOnce(
-      postCoreConvergenceResult({
+    runPostCorePluginConvergenceSpy.mockImplementationOnce(async ({ cfg }) => ({
+      ...postCoreConvergenceResult({
         changes: ["Repaired configured plugin install records."],
       }),
-    );
+      config: cfg,
+    }));
 
     await runPostCoreCommand({ restart: false, json: true });
 
@@ -359,10 +344,11 @@ describe("update-cli child-owned deferred completion", () => {
         fsSync.writeFileSync(path.join(installPath, "index.js"), "module.exports = {};\n");
         return { config: current, changed: true, outcomes: [repaired] };
       });
-      runPostCorePluginConvergenceSpy.mockResolvedValueOnce({
+      runPostCorePluginConvergenceSpy.mockImplementationOnce(async ({ cfg }) => ({
         ...postCoreConvergenceResult(),
         installRecords: records,
-      });
+        config: cfg,
+      }));
 
       await runPostCoreCommand({ yes: true, json, restart: false });
 
@@ -383,9 +369,10 @@ describe("update-cli child-owned deferred completion", () => {
     {
       name: "does not restore stale backup channels when current pre-update snapshot has none",
       prepare: async (configPath: string, preUpdateConfig: OpenClawConfig) => {
+        const updateStartedAtMs = Date.now();
         await writeJsonFixture(`${configPath}.pre-update`, stableConfig());
         await writeJsonFixture(`${configPath}.bak`, preUpdateConfig);
-        return {};
+        return { OPENCLAW_UPDATE_POST_CORE_STARTED_AT_MS: String(updateStartedAtMs) };
       },
     },
     {
@@ -407,8 +394,6 @@ describe("update-cli child-owned deferred completion", () => {
         for (const suffix of [".pre-update", ".bak"]) {
           await writeJsonFixture(`${configPath}${suffix}`, preUpdateConfig);
         }
-        mockLegacyPostCoreDoctor();
-        vi.mocked(runExec).mockRejectedValueOnce(new Error("ps unavailable"));
         return {};
       },
     },
@@ -423,7 +408,7 @@ describe("update-cli child-owned deferred completion", () => {
         await writeJsonFixture(snapshotPath, staleConfig);
         const staleTime = new Date(Date.now() - 7 * 60 * 60 * 1000);
         await fs.utimes(snapshotPath, staleTime, staleTime);
-        return {};
+        return { OPENCLAW_UPDATE_POST_CORE_STARTED_AT_MS: String(Date.now() - 8 * 60 * 60 * 1000) };
       },
     },
   ])("$name", async ({ prepare, preserveParsed = false }) => {
@@ -441,39 +426,5 @@ describe("update-cli child-owned deferred completion", () => {
 
     expect(syncPluginCall()?.config?.channels?.whatsapp).toBeUndefined();
     expect(lastReplaceConfigCall()).toBeUndefined();
-  });
-
-  it("uses the Windows parent process start time for old post-core parents", async () => {
-    const parentStartedAtMs = Date.now() - 1_000;
-    const preUpdateConfig = stableWhatsAppConfig();
-    const postDoctorConfig = stableConfig();
-    await setupPostCoreConfigFixture({ preUpdateConfig, postDoctorConfig });
-    mockLegacyPostCoreDoctor();
-    vi.mocked(runExec).mockImplementationOnce(async (file, commandArgs) => {
-      expect(file).toBe("powershell.exe");
-      expect(commandArgs).toContain("-NonInteractive");
-      return {
-        stdout: new Date(parentStartedAtMs).toISOString(),
-        stderr: "",
-      };
-    });
-    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
-    Object.defineProperty(process, "platform", {
-      configurable: true,
-      enumerable: true,
-      value: "win32",
-    });
-    try {
-      await runPostCoreUpdate();
-    } finally {
-      if (platformDescriptor) {
-        Object.defineProperty(process, "platform", platformDescriptor);
-      }
-    }
-
-    expect(syncPluginCall()?.config?.channels?.whatsapp).toEqual(
-      preUpdateConfig.channels?.whatsapp,
-    );
-    expect(lastReplaceConfigCall()).toBeDefined();
   });
 });

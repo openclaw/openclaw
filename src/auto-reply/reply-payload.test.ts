@@ -6,6 +6,7 @@ import {
   isReplyPayloadTerminalContent,
   markCommandReplyForDelivery,
   readPairingQrReplyChannelData,
+  readReplyPayloadSourceOccurrence,
   setReplyPayloadMetadata,
 } from "./reply-payload.js";
 
@@ -141,6 +142,45 @@ describe("session writer delivery authority", () => {
       }),
     ).toBe(false);
     expect(isReplyPayloadSessionWriterDeliveryAuthorized(payload, undefined)).toBe(false);
+  });
+});
+
+describe("reply payload source occurrence", () => {
+  const complete = {
+    assistantMessageIndex: 2,
+    blockSourceText: "same",
+    blockSourceRange: [8, 12] as const,
+  };
+
+  it("reads complete UTF-16 source identity without changing the wire payload", () => {
+    const payload = setReplyPayloadMetadata({ text: "same" }, complete);
+
+    expect(readReplyPayloadSourceOccurrence(payload)).toEqual({
+      assistantMessageIndex: 2,
+      sourceText: "same",
+      sourceRange: [8, 12],
+    });
+    expect(JSON.stringify(payload)).toBe(JSON.stringify({ text: "same" }));
+  });
+
+  it.each([
+    ["absent metadata", undefined],
+    ["missing message index", { ...complete, assistantMessageIndex: undefined }],
+    ["negative message index", { ...complete, assistantMessageIndex: -1 }],
+    ["fractional message index", { ...complete, assistantMessageIndex: 1.5 }],
+    ["missing source text", { ...complete, blockSourceText: undefined }],
+    ["missing source range", { ...complete, blockSourceRange: undefined }],
+    ["negative source start", { ...complete, blockSourceRange: [-1, 3] as const }],
+    ["reversed source range", { ...complete, blockSourceRange: [12, 8] as const }],
+    ["empty source range", { ...complete, blockSourceRange: [8, 8] as const }],
+    ["mismatched source length", { ...complete, blockSourceRange: [8, 13] as const }],
+  ])("rejects %s", (_name, metadata) => {
+    const payload = { text: "same" };
+    if (metadata) {
+      setReplyPayloadMetadata(payload, metadata);
+    }
+
+    expect(readReplyPayloadSourceOccurrence(payload)).toBeUndefined();
   });
 });
 

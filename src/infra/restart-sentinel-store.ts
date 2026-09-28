@@ -613,13 +613,13 @@ export function writeRestartSentinelRowIfRevisionSync(
   return { version: 1, payload, revision };
 }
 
-export function deleteRestartSentinelRowSync(db: DatabaseSync, expectedRevision?: number): boolean {
+export function deleteRestartSentinelRowSync(db: DatabaseSync, expectedRevision: number): boolean {
   const current = readRestartSentinelRowSync(db);
   if (current.kind === "missing") {
     return false;
   }
   const currentRevision = current.kind === "valid" ? current.sentinel.revision : current.revision;
-  if (expectedRevision !== undefined && currentRevision !== expectedRevision) {
+  if (currentRevision !== expectedRevision) {
     return false;
   }
   if (!Number.isSafeInteger(currentRevision)) {
@@ -631,12 +631,10 @@ export function deleteRestartSentinelRowSync(db: DatabaseSync, expectedRevision?
   );
 
   const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
-  let query = stateDb
+  const query = stateDb
     .deleteFrom("gateway_restart_sentinel")
-    .where("sentinel_key", "=", RESTART_SENTINEL_KEY);
-  if (expectedRevision !== undefined) {
-    query = query.where("updated_at_ms", "=", expectedRevision);
-  }
+    .where("sentinel_key", "=", RESTART_SENTINEL_KEY)
+    .where("updated_at_ms", "=", expectedRevision);
   if (executeSqliteQuerySync(db, query).numAffectedRows !== 1n) {
     // The outer write transaction owns both rows; fail closed so its rollback
     // cannot leave a floor for a current row this call did not consume.

@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString as normalizeLifecycleRunId } from "@openclaw/normalization-core/string-coerce";
 import type { SessionRunStatus } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
@@ -11,15 +12,21 @@ import {
   projectMainSessionRecoveryLifecycle,
 } from "../agents/main-session-recovery/main-session-recovery-lifecycle.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
+import { buildUpdatedSessionGoalStatus } from "../config/sessions/goals-transitions.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration, type AgentEventPayload } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  readAgentRunProviderReview,
+  type ProviderReviewTerminalFact,
+} from "../sessions/provider-review-terminal.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   recordGatewaySessionRunFailure,
   resolveSessionRunError,
 } from "../sessions/session-run-error.js";
+import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { loadSessionEntry } from "./session-utils.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
@@ -28,6 +35,8 @@ const restartRecoveryLog = createSubsystemLogger("main-session-restart-recovery"
 type LifecyclePhase = "start" | "end" | "error";
 
 type LifecycleEventLike = Pick<AgentEventPayload, "ts" | "sessionId"> & {
+  controlUiVisible?: boolean;
+  isHeartbeat?: boolean;
   contextClaimId?: string;
   runId?: string;
   clientRunId?: string;
@@ -40,6 +49,8 @@ type LifecycleEventLike = Pick<AgentEventPayload, "ts" | "sessionId"> & {
     aborted?: unknown;
     stopReason?: unknown;
     error?: unknown;
+    errorKind?: unknown;
+    executionStarted?: unknown;
     livenessState?: unknown;
     timeoutPhase?: unknown;
     providerStarted?: unknown;
@@ -57,19 +68,13 @@ type LifecycleSessionShape = Pick<
   | "startedAt"
   | "endedAt"
   | "runtimeMs"
+  | "lastActivityAt"
   | "abortedLastRun"
 >;
 
 type PersistedLifecycleSessionShape = Pick<
   SessionEntry,
-  | "updatedAt"
-  | "status"
-  | "lastRunError"
-  | "lastRunId"
-  | "startedAt"
-  | "endedAt"
-  | "runtimeMs"
-  | "abortedLastRun"
+  | keyof LifecycleSessionShape
   | "restartRecoveryRuns"
   | "restartRecoveryForceSafeTools"
   | "mainRestartRecovery"
@@ -206,12 +211,21 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
   return {
     updatedAt,
     status,
-    lastRunError: terminal ? resolveSessionRunError(terminal, status) : undefined,
+    lastRunError: terminal
+      ? resolveSessionRunError({ ...terminal, errorKind: params.event.data?.errorKind }, status)
+      : undefined,
     startedAt,
     endedAt: interruptedForRestart ? undefined : endedAt,
     runtimeMs: interruptedForRestart
       ? undefined
       : resolveRuntimeMs({ startedAt, endedAt, existingRuntimeMs: existing?.runtimeMs }),
+    ...(terminal &&
+    !interruptedForRestart &&
+    params.event.controlUiVisible === true &&
+    params.event.isHeartbeat !== true &&
+    endedAt !== undefined
+      ? { lastActivityAt: Math.max(existing?.lastActivityAt ?? 0, endedAt) }
+      : {}),
     abortedLastRun: interruptedForRestart || status === "killed",
   };
 }
@@ -220,6 +234,11 @@ function derivePersistedSessionLifecyclePatch(params: {
   entry?: Partial<PersistedLifecycleSessionShape> | null;
   event: LifecycleEventLike;
 }): Partial<PersistedLifecycleSessionShape> {
+  const phase = resolveLifecyclePhase(params.event);
+  // Queued request settlement cannot end the turn that owns this session.
+  if ((phase === "end" || phase === "error") && params.event.data?.executionStarted === false) {
+    return {};
+  }
   const snapshot = deriveGatewaySessionLifecycleSnapshot({
     session: params.entry
       ? {
@@ -245,7 +264,6 @@ function derivePersistedSessionLifecyclePatch(params: {
   if (projection.action === "suppress") {
     return {};
   }
-  const phase = resolveLifecyclePhase(params.event);
   const runId = normalizeLifecycleRunId(params.event.runId);
   const clientRunId = normalizeLifecycleRunId(params.event.clientRunId) ?? runId;
   // Run ownership follows the durable running projection. Terminal settlement
@@ -329,6 +347,22 @@ function acceptsCronRunContinuationLifecycleEvent(params: {
   return Boolean(marker?.phase === "continuing" && runId && marker.ownerRunId === runId);
 }
 
+function matchesProviderReviewWriter(
+  entry: SessionEntry,
+  fact: ProviderReviewTerminalFact,
+): boolean {
+  return (
+    entry.sessionId === fact.target.sessionId &&
+    entry.lifecycleRevision === fact.target.lifecycleRevision &&
+    (entry.activeWriterRunId === fact.expectedWriterRunId ||
+      entry.lifecycleRunId === fact.expectedWriterRunId) &&
+    (entry.activeWriterRunId === undefined ||
+      entry.activeWriterRunId === fact.expectedWriterRunId) &&
+    (entry.lifecycleRunId === undefined || entry.lifecycleRunId === fact.expectedWriterRunId) &&
+    (!entry.providerReview || isDeepStrictEqual(entry.providerReview, fact.review))
+  );
+}
+
 export async function persistGatewaySessionLifecycleEvent(params: {
   sessionKey: string;
   agentId?: string;
@@ -352,6 +386,27 @@ export async function persistGatewaySessionLifecycleEvent(params: {
   if (!sessionEntry.entry) {
     return;
   }
+  // Incognito keeps its existing native lifecycle writer. The runtime's private fact
+  // joins that same entry update; public event data cannot introduce a review pause.
+  const terminalReview =
+    (phase === "error" || (phase === "end" && params.event.data?.stopReason === "error")) &&
+    isIncognitoSessionKey(sessionEntry.canonicalKey) &&
+    params.event.runId
+      ? readAgentRunProviderReview(params.event.runId)
+      : undefined;
+  const providerReview =
+    terminalReview &&
+    terminalReview.target.sessionKey === sessionEntry.canonicalKey &&
+    terminalReview.target.storePath === sessionEntry.storePath &&
+    terminalReview.target.sessionId === params.event.sessionId &&
+    terminalReview.review.runId === params.event.runId &&
+    terminalReview.lifecycleGeneration === params.event.lifecycleGeneration &&
+    params.event.ts >= terminalReview.capturedAtMs &&
+    (terminalReview.lifecycleStartedAt === undefined ||
+      terminalReview.lifecycleStartedAt === params.event.data?.startedAt) &&
+    matchesProviderReviewWriter(sessionEntry.entry, terminalReview)
+      ? terminalReview
+      : undefined;
   const owningSessionId =
     typeof params.event.sessionId === "string" && params.event.sessionId
       ? params.event.sessionId
@@ -359,7 +414,7 @@ export async function persistGatewaySessionLifecycleEvent(params: {
 
   const exactCronRun = parseCronRunScopeSuffix(sessionEntry.canonicalKey).runId !== undefined;
   let terminalRecovery: { runId: string; outcome: AgentRunTerminalOutcome } | undefined;
-  let failedRun: { runId: string; error: unknown } | undefined;
+  let failedRun: { runId: string; error: unknown; errorKind?: "state_contention" } | undefined;
   const persisted = await patchSessionEntryCore(
     {
       storePath: sessionEntry.storePath,
@@ -369,6 +424,9 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       terminalRecovery = undefined;
       failedRun = undefined;
       const entry = storedEntry as SessionEntry;
+      if (providerReview && !matchesProviderReviewWriter(entry, providerReview)) {
+        return null;
+      }
       const expected = params.expectedWriter;
       if (
         expected &&
@@ -414,10 +472,32 @@ export async function persistGatewaySessionLifecycleEvent(params: {
         // their async persistence can settle out of order.
         return null;
       }
-      const patch = derivePersistedSessionLifecyclePatch({
+      const patch: Partial<PersistedLifecycleSessionShape> &
+        Pick<SessionEntry, "providerReview" | "goal"> = derivePersistedSessionLifecyclePatch({
         entry,
         event: params.event,
       });
+      if (providerReview && Object.keys(patch).length > 0) {
+        patch.providerReview = providerReview.review;
+      }
+      const endedAt = patch.endedAt ?? params.event.ts;
+      if (
+        (patch.status === "failed" || patch.status === "timeout") &&
+        entry.goal?.status === "active" &&
+        entry.goal.updatedAt <= endedAt
+      ) {
+        // The terminal owner has exhausted retries. Commit the pause with the run
+        // failure so every client sees the same stopped goal and frozen timer.
+        // A delayed failure must not undo a newer resume or replacement goal.
+        patch.goal = buildUpdatedSessionGoalStatus(
+          entry,
+          {
+            status: "paused",
+            note: `Paused after an error. Resume to continue. ${patch.lastRunError ?? (patch.status === "timeout" ? "Run timed out." : "Run failed.")}`,
+          },
+          endedAt,
+        );
+      }
       if (
         (phase === "error" || phase === "end") &&
         eventRunId &&
@@ -425,6 +505,8 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       ) {
         failedRun = {
           runId: eventRunId,
+          errorKind:
+            params.event.data?.errorKind === "state_contention" ? "state_contention" : undefined,
           error:
             resolveTerminalOutcome(params.event).error ??
             (patch.status === "timeout" ? "Run timed out" : undefined),
@@ -450,13 +532,23 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       skipMaintenance: true,
       takeCacheOwnership: true,
       requireWriteSuccess: true,
+      ...(providerReview ? { providerReviewMutation: true } : {}),
       onCommitted: () =>
         sessionChanges.emit({
           sessionKey: sessionEntry.canonicalKey,
           agentId: sessionEntry.agentId,
           storePath: sessionEntry.storePath,
+          // The SQLite writer already published sharing facts; this adapter only projects run state.
+          facts: { kind: "unchanged" },
         }),
-      ...(params.assertCommitAllowed ? { assertCommitAllowed: params.assertCommitAllowed } : {}),
+      ...(params.assertCommitAllowed || providerReview
+        ? {
+            assertCommitAllowed: () => {
+              params.assertCommitAllowed?.();
+              providerReview?.assertCurrent();
+            },
+          }
+        : {}),
     },
   );
   if (persisted && terminalRecovery) {
@@ -464,7 +556,7 @@ export async function persistGatewaySessionLifecycleEvent(params: {
     restartRecoveryLog[terminalRecovery.outcome.status === "ok" ? "info" : "warn"](message);
   }
   if (persisted && failedRun) {
-    const { runId, error } = failedRun;
+    const { runId, error, errorKind } = failedRun;
     // Only accepted errors pay for branch navigation; assistant detection and
     // report deduplication share the appender's authoritative write snapshot.
     await recordGatewaySessionRunFailure({
@@ -477,6 +569,7 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       },
       runId,
       error,
+      errorKind,
       assertCommitAllowed: params.assertCommitAllowed,
     });
   }

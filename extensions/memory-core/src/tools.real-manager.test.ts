@@ -110,6 +110,7 @@ describe("memory_search real manager", () => {
   it.each([
     {
       label: "space-indented citations on",
+      citation: "memory/citation-indent.md#L1-L2",
       mode: "on",
       sessionKey: "agent:main:main",
       query: "CitationIndentSpaces",
@@ -119,6 +120,7 @@ describe("memory_search real manager", () => {
     },
     {
       label: "tab-indented direct auto citations",
+      citation: "memory/citation-indent.md#L1-L2",
       mode: "auto",
       sessionKey: "agent:main:telegram:direct:fixture",
       query: "CitationIndentTabs",
@@ -128,6 +130,7 @@ describe("memory_search real manager", () => {
     },
     {
       label: "space-indented citations off",
+      citation: undefined,
       mode: "off",
       sessionKey: "agent:main:main",
       query: "CitationIndentOff",
@@ -136,6 +139,7 @@ describe("memory_search real manager", () => {
     },
     {
       label: "tab-indented group auto citations",
+      citation: undefined,
       mode: "auto",
       sessionKey: "agent:main:telegram:group:fixture",
       query: "CitationIndentGroup",
@@ -144,6 +148,7 @@ describe("memory_search real manager", () => {
     },
     {
       label: "ordinary citation suffix whitespace",
+      citation: "memory/citation-indent.md#L1-L3",
       mode: "on",
       sessionKey: "agent:main:main",
       query: "CitationPlainControl",
@@ -196,6 +201,7 @@ describe("memory_search real manager", () => {
     expect
       .soft(result.details, "tool result details preserve snippet layout")
       .toMatchObject(expected);
+    expect(result.details).toMatchObject({ results: [{ citation: testCase.citation }] });
     const content = result.content[0];
     if (!content || content.type !== "text") {
       throw new Error("memory_search returned no model-visible JSON");

@@ -15,7 +15,10 @@ export async function evaluate(
     throw evaluationError(undefined, true);
   }
   const parsed = parseInput(input);
-  const model = parsed.model ?? config.model;
+  const model = parsed.model;
+  if (!model) {
+    throw new EvaluationError("TypeSafe requires a host-selected model.", "unsupported-input");
+  }
   if (model === "kev-latest" && !config.baseUrl) {
     throw new EvaluationError(
       "Kev requires a local System One server. Configure baseUrl in TypeSafe plugin Settings.",

@@ -12,7 +12,6 @@ import {
 import { createQaBusWaiterStore, throwQaBusClosed } from "./bus-waiters.js";
 import { sanitizeQaBusToolCalls } from "./qa-bus-protocol.js";
 import type {
-  QaBusAttachment,
   QaBusConversation,
   QaBusCreateThreadInput,
   QaBusDeleteMessageInput,
@@ -26,10 +25,7 @@ import type {
   QaBusReactToMessageInput,
   QaBusSearchMessagesInput,
   QaBusSnapshotConversation,
-  QaBusStateSnapshot,
   QaBusThread,
-  QaBusToolCall,
-  QaBusWaitForInput,
 } from "./runtime-api.js";
 
 const DEFAULT_BOT_ID = "openclaw";
@@ -44,39 +40,9 @@ function normalizeInboundConversation(conversation: QaBusConversation): QaBusCon
   return kind === conversation.kind ? conversation : { ...conversation, kind };
 }
 
-type QaBusEventSeed =
-  | {
-      kind: "inbound-message";
-      accountId: string;
-      message: QaBusMessage;
-    }
-  | {
-      kind: "outbound-message";
-      accountId: string;
-      message: QaBusMessage;
-    }
-  | {
-      kind: "thread-created";
-      accountId: string;
-      thread: QaBusThread;
-    }
-  | {
-      kind: "message-edited";
-      accountId: string;
-      message: QaBusMessage;
-    }
-  | {
-      kind: "message-deleted";
-      accountId: string;
-      message: QaBusMessage;
-    }
-  | {
-      kind: "reaction-added";
-      accountId: string;
-      message: QaBusMessage;
-      emoji: string;
-      senderId: string;
-    };
+type QaBusEventSeed = {
+  [Kind in QaBusEvent["kind"]]: Omit<Extract<QaBusEvent, { kind: Kind }>, "cursor">;
+}[QaBusEvent["kind"]];
 
 export function createQaBusState() {
   const conversations = new Map<string, QaBusSnapshotConversation>();
@@ -86,23 +52,30 @@ export function createQaBusState() {
   const acknowledgedPollCursors = new Map<string, number>();
   let cursor = 0;
   let assertWritable = () => {};
-  const waiters = createQaBusWaiterStore(() =>
+  const getSnapshot = () =>
     buildQaBusSnapshot({
       cursor,
       conversations,
       threads,
       messages,
       events,
-    }),
-  );
+    });
+  const waiters = createQaBusWaiterStore(getSnapshot);
 
-  const pushEvent = (event: QaBusEventSeed | ((cursor: number) => QaBusEventSeed)): QaBusEvent => {
+  const pushEvent = (event: QaBusEventSeed): QaBusEvent => {
     cursor += 1;
-    const next = typeof event === "function" ? event(cursor) : event;
-    const finalized = { cursor, ...next } as QaBusEvent;
+    const finalized = { cursor, ...event };
     events.push(finalized);
     waiters.settle();
     return finalized;
+  };
+
+  const publishMessage = (
+    kind: "inbound-message" | "outbound-message" | "message-edited" | "message-deleted",
+    message: QaBusMessage,
+  ) => {
+    pushEvent({ kind, accountId: message.accountId, message: cloneMessage(message) });
+    return cloneMessage(message);
   };
 
   const ensureConversation = (
@@ -133,23 +106,14 @@ export function createQaBusState() {
     return message;
   };
 
-  const createMessage = (params: {
-    direction: QaBusMessage["direction"];
-    accountId: string;
-    messageId?: string;
-    conversation: QaBusConversation;
-    senderId: string;
-    senderName?: string;
-    text: string;
-    isError?: boolean;
-    timestamp?: number;
-    threadId?: string;
-    threadTitle?: string;
-    replyToId?: string;
-    attachments?: QaBusAttachment[];
-    nativeCommand?: QaBusInboundMessageInput["nativeCommand"];
-    toolCalls?: QaBusToolCall[];
-  }): QaBusMessage => {
+  const createMessage = (
+    params: QaBusInboundMessageInput & {
+      direction: QaBusMessage["direction"];
+      accountId: string;
+      messageId?: string;
+      isError?: boolean;
+    },
+  ): QaBusMessage => {
     assertWritable();
     const thread = params.threadId ? threads.get(params.threadId) : undefined;
     if (
@@ -204,15 +168,7 @@ export function createQaBusState() {
       // miss events; terminal reset also fences late waiter timers.
       waiters.reset(undefined, terminal);
     },
-    getSnapshot() {
-      return buildQaBusSnapshot({
-        cursor,
-        conversations,
-        threads,
-        messages,
-        events,
-      });
-    },
+    getSnapshot,
     addInboundMessage(input: QaBusInboundMessageInput, messageId?: string) {
       const accountId = normalizeAccountId(input.accountId);
       const message = createMessage({
@@ -234,12 +190,7 @@ export function createQaBusState() {
         nativeCommand: input.nativeCommand,
         toolCalls: input.toolCalls,
       });
-      pushEvent({
-        kind: "inbound-message",
-        accountId,
-        message: cloneMessage(message),
-      });
-      return cloneMessage(message);
+      return publishMessage("inbound-message", message);
     },
     addOutboundMessage(input: QaBusOutboundMessageInput) {
       const accountId = normalizeAccountId(input.accountId);
@@ -258,12 +209,7 @@ export function createQaBusState() {
         attachments: input.attachments,
         toolCalls: input.toolCalls,
       });
-      pushEvent({
-        kind: "outbound-message",
-        accountId,
-        message: cloneMessage(message),
-      });
-      return cloneMessage(message);
+      return publishMessage("outbound-message", message);
     },
     createThread(input: QaBusCreateThreadInput) {
       assertWritable();
@@ -315,27 +261,15 @@ export function createQaBusState() {
       return cloneMessage(message);
     },
     editMessage(input: QaBusEditMessageInput) {
-      const accountId = normalizeAccountId(input.accountId);
       const message = requireActiveMessageForAccount(input);
       message.text = input.text;
       message.editedAt = input.timestamp ?? Date.now();
-      pushEvent({
-        kind: "message-edited",
-        accountId,
-        message: cloneMessage(message),
-      });
-      return cloneMessage(message);
+      return publishMessage("message-edited", message);
     },
     deleteMessage(input: QaBusDeleteMessageInput) {
-      const accountId = normalizeAccountId(input.accountId);
       const message = requireActiveMessageForAccount(input);
       message.deleted = true;
-      pushEvent({
-        kind: "message-deleted",
-        accountId,
-        message: cloneMessage(message),
-      });
-      return cloneMessage(message);
+      return publishMessage("message-deleted", message);
     },
     readMessage(input: QaBusReadMessageInput) {
       return readQaBusMessage({ messages, input });
@@ -364,16 +298,8 @@ export function createQaBusState() {
     poll(input: QaBusPollInput = {}) {
       return pollQaBusEvents({ events, cursor, input });
     },
-    async waitFor(input: QaBusWaitForInput) {
-      return await waiters.waitFor(input);
-    },
-    async waitForCursorAdvance(
-      afterCursor: number,
-      timeoutMs: number,
-      shouldResolve?: (snapshot: QaBusStateSnapshot) => boolean,
-    ) {
-      return await waiters.waitForCursorAdvance(afterCursor, timeoutMs, shouldResolve);
-    },
+    waitFor: waiters.waitFor.bind(waiters),
+    waitForCursorAdvance: waiters.waitForCursorAdvance.bind(waiters),
   };
 }
 

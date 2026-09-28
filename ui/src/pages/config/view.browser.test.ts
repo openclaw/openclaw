@@ -1891,8 +1891,8 @@ describe("config view", () => {
       .find((button) => button.textContent?.includes("100%"))
       ?.click();
 
-    expect(setTheme).toHaveBeenCalledWith("claw", expect.any(Object));
-    expect(setThemeMode).toHaveBeenCalledWith("system", expect.any(Object));
+    expect(setTheme).toHaveBeenCalledWith("claw");
+    expect(setThemeMode).toHaveBeenCalledWith("system");
     expect(setAccent).toHaveBeenCalledWith(undefined);
     expect(setTextScale).toHaveBeenCalledWith(100);
   });
@@ -1927,8 +1927,8 @@ describe("config view", () => {
     findButtonByText(themeSection, "Claw").click();
     themeSection.querySelector<HTMLElement>('wa-radio[value="system"]')?.click();
 
-    expect(setTheme).toHaveBeenCalledWith("claw", expect.any(Object));
-    expect(setThemeMode).toHaveBeenCalledWith("system", expect.any(Object));
+    expect(setTheme).toHaveBeenCalledWith("claw");
+    expect(setThemeMode).toHaveBeenCalledWith("system");
   });
 
   it("renders rejected theme and locale edits as browser-only fallbacks", () => {
@@ -1973,7 +1973,7 @@ describe("config view", () => {
 
     findButtonByText(themeSection, "Claw").click();
 
-    expect(setTheme).toHaveBeenCalledWith("claw", expect.any(Object));
+    expect(setTheme).toHaveBeenCalledWith("claw");
   });
 
   it("shows pending synced preferences without claiming they already synced", () => {
@@ -2030,7 +2030,7 @@ describe("config view", () => {
     for (const title of [
       "Message width",
       "Show task progress cards",
-      "Collapse task progress by default",
+      "Collapse task progress by default on desktop",
       "Open external sessions in",
       "Hold microphone button to start dictation",
     ]) {
@@ -2050,7 +2050,7 @@ describe("config view", () => {
     const row = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
       (candidate) =>
         candidate.querySelector(".settings-row__title")?.textContent?.trim() ===
-        "Collapse task progress by default",
+        "Collapse task progress by default on desktop",
     );
     const toggle = row?.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
 
@@ -2106,7 +2106,7 @@ describe("config view", () => {
     const customButton = findButtonByText(container, "Light Green");
     expect(customButton.disabled).toBe(false);
     customButton.click();
-    expect(setTheme).toHaveBeenCalledWith("custom", { element: customButton });
+    expect(setTheme).toHaveBeenCalledWith("custom");
 
     const replaceButton = findButtonContainingText(container, "Replace Light Green");
     const clearButton = findButtonContainingText(container, "Clear Light Green");

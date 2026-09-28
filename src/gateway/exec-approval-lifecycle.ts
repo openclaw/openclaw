@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
+import type { GatewayScheduledJob, GatewayScheduler } from "../infra/gateway-scheduler.js";
 import {
   captureGatewayRootWorkAdmissionContinuationScope,
   runWithRetainedGatewayRootWork,
@@ -11,16 +11,28 @@ import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.j
 import { createDeferredCore } from "../shared/deferred.js";
 import type {
   ExecApprovalIdLookupResult,
+  ExecApprovalManagerOptions,
   ExecApprovalRecord,
+  ExecApprovalReadAuthority,
   ExecApprovalResolutionSource,
   OperatorApprovalLifecycleEvent,
 } from "./exec-approval-manager.types.js";
+import {
+  assertExecApprovalMutationPersistenceCurrent,
+  type ExecApprovalMutationPersistence,
+} from "./exec-approval-recovery.js";
+import {
+  prepareExecApprovalSettlement,
+  prepareExecApprovalStorageFailure,
+} from "./exec-approval-results.js";
 import type {
   OperatorApprovalRecord,
+  OperatorApprovalKind,
   OperatorApprovalResolver,
   OperatorApprovalStatus,
   OperatorApprovalTerminalReason,
 } from "./operator-approval-store.js";
+import { getOperatorApprovalResolutionKey } from "./operator-approval-store.rows.js";
 
 // Node ask-fallback replay uses the same grace anchor as manager binding retention.
 export const EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS = 15_000;
@@ -38,11 +50,11 @@ type DecisionHandoff = {
   cancel: () => void;
 };
 
-type PendingEntry<TPayload> = {
+export type PendingEntry<TPayload> = {
   record: ExecApprovalRecord<TPayload>;
   resolve: (decision: ExecApprovalDecision | null) => void;
-  timer: ReturnType<typeof setTimeout> | null;
-  cleanupTimer: ReturnType<typeof setTimeout> | null;
+  expiryJob: GatewayScheduledJob | null;
+  cleanupJob: GatewayScheduledJob | null;
   handoffRetainCount: number;
   handoffReleasedAtMs: number | null;
   retainForManagerLifetime: boolean;
@@ -50,6 +62,12 @@ type PendingEntry<TPayload> = {
   handoffs: Set<DecisionHandoff>;
   admissionContinuation: GatewayRootWorkAdmissionContinuationScope | null;
   mutation?: Promise<void>;
+  expiryPersistence?: ExecApprovalMutationPersistence;
+  expiryRefusals?: number;
+  uncertainVerdict?: {
+    assertCurrent: () => void;
+    autoReview?: { committedResolutionKey?: string };
+  };
   terminalPublication?: Pick<
     OperatorApprovalRecord,
     | "kind"
@@ -71,12 +89,133 @@ export abstract class ExecApprovalLifecycle<TPayload> {
   private readonly work = new AsyncWorkScope();
   private draining: Promise<void> | undefined;
 
+  constructor(protected readonly scheduler: GatewayScheduler) {}
+
   abstract get runtimeEpoch(): string;
-  protected abstract expireDue(recordId: string): Promise<boolean>;
-  protected abstract reportError(
+  protected abstract expireDue(
+    recordId: string,
+    authority?: ExecApprovalReadAuthority,
+  ): Promise<boolean>;
+  abstract get approvalKind(): OperatorApprovalKind;
+  protected abstract readonly options: Pick<
+    ExecApprovalManagerOptions<TPayload>,
+    "onError" | "onExpired" | "onLifecycle"
+  >;
+
+  protected emitLifecycle(event: OperatorApprovalLifecycleEvent): void {
+    try {
+      this.recordLifecyclePublication(event, this.options.onLifecycle !== undefined);
+      this.options.onLifecycle?.(event);
+    } catch {
+      // Stream fanout is observational. It must never change approval truth or
+      // prevent the durable first-answer transition from releasing its waiter.
+    }
+  }
+
+  protected retainUncertainVerdict(
+    record: ExecApprovalRecord<TPayload> | undefined,
+    uncertainty: NonNullable<PendingEntry<TPayload>["uncertainVerdict"]>,
+  ): void {
+    const entry = record ? this.pending.get(record.id) : undefined;
+    if (entry && entry.record === record && record.resolvedAtMs === undefined) {
+      // Retries retain the original owner and cannot erase possible auto-review provenance.
+      entry.uncertainVerdict ??= uncertainty;
+      if (uncertainty.autoReview && !entry.uncertainVerdict.autoReview?.committedResolutionKey) {
+        entry.uncertainVerdict.autoReview = uncertainty.autoReview;
+      }
+    }
+  }
+
+  protected assertPendingPersistenceCurrent(entry: PendingEntry<TPayload> | undefined): void {
+    entry?.uncertainVerdict?.assertCurrent();
+    if (entry?.expiryPersistence) {
+      assertExecApprovalMutationPersistenceCurrent(entry.expiryPersistence);
+    }
+  }
+
+  protected clearUncommittedVerdict(record: ExecApprovalRecord<TPayload>): void {
+    const entry = this.pending.get(record.id);
+    if (entry?.record === record && !entry.uncertainVerdict?.autoReview?.committedResolutionKey) {
+      this.assertPendingPersistenceCurrent(entry);
+      delete entry.uncertainVerdict;
+    }
+  }
+
+  protected settleLocalStorageFailure(recordId: string): void {
+    this.settleLocalEntry(prepareExecApprovalStorageFailure(recordId, Date.now()));
+  }
+
+  protected settleLocalFromStore(
+    record: OperatorApprovalRecord,
+    localDecision?: ExecApprovalDecision | null,
+    localResolvedBy: string | null = null,
+    localResolutionSource?: ExecApprovalResolutionSource,
+  ): boolean {
+    const entry = this.pending.get(record.id);
+    const liveRecord = entry?.record;
+    const uncertainty = entry?.uncertainVerdict;
+    let observedSource: ExecApprovalResolutionSource = "operator";
+    if (localResolutionSource === undefined && uncertainty) {
+      if (
+        uncertainty.autoReview &&
+        record.status === "allowed" &&
+        record.decision === "allow-once"
+      ) {
+        if (
+          uncertainty.autoReview.committedResolutionKey === getOperatorApprovalResolutionKey(record)
+        ) {
+          observedSource = "auto-review";
+        } else if (record.resolver?.kind === "runtime") {
+          // Runtime IDs are shared by operator and auto-review callers, including null IDs.
+          return false;
+        }
+      }
+    }
+    const settlement = prepareExecApprovalSettlement({
+      record,
+      expectedKind: this.approvalKind,
+      runtimeEpoch: this.runtimeEpoch,
+      localDecision,
+      localResolvedBy,
+      localResolutionSource: localResolutionSource ?? observedSource,
+    });
+    if (!settlement) {
+      return false;
+    }
+    const settled = this.settleLocalEntry(settlement);
+    if (settled) {
+      this.emitLifecycle({ phase: "terminal", record });
+      if (record.status === "expired" && liveRecord) {
+        try {
+          this.options.onExpired?.(record, liveRecord);
+        } catch (error) {
+          this.reportError(error, { approvalId: record.id, operation: "expire" });
+        }
+      }
+    }
+    return settled;
+  }
+
+  /** Settle one durable terminal transition and report whether this manager published it. */
+  async reconcileDurableTerminal(record: OperatorApprovalRecord): Promise<boolean> {
+    await this.waitForMutations(record.id);
+    this.settleLocalFromStore(record);
+    return this.wasTerminalPublished(record);
+  }
+
+  protected reportError(
     error: unknown,
     context: { approvalId: string; operation: "expire" },
-  ): void;
+  ): void {
+    try {
+      this.options.onError?.(error instanceof Error ? error : new Error(String(error)), {
+        ...context,
+        approvalKind: this.approvalKind,
+      });
+    } catch {
+      // Reporting is observational; the lifecycle owner keeps the original outcome.
+    }
+  }
 
   beginClose(): void {
     this.observingClosed = true;
@@ -92,10 +231,10 @@ export abstract class ExecApprovalLifecycle<TPayload> {
     this.retired = true;
     this.beginClose();
     for (const [id, entry] of this.pending) {
-      clearTimeout(entry.timer ?? undefined);
-      clearTimeout(entry.cleanupTimer ?? undefined);
-      entry.timer = null;
-      entry.cleanupTimer = null;
+      entry.expiryJob?.cancel();
+      entry.cleanupJob?.cancel();
+      entry.expiryJob = null;
+      entry.cleanupJob = null;
       entry.admissionContinuation?.release();
       entry.admissionContinuation = null;
       if (entry.record.resolvedAtMs === undefined && !this.work.hasPendingWork) {
@@ -217,8 +356,8 @@ export abstract class ExecApprovalLifecycle<TPayload> {
     const entry: PendingEntry<TPayload> = {
       record,
       resolve: decision.resolve,
-      timer: null,
-      cleanupTimer: null,
+      expiryJob: null,
+      cleanupJob: null,
       handoffRetainCount: 0,
       handoffReleasedAtMs: null,
       retainForManagerLifetime: false,
@@ -227,7 +366,7 @@ export abstract class ExecApprovalLifecycle<TPayload> {
       admissionContinuation: captureGatewayRootWorkAdmissionContinuationScope(),
     };
     this.pending.set(record.id, entry);
-    this.scheduleExpiryTimer(entry);
+    this.scheduleExpiry(entry);
     return decision.promise;
   }
 
@@ -325,8 +464,12 @@ export abstract class ExecApprovalLifecycle<TPayload> {
     if (!pending || pending.record.resolvedAtMs !== undefined || !this.canUseRetainedBinding()) {
       return false;
     }
-    clearTimeout(pending.timer ?? undefined);
-    pending.timer = null;
+    this.assertPendingPersistenceCurrent(pending);
+    delete pending.uncertainVerdict;
+    delete pending.expiryPersistence;
+    delete pending.expiryRefusals;
+    pending.expiryJob?.cancel();
+    pending.expiryJob = null;
     pending.record.resolvedAtMs = params.resolvedAtMs;
     if (params.decision === null) {
       delete pending.record.decision;
@@ -357,24 +500,23 @@ export abstract class ExecApprovalLifecycle<TPayload> {
   private scheduleResolvedCleanup(entry: PendingEntry<TPayload>): void {
     if (
       this.retired ||
-      entry.cleanupTimer ||
+      entry.cleanupJob ||
       entry.record.resolvedAtMs === undefined ||
       entry.retainForManagerLifetime ||
       entry.handoffRetainCount > 0
     ) {
       return;
     }
-    const cleanupTimer = setTimeout(() => {
-      if (entry.cleanupTimer !== cleanupTimer) {
-        return;
-      }
-      entry.cleanupTimer = null;
-      if (this.pending.get(entry.record.id) === entry && entry.handoffRetainCount === 0) {
-        this.pending.delete(entry.record.id);
-      }
-    }, EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS);
-    cleanupTimer.unref?.();
-    entry.cleanupTimer = cleanupTimer;
+    entry.cleanupJob = this.scheduler.schedule({
+      id: `approval:${this.runtimeEpoch}:${this.approvalKind}:${entry.record.id}:cleanup`,
+      delayMs: EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS,
+      run: () => {
+        entry.cleanupJob = null;
+        if (this.pending.get(entry.record.id) === entry && entry.handoffRetainCount === 0) {
+          this.pending.delete(entry.record.id);
+        }
+      },
+    });
   }
 
   protected resolvedGraceAnchorMs(entry: PendingEntry<TPayload>, nowMs: number): number | null {
@@ -403,8 +545,8 @@ export abstract class ExecApprovalLifecycle<TPayload> {
       this.pending.delete(recordId);
       return null;
     }
-    clearTimeout(entry.cleanupTimer ?? undefined);
-    entry.cleanupTimer = null;
+    entry.cleanupJob?.cancel();
+    entry.cleanupJob = null;
     entry.handoffRetainCount += 1;
     let released = false;
     return () => {
@@ -423,24 +565,13 @@ export abstract class ExecApprovalLifecycle<TPayload> {
     };
   }
 
-  protected scheduleExpiryTimer(entry: PendingEntry<TPayload>): void {
-    if (this.retired) {
-      return;
-    }
-    entry.timer = setTimeout(
-      () => {
-        if (this.retired || this.pending.get(entry.record.id) !== entry) {
-          return;
-        }
-        void this.expireDue(entry.record.id).catch((error: unknown) => {
-          this.reportError(error, { approvalId: entry.record.id, operation: "expire" });
-        });
-      },
-      resolveTimerTimeoutMs(entry.record.expiresAtMs - Date.now(), 1),
-    );
-  }
+  protected abstract scheduleExpiry(entry: PendingEntry<TPayload>, delayMs?: number): void;
 
-  async getSnapshot(recordId: string): Promise<ExecApprovalRecord<TPayload> | null> {
+  async getSnapshot(
+    recordId: string,
+    authority?: ExecApprovalReadAuthority,
+  ): Promise<ExecApprovalRecord<TPayload> | null> {
+    authority?.assertCurrent();
     const record = this.getLocalSnapshot(recordId);
     if (
       !this.retired &&
@@ -448,8 +579,9 @@ export abstract class ExecApprovalLifecycle<TPayload> {
       record.resolvedAtMs === undefined &&
       record.expiresAtMs <= Date.now()
     ) {
-      await this.expireDue(recordId);
+      await this.expireDue(recordId, authority);
     }
+    authority?.assertCurrent();
     return this.getLocalSnapshot(recordId);
   }
 
@@ -531,14 +663,18 @@ export abstract class ExecApprovalLifecycle<TPayload> {
     return entry.admissionContinuation.run(run);
   }
 
-  async listPendingRecords(): Promise<ExecApprovalRecord<TPayload>[]> {
+  async listPendingRecords(
+    authority?: ExecApprovalReadAuthority,
+  ): Promise<ExecApprovalRecord<TPayload>[]> {
+    authority?.assertCurrent();
     if (this.retired) {
       return [];
     }
     const nowMs = Date.now();
     for (const entry of this.pending.values()) {
       if (entry.record.resolvedAtMs === undefined && entry.record.expiresAtMs <= nowMs) {
-        await this.expireDue(entry.record.id);
+        await this.expireDue(entry.record.id, authority);
+        authority?.assertCurrent();
       }
     }
     return this.listLocalPendingRecords();
@@ -558,10 +694,11 @@ export abstract class ExecApprovalLifecycle<TPayload> {
     input: string,
     opts: {
       includeResolved?: boolean;
+      authority?: ExecApprovalReadAuthority;
       filter?: (record: ExecApprovalRecord<TPayload>) => boolean;
     } = {},
   ): Promise<ExecApprovalIdLookupResult> {
-    await this.listPendingRecords();
+    await this.listPendingRecords(opts.authority);
     return this.lookupLocalApprovalId(input, opts);
   }
 
@@ -612,4 +749,22 @@ export abstract class ExecApprovalLifecycle<TPayload> {
         ? { kind: "ambiguous", ids: matches }
         : { kind: "none" };
   }
+}
+
+export function prepareExecApprovalRedemptionWindow(
+  record: ExecApprovalRecord<unknown>,
+  graceAnchorMs: number | null,
+  nowMs: number,
+): number | null {
+  const resolvedAtMs = record.resolvedAtMs;
+  if (
+    resolvedAtMs === undefined ||
+    graceAnchorMs === null ||
+    nowMs - graceAnchorMs >= EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS ||
+    record.decision !== "allow-once" ||
+    record.consumedDecision
+  ) {
+    return null;
+  }
+  return EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS + Math.max(0, graceAnchorMs - resolvedAtMs);
 }

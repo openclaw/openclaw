@@ -14,7 +14,6 @@ import {
   loadTranscriptEvents,
   readSessionTranscriptMessageEventPage,
   readSessionTranscriptMessageEvents,
-  recordSessionParticipant,
   rewindSessionToMessage,
   switchSessionBranch,
   updateSessionEntry,
@@ -25,6 +24,7 @@ import {
   sourceExpectedState,
   useSessionMessageCutFixtures,
 } from "./session-accessor.sqlite-message-cut.test-support.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { SYNC_REBUILD_MAX_BYTES } from "./session-transcript-index.js";
 import { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
 import type { InternalSessionEntry } from "./types.js";

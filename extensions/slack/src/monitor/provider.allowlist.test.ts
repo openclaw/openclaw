@@ -15,6 +15,7 @@ import {
   getSlackHandlerOrThrow,
   getSlackTestState,
   resetSlackTestState,
+  runSlackHandlerWithDispatch,
   startSlackMonitor,
   stopSlackMonitor,
 } from "../monitor.test-helpers.js";
@@ -69,17 +70,6 @@ describe("slack allowlist log formatting", () => {
     ).toBe("C0AQXEG6QFJ→openclawtest");
   });
 
-  it("prints user names without repeating the id input", () => {
-    expect(
-      formatSlackUserResolved({
-        input: "U090HHQ029J",
-        resolved: true,
-        id: "U090HHQ029J",
-        name: "steipete",
-      }),
-    ).toBe("U090HHQ029J→steipete");
-  });
-
   it("includes the id when resolving from a display name", () => {
     expect(
       formatSlackUserResolved({
@@ -114,6 +104,80 @@ describe("slack allowlist log formatting", () => {
 });
 
 describe("slack startup user allowlist resolution", () => {
+  it.each(["allowBots", "room users"] as const)(
+    "delivers an allowed bot's reply by default and stops subsequent turns after %s revocation",
+    async (revokedPolicy) => {
+      const initial: OpenClawConfig = {
+        channels: {
+          slack: {
+            enabled: true,
+            groupPolicy: "open",
+            historyLimit: 0,
+            streaming: { mode: "off" },
+            channels: { C123: { requireMention: true, users: ["B123BOT"] } },
+          },
+        },
+      };
+      await resetSlackTestState(initial);
+      setRuntimeConfigSnapshot(initial, initial);
+      getSlackClient().conversations.info.mockResolvedValue({
+        channel: { name: "releases", is_channel: true },
+      });
+      slackTestState.replyMock.mockResolvedValue({ text: "Release is ready." });
+      const monitor = startSlackMonitor(monitorSlackProvider);
+      try {
+        const handler = await getSlackHandlerOrThrow("message");
+        // Core dedupe survives monitor replacement; each case uses distinct Slack messages.
+        const timestampPrefix = revokedPolicy === "allowBots" ? "202" : "203";
+        const receive = (botId: string, sequence: string) =>
+          runSlackHandlerWithDispatch(handler, {
+            event: {
+              type: "message",
+              subtype: "bot_message",
+              bot_id: botId,
+              text: "<@bot-user> release status",
+              ts: `${timestampPrefix}.${sequence}`,
+              channel: "C123",
+              channel_type: "channel",
+            },
+          });
+
+        await receive("B123BOT", "001");
+        expect(slackTestState.replyMock).toHaveBeenCalledTimes(1);
+        expect(slackTestState.replyMock.mock.calls[0]?.[0]).toMatchObject({ SenderIsBot: true });
+        expect(slackTestState.sendMock).toHaveBeenCalledExactlyOnceWith(
+          "channel:C123",
+          "Release is ready.",
+          expect.objectContaining({ accountId: "default" }),
+        );
+
+        slackTestState.replyMock.mockClear();
+        slackTestState.sendMock.mockClear();
+        await receive("BDENIED", "002");
+        expect(slackTestState.replyMock).not.toHaveBeenCalled();
+        expect(slackTestState.sendMock).not.toHaveBeenCalled();
+
+        const revoked: OpenClawConfig = {
+          channels: {
+            slack: {
+              ...initial.channels?.slack,
+              ...(revokedPolicy === "allowBots"
+                ? { allowBots: false }
+                : { channels: { C123: { requireMention: true, users: ["UOTHER"] } } }),
+            },
+          },
+        };
+        setRuntimeConfigSnapshot(revoked, revoked);
+        await receive("B123BOT", "003");
+        expect(slackTestState.replyMock).not.toHaveBeenCalled();
+        expect(slackTestState.sendMock).not.toHaveBeenCalled();
+        expect(slackTestState.appStopMock).not.toHaveBeenCalled();
+      } finally {
+        await stopSlackMonitor(monitor);
+      }
+    },
+  );
+
   it("updates DM access on the retained message listener without restarting Slack", async () => {
     const initial: OpenClawConfig = {
       channels: { slack: { enabled: true, dmPolicy: "allowlist", allowFrom: ["UOLD"] } },

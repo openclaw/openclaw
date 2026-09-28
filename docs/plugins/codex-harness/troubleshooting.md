@@ -108,6 +108,13 @@ an adaptive V8 heap, and raising it can leave less host memory for Codex. Use
 [Gateway memory troubleshooting](/gateway/troubleshooting#gateway-exits-during-high-memory-use)
 for Gateway pressure, and inspect host or container memory for the Codex child.
 
+Large catalog replies use a decoder worker in the Gateway. After a complete
+reply, OpenClaw releases that worker after one minute without further worker
+decoding. The native app-server connection and its warm conversation threads stay
+connected. A later large reply starts a new decoder, so its first response can
+take longer; small replies do not require a worker. Incomplete replies retain
+their decoder until recovery completes or the connection closes.
+
 **"Cannot inspect Codex processes":** this error comes from local process
 inspection before model inference. For a deadline error, retry after host
 responsiveness recovers. For a permissions error, check access to `/proc` on

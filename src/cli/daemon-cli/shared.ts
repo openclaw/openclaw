@@ -7,14 +7,14 @@ import {
   resolveGatewayWindowsTaskName,
 } from "../../daemon/constants.js";
 import { resolveDaemonContainerContext } from "../../daemon/container-context.js";
-import "../../daemon/runtime-format.js";
 import { buildPlatformServiceStartHints } from "../../daemon/runtime-hints.js";
 import type { GatewayServiceInstallationDrift } from "../../daemon/service-layout.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { hasSudoToRootSystemdUserManagerMismatch } from "../../daemon/systemd-user-transport.js";
 import { resolveGatewayServiceMutationError } from "../../infra/gateway-supervision.js";
+import { parseTcpPort } from "../../infra/tcp-port.js";
+import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
-import { parsePort } from "../shared/parse-port.js";
 import { createDaemonActionContext } from "./response.js";
 export { formatRuntimeStatus } from "../../daemon/runtime-format.js";
 
@@ -24,9 +24,17 @@ export function createDaemonInstallActionContext(
   definitionBackup?: Parameters<typeof createDaemonActionContext>[0]["definitionBackup"],
 ) {
   const json = Boolean(jsonFlag);
+  const context = createDaemonActionContext({ action: "install", json, definitionBackup });
   return {
     json,
-    ...createDaemonActionContext({ action: "install", json, definitionBackup }),
+    ...context,
+    warn: (message: string) => {
+      if (json) {
+        context.warnings.push(message);
+      } else {
+        defaultRuntime.log(message);
+      }
+    },
   };
 }
 
@@ -63,7 +71,7 @@ export function resolveDaemonInstallBlockMessage(
 }
 
 export function formatDaemonServiceInstallCommand(env: NodeJS.ProcessEnv, port?: number): string {
-  const servicePort = port ?? parsePort(env.OPENCLAW_GATEWAY_PORT);
+  const servicePort = port ?? parseTcpPort(env.OPENCLAW_GATEWAY_PORT);
   return formatCliCommand(
     `openclaw gateway install --force${servicePort ? ` --port ${servicePort}` : ""}`,
     env,

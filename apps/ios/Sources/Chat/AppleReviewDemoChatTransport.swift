@@ -312,15 +312,15 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
             sessions: sessions)
     }
 
-    func listAgents() async throws -> OpenClawChatAgentsListResponse? {
-        OpenClawChatAgentsListResponse(
+    func loadAgents(onUpdate: @escaping OpenClawChatAgentCatalogUpdate) async throws {
+        await onUpdate(OpenClawChatAgentsListResponse(
             defaultId: self.fixture.defaultAgentID,
             agents: self.fixture.agents.map {
                 OpenClawChatAgentChoice(
                     id: $0.id,
                     name: $0.name,
                     workspaceGit: $0.workspacegit)
-            })
+            }))
     }
 
     func listChildSessions(parentKey: String) async throws -> [OpenClawChatSessionEntry] {
@@ -462,6 +462,12 @@ private actor LocalFixtureChatStore {
                 sessionId: "\(self.fixture.sessionIDPrefix)-\(normalizedSessionKey)",
                 messages: self.messages,
                 thinkingLevel: self.thinkingLevel,
+                inFlightRun: ProcessInfo.processInfo.arguments.contains("--openclaw-streaming-layout-fixture")
+                    ? self.activeRunID.map {
+                        OpenClawChatInFlightRun(
+                            runId: $0,
+                            text: String(repeating: "Streaming layout response. ", count: 12))
+                    } : nil,
                 sessionInfo: OpenClawChatSessionInfo(
                     hasActiveRun: self.activeRunID != nil,
                     activeRunIds: self.activeRunID.map { [$0] })),
@@ -707,6 +713,7 @@ private actor LocalFixtureChatStore {
         var sessionId: String?
         var messages: [OpenClawChatMessage]?
         var thinkingLevel: String?
+        var inFlightRun: OpenClawChatInFlightRun?
         var sessionInfo: OpenClawChatSessionInfo?
     }
 

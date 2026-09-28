@@ -46,6 +46,7 @@ suite.define(() => {
           : {}),
       },
       async ({ page }) => {
+        await page.clock.install();
         const activeRows = Array.from({ length: 101 }, (_, index) => ({
           key: index === 0 ? "global" : index === 1 ? "unknown" : `agent:main:older-${index}`,
           agentId: "main",
@@ -204,6 +205,7 @@ suite.define(() => {
         await expect
           .poll(() => overlay.locator(".gateway-vital--cpu").textContent())
           .toContain("25%");
+        await page.clock.runFor(10_000);
         await expect.poll(() => overlay.locator(".gateway-vital--cpu polyline").count()).toBe(1);
         if (captureUiProof) {
           await page.screenshot({
@@ -278,9 +280,10 @@ suite.define(() => {
             heapTotalBytes: 384 * 1_048_576,
           },
         });
+        await page.clock.runFor(10_000);
         await gateway.waitForRequest("system.info", { after: nextSystemInfoCount });
         // This delay is the simulated network latency the ping graph must measure.
-        await page.waitForTimeout(initialPingMs + 250);
+        await page.clock.runFor(initialPingMs + 250);
         await gateway.resolveDeferred("system.info");
         await expect
           .poll(() => widget.locator(".gateway-vital--memory").textContent())
@@ -304,6 +307,7 @@ suite.define(() => {
           );
         }
         expect(await ping.getAttribute("data-degraded")).toBe("");
+        await page.clock.runFor(10_000);
         await expect.poll(() => ping.getAttribute("data-degraded")).toBeNull();
         await gateway.waitForRequest("system.info", { after: systemInfoCount + 2 });
         expect(await gateway.getRequests("sessions.list", currentWorkQuery)).toHaveLength(
@@ -451,6 +455,7 @@ suite.define(() => {
               heapTotalBytes: 384 * 1_048_576,
             },
           });
+          await page.clock.runFor(10_000);
           await expect
             .poll(() => widget.locator(".gateway-vital--cpu .sparkline-tile__value").textContent())
             .toContain(`${Math.round(scenario.total * 100)}%`);
@@ -518,6 +523,7 @@ suite.define(() => {
           await gateway.getRequests("sessions.list", { ...currentWorkQuery, offset: 100 }),
         ).toHaveLength(0);
         await gateway.setMethodResponse("sessions.list", listing([]));
+        await page.clock.runFor(10_000);
         await activeRuns.getByText("No active runs.", { exact: true }).waitFor();
         expect((await activeCount.textContent())?.trim()).toBe("0 active");
         expect(await activeRuns.locator("li").count()).toBe(0);

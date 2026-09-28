@@ -8,6 +8,7 @@ import {
   ONE_PIXEL_PNG_B64,
   captureProjectUiProof,
   captureUiProofEnabled,
+  checkoutBaseRefInput,
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
   installMockGateway,
@@ -87,7 +88,7 @@ suite.define(() => {
         await pollLocatorText(checkout.locator(".new-session-page__trigger-label")).toBe(
           "New worktree",
         );
-        const baseRef = checkoutPopover.getByLabel("From", { exact: true });
+        const baseRef = checkoutBaseRefInput(checkoutPopover);
         expect(await baseRef.getAttribute("placeholder")).toBe("From");
         expect(await baseRef.inputValue()).toBe("");
         expect(await checkoutPopover.locator("datalist option").count()).toBe(0);

@@ -14,7 +14,6 @@ import {
 import type { UserTurnOriginalInputCommit } from "../../sessions/user-turn-transcript.types.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import type { MentionInbox } from "../mention-inbox.types.js";
-import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { hasGatewayAdminScope } from "./chat-origin-routing.js";
 import { buildRestartSafeChatTranscriptState } from "./chat-restart-recovery.js";
@@ -34,9 +33,7 @@ export type GatewayChatUserTurnPersist = (options?: {
 
 type GatewayChatUserTurnController = {
   baseInput: UserTurnInput;
-  persist: (
-    ...args: Parameters<GatewayChatUserTurnPersist>
-  ) => ReturnType<UserTurnTranscriptRecorder["persistFallback"]>;
+  persist: GatewayChatUserTurnPersist;
   persistBestEffort: GatewayChatUserTurnPersist;
   recorder: UserTurnTranscriptRecorder;
   replyContextFieldsPromise?: Promise<ChatSendReplyContextFields>;
@@ -143,21 +140,15 @@ export function createGatewayChatUserTurnController(params: {
     resolveInput: () => inputPromise,
     target: () => {
       // Retain only the current binding; transcript writers recheck it at commit.
-      const { storePath, entry } = loadSessionEntry(session.sessionKey, {
-        ...session.sessionLoadOptions,
-        clone: false,
-      });
-      const sessionId = (entry ?? admission.initialSessionEntry)?.sessionId;
-      if (!sessionId || sessionId !== admission.sessionBinding.sessionId) {
-        return undefined;
-      }
+      const target = session.sessionTarget;
+      const sessionId = admission.sessionBinding.sessionId;
       return {
         sessionId,
         expectedSessionId: sessionId,
         initialSessionEntry: admission.initialSessionEntry,
-        sessionKey: session.sessionKey,
+        sessionKey: target.storeKey,
         sessionEntry: undefined,
-        storePath,
+        storePath: target.storePath,
         agentId: session.agentId,
         config: session.cfg,
       };

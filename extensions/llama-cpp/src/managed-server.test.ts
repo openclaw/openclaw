@@ -13,11 +13,15 @@ const installMocks = vi.hoisted(() => ({
 vi.mock("./llama-server-install.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./llama-server-install.js")>()),
   ensureLlamaServerInstalled: installMocks.ensureLlamaServerInstalled,
+}));
+
+vi.mock("./llama-server-assets.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./llama-server-assets.js")>()),
   resolveManagedLlamaServerPaths: installMocks.resolveManagedLlamaServerPaths,
 }));
 
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { selectLlamaServerAsset } from "./llama-server-install.js";
+import { selectLlamaServerAsset } from "./llama-server-assets.js";
 import { withHuggingFaceMetadataFixture } from "./managed-server-huggingface.test-support.js";
 import {
   ensureLlamaCppModel,
@@ -920,11 +924,16 @@ describe("managed llama-server", () => {
   it.each(["metrics", "props"] as const)(
     "bounds %s inspection responses while accepting a legitimate large body",
     async (endpoint) => {
-      let padding = "x".repeat(1024 * 1024);
+      const responseBytes = (size: number) => {
+        const padding = "x".repeat(size);
+        return Buffer.from(endpoint === "metrics" ? padding : JSON.stringify({ padding }));
+      };
+      // Fixture serialization must not consume the concurrent inspection deadlines.
+      let body = responseBytes(1024 * 1024);
       const server = http.createServer((req, res) => {
         if (req.url?.startsWith(`/${endpoint}?`)) {
           res.setHeader("content-type", endpoint === "metrics" ? "text/plain" : "application/json");
-          res.end(endpoint === "metrics" ? padding : JSON.stringify({ padding }));
+          res.end(body);
           return;
         }
         res.setHeader("content-type", "application/json");
@@ -967,7 +976,7 @@ describe("managed llama-server", () => {
         endpoints: { health: "ready", models: "ready", props: "ready", metrics: "ready" },
       });
 
-      padding = "x".repeat(32 * 1024 * 1024);
+      body = responseBytes(32 * 1024 * 1024);
       await expect(inspect()).resolves.toMatchObject({
         state: "failed",
         endpoints: {

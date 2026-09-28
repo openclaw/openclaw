@@ -75,7 +75,7 @@ export {
   type TempWorkspaceSync,
   withTempWorkspace,
   withTempWorkspaceSync,
-} from "../infra/private-temp-workspace.js";
+} from "@openclaw/fs-safe/temp";
 export { SandboxRuntimeRetiredError } from "../agents/sandbox/provisioning-error.js";
 export {
   createRemoteShellSandboxBackend,

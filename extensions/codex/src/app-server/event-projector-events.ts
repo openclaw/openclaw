@@ -11,12 +11,12 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   isNonSuccessItemStatus,
+  isProjectedNativeToolItem,
   itemKind,
   itemName,
   itemStatus,
   itemTitle,
   matchesCodexSnapshotTurn,
-  shouldSynthesizeToolProgressForItem,
   unknownItemStatus,
 } from "./event-projector-items.js";
 import {
@@ -110,7 +110,7 @@ export function projectNormalizedToolItem(params: {
   detailMode?: ToolProgressDetailMode;
 }): NormalizedToolItemProjection | undefined {
   const { item } = params;
-  if (!item || !shouldSynthesizeToolProgressForItem(item)) {
+  if (!item || !isProjectedNativeToolItem(item)) {
     return undefined;
   }
   const name = itemName(item);
@@ -121,7 +121,9 @@ export function projectNormalizedToolItem(params: {
   const args = itemToolArgs(item);
   const commandBearing = isCommandBearingToolItem(item, args);
   const meta = itemMeta(item, params.detailMode);
-  const event = shouldEmitTranscriptToolProgress(name)
+  const emit = shouldEmitTranscriptToolProgress(name);
+  const result = emit && params.phase === "result" ? itemToolResult(item) : undefined;
+  const event = emit
     ? {
         stream: "tool",
         data: {
@@ -136,7 +138,7 @@ export function projectNormalizedToolItem(params: {
             ? {
                 status,
                 isError: isNonSuccessItemStatus(status),
-                ...itemToolResult(item),
+                ...(result ? { result } : {}),
               }
             : {}),
         },
@@ -523,7 +525,7 @@ export class CodexEventProjection {
           ...(suppressChannelProgress ? { suppressChannelProgress: true } : {}),
         },
         {
-          args: itemToolArgs(item),
+          args,
           ...(item.type === "collabAgentToolCall" && item.tool === "wait"
             ? { nativeOperation: "wait" as const }
             : {}),
@@ -540,7 +542,7 @@ export class CodexEventProjection {
   }): Promise<void> {
     const { item, activeItemIds, completedItemIds, isActive } = params;
     if (
-      !shouldSynthesizeToolProgressForItem(item) ||
+      !isProjectedNativeToolItem(item) ||
       !matchesCodexSnapshotTurn(item, this.turnId) ||
       completedItemIds.has(item.id) ||
       itemStatus(item) === "running"
@@ -584,20 +586,15 @@ export class CodexEventProjection {
     if (params.phase === "result") {
       this.toolProgress.recordNativeToolError({ item, name, meta, status });
     }
-    if (!event) {
-      if (params.phase === "result") {
-        this.toolTranscript.emitAfterToolCallObservation(item);
-        await this.onNativeToolResultRecorded?.();
+    if (event) {
+      const activity = projectCodexToolActivity(item, params.phase, meta);
+      if (activity && params.phase === "start") {
+        this.emitAgentEvent({ stream: "item", data: activity });
       }
-      return;
-    }
-    const activity = projectCodexToolActivity(item, params.phase, meta);
-    if (activity && params.phase === "start") {
-      this.emitAgentEvent({ stream: "item", data: activity });
-    }
-    this.emitAgentEvent(event);
-    if (activity && params.phase !== "start") {
-      this.emitAgentEvent({ stream: "item", data: activity });
+      this.emitAgentEvent(event);
+      if (activity && params.phase !== "start") {
+        this.emitAgentEvent({ stream: "item", data: activity });
+      }
     }
     if (params.phase === "result") {
       this.toolTranscript.emitAfterToolCallObservation(item);

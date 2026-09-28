@@ -293,9 +293,7 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
       turn.foregroundTaskIds.delete(taskId);
     }
   }
-  if (!turn.events.write(message)) {
-    await once(turn.events, "drain", { signal: turn.controller.signal });
-  }
+  let completesTurn = false;
   if (message.type === "result") {
     // A batched notification can acknowledge input without running the model.
     const queuedContinuation =
@@ -309,14 +307,23 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
       message.terminal_reason === undefined;
     turn.sawTerminalResult = true;
     // Background work holds successful interim results, never terminal failures.
-    if (
+    completesTurn =
       (!hasResultHoldingBackgroundTasks(session, turn) && !queuedContinuation) ||
       message.is_error === true ||
       (typeof message.subtype === "string" && message.subtype.startsWith("error")) ||
-      (typeof message.result === "string" && hasClaudeRawToolInvocation(message.result))
-    ) {
-      completeTurn(session, turn);
-    }
+      (typeof message.result === "string" && hasClaudeRawToolInvocation(message.result));
+  }
+  // The transport owns continuation lifetime; the completed answer can be
+  // delivered through normal reply hooks without waiting for the children.
+  const outputMessage =
+    message.type === "result" && !completesTurn
+      ? { ...message, openclaw_interim_result: true }
+      : message;
+  if (!turn.events.write(outputMessage)) {
+    await once(turn.events, "drain", { signal: turn.controller.signal });
+  }
+  if (completesTurn) {
+    completeTurn(session, turn);
   }
 }
 

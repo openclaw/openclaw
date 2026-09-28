@@ -42,6 +42,7 @@ export const GatewayErrorDetailCodes = {
   GITHUB_PUBLICATION_SELECTION_REJECTED: "GITHUB_PUBLICATION_SELECTION_REJECTED",
   SESSION_WORKSPACE_RECOVERY_REQUIRED: "SESSION_WORKSPACE_RECOVERY_REQUIRED",
   TASK_WORKTREE_SOURCE_REQUIRED: "TASK_WORKTREE_SOURCE_REQUIRED",
+  TASK_HISTORY_PREVIEW_CAPACITY: "TASK_HISTORY_PREVIEW_CAPACITY",
 } as const;
 
 /** Missing cron automation identified by its exact store key. */
@@ -143,7 +144,8 @@ export type GatewayErrorDetails =
   | SetupAdmissionBusyErrorDetails
   | GitHubPublicationSelectionRejectedErrorDetails
   | SessionWorkspaceRecoveryRequiredErrorDetails
-  | TaskWorktreeSourceRequiredErrorDetails;
+  | TaskWorktreeSourceRequiredErrorDetails
+  | { code: typeof GatewayErrorDetailCodes.TASK_HISTORY_PREVIEW_CAPACITY };
 
 type GatewayErrorLike = {
   code?: unknown;

@@ -3,15 +3,19 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as serviceMembership from "../../daemon/service-process-membership.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
+import * as ancestry from "../../infra/restart-stale-pids.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { triageTestRuntimeEntrypoints } from "../../infra/triage-runtime.test-support.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import {
   formatUpdateAncestryBlockMessage,
-  gatewayMaintenanceBlockMessage,
+  gatewayMaintenanceBlock,
+  handoffUpdateFromGateway,
 } from "./update-command-handoff.js";
 
 const UPDATE_HANDOFF_IN_PROGRESS_EXIT_CODE = 75;
@@ -186,18 +190,23 @@ const callerService = {
   runtime: { status: "running", pid: process.pid },
 } satisfies GatewayServiceState;
 
-describe("gatewayMaintenanceBlockMessage", () => {
+describe("gatewayMaintenanceBlock", () => {
   it("never advises stopping the gateway service or running update from the caller", () => {
-    const message = gatewayMaintenanceBlockMessage(callerService, process.cwd());
+    const message = gatewayMaintenanceBlock(callerService, process.cwd())?.message;
     expect(message).toContain("inside the gateway process tree");
     expect(message).toContain("from a shell outside the gateway service");
     expect(message).not.toContain("stop the gateway service first");
     expect(message).not.toContain("openclaw update");
   });
 
-  it("returns undefined when the pid is not an ancestor", () => {
+  it("allows a caller with verified external ancestry and native membership", () => {
+    vi.spyOn(serviceMembership, "inspectServiceProcessMembershipSync").mockReturnValue("outside");
+    vi.spyOn(ancestry, "inspectSelfAndAncestorPidsSync").mockReturnValue({
+      pids: new Set([process.pid, 1]),
+      complete: true,
+    });
     expect(
-      gatewayMaintenanceBlockMessage(
+      gatewayMaintenanceBlock(
         { ...callerService, runtime: { status: "running", pid: 2 } },
         process.cwd(),
       ),
@@ -205,10 +214,43 @@ describe("gatewayMaintenanceBlockMessage", () => {
   });
 });
 
+it.runIf(process.platform === "linux" || process.platform === "darwin").each([true, false])(
+  "does not start a handoff from inherited markers without a verified ancestor (complete: %s)",
+  async (complete) => {
+    vi.spyOn(ancestry, "inspectSelfAndAncestorPidsSync").mockReturnValue({
+      pids: new Set([process.pid]),
+      complete,
+    });
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_RUN_HANDOFF: undefined,
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+        OPENCLAW_GATEWAY_SERVICE_PID: String(process.ppid),
+        INVOCATION_ID: "fixture-inherited",
+      },
+      async () => {
+        await expect(
+          handoffUpdateFromGateway({
+            state: { ...callerService, runtime: { status: "running", pid: process.ppid } },
+            root: process.cwd(),
+            mode: "npm",
+            opts: {},
+            timeoutMs: 1000,
+            stopProgress: () => {
+              throw new Error("An unverified caller must not start handoff preparation");
+            },
+          }),
+        ).resolves.toBe(false);
+      },
+    );
+  },
+);
+
 describe("formatUpdateAncestryBlockMessage", () => {
   it("adds the chat handoff advice only to ancestry blocks", () => {
-    const ancestry = gatewayMaintenanceBlockMessage(callerService, process.cwd()) ?? "";
-    const updateMessage = formatUpdateAncestryBlockMessage(ancestry);
+    const blockMessage = gatewayMaintenanceBlock(callerService, process.cwd())?.message ?? "";
+    const updateMessage = formatUpdateAncestryBlockMessage(blockMessage);
     expect(updateMessage).toContain("/update");
     expect(updateMessage).not.toContain("shell outside");
     expect(updateMessage).not.toContain("terminal");

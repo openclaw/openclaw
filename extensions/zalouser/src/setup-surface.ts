@@ -328,6 +328,9 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
           ...(options?.beforePersistentEffect
             ? { beforeCredentialPersistence: options.beforePersistentEffect }
             : {}),
+          ...(options?.assertPersistentEffectCurrent
+            ? { assertCredentialPersistenceCurrent: options.assertPersistentEffectCurrent }
+            : {}),
         });
         if (start.qrDataUrl) {
           const qrPath = await writeQrDataUrlToTempFile(start.qrDataUrl, account.profile);
@@ -366,7 +369,9 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
       });
       if (!keepSession) {
         await options?.beforePersistentEffect?.();
-        await logoutZaloProfile(account.profile);
+        await logoutZaloProfile(account.profile, {
+          assertCurrent: options?.assertPersistentEffectCurrent,
+        });
         await options?.beforePersistentEffect?.();
         const start = await startZaloQrLogin({
           profile: account.profile,
@@ -374,6 +379,9 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
           timeoutMs: 35_000,
           ...(options?.beforePersistentEffect
             ? { beforeCredentialPersistence: options.beforePersistentEffect }
+            : {}),
+          ...(options?.assertPersistentEffectCurrent
+            ? { assertCredentialPersistenceCurrent: options.assertPersistentEffectCurrent }
             : {}),
         });
         if (start.qrDataUrl) {

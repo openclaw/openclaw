@@ -121,12 +121,14 @@ Browser, Canvas, Diffs, and the memory family preserve the approved shapes from 
 
 FaceTime reuses the existing [Voice Call phone glyph](voice-call/assets/activity.svg) byte-for-byte for its realtime voice carrier.
 
+QuickJS Code Mode reuses the existing [mxc sandbox glyph](mxc/assets/activity.svg) byte-for-byte for its isolated executor.
+
 Other defaults are OpenClaw functional glyphs drawn for the 24-unit activity grid. They indicate the capability rather than reproducing a service’s larger app tile. Related actions deliberately share a visual family:
 
 | Capability              | Plugins                                                                                                          |
 | ----------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | Agent or task flow      | `a2a`, `acpx`, `llm-task`, `raft`, `reef`                                                                        |
-| Connections and sharing | `admin-http-rpc`, `beam`, `bonjour`, `device-pair`, `session-share`, `webhooks`                                  |
+| Connections and sharing | `admin-http-rpc`, `beam`, `bonjour`, `device-pair`, `session-share`                                              |
 | Chat and meetings       | `buzz`, `clickclack`, `feishu`, `irc`, `nostr`, `sms`, `synology-chat`, `tlon`, `zoom-meetings`                  |
 | Files and knowledge     | `document-extract`, `file-transfer`, `imap`, `logbook`, `memory-wiki`, `oc-path`, `web-readability`, `workboard` |
 | Compute and location    | `crabbox`, `cua-computer`, `geolocation`, `gmi`, `radius`, `sglang`                                              |

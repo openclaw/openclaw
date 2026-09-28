@@ -8,6 +8,7 @@ import { describe, expect, inject, it } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import type { AuthHealthSummary } from "../../../src/agents/auth-health.js";
 import type { ProfileUsageStats } from "../../../src/agents/auth-profiles/types.js";
+import { waitForControlUiDocument } from "../../../src/commands/control-ui-handoff.js";
 import type { ModelAuthStatusResult } from "../../../src/gateway/server-methods/models-auth-status.types.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../../src/state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../../src/state/openclaw-state-db.paths.js";
@@ -118,9 +119,18 @@ async function captureFinalStatus(
     )
     .toBeGreaterThan(0);
 
+  // Gateway readiness does not join its background UI build; dashboard --json intentionally
+  // fails immediately while assets are preparing. Wait only at the browser-proof boundary.
+  const document = await waitForControlUiDocument({
+    url: `http://127.0.0.1:${fixture.gateway.port}/`,
+    timeoutMs: 60_000,
+  });
+  expect(document.ready, JSON.stringify(document)).toBe(true);
   const dashboard = await fixture.gateway.cli(["dashboard", "--json"]);
-  expect(dashboard.code, dashboard.stderr).toBe(0);
-  const { browserUrl }: { browserUrl: string } = JSON.parse(dashboard.stdout);
+  const { browserUrl, reason }: { browserUrl: string; reason?: string } = JSON.parse(
+    dashboard.stdout,
+  );
+  expect(dashboard.code, reason ?? dashboard.stderr).toBe(0);
   const url = new URL("settings/model-providers", browserUrl);
   url.hash = new URL(browserUrl).hash;
   const browser = await chromium.launch({

@@ -17,7 +17,7 @@ import { logVerbose } from "../../globals.js";
 import { withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
 import { createSupersededActorError } from "./manager.runtime-handle-ensure.js";
 import { isAcpOwnerRepairRequired } from "./manager.runtime-owner.js";
-import type { AcpSessionTarget, SessionAcpMeta, SessionEntry } from "./manager.types.js";
+import type { AcpSessionTarget, SessionAcpMeta, WriteManagerSessionMeta } from "./manager.types.js";
 import { hasLegacyAcpIdentityProjection } from "./manager.utils.js";
 
 /** Reconciles runtime-reported session identifiers into persisted ACP session metadata. */
@@ -32,17 +32,7 @@ export async function reconcileManagerRuntimeSessionIdentifiers(params: {
   failOnStatusError: boolean;
   isCurrentActor?: () => boolean;
   setCachedHandle: (target: AcpSessionTarget, handle: AcpRuntimeHandle) => void;
-  writeSessionMeta: (params: {
-    cfg: OpenClawConfig;
-    sessionKey: string;
-    agentId: string;
-    mutate: (
-      current: SessionAcpMeta | undefined,
-      entry: SessionEntry | undefined,
-    ) => SessionAcpMeta | null | undefined;
-    failOnError?: boolean;
-    isCurrentActor?: () => boolean;
-  }) => Promise<SessionEntry | null>;
+  writeSessionMeta: WriteManagerSessionMeta;
 }): Promise<{
   handle: AcpRuntimeHandle;
   meta: SessionAcpMeta;

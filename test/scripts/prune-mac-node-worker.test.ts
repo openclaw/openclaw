@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { planMacNodeWorkerClosure } from "../../scripts/prune-mac-node-worker.js";
 import { runtimeProcessEntrypoints } from "../../src/infra/runtime-process-entrypoints.js";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 const tempDirs: string[] = [];
@@ -38,7 +39,7 @@ describe("Mac node worker package closure", () => {
     );
     write("dist/process/supervisor/anchor-helper.js", 'import "worker-runtime-dependency";\n');
 
-    const closure = planMacNodeWorkerClosure(root);
+    const closure = planMacNodeWorkerClosure(root, resolveTestNodeExecPath());
 
     expect(closure.files).toEqual(
       expect.arrayContaining([

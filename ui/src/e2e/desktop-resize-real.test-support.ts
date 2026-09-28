@@ -4,6 +4,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import net, { type Socket } from "node:net";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { desktopProofTestReport } from "../../../scripts/lib/desktop-resize-proof.mts";
 import { hashWorkerCredential } from "../../../src/gateway/worker-environments/credential.js";
 import {
@@ -120,6 +121,7 @@ export function observeDesktopProofRfbLifecycle(element: Element) {
 
 export type DesktopResizeFixture = {
   carrier: "ssh" | "node";
+  bootstrapReceipt: WorkerAdmissionHandshake;
   ssh: WorkerSshEndpoint;
   identityPath: string;
   xauthorityPath?: string;
@@ -388,10 +390,11 @@ export async function readDesktopResizeFixture(file: string): Promise<DesktopRes
     !fixture.ssh?.hostKey ||
     !fixture.desktop?.passwordFilePath ||
     !fixture.fixedDesktop?.passwordFilePath ||
+    !fixture.bootstrapReceipt ||
     !hasPinnedProvenance(fixture.provenance)
   ) {
     throw new Error(
-      "Desktop resize proof requires a carrier, pinned SSH/VNC facts, and provenance",
+      "Desktop resize proof requires a carrier, build receipt, pinned SSH/VNC facts, and provenance",
     );
   }
   return fixture;
@@ -450,53 +453,53 @@ export async function seedDesktopResizeSources(
   nodeDeviceId?: string,
 ) {
   if (fixture.carrier === "node" && !nodeDeviceId) {
-    throw new Error("Node desktop proof requires the actually admitted node device");
+    throw new Error("Node desktop proof requires the prepared node device identity");
   }
   const store = await createWorkerEnvironmentStore();
-  for (const [kind, environmentId] of Object.entries(resizeSources)) {
-    const intent = await store.createIntent({
-      environmentId,
-      providerId: kind === "unmanaged" ? "desktop-unmanaged-fixture" : "desktop-resize-fixture",
-      profileId: "resize-fixture",
-      profileSnapshot: { executionMode: "remote-exec", settings: {} },
-      provisionOperationId: `provision:${environmentId}`,
-    });
-    const provisioning = await store.transition({
-      environmentId,
-      from: intent.state,
-      to: "provisioning",
-    });
-    const desktop = kind === "fixed" ? fixture.fixedDesktop : fixture.desktop;
-    const owner = { leaseId: `lease:${environmentId}`, sharedHost: false, desktop };
-    const preparing =
-      fixture.carrier === "node"
-        ? provisioning
-        : await store.transition({
-            environmentId,
-            from: provisioning.state,
-            to: "bootstrapping",
-            patch: { ...owner, sshEndpoint: fixture.ssh },
-          });
-    await store.transition({
-      environmentId,
-      from: preparing.state,
-      to: "ready",
-      patch: {
-        ...(fixture.carrier === "node" ? { ...owner, nodeDeviceId, sshEndpoint: null } : {}),
-        // Synthetic provisioning receipt, not evidence of a cloud bootstrap.
-        bootstrapReceipt: {
-          bundleHash: "a".repeat(64),
-          openclawVersion: "2026.9.1",
-          protocolFeatures: [],
+  try {
+    for (const [kind, environmentId] of Object.entries(resizeSources)) {
+      const intent = await store.createIntent({
+        environmentId,
+        providerId: kind === "unmanaged" ? "desktop-unmanaged-fixture" : "desktop-resize-fixture",
+        profileId: "resize-fixture",
+        profileSnapshot: { executionMode: "remote-exec", settings: {} },
+        provisionOperationId: `provision:${environmentId}`,
+      });
+      const provisioning = await store.transition({
+        environmentId,
+        from: intent.state,
+        to: "provisioning",
+      });
+      const desktop = kind === "fixed" ? fixture.fixedDesktop : fixture.desktop;
+      const owner = { leaseId: `lease:${environmentId}`, sharedHost: false, desktop };
+      const preparing =
+        fixture.carrier === "node"
+          ? provisioning
+          : await store.transition({
+              environmentId,
+              from: provisioning.state,
+              to: "bootstrapping",
+              patch: { ...owner, sshEndpoint: fixture.ssh },
+            });
+      await store.transition({
+        environmentId,
+        from: preparing.state,
+        to: "ready",
+        patch: {
+          ...(fixture.carrier === "node" ? { ...owner, nodeDeviceId, sshEndpoint: null } : {}),
+          // Match the running build so startup reconciliation preserves this provisioned fixture.
+          bootstrapReceipt: fixture.bootstrapReceipt,
+          credential: {
+            credentialHash: hashWorkerCredential(`desktop-resize-proof:${environmentId}`),
+            sessionId: null,
+            rpcSetVersion: 1,
+            expiresAtMs: Date.now() + 3_600_000,
+          },
         },
-        credential: {
-          credentialHash: hashWorkerCredential(`desktop-resize-proof:${environmentId}`),
-          sessionId: null,
-          rpcSetVersion: 1,
-          expiresAtMs: Date.now() + 3_600_000,
-        },
-      },
-    });
+      });
+    }
+  } finally {
+    await store.close();
   }
 }
 

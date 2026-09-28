@@ -79,7 +79,9 @@ suite.define(() => {
         if (!buttonBox || !rowBox) {
           throw new Error("expected visible sidebar row and menu target");
         }
-        expect(buttonBox).toMatchObject({ width: 44, height: 44 });
+        // Allow only roundoff from the drawer's translated box coordinates.
+        expect(buttonBox.width).toBeCloseTo(44, 4);
+        expect(buttonBox.height).toBeCloseTo(44, 4);
         expect(buttonBox.y).toBeGreaterThanOrEqual(rowBox.y);
         expect(buttonBox.y + buttonBox.height).toBeLessThanOrEqual(rowBox.y + rowBox.height);
         if (pointer === "coarse") {

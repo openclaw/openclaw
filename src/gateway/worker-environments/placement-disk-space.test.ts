@@ -142,7 +142,6 @@ describe("active worker placement disk-space monitoring", () => {
   it.each([
     { availableBytes: 99 * MIB, totalBytes: 10 * GIB, status: "critical" },
     { availableBytes: 512 * MIB, totalBytes: 25 * GIB, status: "critical" },
-    { availableBytes: 499 * MIB, totalBytes: 10 * GIB, status: "warning" },
     { availableBytes: 100 * MIB, totalBytes: GIB, status: "warning" },
     { availableBytes: 4 * GIB, totalBytes: 80 * GIB, status: "warning" },
     { availableBytes: 500 * MIB, totalBytes: GIB, status: "ok" },

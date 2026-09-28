@@ -395,6 +395,85 @@ describe("draining Gateway completion ownership", () => {
     },
   );
 
+  it.each(
+    completionDrainModes.flatMap((mode) =>
+      ["question.get", "question.resolve"].map((method) => ({ mode, method })),
+    ),
+  )(
+    "does not borrow a replacement question root for $method during $mode after synchronous expiry",
+    async ({ mode, method }) => {
+      const manager = new QuestionManager();
+      managerCleanups.push(() => manager.close());
+      const originalRoot = tryBeginGatewayRootWorkAdmission();
+      const replacementRoot = tryBeginGatewayRootWorkAdmission();
+      if (!originalRoot || !replacementRoot) {
+        throw new Error("expected both admitted question producers");
+      }
+      const request = {
+        id: "question-reused",
+        questions: [
+          {
+            questionId: "choice",
+            header: "Choice",
+            question: "Continue?",
+            options: [],
+            isOther: true,
+          },
+        ],
+        timeoutMs: 60_000,
+      };
+      let replacement: Promise<void> | undefined;
+      const original = await originalRoot.run(async () =>
+        manager.request({
+          ...request,
+          onResolved: () => {
+            manager.reset();
+            // The second producer was admitted before drain, independently of the old question.
+            replacement = replacementRoot.run(async () => {
+              manager.request(request);
+            });
+          },
+        }),
+      );
+      originalRoot.release();
+      expect(getActiveGatewayRootWorkCount()).toBe(2);
+      const suspension = closeAdmission(mode);
+      const now = vi.spyOn(Date, "now").mockReturnValue(original.expiresAtMs + 1);
+      const handler = vi.fn<GatewayRequestHandler>();
+      try {
+        const response = await dispatch({
+          method,
+          requestParams: { id: request.id },
+          context: createContext({ questionManager: manager }),
+          client: createClient("operator"),
+          handler,
+        });
+        expect(response).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: "UNAVAILABLE" }),
+        );
+        expect(handler).not.toHaveBeenCalled();
+        await replacement;
+        expect(manager.get(request.id)).toMatchObject({
+          status: "pending",
+          createdAtMs: original.expiresAtMs + 1,
+        });
+        expect(getActiveGatewayRootWorkCount()).toBe(1);
+      } finally {
+        now.mockRestore();
+        await replacement;
+        originalRoot.release();
+        replacementRoot.release();
+        manager.close();
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+        if (suspension) {
+          expect(suspension.release()).toBe(true);
+        }
+      }
+    },
+  );
+
   it.each(completionDrainModes)(
     "admits only the registered node's exact live progress and result during %s",
     async (mode) => {

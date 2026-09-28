@@ -16,6 +16,7 @@ import type { ImageContent } from "../../llm/types.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
+import type { CommandLaneConfiguration } from "../../process/lanes.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { SkillSnapshot } from "../../skills/types.js";
@@ -187,6 +188,7 @@ export type AgentRunTranscriptContext = {
 };
 
 export type AgentRunLifecycle = {
+  providerReviewAcknowledgment?: import("../../sessions/provider-review.js").ProviderReviewAcknowledgment;
   /** Already-admitted internal execution; mutually exclusive with preparedRunAdmission. */
   admittedRunContext?: AdmittedRunContext;
   /** Host-only post-prepare continuation, removed before plugin invocation. */
@@ -201,6 +203,7 @@ export type AgentRunLifecycle = {
   /** Immutable gateway lifecycle ownership captured when this execution was admitted. */
   lifecycleGeneration?: string;
   lane?: string;
+  swarmExecutionLane?: CommandLaneConfiguration;
   /** Stable cron job identifier populated for cron-triggered runs. */
   jobId?: string;
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */

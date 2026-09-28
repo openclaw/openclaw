@@ -1,19 +1,21 @@
 import path from "node:path";
 import {
+  createAgentHarnessToolCallMessage,
+  createAgentHarnessToolResultMessage,
+} from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
+import {
   embeddedAgentLog,
   runAgentHarnessAfterToolCallHook,
   type AgentMessage,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { Usage } from "openclaw/plugin-sdk/llm";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   isMutatingNativeToolItem,
   isNonSuccessItemStatus,
+  isProjectedNativeToolItem,
   itemName,
   itemStatus,
-  shouldRecordNativeToolTranscript,
-  shouldSynthesizeToolProgressForItem,
 } from "./event-projector-items.js";
 import {
   isNativePostToolUseRelayItem,
@@ -28,7 +30,6 @@ import {
 } from "./event-projector-tool-items.js";
 import {
   collectDynamicToolContentText,
-  normalizeToolTranscriptArguments,
   readCodexResponseOutput,
 } from "./event-projector-tool-output.js";
 import {
@@ -49,15 +50,6 @@ import { sanitizeCodexToolArguments } from "./tool-progress-normalization.js";
 import type { CodexTrajectoryRecorder } from "./trajectory.js";
 import type { CodexTranscriptCheckpointEntry } from "./transcript-checkpoint.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
-
-const ZERO_USAGE: Usage = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
 
 const MISSING_TOOL_RESULT_ERROR =
   "OpenClaw recorded a native Codex tool.call without a matching tool.result before the turn completed.";
@@ -86,10 +78,8 @@ function toolApprovalReviewOutcome(state: ToolApprovalReviewState): ToolApproval
 
 export class CodexToolTranscriptProjection {
   private readonly messages: AgentMessage[] = [];
-  private readonly callIds = new Set<string>();
   private readonly resultIds = new Set<string>();
   private readonly namesById = new Map<string, string>();
-  private readonly trajectoryCallIds = new Set<string>();
   private readonly trajectoryResultIds = new Set<string>();
   private readonly trajectoryNamesById = new Map<string, string>();
   private readonly trajectoryItemsById = new Map<string, CodexThreadItem>();
@@ -187,7 +177,7 @@ export class CodexToolTranscriptProjection {
   }
 
   recordNativeToolCall(item: CodexThreadItem | undefined): void {
-    if (!item || !shouldRecordNativeToolTranscript(item)) {
+    if (!item || !isProjectedNativeToolItem(item)) {
       return;
     }
     const name = itemName(item);
@@ -197,7 +187,7 @@ export class CodexToolTranscriptProjection {
   }
 
   recordNativeToolResult(item: CodexThreadItem | undefined, details?: unknown): void {
-    if (!item || !shouldRecordNativeToolTranscript(item) || this.resultIds.has(item.id)) {
+    if (!item || !isProjectedNativeToolItem(item) || this.resultIds.has(item.id)) {
       return;
     }
     const name = itemName(item);
@@ -343,7 +333,7 @@ export class CodexToolTranscriptProjection {
         message.role === "toolResult" && message.toolCallId === callId,
     );
     if (!result) {
-      if (!this.callIds.has(callId) && rawCall) {
+      if (!this.namesById.has(callId) && rawCall) {
         // Code-mode calls can have no matching command item. Keep the outer
         // response under its own call ID, never under a nested process ID.
         this.recordToolCall(rawCall);
@@ -446,7 +436,6 @@ export class CodexToolTranscriptProjection {
     status: ReturnType<typeof itemStatus>;
   }): void {
     if (params.phase === "start") {
-      this.trajectoryCallIds.add(params.item.id);
       this.trajectoryNamesById.set(params.item.id, params.name);
       this.trajectoryItemsById.set(params.item.id, params.item);
       this.options.trajectoryRecorder?.recordEvent("tool.call", {
@@ -460,7 +449,7 @@ export class CodexToolTranscriptProjection {
       return;
     }
     this.trajectoryResultIds.add(params.item.id);
-    const toolResult = itemToolResult(params.item).result;
+    const toolResult = itemToolResult(params.item);
     const output =
       this.progress.approvalTimeoutExplanation(params.item.id, params.status) ??
       itemOutputText(params.item, this.progress.outputTextByItem);
@@ -487,7 +476,7 @@ export class CodexToolTranscriptProjection {
       return;
     }
     this.afterToolCallObservedItemIds.add(item.id);
-    const result = itemToolResult(item).result;
+    const result = itemToolResult(item);
     const error =
       this.progress.approvalTimeoutExplanation(item.id, status) ??
       itemToolError(item, status, this.progress.outputTextByItem);
@@ -512,12 +501,13 @@ export class CodexToolTranscriptProjection {
   synthesizeMissingToolResults(params: {
     synthesize: boolean;
     terminalDisposition: "prompt_error" | "tool_error" | "diagnostic_only";
+    retainedCommands?: ReadonlyMap<string, string>;
   }): string | undefined {
     if (!params.synthesize) {
       return undefined;
     }
-    const missingTranscriptIds = [...this.callIds].filter((id) => !this.resultIds.has(id));
-    const missingTrajectoryIds = [...this.trajectoryCallIds].filter(
+    const missingTranscriptIds = [...this.namesById.keys()].filter((id) => !this.resultIds.has(id));
+    const missingTrajectoryIds = [...this.trajectoryNamesById.keys()].filter(
       (id) => !this.trajectoryResultIds.has(id),
     );
     if (missingTranscriptIds.length === 0 && missingTrajectoryIds.length === 0) {
@@ -526,12 +516,16 @@ export class CodexToolTranscriptProjection {
     for (const id of missingTranscriptIds) {
       const name = this.namesById.get(id) ?? this.trajectoryNamesById.get(id);
       if (name) {
+        const processId = params.retainedCommands?.get(id);
         this.recordToolResult({
           id,
           name,
-          text: formatMissingToolResultError({ id, name }),
-          isError: true,
-          details: { reason: "missing_tool_result" },
+          text: processId
+            ? formatRetainedCommandResult(processId)
+            : formatMissingToolResultError({ id, name }),
+          isError: !processId,
+          ...(processId ? { outcomeUnknown: true as const } : {}),
+          details: processId ? { status: "running", processId } : { reason: "missing_tool_result" },
         });
       }
     }
@@ -541,16 +535,21 @@ export class CodexToolTranscriptProjection {
         continue;
       }
       this.trajectoryResultIds.add(id);
-      const text = formatMissingToolResultError({ id, name });
+      const processId = params.retainedCommands?.get(id);
+      const text = processId
+        ? formatRetainedCommandResult(processId)
+        : formatMissingToolResultError({ id, name });
       this.options.trajectoryRecorder?.recordEvent("tool.result", {
         threadId: this.threadId,
         turnId: this.turnId,
         itemId: id,
         toolCallId: id,
         name,
-        status: "failed",
-        isError: true,
-        result: { status: "failed", reason: "missing_tool_result" },
+        status: processId ? "running" : "failed",
+        isError: !processId,
+        result: processId
+          ? { status: "running", processId }
+          : { status: "failed", reason: "missing_tool_result" },
         output: text,
       });
     }
@@ -585,10 +584,9 @@ export class CodexToolTranscriptProjection {
   }
 
   recordToolCall(params: ToolTranscriptCallInput): void {
-    if (!params.id || !params.name || this.callIds.has(params.id)) {
+    if (!params.id || !params.name || this.namesById.has(params.id)) {
       return;
     }
-    this.callIds.add(params.id);
     this.namesById.set(params.id, params.name);
     this.progress.recordTranscriptCall(params);
     const message = attachCodexMirrorIdentity(
@@ -647,42 +645,32 @@ export class CodexToolTranscriptProjection {
   }
 
   private shouldEmitAfterToolCallObservation(item: CodexThreadItem): boolean {
-    if (
-      !shouldSynthesizeToolProgressForItem(item) ||
-      this.afterToolCallObservedItemIds.has(item.id)
-    ) {
+    if (!isProjectedNativeToolItem(item) || this.afterToolCallObservedItemIds.has(item.id)) {
       return false;
     }
     return !(this.options.nativePostToolUseRelayEnabled && isNativePostToolUseRelayItem(item));
   }
 
   private createToolCallMessage(params: ToolTranscriptCallInput): AgentMessage {
-    const args = normalizeToolTranscriptArguments(params.arguments);
     const attribution = resolveCodexLocalRuntimeAttribution(this.params);
-    return {
-      role: "assistant",
-      content: [{ type: "toolCall", id: params.id, name: params.name, arguments: args }],
-      api: attribution.api ?? "openai-chatgpt-responses",
-      provider: attribution.provider,
-      model: this.params.modelId,
-      usage: ZERO_USAGE,
-      stopReason: "toolUse",
-      timestamp: this.nextTranscriptTimestamp(),
-    };
+    return createAgentHarnessToolCallMessage(
+      {
+        ...attribution,
+        api: attribution.api ?? "openai-chatgpt-responses",
+        modelId: this.params.modelId,
+      },
+      params,
+      this.nextTranscriptTimestamp(),
+    );
   }
 
   private createToolResultMessage(params: ToolTranscriptResultInput) {
     const response = this.rawNativeToolOutputByCallId.get(params.id);
     const text = response ?? params.text ?? toolResultStatusText(params);
-    const message = {
-      role: "toolResult",
-      toolCallId: params.id,
-      toolName: params.name,
-      isError: params.isError,
-      content: [{ type: "text", text }],
-      ...(params.details !== undefined ? { details: params.details } : {}),
-      timestamp: this.nextTranscriptTimestamp(),
-    } satisfies Extract<AgentMessage, { role: "toolResult" }>;
+    const message = createAgentHarnessToolResultMessage(
+      { ...params, text },
+      this.nextTranscriptTimestamp(),
+    );
     return {
       ...message,
       __openclaw: {
@@ -698,6 +686,10 @@ export class CodexToolTranscriptProjection {
       },
     };
   }
+}
+
+function formatRetainedCommandResult(processId: string): string {
+  return `Native command is still running with session handle ${processId}. Its final outcome is not yet available; use the native process-wait tool to collect it.`;
 }
 
 function formatMissingToolResultError(params: { id: string; name: string }): string {

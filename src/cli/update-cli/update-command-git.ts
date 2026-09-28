@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { sameFileIdentity } from "../../infra/fs-safe-advanced.js";
 import { readRegularFile } from "../../infra/fs-safe.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
@@ -18,6 +18,7 @@ import {
   resolveDevUpdateTargetRevision,
   type DevUpdateTarget,
 } from "../../infra/update-dev-target.js";
+import { getUpdateDoctorConfigFailureReason } from "../../infra/update-doctor-config.js";
 import { createFreeBsdPkgOwnershipInspection } from "../../infra/update-freebsd-pkg-ownership.js";
 import type { CommandRunner as GlobalCommandRunner } from "../../infra/update-global-command-runner.js";
 import {
@@ -25,8 +26,12 @@ import {
   verifyPackageUpdateRecovery,
   resolveGlobalInstallTarget,
   resolveNpmLifecyclePolicyGate,
+  type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
-import { UPDATE_RUNNER_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
+import {
+  DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+  UPDATE_RUNNER_TIMEOUT_MS,
+} from "../../infra/update-run-timeouts.js";
 import {
   buildUpdateCommandRunner,
   normalizeFallbackFailureReason,
@@ -62,8 +67,6 @@ import {
   runPackageUpdateDoctor,
 } from "./update-command-package.js";
 import { gatewayServiceCommandUsesRoot } from "./update-command-service-plan.js";
-
-const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
 
 export async function retireStandaloneGitWrapper(params: {
   previousRoot: string;
@@ -176,7 +179,7 @@ async function runReadOnlyGitCommand(params: {
 type RemoteRevisionResolution =
   | { status: "ok"; revision: string }
   | { status: "missing" }
-  | { status: "unreadable"; reason: string };
+  | { status: "unreadable"; reason: string; failureCode?: "target-git-cache-stale" };
 
 async function listGitRemotes(params: {
   runCommand: GlobalCommandRunner;
@@ -245,7 +248,8 @@ async function resolveCurrentRemoteBranchRevision(params: {
     ? { status: "ok", revision: remoteRevision }
     : {
         status: "unreadable",
-        reason: `current remote target ${remote}/${branch} is not available in the local checkout`,
+        reason: `cached ${trackingRef} differs from current remote ${remote}/${branch}`,
+        failureCode: "target-git-cache-stale",
       };
 }
 
@@ -272,10 +276,7 @@ function readRemoteTagRevisions(stdout: string): Map<string, string> | null {
     }
     const match = /^refs\/tags\/(v.+?)(\^\{\})?$/u.exec(ref);
     if (!match) {
-      if (line.trim()) {
-        return null;
-      }
-      continue;
+      return null;
     }
     const tag = match[1];
     if (!tag) {
@@ -334,7 +335,11 @@ export async function inspectGitDryRunTargetSchemaVersions(params: {
   timeoutMs: number;
   channel: UpdateChannel;
   devTarget?: DevUpdateTarget;
-}): Promise<{ schemaVersions?: OpenClawSchemaVersions; metadataUnreadable?: string }> {
+}): Promise<{
+  schemaVersions?: OpenClawSchemaVersions;
+  metadataUnreadable?: string;
+  failureCode?: "target-git-cache-stale";
+}> {
   const runCommand: GlobalCommandRunner = (argv, options) =>
     runCommandWithTimeout(argv, {
       ...options,
@@ -368,17 +373,8 @@ export async function inspectGitDryRunTargetSchemaVersions(params: {
     const needsCheckoutMain = branch !== DEV_BRANCH;
     let remoteBranchRefs: string[] = [];
     if (needsCheckoutMain) {
-      const remoteResult = await runCommand(["git", "-C", params.root, "remote"], {
-        cwd: params.root,
-        timeoutMs: params.timeoutMs,
-      }).catch(() => null);
-      if (remoteResult?.code === 0) {
-        remoteBranchRefs = remoteResult.stdout
-          .split("\n")
-          .map((remote) => remote.trim())
-          .filter(Boolean)
-          .map((remote) => `refs/remotes/${remote}/${DEV_BRANCH}`);
-      }
+      const { remotes = [] } = await listGitRemotes({ runCommand, ...params });
+      remoteBranchRefs = remotes.map((remote) => `refs/remotes/${remote}/${DEV_BRANCH}`);
     }
     for (const candidate of resolveDevUpstreamRefs(needsCheckoutMain, remoteBranchRefs)) {
       const resolved = await resolveCurrentRemoteBranchRevision({
@@ -392,7 +388,7 @@ export async function inspectGitDryRunTargetSchemaVersions(params: {
         break;
       }
       if (resolved.status === "unreadable") {
-        return { metadataUnreadable: resolved.reason };
+        return { metadataUnreadable: resolved.reason, failureCode: resolved.failureCode };
       }
     }
   }
@@ -414,16 +410,16 @@ export async function inspectGitDryRunTargetSchemaVersions(params: {
 
 export async function updateGitInstall(params: {
   root: string;
+  sourceRuntimePrepared?: boolean;
   switchToGit: boolean;
   installKind: "git" | "package" | "unknown";
   timeoutMs: number | undefined;
   startedAt: number;
   progress: ReturnType<typeof createUpdateProgress>["progress"];
   channel: UpdateChannel;
-  tag: string;
   devTarget?: DevUpdateTarget;
-  beforeGitMutation?: UpdateRunnerOptions["beforeGitMutation"];
-  validateCandidate: (root: string) => Promise<void>;
+  beforeGitMutation: UpdateRunnerOptions["beforeGitMutation"];
+  validateCandidate: UpdateRunnerOptions["validateCandidate"];
   assertCurrent?: () => void;
   onTransaction?: (transaction: PackageUpdateTransaction) => void;
   onConfigSnapshot?: Parameters<typeof runPackageUpdateDoctor>[0]["onConfigSnapshot"];
@@ -433,9 +429,10 @@ export async function updateGitInstall(params: {
   jsonMode?: boolean;
   invocationCwd?: string;
   nodeRunner?: string;
-  inspectGitTarget: UpdateRunnerOptions["inspectGitTarget"];
-  allowGatewayServiceRepair: boolean;
-  allowGatewayActivation: boolean;
+  inspectGitTarget: (
+    target: Parameters<UpdateRunnerOptions["inspectGitTarget"]>[0],
+    installTarget?: ResolvedGlobalInstallTarget,
+  ) => Promise<void>;
 }): Promise<UpdateRunResult> {
   let updateRoot = params.switchToGit ? resolveGitInstallDir() : params.root;
   const effectiveTimeout = params.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
@@ -522,7 +519,20 @@ export async function updateGitInstall(params: {
     ? await readPackageUpdateIdentity(installTarget.packageRoot ?? params.root)
     : undefined;
   let exposure: Awaited<ReturnType<typeof prepareGitPackageExposure>> | undefined;
-  const runUpdate = async (gitRoot: string, publishGitCheckout?: () => Promise<string>) =>
+  const runDoctor: NonNullable<UpdateRunnerOptions["runGitDoctor"]> = (root, results) =>
+    runPackageUpdateDoctor({
+      ...params,
+      results,
+      managedServiceEnv: params.getManagedServiceEnv(),
+      root,
+      timeoutMs: effectiveTimeout,
+      workTimeoutMs: params.timeoutMs ?? null,
+    });
+  const runUpdate = async (
+    gitRoot: string,
+    publishGitCheckout?: () => Promise<string>,
+    gitArtifactStorageRoot?: string,
+  ) =>
     updateGitCheckout({
       ...(await buildUpdateCommandRunner()),
       gitRoot,
@@ -530,20 +540,21 @@ export async function updateGitInstall(params: {
       startedAt: params.startedAt,
       opts: {
         timeoutMs: params.timeoutMs,
+        sourceRuntimePrepared: params.sourceRuntimePrepared,
         progress: params.progress,
         channel: params.channel,
         devTarget: params.devTarget,
         beforeGitMutation:
           process.platform === "freebsd"
             ? async (target) => {
-                await params.beforeGitMutation?.(target);
+                await params.beforeGitMutation(target);
                 await createFreeBsdPkgOwnershipInspection(effectiveTimeout).assertUnowned(
                   updateRoot,
                 );
                 params.assertCurrent?.();
               }
             : params.beforeGitMutation,
-        inspectGitTarget: params.inspectGitTarget,
+        inspectGitTarget: (target) => params.inspectGitTarget(target, installTarget ?? undefined),
         beforeGitStaging: params.switchToGit
           ? undefined
           : async () => ({
@@ -551,44 +562,38 @@ export async function updateGitInstall(params: {
               failureReason: "snapshot-capacity-insufficient",
             }),
         publishGitCheckout,
+        gitArtifactStorageRoot,
         validateCandidate: params.validateCandidate,
-        runGitDoctor: (root) =>
-          runPackageUpdateDoctor({
-            ...params,
-            managedServiceEnv: params.getManagedServiceEnv(),
-            root,
-            timeoutMs: effectiveTimeout,
-          }),
-        prepareGitExposure: installTarget
-          ? async (candidateRoot, candidateSha, candidateEnv) => {
-              const packageName =
-                (await readPackageName(installTarget.packageRoot ?? params.root)) ??
-                DEFAULT_PACKAGE_NAME;
-              exposure = await prepareGitPackageExposure({
-                installTarget,
-                installSpec: candidateRoot,
-                packageName,
-                packageRoot: installTarget.packageRoot,
-                runCommand: runCommandWithTimeout,
-                runStep: (stepParams) =>
-                  runUpdateStep({ ...stepParams, progress: params.progress }),
-                timeoutMs: effectiveTimeout,
-                env: mergeProcessEnv([installEnv, candidateEnv]),
-                installCwd: candidateRoot,
-                expectedGitCheckout: { root: candidateRoot, sha: candidateSha },
-                activateGitRoot: updateRoot,
-                onTransaction: params.onTransaction,
-                assertCurrent: params.assertCurrent,
-                postVerifyStep: (root: string) =>
-                  runPackageUpdateDoctor({
-                    ...params,
-                    managedServiceEnv: params.getManagedServiceEnv(),
-                    root,
-                    timeoutMs: effectiveTimeout,
-                  }),
-              });
+        ...(installTarget
+          ? {
+              prepareGitExposure: async (candidateRoot, candidateSha, candidateEnv) => {
+                const packageName =
+                  (await readPackageName(installTarget.packageRoot ?? params.root)) ??
+                  DEFAULT_PACKAGE_NAME;
+                exposure = await prepareGitPackageExposure({
+                  installTarget,
+                  installSpec: candidateRoot,
+                  packageName,
+                  packageRoot: installTarget.packageRoot,
+                  runCommand: runCommandWithTimeout,
+                  runStep: (stepParams) =>
+                    runUpdateStep({ ...stepParams, progress: params.progress }),
+                  timeoutMs: effectiveTimeout,
+                  workTimeoutMs: params.timeoutMs ?? null,
+                  env: mergeProcessEnv([installEnv, candidateEnv]),
+                  installCwd: candidateRoot,
+                  expectedGitCheckout: { root: candidateRoot, sha: candidateSha },
+                  activateGitRoot: updateRoot,
+                  onTransaction: params.onTransaction,
+                  assertCurrent: params.assertCurrent,
+                  postVerifyStep: runDoctor,
+                });
+              },
             }
-          : undefined,
+          : {
+              onTransaction: params.onTransaction,
+              runGitDoctor: runDoctor,
+            }),
       },
     });
   let stagedUpdateResult: UpdateRunResult | undefined;
@@ -599,12 +604,12 @@ export async function updateGitInstall(params: {
           env: installEnv,
           timeoutMs: effectiveTimeout,
           progress: params.progress,
-          useStagedCheckout: async (stagingRoot, publish, targetRoot) => {
+          useStagedCheckout: async (stagingRoot, publish, targetRoot, storageRoot) => {
             // Exposure must use the clone owner's pinned destination, not a
             // caller alias that transport may have retargeted meanwhile.
             updateRoot = targetRoot;
             await createFreeBsdPkgOwnershipInspection(effectiveTimeout).assertUnowned(updateRoot);
-            stagedUpdateResult = await runUpdate(stagingRoot, publish);
+            stagedUpdateResult = await runUpdate(stagingRoot, publish, storageRoot);
             if (stagedUpdateResult.root === stagingRoot) {
               stagedUpdateResult = {
                 ...stagedUpdateResult,
@@ -647,13 +652,10 @@ export async function updateGitInstall(params: {
         status: packageUpdate.failedStep ? "error" : "ok",
         reason:
           packageUpdate.reason ??
-          (packageUpdate.failedStep?.configWriteRefusal
-            ? packageUpdate.failedStep.configWriteRefusal.reason === "requester-revoked"
-              ? "requester-revoked"
-              : "repair-requires-config-change"
-            : packageUpdate.failedStep
-              ? normalizeFallbackFailureReason(packageUpdate.failedStep.name)
-              : undefined),
+          getUpdateDoctorConfigFailureReason(packageUpdate.failedStep?.configWriteRefusal) ??
+          (packageUpdate.failedStep
+            ? normalizeFallbackFailureReason(packageUpdate.failedStep.name)
+            : undefined),
         recovery: packageUpdate.recovery,
         failedStep: packageUpdate.failedStep ?? undefined,
         steps: [...steps, ...packageUpdate.steps],

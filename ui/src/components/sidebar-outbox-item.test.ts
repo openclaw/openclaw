@@ -66,8 +66,7 @@ it.each([
         dispose() {},
       },
     };
-    const onClosePanel = vi.fn();
-    render(renderSidebarOutboxItem({ entry, context, onClosePanel }), container);
+    render(renderSidebarOutboxItem({ entry, context, onNavigate: navigate }), container);
     const link = container.querySelector<HTMLAnchorElement>("a")!;
     expect(link.textContent).toBe("Review");
     expect(link.getAttribute("aria-label")).toBe("Review in chat");
@@ -87,7 +86,6 @@ it.each([
       pathname: "/team/chat/writer/review",
       search: "?__openclawComposerFocus=1",
     });
-    expect(onClosePanel).toHaveBeenCalledOnce();
     expect(request).not.toHaveBeenCalled();
     expect(context.sidebarAttention.dismiss).not.toHaveBeenCalled();
     expect(entries).toEqual([entry]);

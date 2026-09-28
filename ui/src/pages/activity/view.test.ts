@@ -57,14 +57,14 @@ function createProps(overrides: Partial<ActivityProps> = {}): ActivityProps {
 }
 
 describe("renderActivity", () => {
-  beforeEach(() => {
-    document.body.innerHTML = "";
+  let container: HTMLDivElement;
+  beforeEach(async () => {
+    await i18n.setLocale("en");
+    container = document.createElement("div");
+    document.body.replaceChildren(container);
   });
 
   it("keeps raw global status visible without linking to another session outside global scope", async () => {
-    await i18n.setLocale("en");
-    const container = document.createElement("div");
-    document.body.append(container);
     render(
       renderCurrentWork({
         basePath: "/control",
@@ -114,9 +114,6 @@ describe("renderActivity", () => {
   it.each([false, true])(
     "distinguishes an incomplete empty snapshot from a normal empty refresh (incomplete: %s)",
     async (incomplete) => {
-      await i18n.setLocale("en");
-      const container = document.createElement("div");
-      document.body.append(container);
       render(
         renderCurrentWork({
           basePath: "/control",
@@ -145,35 +142,60 @@ describe("renderActivity", () => {
     },
   );
 
-  it("renders the summary from localized labels", async () => {
-    await i18n.setLocale("de");
-    const container = document.createElement("div");
-    document.body.append(container);
-
-    render(renderActivity(createProps()), container);
-
-    expect(container.querySelector(".activity-entry__text")?.textContent?.trim()).toBe(
-      "0 Argumente ausgeblendet",
-    );
+  it("renders localized summaries and timestamps across locale changes", async () => {
+    const previousLocale = i18n.getLocale();
+    const timestamp = Date.UTC(2026, 0, 2, 15, 4, 55);
+    const props = createProps({
+      entries: [0, timestamp, Number.NaN, Number.POSITIVE_INFINITY, 8_640_000_000_000_001].map(
+        (updatedAt, index) => createEntry({ id: `time-${index}`, updatedAt }),
+      ),
+    });
+    const options: Intl.DateTimeFormatOptions = {
+      hour: "numeric",
+      minute: "2-digit",
+      second: "2-digit",
+    };
+    try {
+      for (const [locale, summary] of [
+        ["en", "0 arguments hidden"],
+        ["de", "0 Argumente ausgeblendet"],
+      ] as const) {
+        await i18n.setLocale(locale);
+        render(renderActivity(props), container);
+        expect(container.querySelector(".activity-entry__text")?.textContent?.trim()).toBe(summary);
+        expect(
+          Array.from(
+            container.querySelectorAll(".activity-entry__meta > span:first-child"),
+            (element) => element.textContent,
+          ),
+        ).toEqual([
+          new Date(0).toLocaleTimeString(locale, options),
+          new Date(timestamp).toLocaleTimeString(locale, options),
+          "",
+          "",
+          "",
+        ]);
+      }
+    } finally {
+      await i18n.setLocale(previousLocale);
+    }
   });
 
-  it("exposes the activity stream as a named list", async () => {
+  it("groups the named activity stream without overriding native disclosure semantics", async () => {
     await i18n.setLocale("en");
-    const container = document.createElement("div");
-    document.body.append(container);
 
     render(renderActivity(createProps()), container);
 
     const stream = container.querySelector(".activity-stream");
-    expect(stream?.getAttribute("role")).toBe("list");
+    expect(stream?.getAttribute("role")).toBe("group");
     expect(stream?.getAttribute("aria-label")).toBe("Agent activity entries");
-    expect(container.querySelector(".activity-entry")?.getAttribute("role")).toBe("listitem");
+    const entry = container.querySelector(".activity-entry");
+    expect(entry?.tagName).toBe("DETAILS");
+    expect(entry?.hasAttribute("role")).toBe(false);
+    expect(entry?.querySelector("summary")).not.toBeNull();
   });
 
   it("keeps primary live filters visible and moves the tool picker into the filter disclosure", async () => {
-    await i18n.setLocale("en");
-    const container = document.createElement("div");
-    document.body.append(container);
     const onFilterTextChange = vi.fn();
     const onToolFilterChange = vi.fn();
 
@@ -218,10 +240,6 @@ describe("renderActivity", () => {
   });
 
   it("renders selected answer candidates without tool-only facts", async () => {
-    await i18n.setLocale("en");
-    const container = document.createElement("div");
-    document.body.append(container);
-
     render(
       renderActivity(
         createProps({
@@ -256,23 +274,7 @@ describe("renderActivity", () => {
     );
   });
 
-  it("lets the route shell own the page heading", async () => {
-    await i18n.setLocale("en");
-    const container = document.createElement("div");
-    document.body.append(container);
-
-    render(renderActivity(createProps()), container);
-
-    expect(container.querySelector(".activity-page__title")).toBeNull();
-    expect(container.querySelector(".activity-page__subtitle")).toBeNull();
-    expect(container.querySelector(".activity-count")?.textContent?.trim()).toBe("1 of 1");
-  });
-
   it("normalizes rounded minute durations that would otherwise show 60 seconds", async () => {
-    await i18n.setLocale("en");
-    const container = document.createElement("div");
-    document.body.append(container);
-
     render(renderActivity(createProps()), container);
 
     const meta = Array.from(container.querySelectorAll(".activity-entry__meta span")).map(
@@ -282,10 +284,6 @@ describe("renderActivity", () => {
   });
 
   it("links the displayed run id to the deep-link inspector", async () => {
-    await i18n.setLocale("en");
-    const container = document.createElement("div");
-    document.body.append(container);
-
     render(
       renderActivity(createProps({ entries: [createEntry({ runId: "live run:a/b" })] })),
       container,

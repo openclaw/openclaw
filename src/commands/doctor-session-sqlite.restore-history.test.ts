@@ -2,8 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import * as migrationArtifact from "../infra/session-sqlite-migration-artifact.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import * as migrationArtifact from "./doctor-session-sqlite-artifact.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import {
   importLegacyStore,

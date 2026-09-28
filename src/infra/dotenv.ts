@@ -237,6 +237,8 @@ const BLOCKED_WORKSPACE_DOTENV_PREFIXES = [
   // AWS SDK endpoint overrides redirect signed provider traffic by service id.
   "AWS_ENDPOINT_URL_",
   "OPENAI_API_KEY_",
+  // OCM launch identity and executable selection belong to the trusted launcher.
+  "OCM_",
   // Workspace .env is untrusted; reserve the full OpenClaw runtime namespace
   // for shell/global config so new OPENCLAW_* controls are fail-closed by default.
   "OPENCLAW_",
@@ -355,14 +357,15 @@ export async function loadDotEnvAsync(opts: {
 
 export { loadGlobalRuntimeDotEnvFiles };
 
-export function loadDotEnv(opts?: { quiet?: boolean }) {
+export function loadDotEnv(opts?: { quiet?: boolean; env?: NodeJS.ProcessEnv }) {
   const quiet = opts?.quiet ?? true;
+  const env = opts?.env ?? process.env;
   const cwd = tryProcessCwd();
   if (cwd) {
-    loadWorkspaceDotEnvFile(path.join(cwd, ".env"), { quiet });
+    loadWorkspaceDotEnvFile(path.join(cwd, ".env"), { quiet, env });
   }
 
   // Then load global fallback: ~/.openclaw/.env (or OPENCLAW_STATE_DIR/.env),
   // without overriding any env vars already present.
-  loadGlobalRuntimeDotEnvFiles({ quiet });
+  loadGlobalRuntimeDotEnvFiles({ quiet, env });
 }

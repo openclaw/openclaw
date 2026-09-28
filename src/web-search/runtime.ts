@@ -1,4 +1,3 @@
-// Web search runtime resolves configured search providers and executes searches.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -93,16 +92,7 @@ function hasEntryCredential(
 }
 
 function hasImplicitProviderSelectionSignal(
-  provider: Pick<
-    PluginWebSearchProviderEntry,
-    | "credentialPath"
-    | "id"
-    | "authProviderId"
-    | "envVars"
-    | "getConfiguredCredentialValue"
-    | "getConfiguredCredentialFallback"
-    | "requiresCredential"
-  >,
+  provider: Parameters<typeof hasEntryCredential>[0],
   config: OpenClawConfig | undefined,
   search: WebSearchConfig | undefined,
   agentDir?: string,
@@ -205,7 +195,6 @@ export function resolveWebSearchProviderId(params: {
       );
       return provider.id;
     }
-    return "";
   }
 
   return "";
@@ -236,10 +225,18 @@ function resolveRuntimePreferredWebSearchProviderId(params: {
     return runtimeProviderId;
   }
   const provider = params.providers?.find((entry) => entry.id === runtimeProviderId);
-  return provider &&
-    hasImplicitProviderSelectionSignal(provider, params.config, params.search, params.agentDir)
-    ? provider.id
-    : undefined;
+  if (
+    !provider ||
+    !hasImplicitProviderSelectionSignal(provider, params.config, params.search, params.agentDir)
+  ) {
+    return undefined;
+  }
+  // The secrets snapshot cannot see OAuth profiles. Let the credential-aware
+  // order choose ahead of its env-keyed winner, which remains eligible for fallback.
+  if (params.runtimeWebSearch?.selectedProviderKeySource === "env") {
+    return undefined;
+  }
+  return provider.id;
 }
 
 type WebSearchRequestContext = {
@@ -353,13 +350,12 @@ function resolveWebSearchCandidates(
         hasImplicitProviderSelectionSignal(provider, config, search, options?.agentDir),
       );
 
-  const orderedProviders = [
+  return [
     ...preferredIds
       .map((id) => providers.find((entry) => entry.id === id))
       .filter((entry): entry is PluginWebSearchProviderEntry => Boolean(entry)),
     ...fallbackProviders.filter((entry) => !preferredIds.includes(entry.id)),
   ];
-  return orderedProviders;
 }
 
 /** Reports whether web_search can use the prepared selection or resolve an agent-scoped provider. */

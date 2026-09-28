@@ -1,11 +1,11 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 /**
  * Shared Browser control-server test harness with mocked Chrome, CDP,
  * Playwright, Chrome MCP, config, and media dependencies.
  */
 import { afterEach, beforeEach, vi } from "vitest";
 import { deriveDefaultBrowserCdpPortRange } from "../config/port-defaults.js";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import { installChromeUserDataDirHooks } from "./chrome-user-data-dir.test-harness.js";
 import { getFreePort } from "./test-port.js";
@@ -199,7 +199,6 @@ const pwMocks = vi.hoisted(() => {
     closePageViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
     closePlaywrightBrowserConnection,
     hasCachedPlaywrightBrowserConnection: vi.fn((_cdpUrl: string) => false),
-    retirePlaywrightBrowserConnection: vi.fn(() => false),
     retirePlaywrightBrowserConnectionExact: vi.fn((opts: { cdpUrl: string }) => ({
       retired: false,
       close: async () => await closePlaywrightBrowserConnection(opts),
@@ -469,27 +468,32 @@ function defaultProfilesForState(testPort: number): HarnessState["cfgProfiles"] 
   };
 }
 
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  const loadConfig = () => {
-    return {
-      browser: {
-        enabled: true,
-        evaluateEnabled: state.cfgEvaluateEnabled,
-        extraArgs: state.cfgExtraArgs,
-        color: "#FF4500",
-        attachOnly: state.cfgAttachOnly,
-        ssrfPolicy: state.cfgSsrfPolicy ?? { dangerouslyAllowPrivateNetwork: true },
-        headless: true,
-        defaultProfile: state.cfgDefaultProfile,
-        profiles:
-          Object.keys(state.cfgProfiles).length > 0
-            ? state.cfgProfiles
-            : defaultProfilesForState(state.testPort),
-      },
-    };
+function loadConfig() {
+  return {
+    browser: {
+      enabled: true,
+      evaluateEnabled: state.cfgEvaluateEnabled,
+      extraArgs: state.cfgExtraArgs,
+      color: "#FF4500",
+      attachOnly: state.cfgAttachOnly,
+      ssrfPolicy: state.cfgSsrfPolicy ?? { dangerouslyAllowPrivateNetwork: true },
+      headless: true,
+      defaultProfile: state.cfgDefaultProfile,
+      profiles:
+        Object.keys(state.cfgProfiles).length > 0
+          ? state.cfgProfiles
+          : defaultProfilesForState(state.testPort),
+    },
   };
-  const writeConfigFile = vi.fn(async (_cfg?: ReturnType<typeof loadConfig>) => {});
+}
+
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
+  getRuntimeConfig: loadConfig,
+  getRuntimeConfigSnapshot: vi.fn(() => null),
+}));
+
+vi.mock("openclaw/plugin-sdk/config-mutation", async (importOriginal) => {
   const mutateConfigFile = vi.fn(
     async (params: {
       mutate: (
@@ -499,7 +503,6 @@ vi.mock("../config/config.js", async () => {
     }) => {
       const draft = structuredClone(loadConfig());
       const result = await params.mutate(draft, { snapshot: { path: "/tmp/openclaw.json" } });
-      await writeConfigFile(draft);
       return {
         path: "/tmp/openclaw.json",
         previousHash: "test-hash",
@@ -514,15 +517,7 @@ vi.mock("../config/config.js", async () => {
     },
   );
   return {
-    ...actual,
-    createConfigIO: vi.fn(() => ({
-      loadConfig,
-      writeConfigFile,
-    })),
-    getRuntimeConfig: loadConfig,
-    getRuntimeConfigSnapshot: vi.fn(() => null),
-    loadConfig,
-    writeConfigFile,
+    ...(await importOriginal<typeof import("openclaw/plugin-sdk/config-mutation")>()),
     mutateConfigFile,
   };
 });
@@ -572,7 +567,8 @@ vi.mock("./pw-ai.js", () => ({ pwAi: pwMocks }));
 
 vi.mock("./chrome-mcp.js", () => chromeMcpMocks);
 
-vi.mock("../media/store.js", () => ({
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
   MEDIA_MAX_BYTES: 5 * 1024 * 1024,
   ensureMediaDir: vi.fn(async () => {}),
   getMediaDir: vi.fn(() => "/tmp"),

@@ -1,5 +1,6 @@
 import { readBoardSessionKeys } from "../../boards/sqlite-board-store.kernel.js";
 import type { GatewayStoredSessionTarget } from "../../config/sessions/combined-store-gateway.js";
+import type { SessionRowDatabaseFacts } from "../../config/sessions/session-transcript-worker.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -14,7 +15,10 @@ import {
   type WorkerPlacementRunnerAvailabilityReader,
 } from "../worker-environments/placement-projector.js";
 import type { WorkerEnvironmentServiceContract } from "../worker-environments/service-contract.js";
-import { isFailedWorkerPlacementEnvironmentGone } from "../worker-environments/session-placement-lifecycle.js";
+import {
+  canRedispatchFailedWorkerPlacement,
+  isFailedWorkerPlacementEnvironmentGone,
+} from "../worker-environments/session-placement-lifecycle.js";
 
 type PlacementReadContext = {
   workerPlacementDiskSpaceReader?: WorkerPlacementDiskSpaceReader;
@@ -30,6 +34,7 @@ export function readSessionRowFacts(params: {
   context?: PlacementReadContext;
   placementFactsReader?: SessionRowPlacementFactsReader;
   activitySummaryEnabled?: boolean;
+  databaseFacts?: Pick<SessionRowDatabaseFacts, "hasBoard" | "activitySummaryWatermark">;
 }) {
   const { cfg, entry, placementFactsReader } = params;
   // The board callback shares a closure context with present; never capture a resident row.
@@ -42,6 +47,7 @@ export function readSessionRowFacts(params: {
       move,
       environment,
       workspaceResultReconciling = false,
+      workspaceRecoveryPending = false,
     } = placementSource ?? {};
     const identity = placement
       ? readWorkerPlacementIdentity(
@@ -61,6 +67,11 @@ export function readSessionRowFacts(params: {
           ? "restart"
           : "stop-first"
         : undefined;
+    const retryOnSend =
+      placement?.state === "failed" &&
+      !move &&
+      !workspaceRecoveryPending &&
+      canRedispatchFailedWorkerPlacement(placement, environment);
     return {
       placement,
       move,
@@ -68,6 +79,7 @@ export function readSessionRowFacts(params: {
       environment,
       identity,
       failedRecoveryAction,
+      retryOnSend,
     };
   };
   let placementFacts = readPlacementFacts();
@@ -78,9 +90,10 @@ export function readSessionRowFacts(params: {
     cfg,
     entry,
     enabled: params.activitySummaryEnabled,
+    watermark: params.databaseFacts?.activitySummaryWatermark,
   });
   return {
-    hasBoard: readSessionRowHasBoard({ key, storeTarget }),
+    hasBoard: params.databaseFacts?.hasBoard ?? readSessionRowHasBoard({ key, storeTarget }),
     present: () => {
       const currentSource = placementFactsReader?.getProjectionFacts(entry.sessionId);
       if (currentSource !== placementSource) {
@@ -94,6 +107,7 @@ export function readSessionRowFacts(params: {
         environment,
         identity,
         failedRecoveryAction,
+        retryOnSend,
       } = placementFacts;
       return {
         ...(placement
@@ -108,6 +122,7 @@ export function readSessionRowFacts(params: {
                 identity,
                 failedRecoveryAction,
                 workspaceResultReconciling,
+                retryOnSend,
               ),
             }
           : {}),
@@ -119,8 +134,7 @@ export function readSessionRowFacts(params: {
   };
 }
 
-/** Selection can check board membership without materializing placement or display fields. */
-export function readSessionRowHasBoard(target: {
+function readSessionRowHasBoard(target: {
   key: string;
   storeTarget: GatewayStoredSessionTarget["storeTarget"];
 }) {

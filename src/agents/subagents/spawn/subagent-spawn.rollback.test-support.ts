@@ -1,13 +1,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { expect, it, type Mock } from "vitest";
+import { expect, it, vi, type Mock } from "vitest";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { createGatewayInstanceRuntime } from "../../../gateway/server-instance-runtime.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { withTimeout } from "../../../infra/fs-safe.js";
 import type { AdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { testing as registryTesting } from "../registry/subagent-registry.test-helpers.js";
+import { persistSubagentRunsToDiskOrThrow } from "../registry/subagent-registry-state.js";
 import {
   createBoundSpawnInvocation,
   createSpawnOperatorSource,
@@ -69,24 +69,22 @@ export function registerOperatorSpawnRollbackCases(options: {
             embeddedSettled = true;
           }
         });
-        registryTesting.setDepsForTest({
-          persistSubagentRunsToDiskOrThrow: () => {
-            const record = expectDefined(
-              [...subagentRuns.values()].find(
-                (entry) => entry.requesterSessionKey === bound.parentSessionKey,
-              ),
-              "ordinary child registration",
-            );
-            childSessionKey = record.childSessionKey;
-            childRunId = record.runId;
-            const acceptedRun = expectDefined(
-              context.chatAbortControllers.get(record.runId),
-              "accepted child execution owner",
-            );
-            expect(acceptedRun.sessionKey).toBe(record.childSessionKey);
-            source.revoke();
-            throw new Error("ordinary child registry write failed");
-          },
+        vi.mocked(persistSubagentRunsToDiskOrThrow).mockImplementation(() => {
+          const record = expectDefined(
+            [...subagentRuns.values()].find(
+              (entry) => entry.requesterSessionKey === bound.parentSessionKey,
+            ),
+            "ordinary child registration",
+          );
+          childSessionKey = record.childSessionKey;
+          childRunId = record.runId;
+          const acceptedRun = expectDefined(
+            context.chatAbortControllers.get(record.runId),
+            "accepted child execution owner",
+          );
+          expect(acceptedRun.sessionKey).toBe(record.childSessionKey);
+          source.revoke();
+          throw new Error("ordinary child registry write failed");
         });
       }
       try {
@@ -125,7 +123,7 @@ export function registerOperatorSpawnRollbackCases(options: {
         failures.push(error);
       } finally {
         spawnTesting.setDepsForTest();
-        registryTesting.setDepsForTest();
+        vi.mocked(persistSubagentRunsToDiskOrThrow).mockReset();
         for (const entry of context.chatAbortControllers.values()) {
           if (entry !== bound.parent.entry) {
             entry.controller.abort(new Error("spawn rollback fixture cleanup"));

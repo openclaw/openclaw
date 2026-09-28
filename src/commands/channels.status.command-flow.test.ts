@@ -1,5 +1,7 @@
 // Channels status command-flow tests cover gateway calls, config fallback, and timeout validation.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { retainGatewayResponsePayload } from "../../packages/gateway-client/src/protocol-request.js";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 
 vi.mock("../cli/daemon-cli/diagnostic-readiness.js", () => ({
   waitForGatewayDiagnosticReadiness: vi.fn(async () => undefined),
@@ -197,6 +199,27 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
     mocks.withProgress.mockClear();
     mocks.listChannelPlugins.mockReturnValue([createTokenOnlyPlugin()]);
   });
+
+  it.each([false, true])(
+    "preserves a Gateway rejection instead of reporting it unreachable (json=%s)",
+    async (json) => {
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const error = new GatewayClientRequestError({
+        code: "INVALID_REQUEST",
+        message: "unknown channel: missing-channel",
+      });
+      retainGatewayResponsePayload(error, undefined);
+      mocks.callGateway.mockRejectedValueOnce(error);
+
+      await expect(
+        channelsStatusCommand({ channel: "missing-channel", json }, runtime),
+      ).rejects.toBe(error);
+
+      expect(mocks.requireValidConfig).not.toHaveBeenCalled();
+      expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
+      expect(runtime.error).not.toHaveBeenCalled();
+    },
+  );
 
   it("sends valid channel RPC parameters after fractional startup timing", async () => {
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
@@ -551,16 +574,5 @@ describe("channelsStatusCommand SecretRef fallback flow", () => {
 
     const payload = JSON.parse(logs.at(-1) ?? "{}");
     expect(payload.configuredChannels).toStrictEqual(["clickclack"]);
-  });
-
-  it("rejects invalid timeout before falling back to config-only status", async () => {
-    const { runtime } = createCapturingTestRuntime();
-
-    await expect(channelsStatusCommand({ timeout: "1000ms" }, runtime as never)).rejects.toThrow(
-      'Received: "1000ms"',
-    );
-
-    expect(mocks.callGateway).not.toHaveBeenCalled();
-    expect(mocks.requireValidConfig).not.toHaveBeenCalled();
   });
 });

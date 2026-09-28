@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigPatchAck } from "./config-gateway-operations.ts";
 import { createConfigCapabilityHarness, createConfigServerMock } from "./config-test-harness.ts";
 
@@ -89,7 +89,10 @@ it("runExternalMutation preserves a retained form conflict after a hashless no-o
       method === "config.set" &&
       (params as { baseHash: string }).baseHash !== store.currentHash()
     ) {
-      throw new Error("config changed since last load; re-run config.get and retry");
+      throw new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: "config changed since last load; re-run config.get and retry",
+      });
     }
     return store.request(method, params);
   });

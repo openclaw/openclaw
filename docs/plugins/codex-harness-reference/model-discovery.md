@@ -77,22 +77,23 @@ response remains authoritative even if it contains no visible models; HTTP
 `401` and `403` return an empty catalog rather than exposing fallback models.
 
 <Note>
-The current bundled harness is `@openai/codex` `0.154.0`. A live `model/list`
-probe against the official `0.153.4` app-server, using an isolated,
-unauthenticated Codex home and `includeHidden: true`, returned this public
-subset of catalog metadata:
+The current bundled harness is `@openai/codex` `0.155.1`. A live `model/list`
+probe against that app-server, using an isolated Codex home authenticated with
+a ChatGPT account, returned this public subset of catalog metadata:
 
-| Model id        | Input modalities | Reasoning efforts                    |
-| --------------- | ---------------- | ------------------------------------ |
-| `gpt-5.4`       | text, image      | low, medium, high, xhigh             |
-| `gpt-5.4-mini`  | text, image      | low, medium, high, xhigh             |
-| `gpt-5.5`       | text, image      | low, medium, high, xhigh             |
-| `gpt-5.6-luna`  | text, image      | low, medium, high, xhigh, max        |
-| `gpt-5.6-sol`   | text, image      | low, medium, high, xhigh, max, ultra |
-| `gpt-5.6-terra` | text, image      | low, medium, high, xhigh, max, ultra |
+| Model id        | Input modalities | Reasoning efforts                    | Default effort |
+| --------------- | ---------------- | ------------------------------------ | -------------- |
+| `gpt-6-astra`   | text, image      | low, medium, high, xhigh, max, ultra | medium         |
+| `gpt-6-sol`     | text, image      | low, medium, high, xhigh, max, ultra | medium         |
+| `gpt-6-luna`    | text, image      | low, medium, high, xhigh, max        | medium         |
+| `gpt-5.6-luna`  | text, image      | low, medium, high, xhigh, max        | medium         |
+| `gpt-5.6-sol`   | text, image      | low, medium, high, xhigh, max, ultra | low            |
+| `gpt-5.6-terra` | text, image      | low, medium, high, xhigh, max, ultra | medium         |
 
-The probe marked `gpt-5.4` and `gpt-5.4-mini` as hidden. This snapshot does not
-prove account entitlement. Available model IDs, input modalities, and reasoning
+The check reused the same isolated home and catalog cache from `0.154.0`,
+without clearing the cache. The earlier app-server omitted GPT-6 Sol and Luna;
+`0.155.1` listed both for the same account. This snapshot does not establish
+access for other accounts. Available model IDs, input modalities, and reasoning
 efforts remain account-scoped. Run `/codex models` after starting or upgrading
 the gateway to inspect the actual public picker for your account.
 

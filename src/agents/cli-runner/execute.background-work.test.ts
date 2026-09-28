@@ -9,8 +9,12 @@ import {
   markDiagnosticEmbeddedRunStarted,
 } from "../../logging/diagnostic-run-activity.js";
 import { markDiagnosticModelStartedForTest } from "../../logging/diagnostic-run-activity.test-support.js";
-import { logSessionStateChange, startDiagnosticHeartbeat } from "../../logging/diagnostic.js";
+import {
+  logSessionStateChange,
+  startGatewayDiagnosticHeartbeat,
+} from "../../logging/diagnostic.js";
 import { resetDiagnosticStateForTest } from "../../logging/diagnostic.test-support.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { executePreparedCliRun } from "./execute.js";
 import { wrapPreparedCliRunWithTestAdmission } from "./execute.test-support.js";
@@ -28,7 +32,11 @@ it.each(["embedded_run", "model_call"] as const)(
     });
     vi.setSystemTime(Date.parse("2026-08-04T00:00:00Z"));
     const recoverStuckSession = vi.fn();
-    startDiagnosticHeartbeat({ diagnostics: { enabled: true } }, { recoverStuckSession });
+    startGatewayDiagnosticHeartbeat(
+      createTestGatewayScheduler("fake-timers"),
+      { diagnostics: { enabled: true } },
+      { recoverStuckSession },
+    );
     const context = buildPreparedCliRunContext({
       runId: "background-run",
       sessionId: "background-session",
@@ -102,3 +110,62 @@ it.each(["embedded_run", "model_call"] as const)(
     }
   },
 );
+
+it("emits transformed completed replies while the native continuation remains active", async () => {
+  const context = buildPreparedCliRunContext({
+    runId: "completed-background-reply",
+    config: { plugins: { enabled: false } },
+    backend: { command: process.execPath, sessionMode: "none" },
+  });
+  context.backendResolved.bundleMcp = false;
+  context.backendResolved.textTransforms = { output: [{ from: /PRIVATE_MARKER/g, to: "answer" }] };
+  const paused = createDeferred();
+  const finish = createDeferred();
+  const replies: string[] = [];
+  const { onAgentEventForRun } = await import("../../infra/agent-events.js");
+  const unsubscribe = onAgentEventForRun(context.params.runId, (event) => {
+    if (event.stream === "assistant" && typeof event.data.completedText === "string") {
+      replies.push(event.data.completedText);
+    }
+  });
+  context.executionTarget = {
+    kind: "plugin",
+    async *execute() {
+      yield {
+        type: "system",
+        subtype: "background_tasks_changed",
+        tasks: [{ task_id: "background", task_type: "local_agent" }],
+      };
+      yield {
+        type: "result",
+        subtype: "success",
+        result: "First PRIVATE_MARKER.",
+        openclaw_interim_result: true,
+      };
+      paused.resolve();
+      await finish.promise;
+      yield { type: "system", subtype: "background_tasks_changed", tasks: [] };
+      yield { type: "result", subtype: "success", result: "Last PRIVATE_MARKER." };
+    },
+  };
+  let settled = false;
+  const run = wrapPreparedCliRunWithTestAdmission(executePreparedCliRun)(context).finally(() => {
+    settled = true;
+  });
+  try {
+    await paused.promise;
+    expect(settled).toBe(false);
+    expect(replies).toEqual(["First answer."]);
+    finish.resolve();
+    await expect(run).resolves.toMatchObject({
+      text: "First answer.\nLast answer.",
+      textParts: ["First answer.", "Last answer."],
+      rawText: "First PRIVATE_MARKER.\nLast PRIVATE_MARKER.",
+    });
+    expect(replies).toEqual(["First answer."]);
+  } finally {
+    finish.resolve();
+    await Promise.allSettled([run]);
+    unsubscribe();
+  }
+});

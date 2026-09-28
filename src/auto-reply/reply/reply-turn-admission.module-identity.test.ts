@@ -4,14 +4,20 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build } from "tsdown";
 import { expect, it } from "vitest";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { spawnNodeEvalSync } from "../../test-utils/node-process.js";
 
-it("keeps admitted session ownership across native and transformed SDK graphs", async () => {
+it("keeps admitted session ownership when transformed plugins import the native SDK", async () => {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "reply-admission-module-")));
   const repo = process.cwd();
   const dist = path.join(root, "dist");
+  const processDeclaration = resolveRuntimeWorkerUrl({
+    currentModuleUrl: runtimeProcessEntrypoints.stateRead.currentModuleUrl,
+    sourceWorkerName: "runtime-process-entrypoints",
+    distWorkerPath: "infra/runtime-process-entrypoints.js",
+  }).href;
   const deferredModules = new Set<string>();
-  const nativeRuntime = path.join(dist, "node_modules/admission-native-runtime");
   const source = (relativePath: string) => JSON.stringify(path.join(repo, relativePath));
   const ownerExports = `
     export { admitReplyTurn } from ${source("src/auto-reply/reply/reply-turn-admission.ts")};
@@ -35,18 +41,26 @@ it("keeps admitted session ownership across native and transformed SDK graphs", 
       path.join(root, "plugin.ts"),
       'export * from "openclaw/plugin-sdk/admission-fixture";\n',
     );
-    // Keep lazy recovery/archival graphs out of this admission fixture. The child
-    // rejects and records any attempt to enter them, including caught import errors.
+    // Admission now reads through the real history worker. Borrow the maintained
+    // subprocess generation; keep unrelated recovery/archival graphs deferred.
     await build({
       plugins: [
         {
           name: "defer-unexercised-runtime",
           async resolveId(id, importer, options) {
-            if (options.kind !== "dynamic-import") {
-              return null;
-            }
             const resolved = await this.resolve(id, importer, { skipSelf: true });
             if (!resolved || resolved.external) {
+              return resolved;
+            }
+            const filename = path.normalize(resolved.id);
+            if (filename === path.join(repo, "src/infra/runtime-process-entrypoints.ts")) {
+              return { id: processDeclaration, external: true };
+            }
+            if (
+              options.kind !== "dynamic-import" ||
+              filename ===
+                path.join(repo, "src/config/sessions/session-transcript-worker-runtime.ts")
+            ) {
               return resolved;
             }
             const url = pathToFileURL(resolved.id).href;
@@ -65,28 +79,8 @@ it("keeps admitted session ownership across native and transformed SDK graphs", 
       envPrefix: [],
       clean: false,
       deps: {
-        // Bundle dependencies once; only the admission owner needs a second module graph.
+        // Build the host and SDK together, matching the packaged host graph.
         alwaysBundle: (id) => id !== "@openclaw/fs-safe" && !id.startsWith("@openclaw/fs-safe/"),
-      },
-      // Duplicate the real admission/registry owners while their unchanged
-      // dependencies stay native, as external packages do in the installed SDK.
-      outputOptions: {
-        codeSplitting: {
-          includeDependenciesRecursively: false,
-          groups: [
-            {
-              name: "native-runtime",
-              test: (id) =>
-                id.replaceAll("\\", "/").startsWith(repo.replaceAll("\\", "/")) &&
-                !/[/\\]auto-reply[/\\]reply[/\\]reply-(?:run-|turn-admission)/.test(id),
-              priority: 10,
-            },
-          ],
-        },
-        chunkFileNames: (chunk) =>
-          chunk.name === "native-runtime"
-            ? "node_modules/admission-native-runtime/index.js"
-            : "[name]-[hash].js",
       },
       platform: "node",
       format: "esm",
@@ -95,9 +89,8 @@ it("keeps admitted session ownership across native and transformed SDK graphs", 
       tsconfig: path.join(repo, "tsconfig.json"),
       logLevel: "silent",
     });
-    fs.writeFileSync(path.join(nativeRuntime, "package.json"), '{"type":"module"}');
     for (const schema of ["openclaw-agent-schema.sql", "openclaw-state-schema.sql"]) {
-      fs.copyFileSync(path.join(repo, "src/state", schema), path.join(nativeRuntime, schema));
+      fs.copyFileSync(path.join(repo, "src/state", schema), path.join(dist, schema));
     }
     const result = spawnNodeEvalSync(
       String.raw`
@@ -140,10 +133,9 @@ it("keeps admitted session ownership across native and transformed SDK graphs", 
           const modulePath = path.join(root, "plugin.ts");
           transformed = host.getCachedPluginModuleLoader({
             modulePath, rootDir: root, importerUrl: import.meta.url, tryNative: false,
-            transformOpenClawDependencies: true,
             aliasMap: { "openclaw/plugin-sdk/admission-fixture": path.join(root, "dist/admission-runtime.js") },
           })(modulePath);
-          assert.notEqual(transformed.admitReplyTurn, host.admitReplyTurn, "transformed SDK evaluates a separate graph");
+          assert.equal(transformed.admitReplyTurn, host.admitReplyTurn, "plugin transformation retains the native admission owner");
           const cases = [
             { name: "native-same-store", parent: native, foreign: false },
             { name: "transformed-same-store", parent: transformed, foreign: false },
@@ -237,7 +229,6 @@ it("keeps admitted session ownership across native and transformed SDK graphs", 
           OPENCLAW_STATE_DIR: path.join(root, "state"),
           OPENCLAW_CONFIG_PATH: path.join(root, "config.json"),
           XDG_CACHE_HOME: path.join(root, "cache"),
-          JITI_NATIVE_MODULES: JSON.stringify(["admission-native-runtime"]),
           JITI_FS_CACHE: "0",
         },
       },

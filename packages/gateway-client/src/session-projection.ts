@@ -45,7 +45,10 @@ export {
   readSessionMessageIdentity,
   readSessionMessageSequence,
 } from "./session-projection-message-identity.js";
-export { isSessionProjectionErrorMessage } from "./session-projection-message-content.js";
+export {
+  isSessionProjectionErrorMessage,
+  projectSessionTerminalReplyMessage,
+} from "./session-projection-message-content.js";
 export type {
   SessionProjectionEntry,
   SessionMessageEnvelope,

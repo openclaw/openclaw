@@ -75,7 +75,7 @@ export function copyProviderCatalogResultProjection(
 
 /** Copies valid, secret-free provider outcomes out of a catalog hook result. */
 export function copyProviderCatalogOutcomes(
-  result: ProviderCatalogResult,
+  result: { outcomes?: readonly ProviderCatalogOutcome[] } | null | undefined,
 ): ProviderCatalogOutcome[] {
   return copyArrayEntries(readRecordValue(result, "outcomes")).flatMap((entry) => {
     if (!isRecordWithoutThrowing(entry)) {

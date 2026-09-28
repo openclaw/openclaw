@@ -67,6 +67,7 @@ async function selectForRequester(
     hasModelDirective: false,
   });
   return resolveSessionAuthSelection({
+    agentId: "main",
     cfg: {},
     provider: model.provider,
     modelId: model.model,
@@ -165,6 +166,7 @@ describe("person-linked session auth", () => {
 
       await expect(
         resolveSessionAuthSelection({
+          agentId: "main",
           cfg: {},
           provider: "openai",
           modelId: "gpt-5.6-luna",

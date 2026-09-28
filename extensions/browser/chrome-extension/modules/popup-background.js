@@ -7,10 +7,6 @@ import {
 import { isTabSelected } from "./relay-tab-groups.js";
 import { isValidTabId } from "./tab-eligibility.js";
 
-function errorResponse(sendResponse, error) {
-  sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) });
-}
-
 /** Own manual/native pairing transactions and compact popup/options messages. */
 export function createPopupMessageHandler({
   chromeApi = chrome,
@@ -316,13 +312,12 @@ export function createPopupMessageHandler({
             sendResponse({ ok: false, error: "unknown message" });
         }
       } catch (error) {
-        errorResponse(sendResponse, error);
+        sendResponse({ ok: false, error: error instanceof Error ? error.message : String(error) });
       }
     })();
     return true;
   };
 
   handler.applyPairing = applyPairing;
-  handler.unpair = unpair;
   return handler;
 }

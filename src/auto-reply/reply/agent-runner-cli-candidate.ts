@@ -15,19 +15,18 @@ import {
 } from "../../agents/cli-session.js";
 import { resolveDelegationCapability } from "../../agents/delegation-capability.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
+import {
+  getGeneratedMediaTaskIdsForSessionKey,
+  hasNewGeneratedMediaTaskForSessionKey,
+} from "../../agents/media-generation-activity.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import type { ModelFallbackResultClassification } from "../../agents/model-fallback-attempt.js";
 import { createAgentRunSupersededAbortError } from "../../agents/run-termination.js";
 import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
-import {
-  getGeneratedMediaTaskIdsForSessionKey,
-  hasNewGeneratedMediaTaskForSessionKey,
-} from "../../tasks/task-status-access.js";
-import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { BlockReplyContext, ReplyPayload } from "../types.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
@@ -40,10 +39,10 @@ import {
 import { buildCommandOutputFromToolResultEvent } from "./agent-runner-command-output.js";
 import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback-cycle.types.js";
 import { resolveRunModelHasVision } from "./agent-runner-run-params.js";
+import { prepareCliReplyPayload } from "./cli-reply-payload.js";
 import { shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
-import { parseReplyDirectives } from "./reply-directives.js";
 import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.js";
 
 export async function runCliFallbackCandidate(
@@ -130,14 +129,7 @@ export async function runCliFallbackCandidate(
   // from the shared agent-event handler; without it a failed CLI command renders
   // exactly like one that succeeded.
   const deliverCliCommandOutcome = async (
-    payload: {
-      name: string | undefined;
-      phase: "start" | "update" | "result";
-      args: Record<string, unknown> | undefined;
-      toolCallId?: string;
-      isError?: boolean;
-      result?: unknown;
-    },
+    payload: Parameters<typeof cliToolSummaryTracker.noteToolEvent>[0],
     commandBearing: boolean,
   ) => {
     const onCommandOutput = turn.opts?.onCommandOutput;
@@ -171,8 +163,18 @@ export async function runCliFallbackCandidate(
         // Placement admission may wait behind an older turn. Snapshot placement,
         // permission, and native resume identity only after this turn owns it.
         const sessionEntry = sessionTarget
-          ? loadSessionEntry({ ...sessionTarget, readConsistency: "latest" })
+          ? await withSessionEntryReadOnlyInWorker(
+              sessionTarget,
+              assertSettlementCurrent,
+              async (read) => {
+                if (!read.ok) {
+                  throw read.error;
+                }
+                return read.value;
+              },
+            )
           : turn.getActiveSessionEntry();
+        assertSettlementCurrent();
         if (
           sessionTarget &&
           (sessionEntry?.sessionId !== sessionTarget.sessionId ||
@@ -195,7 +197,10 @@ export async function runCliFallbackCandidate(
               config: params.runtimeConfig,
             }).authProfileId;
         const diagnosticOwner = params.deferredLifecycle.handoffToCli();
-        const mediaTaskIdsBefore = getGeneratedMediaTaskIdsForSessionKey(turn.sessionKey);
+        const mediaTaskIdsBefore = getGeneratedMediaTaskIdsForSessionKey(
+          turn.sessionKey,
+          turn.followupRun.run.agentId,
+        );
         let droppedCliSessionReplacement = false;
         const candidateResult = await runCliAgentWithLifecycle({
           runId: params.runId,
@@ -216,12 +221,14 @@ export async function runCliFallbackCandidate(
                       hasNewGeneratedMediaTask: hasNewGeneratedMediaTaskForSessionKey(
                         turn.sessionKey,
                         mediaTaskIdsBefore,
+                        turn.followupRun.run.agentId,
                       ),
                     })
                   ) {
                     return;
                   }
                   await clearCliSessionInStore({
+                    agentId: turn.followupRun.run.agentId,
                     provider: params.cliExecutionProvider,
                     expectedCliSessionId: cliSessionBinding.sessionId,
                     expectedSessionId: sessionEntry?.sessionId,
@@ -250,6 +257,12 @@ export async function runCliFallbackCandidate(
                   : onPartialReply({ text: sanitized.text }),
             );
           },
+          onCompletedReply: async (text, assistantMessageIndex) => {
+            params.runAbortSignal?.throwIfAborted();
+            assertSettlementCurrent();
+            const reply = prepareCliReplyPayload(text, cliCurrentMessageId, assistantMessageIndex);
+            await params.presentation.blockReplyHandler?.(reply, { completed: true });
+          },
           onReasoningText: createCliReasoningStreamBridge(turn.opts?.onReasoningStream),
           onPlanUpdate: turn.opts?.onPlanUpdate,
           onReasoningProgress: async (payload) => {
@@ -258,45 +271,32 @@ export async function runCliFallbackCandidate(
           onCompactionStart: turn.opts?.onCompactionStart,
           onCompactionEnd: turn.opts?.onCompactionEnd,
           onToolEvent: async (payload) => {
-            if (!params.preserveProgressCallbackStartOrder) {
-              const commandBearing = await cliToolSummaryTracker.noteToolEvent(payload);
-              if (payload.phase === "result") {
-                await deliverCliCommandOutcome(payload, commandBearing);
-                return;
-              }
-              const { name, phase, args, toolCallId } = payload;
-              await Promise.all([
-                turn.typingSignals.signalToolStart(),
-                turn.opts?.onToolStart?.({
-                  ...(toolCallId ? { toolCallId } : {}),
-                  name,
-                  phase,
-                  args,
-                  detailMode: turn.toolProgressDetail,
-                }),
-              ]);
-              return;
-            }
             const summaryPromise = cliToolSummaryTracker.noteToolEvent(payload);
             if (payload.phase === "result") {
-              const commandBearing = await summaryPromise;
-              await deliverCliCommandOutcome(payload, commandBearing);
+              await deliverCliCommandOutcome(payload, await summaryPromise);
               return;
             }
             const { name, phase, args, toolCallId } = payload;
+            const deliverToolStart = () =>
+              turn.opts?.onToolStart?.({
+                ...(toolCallId ? { toolCallId } : {}),
+                name,
+                phase,
+                args,
+                detailMode: turn.toolProgressDetail,
+              });
+            if (!params.preserveProgressCallbackStartOrder) {
+              await summaryPromise;
+              await Promise.all([turn.typingSignals.signalToolStart(), deliverToolStart()]);
+              return;
+            }
             // Tool and assistant bridges drain independently. Preserve source order.
             await Promise.all([
               summaryPromise,
               params.presentation.presentWithTyping(
                 turn.typingSignals.signalToolStart(),
                 async () => {
-                  await turn.opts?.onToolStart?.({
-                    ...(toolCallId ? { toolCallId } : {}),
-                    name,
-                    phase,
-                    args,
-                    detailMode: turn.toolProgressDetail,
-                  });
+                  await deliverToolStart();
                 },
               ),
             ]);
@@ -320,21 +320,9 @@ export async function runCliFallbackCandidate(
                   if (bridgeCliDurableCommentary) {
                     // Block mode treats completed CLI text as an ordinary answer block so
                     // the existing pipeline owns coalescing and final-payload dedupe.
-                    const parsed = parseReplyDirectives(payload.text, {
-                      currentMessageId:
-                        turn.sessionCtx.MessageSidFull ?? turn.sessionCtx.MessageSid,
-                    });
-                    const reply: ReplyPayload = {
-                      text: parsed.text,
-                      mediaUrls: parsed.mediaUrls,
-                      replyToId: parsed.replyToId,
-                      replyToCurrent: parsed.replyToCurrent,
-                      ...(parsed.replyToTag ? { replyToTag: true } : {}),
-                      audioAsVoice: parsed.audioAsVoice,
-                      ...(turn.blockStreamingEnabled ? {} : { isCommentary: true }),
-                    };
-                    if (parsed.isSilent) {
-                      setReplyPayloadMetadata(reply, { silentReply: true });
+                    const reply = prepareCliReplyPayload(payload.text, cliCurrentMessageId);
+                    if (!turn.blockStreamingEnabled) {
+                      reply.isCommentary = true;
                     }
                     deliveries.push(params.presentation.blockReplyHandler?.(reply));
                   }
@@ -491,6 +479,7 @@ export async function runCliFallbackCandidate(
           // invalidation remains, and failure must retain the returned turn.
           return await settleCliSessionResult(candidateResult, async () => {
             await clearCliSessionInStore({
+              agentId: turn.followupRun.run.agentId,
               provider: params.cliExecutionProvider,
               expectedCliSessionId: cliSessionBinding?.sessionId,
               expectedSessionId: sessionEntry?.sessionId,
@@ -511,6 +500,7 @@ export async function runCliFallbackCandidate(
           )
         ) {
           return await persistCliSessionBindingResult({
+            agentId: turn.followupRun.run.agentId,
             provider: params.cliExecutionProvider,
             result: candidateResult,
             sessionKey,

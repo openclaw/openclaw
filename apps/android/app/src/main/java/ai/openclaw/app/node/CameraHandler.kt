@@ -8,10 +8,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonArray
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
+import kotlinx.serialization.json.Json
 import java.util.concurrent.atomic.AtomicReference
 
 internal const val CAMERA_CLIP_MAX_RAW_BYTES: Long = 18L * 1024L * 1024L
@@ -33,25 +30,7 @@ class CameraHandler(
   suspend fun handleList(_paramsJson: String?): GatewaySession.InvokeResult =
     try {
       val devices = camera.listDevices()
-      val payload =
-        buildJsonObject {
-          put(
-            "devices",
-            buildJsonArray {
-              devices.forEach { device ->
-                add(
-                  buildJsonObject {
-                    put("id", JsonPrimitive(device.id))
-                    put("name", JsonPrimitive(device.name))
-                    put("position", JsonPrimitive(device.position))
-                    put("deviceType", JsonPrimitive(device.deviceType))
-                  },
-                )
-              }
-            },
-          )
-        }.toString()
-      GatewaySession.InvokeResult.ok(payload)
+      GatewaySession.InvokeResult.ok(Json.encodeToString(mapOf("devices" to devices)))
     } catch (err: CancellationException) {
       throw err
     } catch (err: Throwable) {
@@ -75,7 +54,7 @@ class CameraHandler(
         try {
           camLog("calling camera.snap()")
           val r = camera.snap(paramsJson)
-          camLog("success, payload size=${r.payloadJson.length}")
+          camLog("success, payload size=${r.length}")
           r
         } catch (err: CancellationException) {
           throw err
@@ -86,7 +65,7 @@ class CameraHandler(
           return GatewaySession.InvokeResult.error(code = code, message = message)
         }
       camLog("returning result")
-      return GatewaySession.InvokeResult.ok(res.payloadJson)
+      return GatewaySession.InvokeResult.ok(res)
     } catch (err: CancellationException) {
       throw err
     } catch (err: Throwable) {

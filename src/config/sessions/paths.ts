@@ -1,4 +1,3 @@
-// Session path helpers keep stores and transcripts inside agent-owned session directories.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -42,7 +41,7 @@ export function resolveConcreteSessionStorePath(storePath: string | undefined): 
   return trimmed;
 }
 
-function resolveAgentSessionsDir(
+export function resolveSessionTranscriptsDirForAgent(
   agentId: string,
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = () => resolveRequiredHomeDir(env, os.homedir),
@@ -55,16 +54,8 @@ function resolveAgentSessionsDir(
   return path.join(root, "agents", id, "sessions");
 }
 
-export function resolveSessionTranscriptsDirForAgent(
-  agentId: string,
-  env: NodeJS.ProcessEnv = process.env,
-  homedir: () => string = () => resolveRequiredHomeDir(env, os.homedir),
-): string {
-  return resolveAgentSessionsDir(agentId, env, homedir);
-}
-
 export function resolveDefaultSessionStorePath(agentId: string): string {
-  return path.join(resolveAgentSessionsDir(agentId), "sessions.json");
+  return path.join(resolveSessionTranscriptsDirForAgent(agentId), "sessions.json");
 }
 
 /** Store selectors and explicit databases share the owning agent's session artifact directory. */
@@ -122,7 +113,7 @@ function resolveSessionsDir(opts?: SessionFilePathOptions): string {
   if (!opts?.agentId?.trim()) {
     throw new Error("Session storage path requires an explicit agent id.");
   }
-  return resolveAgentSessionsDir(opts.agentId);
+  return resolveSessionTranscriptsDirForAgent(opts.agentId);
 }
 
 function resolvePathFromAgentSessionsDir(
@@ -268,7 +259,7 @@ function resolvePathWithinSessionsDir(
         }
       }
       return resolvePathFromAgentSessionsDir(
-        resolveAgentSessionsDir(normalizedAgentId),
+        resolveSessionTranscriptsDirForAgent(normalizedAgentId),
         realTrimmed,
       );
     };
@@ -330,7 +321,11 @@ export function resolveSessionTranscriptPath(
   agentId: string,
   topicId?: string | number,
 ): string {
-  return resolveSessionTranscriptPathInDir(sessionId, resolveAgentSessionsDir(agentId), topicId);
+  return resolveSessionTranscriptPathInDir(
+    sessionId,
+    resolveSessionTranscriptsDirForAgent(agentId),
+    topicId,
+  );
 }
 export function resolveSessionFilePathCore(
   sessionId: string,
@@ -367,6 +362,15 @@ export function resolveSessionStorePathCore(
   store?: string,
   opts?: { agentId?: string; env?: NodeJS.ProcessEnv },
 ) {
+  return resolveSessionStorePathWithContext(store, opts, { cwd: process.cwd() });
+}
+
+/** Internal async readers capture their relative-path base before yielding. */
+export function resolveSessionStorePathWithContext(
+  store: string | undefined,
+  opts: { agentId?: string; env?: NodeJS.ProcessEnv } | undefined,
+  context: { cwd: string },
+) {
   const env = opts?.env ?? process.env;
   const homedir = () => resolveRequiredHomeDir(env, os.homedir);
   if (!store) {
@@ -374,35 +378,27 @@ export function resolveSessionStorePathCore(
       throw new SessionStoreAgentIdRequiredError();
     }
     const agentId = normalizeAgentId(opts.agentId);
-    return path.join(resolveAgentSessionsDir(agentId, env, homedir), "sessions.json");
+    return path.join(resolveSessionTranscriptsDirForAgent(agentId, env, homedir), "sessions.json");
   }
-  if (store.includes("{agentId}")) {
+  let expandedStore = store;
+  if (expandedStore.includes("{agentId}")) {
     if (!opts?.agentId?.trim()) {
       throw new SessionStoreAgentIdRequiredError();
     }
     const agentId = normalizeAgentId(opts.agentId);
-    const expanded = store.replaceAll("{agentId}", agentId);
-    if (expanded.startsWith("~")) {
-      return path.resolve(
-        expandHomePrefix(expanded, {
-          home: resolveRequiredHomeDir(env, homedir),
-          env,
-          homedir,
-        }),
-      );
-    }
-    return path.resolve(expanded);
+    expandedStore = expandedStore.replaceAll("{agentId}", agentId);
   }
-  if (store.startsWith("~")) {
+  if (expandedStore.startsWith("~")) {
     return path.resolve(
-      expandHomePrefix(store, {
+      context.cwd,
+      expandHomePrefix(expandedStore, {
         home: resolveRequiredHomeDir(env, homedir),
         env,
         homedir,
       }),
     );
   }
-  return path.resolve(store);
+  return path.resolve(context.cwd, expandedStore);
 }
 
 export function resolveAgentsDirFromSessionStorePath(storePath: string): string | undefined {

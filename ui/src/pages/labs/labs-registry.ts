@@ -1,5 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { t } from "../../i18n/index.ts";
+import { registerLabsEnglish } from "../../i18n/locales/en-labs.ts";
+
+registerLabsEnglish();
 
 /** What a lab row writes at its gate. Most gates are booleans; some are modes. */
 type LabFeatureValue = boolean | string;
@@ -12,39 +15,16 @@ export type LabFeature = {
   docsUrl: string;
   /** Leaf whose value decides whether the row reads as on. */
   configPath: readonly [string, ...string[]];
-  /**
-   * Values written at `configPath`. Required rather than defaulted to `true` and
-   * `false` so a setting that spells its on/off state as a mode has to say so
-   * here instead of silently writing a boolean the runtime would ignore.
-   */
+  /** Explicit writes preserve gates whose on/off values are modes, not booleans. */
   onValue: LabFeatureValue;
   offValue: LabFeatureValue;
-  /**
-   * Every value that reads as on, which is not always just `onValue`. A mode can
-   * have settings broader than the one Labs offers, and those must render as
-   * enabled — otherwise the row shows off, and clicking it narrows a choice the
-   * operator made deliberately somewhere else.
-   */
+  /** Include broader enabled modes so the toggle never narrows an existing choice. */
   activeValues: readonly LabFeatureValue[];
-  /**
-   * Replaces the leaf read when the runtime decides enablement from more than
-   * one key. Receives the value at the gate's parent, which may be the boolean
-   * shorthand. Must mirror the runtime resolver it cites, or the row will
-   * misreport a config the runtime considers on.
-   */
+  /** Runtime-owned enablement from the parent, including boolean shorthand. */
   readEnabled: ((raw: unknown) => boolean) | null;
-  /**
-   * Extra keys written beside the gate when enabling, relative to the gate's
-   * parent. Labs pins the variant we actually recommend rather than inheriting
-   * whatever a bare enable defaults to.
-   */
+  /** Sibling writes pin the recommended variant rather than a bare enable's defaults. */
   enableAlso: Readonly<Record<string, LabFeatureValue>> | null;
-  /**
-   * Ownership boundary for default provenance and reset. Most rows own only
-   * their gate; features whose runtime default depends on any parent config
-   * own and reset that parent as a unit. Required gates use null to keep their
-   * explicit off value instead of deleting it.
-   */
+  /** Reset the parent when its presence changes defaults; null retains required gates. */
   resetScope: LabFeatureResetScope;
 };
 
@@ -72,6 +52,19 @@ function readConfiguredFeatureEnabled(
 
 export const LAB_FEATURES = [
   {
+    id: "decisionAssistance",
+    title: () => t("labsPage.decisionAssistance.title"),
+    description: () => t("labsPage.decisionAssistance.description"),
+    docsUrl: "https://docs.openclaw.ai/concepts/experimental-features#decision-assistance",
+    configPath: ["agents", "defaults", "experimental", "decisionAssistance"],
+    onValue: true,
+    offValue: false,
+    activeValues: [true],
+    readEnabled: null,
+    enableAlso: null,
+    resetScope: "gate",
+  },
+  {
     id: "codeMode",
     title: () => t("labsPage.codeMode.title"),
     description: () => t("labsPage.codeMode.description"),
@@ -82,7 +75,12 @@ export const LAB_FEATURES = [
     onValue: "auto",
     offValue: false,
     activeValues: [true, "auto"],
-    readEnabled: null,
+    // Mirrors resolveCodeModeConfig: absence inherits auto; authored objects opt in.
+    readEnabled: (raw) =>
+      raw === undefined ||
+      raw === true ||
+      raw === "auto" ||
+      (isRecord(raw) && (raw.enabled === true || raw.enabled === "auto")),
     enableAlso: null,
     resetScope: "gate",
   },
@@ -212,8 +210,8 @@ export function resolveLabFeatureState(
   if (overridePath?.length === parentPath.length) {
     defaultParent = undefined;
   } else if (overridePath && key && isRecord(parent)) {
-    defaultParent = { ...(parent as Record<string, unknown>) };
-    delete (defaultParent as Record<string, unknown>)[key];
+    const { [key]: _override, ...defaults } = parent;
+    defaultParent = defaults;
   }
   return {
     enabled: readEnabledFromParent(feature, parent),

@@ -32,10 +32,19 @@ const { patchSessionEntry } = vi.hoisted(() => ({
   patchSessionEntry: vi.fn<PluginRuntime["agent"]["session"]["patchSessionEntry"]>(),
 }));
 
-vi.mock("../../runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../runtime.js")>()),
-  getSlackRuntime: () => ({ agent: { session: { patchSessionEntry } } }),
-}));
+vi.mock("../../runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../runtime.js")>();
+  return {
+    ...actual,
+    getSlackRuntime: () => {
+      const runtime = actual.getSlackRuntime();
+      return {
+        ...runtime,
+        agent: { ...runtime.agent, session: { ...runtime.agent.session, patchSessionEntry } },
+      };
+    },
+  };
+});
 
 vi.mock("../../streaming.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../streaming.js")>();

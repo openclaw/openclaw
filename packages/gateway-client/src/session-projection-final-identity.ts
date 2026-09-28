@@ -5,6 +5,7 @@ import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import {
   hasDisplayableSessionMessage,
   readSessionMessageDisplayContent,
+  projectSessionTerminalReplyMessage,
 } from "./session-projection-message-content.js";
 import {
   readSessionMessageIdentity,
@@ -104,12 +105,13 @@ function hasCompatiblePersistedFinalIdentity(currentMessage: unknown, incomingMe
 }
 
 export function readFinalContentIdentity(message: unknown): string | null {
-  const display = readSessionMessageDisplayContent(message);
+  const terminalMessage = projectSessionTerminalReplyMessage(message);
+  const display = readSessionMessageDisplayContent(terminalMessage);
   if (!display.text && !display.hasNonText) {
     return null;
   }
   const identity = readSessionMessageIdentity(message);
-  const record = readRecord(message);
+  const record = readRecord(terminalMessage);
   const metadata = readRecord(record?.["__openclaw"]);
   try {
     return `content:${stableStringify([

@@ -1,13 +1,10 @@
 // iOS release planning keeps App Store version and build selection deterministic.
-import { readFileSync } from "node:fs";
-import path from "node:path";
 import {
   encodeIosAppStoreVersion,
   MAX_IOS_APP_STORE_REVISION,
   normalizeIosAppStoreRevision,
   normalizePinnedIosVersion,
 } from "./ios-version.ts";
-import { extractChangelogSection } from "./mobile-changelog.ts";
 
 const IOS_BUILD_UPLOAD_STATES = ["AWAITING_UPLOAD", "PROCESSING", "FAILED", "COMPLETE"] as const;
 // 2026.7.2 is the last exact-version iOS release in App Store Connect.
@@ -49,7 +46,7 @@ export type IosReleasePlanInput = {
   explicitBuildNumber?: string | null;
   explicitRevision?: string | number | null;
   gatewayVersion: string;
-  rootDir?: string;
+  releaseNotesBaselines: [{ audience: "ios"; version: string | null; build: string | null }];
   sourceClean?: boolean;
   sourceSha?: string | null;
 };
@@ -61,7 +58,7 @@ export type IosReleasePlan = {
   appStoreVersionState: string | null;
   buildNumber: number;
   buildUploads: IosRemoteBuildUpload[];
-  changelogStatus: "needs-cut" | "ready";
+  releaseNotesBaselines: IosReleasePlanInput["releaseNotesBaselines"];
   decision: "new-revision" | "resume-editable" | "retry-upload";
   gatewayVersion: string;
   sourceClean: boolean | null;
@@ -302,11 +299,21 @@ export function resolveIosReleasePlan(input: IosReleasePlanInput): IosReleasePla
   }
   const uploads = relevantBuildUploads(input.buildUploads, appStoreVersion);
   const buildNumber = nextBuildNumber(input.buildUploads, appStoreVersion);
-  const rootDir = path.resolve(input.rootDir ?? ".");
-  const changelog = readFileSync(path.join(rootDir, "apps/ios/CHANGELOG.md"), "utf8");
-  const hasReleaseNotes = Boolean(extractChangelogSection(changelog, appStoreVersion));
-  const hasUnreleasedNotes = Boolean(extractChangelogSection(changelog, "Unreleased"));
-  const changelogStatus = hasReleaseNotes && !hasUnreleasedNotes ? "ready" : "needs-cut";
+  const baselines = input.releaseNotesBaselines;
+  const baseline = baselines?.[0];
+  if (
+    baselines?.length !== 1 ||
+    baseline?.audience !== "ios" ||
+    baseline.version !== (latestReleasedVersion ?? null) ||
+    (latestReleasedVersion ? typeof baseline.build !== "string" : baseline.build !== null)
+  ) {
+    throw new Error(
+      "Missing or inconsistent latest public App Store version/build notes baseline.",
+    );
+  }
+  if (baseline.build !== null) {
+    normalizeBuildNumber(baseline.build);
+  }
   const plan: IosReleasePlan = {
     appStoreRevision: revision,
     appStoreVersion,
@@ -314,7 +321,7 @@ export function resolveIosReleasePlan(input: IosReleasePlanInput): IosReleasePla
     appStoreVersionState: selectedVersion?.state ?? null,
     buildNumber,
     buildUploads: uploads,
-    changelogStatus,
+    releaseNotesBaselines: baselines,
     decision,
     gatewayVersion,
     sourceClean: input.sourceClean ?? null,

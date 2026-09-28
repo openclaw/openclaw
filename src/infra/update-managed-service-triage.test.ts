@@ -4,8 +4,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { useTriageLeaseDatabaseFixture } from "./triage-lease-fixture.test-support.js";
 import { triageTestRuntimeEntrypoints } from "./triage-runtime.test-support.js";
 import { createTriageBoundary } from "./update-managed-service-triage.test-support.js";
+
+useTriageLeaseDatabaseFixture();
 
 const boundaries: Awaited<ReturnType<typeof createTriageBoundary>>[] = [];
 afterEach(async () => {
@@ -24,6 +27,13 @@ async function ready(boundary: Awaited<ReturnType<typeof start>>) {
   expect(await boundary.response(), boundary.stderr()).toBe("OPENCLAW_UPDATE_HANDOFF_READY");
 }
 async function fixing(boundary: Awaited<ReturnType<typeof start>>) {
+  if (!boundaries.includes(boundary)) {
+    throw new Error("Branch readiness requires cleanup registered with afterEach");
+  }
+  await boundary.waitForBranch();
+  await expectFixerPlacement(boundary);
+}
+async function expectFixerPlacement(boundary: Awaited<ReturnType<typeof start>>) {
   // One readiness budget covers the fixer and its complete descendant placement.
   await vi.waitFor(
     async () => {
@@ -97,7 +107,7 @@ describe("managed triage attachment cutover (synthetic native boundary)", () => 
         });
         await ready(boundary);
         expect(await boundary.control("commit")).toBe("committed");
-        await fixing(boundary);
+        await expectFixerPlacement(boundary);
         await vi.waitFor(async () => {
           const { pid } = JSON.parse(await fs.readFile(receipt, "utf8"));
           controller = { pid, start: getFileLockProcessStartTime(pid) };

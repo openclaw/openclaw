@@ -6,6 +6,7 @@ import type { ChatSessionScrollPosition } from "../scroll.ts";
 import type { ChatMessageEntryAnimations } from "./chat-message-entry.ts";
 import type { ChatPositionIndex } from "./chat-position-projection.ts";
 import type { TranscriptAnnouncement } from "./chat-transcript-announcement.ts";
+import type { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 
 /** A reader-position restoration that is waiting for measurable transcript geometry. */
@@ -18,6 +19,8 @@ export type ChatTranscriptPendingScrollOffset = {
 };
 
 export type TranscriptCallbacks = {
+  /** Retained panes can remain measurable while visually hidden. */
+  visuallyPresented?: () => boolean;
   onViewportResize?: () => void;
   onReaderScroll?: (towardEnd?: boolean) => void;
   /** The pane owns reader intent; geometry-only follow must honor that policy. */
@@ -40,6 +43,7 @@ export type TranscriptHeader = {
 };
 
 export type ChatTranscriptSession = {
+  readonly layout: Pick<TranscriptLayoutOwner, "viewportResizePending">;
   readonly entryAnimations: ChatMessageEntryAnimations;
   readonly expandedAssistantMessages: Map<string, AssistantMessageExpansionState>;
   readonly liveAnnouncementText: string;

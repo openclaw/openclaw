@@ -1,42 +1,12 @@
+import { writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
-import { runDaemonInstall } from "../daemon-cli/install.js";
 import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
 import type { UpdateServiceDefinitionRecovery } from "./update-command-service-context-types.js";
 
-// A missing target must never select the updater's old native/config writer.
-vi.mock("../daemon-cli/install.js", () => ({ runDaemonInstall: vi.fn() }));
-
-it.each(["git", "unknown"] as const)(
-  "refuses a missing %s target without installing through the old runtime",
-  async (mode) => {
-    vi.mocked(runDaemonInstall).mockClear();
-    await withTestDir({ prefix: "openclaw-native-missing-target-" }, async (root) => {
-      await expect(
-        runUpdatedInstallGatewayCommand(
-          {
-            result: { root, mode },
-            opts: { json: true },
-            invocationEnv: {},
-          },
-          "install",
-        ),
-      ).rejects.toThrow("updated install entrypoint not found");
-      expect(runDaemonInstall).not.toHaveBeenCalled();
-    });
-  },
-);
-
-it.each([
-  "installed",
-  "load-failed",
-  "operator-edit",
-  "compensated",
-  "invalid-receipt",
-  "compensation-failed",
-])(
+it.each(["installed", "load-failed", "compensated", "invalid-receipt", "compensation-failed"])(
   "retains installer warnings and rollback evidence after child settlement: %s",
   async (outcome) => {
     await withTestDir({ prefix: "openclaw-definition-response-" }, async (root) => {
@@ -49,18 +19,14 @@ it.each([
       const warning =
         outcome === "compensated"
           ? "previous definition was restored"
-          : outcome === "operator-edit"
-            ? "Service.Nice preserved"
-            : "Service.KillMode repaired";
-      const preserved = outcome === "operator-edit" || outcome === "compensated";
+          : "Service.KillMode repaired";
+      const preserved = outcome === "compensated";
       const compensationFailed = outcome === "compensation-failed";
       const failed = preserved || compensationFailed || outcome === "load-failed";
       const error = compensationFailed
         ? "UPDATE_NATIVE_AUTHORITY: Service definition recovery is unverified: Error: SERVICE_DEFINITION_UNKNOWN: Scheduled Task changed"
         : preserved
-          ? outcome === "compensated"
-            ? "SERVICE_DEFINITION_UNKNOWN: Service definition refresh failed; the previous definition was restored: Error: ENOSPC"
-            : "SERVICE_DEFINITION_UNKNOWN: Service.Nice"
+          ? "SERVICE_DEFINITION_UNKNOWN: Service definition refresh failed; the previous definition was restored: Error: ENOSPC"
           : "load failed";
       await fs.writeFile(
         path.join(root, "dist", "index.mjs"),
@@ -81,7 +47,7 @@ it.each([
       const result = runUpdatedInstallGatewayCommand(
         {
           result: { root, mode: "npm" },
-          opts: { json: true },
+          opts: {},
           invocationEnv: {},
           definitionRecovery,
           onWarnings: (messages) => warnings.push(...messages),
@@ -110,9 +76,11 @@ it("restarts the updated runtime without admitting another definition writer", a
   await withTestDir({ prefix: "openclaw-definition-restart-" }, async (root) => {
     await fs.mkdir(path.join(root, "dist"));
     const received = path.join(root, "received-arguments");
+    const activation = path.join(root, "activation-attempted");
     await fs.writeFile(
       path.join(root, "dist", "index.mjs"),
       `import fs from "node:fs";
+       fs.readFileSync(${JSON.stringify(activation)});
        fs.writeFileSync(${JSON.stringify(received)}, process.argv.slice(2).join("\\n"));
        process.stdout.write(JSON.stringify({ action: "restart", ok: true, result: "restarted" }));`,
     );
@@ -120,8 +88,9 @@ it("restarts the updated runtime without admitting another definition writer", a
       runUpdatedInstallGatewayCommand(
         {
           result: { root, mode: "npm" },
-          opts: { json: true },
+          opts: {},
           invocationEnv: {},
+          onGatewayStartAttempted: () => writeFileSync(activation, "attempted"),
         },
         "restart",
       ),

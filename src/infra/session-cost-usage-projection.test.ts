@@ -180,7 +180,7 @@ describe("usage cache projections", () => {
     ]);
   });
 
-  it("keeps selected identities and strict freshness for duplicate canonical files", async () => {
+  it("keeps committed totals and freshness for duplicate canonical files", async () => {
     const file = createFile("selected");
     const rows = [createRow(file, [{ timestamp: dayStart, cost: 0.5 }, { cost: 0.25 }], 300)];
     const sessions = [
@@ -208,7 +208,13 @@ describe("usage cache projections", () => {
 
       expect(result.summaries).toMatchObject([
         { sessionId: "first", sessionFile: "first-archive-alias", totalCost: expectedCost },
-        null,
+        {
+          sessionId: "stale",
+          totalCost: expectedCost,
+          computedAt: 300,
+          refreshing: true,
+          staleSince: file.mtimeMs,
+        },
         { sessionId: "second", sessionFile: "second-archive-alias", totalCost: expectedCost },
         null,
         null,
@@ -218,7 +224,7 @@ describe("usage cache projections", () => {
       expect(result.staleSessionFiles).toEqual([file.sourcePath, "missing-transcript"]);
       expect(result.cacheStatus).toEqual({
         status: "refreshing",
-        cachedFiles: 2,
+        cachedFiles: 3,
         pendingFiles: 2,
         staleFiles: 2,
         refreshedAt: 300,

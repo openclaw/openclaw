@@ -12,7 +12,7 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
 import { generateSecureUuid } from "../secure-random.js";
 import {
   DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
-  OUTBOUND_DELIVERY_QUEUE_NAME,
+  OUTBOUND_EXECUTABLE_QUEUE_NAMES,
   LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
   OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
   OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
@@ -73,7 +73,7 @@ export function loadDeliveryQueueMediaRetentionSnapshotInDatabase(
 ): { payloads: ReplyPayload[][]; stagedArtifacts: string[] } {
   const snapshot = expireStagingAndLoadDeliveryQueueEntriesInDatabase(database, {
     queueNames: [
-      OUTBOUND_DELIVERY_QUEUE_NAME,
+      ...OUTBOUND_EXECUTABLE_QUEUE_NAMES,
       LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
       OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
       OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,

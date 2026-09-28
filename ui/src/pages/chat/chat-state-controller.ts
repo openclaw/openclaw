@@ -4,11 +4,13 @@ import type { ChatPendingInputsPage } from "../../../../packages/gateway-protoco
 import { registerControlUiReloadGuard } from "../../app/document-reload-guard.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
+import { parseStoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
+import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
+import { releaseDisplacedChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { disposeSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
-import { subscribeChatOutboxProjection } from "./chat-queue.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
@@ -17,11 +19,13 @@ import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.
 import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
 import { clearSessionWorkspacePreviews } from "./components/chat-session-workspace-state.ts";
 import { clearSessionWorkspaceTimers } from "./components/chat-session-workspace.ts";
+import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.ts";
 import {
-  ChatComposerPersistence,
-  type ChatComposerPersistResult,
-  markChatComposerEdit,
-} from "./composer-persistence.ts";
+  captureChatComposerOwner,
+  isChatComposerOwnerCurrent,
+  isIncognitoComposerScope,
+} from "./composer-persistence-state.ts";
+import { ChatComposerPersistence, markChatComposerEdit } from "./composer-persistence.ts";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
 import type { AfterCommitEffect, RenderLifecycle } from "./render-lifecycle.ts";
 import { cancelChatScroll, lockChatScroll, scheduleCommittedChatScroll } from "./scroll.ts";
@@ -31,9 +35,10 @@ type ChatRenderLifecycleScope = {
 };
 
 export class ChatStateController<TState extends ChatPageHost> implements ReactiveController {
-  readonly attachmentReads: ChatAttachmentReadLifecycle;
-  private readonly composerPersistence: ChatComposerPersistence;
+  private attachmentReadsValue: ChatAttachmentReadLifecycle;
+  readonly composerPersistence: ChatComposerPersistence;
   private stateValue: TState | undefined;
+  private privateDraftReview: { controller: AbortController; isCurrent: () => boolean } | undefined;
   private previousChatLoading = false;
   private previousChatMessages: unknown[] = [];
   private previousPendingInputs: ChatPendingInputsPage | undefined;
@@ -56,7 +61,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     private readonly onStateChange?: () => void,
     private readonly onQueuedMessageDiscarded?: (item: ChatQueueItem) => void,
   ) {
-    this.attachmentReads = new ChatAttachmentReadLifecycle(() =>
+    this.attachmentReadsValue = new ChatAttachmentReadLifecycle(() =>
       this.stateValue?.requestUpdate?.(),
     );
     this.composerPersistence = new ChatComposerPersistence(() => this.stateValue);
@@ -65,6 +70,24 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
 
   get state(): TState | undefined {
     return this.stateValue;
+  }
+
+  get attachmentReads(): ChatAttachmentReadLifecycle {
+    return this.attachmentReadsValue;
+  }
+
+  takeAttachmentReads(): ChatAttachmentReadLifecycle {
+    const reads = this.attachmentReadsValue;
+    this.attachmentReadsValue = new ChatAttachmentReadLifecycle(() =>
+      this.stateValue?.requestUpdate?.(),
+    );
+    return reads;
+  }
+
+  adoptAttachmentReads(reads: ChatAttachmentReadLifecycle, state: TState): void {
+    this.attachmentReadsValue.abortReads();
+    this.attachmentReadsValue = reads;
+    reads.retarget(this.attachmentInputProps(state), () => state.requestUpdate?.());
   }
 
   attachmentInputProps(state: TState) {
@@ -107,6 +130,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
 
   attach(state: TState) {
     if (this.stateValue && this.stateValue !== state) {
+      this.privateDraftReview?.controller.abort();
       disposeSelectedSessionMessageSubscription(this.stateValue);
       releaseChatMediaResourceSubscriber(this.stateValue.requestUpdate);
       this.attachmentReads.abortReads();
@@ -134,7 +158,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     const renderLifecycle = state.renderLifecycle;
     state.requestUpdate = () => renderLifecycle.invalidate();
     this.cleanups.push(
-      subscribeChatOutboxProjection(state, (item) => {
+      chatOutboxOwner(state).subscribe(state, (item) => {
         if (this.stateValue === state) {
           this.onQueuedMessageDiscarded?.(item);
         }
@@ -144,8 +168,16 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     // must not release their reload protection before Save or Cancel does.
     this.cleanups.push(
       registerControlUiReloadGuard(
-        () => this.stateValue !== state || !state.chatQueuedEdit,
+        () => this.stateValue !== state || (!state.chatQueuedEdit && !this.hasPrivateDraft(state)),
         () => {
+          if (!state.chatQueuedEdit && this.hasPrivateDraft(state)) {
+            showToast({
+              message: t("chat.privateDraftReload.blocked"),
+              actionLabel: t("chat.privateDraftReload.review"),
+              onAction: () => void this.reviewPrivateDraft(state),
+            });
+            return;
+          }
           const edit = state.chatQueuedEdit;
           const client = state.client;
           showToast({
@@ -193,6 +225,137 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     };
   }
 
+  private hasPrivateComposerInput(state: TState): boolean {
+    return (
+      isIncognitoComposerScope(state, resolveUiConversationIdentity(state, state.sessionKey)) &&
+      Boolean(
+        state.chatMessage ||
+        state.chatAttachments.length ||
+        state.chatGoalDraftMode ||
+        state.chatReplyTarget ||
+        state.chatMentions?.length ||
+        this.attachmentReads.pendingReads,
+      )
+    );
+  }
+
+  private privateFallback(state: TState) {
+    return Object.entries(state.chatComposerFallbackByScope).find(([key, fallback]) => {
+      const scope = parseStoredChatOutboxScope(key);
+      return (
+        (fallback.incognito || (scope && isIncognitoComposerScope(state, scope))) &&
+        Boolean(
+          fallback.message ||
+          fallback.attachments.length ||
+          fallback.goalMode ||
+          fallback.replyTarget ||
+          fallback.mentions?.length,
+        )
+      );
+    });
+  }
+
+  private hasPrivateDraft(state: TState): boolean {
+    return this.hasPrivateComposerInput(state) || Boolean(this.privateFallback(state));
+  }
+
+  private async reviewPrivateDraft(state: TState): Promise<void> {
+    if (this.stateValue !== state || this.privateDraftReview || !this.hasPrivateDraft(state)) {
+      return;
+    }
+    const owner = captureChatComposerOwner(state);
+    const fallback = this.hasPrivateComposerInput(state) ? undefined : this.privateFallback(state);
+    const { sessionKey, connectionEpoch } = state;
+    const chatMessage = fallback?.[1].message ?? state.chatMessage;
+    const chatMentions = fallback ? fallback[1].mentions : state.chatMentions;
+    const chatGoalDraftMode = fallback ? fallback[1].goalMode : state.chatGoalDraftMode;
+    const chatReplyTarget = fallback ? fallback[1].replyTarget : state.chatReplyTarget;
+    const attachments = [...(fallback?.[1].attachments ?? state.chatAttachments)];
+    const reads = this.attachmentReads;
+    const pendingReads = fallback ? 0 : reads.pendingReads;
+    const retryReload = state.captureComposerRecoveryReload?.();
+    const review = {
+      controller: new AbortController(),
+      isCurrent: () =>
+        this.stateValue === state &&
+        state.client === owner.client &&
+        isChatComposerOwnerCurrent(state, owner) &&
+        state.sessionKey === sessionKey &&
+        state.connectionEpoch === connectionEpoch &&
+        (fallback
+          ? state.chatComposerFallbackByScope[fallback[0]] === fallback[1]
+          : state.chatMessage === chatMessage &&
+            state.chatMentions === chatMentions &&
+            state.chatGoalDraftMode === chatGoalDraftMode &&
+            state.chatReplyTarget === chatReplyTarget &&
+            this.attachmentReads === reads &&
+            reads.pendingReads === pendingReads &&
+            state.chatAttachments.length === attachments.length &&
+            attachments.every((attachment, index) => state.chatAttachments[index] === attachment)),
+    };
+    this.privateDraftReview = review;
+    try {
+      if (!review.isCurrent() || review.controller.signal.aborted) {
+        return;
+      }
+      const discard = await reviewPrivateComposerDraft({
+        text: chatMessage,
+        attachments,
+        hasGoal: Boolean(chatGoalDraftMode),
+        pendingReads,
+        isCurrent: review.isCurrent,
+        signal: review.controller.signal,
+      });
+      if (!discard || !review.isCurrent()) {
+        return;
+      }
+      // Discard only this captured composer. Other panes and queued edits still
+      // participate in the normal reload guard after the local draft retires.
+      if (fallback) {
+        const next = { ...state.chatComposerFallbackByScope };
+        delete next[fallback[0]];
+        state.chatComposerFallbackByScope = next;
+      } else {
+        reads.abortReads();
+        state.chatAttachments = [];
+        state.chatGoalDraftMode = null;
+        state.chatReplyTarget = null;
+        state.handleChatDraftChange("", []);
+      }
+      const retained = state.captureComposerRecoveryOwner?.()?.retainedAttachmentIds(attachments);
+      releaseDisplacedChatAttachmentPayloads(
+        attachments.filter((attachment) => !retained?.has(attachment.id)),
+        [
+          state.chatAttachments,
+          ...Object.values(state.chatComposerFallbackByScope).map((item) => item.attachments),
+        ],
+      );
+      state.requestUpdate?.();
+      await retryReload?.();
+    } catch {
+      if (review.isCurrent()) {
+        showToast({ message: t("chat.privateDraftReload.unavailable") });
+      }
+    } finally {
+      if (this.privateDraftReview === review) {
+        this.privateDraftReview = undefined;
+      }
+      if (
+        !review.isCurrent() &&
+        this.stateValue === state &&
+        state.client === owner.client &&
+        state.sessionKey === sessionKey &&
+        this.hasPrivateDraft(state)
+      ) {
+        showToast({
+          message: t("chat.privateDraftReload.changed"),
+          actionLabel: t("chat.privateDraftReload.review"),
+          onAction: () => void this.reviewPrivateDraft(state),
+        });
+      }
+    }
+  }
+
   addCleanup(cleanup: () => void) {
     this.cleanups.push(cleanup);
   }
@@ -204,6 +367,9 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   private requestUpdateForScope(scope: ChatRenderLifecycleScope): boolean {
     if (!this.isRenderLifecycleScopeActive(scope)) {
       return false;
+    }
+    if (this.privateDraftReview && !this.privateDraftReview.isCurrent()) {
+      this.privateDraftReview.controller.abort();
     }
     this.composerPersistence.persistChangedState();
     this.captureRenderLifecycleChanges();
@@ -335,6 +501,14 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       // Retain receipt identity through custody-to-history gaps and replay;
       // retire this presentation cache with its pane or physical conversation.
       this.seenInputKeys.add(key);
+      // Persisted rows for this browser's own speech keep the live caption's identity.
+      const entryId = identity.id;
+      if (
+        entryId &&
+        state.realtimeTalkConversation.some((entry) => entry.transcriptId === entryId)
+      ) {
+        return;
+      }
       remoteInputArrived ||= !changedScope && state.chatHasAutoScrolled;
     };
     state.chatMessages.forEach((message) => observe(message));
@@ -407,35 +581,8 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     scheduleCommittedChatScroll(state, force, state.chatHasAutoScrolled, { contentChanged });
   }
 
-  restoreComposer(options: { preserveCurrent?: boolean } = {}) {
-    this.composerPersistence.restore(options);
-  }
-
-  startComposerPersistence() {
-    this.composerPersistence.start();
-  }
-
-  pauseComposerPersistence() {
-    this.composerPersistence.stop();
-  }
-
-  persistComposerForEviction(): ChatComposerPersistResult {
-    return this.composerPersistence.persistForRouteSwitchResult();
-  }
-
-  composerScopeForEviction(): StoredChatOutboxScope | null {
-    return this.composerPersistence.scopeForRouteSwitch();
-  }
-
-  get durableComposerScope() {
-    return this.composerPersistence.durableScope;
-  }
-
-  get composerDraftRevision(): number {
-    return this.composerPersistence.draftRevision;
-  }
-
   private stopChatEffects() {
+    this.privateDraftReview?.controller.abort();
     while (this.cleanups.length > 0) {
       this.cleanups.pop()?.();
     }

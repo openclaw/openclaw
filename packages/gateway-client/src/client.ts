@@ -43,7 +43,12 @@ import {
 } from "./connect-auth.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { resolveModelCatalogConnect } from "./model-catalog-connect.js";
-import type { GatewayProtocolConnectAuthority } from "./protocol-client-contract.js";
+import type { GatewayProtocolRequestTiming } from "./pending-request.js";
+import type {
+  GatewayClientCloseInfo,
+  GatewayClientConnectionMetadata,
+  GatewayProtocolConnectAuthority,
+} from "./protocol-client-contract.js";
 import {
   GatewayProtocolClient,
   type GatewayProtocolCloseContext,
@@ -142,15 +147,6 @@ export type GatewayReconnectPausedInfo = {
   detailCode: string | null;
 };
 
-export type GatewayClientCloseInfo = {
-  phase: "pre-hello" | "post-hello";
-  socketOpened: boolean;
-  transportValidated: boolean;
-  connectRequestSent?: boolean;
-  transientPreHelloCleanClose: boolean;
-  connectError?: Error;
-};
-
 export { GatewayClientRequestError, isGatewayConnectAssemblyError } from "./request-error.js";
 export { isGatewayProtocolResponseError } from "./protocol-request.js";
 
@@ -218,14 +214,13 @@ export type GatewayClientOptions = {
   notifyOnStartupRetry?: boolean;
   onClose?: (code: number, reason: string, info?: GatewayClientCloseInfo) => void;
   onGap?: (info: { expected: number; received: number }) => void;
+  onRequestTiming?: (timing: GatewayProtocolRequestTiming) => void;
 };
 
-export type GatewayClientConnectionMetadata = {
-  clientName?: GatewayClientName;
-  hasDeviceIdentity: boolean;
-  mode?: GatewayClientMode;
-  preauthHandshakeTimeoutMs?: number;
-};
+export type {
+  GatewayClientCloseInfo,
+  GatewayClientConnectionMetadata,
+} from "./protocol-client-contract.js";
 
 const FORCE_STOP_TERMINATE_GRACE_MS = 250;
 const STOP_AND_WAIT_TIMEOUT_MS = 1_000;
@@ -366,6 +361,7 @@ export class GatewayClient {
         this.logDebug(`gateway client parse error: ${formatGatewayClientErrorForLog(error)}`),
       onEvent: (event) => this.opts.onEvent?.(event),
       onGap: (info) => this.opts.onGap?.(info),
+      onRequestTiming: (timing) => this.opts.onRequestTiming?.(timing),
       onActivity: () => {
         this.lastTick = Date.now();
       },
@@ -801,9 +797,8 @@ export class GatewayClient {
     );
   }
 
-  private shouldRetryWithLegacyNodeProtocol(error: GatewayProtocolRequestError): boolean {
+  private shouldRetryWithAlternateNodeProtocol(error: GatewayProtocolRequestError): boolean {
     if (
-      this.useLegacyNodeProtocolEnvelope ||
       !this.shouldNegotiateLegacyNodeProtocol() ||
       !(error instanceof GatewayClientRequestError)
     ) {
@@ -813,25 +808,8 @@ export class GatewayClient {
     const expectedProtocol = (error.details as { expectedProtocol?: unknown } | null | undefined)
       ?.expectedProtocol;
     return (
-      expectedProtocol === MIN_NODE_PROTOCOL_VERSION &&
-      (detailCode === ConnectErrorDetailCodes.PROTOCOL_MISMATCH ||
-        normalizeGatewayErrorText(error.message).includes("protocol mismatch"))
-    );
-  }
-
-  private shouldRetryWithCurrentNodeProtocol(error: GatewayProtocolRequestError): boolean {
-    if (
-      !this.useLegacyNodeProtocolEnvelope ||
-      !this.shouldNegotiateLegacyNodeProtocol() ||
-      !(error instanceof GatewayClientRequestError)
-    ) {
-      return false;
-    }
-    const detailCode = readConnectErrorDetailCode(error.details);
-    const expectedProtocol = (error.details as { expectedProtocol?: unknown } | null | undefined)
-      ?.expectedProtocol;
-    return (
-      expectedProtocol === PROTOCOL_VERSION &&
+      expectedProtocol ===
+        (this.useLegacyNodeProtocolEnvelope ? PROTOCOL_VERSION : MIN_NODE_PROTOCOL_VERSION) &&
       (detailCode === ConnectErrorDetailCodes.PROTOCOL_MISMATCH ||
         normalizeGatewayErrorText(error.message).includes("protocol mismatch"))
     );
@@ -990,24 +968,18 @@ export class GatewayClient {
     error: GatewayProtocolRequestError,
     assembled: AssembledConnect,
   ) {
-    if (this.shouldRetryWithCurrentNodeProtocol(error)) {
+    if (this.shouldRetryWithAlternateNodeProtocol(error)) {
       const resetBackoff = !this.nodeProtocolTransitionPending;
-      this.useLegacyNodeProtocolEnvelope = false;
+      this.useLegacyNodeProtocolEnvelope = !this.useLegacyNodeProtocolEnvelope;
       this.nodeProtocolTransitionPending = true;
       if (resetBackoff) {
         this.protocol.resetReconnectBackoff(250);
       }
-      this.logDebug("gateway rejected protocol v3; retrying node host with protocol v4");
-      return { closeCode: 1008, closeReason: "connect retry" };
-    }
-    if (this.shouldRetryWithLegacyNodeProtocol(error)) {
-      const resetBackoff = !this.nodeProtocolTransitionPending;
-      this.useLegacyNodeProtocolEnvelope = true;
-      this.nodeProtocolTransitionPending = true;
-      if (resetBackoff) {
-        this.protocol.resetReconnectBackoff(250);
-      }
-      this.logDebug("gateway rejected protocol v4; retrying node host with protocol v3");
+      this.logDebug(
+        this.useLegacyNodeProtocolEnvelope
+          ? "gateway rejected protocol v4; retrying node host with protocol v3"
+          : "gateway rejected protocol v3; retrying node host with protocol v4",
+      );
       return { closeCode: 1008, closeReason: "connect retry" };
     }
     this.nodeProtocolTransitionPending = false;
@@ -1036,10 +1008,8 @@ export class GatewayClient {
       };
     }
     if (
-      this.shouldFailClosedForUnsupportedAgentRuntimeIdentity({
-        error,
-        authAgentRuntimeIdentityToken: assembled.authAgentRuntimeIdentityToken,
-      })
+      assembled.authAgentRuntimeIdentityToken &&
+      this.isUnsupportedConnectAuthField(error, "agentruntimeidentitytoken")
     ) {
       const unsupportedIdentityError = new Error(
         "gateway rejected required agent runtime identity auth field; refusing to retry without it",
@@ -1050,10 +1020,9 @@ export class GatewayClient {
       return { closeCode: 1008, closeReason: "connect failed", stop: true };
     }
     if (
-      this.shouldRetryWithoutApprovalRuntimeToken({
-        error,
-        authApprovalRuntimeToken: assembled.authApprovalRuntimeToken,
-      })
+      !this.approvalRuntimeTokenRetryBudgetUsed &&
+      assembled.authApprovalRuntimeToken &&
+      this.isUnsupportedConnectAuthField(error, "approvalruntimetoken")
     ) {
       this.approvalRuntimeTokenCompatibilityDisabled = true;
       this.approvalRuntimeTokenRetryBudgetUsed = true;
@@ -1224,43 +1193,12 @@ export class GatewayClient {
     }
   }
 
-  private shouldRetryWithoutApprovalRuntimeToken(params: {
-    error: unknown;
-    authApprovalRuntimeToken?: string;
-  }): boolean {
-    if (this.approvalRuntimeTokenRetryBudgetUsed) {
+  private isUnsupportedConnectAuthField(error: unknown, field: string): boolean {
+    if (!(error instanceof GatewayClientRequestError) || error.gatewayCode !== "INVALID_REQUEST") {
       return false;
     }
-    if (!params.authApprovalRuntimeToken) {
-      return false;
-    }
-    if (!(params.error instanceof GatewayClientRequestError)) {
-      return false;
-    }
-    if (params.error.gatewayCode !== "INVALID_REQUEST") {
-      return false;
-    }
-    const message = normalizeGatewayErrorText(params.error.message);
-    return message.includes("invalid connect params") && message.includes("approvalruntimetoken");
-  }
-
-  private shouldFailClosedForUnsupportedAgentRuntimeIdentity(params: {
-    error: unknown;
-    authAgentRuntimeIdentityToken?: string;
-  }): boolean {
-    if (!params.authAgentRuntimeIdentityToken) {
-      return false;
-    }
-    if (!(params.error instanceof GatewayClientRequestError)) {
-      return false;
-    }
-    if (params.error.gatewayCode !== "INVALID_REQUEST") {
-      return false;
-    }
-    const message = normalizeGatewayErrorText(params.error.message);
-    return (
-      message.includes("invalid connect params") && message.includes("agentruntimeidentitytoken")
-    );
+    const message = normalizeGatewayErrorText(error.message);
+    return message.includes("invalid connect params") && message.includes(field);
   }
 
   private isTrustedDeviceRetryEndpoint(): boolean {

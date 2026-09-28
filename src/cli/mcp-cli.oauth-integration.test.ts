@@ -8,12 +8,9 @@ import {
   operatorMcpOAuthIdentity,
   requesterMcpOAuthIdentity,
 } from "../agents/mcp-oauth-identity.js";
-import {
-  readMcpOAuthPendingAuthorization,
-  updateMcpOAuthStore,
-  writeMcpOAuthPendingAuthorization,
-} from "../agents/mcp-oauth-store.js";
+import { readMcpOAuthPendingAuthorization } from "../agents/mcp-oauth-store.js";
 import { readMcpOAuthCredentialsStatus } from "../agents/mcp-oauth.js";
+import { seedMcpOAuthStoreForTest } from "../agents/mcp-oauth.test-support.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
 import { defaultRuntime } from "../runtime.js";
 import { withOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
@@ -293,12 +290,14 @@ describe("mcp login OAuth integration", () => {
         messageChannel: "telegram",
       });
       for (const identity of [operator, requester]) {
-        updateMcpOAuthStore(identity.storeKey, (store) => ({
-          ...store,
-          tokens: { access_token: identity.principal, token_type: "Bearer" },
-        }));
+        seedMcpOAuthStoreForTest(
+          identity.storeKey,
+          {
+            tokens: { access_token: identity.principal, token_type: "Bearer" },
+          },
+          identity === requester ? "requester-state" : undefined,
+        );
       }
-      writeMcpOAuthPendingAuthorization(requester.storeKey, "requester-state");
 
       await program.parseAsync(
         [

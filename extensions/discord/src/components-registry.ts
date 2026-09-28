@@ -9,6 +9,7 @@ import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   discordComponentRegistryState,
   type DiscordRegistryStore,
+  type PersistedDiscordRegistryEntry,
 } from "./components-registry-state.js";
 import type { DiscordComponentEntry, DiscordModalEntry } from "./components.js";
 import { getOptionalDiscordRuntime } from "./runtime.js";
@@ -18,18 +19,6 @@ const PERSISTENT_COMPONENT_NAMESPACE = "discord.components";
 const PERSISTENT_MODAL_NAMESPACE = "discord.modals";
 const PERSISTENT_COMPONENT_MAX_ENTRIES = 500;
 const PERSISTENT_MODAL_MAX_ENTRIES = 500;
-type PersistedDiscordRegistryEntry<T extends { id: string }> = {
-  version: 1;
-  entry: T;
-};
-
-function getComponentEntries(): Map<string, DiscordComponentEntry> {
-  return discordComponentRegistryState.componentEntries;
-}
-
-function getModalEntries(): Map<string, DiscordModalEntry> {
-  return discordComponentRegistryState.modalEntries;
-}
 
 function formatRegistryError(error: unknown): Record<string, unknown> {
   if (!(error instanceof Error)) {
@@ -185,16 +174,13 @@ function pruneUndefinedRegistryValues<T>(value: T): T {
 function normalizeRegistryEntries<
   T extends { id: string; messageId?: string; createdAt?: number; expiresAt?: number },
 >(entries: T[], params: { now: number; ttlMs: number; messageId?: string }): T[] {
-  const normalizedEntries: T[] = [];
-  for (const entry of entries) {
-    const normalized = normalizeEntryTimestamps(
+  return entries.map((entry) =>
+    normalizeEntryTimestamps(
       { ...entry, messageId: params.messageId ?? entry.messageId },
       params.now,
       params.ttlMs,
-    );
-    normalizedEntries.push(normalized);
-  }
-  return normalizedEntries;
+    ),
+  );
 }
 
 function resolveEntry<T extends { expiresAt?: number }>(
@@ -296,7 +282,7 @@ function resolveComponentConsumptionIds(entry: DiscordComponentEntry): string[] 
 }
 
 function deleteComponentConsumptionGroup(entry: DiscordComponentEntry): void {
-  const store = getComponentEntries();
+  const store = discordComponentRegistryState.componentEntries;
   for (const id of resolveComponentConsumptionIds(entry)) {
     store.delete(id);
   }
@@ -351,10 +337,10 @@ export function registerDiscordComponentEntries(params: {
   });
   return discordComponentRegistryState.withRegistryLock(async () => {
     for (const entry of normalizedEntries) {
-      getComponentEntries().set(entry.id, entry);
+      discordComponentRegistryState.componentEntries.set(entry.id, entry);
     }
     for (const entry of normalizedModals) {
-      getModalEntries().set(entry.id, entry);
+      discordComponentRegistryState.modalEntries.set(entry.id, entry);
     }
     await registerPersistentEntries({
       entries: normalizedEntries,
@@ -368,7 +354,7 @@ function resolveDiscordComponentEntry(params: {
   id: string;
   consume?: boolean;
 }): DiscordComponentEntry | null {
-  const entry = resolveEntry(getComponentEntries(), params);
+  const entry = resolveEntry(discordComponentRegistryState.componentEntries, params);
   if (entry && params.consume !== false) {
     deleteComponentConsumptionGroup(entry);
   }
@@ -400,19 +386,12 @@ export async function resolveDiscordComponentEntryWithPersistence(params: {
   });
 }
 
-function resolveDiscordModalEntry(params: {
-  id: string;
-  consume?: boolean;
-}): DiscordModalEntry | null {
-  return resolveEntry(getModalEntries(), params);
-}
-
 export async function resolveDiscordModalEntryWithPersistence(params: {
   id: string;
   consume?: boolean;
 }): Promise<DiscordModalEntry | null> {
   return discordComponentRegistryState.withRegistryLock(async () => {
-    const inMemory = resolveDiscordModalEntry(params);
+    const inMemory = resolveEntry(discordComponentRegistryState.modalEntries, params);
     if (inMemory) {
       if (params.consume !== false) {
         await deletePersistentEntry({ ...params, openStore: getPersistentModalStore });

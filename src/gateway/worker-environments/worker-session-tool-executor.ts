@@ -10,11 +10,13 @@ import {
   runWithGatewayToolCleanupContext,
   withAgentToolGatewayRuntimeIdentity,
 } from "../../agents/tools/in-process-gateway.js";
+import { capturePresenceToolAuthority } from "../../agents/tools/presence-tool-authority.js";
+import { PRESENCE_QUERY_TIMEOUT_MS } from "../../agents/tools/presence-tool-contract.js";
 import { runWithScopedSessionAccess } from "../../agents/tools/scoped-session-access.js";
 import { createSessionsSpawnTool } from "../../agents/tools/sessions-spawn-tool.js";
+import { jsonResult } from "../../agents/tools/tool-results.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import { inheritSessionCreationPolicy } from "../../config/sessions/session-entry-provenance.js";
 import { sha256Base64Url, sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { WORKER_TOOL_NAMES } from "../../worker/tool-authority.js";
@@ -48,6 +50,7 @@ import { invokeWorkerSkillAuthoring } from "./worker-skill-authoring.js";
 
 type WorkerSessionToolAuthority = {
   assertSource: () => void;
+  assertPresenceSourceCurrent?: () => void;
   collectExecutionIdentity: boolean;
   callGateway: <T = Record<string, unknown>>(
     request: Parameters<AgentToolGatewayRequestCaller>[0],
@@ -98,6 +101,8 @@ export function createWorkerSessionToolExecutor(params: {
           sessionKey: owner.sessionKey,
           gatewayContextResolver: params.resolveGatewayContext,
           operationalRunInstance: owner.operationalRunInstance,
+          approvalAuthority: owner.delegatedAuthority,
+          ...(owner.operatorAuthority ? { operatorAuthority: owner.operatorAuthority } : {}),
           executionIdentityToken: owner.executionIdentityToken,
           receiptAuthority: owner.receiptAuthority,
           workerTurnClaim: owner.turnClaim,
@@ -150,6 +155,7 @@ export function createWorkerSessionToolExecutor(params: {
           assertSource();
           return await run({
             assertSource,
+            assertPresenceSourceCurrent: owner.assertPresenceSourceCurrent,
             callGateway,
             collectExecutionIdentity: owner.executionIdentityToken !== undefined,
           });
@@ -231,7 +237,7 @@ export function createWorkerSessionToolExecutor(params: {
             createParams,
             {
               via: "spawn",
-              ...inheritSessionCreationPolicy(source.entry, { type: "agent", id: source.agentId }),
+              actor: { type: "agent", id: source.agentId },
               requesterSessionKey: source.sessionKey,
               inheritedToolPolicy: { version: 1, allow: authorizedTools, deny: [] },
             },
@@ -265,7 +271,7 @@ export function createWorkerSessionToolExecutor(params: {
         const error = new Error("Cloud child session creation did not persist an incarnation");
         throw creationAttempted ? new WorkerSessionToolOutcomeUnknownError(error) : error;
       }
-      try {
+      const assertChild = () =>
         assertExactChild({
           childSessionKey: operation.childSessionKey,
           childSessionId,
@@ -273,6 +279,8 @@ export function createWorkerSessionToolExecutor(params: {
           sourceSessionId: operation.source.sessionId,
           targetAgentId,
         });
+      try {
+        assertChild();
       } catch (error) {
         if (creationAttempted) {
           throw new WorkerSessionToolOutcomeUnknownError(error);
@@ -327,13 +335,7 @@ export function createWorkerSessionToolExecutor(params: {
         }
         assertActiveChildPlacement();
         assertSource();
-        assertExactChild({
-          childSessionKey: operation.childSessionKey,
-          childSessionId,
-          sourceSessionKey: operation.source.sessionKey,
-          sourceSessionId: operation.source.sessionId,
-          targetAgentId,
-        });
+        assertChild();
         const childRunId = operationKey(operation.operationSeed, "initial-task");
         const config = getRuntimeConfig();
         const sessionSpawnContext = collectExecutionIdentity
@@ -363,13 +365,7 @@ export function createWorkerSessionToolExecutor(params: {
             for (let attempt = 0; attempt < 2; attempt += 1) {
               try {
                 assertSource();
-                assertExactChild({
-                  childSessionKey: operation.childSessionKey,
-                  childSessionId,
-                  sourceSessionKey: operation.source.sessionKey,
-                  sourceSessionId: operation.source.sessionId,
-                  targetAgentId,
-                });
+                assertChild();
                 assertActiveChildPlacement();
                 const request = {
                   method: "agent",
@@ -455,6 +451,35 @@ export function createWorkerSessionToolExecutor(params: {
     }
     if (request.toolName === "portal") {
       return await executePortal(request);
+    }
+    if (request.toolName === "presence") {
+      return await runWithSource({ source, ...request }, async (authority) => {
+        const { assertSource, callGateway } = authority;
+        const assertPresenceSourceCurrent =
+          authority.assertPresenceSourceCurrent ?? capturePresenceToolAuthority();
+        const assertAuthorized = () => {
+          assertSource();
+          assertPresenceSourceCurrent();
+          if (!params.placements.isWorkerTurnToolAuthorized(source.turnClaim, "presence")) {
+            throw new Error("Worker presence is not authorized.");
+          }
+        };
+        assertAuthorized();
+        const policy = await applyWorkerSessionToolPolicy({ request, source });
+        assertAuthorized();
+        if ("result" in policy) {
+          return { resultJson: serializeResult(policy.result) };
+        }
+        const { toolCallId: _toolCallId, ...query } = policy.request.request;
+        const result = await callGateway({
+          method: "presence.query",
+          params: query,
+          assertDispatchCurrent: assertAuthorized,
+          timeoutMs: PRESENCE_QUERY_TIMEOUT_MS,
+        });
+        assertAuthorized();
+        return { resultJson: serializeResult(jsonResult(result)) };
+      });
     }
     const requestDigest = computeRequestDigest(
       request.toolName === "sessions_spawn"

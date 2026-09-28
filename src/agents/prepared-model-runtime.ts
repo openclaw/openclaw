@@ -15,7 +15,6 @@ import {
   registerPreparedRuntimeAuthMaterializationPublisher,
 } from "./prepared-model-runtime-materializations.js";
 import { refreshPreparedModelRuntimeSnapshotsNow } from "./prepared-model-runtime.configured-refresh.js";
-import { isPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import {
   capturePreparedModelRuntimeLifetime,
   closePreparedModelRuntimeSnapshots,
@@ -34,7 +33,6 @@ import {
   publishPreparedModelRuntimeOwnerBatch,
   publishModelRuntimeSnapshot,
   rebindInputToCommittedConfiguredOwner,
-  resolvePreparedModelRuntimeOwnerBySnapshot,
   resolveConfiguredOwnerPublication,
   readPublishedModelRuntimeSnapshot,
   type PreparedModelRuntimeOwner,
@@ -54,6 +52,7 @@ import {
 import { PreparedModelRuntimePublicationQueue } from "./prepared-model-runtime.publication-queue.js";
 import {
   projectPublishedModelRuntimeOwner,
+  refreshPublishedModelRuntimeCatalog,
   retainPublishedModelRuntimeOwner,
 } from "./prepared-model-runtime.published-owner.js";
 import {
@@ -124,8 +123,23 @@ export const loadPublishedGatewayReplyDispatchRuntime = replyDispatchPublication
 let releaseProcessLifetime: (() => void) | undefined;
 function captureModelRuntimeLifetime(): () => void {
   const assertCurrent = capturePreparedModelRuntimeLifetime();
-  releaseProcessLifetime ??= registerPreparedModelRuntimeClose(closeModelRuntime);
+  if (!releaseProcessLifetime) {
+    // Completed process teardown ends the previous refresh admission fence.
+    refreshCancellation = new AbortController();
+    releaseProcessLifetime = registerPreparedModelRuntimeClose(closeModelRuntime);
+  }
   return assertCurrent;
+}
+
+/** Seal refresh admission and cancel acquisition after every Gateway fences admission. */
+export function cancelPreparedModelRuntimeRefresh(): void {
+  if (releaseProcessLifetime && refreshCancellation.signal.aborted) {
+    return;
+  }
+  captureModelRuntimeLifetime();
+  // Fence pending publications before cancellation can reenter a provider callback.
+  refreshRequestEpoch += 1;
+  refreshCancellation.abort(new Error("prepared model runtime acquisition stopped for shutdown"));
 }
 
 async function closeModelRuntime(error: Error): Promise<void> {
@@ -245,13 +259,6 @@ async function loadPreparedModelRuntimeOwner<T>(
     if (getBlockingReplacement()) {
       continue;
     }
-    if (!activated) {
-      return await projectPublishedModelRuntimeOwner(
-        input,
-        preparedModelRuntimeLeaseContext,
-        project,
-      );
-    }
     try {
       return await projectPublishedModelRuntimeOwner(
         input,
@@ -259,7 +266,7 @@ async function loadPreparedModelRuntimeOwner<T>(
         project,
       );
     } catch (error) {
-      if (!(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
+      if (!activated || !(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
         throw error;
       }
       // A concurrent publication boundary may retire the standalone owner between build and read.
@@ -434,31 +441,7 @@ export async function refreshPreparedModelRuntimeCatalog(
   snapshot: PreparedModelRuntimeSnapshot,
   options: PreparedModelCatalogRefreshOptions = {},
 ): Promise<ModelCatalogSnapshot | undefined> {
-  const owner = resolvePreparedModelRuntimeOwnerBySnapshot(snapshot);
-  if (!owner || owners.get(ownerKey(owner.input)) !== owner || !snapshot.loadFullModelCatalog) {
-    return undefined;
-  }
-  const currentCatalog = snapshot.readFullModelCatalog?.() ?? snapshot.modelCatalog;
-  const refresh = options.refresh === true || owner.catalogStale;
-  if (
-    !refresh &&
-    !options.providerIds &&
-    !options.changedOnly &&
-    isPreparedModelCatalogFull(currentCatalog)
-  ) {
-    return undefined;
-  }
-  const generation = owner.generation;
-  const catalog = await snapshot.loadFullModelCatalog({ ...options, refresh });
-  if (
-    owner.catalogStale &&
-    !catalog.pendingProviders?.length &&
-    owner.generation === generation &&
-    owners.get(ownerKey(owner.input)) === owner
-  ) {
-    owner.catalogStale = false;
-  }
-  return catalog;
+  return await refreshPublishedModelRuntimeCatalog(snapshot, owners, options);
 }
 
 /** Invalidates every published generation before config/plugin runtime replacement. */
@@ -471,6 +454,7 @@ export function markPreparedModelRuntimeSnapshotsStale(
   } = {},
 ): PreparedModelRuntimeReplacementGateId | undefined {
   captureModelRuntimeLifetime();
+  refreshCancellation.signal.throwIfAborted();
   const previousCancellation = refreshCancellation;
   refreshCancellation = new AbortController();
   setPreparedModelRuntimeStartupStatus(undefined);
@@ -494,7 +478,11 @@ export function markPreparedModelRuntimeSnapshotsStale(
   });
   // Fence epochs and admission before cancellation can reenter a plugin callback.
   previousCancellation.abort(new PreparedModelRuntimePublicationSupersededError(reason));
-  notifyPreparedModelRuntimePublication({ phase: "invalidated" });
+  const replacement = getBlockingReplacement();
+  notifyPreparedModelRuntimePublication({
+    phase: "invalidated",
+    ...(replacement ? { replacement: replacement.promise } : {}),
+  });
   if (!pendingModelRuntimeReplacement) {
     notifyPreparedModelRuntimePublication({ phase: "failed", error: staleError });
   }
@@ -658,20 +646,20 @@ export function refreshPreparedModelRuntimeSnapshots(
       }
       throw refreshError;
     });
-  return startup ? startup.wait(publication) : publication;
+  return publicationQueue.complete(publication, isPublicationCurrent, options, startup);
 }
 
 async function drainPendingAuthMutations(commit?: () => void): Promise<void> {
   await authPublication.drain({
     owners,
-    publish: async (ownersToPublish, includeCredentialProviders) =>
+    publish: async (ownersToPublish, includeCredentialProviders, reuseGenerations) =>
       await publishPreparedModelRuntimeOwnerBatch({
         ownersToPublish,
         owners,
         agentBuildCompletions,
         buildTimeoutMs: modelRuntimeBuildTimeoutMs,
         ...(includeCredentialProviders ? { includeCredentialProviders: true } : {}),
-        selectPluginGeneration: (owner) => owner.pluginGeneration,
+        selectPluginGeneration: reuseGenerations ? (owner) => owner.pluginGeneration : undefined,
       }),
     publishOwners: (publishedOwners) => replyDispatchPublication.replace(publishedOwners),
     commit,

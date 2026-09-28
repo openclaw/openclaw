@@ -78,8 +78,6 @@ type ProviderModelMergeOptions = {
   providerId: string;
   modelIdMatching?: "exact";
   sourceModelFields?: SourceModelFields;
-  preserveConfiguredModelMembership?: boolean;
-  retainDiscoveredModels?: boolean;
 };
 
 export function buildSourceModelFields(
@@ -127,19 +125,15 @@ export function mergeProviderModels(
     explicit.headers && typeof explicit.headers === "object" && !Array.isArray(explicit.headers)
       ? explicit.headers
       : undefined;
+  const mergeProviderFields = () => ({
+    ...implicit,
+    ...explicit,
+    ...(implicitHeaders || explicitHeaders
+      ? { headers: { ...implicitHeaders, ...explicitHeaders } }
+      : {}),
+  });
   if (implicitModels.length === 0) {
-    return {
-      ...implicit,
-      ...explicit,
-      ...(implicitHeaders || explicitHeaders
-        ? {
-            headers: {
-              ...implicitHeaders,
-              ...explicitHeaders,
-            },
-          }
-        : {}),
-    };
+    return mergeProviderFields();
   }
 
   const getModelId = (model: { id: string }) =>
@@ -176,14 +170,6 @@ export function mergeProviderModels(
         : "input" in explicitModel
           ? explicitModel.input
           : implicitModel.input;
-    if (options?.preserveConfiguredModelMembership) {
-      return Object.assign(
-        {},
-        explicitModel,
-        { cost },
-        sourceFields?.inputOmitted ? { input } : {},
-      );
-    }
 
     const contextWindow =
       asPositiveFiniteNumber(explicitModel.contextWindow) ??
@@ -197,35 +183,23 @@ export function mergeProviderModels(
       explicitMaxTokens === undefined
         ? implicitModel.maxTokensSource
         : explicitModel.maxTokensSource;
+    const catalogRoute = {
+      api: implicitModel.api ?? implicit.api,
+      baseUrl: implicitModel.baseUrl ?? implicit.baseUrl,
+    };
+    const configuredRoute = {
+      api: explicitModel.api ?? explicit.api ?? catalogRoute.api,
+      baseUrl: explicitModel.baseUrl ?? explicit.baseUrl ?? catalogRoute.baseUrl,
+    };
     const compat = resolveCatalogOwnedModelCompat({
-      catalogRoute: {
-        api: implicitModel.api ?? implicit.api,
-        baseUrl: implicitModel.baseUrl ?? implicit.baseUrl,
-      },
+      catalogRoute,
       catalogCompat: implicitModel.compat,
-      configuredRoute: {
-        api: explicitModel.api ?? explicit.api ?? implicitModel.api ?? implicit.api,
-        baseUrl:
-          explicitModel.baseUrl ?? explicit.baseUrl ?? implicitModel.baseUrl ?? implicit.baseUrl,
-      },
+      configuredRoute,
       configuredCompat: explicitModel.compat,
     });
     const contextSelection = explicitModel.contextWindows
       ? explicitModel
-      : modelTransportRoutesMatch(
-            {
-              api: implicitModel.api ?? implicit.api,
-              baseUrl: implicitModel.baseUrl ?? implicit.baseUrl,
-            },
-            {
-              api: explicitModel.api ?? explicit.api ?? implicitModel.api ?? implicit.api,
-              baseUrl:
-                explicitModel.baseUrl ??
-                explicit.baseUrl ??
-                implicitModel.baseUrl ??
-                implicit.baseUrl,
-            },
-          )
+      : modelTransportRoutesMatch(catalogRoute, configuredRoute)
         ? implicitModel
         : undefined;
 
@@ -257,28 +231,17 @@ export function mergeProviderModels(
     );
   });
 
-  if (!options?.preserveConfiguredModelMembership || options.retainDiscoveredModels) {
-    for (const implicitModel of implicitModels) {
-      const id = getModelId(implicitModel);
-      if (!id || seen.has(id)) {
-        continue;
-      }
-      seen.add(id);
-      mergedModels.push(implicitModel);
+  for (const implicitModel of implicitModels) {
+    const id = getModelId(implicitModel);
+    if (!id || seen.has(id)) {
+      continue;
     }
+    seen.add(id);
+    mergedModels.push(implicitModel);
   }
 
   return {
-    ...implicit,
-    ...explicit,
-    ...(implicitHeaders || explicitHeaders
-      ? {
-          headers: {
-            ...implicitHeaders,
-            ...explicitHeaders,
-          },
-        }
-      : {}),
+    ...mergeProviderFields(),
     models: mergedModels,
   };
 }
@@ -364,10 +327,11 @@ function shouldPreserveExistingBaseUrl(params: {
   return !existingApi || !nextApi || existingApi === nextApi;
 }
 
-function isExistingProviderSelfContained(entry: ExistingProviderConfig): boolean {
+export function isWritableProviderConfig(entry: ProviderConfig): boolean {
   if (!Array.isArray(entry.models) || entry.models.length === 0) {
     return true;
   }
+  // AuthStorage can supply omitted keys; an explicitly empty key still violates the schema.
   return Boolean(entry.baseUrl?.trim() && (entry.apiKey === undefined || entry.apiKey));
 }
 
@@ -383,7 +347,7 @@ export function mergeWithExistingProviderSecrets(params: {
 
   const mergedProviders: Record<string, ProviderConfig> = {};
   for (const [key, entry] of Object.entries(normalizedExistingProviders)) {
-    if (!isExistingProviderSelfContained(entry)) {
+    if (!isWritableProviderConfig(entry)) {
       continue;
     }
     mergedProviders[key] = entry;

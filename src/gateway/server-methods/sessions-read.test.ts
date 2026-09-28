@@ -136,7 +136,7 @@ test("agents.list includes system rows only when negotiated", async () => {
     result.agents
       .find((agent) => agent.id === "openclaw")
       ?.thinkingLevels?.map((level) => level.id),
-  ).toEqual(["off"]);
+  ).toEqual(["off", "ultra"]);
   expect(readPreparedGatewayModelCatalog.mock.calls).toEqual([
     [{ agentId: "main" }],
     [{ agentId: "main" }],
@@ -244,7 +244,7 @@ test.each(
     if (unavailableAgentId === "main") {
       expect(mainLevels).toContain("high");
     } else {
-      expect(mainLevels).toEqual(["off"]);
+      expect(mainLevels).toEqual(["off", "ultra"]);
     }
     expect(work?.thinkingLevels?.map((level) => level.id)).toContain("high");
     expect(readPreparedGatewayModelCatalog.mock.calls).toEqual([

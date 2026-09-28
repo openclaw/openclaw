@@ -4,16 +4,95 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { withWorkspaceHashMemo } from "./workspace-hash-memo.js";
 import {
   captureWorkspaceSnapshot,
   parseWorkspaceManifestPair,
 } from "./workspace-manifest-worker.js";
+import { workspaceProcessTestEntrypoints } from "./workspace-process-runtime.test-support.js";
 import { readActualWorkspaceManifest } from "./workspace-reconcile-core.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const adapterUrl = resolveRuntimeWorkerUrl(workspaceProcessTestEntrypoints.manifestWorker);
+const limitsUrl = resolveRuntimeWorkerUrl(workspaceProcessTestEntrypoints.inventoryLimits).href;
 afterEach(() => vi.restoreAllMocks());
+
+it("settles private Git-input staging before a cancelled tree read returns", async () => {
+  const root = tempDirs.make("workspace-tree-input-cancel-");
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const controller = new AbortController();
+  const content = Buffer.from("snapshot");
+  const payload = new TextEncoder().encode(
+    JSON.stringify({
+      inputPath: path.join(root, "input"),
+      ref: "refs/heads/snapshot",
+      entries: [
+        {
+          path: "file.txt",
+          type: "file",
+          mode: 0o644,
+          size: content.length,
+          sha256: createHash("sha256").update(content).digest("hex"),
+        },
+      ],
+      source: { root, tree: "a".repeat(40) },
+    }),
+  );
+  const outcome = runGitWorkerOperation(
+    { type: "workspace.manifest.tree-input", input: { payload } },
+    {
+      inputBytes: payload.byteLength,
+      signal: controller.signal,
+      git: {
+        text: async () => {
+          throw new Error("Unexpected text Git request");
+        },
+        buffered: async (_cwd, args) => {
+          const listing = args.includes("ls-tree");
+          if (!listing) {
+            expect(args[0]).toBe("cat-file");
+            entered.resolve();
+            await release.promise;
+          }
+          return {
+            stdout: listing ? Buffer.from(`100644 blob ${"b".repeat(40)}\tfile.txt\0`) : content,
+            stderr: Buffer.alloc(0),
+            code: 0,
+            signal: null,
+            killed: false,
+            termination: "exit",
+          };
+        },
+      },
+    },
+  ).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  try {
+    await Promise.race([
+      entered.promise,
+      outcome.then(() => {
+        throw new Error("Tree read ended before its blob request");
+      }),
+    ]);
+    controller.abort(new Error("cancel tree input"));
+    release.resolve();
+    expect(await outcome).toBeInstanceOf(Error);
+    expect(await fs.readdir(root)).toEqual([]);
+  } finally {
+    controller.abort();
+    release.resolve();
+    await outcome;
+  }
+});
 
 it("does not create or return an implicit hash memo for an uncached capture", async () => {
   const root = await fs.realpath(tempDirs.make("workspace-uncached-capture-"));
@@ -143,18 +222,15 @@ it("admits a large rebase against its original synchronization manifest", async 
 
 it("admits a pair of manifests at the exact supported byte limit", async () => {
   // Keep this legal 128 MiB request outside the shared Vitest heap.
-  const adapterUrl = new URL("./workspace-manifest-worker.ts", import.meta.url).href;
-  const limitsUrl = new URL("./workspace-inventory-limits.ts", import.meta.url).href;
   const result = await runCommandWithTimeout(
     [
       process.execPath,
-      "--import",
-      "tsx/esm",
+      ...resolveRuntimeWorkerArgv(adapterUrl).slice(0, -1),
       "--input-type=module",
       "--eval",
       `
       import { createHash } from "node:crypto";
-      import { parseWorkspaceManifestPair } from ${JSON.stringify(adapterUrl)};
+      import { parseWorkspaceManifestPair } from ${JSON.stringify(adapterUrl.href)};
       import { MAX_WORKSPACE_MANIFEST_BYTES } from ${JSON.stringify(limitsUrl)};
       const body = JSON.stringify({ version: 1, baseCommit: null, entries: [] });
       const raw = body + " ".repeat(MAX_WORKSPACE_MANIFEST_BYTES - Buffer.byteLength(body));
@@ -171,19 +247,16 @@ it("admits a pair of manifests at the exact supported byte limit", async () => {
 
 it("admits maximum legal path sets with a populated caller-owned hash memo", async () => {
   const root = tempDirs.make("workspace-path-boundary-");
-  const adapterUrl = new URL("./workspace-manifest-worker.ts", import.meta.url).href;
-  const memoUrl = new URL("./workspace-hash-memo.ts", import.meta.url).href;
-  const limitsUrl = new URL("./workspace-inventory-limits.ts", import.meta.url).href;
+  const memoUrl = resolveRuntimeWorkerUrl(workspaceProcessTestEntrypoints.hashMemo).href;
   const result = await runCommandWithTimeout(
     [
       process.execPath,
-      "--import",
-      "tsx/esm",
+      ...resolveRuntimeWorkerArgv(adapterUrl).slice(0, -1),
       "--input-type=module",
       "--eval",
       `
       import { createHash } from "node:crypto";
-      import { captureWorkspaceSnapshot } from ${JSON.stringify(adapterUrl)};
+      import { captureWorkspaceSnapshot } from ${JSON.stringify(adapterUrl.href)};
       import { withWorkspaceHashMemo, MAX_WORKSPACE_HASH_MEMO_BYTES } from ${JSON.stringify(memoUrl)};
       import { MAX_WORKSPACE_INVENTORY_ENTRIES, MAX_WORKSPACE_MANIFEST_BYTES } from ${JSON.stringify(limitsUrl)};
       const root = ${JSON.stringify(root)};
@@ -217,19 +290,16 @@ it("admits maximum legal path sets with a populated caller-owned hash memo", asy
 it.each(["comparison", "overlay"] as const)(
   "admits maximum-entry decoded manifests for %s without an estimated-size rejection",
   async (operation) => {
-    const adapterUrl = new URL("./workspace-manifest-worker.ts", import.meta.url).href;
-    const limitsUrl = new URL("./workspace-inventory-limits.ts", import.meta.url).href;
-    const stagingUrl = new URL("./workspace-result-staging.ts", import.meta.url).href;
+    const stagingUrl = resolveRuntimeWorkerUrl(workspaceProcessTestEntrypoints.resultStaging).href;
     const result = await runCommandWithTimeout(
       [
         process.execPath,
-        "--import",
-        "tsx/esm",
+        ...resolveRuntimeWorkerArgv(adapterUrl).slice(0, -1),
         "--input-type=module",
         "--eval",
         `
         import { createHash } from "node:crypto";
-        import { overlayWorkspaceManifest } from ${JSON.stringify(adapterUrl)};
+        import { overlayWorkspaceManifest } from ${JSON.stringify(adapterUrl.href)};
         import { workerWorkspaceTransferPaths } from ${JSON.stringify(stagingUrl)};
         import { MAX_WORKSPACE_INVENTORY_ENTRIES, MAX_WORKSPACE_MANIFEST_BYTES } from ${JSON.stringify(limitsUrl)};
         const digest = createHash("sha256").update("").digest("hex");

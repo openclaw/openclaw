@@ -81,6 +81,8 @@ it.skipIf(process.platform === "win32")(
     });
     expect(JSON.parse(stdout)).toMatchObject({
       startupDeadlineMs: 10_000,
+      filesystemWorkerReleaseDeadlineMs: 10_500,
+      filesystemWorkerHeldAtInspection: true,
       outcomes: [
         { operation: "selected-identity", status: "fulfilled", observerPresent: true },
         { operation: "selected-command", status: "fulfilled", commandBytes: expect.any(Number) },

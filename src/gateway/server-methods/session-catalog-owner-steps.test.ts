@@ -22,6 +22,7 @@ describe("catalog list step owner", () => {
     async (change) => {
       const blockers = createDeferredCore<SessionCatalogHost[]>();
       const first = createDeferredCore<{ done: false }>();
+      const sourceStarted = createDeferredCore();
       const healthyStarted = createDeferredCore();
       const healthyGate = createDeferredCore<SessionCatalogHost[]>();
       const entryOwner = new AbortController();
@@ -45,6 +46,7 @@ describe("catalog list step owner", () => {
             return {
               async next() {
                 sourceRead();
+                sourceStarted.resolve();
                 return sourceRead.mock.calls.length === 1
                   ? await first.promise
                   : { done: true, hosts: [] };
@@ -55,7 +57,7 @@ describe("catalog list step owner", () => {
         }),
       );
       hoisted.activeRegistry.sessionCatalogs = [{ provider: catalog }];
-      const active = Array.from({ length: 3 }, (_, index) =>
+      const active = Array.from({ length: 15 }, (_, index) =>
         listSessionCatalogProvider(
           provider(`blocking-${index}`, { list: () => blockers.promise }),
           {},
@@ -70,16 +72,18 @@ describe("catalog list step owner", () => {
           respond,
         } as never),
       );
-      const healthy = listSessionCatalogProvider(
-        provider("healthy", {
-          list: () => {
-            healthyStarted.resolve();
-            return healthyGate.promise;
-          },
-        }),
-        {},
-      );
+      let healthy: Promise<SessionCatalogHost[]> | undefined;
       try {
+        await sourceStarted.promise;
+        healthy = listSessionCatalogProvider(
+          provider("healthy", {
+            list: () => {
+              healthyStarted.resolve();
+              return healthyGate.promise;
+            },
+          }),
+          {},
+        );
         first.resolve({ done: false });
         await healthyStarted.promise;
         expect(sourceRead.mock.calls, JSON.stringify(respond.mock.calls)).toHaveLength(1);

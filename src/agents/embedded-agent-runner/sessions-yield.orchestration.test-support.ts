@@ -59,8 +59,9 @@ describe("sessions_yield orchestration", () => {
       const { prepareSystemAgentRunAdmission } = await import("../admitted-run-context.js");
       const transcriptOwner = await import("../assistant-error-transcript.js");
       const registry = await import("../subagents/registry/subagent-registry.test-helpers.js");
-      const { subagentRegistryDeps } =
-        await import("../subagents/registry/subagent-registry-deps.js");
+      const gateway = await import("../../gateway/call.js");
+      const requesterSettlement =
+        await import("../subagents/announce/subagent-announce.requester-settle-wake.js");
       const { subagentRuns } = await import("../subagents/registry/subagent-registry-memory.js");
       const { onSubagentRegistryPersisted, persistSubagentRunsToDiskOrThrow } =
         await import("../subagents/registry/subagent-registry-state.js");
@@ -80,7 +81,7 @@ describe("sessions_yield orchestration", () => {
       const releaseCleanup = createDeferred();
       const settlementEntered = createDeferred();
       const settlement = gateSubagentRequesterSettlement(
-        subagentRegistryDeps.maybeWakeRequesterAfterAllChildrenSettled,
+        requesterSettlement.maybeWakeRequesterAfterAllChildrenSettled,
       );
       const gatewayCalls = vi
         .fn<(request: Parameters<typeof runtimeCallGateway>[0]) => Promise<unknown>>()
@@ -95,14 +96,14 @@ describe("sessions_yield orchestration", () => {
         request: Parameters<typeof runtimeCallGateway>[0],
       ): Promise<T> => (await gatewayCalls(request)) as T;
       deliveryTesting.setDepsForTest({ callGateway });
-      registry.testing.setDepsForTest({
-        callGateway,
-        maybeWakeRequesterAfterAllChildrenSettled: (settlementParams) => {
+      const gatewaySpy = vi.spyOn(gateway, "callGateway").mockImplementation(callGateway);
+      const settlementSpy = vi
+        .spyOn(requesterSettlement, "maybeWakeRequesterAfterAllChildrenSettled")
+        .mockImplementation((settlementParams) => {
           const pending = settlement.run(settlementParams);
           settlementEntered.resolve();
           return pending;
-        },
-      });
+        });
       registry.resetSubagentRegistryForTests({ persist: false });
       registry.initSubagentRegistry();
       const child = createSubagentRunRecord({
@@ -226,7 +227,8 @@ describe("sessions_yield orchestration", () => {
           admission.close();
           replacement.close();
           registry.resetSubagentRegistryForTests({ persist: false });
-          registry.testing.setDepsForTest();
+          settlementSpy.mockRestore();
+          gatewaySpy.mockRestore();
           deliveryTesting.setDepsForTest();
         }
       }

@@ -31,7 +31,7 @@ describe("command palette input", () => {
     };
   }
 
-  it("retains the same field, selection and picker focus across controlled rerenders", async () => {
+  it("preserves the field and skips layout when only the selected result changes", async () => {
     const inputProps = props();
     inputProps.value = "A task draft";
     inputProps.onInputRef = vi.fn((element) => {
@@ -42,6 +42,15 @@ describe("command palette input", () => {
     inputProps.actions = html`<button type="button">Settings</button>`;
     render(renderCommandPaletteInput(inputProps), host);
     const input = host.querySelector("textarea")!;
+    input.style.lineHeight = "24px";
+    const measureContent = vi.fn(() => 24);
+    Object.defineProperties(input, {
+      scrollHeight: { configurable: true, get: measureContent },
+      clientHeight: { configurable: true, value: 24 },
+    });
+    await vi.advanceTimersByTimeAsync(20);
+    expect(measureContent).toHaveBeenCalled();
+    measureContent.mockClear();
     input.setSelectionRange(2, 6);
     const settings = host.querySelector("button")!;
     settings.focus();
@@ -55,6 +64,7 @@ describe("command palette input", () => {
     expect(inputProps.onInputRef).toHaveBeenCalledTimes(1);
     expect(input.id).toBe("cmd-palette-input");
     expect(input.getAttribute("aria-activedescendant")).toBe("next-result");
+    expect(measureContent).not.toHaveBeenCalled();
   });
 
   it("reports the whole prompt without truncating the search projection boundary", () => {
@@ -108,6 +118,68 @@ describe("command palette input", () => {
     expect(input.style.overflowY).toBe("hidden");
     expect(entry.hasAttribute("data-scroll-fade-top")).toBe(false);
     expect(entry.hasAttribute("data-scroll-fade-bottom")).toBe(false);
+  });
+
+  it("reuses an input edit's layout and remeasures controlled values, resizes and reconnects", async () => {
+    let notifyResize: () => void = () => undefined;
+    const disconnect = vi.fn();
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: () => void) {
+          notifyResize = callback;
+        }
+        observe = vi.fn();
+        disconnect = disconnect;
+      },
+    );
+    const inputProps = props();
+    inputProps.onValueChange = vi.fn((value) => {
+      inputProps.value = value;
+    });
+    const part = render(renderCommandPaletteInput(inputProps), host);
+    const input = host.querySelector("textarea")!;
+    input.style.lineHeight = "24px";
+    let contentHeight = 24;
+    const measureContent = vi.fn(() => contentHeight);
+    Object.defineProperties(input, {
+      scrollHeight: { configurable: true, get: measureContent },
+      clientHeight: { configurable: true, get: () => Number.parseFloat(input.style.height) || 24 },
+    });
+    await vi.advanceTimersByTimeAsync(20);
+
+    contentHeight = 48;
+    input.value = "Two\nlines";
+    input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    expect(input.style.height).toBe("48px");
+    measureContent.mockClear();
+    render(renderCommandPaletteInput(inputProps), host);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(measureContent).not.toHaveBeenCalled();
+
+    contentHeight = 24;
+    inputProps.value = "Restored";
+    render(renderCommandPaletteInput(inputProps), host);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(input.style.height).toBe("24px");
+
+    contentHeight = 48;
+    notifyResize();
+    await vi.advanceTimersByTimeAsync(20);
+    expect(input.style.height).toBe("48px");
+
+    part.setConnected(false);
+    expect(disconnect).toHaveBeenCalledOnce();
+    contentHeight = 72;
+    part.setConnected(true);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(input.style.height).toBe("72px");
+    input.value = "Reconnected";
+    input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    expect(inputProps.onValueChange).toHaveBeenLastCalledWith(
+      "Reconnected",
+      expect.any(InputEvent),
+    );
   });
 
   it("disconnects scroll/resize observation and cancels pending layout on removal", async () => {

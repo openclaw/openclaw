@@ -3,12 +3,15 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "../../infra/sqlite-worker-contract.js";
-import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
 import * as stateRead from "../../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../../test-utils/gateway-scheduler-clock.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import { loadCronStore, saveCronJobsStore } from "../store.js";
 import {
@@ -20,29 +23,27 @@ import {
   inspectActiveCronRunReceipt,
   makeCronRecoveryJob as makeJob,
 } from "../store/run-receipt-store.test-support.js";
+import { prepareCronRunReceiptWriteSchema } from "../store/run-receipt-write-admission.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import type { CronJob } from "../types.js";
 import { start, stop } from "./ops-lifecycle.js";
+import { createCronRunHandle, finishCronRun, recordQuietCronEvaluation } from "./run-history.js";
 import {
   claimCronRecoveryReceipt as claimReceipt,
   makeCronRecoveryState as makeState,
   observeCronRecoveryForTest,
+  observeCronTimerAdmissions,
   recoverCronRunForTest,
 } from "./run-recovery.test-support.js";
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
 import { createCronServiceState, type CronServiceDeps } from "./state.js";
 import { runPostPersistCronNotifications } from "./store.js";
-import {
-  tryCreateCronTaskRunHandle,
-  tryFinishCronTaskRun,
-  tryFinishCronTaskRunWithoutHistory,
-} from "./task-runs.js";
 import { onTimer } from "./timer.test-support.js";
 
 function tryCreateCronTaskRun(
-  params: Parameters<typeof tryCreateCronTaskRunHandle>[0],
+  params: Parameters<typeof createCronRunHandle>[0],
 ): string | undefined {
-  return tryCreateCronTaskRunHandle(params)?.runId;
+  return createCronRunHandle(params)?.runId;
 }
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-run-recovery-" });
@@ -58,9 +59,10 @@ async function commitCompletedJob(params: {
     { version: 1, jobs: params.jobs },
     {
       transactionHooks: {
-        afterWrite: (database) => {
+        afterWrite: (database, receiptSchema) => {
           finishCronRunReceiptInDatabase({
             database,
+            receiptSchema,
             handle: params.receipt,
             status: "ok",
             finishedAtMs: params.finishedAtMs,
@@ -91,6 +93,7 @@ describe("atomic cron run recovery", () => {
       const reaperDiscovery = vi.fn(() => []);
       const state = createCronServiceState({
         ...makeState(logger, storePath, startedAtMs + 1).deps,
+        scheduler: createTestGatewayScheduler(),
         onEvent,
         runCommandJob,
         resolveSessionStoreAgentIds: reaperDiscovery,
@@ -115,11 +118,14 @@ describe("atomic cron run recovery", () => {
           }
           return result;
         });
-      const rootWorkBefore = getActiveGatewayRootWorkCount();
+      const admissions = observeCronTimerAdmissions(state);
       const retired = source === "startup" ? start(state) : onTimer(state);
       let restarted: Promise<void> | undefined;
       try {
         await barriers[0]!.entered.promise;
+        if (source === "timer") {
+          await admissions.expectActive();
+        }
         stop(state);
         restarted = start(state);
         expect(state.stopped).toBe(false);
@@ -134,7 +140,7 @@ describe("atomic cron run recovery", () => {
         expect(reaperDiscovery).not.toHaveBeenCalled();
         expect(state.activeTimerTicks).toBe(0);
         expect(state.queuedRunReservationsByJobId.size).toBe(0);
-        expect(getActiveGatewayRootWorkCount()).toBe(rootWorkBefore);
+        await admissions.expectReleased(source === "timer" ? 1 : 0);
 
         await barriers[1]!.entered.promise;
         barriers[1]!.release.resolve();
@@ -263,7 +269,11 @@ describe("atomic cron run recovery", () => {
     });
     const runCommandJob = vi.fn(async () => ({ status: "ok" as const }));
     for (let restart = 0; restart < 3; restart += 1) {
-      const next = createCronServiceState({ ...state.deps, runCommandJob });
+      const next = createCronServiceState({
+        ...state.deps,
+        scheduler: createTestGatewayScheduler(),
+        runCommandJob,
+      });
       try {
         await start(next);
         expect(runCommandJob).toHaveBeenCalledOnce();
@@ -310,7 +320,7 @@ describe("atomic cron run recovery", () => {
         startedAt: startedAtMs,
       });
       expect(taskRunId).toBeDefined();
-      tryFinishCronTaskRun(executionState, {
+      await finishCronRun(executionState, {
         taskRunId,
         job,
         event: {
@@ -392,7 +402,7 @@ describe("atomic cron run recovery", () => {
       });
       expect(taskRunId).toBeDefined();
       if (terminal) {
-        tryFinishCronTaskRun(original, {
+        await finishCronRun(original, {
           taskRunId,
           job,
           event: {
@@ -420,6 +430,7 @@ describe("atomic cron run recovery", () => {
       for (let restart = 0; restart < 3; restart += 1) {
         const state = createCronServiceState({
           ...makeState(logger, storePath, Date.now()).deps,
+          scheduler: createTestGatewayScheduler(),
           runCommandJob,
           onEvent,
         });
@@ -472,10 +483,12 @@ describe("atomic cron run recovery", () => {
       releaseLocalCronRunReceiptOwnership(receipt);
       const finished = createDeferred();
       const runJob = vi.fn(async () => ({ status: "ok" as const }));
+      const clock = createGatewaySchedulerClock(nowMs);
       const freshState = () =>
         createCronServiceState({
           ...original.deps,
-          nowMs: Date.now,
+          scheduler: createTestGatewayScheduler(clock.clock),
+          nowMs: clock.clock.now,
           onEvent(event) {
             if (event.action === "finished" && event.status === "ok") {
               finished.resolve();
@@ -512,7 +525,7 @@ describe("atomic cron run recovery", () => {
       }
       if (phase !== "repair") {
         for (let restart = 0; restart < 3; restart += 1) {
-          await vi.advanceTimersByTimeAsync(1);
+          await clock.advanceBy(1);
           const pendingState = freshState();
           try {
             await start(pendingState);
@@ -533,10 +546,10 @@ describe("atomic cron run recovery", () => {
         await start(second);
         if (phase !== "repair") {
           expect(runJob).not.toHaveBeenCalled();
-          const delay = nowMs + (phase === "agent-deferral" ? 120_000 : 5_000) - Date.now();
-          await vi.advanceTimersByTimeAsync(delay - 1);
+          const dueAt = nowMs + (phase === "agent-deferral" ? 120_000 : 5_000);
+          await clock.advanceTo(dueAt - 1);
           expect(runJob).not.toHaveBeenCalled();
-          await vi.advanceTimersByTimeAsync(1);
+          await clock.advanceBy(1);
           await finished.promise;
           await second.op;
         }
@@ -587,6 +600,7 @@ describe("atomic cron run recovery", () => {
     runOpenClawStateWriteTransaction(({ db }) =>
       finishCronRunReceiptInDatabase({
         database: db,
+        receiptSchema: prepareCronRunReceiptWriteSchema(db),
         handle: receipt,
         status: "ok",
         finishedAtMs: startedAtMs + 1,
@@ -726,8 +740,11 @@ describe("atomic cron run recovery", () => {
       startedAt: startedAtMs,
       runReceipt: receipt,
     });
-    tryFinishCronTaskRunWithoutHistory(state, {
+    await recordQuietCronEvaluation(state, {
       taskRunId,
+      jobId: job.id,
+      job,
+      startedAt: startedAtMs,
       status: "ok",
       endedAt: startedAtMs + 1,
       triggerEval: { fired: false, stateChanged: true, state: { ready: false } },
@@ -760,7 +777,7 @@ describe("atomic cron run recovery", () => {
       startedAt: startedAtMs,
       runReceipt: priorReceipt,
     });
-    tryFinishCronTaskRun(state, {
+    await finishCronRun(state, {
       taskRunId: priorTaskRunId,
       job,
       event: {
@@ -802,7 +819,7 @@ describe("atomic cron run recovery", () => {
       startedAt: startedAtMs,
       publicRunId: "manual:legacy-manual-task-recovery:1",
     });
-    tryFinishCronTaskRun(state, {
+    await finishCronRun(state, {
       taskRunId,
       job,
       event: {

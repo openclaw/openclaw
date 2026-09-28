@@ -76,6 +76,7 @@ export const handlePluginCommand: CommandHandler = async (
     channelId: command.channelId,
     isAuthorizedSender: command.isAuthorizedSender,
     senderIsOwner: command.senderIsOwner,
+    assertOwnerCurrent: command.assertOwnerCurrent,
     gatewayClientScopes: params.ctx.GatewayClientScopes,
     agentId: targetAgentId,
     sessionKey: params.sessionKey,
@@ -98,7 +99,7 @@ export const handlePluginCommand: CommandHandler = async (
     ...(sessionTarget
       ? {
           runtimeContext: {
-            compactCurrent: async (invocationSignal) => {
+            compactCurrent: async (invocationSignal, assertOwnerCurrent) => {
               if (!params.command.isAuthorizedSender) {
                 return { compacted: false, reason: "compaction requires authorization" };
               }
@@ -117,6 +118,7 @@ export const handlePluginCommand: CommandHandler = async (
                   },
                 },
                 true,
+                assertOwnerCurrent,
               );
               return (
                 compaction?.sessionCompaction ?? {

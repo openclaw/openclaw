@@ -186,8 +186,6 @@ export function resolveHermesImplicitBaseUrl(providerId: string | undefined): st
     : undefined;
 }
 
-export { readPositiveNumber };
-
 export function resolveProviderApi(
   raw: Record<string, unknown>,
   providerId?: string,

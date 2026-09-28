@@ -65,6 +65,8 @@ export type PluginCommandContext = {
   isAuthorizedSender: boolean;
   /** Whether the sender is an owner for owner-only command surfaces. */
   senderIsOwner?: boolean;
+  /** Revalidate admitted owner authority before privileged effects, after awaited preparation. */
+  assertOwnerCurrent?: () => void;
   /** Gateway client scopes for internal control-plane callers */
   gatewayClientScopes?: string[];
   /** Host-resolved agent that owns the active session. */

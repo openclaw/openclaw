@@ -1,6 +1,6 @@
 /** Executes isolated cron prompts with model fallbacks and interim-ack retries. */
 import { createHash } from "node:crypto";
-import { resolveGroupToolPolicyOutcome } from "../../agents/agent-tools.policy.js";
+import { resolveGroupToolPolicy } from "../../agents/agent-tools.policy.js";
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import {
   cliBackendAcceptsAuthProfileForwarding,
@@ -16,10 +16,17 @@ import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-en
 import { createDeferredEmbeddedRunLifecycleManager } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
+import {
+  getGeneratedMediaTaskIdsForSessionKey,
+  hasNewGeneratedMediaTaskForSessionKey,
+} from "../../agents/media-generation-activity.js";
 import { findModelInCatalog, modelSupportsInput } from "../../agents/model-catalog-lookup.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
 import { rootedAgentRunParams } from "../../agents/rooted-run-params.js";
-import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
+import {
+  resolveScheduledToolCallerContext,
+  resolveScheduledToolPolicyContext,
+} from "../../agents/scheduled-tool-policy.js";
 import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { needsThinkHydration } from "../../agents/thinking-runtime.js";
@@ -33,10 +40,6 @@ import {
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import {
-  getGeneratedMediaTaskIdsForSessionKey,
-  hasNewGeneratedMediaTaskForSessionKey,
-} from "../../tasks/task-status-access.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { assertCronExecutionRootRuntime } from "../execution-root-runtime.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
@@ -52,10 +55,7 @@ import {
   prepareCronPromptRunAdmission,
 } from "./run-admission.js";
 import { createCronCandidateExecutionResolver } from "./run-candidate-runtime.js";
-import {
-  appendCronDeliveryInstruction,
-  buildCronDeliveryTargetRuntimeContext,
-} from "./run-delivery-trace.js";
+import { finalizeCronPromptForResolvedTools } from "./run-delivery-trace.js";
 import {
   getCliSessionBinding,
   LiveSessionModelSwitchError,
@@ -162,14 +162,13 @@ function createCronPromptExecutor(
     isCommandStyleCronMessage(params.agentPayload?.message ?? ""))
       ? "lightweight"
       : undefined;
-  const validatedScheduledToolPolicy = resolveCronScheduledToolPolicy({
-    toolsAllow: params.agentPayload?.toolsAllow,
-    scheduledToolPolicy: params.job.scheduledToolPolicy,
-    owner: params.job.owner,
-  });
   const scheduledToolPolicy = resolveScheduledToolPolicyContext({
     toolsAllow: params.agentPayload?.toolsAllow,
-    scheduledToolPolicy: validatedScheduledToolPolicy,
+    scheduledToolPolicy: resolveCronScheduledToolPolicy({
+      toolsAllow: params.agentPayload?.toolsAllow,
+      scheduledToolPolicy: params.job.scheduledToolPolicy,
+      owner: params.job.owner,
+    }),
     callerOrigin: params.job.toolsAllowProvenance?.callerOrigin,
     execTarget: params.job.toolsAllowExecTarget,
   });
@@ -177,17 +176,15 @@ function createCronPromptExecutor(
   const sourceReplyDeliveryMode = sourceDelivery.sourceReplyDeliveryMode;
   const messageChannel = sourceDelivery.target.channel ?? params.resolvedDelivery.channel;
   if (scheduledToolPolicy?.mode === "account") {
-    const policyOutcome = resolveGroupToolPolicyOutcome({
+    const callerContext = resolveScheduledToolCallerContext({ scheduledToolPolicy });
+    resolveGroupToolPolicy({
       config: params.cfgWithAgentDefaults,
       sessionKey: scheduledToolPolicy.ownerSessionKey,
-      messageProvider: messageChannel,
+      messageProvider: callerContext.local ? messageChannel : (callerContext.channel ?? undefined),
       accountId: scheduledToolPolicy.ownerAccountId,
       requireConfiguredAccount: true,
       senderPolicyMode: "never",
     });
-    if (policyOutcome.kind === "account-unavailable") {
-      throw new Error(policyOutcome.message);
-    }
   }
   const finalizePromptForResolvedTools = ({
     prompt,
@@ -195,30 +192,15 @@ function createCronPromptExecutor(
   }: {
     prompt: string;
     messageToolAvailable: boolean;
-  }) => {
-    const deliveryMessageToolAvailable = sourceDelivery.messageTool.enabled && messageToolAvailable;
-    if (sourceReplyDeliveryMode === "message_tool_only" && !deliveryMessageToolAvailable) {
-      throw new Error(
-        "Cron source delivery requires the message tool, but the selected runtime does not expose it. Allow the message tool, choose a compatible runtime, or use automatic delivery.",
-      );
-    }
-    const promptWithDeliveryGuidance = appendCronDeliveryInstruction({
-      commandBody: prompt,
+  }) =>
+    finalizeCronPromptForResolvedTools({
+      prompt,
+      messageToolAvailable,
       deliveryRequested: params.deliveryRequested,
-      messageToolEnabled: deliveryMessageToolAvailable,
-      resolvedDeliveryOk: params.resolvedDelivery.ok,
-      requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
-    });
-    const deliveryTargetRuntimeContext = buildCronDeliveryTargetRuntimeContext({
-      resolvedDeliveryOk: params.resolvedDelivery.ok,
-      messageToolAvailable: deliveryMessageToolAvailable,
       resolvedDelivery: params.resolvedDelivery,
       sourceDelivery,
+      messageToolFormatPrompt: params.messageToolFormatPrompt,
     });
-    return deliveryTargetRuntimeContext
-      ? `${promptWithDeliveryGuidance}\n\n${deliveryTargetRuntimeContext}`.trim()
-      : promptWithDeliveryGuidance;
-  };
   let pendingUserTurn:
     | {
         promptText: string;
@@ -478,6 +460,7 @@ function createCronPromptExecutor(
             skillsSnapshot: params.skillsSnapshot,
             messageChannel,
             agentAccountId: params.resolvedDelivery.accountId,
+            extraSystemPrompt: params.deliverySystemPrompt,
             sourceReplyDeliveryMode,
             requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
             scheduledToolPolicy,
@@ -570,6 +553,7 @@ function createCronPromptExecutor(
                   cliSessionId: cliSessionBinding?.sessionId,
                   cliSessionBinding: guardedCliSessionBinding,
                   cliSessionBindingFacts: {
+                    extraSystemPromptStatic: params.deliverySystemPrompt,
                     sourceReplyDeliveryMode,
                     requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
                   },

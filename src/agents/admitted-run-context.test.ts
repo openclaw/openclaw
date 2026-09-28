@@ -10,6 +10,11 @@ import {
   validateAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
 import {
+  bindGatewayContextResolver,
+  clearGatewayContextResolver,
+  getGatewayContextResolver,
+} from "../plugins/runtime/gateway-context-binding.js";
+import {
   closeAdmittedRunDelegatedAuthority,
   createExecutionIdentityRecoveryAdmission,
   createOperationalRunInstanceRef,
@@ -95,6 +100,32 @@ describe("prepared run admission", () => {
     expect(Object.isFrozen(first)).toBe(true);
     expect(Object.isFrozen(first.operationalRunInstance)).toBe(true);
   });
+
+  it.each([false, true])(
+    "binds Gateway routing after freezing admission (audit=%s)",
+    async (audit) => {
+      const { runtime, ...admissionFacts } = facts;
+      const resolver = () => undefined;
+      const prepared = prepareAgentRunAdmission({
+        cfg: audit ? enabledConfig : {},
+        facts: admissionFacts,
+        operationalRunInstance: createOperationalRunInstanceRef(facts.runId),
+        onAdmitted: (context) => {
+          expect(Object.isFrozen(context)).toBe(true);
+          bindGatewayContextResolver(context, resolver);
+        },
+      });
+      try {
+        const admitted = await prepared.admit(runtime.kind);
+        expect(getGatewayContextResolver(admitted)).toBe(resolver);
+        expect(getGatewayContextResolver({ ...admitted })).toBeUndefined();
+        expect(clearGatewayContextResolver(admitted)).toBe(true);
+        expect(getGatewayContextResolver(admitted)).toBeUndefined();
+      } finally {
+        prepared.close();
+      }
+    },
+  );
 
   it("consumes disabled recovery evidence so a reused run id cannot inherit it", async () => {
     const token = createExecutionIdentityAdmissionToken(facts.runId);
@@ -366,6 +397,45 @@ describe("prepared run admission", () => {
     expect(() => assertActive?.()).toThrow("no longer active");
     prepared.close();
     expect(() => assertActive?.()).toThrow("no longer active");
+  });
+
+  it("retains the first source failure after revocation without reviving authority", async () => {
+    const failure = new Error("Completed-turn transcript anchor changed");
+    let sourceFailure: Error | undefined;
+    const prepared = prepareAgentRunAdmission({
+      cfg: {},
+      facts: { ...facts, runId: "source-failure" },
+      operationalRunInstance: createOperationalRunInstanceRef("source-failure"),
+      assertSourceCurrent: () => {
+        if (sourceFailure) {
+          throw sourceFailure;
+        }
+      },
+    });
+    try {
+      const admitted = await prepared.admit("embedded");
+      const assertActive = resolveAdmittedRunActiveAssertion(admitted)!;
+      assertActive();
+      prepared.assertSourceCurrent();
+      sourceFailure = failure;
+      expect(assertActive).toThrow(
+        expect.objectContaining({
+          message: "admitted run authority is no longer active",
+          cause: failure,
+        }),
+      );
+      sourceFailure = undefined;
+      expect(getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();
+      expect(assertActive).toThrow(expect.objectContaining({ cause: failure }));
+      expect(() => prepared.assertSourceCurrent()).toThrow(
+        expect.objectContaining({
+          message: "source execution authority is no longer active",
+          cause: failure,
+        }),
+      );
+    } finally {
+      prepared.close();
+    }
   });
 
   it("closes generic authority while keeping a recovery-only lease active", async () => {

@@ -528,13 +528,16 @@ async function completeEmbeddedRun(
           attempt: input.attempt,
           incompleteTurnText,
         });
-  const stopReason = error
-    ? undefined
-    : input.attempt.clientToolCalls
-      ? "tool_calls"
-      : input.attempt.yieldDetected
-        ? "end_turn"
-        : (input.attemptAssistant?.stopReason as string | undefined);
+  // Cancellation belongs to the runtime owner, not the last model tool-call message.
+  const stopReason = terminalAborted
+    ? input.terminalState.outcome.stopReason
+    : error
+      ? undefined
+      : input.attempt.clientToolCalls
+        ? "tool_calls"
+        : input.attempt.yieldDetected
+          ? "end_turn"
+          : (input.attemptAssistant?.stopReason as string | undefined);
   if (error) {
     input.setTerminalLifecycleMeta({ replayInvalid, livenessState });
     if (input.authProfileId) {

@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
+import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 
 const { fixture, outcomeRef, describePosix, unknownProjection } =
@@ -24,6 +25,7 @@ describePosix("native merge with exhausted GraphQL quota", () => {
     expect(f.state().mutations).toBe(1);
     expect(f.state().restMergePayload).toMatchObject({ sha: f.head, merge_method: "squash" });
     expect(f.state().restMergePayload).not.toHaveProperty("commit_title");
+    expect(f.state().nodeArgs).toEqual(resolveVitestNodeArgs());
     expect(f.state().calls.filter((call) => call.includes("PUT"))).toHaveLength(1);
     expect(
       f

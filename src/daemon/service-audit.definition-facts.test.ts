@@ -503,7 +503,7 @@ it.each(["OpenClaw Gateway (v2026.9.4)", "operator-private"])(
   },
 );
 
-it.each(["canonical-wrapper", "wrapper", "metadata"])(
+it.each(["canonical-wrapper", "legacy-wrapper", "malformed-args", "wrapper", "metadata"])(
   "audits launchd %s before the installer can replace it",
   async (kind) => {
     const home = dirs.make("rewrite-launchd-preservation-");
@@ -519,6 +519,16 @@ it.each(["canonical-wrapper", "wrapper", "metadata"])(
       sourcePath,
       buildLaunchAgentPlist({
         ...command,
+        ...(kind === "malformed-args"
+          ? {
+              programArguments: [
+                "/bin/sh",
+                resolveLaunchAgentEnvWrapperPath(env, "ai.openclaw.gateway"),
+                command.programArguments[0]!,
+                ...command.programArguments,
+              ],
+            }
+          : {}),
         label: "ai.openclaw.gateway",
         comment: kind === "metadata" ? "operator-private" : "OpenClaw Gateway",
         stdoutPath,
@@ -530,9 +540,11 @@ it.each(["canonical-wrapper", "wrapper", "metadata"])(
       await fs.mkdir(path.dirname(wrapperPath), { recursive: true });
       await fs.writeFile(
         wrapperPath,
-        kind === "canonical-wrapper"
+        kind === "canonical-wrapper" || kind === "malformed-args"
           ? buildLaunchAgentEnvironmentWrapper()
-          : '#!/bin/sh\necho operator-private\nexec "$@"\n',
+          : kind === "legacy-wrapper"
+            ? '#!/bin/sh\nset -eu\nenv_file="$1"\nshift\nif [ -f "$env_file" ]; then\n  . "$env_file"\nfi\nexec "$@"\n'
+            : '#!/bin/sh\necho operator-private\nexec "$@"\n',
       );
     }
     const result = await auditGatewayServiceConfig({
@@ -543,6 +555,24 @@ it.each(["canonical-wrapper", "wrapper", "metadata"])(
     });
     if (kind === "canonical-wrapper") {
       expect(result.definitionDrift ?? []).toEqual([]);
+      return;
+    }
+    if (kind === "malformed-args") {
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({
+          code: "launchd-env-file-argument",
+          message: expect.stringContaining("openclaw gateway install --force"),
+        }),
+      );
+      return;
+    }
+    if (kind === "legacy-wrapper") {
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({ code: "launchd-env-wrapper-outdated" }),
+      );
+      expect(result.definitionDrift).toEqual([
+        expect.objectContaining({ kind: "outdated", key: "EnvironmentWrapper" }),
+      ]);
       return;
     }
     expect(result.definitionDrift).toContainEqual(
@@ -557,6 +587,8 @@ it.each(["canonical-wrapper", "wrapper", "metadata"])(
 
 it.each([
   "canonical",
+  "released-waiting",
+  "released-waiting-custom",
   "script",
   "launcher",
   "metadata",
@@ -566,6 +598,7 @@ it.each([
   "custom-script",
   "native-defaults",
 ])("checks generated Scheduled Task %s before a rewrite", async (kind) => {
+  const releasedWaiting = kind.startsWith("released-waiting");
   const home = dirs.make("rewrite-task-preservation-");
   const env = {
     USERPROFILE: home,
@@ -574,6 +607,9 @@ it.each([
     ...(kind === "custom-script" ? { OPENCLAW_TASK_SCRIPT_NAME: "gateway.bat" } : {}),
   };
   const environment: Record<string, string> = { ...staleServiceEnvironment };
+  if (releasedWaiting) {
+    environment.OPENCLAW_SERVICE_VERSION = "2026.9.3";
+  }
   if (kind === "path") {
     environment.PATH = "C:\\operator-private";
   }
@@ -591,8 +627,10 @@ it.each([
     buildTaskScript(command) +
     (kind === "script" ? "echo operator-private\r\n" : "");
   const launcher =
-    buildHiddenLauncherScript({ scriptPath, taskSupervisor: true }) +
-    (kind === "launcher" || kind === "planned-launcher"
+    (releasedWaiting
+      ? `' OpenClaw Gateway (v2026.9.3)\r\nWScript.Quit CreateObject("WScript.Shell").Run("""${scriptPath.replaceAll('"', '""')}""", 0, True)\r\n`
+      : buildHiddenLauncherScript({ scriptPath, taskSupervisor: true })) +
+    (kind === "launcher" || kind === "planned-launcher" || kind === "released-waiting-custom"
       ? 'WScript.Echo "operator-private"\r\n'
       : "");
   await fs.writeFile(scriptPath, script);
@@ -634,8 +672,18 @@ it.each([
       environment: { ...environment, OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1" },
     },
   });
-  if (kind === "canonical" || kind === "missing-launcher" || kind === "custom-script") {
+  if (
+    kind === "canonical" ||
+    kind === "released-waiting" ||
+    kind === "missing-launcher" ||
+    kind === "custom-script"
+  ) {
     expect(result.definitionDrift).toBeUndefined();
+  } else if (kind === "script") {
+    expect(result.definitionDrift).toBeUndefined();
+    expect(result.definitionDriftError).toBe(
+      "Service definition inspection could not be completed.",
+    );
   } else if (kind === "native-defaults") {
     expect(result.definitionDrift).toEqual(
       expect.arrayContaining([
@@ -665,18 +713,18 @@ it.each([
       expect.objectContaining({
         kind: "unknown-edit",
         key:
-          kind === "script"
-            ? "TaskScript"
-            : kind === "launcher" || kind === "planned-launcher"
-              ? "TaskLauncher"
-              : kind === "path"
-                ? "Environment.PATH"
-                : "RegistrationInfo.Description",
+          kind === "launcher" || kind === "planned-launcher" || kind === "released-waiting-custom"
+            ? "TaskLauncher"
+            : kind === "path"
+              ? "Environment.PATH"
+              : "RegistrationInfo.Description",
       }),
     );
     expect(JSON.stringify(result.definitionDrift)).not.toContain("operator-private");
   }
-  expect(result.definitionDriftError).toBeUndefined();
+  if (kind !== "script") {
+    expect(result.definitionDriftError).toBeUndefined();
+  }
   expect(await fs.readFile(scriptPath, "utf8")).toBe(script);
   if (kind === "missing-launcher") {
     await expect(fs.stat(hiddenPath)).rejects.toMatchObject({ code: "ENOENT" });

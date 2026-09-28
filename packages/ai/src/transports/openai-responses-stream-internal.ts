@@ -1,5 +1,9 @@
 import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeStringifiedOptionalString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import type { ResponseOutputItem } from "openai/resources/responses/responses.js";
 import {
   AZURE_RESPONSES_TEXT_CONTENT_PART_TYPE,
@@ -378,7 +382,10 @@ export async function processResponsesStream<TApi extends Api>(
         }
         slot.item.summary = slot.item.summary || [];
         slot.item.summary.push(event.part);
-      } else if (event.type === "response.reasoning_summary_text.delta") {
+      } else if (
+        event.type === "response.reasoning_summary_text.delta" ||
+        event.type === "response.reasoning_summary_part.done"
+      ) {
         const slot = outputSlots.resolve(event, "thinking");
         if (!slot) {
           continue;
@@ -388,20 +395,9 @@ export async function processResponsesStream<TApi extends Api>(
         if (!lastPart) {
           continue;
         }
-        lastPart.text += event.delta;
-        appendThinkingDelta(slot, event.delta);
-      } else if (event.type === "response.reasoning_summary_part.done") {
-        const slot = outputSlots.resolve(event, "thinking");
-        if (!slot) {
-          continue;
-        }
-        slot.item.summary = slot.item.summary || [];
-        const lastPart = slot.item.summary[slot.item.summary.length - 1];
-        if (!lastPart) {
-          continue;
-        }
-        lastPart.text += "\n\n";
-        appendThinkingDelta(slot, "\n\n");
+        const delta = event.type === "response.reasoning_summary_text.delta" ? event.delta : "\n\n";
+        lastPart.text += delta;
+        appendThinkingDelta(slot, delta);
       } else if (event.type === "response.reasoning_text.delta") {
         const slot = outputSlots.resolve(event, "thinking");
         if (!slot) {
@@ -704,8 +700,14 @@ export async function processResponsesStream<TApi extends Api>(
         }
         break;
       } else if (event.type === "error") {
-        throw new Error(
-          event.message ? `Error Code ${event.code}: ${event.message}` : "Unknown error",
+        const details = isRecord(event) && isRecord(event.error) ? event.error : event;
+        const message = readStringValue(details.message);
+        const code = normalizeStringifiedOptionalString(details.code);
+        throw Object.assign(
+          new Error(
+            message ? (code ? `Error Code ${code}: ${message}` : message) : "Unknown error",
+          ),
+          { code: details.code, error: details },
         );
       } else if (event.type === "response.failed") {
         const failure = normalizeResponsesFailedEvent(isRecord(event) ? event : {}, model);

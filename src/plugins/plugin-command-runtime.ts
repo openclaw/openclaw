@@ -33,7 +33,9 @@ export type PluginCommandDispatchContext = Readonly<{
   channelId?: PluginCommandContext["channelId"];
   isAuthorizedSender: boolean;
   senderIsOwner?: boolean;
+  assertOwnerCurrent?: () => void;
   gatewayClientScopes?: PluginCommandContext["gatewayClientScopes"];
+  /** Host-resolved agent authority for plugin-owned or non-agent-shaped session keys. */
   agentId?: string;
   sessionKey?: PluginCommandContext["sessionKey"];
   sessionId?: PluginCommandContext["sessionId"];
@@ -55,6 +57,7 @@ export type PluginCommandDispatchContext = Readonly<{
   runtimeContext?: {
     compactCurrent?: (
       signal?: AbortSignal,
+      assertOwnerCurrent?: () => void,
     ) => ReturnType<
       NonNullable<NonNullable<PluginCommandContext["runtimeContext"]>["compactCurrent"]>
     >;
@@ -75,15 +78,9 @@ export type PluginCommandExecutionReplyOptions = Readonly<{
   [PLUGIN_COMMAND_DISPATCH]?: PluginCommandCatalogDecision;
 }>;
 
-export type PluginCommandNativeCandidate = Readonly<{
-  name: string;
-  description: string;
-  descriptionLocalizations?: Readonly<Record<string, string>>;
-  acceptsArgs: boolean;
-  requireAuth: boolean;
-  progressMessage?: string;
-  prepareDispatch: (rawArgs?: string) => PluginCommandCatalogDecision;
-}>;
+export type PluginCommandNativeCandidate = ReturnType<typeof projectPluginCommandNativeMetadata> & {
+  readonly prepareDispatch: (rawArgs?: string) => PluginCommandCatalogDecision;
+};
 
 type PluginCommandInvocationMatch = Readonly<{
   dispatch: PluginCommandDispatch;
@@ -149,8 +146,9 @@ function createSelectedPluginCommandDispatch(
 async function executeSelectedPluginCommand(
   runtime: PluginCommandRuntime | undefined,
   dispatch: PluginCommandDispatch,
-  context: PluginCommandDispatchContext,
+  input: PluginCommandDispatchContext,
 ): Promise<PluginCommandResult> {
+  const context = { ...input };
   const selected = dispatchSelections.get(dispatch as object);
   if (!selected || (runtime && selected.runtime !== runtime)) {
     return { ...INVALID_SELECTION_REPLY };

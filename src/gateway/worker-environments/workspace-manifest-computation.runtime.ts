@@ -75,9 +75,13 @@ async function withHashes<T>(
 
 export function executeWorkspaceManifestComputation<
   Command extends WorkspaceManifestComputationCommand,
->(command: Command): Promise<WorkspaceManifestComputationOperations[Command["type"]]["output"]>;
+>(
+  command: Command,
+  assertBeforeMutation?: () => void,
+): Promise<WorkspaceManifestComputationOperations[Command["type"]]["output"]>;
 export async function executeWorkspaceManifestComputation(
   command: WorkspaceManifestComputationCommand,
+  assertBeforeMutation?: () => void,
 ): Promise<WorkspaceManifestComputationResult> {
   switch (command.type) {
     case "workspace.manifest.nodes": {
@@ -105,29 +109,27 @@ export async function executeWorkspaceManifestComputation(
     case "workspace.manifest.stage-input": {
       const { buildWorkspaceStageInput } =
         await import("./workspace-result-preparation.runtime.js");
-      return await buildWorkspaceStageInput(command.input);
+      return await buildWorkspaceStageInput(command.input, assertBeforeMutation);
+    }
+    case "workspace.manifest.tree-input": {
+      const { buildWorkspaceTreeInput } = await import("./workspace-result-preparation.runtime.js");
+      return await buildWorkspaceTreeInput(decodeManifestValue(command), assertBeforeMutation);
     }
     case "workspace.manifest.entries": {
       const { readStagedWorkerWorkspaceEntries } =
         await import("./workspace-result-inventory.runtime.js");
       return ownedWorkerBytes(await readStagedWorkerWorkspaceEntries(command.input));
     }
-    case "workspace.manifest.capture": {
-      const { readActualWorkspaceManifestImpl } = await import("./workspace-actual-manifest.js");
-      const input = decodeManifestValue(command);
-      return await withHashes(input.hashes, async () => {
-        const { manifest, manifestRef } = await readActualWorkspaceManifestImpl(
-          captureArguments(input),
-        );
-        return { manifest, manifestRef };
-      });
-    }
+    case "workspace.manifest.capture":
     case "workspace.manifest.snapshot": {
       const { readActualWorkspaceManifestImpl } = await import("./workspace-actual-manifest.js");
       const input = decodeManifestValue(command);
-      return await withHashes(input.hashes, () =>
-        readActualWorkspaceManifestImpl(captureArguments(input)),
-      );
+      return await withHashes(input.hashes, async () => {
+        const snapshot = await readActualWorkspaceManifestImpl(captureArguments(input));
+        return command.type === "workspace.manifest.snapshot"
+          ? snapshot
+          : { manifest: snapshot.manifest, manifestRef: snapshot.manifestRef };
+      });
     }
     case "workspace.manifest.file": {
       const { readWorkspaceFileSnapshotWithLimit } = await import("./workspace-actual-manifest.js");

@@ -32,6 +32,7 @@ import { isRecord as isJsonRecord } from "../packages/normalization-core/src/rec
 import {
   decodePublicationDispatchEnvelope,
   normalizePublicationIntent,
+  normalizePublicationLaneInputs,
   publicationDispatchEnvelope,
   publicationIntentInputs,
 } from "./full-release-publication-contract.mjs";
@@ -405,6 +406,22 @@ export function parseArgs(argv: string[]) {
     dryRun: false,
     inputs,
   };
+  const valueOptions = [
+    ["--sha", "sha"],
+    ["--request-file", "requestFile"],
+    ["--reconcile-request", "reconcileRequest"],
+    ["--workflow-sha", "workflowSha"],
+    ["--trusted-workflow-ref", "trustedWorkflowRef"],
+    ["--target-ref", "targetRef"],
+  ] as const;
+  const assignInput = (assignment: string, errorMessage: string) => {
+    const [key, ...valueParts] = assignment.split("=");
+    if (!key || valueParts.length === 0) {
+      throw new Error(errorMessage);
+    }
+    args.inputs[key] = valueParts.join("=");
+    args.specifiedInputs.push(key);
+  };
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i]!;
@@ -412,32 +429,9 @@ export function parseArgs(argv: string[]) {
       usage();
       process.exit(0);
     }
-    if (arg === "--sha") {
-      args.sha = requireOptionArgument(argv, i, arg);
-      i += 1;
-      continue;
-    }
-    if (arg === "--request-file" || arg === "--reconcile-request") {
-      args[arg === "--request-file" ? "requestFile" : "reconcileRequest"] = requireOptionArgument(
-        argv,
-        i,
-        arg,
-      );
-      i += 1;
-      continue;
-    }
-    if (arg === "--workflow-sha") {
-      args.workflowSha = requireOptionArgument(argv, i, arg);
-      i += 1;
-      continue;
-    }
-    if (arg === "--trusted-workflow-ref") {
-      args.trustedWorkflowRef = requireOptionArgument(argv, i, arg);
-      i += 1;
-      continue;
-    }
-    if (arg === "--target-ref") {
-      args.targetRef = requireOptionArgument(argv, i, arg);
+    const valueKey = valueOptions.find(([flag]) => flag === arg)?.[1];
+    if (valueKey) {
+      args[valueKey] = requireOptionArgument(argv, i, arg);
       i += 1;
       continue;
     }
@@ -460,34 +454,19 @@ export function parseArgs(argv: string[]) {
         } else {
           assignment = extra.startsWith("-f") ? extra.slice(2).trim() : extra;
         }
-        const [key, ...valueParts] = assignment.split("=");
-        if (!key || valueParts.length === 0) {
-          throw new Error(`Unsupported extra argument after --: ${extra}`);
-        }
-        args.inputs[key] = valueParts.join("=");
-        args.specifiedInputs.push(key);
+        assignInput(assignment, `Unsupported extra argument after --: ${extra}`);
       }
       break;
     }
     if (arg === "-f") {
       const assignment = requireOptionArgument(argv, i, arg);
       i += 1;
-      const [key, ...valueParts] = assignment.split("=");
-      if (!key || valueParts.length === 0) {
-        throw new Error(`Invalid -f assignment: ${assignment}`);
-      }
-      args.inputs[key] = valueParts.join("=");
-      args.specifiedInputs.push(key);
+      assignInput(assignment, `Invalid -f assignment: ${assignment}`);
       continue;
     }
     if (arg.startsWith("-f") && arg.includes("=")) {
       const assignment = arg.slice(2).trim();
-      const [key, ...valueParts] = assignment.split("=");
-      if (!key || valueParts.length === 0) {
-        throw new Error(`Invalid -f assignment: ${arg}`);
-      }
-      args.inputs[key] = valueParts.join("=");
-      args.specifiedInputs.push(key);
+      assignInput(assignment, `Invalid -f assignment: ${arg}`);
       continue;
     }
     throw new Error(`Unknown argument: ${arg}`);
@@ -854,7 +833,8 @@ function validateDispatchRecord(value: unknown): asserts value is DispatchRecord
     requireDispatch(
       !enveloped ||
         (!Object.hasOwn(request.inputs, "validation_purpose") &&
-          !Object.hasOwn(request.inputs, "publication_selection_json")),
+          !Object.hasOwn(request.inputs, "publication_selection_json") &&
+          !Object.hasOwn(request.inputs, "extension_test_exclude_patterns_json")),
       "Retained dispatch contains conflicting source intent representations",
     );
     requireDispatch(
@@ -995,7 +975,25 @@ function resolveDispatchSelection(workflowSha: string, overrides: Record<string,
     Object.keys(definitions).length <= 25,
     "Pinned workflow exceeds 25 dispatch inputs",
   );
-  const { validation_purpose, publication_selection_json, ...wireOverrides } = overrides;
+  const {
+    validation_purpose,
+    publication_selection_json,
+    extension_test_exclude_patterns_json,
+    known_flaky_jobs_json,
+    ...wireOverrides
+  } = overrides;
+  const laneInputs =
+    extension_test_exclude_patterns_json === undefined
+      ? undefined
+      : { extension_test_exclude_patterns_json };
+  requireDispatch(
+    laneInputs === undefined || workflow.env.FULL_RELEASE_LANE_INPUTS_CONTRACT === "1",
+    `Tooling SHA ${workflowSha} does not support packed lane inputs; no remote refs or run were created. Keep the frozen Tooling SHA.`,
+  );
+  requireDispatch(
+    known_flaky_jobs_json === undefined,
+    "Automatic test retries are disabled; remove known_flaky_jobs_json and diagnose the failed job.",
+  );
   const intent = normalizePublicationIntent(validation_purpose, publication_selection_json);
   requireDispatch(
     intent.validationPurpose !== "publish" ||
@@ -1005,6 +1003,7 @@ function resolveDispatchSelection(workflowSha: string, overrides: Record<string,
   wireOverrides.trusted_workflow_json = publicationDispatchEnvelope(
     JSON.parse(overrides.trusted_workflow_json || "null"),
     intent,
+    laneInputs,
   );
   requireDispatch(
     Object.keys(wireOverrides).every((key) => Object.hasOwn(definitions, key)),
@@ -1334,9 +1333,11 @@ async function reopenDispatch(path: string, args: ReturnType<typeof parseArgs>, 
   let retainedIntent: ReturnType<typeof publicationIntentInputs> | undefined;
   const rawIdentity = request.wireInputs.trusted_workflow_json;
   if (rawIdentity && Object.hasOwn(JSON.parse(rawIdentity), "trustedWorkflow")) {
-    retainedIntent = publicationIntentInputs(decodePublicationDispatchEnvelope(rawIdentity));
+    const envelope = decodePublicationDispatchEnvelope(rawIdentity);
+    retainedIntent = publicationIntentInputs(envelope);
     retainedInputs = {
       ...retainedInputs,
+      ...envelope.laneInputs,
       validation_purpose: retainedIntent.validationPurpose,
       publication_selection_json: retainedIntent.publicationSelectionJson,
     };
@@ -1352,7 +1353,10 @@ async function reopenDispatch(path: string, args: ReturnType<typeof parseArgs>, 
           ? publicationIntentInputs(
               normalizePublicationIntent(retainedIntent.validationPurpose, args.inputs[key]),
             ).publicationSelectionJson === retainedIntent.publicationSelectionJson
-          : args.inputs[key] === retainedInputs[key],
+          : key === "extension_test_exclude_patterns_json"
+            ? normalizePublicationLaneInputs({ [key]: args.inputs[key] })[key] ===
+              retainedInputs[key]
+            : args.inputs[key] === retainedInputs[key],
       ),
     "Reopen arguments conflict with the retained request",
   );

@@ -90,53 +90,33 @@ function formatInstallLines(install: PluginInstallRecord | undefined): string[] 
     return [];
   }
   const lines = [`Source: ${install.source}`];
-  if (install.spec) {
-    lines.push(`Spec: ${install.spec}`);
-  }
-  if (install.sourcePath) {
-    lines.push(`Source path: ${shortenHomePath(install.sourcePath)}`);
-  }
-  if (install.installPath) {
-    lines.push(`Install path: ${shortenHomePath(install.installPath)}`);
-  }
-  if (install.version) {
-    lines.push(`Recorded version: ${install.version}`);
-  }
-  if (install.clawhubPackage) {
-    lines.push(`ClawHub package: ${install.clawhubPackage}`);
-  }
-  if (install.clawhubChannel) {
-    lines.push(`ClawHub channel: ${install.clawhubChannel}`);
-  }
-  if (install.artifactKind) {
-    lines.push(`Artifact kind: ${install.artifactKind}`);
-  }
-  if (install.artifactFormat) {
-    lines.push(`Artifact format: ${install.artifactFormat}`);
-  }
-  if (install.npmIntegrity) {
-    lines.push(`Npm integrity: ${install.npmIntegrity}`);
-  }
-  if (install.npmShasum) {
-    lines.push(`Npm shasum: ${install.npmShasum}`);
-  }
-  if (install.npmTarballName) {
-    lines.push(`Npm tarball: ${install.npmTarballName}`);
-  }
-  if (install.clawpackSha256) {
-    lines.push(`ClawPack sha256: ${install.clawpackSha256}`);
-  }
-  if (install.clawpackSpecVersion !== undefined) {
-    lines.push(`ClawPack spec: ${install.clawpackSpecVersion}`);
-  }
-  if (install.clawpackManifestSha256) {
-    lines.push(`ClawPack manifest sha256: ${install.clawpackManifestSha256}`);
-  }
-  if (install.clawpackSize !== undefined) {
-    lines.push(`ClawPack size: ${install.clawpackSize} bytes`);
-  }
-  if (install.installedAt) {
-    lines.push(`Installed at: ${install.installedAt}`);
+  for (const [label, value] of [
+    ["Spec", install.spec],
+    ["Source path", install.sourcePath ? shortenHomePath(install.sourcePath) : undefined],
+    ["Install path", install.installPath ? shortenHomePath(install.installPath) : undefined],
+    ["Recorded version", install.version],
+    ["ClawHub package", install.clawhubPackage],
+    ["ClawHub channel", install.clawhubChannel],
+    ["Artifact kind", install.artifactKind],
+    ["Artifact format", install.artifactFormat],
+    ["Npm integrity", install.npmIntegrity],
+    ["Npm shasum", install.npmShasum],
+    ["Npm tarball", install.npmTarballName],
+    ["ClawPack sha256", install.clawpackSha256],
+    [
+      "ClawPack spec",
+      install.clawpackSpecVersion === undefined ? undefined : String(install.clawpackSpecVersion),
+    ],
+    ["ClawPack manifest sha256", install.clawpackManifestSha256],
+    [
+      "ClawPack size",
+      install.clawpackSize === undefined ? undefined : `${install.clawpackSize} bytes`,
+    ],
+    ["Installed at", install.installedAt],
+  ]) {
+    if (value) {
+      lines.push(`${label}: ${value}`);
+    }
   }
   return lines;
 }

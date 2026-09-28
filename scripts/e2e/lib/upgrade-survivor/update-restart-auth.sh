@@ -26,7 +26,9 @@ MANAGER_ENV
     "${OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG:-$shim_dir/systemctl-shim-gateway.log}" <<'RUNTIME_PATHS'
 const fs = require("node:fs");
 const [file, pidFile, daemonLog] = process.argv.slice(2);
-fs.writeFileSync(file, JSON.stringify({ pidFile, daemonLog }), { mode: 0o600 });
+const controlGroup = fs.existsSync("/sys/fs/cgroup/openclaw-gateway.service/cgroup.procs")
+  ? "/openclaw-gateway.service" : undefined;
+fs.writeFileSync(file, JSON.stringify({ pidFile, daemonLog, controlGroup }), { mode: 0o600 });
 RUNTIME_PATHS
   cat >"$shim_dir/busctl" <<'BUSCTL'
 #!/usr/bin/env bash
@@ -382,12 +384,15 @@ case "$command" in
       exit 0
     fi
     [ "$unit_name" = openclaw-gateway.service ] || exit 1
-    # The published 2026.8.1 reader omits LoadState; current maintenance requires it.
-    # Keep both exact query contracts and reject unimplemented manager properties.
-    [ "${property/Id,LoadState,/Id,}" = 'Id,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent' ] || {
-      echo "systemctl shim unsupported user-scope show: $*" >&2
-      exit 1
-    }
+    # Published readers omit LoadState or ControlGroup; retain their exact queries.
+    runtime_properties='Id,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent'
+    case "$property" in
+      "$runtime_properties" | "${runtime_properties/Id,/Id,LoadState,}" | "${runtime_properties/Id,/Id,LoadState,},ControlGroup") ;;
+      *)
+        echo "systemctl shim unsupported user-scope show: $*" >&2
+        exit 1
+        ;;
+    esac
     if [[ "$property" == Id,LoadState,* ]]; then
       load_state="$(node "$manager_script" load-state)"
       printf 'Id=%s\nLoadState=%s\n' "$unit_name" "$load_state"
@@ -542,9 +547,10 @@ run_update_restart_probe_gateway() {
   ready_epoch="$(node -e "process.stdout.write(String(Date.now()))")" || return "$?"
   start_seconds=$(((ready_epoch - start_epoch + 999) / 1000))
   if [ "$start_seconds" -gt "$budget" ]; then
-    echo "gateway startup exceeded survivor budget: ${start_seconds}s > ${budget}s" >&2
-    openclaw_e2e_print_log "$log_file" >&2
-    return 1
+    if ! node scripts/lib/check-limits.mts scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh "Upgrade service startup budget" "gateway startup exceeded survivor budget: ${start_seconds}s > ${budget}s"; then
+      openclaw_e2e_print_log "$log_file" >&2
+      return 1
+    fi
   fi
 }
 

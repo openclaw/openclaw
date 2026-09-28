@@ -4,9 +4,13 @@ Root rules still apply. This file adds the Android release guardrails.
 
 ## Google Play Releases
 
-- Agent-driven Google Play uploads must use only `pnpm android:release:upload`.
+- Agent-driven Google Play uploads must use only `pnpm android:release:upload`. The no-input **Android Store Release** GitHub Action calls this owner to plan, generate notes, and upload the selected clean source commit without preparation commits or finalization PRs.
+- Google Play releases use the saved Android plan and generated notes artifact. Notes compare the selected source with the public phone and Wear releases, and upload revalidates those baselines. Do not substitute tracked changelog notes or the latest internal build as the store baseline.
+- Android pinned metadata and changelog sync remain the defaults for ordinary archives and Gateway APK publication. Store releases leave them unchanged. Keep preparation independent of iOS and preserve `.github/workflows/android-release.yml`.
+- Follow [VERSIONING.md](VERSIONING.md) for public revisions, sequential store codes, immutable source refs, and the legacy cutover. Do not infer a store release identity from a new code's date-like shape or an editable Play release name.
 - If `pnpm android:release:upload` exits non-zero, stop immediately and report the failing step.
 - After a failed `pnpm android:release:upload`, do not continue with `pnpm android:release:archive`, `pnpm android:release:metadata`, `fastlane android play_store`, `fastlane android metadata`, direct Gradle release artifacts plus Google Play upload commands, Google Play API mutation commands, or mobile release ref recording.
+- Recovery requires explicit maintainer direction after the failure is reported. If Play accepted the upload but ref recording failed, verify the saved plan and exact uploaded AAB hashes/codes against Play before an authorized record-only repair. Never automatically rerun or re-upload to repair a missing ref.
 - Do not promote an Android release to production. Production promotion stays manual in Google Play Console unless the user explicitly asks to promote a specific already-prepared release after the failed state has been reported.
 - `pnpm android:release:archive` is for local archive validation only. It is not a fallback release path after screenshot, metadata, signing, validation, or upload-lane failure.
 

@@ -249,21 +249,55 @@ describe("Control UI plugin auth cookie profile binding", () => {
     );
   });
 
-  it("retains the signed viewer without named roles and rejects an unavailable viewer", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await withTempConfig({
-        cfg: {},
-        run: async () => {
-          const profile = ensureProfileForEmail("plugin-reader@example.test");
-          expect(authorizeCookie(issueCookie(profile.id))?.requestAuth).toMatchObject({
-            authenticatedUserProfile: { profileId: profile.id },
-            controlUiPluginGrants: [{ scopes: ["operator.read"] }],
-          });
-          expect(authorizeCookie(issueCookie("missing-profile"))).toBeNull();
-        },
+  it.each([{ trustedProxies: undefined }, { trustedProxies: ["192.0.2.1"] }])(
+    "retains the signed viewer and proxy override with runtime proxies $trustedProxies",
+    async ({ trustedProxies }) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        await withTempConfig({
+          cfg: { gateway: { trustedProxies } },
+          run: async () => {
+            const profile = ensureProfileForEmail("plugin-reader@example.test");
+            expect(authorizeCookie(issueCookie(profile.id))?.requestAuth).toMatchObject({
+              authenticatedUserProfile: { profileId: profile.id },
+              controlUiPluginGrants: [{ scopes: ["operator.read"] }],
+            });
+            expect(authorizeCookie(issueCookie("missing-profile"))).toBeNull();
+            const auth = {
+              mode: "trusted-proxy" as const,
+              allowTailscale: false,
+              trustedProxy: { userHeader: "x-user" },
+            };
+            const proxies = ["127.0.0.1"];
+            const cookie = issueCookie(profile.id, {
+              generation: resolveControlUiPluginAuthCookieGeneration(
+                resolveSharedGatewaySessionGeneration(auth, proxies),
+                getRuntimeConfig(),
+              ),
+            });
+            const { res } = makeMockHttpResponse();
+            try {
+              const admitted = await authorizePluginGatewayHttpRequestOrReply({
+                req: { method: "GET", headers: { cookie } } as IncomingMessage,
+                res,
+                auth,
+                trustedProxies: proxies,
+                requestPath: "/plugins/example/session",
+                resolveOperatorScopes: () => [],
+              });
+              expect(admitted?.requestAuth.authenticatedUserProfile?.profileId).toBe(profile.id);
+              expect(admitted?.requestAuth.hasCurrentClientAuthority?.()).toBe(true);
+              await expect(admitted?.requestAuth.revalidate?.()).resolves.toBeUndefined();
+              setRuntimeConfigSnapshot({ gateway: { trustedProxies: ["198.51.100.1"] } });
+              expect(admitted?.requestAuth.hasCurrentClientAuthority?.()).toBe(false);
+              await expect(admitted?.requestAuth.revalidate?.()).rejects.toThrow("Unauthorized");
+            } finally {
+              res.destroy();
+            }
+          },
+        });
       });
-    });
-  });
+    },
+  );
 
   it.each(["another-profile", undefined])(
     "rejects mixed signed viewer grants (%s) without roles",

@@ -1,3 +1,4 @@
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -16,6 +17,17 @@ export type PluginConfigUninstallActions = {
 
 const SHARED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
 
+export function mergePluginConfigUninstallActions(
+  ...sources: PluginConfigUninstallActions[]
+): PluginConfigUninstallActions {
+  const actions = createEmptyConfigUninstallActions();
+  // SAFETY: The constructor supplies exactly the declared config-action keys.
+  for (const key of Object.keys(actions) as Array<keyof PluginConfigUninstallActions>) {
+    actions[key] = sources.some((source) => source[key]);
+  }
+  return actions;
+}
+
 function createEmptyConfigUninstallActions(): PluginConfigUninstallActions {
   return {
     entry: false,
@@ -29,39 +41,28 @@ function createEmptyConfigUninstallActions(): PluginConfigUninstallActions {
   };
 }
 
-export function resolveComparableUninstallPathInternal(value: string): string {
-  return resolveRealpathOrAbsolute(value);
+/** Resolve canonically when present, otherwise preserve an absolute lexical path. */
+export { resolveRealpathOrAbsolute as resolveComparableUninstallPath };
+
+/** Check whether a managed uninstall target stays inside its owning root. */
+export function isUninstallPathInsideOrEqual(parent: string, child: string): boolean {
+  return isPathInside(resolveRealpathOrAbsolute(parent), resolveRealpathOrAbsolute(child));
 }
 
-export function isUninstallPathInsideOrEqualInternal(parent: string, child: string): boolean {
-  return isPathInside(
-    resolveComparableUninstallPathInternal(parent),
-    resolveComparableUninstallPathInternal(child),
-  );
-}
-
-export function resolveUninstallChannelConfigKeysInternal(
+/** Resolve channel config keys owned by a plugin during uninstall. */
+export function resolveUninstallChannelConfigKeys(
   pluginId: string,
   opts?: { channelIds?: string[] },
 ): string[] {
-  const rawKeys = opts?.channelIds ?? [pluginId];
-  const seen = new Set<string>();
-  const keys: string[] = [];
-  for (const key of rawKeys) {
-    if (SHARED_CHANNEL_CONFIG_KEYS.has(key) || seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    keys.push(key);
-  }
-  return keys;
+  return uniqueStrings(
+    (opts?.channelIds ?? [pluginId]).filter((key) => !SHARED_CHANNEL_CONFIG_KEYS.has(key)),
+  );
 }
 
 function loadPathMatchesInstallPath(loadPath: string, installPath: string): boolean {
   return (
     loadPath === installPath ||
-    resolveComparableUninstallPathInternal(loadPath) ===
-      resolveComparableUninstallPathInternal(installPath)
+    resolveRealpathOrAbsolute(loadPath) === resolveRealpathOrAbsolute(installPath)
   );
 }
 
@@ -159,7 +160,7 @@ export function removePluginRuntimePolicyFromConfig(
   }
 
   let channels = cfg.channels as Record<string, unknown> | undefined;
-  for (const key of resolveUninstallChannelConfigKeysInternal(pluginId, opts)) {
+  for (const key of resolveUninstallChannelConfigKeys(pluginId, opts)) {
     if (!channels || !Object.hasOwn(channels, key)) {
       continue;
     }

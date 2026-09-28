@@ -125,7 +125,7 @@ export async function steerCodexConversationTurn(params: {
   return { steered: true, message: "Sent steer message to Codex." };
 }
 
-export async function setCodexConversationModel(params: {
+export async function setCodexConversationModel(input: {
   identity: CodexAppServerBindingIdentity;
   bindingStore: CodexAppServerBindingStore;
   binding: CodexAppServerThreadBinding | undefined;
@@ -135,13 +135,16 @@ export async function setCodexConversationModel(params: {
   config?: CodexAppServerBindingLookup["config"];
   storePath?: string;
   assertCurrent: () => void;
+  assertCommitAllowed?: () => void;
 }): Promise<string> {
+  const params = { ...input };
   const model = params.model.trim();
   if (!model) {
     return "Usage: /codex model <model>";
   }
   const lookup = buildBindingLookup(params);
   params.assertCurrent();
+  const assertCommitAllowed = params.assertCommitAllowed ?? params.assertCurrent;
   const binding = requirePreparedThreadBinding(params.binding);
   if (binding.connectionScope === "supervision") {
     throw new ModelSelectionLockedError();
@@ -182,7 +185,7 @@ export async function setCodexConversationModel(params: {
       sessionKey: identity.sessionKey,
       requireWriteSuccess: true,
       replaceEntry: true,
-      assertCommitAllowed: params.assertCurrent,
+      assertCommitAllowed,
       update: (entry) => {
         if (entry.sessionId !== identity.sessionId) {
           throw new Error("Codex session changed while applying the model selection.");
@@ -222,7 +225,7 @@ export async function setCodexConversationModel(params: {
         modelProvider: nextModelProvider,
         ...projectionPatch,
       },
-      params.assertCurrent,
+      assertCommitAllowed,
     );
   }
   return `Codex model set to ${formatCodexDisplayText(nextModel)}.`;

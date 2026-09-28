@@ -9,7 +9,9 @@ import {
   readGuardReview,
 } from "./guard-review.mjs";
 import {
+  GitHubDiffDataError,
   GitHubRateLimitError,
+  GitHubReadTimeoutError,
   GitHubStatusPublicationError,
   publishGuardStatus,
   withSecurityReviewRecovery,
@@ -123,12 +125,16 @@ async function ciState(review) {
     : "failure";
 }
 
+let diffRecoveryReview;
+let currentReview;
+
 async function main() {
   const mode = process.env.OPENCLAW_SECURITY_REVIEW_MODE ?? "enforce";
   if (!["detect", "autoscrub", "enforce"].includes(mode)) {
     throw new Error(`Unknown security review mode: ${mode}`);
   }
-  const review = await readGuardReview();
+  const review = await readGuardReview(diffRecoveryReview);
+  currentReview = review;
   if (!review) {
     return;
   }
@@ -154,6 +160,8 @@ async function main() {
           if (
             error instanceof GitHubRateLimitError ||
             ((error instanceof GitHubStatusPublicationError ||
+              error instanceof GitHubReadTimeoutError ||
+              error instanceof GitHubDiffDataError ||
               error instanceof SupersededReviewError) &&
               errors.length === 0)
           ) {
@@ -226,9 +234,13 @@ async function main() {
       "CI and applicable security review requirements passed",
     );
   } catch (error) {
+    if (error instanceof GitHubDiffDataError) {
+      diffRecoveryReview = review;
+    }
     if (
       error instanceof GitHubRateLimitError ||
       error instanceof GitHubStatusPublicationError ||
+      error instanceof GitHubReadTimeoutError ||
       error instanceof SupersededReviewError
     ) {
       throw error;
@@ -239,6 +251,14 @@ async function main() {
       "CI or security review failed; see workflow details",
     ).catch(
       /** @param {unknown} publicationError */ (publicationError) => {
+        if (
+          error instanceof GitHubDiffDataError &&
+          (publicationError instanceof GitHubRateLimitError ||
+            publicationError instanceof GitHubStatusPublicationError)
+        ) {
+          // Keep publication timing and the diff's original PR identity together.
+          throw publicationError;
+        }
         console.error(
           publicationError instanceof Error ? publicationError.message : String(publicationError),
         );
@@ -249,7 +269,13 @@ async function main() {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  withSecurityReviewRecovery(main).catch(
+  withSecurityReviewRecovery(main, {
+    checkCurrent: async () => {
+      if (currentReview) {
+        await assertGuardUnchanged(currentReview, { allowFileCountChange: true });
+      }
+    },
+  }).catch(
     /** @param {unknown} error */ (error) => {
       if (error instanceof SupersededReviewError) {
         console.log(error.message);

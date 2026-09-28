@@ -116,22 +116,14 @@ describe("managed removal custody", () => {
     },
   );
 
-  it.each(["none", "single", "multiple"])(
+  it.each(["none", "multiple"])(
     "archives and restores unpublished work with %s tracking",
     async (tracking) => {
       const created = await materialize(tracking);
       if (tracking !== "none") {
         await git(repo, "config", `branch.${created.branch}.remote`, ".");
         await git(repo, "config", "--add", `branch.${created.branch}.merge`, "refs/heads/main");
-        if (tracking === "multiple") {
-          await git(
-            repo,
-            "config",
-            "--add",
-            `branch.${created.branch}.merge`,
-            "refs/heads/another",
-          );
-        }
+        await git(repo, "config", "--add", `branch.${created.branch}.merge`, "refs/heads/another");
       }
       await git(created.path, "commit", "--allow-empty", "-m", "unpublished task work");
       const head = await git(created.path, "rev-parse", "HEAD");

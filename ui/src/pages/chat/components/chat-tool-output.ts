@@ -7,13 +7,14 @@ import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import {
   isLegacyToolOutputUnavailable,
   toolOutputSourceLabel,
-  toolOutputSourceNote,
+  formatToolOutput,
 } from "../../../lib/chat/tool-output.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import type {
   SidebarFullMessageLoader,
   ToolOutputSidebarContent,
 } from "./chat-sidebar-content-types.ts";
+import { renderRawOutputToggle } from "./chat-tool-content.ts";
 
 type OutputLoadState = "idle" | "loading" | "loaded" | "unavailable" | "error";
 
@@ -136,12 +137,11 @@ class ChatToolOutput extends OpenClawLightDomElement {
       return nothing;
     }
     const text = card.outputText ?? "";
-    const note = toolOutputSourceNote(card);
+    const displayText = formatToolOutput(card) ?? "";
     return html`<section class="chat-tool-output" aria-busy=${this.loadState === "loading"}>
       <div class="sidebar-header">
         <div class="sidebar-title">${toolOutputSourceLabel(card)}</div>
       </div>
-      ${note ? html`<p class="muted">${note}</p>` : nothing}
       ${this.loadState === "loading" ? html`<p role="status">${t("common.loading")}</p>` : nothing}
       ${this.loadState === "unavailable" ? html`<p role="status">${t("chat.toolCards.fullOutputUnavailable")}</p>` : nothing}
       ${this.loadState === "error" ? html`<p role="alert">${t("chat.toolCards.outputLoadFailed")} <button class="btn btn--sm" @click=${this.loadOutput}>${t("common.retry")}</button></p>` : nothing}
@@ -164,7 +164,8 @@ class ChatToolOutput extends OpenClawLightDomElement {
             </div>`
       }
       ${this.downloadFailed ? html`<p role="alert">${t("chat.toolCards.outputDownloadFailed")}</p>` : nothing}
-      <pre class="chat-tool-output__text"><code>${text}</code></pre>
+      <pre class="chat-tool-output__text"><code>${displayText}</code></pre>
+      ${displayText !== text ? renderRawOutputToggle(text) : nothing}
     </section>`;
   }
 }

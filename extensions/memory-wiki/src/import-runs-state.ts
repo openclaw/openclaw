@@ -1,4 +1,3 @@
-// Memory Wiki plugin module implements import run state behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -57,15 +56,11 @@ type MemoryWikiImportRunMetaStateRecord = Omit<
   vaultRootKey: string;
 };
 
-type MemoryWikiImportRunPathStateRecord = {
+type MemoryWikiImportRunPathStateRecord = ChatGptImportRunEntry & {
   kind: "created-path" | "updated-path";
   vaultRootKey: string;
   runId: string;
   index: number;
-  path: string;
-  snapshotPath?: string;
-  contentHash?: string;
-  recoveryPaths?: string[];
 };
 
 type MemoryWikiImportRunStateRecord =
@@ -239,6 +234,28 @@ function normalizePathRecord(raw: unknown): MemoryWikiImportRunPathStateRecord |
   };
 }
 
+function importRunMetadata(
+  record: Omit<ChatGptImportRunRecord, "createdPaths" | "updatedPaths">,
+): Omit<ChatGptImportRunRecord, "createdPaths" | "updatedPaths"> {
+  return {
+    version: 1,
+    runId: record.runId,
+    importType: "chatgpt",
+    exportPath: record.exportPath,
+    sourcePath: record.sourcePath,
+    appliedAt: record.appliedAt,
+    conversationCount: record.conversationCount,
+    createdCount: record.createdCount,
+    updatedCount: record.updatedCount,
+    skippedCount: record.skippedCount,
+    ...(record.rollbackStartedAt ? { rollbackStartedAt: record.rollbackStartedAt } : {}),
+    ...(record.rollbackTargetsFinalizedAt
+      ? { rollbackTargetsFinalizedAt: record.rollbackTargetsFinalizedAt }
+      : {}),
+    ...(record.rolledBackAt ? { rolledBackAt: record.rolledBackAt } : {}),
+  };
+}
+
 function composeImportRunRecord(
   meta: MemoryWikiImportRunMetaStateRecord,
   pathRows: MemoryWikiImportRunPathStateRecord[],
@@ -257,76 +274,38 @@ function composeImportRunRecord(
     .filter((row) => row.kind === "updated-path")
     .toSorted((left, right) => left.index - right.index)
     .map(toEntry);
-  return {
-    version: 1,
-    runId: meta.runId,
-    importType: "chatgpt",
-    exportPath: meta.exportPath,
-    sourcePath: meta.sourcePath,
-    appliedAt: meta.appliedAt,
-    conversationCount: meta.conversationCount,
-    createdCount: meta.createdCount,
-    updatedCount: meta.updatedCount,
-    skippedCount: meta.skippedCount,
-    createdPaths,
-    updatedPaths,
-    ...(meta.rollbackStartedAt ? { rollbackStartedAt: meta.rollbackStartedAt } : {}),
-    ...(meta.rollbackTargetsFinalizedAt
-      ? { rollbackTargetsFinalizedAt: meta.rollbackTargetsFinalizedAt }
-      : {}),
-    ...(meta.rolledBackAt ? { rolledBackAt: meta.rolledBackAt } : {}),
-  };
+  return { ...importRunMetadata(meta), createdPaths, updatedPaths };
 }
 
 function toMetaRecord(
   vaultRootKey: string,
   record: ChatGptImportRunRecord,
 ): MemoryWikiImportRunMetaStateRecord {
-  return {
-    version: 1,
-    kind: "meta",
-    vaultRootKey,
-    runId: record.runId,
-    importType: "chatgpt",
-    exportPath: record.exportPath,
-    sourcePath: record.sourcePath,
-    appliedAt: record.appliedAt,
-    conversationCount: record.conversationCount,
-    createdCount: record.createdCount,
-    updatedCount: record.updatedCount,
-    skippedCount: record.skippedCount,
-    ...(record.rollbackStartedAt ? { rollbackStartedAt: record.rollbackStartedAt } : {}),
-    ...(record.rollbackTargetsFinalizedAt
-      ? { rollbackTargetsFinalizedAt: record.rollbackTargetsFinalizedAt }
-      : {}),
-    ...(record.rolledBackAt ? { rolledBackAt: record.rolledBackAt } : {}),
-  };
+  const { version, ...metadata } = importRunMetadata(record);
+  return { version, kind: "meta", vaultRootKey, ...metadata };
 }
 
 function toPathRecords(
   vaultRootKey: string,
   record: ChatGptImportRunRecord,
 ): MemoryWikiImportRunPathStateRecord[] {
+  const toPathRecord = (
+    entry: ChatGptImportRunEntry,
+    index: number,
+    kind: MemoryWikiImportRunPathStateRecord["kind"],
+  ): MemoryWikiImportRunPathStateRecord => ({
+    kind,
+    vaultRootKey,
+    runId: record.runId,
+    index,
+    path: entry.path,
+    ...(kind === "updated-path" && entry.snapshotPath ? { snapshotPath: entry.snapshotPath } : {}),
+    ...(entry.contentHash ? { contentHash: entry.contentHash } : {}),
+    ...(entry.recoveryPaths ? { recoveryPaths: [...entry.recoveryPaths] } : {}),
+  });
   return [
-    ...record.createdPaths.map((entry, index): MemoryWikiImportRunPathStateRecord => ({
-      kind: "created-path",
-      vaultRootKey,
-      runId: record.runId,
-      index,
-      path: entry.path,
-      ...(entry.contentHash ? { contentHash: entry.contentHash } : {}),
-      ...(entry.recoveryPaths ? { recoveryPaths: [...entry.recoveryPaths] } : {}),
-    })),
-    ...record.updatedPaths.map((entry, index): MemoryWikiImportRunPathStateRecord => ({
-      kind: "updated-path",
-      vaultRootKey,
-      runId: record.runId,
-      index,
-      path: entry.path,
-      ...(entry.snapshotPath ? { snapshotPath: entry.snapshotPath } : {}),
-      ...(entry.contentHash ? { contentHash: entry.contentHash } : {}),
-      ...(entry.recoveryPaths ? { recoveryPaths: [...entry.recoveryPaths] } : {}),
-    })),
+    ...record.createdPaths.map((entry, index) => toPathRecord(entry, index, "created-path")),
+    ...record.updatedPaths.map((entry, index) => toPathRecord(entry, index, "updated-path")),
   ];
 }
 
@@ -391,13 +370,7 @@ export function createMemoryWikiImportRunStateStore(
       const store = openStore();
       const nextPathKeys = new Set<string>();
       for (const pathRecord of toPathRecords(vaultRootKey, record)) {
-        const key = resolvePathStateEntryKey({
-          vaultRootKey,
-          runId: record.runId,
-          kind: pathRecord.kind,
-          index: pathRecord.index,
-          path: pathRecord.path,
-        });
+        const key = resolvePathStateEntryKey(pathRecord);
         nextPathKeys.add(key);
         await store.register(key, pathRecord);
       }

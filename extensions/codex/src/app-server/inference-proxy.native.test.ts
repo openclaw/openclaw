@@ -8,7 +8,7 @@ import {
   WebSocket,
   WebSocketServer,
 } from "openclaw/plugin-sdk/websocket-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type TestContext } from "vitest";
 import { CodexAppServerClient } from "./client.js";
 import { CODEX_INFERENCE_GENERATION_KEY } from "./inference-context.js";
 import { createCodexInferenceProxy } from "./inference-proxy.js";
@@ -24,6 +24,9 @@ const transport = vi.hoisted(() => ({
   socketThreads: new WeakMap<object, string>(),
   closedSockets: new WeakSet<object>(),
   closedThreads: new Set<string>(),
+  httpSockets: new Set<object>(),
+  httpClosed: 0,
+  fetch: vi.fn(),
   changed: undefined as (() => void) | undefined,
 }));
 vi.unmock("node:child_process");
@@ -37,6 +40,15 @@ vi.mock("node:http", async (original) => {
     createServer(...args: Parameters<typeof actual.createServer>) {
       const server = actual.createServer(...args);
       if (typeof args[0] === "function") {
+        server.on("request", (request) => {
+          if (!transport.httpSockets.has(request.socket)) {
+            transport.httpSockets.add(request.socket);
+            request.socket.once("close", () => {
+              transport.httpClosed++;
+              transport.changed?.();
+            });
+          }
+        });
         server.on("upgrade", (request, socket) => {
           const threadId = request.headers["thread-id"];
           if (typeof threadId === "string") {
@@ -68,9 +80,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (original) =>
     : {
         isBlockedHostnameOrIp: () => false,
         resolvePinnedHostnameWithPolicy: async () => ({ lookup: undefined }),
-        fetchWithSsrFGuard: async () => {
-          throw new Error("Native fixture unexpectedly fell back to HTTP");
-        },
+        fetchWithSsrFGuard: transport.fetch,
       },
 );
 vi.mock("openclaw/plugin-sdk/websocket-runtime", async (original) => {
@@ -98,29 +108,61 @@ vi.mock("openclaw/plugin-sdk/websocket-runtime", async (original) => {
   };
 });
 
-// Native proof complements the deterministic queue/clock tests. It deliberately
-// spans the relay's real handshake deadline so the pinned native connect/retry
-// contract is exercised; it never reaches a provider or the operator's HOME.
+async function prepareNative(context: TestContext, prefix: string) {
+  const tempDirs = useAutoCleanupTempDirTracker(context.onTestFinished);
+  const root = await fs.realpath(tempDirs.make(prefix));
+  const native = await createCodexNativeTestState(root);
+  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+  vi.stubEnv("HOME", native.env.HOME);
+  vi.stubEnv("CODEX_HOME", native.codexHome);
+  context.onTestFinished(() => {
+    vi.unstubAllEnvs();
+  });
+  return native;
+}
+
+async function startNative(
+  context: TestContext,
+  native: Awaited<ReturnType<typeof createCodexNativeTestState>>,
+) {
+  const childEnv = Object.fromEntries(
+    Object.entries(native.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+  );
+  const client = await CodexAppServerClient.start({
+    transport: "stdio",
+    command: native.command,
+    commandSource: "config",
+    args: ["app-server"],
+    cwd: native.cwd,
+    headers: {},
+    env: childEnv,
+    clearEnv: Object.keys(process.env).filter((key) => !(key in childEnv)),
+  });
+  context.onTestFinished(async () => {
+    expect(await client.closeAndWait()).toMatchObject({ exited: true });
+  });
+  await client.initialize();
+  expect(client.getRuntimeIdentity()?.serverVersion).toBe(CODEX_APP_SERVER_VERSION);
+  return client;
+}
+
+// One real app-server complements the deterministic admission/clock tests.
+// It never reaches a provider or the operator's HOME.
 describe.skipIf(process.platform === "win32")("native inference admission", () => {
   it.skipIf(process.env.OPENCLAW_LIVE_CODEX_INFERENCE === "1")(
-    "keeps native roots and delegated work progressing across saturation and cancellation",
+    "starts native roots and delegated work beyond 16 active responses",
     { timeout: 90_000 },
     async (context) => {
-      const tempDirs = useAutoCleanupTempDirTracker(context.onTestFinished);
-      const root = await fs.realpath(tempDirs.make("codex-inference-admission-"));
-      const native = await createCodexNativeTestState(root);
-      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
-      vi.stubEnv("HOME", native.env.HOME);
-      vi.stubEnv("CODEX_HOME", native.codexHome);
-      context.onTestFinished(() => {
-        vi.unstubAllEnvs();
-      });
+      const native = await prepareNative(context, "codex-inference-admission-");
       const changed = new EventEmitter();
       changed.setMaxListeners(64);
       transport.upstream = "";
       transport.dials = 0;
       transport.upgrades.clear();
       transport.closedThreads.clear();
+      transport.httpSockets.clear();
+      transport.httpClosed = 0;
+      transport.fetch.mockReset().mockRejectedValue(new Error("Unexpected native HTTP fallback"));
       transport.rejected = [];
       transport.changed = () => changed.emit("changed");
       const waitFor = <T>(read: () => T | undefined): Promise<T> => {
@@ -142,7 +184,16 @@ describe.skipIf(process.platform === "win32")("native inference admission", () =
         });
       };
       const upstream = http.createServer();
-      const wss = new WebSocketServer({ server: upstream });
+      const wss = new WebSocketServer({ noServer: true, maxPayload: 32 * 1024 * 1024 });
+      let disconnectNextHandshake = false;
+      upstream.on("upgrade", (request, socket, head) => {
+        if (disconnectNextHandshake) {
+          disconnectNextHandshake = false;
+          socket.destroy();
+          return;
+        }
+        wss.handleUpgrade(request, socket, head, (accepted) => wss.emit("connection", accepted));
+      });
       const held = new Map<string, WebSocket>();
       const metadata = new Map<string, JsonObject>();
       let responseSequence = 0;
@@ -175,7 +226,15 @@ describe.skipIf(process.platform === "win32")("native inference admission", () =
         });
         changed.emit("changed");
       };
-      wss.on("connection", (socket) =>
+      wss.on("connection", (socket) => {
+        socket.once("close", () => {
+          for (const [threadId, owner] of held) {
+            if (owner === socket) {
+              held.delete(threadId);
+            }
+          }
+          changed.emit("changed");
+        });
         socket.on("message", (raw) => {
           if (!Buffer.isBuffer(raw)) {
             throw new Error("Expected a native WebSocket text buffer");
@@ -217,8 +276,8 @@ describe.skipIf(process.platform === "win32")("native inference admission", () =
             held.set(info.thread_id, socket);
           }
           changed.emit("changed");
-        }),
-      );
+        });
+      });
       await new Promise<void>((resolve) => {
         upstream.listen(0, "127.0.0.1", resolve);
       });
@@ -268,28 +327,16 @@ describe.skipIf(process.platform === "win32")("native inference admission", () =
           'wire_api="responses"',
           "requires_openai_auth=false",
           "supports_websockets=true",
+          "[model_providers.http-fixture]",
+          'name="Synthetic HTTP provider"',
+          `base_url=${JSON.stringify(proxy.baseUrl)}`,
+          'wire_api="responses"',
+          "requires_openai_auth=false",
+          "supports_websockets=false",
+          "request_max_retries=1",
         ].join("\n"),
       );
-      const childEnv = Object.fromEntries(
-        Object.entries(native.env).filter(
-          (entry): entry is [string, string] => entry[1] !== undefined,
-        ),
-      );
-      const client = await CodexAppServerClient.start({
-        transport: "stdio",
-        command: native.command,
-        commandSource: "config",
-        args: ["app-server"],
-        cwd: native.cwd,
-        headers: {},
-        env: childEnv,
-        clearEnv: Object.keys(process.env).filter((key) => !(key in childEnv)),
-      });
-      context.onTestFinished(async () => {
-        expect(await client.closeAndWait()).toMatchObject({ exited: true });
-      });
-      await client.initialize();
-      expect(client.getRuntimeIdentity()?.serverVersion).toBe(CODEX_APP_SERVER_VERSION);
+      const client = await startNative(context, native);
       const started = new Map<string, string>();
       const terminals = new Map<string, string>();
       client.addNotificationHandler((event) => {
@@ -310,10 +357,11 @@ describe.skipIf(process.platform === "win32")("native inference admission", () =
         }
         changed.emit("changed");
       });
-      const begin = async (parent = false) => {
+      const begin = async (parent = false, modelProvider?: string) => {
         const { thread } = await client.request("thread/start", {
           cwd: native.cwd,
           experimentalRawEvents: true,
+          ...(modelProvider ? { modelProvider } : {}),
         });
         if (parent) {
           parentId = thread.id;
@@ -338,14 +386,26 @@ describe.skipIf(process.platform === "win32")("native inference admission", () =
         });
         return { threadId: thread.id, turnId: turn.id, controller };
       };
+      disconnectNextHandshake = true;
+      const recovered = await begin();
+      await waitFor(() => (held.has(recovered.threadId) ? true : undefined));
+      finish(recovered.threadId);
+      expect(await waitFor(() => terminals.get(recovered.threadId))).toBe("completed");
+      expect(transport.rejected).toContainEqual({
+        status: 502,
+        connected: true,
+        threadId: recovered.threadId,
+      });
+      transport.rejected = [];
       const roots = [];
       for (let index = 0; index < 16; index++) {
         roots.push(await begin());
       }
       await waitFor(() => (held.size === 16 ? true : undefined));
-      const activeDials = transport.dials;
       const cancelled = await begin();
-      await waitFor(() => (transport.upgrades.has(cancelled.threadId) ? true : undefined));
+      await waitFor(() => (held.has(cancelled.threadId) ? true : undefined));
+      expect(held.size).toBe(17);
+      expect(roots.every((rootTurn) => held.has(rootTurn.threadId))).toBe(true);
       // Native prewarm can open the socket before turn/started establishes the active turn.
       await waitFor(() =>
         started.get(cancelled.threadId) === cancelled.turnId ? true : undefined,
@@ -355,44 +415,79 @@ describe.skipIf(process.platform === "win32")("native inference admission", () =
         turnId: cancelled.turnId,
       });
       expect(await waitFor(() => terminals.get(cancelled.threadId))).toBe("interrupted");
+      // The host releases the admitted generation when native interruption settles.
+      cancelled.controller.abort();
       await waitFor(() => (transport.closedThreads.has(cancelled.threadId) ? true : undefined));
       expect(transport.rejected.some((entry) => entry.threadId === cancelled.threadId)).toBe(false);
-      expect(transport.dials).toBe(activeDials);
+      await waitFor(() => (!held.has(cancelled.threadId) ? true : undefined));
       expect(held.has(cancelled.threadId)).toBe(false);
-      const waiting = await begin();
-      const rejection = await waitFor(() =>
-        transport.rejected.find((entry) => entry.threadId === waiting.threadId),
-      );
-      expect(rejection).toMatchObject({ status: 503, connected: true });
-      expect(transport.dials).toBe(activeDials);
-      expect(terminals.has(waiting.threadId)).toBe(false);
-      finish(roots[0]!.threadId);
-      await waitFor(() => (held.has(waiting.threadId) ? true : undefined));
-      finish(waiting.threadId);
-      expect(await waitFor(() => terminals.get(waiting.threadId))).toBe("completed");
-      expect(held.size).toBe(15);
       const parent = await begin(true);
       const childId = await waitFor(
         () => [...metadata].find(([, info]) => info.parent_thread_id === parent.threadId)?.[0],
       );
       await waitFor(() => (held.has(childId) ? true : undefined));
-      expect(held.size).toBe(16);
+      expect(held.size).toBe(17);
       const quick = await begin();
-      await waitFor(() => (transport.upgrades.has(quick.threadId) ? true : undefined));
-      const rejectedBeforeDrain = transport.rejected.length;
-      finish(childId);
       await waitFor(() => (held.has(quick.threadId) ? true : undefined));
+      expect(held.size).toBe(18);
+      expect(roots.every((rootTurn) => held.has(rootTurn.threadId))).toBe(true);
+      finish(childId);
       finish(quick.threadId);
-      // Child and queued root may run before the parent's follow-up request.
       expect(await waitFor(() => terminals.get(parent.threadId))).toBe("completed");
       expect(await waitFor(() => terminals.get(quick.threadId))).toBe("completed");
-      expect(transport.rejected).toHaveLength(rejectedBeforeDrain);
+      expect(transport.rejected).toHaveLength(0);
       for (const threadId of held.keys()) {
         finish(threadId);
       }
       for (const rootTurn of roots) {
         expect(await waitFor(() => terminals.get(rootTurn.threadId))).toBe("completed");
       }
+      let httpAttempts = 0;
+      transport.fetch.mockImplementation(async (args) => {
+        const requestBody: unknown = await new Response(args.init.body).json();
+        expect(requestBody).toMatchObject({
+          instructions: expect.stringContaining("synthetic root context"),
+        });
+        if (++httpAttempts === 1) {
+          return {
+            response: new Response('{"error":{"type":"server_error","message":"retry fixture"}}', {
+              status: 503,
+            }),
+            release: async () => {},
+          };
+        }
+        const id = "http-retry-response";
+        const events = [
+          { type: "response.created", response: { id } },
+          {
+            type: "response.output_item.done",
+            item: {
+              type: "message",
+              role: "assistant",
+              id: "http-answer",
+              content: [{ type: "output_text", text: "synthetic HTTP complete" }],
+            },
+          },
+          {
+            type: "response.completed",
+            response: { id, usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } },
+          },
+        ];
+        return {
+          response: new Response(
+            events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""),
+            {
+              headers: { "content-type": "text/event-stream" },
+            },
+          ),
+          release: async () => {},
+        };
+      });
+      const httpTurn = await begin(false, "http-fixture");
+      expect(await waitFor(() => terminals.get(httpTurn.threadId))).toBe("completed");
+      await waitFor(() => (transport.httpClosed === 2 ? true : undefined));
+      expect(httpAttempts).toBe(2);
+      expect(transport.httpSockets.size).toBe(2);
     },
   );
   it.skipIf(process.env.OPENCLAW_LIVE_CODEX_INFERENCE !== "1")(
@@ -403,15 +498,7 @@ describe.skipIf(process.platform === "win32")("native inference admission", () =
       if (!apiKey) {
         throw new Error("OPENAI_API_KEY is required for real relay proof");
       }
-      const tempDirs = useAutoCleanupTempDirTracker(context.onTestFinished);
-      const root = await fs.realpath(tempDirs.make("codex-inference-live-"));
-      const native = await createCodexNativeTestState(root);
-      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
-      vi.stubEnv("HOME", native.env.HOME);
-      vi.stubEnv("CODEX_HOME", native.codexHome);
-      context.onTestFinished(() => {
-        vi.unstubAllEnvs();
-      });
+      const native = await prepareNative(context, "codex-inference-live-");
       const proxy = await createCodexInferenceProxy({
         upstream: new URL("https://api.openai.com/v1"),
         assertCurrent: () => {},
@@ -435,26 +522,7 @@ describe.skipIf(process.platform === "win32")("native inference admission", () =
           "enabled=false",
         ].join("\n"),
       );
-      const childEnv = Object.fromEntries(
-        Object.entries(native.env).filter(
-          (entry): entry is [string, string] => entry[1] !== undefined,
-        ),
-      );
-      const client = await CodexAppServerClient.start({
-        transport: "stdio",
-        command: native.command,
-        commandSource: "config",
-        args: ["app-server"],
-        cwd: native.cwd,
-        headers: {},
-        env: childEnv,
-        clearEnv: Object.keys(process.env).filter((key) => !(key in childEnv)),
-      });
-      context.onTestFinished(async () => {
-        expect(await client.closeAndWait()).toMatchObject({ exited: true });
-      });
-      await client.initialize();
-      expect(client.getRuntimeIdentity()?.serverVersion).toBe(CODEX_APP_SERVER_VERSION);
+      const client = await startNative(context, native);
       await client.request("account/login/start", { type: "apiKey", apiKey });
       const { thread } = await client.request("thread/start", {
         cwd: native.cwd,

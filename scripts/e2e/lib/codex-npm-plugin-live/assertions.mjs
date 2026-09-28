@@ -1,5 +1,6 @@
 // Assertions for Codex npm plugin live E2E scenarios.
-import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -21,6 +22,7 @@ import {
   stateDir,
 } from "../codex-install-utils.mjs";
 import { assertCodexReleasePackageContract } from "../codex-release-package-assertions.mjs";
+import { inspectCodexAudit } from "./audit-inspection.mjs";
 
 const command = process.argv[2];
 const allowBetaCompatDiagnostics =
@@ -289,6 +291,19 @@ function configure() {
   const state = stateDir();
   const cfgPath = configPath();
   const cfg = fs.existsSync(cfgPath) ? readJson(cfgPath) : {};
+  if (process.env.OPENCLAW_CODEX_NPM_PLUGIN_AUDIT_IDENTITY === "1") {
+    cfg.logging = {
+      ...cfg.logging,
+      audit: { ...cfg.logging?.audit, enabled: true, executionIdentity: true },
+    };
+    cfg.gateway = {
+      ...cfg.gateway,
+      mode: "local",
+      bind: "loopback",
+      port: 18789,
+      auth: { mode: "token", token: randomUUID() },
+    };
+  }
   cfg.plugins = {
     ...cfg.plugins,
     enabled: true,
@@ -819,6 +834,47 @@ function assertAgentTurn() {
   });
 }
 
+function assertAudit() {
+  const marker = process.argv[3];
+  if (!marker) {
+    throw new Error("assert-audit requires a private reply marker");
+  }
+  const cliPath = process.env.OPENCLAW_E2E_CLI_BIN;
+  if (!cliPath) {
+    throw new Error("assert-audit requires the installed OPENCLAW_E2E_CLI_BIN");
+  }
+  // CLI runs mint independent run ids. This fresh state contains exactly the three
+  // completed local turns; select retained identity keys, never session/route guesses.
+  const database = new DatabaseSync(path.join(stateDir(), "state", "openclaw.sqlite"), {
+    readOnly: true,
+  });
+  let selectors;
+  try {
+    selectors = database
+      .prepare(
+        "SELECT run_id AS runId, execution_id AS executionId, context_id AS contextId FROM execution_identity_contexts ORDER BY created_at, execution_id LIMIT 4",
+      )
+      .all();
+  } finally {
+    database.close();
+  }
+  const result = inspectCodexAudit({
+    selectors,
+    expectedExecutions: 3,
+    privateValues: [marker],
+    query: (args) =>
+      JSON.parse(
+        execFileSync(process.execPath, [cliPath, "audit", ...args, "--json"], {
+          encoding: "utf8",
+          timeout: 120_000,
+          maxBuffer: MAX_TEXT_FILE_BYTES,
+          stdio: ["ignore", "pipe", "pipe"],
+        }),
+      ),
+  });
+  console.log(`codex_audit_identity: ${JSON.stringify(result)}`);
+}
+
 function assertFollowthrough() {
   const progressMarker = process.argv[3];
   const completeMarker = process.argv[4];
@@ -929,6 +985,7 @@ const commands = {
   "print-codex-bin": printCodexBin,
   "assert-preflight": assertPreflight,
   "assert-agent-turn": assertAgentTurn,
+  "assert-audit": assertAudit,
   "assert-followthrough": assertFollowthrough,
   "assert-uninstalled": assertUninstalled,
   "assert-agent-error": assertAgentError,

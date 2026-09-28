@@ -94,6 +94,7 @@ export function beginSqliteSnapshotRetirement(
     inheritedCutoff: number,
     layout = "",
     lock = true,
+    parentFenced = false,
   ): { bytes: number; newest: number } {
     const stat = fs.lstatSync(current);
     if (!stat.isDirectory() || (process.getuid && stat.uid !== process.getuid())) {
@@ -110,10 +111,18 @@ export function beginSqliteSnapshotRetirement(
       inspect(current, cutoff, layout, false);
     }
     if (!layout && lock) {
+      // Allocation holds its parent's read token until this token exists. Once
+      // that parent is exclusive, an empty child can only be an interrupted allocation.
+      const unfinishedAllocation =
+        parentFenced &&
+        tokenMarker.test(path.basename(current)) &&
+        fs.readdirSync(current).length === 0;
       tokens.push(
         current === directory && options.token
           ? options.token.beginRetirement()
-          : acquireSqliteSnapshotToken(current, "reclaim"),
+          : unfinishedAllocation
+            ? acquireSqliteStagingToken(current, "reclaim", { allowMissing: true })
+            : acquireSqliteSnapshotToken(current, "reclaim"),
       );
     }
     let bytes = 0;
@@ -143,7 +152,16 @@ export function beginSqliteSnapshotRetirement(
         ) {
           throw new Error("Unrecognized snapshot directory");
         }
-        const child = inspect(location, cutoff, childLayout, lock);
+        const allocationParent = layout === "openclaw" ? path.dirname(current) : current;
+        const child = inspect(
+          location,
+          cutoff,
+          childLayout,
+          lock,
+          nested &&
+            (layout === "" || layout === "openclaw") &&
+            isSqliteSnapshotStagingName(path.basename(allocationParent)),
+        );
         bytes += child.bytes;
         newest = Math.max(newest, child.newest);
       } else if (

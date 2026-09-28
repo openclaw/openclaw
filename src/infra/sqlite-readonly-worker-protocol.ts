@@ -1,12 +1,12 @@
 import { toUSVString } from "node:util";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { StateDatabaseCoordinatorRuntime } from "./state-database-coordinator.js";
 
 // Keep the one-shot execFile output limit when inspections use IPC.
 export const SQLITE_READONLY_WORKER_MAX_BUFFER = 1024 * 1024;
 
 export type SqliteReadOnlyWorkerMode =
   | "sync"
+  | "content-version"
   | "async"
   | "consolidated"
   | "reclaim"
@@ -26,6 +26,7 @@ export function isSqliteSnapshotStagingMode(mode: unknown): boolean {
 
 export type SqliteReadOnlyWorkerResult =
   | { ok: true; location: string }
+  | { ok: true; contentVersion: string }
   | { ok: true; warnings: string[] }
   | { ok: false; message: string };
 
@@ -41,7 +42,6 @@ export type SqliteAuthProfileReadOptions = {
   source: "canonical" | "snapshot";
   expectedIdentity: string;
   env: NodeJS.ProcessEnv;
-  coordinatorRuntime: StateDatabaseCoordinatorRuntime;
   signal?: AbortSignal;
   stagingRoot?: never;
 };
@@ -65,6 +65,10 @@ export function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteRea
   }
   return (
     (value.ok === true && "location" in value && typeof value.location === "string") ||
+    (value.ok === true &&
+      "contentVersion" in value &&
+      typeof value.contentVersion === "string" &&
+      /^(?:[a-f0-9]{64})?$/.test(value.contentVersion)) ||
     (value.ok === true &&
       "warnings" in value &&
       Array.isArray(value.warnings) &&
@@ -102,7 +106,7 @@ function parseSqliteReadOnlyWorkerResult(
 
 export function readSqliteReadOnlyWorkerValue(
   params: SqliteReadOnlyWorkerOutput,
-  mode: "sync" | "async" | "consolidated",
+  mode: "sync" | "async" | "consolidated" | "content-version",
 ): string;
 export function readSqliteReadOnlyWorkerValue(
   params: SqliteReadOnlyWorkerOutput,
@@ -148,6 +152,9 @@ export function readSqliteReadOnlyWorkerValue(
     "location" in result
   ) {
     return result.location;
+  }
+  if (mode === "content-version" && "contentVersion" in result) {
+    return result.contentVersion;
   }
   if (mode === "reclaim" && "warnings" in result) {
     return result.warnings;

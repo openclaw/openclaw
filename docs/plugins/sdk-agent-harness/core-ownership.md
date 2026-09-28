@@ -36,6 +36,31 @@ applies it when building the surface; harnesses do not need to forward that fact
 and plugin-supplied options cannot replace it. Tool profiles still filter the
 catalog, and each executable remains bound to the host's live authority.
 
+### Current input files for local execution
+
+A harness that has confirmed unsandboxed execution on the Gateway host may call
+`hostCapabilities.prepareInputAttachments({ placement: "local-host", maxChars, assertCurrent, signal })`.
+The host returns an execution-only note with verified readable document paths,
+using the admitted input and its captured media and tool policy. It retains the
+originals even when native image projection clears the ordinary media field.
+For steering, pass the current `turn: { media, userTurnTranscriptRecorder }`.
+Path metadata must fit the supplied native input budget. When the complete note
+cannot fit, the host omits it and preserves the original request and inline
+attachment context.
+Append the note to the current native input without rewriting OpenClaw's
+canonical prompt, transcript, or media references. This separation does not imply
+that a harness discards its native input after the turn: Codex retains it in its
+native conversation history. Prepared paths do not replace the existing
+execution and tool-policy admission for later turns.
+
+This optional addition preserves the shipped V2 host capability contract: older
+hosts omit it, so plugins retain ordinary inline attachment context when absent.
+It is not a fallback for remote transports, remote workspace roots, registered
+workspace adapters, sandboxes, or workspace-only/no-read policies. A harness must
+confirm placement from its effective connection, not infer it from the absence
+of a workspace adapter. The supplied current-turn guard and the captured host
+authority are checked across awaited preparation and before returning paths.
+
 ### Workspace files on the harness host
 
 A trusted host plugin can bind the existing `agents.files.list/get/set` methods
@@ -205,6 +230,36 @@ Include `modelRef: { provider, model }` only when both values are known from tha
 same binding. Do not infer a missing value from outer configuration, credentials,
 or usage. Host-auth ownership requires this tuple before credential preparation;
 native-auth pending branches may omit it until their native owner selects a model.
+
+Declare `nativeModelPolicySupport: "exact"` only when the harness binds the actual
+native selection before every inference dispatch, including after resume. Use
+`hostCapabilities.bindModelExecution({ provider, model })` or the retained-source
+operation below. Observe the
+returned cancellation signal, recheck its assertion after awaited preparation and
+immediately before transport writes and result settlement, and release it after
+execution cleanup. The issuing host must be active when acquiring a binding.
+The issued binding retains the original source until release; host closure blocks
+new direct acquisitions without revoking accepted native work. Explicit Stop, session
+and transport authority, and real source or model-policy revocation still apply.
+A cached pre-resume model is not authority for a different resumed model. Missing
+support rejects native-owned inference when the operator has a model policy.
+The method returns `undefined` when the run has no operator source; ordinary
+host action checks and native turn settlement retain their existing lifetimes.
+The host exposes the direct model binder only for a harness declaring exact
+support. Other harnesses retain an unknown-model guard through their existing
+source capability; introducing a model policy cancels that unqualified work.
+
+For accepted work that can select models after foreground completion, acquire
+`hostCapabilities.retainSourceAuthority()` while the host is active. Its
+`bindModelExecution(...)` operation uses the same original source until that work
+releases the retained capability. Each model binding owns its retention and must
+be released after dispatch cleanup; closing the retained work cancels its model
+bindings. The live `modelPolicyRequired` fact supports connection preflight;
+an absent fact means unknown, not unrestricted. The live `sourceIdentity` is an
+opaque equality token for checking whether active inputs share the same original
+source; it never grants execution authority. Release retained authority when
+its work settles, rather than attaching the creator's authority permanently to a
+reusable native thread.
 
 Read the existing private binding synchronously. Call `assertCurrent()` before
 and after the read. Do not discover models, reclaim a generation, start a client,

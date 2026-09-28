@@ -16,14 +16,10 @@ import {
 import { buildWorkspaceSkillReadiness } from "../../skills/discovery/status.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import { buildStatusAllOverviewRows } from "../status-overview-rows.ts";
-import {
-  buildStatusOverviewSurfaceFromOverview,
-  type StatusOverviewSurface,
-} from "../status-overview-surface.ts";
+import { buildStatusOverviewSurfaceFromOverview } from "../status-overview-surface.ts";
 import {
   resolveStatusGatewayDiagnosticsSafe,
   resolveStatusGatewayHealthSafe,
-  type StatusGatewayDiagnosticsResult,
   type resolveStatusServiceSummaries,
 } from "../status-runtime-shared.ts";
 import { buildStatusUpdateRows } from "../status-update-restart.ts";
@@ -37,78 +33,43 @@ import {
 type StatusServiceSummaries = Awaited<ReturnType<typeof resolveStatusServiceSummaries>>;
 type StatusGatewayServiceSummary = StatusServiceSummaries[0];
 type StatusNodeServiceSummary = StatusServiceSummaries[1];
-type StatusGatewayHealthSafe = Awaited<ReturnType<typeof resolveStatusGatewayHealthSafe>>;
-type ConfigFileSnapshot = Awaited<ReturnType<typeof readConfigFileSnapshot>>;
 
 type StatusAllProgress = {
   setLabel(label: string): void;
   tick(): void;
 };
 
-function resolveStatusAllConfigPath(path: string | null | undefined): string {
-  const trimmed = path?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : "(unknown config path)";
-}
-
 /** Collects local diagnosis inputs that are not part of the shared overview scan. */
 async function resolveStatusAllLocalDiagnosis(params: {
   overview: StatusScanOverviewResult;
   progress: StatusAllProgress;
-  gatewayReachable: boolean;
-  gatewayProbe: StatusScanOverviewResult["gatewaySnapshot"]["gatewayProbe"];
-  gatewayCallOverrides: StatusScanOverviewResult["gatewaySnapshot"]["gatewayCallOverrides"];
   nodeOnlyGateway: NodeOnlyGatewayInfo | null;
   timeoutMs?: number;
   gatewayProbeDeadlineMs: number;
-}): Promise<{
-  configPath: string;
-  health: StatusGatewayHealthSafe | undefined;
-  diagnosis: {
-    snap: ConfigFileSnapshot | null;
-    remoteUrlMissing: boolean;
-    secretDiagnostics: StatusScanOverviewResult["secretDiagnostics"];
-    sentinel: Awaited<ReturnType<typeof readRestartSentinelReadOnly>> | null;
-    lastErr: string | null;
-    port: number;
-    portUsage: Awaited<ReturnType<typeof inspectPortUsage>> | null;
-    tailscaleMode: string;
-    tailscaleDns: string | null;
-    tailscaleHttpsUrl: string | null;
-    skillReadiness: ReturnType<typeof buildWorkspaceSkillReadiness> | null;
-    pluginCompatibility: ReturnType<typeof buildPluginCompatibilityNotices>;
-    channelsStatus: StatusScanOverviewResult["channelsStatus"];
-    channelIssues: StatusScanOverviewResult["channelIssues"];
-    agentStatus: StatusScanOverviewResult["agentStatus"];
-    gatewayReachable: boolean;
-    gatewayStartupPhase?: string;
-    health: StatusGatewayHealthSafe | undefined;
-    deliveryDiagnostics: StatusGatewayDiagnosticsResult | null;
-    exporterDiagnostics: StatusGatewayDiagnosticsResult | null;
-    nodeOnlyGateway: NodeOnlyGatewayInfo | null;
-  };
-}> {
+}) {
   const { overview } = params;
+  const { gatewayReachable, gatewayProbe, gatewayCallOverrides } = overview.gatewaySnapshot;
   const snap = await readConfigFileSnapshot({ observe: false }).catch(() => null);
-  const configPath = resolveStatusAllConfigPath(snap?.path);
+  const configPath = snap?.path?.trim() || "(unknown config path)";
   const diagnosticsParams = {
     config: overview.cfg,
     gatewayProbeDeadlineMs: params.gatewayProbeDeadlineMs,
     timeoutMs: Math.min(5000, params.timeoutMs ?? 10_000),
-    gatewayReachable: params.gatewayReachable,
-    ...(params.gatewayCallOverrides ? { callOverrides: params.gatewayCallOverrides } : {}),
+    gatewayReachable,
+    ...(gatewayCallOverrides ? { callOverrides: gatewayCallOverrides } : {}),
   };
 
   const [health, deliveryDiagnostics, exporterDiagnostics] =
-    params.nodeOnlyGateway || params.gatewayProbe?.startupPhase
+    params.nodeOnlyGateway || gatewayProbe?.startupPhase
       ? [undefined, null, null]
       : await Promise.all([
           resolveStatusGatewayHealthSafe({
             config: overview.cfg,
             gatewayProbeDeadlineMs: params.gatewayProbeDeadlineMs,
             timeoutMs: Math.min(8000, params.timeoutMs ?? 10_000),
-            gatewayReachable: params.gatewayReachable,
-            gatewayProbeError: params.gatewayProbe?.error ?? null,
-            ...(params.gatewayCallOverrides ? { callOverrides: params.gatewayCallOverrides } : {}),
+            gatewayReachable,
+            gatewayProbeError: gatewayProbe?.error ?? null,
+            ...(gatewayCallOverrides ? { callOverrides: gatewayCallOverrides } : {}),
           }),
           resolveStatusGatewayDiagnosticsSafe(diagnosticsParams),
           resolveStatusGatewayDiagnosticsSafe({
@@ -168,7 +129,6 @@ async function resolveStatusAllLocalDiagnosis(params: {
 
   return {
     configPath,
-    health,
     diagnosis: {
       snap,
       remoteUrlMissing: overview.gatewaySnapshot.remoteUrlMissing,
@@ -185,8 +145,8 @@ async function resolveStatusAllLocalDiagnosis(params: {
       channelsStatus: overview.channelsStatus,
       channelIssues: overview.channelIssues,
       agentStatus: overview.agentStatus,
-      gatewayReachable: params.gatewayReachable,
-      gatewayStartupPhase: params.gatewayProbe?.startupPhase,
+      gatewayReachable,
+      gatewayStartupPhase: gatewayProbe?.startupPhase,
       health,
       deliveryDiagnostics,
       exporterDiagnostics,
@@ -206,13 +166,10 @@ export async function buildStatusAllReportData(params: {
   gatewayProbeDeadlineMs: number;
 }) {
   const gatewaySnapshot = params.overview.gatewaySnapshot;
-  const [{ configPath, health, diagnosis }, summary] = await Promise.all([
+  const [{ configPath, diagnosis }, summary] = await Promise.all([
     resolveStatusAllLocalDiagnosis({
       overview: params.overview,
       progress: params.progress,
-      gatewayReachable: gatewaySnapshot.gatewayReachable,
-      gatewayProbe: gatewaySnapshot.gatewayProbe,
-      gatewayCallOverrides: gatewaySnapshot.gatewayCallOverrides,
       nodeOnlyGateway: params.nodeOnlyGateway,
       timeoutMs: params.timeoutMs,
       gatewayProbeDeadlineMs: params.gatewayProbeDeadlineMs,
@@ -221,7 +178,7 @@ export async function buildStatusAllReportData(params: {
       resolveStatusSummaryFromOverview({ overview: params.overview }),
   ]);
 
-  const overviewSurface: StatusOverviewSurface = buildStatusOverviewSurfaceFromOverview({
+  const overviewSurface = buildStatusOverviewSurfaceFromOverview({
     overview: params.overview,
     gatewayService: params.daemon,
     nodeService: params.nodeService,
@@ -253,9 +210,6 @@ export async function buildStatusAllReportData(params: {
       bindMode: params.overview.cfg.gateway?.bind ?? "loopback",
       configPath,
     }),
-    diagnosis: {
-      ...diagnosis,
-      health,
-    },
+    diagnosis,
   };
 }

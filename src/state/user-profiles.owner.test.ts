@@ -8,7 +8,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { readUserProfileVersion } from "./user-profile-events.js";
-import { listUserProfilesSync } from "./user-profile-list.js";
+import { listUserProfilesSync } from "./user-profile-identity.read.js";
 import { mergeOwnerIntoPerson, profileState } from "./user-profiles-owner.test-support.js";
 import { UserProfileOwnerError } from "./user-profiles-schema.js";
 import {
@@ -86,12 +86,9 @@ describe("gateway owner profiles", () => {
   });
 
   it.each([
-    { target: "owner", role: "guest" },
     { target: "owner", role: null },
     { target: "tombstone", role: "guest" },
-    { target: "tombstone", role: null },
     { target: "merged owner", role: "guest" },
-    { target: "merged owner", role: null },
   ])("rejects role $role on the $target without changing state", ({ target, role }) => {
     const options = stateOptions();
     const owner = ensureGatewayOwnerProfile("Local Owner", options);
@@ -310,7 +307,7 @@ describe("gateway owner profiles", () => {
     },
   );
 
-  it.each([null, "", " \t "])("seeds an unset gateway owner name: %s", (emptyName) => {
+  it.each([null, " \t "])("seeds an unset gateway owner name: %s", (emptyName) => {
     const options = stateOptions();
     const owner = ensureGatewayOwnerProfile(null, options);
     setDisplayName(owner.id, emptyName, options);

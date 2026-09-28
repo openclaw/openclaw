@@ -1,10 +1,6 @@
-/**
- * Subagent inline attachment staging.
- *
- * Validates base64/utf8 payloads, writes private receipt files, and resolves inherited workspace paths.
- */
 import crypto from "node:crypto";
 import path from "node:path";
+import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { privateFileStore } from "../../../infra/private-file-store.js";
@@ -20,6 +16,7 @@ import {
   resolveSubagentSessionAttachmentRootDir,
   SANDBOX_SUBAGENT_ATTACHMENTS_MOUNT,
 } from "../subagent-attachment-paths.js";
+import type { SpawnSubagentParams, SpawnSubagentResult } from "./subagent-spawn-contract.js";
 
 export { cleanupMaterializedSubagentAttachments } from "../subagent-attachment-cleanup.js";
 
@@ -49,12 +46,7 @@ function decodeStrictBase64(value: string, maxDecodedBytes: number): Buffer | nu
   return decoded;
 }
 
-type SubagentInlineAttachment = {
-  name: string;
-  content: string;
-  encoding?: "utf8" | "base64";
-  mimeType?: string;
-};
+type SubagentInlineAttachment = NonNullable<SpawnSubagentParams["attachments"]>[number];
 
 type AcpInlineImageAttachment = {
   mediaType: string;
@@ -69,18 +61,7 @@ type AttachmentLimits = {
   retainOnSessionKeep: boolean;
 };
 
-type SubagentAttachmentReceiptFile = {
-  name: string;
-  bytes: number;
-  sha256: string;
-};
-
-type SubagentAttachmentReceipt = {
-  count: number;
-  totalBytes: number;
-  files: SubagentAttachmentReceiptFile[];
-  relDir: string;
-};
+type SubagentAttachmentReceipt = NonNullable<SpawnSubagentResult["attachments"]>;
 
 type MaterializeSubagentAttachmentsResult =
   | {
@@ -114,20 +95,9 @@ function resolveAttachmentLimits(config: OpenClawConfig): AttachmentLimits {
   const attachmentsCfg = config.tools?.sessions_spawn?.attachments;
   return {
     enabled: attachmentsCfg?.enabled === true,
-    maxTotalBytes:
-      typeof attachmentsCfg?.maxTotalBytes === "number" &&
-      Number.isFinite(attachmentsCfg.maxTotalBytes)
-        ? Math.max(0, Math.floor(attachmentsCfg.maxTotalBytes))
-        : 5 * 1024 * 1024,
-    maxFiles:
-      typeof attachmentsCfg?.maxFiles === "number" && Number.isFinite(attachmentsCfg.maxFiles)
-        ? Math.max(0, Math.floor(attachmentsCfg.maxFiles))
-        : 50,
-    maxFileBytes:
-      typeof attachmentsCfg?.maxFileBytes === "number" &&
-      Number.isFinite(attachmentsCfg.maxFileBytes)
-        ? Math.max(0, Math.floor(attachmentsCfg.maxFileBytes))
-        : 1 * 1024 * 1024,
+    maxTotalBytes: resolveNonNegativeIntegerOption(attachmentsCfg?.maxTotalBytes, 5 * 1024 * 1024),
+    maxFiles: resolveNonNegativeIntegerOption(attachmentsCfg?.maxFiles, 50),
+    maxFileBytes: resolveNonNegativeIntegerOption(attachmentsCfg?.maxFileBytes, 1024 * 1024),
     retainOnSessionKeep: attachmentsCfg?.retainOnSessionKeep === true,
   };
 }
@@ -276,11 +246,6 @@ function prepareSubagentAttachments(params: {
       limits: params.limits,
     });
     const bytes = buf.byteLength;
-    if (bytes > params.limits.maxFileBytes) {
-      failAttachment(
-        `attachments_file_bytes_exceeded (name=${name} bytes=${bytes} maxFileBytes=${params.limits.maxFileBytes})`,
-      );
-    }
 
     totalBytes += bytes;
     if (totalBytes > params.limits.maxTotalBytes) {
@@ -398,7 +363,7 @@ export async function materializeSubagentAttachments(params: {
     params.assertActive?.();
     const attachmentStore = privateFileStore(absRootDir);
 
-    const files: SubagentAttachmentReceiptFile[] = [];
+    const files: SubagentAttachmentReceipt["files"] = [];
     for (const { name, buf, bytes } of prepared.attachments) {
       const sha256 = crypto.createHash("sha256").update(buf).digest("hex");
       params.assertActive?.();

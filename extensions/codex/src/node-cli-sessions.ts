@@ -1,4 +1,3 @@
-// Codex plugin module implements node cli sessions behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
@@ -261,7 +260,7 @@ export function formatCodexCliSessions(params: {
 }
 
 async function listLocalCodexCliSessions(paramsJSON?: string | null): Promise<string> {
-  const params = readRecordParam(paramsJSON);
+  const params = parseJsonRecord(paramsJSON);
   const limit = normalizeLimit(params.limit);
   const filter = typeof params.filter === "string" ? params.filter.trim().toLowerCase() : "";
   const codexHome = resolveCodexAppServerUserHomeDir();
@@ -276,7 +275,7 @@ async function listLocalCodexCliSessions(paramsJSON?: string | null): Promise<st
         value?.toLowerCase().includes(filter),
       );
     })
-    .toSorted((a, b) => compareOptionalStringsDesc(a.updatedAt, b.updatedAt))
+    .toSorted((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""))
     .slice(0, limit);
   return JSON.stringify({ sessions, codexHome } satisfies CodexCliSessionsListResult);
 }
@@ -287,7 +286,7 @@ async function resumeLocalCodexCliSession(
   context?: Parameters<OpenClawPluginNodeHostCommand["handle"]>[2],
 ): Promise<string> {
   context?.signal?.throwIfAborted();
-  const params = readRecordParam(paramsJSON);
+  const params = parseJsonRecord(paramsJSON);
   const sessionId = typeof params.sessionId === "string" ? params.sessionId.trim() : "";
   const prompt = typeof params.prompt === "string" ? params.prompt.trim() : "";
   const expectedHomeId = readBoundedOptionalString(params, "sourceHomeId", MAX_SESSION_ID_LENGTH);
@@ -416,17 +415,8 @@ async function readHistorySessions(
   const summaries = new Map<string, CodexCliSessionSummary>();
   const historyPath = path.join(codexHome, "history.jsonl");
   const result = await visitJsonlLines(historyPath, (line) => {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      return;
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(trimmed) as unknown;
-    } catch {
-      return;
-    }
-    if (!isRecord(parsed) || typeof parsed.session_id !== "string") {
+    const parsed = parseJsonRecord(line.trim());
+    if (typeof parsed.session_id !== "string") {
       return;
     }
     const sessionId = parsed.session_id.trim();
@@ -483,19 +473,7 @@ async function readSessionFileSummary(file: string): Promise<CodexCliSessionSumm
   let lastMessage: string | undefined;
   let messageCount = 0;
   const result = await visitJsonlLines(file, (line) => {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      return;
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(trimmed) as unknown;
-    } catch {
-      return;
-    }
-    if (!isRecord(parsed)) {
-      return;
-    }
+    const parsed = parseJsonRecord(line.trim());
     if (typeof parsed.timestamp === "string" && parsed.timestamp.trim()) {
       updatedAt = parsed.timestamp.trim();
     }
@@ -514,10 +492,7 @@ async function readSessionFileSummary(file: string): Promise<CodexCliSessionSumm
       lastMessage = truncateText(messageText, 140);
     }
   });
-  if (!result.ok) {
-    return null;
-  }
-  if (result.lineCount === 0) {
+  if (!result.ok || result.lineCount === 0) {
     return null;
   }
   if (!sessionId) {
@@ -559,14 +534,12 @@ async function findSessionFiles(dir: string, maxDepth: number): Promise<string[]
 }
 
 function readResponseItemMessageText(parsed: Record<string, unknown>): string | undefined {
-  if (parsed.type !== "response_item" || !isRecord(parsed.payload)) {
-    return undefined;
-  }
-  if (parsed.payload.type !== "message") {
-    return undefined;
-  }
-  const role = typeof parsed.payload.role === "string" ? parsed.payload.role : "";
-  if (role !== "user") {
+  if (
+    parsed.type !== "response_item" ||
+    !isRecord(parsed.payload) ||
+    parsed.payload.type !== "message" ||
+    parsed.payload.role !== "user"
+  ) {
     return undefined;
   }
   const content = Array.isArray(parsed.payload.content) ? parsed.payload.content : [];
@@ -667,7 +640,7 @@ function unwrapNodeInvokePayload(raw: unknown): unknown {
   return raw;
 }
 
-function readRecordParam(paramsJSON?: string | null): Record<string, unknown> {
+function parseJsonRecord(paramsJSON?: string | null): Record<string, unknown> {
   if (!paramsJSON?.trim()) {
     return {};
   }
@@ -704,10 +677,6 @@ function truncateText(value: string, max: number): string {
     return value;
   }
   return `${truncateUtf16Safe(value, Math.max(0, max - 3))}...`;
-}
-
-function compareOptionalStringsDesc(a?: string, b?: string): number {
-  return (b ?? "").localeCompare(a ?? "");
 }
 
 function readNodeId(node: CodexCliSessionNodeInfo): string {

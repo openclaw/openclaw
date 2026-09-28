@@ -55,12 +55,17 @@ export class ManagerRuntimeHandleCache {
 
   /** Closes and removes one cached runtime handle when present. */
   async close(
-    params: AcpSessionTarget & { reason: string; expectedHandle?: AcpRuntimeHandle },
+    params: AcpSessionTarget & {
+      assertActive?: () => void;
+      reason: string;
+      expectedHandle?: AcpRuntimeHandle;
+    },
   ): Promise<void> {
     const cached = this.get(params);
     if (!cached || (params.expectedHandle && cached.handle !== params.expectedHandle)) {
       return;
     }
+    params.assertActive?.();
     try {
       await cached.runtime.close({
         handle: cached.handle,

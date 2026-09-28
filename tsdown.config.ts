@@ -44,6 +44,7 @@ import {
   createWorkerDeployBuildPlugin,
   WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
 } from "./scripts/lib/worker-deploy-build-plugin.mts";
+import { buildPackageDistEntriesFromExports } from "./scripts/lib/workspace-package-entries.mts";
 
 type InputOptionsFactory = Extract<NonNullable<UserConfig["inputOptions"]>, Function>;
 type InputOptionsArg = InputOptionsFactory extends (
@@ -368,6 +369,8 @@ const rootDependencyOptions = withExternalPackageSubpaths({
     "@slack/bolt",
     "@slack/web-api",
     "@vitest/expect",
+    // LanceDB's serializer and plugin schemas must share Arrow's CJS type identity.
+    "apache-arrow",
     "jimp",
     "matrix-js-sdk",
     "prism-media",
@@ -387,10 +390,10 @@ function shouldNeverBundleDependency(id: string): boolean {
 }
 
 function shouldNeverBundleDeclarationDependency(id: string): boolean {
-  // Arrow's relative module augmentations must stay beside their package modules.
+  // Keep dependency declarations beside their package modules.
   return (
     shouldNeverBundleDependency(id) ||
-    ["zod", "apache-arrow", "kysely"].some((name) => id === name || id.startsWith(`${name}/`))
+    ["zod", "kysely"].some((name) => id === name || id.startsWith(`${name}/`))
   );
 }
 
@@ -473,7 +476,6 @@ function buildCoreDistEntries(): Record<string, string> {
     "plugins/memory-state": "src/plugins/memory-state.ts",
     "plugins/synthetic-auth.runtime": "src/plugins/synthetic-auth.runtime.ts",
     "subagent-registry.runtime": "src/agents/subagents/registry/subagent-registry.runtime.ts",
-    "task-registry-control.runtime": "src/tasks/task-registry-control.runtime.ts",
     "link-understanding/apply.runtime": "src/link-understanding/apply.runtime.ts",
     "media-understanding/apply.runtime": "src/media-understanding/apply.runtime.ts",
     "commands/status.summary.runtime": "src/status/summary.runtime.ts",
@@ -508,10 +510,10 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
     // Mounted Docker harnesses need stable package dist entries for asserted internal modules.
     "agents/agent-bundle-mcp-manager-api": "src/agents/agent-bundle-mcp-manager-api.ts",
     "agents/agent-bundle-mcp-materialize": "src/agents/agent-bundle-mcp-materialize.ts",
+    "agents/agent-tool-definition-adapter": "src/agents/agent-tool-definition-adapter.ts",
     "agents/conversation-capability-profile": "src/agents/conversation-capability-profile.ts",
     "agents/embedded-agent-runner/effective-tool-policy":
       "src/agents/embedded-agent-runner/effective-tool-policy.ts",
-    "agents/embedded-agent-runner/tool-split": "src/agents/embedded-agent-runner/tool-split.ts",
     "agents/embedded-agent-runner/run/runtime-context-prompt":
       "src/agents/embedded-agent-runner/run/runtime-context-prompt.ts",
     "auto-reply/reply/commands-system-agent": "src/auto-reply/reply/commands-system-agent.ts",
@@ -551,33 +553,6 @@ function buildAgentCoreDistEntries(): Record<string, string> {
       "packages/agent-core/src/harness/prompt-template-arguments.ts",
     "harness/utils/truncate": "packages/agent-core/src/harness/utils/truncate.ts",
   };
-}
-
-function buildPackageDistEntriesFromExports(packageDir: string): Record<string, string> {
-  const packageJsonPath = path.join("packages", packageDir, "package.json");
-  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
-    exports?: Record<string, unknown>;
-  };
-  const entries: Record<string, string> = {};
-  for (const [exportKey, value] of Object.entries(packageJson.exports ?? {})) {
-    const entry =
-      exportKey === "." ? "index" : exportKey.startsWith("./") ? exportKey.slice(2) : "";
-    if (!entry || entry.includes("..")) {
-      continue;
-    }
-    const importPath =
-      typeof value === "object" && value !== null && !Array.isArray(value)
-        ? (value as Record<string, unknown>).import
-        : value;
-    if (typeof importPath !== "string" || !importPath.startsWith("./dist/")) {
-      continue;
-    }
-    const sourcePath = importPath
-      .replace(/^\.\/dist\//u, `packages/${packageDir}/src/`)
-      .replace(/\.mjs$/u, ".ts");
-    entries[entry] = sourcePath;
-  }
-  return Object.fromEntries(Object.entries(entries).toSorted(([a], [b]) => a.localeCompare(b)));
 }
 
 function buildLlmCoreDistEntries(): Record<string, string> {
@@ -720,6 +695,7 @@ function buildUnifiedDistEntries(): Record<string, string> {
     ...listBundledPluginEntrySources(rootBundledPluginBuildEntries),
     "extensions/browser/native-host-entry": "extensions/browser/native-host-entry.ts",
     "extensions/browser/relay-daemon-entry": "extensions/browser/relay-daemon-entry.ts",
+    "extensions/browser/setup-entry": "extensions/browser/setup-entry.ts",
     ...bundledHookEntries,
   };
 }
@@ -871,8 +847,23 @@ const configs: UserConfig[] = [
   }),
   nodeWorkspacePackageBuildConfig("normalization-core"),
   nodeWorkspacePackageBuildConfig("retry"),
+  nodeWorkspacePackageBuildConfig("sdk", {
+    deps: withExternalPackageSubpaths({
+      neverBundle: [
+        "@openclaw/gateway-client",
+        "@openclaw/gateway-protocol",
+        "@openclaw/normalization-core",
+      ],
+    }),
+  }),
   nodeWorkspacePackageBuildConfig("media-core"),
-  nodeWorkspacePackageBuildConfig("acp-core"),
+  nodeWorkspacePackageBuildConfig("acp-core", {
+    entry: {
+      ...buildPackageDistEntriesFromExports("acp-core"),
+      // Preserve the standalone package build's non-exported redactor artifact.
+      "error-format": "packages/acp-core/src/error-format.ts",
+    },
+  }),
   nodeWorkspacePackageBuildConfig("terminal-core", {
     deps: {
       neverBundle: shouldExternalizeTerminalCoreDependency,
@@ -973,6 +964,9 @@ const configs: UserConfig[] = [
     false,
   ),
   workerDeployBuildConfig({ "worker/worker": "src/worker/worker-deploy-entry.ts" }),
+  workerDeployBuildConfig({
+    "worker/file-tool-planning.worker": "src/worker/worker-deploy-file-tool-planning.ts",
+  }),
   workerDeployBuildConfig({
     "worker/image-processor.worker": "src/worker/worker-deploy-image-processor.ts",
   }),

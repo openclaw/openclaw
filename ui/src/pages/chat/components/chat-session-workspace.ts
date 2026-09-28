@@ -1,5 +1,8 @@
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
-import { formatFencedCodeBlock } from "../../../../../src/shared/markdown-code.js";
+import {
+  formatFencedCodeBlock,
+  formatInlineCodeSpan,
+} from "../../../../../src/shared/markdown-code.js";
 import { downloadArtifact, isHttpArtifactDownloadUrl } from "../../../api/artifact-download.ts";
 import { GatewayRequestError } from "../../../api/gateway.ts";
 import type { ArtifactDownloadResult, SessionWorkspaceGetResult } from "../../../api/types.ts";
@@ -8,6 +11,7 @@ import { patchSettings, type ChatWorkspaceDock } from "../../../app/settings.ts"
 import { t } from "../../../i18n/index.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../../lib/gateway-methods.ts";
+import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import { sessionWorkspaceFileKey } from "../../../lib/sessions/workspace.ts";
 import { openWorkspaceItem } from "./chat-session-workspace-preview.ts";
 import {
@@ -17,7 +21,6 @@ import {
   loadSessionWorkspace,
   openSessionCheckoutSidebar,
   refreshSessionWorkspaceState,
-  requestWorkspaceUpdate,
   trackSessionCheckoutSidebar,
 } from "./chat-session-workspace-state.ts";
 import type {
@@ -61,20 +64,10 @@ function formatMarkdownCodeSpan(value: string): string {
   // Markdown finds block boundaries before inline spans, so filenames must
   // stay on one logical line even when the Gateway returns hostile metadata.
   const singleLineValue = value.replace(/\r/g, "\\r").replace(/\n/g, "\\n");
-  const longestBacktickRun = Math.max(
-    0,
-    ...(singleLineValue.match(/`+/g)?.map((run) => run.length) ?? []),
-  );
-  const delimiter = "`".repeat(longestBacktickRun + 1);
   const hasBoundarySpaces = singleLineValue.startsWith(" ") && singleLineValue.endsWith(" ");
-  const isOnlySpaces = /^ +$/.test(singleLineValue);
-  const padding =
-    singleLineValue.startsWith("`") ||
-    singleLineValue.endsWith("`") ||
-    (hasBoundarySpaces && !isOnlySpaces)
-      ? " "
-      : "";
-  return `${delimiter}${padding}${singleLineValue}${padding}${delimiter}`;
+  return formatInlineCodeSpan(
+    hasBoundarySpaces && !/^ +$/.test(singleLineValue) ? ` ${singleLineValue} ` : singleLineValue,
+  );
 }
 
 function formatFileUpdatedAt(updatedAtMs: number | undefined): string | null {
@@ -117,33 +110,59 @@ function workspaceBrowserFilePath(root: string | undefined, filePath: string): s
   return base ? `${base}${separator}${relative}` : `${separator}${relative}`;
 }
 
-function artifactSidebarContent(params: {
-  data?: string;
-  encoding?: string;
-  mimeType: string;
-  title: string;
-  url?: string;
-  text?: string;
-  imageSource?: string;
-  download?: (signal: AbortSignal) => Promise<Blob | null>;
-}): SidebarContent {
-  const { data, encoding, mimeType, title, url, imageSource } = params;
-  let { text } = params;
-  if (imageSource || (encoding === "base64" && data && mimeType.startsWith("image/"))) {
-    return {
-      kind: "image",
-      title,
-      src: imageSource ?? `data:${mimeType};base64,${data}`,
-      mimeType,
-      rawText: url ?? null,
-    };
-  }
-  if (mimeType === "application/json" || mimeType.startsWith("text/")) {
-    if (text === undefined && encoding === "base64" && data) {
+async function loadArtifactSidebarContent(
+  result: ArtifactDownloadResult & { blob?: Blob },
+  download: (signal: AbortSignal) => Promise<Blob | null>,
+  resourceBasePath?: string,
+): Promise<SidebarContent> {
+  const { data, encoding, url, blob } = result;
+  const { title } = result.artifact;
+  const mimeType = result.artifact.mimeType ?? "";
+  let imageSource: string | undefined;
+  let text: string | undefined;
+  if (blob) {
+    if (mimeType.startsWith("image/")) {
+      // Workspace previews outlive the ticket, so retain the image in the existing data URL form.
+      imageSource = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.addEventListener(
+          "load",
+          () => {
+            if (typeof reader.result === "string") {
+              resolve(reader.result);
+            } else {
+              reject(new Error("Artifact image could not be decoded"));
+            }
+          },
+          { once: true },
+        );
+        reader.addEventListener(
+          "error",
+          () => reject(reader.error ?? new Error("Artifact image could not be decoded")),
+          { once: true },
+        );
+        reader.readAsDataURL(blob);
+      });
+    } else {
+      text = await blob.text();
+    }
+  } else if (encoding === "base64" && data) {
+    if (mimeType.startsWith("image/")) {
+      imageSource = `data:${mimeType};base64,${data}`;
+    } else if (mimeType === "application/json" || mimeType.startsWith("text/")) {
       text = new TextDecoder().decode(
         Uint8Array.from(globalThis.atob(data), (char) => char.charCodeAt(0)),
       );
     }
+  }
+  if (imageSource) {
+    return {
+      kind: "image",
+      title,
+      src: imageSource,
+      mimeType,
+      rawText: url ?? null,
+    };
   }
   if (text !== undefined) {
     const language = mimeType === "application/json" ? "json" : "";
@@ -153,75 +172,25 @@ function artifactSidebarContent(params: {
       rawText: text,
     };
   }
-  if (params.download) {
+  if (encoding === "base64" || (url && isHttpArtifactDownloadUrl(url, resourceBasePath))) {
     return {
       kind: "attachment",
       attachmentKind: "document",
       title,
       mimeType,
-      download: params.download,
+      download,
     };
   }
-  if (url) {
-    const content = `# ${title}\n\n[Open artifact](${url})`;
-    return { kind: "markdown", content, rawText: content };
-  }
-  const content = `# ${title}\n\nArtifact download is not previewable in the sidebar.`;
+  const content = url
+    ? `# ${title}\n\n[Open artifact](${url})`
+    : `# ${title}\n\nArtifact download is not previewable in the sidebar.`;
   return { kind: "markdown", content, rawText: content };
-}
-
-async function loadArtifactSidebarContent(
-  result: ArtifactDownloadResult & { blob?: Blob },
-  download: (signal: AbortSignal) => Promise<Blob | null>,
-  resourceBasePath?: string,
-): Promise<SidebarContent> {
-  const params = {
-    data: result.data,
-    encoding: result.encoding,
-    mimeType: result.artifact.mimeType ?? "",
-    title: result.artifact.title,
-    url: result.url,
-    download:
-      result.encoding === "base64" ||
-      (result.url && isHttpArtifactDownloadUrl(result.url, resourceBasePath))
-        ? download
-        : undefined,
-  };
-  if (!result.blob) {
-    return artifactSidebarContent(params);
-  }
-  if (!params.mimeType.startsWith("image/")) {
-    return artifactSidebarContent({ ...params, text: await result.blob.text() });
-  }
-  const blob = result.blob;
-  // Workspace previews outlive the ticket. Retain the fetched image in the
-  // preview's existing data URL representation without a second Blob URL owner.
-  const imageSource = await new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.addEventListener(
-      "load",
-      () => {
-        if (typeof reader.result === "string") {
-          resolve(reader.result);
-        } else {
-          reject(new Error("Artifact image could not be decoded"));
-        }
-      },
-      { once: true },
-    );
-    reader.addEventListener(
-      "error",
-      () => reject(reader.error ?? new Error("Artifact image could not be decoded")),
-      { once: true },
-    );
-    reader.readAsDataURL(blob);
-  });
-  return artifactSidebarContent({ ...params, imageSource });
 }
 
 export function refreshSessionWorkspace(state: SessionWorkspaceHost, refreshFiles: boolean) {
   if (refreshSessionWorkspaceState(state, refreshFiles)) {
-    state.handleOpenSidebar(resolveSessionDiffSidebarContent(state));
+    state.sidebarContent = resolveSessionDiffSidebarContent(state);
+    state.requestUpdate?.();
   }
 }
 
@@ -232,6 +201,9 @@ function openFile(
   opts: { line?: number | null; requestPath?: string } = {},
 ) {
   const requestPath = opts.requestPath ?? path;
+  const draftScope = state.sessionWorkspaceDraftScope;
+  const draftContext = state.sessionWorkspaceDraftContext;
+  const gatewayUrl = state.settings?.gatewayUrl ?? "";
   openWorkspaceItem(
     state,
     workspace,
@@ -297,6 +269,9 @@ function openFile(
                 );
                 const hash = saved?.file.hash;
                 const updatedAtMs = saved?.file.updatedAtMs;
+                if (typeof hash === "string" && isCurrentSessionWorkspace(state, workspace)) {
+                  refreshSessionWorkspace(state, true);
+                }
                 return typeof hash === "string"
                   ? {
                       ok: true as const,
@@ -355,12 +330,17 @@ function openFile(
         name,
         content: file.content,
         draftKey: [
-          state.settings?.gatewayUrl ?? "",
-          state.sessionWorkspaceDraftScope ?? "",
+          gatewayUrl,
+          draftScope ?? "",
           result.sessionKey,
           result.root ?? "",
           file.workspacePath || file.path || path,
         ].join("\u0000"),
+        draftContext: {
+          sessionKey: result.sessionKey,
+          sessionTitle: draftContext?.sessionTitle ?? resolveSessionDisplayName(result.sessionKey),
+          paneLabel: draftContext?.paneLabel,
+        },
         root: result.root ?? null,
         mimeType: file.mimeType,
         language: languageForFile(name),
@@ -396,7 +376,7 @@ function toggleSessionWorkspace(state: SessionWorkspaceHost) {
   if (!workspace.collapsed && workspace.list?.sessionKey !== state.sessionKey) {
     loadSessionWorkspace(state, workspace);
   }
-  requestWorkspaceUpdate(state);
+  state.requestUpdate?.();
 }
 
 function setSessionWorkspaceDock(state: SessionWorkspaceHost, dock: ChatWorkspaceDock) {
@@ -408,7 +388,7 @@ function setSessionWorkspaceDock(state: SessionWorkspaceHost, dock: ChatWorkspac
     }
     patchSettings({ chatWorkspaceDock: dock });
   }
-  requestWorkspaceUpdate(state);
+  state.requestUpdate?.();
 }
 
 export function revealSessionWorkspaceFile(state: SessionWorkspaceHost, path: string) {
@@ -422,7 +402,7 @@ export function revealSessionWorkspaceFile(state: SessionWorkspaceHost, path: st
   workspace.filter = "all";
   workspace.activeId = `file:${path}`;
   loadSessionWorkspace(state, workspace, true);
-  requestWorkspaceUpdate(state);
+  state.requestUpdate?.();
 }
 
 function openArtifact(
@@ -496,11 +476,13 @@ export function createSessionWorkspaceProps(
   options?: {
     narrowLayout?: boolean;
     draftScope?: string;
+    draftContext?: SessionWorkspaceHost["sessionWorkspaceDraftContext"];
     expanded?: boolean;
     presented?: boolean;
   },
 ): SessionWorkspaceProps {
   state.sessionWorkspaceDraftScope = options?.draftScope;
+  state.sessionWorkspaceDraftContext = options?.draftContext;
   const workspace = getSessionWorkspace(state);
   if (
     (options?.expanded === false || options?.presented === false) &&
@@ -536,7 +518,7 @@ export function createSessionWorkspaceProps(
     browserSearch: workspace.browserSearch,
     onSetFilter: (filter) => {
       workspace.filter = filter;
-      requestWorkspaceUpdate(state);
+      state.requestUpdate?.();
     },
     onToggleCollapsed: () => toggleSessionWorkspace(state),
     onSetDock: (dock) => setSessionWorkspaceDock(state, dock),
@@ -558,7 +540,7 @@ export function createSessionWorkspaceProps(
     },
     onSearch: (search) => {
       workspace.browserSearch = search;
-      requestWorkspaceUpdate(state);
+      state.requestUpdate?.();
       clearWorkspaceTimer(workspace);
       workspace.browserSearchTimer = globalThis.setTimeout(() => {
         workspace.browserSearchTimer = null;
@@ -582,23 +564,12 @@ export function resolveSessionDiffSidebarContent(
   if (workspace.diffContent) {
     return workspace.diffContent;
   }
-  const content = buildSessionDiffSidebarContent(state, workspace);
-  trackSessionCheckoutSidebar(content);
-  workspace.diffContent = content;
-  return content;
-}
-
-/** Sidebar payload whose loader refetches sessions.diff for the pane's session. */
-function buildSessionDiffSidebarContent(
-  state: SessionWorkspaceHost,
-  workspace: SessionWorkspaceState,
-): SidebarContent {
   const sessionKey = state.sessionKey;
   const client = state.client;
   const agentId = workspace.agentId;
   const canLoadFileText =
     isGatewayMethodAdvertised(state, "sessions.files.get") === true && Boolean(state.client);
-  return {
+  const content: SidebarContent = {
     kind: "session-diff",
     load: async (scope) => {
       if (!client) {
@@ -633,4 +604,7 @@ function buildSessionDiffSidebarContent(
       : undefined,
     openFile: (path) => openFile(state, getSessionWorkspace(state), path),
   };
+  trackSessionCheckoutSidebar(content);
+  workspace.diffContent = content;
+  return content;
 }

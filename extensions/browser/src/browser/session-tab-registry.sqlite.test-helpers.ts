@@ -5,6 +5,7 @@ import type { CloseTrackedCdpTargetResult } from "./cdp.helpers.js";
 import type { BrowserTabOwnership } from "./client.types.js";
 import type { ResolvedBrowserConfig } from "./config.js";
 import type { BrowserSessionTabRoute } from "./session-tab-route.js";
+import type { BrowserSessionTabAuthority } from "./session-tab-store.js";
 
 type TabIdentity = {
   sessionKey?: string;
@@ -42,19 +43,32 @@ export type CloseTab = (tab: {
 }) => Promise<void>;
 
 type CleanupParams = {
+  isCurrent?: () => boolean;
   closeTab?: CloseTab;
   closeDurableTab?: (
     tab: DurableTab,
-    options: { shouldClose: () => boolean },
+    options: CloseOptions,
   ) => Promise<CloseTrackedCdpTargetResult>;
   getResolvedBrowserConfig?: () => ResolvedBrowserConfig | null;
   onWarn?: (message: string) => void;
 };
 
+export type CloseOptions = {
+  closeIfCurrent: (
+    dispatch: () => Promise<CloseTrackedCdpTargetResult>,
+  ) => Promise<CloseTrackedCdpTargetResult>;
+};
+
 export type RegistryModule = {
-  trackSessionBrowserTab(params: TabIdentity & { now?: number }): void;
-  touchSessionBrowserTab(params: TabIdentity & { now?: number }): void;
-  untrackSessionBrowserTab(params: TabIdentity): void;
+  filterTrackedSessionBrowserTabs<T extends { targetId: string; tabId?: string }>(
+    params: Pick<TabIdentity, "sessionKey" | "route" | "profile"> & {
+      tabs: readonly T[];
+      authority?: BrowserSessionTabAuthority;
+    },
+  ): Promise<T[]>;
+  trackSessionBrowserTab(params: TabIdentity & { now?: number }): Promise<DurableTab | undefined>;
+  touchSessionBrowserTab(params: TabIdentity & { now?: number }): Promise<void>;
+  untrackSessionBrowserTab(params: TabIdentity): Promise<void>;
   closeTrackedBrowserTabsForSessions(
     params: CleanupParams & { sessionKeys: Array<string | undefined>; now?: number },
   ): Promise<number>;
@@ -73,7 +87,7 @@ export const durableOwnership = (
   nativeTargetId: string,
   profileFingerprint = "test-profile-fingerprint",
   browserInstanceFingerprint = "test-browser-instance-fingerprint",
-): BrowserTabOwnership => ({
+): Extract<BrowserTabOwnership, { status: "durable" }> => ({
   status: "durable",
   nativeTargetId,
   profileFingerprint,

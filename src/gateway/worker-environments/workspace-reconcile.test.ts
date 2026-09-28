@@ -618,6 +618,7 @@ describe("worker workspace reconciliation", () => {
   it("applies changed, added, deleted, executable, binary, and symlink results", async () => {
     const local = await temporaryDirectory("workspace-local");
     const staged = await temporaryDirectory("workspace-staged");
+    const addedName = process.platform === "win32" ? "added.txt" : "added\u0001-é.txt";
     await gitInit(local);
     await fs.mkdir(path.join(local, "src"));
     await fs.writeFile(path.join(local, "keep.bin"), Buffer.from([0, 1, 2]));
@@ -627,10 +628,10 @@ describe("worker workspace reconciliation", () => {
 
     await fs.mkdir(path.join(staged, "src"));
     await fs.writeFile(path.join(staged, "keep.bin"), Buffer.from([0, 9, 2]));
-    await fs.writeFile(path.join(staged, "added.txt"), "new");
+    await fs.writeFile(path.join(staged, addedName), "new");
     await fs.writeFile(path.join(staged, "src", "script.sh"), "after");
     await fs.chmod(path.join(staged, "src", "script.sh"), 0o755);
-    await fs.symlink("added.txt", path.join(staged, "link.txt"));
+    await fs.symlink(addedName, path.join(staged, "link.txt"));
     const current = await manifestFor(staged);
 
     await applyWorkspace({ root: local, stagingRoot: staged, base, current });
@@ -638,9 +639,9 @@ describe("worker workspace reconciliation", () => {
     await expect(fs.readFile(path.join(local, "keep.bin"))).resolves.toEqual(
       Buffer.from([0, 9, 2]),
     );
-    await expect(fs.readFile(path.join(local, "added.txt"), "utf8")).resolves.toBe("new");
+    await expect(fs.readFile(path.join(local, addedName), "utf8")).resolves.toBe("new");
     await expect(fs.access(path.join(local, "delete.txt"))).rejects.toThrow();
-    await expect(fs.readlink(path.join(local, "link.txt"))).resolves.toBe("added.txt");
+    await expect(fs.readlink(path.join(local, "link.txt"))).resolves.toBe(addedName);
     expect((await fs.stat(path.join(local, "src", "script.sh"))).mode & 0o111).not.toBe(0);
   });
 

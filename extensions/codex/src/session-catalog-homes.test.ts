@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import { createServer } from "node:http";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -184,7 +183,7 @@ describe("Codex catalog home discovery", () => {
     );
   });
 
-  it("serves HTTP and a replacement owner while obsolete discovery is pending", async () => {
+  it("serves a replacement owner while obsolete discovery is pending", async () => {
     const root = tempDirs.make("codex-catalog-generation-");
     const alpha = { agentDir: path.join(root, "alpha") };
     const beta = { agentDir: path.join(root, "beta") };
@@ -209,23 +208,10 @@ describe("Codex catalog home discovery", () => {
       await release.promise;
       return directoryStat;
     });
-    const server = createServer((_request, response) => response.end("ok"));
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
     const pending = resolver.forAgent("beta");
     const rejected = expect(pending).rejects.toThrow("configuration changed");
     try {
       await entered.promise;
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("HTTP probe did not bind");
-      }
-      const response = await fetch(`http://127.0.0.1:${address.port}/health`, {
-        headers: { connection: "close" },
-      });
-      expect(response.status).toBe(200);
-      expect(await response.text()).toBe("ok");
       config = { agents: { ownership: "explicit", entries: { alpha } } };
       expect((await resolver.forAgent("alpha"))[0]?.agentDir).toBe(alpha.agentDir);
       expect(await resolver.forAgent("beta")).toEqual([]);
@@ -235,10 +221,6 @@ describe("Codex catalog home discovery", () => {
       release.resolve();
       await Promise.allSettled([pending, rejected]);
       stat.mockRestore();
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
     }
   });
 

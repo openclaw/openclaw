@@ -1,8 +1,3 @@
-/**
- * sessions_spawn built-in tool.
- *
- * Starts subagent or ACP-backed sessions with inherited tool policy and delivery context.
- */
 import { Type } from "typebox";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import { supportsThreadBindingSpawn } from "../../channels/conversation-resolution.js";
@@ -11,7 +6,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSnakeCaseParamKey } from "../../param-key.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { createLazyPromise } from "../../shared/lazy-promise.js";
 import {
   mergeAcceptedSessionSpawnsForRun,
   normalizeAcceptedSessionSpawnResult,
@@ -84,15 +79,7 @@ const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
   "replyTo",
   "reply_to",
 ] as const;
-type AcpSpawnModule = typeof import("../subagents/spawn/acp-spawn.js");
-
-const acpSpawnModuleLoader = createLazyImportLoader<AcpSpawnModule>(
-  () => import("../subagents/spawn/acp-spawn.js"),
-);
-
-async function loadAcpSpawnModule(): Promise<AcpSpawnModule> {
-  return await acpSpawnModuleLoader.load();
-}
+const loadAcpSpawnModule = createLazyPromise(() => import("../subagents/spawn/acp-spawn.js"));
 
 function addRoleToFailureResult<T extends { status: string }>(
   result: T,
@@ -133,10 +120,6 @@ type SessionsSpawnThreadAvailability = {
   subagent: boolean;
   acp: boolean;
 };
-
-function hasAnyThreadAvailability(availability: SessionsSpawnThreadAvailability): boolean {
-  return availability.subagent || availability.acp;
-}
 
 function resolveSessionsSpawnThreadAvailability(opts?: {
   config?: OpenClawConfig;
@@ -267,7 +250,6 @@ function createSessionsSpawnToolSchema(params: {
       : {}),
     ...VISIBLE_SESSIONS_SPAWN_SCHEMA,
 
-    // Inline attachments (snapshot-by-value).
     attachments: Type.Optional(
       Type.Array(
         Type.Object({
@@ -285,8 +267,6 @@ function createSessionsSpawnToolSchema(params: {
     attachAs: Type.Optional(
       Type.Object(
         {
-          // Where the spawned agent should look for attachments.
-          // Kept as a hint; implementation materializes into the child workspace.
           mountPath: Type.Optional(Type.String()),
         },
         {
@@ -356,7 +336,7 @@ export function createSessionsSpawnTool(
     ...opts,
     config: effectiveConfig,
   });
-  const threadAvailable = hasAnyThreadAvailability(threadAvailability);
+  const threadAvailable = threadAvailability.subagent || threadAvailability.acp;
   const requesterAgentId =
     opts?.requesterAgentIdOverride ?? parseAgentSessionKey(opts?.agentSessionKey)?.agentId;
   const swarmConfig = resolveSwarmConfig(effectiveConfig, requesterAgentId);
@@ -572,6 +552,21 @@ export function createSessionsSpawnTool(
             }>)
           : undefined;
         const parentExecutionIdentityToken = getGatewayToolCallerIdentity()?.executionIdentityToken;
+        const spawnParams = {
+          task,
+          taskName,
+          label: label || undefined,
+          agentId: requestedAgentId,
+          model: modelOverride,
+          thinking: thinkingOverrideRaw,
+          ...(runTimeoutSeconds !== undefined ? { runTimeoutSeconds } : {}),
+          cwd,
+          mode,
+          thread,
+          sandbox,
+          cleanup,
+          expectsCompletionMessage,
+        } as const;
 
         if (runtime === "acp") {
           const { spawnAcpDirect } = await loadAcpSpawnModule();
@@ -588,20 +583,8 @@ export function createSessionsSpawnTool(
           }
           const result = await spawnAcpDirect(
             {
-              task,
-              taskName,
-              label: label || undefined,
-              agentId: requestedAgentId,
+              ...spawnParams,
               resumeSessionId,
-              model: modelOverride,
-              thinking: thinkingOverrideRaw,
-              ...(runTimeoutSeconds !== undefined ? { runTimeoutSeconds } : {}),
-              cwd,
-              mode: mode === "run" || mode === "session" ? mode : undefined,
-              thread,
-              sandbox,
-              cleanup,
-              expectsCompletionMessage,
               streamTo,
               attachments: acpAttachments?.attachments,
             },
@@ -636,13 +619,7 @@ export function createSessionsSpawnTool(
 
         const result = await spawnSubagentDirect(
           {
-            task,
-            taskName,
-            label: label || undefined,
-            agentId: requestedAgentId,
-            model: modelOverride,
-            thinking: thinkingOverrideRaw,
-            ...(runTimeoutSeconds !== undefined ? { runTimeoutSeconds } : {}),
+            ...spawnParams,
             collect: hasCollectParam ? collect : undefined,
             outputSchema:
               params.outputSchema && typeof params.outputSchema === "object"
@@ -661,14 +638,8 @@ export function createSessionsSpawnTool(
               typeof params[SWARM_CODE_MODE_REQUEST_FINGERPRINT] === "string"
                 ? params[SWARM_CODE_MODE_REQUEST_FINGERPRINT]
                 : undefined,
-            cwd,
-            thread,
-            mode,
-            cleanup,
-            sandbox,
             context,
             lightContext,
-            expectsCompletionMessage,
             completionTarget,
             attachments,
             attachMountPath:

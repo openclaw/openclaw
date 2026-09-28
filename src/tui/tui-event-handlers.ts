@@ -265,16 +265,18 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (state.activeChatRunId === evt.runId) {
         armStreamingWatchdog(evt.runId);
       }
+      if (evt.replace === true) {
+        streamAssembler.drop(evt.runId);
+      }
       const displayText = streamAssembler.ingestDelta(evt.runId, evt.message, state.showThinking);
-      if (!displayText) {
+      if (displayText === null && evt.replace !== true) {
         return;
       }
-      chatLog.updateAssistant(displayText, evt.runId);
+      chatLog.updateAssistant(displayText ?? "", evt.runId);
     }
     if (evt.state === "final") {
-      const isLocalBtwRunLocal = isLocalBtwRunId?.(evt.runId) ?? false;
       const wasActiveRun = state.activeChatRunId === evt.runId;
-      if (!evt.message && isLocalBtwRunLocal) {
+      if (!evt.message && isLocalBtwRun) {
         forgetLocalBtwRunId?.(evt.runId);
         runCoordinator.noteFinalizedRun(evt.runId);
         clearStaleStreamingIfNoTrackedRunRemains();

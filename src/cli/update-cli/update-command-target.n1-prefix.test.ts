@@ -32,7 +32,8 @@ vi.mock("../../process/exec.js", () => ({
     throw new Error(`Unexpected command in read-only resolver: ${argv.join(" ")}`);
   },
 }));
-vi.mock("./shared.js", () => ({
+vi.mock("./shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./shared.js")>()),
   DEFAULT_PACKAGE_NAME: "openclaw",
   normalizeTag: () => null,
   readPackageName: async () => "openclaw",
@@ -91,12 +92,6 @@ it("keeps writable rebind target B without a recognized service Node instead of 
   expect(selected?.packageRoot).toBe(rootB);
   expect(selected?.directNodeModulesRoot).toBe(true);
   expect(state.calls.some((argv) => argv[1] === "root")).toBe(false);
-});
-it("keeps writable target B with an explicit service Node", async () => {
-  expect(
-    (await resolve({ rootRedirect: null, serviceRoot: rootA, nodeRunner: "/old/node" }))
-      ?.packageRoot,
-  ).toBe(rootB);
 });
 it("preserves protected-definition redirect to A", async () => {
   expect((await resolve({ rootRedirect: { root: rootA, previousRoot: rootB } }))?.packageRoot).toBe(

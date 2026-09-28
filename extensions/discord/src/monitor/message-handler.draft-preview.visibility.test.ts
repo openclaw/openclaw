@@ -43,9 +43,6 @@ describe("Discord progress visibility", () => {
       deliveryRest: {} as never,
       deliverChannelId: "channel-1",
       replyReference: { peek: () => undefined },
-      tableMode: "off",
-      maxLinesPerMessage: undefined,
-      chunkMode: "length",
       log: vi.fn(),
     });
     const progress = { itemId: "item-1", progressText: "still working" };

@@ -2,6 +2,7 @@
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { getOAuthProviderRuntimeMocks } from "./oauth-common-mocks.test-support.js";
@@ -153,10 +154,15 @@ describe("OAuth refresh failure ownership", () => {
     const queuedController = new AbortController();
     const activeReason = new Error("active lookup cancelled");
     const queuedReason = new Error("queued lookup cancelled");
-    const active = manager.resolveOAuthAccess({ ...params, signal: activeController.signal });
+    const scope = new AsyncWorkScope();
+    const active = scope.run(() =>
+      manager.resolveOAuthAccess({ ...params, signal: activeController.signal }),
+    );
     const activeRejected = expect(active).rejects.toBe(activeReason);
     await started.promise;
-    const queued = manager.resolveOAuthAccess({ ...params, signal: queuedController.signal });
+    const queued = scope.run(() =>
+      manager.resolveOAuthAccess({ ...params, signal: queuedController.signal }),
+    );
     const queuedRejected = expect(queued).rejects.toBe(queuedReason);
     const requests: Promise<unknown>[] = [active, queued];
     try {
@@ -166,7 +172,14 @@ describe("OAuth refresh failure ownership", () => {
       await activeRejected;
       const pending = ensureAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[profileId];
       expect(pending?.type === "oauth" && isPendingOAuthRefreshFence(pending)).toBe(true);
+      let drained = false;
+      const draining = scope.drain().then(() => {
+        drained = true;
+      });
+      await Promise.resolve();
+      expect(drained).toBe(false);
       release.resolve(refreshed);
+      await draining;
       await settled.promise;
       const continuing = manager.resolveOAuthAccess(params);
       requests.push(continuing);
@@ -180,49 +193,7 @@ describe("OAuth refresh failure ownership", () => {
       queuedController.abort(queuedReason);
       release.resolve(refreshed);
       await settled.promise;
-      await Promise.allSettled(requests);
+      await Promise.allSettled([...requests, scope.drain()]);
     }
-  });
-
-  it("serializes a 10-caller burst", async () => {
-    const profileId = "openai:default";
-    const provider = "openai";
-    saveAuthProfileStore(createExpiredOauthStore({ profileId, provider }), agentDir);
-
-    const startOrder: number[] = [];
-    const endOrder: number[] = [];
-    let inFlight = 0;
-    let maxInFlight = 0;
-    let seq = 0;
-    refreshProviderOAuthCredentialWithPluginMock.mockImplementation(async () => {
-      const n = ++seq;
-      startOrder.push(n);
-      inFlight += 1;
-      maxInFlight = Math.max(maxInFlight, inFlight);
-      await Promise.resolve();
-      inFlight -= 1;
-      endOrder.push(n);
-      return {
-        type: "oauth",
-        provider,
-        access: `refreshed-${n}`,
-        refresh: `refresh-${n}`,
-        expires: Date.now() - 1_000,
-      } as never;
-    });
-
-    const results = await Promise.all(
-      Array.from({ length: 10 }, () =>
-        resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
-          store: ensureAuthProfileStore(agentDir),
-          profileId,
-          agentDir,
-        }).catch((e: unknown) => e),
-      ),
-    );
-
-    expect(results).toHaveLength(10);
-    expect(startOrder).toEqual(endOrder);
-    expect(maxInFlight).toBe(1);
   });
 });

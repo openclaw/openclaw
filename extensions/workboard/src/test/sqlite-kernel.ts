@@ -17,7 +17,9 @@ function asyncKeyedStore<T>(store: {
   };
 }
 
-export function createKernelStores(dbPath: string): ReturnType<typeof createWorkboardSqliteStores> {
+export function createKernelStores(
+  dbPath: string,
+): Omit<ReturnType<typeof createWorkboardSqliteStores>, "runWithWriteAuthority"> {
   const kernel = createWorkboardSqliteKernel(dbPath);
   return {
     ready: Promise.resolve(kernel.dataVersion()),

@@ -10,7 +10,8 @@ import type {
   SqliteIntegrityWorkerPhase,
   SqliteIntegrityWorkerResult,
 } from "./sqlite-integrity-worker.js";
-import { assertSqliteIntegrity } from "./sqlite-integrity.js";
+import { assertSqliteIntegrity, type SqliteIntegrityCheckTiming } from "./sqlite-integrity.js";
+import { configureSqliteMaintenanceCache } from "./sqlite-maintenance-cache.js";
 
 function nativeErrorDetails(error: Error) {
   // SAFETY: Node's filesystem and SQLite errors attach these optional diagnostic fields.
@@ -41,19 +42,18 @@ async function check(input: SqliteIntegrityWorkerInput): Promise<SqliteIntegrity
   let database: import("node:sqlite").DatabaseSync | undefined;
   let failure: Error | undefined;
   let checkElapsedMs: number | undefined;
+  const timing: SqliteIntegrityCheckTiming = {};
   try {
     await sendPhase("opening");
     readSqliteIntegrityFileIdentity(input.pathname, input.identity);
     database = openNodeSqliteDatabase(input.pathname, { readOnly: true });
     setSqliteBusyTimeout(database, input.busyTimeoutMs);
-    // Full index checks revisit pages. Keep their cache in this disposable child,
-    // without raising the memory budget of the Gateway's retained connections.
-    database.exec("PRAGMA cache_size = -65536;"); // sqlite-allow-raw -- Connection-local page-cache policy for this disposable integrity child.
+    configureSqliteMaintenanceCache(database);
     readSqliteIntegrityFileIdentity(input.pathname, input.identity);
     await sendPhase("checking");
     const startedAt = performance.now();
     try {
-      assertSqliteIntegrity(database, input.databaseLabel);
+      assertSqliteIntegrity(database, input.databaseLabel, "integrity_check", input.tables, timing);
     } finally {
       checkElapsedMs = performance.now() - startedAt;
     }
@@ -87,6 +87,9 @@ async function check(input: SqliteIntegrityWorkerInput): Promise<SqliteIntegrity
   }
   if (checkElapsedMs !== undefined) {
     result.checkElapsedMs = checkElapsedMs;
+  }
+  if (timing.tables) {
+    result.tables = timing.tables;
   }
   return result;
 }

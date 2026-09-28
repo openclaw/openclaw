@@ -11,11 +11,16 @@ import {
 import { jsonUtf8BytesOrInfinity } from "../../infra/json-utf8-bytes.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
+import type { SubagentCoordinationDisplayResolver } from "../chat-display-projection.history.js";
 import {
   createCurrentUserProfileMessageProjector,
   isAssistantTtsSupplementMessage,
 } from "../chat-display-projection.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
+import {
+  createPreparedSessionHistorySubagentProjection,
+  isAppendOnlySessionHistoryDelta,
+} from "../session-history-delta-visibility.js";
 import { createSessionHistorySubagentProjection } from "../session-history-subagent-projection.js";
 import { projectTranscriptEntryMessage } from "../session-transcript-entry-message.js";
 import {
@@ -25,6 +30,7 @@ import {
 import {
   chatHistoryActivityBytes,
   createChatHistoryActivityProjection,
+  createChatHistoryDeltaByteCounter,
 } from "./chat-history-budget.js";
 
 const CHAT_HISTORY_DELTA_MAX_EVENTS = 200;
@@ -38,21 +44,9 @@ type ChatHistoryDeltaRead =
       kind: "delta";
       messages: Record<string, unknown>[];
       activity: AgentHistoryActivity[];
+      messagesBytes: number;
+      activityBytes: number;
     };
-
-function containsTranscriptDiscontinuity(
-  result: Extract<SessionTranscriptDisplayDeltaResult, { kind: "page" }>,
-): boolean {
-  return result.events.some((row) => {
-    const event = asOptionalRecord(row.event);
-    if (!event) {
-      return false;
-    }
-    const type = event.type;
-    // Leaf appends can remove cached rows without changing the raw transcript generation.
-    return type === "reset" || type === "compaction" || type === "leaf";
-  });
-}
 
 type ChatHistoryDeltaParams = {
   agentId: string;
@@ -93,7 +87,14 @@ export async function readChatHistoryDelta(
     },
     signal,
   );
-  return projectChatHistoryDelta(params, result);
+  return projectChatHistoryDelta(
+    params,
+    result.delta,
+    createPreparedSessionHistorySubagentProjection(
+      result.subagentCoordination,
+      result.assertCurrent,
+    ),
+  );
 }
 
 function readLocalChatHistoryDelta(params: ChatHistoryDeltaParams): ChatHistoryDeltaRead {
@@ -103,15 +104,24 @@ function readLocalChatHistoryDelta(params: ChatHistoryDeltaParams): ChatHistoryD
     maxBytes,
     maxEvents: CHAT_HISTORY_DELTA_MAX_EVENTS,
   });
-  return projectChatHistoryDelta(params, result);
+  if (!isAppendOnlySessionHistoryDelta(result)) {
+    return { kind: "reset" };
+  }
+  return projectChatHistoryDelta(
+    params,
+    result,
+    createSessionHistorySubagentProjection(params.scope),
+  );
 }
 
 function projectChatHistoryDelta(
   params: ChatHistoryDeltaParams,
   result: SessionTranscriptDisplayDeltaResult,
+  subagentCoordination: SubagentCoordinationDisplayResolver,
 ): ChatHistoryDeltaRead {
   const maxBytes = Math.min(params.maxBytes ?? Infinity, CHAT_HISTORY_DELTA_MAX_BYTES);
-  if (result.kind !== "page" || result.hasMore || containsTranscriptDiscontinuity(result)) {
+  subagentCoordination.assertCurrent?.();
+  if (!isAppendOnlySessionHistoryDelta(result)) {
     return { kind: "reset" };
   }
 
@@ -122,11 +132,14 @@ function projectChatHistoryDelta(
   const projectCurrentUserProfile = createCurrentUserProfileMessageProjector(
     resolveCurrentUserProfileDisplay,
   );
-  const subagentCoordination = createSessionHistorySubagentProjection(params.scope);
   const messages: Record<string, unknown>[] = [];
   const activityMessages: Array<{ messageId: string; message: unknown }> = [];
   // Include array brackets and separators without serializing the whole page.
   let messagesBytes = 2;
+  const envelopeBytes =
+    result.events.length > 1
+      ? createChatHistoryDeltaByteCounter(params.sessionSnapshot)
+      : undefined;
   for (const row of result.events) {
     if (row.messageSeq === undefined) {
       continue;
@@ -175,7 +188,10 @@ function projectChatHistoryDelta(
       return { kind: "reset" };
     }
     if (projected.payload) {
-      messagesBytes += jsonUtf8BytesOrInfinity(projected.payload) + (messages.length > 0 ? 1 : 0);
+      messagesBytes +=
+        (envelopeBytes
+          ? envelopeBytes(projected.payload)
+          : jsonUtf8BytesOrInfinity(projected.payload)) + (messages.length > 0 ? 1 : 0);
       if (messagesBytes > maxBytes) {
         return { kind: "reset" };
       }
@@ -192,7 +208,8 @@ function projectChatHistoryDelta(
       projectAgentHistoryActivity(activityMessages),
     ).values(),
   ];
-  if (messagesBytes + chatHistoryActivityBytes(activity) > maxBytes) {
+  const activityBytes = chatHistoryActivityBytes(activity);
+  if (messagesBytes + activityBytes > maxBytes) {
     return { kind: "reset" };
   }
   return {
@@ -201,5 +218,7 @@ function projectChatHistoryDelta(
     kind: "delta",
     activity,
     messages: composeTranscriptDisplay(messages, (envelope) => envelope.message),
+    messagesBytes,
+    activityBytes,
   };
 }

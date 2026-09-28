@@ -2,6 +2,7 @@ import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import type { BlockReplyContext } from "openclaw/plugin-sdk/reply-runtime";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import type { TelegramBotDeps } from "./bot-deps.js";
 import type {
   TelegramDispatchTurn as Turn,
   TelegramDispatchTurnConfig as TurnConfig,
@@ -9,7 +10,6 @@ import type {
   TelegramDraftStateSlice,
   TelegramQueuedAnswerBlockRotation,
   TelegramSplitLaneSegmentsResult,
-  TelegramAnswerBlockDelivery,
 } from "./bot-message-dispatch.types.js";
 import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 import type { TelegramDraftPreview } from "./draft-stream-message.js";
@@ -25,6 +25,12 @@ import { recordSentMessage } from "./sent-message-cache.js";
 const draftLogger = createSubsystemLogger("telegram/draft-stream");
 const DRAFT_MIN_INITIAL_CHARS = 30;
 
+type Cancel = NonNullable<
+  Parameters<
+    TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]
+  >[0]["dispatcherOptions"]["onBeforeDeliverCancelled"]
+>;
+
 function resolveDraftPartialText(
   previous: string,
   update: TelegramDraftPartialTextUpdate,
@@ -37,10 +43,10 @@ function resolveDraftPartialText(
 }
 
 function renderStreamText(
-  turn: Pick<Turn, "tableMode" | "telegramCfg">,
+  turn: Pick<Turn, "richMessages" | "tableMode" | "telegramCfg">,
   text: string,
 ): TelegramDraftPreview {
-  return turn.telegramCfg.richMessages === true
+  return turn.richMessages
     ? {
         text,
         richMessage: buildTelegramRichMarkdown(text, {
@@ -86,9 +92,7 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
         )
       : Math.min(
           params.textLimit,
-          params.telegramCfg.richMessages === true
-            ? TELEGRAM_RICH_TEXT_LIMIT
-            : TELEGRAM_TEXT_CHUNK_LIMIT,
+          params.richMessages ? TELEGRAM_RICH_TEXT_LIMIT : TELEGRAM_TEXT_CHUNK_LIMIT,
         );
   const renderDraftText = (text: string): TelegramDraftPreview => renderStreamText(params, text);
 
@@ -105,7 +109,7 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
             params.draftReplyToMessageId != null
               ? params.replyQuoteByMessageId[String(params.draftReplyToMessageId)]
               : undefined,
-          richMessages: params.telegramCfg.richMessages,
+          richMessages: params.richMessages,
           linkPreview: params.telegramCfg.linkPreview,
           minInitialChars: DRAFT_MIN_INITIAL_CHARS,
           renderText: renderDraftText,
@@ -197,11 +201,11 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
       params.resolvedReasoningLevel === "on" || Boolean(lanes.reasoning.stream),
     lastAnswerPartialText: "",
     activeAnswerDraftIsToolProgressOnly: false,
-    activeAnswerBlockAssistantMessageIndex: undefined as number | undefined,
-    activeAnswerBlockDelivery: undefined as TelegramAnswerBlockDelivery | undefined,
-    queuedAnswerBlockRotations: [] as TelegramQueuedAnswerBlockRotation[],
-    queuedAnswerBlockAssistantMessageIndex: undefined as number | undefined,
-    pendingAnswerBlockAssistantMessageIndex: undefined as number | undefined,
+    activeAnswerBlockAssistantMessageIndex: undefined,
+    activeAnswerBlockDelivery: undefined,
+    queuedAnswerBlockRotations: [],
+    queuedAnswerBlockAssistantMessageIndex: undefined,
+    pendingAnswerBlockAssistantMessageIndex: undefined,
     rotateAnswerLaneWhenQueuedBlocksSettle: false,
     draftEventQueue: Promise.resolve(),
   };
@@ -266,7 +270,7 @@ export async function rotateAnswerLaneForNewMessage(turn: Turn) {
   await retireAnswerLane(turn);
 }
 
-export async function rotateAnswerLaneAfterToolProgress(turn: Turn): Promise<boolean> {
+async function rotateAnswerLaneAfterToolProgress(turn: Turn): Promise<boolean> {
   if (!turn.activeAnswerDraftIsToolProgressOnly) {
     return false;
   }
@@ -558,6 +562,18 @@ export function dropQueuedAnswerBlockRotation(
   recomputeTelegramQueuedAnswerBlockRotations(turn);
 }
 
+export function handleBeforeDeliverCancelled(
+  turn: Turn,
+  payload: Parameters<Cancel>[0],
+  info: Parameters<Cancel>[1],
+): ReturnType<Cancel> {
+  return info.kind === "block"
+    ? enqueueDraftEvent(turn, async () => {
+        dropQueuedAnswerBlockRotation(turn, payload, info.assistantMessageIndex);
+      })
+    : undefined;
+}
+
 export function isQueuedAnswerBlock(
   turn: Turn,
   payload: ReplyPayload,
@@ -580,21 +596,7 @@ export function beginDraftQueuedFollowup(turn: Turn): void {
 }
 
 export async function cleanupDrafts(turn: Turn, superseded: boolean): Promise<void> {
-  for (const lane of [turn.answerLane, turn.reasoningLane]) {
-    const stream = lane.stream;
-    if (!stream) {
-      continue;
-    }
-    if (superseded) {
-      await stream.discard();
-    } else if (lane.finalized) {
-      await stream.stop();
-    } else {
-      await stream.clear();
-    }
-  }
+  await turn.previewLifecycle.cleanup({
+    failed: superseded || turn.dispatchError != null || turn.agentRunFailed,
+  });
 }
-
-export const waitForDraftEvents = (turn: Turn) => turn.draftEventQueue;
-
-export const flushDraftLane = (_turn: Turn, lane: DraftLaneState) => lane.stream?.flush();

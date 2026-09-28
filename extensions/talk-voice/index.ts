@@ -148,6 +148,7 @@ export default definePluginEntry({
       acceptsArgs: true,
       exposeSenderIsOwner: true,
       handler: async (ctx) => {
+        const assertOwnerCurrent = ctx.assertOwnerCurrent;
         const commandLabel = resolveCommandLabel(ctx.channel);
         const args = ctx.args?.trim() ?? "";
         const tokens = args.split(/\s+/).filter(Boolean);
@@ -234,6 +235,11 @@ export default definePluginEntry({
 
           await api.runtime.config.mutateConfigFile({
             afterWrite: { mode: "auto" },
+            writeOptions: {
+              assertCurrent: Array.isArray(ctx.gatewayClientScopes)
+                ? undefined
+                : assertOwnerCurrent,
+            },
             mutate: (draft) => {
               const nextConfig = {
                 ...draft,

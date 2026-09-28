@@ -11,7 +11,6 @@ import { isToolExecutionAllowed } from "../tool-policy-shared.js";
 import { getAgentWorkspaceAccess, WorkspaceAccessUnavailableError } from "../workspace-access.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
 import {
-  createSandboxPromptEntryLoader,
   mapSandboxSkillEntriesForPrompt,
   resolveSandboxSkillRuntimeInputs,
 } from "./sandbox-skills.js";
@@ -90,11 +89,12 @@ export async function prepareEmbeddedSkills(params: {
       contextTokenBudget: params.attempt.contextTokenBudget,
       skillsSnapshot,
       entries: promptSkillEntries,
-      loadEntries: createSandboxPromptEntryLoader({
-        loadEntries: loadSkillEntries,
-        skillsWorkspaceDir,
-        skillsPromptWorkspaceDir,
-      }),
+      loadEntries: async () =>
+        mapSandboxSkillEntriesForPrompt({
+          entries: await loadSkillEntries(),
+          skillsWorkspaceDir,
+          skillsPromptWorkspaceDir,
+        }) ?? [],
       config: params.attempt.config,
       workspaceDir: skillsPromptWorkspaceDir,
       agentId: params.sessionAgentId,

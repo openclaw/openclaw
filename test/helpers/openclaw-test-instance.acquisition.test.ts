@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -7,13 +8,156 @@ import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-own
 import { resolveGatewayPort } from "../../src/config/paths.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { resolveGatewayUrlOverride } from "../../src/gateway/client-bootstrap.js";
+import { reserveGatewayTestListener } from "../../src/gateway/test-helpers.listener.js";
 import { captureFullEnv, withEnvAsync } from "../../src/test-utils/env.js";
+import {
+  acquireTestPortBlock,
+  reserveTestPortListener,
+  type TestPortClaim,
+} from "../../src/test-utils/port-claims.js";
+import * as testPorts from "../../src/test-utils/ports.js";
 import { createFixtureLifetime } from "./fixture-lifetime.js";
 import { createOpenClawTestInstance } from "./openclaw-test-instance.js";
 import { createDeferred, withTestTimeout } from "./promise.js";
 import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
 
 describe("createOpenClawTestInstance acquisition", () => {
+  it.each([
+    { platform: "win32", explicit: false, advances: true },
+    { platform: "win32", explicit: true, advances: false },
+    { platform: "darwin", explicit: false, advances: false },
+  ] as const)(
+    "preserves reservation policy after $platform EACCES (explicit=$explicit)",
+    async ({ platform, explicit, advances }) => {
+      const port = await testPorts.getDeterministicFreePortBlock({ offsets: [0] });
+      const denied = Object.assign(new Error("candidate listener denied"), { code: "EACCES" });
+      const platformSpy = vi.spyOn(os, "platform").mockReturnValue(platform);
+      syncBuiltinESMExports();
+      const pickerSpy = vi
+        .spyOn(testPorts, "getDeterministicFreePortBlock")
+        .mockResolvedValueOnce(port);
+      let first = true;
+      let reservation: Awaited<ReturnType<typeof reserveTestPortListener>> | undefined;
+      try {
+        const pending = reserveTestPortListener({
+          offsets: [0],
+          ...(explicit ? { port } : {}),
+          createListener: () => {
+            const listener = net.createServer();
+            if (first) {
+              first = false;
+              vi.spyOn(listener, "listen").mockImplementationOnce(() => {
+                queueMicrotask(() => listener.emit("error", denied));
+                return listener;
+              });
+            }
+            return listener;
+          },
+        });
+        if (advances) {
+          reservation = await pending;
+          expect(reservation.claim.port).not.toBe(port);
+          expect(reservation.listener.listening).toBe(true);
+        } else {
+          await expect(pending).rejects.toBe(denied);
+        }
+        const released = await acquireTestPortBlock({ port, offsets: [0] });
+        await released.release();
+      } finally {
+        platformSpy.mockRestore();
+        syncBuiltinESMExports();
+        pickerSpy.mockRestore();
+        await reservation?.releaseListener();
+        await reservation?.claim.release();
+      }
+    },
+  );
+
+  it.each([
+    {
+      name: "child-process",
+      offsets: [0, 1],
+      acquire: async () => {
+        const instance = await createOpenClawTestInstance({ name: "initial-listener-race" });
+        return { port: instance.port, cleanup: () => instance.cleanup() };
+      },
+    },
+    {
+      name: "in-process",
+      offsets: [0, 1, 2, 3, 4],
+      acquire: async () => {
+        const reservation = await reserveGatewayTestListener();
+        return { port: reservation.port, cleanup: reservation.closeUnadopted };
+      },
+    },
+  ])(
+    "retains another $name reservation when an unclaimed listener wins the probe",
+    async (adapter) => {
+      const competitor = net.createServer((socket) => socket.destroy());
+      const exclusiveProbe = net.createServer((socket) => socket.destroy());
+      let competitorClaim: TestPortClaim | undefined;
+      let restoreAllocation: (() => void) | undefined;
+      let reserved: { port: number; cleanup: () => Promise<void> } | undefined;
+      const listen = (server: net.Server, port: number) =>
+        new Promise<void>((resolve, reject) => {
+          server.once("error", reject);
+          server.listen(port, "127.0.0.1", () => {
+            server.off("error", reject);
+            resolve();
+          });
+        });
+      const close = async (server: net.Server) => {
+        if (server.listening) {
+          await new Promise<void>((resolve, reject) => {
+            server.close((error) => (error ? reject(error) : resolve()));
+          });
+        }
+      };
+      await runQaGatewayFixture(
+        async () => {
+          const competing = await reserveTestPortListener({
+            offsets: adapter.offsets,
+            createListener: () => competitor,
+          });
+          competitorClaim = competing.claim;
+          const competitorPort = competitorClaim.port;
+          // Bind under the claim, then retain only the socket to model an unclaimed listener.
+          await competitorClaim.release();
+          competitorClaim = undefined;
+          const allocationSpy = vi
+            .spyOn(testPorts, "getDeterministicFreePortBlock")
+            .mockResolvedValueOnce(competitorPort);
+          restoreAllocation = () => allocationSpy.mockRestore();
+          reserved = await adapter.acquire();
+          expect(competitor.listening).toBe(true);
+          expect(reserved.port).not.toBe(competitorPort);
+          await expect(listen(exclusiveProbe, reserved.port)).rejects.toMatchObject({
+            code: "EADDRINUSE",
+          });
+          const abandoned = await acquireTestPortBlock({
+            port: competitorPort,
+            offsets: adapter.offsets,
+          });
+          await abandoned.release();
+          // An explicitly requested port remains pinned, even when its socket is occupied.
+          await expect(reserveGatewayTestListener(competitorPort)).rejects.toMatchObject({
+            code: "EADDRINUSE",
+          });
+        },
+        () => restoreAllocation?.(),
+        () => close(exclusiveProbe),
+        () => reserved?.cleanup(),
+        () => close(competitor),
+        () => competitorClaim?.release(),
+        () => {
+          expect(competitor.listening).toBe(false);
+          expect(competitor.address()).toBeNull();
+          expect(exclusiveProbe.listening).toBe(false);
+        },
+      );
+    },
+  );
+
   it.skipIf(process.platform !== "linux")(
     "keeps Gateway and deferred sandbox listeners outside the kernel client-port range",
     async () => {
@@ -299,15 +443,9 @@ const cases: Array<{
   explicit?: EndpointEnv;
   expected: { port: number; override: { url?: string; source?: "env" } };
 }> = [
-  { name: "clean environment", inherited: {}, expected: { port, override: {} } },
   {
-    name: "inherited port",
-    inherited: { OPENCLAW_GATEWAY_PORT: "19702" },
-    expected: { port, override: {} },
-  },
-  {
-    name: "inherited URL",
-    inherited: { OPENCLAW_GATEWAY_URL: inheritedUrl },
+    name: "inherited endpoints",
+    inherited: { OPENCLAW_GATEWAY_PORT: "19702", OPENCLAW_GATEWAY_URL: inheritedUrl },
     expected: { port, override: {} },
   },
   {

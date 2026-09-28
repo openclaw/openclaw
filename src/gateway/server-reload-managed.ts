@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   advancePreparedModelRuntimeConfig,
   refreshPreparedModelRuntimeSnapshots,
@@ -6,8 +7,12 @@ import { copyConfigResolutionFacts } from "../config/resolution-facts.js";
 import { publishSystemEventStoreConfig } from "../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { applyLoggingConfig } from "../logging/logger.js";
-import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
+import {
+  runOutsideGatewayRootWorkAdmission,
+  runWithGatewayIndependentRootWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeSnapshotRevisionState } from "../secrets/runtime-state.js";
+import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import { resetSkillSnapshotConfigFingerprintCache } from "../skills/runtime/snapshot-config-fingerprint.js";
 import { invalidateConfigGetResponseCache } from "./config-get-response.js";
 import { isNoopGatewayReloadPlan } from "./config-reload-plan.js";
@@ -44,10 +49,7 @@ import {
   restoreCanonicalSecretRefs,
 } from "./server-reload-utils.js";
 import {
-  captureSharedGatewaySessionGenerationOwnership,
   disconnectStaleSharedGatewayAuthClients,
-  isSharedGatewaySessionGenerationOwnershipCurrent,
-  setRequiredSharedGatewaySessionGenerationIfOwned,
   type SharedGatewaySessionGenerationOwnership,
 } from "./server-shared-auth-generation.js";
 
@@ -58,6 +60,9 @@ function canAdvancePreparedModelRuntimeConfigInPlace(plan: GatewayReloadPlan): b
 export function startManagedGatewayConfigReloader(
   params: ManagedGatewayConfigReloaderParams,
 ): ManagedGatewayConfigReloaderHandle {
+  // Keep this Gateway's owners across deferred writes. A module snapshot would
+  // retain the first Gateway's closed SDK host after an in-process restart.
+  const runInGatewayReloadContext = AsyncLocalStorage.snapshot();
   const lifecycle = new AbortController();
   if (params.minimalTestGateway) {
     return {
@@ -73,6 +78,11 @@ export function startManagedGatewayConfigReloader(
     };
   }
 
+  const applyRuntimeConfigOverrides = (config: OpenClawConfig): OpenClawConfig => {
+    const applied = params.applyRuntimeConfigOverrides?.(config) ?? config;
+    copyConfigResolutionFacts(config, applied);
+    return applied;
+  };
   const prepareRuntimeCandidate = (
     runtimeConfig: OpenClawConfig,
     sourceConfig: OpenClawConfig,
@@ -81,14 +91,7 @@ export function startManagedGatewayConfigReloader(
     const canonicalConfig = restoreCanonicalSecretRefs(runtimeConfig, sourceConfig);
     copyConfigResolutionFacts(sourceConfig, canonicalConfig);
     const candidateConfig = ownership?.reapplyRuntimeOverlays(canonicalConfig) ?? canonicalConfig;
-    const prepared = params.applyRuntimeConfigOverrides?.(candidateConfig) ?? candidateConfig;
-    copyConfigResolutionFacts(candidateConfig, prepared);
-    return prepared;
-  };
-  const applyRuntimeConfigOverrides = (config: OpenClawConfig): OpenClawConfig => {
-    const applied = params.applyRuntimeConfigOverrides?.(config) ?? config;
-    copyConfigResolutionFacts(config, applied);
-    return applied;
+    return applyRuntimeConfigOverrides(candidateConfig);
   };
   const restartRecoveryAvailable =
     params.restartRecoveryAvailable !== false && params.requestRecoveryRestart !== undefined;
@@ -203,9 +206,7 @@ export function startManagedGatewayConfigReloader(
       for (;;) {
         await transactionOwnership.checkpoint();
         assertCurrent();
-        const ownership = captureSharedGatewaySessionGenerationOwnership(
-          params.sharedGatewaySessionGenerationState,
-        );
+        const ownership = params.sharedGatewaySessionGenerationState.capture();
         const previousRequired = params.sharedGatewaySessionGenerationState.required;
         const prepared = await tryPrepareRuntimeSecrets(
           prepareRuntimeCandidate(nextConfig, sourceConfig, transactionOwnership),
@@ -220,10 +221,7 @@ export function startManagedGatewayConfigReloader(
         );
         await transactionOwnership.checkpoint();
         assertCurrent();
-        const generationChanged = !isSharedGatewaySessionGenerationOwnershipCurrent(
-          params.sharedGatewaySessionGenerationState,
-          ownership,
-        );
+        const generationChanged = !params.sharedGatewaySessionGenerationState.owns(ownership);
         if (!prepared || !isRuntimeSecretsPreparationCurrent(prepared) || generationChanged) {
           continue;
         }
@@ -262,8 +260,7 @@ export function startManagedGatewayConfigReloader(
       assertCurrent();
       // Claim the shared-session requirement before creating any async restart
       // emission. A rejected generation owner must never leave a live deferral.
-      requiredOwnership = setRequiredSharedGatewaySessionGenerationIfOwned(
-        params.sharedGatewaySessionGenerationState,
+      requiredOwnership = params.sharedGatewaySessionGenerationState.setRequired(
         preparationOwnership,
         previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration
           ? nextSharedGatewaySessionGeneration
@@ -299,8 +296,7 @@ export function startManagedGatewayConfigReloader(
       restartLifecycle.settle("rejected");
       transactionOwnership.rollbackRuntimeEnv();
       if (requiredOwnership) {
-        setRequiredSharedGatewaySessionGenerationIfOwned(
-          params.sharedGatewaySessionGenerationState,
+        params.sharedGatewaySessionGenerationState.setRequired(
           requiredOwnership,
           previousRequiredSharedGatewaySessionGeneration,
         );
@@ -350,10 +346,16 @@ export function startManagedGatewayConfigReloader(
       // Secret resolution can make the committed runtime config a different
       // object from the source-derived candidate. Record the committed one so a
       // rebuild below stamps owners with the identity readers actually supply.
+      const sessionStoresChanged =
+        committedRuntimeConfig.session?.store !== nextCommittedRuntimeConfig.session?.store ||
+        plan.changedPaths.some((path) => path === "env" || path.startsWith("env."));
       lastCommittedRuntimeConfig = nextCommittedRuntimeConfig;
       committedRuntimeConfig = nextCommittedRuntimeConfig;
       publishOperatorRoleConfigChange(params.resolveGatewayContext?.());
-      publishSystemEventStoreConfig(nextCommittedRuntimeConfig);
+      // Store retirement follows locator changes, not unrelated presentation commits.
+      if (sessionStoresChanged) {
+        publishSystemEventStoreConfig(nextCommittedRuntimeConfig);
+      }
       params.resolveGatewayContext?.()?.mentionInbox?.invalidate();
       if (canAdvancePreparedModelRuntimeConfigInPlace(plan)) {
         advancePreparedModelRuntimeConfig(nextCommittedRuntimeConfig);
@@ -363,18 +365,26 @@ export function startManagedGatewayConfigReloader(
       ? { prepareConfigCandidate: params.prepareConfigCandidate }
       : {}),
     runTransaction: (run) =>
-      runWithGatewayIndependentRootWorkAdmission(run, "reload:config", lifecycle.signal).catch(
-        (error: unknown) => {
-          // Only the admission wait wraps this stop reason; retain admitted work failures.
-          if (
-            lifecycle.signal.reason instanceof GatewayConfigReloadSupersededError &&
-            error instanceof Error &&
-            error.cause === lifecycle.signal.reason
-          ) {
-            throw lifecycle.signal.reason;
-          }
-          throw error;
-        },
+      runInGatewayReloadContext(() =>
+        runOutsideAsyncWorkScope(() =>
+          runOutsideGatewayRootWorkAdmission(() =>
+            runWithGatewayIndependentRootWorkAdmission(
+              run,
+              "reload:config",
+              lifecycle.signal,
+            ).catch((error: unknown) => {
+              // Only the admission wait wraps this stop reason; retain admitted work failures.
+              if (
+                lifecycle.signal.reason instanceof GatewayConfigReloadSupersededError &&
+                error instanceof Error &&
+                error.cause === lifecycle.signal.reason
+              ) {
+                throw lifecycle.signal.reason;
+              }
+              throw error;
+            }),
+          ),
+        ),
       ),
     readSnapshot: params.readSnapshot,
     promoteSnapshot: async (snapshot, _reason) => await params.promoteSnapshot(snapshot),
@@ -498,11 +508,7 @@ export function startManagedGatewayConfigReloader(
     },
     onHotReload,
     onRestart: runManagedRestart,
-    log: {
-      info: (msg) => params.logReload.info(msg),
-      warn: (msg) => params.logReload.warn(msg),
-      error: (msg) => params.logReload.error(msg),
-    },
+    log: params.logReload,
     watchPath: params.watchPath,
   });
   return {

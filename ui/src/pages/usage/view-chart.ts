@@ -5,7 +5,13 @@ import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-u
 import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/tooltip.ts";
-import { formatUsageCost, formatUsageTokens, formatDayLabel, formatFullDate } from "./metrics.ts";
+import {
+  formatUsageCost,
+  formatAnalysisCost,
+  formatUsageTokens,
+  formatDayLabel,
+  formatFullDate,
+} from "./metrics.ts";
 import type { CostDailyEntry, UsageProps, UsageTotals } from "./types.ts";
 
 function tokenCategory<Key extends "output" | "input" | "cacheWrite" | "cacheRead">(
@@ -31,12 +37,6 @@ export const USAGE_TOKEN_CATEGORIES = [
 
 function pct(part: number, total: number): number {
   return total === 0 ? 0 : (part / total) * 100;
-}
-
-function formatAnalysisCost(value: number): string {
-  const magnitude = Math.abs(value);
-  const decimals = magnitude === 0 || magnitude >= 0.01 ? 2 : magnitude >= 0.0001 ? 4 : 6;
-  return formatUsageCost(value, decimals);
 }
 
 function handleDailyBarKeydown(

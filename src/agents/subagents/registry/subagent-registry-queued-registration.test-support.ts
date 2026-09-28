@@ -1,13 +1,10 @@
 import { vi, type Mock } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { RegisterSubagentRunParams } from "./subagent-registry-run-launch-record.js";
 import type { SubagentLaunchManager } from "./subagent-registry-run-launch.js";
 import { createSubagentRunManager } from "./subagent-registry-run-manager.js";
 import type { SubagentManagerOptions } from "./subagent-registry-run-wait.js";
-import type {
-  RegisterSubagentRunParams,
-  SubagentRegistrationScope,
-  SubagentRunRecord,
-} from "./subagent-registry.types.js";
+import type { SubagentRegistrationScope, SubagentRunRecord } from "./subagent-registry.types.js";
 
 export function createQueuedRegistrationFixture(mocks: {
   register: Mock<SubagentLaunchManager["registerSubagentRun"]>;
@@ -22,6 +19,7 @@ export function createQueuedRegistrationFixture(mocks: {
     assertCurrent: () => void;
     afterPublicationFailure?: { error: unknown };
   }> = [];
+  let nextWrite = createDeferred<(typeof writes)[number]>();
   const persist = vi.fn<SubagentManagerOptions["persistAsyncOrThrow"]>((_context, callbacks) => {
     const gate = createDeferred();
     const admittedRevision = syncRevision;
@@ -31,6 +29,8 @@ export function createQueuedRegistrationFixture(mocks: {
       assertCurrent: callbacks.assertCurrent,
     };
     writes.push(write);
+    nextWrite.resolve(write);
+    nextWrite = createDeferred<(typeof writes)[number]>();
     if (acknowledgeAll) {
       gate.resolve();
     }
@@ -76,7 +76,6 @@ export function createQueuedRegistrationFixture(mocks: {
     notifyContextEngineSubagentEnded: async () => {},
     completeCleanupBookkeeping: vi.fn(),
     completeSubagentRun: async () => {},
-    resolveSubagentTask: () => ({ lookup: "unavailable" }),
   } satisfies SubagentManagerOptions;
   const manager = createSubagentRunManager(options);
   mocks.register.mockImplementation(manager.registerSubagentRun);
@@ -89,7 +88,6 @@ export function createQueuedRegistrationFixture(mocks: {
     cleanup: "keep",
     collect: true,
     queued: true,
-    taskRowOwnership: "required",
     queuedLaunch: {
       request: { sessionKey: "agent:main:subagent:synthetic" },
       timeoutMs: 100,
@@ -101,6 +99,9 @@ export function createQueuedRegistrationFixture(mocks: {
   return {
     runs,
     writes,
+    get nextWrite() {
+      return nextWrite.promise;
+    },
     options,
     manager,
     get persistenceObservers() {

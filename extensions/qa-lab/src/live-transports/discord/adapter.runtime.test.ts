@@ -1,8 +1,12 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as credentialLease from "../shared/credential-lease.runtime.js";
 import { createDiscordQaTransportAdapter } from "./adapter.runtime.js";
+import * as channelE2e from "./channel-e2e.js";
 import { discordQaScenarioSupport } from "./discord-live.runtime.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function mockAdapterIo() {
   const release = vi.fn(async () => {});
@@ -17,6 +21,7 @@ function mockAdapterIo() {
       sutBotToken: "sut-token",
       sutApplicationId: "323456789012345678",
     },
+    assertHealthy() {},
     heartbeat: vi.fn(async () => {}),
     heartbeatIntervalMs: 30_000,
     leaseTtlMs: 120_000,
@@ -90,6 +95,61 @@ describe("Discord QA adapter cleanup", () => {
       expect(heartbeatStop).toHaveBeenCalledBefore(release);
     },
   );
+
+  it("defers native cleanup until Gateway stop and releases even when native cleanup fails", async () => {
+    const { context, heartbeatStop, release } = mockAdapterIo();
+    const outputDir = tempDirs.make("discord-adapter-cleanup-");
+    const session = channelE2e.createDiscordChannelE2eSession({
+      runtimeEnv: {
+        guildId: "123456789012345678",
+        channelId: "223456789012345678",
+        driverBotToken: "driver-token",
+        sutBotToken: "sut-token",
+        sutApplicationId: "323456789012345678",
+      },
+      driverId: "423456789012345678",
+      sutId: "323456789012345678",
+      outputDir,
+      scenarioId: "owned-cleanup",
+      assertActive() {},
+      assertLeaseActive() {},
+      async waitForSutReady() {},
+    });
+    vi.spyOn(session.driver, "doctor").mockResolvedValue({
+      ok: true,
+      checks: [],
+      capabilities: { automated: [], observationOnly: [], manualClient: [], unavailable: [] },
+    });
+    vi.spyOn(channelE2e, "createDiscordChannelE2eSession").mockReturnValue(session);
+    const nativeCleanup = vi
+      .spyOn(session, "cleanup")
+      .mockRejectedValue(new Error("native cleanup failed"));
+    const adapter = await createDiscordQaTransportAdapter({
+      ...context,
+      adapterOptions: { agentE2e: true },
+    });
+    await adapter.prepareFlow?.({
+      config: {},
+      gateway: {
+        baseUrl: "http://127.0.0.1:1",
+        tempRoot: outputDir,
+        workspaceDir: outputDir,
+        runtimeEnv: {},
+        call: vi.fn(),
+      },
+      outputDir,
+      scenarioId: "owned-cleanup",
+      scenarioTitle: "Owned cleanup",
+      timeoutMs: 60_000,
+      waitForConfigRestartSettle: vi.fn(),
+    });
+    await adapter.cleanup?.();
+    expect(nativeCleanup).not.toHaveBeenCalled();
+    expect(release).not.toHaveBeenCalled();
+    await expect(adapter.cleanupAfterGatewayStop?.()).rejects.toThrow("native cleanup failed");
+    expect(nativeCleanup).toHaveBeenCalledBefore(heartbeatStop);
+    expect(heartbeatStop).toHaveBeenCalledBefore(release);
+  });
 
   it.each([
     {

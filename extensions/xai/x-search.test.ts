@@ -139,15 +139,6 @@ describe("xai x_search tool", () => {
     }
   });
 
-  it("enables x_search when runtime config carries the shared xAI key", () => {
-    const tool = createXSearchTool({
-      config: {},
-      runtimeConfig: xaiPluginConfig({ apiKey: "x-search-runtime-key" }),
-    });
-
-    expect(tool?.name).toBe("x_search");
-  });
-
   it("enables x_search from an xAI auth profile and uses it for requests", async () => {
     const mockFetch = installXSearchFetch();
     const tool = createXSearchTool({
@@ -165,13 +156,6 @@ describe("xai x_search tool", () => {
     });
 
     expect(firstAuthorizationHeader(mockFetch)).toBe("Bearer xai-profile-key");
-  });
-
-  it("enables x_search when the xAI plugin web search key is configured", () => {
-    const tool = createConfiguredXSearchTool({ apiKey: "xai-plugin-key" });
-
-    expect(tool?.name).toBe("x_search");
-    expect(tool?.resultContentSource).toBe("network");
   });
 
   it("bounds external xAI answers and closes hostile citation metadata", async () => {
@@ -353,6 +337,7 @@ describe("xai x_search tool", () => {
     const mockFetch = installXSearchFetch();
     const tool = createConfiguredXSearchTool({ xSearch: { maxTurns: 2 } });
 
+    expect(tool.resultContentSource).toBe("network");
     const result = await tool?.execute?.("x-search:1", {
       query: "dinner recipes",
       allowed_x_handles: ["openclaw"],
@@ -364,7 +349,7 @@ describe("xai x_search tool", () => {
     expect(mockFetch).toHaveBeenCalled();
     expect(firstFetchUrl(mockFetch)).toContain("api.x.ai/v1/responses");
     const body = parseFirstRequestBody(mockFetch);
-    expect(body.model).toBe("grok-4.6");
+    expect(body.model).toBe("grok-4.7");
     expect(body.input).toEqual([{ role: "user", content: "dinner recipes" }]);
     expect(body.store).toBe(false);
     expect(body.reasoning).toEqual({ effort: "low" });

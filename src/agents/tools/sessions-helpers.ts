@@ -1,4 +1,4 @@
-import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type, type Static } from "typebox";
 import type { SessionRow } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import {
@@ -8,13 +8,8 @@ import {
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseRawSessionConversationRef } from "../../sessions/session-key-utils.js";
-import type { FastModeSource } from "../../shared/fast-mode.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { stringEnum } from "../schema/typebox.js";
-/**
- * Shared session-tool data shapes and classification helpers.
- *
- * Keeps list/send/status tools aligned on rows, visibility context, and compact kind/channel labels.
- */
 import {
   createAgentToAgentPolicy,
   resolveEffectiveSessionToolsVisibility,
@@ -51,14 +46,6 @@ const SESSION_KIND_BY_CLASSIFICATION: Readonly<Record<string, SessionKind>> = {
   cron: "cron",
   hook: "hook",
   node: "node",
-};
-
-/** Delivery target metadata attached to session rows. */
-type SessionListDeliveryContext = {
-  channel?: string;
-  to?: string;
-  accountId?: string;
-  threadId?: string | number;
 };
 
 const SessionInventoryActorSchema = Type.Omit(SessionCreatedActorSchema, ["avatarUrl"]);
@@ -123,30 +110,9 @@ export type GatewaySessionListRow = Omit<
     accountId?: string;
   };
   category?: string;
-  deliveryContext?: SessionListDeliveryContext;
-  stateVersion?: number;
-  startedAt?: number;
-  endedAt?: number;
-  runtimeMs?: number;
-  childSessions?: string[];
-  thinkingLevel?: string;
-  fastMode?: FastMode;
-  effectiveFastMode?: FastMode;
-  effectiveFastModeSource?: FastModeSource;
-  fastAutoOnSeconds?: number;
-  verboseLevel?: string;
-  reasoningLevel?: string;
-  elevatedLevel?: string;
-  responseUsage?: string;
-  systemSent?: boolean;
+  deliveryContext?: DeliveryContext;
   abortedLastRun?: boolean;
-  sendPolicy?: string;
   lastChannel?: string;
-  lastTo?: string;
-  lastAccountId?: string;
-  lastThreadId?: string | number;
-  transcriptPath?: string;
-  messages?: unknown[];
 };
 
 /** Focused model-facing row returned by sessions_list. */

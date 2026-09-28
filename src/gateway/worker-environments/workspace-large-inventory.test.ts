@@ -6,6 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
+import { parseChangedWorkspaceResult } from "./workspace-manifest-comparison.js";
 import {
   parseWorkerWorkspaceReconciliationPlan,
   serializeWorkerWorkspaceManifest,
@@ -33,6 +34,22 @@ async function temporaryDirectory(name: string): Promise<string> {
 function encodeManifest(manifest: WorkerWorkspaceManifest) {
   const raw = serializeWorkerWorkspaceManifest(manifest);
   return { raw, ref: `sha256:${createHash("sha256").update(raw).digest("hex")}` };
+}
+
+function fileManifest(paths: readonly string[], content: string): WorkerWorkspaceManifest {
+  const size = Buffer.byteLength(content);
+  const sha256 = createHash("sha256").update(content).digest("hex");
+  return {
+    version: 1,
+    baseCommit: null,
+    entries: paths.map((entryPath) => ({
+      path: entryPath,
+      type: "file",
+      mode: 0o644,
+      size,
+      sha256,
+    })),
+  };
 }
 
 async function stageHistoricalV1Result(params: {
@@ -229,39 +246,58 @@ it("stages a directory-only v2 result above 25,000 reconciliation records", asyn
   expect(staged.changedEntries).toEqual([]);
 });
 
-it("stages, applies, and recovers 13,000 modified files through a serialized journal", async () => {
-  const local = await temporaryDirectory("workspace-large-modification-local");
-  const payload = await temporaryDirectory("workspace-large-modification-payload");
+it("compares and round-trips 26,000 modified-file reconciliation records", () => {
   const paths = Array.from(
     { length: 13_000 },
     (_, index) => `changed-${index.toString().padStart(5, "0")}.txt`,
   );
-  for (let offset = 0; offset < paths.length; offset += 64) {
-    await Promise.all(
-      paths
-        .slice(offset, offset + 64)
-        .flatMap((entryPath) => [
-          fs.writeFile(path.join(local, entryPath), "base\n"),
-          fs.writeFile(path.join(payload, entryPath), "worker\n"),
-        ]),
-    );
-  }
-  const manifest = (content: string): WorkerWorkspaceManifest => ({
+  const base = fileManifest(paths, "base\n");
+  const current = fileManifest(paths, "worker\n");
+  // Record capacity belongs to comparison and persistence; the next test covers
+  // the real Git pack and filesystem round trip without materializing this inventory.
+  const changed = parseChangedWorkspaceResult(base, current);
+  expect(changed.changed).toBe(true);
+  expect(changed.entries).toEqual(current.entries);
+  const basePack = new Uint8Array();
+  const journal: WorkerWorkspaceReconciliationJournal = {
     version: 1,
-    baseCommit: null,
-    entries: paths.map((entryPath) => ({
-      path: entryPath,
-      type: "file",
-      mode: 0o644,
-      size: Buffer.byteLength(content),
-      sha256: createHash("sha256").update(content).digest("hex"),
-    })),
-  });
-  const baseManifest = manifest("base\n");
-  const currentManifest = manifest("worker\n");
+    temporaryNonce: "a".repeat(32),
+    baseManifestRef: encodeManifest(base).ref,
+    currentManifestRef: encodeManifest(current).ref,
+    baseEntries: base.entries,
+    appliedEntries: changed.entries,
+    baseTree: "b".repeat(40),
+    basePackSha256: createHash("sha256").update(basePack).digest("hex"),
+    basePack,
+  };
+  const restored = parseWorkerWorkspaceReconciliationPlan(
+    serializeWorkerWorkspaceReconciliationPlan(journal),
+  );
+
+  expect(restored.baseEntries).toEqual(base.entries);
+  expect(restored.appliedEntries).toEqual(current.entries);
+  expect(restored.baseEntries.length + restored.appliedEntries.length).toBe(26_000);
+});
+
+it("stages, applies, and recovers modified files across Git tree batches", async () => {
+  const local = await temporaryDirectory("workspace-modification-local");
+  const payload = await temporaryDirectory("workspace-modification-payload");
+  // Cross writeRawWorkspaceTree's 256-entry batches with the smallest physical fixture.
+  const paths = Array.from(
+    { length: 257 },
+    (_, index) => `changed-${index.toString().padStart(3, "0")}.txt`,
+  );
+  await Promise.all(
+    paths.flatMap((entryPath) => [
+      fs.writeFile(path.join(local, entryPath), "base\n"),
+      fs.writeFile(path.join(payload, entryPath), "worker\n"),
+    ]),
+  );
+  const baseManifest = fileManifest(paths, "base\n");
+  const currentManifest = fileManifest(paths, "worker\n");
   const base = encodeManifest(baseManifest);
   const current = encodeManifest(currentManifest);
-  const stagedResultRef = workerWorkspaceResultRef("claim-large-modification");
+  const stagedResultRef = workerWorkspaceResultRef("claim-modification");
   await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
     root: local,
     stagingRoot: payload,
@@ -297,20 +333,16 @@ it("stages, applies, and recovers 13,000 modified files through a serialized jou
     ...parseWorkerWorkspaceReconciliationPlan(serializedJournal!),
     basePack: basePack!,
   };
-  expect(journal.baseEntries).toHaveLength(paths.length);
-  expect(journal.appliedEntries).toHaveLength(paths.length);
+  expect(journal.baseEntries).toEqual(baseManifest.entries);
+  expect(journal.appliedEntries).toEqual(currentManifest.entries);
 
   await recoverWorkerWorkspaceReconciliation({ root: local, journal });
 
-  for (let offset = 0; offset < paths.length; offset += 64) {
-    const contents = await Promise.all(
-      paths
-        .slice(offset, offset + 64)
-        .map((entryPath) => fs.readFile(path.join(local, entryPath), "utf8")),
-    );
-    expect(contents.every((content) => content === "base\n")).toBe(true);
-  }
-}, 120_000);
+  const contents = await Promise.all(
+    paths.map((entryPath) => fs.readFile(path.join(local, entryPath), "utf8")),
+  );
+  expect(contents).toEqual(paths.map(() => "base\n"));
+});
 
 it("stages only a one-file delta for a 31,274-entry Git baseline", async () => {
   const local = await temporaryDirectory("workspace-large-baseline-local");

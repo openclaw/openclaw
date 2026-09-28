@@ -1,6 +1,3 @@
-// Sidebar agent menu and the menu focus/typeahead helpers shared with the
-// footer identity menu, split out of app-sidebar.ts to keep that hot
-// component inside the TS LOC ratchet.
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import type { AgentIdentityResult } from "../api/types.ts";
@@ -14,6 +11,7 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { renderAgentSelectAvatar, renderAgentSelectCopy } from "./agent-select.ts";
+import { renderSidebarMenuAction, renderSidebarMenuTrigger } from "./app-sidebar-nav-menus.ts";
 import { icons, type IconName } from "./icons.ts";
 import {
   consumeDropdownKeyboardDismissal,
@@ -184,12 +182,7 @@ function sidebarAgentMenuRows(params: {
   pinnedAgentIds: readonly string[];
 }) {
   const { agents } = params;
-  const availableIds = new Set(agents.map((agent) => normalizeAgentId(agent.id)));
-  const pinnedIds = new Set(
-    params.pinnedAgentIds
-      .map((agentId) => normalizeAgentId(agentId))
-      .filter((agentId) => availableIds.has(agentId)),
-  );
+  const pinnedIds = new Set(params.pinnedAgentIds.map(normalizeAgentId));
   return agents.toSorted((a, b) => {
     const aPinned = pinnedIds.has(normalizeAgentId(a.id)) ? 0 : 1;
     const bPinned = pinnedIds.has(normalizeAgentId(b.id)) ? 0 : 1;
@@ -371,14 +364,7 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
       }}
       @wa-after-hide=${(event: Event) => closeMenuAfterOwnDropdownHide(event, params.onClose)}
     >
-      <button
-        slot="trigger"
-        type="button"
-        tabindex="-1"
-        aria-hidden="true"
-        aria-label=${menuLabel}
-        style="position: fixed; left: ${position.x}px; top: ${position.top}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
-      ></button>
+      ${renderSidebarMenuTrigger({ x: position.x, y: position.top }, menuLabel)}
       ${
         agentRows.length > 0
           ? html`
@@ -400,31 +386,18 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
       ${
         !params.rosterMode
           ? html`
-              <wa-dropdown-item class="sidebar-customize-menu__item" value="command:all-agents">
-                <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.bot}</span>
-                <span class="sidebar-customize-menu__text">${t("agentChip.allAgents")}</span>
-              </wa-dropdown-item>
-              <wa-dropdown-item class="sidebar-customize-menu__item" value="command:new-agent">
-                <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.users}</span>
-                <span class="sidebar-customize-menu__text">${t("custodian.newAgent")}</span>
-              </wa-dropdown-item>
-              <wa-dropdown-item
-                class="sidebar-customize-menu__item"
-                value="command:capabilities"
-                ?disabled=${!params.connected}
-              >
-                <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.bot}</span>
-                <span class="sidebar-customize-menu__text">
-                  ${t("agentChip.whatCanAgentDo", { name: activeName })}
-                </span>
-              </wa-dropdown-item>
+              ${renderSidebarMenuAction("command:all-agents", t("agentChip.allAgents"), "bot")}
+              ${renderSidebarMenuAction("command:new-agent", t("custodian.newAgent"), "users")}
+              ${renderSidebarMenuAction(
+                "command:capabilities",
+                t("agentChip.whatCanAgentDo", { name: activeName }),
+                "bot",
+                { disabled: !params.connected },
+              )}
             `
           : nothing
       }
-      <wa-dropdown-item class="sidebar-customize-menu__item" value="command:agent-settings">
-        <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.settings}</span>
-        <span class="sidebar-customize-menu__text">${t("agentChip.agentSettings")}</span>
-      </wa-dropdown-item>
+      ${renderSidebarMenuAction("command:agent-settings", t("agentChip.agentSettings"), "settings")}
       ${params.rosterMode ? renderSidebarHelpMenu() : nothing}
     </wa-dropdown>
   `;

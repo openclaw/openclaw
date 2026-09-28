@@ -1,6 +1,9 @@
-// Channel turn delivery tests cover orchestration, dispatch, and completion behavior.
+// Preserve mock setup before modules that consume it.
+// oxfmt-ignore
+import { channelTurnMocks } from "./run-channel-turn.test-support.js";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ReplyDispatchRun } from "../../auto-reply/get-reply-options.types.js";
 import {
   getReplyPayloadMetadata,
@@ -30,7 +33,6 @@ import {
   createRecordInboundSession,
   createReplyDispatchReceipt,
   createDeliveryResultCapture,
-  type DeliveryResult,
   type DurableSendRequest,
   type DurableSupportRequest,
   expectDispatched,
@@ -38,79 +40,28 @@ import {
 } from "./run-channel-turn.delivery.test-helpers.js";
 import type { ChannelDeliveryInfo, ChannelTurnDeliveryAdapter, ChannelTurnPlan } from "./types.js";
 
-const deliverOutboundPayloads = vi.hoisted(() => vi.fn());
-const resolveOutboundDurableFinalDeliverySupport = vi.hoisted(() => vi.fn());
-const sendDurableMessageBatch = vi.hoisted(() => vi.fn());
-const recordInboundSessionCore = vi.hoisted(() => vi.fn(async () => undefined));
-const dispatchReplyWithBufferedBlockDispatcherCore = vi.hoisted(() => vi.fn());
-const dispatchReplyWithRoutedChannelDispatcherCore = vi.hoisted(() => vi.fn());
-const emitMessageSent = vi.hoisted(() => vi.fn());
-const getGlobalHookRunner = vi.hoisted(() => vi.fn());
-const createMessageSentEmitter = vi.hoisted(() =>
-  vi.fn(() => ({ emitMessageSent, hasMessageSentHooks: true })),
-);
-const readRecentUserAssistantTextForSession = vi.hoisted(() => vi.fn());
 const settlePendingFinalDelivery = vi.hoisted(() =>
   vi.fn(async (_completion: unknown, state: string) => ({ state })),
 );
-
-vi.mock("../../auto-reply/reply/provider-dispatcher.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../auto-reply/reply/provider-dispatcher.js")>();
-  return {
-    ...actual,
-    dispatchReplyWithBufferedBlockDispatcherCore,
-  };
-});
-
-vi.mock("../../auto-reply/dispatch.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../auto-reply/dispatch.js")>();
-  return {
-    ...actual,
-    dispatchInboundMessageWithRoutedChannelDispatcher: dispatchReplyWithRoutedChannelDispatcherCore,
-  };
-});
-
-vi.mock("../../infra/outbound/deliver.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../infra/outbound/deliver.js")>();
-  return {
-    ...actual,
-    deliverOutboundPayloads,
-    resolveOutboundDurableFinalDeliverySupport,
-  };
-});
-
-vi.mock("../message/send.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../message/send.js")>();
-  return {
-    ...actual,
-    sendDurableMessageBatchCore: sendDurableMessageBatch,
-  };
-});
-
-vi.mock("../session.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../session.js")>();
-  return { ...actual, recordInboundSession: recordInboundSessionCore };
-});
-
-vi.mock("../../infra/outbound/message-sent-hook.js", () => ({
-  createMessageSentEmitter,
-}));
-
-vi.mock("../../plugins/hook-runner-global.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../plugins/hook-runner-global.js")>();
-  return { ...actual, getGlobalHookRunner };
-});
-
-vi.mock("../../config/sessions/transcript.js", () => ({
-  readRecentUserAssistantTextForSession,
-}));
 
 vi.mock("../../infra/outbound/delivery-completion.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../infra/outbound/delivery-completion.js")>();
   return { ...actual, settlePendingFinalDelivery };
 });
+
+const {
+  deliverOutboundPayloads,
+  resolveOutboundDurableFinalDeliverySupport,
+  sendDurableMessageBatch,
+  recordInboundSessionCore,
+  dispatchReplyWithBufferedBlockDispatcherCore,
+  dispatchReplyWithRoutedChannelDispatcherCore,
+  emitMessageSent,
+  getGlobalHookRunner,
+  createMessageSentEmitter,
+  readRecentUserAssistantTextForSession,
+} = channelTurnMocks;
 
 const cfg = {} as OpenClawConfig;
 const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-channel-turn-delivery-" });
@@ -287,10 +238,7 @@ describe("channel turn delivery", () => {
           content: `${content} + hook`,
         })),
       });
-      let releaseDelivery: (() => void) | undefined;
-      const deliveryPending = new Promise<void>((resolve) => {
-        releaseDelivery = resolve;
-      });
+      const { promise: deliveryPending, resolve: releaseDelivery } = createDeferred();
       settlePendingFinalDelivery.mockImplementationOnce(async (_completion, state: string) => {
         order.push(`settle:${state}`);
         return { state };
@@ -730,24 +678,37 @@ describe("channel turn delivery", () => {
     });
   });
 
-  it("returns durable delivery result to the buffered dispatcher", async () => {
-    sendDurableMessageBatch.mockResolvedValueOnce(createDurableSendResult(["tg-1", "tg-2"]));
-    const capture = createDeliveryResultCapture();
+  it.each(["sent", "adapter_returned_no_identity"] as const)(
+    "reports visibility to the buffered dispatcher for %s delivery",
+    async (outcome) => {
+      sendDurableMessageBatch.mockResolvedValueOnce(
+        outcome === "sent"
+          ? createDurableSendResult(["tg-1", "tg-2"])
+          : {
+              status: "suppressed",
+              results: [],
+              receipt: { platformMessageIds: [], parts: [], sentAt: 1 },
+              reason: outcome,
+            },
+      );
+      const capture = createDeliveryResultCapture();
 
-    await dispatchTestAssembledTurn({
-      channel: "telegram",
-      accountId: "acct",
-      routeSessionKey: "agent:main:telegram:peer",
-      ctxPayload: createCtx({ To: "123", OriginatingTo: "123" }),
-      dispatchReplyWithBufferedBlockDispatcher: capture.dispatch,
-      delivery: { deliver: vi.fn(), durable: { replyToMode: "first" } },
-    });
+      await dispatchTestAssembledTurn({
+        channel: "telegram",
+        accountId: "acct",
+        routeSessionKey: "agent:main:telegram:peer",
+        ctxPayload: createCtx({ To: "123", OriginatingTo: "123" }),
+        dispatchReplyWithBufferedBlockDispatcher: capture.dispatch,
+        delivery: { deliver: vi.fn(), durable: { replyToMode: "first" } },
+      });
 
-    const delivered = capture.getResult();
-    expect(delivered.messageIds).toEqual(["tg-1", "tg-2"]);
-    expect(delivered.receipt?.platformMessageIds).toEqual(["tg-1", "tg-2"]);
-    expect(delivered.visibleReplySent).toBe(true);
-  });
+      const delivered = capture.getResult();
+      expect(delivered).toMatchObject({ visibleReplySent: outcome === "sent" });
+      if (outcome !== "sent") {
+        expect(delivered).toMatchObject({ suppression: { reason: outcome } });
+      }
+    },
+  );
 
   it("maps durable hook cancellation to typed routed suppression", async () => {
     sendDurableMessageBatch.mockResolvedValueOnce({
@@ -856,11 +817,11 @@ describe("channel turn delivery", () => {
       text: true,
     });
     expect(onDelivered).toHaveBeenCalledTimes(1);
-    const [deliveredPayload, deliveredInfo, deliveredResult] = onDelivered.mock
-      .calls[0] as unknown as [ReplyPayload, unknown, DeliveryResult];
-    expect(deliveredPayload.text).toBe("reply\n\n_[Generated by test]_");
-    expect(deliveredInfo).toEqual({ kind: "final" });
-    expect(deliveredResult.visibleReplySent).toBe(true);
+    expect(onDelivered).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "reply\n\n_[Generated by test]_" }),
+      { kind: "final" },
+      expect.objectContaining({ visibleReplySent: true }),
+    );
     // The durable outbound pipeline owns message_sent; the turn lifecycle must not duplicate it.
     expect(emitMessageSent).not.toHaveBeenCalled();
   });
@@ -891,9 +852,7 @@ describe("channel turn delivery", () => {
     });
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
     expect(deliver).toHaveBeenCalledWith({ text: "reply" }, { kind: "final" });
-    const delivered = capture.getResult();
-    expect(delivered.messageIds).toEqual(["legacy-1"]);
-    expect(delivered.visibleReplySent).toBe(true);
+    expect(capture.getResult()).toMatchObject({ messageIds: ["legacy-1"], visibleReplySent: true });
   });
 
   it("treats durable outbound support preflight failures as terminal", async () => {
@@ -994,9 +953,7 @@ describe("channel turn delivery", () => {
       },
     });
 
-    const delivered = capture.getResult();
-    expect(delivered.messageIds).toEqual(["local-1"]);
-    expect(delivered.visibleReplySent).toBe(true);
+    expect(capture.getResult()).toMatchObject({ messageIds: ["local-1"], visibleReplySent: true });
   });
 
   it("observes provider-finalized content and identity after deferred delivery settles", async () => {
@@ -1010,18 +967,11 @@ describe("channel turn delivery", () => {
       events.push("message_sent");
       return event;
     });
-    let resolveFinalization!: (result: {
+    const { promise: finalization, resolve: resolveFinalization } = createDeferred<{
       content: string;
       messageIds: string[];
       visibleReplySent: true;
-    }) => void;
-    const finalization = new Promise<{
-      content: string;
-      messageIds: string[];
-      visibleReplySent: true;
-    }>((resolve) => {
-      resolveFinalization = resolve;
-    });
+    }>();
     const deliver = vi.fn(async () => {
       events.push("deliver");
       return { visibleReplySent: false, finalization };

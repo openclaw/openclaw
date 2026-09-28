@@ -1,5 +1,5 @@
-import { Worker } from "node:worker_threads";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createCpuTrackedWorker } from "openclaw/plugin-sdk/process-runtime";
 
 export const TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER = "openclaw.telegram-ingress-worker";
 const TELEGRAM_INGRESS_WORKER_STOP_GRACE_MS = 2_000;
@@ -59,7 +59,6 @@ export type TelegramIngressWorkerOptions = {
   token: string;
   accountId: string;
   initialUpdateId: number | null;
-  spoolDir: string;
   apiRoot?: string;
   timeoutSeconds?: number;
   network?: TelegramNetworkConfig;
@@ -70,15 +69,7 @@ type TelegramIngressWorkerHandle = {
   onMessage(listener: (message: TelegramIngressWorkerMessage) => void): () => void;
   ackSpooledUpdate?(
     requestId: string,
-    result:
-      | {
-          ok: true;
-          updateId: number;
-        }
-      | {
-          ok: false;
-          message: string;
-        },
+    result: Extract<TelegramIngressWorkerCommand, { type: "spool-ack" }>["result"],
   ): void;
   stop(): Promise<void>;
   task(): Promise<void>;
@@ -115,9 +106,12 @@ async function stopTelegramIngressWorker(params: {
 
 export const createTelegramIngressWorker: TelegramIngressWorkerFactory = (options) => {
   const listeners = new Set<(message: TelegramIngressWorkerMessage) => void>();
-  const worker = new Worker(new URL("./telegram-ingress-worker.runtime.js", import.meta.url), {
-    workerData: { ...options, runtime: TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER },
-  });
+  const worker = createCpuTrackedWorker(
+    new URL("./telegram-ingress-worker.runtime.js", import.meta.url),
+    {
+      workerData: { ...options, runtime: TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER },
+    },
+  );
   const taskPromise = new Promise<void>((resolve, reject) => {
     worker.once("error", reject);
     worker.once("exit", (code) => {
@@ -143,9 +137,14 @@ export const createTelegramIngressWorker: TelegramIngressWorkerFactory = (option
     },
     ackSpooledUpdate(requestId, result) {
       try {
-        Reflect.apply(Reflect.get(worker, "postMessage") as (value: unknown) => void, worker, [
-          { type: "spool-ack", requestId, result } satisfies TelegramIngressWorkerCommand,
-        ]);
+        worker.postMessage(
+          {
+            type: "spool-ack",
+            requestId,
+            result,
+          } satisfies TelegramIngressWorkerCommand,
+          [],
+        );
       } catch {
         // Worker may have exited after the parent committed the queue write.
       }
@@ -153,9 +152,7 @@ export const createTelegramIngressWorker: TelegramIngressWorkerFactory = (option
     async stop() {
       await stopTelegramIngressWorker({
         requestStop: () => {
-          Reflect.apply(Reflect.get(worker, "postMessage") as (value: unknown) => void, worker, [
-            { type: "stop" } satisfies TelegramIngressWorkerCommand,
-          ]);
+          worker.postMessage({ type: "stop" } satisfies TelegramIngressWorkerCommand, []);
         },
         task: taskPromise,
         terminate: () => worker.terminate(),

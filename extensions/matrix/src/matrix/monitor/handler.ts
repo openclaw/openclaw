@@ -4,8 +4,14 @@ import {
   hasFinalInboundReplyDispatch,
   resolveInboundReplyDispatchCounts,
 } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  createReplyPrefixOptions,
+  createTypingCallbacks,
+  logTypingFailure,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
@@ -15,6 +21,7 @@ import { isPollEventType } from "../poll-types.js";
 import type { LocationMessageEventContent } from "../sdk.js";
 import { normalizeMatrixUserId } from "./allowlist.js";
 import { resolveMatrixMonitorLiveUserAllowlist } from "./config.js";
+import { createMatrixEventContextResolver } from "./event-context.js";
 import { resolveMatrixInboundContext } from "./handler-context.js";
 import { createMatrixDraftController } from "./handler-draft-controller.js";
 import {
@@ -25,19 +32,11 @@ import { resolveMatrixIngressAccess } from "./handler-ingress-access.js";
 import { resolveMatrixIngressContent } from "./handler-ingress-content.js";
 import { readMatrixIngressPrefix } from "./handler-ingress-prefix.js";
 import { createMatrixReplyDispatcher } from "./handler-reply-dispatcher.js";
-import { loadMatrixSendModule, redactMatrixDraftEvent } from "./handler-runtime.js";
+import { loadMatrixSendModule } from "./handler-runtime.js";
 import { createMatrixHandlerState } from "./handler-state.js";
 import type { MatrixHandlerRuntimeConfig, MatrixMonitorHandlerParams } from "./handler-types.js";
 import type { MatrixLocationPayload } from "./location.js";
-import { createMatrixReplyContextResolver } from "./reply-context.js";
 import { createRoomHistoryTracker, type ReservedHistorySlot } from "./room-history.js";
-import {
-  createReplyPrefixOptions,
-  createTypingCallbacks,
-  getAgentScopedMediaLocalRoots,
-  logTypingFailure,
-} from "./runtime-api.js";
-import { createMatrixThreadContextResolver } from "./thread-context.js";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 import { EventType } from "./types.js";
 
@@ -94,12 +93,14 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     groupAllowFromResolvedEntries,
     resolveLiveUserAllowlist,
   });
-  const resolveThreadContext = createMatrixThreadContextResolver({
+  const resolveThreadContext = createMatrixEventContextResolver({
+    kind: "thread",
     client,
     getMemberDisplayName,
     logVerboseMessage,
   });
-  const resolveReplyContext = createMatrixReplyContextResolver({
+  const resolveReplyContext = createMatrixEventContextResolver({
+    kind: "reply",
     client,
     getMemberDisplayName,
     logVerboseMessage,
@@ -107,10 +108,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
   const roomHistoryTracker = createRoomHistoryTracker();
   const roomIngressQueue = new KeyedAsyncQueue();
   const sharedDmContextNoticeRooms = new Set<string>();
-
-  const runRoomIngress = async <T>(roomId: string, task: () => Promise<T>): Promise<T> => {
-    return await roomIngressQueue.enqueue(roomId, task);
-  };
 
   return async (roomId: string, event: MatrixRawEvent) => {
     const eventId = typeof event.event_id === "string" ? event.event_id.trim() : "";
@@ -217,12 +214,13 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           eventTs: eventTs ?? undefined,
           senderId,
           roomHistoryTracker,
+          resolveThreadContext,
           commitInboundEventIfClaimed,
         });
       };
       const ingressResult =
         historyLimit > 0
-          ? await runRoomIngress(roomId, async () => {
+          ? await roomIngressQueue.enqueue(roomId, async () => {
               const prefix = await readIngressPrefix();
               if (!prefix) {
                 return undefined;
@@ -312,11 +310,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const typingCallbacks = createTypingCallbacks({
         start: async () => {
           const { sendTypingMatrix } = await loadMatrixSendModule();
-          await sendTypingMatrix(roomId, true, undefined, client);
+          await sendTypingMatrix(roomId, true, { client });
         },
         stop: async () => {
           const { sendTypingMatrix } = await loadMatrixSendModule();
-          await sendTypingMatrix(roomId, false, undefined, client);
+          await sendTypingMatrix(roomId, false, { client });
         },
         onStartError: (err) => {
           logTypingFailure({
@@ -531,6 +529,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 ? draftController.resetDraftDeliveryState
                 : undefined,
               ...draftController.buildPreviewToolProgressReplyOptions(),
+              onObservedReplyDelivery: draftStream
+                ? () => draftController.previewLifecycle.observeDelivery({ visibleReplySent: true })
+                : undefined,
               onModelSelected,
             },
           }),
@@ -576,7 +577,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       }
       const { dispatchResult } = turnResult;
       const { queuedFinal } = dispatchResult;
-      if (replyDispatcher.finalReplyDeliveryFailed()) {
+      if (draftController.previewLifecycle.finalFailed) {
         logVerboseMessage(
           `matrix: final reply delivery failed room=${roomId} id=${messageId}; keeping replay committed`,
         );
@@ -613,12 +614,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       await commitInboundEventIfClaimed();
     } catch (err) {
       const draftController = draftControllerRef;
-      if (
-        draftController?.draftStream?.eventId() &&
-        draftController.draftDisposition() === "active"
-      ) {
+      if (draftController?.draftStream?.eventId()) {
         // A Matrix-accepted preview is the only visible reply after an abort.
-        draftController.markDraftRetained();
+        draftController.previewLifecycle.retainPreview();
       }
       runtime.error?.(`matrix handler failed: ${String(err)}`);
     } finally {
@@ -626,10 +624,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       // model run throws or times out mid-stream.
       const draftStream = draftControllerRef?.draftStream;
       if (draftStream) {
-        const draftEventId = await draftStream.stop().catch(() => undefined);
-        if (draftEventId && draftControllerRef?.draftDisposition() === "active") {
-          await redactMatrixDraftEvent(client, roomId, draftEventId);
-        }
+        await draftStream.stop().catch(() => undefined);
+        await draftControllerRef?.previewLifecycle.cleanup();
+        await draftStream.cleanupPending();
       }
       inboundReplayClaim?.release();
     }

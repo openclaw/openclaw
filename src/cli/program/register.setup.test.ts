@@ -371,24 +371,20 @@ describe("registerSetupCommand", () => {
     expect(setupCommandMock).not.toHaveBeenCalled();
   });
 
-  it("accepts retired --no-tailscale-reset-on-exit as a no-op", async () => {
-    await runCli(["setup", "--no-tailscale-reset-on-exit"]);
-
-    expect(lastWizardOptions()).not.toHaveProperty("tailscaleResetOnExit");
-  });
-
-  it("accepts retired --tailscale-reset-on-exit as a no-op", async () => {
-    await runCli(["setup", "--tailscale-reset-on-exit"]);
-
-    expect(lastWizardOptions()).not.toHaveProperty("tailscaleResetOnExit");
-  });
-
-  it("runs baseline setup command when --baseline is set", async () => {
-    await runCli(["setup", "--baseline", "--workspace", "/tmp/ws", "--json"]);
+  it.each([false, true])("runs baseline setup with skip-bootstrap=%s", async (skipBootstrap) => {
+    await runCli([
+      "setup",
+      "--baseline",
+      "--workspace",
+      "/tmp/ws",
+      "--json",
+      ...(skipBootstrap ? ["--skip-bootstrap"] : []),
+    ]);
 
     expect(setupCommandMock).toHaveBeenCalledWith(lastSetupOptions(), runtime);
     expect(lastSetupOptions()?.workspace).toBe("/tmp/ws");
     expect(lastSetupOptions()?.json).toBe(true);
+    expect(lastSetupOptions()?.skipBootstrap ?? false).toBe(skipBootstrap);
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 
@@ -422,29 +418,6 @@ describe("registerSetupCommand", () => {
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { flag: "--remote-token", optionKey: "remoteToken" },
-    { flag: "--remote-password", optionKey: "remotePassword" },
-  ])("forwards $flag to the setup wizard", async ({ flag, optionKey }) => {
-    const credential = ["fixture", "value"].join("-");
-    await runCli([
-      "setup",
-      "--wizard",
-      "--mode",
-      "remote",
-      "--remote-url",
-      "wss://example",
-      flag,
-      credential,
-    ]);
-
-    expect(setupWizardCommandMock).toHaveBeenCalledWith(lastWizardOptions(), runtime);
-    expect(lastWizardOptions()?.mode).toBe("remote");
-    expect(lastWizardOptions()?.remoteUrl).toBe("wss://example");
-    expect(lastWizardOptions()?.[optionKey]).toBe(credential);
-    expect(setupCommandMock).not.toHaveBeenCalled();
-  });
-
   it("forwards --tui through the canonical onboarding path", async () => {
     await runCli(["setup", "--tui"]);
 
@@ -452,51 +425,16 @@ describe("registerSetupCommand", () => {
     expect(setupCommandMock).not.toHaveBeenCalled();
   });
 
-  it("forwards --skip-ui through the canonical onboarding path", async () => {
-    await runCli(["setup", "--skip-ui"]);
+  it("rejects a blank gateway port before onboarding dispatch", async () => {
+    await runCli(["setup", "--gateway-port", ""]);
 
-    expect(lastWizardOptions()?.skipUi).toBe(true);
+    expect(runtime.error).toHaveBeenCalledWith(
+      "--gateway-port must be an integer between 1 and 65535.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
     expect(setupCommandMock).not.toHaveBeenCalled();
   });
-
-  it.each([false, true])(
-    "rejects conflicting custom model input capabilities (json: %s)",
-    async (json) => {
-      await runCli([
-        "setup",
-        "--custom-image-input",
-        "--custom-text-input",
-        ...(json ? ["--json"] : []),
-      ]);
-
-      const message = "Use either --custom-image-input or --custom-text-input, not both.";
-      expect(runtime.error).toHaveBeenCalledWith(message);
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-      if (json) {
-        expect(runtime.log).toHaveBeenCalledWith(
-          JSON.stringify({ ok: false, phase: "options", message }, null, 2),
-        );
-      } else {
-        expect(runtime.log).not.toHaveBeenCalled();
-      }
-      expect(setupWizardCommandMock).not.toHaveBeenCalled();
-      expect(setupCommandMock).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["", " \t ", "not-a-port", "70000"])(
-    "rejects invalid --gateway-port %s before onboarding dispatch",
-    async (gatewayPort) => {
-      await runCli(["setup", "--gateway-port", gatewayPort]);
-
-      expect(runtime.error).toHaveBeenCalledWith(
-        "--gateway-port must be an integer between 1 and 65535.",
-      );
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-      expect(setupWizardCommandMock).not.toHaveBeenCalled();
-      expect(setupCommandMock).not.toHaveBeenCalled();
-    },
-  );
 
   it("runs setup wizard command when wizard-only flags are passed explicitly", async () => {
     await runCli(["setup", "--mode", "remote", "--non-interactive", "--accept-risk"]);

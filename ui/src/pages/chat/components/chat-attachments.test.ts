@@ -218,6 +218,62 @@ describe("chat attachment read failures", () => {
     expect(tiles[1]?.textContent?.trim()).toBe("");
   });
 
+  it("settles an eventless stalled attachment read through failure without leaving pending reads", async () => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    StubFileReader.heldNames.add("stalled.png");
+    let attachments: ChatAttachment[] = [];
+    const container = document.createElement("div");
+    const redraw = () =>
+      render(
+        renderAttachmentPreview({
+          attachments,
+          attachmentReads: reads,
+          getAttachments: () => attachments,
+          onAttachmentsChange: (next) => {
+            attachments = next;
+            redraw();
+          },
+        }),
+        container,
+      );
+    const reads = new ChatAttachmentReadLifecycle(redraw);
+    const signal = reads.readSignal;
+    onTestFinished(() => {
+      reads.abortReads();
+      payloads.releaseChatAttachmentPayloads(attachments);
+      render(null, container);
+    });
+    handleChatAttachmentPaste(
+      pasteEventWithFiles([new File(["stalled"], "stalled.png", { type: "image/png" })]),
+      {
+        attachments,
+        attachmentReads: reads,
+        getAttachments: () => attachments,
+        readSignal: signal,
+        onPendingReadsChange: (delta) => reads.updatePending(signal, delta),
+        onAttachmentsChange: (next) => {
+          attachments = next;
+          redraw();
+        },
+      },
+    );
+    expect(reads.pendingReads).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(15_001);
+    expect(reads.pendingReads).toBe(0);
+    expect(container.querySelector(".chat-attachment-thumb--error")).not.toBeNull();
+    expect(container.querySelector(".chat-attachment-error")).not.toBeNull();
+
+    const removeButton = container.querySelector<HTMLButtonElement>(".chat-attachment-remove");
+    expect(removeButton).not.toBeNull();
+    removeButton?.click();
+    expect(reads.pendingReads).toBe(0);
+    expect(container.querySelector(".chat-attachment-thumb")).toBeNull();
+  });
+
   it("rejects oversized files against hello policy before encoding", async () => {
     const onAttachmentsChange = vi.fn();
     const limits = { maxBytes: 8, maxImageBytes: 4 };

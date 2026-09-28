@@ -1,9 +1,8 @@
 // Defines tool availability and allowlist configuration types.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { z } from "zod";
-import type { ChatType } from "../channels/chat-type.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
-import type { AgentElevatedAllowFromConfig, SessionSendPolicyAction } from "./types.base.js";
+import type { AgentElevatedAllowFromConfig } from "./types.base.js";
 import type { ConfiguredProviderRequest } from "./types.provider-request.js";
 import type {
   AgentEntrySchema,
@@ -11,33 +10,14 @@ import type {
   ToolPolicySchema,
 } from "./zod-schema.agent-runtime.js";
 type SchemaToolsConfig = NonNullable<z.input<typeof ToolsSchema>>;
+// The web security preprocess erases input inference; parsed output retains its optional authoring shape.
+type ParsedToolsConfig = NonNullable<z.output<typeof ToolsSchema>>;
 type SchemaMediaConfig = NonNullable<SchemaToolsConfig["media"]>;
 type SchemaAudioConfig = NonNullable<SchemaMediaConfig["audio"]>;
 
 export type { MemorySearchConfig } from "./types.memory.js";
 
-export type MediaUnderstandingScopeMatch = {
-  /** Channel/provider id to match before running media or link understanding. */
-  channel?: string;
-  /** Direct/group classification from the channel runtime, when available. */
-  chatType?: ChatType;
-  /** Attachment or link key prefix used for narrow per-source routing. */
-  keyPrefix?: string;
-};
-
-export type MediaUnderstandingScopeRule = {
-  /** Policy applied when match criteria select this scope rule. */
-  action: SessionSendPolicyAction;
-  /** Optional match filter; omitted match behaves as a catch-all rule. */
-  match?: MediaUnderstandingScopeMatch;
-};
-
-export type MediaUnderstandingScopeConfig = {
-  /** Fallback action when no scope rule matches. */
-  default?: SessionSendPolicyAction;
-  /** Ordered allow/block rules; first matching rule wins. */
-  rules?: MediaUnderstandingScopeRule[];
-};
+export type MediaUnderstandingScopeConfig = NonNullable<SchemaAudioConfig["scope"]>;
 
 export type MediaUnderstandingCapability = "image" | "audio" | "video";
 
@@ -170,39 +150,7 @@ export type ToolsConfig = Omit<
   exec?: ExecToolConfig;
   elevated?: AgentToolsConfig["elevated"];
   links?: LinkToolsConfig;
-  web?: {
-    search?: {
-      /** Enable managed web_search and optional Codex-native web search. */
-      enabled?: boolean;
-      /** Search provider id. */
-      provider?: string;
-      /** Default search results count (1-10). */
-      maxResults?: number;
-      /** Timeout in seconds for search requests. */
-      timeoutSeconds?: number;
-      /** Cache TTL in minutes for search results. */
-      cacheTtlMinutes?: number;
-      /** Optional native Codex web search for Codex-capable models. */
-      openaiCodex?: {
-        /** Enable native Codex web search for eligible models. */
-        enabled?: boolean;
-        /** Prefer cached or explicitly request live access. Unrestricted Codex turns resolve cached to live. */
-        mode?: "cached" | "live";
-        /** Native Codex search allowlist; also gates web_fetch on native-hosted-search turns. */
-        allowedDomains?: string[];
-        /** Optional Codex native search context size hint. */
-        contextSize?: "low" | "medium" | "high";
-        /** Optional approximate user location passed to the native Codex tool. */
-        userLocation?: {
-          country?: string;
-          region?: string;
-          city?: string;
-          timezone?: string;
-        };
-      };
-    };
-    fetch?: NonNullable<SchemaToolsConfig["web"]>["fetch"];
-  };
+  web?: NonNullable<ParsedToolsConfig["web"]>;
 };
 
 export type MessageToolsConfig = NonNullable<SchemaToolsConfig["message"]>;

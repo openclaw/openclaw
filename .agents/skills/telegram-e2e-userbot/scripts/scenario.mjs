@@ -12,6 +12,15 @@ const ACTION_KEYS = {
   cron: new Set(["type", "atMs", "message", "bestEffort"]),
   command: new Set(["type", "atMs", "argv", "cwd", "timeoutMs"]),
   telegramApiHold: new Set(["type", "atMs", "method", "skip"]),
+  telegramApiReject: new Set([
+    "type",
+    "atMs",
+    "method",
+    "skip",
+    "bodyIncludes",
+    "times",
+    "retryAfter",
+  ]),
   telegramApiWaitHeld: new Set(["type", "atMs", "method", "timeoutMs"]),
   telegramApiRelease: new Set(["type", "atMs"]),
   followupDrainHold: new Set(["type", "atMs", "sessionKey", "timeoutMs"]),
@@ -131,12 +140,23 @@ export function parseScenario(value) {
         timeoutMs: positiveInteger(action.timeoutMs, `${label}.timeoutMs`, 60_000),
       };
     }
-    if (action.type === "telegramApiHold") {
+    if (action.type === "telegramApiHold" || action.type === "telegramApiReject") {
       return {
         type: action.type,
         atMs,
         method: nonEmptyString(action.method, `${label}.method`),
         skip: nonNegativeInteger(action.skip, `${label}.skip`, 0),
+        ...(action.type === "telegramApiReject" && action.bodyIncludes !== undefined
+          ? { bodyIncludes: nonEmptyString(action.bodyIncludes, `${label}.bodyIncludes`) }
+          : {}),
+        ...(action.type === "telegramApiReject"
+          ? {
+              times: positiveInteger(action.times, `${label}.times`, 1),
+              ...(action.retryAfter !== undefined
+                ? { retryAfter: nonNegativeInteger(action.retryAfter, `${label}.retryAfter`) }
+                : {}),
+            }
+          : {}),
       };
     }
     if (action.type === "telegramApiWaitHeld") {

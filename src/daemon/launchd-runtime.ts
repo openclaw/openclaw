@@ -6,6 +6,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { sleep } from "../utils.js";
 import { GATEWAY_SERVICE_KIND } from "./constants.js";
 import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
@@ -160,6 +161,9 @@ export async function bootstrapLaunchAgentOrThrow(params: {
     const [boot] = await Promise.allSettled([
       bootstrapLaunchAgentOrThrow({ ...params, preserveAutoStart: false, skipEnable: true }),
     ]);
+    if (boot.status === "rejected" && hasCommandProcessCleanupError(boot.reason)) {
+      throw boot.reason;
+    }
     const failures: unknown[] = boot.status === "rejected" ? [boot.reason] : [];
     if (!enabled) {
       try {
@@ -345,12 +349,11 @@ export async function readLaunchAgentRuntime(
       },
     };
   }
+  const plistExists = await launchAgentPlistExists(env);
   if (probe.state === "not-loaded") {
-    const plistExists = await launchAgentPlistExists(env);
     return plistExists ? { status: "stopped" } : { status: "unknown", missingUnit: true };
   }
   if (probe.state === "unknown") {
-    const plistExists = await launchAgentPlistExists(env);
     const missingGuiSession = plistExists && isUnsupportedGuiDomain(probe.detail ?? "");
     return {
       status: "unknown",
@@ -360,7 +363,6 @@ export async function readLaunchAgentRuntime(
     };
   }
   const parsed = probe.runtime;
-  const plistExists = await launchAgentPlistExists(env);
   return {
     status: probe.state,
     state: parsed.state,

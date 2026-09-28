@@ -94,9 +94,6 @@ suite.define(() => {
         const card = page.locator(".session-progress-card--composer");
         await card.waitFor();
         await waitForChatScrollIdle(page);
-        if (collapsed) {
-          await card.locator("summary").click();
-        }
         await expect
           .poll(() => card.evaluate((element) => (element as HTMLDetailsElement).open))
           .toBe(!collapsed);
@@ -160,11 +157,12 @@ suite.define(() => {
           status: "accepted",
           revision: 1,
         });
-        // Acceptance and a same-revision authoritative read are not completion.
+        // An unnumbered invalidation forces an authoritative read; returning
+        // the accepted baseline revision still must not complete the refresh.
         const reads = (await gateway.getRequests("progressCard.get")).length;
         await gateway.emitGatewayEvent("progressCard.changed", {
           sessionKey: scenario.sessionKey,
-          revision: 1,
+          revision: null,
         });
         await gateway.waitForRequest("progressCard.get", { after: reads });
         expect(await button.getAttribute("data-state")).toBe("pending");

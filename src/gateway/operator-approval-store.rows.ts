@@ -42,6 +42,22 @@ export class OperatorApprovalHistoryCursorError extends Error {
   }
 }
 
+/** Match an observed terminal row to this operation's separately retained commit receipt. */
+export function getOperatorApprovalResolutionKey(record: OperatorApprovalRecord): string {
+  return JSON.stringify([
+    record.id,
+    record.kind,
+    record.runtimeEpoch,
+    record.createdAtMs,
+    record.resolvedAtMs,
+    record.status,
+    record.decision,
+    record.terminalReason,
+    record.resolver?.kind ?? null,
+    record.resolver?.id ?? null,
+  ]);
+}
+
 export function parseOperatorApprovalKind(value: string): OperatorApprovalKind | null {
   return value === "exec" || value === "plugin" || value === "system-agent" ? value : null;
 }

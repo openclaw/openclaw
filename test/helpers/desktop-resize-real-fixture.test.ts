@@ -30,6 +30,11 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 function fixture(carrier: DesktopResizeFixture["carrier"] = "ssh"): DesktopResizeFixture {
   return {
     carrier,
+    bootstrapReceipt: {
+      bundleHash: "b".repeat(64),
+      openclawVersion: "2026.9.21",
+      protocolFeatures: ["fixture-runtime"],
+    },
     ssh: {
       host: "127.0.0.1",
       port: 2222,
@@ -127,7 +132,7 @@ describe("desktop resize fixture provenance and carrier", () => {
           expect(database.path).toBe(path.join(root, "state", "openclaw.sqlite"));
           const value = fixture(carrier);
           if (carrier === "node") {
-            await expect(seedDesktopResizeSources(value)).rejects.toThrow("actually admitted");
+            await expect(seedDesktopResizeSources(value)).rejects.toThrow("prepared node device");
             expect((await createWorkerEnvironmentStore()).list()).toEqual([]);
           }
           await seedDesktopResizeSources(value, carrier === "node" ? "admitted-device" : undefined);
@@ -144,11 +149,7 @@ describe("desktop resize fixture provenance and carrier", () => {
               sshEndpoint: carrier === "node" ? null : value.ssh,
               sharedHost: false,
               desktop: kind === "fixed" ? value.fixedDesktop : value.desktop,
-              bootstrapReceipt: {
-                bundleHash: "a".repeat(64),
-                openclawVersion: "2026.9.1",
-                protocolFeatures: [],
-              },
+              bootstrapReceipt: value.bootstrapReceipt,
             });
           }
         } finally {

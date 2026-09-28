@@ -44,10 +44,13 @@ export class WorkerTaskPool<Input, Output> {
   }
 }
 
-/** Internal callers retain each result's slot through their native cleanup decision. */
+/** Internal resource owners can retain task custody or use settled ordinary reads. */
 export function createOwnedWorkerTaskPool<Input, Output>(options: WorkerTaskPoolOptions<Output>) {
   const core = createWorkerTaskPoolCore<Input, Output>(options);
   return {
+    run: (input: WorkerTaskInput<Input>, taskOptions: WorkerTaskOptions<Input>) =>
+      core.run(input, taskOptions),
+    rotate: () => core.rotate(),
     runTask: (input: WorkerTaskInput<Input>, taskOptions: WorkerTaskOptions<Input>) =>
       core.runTask(input, taskOptions),
     closeResources: (key?: string) => core.closeResources(key),

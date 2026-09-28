@@ -12,12 +12,16 @@ import { resolveSessionTranscriptReadTarget } from "../config/sessions/session-a
 import { isSessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { resolveSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import { startSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
+import { captureSessionTranscriptTargetBinding } from "../config/sessions/transcript-target-binding.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.paths.js";
 import { buildSessionPreviewItems } from "./session-display-projection.js";
-import { readBoundedSessionPreviewItems } from "./session-transcript-preview-reader.js";
+import {
+  readBoundedSessionPreviewItems,
+  readBoundedSessionPreviewItemsAsync,
+} from "./session-transcript-preview-reader.js";
 import { toTranscriptReadScope } from "./session-transcript-read-target.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
 
@@ -26,8 +30,42 @@ export async function readSessionPreviewItemsFromTranscriptAsync(
   scope: SessionTranscriptReadScope,
   maxItems: number,
   maxChars: number,
+  view: "display" | "model-context" = "display",
 ): Promise<SessionPreviewItem[]> {
   const target = prepareSessionTranscriptReadTargetCore(scope);
+  if (view === "model-context") {
+    const { agentId, sessionKey, storePath } = target;
+    const sessionId = scope.sessionId;
+    if (!agentId || !sessionKey || !storePath) {
+      throw new Error("Model-context preview requires an exact session target");
+    }
+    const modelTarget = captureSessionTranscriptTargetBinding({
+      agentId,
+      sessionId,
+      sessionKey,
+      storePath,
+      ...(scope.env ? { env: scope.env } : {}),
+    });
+    return await readBoundedSessionPreviewItemsAsync(maxItems, async (maxEvents, maxBytes) => {
+      let truncated = false;
+      const manager = await SessionManager.openBoundedAsync(modelTarget, {
+        maxEvents,
+        maxBytes,
+        onTruncated: () => {
+          truncated = true;
+        },
+      });
+      return {
+        items: buildSessionPreviewItems(
+          manager.buildSessionContext().messages,
+          maxItems,
+          maxChars,
+          view,
+        ),
+        hasOlderEvents: truncated,
+      };
+    });
+  }
   const readScope: SessionTranscriptReadScope = {
     agentId: target.agentId,
     sessionId: scope.sessionId,
@@ -40,7 +78,7 @@ export async function readSessionPreviewItemsFromTranscriptAsync(
   const options = toDatabaseOptions(resolved);
   const databasePath = resolveOpenClawAgentSqlitePath(options);
   if (isIncognitoOpenClawAgentSqlitePath(databasePath, options)) {
-    return readSessionPreviewItemsFromTranscript(readScope, maxItems, maxChars);
+    return readSessionDisplayPreviewItems(readScope, maxItems, maxChars);
   }
   // Qualify the key with the bound logical agent without discovering the physical store again.
   const entryValidationKey = target.entryValidationScope
@@ -75,47 +113,17 @@ export async function readSessionPreviewItemsFromTranscriptAsync(
   }
 }
 
-/** Reads a bounded display or canonical model-context preview before discarding metadata. */
-export function readSessionPreviewItemsFromTranscript(
+function readSessionDisplayPreviewItems(
   scope: SessionTranscriptReadScope,
   maxItems: number,
   maxChars: number,
-  view: "display" | "model-context" = "display",
-  options: { readOnly?: boolean } = {},
 ): SessionPreviewItem[] {
   const target = resolveSessionTranscriptReadTarget(scope);
   return readBoundedSessionPreviewItems(maxItems, (maxEvents, maxBytes) => {
-    if (view === "model-context") {
-      const { agentId, sessionId, sessionKey, storePath } = target;
-      if (!agentId || !sessionKey || !storePath) {
-        throw new Error("Model-context preview requires an exact session target");
-      }
-      let truncated = false;
-      const manager = SessionManager.openBounded(
-        { agentId, sessionId, sessionKey, storePath },
-        {
-          maxEvents,
-          maxBytes,
-          onTruncated: () => {
-            truncated = true;
-          },
-        },
-      );
-      return {
-        items: buildSessionPreviewItems(
-          manager.buildSessionContext().messages,
-          maxItems,
-          maxChars,
-          view,
-        ),
-        hasOlderEvents: truncated,
-      };
-    }
     const page = readRecentSessionTranscriptHistoryEvents(toTranscriptReadScope(target), {
       maxBytes,
       maxLines: maxEvents,
       maxMessages: maxEvents,
-      ...options,
     });
     return {
       items: buildSessionPreviewItems(

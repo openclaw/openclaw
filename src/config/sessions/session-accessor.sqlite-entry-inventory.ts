@@ -58,7 +58,7 @@ const countQueriesByDatabase = new WeakMap<
 >();
 
 export function readSessionEntryCount(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   options: { includeArchived?: boolean } = {},
 ): number {
   const includeArchived = options.includeArchived !== false;

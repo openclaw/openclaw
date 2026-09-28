@@ -39,7 +39,8 @@ vi.mock("../infra/update-runner-git.js", () => ({
   updateGitCheckout: vi.fn(),
 }));
 // Runtime publication has its own fixture; this suite owns deferred completion and config writes.
-vi.mock("./update-cli/update-command-runtime.js", () => ({
+vi.mock("./update-cli/update-command-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-cli/update-command-runtime.js")>()),
   completeSourceUpdateRuntime: sourceRuntimeCompletion,
 }));
 vi.mock("../infra/update-check.js", async (importOriginal) => ({
@@ -173,13 +174,18 @@ vi.mock("../plugins/update.js", async (importOriginal) => {
 });
 
 vi.mock("../commands/doctor/shared/post-core-plugin-convergence.js", () => ({
-  runPostCorePluginConvergence: vi.fn(async (params: { baselineInstallRecords?: unknown }) => ({
-    changes: [],
-    warnings: [],
-    errored: false,
-    smokeFailures: [],
-    installRecords: params.baselineInstallRecords ?? {},
-  })),
+  runPostCorePluginConvergence: vi.fn(
+    async (params: { cfg: OpenClawConfig; baselineInstallRecords?: unknown }) => ({
+      config: params.cfg,
+      configChanges: [],
+      installedPluginIdRecovery: new Map(),
+      changes: [],
+      warnings: [],
+      errored: false,
+      smokeFailures: [],
+      installRecords: params.baselineInstallRecords ?? {},
+    }),
+  ),
 }));
 
 const nodeSqlite = await import("../infra/node-sqlite.js");
@@ -333,6 +339,8 @@ export function installDeferredCompletionFixture() {
       errored: boolean;
     }> = {},
   ) => ({
+    configChanges: [],
+    installedPluginIdRecovery: new Map(),
     changes: [],
     warnings: [],
     errored: false,
@@ -427,33 +435,6 @@ export function installDeferredCompletionFixture() {
   ): Promise<void> =>
     fs.writeFile(filePath, `${JSON.stringify(value)}${trailingNewline ? "\n" : ""}`, "utf-8");
 
-  const setupPostCoreConfigFixture = async (params: {
-    backupConfig?: OpenClawConfig;
-    postDoctorConfig: OpenClawConfig;
-    preUpdateConfig?: OpenClawConfig;
-    snapshotSuffix?: ".bak" | ".pre-update";
-    preserveParsed?: boolean;
-  }) => {
-    const tempDir = createCaseDir("openclaw-update");
-    const configPath = path.join(tempDir, "openclaw.json");
-    await fs.mkdir(tempDir, { recursive: true });
-    if (params.preUpdateConfig) {
-      await writeJsonFixture(
-        `${configPath}${params.snapshotSuffix ?? ".pre-update"}`,
-        params.preUpdateConfig,
-      );
-    }
-    if (params.backupConfig) {
-      await writeJsonFixture(`${configPath}.bak`, params.backupConfig);
-    }
-    await writeJsonFixture(configPath, params.postDoctorConfig);
-    mockPostDoctorSnapshot(configPath, params.postDoctorConfig, {
-      preserveParsed: params.preserveParsed,
-    });
-    mockNoopPostUpdatePluginConvergence();
-    return { tempDir, configPath };
-  };
-
   beforeEach(async () => {
     tempHome = await createTempHomeEnv("openclaw-deferred-completion-");
     fixtureRoot = dirs.make("openclaw-deferred-completion-fixtures-");
@@ -497,13 +478,10 @@ export function installDeferredCompletionFixture() {
     );
     const entrypoint = path.join(process.cwd(), "dist", "index.js");
     pathExists.mockImplementation(async (candidate: string) => candidate === entrypoint);
-    // Child completion may invoke only Doctor, config validation, and the parent's start probe.
+    // Child completion may invoke only Doctor and config validation.
     vi.mocked(runExec).mockImplementation(async (file, args) => {
       if (file === process.execPath && (args[1] === "doctor" || args[1] === "config")) {
         return { stdout: "", stderr: "" };
-      }
-      if (file === "ps") {
-        return { stdout: new Date(Date.now() - 1000).toString(), stderr: "" };
       }
       throw new Error(`Unexpected completion process: ${file}`);
     });
@@ -567,6 +545,5 @@ export function installDeferredCompletionFixture() {
     mockPostDoctorSnapshot,
     runPostCoreUpdate,
     lastReplaceConfigCall,
-    setupPostCoreConfigFixture,
   };
 }

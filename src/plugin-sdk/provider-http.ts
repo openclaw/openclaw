@@ -37,6 +37,7 @@ export {
   fetchWithTimeout,
   fetchWithTimeoutGuarded,
   normalizeBaseUrl,
+  pollProviderOperation,
   pollProviderOperationJson,
   postJsonRequest,
   postMultipartRequest,

@@ -1,3 +1,4 @@
+import { sameSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
 import { withSessionTranscriptWriteAssertion } from "../../../config/sessions/transcript-write-context.js";
 import type { SessionManager } from "../session-manager.js";
 import type { ExtensionActions, ExtensionRuntime } from "./types.js";
@@ -14,14 +15,7 @@ export function bindExtensionMetadataActions(
     const assertCurrent = () => {
       runtime.assertActive();
       const current = manager.getSessionTarget();
-      if (
-        target
-          ? !current ||
-            (["agentId", "sessionId", "sessionKey", "storePath"] as const).some(
-              (key) => target[key] !== current[key],
-            )
-          : current !== undefined
-      ) {
+      if (!sameSessionTranscriptTargetBinding(target, current)) {
         throw new Error("Extension session manager changed before metadata persistence");
       }
     };

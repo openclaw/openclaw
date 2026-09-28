@@ -1,4 +1,14 @@
+import {
+  ErrorCodes,
+  errorShape,
+  validateUpdateRunParams,
+} from "../../../packages/gateway-protocol/src/index.js";
+import type { PreparedCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
 import { UpdatePreMutationError } from "../../cli/update-cli/shared.js";
+import { isRestartEnabled } from "../../config/commands.flags.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveOcmUpdateManager } from "../../infra/ocm-update-client.js";
+import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { currentUpdateCheckLifecycle } from "../../infra/update-check-lifecycle.js";
 import { createUpdateErrorFact } from "../../infra/update-failure-facts.js";
 import {
@@ -6,6 +16,7 @@ import {
   FreeBsdPkgOwnershipError,
 } from "../../infra/update-freebsd-pkg-ownership.js";
 import { resolveStartupInstallStatus } from "../../infra/update-install-status.js";
+import type { UpdateRequester } from "../../infra/update-requester-authority.js";
 import {
   recordUpdateRunDiagnostics,
   recordUpdateRunPhase,
@@ -14,6 +25,79 @@ import {
 import { summarizeUpdateStepFailure, type UpdateRunRecord } from "../../infra/update-run-record.js";
 import { resolveUpdateInstallSurface } from "../../infra/update-runner-install-surface.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
+import type { GatewayRequestHandlerOptions } from "./types.js";
+import { assertValidParams } from "./validation.js";
+
+/** Native params are returned only when this request still belongs to the native updater. */
+export async function admitGatewayUpdateRequest(request: GatewayRequestHandlerOptions) {
+  const { params, respond, context } = request;
+  if (!assertValidParams(params, validateUpdateRunParams, "update.run", respond)) {
+    return null;
+  }
+  const authority = readGatewayRequestMutationAuthority(request);
+  const channel = params.requester?.channel;
+  const manager =
+    !channel || isInternalMessageChannel(channel) ? await resolveOcmUpdateManager() : null;
+  if (!manager?.canStart) {
+    return params;
+  }
+  if (params.target) {
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "This OCM version does not support an explicit Git update target.",
+      ),
+    );
+    return null;
+  }
+  const run = await manager.start(
+    authority.assertCurrent,
+    normalizeUpdateChannel(context.getRuntimeConfig().update?.channel),
+  );
+  respond(true, {
+    runId: run.runId,
+    ok: run.status === "running" || run.status === "succeeded" || run.status === "skipped",
+    result: {
+      status:
+        run.status === "running" || run.status === "skipped"
+          ? "skipped"
+          : run.status === "succeeded"
+            ? "ok"
+            : "error",
+      reason: run.reason,
+    },
+    ...(run.status === "running" ? { handoff: { status: "started" } } : {}),
+    message: "OCM owns this update. Use the Update status view to follow its progress and result.",
+  });
+  return null;
+}
+
+export function retainUpdateRequesterAuthority(
+  requester: UpdateRequester | undefined,
+  authority: PreparedCommandOwnerAuthority | undefined,
+  getConfig: () => OpenClawConfig,
+) {
+  return {
+    signal: authority?.signal,
+    assertCurrent: () => {
+      if (!requester?.channel || isInternalMessageChannel(requester.channel)) {
+        return;
+      }
+      const config = getConfig();
+      if (
+        !requester.authorizationSource ||
+        !authority?.isCurrent(config) ||
+        !isRestartEnabled(config)
+      ) {
+        throw new Error("Update requester authority changed before parking.");
+      }
+    },
+  };
+}
 
 export async function resolveGatewayUpdateAdmission(runId: string, timeoutMs?: number) {
   recordUpdateRunStep(runId, { step: "installation-inspection", status: "in_progress" });
@@ -65,6 +149,9 @@ export function recordHandoffFailure(
     failureFacts,
   };
   try {
+    if (error instanceof UpdatePreMutationError) {
+      recordUpdateRunPhase(runId, "requested", { origin: { nextAction: error.message } });
+    }
     recordUpdateRunStep(runId, { step: step.name, status: "failed", reason });
   } catch {
     warn("Update failure state could not be recorded; preserving the original error.");

@@ -3,6 +3,7 @@ import {
   getSupportedThinkingLevels,
   modelsAreEqual,
 } from "@openclaw/ai/internal/runtime";
+import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import {
   captureOwnedTranscriptWriteAssertion,
   withSessionMetadataPublication,
@@ -217,13 +218,7 @@ export abstract class AgentSessionModels extends AgentSessionPrompting {
     const isBound = () => {
       const current = manager.getSessionTarget();
       return (
-        manager.getSessionId() === sessionId &&
-        (target
-          ? current !== undefined &&
-            (["agentId", "sessionId", "sessionKey", "storePath"] as const).every(
-              (key) => current[key] === target[key],
-            )
-          : current === undefined)
+        manager.getSessionId() === sessionId && sameSessionTranscriptTargetBinding(target, current)
       );
     };
     const assertCurrent = () => {

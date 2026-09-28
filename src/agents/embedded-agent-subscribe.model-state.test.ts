@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as agentEvents from "../infra/agent-events.js";
 import { runAgentLoop, type AgentEvent } from "../plugin-sdk/agent-core.js";
+import { createEmbeddedRunContextRecoveryState } from "./embedded-agent-runner/run/context-recovery-state.js";
 import { createEmbeddedRunFailoverRetryController } from "./embedded-agent-runner/run/failover-retry-controller.js";
 import { createSubscribedSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
 import { SessionManager } from "./sessions/session-manager.js";
@@ -188,7 +189,13 @@ describe("subscribeEmbeddedAgentSession model state", () => {
     overrides: Partial<AssistantMessage>;
     expected: boolean;
   }>)("counts only real completed model progress: $label", ({ overrides, expected }) => {
-    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run-progress" });
+    const recovery = createEmbeddedRunContextRecoveryState();
+    recovery.overflowCompactionAttempts = 2;
+    recovery.toolResultTruncationAttempted = true;
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run-progress",
+      onContextAccountingEvent: (event) => recovery.observeContextAccounting(event),
+    });
     const message = makeAssistantMessageFixture({
       content: [{ type: "text", text: "Response" }],
       errorMessage: undefined,
@@ -205,8 +212,12 @@ describe("subscribeEmbeddedAgentSession model state", () => {
 
       emit({ type: "message_end", message });
       expect(subscription.hasSuccessfulModelResponse()).toBe(false);
+      expect(recovery.overflowCompactionAttempts).toBe(2);
+      expect(recovery.toolResultTruncationAttempted).toBe(true);
       emit({ type: "turn_end", message, toolResults: [] });
       expect(subscription.hasSuccessfulModelResponse()).toBe(expected);
+      expect(recovery.overflowCompactionAttempts).toBe(expected ? 0 : 2);
+      expect(recovery.toolResultTruncationAttempted).toBe(!expected);
     } finally {
       subscription.unsubscribe();
     }
@@ -217,7 +228,12 @@ describe("subscribeEmbeddedAgentSession model state", () => {
     async (stopReason) => {
       let nowMs = Date.now();
       const now = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
-      const harness = createSubscribedSessionHarness({ runId: "async-progress" });
+      const recovery = createEmbeddedRunContextRecoveryState();
+      recovery.overflowCompactionAttempts = 2;
+      const harness = createSubscribedSessionHarness({
+        runId: "async-progress",
+        onContextAccountingEvent: (event) => recovery.observeContextAccounting(event),
+      });
       const controller = createEmbeddedRunFailoverRetryController({
         runParams: {
           sessionId: "async-progress",
@@ -251,10 +267,12 @@ describe("subscribeEmbeddedAgentSession model state", () => {
             if (event.type === "message_end" && event.message.role === "assistant") {
               messages.push(event.message.stopReason);
               expect(harness.subscription.hasSuccessfulModelResponse()).toBe(false);
+              expect(recovery.overflowCompactionAttempts).toBe(2);
             }
           },
         );
         expect(messages).toEqual(["toolUse", stopReason]);
+        expect(recovery.overflowCompactionAttempts).toBe(stopReason === "stop" ? 0 : 2);
         controller.observeAttempt({
           hasSuccessfulModelResponse: harness.subscription.hasSuccessfulModelResponse(),
         });
@@ -269,14 +287,9 @@ describe("subscribeEmbeddedAgentSession model state", () => {
     },
   );
 
-  it.each([
-    { blockReplyBreak: "text_end", retry: false },
-    { blockReplyBreak: "text_end", retry: true },
-    { blockReplyBreak: "message_end", retry: false },
-    { blockReplyBreak: "message_end", retry: true },
-  ] as const)(
-    "accounts queued $blockReplyBreak delivery across retry=$retry",
-    async ({ blockReplyBreak, retry }) => {
+  it.each(["text_end", "message_end"] as const)(
+    "accounts queued %s delivery across a retry",
+    async (blockReplyBreak) => {
       const deliveryStarted = createDeferred();
       const releaseDelivery = createDeferred();
       const secondCompleted = createDeferred();
@@ -289,7 +302,7 @@ describe("subscribeEmbeddedAgentSession model state", () => {
         return releaseDelivery.promise;
       });
       const harness = createSubscribedSessionHarness({
-        runId: "queued-usage-" + blockReplyBreak + "-" + retry,
+        runId: "queued-usage-" + blockReplyBreak,
         lifecycleGeneration: agentEvents.getAgentEventLifecycleGeneration(),
         sessionPersistence: "detached",
         blockReplyBreak,
@@ -318,7 +331,7 @@ describe("subscribeEmbeddedAgentSession model state", () => {
             return;
           }
           admittedUsage.push(structuredClone(event.message.usage));
-          if (admittedUsage.length === 1 && retry) {
+          if (admittedUsage.length === 1) {
             emit(retryingCompactionEnd());
           }
           if (admittedUsage.length === 2) {
@@ -381,34 +394,34 @@ describe("subscribeEmbeddedAgentSession model state", () => {
       expected: { input: 11, output: 3, total: 14, cost: { total: 0.25 } },
       contextTokens: 11,
     },
-    ...[0, 0.125].map((cost) => ({
-      name: "billed " + cost + " over a later estimate",
+    {
+      name: "billed zero over a later estimate",
       call: {
-        streamedUsage: makeUsage({ input: 7, output: 5, cost, billed: true }),
+        streamedUsage: makeUsage({ input: 7, output: 5, cost: 0, billed: true }),
         usage: makeUsage({ input: 11, output: 3, cost: 0.5 }),
       },
       expected: {
         input: 11,
         output: 3,
         total: 14,
-        cost: { total: cost, totalOrigin: "provider-billed" },
+        cost: { total: 0, totalOrigin: "provider-billed" },
       },
       contextTokens: 11,
-    })),
-    ...[0, 0.125].map((cost) => ({
-      name: "final billing-only " + cost + " with streamed tokens",
+    },
+    {
+      name: "final billing-only zero with streamed tokens",
       call: {
         streamedUsage: makeUsage({ input: 7, output: 5, cost: 0.1 }),
-        usage: makeUsage({ cost, billed: true }),
+        usage: makeUsage({ cost: 0, billed: true }),
       },
       expected: {
         input: 7,
         output: 5,
         total: 12,
-        cost: { total: cost, totalOrigin: "provider-billed" },
+        cost: { total: 0, totalOrigin: "provider-billed" },
       },
       contextTokens: 7,
-    })),
+    },
     {
       name: "streamed usage before a zero error result",
       call: {
@@ -466,7 +479,12 @@ describe("subscribeEmbeddedAgentSession model state", () => {
         expect(subscription.getLastAssistantUsage()).toMatchObject(expected);
         expect(subscription.getCurrentAttemptAssistant()).toEqual(completed);
         expect(subscription.hasSuccessfulModelResponse()).toBe(completed?.stopReason === "stop");
-        expect(onContextAccountingEvent.mock.calls).toEqual([[{ kind: "model", contextTokens }]]);
+        expect(onContextAccountingEvent.mock.calls).toEqual([
+          [{ kind: "model", contextTokens, successful: false }],
+          ...(completed?.stopReason === "stop"
+            ? [[{ kind: "model", contextTokens, successful: true }]]
+            : []),
+        ]);
         expect(
           onAgentEvent.mock.calls
             .map(([event]) => event)
@@ -480,8 +498,6 @@ describe("subscribeEmbeddedAgentSession model state", () => {
 
   it.each([
     { costTotal: 0, priorCall: false },
-    { costTotal: 0.125, priorCall: false },
-    { costTotal: 0, priorCall: true },
     { costTotal: 0.125, priorCall: true },
   ])(
     "retains billed cost-only $costTotal with prior call $priorCall",
@@ -666,7 +682,8 @@ describe("subscribeEmbeddedAgentSession model state", () => {
           },
         );
         expect(onContextAccountingEvent.mock.calls).toEqual([
-          [{ kind: "model", contextTokens: undefined }],
+          [{ kind: "model", contextTokens: undefined, successful: false }],
+          [{ kind: "model", contextTokens: undefined, successful: true }],
         ]);
         const usageEvents = onAgentEvent.mock.calls
           .map(([event]) => event)

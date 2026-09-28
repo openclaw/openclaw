@@ -23,6 +23,7 @@ import { createMemoryTranscriptProjectionSource } from "../config/sessions/sessi
 import { withSessionCostUsageWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { OpenClawAgentDatabaseOptions } from "../state/openclaw-agent-db-contract.js";
@@ -45,8 +46,10 @@ import {
 import { prepareSessionCostUsageRefreshLock } from "./session-cost-usage-cache.sqlite.js";
 import {
   createUsageCostResolver,
-  resolveUsageCostPricingFingerprint,
+  prepareUsageCostPricing,
 } from "./session-cost-usage-pricing-context.js";
+import type { UsageCostResolver } from "./session-cost-usage-pricing.js";
+import { openUsageCostRefreshFailures } from "./session-cost-usage-refresh-health.js";
 import {
   UsageCostWorkerReplyError,
   type UsageCostWorkerHostEffects,
@@ -60,6 +63,7 @@ import type { UsageDailyBucket } from "./session-cost-usage.types.js";
 import { withSqliteWorkerCleanupFailure } from "./sqlite-worker-broker-reply.js";
 
 const USAGE_COST_WORKER_TIMEOUT_MS = 5 * 60_000;
+const logger = createSubsystemLogger("usage-cost-cache");
 
 export type PreparedUsageCostWorker = {
   location: UsageCostWorkerLocation;
@@ -314,23 +318,30 @@ export async function runUsageCostWorker(
       }
     }
     assertCurrent();
-    const workerOperation: UsageCostWorkerOperation =
-      capturedOperation.kind === "refresh"
-        ? {
-            ...capturedOperation,
-            pricingFingerprint: await resolveUsageCostPricingFingerprint(
-              prepared.config,
-              prepared.agentDir,
-            ),
-          }
-        : capturedOperation;
-    const resolveCost = createUsageCostResolver({
-      config: prepared.config,
-      agentDir: prepared.agentDir,
-    });
+    let workerOperation: UsageCostWorkerOperation;
+    let resolveCost: UsageCostResolver;
+    if (capturedOperation.kind === "refresh") {
+      const pricing = await prepareUsageCostPricing(prepared.config, prepared.agentDir);
+      workerOperation = { ...capturedOperation, pricingFingerprint: pricing.fingerprint() };
+      resolveCost = createUsageCostResolver(prepared, pricing);
+    } else {
+      workerOperation = capturedOperation;
+      resolveCost = createUsageCostResolver(prepared);
+    }
+    const failures = openUsageCostRefreshFailures(location.env);
+    const failureKey = (sessionFile: string) =>
+      JSON.stringify([location.databasePath, sessionFile]);
+    let activeSessionFile: string | undefined;
     const hostErrors = new Map<number, unknown>();
     let errorSequence = 0;
     try {
+      const failureEntries = lock
+        ? await failures.entries().catch((error: unknown) => {
+            logger.warn("Could not read usage refresh failure history", { error });
+            return [];
+          })
+        : [];
+      const failedKeys = new Set(failureEntries.map((entry) => entry.key));
       const result = await scope.run(
         { kind: "usage-cost", location, operation: workerOperation, databases: [] },
         {
@@ -354,6 +365,13 @@ export async function runUsageCostWorker(
               const request = value as UsageCostWorkerHostRequest;
               let output: UsageCostWorkerHostEffects[keyof UsageCostWorkerHostEffects]["output"];
               switch (request.kind) {
+                case "refresh-session":
+                  if (!lock) {
+                    throw new Error("Usage report cannot refresh sessions");
+                  }
+                  activeSessionFile = request.input.sessionFile;
+                  output = undefined;
+                  break;
                 case "pricing":
                   output = request.input.map(resolveCost);
                   break;
@@ -481,6 +499,16 @@ export async function runUsageCostWorker(
                     blob: request.input.blob,
                     updatedAt: request.input.updatedAt,
                   });
+                  if (output && failedKeys.has(failureKey(request.input.key))) {
+                    await failures
+                      .delete(failureKey(request.input.key), {
+                        assertCurrent: assertRequestCurrent,
+                      })
+                      .catch((error: unknown) => {
+                        logger.warn("Could not clear usage refresh failure fact", { error });
+                      });
+                  }
+                  activeSessionFile = undefined;
                   break;
                 default:
                   throw new Error("Unknown usage worker host request");
@@ -503,7 +531,27 @@ export async function runUsageCostWorker(
       assertCurrent();
       return result;
     } catch (error) {
-      throw restoreWorkerFailure(error, hostErrors);
+      let failure = restoreWorkerFailure(error, hostErrors);
+      if (activeSessionFile && !signal?.aborted) {
+        try {
+          await failures.register(
+            failureKey(activeSessionFile),
+            {
+              agentId: location.agentId,
+              sessionFile: activeSessionFile,
+              failedAt: Date.now(),
+              reason: "Usage refresh failed; cached totals may be incomplete. Check Gateway logs.",
+            },
+            { assertCurrent },
+          );
+        } catch (healthError) {
+          failure = withSqliteWorkerCleanupFailure(
+            toErrorObject(failure, "Usage refresh failed"),
+            healthError,
+          );
+        }
+      }
+      throw failure;
     }
   });
 }

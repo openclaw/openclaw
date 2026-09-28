@@ -440,14 +440,6 @@ export async function markUpdateRestartSentinelFailure(
   }, env);
 }
 
-export async function clearRestartSentinel(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => deleteRestartSentinelRowSync(db),
-    { env },
-    { operationLabel: "restart-sentinel.clear" },
-  );
-}
-
 export async function clearRestartSentinelIfRevision(
   expectedRevision: number,
   env: NodeJS.ProcessEnv = process.env,

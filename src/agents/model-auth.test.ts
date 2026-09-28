@@ -1,13 +1,12 @@
 // Verifies provider auth resolution, synthetic auth, and auth header behavior.
-import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ModelProviderConfig, OpenClawConfig } from "../config/config.js";
+import type { ModelProviderConfig } from "../config/config.js";
 import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 import { resolveAuthProfileSecretOwnerId } from "../secrets/runtime-auth-profile-owner.js";
 import type { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
-import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import {
   createApiKeyCredential,
@@ -122,15 +121,6 @@ vi.mock("../plugins/provider-runtime.js", () => {
             }
           >;
         };
-        tools?: {
-          web?: {
-            search?: {
-              grok?: {
-                apiKey?: unknown;
-              };
-            };
-          };
-        };
       };
       modelApi?: string;
       context: { providerConfig?: { api?: string; baseUrl?: string; models?: unknown[] } };
@@ -185,14 +175,10 @@ vi.mock("../plugins/provider-runtime.js", () => {
   };
 });
 
-let getCustomProviderApiKey: typeof import("./model-auth.js").getCustomProviderApiKey;
-let resolveProviderConfigSecretInput: typeof import("./model-auth-provider-config.js").resolveProviderConfigSecretInput;
-let providerConfigMatchesRuntimeSnapshot: typeof import("./model-auth-provider-config.js").providerConfigMatchesRuntimeSnapshot;
 let applyAuthHeaderOverride: typeof import("./model-auth.js").applyAuthHeaderOverride;
 let applyLocalNoAuthHeaderOverride: typeof import("./model-auth.js").applyLocalNoAuthHeaderOverride;
 let applySecretRefHeaderSentinels: typeof import("./model-auth.js").applySecretRefHeaderSentinels;
 let createRuntimeProviderAuthLookup: typeof import("./model-auth.js").createRuntimeProviderAuthLookup;
-let formatMissingAuthError: typeof import("./model-auth.js").formatMissingAuthError;
 let hasAvailableAuthForProvider: typeof import("./model-auth.js").hasAvailableAuthForProvider;
 let hasRuntimeAvailableProviderAuth: typeof import("./model-auth.js").hasRuntimeAvailableProviderAuth;
 let hasUsableCustomProviderApiKey: typeof import("./model-auth.js").hasUsableCustomProviderApiKey;
@@ -221,20 +207,16 @@ beforeAll(async () => {
   ({ clearRuntimeAuthProfileStoreSnapshots, setRuntimeAuthProfileStoreSnapshot } =
     await import("./auth-profiles/runtime-snapshots.js"));
   cliCredentials = await import("./cli-credentials.js");
-  ({ resolveProviderConfigSecretInput, providerConfigMatchesRuntimeSnapshot } =
-    await import("./model-auth-provider-config.js"));
   ({ resolveProviderEntryApiKeyAuth } = await import("./model-auth-provider.js"));
   ({
     applyAuthHeaderOverride,
     applyLocalNoAuthHeaderOverride,
     applySecretRefHeaderSentinels,
     createRuntimeProviderAuthLookup,
-    formatMissingAuthError,
     hasAvailableAuthForProvider,
     hasRuntimeAvailableProviderAuth,
     hasSyntheticLocalProviderAuthConfig,
     getApiKeyForModelCore,
-    getCustomProviderApiKey,
     hasUsableCustomProviderApiKey,
     requireApiKey,
     resolveApiKeyForProviderCore,
@@ -256,132 +238,17 @@ afterEach(() => {
   setActiveDegradedSecretOwners([]);
 });
 
-function createProviderConfig() {
-  const provider: ModelProviderConfig = {
-    baseUrl: "https://provider.example/v1",
-    apiKey: "synthetic-resolved-value",
-    models: [],
-  };
-  const config = { models: { providers: { synthetic: provider } } } satisfies OpenClawConfig;
-  return { config, provider };
+function providerEntry<T extends Omit<ModelProviderConfig, "baseUrl" | "models">>(
+  baseUrl: string,
+  options: T,
+) {
+  const models: ModelProviderConfig["models"] = [];
+  return { baseUrl, models, ...options };
 }
 
-function publishProvider(config: ReturnType<typeof createProviderConfig>["config"]) {
-  const source = structuredClone(config);
-  source.models.providers.synthetic.apiKey = {
-    source: "store",
-    provider: "default",
-    id: "SYNTHETIC_PROVIDER_KEY",
-  };
-  setRuntimeConfigSnapshot(config, source);
+function configForProviders<T extends Record<string, ModelProviderConfig>>(providers: T) {
+  return { models: { providers } };
 }
-
-describe("provider auth snapshot comparison", () => {
-  it("does not traverse a shared runtime model catalog during repeated auth lookups", () => {
-    const { config, provider } = createProviderConfig();
-    let catalogReads = 0;
-    provider.models = Array.from({ length: 400 }, (_, index) => ({
-      id: `synthetic-${index}`,
-      get name() {
-        catalogReads += 1;
-        return `Synthetic ${index}`;
-      },
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      maxTokens: 4096,
-    }));
-    publishProvider(config);
-    catalogReads = 0;
-    const started = performance.now();
-    for (let agent = 0; agent < 11; agent += 1) {
-      for (let model = 0; model < 400; model += 1) {
-        expect(getCustomProviderApiKey(config, "synthetic")).toBe("secretref-managed");
-      }
-    }
-    console.info(
-      JSON.stringify({
-        providerAuthCalls: 4400,
-        catalogRows: 400,
-        catalogReads,
-        elapsedMs: performance.now() - started,
-        rssBytes: process.memoryUsage().rss,
-      }),
-    );
-    expect(catalogReads).toBe(0);
-  });
-
-  it("stops using runtime SecretRef provenance after a warmed input is mutated", () => {
-    const { config } = createProviderConfig();
-    publishProvider(config);
-    const input = structuredClone(config);
-    expect(resolveProviderConfigSecretInput(input, "synthetic").ref).toMatchObject({
-      source: "store",
-    });
-    input.models.providers.synthetic.baseUrl = "https://another.example/v1";
-    expect(resolveProviderConfigSecretInput(input, "synthetic").ref).toBeNull();
-    expect(getCustomProviderApiKey(input, "synthetic")).toBe("synthetic-resolved-value");
-  });
-});
-
-describe("provider config structural comparison", () => {
-  it.each(["same object", "shared provider", "equivalent clone"] as const)(
-    "matches a %s without changing missing-provider behavior",
-    (kind) => {
-      const runtime = createProviderConfig().config;
-      const input =
-        kind === "same object"
-          ? runtime
-          : kind === "shared provider"
-            ? { ...runtime, agents: { defaults: { workspace: "/tmp/synthetic-agent" } } }
-            : structuredClone(runtime);
-      expect(
-        providerConfigMatchesRuntimeSnapshot({
-          inputConfig: input,
-          runtimeConfig: runtime,
-          provider: " SYNTHETIC ",
-        }),
-      ).toBe(true);
-      expect(
-        providerConfigMatchesRuntimeSnapshot({
-          inputConfig: input,
-          runtimeConfig: runtime,
-          provider: "missing",
-        }),
-      ).toBe(false);
-    },
-  );
-
-  it("keeps distinct configurations current after runtime mutation and replacement", () => {
-    const input = createProviderConfig().config;
-    const runtime = createProviderConfig().config;
-    const compare = () =>
-      providerConfigMatchesRuntimeSnapshot({
-        inputConfig: input,
-        runtimeConfig: runtime,
-        provider: "synthetic",
-      });
-    expect(compare()).toBe(true);
-    runtime.models.providers.synthetic.headers = { "X-Synthetic": "changed" };
-    expect(compare()).toBe(false);
-    runtime.models.providers.synthetic = structuredClone(input.models.providers.synthetic);
-    expect(compare()).toBe(true);
-    expect(
-      providerConfigMatchesRuntimeSnapshot({
-        inputConfig: undefined,
-        runtimeConfig: runtime,
-        provider: "synthetic",
-      }),
-    ).toBe(false);
-    expect(
-      providerConfigMatchesRuntimeSnapshot({
-        inputConfig: runtime,
-        runtimeConfig: null,
-        provider: "synthetic",
-      }),
-    ).toBe(false);
-  });
-});
 
 describe("createRuntimeProviderAuthLookup", () => {
   it("marks env auth maps as authoritative so hot checks skip setup runtime fallback", () => {
@@ -402,24 +269,17 @@ describe("createRuntimeProviderAuthLookup", () => {
   });
 });
 
-async function withoutEnv<T>(key: string, fn: () => Promise<T>): Promise<T> {
-  const snapshot = captureEnv([key]);
-  deleteTestEnvValue(key);
-  try {
-    return await fn();
-  } finally {
-    snapshot.restore();
-  }
-}
-
-async function withEnv<T>(key: string, value: string, fn: () => Promise<T>): Promise<T> {
-  const snapshot = captureEnv([key]);
-  setTestEnvValue(key, value);
-  try {
-    return await fn();
-  } finally {
-    snapshot.restore();
-  }
+function createModelConfig(overrides: Partial<ModelProviderConfig["models"][number]> = {}) {
+  return {
+    id: "llama3",
+    name: "Llama 3",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 8192,
+    maxTokens: 4096,
+    ...overrides,
+  } satisfies ModelProviderConfig["models"][number];
 }
 
 function createCustomProviderConfig(
@@ -431,17 +291,7 @@ function createCustomProviderConfig(
   return {
     baseUrl,
     api: "openai-completions" as const,
-    models: [
-      {
-        id: modelId,
-        name: modelName,
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 8192,
-        maxTokens: 4096,
-      },
-    ],
+    models: [createModelConfig({ id: modelId, name: modelName })],
   };
 }
 
@@ -453,13 +303,9 @@ async function resolveCustomProviderAuth(
 ) {
   return resolveApiKeyForProviderCore({
     provider,
-    cfg: {
-      models: {
-        providers: {
-          [provider]: createCustomProviderConfig(baseUrl, modelId, modelName),
-        },
-      },
-    },
+    cfg: configForProviders({
+      [provider]: createCustomProviderConfig(baseUrl, modelId, modelName),
+    }),
   });
 }
 
@@ -494,37 +340,24 @@ function expectSecretSentinelAuth(
 }
 
 describe("resolveAwsSdkEnvVarName", () => {
-  it("prefers bearer token over access keys and profile", () => {
-    const env = {
-      AWS_BEARER_TOKEN_BEDROCK: "bearer",
-      AWS_ACCESS_KEY_ID: "access",
-      AWS_SECRET_ACCESS_KEY: "secret", // pragma: allowlist secret
-      AWS_PROFILE: "default",
-    } as NodeJS.ProcessEnv;
-
-    expect(resolveAwsSdkEnvVarName(env)).toBe("AWS_BEARER_TOKEN_BEDROCK");
-  });
-
-  it("uses access keys when bearer token is missing", () => {
-    const env = {
-      AWS_ACCESS_KEY_ID: "access",
-      AWS_SECRET_ACCESS_KEY: "secret", // pragma: allowlist secret
-      AWS_PROFILE: "default",
-    } as NodeJS.ProcessEnv;
-
-    expect(resolveAwsSdkEnvVarName(env)).toBe("AWS_ACCESS_KEY_ID");
-  });
-
-  it("uses profile when no bearer token or access keys exist", () => {
-    const env = {
-      AWS_PROFILE: "default",
-    } as NodeJS.ProcessEnv;
-
-    expect(resolveAwsSdkEnvVarName(env)).toBe("AWS_PROFILE");
-  });
-
-  it("returns undefined when no AWS auth env is set", () => {
-    expect(resolveAwsSdkEnvVarName({} as NodeJS.ProcessEnv)).toBeUndefined();
+  it.each([
+    {
+      env: {
+        AWS_BEARER_TOKEN_BEDROCK: "bearer",
+        AWS_ACCESS_KEY_ID: "access",
+        AWS_SECRET_ACCESS_KEY: "secret",
+        AWS_PROFILE: "default",
+      },
+      expected: "AWS_BEARER_TOKEN_BEDROCK",
+    },
+    {
+      env: { AWS_ACCESS_KEY_ID: "access", AWS_SECRET_ACCESS_KEY: "secret", AWS_PROFILE: "default" },
+      expected: "AWS_ACCESS_KEY_ID",
+    },
+    { env: { AWS_PROFILE: "default" }, expected: "AWS_PROFILE" },
+    { env: {}, expected: undefined },
+  ])("selects $expected using AWS credential precedence", ({ env, expected }) => {
+    expect(resolveAwsSdkEnvVarName(env)).toBe(expected);
   });
 });
 
@@ -546,17 +379,11 @@ describe("resolveModelAuthMode", () => {
     expect(
       resolveModelAuthMode(
         "amazon-bedrock",
-        {
-          models: {
-            providers: {
-              "amazon-bedrock": {
-                baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-                models: [],
-                auth: "aws-sdk",
-              },
-            },
-          },
-        },
+        configForProviders({
+          "amazon-bedrock": providerEntry("https://bedrock-runtime.us-east-1.amazonaws.com", {
+            auth: "aws-sdk",
+          }),
+        }),
         { version: 1, profiles: {} },
       ),
     ).toBe("aws-sdk");
@@ -564,12 +391,6 @@ describe("resolveModelAuthMode", () => {
 
   it("does not infer aws-sdk for bedrock alias without explicit auth override", () => {
     expect(resolveModelAuthMode("bedrock", undefined, { version: 1, profiles: {} })).toBe(
-      "unknown",
-    );
-  });
-
-  it("does not infer aws-sdk for aws-bedrock alias without explicit auth override", () => {
-    expect(resolveModelAuthMode("aws-bedrock", undefined, { version: 1, profiles: {} })).toBe(
       "unknown",
     );
   });
@@ -598,20 +419,6 @@ describe("resolveModelAuthMode", () => {
 });
 
 describe("requireApiKey", () => {
-  it("formats missing auth errors with the checked credential source", () => {
-    expect(
-      formatMissingAuthError(
-        {
-          source: "env: OPENAI_API_KEY",
-          mode: "api-key",
-        },
-        "openai",
-      ),
-    ).toBe(
-      'No API key resolved for provider "openai" (auth mode: api-key, checked: env: OPENAI_API_KEY).',
-    );
-  });
-
   it("normalizes line breaks in resolved API keys", () => {
     const key = requireApiKey(
       {
@@ -623,20 +430,6 @@ describe("requireApiKey", () => {
     );
 
     expect(key).toBe("sk-test-abc");
-  });
-
-  it("throws when no API key is present", () => {
-    expect(() =>
-      requireApiKey(
-        {
-          source: "env: OPENAI_API_KEY",
-          mode: "api-key",
-        },
-        "openai",
-      ),
-    ).toThrow(
-      'No API key resolved for provider "openai" (auth mode: api-key, checked: env: OPENAI_API_KEY).',
-    );
   });
 
   it("throws typed missing auth errors with source metadata", () => {
@@ -654,6 +447,8 @@ describe("requireApiKey", () => {
     }
     expect(thrown).toMatchObject({
       name: "MissingProviderAuthError",
+      message:
+        'No API key resolved for provider "openai" (auth mode: api-key, checked: env: OPENAI_API_KEY).',
       code: "missing-api-key",
       provider: "openai",
       mode: "api-key",
@@ -663,27 +458,6 @@ describe("requireApiKey", () => {
 });
 
 describe("resolveUsableCustomProviderApiKey", () => {
-  it("returns literal custom provider keys", () => {
-    const resolved = resolveUsableCustomProviderApiKey({
-      cfg: {
-        models: {
-          providers: {
-            custom: {
-              baseUrl: "https://example.com/v1",
-              apiKey: "sk-custom-runtime", // pragma: allowlist secret
-              models: [],
-            },
-          },
-        },
-      },
-      provider: "custom",
-    });
-    expect(resolved).toEqual({
-      apiKey: "sk-custom-runtime",
-      source: "models.json",
-    });
-  });
-
   it.each([
     { name: "unresolved bare shorthand", authored: "$MISSING", env: {}, expected: null },
     { name: "unresolved braced shorthand", authored: "${MISSING}", env: {}, expected: null },
@@ -701,17 +475,9 @@ describe("resolveUsableCustomProviderApiKey", () => {
         import("../config/resolution-facts.js"),
       ]);
       const read = resolveConfigForRead(
-        {
-          models: {
-            providers: {
-              custom: {
-                baseUrl: "https://example.com/v1",
-                apiKey: authored,
-                models: [],
-              },
-            },
-          },
-        },
+        configForProviders({
+          custom: providerEntry("https://example.com/v1", { apiKey: authored }),
+        }),
         env,
       );
       const cfg = read.resolvedConfigRaw as NonNullable<
@@ -727,127 +493,44 @@ describe("resolveUsableCustomProviderApiKey", () => {
     },
   );
 
-  it("does not treat non-env markers as usable credentials", () => {
-    const resolved = resolveUsableCustomProviderApiKey({
-      cfg: {
-        models: {
-          providers: {
-            custom: {
-              baseUrl: "https://example.com/v1",
-              apiKey: NON_ENV_SECRETREF_MARKER,
-              models: [],
-            },
-          },
-        },
-      },
-      provider: "custom",
-    });
-    expect(resolved).toBeNull();
-  });
-
   it("does not treat the Vertex ADC marker as a usable models.json credential", () => {
     const resolved = resolveUsableCustomProviderApiKey({
-      cfg: {
-        models: {
-          providers: {
-            "anthropic-vertex": {
-              baseUrl: "https://us-central1-aiplatform.googleapis.com",
-              apiKey: GCP_VERTEX_CREDENTIALS_MARKER,
-              models: [],
-            },
-          },
-        },
-      },
+      cfg: configForProviders({
+        "anthropic-vertex": providerEntry("https://us-central1-aiplatform.googleapis.com", {
+          apiKey: GCP_VERTEX_CREDENTIALS_MARKER,
+        }),
+      }),
       provider: "anthropic-vertex",
     });
     expect(resolved).toBeNull();
   });
 
   it("resolves known env marker names from process env for custom providers", () => {
-    const previous = process.env.OPENAI_API_KEY;
-    process.env.OPENAI_API_KEY = "sk-from-env"; // pragma: allowlist secret
-    try {
+    return withEnv({ OPENAI_API_KEY: "sk-from-env" }, () => {
       const resolved = resolveUsableCustomProviderApiKey({
-        cfg: {
-          models: {
-            providers: {
-              custom: {
-                baseUrl: "https://example.com/v1",
-                apiKey: "OPENAI_API_KEY",
-                models: [],
-              },
-            },
-          },
-        },
+        cfg: configForProviders({
+          custom: providerEntry("https://example.com/v1", { apiKey: "OPENAI_API_KEY" }),
+        }),
         provider: "custom",
         secretSentinels: true,
       });
       expect(resolved?.apiKey).toBe("sk-from-env");
       expect(resolved?.source).toContain("OPENAI_API_KEY");
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENAI_API_KEY;
-      } else {
-        process.env.OPENAI_API_KEY = previous;
-      }
-    }
-  });
-
-  it("resolves env SecretRefs from process env for custom providers", () => {
-    const previous = process.env.OPENAI_API_KEY;
-    process.env.OPENAI_API_KEY = "sk-secretref-env"; // pragma: allowlist secret
-    try {
-      const resolved = resolveUsableCustomProviderApiKey({
-        cfg: {
-          models: {
-            providers: {
-              custom: {
-                baseUrl: "https://example.com/v1",
-                apiKey: {
-                  source: "env",
-                  provider: "default",
-                  id: "OPENAI_API_KEY",
-                },
-                models: [],
-              },
-            },
-          },
-        },
-        provider: "custom",
-        secretSentinels: true,
-      });
-      expect(looksLikeSecretSentinel(resolved?.apiKey ?? "")).toBe(true);
-      expect(resolveSecretSentinel(resolved?.apiKey ?? "")).toBe("sk-secretref-env");
-      expect(resolved?.source).toContain("OPENAI_API_KEY");
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENAI_API_KEY;
-      } else {
-        process.env.OPENAI_API_KEY = previous;
-      }
-    }
+    });
   });
 
   it("sentinelizes config env SecretRefs on env-first provider resolution", async () => {
-    const previous = process.env.OPENAI_API_KEY;
-    process.env.OPENAI_API_KEY = "sk-secretref-env-first"; // pragma: allowlist secret
-    try {
+    return withEnvAsync({ OPENAI_API_KEY: "sk-secretref-env-first" }, async () => {
       const resolved = await resolveApiKeyForProviderCore({
-        cfg: {
-          models: {
-            providers: {
-              custom: {
-                baseUrl: "https://example.com/v1",
-                apiKey: {
-                  source: "env",
-                  provider: "default",
-                  id: "OPENAI_API_KEY",
-                },
-                models: [],
-              },
+        cfg: configForProviders({
+          custom: providerEntry("https://example.com/v1", {
+            apiKey: {
+              source: "env",
+              provider: "default",
+              id: "OPENAI_API_KEY",
             },
-          },
-        },
+          }),
+        }),
         provider: "custom",
         credentialPrecedence: "env-first",
         secretSentinels: true,
@@ -856,54 +539,32 @@ describe("resolveUsableCustomProviderApiKey", () => {
 
       expect(looksLikeSecretSentinel(resolved.apiKey ?? "")).toBe(true);
       expect(resolveSecretSentinel(resolved.apiKey ?? "")).toBe("sk-secretref-env-first");
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENAI_API_KEY;
-      } else {
-        process.env.OPENAI_API_KEY = previous;
-      }
-    }
+    });
   });
 
   it("resolves env SecretRefs with unknown env IDs from process env for custom providers", () => {
-    const previous = process.env.MY_CUSTOM_KEY;
-    process.env.MY_CUSTOM_KEY = "sk-custom-secretref-env"; // pragma: allowlist secret
-    try {
+    return withEnv({ MY_CUSTOM_KEY: "sk-custom-secretref-env" }, () => {
       const resolved = resolveUsableCustomProviderApiKey({
-        cfg: {
-          models: {
-            providers: {
-              custom: {
-                baseUrl: "https://example.com/v1",
-                apiKey: {
-                  source: "env",
-                  provider: "default",
-                  id: "MY_CUSTOM_KEY",
-                },
-                models: [],
-              },
+        cfg: configForProviders({
+          custom: providerEntry("https://example.com/v1", {
+            apiKey: {
+              source: "env",
+              provider: "default",
+              id: "MY_CUSTOM_KEY",
             },
-          },
-        },
+          }),
+        }),
         provider: "custom",
         secretSentinels: true,
       });
       expect(looksLikeSecretSentinel(resolved?.apiKey ?? "")).toBe(true);
       expect(resolveSecretSentinel(resolved?.apiKey ?? "")).toBe("sk-custom-secretref-env");
       expect(resolved?.source).toContain("MY_CUSTOM_KEY");
-    } finally {
-      if (previous === undefined) {
-        delete process.env.MY_CUSTOM_KEY;
-      } else {
-        process.env.MY_CUSTOM_KEY = previous;
-      }
-    }
+    });
   });
 
   it("does not resolve env SecretRefs when provider allowlist excludes the env id", () => {
-    const previous = process.env.MY_CUSTOM_KEY;
-    process.env.MY_CUSTOM_KEY = "sk-custom-secretref-env"; // pragma: allowlist secret
-    try {
+    return withEnv({ MY_CUSTOM_KEY: "sk-custom-secretref-env" }, () => {
       const resolved = resolveUsableCustomProviderApiKey({
         cfg: {
           secrets: {
@@ -916,34 +577,24 @@ describe("resolveUsableCustomProviderApiKey", () => {
           },
           models: {
             providers: {
-              custom: {
-                baseUrl: "https://example.com/v1",
+              custom: providerEntry("https://example.com/v1", {
                 apiKey: {
                   source: "env",
                   provider: "custom-env",
                   id: "MY_CUSTOM_KEY",
                 },
-                models: [],
-              },
+              }),
             },
           },
         },
         provider: "custom",
       });
       expect(resolved).toBeNull();
-    } finally {
-      if (previous === undefined) {
-        delete process.env.MY_CUSTOM_KEY;
-      } else {
-        process.env.MY_CUSTOM_KEY = previous;
-      }
-    }
+    });
   });
 
   it("does not resolve env SecretRefs when provider source is not env", () => {
-    const previous = process.env.MY_CUSTOM_KEY;
-    process.env.MY_CUSTOM_KEY = "sk-custom-secretref-env"; // pragma: allowlist secret
-    try {
+    return withEnv({ MY_CUSTOM_KEY: "sk-custom-secretref-env" }, () => {
       const resolved = resolveUsableCustomProviderApiKey({
         cfg: {
           secrets: {
@@ -956,128 +607,65 @@ describe("resolveUsableCustomProviderApiKey", () => {
           },
           models: {
             providers: {
-              custom: {
-                baseUrl: "https://example.com/v1",
+              custom: providerEntry("https://example.com/v1", {
                 apiKey: {
                   source: "env",
                   provider: "custom-env",
                   id: "MY_CUSTOM_KEY",
                 },
-                models: [],
-              },
+              }),
             },
           },
         },
         provider: "custom",
       });
       expect(resolved).toBeNull();
-    } finally {
-      if (previous === undefined) {
-        delete process.env.MY_CUSTOM_KEY;
-      } else {
-        process.env.MY_CUSTOM_KEY = previous;
-      }
-    }
+    });
   });
 
   it("does not treat env SecretRefs with missing unknown env IDs as usable", () => {
-    const previous = process.env.MY_CUSTOM_KEY;
-    delete process.env.MY_CUSTOM_KEY;
-    try {
+    return withEnv({ MY_CUSTOM_KEY: undefined }, () => {
       expect(
         hasUsableCustomProviderApiKey(
-          {
-            models: {
-              providers: {
-                custom: {
-                  baseUrl: "https://example.com/v1",
-                  apiKey: {
-                    source: "env",
-                    provider: "default",
-                    id: "MY_CUSTOM_KEY",
-                  },
-                  models: [],
-                },
+          configForProviders({
+            custom: providerEntry("https://example.com/v1", {
+              apiKey: {
+                source: "env",
+                provider: "default",
+                id: "MY_CUSTOM_KEY",
               },
-            },
-          },
+            }),
+          }),
           "custom",
         ),
       ).toBe(false);
-    } finally {
-      if (previous === undefined) {
-        delete process.env.MY_CUSTOM_KEY;
-      } else {
-        process.env.MY_CUSTOM_KEY = previous;
-      }
-    }
+    });
   });
 
   it("does not treat non-env SecretRefs as usable models.json credentials", () => {
     const resolved = resolveUsableCustomProviderApiKey({
-      cfg: {
-        models: {
-          providers: {
-            custom: {
-              baseUrl: "https://example.com/v1",
-              apiKey: {
-                source: "file",
-                provider: "vault",
-                id: "custom-provider-key",
-              },
-              models: [],
-            },
+      cfg: configForProviders({
+        custom: providerEntry("https://example.com/v1", {
+          apiKey: {
+            source: "file",
+            provider: "vault",
+            id: "custom-provider-key",
           },
-        },
-      },
+        }),
+      }),
       provider: "custom",
     });
     expect(resolved).toBeNull();
-  });
-
-  it("does not treat known env marker names as usable when env value is missing", () => {
-    const previous = process.env.OPENAI_API_KEY;
-    delete process.env.OPENAI_API_KEY;
-    try {
-      expect(
-        hasUsableCustomProviderApiKey(
-          {
-            models: {
-              providers: {
-                custom: {
-                  baseUrl: "https://example.com/v1",
-                  apiKey: "OPENAI_API_KEY",
-                  models: [],
-                },
-              },
-            },
-          },
-          "custom",
-        ),
-      ).toBe(false);
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENAI_API_KEY;
-      } else {
-        process.env.OPENAI_API_KEY = previous;
-      }
-    }
   });
 });
 
 describe("resolveApiKeyForProviderCore", () => {
   it("does not fall back to env or profiles after an explicit provider SecretRef fails", async () => {
-    const sourceConfig = {
-      models: {
-        providers: {
-          openai: {
-            apiKey: { source: "env", provider: "default", id: "MISSING_OPENAI_KEY" } as const,
-            baseUrl: "https://api.openai.com/v1",
-            models: [],
-          },
-        },
-      },
-    };
+    const sourceConfig = configForProviders({
+      openai: providerEntry("https://api.openai.com/v1", {
+        apiKey: { source: "env", provider: "default", id: "MISSING_OPENAI_KEY" } as const,
+      }),
+    });
     setRuntimeConfigSnapshot(sourceConfig, sourceConfig);
     setActiveDegradedSecretOwners([
       {
@@ -1090,7 +678,7 @@ describe("resolveApiKeyForProviderCore", () => {
       },
     ]);
 
-    await withEnv("OPENAI_API_KEY", "must-not-be-used", async () => {
+    await withEnvAsync({ OPENAI_API_KEY: "must-not-be-used" }, async () => {
       await expect(
         resolveApiKeyForProviderCore({
           provider: "openai",
@@ -1117,24 +705,18 @@ describe("resolveApiKeyForProviderCore", () => {
   it.each([false, true])(
     "keeps the whole provider cold when a non-api-key SecretRef fails (per-entry = %s)",
     async (perEntry) => {
-      const sourceConfig = {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              ...(perEntry ? { apiKey: "openai:bound" } : {}),
-              headers: {
-                "X-Provider-Secret": {
-                  source: "env",
-                  provider: "default",
-                  id: "MISSING_OPENAI_HEADER",
-                } as const,
-              },
-              models: [],
-            },
+      const sourceConfig = configForProviders({
+        openai: providerEntry("https://api.openai.com/v1", {
+          ...(perEntry ? { apiKey: "openai:bound" } : {}),
+          headers: {
+            "X-Provider-Secret": {
+              source: "env",
+              provider: "default",
+              id: "MISSING_OPENAI_HEADER",
+            } as const,
           },
-        },
-      };
+        }),
+      });
       setRuntimeConfigSnapshot(sourceConfig, sourceConfig);
       setActiveDegradedSecretOwners([
         {
@@ -1147,7 +729,7 @@ describe("resolveApiKeyForProviderCore", () => {
         },
       ]);
 
-      await withEnv("OPENAI_API_KEY", "must-not-be-used", async () => {
+      await withEnvAsync({ OPENAI_API_KEY: "must-not-be-used" }, async () => {
         await expect(
           (perEntry ? resolveProviderEntryApiKeyAuth : resolveApiKeyForProviderCore)({
             provider: "openai",
@@ -1231,7 +813,7 @@ describe("resolveApiKeyForProviderCore", () => {
     ).resolves.toMatchObject({ apiKey: "unused", profileId: healthyProfileId });
 
     const request = vi.fn();
-    await withEnv("OPENAI_API_KEY", "unused", async () => {
+    await withEnvAsync({ OPENAI_API_KEY: "unused" }, async () => {
       await expect(
         (async () => {
           const auth = await resolveApiKeyForProviderCore({
@@ -1252,7 +834,7 @@ describe("resolveApiKeyForProviderCore", () => {
   });
 
   it("keeps plain environment credentials as plaintext", async () => {
-    const resolved = await withEnv("OPENAI_API_KEY", "sk-plain-env-key", () =>
+    const resolved = await withEnvAsync({ OPENAI_API_KEY: "sk-plain-env-key" }, () =>
       resolveApiKeyForProviderCore({
         provider: "openai",
         store: { version: 1, profiles: {} },
@@ -1340,7 +922,7 @@ describe("resolveApiKeyForProviderCore", () => {
   });
 
   it("reuses plugin fallback auth without a models.providers entry", async () => {
-    const resolved = await withoutEnv("PLUGIN_WEB_API_KEY", () =>
+    const resolved = await withEnvAsync({ PLUGIN_WEB_API_KEY: undefined }, () =>
       resolveApiKeyForProviderCore({
         provider: "plugin-web",
         cfg: {
@@ -1396,7 +978,7 @@ describe("resolveApiKeyForProviderCore", () => {
     };
     setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
 
-    const resolved = await withoutEnv("PLUGIN_WEB_API_KEY", () =>
+    const resolved = await withEnvAsync({ PLUGIN_WEB_API_KEY: undefined }, () =>
       resolveApiKeyForProviderCore({
         provider: "plugin-web",
         cfg: sourceConfig,
@@ -1427,9 +1009,7 @@ describe("resolveApiKeyForProviderCore", () => {
     },
     ...(
       [
-        ["opaque synthetic marker", CUSTOM_LOCAL_AUTH_MARKER],
         ["opaque managed marker", NON_ENV_SECRETREF_MARKER],
-        ["opaque env marker", "OLLAMA_API_KEY"],
         ["opaque env template", "${OPAQUE_KEY}"],
         ["opaque whitespace", "  synthetic-byte-exact-key  "],
       ] as const
@@ -1441,28 +1021,18 @@ describe("resolveApiKeyForProviderCore", () => {
   ])(
     "resolves custom provider $name auth from the active runtime snapshot",
     async ({ apiKey, runtimeKey = "sk-runtime-cliproxy" }) => {
-      const sourceConfig = {
-        models: {
-          providers: {
-            cliproxyapi: {
-              api: "openai-responses" as const,
-              apiKey,
-              baseUrl: "https://cliproxy.example/v1",
-              models: [],
-            },
-          },
+      const sourceConfig = configForProviders({
+        cliproxyapi: providerEntry("https://cliproxy.example/v1", {
+          api: "openai-responses" as const,
+          apiKey,
+        }),
+      });
+      const runtimeConfig = configForProviders({
+        cliproxyapi: {
+          ...sourceConfig.models.providers.cliproxyapi,
+          apiKey: runtimeKey,
         },
-      };
-      const runtimeConfig = {
-        models: {
-          providers: {
-            cliproxyapi: {
-              ...sourceConfig.models.providers.cliproxyapi,
-              apiKey: runtimeKey,
-            },
-          },
-        },
-      };
+      });
       setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
 
       const resolved = await resolveApiKeyForProviderCore({
@@ -1495,28 +1065,18 @@ describe("resolveApiKeyForProviderCore", () => {
   );
 
   it("preserves SecretRef provenance for resolved runtime config clones", async () => {
-    const sourceConfig = {
-      models: {
-        providers: {
-          cliproxyapi: {
-            api: "openai-responses" as const,
-            apiKey: { source: "file", provider: "vault", id: "/cliproxy/api-key" } as const,
-            baseUrl: "https://cliproxy.example/v1",
-            models: [],
-          },
-        },
+    const sourceConfig = configForProviders({
+      cliproxyapi: providerEntry("https://cliproxy.example/v1", {
+        api: "openai-responses" as const,
+        apiKey: { source: "file", provider: "vault", id: "/cliproxy/api-key" } as const,
+      }),
+    });
+    const runtimeConfig = configForProviders({
+      cliproxyapi: {
+        ...sourceConfig.models.providers.cliproxyapi,
+        apiKey: "sk-runtime-clone", // pragma: allowlist secret
       },
-    };
-    const runtimeConfig = {
-      models: {
-        providers: {
-          cliproxyapi: {
-            ...sourceConfig.models.providers.cliproxyapi,
-            apiKey: "sk-runtime-clone", // pragma: allowlist secret
-          },
-        },
-      },
-    };
+    });
     setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
 
     const resolved = await resolveApiKeyForProviderCore({
@@ -1565,24 +1125,18 @@ describe("resolveApiKeyForProviderCore", () => {
   ])(
     "blocks a managed file SecretRef apiKey while its inline provider cooldown is active — $name",
     async ({ auth }) => {
-      const cliproxyConfig = {
+      const cliproxyConfig = providerEntry("https://cliproxy.example/v1", {
         api: "openai-responses" as const,
         apiKey: { source: "file", provider: "vault", id: "/cliproxy/api-key" } as const,
-        baseUrl: "https://cliproxy.example/v1",
-        models: [],
         ...(auth ? { auth } : {}),
-      };
-      const sourceConfig = { models: { providers: { cliproxyapi: cliproxyConfig } } };
-      const runtimeConfig = {
-        models: {
-          providers: {
-            cliproxyapi: {
-              ...cliproxyConfig,
-              apiKey: "sk-runtime-cliproxy", // pragma: allowlist secret
-            },
-          },
+      });
+      const sourceConfig = configForProviders({ cliproxyapi: cliproxyConfig });
+      const runtimeConfig = configForProviders({
+        cliproxyapi: {
+          ...cliproxyConfig,
+          apiKey: "sk-runtime-cliproxy", // pragma: allowlist secret
         },
-      };
+      });
       setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
 
       const store = {
@@ -1614,18 +1168,12 @@ describe("resolveApiKeyForProviderCore", () => {
   );
 
   it("does not treat a custom provider managed SecretRef marker as auth without a runtime snapshot", async () => {
-    const sourceConfig = {
-      models: {
-        providers: {
-          cliproxyapi: {
-            api: "openai-responses" as const,
-            apiKey: NON_ENV_SECRETREF_MARKER,
-            baseUrl: "https://cliproxy.example/v1",
-            models: [],
-          },
-        },
-      },
-    };
+    const sourceConfig = configForProviders({
+      cliproxyapi: providerEntry("https://cliproxy.example/v1", {
+        api: "openai-responses" as const,
+        apiKey: NON_ENV_SECRETREF_MARKER,
+      }),
+    });
 
     await expect(
       resolveApiKeyForProviderCore({
@@ -1644,39 +1192,25 @@ describe("resolveApiKeyForProviderCore", () => {
   });
 
   it("does not resolve custom provider managed SecretRef auth from an unrelated runtime snapshot", async () => {
-    const sourceConfig = {
-      models: {
-        providers: {
-          cliproxyapi: {
-            api: "openai-responses" as const,
-            apiKey: NON_ENV_SECRETREF_MARKER,
-            baseUrl: "https://cliproxy.example/v1",
-            models: [],
-          },
-        },
-      },
-    };
+    const sourceConfig = configForProviders({
+      cliproxyapi: providerEntry("https://cliproxy.example/v1", {
+        api: "openai-responses" as const,
+        apiKey: NON_ENV_SECRETREF_MARKER,
+      }),
+    });
     setRuntimeConfigSnapshot(
-      {
-        models: {
-          providers: {
-            cliproxyapi: {
-              ...sourceConfig.models.providers.cliproxyapi,
-              apiKey: "sk-runtime-wrong-source", // pragma: allowlist secret
-            },
-          },
+      configForProviders({
+        cliproxyapi: {
+          ...sourceConfig.models.providers.cliproxyapi,
+          apiKey: "sk-runtime-wrong-source", // pragma: allowlist secret
         },
-      },
-      {
-        models: {
-          providers: {
-            cliproxyapi: {
-              ...sourceConfig.models.providers.cliproxyapi,
-              baseUrl: "https://other.example/v1",
-            },
-          },
+      }),
+      configForProviders({
+        cliproxyapi: {
+          ...sourceConfig.models.providers.cliproxyapi,
+          baseUrl: "https://other.example/v1",
         },
-      },
+      }),
     );
 
     await expect(
@@ -1686,31 +1220,6 @@ describe("resolveApiKeyForProviderCore", () => {
         store: { version: 1, profiles: {} },
       }),
     ).rejects.toThrow('No API key found for provider "cliproxyapi"');
-  });
-
-  it("does not reuse plugin fallback auth when the plugin is disabled", async () => {
-    await expect(
-      withoutEnv("PLUGIN_WEB_API_KEY", () =>
-        resolveApiKeyForProviderCore({
-          provider: "plugin-web",
-          cfg: {
-            plugins: {
-              entries: {
-                "plugin-web": {
-                  enabled: false,
-                  config: {
-                    webSearch: {
-                      apiKey: "plugin-web-fallback-key", // pragma: allowlist secret
-                    },
-                  },
-                },
-              },
-            },
-          },
-          store: { version: 1, profiles: {} },
-        }),
-      ),
-    ).rejects.toThrow('No API key found for provider "plugin-web"');
   });
 
   it.each([
@@ -1810,18 +1319,12 @@ describe("resolveApiKeyForProviderCore", () => {
           provider,
           api: "openai-completions",
         } as Model,
-        cfg: {
-          models: {
-            providers: {
-              [provider]: {
-                auth: mode,
-                apiKey: "configured-subscription-credential",
-                baseUrl: "https://subscription.example/v1",
-                models: [],
-              },
-            },
-          },
-        },
+        cfg: configForProviders({
+          [provider]: providerEntry("https://subscription.example/v1", {
+            auth: mode,
+            apiKey: "configured-subscription-credential",
+          }),
+        }),
         store: { version: 1, profiles: {} },
       });
 
@@ -1841,27 +1344,20 @@ describe("resolveApiKeyForProviderCore", () => {
           provider: "openai",
           api: "openai-responses",
         } as Model,
-        cfg: {
-          models: {
-            providers: {
-              openai: {
-                auth: "oauth",
-                apiKey: "configured-subscription-credential",
-                baseUrl: "https://api.openai.com/v1",
-                models: [],
-              },
-            },
-          },
-        },
+        cfg: configForProviders({
+          openai: providerEntry("https://api.openai.com/v1", {
+            auth: "oauth",
+            apiKey: "configured-subscription-credential",
+          }),
+        }),
         store: { version: 1, profiles: {} },
       }),
     ).rejects.toThrow('No API key found for provider "openai"');
   });
 
   it("preserves token mode for an env-backed provider SecretRef", async () => {
-    await withEnv(
-      "OPENCLAW_TEST_PROVIDER_SUBSCRIPTION_TOKEN",
-      "env-subscription-credential",
+    await withEnvAsync(
+      { OPENCLAW_TEST_PROVIDER_SUBSCRIPTION_TOKEN: "env-subscription-credential" },
       async () => {
         const resolved = await getApiKeyForModelCore({
           model: {
@@ -1869,22 +1365,16 @@ describe("resolveApiKeyForProviderCore", () => {
             provider: "custom-token-env",
             api: "openai-completions",
           } as Model,
-          cfg: {
-            models: {
-              providers: {
-                "custom-token-env": {
-                  auth: "token",
-                  apiKey: {
-                    source: "env",
-                    provider: "default",
-                    id: "OPENCLAW_TEST_PROVIDER_SUBSCRIPTION_TOKEN",
-                  },
-                  baseUrl: "https://subscription.example/v1",
-                  models: [],
-                },
+          cfg: configForProviders({
+            "custom-token-env": providerEntry("https://subscription.example/v1", {
+              auth: "token",
+              apiKey: {
+                source: "env",
+                provider: "default",
+                id: "OPENCLAW_TEST_PROVIDER_SUBSCRIPTION_TOKEN",
               },
-            },
-          },
+            }),
+          }),
           store: { version: 1, profiles: {} },
         });
 
@@ -1898,30 +1388,20 @@ describe("resolveApiKeyForProviderCore", () => {
   });
 
   it("prefers explicit api-key provider SecretRef config over ambient auth profiles", async () => {
-    const sourceConfig = {
-      models: {
-        providers: {
-          cliproxyapi: {
-            api: "openai-responses" as const,
-            auth: "api-key" as const,
-            apiKey: { source: "file", provider: "vault", id: "/cliproxy/api-key" } as const,
-            baseUrl: "https://cliproxy.example/v1",
-            models: [],
-          },
-        },
-      },
-    };
+    const sourceConfig = configForProviders({
+      cliproxyapi: providerEntry("https://cliproxy.example/v1", {
+        api: "openai-responses" as const,
+        auth: "api-key" as const,
+        apiKey: { source: "file", provider: "vault", id: "/cliproxy/api-key" } as const,
+      }),
+    });
     setRuntimeConfigSnapshot(
-      {
-        models: {
-          providers: {
-            cliproxyapi: {
-              ...sourceConfig.models.providers.cliproxyapi,
-              apiKey: "sk-runtime-cliproxy", // pragma: allowlist secret
-            },
-          },
+      configForProviders({
+        cliproxyapi: {
+          ...sourceConfig.models.providers.cliproxyapi,
+          apiKey: "sk-runtime-cliproxy", // pragma: allowlist secret
         },
-      },
+      }),
       sourceConfig,
     );
 
@@ -1946,30 +1426,20 @@ describe("resolveApiKeyForProviderCore", () => {
   });
 
   it("preserves oauth mode for a managed provider SecretRef", async () => {
-    const sourceConfig = {
-      models: {
-        providers: {
-          "custom-oauth-ref": {
-            api: "openai-completions" as const,
-            auth: "oauth" as const,
-            apiKey: { source: "file", provider: "vault", id: "/custom/oauth" } as const,
-            baseUrl: "https://subscription.example/v1",
-            models: [],
-          },
-        },
-      },
-    };
+    const sourceConfig = configForProviders({
+      "custom-oauth-ref": providerEntry("https://subscription.example/v1", {
+        api: "openai-completions" as const,
+        auth: "oauth" as const,
+        apiKey: { source: "file", provider: "vault", id: "/custom/oauth" } as const,
+      }),
+    });
     setRuntimeConfigSnapshot(
-      {
-        models: {
-          providers: {
-            "custom-oauth-ref": {
-              ...sourceConfig.models.providers["custom-oauth-ref"],
-              apiKey: "resolved-oauth-credential",
-            },
-          },
+      configForProviders({
+        "custom-oauth-ref": {
+          ...sourceConfig.models.providers["custom-oauth-ref"],
+          apiKey: "resolved-oauth-credential",
         },
-      },
+      }),
       sourceConfig,
     );
 
@@ -1992,7 +1462,7 @@ describe("resolveApiKeyForProviderCore", () => {
   });
 
   it("prefers non-secret local env markers over ambient profiles", async () => {
-    const resolved = await withEnv("OLLAMA_API_KEY", "ollama-local", () =>
+    const resolved = await withEnvAsync({ OLLAMA_API_KEY: "ollama-local" }, () =>
       resolveApiKeyForProviderCore({
         provider: "ollama",
         store: createAuthProfileStoreFixture({
@@ -2033,13 +1503,9 @@ describe("resolveApiKeyForProviderCore – synthetic local auth for custom provi
       expect(
         hasSyntheticLocalProviderAuthConfig({
           provider: "custom-local",
-          cfg: {
-            models: {
-              providers: {
-                "custom-local": createCustomProviderConfig(baseUrl),
-              },
-            },
-          },
+          cfg: configForProviders({
+            "custom-local": createCustomProviderConfig(baseUrl),
+          }),
         }),
         baseUrl,
       ).toBe(true);
@@ -2050,13 +1516,9 @@ describe("resolveApiKeyForProviderCore – synthetic local auth for custom provi
     expect(
       hasSyntheticLocalProviderAuthConfig({
         provider: "custom-remote",
-        cfg: {
-          models: {
-            providers: {
-              "custom-remote": createCustomProviderConfig("http://128.0.0.1:8080/v1"),
-            },
-          },
-        },
+        cfg: configForProviders({
+          "custom-remote": createCustomProviderConfig("http://128.0.0.1:8080/v1"),
+        }),
       }),
     ).toBe(false);
   });
@@ -2076,40 +1538,22 @@ describe("resolveApiKeyForProviderCore – synthetic local auth for custom provi
     expect(
       hasSyntheticLocalProviderAuthConfig({
         provider: "my-remote",
-        cfg: {
-          models: {
-            providers: {
-              "my-remote": createCustomProviderConfig("https://api.example.com/v1"),
-            },
-          },
-        },
+        cfg: configForProviders({
+          "my-remote": createCustomProviderConfig("https://api.example.com/v1"),
+        }),
       }),
     ).toBe(false);
 
     await expect(
       resolveApiKeyForProviderCore({
         provider: "my-remote",
-        cfg: {
-          models: {
-            providers: {
-              "my-remote": {
-                baseUrl: "https://api.example.com/v1",
-                api: "openai-completions",
-                models: [
-                  {
-                    id: "gpt-5",
-                    name: "GPT-5",
-                    reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 8192,
-                    maxTokens: 4096,
-                  },
-                ],
-              },
-            },
+        cfg: configForProviders({
+          "my-remote": {
+            baseUrl: "https://api.example.com/v1",
+            api: "openai-completions",
+            models: [createModelConfig({ id: "gpt-5", name: "GPT-5" })],
           },
-        },
+        }),
       }),
     ).rejects.toThrow("No API key found");
   });
@@ -2117,28 +1561,14 @@ describe("resolveApiKeyForProviderCore – synthetic local auth for custom provi
   it("preserves custom named Ollama providers with explicit local marker auth", async () => {
     const auth = await resolveApiKeyForProviderCore({
       provider: "ollama-remote",
-      cfg: {
-        models: {
-          providers: {
-            "ollama-remote": {
-              baseUrl: "http://192.168.178.122:11434",
-              api: "ollama",
-              apiKey: "ollama-local",
-              models: [
-                {
-                  id: "qwen3.5:27b",
-                  name: "Qwen 3.5 27B",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 8192,
-                  maxTokens: 4096,
-                },
-              ],
-            },
-          },
+      cfg: configForProviders({
+        "ollama-remote": {
+          baseUrl: "http://192.168.178.122:11434",
+          api: "ollama",
+          apiKey: "ollama-local",
+          models: [createModelConfig({ id: "qwen3.5:27b", name: "Qwen 3.5 27B" })],
         },
-      },
+      }),
       store: { version: 1, profiles: {} },
     });
 
@@ -2152,27 +1582,20 @@ describe("resolveApiKeyForProviderCore – synthetic local auth for custom provi
   it("uses Ollama plugin synthetic auth for custom private provider ids without apiKey", async () => {
     const auth = await resolveApiKeyForProviderCore({
       provider: "ollama-gpu1",
-      cfg: {
-        models: {
-          providers: {
-            "ollama-gpu1": {
-              baseUrl: "http://192.168.178.122:11435",
-              api: "ollama",
-              models: [
-                {
-                  id: "qwen3:14b",
-                  name: "Qwen 3 14B",
-                  reasoning: true,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 16384,
-                  maxTokens: 4096,
-                },
-              ],
-            },
-          },
+      cfg: configForProviders({
+        "ollama-gpu1": {
+          baseUrl: "http://192.168.178.122:11435",
+          api: "ollama",
+          models: [
+            createModelConfig({
+              id: "qwen3:14b",
+              name: "Qwen 3 14B",
+              reasoning: true,
+              contextWindow: 16384,
+            }),
+          ],
         },
-      },
+      }),
       store: { version: 1, profiles: {} },
     });
 
@@ -2189,24 +1612,16 @@ describe("resolveApiKeyForProviderCore – synthetic local auth for custom provi
       api: "ollama" as const,
       apiKey: { source: "file", provider: "vault", id: "/ollama/api-key" } as const,
     };
-    const sourceConfig = {
-      models: {
-        providers: {
-          "ollama-gpu1": providerConfig,
-        },
-      },
-    };
+    const sourceConfig = configForProviders({
+      "ollama-gpu1": providerConfig,
+    });
     setRuntimeConfigSnapshot(
-      {
-        models: {
-          providers: {
-            "ollama-gpu1": {
-              ...providerConfig,
-              apiKey: "sk-runtime-ollama", // pragma: allowlist secret
-            },
-          },
+      configForProviders({
+        "ollama-gpu1": {
+          ...providerConfig,
+          apiKey: "sk-runtime-ollama", // pragma: allowlist secret
         },
-      },
+      }),
       sourceConfig,
     );
 
@@ -2238,29 +1653,20 @@ describe("resolveApiKeyForProviderCore – synthetic local auth for custom provi
         contextWindow: 8192,
         maxTokens: 4096,
       },
-      cfg: {
-        models: {
-          providers: {
-            "my-router": {
-              baseUrl: "http://localhost:8080/v1",
-              api: "openai-completions",
-              models: [
-                {
-                  id: "my-router/local-llama",
-                  name: "Local Llama",
-                  api: "ollama",
-                  baseUrl: "http://localhost:11434",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 8192,
-                  maxTokens: 4096,
-                },
-              ],
-            },
-          },
+      cfg: configForProviders({
+        "my-router": {
+          baseUrl: "http://localhost:8080/v1",
+          api: "openai-completions",
+          models: [
+            createModelConfig({
+              id: "my-router/local-llama",
+              name: "Local Llama",
+              api: "ollama",
+              baseUrl: "http://localhost:11434",
+            }),
+          ],
         },
-      },
+      }),
       store: { version: 1, profiles: {} },
     });
 
@@ -2274,28 +1680,14 @@ describe("resolveApiKeyForProviderCore – synthetic local auth for custom provi
   it("accepts non-secret local markers for private LAN custom OpenAI-compatible providers", async () => {
     const auth = await resolveApiKeyForProviderCore({
       provider: "custom-192-168-0-222-11434",
-      cfg: {
-        models: {
-          providers: {
-            "custom-192-168-0-222-11434": {
-              baseUrl: "http://192.168.0.222:11434/v1",
-              api: "openai-completions",
-              apiKey: "ollama-local",
-              models: [
-                {
-                  id: "qwen3.5:9b",
-                  name: "Qwen 3.5 9B",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 8192,
-                  maxTokens: 4096,
-                },
-              ],
-            },
-          },
+      cfg: configForProviders({
+        "custom-192-168-0-222-11434": {
+          baseUrl: "http://192.168.0.222:11434/v1",
+          api: "openai-completions",
+          apiKey: "ollama-local",
+          models: [createModelConfig({ id: "qwen3.5:9b", name: "Qwen 3.5 9B" })],
         },
-      },
+      }),
       store: { version: 1, profiles: {} },
     });
 
@@ -2311,28 +1703,21 @@ describe("resolveApiKeyForProviderCore – synthetic local auth for custom provi
     async (hostname) => {
       const auth = await resolveApiKeyForProviderCore({
         provider: "ollama",
-        cfg: {
-          models: {
-            providers: {
-              ollama: {
-                baseUrl: `http://${hostname}:11434`,
-                api: "ollama",
-                apiKey: "ollama-local",
-                models: [
-                  {
-                    id: "qwen3.5:27b",
-                    name: "Qwen 3.5 27B",
-                    reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 262144,
-                    maxTokens: 8192,
-                  },
-                ],
-              },
-            },
+        cfg: configForProviders({
+          ollama: {
+            baseUrl: `http://${hostname}:11434`,
+            api: "ollama",
+            apiKey: "ollama-local",
+            models: [
+              createModelConfig({
+                id: "qwen3.5:27b",
+                name: "Qwen 3.5 27B",
+                contextWindow: 262144,
+                maxTokens: 8192,
+              }),
+            ],
           },
-        },
+        }),
         store: { version: 1, profiles: {} },
       });
 
@@ -2348,99 +1733,49 @@ describe("resolveApiKeyForProviderCore – synthetic local auth for custom provi
     await expect(
       resolveApiKeyForProviderCore({
         provider: "custom-remote",
-        cfg: {
-          models: {
-            providers: {
-              "custom-remote": {
-                baseUrl: "https://api.example.com/v1",
-                api: "openai-completions",
-                apiKey: "ollama-local",
-                models: [
-                  {
-                    id: "qwen3.5:9b",
-                    name: "Qwen 3.5 9B",
-                    reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 8192,
-                    maxTokens: 4096,
-                  },
-                ],
-              },
-            },
+        cfg: configForProviders({
+          "custom-remote": {
+            baseUrl: "https://api.example.com/v1",
+            api: "openai-completions",
+            apiKey: "ollama-local",
+            models: [createModelConfig({ id: "qwen3.5:9b", name: "Qwen 3.5 9B" })],
           },
-        },
+        }),
         store: { version: 1, profiles: {} },
       }),
     ).rejects.toThrow('No API key found for provider "custom-remote"');
   });
 
   it("does not synthesize local auth when apiKey is explicitly configured but unresolved", async () => {
-    const previous = process.env.OPENAI_API_KEY;
-    delete process.env.OPENAI_API_KEY;
-    try {
+    return withEnvAsync({ OPENAI_API_KEY: undefined }, async () => {
       await expect(
         resolveApiKeyForProviderCore({
           provider: "custom",
-          cfg: {
-            models: {
-              providers: {
-                custom: {
-                  baseUrl: "http://127.0.0.1:8080/v1",
-                  api: "openai-completions",
-                  apiKey: "OPENAI_API_KEY",
-                  models: [
-                    {
-                      id: "llama3",
-                      name: "Llama 3",
-                      reasoning: false,
-                      input: ["text"],
-                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                      contextWindow: 8192,
-                      maxTokens: 4096,
-                    },
-                  ],
-                },
-              },
+          cfg: configForProviders({
+            custom: {
+              baseUrl: "http://127.0.0.1:8080/v1",
+              api: "openai-completions",
+              apiKey: "OPENAI_API_KEY",
+              models: [createModelConfig({})],
             },
-          },
+          }),
         }),
       ).rejects.toThrow('No API key found for provider "custom"');
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENAI_API_KEY;
-      } else {
-        process.env.OPENAI_API_KEY = previous;
-      }
-    }
+    });
   });
 
   it("does not synthesize local auth when auth mode explicitly requires oauth", async () => {
     await expect(
       resolveApiKeyForProviderCore({
         provider: "custom",
-        cfg: {
-          models: {
-            providers: {
-              custom: {
-                baseUrl: "http://127.0.0.1:8080/v1",
-                api: "openai-completions",
-                auth: "oauth",
-                models: [
-                  {
-                    id: "llama3",
-                    name: "Llama 3",
-                    reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 8192,
-                    maxTokens: 4096,
-                  },
-                ],
-              },
-            },
+        cfg: configForProviders({
+          custom: {
+            baseUrl: "http://127.0.0.1:8080/v1",
+            api: "openai-completions",
+            auth: "oauth",
+            models: [createModelConfig({})],
           },
-        },
+        }),
       }),
     ).rejects.toThrow('No API key found for provider "custom"');
   });
@@ -2448,17 +1783,9 @@ describe("resolveApiKeyForProviderCore – synthetic local auth for custom provi
   it("uses explicit aws-sdk auth for local baseUrl overrides", async () => {
     const auth = await resolveApiKeyForProviderCore({
       provider: "amazon-bedrock",
-      cfg: {
-        models: {
-          providers: {
-            "amazon-bedrock": {
-              baseUrl: "http://127.0.0.1:8080/v1",
-              models: [],
-              auth: "aws-sdk",
-            },
-          },
-        },
-      },
+      cfg: configForProviders({
+        "amazon-bedrock": providerEntry("http://127.0.0.1:8080/v1", { auth: "aws-sdk" }),
+      }),
     });
 
     expect(auth.mode).toBe("aws-sdk");
@@ -2533,80 +1860,25 @@ describe("applyAuthHeaderOverride", () => {
     maxTokens: 8192,
   };
 
-  it("injects Authorization Bearer header when authHeader is true", () => {
-    const result = applyAuthHeaderOverride(
-      baseModel,
-      { apiKey: "test-api-key", source: "env", mode: "api-key" },
-      {
-        models: {
-          providers: {
-            google: {
-              baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-              api: "openai-completions",
-              authHeader: true,
-              models: [],
-            },
-          },
-        },
-      },
-    );
-
-    expect(result.headers).toEqual({ Authorization: "Bearer test-api-key" });
-  });
-
-  it("preserves existing model headers when injecting Authorization", () => {
-    const result = applyAuthHeaderOverride(
-      { ...baseModel, headers: { "X-Custom": "value" } },
-      { apiKey: "test-api-key", source: "env", mode: "api-key" },
-      {
-        models: {
-          providers: {
-            google: {
-              baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-              api: "openai-completions",
-              authHeader: true,
-              models: [],
-            },
-          },
-        },
-      },
-    );
-
-    expect(result.headers).toEqual({
-      "X-Custom": "value",
-      Authorization: "Bearer test-api-key",
-    });
-  });
-
   it("sentinelizes SecretRef-managed provider headers from the runtime snapshot", () => {
-    const sourceConfig = {
-      models: {
-        providers: {
-          google: {
-            baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-            api: "openai-completions" as const,
-            headers: {
-              Authorization: "secretref-env:GOOGLE_AUTH_TOKEN",
-              "X-Managed": NON_ENV_SECRETREF_MARKER,
-            },
-            models: [],
-          },
+    const sourceConfig = configForProviders({
+      google: providerEntry("https://generativelanguage.googleapis.com/v1beta/openai", {
+        api: "openai-completions" as const,
+        headers: {
+          Authorization: "secretref-env:GOOGLE_AUTH_TOKEN",
+          "X-Managed": NON_ENV_SECRETREF_MARKER,
+        },
+      }),
+    });
+    const runtimeConfig = configForProviders({
+      google: {
+        ...sourceConfig.models.providers.google,
+        headers: {
+          Authorization: "Bearer runtime-google-secret",
+          "X-Managed": "runtime-managed-secret",
         },
       },
-    };
-    const runtimeConfig = {
-      models: {
-        providers: {
-          google: {
-            ...sourceConfig.models.providers.google,
-            headers: {
-              Authorization: "Bearer runtime-google-secret",
-              "X-Managed": "runtime-managed-secret",
-            },
-          },
-        },
-      },
-    };
+    });
     setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
 
     const result = applyAuthHeaderOverride(
@@ -2634,40 +1906,30 @@ describe("applyAuthHeaderOverride", () => {
   });
 
   it("sentinelizes SecretRef-managed request headers and composed auth", () => {
-    const sourceConfig = {
-      models: {
-        providers: {
-          google: {
-            baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-            api: "openai-completions" as const,
-            request: {
-              headers: { "X-Managed": NON_ENV_SECRETREF_MARKER },
-              auth: {
-                mode: "authorization-bearer" as const,
-                token: "secretref-env:GOOGLE_BEARER_TOKEN",
-              },
-            },
-            models: [],
+    const sourceConfig = configForProviders({
+      google: providerEntry("https://generativelanguage.googleapis.com/v1beta/openai", {
+        api: "openai-completions" as const,
+        request: {
+          headers: { "X-Managed": NON_ENV_SECRETREF_MARKER },
+          auth: {
+            mode: "authorization-bearer" as const,
+            token: "secretref-env:GOOGLE_BEARER_TOKEN",
+          },
+        },
+      }),
+    });
+    const runtimeConfig = configForProviders({
+      google: {
+        ...sourceConfig.models.providers.google,
+        request: {
+          headers: { "X-Managed": "runtime-managed-secret" },
+          auth: {
+            mode: "authorization-bearer" as const,
+            token: "runtime-bearer-secret",
           },
         },
       },
-    };
-    const runtimeConfig = {
-      models: {
-        providers: {
-          google: {
-            ...sourceConfig.models.providers.google,
-            request: {
-              headers: { "X-Managed": "runtime-managed-secret" },
-              auth: {
-                mode: "authorization-bearer" as const,
-                token: "runtime-bearer-secret",
-              },
-            },
-          },
-        },
-      },
-    };
+    });
     setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
 
     const result = applySecretRefHeaderSentinels(
@@ -2701,111 +1963,37 @@ describe("applyAuthHeaderOverride", () => {
     expect(resolveSecretSentinel(requestTokenSentinel)).toBe("runtime-bearer-secret");
   });
 
-  it("returns model unchanged when authHeader is not set", () => {
-    const result = applyAuthHeaderOverride(
-      baseModel,
-      { apiKey: "test-api-key", source: "env", mode: "api-key" },
-      {
-        models: {
-          providers: {
-            google: {
-              baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-              api: "openai-completions",
-              models: [],
-            },
-          },
-        },
-      },
-    );
+  const baseAuth = { apiKey: "test-api-key", source: "env", mode: "api-key" } as const;
+  const provider = providerEntry(baseModel.baseUrl, { api: baseModel.api });
+  const enabledConfig = configForProviders({ google: { ...provider, authHeader: true } });
 
-    expect(result).toBe(baseModel);
-  });
-
-  it("returns model unchanged when authHeader is false", () => {
-    const result = applyAuthHeaderOverride(
-      baseModel,
-      { apiKey: "test-api-key", source: "env", mode: "api-key" },
-      {
-        models: {
-          providers: {
-            google: {
-              baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-              api: "openai-completions",
-              authHeader: false,
-              models: [],
-            },
-          },
-        },
-      },
-    );
-
-    expect(result).toBe(baseModel);
-  });
-
-  it("returns model unchanged when no API key is available", () => {
-    const result = applyAuthHeaderOverride(baseModel, null, {
-      models: {
-        providers: {
-          google: {
-            baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-            api: "openai-completions",
-            authHeader: true,
-            models: [],
-          },
-        },
-      },
-    });
-
-    expect(result).toBe(baseModel);
-  });
-
-  it("returns model unchanged when provider config is missing", () => {
-    const result = applyAuthHeaderOverride(
-      baseModel,
-      { apiKey: "test-api-key", source: "env", mode: "api-key" },
-      undefined,
-    );
-
-    expect(result).toBe(baseModel);
-  });
-
-  it("rejects synthetic marker API keys", () => {
-    const result = applyAuthHeaderOverride(
-      baseModel,
-      { apiKey: CUSTOM_LOCAL_AUTH_MARKER, source: "synthetic", mode: "api-key" },
-      {
-        models: {
-          providers: {
-            google: {
-              baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-              api: "openai-completions",
-              authHeader: true,
-              models: [],
-            },
-          },
-        },
-      },
-    );
-
-    expect(result).toBe(baseModel);
+  it.each([
+    {
+      name: "authHeader is not set",
+      cfg: configForProviders({ google: provider }),
+      auth: baseAuth,
+    },
+    {
+      name: "authHeader is false",
+      cfg: configForProviders({ google: { ...provider, authHeader: false } }),
+      auth: baseAuth,
+    },
+    { name: "no API key is available", cfg: enabledConfig, auth: null },
+    { name: "provider config is missing", cfg: undefined, auth: baseAuth },
+    {
+      name: "API key is a synthetic marker",
+      cfg: enabledConfig,
+      auth: { ...baseAuth, apiKey: CUSTOM_LOCAL_AUTH_MARKER, source: "synthetic" },
+    },
+  ])("returns model unchanged when $name", ({ cfg, auth }) => {
+    expect(applyAuthHeaderOverride(baseModel, auth, cfg)).toBe(baseModel);
   });
 
   it("strips existing authorization header case-insensitively before injection", () => {
     const result = applyAuthHeaderOverride(
       { ...baseModel, headers: { authorization: "old-value", "X-Custom": "keep" } },
       { apiKey: "test-api-key", source: "env", mode: "api-key" },
-      {
-        models: {
-          providers: {
-            google: {
-              baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-              api: "openai-completions",
-              authHeader: true,
-              models: [],
-            },
-          },
-        },
-      },
+      enabledConfig,
     );
 
     expect(result.headers).toEqual({

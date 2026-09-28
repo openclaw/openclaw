@@ -61,7 +61,7 @@ async function withTimeout<T>(promise: Promise<T>, message: string): Promise<T> 
   }
 }
 
-it.skipIf(process.platform === "win32").each([
+it.skipIf(process.platform === "win32").concurrent.each([
   { signal: "SIGINT", code: 130 },
   { signal: "SIGTERM", code: 143 },
   { signal: "SIGHUP", code: 129 },

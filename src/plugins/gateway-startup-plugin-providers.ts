@@ -217,16 +217,8 @@ export function collectConfiguredVoiceProviderIds(
 // boot. Missing/"auto" stays lazy, and "none" disables provider-backed embeddings.
 const MEMORY_EMBEDDING_PROVIDER_STARTUP_SKIP_IDS: ReadonlySet<string> = new Set(["auto", "none"]);
 
-function normalizeMemoryEmbeddingProviderIdValue(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = normalizeOptionalLowercaseString(value);
-  return normalized || undefined;
-}
-
 function normalizeExplicitMemoryEmbeddingProviderId(value: unknown): string | undefined {
-  const normalized = normalizeMemoryEmbeddingProviderIdValue(value);
+  const normalized = normalizeOptionalLowercaseString(value);
   return normalized && !MEMORY_EMBEDDING_PROVIDER_STARTUP_SKIP_IDS.has(normalized)
     ? normalized
     : undefined;
@@ -237,10 +229,6 @@ function readMemorySearchEnabled(
 ): boolean | undefined {
   const enabled = memorySearch?.enabled;
   return typeof enabled === "boolean" ? enabled : undefined;
-}
-
-function isMemorySlotExplicitlyDisabled(config: OpenClawConfig): boolean {
-  return normalizeOptionalLowercaseString(config.plugins?.slots?.memory) === "none";
 }
 
 type MemoryEmbeddingStartupProviderSource = "provider" | "fallback";
@@ -297,9 +285,7 @@ function resolveEffectiveMemoryEmbeddingProviderEntries(
   if (!enabled) {
     return [];
   }
-  const rawProvider = normalizeMemoryEmbeddingProviderIdValue(
-    override?.provider ?? defaults?.provider,
-  );
+  const rawProvider = normalizeOptionalLowercaseString(override?.provider ?? defaults?.provider);
   const effectiveProvider = rawProvider === "auto" || !rawProvider ? "openai" : rawProvider;
   if (effectiveProvider === "none") {
     return [];
@@ -333,7 +319,7 @@ function resolveEffectiveMemoryEmbeddingProviderEntries(
 export function collectConfiguredMemoryEmbeddingStartupProviderOwners(
   config: OpenClawConfig,
 ): ConfiguredMemoryEmbeddingStartupProviderOwner[] {
-  if (isMemorySlotExplicitlyDisabled(config)) {
+  if (normalizeOptionalLowercaseString(config.plugins?.slots?.memory) === "none") {
     return [];
   }
   const byConfiguredIdAndSource = new Map<string, ConfiguredMemoryEmbeddingStartupProviderOwner>();
@@ -431,10 +417,8 @@ export function collectUnregisteredConfiguredMemoryEmbeddingProviders(params: {
 export function collectRegisteredEmbeddingProviderIds(
   registry: Partial<Pick<PluginRegistry, "embeddingProviders">>,
 ): Set<string> {
-  return new Set(
-    [
-      ...(registry.embeddingProviders ?? []),
-      ...listRegisteredEmbeddingProviders().map((entry) => ({ provider: entry.adapter })),
-    ].map((entry) => entry.provider.id),
-  );
+  return new Set([
+    ...(registry.embeddingProviders ?? []).map((entry) => entry.provider.id),
+    ...listRegisteredEmbeddingProviders().map((entry) => entry.adapter.id),
+  ]);
 }

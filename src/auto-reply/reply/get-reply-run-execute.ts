@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { resolveAgentConfig, resolveAgentRunCwd } from "../../agents/agent-scope-config.js";
 import {
   hasLegacyAutoFallbackWithoutOrigin,
@@ -23,6 +24,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { sessionPersonalProfileId } from "../../config/sessions/session-entry-provenance.js";
+import { getGatewayLocalUserIngress } from "../../gateway/local-user-ingress.js";
 import { normalizeMediaFacts } from "../../media/media-facts.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
 import { isSessionPersonalBootstrapTurn } from "../../sessions/session-participant-input.js";
@@ -34,6 +36,7 @@ import {
 import { buildChannelUserTurnSender } from "../../sessions/user-turn-transcript.metadata.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { isConfiguredCommandOwner } from "../command-auth.js";
+import { bindCommandOwnerAuthority, getCommandOwnerAuthority } from "../command-owner-authority.js";
 import { getGroupThreadTurn } from "../group-thread-context.js";
 import { resolveInternalTurnTranscript } from "../internal-turn-source.js";
 import type { OriginatingChannelType } from "../templating.js";
@@ -58,6 +61,7 @@ import {
 import {
   buildChannelSourceTurnId,
   readChannelSourceTurnId,
+  resolveReplySourceTurnId,
   setChannelSourceTurnId,
   shouldMintChannelSourceTurnId,
 } from "./source-turn-id.js";
@@ -87,7 +91,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     queueKey,
     shouldSteer,
     shouldFollowup,
-    queueAdmissionState,
+    hasQueuedFollowups,
     isActive,
     authProfileId,
     authProfileIdSource,
@@ -385,12 +389,19 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   });
   const followupRun = {
     prompt: queuedBody,
+    sourceTurnId: resolveReplySourceTurnId({
+      sourceTurnId,
+      admissionRunId: sourceMessageId,
+      ingressProvider: ctx.Provider ?? ctx.Surface ?? promptSessionCtx.Provider,
+      entry: preparedSessionState.sessionEntry,
+    }),
     personalBootstrapEligible,
     operatorAuthority: opts?.operatorAuthority,
     transcriptPrompt: transcriptCommandBody,
     ...(userTurnTranscriptRecorder ? { userTurnTranscriptRecorder } : {}),
     currentInboundEventKind: inboundEventKind,
     currentInboundAudio: hasInboundAudio(sessionCtx),
+    gatewayLocalUserIngress: getGatewayLocalUserIngress(ctx),
     channelAdmissionEvidence:
       readChannelContextAdmissionEvidence(ctx) ?? readChannelContextAdmissionEvidence(sessionCtx),
     currentInboundContext,
@@ -435,6 +446,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       normalizeOptionalString(sessionCtx.ChatId),
     originatingChatType: replyRoute.chatType,
     run: {
+      providerReviewAcknowledgment: opts?.providerReviewAcknowledgment,
       agentId,
       agentDir,
       sessionId: preparedSessionState.sessionId,
@@ -457,11 +469,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
         normalizeOptionalString(sessionCtx.GroupChannel) ??
         normalizeOptionalString(sessionCtx.GroupSubject),
       groupSpace: normalizeOptionalString(sessionCtx.GroupSpace),
-      memberRoleIds: Array.isArray(sessionCtx.MemberRoleIds)
-        ? sessionCtx.MemberRoleIds.map((roleId) => normalizeOptionalString(roleId)).filter(
-            (roleId): roleId is string => Boolean(roleId),
-          )
-        : undefined,
+      memberRoleIds: normalizeArrayBackedTrimmedStringList(sessionCtx.MemberRoleIds),
       // Parent lineage authenticates inherited group policy for queued CLI/MCP runs.
       spawnedBy: normalizeOptionalString(preparedSessionState.sessionEntry?.spawnedBy),
       senderId: normalizeOptionalString(sessionCtx.SenderId),
@@ -577,6 +585,10 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     },
   };
   const sourceReplyDeliveryRuntimeOptions = opts as SourceReplyDeliveryRuntimeOptions | undefined;
+  const channelOwnerAuthority = getCommandOwnerAuthority(sessionCtx);
+  if (command.senderIsOwner && channelOwnerAuthority) {
+    bindCommandOwnerAuthority(followupRun.run, channelOwnerAuthority);
+  }
   if (sourceReplyDeliveryRuntimeOptions?.sourceReplyDeliveryModeOrigin) {
     const sourceReplyDeliveryRuntime = createSourceReplyDeliveryRuntime({
       origin: sourceReplyDeliveryRuntimeOptions.sourceReplyDeliveryModeOrigin,
@@ -612,7 +624,8 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     accountId: replyRoute.accountId,
     senderId: normalizeOptionalString(command.senderId),
   };
-  const isCurrentChannelOwner = () => isConfiguredCommandOwner(getRuntimeConfig(), cronOwner);
+  const isCurrentChannelOwner = () =>
+    channelOwnerAuthority?.isCurrent() ?? isConfiguredCommandOwner(getRuntimeConfig(), cronOwner);
   // Only fresh owner ingress mints this identity. Management-only admissions do not imply it.
   const createdCronCreatorAuthorityCapability =
     !inheritedCronCreatorAuthorityCapability && authorityRunId && messageProvider
@@ -640,7 +653,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       resolvedQueue,
       shouldSteer,
       shouldFollowup,
-      queueAdmissionState,
+      hasQueuedFollowups,
       isActive,
       isRunActive: () => {
         const latestSessionState = resolvePreparedSessionState();

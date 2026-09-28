@@ -1,5 +1,9 @@
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  asNullableObjectRecord,
+  asNullableRecord,
+  isRecord,
+} from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveCronTriggerMinIntervalMs } from "../../../../src/config/cron-limits.js";
@@ -29,6 +33,7 @@ import { getCronJobPayload } from "./payload.ts";
 import { cronRunNotStartedMessage } from "./run-feedback.ts";
 import { clearCronRunsPage, loadCronRuns, retireCronRunsRequest } from "./runs.ts";
 import type { CronFieldErrors, CronFormState, CronState } from "./types.ts";
+import { resolveCronWebhookDeliveryError } from "./webhook-url.ts";
 
 export { loadCronScopeStats } from "./scope.ts";
 export { loadCronJobsPage } from "./jobs.ts";
@@ -232,11 +237,9 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
     }
   }
   if (form.deliveryMode === "webhook") {
-    const target = form.deliveryTo.trim();
-    if (!target) {
-      errors.deliveryTo = "cron.errors.webhookUrlRequired";
-    } else if (!/^https?:\/\//i.test(target)) {
-      errors.deliveryTo = "cron.errors.webhookUrlInvalid";
+    const error = resolveCronWebhookDeliveryError(form.deliveryTo);
+    if (error) {
+      errors.deliveryTo = error;
     }
   }
   if (form.failureAlertMode === "custom") {
@@ -376,17 +379,14 @@ function addModelId(target: Set<string>, value: unknown) {
 }
 
 function addModelConfigIds(target: Set<string>, modelConfig: unknown) {
-  if (!modelConfig) {
-    return;
-  }
   if (typeof modelConfig === "string") {
     addModelId(target, modelConfig);
     return;
   }
-  if (typeof modelConfig !== "object") {
+  const record = asNullableObjectRecord(modelConfig);
+  if (!record) {
     return;
   }
-  const record = modelConfig as Record<string, unknown>;
   addModelId(target, record.primary);
   addModelId(target, record.model);
   addModelId(target, record.id);
@@ -404,32 +404,20 @@ function addModelConfigIds(target: Set<string>, modelConfig: unknown) {
 export function resolveConfiguredCronModelSuggestions(
   configForm: Record<string, unknown> | null | undefined,
 ): string[] {
-  if (!configForm || typeof configForm !== "object") {
-    return [];
-  }
-  const agents = configForm.agents;
-  if (!agents || typeof agents !== "object") {
+  const agents = asNullableObjectRecord(configForm?.agents);
+  if (!agents) {
     return [];
   }
   const out = new Set<string>();
-  const defaults = (agents as { defaults?: unknown }).defaults;
-  if (defaults && typeof defaults === "object") {
-    const defaultsRecord = defaults as Record<string, unknown>;
-    addModelConfigIds(out, defaultsRecord.model);
-    const defaultsModels = defaultsRecord.models;
-    if (defaultsModels && typeof defaultsModels === "object") {
-      for (const modelId of Object.keys(defaultsModels as Record<string, unknown>)) {
-        addModelId(out, modelId);
-      }
+  const defaults = asNullableObjectRecord(agents.defaults);
+  if (defaults) {
+    addModelConfigIds(out, defaults.model);
+    for (const modelId of Object.keys(asNullableObjectRecord(defaults.models) ?? {})) {
+      addModelId(out, modelId);
     }
   }
-  const entries = (agents as { entries?: unknown }).entries;
-  if (entries && typeof entries === "object" && !Array.isArray(entries)) {
-    for (const entry of Object.values(entries as Record<string, unknown>)) {
-      if (entry && typeof entry === "object") {
-        addModelConfigIds(out, (entry as Record<string, unknown>).model);
-      }
-    }
+  for (const entry of Object.values(asNullableRecord(agents.entries) ?? {})) {
+    addModelConfigIds(out, asNullableObjectRecord(entry)?.model);
   }
   return sortUniqueStrings([...out]);
 }
@@ -553,9 +541,6 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     deleteAfterRun: job.deleteAfterRun ?? job.schedule.kind === "at",
     scheduleKind: job.schedule.kind,
     scheduleAt: "",
-    everyAmount: prev.everyAmount,
-    everyUnit: prev.everyUnit,
-    cronExpr: prev.cronExpr,
     cronTz: "",
     scheduleExact: false,
     staggerAmount: "",
@@ -779,7 +764,7 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
         ? editingJob
           ? undefined
           : sourceJob.schedule
-        : buildCronSchedule(form);
+        : buildCronSchedule(form, editingJob?.schedule);
     const preserveLockedPayload = Boolean(
       editingJob &&
       form.payloadLocked &&

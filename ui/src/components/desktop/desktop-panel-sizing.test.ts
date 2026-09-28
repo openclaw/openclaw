@@ -136,7 +136,10 @@ describe("desktop panel sizing", () => {
       if (documentMode) {
         expect(
           panel.renderRoot.querySelectorAll(".desktop-touch-action, .desktop-sizing"),
-        ).toHaveLength(5);
+        ).toHaveLength(6);
+        const audio = panel.renderRoot.querySelector<HTMLButtonElement>(".desktop-audio-button");
+        expect(audio?.getAttribute("aria-label")).toBe("Audio unavailable");
+        expect(audio?.disabled).toBe(true);
       }
     },
   );

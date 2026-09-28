@@ -51,10 +51,6 @@ type SlackAssistantMessageRecord = {
   blocks?: unknown;
 };
 
-function isSlackUserId(value: string): boolean {
-  return /^[UW][A-Z0-9]+$/.test(value);
-}
-
 function isBotAuthoredEnterpriseEvent(event: { bot_id?: unknown; subtype?: unknown }): boolean {
   return Boolean(asString(event.bot_id)) || event.subtype === "bot_message";
 }
@@ -85,35 +81,21 @@ async function resolveSlackAppMentionChannelType(params: {
     : undefined;
 }
 
-function addUserCandidate(candidates: Set<string>, value: unknown, botUserId: string): void {
-  const id = asString(value);
-  if (!id || id === botUserId || !isSlackUserId(id)) {
-    return;
-  }
-  candidates.add(id);
-}
-
-function collectMetadataUserCandidates(
-  candidates: Set<string>,
-  value: unknown,
-  botUserId: string,
-): void {
-  const metadata = asRecord(value);
-  const payload = asRecord(metadata?.event_payload);
-  if (!payload) {
-    return;
-  }
-  for (const key of ["user", "user_id", "actor_user_id", "author_user_id", "slack_user_id"]) {
-    addUserCandidate(candidates, payload[key], botUserId);
-  }
-}
-
 function resolveAssistantMessageChangedSender(params: {
   message?: SlackAssistantMessageRecord;
   botUserId: string;
 }): string | undefined {
+  const payload = asRecord(asRecord(params.message?.metadata)?.event_payload);
+  if (!payload) {
+    return undefined;
+  }
   const candidates = new Set<string>();
-  collectMetadataUserCandidates(candidates, params.message?.metadata, params.botUserId);
+  for (const key of ["user", "user_id", "actor_user_id", "author_user_id", "slack_user_id"]) {
+    const id = asString(payload[key]);
+    if (id && id !== params.botUserId && /^[UW][A-Z0-9]+$/.test(id)) {
+      candidates.add(id);
+    }
+  }
   return candidates.size === 1 ? [...candidates][0] : undefined;
 }
 
@@ -253,18 +235,8 @@ export function registerSlackMessageEvents(params: {
         event: message,
         ctx,
       });
-      if (assistantChangedInbound) {
-        noteConversationMessage(assistantChangedInbound, eventScope);
-        await handleSlackMessage(assistantChangedInbound, {
-          source: "message",
-          eventScope,
-          ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
-          ...(eventScope || turnAdoptionLifecycle ? { awaitDispatch: true } : {}),
-        });
-        return;
-      }
-
       if (
+        !assistantChangedInbound &&
         message.subtype === "message_changed" &&
         isSelfAttributedMessageChange({
           event: message as SlackMessageChangedEvent,
@@ -277,7 +249,9 @@ export function registerSlackMessageEvents(params: {
         return;
       }
 
-      const subtypeHandler = resolveSlackMessageSubtypeHandler(message);
+      const subtypeHandler = assistantChangedInbound
+        ? undefined
+        : resolveSlackMessageSubtypeHandler(message);
       if (subtypeHandler) {
         const ingressContext = await authorizeAndResolveSlackSystemEventContext({
           ctx,
@@ -300,8 +274,9 @@ export function registerSlackMessageEvents(params: {
         return;
       }
 
-      noteConversationMessage(message, eventScope);
-      await handleSlackMessage(message, {
+      const inbound = assistantChangedInbound ?? message;
+      noteConversationMessage(inbound, eventScope);
+      await handleSlackMessage(inbound, {
         source: "message",
         eventScope,
         ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
@@ -321,12 +296,7 @@ export function registerSlackMessageEvents(params: {
   // `channel_type` field ("channel" | "group" | "im" | "mpim") distinguishes
   // the source.  Bolt rejects `app.event("message.channels")` since v4.6
   // because it is a subscription label, not a valid event type.
-  ctx.app.event(
-    "message",
-    async (args: SlackEventMiddlewareArgs<"message"> & AllMiddlewareArgs) => {
-      await handleIncomingMessageEvent(args);
-    },
-  );
+  ctx.app.event("message", handleIncomingMessageEvent);
 
   ctx.app.event(
     "app_mention",

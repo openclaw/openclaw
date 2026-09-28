@@ -10,6 +10,8 @@ import { createSkillProposalEvent, dispatchSkillProposalChanged } from "./plugin
 import { prepareSkillProposalDraft, resolveUpdateProposalDescription } from "./proposal-draft.js";
 import { createSkillProposalGenerationDraftFile } from "./proposal-generation.js";
 import { hashSkillProposalRevision } from "./revision-hash.js";
+import { captureSkillWorkshopStoreOptions } from "./store-client.js";
+import type { SkillWorkshopStoreOptions } from "./store-sqlite-schema.js";
 import {
   createSkillProposalId,
   hashSkillProposalContent,
@@ -79,21 +81,34 @@ export function mergeProposalOriginRunProvenance(
 export async function proposeCreateSkill(
   input: SkillProposalCreateInput,
 ): Promise<SkillProposalReadResult> {
-  const name = normalizeRequired(input.name, "Skill name");
-  const description = normalizeRequired(input.description, "Skill description");
-  const config = resolveSkillWorkshopConfig(input.config);
-  const agentId = requireWorkshopAgentId(input.agentId);
+  const store = captureSkillWorkshopStoreOptions({
+    env: input.env,
+    agentId: input.agentId,
+    config: input.config,
+  });
+  const request = {
+    ...input,
+    env: store.env,
+    supportFiles: structuredClone(input.supportFiles),
+    origin: structuredClone(input.origin),
+    eventActor: structuredClone(input.eventActor),
+  };
+  const name = normalizeRequired(request.name, "Skill name");
+  const description = normalizeRequired(request.description, "Skill description");
+  const config = resolveSkillWorkshopConfig(request.config);
+  const agentId = requireWorkshopAgentId(request.agentId);
   const target = resolveSkillProposalTarget({
     skillName: name,
-    config: input.config,
+    config: request.config,
     agentId,
-    ...(input.env ? { env: input.env } : {}),
+    ...(request.env ? { env: request.env } : {}),
   });
   if ((await readWorkspaceSkillFile(target.skillFile)) !== null) {
     throw new Error(`Skill already exists at ${target.skillFile}.`);
   }
 
-  return await createPendingSkillProposal(input, {
+  return await createPendingSkillProposal(request, {
+    store,
     config,
     agentId,
     kind: "create",
@@ -101,10 +116,10 @@ export async function proposeCreateSkill(
       name: target.skillKey,
       description,
       skillDescription: resolveDraftedSkillDescription({
-        content: input.content,
+        content: request.content,
         label: description,
       }),
-      content: input.content,
+      content: request.content,
       secretScanMetadata: [{ file: "skill-name", content: name }],
     },
     target: {
@@ -152,18 +167,31 @@ export function findUniqueSkillPatchSpan(
 export async function proposeUpdateSkill(
   input: SkillProposalUpdateInput,
 ): Promise<SkillProposalReadResult> {
-  const skillName = normalizeRequired(input.skillName, "Skill name");
-  const config = resolveSkillWorkshopConfig(input.config);
-  const agentId = requireWorkshopAgentId(input.agentId);
-  const target = await readWritableWorkshopSkill(skillName, {
-    config: input.config,
-    agentId,
+  const store = captureSkillWorkshopStoreOptions({
     env: input.env,
+    agentId: input.agentId,
+    config: input.config,
+  });
+  const captured = {
+    ...input,
+    env: store.env,
+    supportFiles: structuredClone(input.supportFiles),
+    origin: structuredClone(input.origin),
+    eventActor: structuredClone(input.eventActor),
+  };
+  const request = { ...captured, composePatch: structuredClone(captured.composePatch) };
+  const skillName = normalizeRequired(request.skillName, "Skill name");
+  const config = resolveSkillWorkshopConfig(request.config);
+  const agentId = requireWorkshopAgentId(request.agentId);
+  const target = await readWritableWorkshopSkill(skillName, {
+    config: request.config,
+    agentId,
+    env: request.env,
   });
   const currentContent = target.content;
   if (
-    input.expectedCurrentContentHash !== undefined &&
-    sha256Hex(currentContent) !== input.expectedCurrentContentHash
+    request.expectedCurrentContentHash !== undefined &&
+    sha256Hex(currentContent) !== request.expectedCurrentContentHash
   ) {
     throw new SkillProposalStaleTargetError(
       "Skill changed since the reviewer's read: read it again and redraft the update.",
@@ -172,15 +200,19 @@ export async function proposeUpdateSkill(
   // Composition uses the same read that currentContentHash binds the proposal to, so a
   // composed draft can never derive from a different body than the one apply validates.
   const draftContent =
-    input.composePatch !== undefined
-      ? composeSkillBodyPatch(stripProposalFrontmatterForSkill(currentContent), input.composePatch)
-      : input.content;
+    request.composePatch !== undefined
+      ? composeSkillBodyPatch(
+          stripProposalFrontmatterForSkill(currentContent),
+          request.composePatch,
+        )
+      : request.content;
   if (draftContent === undefined) {
     throw new Error("Update proposal requires content or composePatch.");
   }
-  const description = resolveUpdateProposalDescription(input.description, target.description);
+  const description = resolveUpdateProposalDescription(request.description, target.description);
 
-  return await createPendingSkillProposal(input, {
+  return await createPendingSkillProposal(request, {
+    store,
     config,
     agentId,
     kind: "update",
@@ -209,6 +241,7 @@ export async function proposeUpdateSkill(
 async function createPendingSkillProposal(
   input: SkillProposalCreateInput | SkillProposalUpdateInput,
   params: {
+    store: SkillWorkshopStoreOptions;
     config: ReturnType<typeof resolveSkillWorkshopConfig>;
     agentId: string;
     kind: SkillProposalRecord["kind"];
@@ -284,7 +317,7 @@ async function createPendingSkillProposal(
       type: "created",
       actor: input.eventActor,
     }),
-    store: { ...(input.env ? { env: input.env } : {}), agentId },
+    store: params.store,
   });
   await dispatchSkillProposalChanged({
     event,

@@ -17,6 +17,7 @@ import { renderExecApprovalCard } from "../../components/exec-approval-card.ts";
 import { icons } from "../../components/icons.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { t } from "../../i18n/index.ts";
+import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
@@ -25,10 +26,13 @@ import {
   areUiSessionKeysEquivalent,
   scopedSessionArtifactKey,
 } from "../../lib/sessions/session-key.ts";
-import "../../plugins/control-ui-contributions.ts";
 import { renderPluginSurface } from "../../plugins/control-ui-view.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
-import { getChatPendingInputs, loadChatPendingInputs } from "./chat-pending-inputs.ts";
+import {
+  buildPendingInputQueueItems,
+  getChatPendingInputs,
+  loadChatPendingInputs,
+} from "./chat-pending-inputs.ts";
 import { chatStartupStatusLabel, type ChatRunStartupStatus } from "./chat-run-startup.ts";
 import { forwardChatWheelToTranscript } from "./chat-scroll-input.ts";
 import type { ChatState } from "./chat-state-contract.ts";
@@ -83,6 +87,8 @@ export type ChatProps = Omit<
   | "onRetryQueuedMessage"
   | "onDiscardQueuedMessage"
   | "onFocusComposer"
+  | "commentAttachments"
+  | "commentsDisabled"
   | "onAddToChat"
   | "onOpenSession"
   | "onSend"
@@ -101,10 +107,9 @@ export type ChatProps = Omit<
     ) => Promise<boolean>;
     presented?: boolean;
     historyState?: ChatState;
-    onSessionKeyChange: (next: string) => void;
-    thinkingLevel: string | null;
     startupStatus?: ChatRunStartupStatus | null;
     providerPolicyNotice?: ProviderPolicyNotice | null;
+    providerReviewNotice?: TemplateResult | typeof nothing;
     error: string | null;
     diskSpace?: SessionPlacementDiskSpace;
     inlineApproval?: ExecApprovalRequest | null;
@@ -125,7 +130,6 @@ export type ChatProps = Omit<
     onRefresh: () => void;
     onToggleFocusMode?: () => void;
     onDismissError?: () => void;
-    onClearHistory?: () => void;
     agentsList: {
       agents: Array<{
         id: string;
@@ -134,8 +138,6 @@ export type ChatProps = Omit<
       }>;
       defaultId?: string;
     } | null;
-    onAgentChange: (agentId: string) => void;
-    onNavigateToAgent?: () => void;
     onSessionSelect?: (sessionKey: string) => void;
     onRevealWorkspaceFile?: (path: string) => void;
     header?: TemplateResult | typeof nothing;
@@ -157,6 +159,13 @@ export type ChatProps = Omit<
     githubPublication?: import("../../lib/sessions/github-publication-controller.ts").GitHubPublicationView;
   };
 
+// renderChat runs on every pane render and the chat-item cache keys the queue by
+// identity; reuse the appended copy until the outbox publishes a new array.
+const placementQueues = new WeakMap<
+  readonly ChatQueueItem[],
+  { initialTurn: ChatQueueItem; queue: ChatQueueItem[] }
+>();
+
 export function renderChat(props: ChatProps) {
   // The request session hosts the card; only sourceSessionKey names the requester.
   const approvalSourceSessionKey = props.inlineApproval?.sourceSessionKey;
@@ -166,6 +175,9 @@ export function renderChat(props: ChatProps) {
       )
     : undefined;
   const pendingInputs = props.historyState ? getChatPendingInputs(props.historyState) : undefined;
+  const displayedPendingInputs = pendingInputs
+    ? [...pendingInputs.page.items.filter((input) => !input.queued), ...pendingInputs.queuedInputs]
+    : undefined;
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const canCompose = props.canSend;
   const questionState = getTranscriptState(props.paneId);
@@ -189,9 +201,16 @@ export function renderChat(props: ChatProps) {
   const attachmentDropHandlers = createChatAttachmentDropHandlers({ ...props, canCompose });
   const placementStartup =
     props.placementStartup?.phase === "failed" ? null : props.placementStartup;
-  const queue = props.placementStartup?.initialTurn
-    ? [...props.queue, props.placementStartup.initialTurn]
-    : props.queue;
+  const initialTurn = props.placementStartup?.initialTurn;
+  let queue = props.queue;
+  if (initialTurn) {
+    let cached = placementQueues.get(props.queue);
+    if (cached?.initialTurn !== initialTurn) {
+      cached = { initialTurn, queue: [...props.queue, initialTurn] };
+      placementQueues.set(props.queue, cached);
+    }
+    queue = cached.queue;
+  }
   // Placement is visible work, but does not own an abortable model run yet.
   const runWorking = Boolean(placementStartup) || isChatRunWorking(props);
   const thread = renderPluginSurface(
@@ -211,7 +230,7 @@ export function renderChat(props: ChatProps) {
         streamStartedAt: placementStartup?.startedAt ?? props.streamStartedAt,
         queue,
         initialTurnId: props.placementStartup?.initialTurn?.id,
-        pendingInputs: pendingInputs?.page.items,
+        pendingInputs: displayedPendingInputs,
         runActive: props.runActive === true,
         runWorking,
         startupLabel: chatStartupStatusLabel(props.startupStatus, placementStartup),
@@ -233,7 +252,8 @@ export function renderChat(props: ChatProps) {
         onDiscardQueuedMessage: props.onQueueRemove,
         onCompanionPrefill:
           props.canSend && !props.suggestionComposer ? props.onCompanionPrefill : undefined,
-        commentAttachments: props.suggestionComposer ? undefined : props,
+        commentAttachments: props.suggestionComposer ? undefined : props.attachments,
+        commentsDisabled: !canCompose || Boolean(props.readSignal?.aborted),
         onAddToChat:
           props.canSend && !props.suggestionComposer
             ? (selection, anchorRect) => {
@@ -375,14 +395,18 @@ export function renderChat(props: ChatProps) {
   // Transcript invalidation replaces its render context; bind submission afterward.
   questionState.transcriptRenderContext.onAsyncQuestionSubmit = props.onAsyncQuestionSubmit;
   questionState.transcriptRenderContext.onAsyncQuestionDiscard = asyncQuestions.discard;
+  const inputDisplay = selectChatInputDisplay(
+    props.messages,
+    props.queue,
+    displayedPendingInputs ?? [],
+  );
   const defaultComposer = renderChatComposer({
     ...props,
     asyncQuestions,
-    displayQueue: selectChatInputDisplay(
-      props.messages,
-      props.queue,
-      pendingInputs?.page.items ?? [],
-    ).queue,
+    displayQueue: [
+      ...buildPendingInputQueueItems(inputDisplay.queuedInputs),
+      ...inputDisplay.queue,
+    ],
     footerContent,
     notices,
     onRequestUpdate: requestUpdate,

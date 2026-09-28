@@ -1,11 +1,5 @@
-/**
- * Tests OAuth refresh failure hints.
- * Verifies typed and message-based classification plus sanitized login command
- * generation.
- */
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
 import { describe, expect, it } from "vitest";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { FailoverError } from "../failover-error.js";
 import {
   buildAuthProfileUnusableHint,
@@ -13,8 +7,158 @@ import {
   classifyOAuthRefreshFailure,
   classifyOAuthRefreshFailureError,
   formatOAuthRefreshFailureLoginCommandMarkdown,
+  OAuthManagerRefreshError,
   OAuthRefreshFailureError,
 } from "./oauth-refresh-failure.js";
+import type { AuthProfileStore, OAuthCredential } from "./types.js";
+
+function createCredential(overrides: Partial<OAuthCredential> = {}): OAuthCredential {
+  return {
+    type: "oauth",
+    provider: "openai",
+    access: "access-token",
+    refresh: "refresh-token",
+    expires: Date.now() + 60_000,
+    ...overrides,
+  };
+}
+
+describe("OAuthManagerRefreshError", () => {
+  it("serializes without leaking credential or store secrets", () => {
+    const refreshedStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:oauth": createCredential({
+          access: "store-access",
+          refresh: "store-refresh",
+        }),
+      },
+    };
+    const error = new OAuthManagerRefreshError({
+      credential: createCredential({ access: "error-access", refresh: "error-refresh" }),
+      profileId: "openai:oauth",
+      refreshedStore,
+      cause: new Error("boom"),
+    });
+
+    const serialized = JSON.stringify(error);
+    expect(serialized).toContain("openai");
+    expect(serialized).toContain("openai:oauth");
+    expect(serialized).not.toContain("error-access");
+    expect(serialized).not.toContain("error-refresh");
+    expect(serialized).not.toContain("store-access");
+    expect(serialized).not.toContain("store-refresh");
+  });
+
+  it("redacts credential secrets from the refresh error message", () => {
+    const refreshedStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:oauth": createCredential({
+          access: "store-access",
+          refresh: "store-refresh",
+          idToken: "store-id-token",
+        }),
+      },
+    };
+    const error = new OAuthManagerRefreshError({
+      credential: createCredential({
+        access: "error-access",
+        refresh: "error-refresh",
+        idToken: "error-id-token",
+      }),
+      profileId: "openai:oauth",
+      refreshedStore,
+      cause: Object.assign(
+        new Error(
+          "refresh rejected error-access error-refresh error-id-token store-access store-refresh store-id-token",
+        ),
+        {
+          oauthRefreshFailure: {
+            errorType: "invalid_request_error",
+            reason: "refresh_token_reused",
+            status: 401,
+            summary: "refresh rejected error-access",
+          },
+        },
+      ),
+    });
+
+    expect(error.message).toContain("refresh rejected");
+    expect(error.message).not.toContain("error-access");
+    expect(error.message).not.toContain("error-refresh");
+    expect(error.message).not.toContain("error-id-token");
+    expect(error.message).not.toContain("store-access");
+    expect(error.message).not.toContain("store-refresh");
+    expect(error.message).not.toContain("store-id-token");
+    expect(error.message.match(/\[redacted\]/g)?.length).toBe(6);
+    expect(error.reason).toBe("refresh_token_reused");
+    expect(error.status).toBe(401);
+    expect(error.errorType).toBe("invalid_request_error");
+    expect(error.summary).toBe("refresh rejected [redacted]");
+    const surfacedCauseMessage = formatErrorMessage(error.cause);
+    expect(surfacedCauseMessage).not.toContain("error-access");
+    expect(surfacedCauseMessage).not.toContain("error-refresh");
+    expect(surfacedCauseMessage).not.toContain("error-id-token");
+    expect(surfacedCauseMessage).not.toContain("store-access");
+    expect(surfacedCauseMessage).not.toContain("store-refresh");
+    expect(surfacedCauseMessage).not.toContain("store-id-token");
+    expect(surfacedCauseMessage.match(/\[redacted\]/g)?.length).toBe(6);
+  });
+
+  it("redacts token-shaped credential secrets before generic masking", () => {
+    const access = "sk-oauthreviewredaction1234567890zzzz";
+    const refresh = "ya29.oauthreviewredaction1234567890yyyy";
+    const error = new OAuthManagerRefreshError({
+      credential: createCredential({ access, refresh }),
+      profileId: "openai:oauth",
+      refreshedStore: { version: 1, profiles: {} },
+      cause: new Error(`refresh rejected ${access} ${refresh}`, {
+        cause: new Error(`nested failure ${access}`),
+      }),
+    });
+
+    const surfacedCauseMessage = formatErrorMessage(error.cause);
+    for (const message of [error.message, surfacedCauseMessage]) {
+      expect(message).not.toContain(access);
+      expect(message).not.toContain(refresh);
+      expect(message).not.toContain("sk-oau");
+      expect(message).not.toContain("zzzz");
+      expect(message).not.toContain("ya29.o");
+      expect(message).not.toContain("yyyy");
+      expect(message.match(/\[redacted\]/g)?.length).toBe(3);
+    }
+  });
+
+  it("formats an undefined refresh failure without throwing", () => {
+    const error = new OAuthManagerRefreshError({
+      credential: createCredential({ access: "sk-nonjsonredaction1234567890zzzz" }),
+      profileId: "openai:oauth",
+      refreshedStore: { version: 1, profiles: {} },
+      cause: undefined,
+    });
+
+    expect(error.message).toContain("OAuth token refresh failed");
+  });
+
+  it("redacts overlapping credential secrets longest first", () => {
+    const error = new OAuthManagerRefreshError({
+      credential: createCredential({
+        access: "abc123",
+        refresh: "abc123456",
+      }),
+      profileId: "openai:oauth",
+      refreshedStore: { version: 1, profiles: {} },
+      cause: new Error("refresh rejected abc123 abc123456"),
+    });
+
+    expect(error.message).toContain("refresh rejected");
+    expect(error.message).not.toContain("abc123");
+    expect(error.message).not.toContain("abc123456");
+    expect(error.message).not.toContain("[redacted]456");
+    expect(error.message.match(/\[redacted\]/g)?.length).toBe(2);
+  });
+});
 
 describe("buildAuthProfileUnusableHint", () => {
   it.each(["auth", "auth_permanent"] as const)(
@@ -258,97 +402,5 @@ describe("oauth refresh failure hints", () => {
     const otherProviderMessage =
       "Provider openai failed: Failed to authenticate. API Error: 401 Unauthorized";
     expect(classifyOAuthRefreshFailure(otherProviderMessage)).toBeNull();
-  });
-});
-
-type LoopbackHandler = (request: IncomingMessage, response: ServerResponse) => void;
-
-async function withLoopbackServer<T>(
-  handler: LoopbackHandler,
-  run: (baseUrl: string) => Promise<T>,
-): Promise<T> {
-  const server = createServer(handler);
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => resolve());
-  });
-  const { port } = server.address() as AddressInfo;
-  try {
-    return await run(`http://127.0.0.1:${port}`);
-  } finally {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-        resolve();
-      });
-    });
-  }
-}
-
-async function fetchClaudeCliOAuthProbe(baseUrl: string): Promise<{ ok: true; body: unknown }> {
-  const response = await fetch(`${baseUrl}/oauth-expiry`);
-  const body = await response.text();
-  if (!response.ok) {
-    const rawError = body.trim() || `HTTP ${response.status}`;
-    const failure = new FailoverError(rawError, {
-      reason: "auth",
-      provider: "claude-cli",
-      model: "claude-sonnet-4-20250514",
-      status: response.status,
-      rawError,
-    });
-    const oauthFailure =
-      classifyOAuthRefreshFailureError(failure) ?? classifyOAuthRefreshFailure(failure.message);
-    if (oauthFailure?.reason) {
-      const command = buildOAuthRefreshFailureLoginCommand(oauthFailure.provider);
-      throw new Error(
-        `Model login expired on the gateway for ${oauthFailure.provider}. Re-auth with \`${command}\`, then try again.`,
-        { cause: failure },
-      );
-    }
-    throw failure;
-  }
-  return { ok: true, body: JSON.parse(body) };
-}
-
-describe("claude-cli oauth-expiry — real HTTP server (no fetch mock)", () => {
-  it("throws a re-auth hint when the server returns 401", async () => {
-    await withLoopbackServer(
-      (_request, response) => {
-        response.writeHead(401, { "content-type": "text/plain" });
-        response.end("Failed to authenticate. API Error: 401 Invalid authentication credentials");
-      },
-      async (baseUrl) => {
-        const error = await fetchClaudeCliOAuthProbe(baseUrl).then(
-          () => undefined,
-          (caught: unknown) => (caught instanceof Error ? caught : new Error(String(caught))),
-        );
-        expect(error?.message).toContain(
-          "Re-auth with `claude auth login && openclaw models auth login --provider anthropic --method cli`",
-        );
-        console.log(
-          `[claude-cli-oauth-proof] server=401 → re-auth hint surfaced: ${error?.message}`,
-        );
-      },
-    );
-  });
-
-  it("works normally when the server returns 200", async () => {
-    await withLoopbackServer(
-      (_request, response) => {
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify({ provider: "claude-cli", ok: true }));
-      },
-      async (baseUrl) => {
-        await expect(fetchClaudeCliOAuthProbe(baseUrl)).resolves.toEqual({
-          ok: true,
-          body: { provider: "claude-cli", ok: true },
-        });
-        console.log("[claude-cli-oauth-proof] server=200 → normal response returned");
-      },
-    );
   });
 });

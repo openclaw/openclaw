@@ -60,7 +60,11 @@ type Fixture = {
   graphqlQuota?: boolean;
 };
 
-function readPrMetadata(fixture: Fixture = {}, command = "pr_meta_json 42") {
+function readPrMetadata(
+  fixture: Fixture = {},
+  command = "pr_meta_json 42",
+  parentEnv: NodeJS.ProcessEnv = process.env,
+) {
   const dir = tempDirs.make("openclaw-pr-metadata-");
   const gh = join(dir, "gh");
   const trace = join(dir, "trace");
@@ -261,7 +265,10 @@ if (endpoint === "user") {
     {
       cwd: process.cwd(),
       env: {
-        ...process.env,
+        ...parentEnv,
+        // This unsupervised child owns neither the parent's snapshot nor its FD3.
+        OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT: undefined,
+        OPENCLAW_PR_LOCK_NOTIFY_FD: undefined,
         FAKE_GH_FIXTURE: JSON.stringify(fixture),
         PR_GH_WRITER_LOGIN: "untrusted-inherited-login",
         PR_GH_WRITER_CONTEXT: "untrusted-inherited-context",
@@ -306,6 +313,20 @@ if (endpoint === "user") {
 }
 
 describe("PR metadata through REST", () => {
+  it("reads real metadata with an unrelated inherited snapshot and closed notify FD", () => {
+    const result = readPrMetadata({}, "pr_meta_json 42", {
+      ...process.env,
+      OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT: tempDirs.make("unrelated-metadata-snapshot-"),
+      OPENCLAW_PR_LOCK_NOTIFY_FD: "3",
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ number: 42, headRefOid: head });
+    expect(
+      result.calls.filter((args) => args.includes("repos/base-owner/base-repo/pulls/42")),
+    ).toHaveLength(2);
+    expect(result.notifications).toBe("");
+  });
+
   describe("core quota fallback", () => {
     const repository = {
       id: "R_base",

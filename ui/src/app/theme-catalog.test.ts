@@ -54,7 +54,15 @@ function catalog(themeDefinition = definition): ThemesListResult {
   };
 }
 
-beforeEach(() => {
+beforeEach((testContext) => {
+  const existingFontLinks = new Set(document.querySelectorAll('link[id^="openclaw-typeface-"]'));
+  testContext.onTestFinished(() => {
+    for (const link of document.querySelectorAll('link[id^="openclaw-typeface-"]')) {
+      if (!existingFontLinks.has(link)) {
+        link.remove();
+      }
+    }
+  });
   localStorage.clear();
   sessionStorage.clear();
   patchSettings({ theme: descriptor.id, themeMode: "light" });

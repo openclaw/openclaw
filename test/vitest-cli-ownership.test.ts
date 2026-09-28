@@ -1,9 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, assert, expect, it } from "vitest";
+import { afterEach, assert, beforeAll, expect, it } from "vitest";
+import { resolveConfig } from "vitest/node";
 import { buildVitestRunPlans } from "../scripts/test-projects.test-support.mts";
 import { createPatternFileHelper } from "./helpers/pattern-file.js";
 import { createCliVitestConfig } from "./vitest/vitest.cli.config.ts";
+import { databaseWorkerCoreTestFiles } from "./vitest/vitest.database-worker-core-paths.mjs";
+import { createDatabaseWorkerWatchVitestConfig } from "./vitest/vitest.database-worker-watch.config.ts";
 import { diagnosticForksPool } from "./vitest/vitest.forks-pool.ts";
 import { createGatewayClientVitestConfig } from "./vitest/vitest.gateway-client.config.ts";
 import { createGatewayCoreVitestConfig } from "./vitest/vitest.gateway-core.config.ts";
@@ -13,6 +16,7 @@ import { createGatewayMethodsVitestConfig } from "./vitest/vitest.gateway-method
 import { createGatewayServerIsolatedVitestConfig } from "./vitest/vitest.gateway-server-isolated.config.ts";
 import { gatewayDatabaseWorkerTestFiles } from "./vitest/vitest.gateway-server-paths.mjs";
 import { createGatewayServerVitestConfig } from "./vitest/vitest.gateway-server.config.ts";
+import { createGatewayVitestConfig } from "./vitest/vitest.gateway.config.ts";
 import { createInfraVitestConfig } from "./vitest/vitest.infra.config.ts";
 import { createToolingVitestConfig } from "./vitest/vitest.tooling.config.ts";
 
@@ -56,6 +60,11 @@ function selectedByFilters(file: string, filters: string[]): boolean {
     filters.some((filter) => file === filter || file.startsWith(`${filter}/`))
   );
 }
+
+let canonicalGatewayFiles: ReturnType<typeof gatewayProjectFiles>;
+beforeAll(() => {
+  canonicalGatewayFiles = gatewayProjectFiles([]);
+});
 
 it.each([
   ...[
@@ -147,10 +156,12 @@ it.each([
     ownership: {
       config: "test/vitest/vitest.database-worker-watch.config.ts",
       databaseWorkerWatchOwner: "test/vitest/vitest.gateway.config.ts",
-      databaseWorkerWatchTests: ["src/gateway/server-methods/memory-search.test.ts"],
+      databaseWorkerWatchTests: databaseWorkerCoreTestFiles.filter((file) =>
+        file.startsWith("src/gateway/"),
+      ),
     },
   },
-])("preserves mixed Gateway worker watch selection with $target", ({ target, ownership }) => {
+])("preserves mixed Gateway worker watch selection with $target", async ({ target, ownership }) => {
   const [workerFile] = gatewayDatabaseWorkerTestFiles;
   assert(workerFile);
   const filters = [workerFile, target];
@@ -168,7 +179,7 @@ it.each([
     },
   ]);
   const includeFile = patternFiles.writePatternFile("include.json", plans[0]!.includePatterns);
-  const canonical = gatewayProjectFiles([]);
+  const canonical = canonicalGatewayFiles;
   const expected = Object.fromEntries(
     Object.entries(canonical).map(([name, files]) => [
       name,
@@ -181,7 +192,32 @@ it.each([
     gatewayDatabaseWorkerTestFiles.filter((file) => selectedByFilters(file, filters)),
   );
   expect(selected["gateway-core"]).toContain("src/gateway/config-reload.telegram-policy.test.ts");
-  const files = Object.values(selected).flat();
+  const workerFiles: string[] = [];
+  if (plans[0]?.databaseWorkerWatchTests) {
+    const env = { OPENCLAW_VITEST_INCLUDE_FILE: includeFile };
+    const config = createDatabaseWorkerWatchVitestConfig(
+      createGatewayVitestConfig(env),
+      plans[0].databaseWorkerWatchTests,
+      env,
+    );
+    const resolved = await resolveConfig({ config: false }, config);
+    const worker = resolved.test.resolvedProjects.find(
+      ({ projectConfig }) => projectConfig.name === "infra",
+    )?.projectConfig;
+    assert(worker);
+    expect(worker.pool).toBe(diagnosticForksPool.name);
+    workerFiles.push(
+      ...fs
+        .globSync(worker.include, { cwd: worker.dir, exclude: worker.exclude })
+        .map((file) =>
+          path.relative(worker.root, path.join(worker.dir, file)).replaceAll("\\", "/"),
+        ),
+    );
+  }
+  expect(workerFiles.toSorted()).toEqual(
+    databaseWorkerCoreTestFiles.filter((file) => selectedByFilters(file, filters)).toSorted(),
+  );
+  const files = [...Object.values(selected).flat(), ...workerFiles];
   expect(new Set(files).size).toBe(files.length);
   if (target.endsWith(".test.ts")) {
     expect(files.toSorted()).toEqual(filters.toSorted());
@@ -199,7 +235,7 @@ it.each(
     ["src/gateway/server", "src/gateway/worker-environments"],
   ].map((filters) => ({ filters })),
 )("preserves canonical project ownership for $filters", ({ filters }) => {
-  const canonical = gatewayProjectFiles([]);
+  const canonical = canonicalGatewayFiles;
   expect(canonical["gateway-database-workers"]).toEqual(gatewayDatabaseWorkerTestFiles);
   const expected = Object.fromEntries(
     Object.entries(canonical).map(([name, files]) => [

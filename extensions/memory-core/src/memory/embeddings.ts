@@ -9,20 +9,18 @@ import { formatErrorMessage } from "../dreaming-shared.js";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 import { MemoryManagerReloadError } from "./lifecycle.js";
 import {
-  createMissingLocalMemoryEmbeddingProviderError,
+  MISSING_LOCAL_MEMORY_EMBEDDING_PROVIDER_MESSAGE,
   LOCAL_MEMORY_EMBEDDING_PROVIDER_ID,
 } from "./local-embedding-provider.js";
 import type { MemoryManagerProviderFactory } from "./manager-registry.js";
 
 export type EmbeddingProvider = MemoryEmbeddingProvider;
 export type EmbeddingProviderId = string;
-export type EmbeddingProviderRequest = string;
-type EmbeddingProviderFallback = string;
 export type EmbeddingProviderRuntime = MemoryEmbeddingProviderRuntime;
 
 export type EmbeddingProviderResult = {
   provider: EmbeddingProvider | null;
-  requestedProvider: EmbeddingProviderRequest;
+  requestedProvider: string;
   fallbackFrom?: string;
   fallbackReason?: string;
   providerUnavailableReason?: string;
@@ -30,8 +28,8 @@ export type EmbeddingProviderResult = {
 };
 
 type CreateEmbeddingProviderOptions = Omit<MemoryEmbeddingProviderCreateOptions, "dimensions"> & {
-  provider: EmbeddingProviderRequest;
-  fallback: EmbeddingProviderFallback;
+  provider: string;
+  fallback: string;
   outputDimensionality?: number;
   acquireLocalService?: MemoryCoreAcquireLocalService;
   createProvider?: MemoryManagerProviderFactory;
@@ -52,7 +50,7 @@ function getAdapter(
     return adapter;
   }
   if (id === LOCAL_MEMORY_EMBEDDING_PROVIDER_ID) {
-    throw createMissingLocalMemoryEmbeddingProviderError();
+    throw new Error(MISSING_LOCAL_MEMORY_EMBEDDING_PROVIDER_MESSAGE);
   }
   throw new Error(`Unknown memory embedding provider: ${id}`);
 }
@@ -181,12 +179,12 @@ export async function createEmbeddingProvider(
         const fallbackReason = formatProviderError(fallbackAdapter, fallbackErr);
         const wrapped = new Error(
           `${reason}\n\nFallback to ${options.fallback} failed: ${fallbackReason}`,
-        ) as Error & { cause?: unknown };
+        );
         wrapped.cause = primaryErr;
         throw wrapped;
       }
     }
-    const wrapped = new Error(reason) as Error & { cause?: unknown };
+    const wrapped = new Error(reason);
     wrapped.cause = primaryErr;
     throw wrapped;
   }

@@ -50,8 +50,11 @@ async function assertUnmanagedGatewayRestartEnabled(port: number): Promise<void>
   }
 }
 
-export function resolveVerifiedGatewayListenerPids(port: number): number[] {
-  return findVerifiedGatewayListenerPidsOnPortSync(port).filter(
+export function resolveVerifiedGatewayListenerPids(
+  port: number,
+  env?: NodeJS.ProcessEnv,
+): number[] {
+  return findVerifiedGatewayListenerPidsOnPortSync(port, { env }).filter(
     (pid): pid is number => Number.isFinite(pid) && pid > 0,
   );
 }
@@ -73,7 +76,7 @@ export async function signalGatewayRestart(
   if (params.enforceRestartConfig) {
     await assertUnmanagedGatewayRestartEnabled(port);
   }
-  const pids = resolveVerifiedGatewayListenerPids(port);
+  const pids = resolveVerifiedGatewayListenerPids(port, params.env);
   if (pids.length === 0) {
     return null;
   }
@@ -171,7 +174,7 @@ export async function signalGatewayRestart(
     } else {
       // Pre-owner-ID releases use SIGUSR1. Current Gateways always publish an
       // owner ID and receive targeted RPC, leaving SIGUSR1 to Node's debugger.
-      signalVerifiedGatewayPidSync(pid, "SIGUSR1");
+      signalVerifiedGatewayPidSync(pid, "SIGUSR1", { env: params.env, port });
     }
   } catch (err) {
     if (intentWritten) {

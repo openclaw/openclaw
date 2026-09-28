@@ -217,9 +217,21 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/agents/embedded-agent-runner/run.harness-auth-failover.test.ts", 8],
   ["src/agents/embedded-agent-runner/run.shared-integration.test.ts", 77],
   ["src/gateway/dashboard-session-title.test.ts", 23],
+  // Three one-worker Testbox runs: rounded median case sums for relative packing.
+  ["src/gateway/server.sessions.create.accounts.test.ts", 20],
+  ["src/gateway/server.sessions.create.authority.test.ts", 13],
+  ["src/gateway/server.sessions.create.dispatch.test.ts", 14],
+  ["src/gateway/server.sessions.create.forks.test.ts", 19],
+  ["src/gateway/server.sessions.create.incognito.test.ts", 3],
+  ["src/gateway/server.sessions.create.lifecycle.test.ts", 4],
+  ["src/gateway/server.sessions.create.models.test.ts", 17],
+  ["src/gateway/server.sessions.create.spawn.test.ts", 11],
+  ["src/gateway/server.sessions.create.stores.test.ts", 14],
+  ["src/gateway/server.sessions.create.workspace-policy.test.ts", 24],
+  ["src/gateway/server.sessions.create.worktree-selection.test.ts", 22],
+  ["src/gateway/server.sessions.create.worktrees.test.ts", 23],
   // Two-run median case-body anchors from main runs 33504478720/33509347578.
   // These balance files; membership-specific wrapper spans own admission.
-  ["src/gateway/server.sessions.create.test.ts", 52],
   ["src/gateway/server.sessions.archive-worktree-lifecycle.test.ts", 34],
   ["src/gateway/server.sessions.delete-worktree-lifecycle.test.ts", 31],
   ["src/gateway/server.chat.gateway-server-chat-b.test.ts", 37],
@@ -260,7 +272,11 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/gateway/session-message-events.test.ts", 26],
   ["src/gateway/tool-resolution.test.ts", 43],
   ["test/scripts/test-projects-routing.test.ts", 21],
-  ["ui/src/components/app-sidebar.test.ts", 28],
+  // Single-worker Node file spans after splitting the sidebar's serial case groups.
+  ["ui/src/components/app-sidebar.catalog.test.ts", 4],
+  ["ui/src/components/app-sidebar.interactions.test.ts", 6],
+  ["ui/src/components/app-sidebar.people.test.ts", 13],
+  ["ui/src/components/app-sidebar.sessions.test.ts", 10],
   ["ui/src/pages/chat/chat-responsive.browser.test.ts", 30],
   // Focused cold proof is ~34s after right-sizing and concurrent crash phases.
   ["test/scripts/bench-sqlite-reliability.test.ts", 34],
@@ -298,8 +314,15 @@ const DEFAULT_STRIPE_FILE_SECONDS = 3;
 // Run 33364935118: 494 unlisted tooling files used 945.94s including imports/setup.
 const DEFAULT_TOOLING_STRIPE_FILE_SECONDS = 2;
 
-export function estimateVitestToolingFileSeconds(file: string): number {
-  return STRIPE_FILE_SECONDS_HINTS.get(file) ?? DEFAULT_TOOLING_STRIPE_FILE_SECONDS;
+export function estimateVitestToolingFileSeconds(
+  file: string,
+  measuredSeconds?: Readonly<Record<string, number>>,
+): number {
+  return (
+    measuredSeconds?.[file] ??
+    STRIPE_FILE_SECONDS_HINTS.get(file) ??
+    DEFAULT_TOOLING_STRIPE_FILE_SECONDS
+  );
 }
 
 export function estimateVitestTestFileSeconds(file: string): number {

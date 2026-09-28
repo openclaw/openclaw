@@ -165,17 +165,9 @@ type MemoryIndexIdentityParams = {
 };
 
 function resolveConfigurationIndexIdentityState(
-  params: MemoryIndexIdentityParams,
+  params: Omit<MemoryIndexIdentityParams, "meta">,
+  meta: MemoryIndexMeta,
 ): MemoryIndexIdentityState {
-  const { meta } = params;
-  if (!meta) {
-    return {
-      status: "missing",
-      reason: "index metadata is missing",
-      code: "metadata_missing",
-      owner: "openclaw",
-    };
-  }
   const expectedModel =
     params.provider && params.provider.model === undefined
       ? undefined
@@ -204,7 +196,7 @@ function resolveConfigurationIndexIdentityState(
   ) {
     return configuredIndexMismatch("provider_settings", "index provider settings changed");
   }
-  const contentIdentity = resolveContentScopeIdentityState(params);
+  const contentIdentity = resolveContentScopeIdentityState(params, meta);
   if (contentIdentity.status !== "valid") {
     return contentIdentity;
   }
@@ -219,17 +211,9 @@ function resolveConfigurationIndexIdentityState(
 // never consume embeddings, so a changed model or an unavailable provider must
 // not lock the last published keyword index away.
 function resolveContentScopeIdentityState(
-  params: MemoryIndexIdentityParams,
+  params: Omit<MemoryIndexIdentityParams, "meta">,
+  meta: MemoryIndexMeta,
 ): MemoryIndexIdentityState {
-  const { meta } = params;
-  if (!meta) {
-    return {
-      status: "missing",
-      reason: "index metadata is missing",
-      code: "metadata_missing",
-      owner: "openclaw",
-    };
-  }
   if (configuredMetaSourcesDiffer({ meta, configuredSources: params.configuredSources })) {
     return configuredIndexMismatch("sources", "index sources changed");
   }
@@ -286,10 +270,10 @@ export function resolveMemoryIndexIdentityState(
         "index chunking implementation changed",
         "older",
       ),
-      ...(resolveContentScopeIdentityState(params).status === "valid"
+      ...(resolveContentScopeIdentityState(params, meta).status === "valid"
         ? { chunkingVersionOnly: true }
         : {}),
     };
   }
-  return resolveConfigurationIndexIdentityState(params);
+  return resolveConfigurationIndexIdentityState(params, meta);
 }

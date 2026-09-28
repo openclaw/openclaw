@@ -208,25 +208,18 @@ describe("memory-wiki cli", () => {
 
   it("registers apply synthesis and writes a synthesis page", async () => {
     const { rootDir, config } = await createCliVault();
-    const program = new Command();
-    program.name("test");
-    registerWikiCli(program, { config });
 
-    await program.parseAsync(
-      [
-        "wiki",
-        "apply",
-        "synthesis",
-        "CLI Alpha",
-        "--body",
-        "Alpha from CLI.",
-        "--source-id",
-        "source.alpha",
-        "--source-id",
-        "source.beta",
-      ],
-      { from: "user" },
-    );
+    await runRegisteredWikiCommand(config, [
+      "apply",
+      "synthesis",
+      "CLI Alpha",
+      "--body",
+      "Alpha from CLI.",
+      "--source-id",
+      "source.alpha",
+      "--source-id",
+      "source.beta",
+    ]);
 
     const page = await fs.readFile(path.join(rootDir, "syntheses", "cli-alpha.md"), "utf8");
     expect(page).toContain("Alpha from CLI.");
@@ -447,16 +440,15 @@ Orders join to [customers](/tables/customers.md).
     const targetPath = path.join(rootDir, "syntheses", "cli-lines.md");
     await fs.mkdir(path.dirname(targetPath), { recursive: true });
     await fs.writeFile(targetPath, "# CLI Lines\n\nfirst\nsecond\n", "utf8");
-    const program = new Command();
-    program.name("test");
-    registerWikiCli(program, { config });
 
-    await program.parseAsync(
-      ["wiki", "get", "syntheses/cli-lines.md", "--from", "+01", "--lines", "02"],
-      {
-        from: "user",
-      },
-    );
+    await runRegisteredWikiCommand(config, [
+      "get",
+      "syntheses/cli-lines.md",
+      "--from",
+      "+01",
+      "--lines",
+      "02",
+    ]);
   });
 
   it("registers apply metadata and preserves the page body", async () => {
@@ -484,28 +476,20 @@ cli note
       "utf8",
     );
 
-    const program = new Command();
-    program.name("test");
-    registerWikiCli(program, { config });
-
-    await program.parseAsync(
-      [
-        "wiki",
-        "apply",
-        "metadata",
-        "entity.alpha",
-        "--source-id",
-        "source.new",
-        "--contradiction",
-        "Conflicts with source.beta",
-        "--question",
-        "Still active?",
-        "--status",
-        "review",
-        "--clear-confidence",
-      ],
-      { from: "user" },
-    );
+    await runRegisteredWikiCommand(config, [
+      "apply",
+      "metadata",
+      "entity.alpha",
+      "--source-id",
+      "source.new",
+      "--contradiction",
+      "Conflicts with source.beta",
+      "--question",
+      "Still active?",
+      "--status",
+      "review",
+      "--clear-confidence",
+    ]);
 
     const page = await fs.readFile(path.join(rootDir, "entities", "alpha.md"), "utf8");
     const parsed = parseWikiMarkdown(page);
@@ -524,12 +508,9 @@ cli note
         bridge: { enabled: false },
       },
     });
-    const program = new Command();
-    program.name("test");
-    registerWikiCli(program, { config });
     await fs.rm(rootDir, { recursive: true, force: true });
 
-    await program.parseAsync(["wiki", "doctor", "--json"], { from: "user" });
+    await runRegisteredWikiCommand(config, ["doctor", "--json"]);
 
     expect(process.exitCode).toBe(1);
     expect(callGatewayFromCliMock).not.toHaveBeenCalled();
@@ -816,37 +797,6 @@ cli note
     ).resolves.toStrictEqual([]);
   });
 
-  it("preserves user edits made after import when rolling back a created page", async () => {
-    const { rootDir, config } = await createCliVault({ initialize: true });
-    const exportDir = await createChatGptExport(rootDir);
-    const applied = JSON.parse(
-      await runRegisteredWikiCommand(config, [
-        "chatgpt",
-        "import",
-        "--export",
-        exportDir,
-        "--json",
-      ]),
-    ) as { runId?: string };
-    const runId = expectDefined(applied.runId, "ChatGPT import runId");
-    const sourceFile = await findImportedSourceFile(rootDir);
-    const pagePath = path.join(rootDir, "sources", sourceFile);
-    const edited = `${await fs.readFile(pagePath, "utf8")}\nUser note added after import.\n`;
-    await fs.writeFile(pagePath, edited, "utf8");
-
-    const rollback = JSON.parse(
-      await runRegisteredWikiCommand(config, ["chatgpt", "rollback", runId, "--json"]),
-    ) as { preservedPaths: Array<{ path: string; recoveryPath: string }> };
-
-    await expect(fs.stat(pagePath)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(rollback.preservedPaths).toHaveLength(1);
-    const preserved = expectDefined(rollback.preservedPaths[0], "preserved rollback page");
-    expect(preserved.path).toBe(`sources/${sourceFile}`);
-    await expect(fs.readFile(path.join(rootDir, preserved.recoveryPath), "utf8")).resolves.toBe(
-      edited,
-    );
-  });
-
   it("preserves a user save after compile before the import run record is written", async () => {
     const { rootDir, config } = await createCliVault({ initialize: true });
     const exportDir = await createChatGptExport(rootDir);
@@ -881,6 +831,7 @@ cli note
     await expect(fs.stat(pagePath)).rejects.toMatchObject({ code: "ENOENT" });
     expect(rollback.preservedPaths).toHaveLength(1);
     const preserved = expectDefined(rollback.preservedPaths[0], "preserved post-compile save");
+    expect(preserved.path).toBe(`sources/${path.basename(pagePath)}`);
     await expect(fs.readFile(path.join(rootDir, preserved.recoveryPath), "utf8")).resolves.toBe(
       edited,
     );

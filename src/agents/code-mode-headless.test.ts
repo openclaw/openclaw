@@ -555,29 +555,42 @@ describe("headless Code Mode", () => {
   );
 
   it.each([
-    String.raw`return r\u0065quire('node:fs');`,
-    "return require?.('node:fs');",
-    "return (require)('node:fs');",
-    "return (0, require)('node:fs');",
-    "const load = require; return load('node:fs');",
-    "return module.require('node:fs');",
-    "return process.getBuiltinModule('node:fs');",
-    "return `${import('node:fs')}`;",
-    "return `${require('node:fs')}`;",
-    "return `${`nested ${import('node:fs')}`}`;",
-    "return `${`nested ${require('node:fs')}`}`;",
-    "const message = `import('node:fs')`; return require('node:fs');",
-    "let value = 1; return value++ / import('node:fs');",
-    "let value = 1; return value-- / import('node:fs');",
-    "const value = { of: 1 }; return value.of / import('node:fs');",
-    "const value = { return: 1 }; return value.return / import('node:fs');",
-    "const value = { if() { return 1; } }; return value.if() / import('node:fs');",
-    "const value = { return: 1 }; return value?.return / import('node:fs') / 1;",
-    "const value = { return: 1 }; return value?.return / require('node:fs') / 1;",
-    "const value = { if() { return 1; } }; return value?.if() / import('node:fs');",
-    "function run() { const await = 1; return await / (globalThis.pending = import('node:fs')); } run(); return globalThis.pending;",
-    "class Guest { #return = 1; run() { return this.#return / (globalThis.pending = import('node:fs')); } } new Guest().run(); return globalThis.pending;",
-  ])("rejects executable module access in a headless guest: %s", async (code) => {
+    ...[
+      String.raw`return r\u0065quire('node:fs');`,
+      "return require?.('node:fs');",
+      "return (require)('node:fs');",
+      "return (0, require)('node:fs');",
+      "const load = require; return load('node:fs');",
+      "return module.require('node:fs');",
+      "return process.getBuiltinModule('node:fs');",
+      "return `${import('node:fs')}`;",
+      "return `${require('node:fs')}`;",
+      "return `${`nested ${import('node:fs')}`}`;",
+      "return `${`nested ${require('node:fs')}`}`;",
+      "const message = `import('node:fs')`; return require('node:fs');",
+      "let value = 1; return value++ / import('node:fs');",
+      "let value = 1; return value-- / import('node:fs');",
+      "const value = { of: 1 }; return value.of / import('node:fs');",
+      "const value = { return: 1 }; return value.return / import('node:fs');",
+      "const value = { if() { return 1; } }; return value.if() / import('node:fs');",
+      "const value = { if() { return 1; } }; return value?.if() / import('node:fs');",
+      "function run() { const await = 1; return await / (globalThis.pending = import('node:fs')); } run(); return globalThis.pending;",
+      "class Guest { #return = 1; run() { return this.#return / (globalThis.pending = import('node:fs')); } } new Guest().run(); return globalThis.pending;",
+    ].map((code) => ({
+      code,
+      reason: "executable module access",
+      expectedError: "module access is disabled",
+    })),
+    ...[
+      "const value = { return: 1 }; return value?.return / import('node:fs') / 1;",
+      "const value = { return: 1 }; return value?.return / require('node:fs') / 1;",
+    ].map((code) => ({
+      code,
+      reason: "existing parser limitation: optional keyword property before division",
+      expectedError:
+        "SyntaxError at openclaw-code-mode:user.js:1:51: Unexpected token. No tools were dispatched; correct the JavaScript source and submit it again.",
+    })),
+  ])("rejects $reason in a headless guest: $code", async ({ code, expectedError }) => {
     const result = expectFailed(
       await runCodeModeScriptHeadless({
         ctx: createHeadlessCodeModeHarness(),
@@ -586,7 +599,7 @@ describe("headless Code Mode", () => {
     );
 
     expect(result.code).toBe("invalid_input");
-    expect(result.error).toContain("module access is disabled");
+    expect(result.error).toContain(expectedError);
     expect(result.toolCallCount).toBe(0);
   });
 

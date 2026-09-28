@@ -1,10 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { registerAgentWorkspaceAccess } from "openclaw/plugin-sdk/agent-workspace-runtime";
 import {
   buildFileEntry,
   buildMultimodalChunkForIndexing,
   listMemoryFiles,
+  MEMORY_INDEX_CHUNKS_TABLE,
   readMemoryFile,
   type MemoryWorkspaceFiles,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -24,6 +26,13 @@ describe("Gateway index over Harness workspace files", () => {
     getMemorySearchManager,
     closeAllMemorySearchManagers,
   });
+  const createConfig = (overrides: Parameters<typeof fixture.createConfig>[0] = {}) =>
+    fixture.createConfig({
+      provider: "none",
+      sources: ["memory"],
+      vectorEnabled: false,
+      ...overrides,
+    });
   let release: (() => void) | undefined;
   afterEach(() => {
     release?.();
@@ -36,6 +45,7 @@ describe("Gateway index over Harness workspace files", () => {
     await fs.mkdir(path.join(harness, "memory"), { recursive: true });
     const remote = (file: string) => path.join(harness, path.relative(gateway, file));
     const local = (file: string) => path.join(gateway, path.relative(harness, file));
+    let changed: Parameters<MemoryWorkspaceFiles["watch"]>[1] | undefined;
     const files: MemoryWorkspaceFiles = {
       assertCurrent() {},
       async listFiles(_workspace, extraPaths, multimodal, skipped) {
@@ -61,7 +71,8 @@ describe("Gateway index over Harness workspace files", () => {
           ? { ...result, canonicalRelativePath: path.relative(gateway, entry.absPath) }
           : null;
       },
-      async watch(_request, _onChange, signal) {
+      async watch(_request, onChange, signal) {
+        changed = onChange;
         if (!signal.aborted) {
           await new Promise<void>((resolve) => {
             signal.addEventListener("abort", () => resolve(), { once: true });
@@ -80,44 +91,42 @@ describe("Gateway index over Harness workspace files", () => {
         stat: rejectUnexpectedDocumentAccess,
       },
     });
-    return { harness, files };
+    return {
+      harness,
+      files,
+      changed: () => {
+        if (!changed) {
+          throw new Error("Memory watch is not subscribed");
+        }
+        changed("change");
+      },
+    };
   }
 
-  it.each(["active", "stopped"])(
-    "keeps local Memory with a %s document-only bridge",
-    async (state) => {
-      await fs.writeFile(path.join(fixture.paths.workspace, "MEMORY.md"), "alpha local Memory.");
-      release = registerAgentWorkspaceAccess(fixture.paths.workspace, {
-        bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
-      });
-      if (state === "stopped") {
-        release();
-      }
-      const cfg = fixture.createConfig({
-        provider: "none",
-        sources: ["memory"],
-        vectorEnabled: false,
-      });
-      const manager = await fixture.getFreshManager(cfg, "cli");
-      await manager.sync({ reason: "document-only", force: true });
-      expect((await manager.search("alpha", { minScore: 0 }))[0]?.snippet).toContain(
-        "local Memory",
-      );
-      expect((await manager.readFile({ relPath: "MEMORY.md" })).text).toContain("local Memory");
-      expect(
-        (await readAgentMemoryFile({ cfg, agentId: "main", relPath: "MEMORY.md" })).text,
-      ).toContain("local Memory");
-      expect(await listWorkspaceMemoryFiles(fixture.paths.workspace)).toContain(
+  it("keeps local Memory with a stopped document-only bridge", async () => {
+    await fs.writeFile(path.join(fixture.paths.workspace, "MEMORY.md"), "alpha local Memory.");
+    release = registerAgentWorkspaceAccess(fixture.paths.workspace, {
+      bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
+    });
+    release();
+    const cfg = createConfig();
+    const manager = await fixture.getFreshManager(cfg, "cli");
+    await manager.sync({ reason: "document-only", force: true });
+    expect((await manager.search("alpha", { minScore: 0 }))[0]?.snippet).toContain("local Memory");
+    expect((await manager.readFile({ relPath: "MEMORY.md" })).text).toContain("local Memory");
+    expect(
+      (await readAgentMemoryFile({ cfg, agentId: "main", relPath: "MEMORY.md" })).text,
+    ).toContain("local Memory");
+    expect(await listWorkspaceMemoryFiles(fixture.paths.workspace)).toContain(
+      path.join(fixture.paths.workspace, "MEMORY.md"),
+    );
+    expect(
+      await readWorkspaceText(
+        fixture.paths.workspace,
         path.join(fixture.paths.workspace, "MEMORY.md"),
-      );
-      expect(
-        await readWorkspaceText(
-          fixture.paths.workspace,
-          path.join(fixture.paths.workspace, "MEMORY.md"),
-        ),
-      ).toContain("local Memory");
-    },
-  );
+      ),
+    ).toContain("local Memory");
+  });
 
   it("still rejects maintenance absent from an opted-in Memory host", async () => {
     await registerHarness();
@@ -134,12 +143,7 @@ describe("Gateway index over Harness workspace files", () => {
     await fs.writeFile(path.join(harness, "imports/new.md"), "alpha imported knowledge.");
     const oldTime = new Date(Date.now() - 90 * 86_400_000);
     await fs.utimes(old, oldTime, oldTime);
-    const cfg = fixture.createConfig({
-      provider: "none",
-      sources: ["memory"],
-      vectorEnabled: false,
-      extraPaths: ["imports"],
-    });
+    const cfg = createConfig({ extraPaths: ["imports"] });
     // Native search applies a 30-day half-life; the Gateway has no copy of these files.
     const manager = await fixture.getFreshManager(cfg, "cli");
     await manager.sync({ reason: "remote-mtime", force: true });
@@ -171,11 +175,9 @@ describe("Gateway index over Harness workspace files", () => {
         },
       ],
     });
-    const cfg = fixture.createConfig({
-      provider: "none",
+    const cfg = createConfig({
       sources: ["memory", "sessions"],
       sessionMemory: true,
-      vectorEnabled: false,
     });
     const manager = await fixture.getFreshManager(cfg, "cli");
     await manager.sync({ reason: "split-storage", force: true });
@@ -225,11 +227,9 @@ describe("Gateway index over Harness workspace files", () => {
           },
         ],
       });
-      const cfg = fixture.createConfig({
-        provider: "none",
+      const cfg = createConfig({
         sources: ["sessions"],
         sessionMemory: true,
-        vectorEnabled: false,
       });
       const manager = await fixture.getFreshManager(cfg, "cli");
       await manager.sync({ reason: "session-only", force: true });
@@ -265,11 +265,7 @@ describe("Gateway index over Harness workspace files", () => {
       }
       return result;
     };
-    const cfg = fixture.createConfig({
-      provider: "none",
-      sources: ["memory"],
-      vectorEnabled: false,
-    });
+    const cfg = createConfig();
     const manager = await fixture.getFreshManager(cfg, "cli");
     await manager.sync({ reason: "changed-source", force: true });
     await manager.sync({ reason: "retry-current-source" });
@@ -278,6 +274,108 @@ describe("Gateway index over Harness workspace files", () => {
       "newer remote version",
     );
   });
+
+  it("drains host edits arriving during indexing into the next watch generation", async () => {
+    const { harness, files, changed } = await registerHarness();
+    await fs.writeFile(path.join(harness, "memory/first.md"), "alpha first.");
+    await fs.writeFile(path.join(harness, "memory/second.md"), "alpha second.");
+    const manager = await fixture.getPersistentManager(createConfig());
+    await manager.sync({ reason: "initial", force: true });
+    const entered = Promise.withResolvers<void>();
+    const resume = Promise.withResolvers<void>();
+    const read = files.readForIndexing;
+    const inspections = vi.spyOn(files, "inspectFile");
+    const reads = vi.spyOn(files, "readForIndexing").mockImplementationOnce(async (file) => {
+      entered.resolve();
+      await resume.promise;
+      return read(file);
+    });
+    const sync = vi.spyOn(manager, "sync");
+    await fs.writeFile(path.join(harness, "memory/first.md"), "beta first updated.");
+    changed();
+    await entered.promise;
+    try {
+      expect(reads).toHaveBeenCalledExactlyOnceWith(path.join(fixture.paths.memory, "first.md"));
+      expect(inspections.mock.calls.map(([file]) => file)).toContain(
+        path.join(fixture.paths.memory, "second.md"),
+      );
+      await fs.writeFile(path.join(harness, "memory/second.md"), "beta second updated.");
+      changed();
+    } finally {
+      resume.resolve();
+    }
+    await Promise.all(sync.mock.results.map((result) => result.value));
+    const index = new DatabaseSync(manager.status().dbPath!, { readOnly: true });
+    try {
+      // Search can synchronize a dirty index and hide a stranded watch generation.
+      // Observe publication before any consumer can repair the missing update.
+      expect(
+        index
+          .prepare(`SELECT path, text FROM ${MEMORY_INDEX_CHUNKS_TABLE} ORDER BY path, start_line`)
+          .all(),
+      ).toEqual([
+        { path: "memory/first.md", text: "beta first updated." },
+        { path: "memory/second.md", text: "beta second updated." },
+      ]);
+    } finally {
+      index.close();
+    }
+  });
+
+  it.each(["newer-index", "discovery-error"] as const)(
+    "bounds joined watch generations when an active pass ends with %s",
+    async (outcome) => {
+      const { harness, files, changed } = await registerHarness();
+      await fs.writeFile(path.join(harness, "memory/first.md"), "alpha first.");
+      const manager = await fixture.getPersistentManager(createConfig());
+      await manager.sync({ reason: "initial", force: true });
+      if (outcome === "newer-index") {
+        const db = new DatabaseSync(manager.status().dbPath!);
+        try {
+          const row = db
+            .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_index_meta_v1'")
+            .get();
+          const meta = JSON.parse(String(row?.value)) as { chunkingVersion: number };
+          db.prepare(
+            "UPDATE memory_index_meta SET value = ? WHERE key = 'memory_index_meta_v1'",
+          ).run(JSON.stringify({ ...meta, chunkingVersion: meta.chunkingVersion + 1 }));
+        } finally {
+          db.close();
+        }
+      } else {
+        vi.spyOn(files, "listFiles").mockRejectedValueOnce(new Error("discovery unavailable"));
+      }
+      const owner = manager as unknown as {
+        runSync: (params?: Parameters<typeof manager.sync>[0]) => Promise<void>;
+      };
+      const original = owner.runSync.bind(owner);
+      const entered = Promise.withResolvers<void>();
+      const resume = Promise.withResolvers<void>();
+      const run = vi.spyOn(owner, "runSync").mockImplementationOnce(async (params) => {
+        entered.resolve();
+        await resume.promise;
+        return original(params);
+      });
+      const sync = vi.spyOn(manager, "sync");
+      changed();
+      await entered.promise;
+      try {
+        for (let i = 0; i < 64; i += 1) {
+          changed();
+        }
+      } finally {
+        resume.resolve();
+      }
+      const settled = await Promise.allSettled(sync.mock.results.map((result) => result.value));
+      expect(manager.status().dirty).toBe(true);
+      expect(run).toHaveBeenCalledTimes(outcome === "newer-index" ? 2 : 1);
+      expect(
+        settled.every(
+          (result) => result.status === (outcome === "newer-index" ? "fulfilled" : "rejected"),
+        ),
+      ).toBe(true);
+    },
+  );
 
   it("uses host change notifications and closes the subscription with the manager", async () => {
     const { harness, files } = await registerHarness();
@@ -294,11 +392,7 @@ describe("Gateway index over Harness workspace files", () => {
         signal.addEventListener("abort", () => resolve(), { once: true });
       });
     };
-    const cfg = fixture.createConfig({
-      provider: "none",
-      sources: ["memory"],
-      vectorEnabled: false,
-    });
+    const cfg = createConfig();
     const manager = await fixture.getPersistentManager(cfg);
     await manager.sync({ reason: "initial", force: true });
     expect(changed).toBeTypeOf("function");

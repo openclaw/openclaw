@@ -27,9 +27,7 @@ describe("Matrix per-wire send authority", () => {
         channel: {
           text: {
             ...createPluginRuntimeMock().channel.text,
-            resolveTextChunkLimit: () => 5,
             resolveChunkMode: () => "length",
-            resolveMarkdownTableMode: () => "code",
             chunkMarkdownTextWithMode: (text, limit) => chunkTextForOutbound(text, limit),
           },
         },
@@ -89,7 +87,7 @@ describe("Matrix per-wire send authority", () => {
         });
         const send = sendMessageMatrix("!room:example.org", "AAAAA BBBBB CCCCC", {
           client,
-          cfg: {},
+          cfg: { channels: { matrix: { textChunkLimit: 5 } } },
           ...(durable
             ? {
                 deliveryQueueId: `authority-${boundary}`,

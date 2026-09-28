@@ -2,6 +2,8 @@ import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process"
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { BrokerChild } from "../process/spawn-broker/child.js";
 import type { SpawnBrokerHost } from "../process/spawn-broker/host.js";
+import { recordChildProcessSpawn } from "../process/spawn-diagnostics.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createSqliteAuthTransferReceiver } from "./sqlite-readonly-auth-transfer.js";
 import { retainSnapshotWork } from "./sqlite-readonly-location-cleanup.js";
 import {
@@ -79,6 +81,7 @@ export function createSqliteReadOnlyWorkerSession(
     transport.kind === "broker"
       ? transport.owner.spawn(process.execPath, argv, spawnOptions)
       : spawn(process.execPath, argv, spawnOptions);
+  recordChildProcessSpawn(process.execPath, child);
   let retired = false;
   let sequence = 0;
   let stderr = "";
@@ -94,11 +97,9 @@ export function createSqliteReadOnlyWorkerSession(
         auth?: ReturnType<typeof createSqliteAuthTransferReceiver>;
       }
     | undefined;
-  let resolveClosed: () => void;
+  const { promise: closeSignal, resolve: resolveClosed } = createDeferredCore();
   // Broker loss retains group cleanup later in the same turn as proxy close.
-  const closed = new Promise<void>((resolve) => {
-    resolveClosed = resolve;
-  }).then(() => {
+  const closed = closeSignal.then(() => {
     if (
       transport.kind === "broker" &&
       child instanceof BrokerChild &&
@@ -120,7 +121,23 @@ export function createSqliteReadOnlyWorkerSession(
   if (host.retainLifetime !== false) {
     void retainSnapshotWork(closed, () => retire(new Error("SQLite snapshot owner stopped")));
   }
-  child.on("error", (error) => retire(error));
+  let spawned = false;
+  child.once("spawn", () => {
+    spawned = true;
+  });
+  child.on("error", (error: NodeJS.ErrnoException) =>
+    retire(
+      spawned
+        ? error
+        : Object.assign(
+            new Error(
+              `SQLite read-only worker failed to start (executable ${process.execPath}, cwd ${cwd}): ${error.message}`,
+              { cause: error },
+            ),
+            { code: error.code },
+          ),
+    ),
+  );
   child.once("close", (code, signal) => {
     retired = true;
     if (pending) {
@@ -285,7 +302,6 @@ export function createSqliteReadOnlyWorkerSession(
                   ? {
                       auth: {
                         expectedIdentity: options.expectedIdentity,
-                        coordinatorRuntime: options.coordinatorRuntime,
                       },
                     }
                   : {}),

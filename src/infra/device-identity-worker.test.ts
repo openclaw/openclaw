@@ -10,7 +10,6 @@ import {
 } from "./device-identity-async.js";
 import type { DeviceIdentityStoreOptions } from "./device-identity-store.js";
 import { signDevicePayload, verifyDeviceSignature } from "./device-identity.js";
-import { withStateDatabaseCoordinatorRuntimeDirectory } from "./state-database-coordinator.js";
 
 async function withIdentityWorkerState(
   run: (options: DeviceIdentityStoreOptions & { path: string }, stateDir: string) => Promise<void>,
@@ -21,15 +20,13 @@ async function withIdentityWorkerState(
     applyEnv: false,
   });
   const databasePath = state.statePath("state", "openclaw.sqlite");
-  await withStateDatabaseCoordinatorRuntimeDirectory(state.path("runtime"), async () => {
-    try {
-      await run({ path: databasePath, env: state.env }, state.stateDir);
-    } finally {
-      // Keep the fixture intact if native drainage cannot establish cleanup.
-      await closeOpenClawStateDatabaseByPathAsync(databasePath);
-      await state.cleanup();
-    }
-  });
+  try {
+    await run({ path: databasePath, env: state.env }, state.stateDir);
+  } finally {
+    // Keep the fixture intact if native drainage cannot establish cleanup.
+    await closeOpenClawStateDatabaseByPathAsync(databasePath);
+    await state.cleanup();
+  }
 }
 
 describe("device identity shared worker", () => {

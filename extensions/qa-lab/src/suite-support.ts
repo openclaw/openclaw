@@ -1,7 +1,6 @@
 import { parseBooleanValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaProviderMode } from "./model-selection.js";
 import type { QaTransportId } from "./qa-transport-registry.js";
-import type { QaTransportAdapter } from "./qa-transport.js";
 import type { RuntimeId } from "./runtime-parity.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
@@ -33,19 +32,6 @@ export async function runQaScenarioWithFlakeRetry(
       .filter(Boolean)
       .join(" | "),
   };
-}
-
-export function createQaSuiteReportNotes(params: {
-  transport: QaTransportAdapter;
-  transportArtifactNotes?: readonly string[];
-  providerMode: QaProviderMode;
-  primaryModel: string;
-  alternateModel: string;
-  fastMode: boolean;
-  concurrency: number;
-  isolatedWorkers?: boolean;
-}) {
-  return [...params.transport.createReportNotes(params), ...(params.transportArtifactNotes ?? [])];
 }
 
 export function buildQaIsolatedScenarioWorkerParams(params: {
@@ -80,6 +66,7 @@ export function buildQaIsolatedScenarioWorkerParams(params: {
     thinkingDefault: params.input?.thinkingDefault,
     claudeCliAuthMode: params.input?.claudeCliAuthMode,
     scenarioIds: [params.scenario.id],
+    ...(params.input?.scenarioDefinitions ? { scenarioDefinitions: [params.scenario] } : {}),
     enabledPluginIds: params.input?.enabledPluginIds,
     concurrency: 1,
     startLab: params.startLab,
@@ -134,11 +121,6 @@ export function mergeQaRuntimeEnvPatches(
   ...patches: Array<NodeJS.ProcessEnv | undefined>
 ): NodeJS.ProcessEnv | undefined {
   const merged: NodeJS.ProcessEnv = {};
-  for (const patch of patches) {
-    if (!patch) {
-      continue;
-    }
-    Object.assign(merged, patch);
-  }
+  Object.assign(merged, ...patches);
   return Object.keys(merged).length > 0 ? merged : undefined;
 }

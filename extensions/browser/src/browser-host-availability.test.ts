@@ -12,7 +12,10 @@ const { getState, getSource, isReachable, resolveExecutable } = vi.hoisted(() =>
   resolveExecutable: vi.fn<() => BrowserExecutable | null>(() => null),
 }));
 vi.mock("./browser-control-state.js", () => ({ getBrowserControlState: getState }));
-vi.mock("./config/config.js", () => ({ getRuntimeConfigSourceSnapshot: getSource }));
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
+  getRuntimeConfigSourceSnapshot: getSource,
+}));
 vi.mock("./browser/chrome.js", () => ({ isChromeReachable: isReachable }));
 vi.mock("./browser/chrome.executables.js", () => ({
   resolveBrowserExecutableForPlatform: resolveExecutable,

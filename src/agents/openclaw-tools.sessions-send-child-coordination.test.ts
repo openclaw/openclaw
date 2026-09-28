@@ -1,7 +1,6 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-// Verifies one-way child coordination at the sessions_send tool boundary.
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -9,6 +8,10 @@ import {
   loadSessionEntryReadOnly,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import {
+  resolveSqliteScope,
+  toDatabaseOptions,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { resolveGatewaySessionStoreTargetWithStore } from "../gateway/session-utils-store-lookup.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -18,7 +21,7 @@ const { config, callGatewayMock, readAcpSessionMetaMock, readAcpSessionMetaForEn
     config: {
       session: { mainKey: "main", scope: "per-sender" },
       agents: {
-        list: [{ id: "main", default: true }, { id: "peer" }, { id: "penny" }, { id: "director" }],
+        list: [{ id: "main", default: true }, { id: "peer" }],
       },
       tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
     } as OpenClawConfig,
@@ -28,6 +31,40 @@ const { config, callGatewayMock, readAcpSessionMetaMock, readAcpSessionMetaForEn
   }));
 vi.mock("../acp/runtime/session-meta.js", () => ({
   readAcpSessionMeta: (params: unknown) => readAcpSessionMetaMock(params),
+  readAcpSessionEntryAsync: async (params: {
+    cfg?: OpenClawConfig;
+    sessionKey: string;
+    agentId?: string;
+    assertCurrent?: () => void;
+  }) => {
+    params.assertCurrent?.();
+    const cfg = params.cfg ?? config;
+    const target = resolveGatewaySessionStoreTargetWithStore({
+      cfg,
+      key: params.sessionKey,
+      agentId: params.agentId,
+      readOnly: true,
+      exactRead: true,
+    });
+    const entry = target.store[target.canonicalKey];
+    const acp = await readAcpSessionMetaForEntryMock({
+      ...params,
+      cfg,
+      sessionKey: target.canonicalKey,
+      agentId: target.agentId,
+      entry,
+    });
+    params.assertCurrent?.();
+    return {
+      cfg,
+      agentId: target.agentId,
+      storePath: target.storePath,
+      sessionKey: params.sessionKey,
+      storeSessionKey: target.canonicalKey,
+      entry,
+      acp,
+    };
+  },
 }));
 vi.mock("../acp/runtime/session-meta-readonly.js", async () => {
   const { rowToAcpSessionMeta } = await vi.importActual<
@@ -52,27 +89,55 @@ import {
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
+import { observeSessionSendContinuations } from "./openclaw-tools.sessions-timeout.test-support.js";
 import { testing as agentStepTesting } from "./tools/agent-step.test-support.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const continuations = observeSessionSendContinuations({ trackAllWork: true });
+
+async function settleSessionWork() {
+  await continuations.settle();
+  await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+}
+
+afterAll(() => {
+  continuations.restore();
+});
 
 type GatewayCall = { method?: string; params?: Record<string, unknown> };
 type AgentCallParams = {
   extraSystemPrompt?: string;
   inputProvenance?: { sourceSessionKey?: string; sourceRole?: string };
 };
+const calls: GatewayCall[] = [];
+const finalAnnounce = vi.fn(async () => ({
+  payloads: [{ text: "ANNOUNCE_SKIP", mediaUrl: null }],
+  meta: { durationMs: 1 },
+}));
+function mockGatewayReply(
+  waitResult: Record<string, unknown> = {
+    status: "ok",
+    terminalReply: { disposition: "visible", text: "Requested result" },
+  },
+) {
+  callGatewayMock.mockImplementation(async (request: GatewayCall) => {
+    calls.push(request);
+    if (request.method === "agent") {
+      return { runId: "coordination-run", status: "accepted" };
+    }
+    return request.method === "agent.wait" ? waitResult : {};
+  });
+}
 function agentParams(call: GatewayCall): AgentCallParams {
   return (call.params ?? {}) as AgentCallParams;
-}
-function sessionsSendDetails(details: unknown) {
-  return details as { reply?: string; delivery?: { status?: string } };
 }
 function createSendTool(agentSessionKey: string) {
   return createSessionsSendTool({ agentSessionKey, config, callGateway: callGatewayMock });
@@ -104,20 +169,18 @@ describe("sessions_send child coordination", () => {
     };
     resetGatewayWorkAdmission();
     callGatewayMock.mockReset();
+    calls.length = 0;
+    mockGatewayReply();
+    finalAnnounce.mockClear();
     readAcpSessionMetaMock.mockReset().mockReturnValue(undefined);
     readAcpSessionMetaForEntryMock
       .mockReset()
       .mockImplementation((params: unknown) => readAcpSessionMetaMock(params));
     setActivePluginRegistry(createSessionConversationTestRegistry());
-    await agentStepTesting.setDepsForTest({
-      agentCommandFromIngress: async () => ({
-        payloads: [{ text: "ANNOUNCE_SKIP", mediaUrl: null }],
-        meta: { durationMs: 1 },
-      }),
-    });
+    await agentStepTesting.setDepsForTest({ agentCommandFromIngress: finalAnnounce });
   });
   afterEach(async () => {
-    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await settleSessionWork();
     resetGatewayWorkAdmission();
     await agentStepTesting.setDepsForTest();
     closeOpenClawStateDatabaseForTest();
@@ -168,26 +231,12 @@ describe("sessions_send child coordination", () => {
       expect(selected.readSource?.path).toBe(alternate.path);
       const requesterKey = direction === "requester" ? alternateKey : peerKey;
       const targetKey = direction === "target" ? alternateKey : peerKey;
-      const calls: GatewayCall[] = [];
-      callGatewayMock.mockImplementation(async (request: GatewayCall) => {
-        calls.push(request);
-        if (request.method === "agent") {
-          return { runId: "alternate-run", status: "accepted" };
-        }
-        if (request.method === "agent.wait") {
-          return {
-            status: "ok",
-            terminalReply: { disposition: "visible", text: "Requested result" },
-          };
-        }
-        return {};
-      });
       const result = await createSendTool(requesterKey).execute("alternate-coordination", {
         sessionKey: targetKey,
         message: "Return the requested result",
         timeoutSeconds: 1,
       });
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      await settleSessionWork();
       expect.soft(result.details).toMatchObject({
         status: "ok",
         reply: "Requested result",
@@ -198,7 +247,17 @@ describe("sessions_send child coordination", () => {
         .soft(agentParams(agentCalls[0] ?? {}).inputProvenance?.sourceRole)
         .toBe(direction === "requester" && child ? "subagent" : undefined);
       expect.soft(agentCalls).toHaveLength(child ? 1 : 6);
+      if (child) {
+        expect(result.details).toMatchObject({ delivery: { mode: "announce" } });
+        expect(agentParams(agentCalls[0] ?? {}).extraSystemPrompt).toBeUndefined();
+        expect(finalAnnounce).not.toHaveBeenCalled();
+        expect(calls.some((call) => call.method === "send")).toBe(false);
+      }
       if (direction === "target") {
+        await runOpenClawAgentWriteAdmission(
+          toDatabaseOptions(resolveSqliteScope(alternateScope)),
+          () => undefined,
+        );
         expect
           .soft(listSessionParticipantsReadOnly(alternateScope).get(alternateKey) ?? [])
           .toEqual([
@@ -226,20 +285,6 @@ describe("sessions_send child coordination", () => {
         sessionId: "same-session",
         lifecycleRevision: "retired",
         sessionStartedAt: 50,
-        expectedChild: false,
-      },
-      {
-        binding: "retired session",
-        sessionId: "retired-session",
-        lifecycleRevision: undefined,
-        sessionStartedAt: 50,
-        expectedChild: false,
-      },
-      {
-        binding: "legacy row before restart",
-        sessionId: "same-session",
-        lifecycleRevision: undefined,
-        sessionStartedAt: 150,
         expectedChild: false,
       },
       {
@@ -306,26 +351,12 @@ describe("sessions_send child coordination", () => {
           metadataRead.readAcpSessionMetaForEntry({ ...params, databasePath }),
       );
       await writeEntry(reusedKey, currentEntry);
-      const calls: GatewayCall[] = [];
-      callGatewayMock.mockImplementation(async (request: GatewayCall) => {
-        calls.push(request);
-        if (request.method === "agent") {
-          return { runId: "bound-metadata-run", status: "accepted" };
-        }
-        if (request.method === "agent.wait") {
-          return {
-            status: "ok",
-            terminalReply: { disposition: "visible", text: "Requested result" },
-          };
-        }
-        return {};
-      });
       const result = await createSendTool(requesterKey).execute("bound-acp-coordination", {
         sessionKey: targetKey,
         message: "Return the requested result",
         timeoutSeconds: 1,
       });
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      await settleSessionWork();
       expect(result.details).toMatchObject({
         status: "ok",
         reply: "Requested result",
@@ -341,148 +372,39 @@ describe("sessions_send child coordination", () => {
 
   it.each([
     {
-      name: "parent to hidden child",
-      requesterKey: "agent:main:main",
-      targetKey: "agent:main:subagent:child",
-      childKeys: ["agent:main:subagent:child"],
+      name: "hidden child with opaque direct token under main DM scope",
+      requesterKey: "agent:main:subagent:direct:peer-1",
+      targetKey: "agent:peer:main",
+      entry: {},
+      timeoutSeconds: 0,
     },
     {
-      name: "parent to visible child",
-      requesterKey: "agent:main:main",
-      targetKey: "agent:penny:dashboard:child",
-      childKeys: ["agent:penny:dashboard:child"],
+      name: "visible child",
+      requesterKey: "agent:main:dashboard:child",
+      entry: { spawnedBy: "agent:main:main", spawnDepth: 1 },
+      timeoutSeconds: 1,
     },
     {
-      name: "hidden child to parent",
-      requesterKey: "agent:main:subagent:child",
-      targetKey: "agent:main:main",
-      childKeys: ["agent:main:subagent:child"],
+      name: "restored child with cyclic lineage",
+      requesterKey: "agent:main:dashboard:cycle",
+      entry: { spawnedBy: "agent:main:dashboard:cycle" },
+      timeoutSeconds: 1,
     },
     {
-      name: "visible child to parent",
-      requesterKey: "agent:penny:dashboard:child",
-      targetKey: "agent:main:main",
-      childKeys: ["agent:penny:dashboard:child"],
-    },
-    {
-      name: "ACP child to parent",
-      requesterKey: "agent:penny:acp:child",
-      targetKey: "agent:main:main",
-      childKeys: ["agent:penny:acp:child"],
-    },
-    {
-      name: "sibling children",
-      requesterKey: "agent:main:subagent:child",
-      targetKey: "agent:penny:dashboard:sibling",
-      childKeys: ["agent:main:subagent:child", "agent:penny:dashboard:sibling"],
-    },
-    {
-      name: "unrelated coordinator to child",
-      requesterKey: "agent:director:main",
-      targetKey: "agent:main:subagent:child",
-      childKeys: ["agent:main:subagent:child"],
+      name: "legacy ACP child",
+      requesterKey: "agent:main:acp:child",
+      entry: { parentSessionKey: "agent:main:main" },
+      acpMeta: { backend: "acpx" },
+      timeoutSeconds: 1,
     },
   ])(
-    "sessions_send returns one reply without reciprocal turns for $name",
-    async ({ requesterKey, targetKey, childKeys }) => {
-      const calls: GatewayCall[] = [];
-      for (const sessionKey of childKeys) {
-        await writeEntry(sessionKey, {
-          sessionId: `session-${sessionKey}`,
-          updatedAt: 1,
-          spawnedBy: "agent:main:main",
-          spawnDepth: 1,
-        });
-      }
-      callGatewayMock.mockImplementation(async (request: GatewayCall) => {
-        calls.push(request);
-        if (request.method === "agent") {
-          return { runId: "run-child", status: "accepted", acceptedAt: 2000 };
-        }
-        if (request.method === "agent.wait") {
-          return {
-            status: "ok",
-            terminalReply: { disposition: "visible", text: "Requested result" },
-          };
-        }
-        return {};
-      });
-      const finalAnnounce = vi.fn(async () => ({
-        payloads: [{ text: "ANNOUNCE_SKIP", mediaUrl: null }],
-        meta: { durationMs: 1 },
-      }));
-      await agentStepTesting.setDepsForTest({ agentCommandFromIngress: finalAnnounce });
-      const tool = createSendTool(requesterKey);
-      const result = await tool.execute("child-coordination", {
-        sessionKey: targetKey,
-        message: "Share the requested result",
-        timeoutSeconds: 1,
-      });
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-      expect(result.details).toMatchObject({
-        status: "ok",
-        reply: "Requested result",
-        delivery: { status: "skipped", mode: "announce" },
-      });
-      expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
-      expect(
-        agentParams(calls.find((call) => call.method === "agent") ?? {}).extraSystemPrompt,
-      ).toBeUndefined();
-      expect(finalAnnounce).not.toHaveBeenCalled();
-      expect(calls.some((call) => call.method === "send")).toBe(false);
-    },
-  );
-
-  it.each(
-    [
-      {
-        name: "hidden child",
-        requesterKey: "agent:main:subagent:child",
-        entry: { spawnedBy: "agent:main:main" },
-      },
-      {
-        name: "hidden child with opaque direct token under main DM scope",
-        requesterKey: "agent:main:subagent:direct:peer-1",
-        targetKey: "agent:peer:main",
-        entry: {},
-      },
-      {
-        name: "visible child",
-        requesterKey: "agent:main:dashboard:child",
-        entry: { spawnedBy: "agent:main:main", spawnDepth: 1 },
-      },
-      {
-        name: "restored child with cyclic lineage",
-        requesterKey: "agent:main:dashboard:cycle",
-        entry: { spawnedBy: "agent:main:dashboard:cycle" },
-      },
-      {
-        name: "legacy ACP child",
-        requesterKey: "agent:main:acp:child",
-        entry: { parentSessionKey: "agent:main:main" },
-        acpMeta: { backend: "acpx" },
-      },
-    ].flatMap((source) =>
-      [0, 1].map((timeoutSeconds) => Object.assign({}, source, { timeoutSeconds })),
-    ),
-  )(
     "sessions_send does not start reply turns for $name after timeoutSeconds=$timeoutSeconds",
     async ({ requesterKey, entry, timeoutSeconds, targetKey = "agent:main:main", acpMeta }) => {
-      const calls: GatewayCall[] = [];
       await writeEntry(requesterKey, { sessionId: "child", updatedAt: 1, ...entry });
       readAcpSessionMetaMock.mockImplementation((params: { sessionKey?: string }) =>
         params.sessionKey === requesterKey ? acpMeta : undefined,
       );
-      callGatewayMock.mockImplementation(async (request: GatewayCall) => {
-        calls.push(request);
-        if (request.method === "agent") {
-          return { status: "accepted", runId: "parent-report" };
-        }
-        if (request.method === "agent.wait") {
-          return { status: "timeout" };
-        }
-        return {};
-      });
+      mockGatewayReply({ status: "timeout" });
       const tool = createSendTool(requesterKey);
       const result = await tool.execute("child-report", {
         sessionKey: targetKey,
@@ -552,21 +474,6 @@ describe("sessions_send child coordination", () => {
             }
           : {}),
       });
-      callGatewayMock.mockImplementation(async (opts: unknown) => {
-        const request = opts as { method?: string };
-        if (request.method === "agent") {
-          return { runId: "run-thread", status: "accepted", acceptedAt: 2000 };
-        }
-        if (request.method === "agent.wait") {
-          return {
-            runId: "run-thread",
-            status: "ok",
-            terminalReply: { disposition: "visible", text: "thread reply" },
-          };
-        }
-        return {};
-      });
-
       const tool = createSendTool(requesterKey);
       const waited = await tool.execute("call-dashboard-thread", {
         sessionKey: targetKey,
@@ -574,9 +481,10 @@ describe("sessions_send child coordination", () => {
         timeoutSeconds: 1,
       });
 
-      const waitedDetails = sessionsSendDetails(waited.details);
-      expect(waitedDetails.reply).toBe("thread reply");
-      expect(waitedDetails.delivery?.status).toBe("pending");
+      expect(waited.details).toMatchObject({
+        reply: "Requested result",
+        delivery: { status: "pending" },
+      });
     },
   );
 });

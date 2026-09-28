@@ -157,6 +157,7 @@ test("projects.list returns only the caller's deterministic resolved recents", a
           ),
         ).toEqual(expected);
       }
+      expect(workerReads).not.toHaveBeenCalled();
       replaceSessionEntrySync(
         { agentId: "main", sessionKey: "agent:main:updated-recent" },
         {
@@ -181,7 +182,7 @@ test("projects.list returns only the caller's deterministic resolved recents", a
           ...expectedRecents.slice(0, 7),
         ],
       });
-      expect(workerReads.mock.calls.length).toBe(0);
+      expect(workerReads).toHaveBeenCalled();
     } finally {
       workerReads.mockRestore();
     }

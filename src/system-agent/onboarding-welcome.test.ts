@@ -45,6 +45,27 @@ vi.mock("../state/local-onboarding-state.js", () => ({
 
 vi.mock("../commands/onboard-helpers.js", () => ({ DEFAULT_WORKSPACE: "/default/workspace" }));
 
+function createWelcomeEngine(
+  defaultModel: string | undefined,
+  config: { exists: boolean; valid: boolean; issues?: []; hash?: string | null } = {
+    exists: true,
+    valid: true,
+    issues: [],
+    hash: "hash",
+  },
+  gateway?: { reachable: boolean; url: string },
+) {
+  return {
+    loadOverview: vi.fn(async () => ({
+      config: { path: "/tmp/openclaw.json", ...config },
+      defaultModel,
+      ...(gateway ? { gateway } : {}),
+    })),
+    propose: vi.fn(),
+    noteAssistantMessage: vi.fn(),
+  };
+}
+
 describe("buildOnboardingWelcome", () => {
   beforeEach(() => {
     mocks.sourceConfig.agents.defaults.workspace = "/existing/workspace";
@@ -55,22 +76,8 @@ describe("buildOnboardingWelcome", () => {
 
   it("preserves an authored workspace in a partial setup", async () => {
     mocks.sourceConfig.agents.defaults.workspace = "/existing/workspace";
-    const propose = vi.fn();
-    const noteAssistantMessage = vi.fn();
-    const engine = {
-      loadOverview: vi.fn(async () => ({
-        config: {
-          path: "/tmp/openclaw.json",
-          exists: true,
-          valid: true,
-          issues: [],
-          hash: "hash",
-        },
-        defaultModel: "openai/gpt-5.5",
-      })),
-      propose,
-      noteAssistantMessage,
-    };
+    const engine = createWelcomeEngine("openai/gpt-5.5");
+    const { propose } = engine;
 
     const { text: welcome, question } = await buildOnboardingWelcome({
       engine: engine as never,
@@ -107,16 +114,10 @@ describe("buildOnboardingWelcome", () => {
       securityAcknowledgedAt: "2026-07-13T00:00:00.000Z",
       startedAtMs: 1,
     });
-    const propose = vi.fn();
+    const engine = createWelcomeEngine("openai/gpt-5.6-luna", { exists: true, valid: true });
+    const { propose } = engine;
     const { text: welcome, question } = await buildOnboardingWelcome({
-      engine: {
-        loadOverview: vi.fn(async () => ({
-          config: { path: "/tmp/openclaw.json", exists: true, valid: true },
-          defaultModel: "openai/gpt-5.6-luna",
-        })),
-        propose,
-        noteAssistantMessage: vi.fn(),
-      } as never,
+      engine: engine as never,
       workspace: "/requested/workspace",
       localRecovery: true,
     });
@@ -142,17 +143,14 @@ describe("buildOnboardingWelcome", () => {
       startedAtMs: 1,
       completedAtMs: 2,
     });
-    const propose = vi.fn();
+    const engine = createWelcomeEngine(
+      "openai/gpt-5.6-luna",
+      { exists: true, valid: true },
+      { reachable: true, url: "ws://127.0.0.1:18789" },
+    );
+    const { propose } = engine;
     const { question } = await buildOnboardingWelcome({
-      engine: {
-        loadOverview: vi.fn(async () => ({
-          config: { path: "/tmp/openclaw.json", exists: true, valid: true },
-          defaultModel: "openai/gpt-5.6-luna",
-          gateway: { reachable: true, url: "ws://127.0.0.1:18789" },
-        })),
-        propose,
-        noteAssistantMessage: vi.fn(),
-      } as never,
+      engine: engine as never,
       localRecovery: true,
     });
 
@@ -179,18 +177,15 @@ describe("buildOnboardingWelcome", () => {
           }
         : undefined,
     );
-    const propose = vi.fn();
+    const engine = createWelcomeEngine(
+      "openai/gpt-5.6-luna",
+      { exists: true, valid: true },
+      { reachable: true, url: "ws://127.0.0.1:18789" },
+    );
+    const { propose } = engine;
 
     const { question } = await buildOnboardingWelcome({
-      engine: {
-        loadOverview: vi.fn(async () => ({
-          config: { path: "/tmp/openclaw.json", exists: true, valid: true },
-          defaultModel: "openai/gpt-5.6-luna",
-          gateway: { reachable: true, url: "ws://127.0.0.1:18789" },
-        })),
-        propose,
-        noteAssistantMessage: vi.fn(),
-      } as never,
+      engine: engine as never,
       localRecovery: true,
     });
 
@@ -213,17 +208,14 @@ describe("buildOnboardingWelcome", () => {
       securityAcknowledgedAt: "2026-07-13T00:00:00.000Z",
       startedAtMs: 1,
     });
-    const propose = vi.fn();
+    const engine = createWelcomeEngine(
+      "openai/gpt-5.6-luna",
+      { exists: true, valid: true },
+      { reachable: true, url: "ws://127.0.0.1:18789" },
+    );
+    const { propose } = engine;
     const { question } = await buildOnboardingWelcome({
-      engine: {
-        loadOverview: vi.fn(async () => ({
-          config: { path: "/tmp/openclaw.json", exists: true, valid: true },
-          defaultModel: "openai/gpt-5.6-luna",
-          gateway: { reachable: true, url: "ws://127.0.0.1:18789" },
-        })),
-        propose,
-        noteAssistantMessage: vi.fn(),
-      } as never,
+      engine: engine as never,
     });
 
     expect(mocks.readLocalOnboardingState).not.toHaveBeenCalled();
@@ -234,17 +226,14 @@ describe("buildOnboardingWelcome", () => {
   it("never reads a local onboarding receipt for a remote Gateway", async () => {
     mocks.sourceConfig.wizard = { securityAcknowledgedAt: "2026-07-13T00:00:00.000Z" };
     mocks.sourceConfig.gateway = { mode: "remote" };
-    const propose = vi.fn();
+    const engine = createWelcomeEngine(
+      "openai/gpt-5.6-luna",
+      { exists: true, valid: true },
+      { reachable: true, url: "wss://gateway.example.test" },
+    );
+    const { propose } = engine;
     const { question } = await buildOnboardingWelcome({
-      engine: {
-        loadOverview: vi.fn(async () => ({
-          config: { path: "/tmp/openclaw.json", exists: true, valid: true },
-          defaultModel: "openai/gpt-5.6-luna",
-          gateway: { reachable: true, url: "wss://gateway.example.test" },
-        })),
-        propose,
-        noteAssistantMessage: vi.fn(),
-      } as never,
+      engine: engine as never,
       localRecovery: true,
     });
 
@@ -254,21 +243,14 @@ describe("buildOnboardingWelcome", () => {
   });
 
   it("advertises only the route that passed the inference gate", async () => {
+    const engine = createWelcomeEngine("openai/gpt-5.5", {
+      exists: false,
+      valid: false,
+      issues: [],
+      hash: null,
+    });
     const { text: welcome } = await buildOnboardingWelcome({
-      engine: {
-        loadOverview: vi.fn(async () => ({
-          config: {
-            path: "/tmp/openclaw.json",
-            exists: false,
-            valid: false,
-            issues: [],
-            hash: null,
-          },
-          defaultModel: "openai/gpt-5.5",
-        })),
-        propose: vi.fn(),
-        noteAssistantMessage: vi.fn(),
-      } as never,
+      engine: engine as never,
       localRecovery: true,
     });
 
@@ -280,21 +262,8 @@ describe("buildOnboardingWelcome", () => {
 
   it("ignores a blank authored workspace", async () => {
     mocks.sourceConfig.agents.defaults.workspace = "   ";
-    const propose = vi.fn();
-    const engine = {
-      loadOverview: vi.fn(async () => ({
-        config: {
-          path: "/tmp/openclaw.json",
-          exists: true,
-          valid: true,
-          issues: [],
-          hash: "hash",
-        },
-        defaultModel: "openai/gpt-5.5",
-      })),
-      propose,
-      noteAssistantMessage: vi.fn(),
-    };
+    const engine = createWelcomeEngine("openai/gpt-5.5");
+    const { propose } = engine;
 
     await buildOnboardingWelcome({ engine: engine as never });
 
@@ -306,23 +275,11 @@ describe("buildOnboardingWelcome", () => {
 
   it("honors an explicit workspace override on an authored setup", async () => {
     mocks.sourceConfig.gateway = { auth: { mode: "token", token: "existing-token" } };
-    const propose = vi.fn();
+    const engine = createWelcomeEngine("openai/gpt-5.5");
+    const { propose } = engine;
     const { text: welcome } = await buildOnboardingWelcome({
       workspace: "/requested/workspace",
-      engine: {
-        loadOverview: vi.fn(async () => ({
-          config: {
-            path: "/tmp/openclaw.json",
-            exists: true,
-            valid: true,
-            issues: [],
-            hash: "hash",
-          },
-          defaultModel: "openai/gpt-5.5",
-        })),
-        propose,
-        noteAssistantMessage: vi.fn(),
-      } as never,
+      engine: engine as never,
     });
 
     expect(propose).toHaveBeenCalledWith({
@@ -333,25 +290,12 @@ describe("buildOnboardingWelcome", () => {
   });
 
   it("fails closed before proposing setup when inference is missing", async () => {
-    const propose = vi.fn();
-    const noteAssistantMessage = vi.fn();
+    const engine = createWelcomeEngine(undefined);
+    const { propose, noteAssistantMessage } = engine;
 
     await expect(
       buildOnboardingWelcome({
-        engine: {
-          loadOverview: vi.fn(async () => ({
-            config: {
-              path: "/tmp/openclaw.json",
-              exists: true,
-              valid: true,
-              issues: [],
-              hash: "hash",
-            },
-            defaultModel: undefined,
-          })),
-          propose,
-          noteAssistantMessage,
-        } as never,
+        engine: engine as never,
       }),
     ).rejects.toThrow("requires working inference first");
 
@@ -368,23 +312,13 @@ describe("buildOnboardingWelcome", () => {
     },
   ])("treats $label consistently with the app gate", async ({ auth, configured }) => {
     mocks.sourceConfig.gateway = { auth };
-    const propose = vi.fn();
+    const engine = createWelcomeEngine("openai/gpt-5.5", undefined, {
+      reachable: true,
+      url: "ws://127.0.0.1:18789",
+    });
+    const { propose } = engine;
     const { text: welcome, question } = await buildOnboardingWelcome({
-      engine: {
-        loadOverview: vi.fn(async () => ({
-          config: {
-            path: "/tmp/openclaw.json",
-            exists: true,
-            valid: true,
-            issues: [],
-            hash: "hash",
-          },
-          defaultModel: "openai/gpt-5.5",
-          gateway: { reachable: true, url: "ws://127.0.0.1:18789" },
-        })),
-        propose,
-        noteAssistantMessage: vi.fn(),
-      } as never,
+      engine: engine as never,
     });
 
     expect(propose).toHaveBeenCalledTimes(configured ? 0 : 1);

@@ -80,6 +80,7 @@ type SidebarAttentionElement = HTMLElement & {
   context: ApplicationContext;
   updateComplete: Promise<boolean>;
   dismissPanel: () => boolean;
+  onNavigate?: ApplicationContext["navigate"];
 };
 
 function authStatus(ts: number, status: "missing" | "ok" = "missing"): ModelAuthStatusResult {
@@ -168,6 +169,7 @@ describe("sidebar attention refresh ownership", () => {
     }
     stores.clear();
     document.body.replaceChildren();
+    vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -230,7 +232,7 @@ describe("sidebar attention refresh ownership", () => {
     expect(document.activeElement).toBe(trigger);
   });
 
-  it("updates the closed Inbox badge for mentions outside the selected agent", async () => {
+  it("updates cross-agent mentions and opens them through shell navigation", async () => {
     let result = { gatewayInstanceId: "boot-a", revision: 1, items: [mentionItem("first")] };
     const responses: Record<string, unknown> = {
       "cron.list": cronListResponse([]),
@@ -274,6 +276,17 @@ describe("sidebar attention refresh ownership", () => {
     await waitForFast(() =>
       expect(element.querySelector(".sidebar-issues-button__count")?.textContent?.trim()).toBe("2"),
     );
+    expect(element.querySelector(".sidebar-issues-panel")).toBeNull();
+    const onNavigate = vi.fn();
+    element.onNavigate = onNavigate;
+    element.querySelector<HTMLButtonElement>(".sidebar-issues-button")!.click();
+    await waitForFast(() => expect(element.querySelector(".sidebar-mention-row a")).not.toBeNull());
+    element.querySelector<HTMLAnchorElement>(".sidebar-mention-row a")!.click();
+    expect(onNavigate).toHaveBeenCalledExactlyOnceWith(
+      "chat",
+      expect.objectContaining({ pathname: "/chat/writer/review" }),
+    );
+    await element.updateComplete;
     expect(element.querySelector(".sidebar-issues-panel")).toBeNull();
   });
 
@@ -345,6 +358,50 @@ describe("sidebar attention refresh ownership", () => {
     await waitForFast(() => expect(request).toHaveBeenCalledWith("cron.status", {}));
     expect(element.querySelector(".sidebar-issues-button__count")).toBeNull();
   });
+
+  it.each(["visible", "hidden"] as const)(
+    "publishes a quiet automation's overdue warning after a %s deadline without polling",
+    async (presentation) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(Date.UTC(2026, 8, 22));
+      let visibility: DocumentVisibilityState = "visible";
+      vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+      vi.stubGlobal("localStorage", createTestStorageMock());
+      const job = cronJob("quiet-deadline");
+      job.state = { lastRunStatus: "ok", nextRunAtMs: Date.now() };
+      const deadline = Date.now() + 300_000;
+      const request = vi.fn(async (method: string) => {
+        if (method === "cron.list") {
+          return cronListResponse([job]);
+        }
+        if (method === "cron.status") {
+          return { enabled: true, triggersEnabled: true, jobs: 1 };
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+      const harness = createGatewayHarness(mockClient(request));
+      const { element } = await mountAttention({ gateway: harness.gateway });
+      expect(request).toHaveBeenCalledTimes(2);
+      if (presentation === "hidden") {
+        visibility = "hidden";
+        document.dispatchEvent(new Event("visibilitychange"));
+      }
+      await vi.advanceTimersByTimeAsync(deadline - Date.now());
+      await element.updateComplete;
+      expect(element.querySelector(".sidebar-issues-button__count")).toBeNull();
+      await vi.advanceTimersByTimeAsync(1);
+      await element.updateComplete;
+      if (presentation === "hidden") {
+        expect(element.querySelector(".sidebar-issues-button__count")).toBeNull();
+        visibility = "visible";
+        document.dispatchEvent(new Event("visibilitychange"));
+        await element.updateComplete;
+      }
+      expect(element.querySelector(".sidebar-issues-button__count")?.textContent).toBe("1");
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+      expect(request).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it("does not let an obsolete open render steal focus from a later interaction", async () => {
     const { element, trigger } = await mountAttention();
@@ -579,7 +636,7 @@ describe("sidebar attention refresh ownership", () => {
       );
 
       now = 200_000;
-      document.dispatchEvent(new Event("visibilitychange"));
+      eventListener?.({ type: "event", event: "cron", payload: {} });
       invalidateModelAuthStatusRequests(client);
       eventListener?.({ type: "event", event: "chat.metadata.changed", payload: {} });
       await waitForFast(() => expect(request).toHaveBeenCalledTimes(6));
