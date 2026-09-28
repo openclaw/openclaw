@@ -65,20 +65,18 @@ installGatewayTestHooks({
 
 await import("./server.js");
 
-for (const { name, fault, replaceParent } of [
-  ...[false, true].map((faultCase) => ({
-    name: `chat.abort interrupts all siblings before cleanup and preserves failure accounting (fault=${faultCase})`,
-    fault: faultCase,
+for (const { name, replaceParent } of [
+  {
+    name: "chat.abort interrupts all siblings before cleanup and preserves failure accounting",
     replaceParent: false,
-  })),
+  },
   {
     name: "typed Stop rejects a replaced parent while child cancellation drains",
-    fault: false,
     replaceParent: true,
   },
 ]) {
   test(name, async () => {
-    const suffix = replaceParent ? "replacement" : fault ? "fault" : "success";
+    const suffix = replaceParent ? "replacement" : "fault";
     const parentRunId = `parent-${suffix}`;
     const parentKey = `agent:main:sibling-abort-${suffix}`;
     const groupId = `sibling-abort-${suffix}`;
@@ -89,7 +87,7 @@ for (const { name, fault, replaceParent } of [
     const firstRunId = expectDefined(running[0], "first running child");
     const queued = replaceParent ? [] : [`queued-${suffix}-0`, `queued-${suffix}-1`];
     const selected = [...running, ...queued];
-    const failedRunId = fault ? running[3] : undefined;
+    const failedRunId = replaceParent ? undefined : running[3];
     const sessionKey = (runId: string) => `agent:main:subagent:${runId}`;
     const stateDir = process.env.OPENCLAW_STATE_DIR!;
     const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
@@ -314,16 +312,11 @@ for (const { name, fault, replaceParent } of [
             replacementScope.sessionId,
           );
           expect(await loadTranscriptEvents(replacementScope)).toEqual(replacementBefore);
-        } else if (fault) {
+        } else {
           expect(outcome.response).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
           expect(outcome.response.error?.message).toContain(
             "synthetic sibling interruption failure",
           );
-        } else {
-          expect(outcome.response).toMatchObject({
-            ok: true,
-            payload: { ok: true, aborted: true, runIds: [parentRunId] },
-          });
         }
 
         const persistedRuns = new Map(

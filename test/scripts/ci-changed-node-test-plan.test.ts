@@ -919,6 +919,95 @@ describe("CI changed Node test plan", () => {
     ]);
   });
 
+  it("retains selected compact coverage when time splitting exceeds the non-dist matrix cap", async () => {
+    const targets = [
+      "test/scripts/ci-node-test-plan.test.ts",
+      "test/scripts/ci-changed-node-test-plan.test.ts",
+    ];
+    const artifactTarget = "test/scripts/build-all.test.ts";
+    const selectedTestTargets = [...targets, artifactTarget];
+    const compact: CompactNodeTestShard = {
+      checkName: "checks-node-changed-tooling",
+      shardName: "changed-tooling",
+      runner: "ubuntu-24.04",
+      requiresDist: false,
+      planConcurrency: 1,
+      timeoutMinutes: 10,
+      pretestBuildMode: "runtime",
+      env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+      predictedSeconds: 200,
+      predictedTestSeconds: 200,
+      groups: [
+        {
+          shard_name: "core-tooling",
+          configs: ["test/vitest/vitest.tooling.config.ts"],
+          includePatterns: targets,
+          runner: "ubuntu-24.04",
+          env: { NODE_OPTIONS: "--max-old-space-size=4096" },
+          fallbackMaxWorkers: 1,
+          minTotalMemoryBytes: 8 * 1024 ** 3,
+          requiresDist: false,
+        },
+      ],
+    };
+    const artifact: CompactNodeTestShard = {
+      checkName: "checks-node-changed-build",
+      shardName: "changed-build",
+      runner: "ubuntu-24.04",
+      requiresDist: true,
+      predictedSeconds: 10,
+      groups: [
+        {
+          shard_name: "core-build",
+          configs: ["test/vitest/vitest.tooling.config.ts"],
+          includePatterns: [artifactTarget],
+          runner: "ubuntu-24.04",
+          requiresDist: true,
+        },
+      ],
+    };
+    const selected = vi
+      .spyOn(
+        await import("../../scripts/lib/ci-node-test-plan.mts"),
+        "createSelectedNodeTestShardBundles",
+      )
+      .mockReturnValue([compact, artifact]);
+    const timing = vi
+      .spyOn(testTimings, "readToolingFileTimings")
+      .mockReturnValue(Object.fromEntries(targets.map((file) => [file, 100])));
+    const groups = vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue({});
+    try {
+      const split = createChangedNodeTestShardsWithSmoke(selectedTestTargets, {
+        selectedTestTargets,
+      });
+      expect(split?.filter((shard) => !shard.requiresDist)).toHaveLength(2);
+      expect(selectedFiles(split).toSorted()).toEqual(selectedTestTargets.toSorted());
+
+      const capped = createChangedNodeTestShardsWithSmoke(selectedTestTargets, {
+        selectedTestTargets,
+        compactNodeJobCap: 1,
+      });
+      expect(capped?.filter((shard) => !shard.requiresDist)).toHaveLength(1);
+      expect(capped).toEqual([
+        { ...compact, configs: [] },
+        { ...artifact, configs: [] },
+      ]);
+      expect(selectedFiles(capped).toSorted()).toEqual(selectedTestTargets.toSorted());
+
+      // A dist descriptor does not consume the Node matrix budget.
+      expect(
+        createChangedNodeTestShardsWithSmoke(selectedTestTargets, {
+          selectedTestTargets,
+          compactNodeJobCap: 2,
+        }),
+      ).toEqual(split);
+    } finally {
+      groups.mockRestore();
+      timing.mockRestore();
+      selected.mockRestore();
+    }
+  });
+
   it("avoids full-suite fallback for the ClawHub fixture's four changed paths", () => {
     const shards = createChangedNodeTestShards([
       "scripts/e2e/lib/skills/clawhub-install-proof.sh",

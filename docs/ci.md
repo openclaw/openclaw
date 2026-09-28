@@ -12,6 +12,9 @@ CI continues during Full Release Validation; the legacy release-priority variabl
 does not pause workflow admission. See [deferred CI recovery](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#deferred-ci-recovery)
 for runs already deferred by older workflow revisions.
 
+Broad PRs retain their compact selected-owner Node plan when time-based splitting
+would exceed the 130-row matrix cap. See [Node test lanes](/ci/scope-and-routing/node-test-lanes).
+
 This page is an index. CI is documented on nine pages, one per reader
 job. Open the page that matches your task.
 

@@ -4381,6 +4381,7 @@ describe("ci workflow guards", () => {
         "precise planner coverage input",
       );
       expect(JSON.parse(coverage.slice("dedicated-coverage:".length))).toEqual({
+        compactNodeJobCap: 130,
         includeReleaseOnlyToolingShards: false,
         includeReleaseOnlyRuntimeTests: false,
         includePrExemptRuntimeTests: false,
