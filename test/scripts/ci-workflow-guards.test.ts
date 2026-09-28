@@ -9185,8 +9185,15 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           return [line.slice(0, separator), line.slice(separator + 1)];
         }),
     );
-    expect(JSON.parse(outputs.checks_node_core_nondist_matrix)).toEqual({ include: [] });
-    expect(JSON.parse(outputs.checks_windows_matrix).include.length).toBeGreaterThan(0);
+    expect(
+      JSON.parse(expectDefined(outputs.checks_node_core_nondist_matrix, "Node test matrix")),
+    ).toEqual({
+      include: [],
+    });
+    expect(
+      JSON.parse(expectDefined(outputs.checks_windows_matrix, "Windows test matrix")).include
+        .length,
+    ).toBeGreaterThan(0);
     expect(outputs.ui_test_groups_gzip_base64).toBeTruthy();
   });
 
