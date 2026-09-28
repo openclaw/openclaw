@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
-  readDeferredPluginMigrations,
+  readConfigWritePendingMigrations,
   type DeferredPluginMigration,
 } from "../infra/deferred-plugin-migrations.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -865,7 +865,7 @@ async function replaceConfigFileUnlocked(
         writeOptions: params.writeOptions,
       });
   const { snapshot, writeOptions } = prepared;
-  const deferredPluginMigrations = readDeferredPluginMigrations({ env: params.io?.env });
+  const deferredPluginMigrations = readConfigWritePendingMigrations(snapshot.path, params.io?.env);
   const mergedWriteOptions = mergeConfigMutationWriteOptions(writeOptions, params.writeOptions);
   const nextConfig = preserveDeferredPluginMigrationConfig({
     sourceConfig: snapshot.sourceConfig,
