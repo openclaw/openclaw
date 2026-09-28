@@ -417,7 +417,7 @@ function completeCapturedToolCall(
 }
 
 function mockPendingMessage(args: Record<string, unknown>) {
-  const started = createDeferred<void>();
+  const started = createDeferred();
   const initialArgs = { ...args };
   delete initialArgs.dryRun;
   supervisorSpawnMock.mockImplementationOnce(async (...spawnArgs: unknown[]) => {

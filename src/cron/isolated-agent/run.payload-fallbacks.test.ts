@@ -418,7 +418,7 @@ describe("runCronIsolatedAgentTurn — rooted runtime fallback", () => {
         onExecutionStarted?: () => void;
         onExecutionPhase?: (info: { phase: "runtime_plugins" }) => void;
       }) => {
-        await params.onExecutionStarted?.();
+        params.onExecutionStarted?.();
         params.onExecutionPhase?.({ phase: "runtime_plugins" });
         if (params.model === "gpt-5.4") {
           throw new Error("embedded primary failed");
