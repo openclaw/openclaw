@@ -23,6 +23,7 @@ import {
   type NodeWorkerSupervisorIdentity,
   type NodeWorkerSupervisorReceipt,
 } from "../../worker/node-supervisor-protocol.js";
+import { nodeWorkerTurnMatchesIdentity } from "../../worker/protocol-record.js";
 import {
   parseWorkerAdmissionDeadlineResult,
   WORKER_ADMISSION_DEADLINE_MS,
@@ -172,21 +173,6 @@ function expectedIdentity(input: NodeWorkerLaunchInput): NodeWorkerSupervisorIde
     placementGeneration: input.placementGeneration,
     runId: input.descriptor.assignment.runId,
   };
-}
-
-function receiptMatchesIdentity(
-  receipt: NodeWorkerSupervisorReceipt,
-  expected: NodeWorkerSupervisorIdentity,
-): boolean {
-  return (
-    receipt.launchId === expected.launchId &&
-    receipt.planHash === expected.planHash &&
-    receipt.environmentId === expected.environmentId &&
-    receipt.sessionId === expected.sessionId &&
-    receipt.ownerEpoch === expected.ownerEpoch &&
-    receipt.placementGeneration === expected.placementGeneration &&
-    receipt.runId === expected.runId
-  );
 }
 
 function parseInvokeReceipt(
@@ -391,7 +377,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     receipt: NodeWorkerSupervisorReceipt,
     expected: NodeWorkerSupervisorIdentity,
   ): NodeWorkerSupervisorReceipt => {
-    if (!receiptMatchesIdentity(receipt, expected)) {
+    if (!nodeWorkerTurnMatchesIdentity(receipt, expected)) {
       throw new Error("node worker supervisor receipt identity mismatch");
     }
     return receipt;

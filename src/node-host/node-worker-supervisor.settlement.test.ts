@@ -4,10 +4,10 @@ import { WORKER_PUBLIC_INGRESS_PATH } from "../../packages/gateway-protocol/src/
 import { createDeferred } from "../../test/helpers/promise.js";
 import { toErrorObject } from "../infra/errors.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
+import { nodeWorkerTurnMatchesIdentity } from "../worker/protocol-record.js";
 import { NodeWorkerCapacity } from "./node-worker-capacity.js";
 import { NodeWorkerContainerLifecycle } from "./node-worker-container-lifecycle.js";
 import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
-import { nodeWorkerTurnMatchesIdentity } from "./node-worker-journal.types.js";
 import { NodeWorkerLaunchStore, type NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
 import type { NodeWorkerChildAdapter } from "./node-worker-launch-transport.js";
 import type { NodeWorkerRunningChild } from "./node-worker-supervisor-ownership.js";
