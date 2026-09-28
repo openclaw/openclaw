@@ -1,5 +1,6 @@
 // Native task/process inspection and sanitized proof rendering.
 import { spawnSync } from "node:child_process";
+import { createServer } from "node:net";
 import os from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
 import { expect } from "vitest";
@@ -39,6 +40,16 @@ export type WindowsProcessDiagnostic = {
 };
 
 type TaskDefinitionSnapshot = { exists: false; taskXml: null } | { exists: true; taskXml: string };
+
+export async function canBindLoopbackPort(port: number): Promise<boolean> {
+  const server = createServer();
+  return new Promise<boolean>((resolve) => {
+    server.once("error", () => resolve(false));
+    server.listen(port, "127.0.0.1", () => {
+      server.close(() => resolve(true));
+    });
+  });
+}
 
 export async function readTaskXml(taskName: string): Promise<string | null> {
   const result = await execSchtasks(["/Query", "/TN", taskName, "/XML"]);

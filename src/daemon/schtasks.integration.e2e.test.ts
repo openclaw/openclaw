@@ -22,6 +22,7 @@ import { readWindowsProcessSnapshot } from "./schtasks-process.js";
 import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
 import {
   assertInteractiveLeastPrivilegeTask,
+  canBindLoopbackPort,
   DIAGNOSTIC_TEXT_LIMIT,
   readRelatedProcessDiagnostics,
   readTaskDefinitionSnapshot,
@@ -104,16 +105,6 @@ async function reserveLoopbackPort(): Promise<number> {
     server.close((error) => (error ? reject(error) : resolve()));
   });
   return port;
-}
-
-async function canBindLoopbackPort(port: number): Promise<boolean> {
-  const server = createServer();
-  return new Promise<boolean>((resolve) => {
-    server.once("error", () => resolve(false));
-    server.listen(port, "127.0.0.1", () => {
-      server.close(() => resolve(true));
-    });
-  });
 }
 
 async function waitForLoopbackPortRelease(port: number): Promise<void> {
@@ -741,7 +732,15 @@ describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration",
           stdout,
           onMutation: (mutation) => restartMutations.push(mutation.mode),
         });
-        expect(restartResult).toEqual({ outcome: "completed" });
+        expect(restartResult).toMatchObject({
+          outcome: "completed",
+          taskSettlement: {
+            status: "settled",
+            taskName,
+            lastRunResult: expect.stringMatching(/^-?\d+$/u),
+            ended: expect.any(Boolean),
+          },
+        });
         expect(restartMutations).toEqual(["schtasks-end", "schtasks-restart"]);
         const restartedRun = await proof.waitForExactProbeRun(eventsPath, 4);
         const restartedPid = restartedRun.pid;
