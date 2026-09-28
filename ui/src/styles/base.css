@@ -196,6 +196,8 @@
   --warn: #f59e0b;
   --warn-muted: rgba(245, 158, 11, 0.75);
   --warn-subtle: rgba(245, 158, 11, 0.08);
+  /* Presence dots are indicators, not text: idle keeps this amber in every theme. */
+  --presence-idle: #f59e0b;
   --danger: #f87171;
   --danger-muted: rgba(248, 113, 113, 0.75);
   --danger-subtle: rgba(248, 113, 113, 0.08);
