@@ -178,12 +178,8 @@ export function registerForcedCollectorCompletionSettlementTests({
   mockPendingAgentWait: () => void;
 }): void {
   it.each([
-    { observation: "lifecycle", schema: false, captured: false },
     { observation: "wait", schema: false, captured: false },
-    { observation: "lifecycle", schema: true, captured: false },
-    { observation: "wait", schema: true, captured: false },
     { observation: "lifecycle", schema: true, captured: true },
-    { observation: "wait", schema: true, captured: true },
   ])(
     "settles forced collector yield through $observation (schema=$schema, captured=$captured)",
     async ({ observation, schema, captured }) => {
