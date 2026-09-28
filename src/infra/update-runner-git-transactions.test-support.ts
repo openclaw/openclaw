@@ -477,7 +477,7 @@ function registerGitRetainedTransactionTests(
     },
   );
 
-  it.each(["raw-writer", "missing-reflog"] as const)(
+  it.each(["raw-writer-before", "raw-writer-after", "missing-reflog"] as const)(
     "retains the runtime when the rollback rewrite transition cannot be verified: %s",
     async (failure) => {
       const { root, beforeSha, advanceRemote, update, runCommand, setRunCommand } = getFixture();
@@ -494,16 +494,19 @@ function registerGitRetainedTransactionTests(
       let rollingBack = false;
       let injected = false;
       setRunCommand(async (argv, options) => {
-        if (rollingBack && argv[2] === root && argv.includes("checkout") && argv.includes("-B")) {
-          if (failure === "raw-writer") {
-            await runFixtureGit(root, "update-ref", "refs/heads/main", concurrentSha, targetSha);
-          } else {
-            await runFixtureGit(root, "config", "core.logAllRefUpdates", "false");
-            await fs.rm(path.join(root, ".git", "logs", "refs", "heads", "main"));
-          }
+        const rewriting =
+          rollingBack && argv[2] === root && argv.includes("checkout") && argv.includes("-B");
+        if (rewriting && failure === "raw-writer-before") {
+          await runFixtureGit(root, "update-ref", "refs/heads/main", concurrentSha, targetSha);
           injected = true;
         }
-        return runCommand(argv, options);
+        const result = await runCommand(argv, options);
+        if (rewriting && failure === "raw-writer-after") {
+          expect(result.code).toBe(0);
+          await runFixtureGit(root, "update-ref", "refs/heads/main", concurrentSha, beforeSha);
+          injected = true;
+        }
+        return result;
       });
       let retained: PackageUpdateTransaction | undefined;
       const result = await update({
@@ -513,26 +516,54 @@ function registerGitRetainedTransactionTests(
       });
       expect(result.status).toBe("ok");
       assert(retained);
+      if (failure === "missing-reflog") {
+        await runFixtureGit(root, "config", "core.logAllRefUpdates", "false");
+        await fs.rm(path.join(root, ".git", "logs", "refs", "heads", "main"));
+      }
+      const sourceTree = await runFixtureGit(root, "ls-files", "--stage");
+      const sourceStatus = await runFixtureGit(root, "status", "--porcelain=v1");
       rollingBack = true;
       await expect(retained.rollback(() => {})).rejects.toThrow("git-rollback-source");
-      expect(injected).toBe(true);
-      expect(await runFixtureGit(root, "rev-parse", "HEAD")).toBe(beforeSha);
+      expect(injected).toBe(failure !== "missing-reflog");
+      const finalSha =
+        failure === "missing-reflog"
+          ? targetSha
+          : failure === "raw-writer-after"
+            ? concurrentSha
+            : beforeSha;
+      expect(await runFixtureGit(root, "rev-parse", "HEAD")).toBe(finalSha);
+      expect(await runFixtureGit(root, "rev-parse", "refs/heads/main")).toBe(finalSha);
       expect(await runFixtureGit(root, "symbolic-ref", "HEAD")).toBe("refs/heads/main");
       const diagnostic = result.steps.find(
         (step) => step.name === "git-rollback-source",
       )?.stderrTail;
-      const recoverySha = failure === "raw-writer" ? concurrentSha : targetSha;
-      expect(diagnostic).toContain("git checkout --detach --no-overwrite-ignore");
-      expect(diagnostic).toMatch(new RegExp(`git branch -f (?:main|'main') ${recoverySha}`));
       if (failure === "missing-reflog") {
-        expect(diagnostic).toContain("unavailable reflog");
+        expect(diagnostic).toContain("reflog");
+        expect(diagnostic).toContain("Source untouched");
+        expect(diagnostic).not.toContain("branch -f");
+        expect(await runFixtureGit(root, "ls-files", "--stage")).toBe(sourceTree);
+        expect(await runFixtureGit(root, "status", "--porcelain=v1")).toBe(sourceStatus);
+      } else {
+        expect(diagnostic).toContain(targetSha);
+        expect(diagnostic).toContain(beforeSha);
+        expect(diagnostic).toContain(concurrentSha);
+        if (failure === "raw-writer-before") {
+          expect(diagnostic).toContain("git checkout --detach --no-overwrite-ignore");
+          expect(diagnostic).toMatch(new RegExp(`git branch -f (?:main|'main') ${concurrentSha}`));
+        } else {
+          expect(diagnostic).not.toContain("branch -f");
+          expect(diagnostic).toMatch(/git reflog (?:main|'main')/);
+          expect(diagnostic).toContain("keep the newest intended commit");
+        }
       }
       await expectRuntime(root, targetSha);
       await expect(fs.stat(retained.backupRoot)).resolves.toBeDefined();
       await expect(retained.complete({ activationVerified: false }, () => {})).rejects.toThrow();
-      await runFixtureGit(root, "checkout", "--detach", "--no-overwrite-ignore");
-      await runFixtureGit(root, "branch", "-f", "main", recoverySha);
-      expect(await runFixtureGit(root, "rev-parse", "refs/heads/main")).toBe(recoverySha);
+      if (failure === "raw-writer-before") {
+        await runFixtureGit(root, "checkout", "--detach", "--no-overwrite-ignore");
+        await runFixtureGit(root, "branch", "-f", "main", concurrentSha);
+        expect(await runFixtureGit(root, "rev-parse", "refs/heads/main")).toBe(concurrentSha);
+      }
     },
   );
 }

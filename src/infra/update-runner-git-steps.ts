@@ -147,6 +147,30 @@ export async function runGitRollbackSteps({
         if (refChange === "keep") {
           return { code: 0, stdout: "", stderr: "" };
         }
+        if (refChange === "rewrite" && source && branch) {
+          const ref = `refs/heads/${branch}`;
+          const reflog = await stepOptions.runCommand(
+            ["git", "-C", gitRoot, "reflog", "exists", ref],
+            options,
+          );
+          assertCurrent();
+          const latest =
+            reflog.code === 0
+              ? await stepOptions.runCommand(
+                  ["git", "-C", gitRoot, "rev-parse", "--verify", `${ref}@{0}`],
+                  options,
+                )
+              : reflog;
+          assertCurrent();
+          if (latest.code !== 0 || !latest.stdout.trim()) {
+            return {
+              ...latest,
+              code: 1,
+              stdout: "",
+              stderr: `Cannot rewrite rollback branch ${branch}: a usable branch reflog is required to verify the transition. Source untouched; previous runtime retained. Inspect the branch and its reflog configuration before recovering manually.`,
+            };
+          }
+        }
         const commandResult = await stepOptions.runCommand(argv, options);
         if (refChange === "rewrite" && source && branch && commandResult.code === 0) {
           const ref = `refs/heads/${branch}`;
@@ -162,12 +186,15 @@ export async function runGitRollbackSteps({
           const previousSha = previous.code === 0 ? previous.stdout.trim() : undefined;
           const currentSha = current.code === 0 ? current.stdout.trim() : undefined;
           if (previousSha !== source.sha || currentSha !== beforeSha) {
-            const recoverSha = previousSha !== source.sha ? previousSha : currentSha;
             const quote = process.platform === "win32" ? quotePowerShellArg : quoteCliArg;
+            const recovery =
+              currentSha === beforeSha && previousSha && previousSha !== source.sha
+                ? `After inspecting the reflog and preserving local edits, detach with: git checkout --detach --no-overwrite-ignore. If the branch still points to ${beforeSha}, restore the intended ref with: git branch -f ${quote(branch)} ${previousSha}`
+                : `Inspect git reflog ${quote(branch)} and keep the newest intended commit.`;
             return {
               ...commandResult,
               code: 1,
-              stderr: `Cannot verify rollback branch transition: expected ${source.sha} -> ${beforeSha}, observed ${previousSha || "unavailable reflog"} -> ${currentSha || "unreadable ref"}. Previous runtime retained. After inspecting the reflog and preserving local edits, detach with: git checkout --detach --no-overwrite-ignore. Then restore the intended ref with: git branch -f ${quote(branch)} ${recoverSha || source.sha}`,
+              stderr: `Cannot verify rollback branch transition: expected ${source.sha} -> ${beforeSha}, observed ${previousSha || "unavailable reflog"} -> ${currentSha || "unreadable ref"}. Previous runtime retained. ${recovery}`,
             };
           }
         }
