@@ -178,7 +178,7 @@ export async function applyCliModelResolveHookForRun(params: RunCliAgentParams):
     prompt: params.prompt,
     attachments: buildBeforeModelResolveAttachments(params.images),
     executionProvider: params.provider,
-    logicalProvider: params.modelProvider ?? params.provider,
+    logicalProvider: params.hookModelProvider ?? params.modelProvider ?? params.provider,
     modelId: params.model ?? "",
     sessionEntry: params.sessionEntry,
     config: params.config,

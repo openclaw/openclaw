@@ -102,6 +102,14 @@ export type RunCliAgentParams = {
   currentInboundContext?: CurrentInboundPromptContext;
   /** Selected model provider used for tool policy; distinct from a CLI runtime id. */
   modelProvider?: string;
+  /**
+   * Logical provider of the caller-selected model, reported to the
+   * before_model_resolve hook only. Policy selection must keep reading
+   * modelProvider/provider, so a caller whose logical provider differs from its
+   * execution backend (e.g. subscription-auth dispatch) reports it here instead
+   * of replacing the policy input.
+   */
+  hookModelProvider?: string;
   /** Resolved logical model selected by this run's owner, before CLI transport mapping. */
   requesterModel?: ProviderModelRef;
   /** Native context window resolved by the run owner from its prepared model catalog. */
