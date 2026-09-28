@@ -197,12 +197,15 @@ const runtimeConsumers = [
     mode: "runtime",
     dir: "",
   },
-  {
-    file: "extensions/qa-lab/src/suite-process-lifecycle.test.ts",
+  ...[
+    "extensions/qa-lab/src/agent-run-identity-repeated-turn-child.process.test.ts",
+    "extensions/qa-lab/src/suite-process-lifecycle.test.ts",
+  ].map((file) => ({
+    file,
     configs: ["test/vitest/vitest.extension-qa.config.ts"],
-    mode: "private-qa",
+    mode: "private-qa" as const,
     dir: "extensions",
-  },
+  })),
   // Native Codex transcript evidence runs in the packaged history Worker.
   ...[
     "extensions/codex/src/app-server/event-projector.verbose-hooks.test.ts",

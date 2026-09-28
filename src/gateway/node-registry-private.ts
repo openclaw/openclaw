@@ -177,7 +177,13 @@ function updateWorkerRunnerInventory(
     ...(workerHost
       ? {
           workerHost: workerHost.enabled
-            ? { ...workerHost, capacity: { ...workerHost.capacity } }
+            ? {
+                ...workerHost,
+                capacity: { ...workerHost.capacity },
+                ...(workerHost.launchToolNames !== undefined
+                  ? { launchToolNames: [...workerHost.launchToolNames] }
+                  : {}),
+              }
             : { enabled: false },
         }
       : {}),

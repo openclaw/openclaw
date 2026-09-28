@@ -287,7 +287,7 @@ export function assertUpdateDoctorConfigInputHash(configPath: string, inputHash:
   }
 }
 
-/** Include publication retains its legacy writer until fs-safe supports final-effect authority. */
+/** Retain the validated root input and live Doctor owner through include publication. */
 export async function runUpdateDoctorIncludeWrite<T>(
   configPath: string,
   inputHash: string,
@@ -299,7 +299,7 @@ export async function runUpdateDoctorIncludeWrite<T>(
   }
   context.authority.assertCurrent();
   assertUpdateDoctorConfigInputHash(configPath, inputHash);
-  const result = await doctorConfigWrites.run({ capture: context.capture }, run);
+  const result = await run();
   context.authority.assertCurrent();
   return result;
 }

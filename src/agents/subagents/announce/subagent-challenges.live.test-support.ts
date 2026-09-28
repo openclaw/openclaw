@@ -15,10 +15,10 @@ import { resetPluginRuntimeStateForTest } from "../../../plugins/runtime.js";
 import { createOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../../../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../../utils/message-channel.js";
-import {
-  countPendingDescendantRuns,
-  listDescendantRunsForRequester,
-} from "../registry/subagent-registry.test-helpers.js";
+import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { listDescendantRunsForRequesterFromRuns } from "../registry/subagent-registry-queries.js";
+import { getSubagentRunsSnapshotForRead } from "../registry/subagent-registry-state.js";
+import { countPendingDescendantRuns } from "../registry/subagent-registry.test-helpers.js";
 import { createExternalGates } from "./subagent-external-gate.test-support.js";
 
 const WAIT_MS = 8 * 60_000;
@@ -500,7 +500,10 @@ export async function runWithLiveSubagentGateway(
       // Capture evidence before cleanup can terminalize or release pending work.
       evidence.push({ phase: "external-gates", gates: gateServer?.snapshot() });
       for (const sessionKey of observedParents) {
-        const runs = listDescendantRunsForRequester(sessionKey);
+        const runs = listDescendantRunsForRequesterFromRuns(
+          getSubagentRunsSnapshotForRead(subagentRuns),
+          sessionKey,
+        );
         evidence.push({
           phase: "final-observation",
           sessionKey,
