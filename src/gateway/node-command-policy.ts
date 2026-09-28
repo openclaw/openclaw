@@ -466,14 +466,13 @@ export type RequiredNodeCommandAuthority = {
 
 /** Present the failed authority layer without suggesting that another layer can grant it. */
 export function formatRequiredNodeCommandUnavailable(
-  authority: RequiredNodeCommandAuthority,
+  { command, state }: RequiredNodeCommandAuthority,
   nodeId: string,
 ): string | undefined {
-  const { command, state } = authority;
   const prefix = `paired-device command ${command}`;
   switch (state) {
     case "invocable":
-      return undefined;
+      break;
     case "undeclared": {
       const pluginId = getActivePluginGatewayNodePolicyRegistry()?.nodeHostCommands.find(
         (entry) => entry.command.command === command,
@@ -488,6 +487,7 @@ export function formatRequiredNodeCommandUnavailable(
     case "unauthorized":
       return `${prefix} is blocked by Gateway policy for node ${nodeId}; allow it in gateway.nodes.commands.allow and remove any matching gateway.nodes.commands.deny entry`;
   }
+  return undefined;
 }
 
 /**
