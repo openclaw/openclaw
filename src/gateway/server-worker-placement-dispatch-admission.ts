@@ -9,10 +9,8 @@ import {
 } from "../sessions/session-lifecycle-admission.js";
 import type { WorkerPlacementSessionRuntime } from "./server-worker-placement-reclaim.js";
 import type { WorkerPlacementDrain } from "./worker-environments/placement-dispatch-coordinator.js";
-import {
-  assertWorkerPlacementDispatchSource,
-  assertWorkerPlacementMoveSource,
-} from "./worker-environments/placement-request-preconditions.js";
+import { assertWorkerPlacementMoveSource } from "./worker-environments/placement-move-intent.js";
+import { assertWorkerPlacementDispatchSource } from "./worker-environments/placement-request-preconditions.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import {
   WorkerPlacementAdmissionTargetError,

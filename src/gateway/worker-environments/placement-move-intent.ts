@@ -17,8 +17,12 @@ import type {
 } from "../../state/openclaw-state-db.generated.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import { drainWorkerSessionPlacement } from "./placement-drain.js";
-import { normalizeEpoch, required, type WorkerSessionPlacementRecord } from "./placement-record.js";
-import { assertWorkerPlacementMoveSource } from "./placement-request-preconditions.js";
+import {
+  isForceAbandonedWorkerPlacement,
+  normalizeEpoch,
+  required,
+  type WorkerSessionPlacementRecord,
+} from "./placement-record.js";
 import { getRequired, query, transitionValues } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import { publishPlacementTurnClaimState } from "./placement-turn-authority.js";
@@ -43,6 +47,27 @@ export type WorkerPlacementMoveSource = {
   environmentId: string;
   ownerEpoch: number;
 };
+
+export function assertWorkerPlacementMoveSource(
+  current: WorkerSessionPlacementRecord | undefined,
+  request: { sessionId: string; source: WorkerPlacementMoveSource; abandonSource?: true },
+  options: { allowDraining?: true } = {},
+): void {
+  const { source, sessionId } = request;
+  if (
+    !current ||
+    current.environmentId !== source.environmentId ||
+    current.activeOwnerEpoch !== source.ownerEpoch ||
+    !(
+      (options.allowDraining && current.state === "draining") ||
+      (current.generation === source.generation &&
+        (current.state === "active" ||
+          (request.abandonSource && isForceAbandonedWorkerPlacement(current))))
+    )
+  ) {
+    throw new Error(`Cannot move stale worker placement for session ${sessionId}`);
+  }
+}
 
 export type WorkerPlacementMoveIntent = {
   operationId: string;

@@ -1,32 +1,9 @@
-import type { WorkerPlacementMoveSource } from "./placement-move-intent.js";
 import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
 import {
-  isForceAbandonedWorkerPlacement,
   normalizeWorkerPlacementExecutionMode,
   type WorkerSessionPlacementDispatchIdentity,
   type WorkerSessionPlacementRecord,
 } from "./placement-record.js";
-
-export function assertWorkerPlacementMoveSource(
-  current: WorkerSessionPlacementRecord | undefined,
-  request: { sessionId: string; source: WorkerPlacementMoveSource; abandonSource?: true },
-  options: { allowDraining?: true } = {},
-): void {
-  const { source, sessionId } = request;
-  if (
-    !current ||
-    current.environmentId !== source.environmentId ||
-    current.activeOwnerEpoch !== source.ownerEpoch ||
-    !(
-      (options.allowDraining && current.state === "draining") ||
-      (current.generation === source.generation &&
-        (current.state === "active" ||
-          (request.abandonSource && isForceAbandonedWorkerPlacement(current))))
-    )
-  ) {
-    throw new Error(`Cannot move stale worker placement for session ${sessionId}`);
-  }
-}
 
 export function assertWorkerPlacementDispatchSource(
   current: WorkerSessionPlacementRecord | undefined,
