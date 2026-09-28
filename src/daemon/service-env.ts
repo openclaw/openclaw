@@ -328,11 +328,6 @@ export function getMinimalServicePathPartsFromEnv(
   });
 }
 
-function buildMinimalServicePath(options: MinimalServicePathOptions = {}): string {
-  const env = options.env ?? process.env;
-  return getMinimalServicePathPartsFromEnv({ ...options, env }).join(path.posix.delimiter);
-}
-
 function resolveGatewaySystemdUnitEnv(env: Record<string, string | undefined>): string {
   const override = normalizeOptionalString(env.OPENCLAW_SYSTEMD_UNIT);
   if (override) {
@@ -459,7 +454,9 @@ function buildCommonServiceEnvironment(
   const minimalPath =
     platform === "win32"
       ? undefined
-      : buildMinimalServicePath({ env, platform, extraDirs: extraPathDirs });
+      : getMinimalServicePathPartsFromEnv({ env, platform, extraDirs: extraPathDirs }).join(
+          path.posix.delimiter,
+        );
   return {
     HOME: env.HOME,
     TMPDIR: tmpDir,

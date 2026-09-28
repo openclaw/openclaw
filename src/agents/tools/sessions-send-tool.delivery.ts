@@ -119,8 +119,11 @@ export async function startSessionsSendAgentRun(params: {
         steeringMode: "all",
         debounceMs: 0,
         deliveryTimeoutMs: params.deliveryTimeoutMs,
-        waitForTranscriptCommit: true,
-        ...(params.mode === "steer" ? {} : { sourceReplyDeliveryMode }),
+        // Explicit steering acknowledges admission, not consumption. Waiting for
+        // a busy run to commit would withdraw accepted guidance at the reply deadline.
+        ...(params.mode === "steer"
+          ? { waitForTranscriptCommit: false }
+          : { waitForTranscriptCommit: true, sourceReplyDeliveryMode }),
         // Carry the same input facts as a new run; transcript ownership stays
         // with the receiving runtime and its exact session incarnation.
         userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
