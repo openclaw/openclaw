@@ -30,7 +30,7 @@ import {
   mapProviderStatusToEndReason,
   normalizeProviderStatus,
 } from "./shared/call-status.js";
-import { guardedJsonApiRequest } from "./shared/guarded-json-api.js";
+import { guardedJsonApiRequest, readProviderCallStatus } from "./shared/guarded-json-api.js";
 import { resolveTwilioApiBaseUrl, type TwilioRegion } from "./twilio-region.js";
 import type { TwilioProviderOptions } from "./twilio.types.js";
 import { TwilioApiError, twilioApiRequest } from "./twilio/api.js";
@@ -206,9 +206,6 @@ export class TwilioProvider implements VoiceCallProvider {
     this.mediaStreamHandler.clearTtsQueue(streamSid, reason);
   }
 
-  /**
-   * Make an authenticated request to the Twilio API.
-   */
   private async apiRequest<T = unknown>(
     endpoint: string,
     params: Record<string, string | string[]>,
@@ -260,9 +257,6 @@ export class TwilioProvider implements VoiceCallProvider {
     });
   }
 
-  /**
-   * Parse Twilio webhook event into normalized format.
-   */
   parseWebhookEvent(
     ctx: WebhookContext,
     options?: WebhookParseOptions,
@@ -303,9 +297,6 @@ export class TwilioProvider implements VoiceCallProvider {
     }
   }
 
-  /**
-   * Parse Twilio direction to normalized format.
-   */
   private static parseDirection(direction: string | null): "inbound" | "outbound" | undefined {
     if (direction === "inbound") {
       return "inbound";
@@ -324,9 +315,6 @@ export class TwilioProvider implements VoiceCallProvider {
     return Number(trimmed);
   }
 
-  /**
-   * Convert Twilio webhook params to normalized event format.
-   */
   private normalizeEvent(
     params: URLSearchParams,
     options?: {
@@ -578,9 +566,6 @@ export class TwilioProvider implements VoiceCallProvider {
     };
   }
 
-  /**
-   * Hang up a call via Twilio API.
-   */
   async hangupCall(input: HangupCallInput): Promise<void> {
     await this.apiRequest(
       `/Calls/${input.providerCallId}.json`,
@@ -769,9 +754,6 @@ export class TwilioProvider implements VoiceCallProvider {
     });
   }
 
-  /**
-   * Start listening for speech via Twilio <Gather>.
-   */
   async startListening(input: StartListeningInput): Promise<void> {
     const webhookUrl = this.callWebhookUrls.get(input.providerCallId);
     if (!webhookUrl) {
@@ -801,29 +783,24 @@ export class TwilioProvider implements VoiceCallProvider {
   }
 
   async getCallStatus(input: GetCallStatusInput): Promise<GetCallStatusResult> {
-    try {
-      const data = await guardedJsonApiRequest<{ status?: string }>({
-        url: `${this.baseUrl}/Calls/${input.providerCallId}.json`,
-        method: "GET",
-        headers: {
-          Authorization: `Basic ${Buffer.from(`${this.accountSid}:${this.authToken}`).toString("base64")}`,
-        },
-        allowNotFound: true,
-        allowedHostnames: [new URL(this.baseUrl).hostname],
-        auditContext: "twilio-get-call-status",
-        errorPrefix: "Twilio get call status error",
-      });
-
-      if (!data) {
-        return { status: "not-found", isTerminal: true };
-      }
-
-      const status = normalizeProviderStatus(data.status);
-      return { status, isTerminal: isProviderStatusTerminal(status) };
-    } catch {
-      // Transient error — keep the call and rely on timer fallback
-      return { status: "error", isTerminal: false, isUnknown: true };
-    }
+    return readProviderCallStatus(
+      () =>
+        guardedJsonApiRequest<{ status?: string }>({
+          url: `${this.baseUrl}/Calls/${input.providerCallId}.json`,
+          method: "GET",
+          headers: {
+            Authorization: `Basic ${Buffer.from(`${this.accountSid}:${this.authToken}`).toString("base64")}`,
+          },
+          allowNotFound: true,
+          allowedHostnames: [new URL(this.baseUrl).hostname],
+          auditContext: "twilio-get-call-status",
+          errorPrefix: "Twilio get call status error",
+        }),
+      (data) => {
+        const status = normalizeProviderStatus(data.status);
+        return { status, isTerminal: isProviderStatusTerminal(status) };
+      },
+    );
   }
 }
 

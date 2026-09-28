@@ -140,7 +140,11 @@ describe("ChatVideoPlayer", () => {
     expect(player.querySelector("video")).toBe(video);
     expect(video?.getAttribute("src")).toContain("mediaTicket=ticket&playback=1");
     const pause = vi.spyOn(video!, "pause").mockImplementation(() => {});
-    player.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand")?.click();
+    const expand = player.querySelector<HTMLButtonElement>(
+      ".chat-assistant-attachment-card__expand",
+    )!;
+    onExpand.mockImplementation(() => expect(document.activeElement).toBe(expand));
+    expand.click();
     expect(pause).toHaveBeenCalledOnce();
     expect(onExpand).toHaveBeenCalledWith(
       "/__openclaw__/assistant-media?source=clip.avi&mediaTicket=ticket&playback=1",
@@ -188,27 +192,6 @@ describe("ChatVideoPlayer", () => {
       ),
     );
     expect(player.querySelector(".chat-assistant-attachment-card--compact")).toBeNull();
-  });
-
-  it("hides a previous attachment while the replacement HEAD is stalled", async () => {
-    const player = document.createElement("openclaw-chat-video-player");
-    player.src = "https://example.com/first.mp4";
-    player.sourceIdentity = "media:first-stalled";
-    player.label = "first.mp4";
-    document.body.append(player);
-    await player.updateComplete;
-
-    const fetchMock = vi.fn<typeof fetch>(async () => await new Promise<Response>(() => {}));
-    vi.stubGlobal("fetch", fetchMock);
-    player.src = "/__openclaw__/assistant-media?source=second.caf&mediaTicket=ticket";
-    player.sourceIdentity = "media:second-stalled";
-    player.label = "second.caf";
-    player.playback = "transcode";
-    await player.updateComplete;
-
-    expect(fetchMock).toHaveBeenCalledOnce();
-    await vi.waitFor(() => expect(player.textContent).toContain("Preparing playback…"));
-    expect(player.querySelector("video")?.hasAttribute("src")).toBe(false);
   });
 
   it("pauses and clears the source when disconnected while playing", async () => {

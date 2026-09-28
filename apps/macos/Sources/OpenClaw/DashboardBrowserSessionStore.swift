@@ -10,7 +10,11 @@ final class DashboardBrowserSessionStore {
     struct Lease {
         fileprivate let owner: DashboardBrowserSessionStore
         fileprivate let revision: UInt64
-        let session: GatewayBrowserSession?
+        fileprivate let originalSession: GatewayBrowserSession?
+
+        var session: GatewayBrowserSession? {
+            self.isCurrent ? self.owner.session : self.originalSession
+        }
 
         var isCurrent: Bool {
             self.owner.revision == self.revision
@@ -99,6 +103,54 @@ final class DashboardBrowserSessionStore {
         store.ownership.principal = next?.browserDataPrincipal
     }
 
+    static func renewProfileSession(
+        profileID: String,
+        registryNamespace: String,
+        previous: GatewayBrowserSession,
+        next: GatewayBrowserSession,
+        ifCurrent: @escaping @Sendable () -> Bool) async throws
+    {
+        try Task.checkCancellation()
+        guard ifCurrent() else { throw GatewayBrowserSessionError.superseded }
+        let id = self.identifier(profileID: profileID, registryNamespace: registryNamespace)
+        // With no live store, the next dashboard lease installs the saved session.
+        guard let store = self.persistentOwners[id]?.store else { return }
+        try await store.renewSession(previous: previous, next: next, ifCurrent: ifCurrent)
+    }
+
+    func renewSession(
+        previous: GatewayBrowserSession,
+        next: GatewayBrowserSession,
+        ifCurrent: @escaping @Sendable () -> Bool) async throws
+    {
+        try Task.checkCancellation()
+        guard ifCurrent(), previous.browserDataPrincipal == next.browserDataPrincipal else {
+            throw GatewayBrowserSessionError.superseded
+        }
+        guard self.session != nil else { return }
+        let revision = self.revision
+        let pending = self.preparation
+        let preparation = Task { @MainActor in
+            // A superseded write still has to finish before its successor writes.
+            _ = await pending?.result
+            try Task.checkCancellation()
+            guard ifCurrent(), self.revision == revision, !self.ownership.requiresRemoval,
+                  self.session?.browserDataPrincipal == previous.browserDataPrincipal
+            else { throw GatewayBrowserSessionError.superseded }
+            guard self.cookieRule != nil else { throw GatewayBrowserSessionError.invalidSession }
+            let cookie = try next.cookie()
+            await self.dataStore.httpCookieStore.setCookie(cookie)
+            guard ifCurrent(), self.revision == revision else { throw GatewayBrowserSessionError.superseded }
+            // The account and origin did not change; retained documents and their
+            // leases can use the new expiry without losing route or worker state.
+            self.session = next
+            self.publishedRevision = revision
+        }
+        // A failed renewal must not poison later navigation with a valid session.
+        self.preparation = Task { @MainActor in _ = await preparation.result }
+        try await preparation.value
+    }
+
     static func identifier(profileID: String, registryNamespace: String) -> UUID {
         // Named app profiles share a WebKit container. Match the Keychain
         // registry namespace so one process cannot replace another's cookies.
@@ -110,10 +162,12 @@ final class DashboardBrowserSessionStore {
     }
 
     func lease(for session: GatewayBrowserSession?) -> Lease {
-        if self.revision == 0 || self.session != session {
+        // Profile commit owns same-account cookie renewal. Opening another
+        // window during that write must not retire existing document leases.
+        if self.revision == 0 || self.session?.browserDataPrincipal != session?.browserDataPrincipal {
             self.replaceSession(session)
         }
-        return Lease(owner: self, revision: self.revision, session: session)
+        return Lease(owner: self, revision: self.revision, originalSession: session)
     }
 
     @discardableResult

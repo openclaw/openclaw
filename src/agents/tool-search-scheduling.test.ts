@@ -14,7 +14,6 @@ import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 const config: ToolSearchConfig = {
   enabled: true,
   mode: "tools",
-  codeTimeoutMs: 10000,
   searchDefaultLimit: 8,
   maxSearchLimit: 50,
 };

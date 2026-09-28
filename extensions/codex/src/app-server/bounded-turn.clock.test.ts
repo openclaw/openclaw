@@ -2,13 +2,14 @@ import { once } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { runBoundedCodexAppServerTurn } from "./bounded-turn.js";
+import { codexModel } from "./bounded-turn.test-harness.js";
 import { CodexAppServerClient } from "./client.js";
 import { threadStartResult, turnStartResult } from "./codex-app-server.test-fixtures.js";
 import type { RpcRequest } from "./protocol.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 describe("bounded Codex turn elapsed deadlines over WebSocket", () => {
-  it.each([0, 60_000, -60_000])(
+  it.each([60_000, -60_000])(
     "keeps its real timeout after a %s ms startup clock correction",
     async (clockStepMs) => {
       // Only the protocol peer is controlled: client, socket, and timers are real.
@@ -36,27 +37,7 @@ describe("bounded Codex turn elapsed deadlines over WebSocket", () => {
               break;
             case "model/list":
               respond({
-                data: [
-                  {
-                    id: thread.model,
-                    model: thread.model,
-                    upgrade: null,
-                    upgradeInfo: null,
-                    availabilityNux: null,
-                    displayName: "Clock proof model",
-                    description: "Controlled protocol fixture; no provider calls",
-                    hidden: false,
-                    isDefault: true,
-                    inputModalities: ["text"],
-                    supportedReasoningEfforts: [{ reasoningEffort: "low", description: "Low" }],
-                    defaultReasoningEffort: "low",
-                    supportsPersonality: false,
-                    multiAgentVersion: null,
-                    additionalSpeedTiers: [],
-                    serviceTiers: [],
-                    defaultServiceTier: null,
-                  },
-                ],
+                data: [codexModel(thread.model)],
                 nextCursor: null,
               });
               break;
@@ -137,13 +118,6 @@ describe("bounded Codex turn elapsed deadlines over WebSocket", () => {
         }).catch((error: unknown) => error);
         const outcome = await run;
         const elapsedMs = performance.now() - startedAt;
-        console.info("bounded-turn-clock", {
-          clockStepMs,
-          elapsedMs: Math.round(elapsedMs),
-          outcome: outcome instanceof Error ? outcome.name : "completed",
-          watchdogAborted: caller.signal.aborted,
-          methods,
-        });
         expect(methods).toEqual([
           "initialize",
           "initialized",

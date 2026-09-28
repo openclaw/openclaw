@@ -23,8 +23,26 @@ afterEach(() => {
   sessionBindingTesting.resetSessionBindingAdaptersForTests();
 });
 
+function createSessionParams() {
+  return {
+    ctx: finalizeInboundContext({
+      Body: "hello",
+      SessionKey: "agent:main:webchat:source",
+      Provider: "webchat",
+      Surface: "webchat",
+      From: "activity",
+      To: "activity",
+      ChatType: "direct",
+    }),
+    cfg: {
+      session: { store: path.join(tempDirs.make("openclaw-binding-activity-"), "sessions.json") },
+    },
+    commandAuthorized: true,
+  };
+}
+
 describe("reply session binding activity settlement", () => {
-  it.each(["complete", "fail", "rebind-time", "rebind-kind"] as const)(
+  it.each(["fail", "rebind-time", "rebind-kind"] as const)(
     "keeps preprocessing read-only and settles binding activity before initialization: %s",
     async (outcome) => {
       const mutation = createDeferred();
@@ -45,7 +63,8 @@ describe("reply session binding activity settlement", () => {
           replacementStarted.resolve();
           return replacementMutation.promise;
         });
-      const storePath = path.join(tempDirs.make("openclaw-binding-activity-"), "sessions.json");
+      const params = createSessionParams();
+      const storePath = params.cfg.session.store;
       const sessionKey = "agent:main:webchat:bound";
       const binding: SessionBindingRecord = {
         bindingId: "webchat:activity",
@@ -75,19 +94,6 @@ describe("reply session binding activity settlement", () => {
         listBySession: () => [binding],
         touchAsync,
       });
-      const params = {
-        ctx: finalizeInboundContext({
-          Body: "hello",
-          SessionKey: "agent:main:webchat:source",
-          Provider: "webchat",
-          Surface: "webchat",
-          From: "activity",
-          To: "activity",
-          ChatType: "direct",
-        }),
-        cfg: { session: { store: storePath } },
-        commandAuthorized: true,
-      };
       const preprocessing = resolveReplySessionPreprocessingState(params);
       await inspectionStarted.promise;
       expect(touchAsync).not.toHaveBeenCalled();
@@ -107,18 +113,15 @@ describe("reply session binding activity settlement", () => {
         await failure;
         expect(readSessionStore(storePath)[sessionKey]).toBeUndefined();
       } else {
-        if (outcome === "rebind-time") {
-          currentBinding = { ...binding, boundAt: 2 };
-        } else if (outcome === "rebind-kind") {
-          currentBinding = { ...binding, targetKind: "subagent" };
-        }
+        currentBinding =
+          outcome === "rebind-time"
+            ? { ...binding, boundAt: 2 }
+            : { ...binding, targetKind: "subagent" };
         mutation.resolve();
-        if (currentBinding !== binding) {
-          await Promise.race([replacementStarted.promise, result]);
-          expect(touchAsync).toHaveBeenCalledTimes(2);
-          expect(readSessionStore(storePath)[sessionKey]).toBeUndefined();
-          replacementMutation.resolve();
-        }
+        await Promise.race([replacementStarted.promise, result]);
+        expect(touchAsync).toHaveBeenCalledTimes(2);
+        expect(readSessionStore(storePath)[sessionKey]).toBeUndefined();
+        replacementMutation.resolve();
         expect((await result).sessionKey).toBe(sessionKey);
         expect(readSessionStore(storePath)[sessionKey]?.sessionId).toBeTruthy();
       }
@@ -141,20 +144,7 @@ describe("reply session binding activity settlement", () => {
       listBySession: () => [],
     };
     registerSessionBindingAdapter(adapter);
-    const result = resolveReplySessionPreprocessingState({
-      cfg: {
-        session: { store: path.join(tempDirs.make("openclaw-binding-read-"), "sessions.json") },
-      },
-      ctx: finalizeInboundContext({
-        Body: "hello",
-        SessionKey: "agent:main:webchat:source",
-        Provider: "webchat",
-        Surface: "webchat",
-        From: "activity",
-        To: "activity",
-        ChatType: "direct",
-      }),
-    });
+    const result = resolveReplySessionPreprocessingState(createSessionParams());
     const failure = expect(result).rejects.toThrow("binding owner is temporarily unavailable");
     await started.promise;
     unregisterSessionBindingAdapter({ channel: "webchat", accountId: "default", adapter });

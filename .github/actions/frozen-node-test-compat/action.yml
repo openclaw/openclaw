@@ -1,0 +1,16 @@
+name: Apply frozen Node test compatibility
+description: Repair attested test-only clock setup for an exact frozen release candidate
+
+inputs:
+  target-sha:
+    description: Exact checked-out candidate SHA
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Apply exact frozen test compatibility
+      shell: bash
+      env:
+        TARGET_SHA: ${{ inputs.target-sha }}
+      run: node "$GITHUB_ACTION_PATH/apply.mjs" --root "$GITHUB_WORKSPACE" --target-sha "$TARGET_SHA"

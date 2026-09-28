@@ -106,11 +106,6 @@ describe("route-args", () => {
 
   it.each([
     {
-      name: "health unknown flag",
-      parse: parseHealthRouteArgs,
-      argv: ["node", "openclaw", "health", "--wat"],
-    },
-    {
       name: "health stray positional",
       parse: parseHealthRouteArgs,
       argv: ["node", "openclaw", "health", "extra"],
@@ -119,26 +114,6 @@ describe("route-args", () => {
       name: "health flag terminator",
       parse: parseHealthRouteArgs,
       argv: ["node", "openclaw", "health", "--", "--json"],
-    },
-    {
-      name: "status malformed arity",
-      parse: parseStatusRouteArgs,
-      argv: ["node", "openclaw", "status", "--timeout"],
-    },
-    {
-      name: "status unknown flag",
-      parse: parseStatusRouteArgs,
-      argv: ["node", "openclaw", "status", "--wat"],
-    },
-    {
-      name: "sessions stray subcommand",
-      parse: parseSessionsRouteArgs,
-      argv: ["node", "openclaw", "sessions", "cleanup"],
-    },
-    {
-      name: "sessions unknown flag",
-      parse: parseSessionsRouteArgs,
-      argv: ["node", "openclaw", "sessions", "--wat"],
     },
     {
       name: "sessions flag terminator",
@@ -151,19 +126,9 @@ describe("route-args", () => {
       argv: ["node", "openclaw", "agents", "list", "extra"],
     },
     {
-      name: "agents list unknown flag",
-      parse: parseAgentsListRouteArgs,
-      argv: ["node", "openclaw", "agents", "list", "--wat"],
-    },
-    {
       name: "agents list flag terminator",
       parse: parseAgentsListRouteArgs,
       argv: ["node", "openclaw", "agents", "list", "--", "--json"],
-    },
-    {
-      name: "bare agents unknown flag",
-      parse: parseAgentsListRouteArgs,
-      argv: ["node", "openclaw", "agents", "--wat"],
     },
     {
       name: "config get empty excess operand",

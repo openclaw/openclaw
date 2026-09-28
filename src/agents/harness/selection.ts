@@ -494,7 +494,7 @@ async function runAgentHarnessOperation<T>(
   params: EmbeddedRunAttemptParams,
   execute: () => Promise<T>,
 ): Promise<T> {
-  await prepareActiveNodeContext();
+  await prepareActiveNodeContext(readRunOperatorAuthority(params)?.profileId);
   resolveAdmittedRunActiveAssertion(params.admittedRunContext, params.abortSignal)?.();
   const activeTrace = getActiveDiagnosticTraceContext();
   const harnessTrace = freezeDiagnosticTraceContext(
@@ -610,6 +610,7 @@ function withoutPluginHarnessPrivateState(
     runtimePluginToolGrant: _runtimePluginToolGrant,
     assistantErrorTranscript: _assistantErrorTranscript,
     compactionCountOwner: _compactionCountOwner,
+    completionCheck: _completionCheck,
     onContextAccountingEvent: _onContextAccountingEvent,
     onCompactionRequestBudget: _onCompactionRequestBudget,
     contextEngineLogicalTurnLease: _contextEngineLogicalTurnLease,
@@ -672,11 +673,7 @@ function applyPluginHarnessDenyAllToolPolicy(
   params: import("./types.js").AgentHarnessAttemptParamsV2,
   policies: ResolvedPluginHarnessToolPolicies,
 ): import("./types.js").AgentHarnessAttemptParamsV2 {
-  if (
-    isHostScopedAgentToolActive("openclaw") &&
-    params.toolsAllow?.length === 1 &&
-    normalizeToolPolicyName(params.toolsAllow[0] ?? "") === "openclaw"
-  ) {
+  if (isHostScopedAgentToolActive("openclaw") && isSystemAgentOnlyAllowlist(params.toolsAllow)) {
     return params;
   }
   const prompt = resolvePluginHarnessDenyAllToolPolicyPrompt(policies);

@@ -174,6 +174,7 @@ describe("process supervisor scope extinction", () => {
       });
       try {
         await vi.advanceTimersByTimeAsync(25);
+        await vi.advanceTimersToNextTimerAsync();
         const run = await pending;
         await expect(run.wait()).resolves.toMatchObject({ reason: "overall-timeout" });
         const drain = join === "scope" ? cleanupScope() : supervisor.shutdown();

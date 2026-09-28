@@ -1,4 +1,3 @@
-// Discord provider module implements model/runtime integration.
 import {
   addAllowlistUserEntriesFromConfigEntry,
   buildAllowlistResolutionSummary,
@@ -11,31 +10,19 @@ import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-na
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveDiscordChannelAllowlist } from "../resolve-channels.js";
-import { resolveDiscordUserAllowlist } from "../resolve-users.js";
+import {
+  resolveDiscordChannelAllowlist,
+  type DiscordChannelResolution,
+} from "../resolve-channels.js";
+import { resolveDiscordUserAllowlist, type DiscordUserResolution } from "../resolve-users.js";
 
 type GuildEntries = Record<string, DiscordGuildEntry>;
 type ChannelResolutionInput = { input: string; guildKey: string; channelKey?: string };
-type DiscordChannelLogEntry = {
-  input: string;
-  guildId?: string;
-  guildName?: string;
-  channelId?: string;
-  channelName?: string;
-  note?: string;
-};
 type DiscordChannelResolvedGroup = {
   target: string;
   aliases: string[];
   guildName?: string;
   channelName?: string;
-  note?: string;
-};
-type DiscordUserLogEntry = {
-  input: string;
-  id?: string;
-  name?: string;
-  guildName?: string;
   note?: string;
 };
 
@@ -74,7 +61,7 @@ function formatDiscordChannelResolvedGroup(entry: DiscordChannelResolvedGroup): 
   ]);
 }
 
-function formatDiscordChannelUnresolved(entry: DiscordChannelLogEntry): string {
+function formatDiscordChannelUnresolved(entry: DiscordChannelResolution): string {
   return formatResolutionLogDetails(entry.input, [
     entry.guildName
       ? `guild:${entry.guildName}`
@@ -90,7 +77,7 @@ function formatDiscordChannelUnresolved(entry: DiscordChannelLogEntry): string {
   ]);
 }
 
-function formatDiscordUserResolved(entry: DiscordUserLogEntry): string | null {
+function formatDiscordUserResolved(entry: DiscordUserResolution): string | null {
   const displayName = entry.name?.trim();
   const target = displayName || entry.id;
   const base = formatResolvedBase(entry.input, target);
@@ -104,7 +91,7 @@ function formatDiscordUserResolved(entry: DiscordUserLogEntry): string | null {
   return formatted === entry.input ? null : formatted;
 }
 
-function formatDiscordUserUnresolved(entry: DiscordUserLogEntry): string {
+function formatDiscordUserUnresolved(entry: DiscordUserResolution): string {
   return formatResolutionLogDetails(entry.input, [
     entry.name ? `name:${entry.name}` : undefined,
     entry.guildName ? `guild:${entry.guildName}` : undefined,
@@ -297,12 +284,8 @@ async function resolveAllowFromByUserAllowlist(params: {
 function collectGuildUserEntries(guildEntries: GuildEntries): Set<string> {
   const userEntries = new Set<string>();
   for (const guild of Object.values(guildEntries)) {
-    if (!guild || typeof guild !== "object") {
-      continue;
-    }
     addAllowlistUserEntriesFromConfigEntry(userEntries, guild);
-    const channels = (guild as { channels?: Record<string, unknown> }).channels ?? {};
-    for (const channel of Object.values(channels)) {
+    for (const channel of Object.values(guild.channels ?? {})) {
       addAllowlistUserEntriesFromConfigEntry(userEntries, channel);
     }
   }
@@ -329,20 +312,14 @@ async function resolveGuildEntriesByUserAllowlist(params: {
       formatResolved: formatDiscordUserResolved,
       formatUnresolved: formatDiscordUserUnresolved,
     });
-    const nextGuilds = { ...params.guildEntries };
-    for (const [guildKey, guildConfig] of Object.entries(params.guildEntries)) {
-      if (!guildConfig || typeof guildConfig !== "object") {
-        continue;
-      }
-      const nextGuild = { ...guildConfig } as Record<string, unknown>;
-      const users = (guildConfig as { users?: string[] }).users;
-      if (Array.isArray(users) && users.length > 0) {
-        nextGuild.users = canonicalizeAllowlistWithResolvedIds({
-          existing: users,
-          resolvedMap,
-        });
-      }
-      const channels = (guildConfig as { channels?: Record<string, unknown> }).channels ?? {};
+    const nextGuilds = patchAllowlistUsersInConfigEntries({
+      entries: params.guildEntries,
+      resolvedMap,
+      strategy: "canonicalize",
+    });
+    for (const [guildKey, guildConfig] of Object.entries(nextGuilds)) {
+      const nextGuild = { ...guildConfig };
+      const channels = guildConfig.channels ?? {};
       if (channels && typeof channels === "object") {
         nextGuild.channels = patchAllowlistUsersInConfigEntries({
           entries: channels,
@@ -350,7 +327,7 @@ async function resolveGuildEntriesByUserAllowlist(params: {
           strategy: "canonicalize",
         });
       }
-      nextGuilds[guildKey] = nextGuild as DiscordGuildEntry;
+      nextGuilds[guildKey] = nextGuild;
     }
     summarizeMapping("discord channel users", mapping, unresolved, params.runtime);
     return nextGuilds;

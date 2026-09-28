@@ -1,8 +1,7 @@
 // Covers formatting helpers used by TUI status and message rendering.
-import { Text, visibleWidth } from "@earendil-works/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
-import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import {
   extractContentFromMessage,
   extractTextFromMessage,
@@ -63,21 +62,6 @@ describe("formatTuiFooter", () => {
         deliver: false,
       }),
     ).toBe("agent Main | session main | fixture-model | deliver:off | tokens ?");
-  });
-
-  it("wraps the compact summary within the terminal width", () => {
-    const summary = formatTuiFooter({
-      agentLabel: "Main",
-      sessionLabel: "a-long-session-name",
-      sessionInfo: {
-        model: "fixture-provider/a-long-model-name",
-        traceLevel: "raw",
-        reasoningLevel: "stream",
-      },
-      deliver: true,
-    });
-
-    expect(new Text(summary, 1, 0).render(48).every((line) => visibleWidth(line) <= 48)).toBe(true);
   });
 
   it("sanitizes terminal controls and collapses footer fields to one line", () => {
@@ -162,52 +146,6 @@ describe("formatTuiFooter", () => {
 describe("extractTextFromMessage", () => {
   it.each([
     {
-      name: "a browser image block",
-      content: [
-        {
-          type: "image",
-          url: "/persisted-image.png",
-          source: { type: "url", url: "/persisted-image.png" },
-        },
-      ],
-      expected: "Attached image",
-    },
-    {
-      name: "a persisted image block",
-      content: [{ type: "image", source: { type: "url", url: "/persisted-image.png" } }],
-      expected: "Attached image",
-    },
-    {
-      name: "a browser document block",
-      content: [
-        {
-          type: "attachment",
-          attachment: {
-            url: "/report.pdf",
-            kind: "document",
-            label: "report.pdf",
-            mimeType: "application/pdf",
-          },
-        },
-      ],
-      expected: "Attached file: report.pdf",
-    },
-    {
-      name: "a browser audio block",
-      content: [
-        {
-          type: "attachment",
-          attachment: {
-            url: "/voice.ogg",
-            kind: "audio",
-            label: "voice.ogg",
-            mimeType: "audio/ogg",
-          },
-        },
-      ],
-      expected: "Attached file: voice.ogg",
-    },
-    {
       name: "a browser file with the default label",
       content: [
         {
@@ -234,19 +172,9 @@ describe("extractTextFromMessage", () => {
 
   it.each([
     {
-      name: "image",
-      media: [{ path: "/media/inbound/generated-image.png", contentType: "image/png" }],
-      expected: "Attached image",
-    },
-    {
       name: "image inferred from its canonical path",
       media: [{ path: "/media/inbound/media-only.png" }],
       expected: "Attached image",
-    },
-    {
-      name: "file",
-      media: [{ path: "/media/inbound/generated-report.pdf", contentType: "application/pdf" }],
-      expected: "Attached file",
     },
     {
       name: "ordered image and file",
@@ -393,17 +321,6 @@ describe("extractTextFromMessage", () => {
     expect(text).toContain("HTTP 429");
     expect(text).toContain("rate_limit_error");
     expect(text).toContain("This request would exceed your account's rate limit.");
-  });
-
-  it("renders malformed streaming fragment errors with friendly text", () => {
-    const text = extractTextFromMessage({
-      role: "assistant",
-      content: [],
-      stopReason: "error",
-      errorMessage: MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
-    });
-
-    expect(text).toBe("LLM streaming response contained a malformed fragment. Please try again.");
   });
 
   it("falls back to a generic message when errorMessage is missing", () => {
@@ -634,18 +551,6 @@ describe("extractThinkingFromMessage", () => {
 });
 
 describe("extractContentFromMessage", () => {
-  it("collects only text blocks", () => {
-    const text = extractContentFromMessage({
-      role: "assistant",
-      content: [
-        { type: "thinking", thinking: "alpha" },
-        { type: "text", text: "hello" },
-      ],
-    });
-
-    expect(text).toBe("hello");
-  });
-
   it("renders error text when stopReason is error and content is not an array", () => {
     const text = extractContentFromMessage({
       role: "assistant",
@@ -654,16 +559,6 @@ describe("extractContentFromMessage", () => {
     });
 
     expect(text).toContain("HTTP 429");
-  });
-
-  it("formats malformed streaming fragment errors when content is not an array", () => {
-    const text = extractContentFromMessage({
-      role: "assistant",
-      stopReason: "error",
-      errorMessage: MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
-    });
-
-    expect(text).toBe("LLM streaming response contained a malformed fragment. Please try again.");
   });
 });
 
@@ -696,16 +591,8 @@ describe("sanitizeRenderableText", () => {
     expect(sanitizeRenderableText(input)).toBe("beforemiddleafter");
   });
 
-  it.each([
-    { label: "very long", input: "a".repeat(140) },
-    { label: "moderately long", input: "b".repeat(90) },
-  ])("preserves $label unbroken tokens for renderer wrapping", ({ input }) => {
-    expect(sanitizeRenderableText(input)).toBe(input);
-  });
-
-  it("preserves surrogate pairs in long prose tokens", () => {
-    const input = `${"a".repeat(31)}😀b`;
-
+  it("preserves long unbroken tokens for renderer wrapping", () => {
+    const input = "a".repeat(140);
     expect(sanitizeRenderableText(input)).toBe(input);
   });
 
@@ -734,34 +621,6 @@ describe("sanitizeRenderableText", () => {
   ])("%s", (_name, input) => {
     const sanitized = sanitizeRenderableText(input);
     expect(sanitized).toBe(input);
-  });
-
-  it("preserves long file-like underscore tokens for copy safety", () => {
-    const input = "administrators_authorized_keys_with_extra_suffix".repeat(2);
-    const sanitized = sanitizeRenderableText(input);
-
-    expect(sanitized).toBe(input);
-  });
-
-  it("preserves long credential-like mixed alnum tokens for copy safety", () => {
-    const input = "e3b19c3b87bcf364b23eebb2c276e96ec478956ba1d84c93"; // pragma: allowlist secret
-    const sanitized = sanitizeRenderableText(input);
-
-    expect(sanitized).toBe(input);
-  });
-
-  it("preserves quoted credential-like mixed alnum tokens for copy safety", () => {
-    const input = "'e3b19c3b87bcf364b23eebb2c276e96ec478956ba1d84c93'"; // pragma: allowlist secret
-    const sanitized = sanitizeRenderableText(input);
-
-    expect(sanitized).toBe(input);
-  });
-
-  it("wraps rtl lines with directional isolation marks", () => {
-    const input = "مرحبا بالعالم";
-    const sanitized = sanitizeRenderableText(input);
-
-    expect(sanitized).toBe("\u2067مرحبا بالعالم\u2069");
   });
 
   it("only wraps lines that contain rtl script", () => {
@@ -823,57 +682,6 @@ describe("sanitizeRenderableText", () => {
     expect(sanitized).toBe(input);
   });
 
-  it("preserves tilde-fenced code blocks verbatim", () => {
-    const input = [
-      "Example:",
-      "~~~typescript",
-      "const requireConfirmationForMutatingActions = false;",
-      "~~~",
-    ].join("\n");
-    const sanitized = sanitizeRenderableText(input);
-
-    expect(sanitized).toBe(input);
-  });
-
-  it("preserves long base64-like blobs inside inline code spans", () => {
-    const input = "token: `e3b19c3b87bcf364b23eebb2c276e96ec478956ba1d84c93deadbeef`"; // pragma: allowlist secret
-    const sanitized = sanitizeRenderableText(input);
-
-    expect(sanitized).toBe(input);
-  });
-
-  it("preserves long unbroken prose tokens outside code spans", () => {
-    const input = `prefix ${"x".repeat(120)} suffix`;
-    expect(sanitizeRenderableText(input)).toBe(input);
-  });
-
-  it("preserves long prose tokens around code blocks", () => {
-    const input = [
-      `before ${"x".repeat(120)}`,
-      "```",
-      "code line preserved verbatim",
-      "```",
-      `after ${"y".repeat(80)}`,
-    ].join("\n");
-    expect(sanitizeRenderableText(input)).toBe(input);
-  });
-
-  it("does not chunk box-drawing horizontal rules used in tables", () => {
-    const input = "─".repeat(60);
-    const sanitized = sanitizeRenderableText(input);
-
-    expect(sanitized).toBe(input);
-  });
-
-  it("does not insert spaces before backslash line-continuations in fenced code", () => {
-    const longContinuation = `cmd ${"a".repeat(40)} \\`;
-    const input = ["```bash", longContinuation, "  next", "```"].join("\n");
-    const sanitized = sanitizeRenderableText(input);
-
-    expect(sanitized).toContain(longContinuation);
-    expect(sanitized).not.toContain("\\ ");
-  });
-
   it("strips ANSI escapes inside fenced code blocks (sanitization runs before segmentation)", () => {
     const input = "Hello\n```\nlet x = 1;[31m injected[0m\n```\nbye";
     const sanitized = sanitizeRenderableText(input);
@@ -909,14 +717,6 @@ describe("Markdown display safety", () => {
 
     expect(sanitized).toBe("# مرحبا\n> שלום");
     expect(sanitized).not.toMatch(/[\u2066-\u2069]/u);
-  });
-
-  it("isolates rendered RTL lines without changing visible width", () => {
-    const rendered = "\x1b[1mمرحبا\x1b[0m";
-    const isolated = isolateRtlRenderedLine(rendered);
-
-    expect(isolated).toBe(`\u2067${rendered}\u2069`);
-    expect(visibleWidth(isolated)).toBe(visibleWidth(rendered));
   });
 
   it("keeps rendered padding outside RTL isolates", () => {

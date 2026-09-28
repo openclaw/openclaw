@@ -11,13 +11,18 @@ import {
   linkEmail,
   resolveUserProfileId,
 } from "../state/user-profiles.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
 import { sessionSuggestionHandlers } from "./server-methods/sessions-suggestions.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams, makeGatewayClient } from "./server-request-context.test-support.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import { getHealthVersion, incrementPresenceVersion } from "./server/health-state.js";
-import { broadcastPresenceSnapshot } from "./server/presence-events.js";
+import { createPresencePublisher } from "./server/presence-events.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 vi.mock("./server/health-state.js", () => ({
@@ -26,8 +31,27 @@ vi.mock("./server/health-state.js", () => ({
   incrementPresenceVersion: vi.fn(() => 1),
 }));
 
+function makePresenceContextParams(overrides: Parameters<typeof makeContextParams>[0] = {}) {
+  const presenceClock = createGatewaySchedulerClock();
+  const scheduler = createTestGatewayScheduler(presenceClock.clock);
+  const params = makeContextParams(overrides);
+  const publisher = createPresencePublisher({
+    scheduler,
+    broadcast: params.runtime.broadcast,
+    incrementPresenceVersion,
+    getHealthVersion,
+    prepare: () => undefined,
+  });
+  params.runtime.publishPresence = publisher.publish;
+  onTestFinished(async () => {
+    publisher.stop();
+    await scheduler.stop();
+  });
+  return { ...params, presenceClock };
+}
+
 describe("createGatewayRequestContext presence", () => {
-  it("refreshes every live connection and presence row for a changed user profile", () => {
+  it("refreshes every live connection and presence row for a changed user profile", async () => {
     const makeProfileClient = (
       connId: string,
       email: string,
@@ -56,7 +80,9 @@ describe("createGatewayRequestContext presence", () => {
       avatarRevision: "1",
       hasAvatar: false,
     });
-    const params = makeContextParams({ clients: new Set([first, second, unrelated]) as never });
+    const params = makePresenceContextParams({
+      clients: new Set([first, second, unrelated]) as never,
+    });
     const context = createGatewayRequestContext(params);
     const capturedFirstProfile = first.authenticatedUserProfile;
     const readCapturedDisplayName = () => capturedFirstProfile.displayName;
@@ -70,6 +96,7 @@ describe("createGatewayRequestContext presence", () => {
         hasAvatar: true,
         updatedAt: 2,
       });
+      await params.presenceClock.advanceBy(200);
     }
 
     expect(first.authenticatedUserProfile).toEqual({
@@ -155,7 +182,7 @@ describe("createGatewayRequestContext presence", () => {
         presenceKey: "profile-refresh-merge-unrelated",
       };
       const capturedProfile = sourceClient.authenticatedUserProfile;
-      const params = makeContextParams({
+      const params = makePresenceContextParams({
         clients: new Set([sourceClient, targetClient, unrelatedClient]) as never,
       });
       const context = createGatewayRequestContext(params);
@@ -167,6 +194,7 @@ describe("createGatewayRequestContext presence", () => {
         ...display,
         updatedAt: linked.updatedAt,
       });
+      await params.presenceClock.advanceBy(200);
 
       expect(sourceClient.authenticatedUserProfile).toBe(capturedProfile);
       expect(sourceClient.authenticatedUserProfile).toEqual({
@@ -202,7 +230,7 @@ describe("createGatewayRequestContext presence", () => {
     });
   });
 
-  it("publishes an owner rename to every tab without inventing an email", () => {
+  it("publishes an owner rename to every tab without inventing an email", async () => {
     const ownerClients = [];
     for (const tab of ["one", "two"]) {
       ownerClients.push({
@@ -221,7 +249,7 @@ describe("createGatewayRequestContext presence", () => {
         personPresence: { onlineSince: 1_000 },
       });
     }
-    const params = makeContextParams({ clients: new Set(ownerClients) as never });
+    const params = makePresenceContextParams({ clients: new Set(ownerClients) as never });
     createGatewayRequestContext(params).refreshConnectedUserProfile?.({
       id: "profile-owner",
       displayName: "Augusta Ada",
@@ -229,6 +257,7 @@ describe("createGatewayRequestContext presence", () => {
       hasAvatar: false,
       updatedAt: 2,
     });
+    await params.presenceClock.advanceBy(200);
 
     for (const client of ownerClients) {
       expect(client.authenticatedUserProfile.displayName).toBe("Augusta Ada");
@@ -250,7 +279,7 @@ describe("createGatewayRequestContext presence", () => {
     );
   });
 
-  it("publishes only server-stamped activity from the exact live client", () => {
+  it("publishes only server-stamped activity from the exact live client", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(10_000);
     onTestFinished(() => now.mockRestore());
     const client: GatewayWsClient = {
@@ -262,11 +291,13 @@ describe("createGatewayRequestContext presence", () => {
       personPresence: { onlineSince: 9_000 },
     };
     const clients = new GatewayClientRegistry([client]);
-    const params = makeContextParams({ clients });
+    const params = makePresenceContextParams({ clients });
     const context = createGatewayRequestContext(params);
     context.recordClientActivity?.({ ...client });
+    await params.presenceClock.advanceBy(200);
     expect(params.runtime.broadcast).not.toHaveBeenCalled();
     context.recordClientActivity?.(client);
+    await params.presenceClock.advanceBy(200);
     expect(params.runtime.broadcast).toHaveBeenCalledExactlyOnceWith(
       "presence",
       {
@@ -283,10 +314,11 @@ describe("createGatewayRequestContext presence", () => {
     now.mockReturnValue(11_000);
     clients.delete(client);
     context.recordClientActivity?.(client);
+    await params.presenceClock.advanceBy(200);
     expect(params.runtime.broadcast).toHaveBeenCalledOnce();
   });
 
-  it("coalesces typing activity across a person's tabs without delaying explicit presence changes", async () => {
+  it("coalesces typing activity across a person's tabs and publishes explicit changes after the coalescing window", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const started = 1_800_000_000_000;
       const clock = vi.spyOn(Date, "now").mockReturnValue(started);
@@ -338,8 +370,9 @@ describe("createGatewayRequestContext presence", () => {
           },
         ),
       );
-      const params = makeContextParams({ clients: new GatewayClientRegistry(tabs) });
+      const params = makePresenceContextParams({ clients: new GatewayClientRegistry(tabs) });
       const context = createGatewayRequestContext(params);
+      await initializeSessionReadContext(context);
       const events = () =>
         vi.mocked(params.runtime.broadcast).mock.calls.filter(([event]) => event === "presence");
       const rows = () =>
@@ -362,6 +395,7 @@ describe("createGatewayRequestContext presence", () => {
           respond,
         });
         expect(respond).toHaveBeenCalledWith(true, { ok: true, broadcast: false });
+        await params.presenceClock.advanceBy(200);
       };
 
       for (let second = 0; second < 30; second++) {
@@ -387,10 +421,12 @@ describe("createGatewayRequestContext presence", () => {
         hasAvatar: false,
         updatedAt: started + 31_000,
       });
+      await params.presenceClock.advanceBy(200);
       expect(events()).toHaveLength(3);
       expect(rows().every((row) => row.user?.name === "Renamed Person")).toBe(true);
       health.mockReturnValue(12);
-      broadcastPresenceSnapshot(context);
+      context.publishPresence();
+      await params.presenceClock.advanceBy(200);
       expect(events()).toHaveLength(4);
       await typeAt(32_000, tabs[1]!);
       expect(events()).toHaveLength(4);
@@ -403,6 +439,7 @@ describe("createGatewayRequestContext presence", () => {
         hasAvatar: false,
         updatedAt: started + 179_000,
       });
+      await params.presenceClock.advanceBy(200);
       expect(events()).toHaveLength(5);
       await typeAt(180_000, tabs[1]!);
       expect(events()).toHaveLength(6);
@@ -428,7 +465,7 @@ describe("createGatewayRequestContext presence", () => {
 
   it.each(["removed", "invalidated", "closing"] as const)(
     "does not refresh a %s profile connection or resurrect its presence",
-    (state) => {
+    async (state) => {
       const client: GatewayWsClient = {
         ...makeGatewayClient({
           connId: `profile-${state}`,
@@ -447,7 +484,7 @@ describe("createGatewayRequestContext presence", () => {
         presenceKey: `profile-${state}`,
         invalidated: state === "invalidated",
       };
-      const params = makeContextParams({
+      const params = makePresenceContextParams({
         clients: new GatewayClientRegistry(state === "removed" ? [] : [client]),
       });
       createGatewayRequestContext(params).refreshConnectedUserProfile?.({
@@ -457,6 +494,7 @@ describe("createGatewayRequestContext presence", () => {
         hasAvatar: false,
         updatedAt: 2,
       });
+      await params.presenceClock.advanceBy(200);
       expect(client.authenticatedUserProfile?.displayName).toBe("Before");
       expect(params.runtime.broadcast).not.toHaveBeenCalled();
       expect(
@@ -465,7 +503,7 @@ describe("createGatewayRequestContext presence", () => {
     },
   );
 
-  it("preserves the Gravatar-backed route when a changed profile has no upload", () => {
+  it("preserves the Gravatar-backed route when a changed profile has no upload", async () => {
     const client = {
       ...makeGatewayClient({
         connId: "ada-avatar-removed",
@@ -481,7 +519,7 @@ describe("createGatewayRequestContext presence", () => {
       },
       presenceKey: "profile-refresh-ada-avatar-removed",
     };
-    const params = makeContextParams({ clients: new Set([client]) as never });
+    const params = makePresenceContextParams({ clients: new Set([client]) as never });
     const context = createGatewayRequestContext(params);
 
     context.refreshConnectedUserProfile?.({
@@ -491,6 +529,7 @@ describe("createGatewayRequestContext presence", () => {
       hasAvatar: false,
       updatedAt: 2,
     });
+    await params.presenceClock.advanceBy(200);
 
     expect(client.authenticatedUserProfile.hasAvatar).toBe(false);
     const presence = vi.mocked(params.runtime.broadcast).mock.calls[0]?.[1] as {
@@ -507,7 +546,7 @@ describe("createGatewayRequestContext presence", () => {
     });
   });
 
-  it("keeps Tailscale provider identities out of refreshed presence email", () => {
+  it("keeps Tailscale provider identities out of refreshed presence email", async () => {
     const client = {
       ...makeGatewayClient({
         connId: "ada-tailscale",
@@ -524,7 +563,7 @@ describe("createGatewayRequestContext presence", () => {
       },
       presenceKey: "profile-refresh-ada-tailscale",
     };
-    const params = makeContextParams({ clients: new Set([client]) as never });
+    const params = makePresenceContextParams({ clients: new Set([client]) as never });
     const context = createGatewayRequestContext(params);
 
     context.refreshConnectedUserProfile?.({
@@ -534,6 +573,7 @@ describe("createGatewayRequestContext presence", () => {
       hasAvatar: true,
       updatedAt: 2,
     });
+    await params.presenceClock.advanceBy(200);
 
     const presence = vi.mocked(params.runtime.broadcast).mock.calls[0]?.[1] as {
       presence?: Array<{ user?: { id?: string; email?: string } }>;

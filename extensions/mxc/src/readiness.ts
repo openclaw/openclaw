@@ -9,7 +9,7 @@ type ReadinessDeps = {
 const DEFAULT_DEPS: ReadinessDeps = { execFileSync };
 
 const MxcProbeOutputSchema = z.object({
-  tier: z.string().optional(),
+  tier: z.enum(["base-container", "appcontainer-bfs", "appcontainer-dacl"]).optional(),
   warnings: z.array(z.string()).default([]),
   error: z.string().optional(),
 });

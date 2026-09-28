@@ -22,6 +22,7 @@ import {
   type TelegramButtonBuildOptions,
   type TelegramDroppedControl,
 } from "./button-types.js";
+import { escapeTelegramHtml } from "./format-html.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
 
 const TELEGRAM_CONTROL_ONLY_FALLBACK = "Choose an option.";
@@ -60,12 +61,7 @@ export function resolveTelegramPresentationCapabilities(params: {
 }
 
 function escapeTelegramTableCellText(value: string | number): string {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replace(/\s+/g, " ")
-    .trim();
+  return escapeTelegramHtml(String(value)).replace(/\s+/g, " ").trim();
 }
 
 // The `<table>` HTML island feeds the existing island -> rich-block converter,
@@ -165,11 +161,7 @@ function partitionTelegramPresentationBlocks(params: {
   const fallbackBlocks: MessagePresentation["blocks"] = [];
   const nativeControlBlocks: MessagePresentationInteractiveBlock[] = [];
   for (const block of params.presentation.blocks) {
-    if (!isMessagePresentationInteractiveBlock(block)) {
-      fallbackBlocks.push(block);
-      continue;
-    }
-    if (!params.presentationControlsSelected) {
+    if (!params.presentationControlsSelected || !isMessagePresentationInteractiveBlock(block)) {
       fallbackBlocks.push(block);
       continue;
     }

@@ -5,7 +5,11 @@ import {
   formatInvalidConfigRecoveryHint,
   formatPluginPackagingRuntimeOutputRecoveryHint,
 } from "../cli/config-recovery-hints.js";
-import { createInvalidConfigError } from "../config/io.invalid-config.js";
+import {
+  createConfigReadError,
+  createInvalidConfigError,
+  isConfigReadFailure,
+} from "../config/io.invalid-config.js";
 import {
   type ReadConfigFileSnapshotWithPluginMetadataResult,
   readConfigFileSnapshotWithPluginMetadata,
@@ -33,16 +37,12 @@ import {
   GATEWAY_AUTH_SURFACE_PATHS,
   evaluateGatewayAuthSurfaceStates,
 } from "../secrets/runtime-gateway-auth-surfaces.js";
-import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
+import { mergeGatewayAuthConfig, resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
 import { mergeActivationSectionsIntoRuntimeConfig } from "./plugin-activation-runtime-config.js";
 import type { ActivateRuntimeSecrets } from "./server-startup-config.types.js";
 import { resolveGatewayStartupSourceConfig } from "./server-startup-secret-surfaces.js";
-import {
-  ensureGatewayStartupAuth,
-  mergeGatewayAuthConfig,
-  mergeGatewayTailscaleConfig,
-} from "./startup-auth.js";
+import { ensureGatewayStartupAuth, mergeGatewayTailscaleConfig } from "./startup-auth.js";
 
 export type GatewayStartupLog = {
   info: (message: string) => void;
@@ -73,6 +73,12 @@ function assertValidGatewayStartupConfigSnapshot(
     snapshot.issues.length > 0
       ? renderConfigValidationIssueLines(snapshot, "").join("\n")
       : "Unknown validation issue.";
+  if (isConfigReadFailure(snapshot)) {
+    throw createConfigReadError(
+      snapshot.path,
+      `${issues}\nResolve the read error shown above, then retry.`,
+    );
+  }
   const recoveryHint =
     options.includeDoctorHint && isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot)
       ? `\n${formatPluginPackagingRuntimeOutputRecoveryHint()}`

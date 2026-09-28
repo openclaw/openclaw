@@ -89,14 +89,35 @@ async function validateImageMime(body: Buffer, contentType: string): Promise<boo
 }
 
 function rememberIcon(
-  cache: Map<string, PluginIconCacheEntry>,
   cacheKey: string,
-  entry: PluginIconCacheEntry,
-): PluginIconCacheEntry {
-  cache.delete(cacheKey);
-  cache.set(cacheKey, entry);
-  pruneMapToMaxSize(cache, PLUGIN_ICON_CACHE_MAX_ENTRIES);
-  return entry;
+  promise: PluginIconCacheEntry["promise"],
+  expiresAt: number,
+  retainFailureForMs?: number,
+): PluginIconCacheEntry["promise"] {
+  const entry = { expiresAt, promise };
+  pluginIconCache.delete(cacheKey);
+  pluginIconCache.set(cacheKey, entry);
+  pruneMapToMaxSize(pluginIconCache, PLUGIN_ICON_CACHE_MAX_ENTRIES);
+  return promise.then((result) => {
+    if (!result && pluginIconCache.get(cacheKey) === entry) {
+      if (retainFailureForMs) {
+        entry.expiresAt = Date.now() + retainFailureForMs;
+      } else {
+        pluginIconCache.delete(cacheKey);
+      }
+    }
+    return result;
+  });
+}
+
+function readCachedIcon(cacheKey: string, now: number): PluginIconCacheEntry | undefined {
+  const cached = pluginIconCache.get(cacheKey);
+  pluginIconCache.delete(cacheKey);
+  if (cached && cached.expiresAt > now) {
+    pluginIconCache.set(cacheKey, cached);
+    return cached;
+  }
+  return undefined;
 }
 
 async function normalizeIconPayload(params: {
@@ -145,14 +166,9 @@ async function loadPackageIcon(params: {
 }): Promise<HttpImageRepresentation | null> {
   const cacheKey = `${params.cacheScope}\0file:${params.rootPath}\0${params.iconPath}`;
   const now = Date.now();
-  const cached = pluginIconCache.get(cacheKey);
-  if (cached && cached.expiresAt > now) {
-    pluginIconCache.delete(cacheKey);
-    pluginIconCache.set(cacheKey, cached);
-    return await cached.promise;
-  }
+  const cached = readCachedIcon(cacheKey, now);
   if (cached) {
-    pluginIconCache.delete(cacheKey);
+    return await cached.promise;
   }
 
   const pending = (async () => {
@@ -185,15 +201,7 @@ async function loadPackageIcon(params: {
       closeSync(opened.fd);
     }
   })();
-  const entry = rememberIcon(pluginIconCache, cacheKey, {
-    expiresAt: now + PLUGIN_ICON_CACHE_TTL_MS,
-    promise: pending,
-  });
-  const result = await pending;
-  if (!result && pluginIconCache.get(cacheKey) === entry) {
-    pluginIconCache.delete(cacheKey);
-  }
-  return result;
+  return await rememberIcon(cacheKey, pending, now + PLUGIN_ICON_CACHE_TTL_MS);
 }
 
 async function loadCatalogIcon(params: {
@@ -222,14 +230,9 @@ async function loadCatalogIcon(params: {
 
   const cacheKey = `${params.cacheScope}\0${parsed.href}`;
   const now = Date.now();
-  const cached = pluginIconCache.get(cacheKey);
-  if (cached && cached.expiresAt > now) {
-    pluginIconCache.delete(cacheKey);
-    pluginIconCache.set(cacheKey, cached);
-    return await cached.promise;
-  }
+  const cached = readCachedIcon(cacheKey, now);
   if (cached) {
-    pluginIconCache.delete(cacheKey);
+    return await cached.promise;
   }
 
   const load = async () => {
@@ -267,19 +270,12 @@ async function loadCatalogIcon(params: {
     return null;
   }
   const pending = params.limitConcurrency ? linkFaviconFetchLimit(load) : load();
-  const entry = rememberIcon(pluginIconCache, cacheKey, {
-    expiresAt: now + PLUGIN_ICON_CACHE_TTL_MS,
-    promise: pending,
-  });
-  const result = await pending;
-  if (!result && pluginIconCache.get(cacheKey) === entry) {
-    if (params.retainFailureForMs) {
-      entry.expiresAt = Date.now() + params.retainFailureForMs;
-    } else {
-      pluginIconCache.delete(cacheKey);
-    }
-  }
-  return result;
+  return await rememberIcon(
+    cacheKey,
+    pending,
+    now + PLUGIN_ICON_CACHE_TTL_MS,
+    params.retainFailureForMs,
+  );
 }
 
 export function clearPluginIconCacheForTest(): void {
@@ -327,15 +323,7 @@ async function loadPluginIcon(
     return null;
   })();
   // Cache the completed chain so a rejected package image cannot hide its publisher image.
-  const entry = rememberIcon(pluginIconCache, cacheKey, {
-    expiresAt: Date.now() + PLUGIN_ICON_CACHE_TTL_MS,
-    promise: pending,
-  });
-  const result = await pending;
-  if (!result && pluginIconCache.get(cacheKey) === entry) {
-    pluginIconCache.delete(cacheKey);
-  }
-  return result;
+  return await rememberIcon(cacheKey, pending, Date.now() + PLUGIN_ICON_CACHE_TTL_MS);
 }
 
 export async function handlePluginIconHttpRequest(

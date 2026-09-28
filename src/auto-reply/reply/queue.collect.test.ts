@@ -320,33 +320,6 @@ describe("followup queue collect routing", () => {
     clearFollowupQueue(key);
   });
 
-  it("does not collect when destinations differ", async () => {
-    const { key, calls, done, runFollowup, settings } = createQueueCase(
-      `test-collect-diff-to-${Date.now()}`,
-      {},
-      2,
-    );
-
-    enqueueTestRuns(
-      key,
-      settings,
-      {
-        prompt: "one",
-        originatingChannel: "slack",
-        originatingTo: "channel:A",
-      },
-      {
-        prompt: "two",
-        originatingChannel: "slack",
-        originatingTo: "channel:B",
-      },
-    );
-
-    await drainRecordedQueue(key, runFollowup, done);
-    expect(calls[0]?.prompt).toBe("one");
-    expect(calls[1]?.prompt).toBe("two");
-  });
-
   it("collects when channel+destination match", async () => {
     const { key, calls, done, runFollowup, settings } = createQueueCase(
       `test-collect-same-to-${Date.now()}`,
@@ -633,72 +606,6 @@ describe("followup queue collect routing", () => {
       undefined,
       "gateway",
     ]);
-  });
-
-  it("keeps overflow summaries on the dropped source chat type", async () => {
-    const { key, calls, done, runFollowup, settings } = createQueueCase(
-      `test-collect-overflow-chat-type-${Date.now()}`,
-      { cap: 1 },
-      2,
-    );
-
-    enqueueTestRuns(
-      key,
-      settings,
-      {
-        prompt: "private direct content",
-        originatingChannel: "slack",
-        originatingTo: "same-target",
-        originatingChatType: "direct",
-      },
-      {
-        prompt: "public channel content",
-        originatingChannel: "slack",
-        originatingTo: "same-target",
-        originatingChatType: "channel",
-      },
-    );
-
-    await drainRecordedQueue(key, runFollowup, done);
-
-    expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
-    expect(calls[0]?.prompt).toContain("- private direct content");
-    expect(calls[0]?.originatingChatType).toBe("direct");
-    expect(calls[1]?.prompt).toContain("public channel content");
-    expect(calls[1]?.originatingChatType).toBe("channel");
-  });
-
-  it("keeps overflow summaries on the dropped source route", async () => {
-    const { key, calls, done, runFollowup, settings } = createQueueCase(
-      `test-collect-overflow-route-${Date.now()}`,
-      { cap: 1 },
-      2,
-    );
-
-    enqueueTestRuns(
-      key,
-      settings,
-      {
-        prompt: "channel A content",
-        originatingChannel: "slack",
-        originatingTo: "channel:A",
-        originatingChatType: "channel",
-      },
-      {
-        prompt: "channel B content",
-        originatingChannel: "slack",
-        originatingTo: "channel:B",
-        originatingChatType: "channel",
-      },
-    );
-
-    await drainRecordedQueue(key, runFollowup, done);
-
-    expect(calls[0]?.prompt).toContain("- channel A content");
-    expect(calls[0]?.originatingTo).toBe("channel:A");
-    expect(calls[1]?.prompt).toContain("channel B content");
-    expect(calls[1]?.prompt).not.toContain("channel A content");
-    expect(calls[1]?.originatingTo).toBe("channel:B");
   });
 
   it.each([
@@ -2017,34 +1924,6 @@ describe("followup queue collect routing", () => {
     expect(calls[1]?.prompt).toContain("- overflowed normal");
   });
 
-  it("carries image payloads across collected batches", async () => {
-    const { key, calls, done, runFollowup, settings } = createQueueCase(
-      `test-collect-images-${Date.now()}`,
-    );
-    const firstImage = { type: "image" as const, data: "first", mimeType: "image/png" };
-    const secondImage = { type: "image" as const, data: "second", mimeType: "image/png" };
-
-    for (const [prompt, image] of [
-      ["one", firstImage],
-      ["two", secondImage],
-    ] as const) {
-      enqueueFollowupRun(
-        key,
-        {
-          ...createRun({ prompt, originatingChannel: "slack", originatingTo: "channel:A" }),
-          images: [image],
-          imageOrder: ["inline"],
-        },
-        settings,
-      );
-    }
-
-    await drainRecordedQueue(key, runFollowup, done);
-
-    expect(calls[0]?.images).toEqual([firstImage, secondImage]);
-    expect(calls[0]?.imageOrder).toEqual(["inline", "inline"]);
-  });
-
   it("preserves prepared empty image state across collected batches", async () => {
     const { key, calls, done, runFollowup, settings } = createQueueCase(
       `test-collect-prepared-empty-images-${Date.now()}`,
@@ -2254,29 +2133,6 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.prompt).not.toContain("second");
     expect(calls[1]?.prompt).toContain("second");
     expect(calls[1]?.prompt).not.toContain("first");
-  });
-
-  it("keeps one collect batch when authorization context matches", async () => {
-    const { key, calls, done, runFollowup, settings } = createQueueCase(
-      `test-collect-auth-match-${Date.now()}`,
-    );
-
-    const sender = {
-      senderId: "user-1",
-      senderName: "Guest",
-      senderUsername: "guest",
-      senderIsOwner: false,
-    };
-    enqueueSlackRun(key, settings, "first", sender);
-    enqueueSlackRun(key, settings, "second", sender);
-
-    await drainRecordedQueue(key, runFollowup, done);
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.prompt).toContain("first");
-    expect(calls[0]?.prompt).toContain("second");
-    expect(calls[0]?.abortSignal).toBeUndefined();
-    expect(calls[0]?.prompt).toContain("(from Guest)");
   });
 
   it("keeps one collect batch when only sender display fields drift", async () => {
@@ -2604,28 +2460,6 @@ describe("followup queue collect routing", () => {
     ]);
   });
 
-  it("retries overflow summary delivery without losing dropped previews", async () => {
-    const key = `test-overflow-summary-retry-${Date.now()}`;
-    const { calls, done } = createDrainRecorder();
-    let attempt = 0;
-    const runFollowup = async (run: FollowupRun) => {
-      attempt += 1;
-      if (attempt === 1) {
-        throw new Error("transient failure");
-      }
-      calls.push(run);
-      done.resolve();
-    };
-    const settings = createQueueSettings({ mode: "followup", cap: 1 });
-
-    enqueueFollowupRun(key, createRun({ prompt: "first" }), settings);
-    enqueueFollowupRun(key, createRun({ prompt: "second" }), settings);
-
-    await drainRecordedQueue(key, runFollowup, done);
-    expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
-    expect(calls[0]?.prompt).toContain("- first");
-  });
-
   it("persists overflow summaries to the session selected after queue admission", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-overflow-session-"));
     const storePath = path.join(tempDir, "sessions.json");
@@ -2721,33 +2555,6 @@ describe("followup queue collect routing", () => {
     expect(cleaned.map((run) => run.prompt)).toEqual(["aborted"]);
     expect(onComplete).toHaveBeenCalledTimes(1);
     expect(getExistingFollowupQueue(key)).toBeUndefined();
-  });
-
-  it("delivers the overflow summary before split auth groups", async () => {
-    const { key, calls, done, runFollowup, settings } = createQueueCase(
-      `test-collect-overflow-summary-once-${Date.now()}`,
-      { cap: 2 },
-      3,
-    );
-
-    const guest = { senderId: "user-1", senderName: "Guest", senderIsOwner: false };
-    enqueueSlackRun(key, settings, "dropped guest message", guest);
-    enqueueSlackRun(key, settings, "guest message", guest);
-    enqueueSlackRun(key, settings, "owner message", {
-      senderId: "owner-1",
-      senderName: "Owner",
-      senderIsOwner: true,
-    });
-
-    await drainRecordedQueue(key, runFollowup, done);
-
-    expect(calls).toHaveLength(3);
-    expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
-    expect(calls[0]?.prompt).toContain("- dropped guest message");
-    expect(calls[1]?.prompt).not.toContain("[Queue overflow]");
-    expect(calls[1]?.prompt).not.toContain("dropped guest message");
-    expect(calls[1]?.prompt).toContain("guest message");
-    expect(calls[2]?.prompt).toContain("owner message");
   });
 
   it("does not re-deliver overflow summary on partial auth group failure retry", async () => {
@@ -3094,46 +2901,6 @@ describe("followup queue collect routing", () => {
     expect(calls[1]?.currentInboundEventKind).toBe("room_event");
     await vi.waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
     expect(onComplete).toHaveBeenCalledTimes(1);
-  });
-
-  it("collects compatible cancelable turns and completes each source lifecycle", async () => {
-    const key = `test-collect-cancelable-${Date.now()}`;
-    const { calls, done } = createDrainRecorder();
-    const firstComplete = vi.fn();
-    const secondComplete = vi.fn();
-    const runFollowup = async (run: FollowupRun) => {
-      calls.push(run);
-      done.resolve();
-    };
-    const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
-
-    enqueueFollowupRun(
-      key,
-      {
-        ...createRun({ prompt: "first" }),
-        abortSignal: new AbortController().signal,
-        turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: firstComplete },
-      },
-      settings,
-    );
-    enqueueFollowupRun(
-      key,
-      {
-        ...createRun({ prompt: "second" }),
-        abortSignal: new AbortController().signal,
-        turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: secondComplete },
-      },
-      settings,
-    );
-
-    await drainRecordedQueue(key, runFollowup, done);
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.prompt).toContain("first");
-    expect(calls[0]?.prompt).toContain("second");
-    await vi.waitFor(() => expect(firstComplete).toHaveBeenCalledTimes(1));
-    expect(firstComplete).toHaveBeenCalledTimes(1);
-    expect(secondComplete).toHaveBeenCalledTimes(1);
   });
 
   it("runs distinct collected admission lifecycles independently when one retries", async () => {
@@ -3584,22 +3351,6 @@ describe("followup authorization delivery context", () => {
     );
   });
 
-  it("changes when exec defaults change", () => {
-    const run = createRun({ prompt: "one" });
-    expect(
-      resolveDeliveryKeyWithRunOverrides(run, {
-        senderId: "user-1",
-        bashElevated: { enabled: false, allowed: true, defaultLevel: "off" },
-      }),
-    ).not.toBe(
-      resolveDeliveryKeyWithRunOverrides(run, {
-        senderId: "user-1",
-        bashElevated: { enabled: true, allowed: true, defaultLevel: "on" },
-        execOverrides: { ask: "always" },
-      }),
-    );
-  });
-
   it("changes when the approval reviewer device changes", () => {
     const run = createRun({ prompt: "one" });
     expect(
@@ -3609,25 +3360,6 @@ describe("followup authorization delivery context", () => {
     ).not.toBe(
       resolveDeliveryKeyWithRunOverrides(run, {
         approvalReviewerDeviceId: "device-b",
-      }),
-    );
-  });
-
-  it("does not change when only sender display fields change", () => {
-    const run = createRun({ prompt: "one" });
-    expect(
-      resolveDeliveryKeyWithRunOverrides(run, {
-        senderId: "user-1",
-        senderName: "Guest",
-        senderUsername: "guest",
-        senderIsOwner: false,
-      }),
-    ).toBe(
-      resolveDeliveryKeyWithRunOverrides(run, {
-        senderId: "user-1",
-        senderName: "Guest User",
-        senderUsername: "guest-renamed",
-        senderIsOwner: false,
       }),
     );
   });

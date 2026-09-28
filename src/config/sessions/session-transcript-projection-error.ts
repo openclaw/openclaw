@@ -13,8 +13,13 @@ export class SessionTranscriptStorageUnavailableError extends Error {
 }
 
 export class SessionTranscriptProjectionUnavailableError extends Error {
-  constructor(readonly sessionId: string) {
-    super(`Session transcript projection is rebuilding: ${sessionId}`);
+  constructor(
+    readonly sessionId: string,
+    readonly reason: "rebuilding" | "window-changed" = "rebuilding",
+  ) {
+    super(
+      `Session transcript ${reason === "rebuilding" ? "projection is rebuilding" : "history window changed"}: ${sessionId}`,
+    );
     this.name = "SessionTranscriptProjectionUnavailableError";
   }
 }

@@ -165,7 +165,7 @@ it.each(["source assertion", "source signal", "lifecycle rotation"] as const)(
       }
       current = true;
       expect(() => retained.assertCurrent()).toThrow(
-        revocation === "source signal" ? revoked : "no longer active",
+        revocation === "lifecycle rotation" ? "no longer active" : revoked,
       );
     } finally {
       modelBinding?.release();
@@ -274,63 +274,56 @@ it.each(["signal", "lifecycle"] as const)(
   },
 );
 
-it.each([false, true])(
-  "guards retained unknown-model work through policy introduction=%s and releases once",
-  async (introducePolicy) => {
-    let policy: AdmittedRunOperatorAuthority["modelPolicy"];
-    let holds = 0;
-    const listeners = new Set<() => void>();
-    const source = createAdmittedRunOperatorAuthority({
-      profileId: "retained-policy",
-      scopes: ["operator.write"],
-      assertCurrent: () => {},
-      get modelPolicy() {
-        return policy;
-      },
-      onModelPolicyChanged: (listener) => {
-        listeners.add(listener);
-        return () => {
-          listeners.delete(listener);
-        };
-      },
-      retain: () => {
-        holds += 1;
-        return () => {
-          holds -= 1;
-        };
-      },
+it("guards retained unknown-model work through policy introduction and releases once", async () => {
+  let policy: AdmittedRunOperatorAuthority["modelPolicy"];
+  let holds = 0;
+  const listeners = new Set<() => void>();
+  const source = createAdmittedRunOperatorAuthority({
+    profileId: "retained-policy",
+    scopes: ["operator.write"],
+    assertCurrent: () => {},
+    get modelPolicy() {
+      return policy;
+    },
+    onModelPolicyChanged: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    retain: () => {
+      holds += 1;
+      return () => {
+        holds -= 1;
+      };
+    },
+  });
+  const { host, admission } = await createSourceHost(source);
+  expect(host.capabilities.bindModelExecution).toBeUndefined();
+  const retained = host.capabilities.retainSourceAuthority?.();
+  if (!retained) {
+    throw new Error("expected retained source authority");
+  }
+  try {
+    host.close();
+    admission.close();
+    expect(holds).toBe(1);
+    expect(() => retained.assertCurrent()).not.toThrow();
+    expect(retained.signal?.aborted).toBe(false);
+    policy = prepareOperatorModelPolicy({
+      cfg: { agents: { defaults: { model: "fixture/a" } } },
+      policy: {},
+      manifestPlugins: [],
     });
-    const { host, admission } = await createSourceHost(source);
-    expect(host.capabilities.bindModelExecution).toBeUndefined();
-    const retained = host.capabilities.retainSourceAuthority?.();
-    if (!retained) {
-      throw new Error("expected retained source authority");
+    for (const listener of listeners) {
+      listener();
     }
-    try {
-      host.close();
-      admission.close();
-      expect(holds).toBe(1);
-      expect(() => retained.assertCurrent()).not.toThrow();
-      if (introducePolicy) {
-        policy = prepareOperatorModelPolicy({
-          cfg: { agents: { defaults: { model: "fixture/a" } } },
-          policy: {},
-          manifestPlugins: [],
-        });
-        for (const listener of listeners) {
-          listener();
-        }
-        expect(retained.signal?.aborted).toBe(true);
-        expect(() => retained.assertCurrent()).toThrow("operator role cannot use this model");
-      } else {
-        expect(retained.signal?.aborted).toBe(false);
-        expect(() => retained.assertCurrent()).not.toThrow();
-      }
-    } finally {
-      retained.release();
-      retained.release();
-    }
-    expect(holds).toBe(0);
-    expect(listeners.size).toBe(0);
-  },
-);
+    expect(retained.signal?.aborted).toBe(true);
+    expect(() => retained.assertCurrent()).toThrow("operator role cannot use this model");
+  } finally {
+    retained.release();
+    retained.release();
+  }
+  expect(holds).toBe(0);
+  expect(listeners.size).toBe(0);
+});

@@ -242,6 +242,7 @@ export function registerWorktreesCli(program: Command): void {
       const limits = resolveWorktreeCleanupLimits();
       const result = await managedWorktrees.gc({
         limits,
+        retryDeferred: true,
         ...createManagedWorktreeOwnerPolicy(cfg),
       });
       if (opts.json) {

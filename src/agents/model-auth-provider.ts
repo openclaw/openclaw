@@ -115,6 +115,7 @@ export async function resolveProviderEntryApiKeyAuth(params: {
   agentDir?: string;
   modelApi?: string;
   modelBaseUrl?: string;
+  capability?: string;
   secretSentinels?: boolean;
   signal?: AbortSignal;
 }): Promise<ResolvedProviderAuth | undefined> {
@@ -140,6 +141,7 @@ export async function resolveProviderEntryApiKeyAuth(params: {
       provider,
       modelApi: params.modelApi,
       modelBaseUrl: params.modelBaseUrl,
+      capability: params.capability,
       profileId: binding.auth.profileId ?? provider,
       mode: binding.auth.mode,
       authFlow: binding.auth.authFlow,
@@ -193,6 +195,7 @@ export async function resolveApiKeyForProviderCore(input: {
   modelId?: string;
   modelApi?: string;
   modelBaseUrl?: string;
+  capability?: string;
   /** Keep SecretRef-backed model credentials opaque until a sentinel-aware transport boundary. */
   secretSentinels?: boolean;
 }): Promise<ResolvedProviderAuth> {
@@ -244,6 +247,7 @@ export async function resolveApiKeyForProviderCore(input: {
         provider,
         modelApi: params.modelApi,
         modelBaseUrl: params.modelBaseUrl,
+        capability: params.capability,
         profileId,
         mode: authConfig.profileTypeToAuthMode(configuredProfileType),
         authFlow:
@@ -290,6 +294,7 @@ export async function resolveApiKeyForProviderCore(input: {
       provider,
       modelApi: params.modelApi,
       modelBaseUrl: params.modelBaseUrl,
+      capability: params.capability,
       profileId: resolvedProfileId,
       mode: result.mode,
       authFlow: result.authFlow,
@@ -356,6 +361,7 @@ export async function resolveApiKeyForProviderCore(input: {
       provider,
       modelApi: params.modelApi,
       modelBaseUrl: params.modelBaseUrl,
+      capability: params.capability,
       mode,
       authFlow,
     });
@@ -418,6 +424,7 @@ export async function resolveApiKeyForProviderCore(input: {
     signal: params.signal,
     modelApi: params.modelApi,
     modelBaseUrl: params.modelBaseUrl,
+    capability: params.capability,
     secretSentinels: params.secretSentinels,
   });
   params.signal?.throwIfAborted();

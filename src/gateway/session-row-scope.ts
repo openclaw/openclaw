@@ -220,8 +220,15 @@ export function selectSessionRowEntries(
     sessionIdOrKey || dirty.size === 0
       ? candidates
       : candidates.map((row) => (row && dirty.has(records.identity(row)) ? acquire(row) : row));
-  const selected = acquired.filter(
-    (row): row is records.EntryRow => records.hasEntry(row) && matches(row),
-  );
-  return records.sort(selected, query.sortBy);
+  // Each candidate path returns an owned array. Finish all acquisitions before
+  // compacting it, since acquiring one dirty row can update another row's facts.
+  let selectedCount = 0;
+  acquired.forEach((row) => {
+    if (records.hasEntry(row) && matches(row)) {
+      acquired[selectedCount++] = row;
+    }
+  });
+  acquired.length = selectedCount;
+  // SAFETY: The compacted prefix contains only rows accepted by records.hasEntry.
+  return records.sort(acquired as records.EntryRow[], query.sortBy);
 }

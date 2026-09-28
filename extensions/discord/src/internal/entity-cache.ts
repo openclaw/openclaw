@@ -18,6 +18,18 @@ const DEFAULT_REST_CACHE_TTL_MS = 30_000;
 const DEFAULT_MAX_ENTRIES = 5_000;
 const DEFAULT_SWEEP_INTERVAL_MS = 30_000;
 
+const CACHE_KIND_BY_EVENT = new Map<string, "channel" | "guild" | "guild-emojis" | "member">([
+  [GatewayDispatchEvents.ChannelUpdate, "channel"],
+  [GatewayDispatchEvents.ChannelDelete, "channel"],
+  [GatewayDispatchEvents.ThreadUpdate, "channel"],
+  [GatewayDispatchEvents.ThreadDelete, "channel"],
+  [GatewayDispatchEvents.GuildUpdate, "guild"],
+  [GatewayDispatchEvents.GuildEmojisUpdate, "guild-emojis"],
+  [GatewayDispatchEvents.GuildMemberAdd, "member"],
+  [GatewayDispatchEvents.GuildMemberRemove, "member"],
+  [GatewayDispatchEvents.GuildMemberUpdate, "member"],
+]);
+
 export class DiscordEntityCache {
   private readonly entries = new Map<string, CacheEntry<unknown>>();
   private lastSweepAt = 0;
@@ -69,37 +81,20 @@ export class DiscordEntityCache {
   }
 
   invalidateForGatewayEvent(type: string, data: unknown): void {
+    const kind = CACHE_KIND_BY_EVENT.get(type);
+    if (!kind) {
+      return;
+    }
     const raw = data && typeof data === "object" ? (data as Record<string, unknown>) : {};
-    const channelUpdate: string = GatewayDispatchEvents.ChannelUpdate;
-    const channelDelete: string = GatewayDispatchEvents.ChannelDelete;
-    const threadUpdate: string = GatewayDispatchEvents.ThreadUpdate;
-    const threadDelete: string = GatewayDispatchEvents.ThreadDelete;
-    const guildUpdate: string = GatewayDispatchEvents.GuildUpdate;
-    const guildEmojisUpdate: string = GatewayDispatchEvents.GuildEmojisUpdate;
-    const guildMemberAdd: string = GatewayDispatchEvents.GuildMemberAdd;
-    const guildMemberRemove: string = GatewayDispatchEvents.GuildMemberRemove;
-    const guildMemberUpdate: string = GatewayDispatchEvents.GuildMemberUpdate;
-    if (
-      type === channelUpdate ||
-      type === channelDelete ||
-      type === threadUpdate ||
-      type === threadDelete
-    ) {
-      this.deleteId("channel", raw.id);
-    }
-    if (type === guildUpdate) {
-      this.deleteId("guild", raw.id);
-    }
-    if (type === guildEmojisUpdate) {
-      this.deleteId("guild-emojis", raw.guild_id);
-    }
-    if (type === guildMemberAdd || type === guildMemberRemove || type === guildMemberUpdate) {
+    if (kind === "member") {
       const guildId = raw.guild_id;
       const user = raw.user && typeof raw.user === "object" ? (raw.user as { id?: unknown }) : {};
       if (typeof guildId === "string" && typeof user.id === "string") {
         this.entries.delete(`member:${guildId}:${user.id}`);
         this.entries.delete(`user:${user.id}`);
       }
+    } else {
+      this.deleteId(kind, kind === "guild-emojis" ? raw.guild_id : raw.id);
     }
   }
 

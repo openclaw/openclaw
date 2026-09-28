@@ -10,10 +10,10 @@ import type {
   ChatAttachment,
   ChatComposerMemoryFallback,
   ChatGoalDraftMode,
+  ChatReplyTarget,
 } from "../lib/chat/chat-types.ts";
 import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
-import type { LiveActivity } from "../pages/activity/live-activity.ts";
 import type { reviewPrivateComposerDraft } from "../pages/chat/components/private-composer-recovery-dialog.ts";
 import type { NewSessionDraftHandoff } from "../pages/new-session/draft-persistence.ts";
 import type { ControlUiPluginCapability } from "../plugins/control-ui-capability.ts";
@@ -24,6 +24,7 @@ import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import type { NativeChatDrafts } from "./native-bridge.ts";
+import type { NativeConversationBridge } from "./native-conversation-types.ts";
 import type { NativeDeviceSettingsCapability } from "./native-device-settings.ts";
 import type { NativeNotificationsCapability } from "./native-notifications.ts";
 import type { ApplicationOverlays } from "./overlays-types.ts";
@@ -92,6 +93,7 @@ export type ApplicationChatAttachmentHandoff = {
       message?: string;
       draftRevision?: number;
       goalMode?: ChatGoalDraftMode | null;
+      replyTarget?: ChatReplyTarget | null;
       mentions?: readonly HumanMention[];
       newSessionDraft?: NewSessionDraftHandoff;
       incognito?: boolean;
@@ -104,6 +106,7 @@ export type ApplicationChatAttachmentHandoff = {
     message?: string;
     draftRevision?: number;
     goalMode?: ChatGoalDraftMode | null;
+    replyTarget?: ChatReplyTarget | null;
     mentions?: readonly HumanMention[];
     newSessionDraft?: NewSessionDraftHandoff;
   } | null;
@@ -135,13 +138,13 @@ export type ApplicationContext<TRouteId extends string = RouteId> = {
   readonly sidebarAttention: SidebarAttentionStore;
   readonly runtimeConfig: RuntimeConfigCapability;
   readonly sessions: SessionCapability;
-  readonly liveActivity: LiveActivity;
   readonly placementStartup: ApplicationPlacementStartup;
   readonly plugins: ControlUiPluginCapability;
   readonly overlays: ApplicationOverlays;
   readonly navigation: ApplicationNavigationPreferences;
   readonly theme: ApplicationTheme;
   readonly nativeChatDrafts: NativeChatDrafts;
+  readonly nativeConversation?: NativeConversationBridge | null;
   readonly nativeDeviceSettings: NativeDeviceSettingsCapability | null;
   readonly nativeNotifications: NativeNotificationsCapability | null;
   readonly webPush: WebPushCapability;

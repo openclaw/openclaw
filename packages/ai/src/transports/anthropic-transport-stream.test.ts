@@ -14,6 +14,7 @@ import {
   getAiTransportHost,
   type AiInlineContentBlock,
 } from "../host.js";
+import { anthropicServerSideFallbackCases } from "../providers/anthropic-server-fallback.test-support.js";
 import { createZeroUsage } from "../usage.test-support.js";
 import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { createCompactionCapture } from "./anthropic-compaction-replay.js";
@@ -897,12 +898,9 @@ describe("anthropic transport stream", () => {
     );
   });
 
-  it.each([
-    { id: "claude-fable-5", name: "Claude Fable 5" },
-    { id: "claude-opus-5", name: "Claude Opus 5" },
-  ])(
+  it.each(anthropicServerSideFallbackCases)(
     "sends default server-side fallback params for direct $name API-key requests",
-    async (model) => {
+    async ({ optionHeaders, customBeta, ...model }) => {
       guardedFetchMock.mockResolvedValueOnce(
         createSseResponse([
           anthropicMessageStart({ id: "msg_fb", usage: { input_tokens: 1, output_tokens: 0 } }),
@@ -918,12 +916,13 @@ describe("anthropic transport stream", () => {
         } as AnthropicStreamContext,
         {
           apiKey: "sk-ant-api",
+          headers: optionHeaders,
         } as AnthropicStreamOptions,
       );
 
       expect(latestAnthropicRequest().payload.fallbacks).toBe("default");
       expect(latestAnthropicRequestHeaders().get("anthropic-beta")).toBe(
-        "fine-grained-tool-streaming-2025-05-14,server-side-fallback-2026-07-01,thinking-binding-controls-2026-08-01",
+        `${customBeta ? "files-api-2025-04-14" : "fine-grained-tool-streaming-2025-05-14"},server-side-fallback-2026-07-01,thinking-binding-controls-2026-08-01`,
       );
     },
   );

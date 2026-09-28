@@ -9,6 +9,49 @@ sidebarTitle: "Full Release Validation"
 
 The Full Release Validation umbrella, release publish, and Docker Release dispatch. Part of the [Release validation workflows](/ci/release-validation) index.
 
+## Mobile store releases
+
+`iOS Store Release` (`ios-release.yml`) and `Android Store Release`
+(`android-store-release.yml`) are separate manual workflows. Choose `main` and
+click **Run workflow**; neither workflow has input parameters. Each platform
+queues its own runs without cancelling an active upload.
+
+The workflows run the same commands available from a clean, current local
+`main` checkout: `pnpm ios:release:upload` and `pnpm android:release:upload`.
+Both freeze the source commit, plan the release using repository versions and
+current store state, generate platform release notes, then build, sign, and upload. Set
+`OPENAI_API_KEY` locally; Actions reads the repository secret with that name.
+Platform setup, signing, and store credentials are documented in each app's
+`fastlane/SETUP.md`.
+
+Release preparation stays outside tracked source files and creates no commits
+or pull requests. Successful upload records point at the original source SHA
+under `refs/openclaw/mobile-releases/`. Actions retains the platform plan,
+`release-notes.json`, and available signed binaries for 30 days. Inspect these
+artifacts and store state after a failure before starting another upload.
+App Review submission and Android production promotion remain manual.
+
+To preview notes without building or uploading, use a saved platform plan and a
+new output path:
+
+```bash
+pnpm mobile:release:notes -- generate --platform ios --plan /path/to/ios-plan.json --output /path/to/preview-notes.json
+```
+
+Use `--platform android` with `android-plan.json` for phone and Wear notes. The
+plan identifies the target version/build, exact source SHA, and public baseline
+builds. For a historical candidate, add `--source-sha <full-commit-sha>` matching
+that plan; the commit must exist locally. Existing output is validated and reused
+without a model call. Use a new output file to evaluate a different draft.
+
+Generation uses the OpenAI Responses API with structured output, source evidence
+extraction, and a separate factual review. It covers the app and bundled shared
+code, including Play-specific sources and Watch RTC. Drafts must fit the store's
+character limit, and a failed generation or review stops the upload. A model can
+still omit or misunderstand a change; inspect the saved notes in the run summary
+before manual public promotion. Notes are reproducible by retaining the artifact,
+not by expecting a fresh model request to return identical words.
+
 ## Full Release Validation
 
 `Full Release Validation` is the manual release umbrella. Every run binds an
@@ -73,8 +116,7 @@ regular beta and stable publishes from a protected lightweight
 `release-publish/<tooling-sha12>-<epoch>` tag at the frozen Tooling SHA after the
 release tag exists and after the OpenClaw npm preflight has succeeded (the preflight runs
 `pnpm plugins:sync:check` among its checks). The tag still selects the exact
-release commit, including a commit on `release/YYYY.M.PATCH`; Tideclaw alpha
-publishes keep using their matching alpha branch. For current validation runs,
+release commit, including a commit on `release/YYYY.M.PATCH`. For current validation runs,
 set `preflight_run_id` and `full_release_validation_run_id` to the same successful
 Full Release Validation run ID and pin `full_release_validation_run_attempt`.
 The publisher resolves the independent `Full Release Artifacts` producer from
@@ -91,7 +133,7 @@ secrets. Failed preparation, denied approval and cancellation cannot publish.
 
 Historical recovery may still supply a separate successful `OpenClaw NPM Release`
 preflight run ID alongside the matching successful Full Release Validation run
-and attempt. Create the tooling tag with the [release publish commands](/reference/RELEASING#regular-release-publish-automation);
+and attempt. Create the tooling tag with the [release publish commands](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/regular-release.md#qualify-publication-bytes);
 real core npm, plugin npm, or ClawHub publication from `main` is rejected before
 child dispatch. Docker-only recovery may still use `main`.
 
@@ -112,8 +154,8 @@ approval; core npm and GitHub release finalization do not wait for it. The whole
 parent can remain active after core publication while native qualification
 finishes. Existing full evidence and macOS's independent validation retain their
 native qualification contracts. A mismatched Android pin skips both native
-qualification and APK publication, with the pin, release train, and shared
-mobile cutter (`scripts/mobile-release-version.ts --prepare`) remedy recorded
+qualification and APK publication, with the pin, release train, and Android
+version pinning (`pnpm android:version:pin -- --from-gateway`) remedy recorded
 in the parent summary and release proof.
 Focused plugin-only repairs use `plugin_publish_scope=selected` with a nonempty
 package list. Plugin-only `all-publishable` runs require the same immutable npm
@@ -157,13 +199,14 @@ For nonpublish work, explicitly select
 publication selection; profile and filters still select the actual coverage.
 
 GitHub workflow dispatch refs must be branches or tags, not raw commit SHAs. The
-helper pushes a temporary `release-ci/<sha>-...` branch at a trusted Tooling
-SHA, passes the requested Validation SHA through `ref` and `expected_sha`, reuses
+helper first proves GitHub serves the exact Validation SHA by bare-SHA fetch in a
+fresh temporary repository, including in dry runs. It then pushes one immutable
+`release-ci/*` workflow ref at the trusted Tooling SHA, passes the exact Validation
+SHA through `ref` and `expected_sha`, reuses
 strict exact-target evidence when available, and verifies every child workflow
 `headSha` matches the Tooling SHA. Record that Tooling SHA once and never refresh
 it from moving `main`. Regular release branches accept only their final package
-version or a matching beta prerelease; Tideclaw alpha validation uses its exact
-alpha tag and matching alpha branch.
+version or a matching beta prerelease.
 
 `release_profile` controls live/provider breadth passed into release checks. The
 manual release workflows default to `stable`; use `full` only when you

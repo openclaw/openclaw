@@ -1,6 +1,3 @@
-/**
- * Orchestrates one agent attempt across embedded and CLI runtimes.
- */
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import {
@@ -29,15 +26,9 @@ import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-sess
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { SkillSnapshot } from "../../skills/types.js";
-import {
-  getGeneratedMediaTaskIdsForSessionKey,
-  hasNewGeneratedMediaTaskForSessionKey,
-} from "../../tasks/task-status-access.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import type { PreparedAgentRunAdmission } from "../admitted-run-context.js";
-import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
-import { ensureAuthProfileStore } from "../auth-profiles/store-runtime.js";
 import { resizeExecApprovalContinuationPrompt } from "../bash-tools.exec-approval-output.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
@@ -66,6 +57,10 @@ import type { ContextEngineLogicalTurnLease } from "../harness/context-engine-lo
 import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
+import {
+  getGeneratedMediaTaskIdsForSessionKey,
+  hasNewGeneratedMediaTaskForSessionKey,
+} from "../media-generation-activity.js";
 import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
 import type { ModelFallbackAttemptProvenance } from "../model-fallback.types.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
@@ -84,6 +79,8 @@ import {
 } from "../subagents/announce/subagent-announce-handoff.js";
 import { isRuntimeToolAllowed, isToolAllowedByPolicies } from "../tool-policy-match.js";
 import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "../tool-result-limits.js";
+import { resolveHarnessAuthProfileSelection } from "./attempt-auth-selection.js";
+import { emitAgentAttemptRuntimeStart } from "./attempt-callbacks.js";
 import {
   buildClaudeCliFallbackContextPrelude,
   claudeCliSessionTranscriptHasContent,
@@ -98,95 +95,6 @@ import {
 import type { AgentCommandOpts, AgentRunContext } from "./types.js";
 
 const log = createSubsystemLogger("agents/agent-command");
-
-type HarnessAuthProfileSelection = {
-  authProfileId?: string;
-  authProfileIdSource?: "auto" | "user";
-  authProfileProvider: string;
-  authProfileMode?: string;
-};
-
-function resolveProfileAuthFromStore(params: { agentDir: string; profileId: string | undefined }): {
-  provider?: string;
-  mode?: string;
-} {
-  const profileId = params.profileId?.trim();
-  if (!profileId) {
-    return {};
-  }
-  const credential = ensureAuthProfileStore(params.agentDir, {
-    allowKeychainPrompt: false,
-    externalCliProfileIds: [profileId],
-  }).profiles[profileId];
-  return { provider: credential?.provider, mode: credential?.type };
-}
-
-function resolveHarnessAuthProfileSelection(params: {
-  config: OpenClawConfig;
-  agentDir: string;
-  workspaceDir: string;
-  provider: string;
-  authProfileProvider: string;
-  sessionAuthProfileId?: string;
-  sessionAuthProfileSource?: "auto" | "user";
-  harnessId?: string;
-  harnessRuntime?: string;
-  metadataSnapshot?: PluginMetadataSnapshot;
-  providerAuthAliasesEnabled?: boolean;
-  allowHarnessAuthProfileForwarding: boolean;
-}): HarnessAuthProfileSelection {
-  const sessionAuthProfileId = params.sessionAuthProfileId?.trim();
-  if (sessionAuthProfileId) {
-    const profileAuth = resolveProfileAuthFromStore({
-      agentDir: params.agentDir,
-      profileId: sessionAuthProfileId,
-    });
-    return {
-      authProfileId: sessionAuthProfileId,
-      authProfileIdSource: params.sessionAuthProfileSource,
-      authProfileProvider: profileAuth.provider ?? params.authProfileProvider,
-      authProfileMode: profileAuth.mode,
-    };
-  }
-
-  if (!params.allowHarnessAuthProfileForwarding) {
-    return { authProfileProvider: params.authProfileProvider };
-  }
-
-  const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
-    provider: params.provider,
-    authProfileProvider: params.authProfileProvider,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
-    providerAuthAliasesEnabled: params.providerAuthAliasesEnabled,
-    harnessId: params.harnessId,
-    harnessRuntime: params.harnessRuntime,
-    allowHarnessAuthProfileForwarding: params.allowHarnessAuthProfileForwarding,
-  });
-  const harnessAuthProvider = runtimeAuthPlan.harnessAuthProvider;
-  if (!harnessAuthProvider) {
-    return { authProfileProvider: params.authProfileProvider };
-  }
-
-  const store = ensureAuthProfileStore(params.agentDir, {
-    allowKeychainPrompt: false,
-    externalCliProviderIds: [harnessAuthProvider],
-  });
-  const authProfileId = resolveAuthProfileOrder({
-    cfg: params.config,
-    store,
-    provider: harnessAuthProvider,
-  })[0];
-
-  return authProfileId
-    ? {
-        authProfileId,
-        authProfileIdSource: "auto",
-        authProfileProvider: harnessAuthProvider,
-      }
-    : { authProfileProvider: params.authProfileProvider };
-}
 
 function isClaudeCliProvider(provider: string): boolean {
   return provider.trim().toLowerCase() === "claude-cli";
@@ -264,13 +172,6 @@ export function runAgentAttempt(params: {
     authProfileIdSource?: "auto" | "user";
   }) => void;
 }) {
-  const onRuntimeActivity = (info: { phase: string }) => {
-    // CLI preparation and child launch do not prove a native turn. Parsed
-    // assistant/tool activity does, even when the backend omits lifecycle events.
-    if (info.phase === "assistant_output_started" || info.phase === "tool_execution_started") {
-      void params.onAgentEvent({ stream: "lifecycle", data: { phase: "start" } });
-    }
-  };
   const sessionAuthProfileId = params.sessionEntry?.authProfileOverride?.trim();
   const sessionAuthProfileSource = resolveCollapsedSessionAuthPinSource(params.sessionEntry);
   // An explicit session choice owns the conversation. Otherwise the profile
@@ -578,12 +479,16 @@ export function runAgentAttempt(params: {
       runTimeoutOverrideMs: params.runTimeoutOverrideMs,
       runId: params.runId,
       lifecycleGeneration: params.lifecycleGeneration,
-      onExecutionPhase: onRuntimeActivity,
+      onExecutionPhase: (info) => emitAgentAttemptRuntimeStart(info, params.onAgentEvent),
       lane: params.opts.lane,
+      swarmExecutionLane: params.opts.swarmExecutionLane,
       extraSystemPrompt: params.opts.extraSystemPrompt,
       inputProvenance: params.opts.inputProvenance,
       skillLibraryAuthoring: params.opts.skillLibraryAuthoring,
       sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
+      taskSuggestionDeliveryMode: params.opts.taskSuggestionDeliveryMode,
+      clientCaps: params.opts.clientCaps,
+      gatewayUiCommandTarget: params.opts.gatewayUiCommandTarget,
       media: params.opts.media,
       skillsSnapshot: params.skillsSnapshot,
       streamParams: params.opts.streamParams,
@@ -718,7 +623,16 @@ export function runAgentAttempt(params: {
               })) ?? params.sessionEntry;
           }
         };
-        const mediaTaskIdsBefore = getGeneratedMediaTaskIdsForSessionKey(params.sessionKey);
+        const mediaTaskIdsBefore = getGeneratedMediaTaskIdsForSessionKey(
+          params.sessionKey,
+          params.sessionAgentId,
+        );
+        const hasNewMediaTask = () =>
+          hasNewGeneratedMediaTaskForSessionKey(
+            params.sessionKey,
+            mediaTaskIdsBefore,
+            params.sessionAgentId,
+          );
         await prepareCliSessionBinding();
         // Retain the cleared binding as the preparation candidate so missing-transcript
         // recovery can reseed history without resuming the stale CLI session.
@@ -830,13 +744,7 @@ export function runAgentAttempt(params: {
             ...(forkStoreParams && !forkCliSessionOnResume
               ? {
                   onBeforeForkedCliSessionRetry: async (retry) => {
-                    if (
-                      hasNewGeneratedMediaTaskForSessionKey(
-                        params.sessionKey,
-                        mediaTaskIdsBefore,
-                      ) ||
-                      retry.sessionId !== cliSessionBinding?.sessionId
-                    ) {
+                    if (hasNewMediaTask() || retry.sessionId !== cliSessionBinding?.sessionId) {
                       return false;
                     }
 
@@ -856,10 +764,7 @@ export function runAgentAttempt(params: {
               ? {
                   onBeforeFreshCliSessionRetry: async (retry) => {
                     if (
-                      hasNewGeneratedMediaTaskForSessionKey(
-                        params.sessionKey,
-                        mediaTaskIdsBefore,
-                      ) ||
+                      hasNewMediaTask() ||
                       getCliSessionBinding(
                         loadSessionEntry({
                           agentId: params.sessionAgentId,
@@ -903,10 +808,7 @@ export function runAgentAttempt(params: {
               error: err,
               binding: failedCliSessionBinding,
               bindingReplacedDuringRun: failedCliSessionId !== cliSessionBinding?.sessionId,
-              hasNewGeneratedMediaTask: hasNewGeneratedMediaTaskForSessionKey(
-                params.sessionKey,
-                mediaTaskIdsBefore,
-              ),
+              hasNewGeneratedMediaTask: hasNewMediaTask(),
             }) &&
             failedCliSessionId &&
             mutableCliSessionStore
@@ -978,6 +880,7 @@ export function runAgentAttempt(params: {
     images: shouldForwardImagesToEmbedded ? params.opts.images : undefined,
     imageOrder: shouldForwardImagesToEmbedded ? params.opts.imageOrder : undefined,
     clientTools: params.opts.clientTools,
+    toolBindings: params.opts.toolBindings,
     provider: embeddedAgentProvider,
     requestedRouteResolution: "resolved",
     modelThinkingCapability: params.modelThinkingCapability,

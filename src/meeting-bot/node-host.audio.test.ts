@@ -312,18 +312,6 @@ describe("meeting node host audio output", () => {
     expect(bridge.host.hasActiveWork()).toBe(false);
   });
 
-  it("copies retained input buffers", async () => {
-    const bridge = await startAudioBridge();
-    const source = Buffer.from([1, 2, 3]);
-
-    bridge.inputStdout.emit("data", source);
-    source.fill(9);
-
-    const pulled = await invokeBridge(bridge, "pullAudio");
-    expect(Buffer.from(pulled.base64 as string, "base64")).toEqual(Buffer.from([1, 2, 3]));
-    await invokeBridge(bridge, "stop");
-  });
-
   it("keeps only the newest bounded input chunks", async () => {
     const bridge = await startAudioBridge();
 

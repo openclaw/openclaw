@@ -71,6 +71,45 @@ function visibleRows(
 }
 
 describe("transcript input order", () => {
+  it.each(["steer", "interrupt"] as const)(
+    "keeps consecutive sends in submission order while a %s ACK is pending",
+    (queueMode) => {
+      const first = { ...queuedInput("First input", 10, "sending"), queueMode };
+      const second = { ...queuedInput("Second input", 20, "sending"), queueMode };
+      resetChatThreadState("input-order");
+      try {
+        expect(visibleRows({ queue: [first] }, buildCachedChatItems)).toEqual([
+          "Existing conversation",
+          "First input",
+        ]);
+        const expected = ["Existing conversation", "First input", "Second input"];
+        expect(visibleRows({ queue: [first, second] }, buildCachedChatItems)).toEqual(expected);
+        // Custody can retire the successor's outbox row before the first ACK.
+        expect(
+          visibleRows(
+            { queue: [first], pendingInputs: [acceptedInput("Second input", 30)] },
+            buildCachedChatItems,
+          ),
+        ).toEqual(expected);
+        const canonical = [first, second].map((input, index) => ({
+          role: "user",
+          content: input.text,
+          timestamp: input.createdAt,
+          __openclaw: { id: input.id, seq: index + 2, idempotencyKey: input.sendRunId },
+        }));
+        expect(
+          visibleRows({ messages: [canonical[1]], queue: [first] }, buildCachedChatItems),
+        ).toEqual(["First input", "Second input"]);
+        expect(visibleRows({ messages: canonical, queue: [] }, buildCachedChatItems)).toEqual([
+          "First input",
+          "Second input",
+        ]);
+      } finally {
+        resetChatThreadState("input-order");
+      }
+    },
+  );
+
   it.each(["failed", "unconfirmed", "waiting-reconnect"] as const)(
     "keeps an earlier %s input ahead of a newer submitting input",
     (sendState) => {
@@ -199,4 +238,45 @@ describe("transcript input order", () => {
       }
     },
   );
+
+  it("reuses loaded history when a render rebuilds its pending input list", () => {
+    let messageReads = 0;
+    const loaded = new Proxy(
+      {
+        role: "assistant",
+        content: "Loaded history",
+        timestamp: 1,
+        __openclaw: { id: "loaded", seq: 1 },
+      },
+      {
+        get(target, key, receiver) {
+          messageReads += 1;
+          return Reflect.get(target, key, receiver);
+        },
+      },
+    );
+    const accepted = acceptedInput("Later input", 30);
+    const input: BuildChatItemsProps = {
+      paneId: "input-order",
+      sessionKey: "agent:main:input-order",
+      messages: [loaded],
+      toolMessages: [],
+      streamSegments: [],
+      stream: null,
+      streamStartedAt: null,
+      showToolCalls: true,
+    };
+    resetChatThreadState("input-order");
+    try {
+      const first = buildCachedChatItems({ ...input, pendingInputs: [accepted] });
+      messageReads = 0;
+      // renderChat derives this list on every render, including scroll-driven ones.
+      const next = buildCachedChatItems({ ...input, pendingInputs: [accepted] });
+
+      expect(next).toBe(first);
+      expect(messageReads).toBe(0);
+    } finally {
+      resetChatThreadState("input-order");
+    }
+  });
 });

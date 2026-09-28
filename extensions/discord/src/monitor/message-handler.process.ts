@@ -290,7 +290,6 @@ export async function processDiscordMessage(
       token,
       accountId,
       rest: reactions.deliveryRest,
-      runtime,
       replyToMode,
       textLimit,
       maxLinesPerMessage,

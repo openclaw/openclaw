@@ -1,6 +1,3 @@
-/**
- * Browser CLI inspection commands for screenshots and snapshots.
- */
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Command } from "commander";
@@ -19,6 +16,7 @@ import {
   BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
   parseBrowserPositiveIntegerOption,
+  runBrowserCliCommand,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
 
@@ -45,8 +43,9 @@ function parseBrowserChoiceOption<const T extends string>(
   label: string,
   choices: readonly T[],
 ): T | undefined {
-  if ((choices as readonly string[]).includes(value)) {
-    return value as T;
+  const choice = choices.find((candidate) => candidate === value);
+  if (choice !== undefined) {
+    return choice;
   }
   defaultRuntime.error(danger(`Invalid ${label}: expected ${choices.join(" or ")}`));
   defaultRuntime.exit(1);
@@ -69,7 +68,6 @@ function resolveBrowserInspectTimeout(
   return { parent: { ...parent, timeout: String(timeoutMs) }, timeoutMs };
 }
 
-/** Registers Browser screenshot and snapshot commands. */
 export function registerBrowserInspectCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -95,7 +93,7 @@ export function registerBrowserInspectCommands(
       if (type === undefined) {
         return;
       }
-      try {
+      await runBrowserCliCommand(async () => {
         const request = resolveBrowserInspectTimeout(cmd, parent, opts.timeout);
         const result = await callBrowserRequest<{ path: string }>(request.parent, {
           method: "POST",
@@ -116,10 +114,7 @@ export function registerBrowserInspectCommands(
           return;
         }
         defaultRuntime.log(shortenHomePath(result.path));
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+      }, "inline");
     });
 
   browser
@@ -170,7 +165,7 @@ export function registerBrowserInspectCommands(
       ) {
         return;
       }
-      try {
+      await runBrowserCliCommand(async () => {
         const request = resolveBrowserInspectTimeout(cmd, parent, opts.timeout);
         const query: Record<string, string | number | boolean | undefined> = {
           format,
@@ -232,9 +227,8 @@ export function registerBrowserInspectCommands(
           return;
         }
 
-        const nodes = "nodes" in result ? result.nodes : [];
         defaultRuntime.log(
-          nodes
+          result.nodes
             .map((n) => {
               const indent = "  ".repeat(Math.min(20, n.depth));
               const name = n.name ? ` "${n.name}"` : "";
@@ -243,9 +237,6 @@ export function registerBrowserInspectCommands(
             })
             .join("\n"),
         );
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+      }, "inline");
     });
 }

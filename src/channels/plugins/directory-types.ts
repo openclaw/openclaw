@@ -1,8 +1,3 @@
-/**
- * Channel directory input types.
- *
- * Defines config/account/query parameters shared by directory-capable plugins.
- */
 import type { OpenClawConfig } from "../../config/types.js";
 
 /**

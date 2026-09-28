@@ -263,8 +263,8 @@ export function createCronRunReceiptSettlementOwner(callbacks: {
   }
 
   return {
-    claim: (receiptId: string) => {
-      locallyOwnedReceipts.add(receiptId);
+    claimLocalCronRunReceiptOwnership: (handle: CronRunReceiptHandle) => {
+      locallyOwnedReceipts.add(handle.receiptId);
     },
     owns: (receiptId: string) => locallyOwnedReceipts.has(receiptId),
     trackCronRunReceiptSettlement,

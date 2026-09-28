@@ -17,10 +17,8 @@ import { extractOriginalFilename, saveMediaBuffer } from "../../media/store.js";
 import { formatGeneratedAttachmentLines } from "../generated-attachments.js";
 import { ToolInputError } from "./common.js";
 import { persistGeneratedMediaBatch } from "./generated-media-batch-persistence.js";
-import {
-  imageGenerationTaskLifecycle,
-  type ImageGenerationTaskHandle,
-} from "./media-generate-background.js";
+import type { MediaGenerationTaskHandle } from "./media-generate-background-shared.js";
+import { imageGenerationTaskLifecycle } from "./media-generate-background.js";
 import {
   buildMediaGenerateToolExecutionResult,
   describeMediaGenerationResult,
@@ -54,7 +52,7 @@ export async function executeImageGenerationJob(params: {
   ssrfPolicy?: SsrFPolicy;
   filename?: string;
   loadedReferenceImages: LoadedMediaToolReference<ImageGenerationSourceImage>[];
-  taskHandle?: ImageGenerationTaskHandle | null;
+  taskHandle?: MediaGenerationTaskHandle | null;
   autoProviderFallback?: boolean;
   providers: ImageGenerationProvider[];
 }) {

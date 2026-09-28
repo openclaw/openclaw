@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 // CLI bootstrap imports this lightweight owner before creating command scopes;
@@ -7,4 +8,20 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 export const runInPluginSourceCaptureContext = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginSourceCaptureContext"),
   () => AsyncLocalStorage.snapshot(),
+);
+
+/** Capture custody can outlive a caller's disposable database inspection state. */
+export const pluginSourceCaptureStateDir = resolveGlobalSingleton(
+  Symbol.for("openclaw.pluginSourceCaptureStateDir"),
+  () => new AsyncLocalStorage<string>(),
+);
+
+/** Executable CLI ownership follows profile selection to each acquired capture root. */
+export const pluginSourceCaptureMaintenance = resolveGlobalSingleton(
+  Symbol.for("openclaw.pluginSourceCaptureMaintenance"),
+  () =>
+    new AsyncLocalStorage<{
+      scheduler: GatewayScheduler;
+      run: (operation: () => Promise<void>) => Promise<void>;
+    }>(),
 );

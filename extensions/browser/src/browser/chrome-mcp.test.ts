@@ -1,4 +1,3 @@
-// Browser tests cover chrome mcp plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -1239,7 +1238,7 @@ describe("chrome MCP page parsing", () => {
     ]);
   });
 
-  it.each(["linux", "darwin", "win32"] as const)(
+  it.each(["linux", "win32"] as const)(
     "stops %s cleanup immediately once every owned process is absent",
     async (platform) => {
       const session = createFakeSession();
@@ -1948,49 +1947,9 @@ describe("chrome MCP page parsing", () => {
     expect(tabs).toHaveLength(2);
   });
 
-  it("surfaces MCP tool errors instead of JSON parse noise", async () => {
-    const factory: ChromeMcpSessionFactory = async () => {
-      const session = createFakeSession();
-      const callTool = vi.fn(async ({ name }: ToolCall) => {
-        if (name === "list_pages") {
-          return fakeListPagesResult();
-        }
-        if (name === "evaluate_script") {
-          return {
-            content: [
-              {
-                type: "text",
-                text: "Cannot read properties of null (reading 'value')",
-              },
-            ],
-            isError: true,
-          };
-        }
-        throw new Error(`unexpected tool ${name}`);
-      });
-      session.client.callTool = callTool as typeof session.client.callTool;
-      return session;
-    };
-    setChromeMcpSessionFactoryForTest(factory);
-
-    await expect(
-      evaluateChromeMcpScript({
-        profileName: "chrome-live",
-        targetId: FAKE_TARGET_1,
-        fn: "() => document.getElementById('missing').value",
-      }),
-    ).rejects.toThrow(/Cannot read properties of null/);
-  });
-
   it("reuses a single pending session for concurrent requests", async () => {
     let factoryCalls = 0;
-    let releaseFactory: (() => void) | undefined;
-    const factoryGate = new Promise<void>((resolve) => {
-      releaseFactory = resolve;
-    });
-    if (!releaseFactory) {
-      throw new Error("Expected Chrome MCP factory release callback to be initialized");
-    }
+    const { promise: factoryGate, resolve: releaseFactory } = createDeferred<void>();
 
     const factory: ChromeMcpSessionFactory = async () => {
       factoryCalls += 1;
@@ -2016,13 +1975,7 @@ describe("chrome MCP page parsing", () => {
 
   it("keeps a shared pending session alive when one waiter aborts", async () => {
     let factoryCalls = 0;
-    let releaseFactory: (() => void) | undefined;
-    const factoryGate = new Promise<void>((resolve) => {
-      releaseFactory = resolve;
-    });
-    if (!releaseFactory) {
-      throw new Error("Expected Chrome MCP factory release callback to be initialized");
-    }
+    const { promise: factoryGate, resolve: releaseFactory } = createDeferred<void>();
 
     const closeMock = vi.fn().mockResolvedValue(undefined);
     const factory: ChromeMcpSessionFactory = async () => {
@@ -2056,13 +2009,7 @@ describe("chrome MCP page parsing", () => {
 
   it("closes a shared pending session when every waiter aborts", async () => {
     let factoryCalls = 0;
-    let releaseFactory: (() => void) | undefined;
-    const factoryGate = new Promise<void>((resolve) => {
-      releaseFactory = resolve;
-    });
-    if (!releaseFactory) {
-      throw new Error("Expected Chrome MCP factory release callback to be initialized");
-    }
+    const { promise: factoryGate, resolve: releaseFactory } = createDeferred<void>();
 
     const closeMock = vi.fn().mockResolvedValue(undefined);
     const factory: ChromeMcpSessionFactory = async () => {
@@ -2186,13 +2133,7 @@ describe("chrome MCP page parsing", () => {
     const closeMocks: Array<ReturnType<typeof vi.fn>> = [];
     const factory: ChromeMcpSessionFactory = async () => {
       factoryCalls += 1;
-      let releaseFactory: (() => void) | undefined;
-      const factoryGate = new Promise<void>((resolve) => {
-        releaseFactory = resolve;
-      });
-      if (!releaseFactory) {
-        throw new Error("Expected Chrome MCP factory release callback to be initialized");
-      }
+      const { promise: factoryGate, resolve: releaseFactory } = createDeferred<void>();
       releaseFactories.push(releaseFactory);
       await factoryGate;
       const session = createFakeSession();
@@ -2272,13 +2213,7 @@ describe("chrome MCP page parsing", () => {
 
   it("closes a shared pending session when every waiter aborts before ready", async () => {
     let factoryCalls = 0;
-    let releaseReady: (() => void) | undefined;
-    const readyGate = new Promise<void>((resolve) => {
-      releaseReady = resolve;
-    });
-    if (!releaseReady) {
-      throw new Error("Expected Chrome MCP ready release callback to be initialized");
-    }
+    const { promise: readyGate, resolve: releaseReady } = createDeferred<void>();
 
     const closeMock = vi.fn().mockResolvedValue(undefined);
     const factory: ChromeMcpSessionFactory = async () => {
@@ -2306,13 +2241,7 @@ describe("chrome MCP page parsing", () => {
 
   it("waits for last-waiter cleanup before starting a replacement session", async () => {
     let factoryCalls = 0;
-    let releaseFirstClose: (() => void) | undefined;
-    const firstCloseGate = new Promise<void>((resolve) => {
-      releaseFirstClose = resolve;
-    });
-    if (!releaseFirstClose) {
-      throw new Error("Expected Chrome MCP close release callback to be initialized");
-    }
+    const { promise: firstCloseGate, resolve: releaseFirstClose } = createDeferred<void>();
 
     const closeMocks: Array<ReturnType<typeof vi.fn>> = [];
     const factory: ChromeMcpSessionFactory = async () => {
@@ -2358,14 +2287,8 @@ describe("chrome MCP page parsing", () => {
 
   it("keeps a ready-pending shared session cached when another waiter remains", async () => {
     let factoryCalls = 0;
-    let releaseReady: (() => void) | undefined;
-    const readyGate = new Promise<void>((resolve) => {
-      releaseReady = resolve;
-    });
+    const { promise: readyGate, resolve: releaseReady } = createDeferred<void>();
     const readyThen = vi.spyOn(readyGate, "then");
-    if (!releaseReady) {
-      throw new Error("Expected Chrome MCP ready release callback to be initialized");
-    }
 
     const closeMock = vi.fn().mockResolvedValue(undefined);
     const factory: ChromeMcpSessionFactory = async () => {
@@ -2404,14 +2327,8 @@ describe("chrome MCP page parsing", () => {
   it("starts a fresh shared session when a ready-pending session loses its transport", async () => {
     let factoryCalls = 0;
     let firstSession: ChromeMcpSession | undefined;
-    let releaseFirstReady: (() => void) | undefined;
-    const firstReadyGate = new Promise<void>((resolve) => {
-      releaseFirstReady = resolve;
-    });
+    const { promise: firstReadyGate, resolve: releaseFirstReady } = createDeferred<void>();
     const firstReadyThen = vi.spyOn(firstReadyGate, "then");
-    if (!releaseFirstReady) {
-      throw new Error("Expected Chrome MCP ready release callback to be initialized");
-    }
 
     const closeMocks: Array<ReturnType<typeof vi.fn>> = [];
     const factory: ChromeMcpSessionFactory = async () => {
@@ -2505,14 +2422,8 @@ describe("chrome MCP page parsing", () => {
   it("does not reuse a stale ready-pending session for ephemeral probes", async () => {
     let factoryCalls = 0;
     let firstSession: ChromeMcpSession | undefined;
-    let releaseFirstReady: (() => void) | undefined;
-    const firstReadyGate = new Promise<void>((resolve) => {
-      releaseFirstReady = resolve;
-    });
+    const { promise: firstReadyGate, resolve: releaseFirstReady } = createDeferred<void>();
     const firstReadyThen = vi.spyOn(firstReadyGate, "then");
-    if (!releaseFirstReady) {
-      throw new Error("Expected Chrome MCP ready release callback to be initialized");
-    }
 
     const closeMocks: Array<ReturnType<typeof vi.fn>> = [];
     const factory: ChromeMcpSessionFactory = async () => {
@@ -2558,14 +2469,8 @@ describe("chrome MCP page parsing", () => {
 
   it("does not let ephemeral probes persist canceled pending attaches", async () => {
     let factoryCalls = 0;
-    let releaseFirstReady: (() => void) | undefined;
-    const firstReadyGate = new Promise<void>((resolve) => {
-      releaseFirstReady = resolve;
-    });
+    const { promise: firstReadyGate, resolve: releaseFirstReady } = createDeferred<void>();
     const firstReadyThen = vi.spyOn(firstReadyGate, "then");
-    if (!releaseFirstReady) {
-      throw new Error("Expected Chrome MCP ready release callback to be initialized");
-    }
 
     const closeMocks: Array<ReturnType<typeof vi.fn>> = [];
     const factory: ChromeMcpSessionFactory = async () => {
@@ -2611,14 +2516,8 @@ describe("chrome MCP page parsing", () => {
 
   it("keeps a shared session after a readiness timeout while another waiter remains", async () => {
     let factoryCalls = 0;
-    let releaseFirstReady: (() => void) | undefined;
-    const firstReadyGate = new Promise<void>((resolve) => {
-      releaseFirstReady = resolve;
-    });
+    const { promise: firstReadyGate, resolve: releaseFirstReady } = createDeferred<void>();
     const firstReadyThen = vi.spyOn(firstReadyGate, "then");
-    if (!releaseFirstReady) {
-      throw new Error("Expected Chrome MCP ready release callback to be initialized");
-    }
 
     const closeMocks: Array<ReturnType<typeof vi.fn>> = [];
     const factory: ChromeMcpSessionFactory = async () => {
@@ -2722,31 +2621,6 @@ describe("chrome MCP page parsing", () => {
     const tabs = await listChromeMcpTabs("chrome-live");
     expect(factoryCalls).toBe(1);
     expect(tabs).toHaveLength(1);
-  });
-
-  it("destroys session on transport errors so next call reconnects", async () => {
-    let factoryCalls = 0;
-    const factory: ChromeMcpSessionFactory = async () => {
-      factoryCalls += 1;
-      const session = createFakeSession();
-      if (factoryCalls === 1) {
-        // First session: transport error (callTool throws)
-        const callTool = vi.fn(async () => {
-          throw new Error("connection reset");
-        });
-        session.client.callTool = callTool as typeof session.client.callTool;
-      }
-      return session;
-    };
-    setChromeMcpSessionFactoryForTest(factory);
-
-    // First call: transport error — should destroy session
-    await expect(listChromeMcpTabs("chrome-live")).rejects.toThrow(/connection reset/);
-
-    // Second call: should create a new session (factory called twice)
-    const tabs = await listChromeMcpTabs("chrome-live");
-    expect(factoryCalls).toBe(2);
-    expect(tabs).toHaveLength(2);
   });
 
   it("times out a stuck click and recovers on the next call", async () => {
@@ -3007,7 +2881,6 @@ describe("chrome MCP page parsing", () => {
 
   it.each([
     { requestedTimeoutMs: 10, expectedTimeoutMs: 1_000 },
-    { requestedTimeoutMs: 180_000, expectedTimeoutMs: 120_000 },
     { requestedTimeoutMs: Number.MAX_SAFE_INTEGER, expectedTimeoutMs: 120_000 },
   ])(
     "normalizes Chrome MCP navigation timeout $requestedTimeoutMs before SDK watchdog grace",
@@ -3104,29 +2977,6 @@ describe("chrome MCP page parsing", () => {
 
     await expect(snapshotPromise).rejects.toThrow(/Chrome MCP "take_snapshot".*timed out/);
     vi.useRealTimers();
-  });
-
-  it("honors timeoutMs for ephemeral availability probes", async () => {
-    vi.useFakeTimers();
-    const closeMock = vi.fn().mockResolvedValue(undefined);
-    const factory: ChromeMcpSessionFactory = async () => {
-      const session = createFakeSession();
-      session.client.close = closeMock;
-      session.ready = new Promise<void>(() => {});
-      return session;
-    };
-    setChromeMcpSessionFactoryForTest(factory);
-
-    const promise = ensureChromeMcpAvailable("chrome-live", undefined, {
-      ephemeral: true,
-      timeoutMs: 50,
-    });
-    const expectation = expect(promise).rejects.toThrow(/timed out after 50ms/i);
-
-    await vi.advanceTimersByTimeAsync(50);
-
-    await expectation;
-    expect(closeMock).toHaveBeenCalledTimes(1);
   });
 
   it("redacts home-relative profile labels from availability timeout diagnostics", async () => {

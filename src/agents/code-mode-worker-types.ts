@@ -1,5 +1,10 @@
 import type { CodeModeJsonSource, CodeModeOutputSource } from "./code-mode-json.js";
-import type { CodeModeApiVirtualFile } from "./code-mode-namespaces.js";
+import type {
+  CodeModeApiVirtualFile,
+  CodeModeNamespaceDescriptor,
+} from "./code-mode-namespaces.js";
+
+export type { CodeModeNamespaceDescriptor } from "./code-mode-namespaces.js";
 
 // Also bounds queued ordinary guest requests independently of configured in-flight slots.
 export const MAX_CODE_MODE_PENDING_TOOL_CALLS = 128;
@@ -37,19 +42,6 @@ export type PendingBridgeRequest = {
 };
 
 export type SettledBridgeRequest = { id: string; ok: boolean; json: string };
-
-type SerializedCodeModeNamespaceValue =
-  | { kind: "array"; items: SerializedCodeModeNamespaceValue[] }
-  | { kind: "function"; path: string[] }
-  | { kind: "object"; entries: Array<[string, SerializedCodeModeNamespaceValue]> }
-  | { kind: "value"; value: unknown };
-
-export type CodeModeNamespaceDescriptor = {
-  id: string;
-  globalName: string;
-  description?: string;
-  scope: SerializedCodeModeNamespaceValue;
-};
 
 type CodeModeWorkerInput<State> =
   | {
@@ -126,7 +118,7 @@ type CodeModeWorkerOutcome<Output, Value, State> = { networkContentObserved?: tr
         | "timeout"
         | "snapshot_limit_exceeded"
         | "internal_error";
-      failurePhase: Extract<CodeModeFailurePhase, "input" | "guest">;
+      failurePhase: Extract<CodeModeFailurePhase, "input" | "guest" | "bridge">;
       bridgeDispatchStarted: false;
       output: Output;
     }

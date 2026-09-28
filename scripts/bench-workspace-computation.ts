@@ -283,8 +283,8 @@ async function childMain(fixturePath: string): Promise<void> {
   const manifests =
     fixture.scenario === "manifest"
       ? await importOwner<
-          typeof import("../src/gateway/worker-environments/workspace-reconcile-core.js")
-        >(fixture.source, "src/gateway/worker-environments/workspace-reconcile-core.ts")
+          typeof import("../src/gateway/worker-environments/workspace-manifest-worker.js")
+        >(fixture.source, "src/gateway/worker-environments/workspace-manifest-worker.ts")
       : undefined;
   const staging =
     fixture.scenario === "delta" ||
@@ -367,7 +367,7 @@ async function childMain(fixturePath: string): Promise<void> {
             };
           }
           if (manifests) {
-            const result = await manifests.readActualWorkspaceManifest({
+            const result = await manifests.captureWorkspaceManifest({
               root,
               baseCommit: null,
               signal: AbortSignal.timeout(fixture.timeoutMs),

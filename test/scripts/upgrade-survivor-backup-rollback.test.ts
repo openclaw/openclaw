@@ -439,9 +439,13 @@ describe("published backup rollback proof", () => {
 });
 
 describe.skipIf(process.platform === "win32")("survivor rollback ordering", () => {
-  it.each([false, true])(
-    "runs rollback after candidate proof and propagates rollback failure=%s",
-    (fail) => {
+  it.each([
+    { baselineVersion: "2026.9.4", fail: false },
+    { baselineVersion: "2026.9.4", fail: true },
+    { baselineVersion: "2026.9.2", fail: false },
+  ])(
+    "runs $baselineVersion rollback after candidate proof and propagates rollback failure=$fail",
+    ({ baselineVersion, fail }) => {
       const root = tempDirs.make("survivor-rollback-order-");
       const prelude = join(root, "bash-env");
       // Keep the real runner's phase ordering, traps and summary. No package,
@@ -454,11 +458,11 @@ describe.skipIf(process.platform === "win32")("survivor rollback ordering", () =
     CURRENT_PHASE="$1"
     printf '%s\\n' "$CURRENT_PHASE" >>"$HOME/events"
     case "$CURRENT_PHASE" in
-      install-baseline) baseline_version="2026.9.4" ;;
+      install-baseline) baseline_version="$FIXTURE_BASELINE_VERSION" ;;
       update-candidate) candidate_version="2026.9.5"; installed_version="2026.9.5" ;;
       verify-backup-rollback)
         if [ "$FIXTURE_FAIL" = "1" ]; then return 43; fi
-        printf '{"status":"passed","baselineVersion":"2026.9.4"}\\n' >"$ARTIFACT_ROOT/backup-rollback.json"
+        printf '{"status":"passed","baselineVersion":"%s"}\\n' "$baseline_version" >"$ARTIFACT_ROOT/backup-rollback.json"
         ;;
     esac
   }
@@ -479,10 +483,11 @@ trap 'case "$BASH_COMMAND" in "phase "*) install_fixture_phases ;; esac' DEBUG
           OPENCLAW_CONFIG_PATH: join(root, "state", "openclaw.json"),
           OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: join(root, "runtime"),
           OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: summaryFile,
-          OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.9.4",
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE: `openclaw@${baselineVersion}`,
           OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "legacy-operator-state",
           BASH_ENV: prelude,
           FIXTURE_FAIL: fail ? "1" : "0",
+          FIXTURE_BASELINE_VERSION: baselineVersion,
         },
       });
       const phases = readFileSync(join(root, "events"), "utf8").trim().split("\n");
@@ -504,12 +509,15 @@ trap 'case "$BASH_COMMAND" in "phase "*) install_fixture_phases ;; esac' DEBUG
       if (fail) {
         expect(phases.at(-1)).toBe("verify-backup-rollback");
         expect(phases).not.toContain("assert-restored-index-rollback");
-      } else {
+      } else if (baselineVersion === "2026.9.4") {
         expect(phases.slice(-2)).toEqual([
           "verify-backup-rollback",
           "assert-restored-index-rollback",
         ]);
+      } else {
+        expect(phases.slice(-2)).toEqual(["verify-backup-rollback", "verify-sole-plugin-policy"]);
       }
+      expect(phases.includes("capture-sole-plugin-policy")).toBe(baselineVersion === "2026.9.2");
       expect(result.status, result.stderr).toBe(fail ? 43 : 0);
       expect(readJson(summaryFile)).toMatchObject({
         status: fail ? "failed" : "passed",

@@ -249,6 +249,7 @@ export async function resolveSlackCommandIngress(params: {
   ctx: SlackMonitorContext;
   teamId?: string;
   senderId: string;
+  senderAuthentication?: "verified" | "asserted";
   senderName?: string;
   channelType: SlackIngressChannelType;
   channelId: string;
@@ -284,6 +285,7 @@ export async function resolveSlackCommandIngress(params: {
   return await createSlackIngressResolver(params.ctx).message({
     subject: createSlackIngressSubject({
       senderId: params.senderId,
+      senderAuthentication: params.senderAuthentication,
       senderName: params.senderName,
       teamId,
     }),

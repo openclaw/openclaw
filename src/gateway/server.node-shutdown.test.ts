@@ -243,7 +243,7 @@ test.for(["direct", "restart"] as const)(
             },
           });
           const placements = createWorkerSessionPlacementStore();
-          seedActivePlacement(placements, { environmentId, ownerEpoch: attached.ownerEpoch });
+          await seedActivePlacement(placements, { environmentId, ownerEpoch: attached.ownerEpoch });
           expect(placements.get(REQUEST.sessionId)).toMatchObject({
             state: "active",
             turnClaim: null,

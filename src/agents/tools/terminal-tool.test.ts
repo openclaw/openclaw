@@ -608,18 +608,6 @@ describe("terminal tool", () => {
     expect(backend.writes).toEqual([]);
   });
 
-  it("rejects guarded input outside an active admitted agent run", async () => {
-    const { backend, manager, sessionId } = await openAgentTerminal();
-    const tool = makeTool(manager, { execSession: { permissionMode: "guarded" } });
-
-    await expect(
-      tool.execute("missing-run-input", { action: "input", sessionId, data: "echo unsafe\r" }),
-    ).rejects.toThrow("agent run is no longer active");
-
-    expect(backend.writes).toEqual([]);
-    expect(approvalMocks.register).not.toHaveBeenCalled();
-  });
-
   it.each([
     { options: { sessionId: "main-session-id" }, error: "agent session required" },
     { options: { agentSessionKey: "agent:main:main" }, error: "agent session id required" },

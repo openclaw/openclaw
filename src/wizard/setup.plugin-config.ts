@@ -14,11 +14,9 @@ import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
 
-/** A discovered plugin with promptable uiHints. */
 export type ConfigurablePlugin = {
   id: string;
   name: string;
-  /** uiHints from the plugin manifest, keyed by config field name. */
   uiHints: Record<string, PluginConfigUiHint>;
   /** JSON schema from the plugin manifest (used for type/enum info). */
   jsonSchema?: JsonSchemaObject;
@@ -115,10 +113,6 @@ function parseJsonNumberInput(value: string): number | undefined {
   }
 }
 
-/**
- * Discover plugins that have non-advanced uiHints fields.
- * Returns only plugins that have at least one promptable field.
- */
 export function discoverConfigurablePlugins(params: {
   manifestPlugins: ReadonlyArray<{
     id: string;
@@ -152,10 +146,6 @@ export function discoverConfigurablePlugins(params: {
   return result.toSorted((a, b) => a.name.localeCompare(b.name));
 }
 
-/**
- * Discover plugins with unconfigured non-advanced fields (for onboard flow).
- * Returns only plugins where at least one promptable field has no value yet.
- */
 export function discoverUnconfiguredPlugins(
   params: Parameters<typeof discoverConfigurablePlugins>[0] & { config: OpenClawConfig },
 ): ConfigurablePlugin[] {
@@ -185,10 +175,6 @@ async function listEnabledConfigurableManifestPlugins(params: {
   });
 }
 
-/**
- * Prompt the user to configure a single plugin's fields via uiHints.
- * Returns the updated config with plugin values applied.
- */
 async function promptPluginFields(params: {
   plugin: ConfigurablePlugin;
   config: OpenClawConfig;
@@ -328,10 +314,6 @@ async function promptPluginFields(params: {
   };
 }
 
-/**
- * Run the plugin configuration step for the onboard wizard.
- * Shows unconfigured plugin fields and prompts the user.
- */
 export async function setupPluginConfig(params: {
   config: OpenClawConfig;
   prompter: WizardPrompter;
@@ -387,10 +369,6 @@ export async function setupPluginConfig(params: {
   return config;
 }
 
-/**
- * Run the plugin configuration step for the configure wizard.
- * Shows all configurable plugins and all their non-advanced fields.
- */
 export async function configurePluginConfig(params: {
   config: OpenClawConfig;
   prompter: WizardPrompter;

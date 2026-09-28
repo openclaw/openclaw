@@ -1,3 +1,4 @@
+import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 // Resolves model suppression metadata declared by plugin manifests.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -112,23 +113,6 @@ function normalizeSuppressionHost(host: string): string {
   return normalizeLowercaseStringOrEmpty(host).replace(/\.+$/, "");
 }
 
-function resolveConfiguredProviderValue(params: {
-  provider: string;
-  config?: OpenClawConfig;
-}): ModelProviderConfig | undefined {
-  const providers = params.config?.models?.providers;
-  if (!providers) {
-    return undefined;
-  }
-  for (const [providerId, entry] of Object.entries(providers)) {
-    if (normalizeLowercaseStringOrEmpty(providerId) !== params.provider) {
-      continue;
-    }
-    return entry;
-  }
-  return undefined;
-}
-
 function manifestSuppressionMatchesConditions(params: {
   suppression: PreparedManifestSuppression;
   provider: string;
@@ -146,10 +130,10 @@ function manifestSuppressionMatchesConditions(params: {
   if (entry.retirement && allowedHosts && !params.baseUrl) {
     return false;
   }
-  const configuredProvider = resolveConfiguredProviderValue({
-    provider: params.provider,
-    config: params.config,
-  });
+  const configuredProvider = findNormalizedProviderValue(
+    params.config?.models?.providers,
+    params.provider,
+  );
   if (allowedApis) {
     const effectiveApi =
       params.api !== undefined
@@ -320,7 +304,7 @@ export function buildManifestBuiltInModelSuppressionResolver(params: {
       if (declaredProviders.has(provider)) {
         return false;
       }
-      const configured = resolveConfiguredProviderValue({ provider, config: params.config });
+      const configured = findNormalizedProviderValue(params.config?.models?.providers, provider);
       const model = findConfiguredProviderModel(
         configured,
         provider,

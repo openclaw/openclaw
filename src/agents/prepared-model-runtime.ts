@@ -259,13 +259,6 @@ async function loadPreparedModelRuntimeOwner<T>(
     if (getBlockingReplacement()) {
       continue;
     }
-    if (!activated) {
-      return await projectPublishedModelRuntimeOwner(
-        input,
-        preparedModelRuntimeLeaseContext,
-        project,
-      );
-    }
     try {
       return await projectPublishedModelRuntimeOwner(
         input,
@@ -273,7 +266,7 @@ async function loadPreparedModelRuntimeOwner<T>(
         project,
       );
     } catch (error) {
-      if (!(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
+      if (!activated || !(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
         throw error;
       }
       // A concurrent publication boundary may retire the standalone owner between build and read.
@@ -287,6 +280,11 @@ export function getPreparedModelRuntimeSnapshot(
   rawInput: PreparedModelRuntimeInput,
 ): PreparedModelRuntimeSnapshot | undefined {
   return getBlockingReplacement() ? undefined : readPublishedModelRuntimeSnapshot(owners, rawInput);
+}
+
+/** Reads the owner-held publication barrier without starting catalog acquisition. */
+export function getPendingPreparedModelRuntimeReplacement(): Promise<void> | undefined {
+  return getBlockingReplacement()?.promise;
 }
 
 /** Publishes one owner from an explicit startup/activation lifecycle boundary. */

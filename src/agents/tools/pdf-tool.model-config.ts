@@ -1,8 +1,3 @@
-/**
- * PDF tool model configuration resolver.
- *
- * Selects explicit PDF, image-model, native PDF, vision, or text-extraction fallback models.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   providerSupportsNativePdfDocument,
@@ -20,6 +15,12 @@ import {
 } from "./image-tool.helpers.js";
 import { hasProviderAuthForTool, resolveDefaultModelRef } from "./model-config.helpers.js";
 import { coercePdfModelConfig } from "./pdf-tool.helpers.js";
+
+export type PdfToolActiveModel = {
+  provider: string;
+  model: string;
+  supportsImages: boolean;
+};
 
 function formatProviderModelRef(providerId: string, modelId: string): string {
   const slash = modelId.indexOf("/");
@@ -196,6 +197,7 @@ export function resolvePdfModelConfigForTool(params: {
   agentDir: string;
   workspaceDir?: string;
   authStore?: AuthProfileStore;
+  activeModel?: PdfToolActiveModel;
 }): ImageModelConfig | null {
   const explicitPdf = coercePdfModelConfig(params.cfg);
   if (explicitPdf.primary?.trim() || (explicitPdf.fallbacks?.length ?? 0) > 0) {
@@ -223,14 +225,28 @@ export function resolvePdfModelConfigForTool(params: {
     authStore: params.authStore,
   });
 
-  const fallbacks: string[] = [];
-  const addFallback = (ref: string) => {
-    const trimmed = ref.trim();
-    if (trimmed && !fallbacks.includes(trimmed)) {
-      fallbacks.push(trimmed);
-    }
-  };
-
+  const activeProvider = params.activeModel?.provider.trim();
+  const activeModel = params.activeModel?.model.trim();
+  const activeFallback =
+    params.activeModel?.supportsImages === true &&
+    activeProvider &&
+    activeModel &&
+    resolveDocumentMediaModel({
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
+      providerId: activeProvider,
+      document: "pdf",
+      mode: "image",
+    }) !== false &&
+    hasProviderAuthForTool({
+      provider: activeProvider,
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
+      agentDir: params.agentDir,
+      authStore: params.authStore,
+    })
+      ? formatProviderModelRef(activeProvider, activeModel)
+      : null;
   let preferred: string | null = null;
 
   const providerOk = hasProviderAuthForTool({
@@ -343,14 +359,15 @@ export function resolvePdfModelConfigForTool(params: {
     preferred = fallbackCandidates[0] ?? null;
   }
 
+  // Preserve every existing native/auto candidate decision. The admitted session model
+  // only fills the previous no-model gap when it can inspect images and has usable auth.
+  preferred ??= activeFallback;
+
   if (preferred?.trim()) {
-    for (const candidate of fallbackCandidates) {
-      if (candidate !== preferred) {
-        addFallback(candidate);
-      }
-    }
-    const pruned = fallbacks.filter((ref) => ref !== preferred);
-    return { primary: preferred, ...(pruned.length > 0 ? { fallbacks: pruned } : {}) };
+    const fallbacks = [...new Set(fallbackCandidates.map((ref) => ref.trim()))].filter(
+      (ref) => ref && ref !== preferred,
+    );
+    return { primary: preferred, ...(fallbacks.length > 0 ? { fallbacks } : {}) };
   }
 
   return null;

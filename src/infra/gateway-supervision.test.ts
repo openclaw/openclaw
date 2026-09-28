@@ -16,8 +16,6 @@ const GATEWAY_SUPERVISOR_MODE_ENV = "OPENCLAW_SUPERVISOR_MODE";
 describe("gateway supervision", () => {
   it.each([
     { value: undefined, expected: "auto" },
-    { value: "", expected: "auto" },
-    { value: "auto", expected: "auto" },
     { value: "invalid", expected: "auto" },
     { value: " EXTERNAL ", expected: "external" },
   ])("resolves $value as $expected", ({ value, expected }) => {

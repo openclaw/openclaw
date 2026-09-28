@@ -1,7 +1,3 @@
-/**
- * Browser doctor checks for Chrome MCP readiness and legacy managed-profile
- * residue cleanup.
- */
 import fs from "node:fs";
 import path from "node:path";
 import { formatCliCommand, note } from "openclaw/plugin-sdk/cli-runtime";
@@ -33,7 +29,6 @@ type ExistingSessionProfile = {
   userDataDir?: string;
 };
 
-/** Legacy managed clawd profile paths that can be archived by doctor --fix. */
 export type LegacyClawdBrowserProfileResidue = {
   legacyProfileDir: string;
   legacyUserDataDir: string;
@@ -70,14 +65,6 @@ function collectBrowserDoctorProfiles(cfg: OpenClawConfig) {
   };
 }
 
-function resolveManagedBrowserProfileDir(configDir: string, profileName: string): string {
-  return path.join(configDir, "browser", profileName);
-}
-
-function resolveManagedBrowserUserDataDir(configDir: string, profileName: string): string {
-  return path.join(resolveManagedBrowserProfileDir(configDir, profileName), "user-data");
-}
-
 function isLegacyClawdProfileConfigured(cfg: OpenClawConfig, legacyProfileDir: string): boolean {
   const browser = asNullableRecord(cfg.browser);
   if (!browser) {
@@ -105,20 +92,13 @@ function isLegacyClawdProfileConfigured(cfg: OpenClawConfig, legacyProfileDir: s
   return false;
 }
 
-/** Detects unmanaged legacy clawd browser profile residue on disk. */
 export function detectLegacyClawdBrowserProfileResidue(
   cfg: OpenClawConfig,
   deps?: BrowserDoctorFilesystemDeps,
 ): LegacyClawdBrowserProfileResidue | null {
   const configDir = deps?.configDir ?? CONFIG_DIR;
-  const legacyProfileDir = resolveManagedBrowserProfileDir(
-    configDir,
-    LEGACY_CLAWD_BROWSER_PROFILE_NAME,
-  );
-  const legacyUserDataDir = resolveManagedBrowserUserDataDir(
-    configDir,
-    LEGACY_CLAWD_BROWSER_PROFILE_NAME,
-  );
+  const legacyProfileDir = path.join(configDir, "browser", LEGACY_CLAWD_BROWSER_PROFILE_NAME);
+  const legacyUserDataDir = path.join(legacyProfileDir, "user-data");
   const pathExists = deps?.pathExists ?? fs.existsSync;
   if (!pathExists(legacyProfileDir) && !pathExists(legacyUserDataDir)) {
     return null;
@@ -140,9 +120,11 @@ export function detectLegacyClawdBrowserProfileResidue(
   return {
     legacyProfileDir,
     legacyUserDataDir,
-    canonicalUserDataDir: resolveManagedBrowserUserDataDir(
+    canonicalUserDataDir: path.join(
       configDir,
+      "browser",
       DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
+      "user-data",
     ),
   };
 }
@@ -157,7 +139,6 @@ function formatLegacyClawdBrowserProfileResidueNote(
   ].join("\n");
 }
 
-/** Emits Browser doctor notes for Chrome MCP, managed Chrome, and legacy residue readiness. */
 export async function noteChromeMcpBrowserReadiness(
   cfg: OpenClawConfig,
   deps?: {
@@ -359,7 +340,6 @@ export async function maybeRepairOwnedChromeExtensionNativeHosts(): Promise<{
   };
 }
 
-/** Archives legacy clawd browser profile residue when doctor --fix is requested. */
 export async function maybeArchiveLegacyClawdBrowserProfileResidue(
   cfg: OpenClawConfig,
   deps?: BrowserDoctorFilesystemDeps,

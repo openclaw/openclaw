@@ -190,6 +190,8 @@ export class ShellGatewayOwner {
       return;
     }
     if (event.event === "config.changed") {
+      // Bootstrap owns upload policy independently of an open configuration editor.
+      void this.host.context?.config.refresh();
       // A local settings draft owns config conflicts; external snapshots must not overwrite it.
       const runtimeConfig = this.host.context?.runtimeConfig;
       if (runtimeConfig && !runtimeConfig.state.configFormDirty) {
@@ -273,7 +275,7 @@ export class ShellGatewayOwner {
       new CustomEvent(UI_COMMAND_EVENT, { detail: commandParams, cancelable: true }),
     );
     if (!handled && (command.kind === "navigate" || command.kind === "split")) {
-      this.host.selectChatSession(command.sessionKey);
+      this.host.selectChatSession(command.sessionKey, commandParams.agentId);
     }
   }
 

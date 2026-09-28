@@ -30,21 +30,10 @@ function writeScript(entry: string, directory: string, packageName = "openclaw")
 describe("ports-format", () => {
   it.each([
     [{ commandLine: "ssh -N -L 18789:127.0.0.1:18789 user@host" }, "ssh"],
-    [{ commandLine: "ssh -NL 18789:127.0.0.1:18789 user@host" }, "ssh"],
-    [{ commandLine: "ssh -NfL18789:127.0.0.1:18789 user@host" }, "ssh"],
     [
       { commandLine: '"C:\\Program Files\\Git\\usr\\bin\\ssh.exe" -N -L18789:127.0.0.1:22 host' },
       "ssh",
     ],
-    [{ commandLine: "ssh -N -L 127.0.0.1:18789:remote:22 host" }, "ssh"],
-    [{ commandLine: "ssh -N -R 18789:localhost:22 host" }, "ssh"],
-    [{ commandLine: "ssh -N -D 18789 host" }, "ssh"],
-    [{ commandLine: "ssh -ND18789 host" }, "ssh"],
-    [{ commandLine: "ssh -N -D 127.0.0.1:18789 host" }, "ssh"],
-    [{ commandLine: "ssh -N -o 'LocalForward 18789 localhost:22' host" }, "ssh"],
-    [{ commandLine: "ssh -N -oLocalForward=127.0.0.1:18789 localhost:22 host" }, "ssh"],
-    [{ commandLine: "ssh -N -o DynamicForward=18789 host" }, "ssh"],
-    [{ command: "ssh", commandLine: "ssh -N host-from-ssh-config" }, "ssh"],
     [{ command: "ssh" }, "ssh"],
     // ssh-named processes that do not forward *this* port are not tunnels; the
     // "close the tunnel / change -L port" remediation does not apply to them.

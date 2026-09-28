@@ -87,6 +87,16 @@ describe("assertMxcReadiness", () => {
     );
   });
 
+  test("rejects an unsupported tier even if the probe returns success", () => {
+    const deps = depsFor({
+      probe: probeOutput({ tier: "none", error: "isolation unavailable" }),
+    });
+
+    expect(() => assertMxcReadiness({ executablePath: MXC_EXE, platform: "win32", deps })).toThrow(
+      /host probe returned an unexpected result.*--probe for host details/u,
+    );
+  });
+
   test("rejects hosts where the MXC probe cannot run", () => {
     const deps = depsFor({ probe: new Error("Command failed: wxc-exec.exe --probe") });
 

@@ -73,9 +73,6 @@ export async function prepareCodexAttemptRoute(
         threadId: resourceState.thread.threadId,
       });
     }
-    if (!resourceState.turnRoute) {
-      throw new Error("codex app-server turn route was not reserved");
-    }
     if (!resourceState.routeActivated) {
       if (!resourceState.nativeSubagentMonitor) {
         await registerNativeSubagentMonitor(resourceState.thread.threadId);

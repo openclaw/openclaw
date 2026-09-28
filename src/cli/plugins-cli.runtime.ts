@@ -15,6 +15,13 @@ import { formatConfigIssueLines } from "../config/issue-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitDiagnosticsTimelineEvent } from "../infra/diagnostics-timeline.js";
 import { resolvePluginInstallSources } from "../plugins/install-channel-specs.js";
+import type {
+  HostedOfficialExternalPluginCatalogLoadResult,
+  HostedOfficialExternalPluginCatalogTrustState,
+  OfficialExternalPluginCatalogEntry,
+  OfficialExternalPluginCatalogFeed,
+} from "../plugins/official-external-plugin-catalog.types.js";
+import type { PluginPackageInstall } from "../plugins/package-manifest.types.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime } from "../runtime.js";
@@ -38,10 +45,6 @@ const loadPluginsStatus = createLazyRuntimeModule(() => import("../plugins/statu
 
 function countEnabledPlugins(plugins: readonly { enabled: boolean }[]): number {
   return plugins.filter((plugin) => plugin.enabled).length;
-}
-
-function formatRegistryState(state: "missing" | "fresh" | "stale"): string {
-  return state === "fresh" ? theme.success(state) : theme.warn(state);
 }
 
 function reportMissingPlugin(id: string) {
@@ -69,18 +72,6 @@ function isErroredConfigSelectedShadowDiagnostic(params: {
       plugin.id === params.entry.pluginId &&
       plugin.origin === "config" &&
       plugin.status === "error",
-  );
-}
-
-function formatConfiguredRuntimePluginInstallSpec(params: {
-  clawhubSpec?: string;
-  defaultChoice?: string;
-  npmSpec?: string;
-  pluginId: string;
-}): string {
-  return (
-    resolvePluginInstallSources({ npmSpec: params.npmSpec, clawhubSpec: params.clawhubSpec })[0]
-      ?.spec ?? params.pluginId
   );
 }
 
@@ -155,7 +146,7 @@ function collectConfiguredRuntimePluginWarnings(params: {
         `- Configured runtime "${runtimeId}" requires the ${candidate.label} plugin, but "${runtimeId}" is disabled. ${formatDisabledRuntimePluginGuidance({ cfg: params.cfg, pluginId: runtimeId })}`,
       ];
     }
-    const installSpec = formatConfiguredRuntimePluginInstallSpec(candidate);
+    const installSpec = resolvePluginInstallSources(candidate)[0]?.spec ?? candidate.pluginId;
     return [
       `- Configured runtime "${runtimeId}" requires the ${candidate.label} plugin, but no enabled "${runtimeId}" plugin was found. Run "openclaw doctor --fix" to install ${installSpec}, or install it manually with "openclaw plugins install ${installSpec}".`,
     ];
@@ -340,7 +331,7 @@ export async function runPluginsRegistryCommand(opts: PluginRegistryOptions): Pr
     ? countEnabledPlugins(inspection.persisted.plugins)
     : 0;
   const lines = [
-    `${theme.muted("State:")} ${formatRegistryState(inspection.state)}`,
+    `${theme.muted("State:")} ${inspection.state === "fresh" ? theme.success(inspection.state) : theme.warn(inspection.state)}`,
     `${theme.muted("Current:")} ${currentEnabled}/${currentTotal} enabled plugins`,
     `${theme.muted("Persisted:")} ${persistedEnabled}/${persistedTotal} enabled plugins`,
   ];
@@ -532,50 +523,25 @@ export async function runPluginsDoctorCommand(opts: PluginDoctorOptions = {}): P
   }
 }
 
-type MarketplaceRefreshPayload = {
-  source: "hosted" | "hosted-snapshot" | "bundled-fallback";
+type MarketplaceRefreshPayload = Pick<
+  HostedOfficialExternalPluginCatalogLoadResult,
+  "source" | "metadata"
+> & {
   entries: number;
-  feed?: {
-    id: string;
-    generatedAt: string;
-    sequence: number;
-  };
-  metadata?: {
-    url: string;
-    status: number;
-    etag?: string;
-    lastModified?: string;
-    checksum?: string;
-  };
+  feed?: Pick<OfficialExternalPluginCatalogFeed, "id" | "generatedAt" | "sequence">;
   snapshot?: {
     savedAt: string;
   };
-  trust?: MarketplaceFeedTrustPayload;
+  trust?: HostedOfficialExternalPluginCatalogTrustState;
   error?: string;
 };
 
-type MarketplaceFeedTrustPayload = {
-  mode: "signed";
-  signedBy: string;
-  signatureCount: number;
-  threshold: number;
-  verifiedAt: string;
-};
-
-type MarketplaceEntryPayload = {
-  id?: string;
+type MarketplaceEntryPayload = Pick<
+  OfficialExternalPluginCatalogEntry,
+  "id" | "kind" | "name" | "version"
+> & {
   label: string;
-  kind?: string;
-  name?: string;
-  version?: string;
-  install?: {
-    defaultChoice?: string;
-    clawhubSpec?: string;
-    npmSpec?: string;
-    localPath?: string;
-    expectedIntegrity?: string;
-    minHostVersion?: string;
-  };
+  install?: PluginPackageInstall;
 };
 
 type MarketplaceFeedTelemetryOptions = {
@@ -668,11 +634,7 @@ function emitMarketplaceFeedTelemetry(params: {
 }
 
 function buildMarketplaceRefreshPayload(
-  result: Awaited<
-    ReturnType<
-      typeof import("../plugins/official-external-plugin-catalog.js").loadConfiguredHostedOfficialExternalPluginCatalogEntries
-    >
-  >,
+  result: HostedOfficialExternalPluginCatalogLoadResult,
   feedUrl?: string,
 ): MarketplaceRefreshPayload {
   const payload: MarketplaceRefreshPayload = {
@@ -740,18 +702,10 @@ function redactMarketplaceOutputText(
   return redacted;
 }
 
-function formatMarketplaceEntryInstall(entry: MarketplaceEntryPayload): string | undefined {
-  return (
-    resolvePluginInstallSources({
-      npmSpec: entry.install?.npmSpec,
-      clawhubSpec: entry.install?.clawhubSpec,
-    })[0]?.spec ?? entry.install?.localPath
-  );
-}
-
 function formatMarketplaceEntryLine(entry: MarketplaceEntryPayload): string {
   const id = entry.id ?? entry.name ?? entry.label;
-  const install = formatMarketplaceEntryInstall(entry);
+  const install =
+    resolvePluginInstallSources(entry.install ?? {})[0]?.spec ?? entry.install?.localPath;
   const suffix = install ? " " + theme.muted(install) : "";
   const label = entry.label !== id ? " " + theme.muted(entry.label) : "";
   return theme.command(id) + label + suffix;
@@ -767,7 +721,7 @@ function formatMarketplaceRefreshSource(source: MarketplaceRefreshPayload["sourc
   return theme.warn("bundled fallback");
 }
 
-function formatMarketplaceFeedTrust(trust: MarketplaceFeedTrustPayload): string {
+function formatMarketplaceFeedTrust(trust: HostedOfficialExternalPluginCatalogTrustState): string {
   return `${trust.mode} by ${trust.signedBy} (${trust.signatureCount}/${trust.threshold}) verified ${trust.verifiedAt}`;
 }
 
@@ -822,10 +776,6 @@ function normalizeMarketplaceExpectedSha256(value: string | undefined): string |
     return `sha256:${prefixed[1].toLowerCase()}`;
   }
   return trimmed;
-}
-
-function formatPinnedMarketplaceRefreshFailure(payload: MarketplaceRefreshPayload): string {
-  return `Pinned marketplace feed refresh did not accept a fresh hosted payload (source: ${payload.source}).`;
 }
 
 /** List entries from the configured OpenClaw marketplace feed. */
@@ -956,7 +906,9 @@ export async function runPluginMarketplaceRefreshCommand(
     defaultRuntime.error(applicationFailure);
   }
   if (failedPinnedRefresh) {
-    defaultRuntime.error(formatPinnedMarketplaceRefreshFailure(payload));
+    defaultRuntime.error(
+      `Pinned marketplace feed refresh did not accept a fresh hosted payload (source: ${payload.source}).`,
+    );
   }
   if (applicationFailure || failedPinnedRefresh) {
     return defaultRuntime.exit(1);

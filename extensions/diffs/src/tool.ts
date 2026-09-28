@@ -1,4 +1,3 @@
-// Diffs plugin module implements tool behavior.
 import fs from "node:fs/promises";
 import { optionalFiniteNumberSchema, stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -197,73 +196,38 @@ export function createDiffsTool(params: {
         throw error;
       });
 
-      if (isArtifactOnlyMode(mode)) {
-        const screenshotter = await loadScreenshotter(config);
-        const artifactFile = await renderDiffArtifactFile({
-          screenshotter,
-          store: params.store,
-          html: requireRenderedHtml(rendered.imageHtml, "image"),
-          theme,
-          image,
-          ttlMs,
-          context: artifactContext,
-        });
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: buildFileArtifactMessage({
-                format: image.format,
-                filePath: artifactFile.path,
-              }),
-            },
-          ],
-          details: buildArtifactDetails({
-            baseDetails: {
-              changed: true,
-              ...(artifactFile.artifactId ? { artifactId: artifactFile.artifactId } : {}),
-              ...(artifactFile.expiresAt ? { expiresAt: artifactFile.expiresAt } : {}),
-              title: rendered.title,
-              inputKind: rendered.inputKind,
-              fileCount: rendered.fileCount,
-              mode,
-              ...(artifactContext ? { context: artifactContext } : {}),
-            },
-            artifactFile,
-            image,
-          }),
-        };
-      }
-
-      const artifact = await params.store.createArtifact({
-        html: requireRenderedHtml(rendered.html, "viewer"),
-        title: rendered.title,
-        inputKind: rendered.inputKind,
-        fileCount: rendered.fileCount,
-        ttlMs,
-        context: artifactContext,
-      });
-
-      const viewerUrl = buildViewerUrl({
-        config,
-        viewerPath: artifact.viewerPath,
-        baseUrl: normalizeBaseUrl(toolParams.baseUrl),
-        viewerBaseUrl: params.viewerBaseUrl,
-      });
-
-      const baseDetails = {
-        changed: true,
-        artifactId: artifact.id,
-        viewerUrl,
-        viewerPath: artifact.viewerPath,
-        title: artifact.title,
-        expiresAt: artifact.expiresAt,
-        inputKind: artifact.inputKind,
-        fileCount: artifact.fileCount,
-        mode,
-        ...(artifactContext ? { context: artifactContext } : {}),
-      };
+      const artifact = isArtifactOnlyMode(mode)
+        ? undefined
+        : await params.store.createArtifact({
+            html: requireRenderedHtml(rendered.html, "viewer"),
+            title: rendered.title,
+            inputKind: rendered.inputKind,
+            fileCount: rendered.fileCount,
+            ttlMs,
+            context: artifactContext,
+          });
+      const viewerUrl = artifact
+        ? buildViewerUrl({
+            config,
+            viewerPath: artifact.viewerPath,
+            baseUrl: normalizeBaseUrl(toolParams.baseUrl),
+            viewerBaseUrl: params.viewerBaseUrl,
+          })
+        : undefined;
+      const viewerDetails = artifact
+        ? {
+            changed: true,
+            artifactId: artifact.id,
+            viewerUrl,
+            viewerPath: artifact.viewerPath,
+            title: artifact.title,
+            expiresAt: artifact.expiresAt,
+            inputKind: artifact.inputKind,
+            fileCount: artifact.fileCount,
+            mode,
+            ...(artifactContext ? { context: artifactContext } : {}),
+          }
+        : undefined;
 
       if (mode === "view") {
         return {
@@ -273,7 +237,7 @@ export function createDiffsTool(params: {
               text: `Diff viewer ready.\n${viewerUrl}`,
             },
           ],
-          details: baseDetails,
+          details: viewerDetails,
         };
       }
 
@@ -301,7 +265,16 @@ export function createDiffsTool(params: {
             },
           ],
           details: buildArtifactDetails({
-            baseDetails,
+            baseDetails: viewerDetails ?? {
+              changed: true,
+              ...(artifactFile.artifactId ? { artifactId: artifactFile.artifactId } : {}),
+              ...(artifactFile.expiresAt ? { expiresAt: artifactFile.expiresAt } : {}),
+              title: rendered.title,
+              inputKind: rendered.inputKind,
+              fileCount: rendered.fileCount,
+              mode,
+              ...(artifactContext ? { context: artifactContext } : {}),
+            },
             artifactFile,
             image,
           }),
@@ -317,7 +290,7 @@ export function createDiffsTool(params: {
               },
             ],
             details: {
-              ...baseDetails,
+              ...viewerDetails,
               fileError: errorMessage,
             },
           };

@@ -44,26 +44,11 @@ describe("A2A gateway account lifecycle", () => {
     const fixture = createA2aGatewayFixture();
     const lifecycle = startA2aGatewayAccount(fixture.ctx);
 
-    expect(fixture.registry.httpRoutes).toEqual([
-      expect.objectContaining({
-        path: "/.well-known/agent-card.json",
-        auth: "plugin",
-        match: "exact",
-        pluginId: "a2a",
-      }),
-      expect.objectContaining({
-        path: "/.well-known/agent.json",
-        auth: "plugin",
-        match: "exact",
-        pluginId: "a2a",
-      }),
-      expect.objectContaining({
-        path: "/a2a/v1",
-        auth: "plugin",
-        match: "exact",
-        pluginId: "a2a",
-      }),
-    ]);
+    expect(fixture.registry.httpRoutes).toEqual(
+      ["/.well-known/agent-card.json", "/.well-known/agent.json", "/a2a/v1"].map((path) =>
+        expect.objectContaining({ path, auth: "plugin", match: "exact", pluginId: "a2a" }),
+      ),
+    );
     expect(fixture.ctx.getStatus()).toEqual(
       expect.objectContaining({ lifecycle: "ready", connected: true }),
     );

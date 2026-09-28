@@ -9,8 +9,12 @@ import {
   McpError,
 } from "@modelcontextprotocol/sdk/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { routeLogsToStderr } from "../logging/console.js";
-import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
+import {
+  getBoundLegacyPluginSdkResourceHost,
+  LegacyPluginSdkResourceHost,
+} from "../plugins/legacy-sdk-resource-host.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginToolRegistryAcquisition } from "../plugins/tools.js";
 import { AsyncWorkScope, runWithTrackedCancellation } from "../shared/async-work-scope.js";
@@ -154,7 +158,10 @@ export async function serveRegisteredToolsMcpServer(params: {
   acquireRegistry: () => Promise<PluginToolRegistryAcquisition>;
   createServer: (tools: AnyAgentTool[], sdkResourceHost: LegacyPluginSdkResourceHost) => Server;
 }): Promise<void> {
+  const existingHost = getBoundLegacyPluginSdkResourceHost();
+  const scheduler = existingHost ? existingHost.scheduler : new GatewayScheduler();
   const sdkResourceHost = new LegacyPluginSdkResourceHost();
+  sdkResourceHost.bindScheduler(scheduler);
   let acquisition: PluginToolRegistryAcquisition | undefined;
 
   const failures: unknown[] = [];
@@ -169,6 +176,11 @@ export async function serveRegisteredToolsMcpServer(params: {
     });
   } catch (error) {
     failures.push(error);
+  }
+  if (!existingHost) {
+    await scheduler.stop().catch((error: unknown) => {
+      failures.push(error);
+    });
   }
   try {
     await sdkResourceHost.run(async () => {

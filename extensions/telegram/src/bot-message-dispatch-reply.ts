@@ -2,10 +2,9 @@ import {
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
-import {
-  collectReplyMediaEntries,
-  type LivePreviewDeliveryResult,
-  type OutboundPayloadPlan,
+import type {
+  LivePreviewDeliveryResult,
+  OutboundPayloadPlan,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import {
@@ -34,7 +33,6 @@ import {
   rotateAnswerLaneForNewMessage,
   splitTextIntoLaneSegments,
   takeQueuedAnswerBlockRotation,
-  waitForDraftEvents,
 } from "./bot-message-dispatch-draft.js";
 import {
   applyTextToPayload,
@@ -43,9 +41,8 @@ import {
   formatTelegramGroupThreadReply,
 } from "./bot-message-dispatch-payload.js";
 import { pushToolProgress } from "./bot-message-dispatch-progress.js";
-import { deduplicateBlockSentMedia } from "./bot-message-dispatch.media-dedup.js";
+import { deduplicateBlockSentMedia, trackBlockMedia } from "./bot-message-dispatch.media-dedup.js";
 import type {
-  TelegramBufferedFinalSettlement,
   TelegramDispatchTurn as Turn,
   TelegramReplyStateSlice,
 } from "./bot-message-dispatch.types.js";
@@ -57,7 +54,6 @@ import {
 } from "./button-types.js";
 import {
   buildTelegramErrorScopeKey,
-  isSilentErrorPolicy,
   resolveTelegramErrorPolicy,
   shouldSuppressTelegramError,
 } from "./error-policy.js";
@@ -73,7 +69,6 @@ type DispatcherOptions = BufferedDispatchParams["dispatcherOptions"];
 type Deliver = DispatcherOptions["deliver"];
 type Skip = NonNullable<DispatcherOptions["onSkip"]>;
 type ErrorCallback = NonNullable<DispatcherOptions["onError"]>;
-type Cancel = NonNullable<DispatcherOptions["onBeforeDeliverCancelled"]>;
 
 function toTelegramReplyDeliveryResult(
   turn: Turn,
@@ -149,7 +144,7 @@ function hasExecApprovalPayload(payload: ReplyPayload): boolean {
 export function createReplyState(): TelegramReplyStateSlice {
   return {
     reasoningStepState: createTelegramReasoningStepState(),
-    bufferedFinalSettlement: undefined as TelegramBufferedFinalSettlement | undefined,
+    bufferedFinalSettlement: undefined,
     sentBlockMediaUrls: new Set<string>(),
     splitReasoningOnNextStream: false,
   };
@@ -227,19 +222,6 @@ async function settleTerminalNoVisibleDelivery(
   return toTelegramReplyDeliveryResult(turn, false);
 }
 
-function trackBlockMedia(
-  turn: Turn,
-  payload: ReplyPayload,
-  acceptedMediaUrls: readonly string[],
-): void {
-  for (const { url, sourceUrls } of collectReplyMediaEntries(payload, acceptedMediaUrls)) {
-    turn.sentBlockMediaUrls.add(url);
-    for (const source of sourceUrls ?? []) {
-      turn.sentBlockMediaUrls.add(source);
-    }
-  }
-}
-
 async function adoptProgressContinuation(
   turn: Turn,
   payload: ReplyPayload,
@@ -253,7 +235,7 @@ async function adoptProgressContinuation(
     return false;
   }
   const adopt = info.adoptProgressContinuation;
-  await waitForDraftEvents(turn);
+  await turn.draftEventQueue;
   const stream = turn.answerLane.stream;
   if (!stream || turn.answerLane.finalized || turn.isSuperseded()) {
     return false;
@@ -355,7 +337,8 @@ async function deliverReplyWithNormalization(
   const effectivePayload = controls.payload;
   const onMediaAccepted =
     info.kind === "block"
-      ? (mediaUrls: readonly string[]) => trackBlockMedia(turn, effectivePayload, mediaUrls)
+      ? (mediaUrls: readonly string[]) =>
+          trackBlockMedia(turn.sentBlockMediaUrls, effectivePayload, mediaUrls)
       : undefined;
   if (
     shouldSuppressLocalTelegramExecApprovalPrompt({
@@ -703,7 +686,7 @@ export function handleReplyError(
     groupConfig: turn.context.groupConfig,
     topicConfig: turn.context.topicConfig,
   });
-  if (isSilentErrorPolicy(errorPolicy.policy)) {
+  if (errorPolicy.policy === "silent") {
     return;
   }
   if (
@@ -722,16 +705,4 @@ export function handleReplyError(
   }
   turn.deliveryState.markNonSilentFailure();
   turn.runtime.error?.(danger(`telegram ${info.kind} reply failed: ${String(err)}`));
-}
-
-export function handleBeforeDeliverCancelled(
-  turn: Turn,
-  payload: Parameters<Cancel>[0],
-  info: Parameters<Cancel>[1],
-): ReturnType<Cancel> {
-  return info.kind === "block"
-    ? enqueueDraftEvent(turn, async () => {
-        dropQueuedAnswerBlockRotation(turn, payload, info.assistantMessageIndex);
-      })
-    : undefined;
 }

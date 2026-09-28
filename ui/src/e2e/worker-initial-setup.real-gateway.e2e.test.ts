@@ -203,6 +203,8 @@ suite.define(() => {
             changed: false,
             verifyStable: async () => {},
             verifyLocalStable: async () => {},
+            publishStagedResult: async () => {},
+            discardPreparedStagedResult: async () => {},
           };
         },
         stop: async () => {},
@@ -238,7 +240,7 @@ suite.define(() => {
           waitForAdmissionNode: async () => {
             throw new Error("unexpected runtime refresh");
           },
-          redispatchReclaimed: async () => {
+          redispatchPlacement: async () => {
             throw new Error("unexpected redispatch");
           },
           workspaceOperations: createWorkerWorkspaceOperationCoordinator(),

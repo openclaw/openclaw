@@ -13,7 +13,6 @@ import { buildCommandLine } from "./windows-command.js";
 import { normalizeWindowsProcessEnvRecord } from "./windows-env.js";
 import {
   resolveMxcReadOnlySkillMounts,
-  type MxcReadOnlySkillMount,
   type MxcWorkspaceAccess,
 } from "./workspace-skill-mounts.js";
 
@@ -95,7 +94,6 @@ export function buildMxcContainerConfig(params: {
   config: MxcConfig;
   baseline: LoadedSandboxBaselinePolicy;
   baselineContext: BaselineApplicationContext;
-  runtimeId: string;
   containerId: string;
   command: string;
   args?: readonly string[];
@@ -128,7 +126,7 @@ export function buildMxcContainerConfig(params: {
     lifecycle: { destroyOnExit: true, preservePolicy: false },
     process: {
       commandLine: buildCommandLine(params.command, params.args ?? []),
-      cwd: resolveProcessCwd(params.workdir),
+      cwd: params.workdir,
       env: processEnv,
       timeout: resolveProcessTimeoutSeconds(params.config, params.baseline) * 1000,
     },
@@ -237,7 +235,7 @@ function resolveBaselineReadonlyPathSpecs(
 
 function resolveMxcProtectedSkillPolicyPaths(context: MxcWorkspaceContext): string[] {
   const deduped = new Map<string, string>();
-  for (const mount of resolveMxcProtectedSkillMounts(context)) {
+  for (const mount of resolveMxcReadOnlySkillMounts(context)) {
     const hostPath = path.resolve(mount.hostPath);
     deduped.set(normalizeMxcPathForComparison(hostPath), hostPath);
     const containerPath = path.resolve(mount.containerPath);
@@ -250,17 +248,6 @@ function resolveProtectedSkillPolicyPathSpecs(context: MxcWorkspaceContext): Fil
   return resolveMxcProtectedSkillPolicyPaths(context).map((candidatePath) =>
     optionalFilesystemPath(candidatePath),
   );
-}
-
-function resolveMxcProtectedSkillMounts(
-  context: MxcWorkspaceContext,
-): readonly MxcReadOnlySkillMount[] {
-  return resolveMxcReadOnlySkillMounts({
-    agentWorkspaceDir: context.agentWorkspaceDir,
-    skillsWorkspaceDir: context.skillsWorkspaceDir,
-    workdir: context.workdir,
-    workspaceAccess: context.workspaceAccess,
-  });
 }
 
 function resolveExistingFilesystemPaths(
@@ -345,10 +332,6 @@ function buildMissingFilesystemPathMessage(
     );
   }
   return `MXC sandbox ${accessLabel} path ${pathValue} does not exist on the host.`;
-}
-
-function resolveProcessCwd(workdir: string): string {
-  return workdir;
 }
 
 function resolveProcessTimeoutSeconds(

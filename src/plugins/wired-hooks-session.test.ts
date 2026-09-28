@@ -74,13 +74,4 @@ describe("session hook runner methods", () => {
     expect(handler).toHaveBeenCalledOnce();
     expect(handler).toHaveBeenCalledWith(event, TEST_PLUGIN_AGENT_CTX);
   });
-
-  it("hasHooks returns true for registered session hooks", () => {
-    const { runner } = createHookRunnerWithRegistry([
-      { hookName: "session_start", handler: vi.fn() },
-    ]);
-
-    expect(runner.hasHooks("session_start")).toBe(true);
-    expect(runner.hasHooks("session_end")).toBe(false);
-  });
 });

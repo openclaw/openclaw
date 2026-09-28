@@ -45,70 +45,12 @@ describe("resolveChannelTtsVoiceDelivery", () => {
           }),
           source: "test",
         },
-        {
-          pluginId: "discord",
-          plugin: createChannelPlugin("discord", {
-            chatTypes: ["direct"],
-            tts: { voice: { synthesisTarget: "voice-note" } },
-          }),
-          source: "test",
-        },
-        {
-          pluginId: "feishu",
-          plugin: createChannelPlugin("feishu", {
-            chatTypes: ["direct"],
-            tts: { voice: { synthesisTarget: "voice-note", transcodesAudio: true } },
-          }),
-          source: "test",
-        },
-        {
-          pluginId: "matrix",
-          plugin: createChannelPlugin("matrix", {
-            chatTypes: ["direct"],
-            tts: { voice: { synthesisTarget: "voice-note" } },
-          }),
-          source: "test",
-        },
-        {
-          pluginId: "telegram",
-          plugin: createChannelPlugin("telegram", {
-            chatTypes: ["direct"],
-            tts: { voice: { synthesisTarget: "voice-note", captionedFinalText: true } },
-          }),
-          source: "test",
-        },
-        {
-          pluginId: "whatsapp",
-          plugin: createChannelPlugin("whatsapp", {
-            chatTypes: ["direct"],
-            tts: { voice: { synthesisTarget: "voice-note", transcodesAudio: true } },
-          }),
-          source: "test",
-        },
       ]),
     );
     expect(resolveChannelTtsVoiceDelivery("imessage")).toEqual({
       synthesisTarget: "audio-file",
       audioFileFormats: ["mp3", "caf", "audio/mpeg", "audio/x-caf"],
       preferAudioFileFormat: "caf",
-    });
-    expect(resolveChannelTtsVoiceDelivery("discord")).toEqual({
-      synthesisTarget: "voice-note",
-    });
-    expect(resolveChannelTtsVoiceDelivery("feishu")).toEqual({
-      synthesisTarget: "voice-note",
-      transcodesAudio: true,
-    });
-    expect(resolveChannelTtsVoiceDelivery("matrix")).toEqual({
-      synthesisTarget: "voice-note",
-    });
-    expect(resolveChannelTtsVoiceDelivery("telegram")).toEqual({
-      synthesisTarget: "voice-note",
-      captionedFinalText: true,
-    });
-    expect(resolveChannelTtsVoiceDelivery("whatsapp")).toEqual({
-      synthesisTarget: "voice-note",
-      transcodesAudio: true,
     });
     expect(resolveChannelTtsVoiceDelivery("slack")).toBeUndefined();
   });

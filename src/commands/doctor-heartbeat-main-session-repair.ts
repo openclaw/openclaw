@@ -2,8 +2,7 @@
 import fs from "node:fs";
 import { StringDecoder } from "node:string_decoder";
 import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
-import type { note } from "../../packages/terminal-core/src/note.js";
-import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
+import { isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { formatSessionArchiveTimestamp } from "../config/sessions/artifacts.js";
 import {
   resolveSessionFilePathCore,
@@ -14,6 +13,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { updateLegacySessionStore } from "../infra/state-migrations.legacy-session-store.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { clearTuiLastSessionPointers } from "../tui/tui-last-session.js";
+import type { DoctorPrompter } from "./doctor-prompter.js";
 import { countLabel } from "./doctor-state-integrity-format.js";
 
 /** Chunk size for sync transcript scans. */
@@ -22,26 +22,13 @@ const TRANSCRIPT_SCAN_CHUNK_BYTES = 64 * 1024;
 // recreate full-file allocation after chunked reads. Oversized records fail closed.
 const TRANSCRIPT_RECORD_MAX_CHARS = 256 * 1024;
 
-type DoctorPrompterLike = {
-  confirmRuntimeRepair: (params: {
-    message: string;
-    initialValue?: boolean;
-    requiresInteractiveConfirmation?: boolean;
-  }) => Promise<boolean>;
-  note?: typeof note;
-};
-
 type HeartbeatMainSessionStore =
   | { kind: "legacy"; path: string }
   | { kind: "sqlite"; agentId: string; path: string };
 
 type TranscriptHeartbeatSummary = {
-  inspectedMessages: number;
-  userMessages: number;
   heartbeatUserMessages: number;
   nonHeartbeatUserMessages: number;
-  assistantMessages: number;
-  heartbeatOkAssistantMessages: number;
 };
 
 type HeartbeatMainSessionRepairCandidate = {
@@ -90,24 +77,13 @@ function accumulateTranscriptHeartbeatMessage(
     return;
   }
   const message = parseTranscriptMessageLine(trimmed);
-  if (!message) {
+  if (message?.role !== "user") {
     return;
   }
-  summary.inspectedMessages += 1;
-  if (message.role === "user") {
-    summary.userMessages += 1;
-    if (isHeartbeatUserMessage(message)) {
-      summary.heartbeatUserMessages += 1;
-    } else {
-      summary.nonHeartbeatUserMessages += 1;
-    }
-    return;
-  }
-  if (message.role === "assistant") {
-    summary.assistantMessages += 1;
-    if (isHeartbeatOkResponse(message)) {
-      summary.heartbeatOkAssistantMessages += 1;
-    }
+  if (isHeartbeatUserMessage(message)) {
+    summary.heartbeatUserMessages += 1;
+  } else {
+    summary.nonHeartbeatUserMessages += 1;
   }
 }
 
@@ -128,12 +104,8 @@ function scanTranscriptHeartbeatMessages(
     return null;
   }
   const summary: TranscriptHeartbeatSummary = {
-    inspectedMessages: 0,
-    userMessages: 0,
     heartbeatUserMessages: 0,
     nonHeartbeatUserMessages: 0,
-    assistantMessages: 0,
-    heartbeatOkAssistantMessages: 0,
   };
   try {
     const decoder = new StringDecoder("utf8");
@@ -169,7 +141,7 @@ function scanTranscriptHeartbeatMessages(
   } finally {
     fs.closeSync(fd);
   }
-  return summary.inspectedMessages > 0 ? summary : null;
+  return summary;
 }
 
 /**
@@ -186,8 +158,7 @@ function resolveHeartbeatMainSessionRepairCandidate(params: {
   if (!entry) {
     return null;
   }
-  const hasNoRecordedHumanInteraction = entry.lastInteractionAt === undefined;
-  if (!hasNoRecordedHumanInteraction) {
+  if (entry.lastInteractionAt !== undefined) {
     return null;
   }
   const hasSyntheticHeartbeatOwnership = sessionEntryHasSyntheticHeartbeatOwnership(entry);
@@ -204,11 +175,7 @@ function resolveHeartbeatMainSessionRepairCandidate(params: {
   if (!summary) {
     return null;
   }
-  if (
-    summary.heartbeatUserMessages > 0 &&
-    summary.userMessages === summary.heartbeatUserMessages &&
-    summary.nonHeartbeatUserMessages === 0
-  ) {
+  if (summary.heartbeatUserMessages > 0 && summary.nonHeartbeatUserMessages === 0) {
     // A human message must block repair; moving a real conversation would break resume semantics.
     return { reason: hasSyntheticHeartbeatOwnership ? "metadata" : "transcript", summary };
   }
@@ -266,7 +233,7 @@ export async function repairHeartbeatPoisonedMainSession(params: {
   store: HeartbeatMainSessionStore;
   stateDir: string;
   sessionPathOpts: ReturnType<typeof resolveSessionFilePathOptions>;
-  prompter: DoctorPrompterLike;
+  prompter: Pick<DoctorPrompter, "confirmRuntimeRepair">;
   warnings: string[];
   changes: string[];
 }): Promise<boolean> {
@@ -367,7 +334,7 @@ export async function repairHeartbeatPoisonedMainSession(params: {
   }
   let clearedPointers = 0;
   try {
-    clearedPointers = clearTuiLastSessionPointers({
+    clearedPointers = await clearTuiLastSessionPointers({
       stateDir: params.stateDir,
       sessionKeys: new Set([mainKey]),
     });

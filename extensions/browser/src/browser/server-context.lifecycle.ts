@@ -6,6 +6,7 @@
  * transition can still abort and drain all previously admitted work.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
 import type { RunningChrome } from "./chrome.js";
 import { stopOpenClawChrome, stopOwnedOpenClawChrome } from "./chrome.js";
@@ -188,26 +189,12 @@ export function waitForProfileOperation<T>(promise: Promise<T>, signal?: AbortSi
 }
 
 function createLease(actor: ProfileLifecycleActor): () => void {
-  let release!: () => void;
-  const settled = new Promise<void>((resolve) => {
-    release = resolve;
-  });
+  const { promise: settled, resolve: release } = createDeferred<void>();
   actor.leases.add(settled);
   return () => {
     actor.leases.delete(settled);
     release();
   };
-}
-
-/** Create the single lifecycle owner for one resolved Browser profile. */
-function createProfileRuntimeState(profile: ResolvedBrowserProfile): ProfileRuntimeState {
-  const runtime: ProfileRuntimeState = {
-    profile,
-    running: null,
-    lastTargetId: null,
-  };
-  profileLifecycles.set(runtime, createProfileLifecycleActor());
-  return runtime;
 }
 
 /** Return the current runtime object; terminal tombstones stay until exact cleanup removes them. */
@@ -221,7 +208,8 @@ export function getOrCreateProfileRuntime(
     getProfileLifecycle(current);
     return current;
   }
-  const created = createProfileRuntimeState(profile);
+  const created: ProfileRuntimeState = { profile, running: null, lastTargetId: null };
+  getProfileLifecycle(created);
   state.profiles.set(profile.name, created);
   return created;
 }

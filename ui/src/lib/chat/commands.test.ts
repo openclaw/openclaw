@@ -51,7 +51,6 @@ describe("model-independent commands", () => {
     "/agents",
     "/tools verbose",
     "/commands",
-    "/tasks",
     "/context detail",
     "/diagnostics",
     "/openclaw status",

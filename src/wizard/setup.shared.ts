@@ -21,11 +21,7 @@ import {
 } from "../system-agent/setup-inference-transition.js";
 import { t } from "./i18n/index.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
-import {
-  getSecurityConfirmMessage,
-  getSecurityNoteMessage,
-  getSecurityNoteTitle,
-} from "./setup.security-note.js";
+import { getSecurityNoteMessage, getSecurityNoteTitle } from "./setup.security-note.js";
 import type { QuickstartGatewayDefaults } from "./setup.types.js";
 
 type QuickstartGatewayOptionOverrides = Pick<
@@ -247,7 +243,7 @@ export async function requireRiskAcknowledgement(params: {
   await params.prompter.note(getSecurityNoteMessage(), getSecurityNoteTitle());
 
   const ok = await params.prompter.confirm({
-    message: getSecurityConfirmMessage(),
+    message: t("wizard.security.confirm"),
     initialValue: true,
     layout: "vertical",
   });

@@ -509,7 +509,12 @@ private fun ChatPage(
       } else {
         visibleMessages.forEach { message ->
           item(key = message.id ?: "${message.role}:${message.timestamp}:${message.text.hashCode()}") {
-            MessageBubble(message = message, onOpenReply = { onOpenReply(message) })
+            MessageBubble(
+              role = message.chatRole,
+              text = message.text,
+              truncated = message.textTruncated == true,
+              onOpenReply = { onOpenReply(message) },
+            )
           }
         }
         streamingText?.let { streaming ->
@@ -831,7 +836,13 @@ private fun ThreadVoiceMode(
       } else {
         visibleConversation.forEach { entry ->
           item(key = entry.id) {
-            RealtimeTalkBubble(entry, onOpenReply = { onOpenReply(entry) })
+            MessageBubble(
+              role = if (entry.role == WearRealtimeTalkRole.USER) WearChatRole.USER else WearChatRole.ASSISTANT,
+              text = entry.text,
+              truncated = entry.textTruncated,
+              streaming = entry.streaming,
+              onOpenReply = { onOpenReply(entry) },
+            )
           }
         }
         if (thinking) {
@@ -1140,57 +1151,6 @@ private fun MicrophoneGlyph(
 }
 
 @Composable
-private fun RealtimeTalkBubble(
-  entry: WearRealtimeTalkEntry,
-  onOpenReply: () -> Unit,
-) {
-  val colors = OpenClawWearTheme.colors
-  val isUser = entry.role == WearRealtimeTalkRole.USER
-  val background = if (isUser) colors.surfacePressed else colors.surfaceRaised
-  val foreground = colors.text
-  Column(
-    modifier =
-      Modifier
-        .fillMaxWidth()
-        .padding(
-          start = if (isUser) 28.dp else 12.dp,
-          end = if (isUser) 12.dp else 28.dp,
-        ).background(background, RoundedCornerShape(14.dp))
-        .then(
-          Modifier.border(
-            width = 1.dp,
-            color = colors.borderStrong,
-            shape = RoundedCornerShape(14.dp),
-          ),
-        ).padding(horizontal = 12.dp, vertical = 9.dp),
-  ) {
-    Text(
-      text =
-        localizedWearUppercase(
-          if (isUser) {
-            stringResource(R.string.you)
-          } else {
-            stringResource(R.string.agent)
-          },
-        ),
-      color = if (isUser) foreground.copy(alpha = 0.72f) else colors.textMuted,
-      fontSize = 10.sp,
-      fontWeight = FontWeight.Bold,
-      letterSpacing = 0.8.sp,
-    )
-    ReplyPreview(text = entry.text, truncated = entry.textTruncated, onOpen = onOpenReply.takeIf { !isUser })
-    if (entry.streaming) {
-      Text(
-        text = localizedWearUppercase(stringResource(R.string.live)),
-        color = colors.warning,
-        fontSize = 10.sp,
-        fontWeight = FontWeight.Bold,
-      )
-    }
-  }
-}
-
-@Composable
 private fun ControlsPage(
   snapshot: WearConversationSnapshot,
   themeMode: WearThemeMode,
@@ -1332,7 +1292,6 @@ private fun AgentPulsePage(
       }
 
       else -> {
-        item { AgentPulseTasksPanel(pulse.tasks) }
         item { AgentPulseSwarmPanel(pulse.swarm) }
         item { AgentPulseApprovalsPanel(pulse.approvals) }
         snapshot.agentPulseFailure?.let { pulseFailure ->
@@ -1346,47 +1305,6 @@ private fun AgentPulsePage(
         enabled = !snapshot.agentPulseLoading,
         onClick = onRefresh,
       )
-    }
-  }
-}
-
-@Composable
-private fun AgentPulseTasksPanel(tasks: WearAgentPulseTasks) {
-  val ready = tasks.state == WearAgentPulseTaskState.Ready
-  Panel {
-    AgentPulsePanelHeader(
-      title = stringResource(R.string.pulse_tasks),
-      status =
-        if (ready) {
-          stringResource(R.string.pulse_ready)
-        } else {
-          stringResource(R.string.pulse_unavailable)
-        },
-      statusColor =
-        if (ready) {
-          OpenClawWearTheme.colors.success
-        } else {
-          OpenClawWearTheme.colors.danger
-        },
-    )
-    if (ready) {
-      AgentPulseMetricRow(stringResource(R.string.pulse_queued), tasks.queued)
-      AgentPulseMetricRow(stringResource(R.string.pulse_running), tasks.running)
-      AgentPulseMetricRow(stringResource(R.string.pulse_completed), tasks.completed)
-      AgentPulseMetricRow(stringResource(R.string.pulse_failed), tasks.failed)
-      AgentPulseDetail(text = stringResource(R.string.pulse_task_snapshot_bounded))
-      if (tasks.activeAtLimit == true) {
-        AgentPulseDetail(
-          text = stringResource(R.string.pulse_active_at_limit),
-          color = OpenClawWearTheme.colors.warning,
-        )
-      }
-      if (tasks.recentAtLimit == true) {
-        AgentPulseDetail(
-          text = stringResource(R.string.pulse_recent_at_limit),
-          color = OpenClawWearTheme.colors.warning,
-        )
-      }
     }
   }
 }
@@ -1546,45 +1464,29 @@ private fun ConnectionStateScreen(
   failure: WearConversationFailure?,
   onRefresh: () -> Unit,
 ) {
-  val colors = OpenClawWearTheme.colors
-  val listState = rememberTransformingLazyColumnState()
-  ScreenScaffold(scrollState = listState) { contentPadding ->
-    TransformingLazyColumn(
-      modifier =
-        Modifier
-          .fillMaxSize()
-          .background(colors.canvas),
-      state = listState,
-      contentPadding = contentPadding,
-      horizontalAlignment = Alignment.CenterHorizontally,
-      verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-      item {
-        OpenClawHeader(pageLabel = stringResource(R.string.chat))
-      }
-      item {
-        EmptyPanel(
-          title =
-            if (loading) {
-              stringResource(R.string.checking_phone)
-            } else {
-              failureTitle(failure)
-            },
-          detail =
-            if (loading) {
-              stringResource(R.string.reading_conversation)
-            } else {
-              failureDetail(failure)
-            },
-        )
-      }
-      item {
-        SecondaryButton(
-          label = stringResource(R.string.retry),
-          enabled = !loading,
-          onClick = onRefresh,
-        )
-      }
+  WearPage(pageLabel = stringResource(R.string.chat)) {
+    item {
+      EmptyPanel(
+        title =
+          if (loading) {
+            stringResource(R.string.checking_phone)
+          } else {
+            failureTitle(failure)
+          },
+        detail =
+          if (loading) {
+            stringResource(R.string.reading_conversation)
+          } else {
+            failureDetail(failure)
+          },
+      )
+    }
+    item {
+      SecondaryButton(
+        label = stringResource(R.string.retry),
+        enabled = !loading,
+        onClick = onRefresh,
+      )
     }
   }
 }
@@ -1653,7 +1555,7 @@ private fun ConversationContextPicker(
   actionBusy: Boolean,
   onOpenContextPicker: () -> Unit,
 ) {
-  val agent = snapshot.agents.firstOrNull(WearAgentSummary::selected) ?: snapshot.agents.firstOrNull()
+  val agent = snapshot.agents.firstOrNull(WearAgent::selected) ?: snapshot.agents.firstOrNull()
   val model = snapshot.models.firstOrNull(WearModelSummary::selected)
   val agentName =
     listOfNotNull(
@@ -1730,7 +1632,7 @@ private fun ContextPickerOverlay(
     }
     if (picker == WearContextPicker.Session) {
       item {
-        val agent = snapshot.agents.firstOrNull(WearAgentSummary::selected) ?: snapshot.agents.firstOrNull()
+        val agent = snapshot.agents.firstOrNull(WearAgent::selected) ?: snapshot.agents.firstOrNull()
         val model = snapshot.models.firstOrNull(WearModelSummary::selected)
         Panel {
           ContextPickerRow(
@@ -2056,13 +1958,16 @@ private fun ConversationStatus(
 
 @Composable
 private fun MessageBubble(
-  message: WearChatMessage,
+  role: WearChatRole,
+  text: String,
+  truncated: Boolean,
+  streaming: Boolean = false,
   onOpenReply: () -> Unit,
 ) {
   val colors = OpenClawWearTheme.colors
-  val isUser = message.chatRole == WearChatRole.USER
+  val isUser = role == WearChatRole.USER
   val background =
-    when (message.chatRole) {
+    when (role) {
       WearChatRole.USER -> colors.surfacePressed
       WearChatRole.ASSISTANT -> colors.surfaceRaised
       WearChatRole.SYSTEM -> colors.surface
@@ -2087,7 +1992,7 @@ private fun MessageBubble(
     Text(
       text =
         localizedWearUppercase(
-          when (message.chatRole) {
+          when (role) {
             WearChatRole.USER -> stringResource(R.string.you)
             WearChatRole.ASSISTANT -> stringResource(R.string.agent)
             WearChatRole.SYSTEM -> stringResource(R.string.system)
@@ -2098,7 +2003,15 @@ private fun MessageBubble(
       fontWeight = FontWeight.Bold,
       letterSpacing = 0.8.sp,
     )
-    ReplyPreview(text = message.text, truncated = message.textTruncated == true, onOpen = onOpenReply.takeIf { message.chatRole == WearChatRole.ASSISTANT })
+    ReplyPreview(text = text, truncated = truncated, onOpen = onOpenReply.takeIf { role == WearChatRole.ASSISTANT })
+    if (streaming) {
+      Text(
+        text = localizedWearUppercase(stringResource(R.string.live)),
+        color = colors.warning,
+        fontSize = 10.sp,
+        fontWeight = FontWeight.Bold,
+      )
+    }
   }
 }
 

@@ -144,7 +144,7 @@ describe("worker environment service", () => {
     const environmentId = "worker-sensitive-environment";
     const sessionId = "session-sensitive-worker";
     const environmentIdentity = await support.seedAttachedIdentity(environmentId, sessionId);
-    const { claim, store } = claimWorkerPlacement({
+    const { claim, store } = await claimWorkerPlacement({
       environmentId,
       ownerEpoch: environmentIdentity.ownerEpoch,
       runId: "run-worker-receipts",
@@ -225,7 +225,7 @@ describe("worker environment service", () => {
     const environmentId = "worker-admission-replacement";
     const sessionId = "session-admission-replacement";
     const environmentIdentity = await support.seedAttachedIdentity(environmentId, sessionId);
-    const { claim: first, store } = claimWorkerPlacement({
+    const { claim: first, store } = await claimWorkerPlacement({
       environmentId,
       ownerEpoch: environmentIdentity.ownerEpoch,
       runId: "run-admission-replacement",
@@ -276,10 +276,10 @@ describe("worker environment service", () => {
         expect(support.testState.prepareInstallation).toHaveBeenCalledOnce(),
       );
 
-      store.releaseTurn(first);
+      await store.releaseTurn(first);
       releaseAgentRunDelegatedAuthority(firstAuthority);
       const placement = store.get(sessionId)!;
-      const second = store.claimTurn({
+      const second = await store.claimTurn({
         sessionId,
         agentId: placement.agentId,
         sessionKey: placement.sessionKey,
@@ -321,92 +321,101 @@ describe("worker environment service", () => {
     }
   });
 
-  it("keeps restart-inherited claims recovery-only across every worker authority surface", async () => {
-    const environmentId = "worker-inherited-claim";
-    const sessionId = "session-inherited-claim";
-    const environmentIdentity = await support.seedAttachedIdentity(environmentId, sessionId);
-    const { claim, store } = claimWorkerPlacement({
-      environmentId,
-      ownerEpoch: environmentIdentity.ownerEpoch,
-      sessionId,
-    });
-    store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
-    store.updateAckCursors({ claim, liveEvent: 1 });
-    const preRestartService = support.createService(support.createProvider(), {
-      placementStore: createWorkerSessionPlacementGate(store),
-    });
-    const recoveryCredential = await preRestartService.acquireTurnCredential(claim);
-    await preRestartService.stop();
-    store.handoffWorkspaceResultRecovery(claim);
+  it.each(["inherited", "revoked"] as const)(
+    "keeps %s claims recovery-only across every worker authority surface",
+    async (source) => {
+      const environmentId = "worker-inherited-claim";
+      const sessionId = "session-inherited-claim";
+      const environmentIdentity = await support.seedAttachedIdentity(environmentId, sessionId);
+      const { claim, store } = await claimWorkerPlacement({
+        environmentId,
+        ownerEpoch: environmentIdentity.ownerEpoch,
+        sessionId,
+      });
+      store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+      store.updateAckCursors({ claim, liveEvent: 1 });
+      const preRestartService = support.createService(support.createProvider(), {
+        placementStore: createWorkerSessionPlacementGate(store),
+      });
+      const recoveryCredential = await preRestartService.acquireTurnCredential(claim);
+      await preRestartService.stop();
+      store.handoffWorkspaceResultRecovery(claim);
 
-    const restartedStore = createWorkerSessionPlacementStore({
-      database: support.testState.stateDb,
-    });
-    const gate = createWorkerSessionPlacementGate(restartedStore, {
-      rejectExistingWorkerClaims: true,
-    });
-    const executeInference = vi.fn<WorkerEnvironmentServiceOptions["executeInference"]>();
-    const executeSessionTool =
-      vi.fn<NonNullable<WorkerEnvironmentServiceOptions["executeSessionTool"]>>();
-    const liveEvents = support.createLiveEvents();
-    const workerService = support.createService(support.createProvider(), {
-      executeInference,
-      executeSessionTool,
-      liveEvents,
-      placementStore: gate,
-    });
-    workerService.start();
-    const identity = {
-      ...environmentIdentity,
-      runId: claim.runId,
-      turnClaim: claim,
-    };
-    const admission = {
-      environmentId,
-      credential: recoveryCredential.credential,
-      sessionId,
-      runId: claim.runId,
-      ownerEpoch: identity.ownerEpoch,
-      rpcSetVersion: 1,
-      handshake: support.BOOTSTRAP_RECEIPT,
-    };
+      const restartedStore = createWorkerSessionPlacementStore({
+        database: support.testState.stateDb,
+      });
+      const gate = createWorkerSessionPlacementGate(restartedStore, {
+        rejectExistingWorkerClaims: source === "inherited",
+      });
+      if (source === "revoked") {
+        gate.fenceWorkerTurnForRecovery(claim);
+      }
+      const executeInference = vi.fn<WorkerEnvironmentServiceOptions["executeInference"]>();
+      const executeSessionTool =
+        vi.fn<NonNullable<WorkerEnvironmentServiceOptions["executeSessionTool"]>>();
+      const liveEvents = support.createLiveEvents();
+      const workerService = support.createService(support.createProvider(), {
+        executeInference,
+        executeSessionTool,
+        liveEvents,
+        placementStore: gate,
+      });
+      workerService.start();
+      const identity = {
+        ...environmentIdentity,
+        runId: claim.runId,
+        turnClaim: claim,
+      };
+      const admission = {
+        environmentId,
+        credential: recoveryCredential.credential,
+        sessionId,
+        runId: claim.runId,
+        ownerEpoch: identity.ownerEpoch,
+        rpcSetVersion: 1,
+        handshake: support.BOOTSTRAP_RECEIPT,
+      };
 
-    expect(restartedStore.validateTurnClaim(claim)).toBe(true);
-    expect(restartedStore.listPendingWorkspaceResults()).toHaveLength(1);
-    await expect(workerService.admitWorker(admission)).resolves.toEqual({
-      ok: false,
-      reason: "placement-mismatch",
-    });
-    expect(await workerService.acknowledgeCredentialDelivery(recoveryCredential)).toBe(false);
-    expect(workerService.validateWorkerConnection(identity)).toBe("placement-mismatch");
-    await expect(
-      workerService.commitTranscript(identity, support.transcriptRequest(identity, "stale")),
-    ).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
-    await expect(
-      workerService.pushLiveEvent(identity, support.assistantEvent(identity, "stale")),
-    ).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
-    expect(
-      await workerService.startInference(identity, support.inferenceRequest(identity), {
-        connectionId: "inherited-claim",
-        send: vi.fn(),
-      }),
-    ).toEqual({ ok: false, closeReason: "placement-mismatch" });
-    await expect(
-      workerService.executeSessionTool(identity, "sessions_send", {
-        toolCallId: "inherited-tool",
-        sessionKey: "agent:main:target",
-        message: "stale",
-      }),
-    ).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
-    expect(executeInference).not.toHaveBeenCalled();
-    expect(executeSessionTool).not.toHaveBeenCalled();
-  });
+      expect(restartedStore.validateTurnClaim(claim)).toBe(true);
+      expect(restartedStore.listPendingWorkspaceResults()).toHaveLength(1);
+      await expect(workerService.admitWorker(admission)).resolves.toEqual({
+        ok: false,
+        reason: "placement-mismatch",
+      });
+      expect(await workerService.acknowledgeCredentialDelivery(recoveryCredential)).toBe(false);
+      expect(workerService.validateWorkerConnection(identity)).toBe("placement-mismatch");
+      await expect(
+        workerService.commitTranscript(identity, support.transcriptRequest(identity, "stale")),
+      ).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
+      await expect(
+        workerService.pushLiveEvent(identity, support.assistantEvent(identity, "stale")),
+      ).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
+      expect(
+        await workerService.startInference(identity, support.inferenceRequest(identity), {
+          connectionId: "inherited-claim",
+          send: vi.fn(),
+        }),
+      ).toEqual({ ok: false, closeReason: "placement-mismatch" });
+      await expect(
+        workerService.executeSessionTool(identity, "sessions_send", {
+          toolCallId: "inherited-tool",
+          sessionKey: "agent:main:target",
+          message: "stale",
+        }),
+      ).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
+      expect(executeInference).not.toHaveBeenCalled();
+      expect(executeSessionTool).not.toHaveBeenCalled();
+      console.info(
+        `[worker-authority-proof] source=${source} admission=denied credential-ack=false connection/transcript/live/inference/tools=placement-mismatch effects=0`,
+      );
+    },
+  );
 
   it("binds credentials and reconnect identities to the exact replacement claim", async () => {
     const environmentId = "worker-claim-credential";
     const sessionId = "session-claim-credential";
     const environmentIdentity = await support.seedAttachedIdentity(environmentId, sessionId);
-    const { claim: first, store } = claimWorkerPlacement({
+    const { claim: first, store } = await claimWorkerPlacement({
       environmentId,
       ownerEpoch: environmentIdentity.ownerEpoch,
       sessionId,
@@ -443,9 +452,9 @@ describe("worker environment service", () => {
     ).resolves.toEqual({ ok: false, reason: "placement-mismatch" });
     const firstAdmission = await workerService.admitWorker(admission);
     expect(firstAdmission).toMatchObject({ ok: true, identity: { turnClaim: first } });
-    store.releaseTurn(first);
+    await store.releaseTurn(first);
     const placement = store.get(sessionId)!;
-    const second = store.claimTurn({
+    const second = await store.claimTurn({
       sessionId,
       agentId: placement.agentId,
       sessionKey: placement.sessionKey,
@@ -480,7 +489,7 @@ describe("worker environment service", () => {
     const environmentId = "worker-claim-inference";
     const sessionId = "session-claim-inference";
     const environmentIdentity = await support.seedAttachedIdentity(environmentId, sessionId);
-    const { claim: first, store } = claimWorkerPlacement({
+    const { claim: first, store } = await claimWorkerPlacement({
       environmentId,
       ownerEpoch: environmentIdentity.ownerEpoch,
       sessionId,
@@ -503,9 +512,9 @@ describe("worker environment service", () => {
     const admitClaim = async (claim: WorkerSessionTurnClaim) => {
       const instance = createOperationalRunInstanceRef(claim.runId);
       const authority = claimAgentRunDelegatedAuthority(instance);
-      support.testState.releaseTurnOwners.push(() => {
+      support.testState.releaseTurnOwners.push(async () => {
         if (store.validateTurnClaim(claim)) {
-          store.releaseTurn(claim);
+          await store.releaseTurn(claim);
         }
         releaseAgentRunDelegatedAuthority(authority);
       });
@@ -568,10 +577,10 @@ describe("worker environment service", () => {
       first.runId,
     );
     expect(originalCancellation?.runIds).toEqual([first.runId]);
-    store.releaseTurn(first);
+    await store.releaseTurn(first);
     expect(signals[0]?.aborted).toBe(true);
     const placement = store.get(sessionId)!;
-    const second = store.claimTurn({
+    const second = await store.claimTurn({
       sessionId,
       agentId: placement.agentId,
       sessionKey: placement.sessionKey,
@@ -595,9 +604,9 @@ describe("worker environment service", () => {
     expect(
       captureWorkerInferenceCancellation(workerService, sessionId, first.runId)?.runIds,
     ).toEqual([first.runId]);
-    expect(() => store.releaseTurn(first)).toThrow("turn claim changed before release");
+    await expect(store.releaseTurn(first)).rejects.toThrow("turn claim changed before release");
     expect(signals[1]?.aborted).toBe(false);
-    store.releaseTurn(second);
+    await store.releaseTurn(second);
     expect(signals[1]?.aborted).toBe(true);
   });
 

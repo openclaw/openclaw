@@ -122,8 +122,12 @@ persisted in service arguments.
 
 For a managed foreground process, `--pair-if-needed` reuses native device-token
 storage across restarts; it does not keep a separate enrollment marker. Preserve
-the node state directory. An expired setup code cannot enroll a new state
-directory or replace a revoked device token; provision a fresh code when needed.
+the node state directory. After the setup code expires, the node can still reconnect
+when its saved identity and node token exist and every selected Gateway endpoint
+matches the saved Gateway scope. The expired bootstrap token is never sent.
+An expired setup code cannot enroll a new state directory or replace a revoked
+device token; provision a fresh code when needed. Explicit `--pair` still rejects
+expired setup codes.
 
 `openclaw node run` and `openclaw node install` resolve gateway auth from config/env (no `--token`/`--password` flags on node commands):
 
@@ -375,10 +379,14 @@ a separate check.
 Older OpenClaw releases stored node-host state in `node.json`, the signed
 identity in `identity/device.json`, and paired auth in
 `identity/device-auth.json`. Stop the node host and run
-`openclaw doctor --fix` once; Doctor claims each retired source, validates it,
-imports and verifies the canonical SQLite row, then removes the old file. Normal
-node commands fail closed with this repair instruction while either retired file
-or an interrupted Doctor claim remains. Keep `state/openclaw.sqlite` private;
+`openclaw doctor --fix` once; Doctor validates the retired inputs, imports and
+verifies their canonical SQLite rows, then removes the old files. Node startup,
+including the macOS app's worker, leaves these inputs for Doctor. Pending device
+auth or exec approvals stop startup before capabilities are prepared. A missing
+canonical identity plus retired identity data or an interrupted import claim
+also stops startup before a new key can be created. An existing valid canonical
+identity remains authoritative when an older release recreates `identity/device.json`;
+Doctor owns that stale file's cleanup. Keep `state/openclaw.sqlite` private;
 it contains the device keypair and auth tokens.
 
 ## Exec approvals

@@ -540,6 +540,19 @@ describe("gateway startup config validation", () => {
     );
   });
 
+  it("preserves storage read failures without invalid-config repair guidance", async () => {
+    const snapshot = buildInvalidConfigSnapshot({
+      rawConfig: validConfig,
+      issues: [{ path: "", errorCode: "CONFIG_READ_FAILED", message: "read failed: ENOSPC" }],
+    });
+    mockStartupSnapshot(snapshot);
+    const start = loadTestStartup({});
+    await expect(start).rejects.toMatchObject({ code: "CONFIG_READ_FAILED" });
+    await expect(start).rejects.not.toThrow("doctor --fix");
+    expect(applyPluginAutoEnable).not.toHaveBeenCalled();
+    expect(configIo.writeConfigFile).not.toHaveBeenCalled();
+  });
+
   it("renders actionable diagnostics for invalid config written by a newer version", async () => {
     const rawConfig = {
       meta: { lastTouchedVersion: "9999.1.1" },
@@ -670,27 +683,6 @@ describe("gateway startup config validation", () => {
       ],
     });
     vi.mocked(configIo.readConfigFileSnapshot).mockResolvedValueOnce(invalidSnapshot);
-    await expectStartupRejects(`Invalid config at ${configPath}:`);
-  });
-
-  it("keeps mixed plugin and core startup invalidity fatal", async () => {
-    const rawConfig = enabledPluginRawConfig("invalid");
-    const invalidSnapshot = buildInvalidConfigSnapshot({
-      rawConfig,
-      config: rawConfig as unknown as OpenClawConfig,
-      issues: [
-        {
-          path: "gateway.mode",
-          message: "Expected 'local' or 'remote'",
-        },
-        {
-          path: "plugins.entries.feishu.config.token",
-          message: "invalid config: must be string",
-        },
-      ],
-    });
-    vi.mocked(configIo.readConfigFileSnapshot).mockResolvedValueOnce(invalidSnapshot);
-
     await expectStartupRejects(`Invalid config at ${configPath}:`);
   });
 

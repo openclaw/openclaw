@@ -130,24 +130,21 @@ export function createEmbeddedRunProgressController(params: {
     }
     return resolveAttemptFastMode();
   };
-  const maybeEmitFastModeAutoReset = async () => {
-    if (
-      params.attempt.fastMode !== "auto" ||
-      !fastModeAutoProgressState.offAnnounced ||
-      fastModeAutoProgressState.resetAnnounced
-    ) {
-      return;
-    }
-    fastModeAutoProgressState.resetAnnounced = true;
-    await emitFastModeAutoProgress({
-      enabled: true,
-      elapsedSeconds: 0,
-      fastAutoOnSeconds: fastModeAutoOnSeconds,
-    });
-  };
   const maybeEmitFastModeAutoResetBestEffort = async () => {
     try {
-      await maybeEmitFastModeAutoReset();
+      if (
+        params.attempt.fastMode !== "auto" ||
+        !fastModeAutoProgressState.offAnnounced ||
+        fastModeAutoProgressState.resetAnnounced
+      ) {
+        return;
+      }
+      fastModeAutoProgressState.resetAnnounced = true;
+      await emitFastModeAutoProgress({
+        enabled: true,
+        elapsedSeconds: 0,
+        fastAutoOnSeconds: fastModeAutoOnSeconds,
+      });
     } catch (error) {
       log.warn(`embedded run fast mode auto reset progress failed: ${formatErrorMessage(error)}`);
     }

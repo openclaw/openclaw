@@ -98,7 +98,7 @@ channels.irc.groups.*.enabled channels.irc.groups.*.requireMention channels.irc.
 channels.irc.nick channels.irc.nickserv.password channels.irc.password channels.irc.port
 channels.irc.tls channels.irc.accounts.*.nickserv.password channels.irc.accounts.*.port
 channels.msteams.appId channels.msteams.appPassword channels.msteams.requireMention
-channels.msteams.tenantId channels.msteams.webhook.port channels.qqbot.stt.apiKey
+channels.msteams.tenantId channels.msteams.legacyWebhook.port channels.qqbot.stt.apiKey
 channels.qqbot.stt.model channels.signal.account channels.signal.cliPath
 channels.signal.groups.*.requireMention channels.slack.appToken channels.slack.botToken
 channels.slack.channels.*.enabled channels.slack.channels.*.requireMention
@@ -119,7 +119,7 @@ channels.telegram.accounts.*.groups.*.topics.*.groupPolicy
 channels.telegram.direct.*.topics.*.groupPolicy
 channels.whatsapp.groups.*.requireMention channels.whatsapp.selfChatMode
 cron.enabled env.vars gateway.auth.mode gateway.auth.password gateway.auth.token
-gateway.cliAgents.enabled
+gateway.cliAgents.enabled gateway.uploads.enabled
 gateway.auth.trustedProxy.allowUsers gateway.auth.trustedProxy.userHeader gateway.bind
 gateway.controlUi.allowedOrigins gateway.http.endpoints.chatCompletions.images.urlAllowlist
 gateway.http.endpoints.responses.files.urlAllowlist

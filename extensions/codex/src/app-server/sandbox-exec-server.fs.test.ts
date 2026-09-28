@@ -19,16 +19,21 @@ afterEach(async () => {
   await sandboxExecServerRegistry.closeAll();
 });
 
+async function openSandboxSocket(sandbox: ReturnType<typeof createSandboxContext>) {
+  const client = createClient();
+  await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
+  const socket = await openSocket(execServerUrlFromClient(client));
+  await rpc(socket, "initialize", { clientName: "test" });
+  socket.send(JSON.stringify({ method: "initialized" }));
+  return socket;
+}
+
 describe("OpenClaw Codex sandbox exec-server filesystem", () => {
   it("returns the required Codex file size in sandbox metadata", async () => {
     const sandbox = createSandboxContext({
       stat: async () => ({ type: "file", size: 1234, mtimeMs: 5678 }),
     });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
-    const socket = await openSocket(execServerUrlFromClient(client));
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
+    const socket = await openSandboxSocket(sandbox);
 
     await expect(
       rpc(socket, "fs/getMetadata", { path: "file:///workspace/attachment.txt" }),
@@ -46,14 +51,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
   it("routes file writes through the sandbox fs bridge", async () => {
     const writeFile = vi.fn(async () => undefined);
     const sandbox = createSandboxContext({ writeFile });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-    });
-    const socket = await openSocket(execServerUrlFromClient(client));
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
+    const socket = await openSandboxSocket(sandbox);
 
     await rpc(socket, "fs/writeFile", {
       path: "file:///workspace/note.txt",
@@ -189,14 +187,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
         filePath === "/workspace" ? { type: "directory", size: 1, mtimeMs: 1 } : null,
       writeFile,
     });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-    });
-    const socket = await openSocket(execServerUrlFromClient(client));
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
+    const socket = await openSandboxSocket(sandbox);
 
     await expect(
       rpc(socket, "fs/writeFile", {
@@ -212,14 +203,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
   it("enforces Codex fs sandbox policy before mutating through the fs bridge", async () => {
     const writeFile = vi.fn(async () => undefined);
     const sandbox = createSandboxContext({ writeFile });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-    });
-    const socket = await openSocket(execServerUrlFromClient(client));
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
+    const socket = await openSandboxSocket(sandbox);
 
     await expect(
       rpc(socket, "fs/writeFile", {
@@ -392,14 +376,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     const remove = vi.fn(async () => undefined);
     const writeFile = vi.fn(async () => undefined);
     const sandbox = createSandboxContext({ remove, writeFile });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-    });
-    const socket = await openSocket(execServerUrlFromClient(client));
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
+    const socket = await openSandboxSocket(sandbox);
     const workspacePolicy = codexFsSandboxContext({
       entries: [
         { path: specialPath("root"), access: "read" },
@@ -434,14 +411,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     const readFile = vi.fn(async () => Buffer.from("ok"));
     const writeFile = vi.fn(async () => undefined);
     const sandbox = createSandboxContext({ readFile, remove, writeFile });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-    });
-    const socket = await openSocket(execServerUrlFromClient(client));
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
+    const socket = await openSandboxSocket(sandbox);
     const policy = codexFsSandboxContext({
       entries: [
         { path: specialPath("root"), access: "read" },
@@ -503,14 +473,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
   it("ignores non-granting Codex fs sandbox special entries", async () => {
     const writeFile = vi.fn(async () => undefined);
     const sandbox = createSandboxContext({ writeFile });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-    });
-    const socket = await openSocket(execServerUrlFromClient(client));
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
+    const socket = await openSandboxSocket(sandbox);
 
     await rpc(socket, "fs/writeFile", {
       path: "file:///workspace/allowed.txt",
@@ -535,14 +498,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
   it("fails closed for unsupported Codex fs sandbox glob classes", async () => {
     const readFile = vi.fn(async () => Buffer.from("ok"));
     const sandbox = createSandboxContext({ readFile });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-    });
-    const socket = await openSocket(execServerUrlFromClient(client));
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
+    const socket = await openSandboxSocket(sandbox);
 
     await expect(
       rpc(socket, "fs/readFile", {
@@ -564,14 +520,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
   it("fails closed for recursive removes below protected glob prefixes", async () => {
     const remove = vi.fn(async () => undefined);
     const sandbox = createSandboxContext({ remove });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-    });
-    const socket = await openSocket(execServerUrlFromClient(client));
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
+    const socket = await openSandboxSocket(sandbox);
     const policy = codexFsSandboxContext({
       entries: [
         { path: specialPath("root"), access: "read" },
@@ -620,14 +569,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
         mtimeMs: 1,
       }),
     });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-    });
-    const socket = await openSocket(execServerUrlFromClient(client));
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
+    const socket = await openSandboxSocket(sandbox);
 
     await rpc(socket, "fs/copy", {
       sourcePath: "file:///workspace/source-dir",
@@ -670,14 +612,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
       }),
       writeFile,
     });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-    });
-    const socket = await openSocket(execServerUrlFromClient(client));
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
+    const socket = await openSandboxSocket(sandbox);
 
     await rpc(socket, "fs/copy", {
       sourcePath: "file:///workspace/huge.bin",
@@ -706,11 +641,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     if (sandbox.fsBridge) {
       sandbox.fsBridge.copyFile = undefined;
     }
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
-    const socket = await openSocket(execServerUrlFromClient(client));
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
+    const socket = await openSandboxSocket(sandbox);
 
     await rpc(socket, "fs/copy", {
       sourcePath: "file:///workspace/source.txt",
@@ -739,14 +670,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
         mtimeMs: 1,
       }),
     });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-    });
-    const socket = await openSocket(execServerUrlFromClient(client));
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
+    const socket = await openSandboxSocket(sandbox);
 
     await expect(
       rpc(socket, "fs/copy", {
@@ -810,23 +734,6 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     socket.close();
   });
 
-  it("reports missing metadata as an exec-server not found error", async () => {
-    const sandbox = createSandboxContext({ stat: async () => null });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-    });
-    const socket = await openSocket(execServerUrlFromClient(client));
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
-
-    await expect(
-      rpc(socket, "fs/getMetadata", { path: "file:///workspace/missing" }),
-    ).rejects.toThrow("file not found");
-    socket.close();
-  });
-
   it("bounds legacy whole-file reads within the sandbox filesystem bridge", async () => {
     const data = Buffer.from("bounded legacy read");
     const readFile = vi.fn(async () => data);
@@ -834,11 +741,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
       readFile,
       stat: async () => ({ type: "file", size: data.byteLength, mtimeMs: 1 }),
     });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({ client: client as never, sandbox });
-    const socket = await openSocket(execServerUrlFromClient(client));
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
+    const socket = await openSandboxSocket(sandbox);
 
     await expect(
       rpc(socket, "fs/readFile", { path: "file:///workspace/note.txt" }),
@@ -860,14 +763,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
         mtimeMs: 1,
       }),
     });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-    });
-    const socket = await openSocket(execServerUrlFromClient(client));
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
+    const socket = await openSandboxSocket(sandbox);
 
     await expect(
       rpc(socket, "fs/readFile", { path: "file:///workspace/huge.bin" }),
@@ -884,14 +780,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
       stat: async ({ filePath }) =>
         filePath === "/workspace/existing" ? { type: "directory", size: 1, mtimeMs: 1 } : null,
     });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-    });
-    const socket = await openSocket(execServerUrlFromClient(client));
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
+    const socket = await openSandboxSocket(sandbox);
 
     await expect(
       rpc(socket, "fs/createDirectory", {
@@ -915,14 +804,7 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
         throw new Error("sandbox denied write outside workspace");
       },
     });
-    const client = createClient();
-    await ensureCodexSandboxExecServerEnvironment({
-      client: client as never,
-      sandbox,
-    });
-    const socket = await openSocket(execServerUrlFromClient(client));
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
+    const socket = await openSandboxSocket(sandbox);
 
     await expect(
       rpc(socket, "fs/writeFile", {

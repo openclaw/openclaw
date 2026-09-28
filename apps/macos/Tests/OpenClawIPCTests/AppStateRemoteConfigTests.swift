@@ -860,8 +860,6 @@ struct AppStateRemoteConfigTests {
         ])
         GatewayDiscoveryPreferences.setPreferredStableID("gateway-a")
         OnboardingSystemAgentResumeStore.markPending(routeIdentity: "remote:id:gateway-a")
-        let view = OnboardingView(state: state)
-        view.preferredGatewayID = "gateway-a"
 
         state._testApplyConfigOverrides([
             "gateway": [
@@ -875,10 +873,8 @@ struct AppStateRemoteConfigTests {
 
         #expect(state.remoteUrl == "wss://gateway-b.example.test")
         #expect(GatewayDiscoveryPreferences.preferredStableID() == nil)
-        #expect(view.effectivePreferredGatewayID == nil)
         let routeIdentity = OnboardingSystemAgentResumeStore.selectedRouteIdentity(
-            state: state,
-            preferredGatewayID: view.effectivePreferredGatewayID)
+            state: state)
         #expect(routeIdentity?.hasPrefix("remote:direct:") == true)
         #expect(routeIdentity != "remote:id:gateway-a")
         #expect(!OnboardingSystemAgentResumeStore.isPending(for: routeIdentity))
@@ -901,8 +897,6 @@ struct AppStateRemoteConfigTests {
             ],
         ])
         GatewayDiscoveryPreferences.setPreferredStableID("gateway-a")
-        let view = OnboardingView(state: state)
-        view.preferredGatewayID = "gateway-a"
 
         state._testApplyConfigOverrides([
             "gateway": [
@@ -917,7 +911,6 @@ struct AppStateRemoteConfigTests {
 
         #expect(state.remoteTarget == "bob@gateway-b.example.test")
         #expect(GatewayDiscoveryPreferences.preferredStableID() == nil)
-        #expect(view.effectivePreferredGatewayID == nil)
     }
 
     @Test

@@ -1,4 +1,5 @@
 /* @vitest-environment jsdom */
+
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
@@ -7,6 +8,7 @@ import {
   createTestSessionCapability,
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
+import { activateSessionMenuValue } from "../test-helpers/app-sidebar-menu.ts";
 import "../test-helpers/app-sidebar-suite.ts";
 import { createGatewayHarness, mountSidebar } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
@@ -160,14 +162,7 @@ describe("selected ancestry after an independent child-list admission", () => {
       let originalLineage: Promise<void> | undefined;
       let primaryRefresh: ReturnType<typeof sessions.refresh> | undefined;
       try {
-        sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort")!.click();
-        await sidebar.updateComplete;
-        sidebar.querySelector(".sidebar-session-sort-menu")!.dispatchEvent(
-          new CustomEvent("wa-select", {
-            bubbles: true,
-            detail: { item: { value: "involving-me" } },
-          }),
-        );
+        await activateSessionMenuValue(sidebar, "involving-me");
         await waitForFast(() => {
           expect(managedReads).toBeGreaterThan(0);
           expect(sidebar.sessionData.sessionsLoading).toBe(false);

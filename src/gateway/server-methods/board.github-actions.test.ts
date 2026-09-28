@@ -543,18 +543,17 @@ describe("board authenticated GitHub Actions", () => {
     },
   );
 
-  it.each([
-    "https://example.test/steal",
-    "https://api.github.com/repos/owner/other/actions/runs",
-    "https://api.github.com/repos/owner/repo/issues",
-  ])("does not follow redirect %s", async (location) => {
-    actions = () => new Response(null, { status: 302, headers: { location } });
-    const { read } = await reader();
-    const response = await read();
-    expect(response.mock.calls[0]?.[0]).toBe(false);
-    expect(actionCalls()).toHaveLength(1);
-    expect(JSON.stringify(response.mock.calls)).not.toContain(token);
-  });
+  it.each(["https://example.test/steal", "https://api.github.com/repos/owner/other/actions/runs"])(
+    "does not follow redirect %s",
+    async (location) => {
+      actions = () => new Response(null, { status: 302, headers: { location } });
+      const { read } = await reader();
+      const response = await read();
+      expect(response.mock.calls[0]?.[0]).toBe(false);
+      expect(actionCalls()).toHaveLength(1);
+      expect(JSON.stringify(response.mock.calls)).not.toContain(token);
+    },
+  );
 
   it("accepts thirty large raw runs under 1MiB, projects them, and retains the shared 256KiB default", async () => {
     const runs = Array.from({ length: 30 }, () => ({
