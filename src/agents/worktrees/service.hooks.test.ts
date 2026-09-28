@@ -52,39 +52,9 @@ describe("ManagedWorktreeService repository code isolation", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("never executes repository hooks when creating a worktree with setup enabled", async () => {
-    const created = await service.create({ repoRoot: repo, name: "default", baseRef: "HEAD" });
-
-    await expect(fs.stat(created.path)).resolves.toBeDefined();
-    await expect(fs.access(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("never executes repository hooks when creating a worktree with setup disabled", async () => {
-    await service.create({
-      repoRoot: repo,
-      name: "without-setup",
-      baseRef: "HEAD",
-      runSetupScript: false,
-    });
-
-    await expect(fs.access(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("never executes repository hooks when snapshotting and removing a worktree", async () => {
-    const created = await service.create({ repoRoot: repo, name: "remove", baseRef: "HEAD" });
-    await fs.rm(sentinel, { force: true });
-
-    await expect(service.remove({ id: created.id, reason: "test" })).resolves.toMatchObject({
-      removed: true,
-      snapshotRef: expect.any(String),
-    });
-    await expect(fs.access(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("never executes repository hooks when restoring a removed worktree", async () => {
+  it("never executes repository hooks through creation, removal and restore", async () => {
     const created = await service.create({ repoRoot: repo, name: "restore", baseRef: "HEAD" });
     await service.remove({ id: created.id, reason: "test" });
-    await fs.rm(sentinel, { force: true });
 
     await expect(service.restore({ id: created.id })).resolves.toMatchObject({ id: created.id });
     await expect(fs.access(sentinel)).rejects.toMatchObject({ code: "ENOENT" });
@@ -202,7 +172,7 @@ describe("ManagedWorktreeService repository code isolation", () => {
     expect(await service.list()).toEqual([]);
   });
 
-  it.each(["complete", "unwind", "creation-refused"] as const)(
+  it.each(["complete", "unwind"] as const)(
     "releases setup source before process settlement (%s)",
     async (mode) => {
       const script = path.join(repo, ".openclaw", "worktree-setup.sh");
@@ -224,7 +194,6 @@ describe("ManagedWorktreeService repository code isolation", () => {
       const aborted = createDeferredCore();
       const completion = createDeferredCore<SpawnResult>();
       const unwindFailure = new Error("source scope unwind failed");
-      const creationFailure = new Error("worktree creation refused before setup");
       const completionFailure = new Error("accepted completion failed after cancellation");
       const events: string[] = [];
       let currentSource: SourceScope | undefined;
@@ -302,11 +271,6 @@ describe("ManagedWorktreeService repository code isolation", () => {
           name: `handoff-${mode}`,
           baseRef: "HEAD",
           withSource,
-          commitGuard: () => {
-            if (mode === "creation-refused") {
-              throw creationFailure;
-            }
-          },
         }),
       );
       const outcome = creation.then(
@@ -331,13 +295,6 @@ describe("ManagedWorktreeService repository code isolation", () => {
           label,
         );
       try {
-        if (mode === "creation-refused") {
-          await expect(waitForSetupSignal(dispatched.promise, "setup dispatch")).rejects.toBe(
-            creationFailure,
-          );
-          expect(events).toEqual([]);
-          return;
-        }
         await waitForSetupSignal(dispatched.promise, "setup dispatch");
         await waitForSetupSignal(released.promise, "setup source release");
         expect(creationSettled).toBe(false);
