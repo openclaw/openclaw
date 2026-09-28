@@ -71,6 +71,7 @@ export function createHarness(
     verifyFailureCall?: number;
     leaseFails?: boolean;
     leaseFailureCount?: number;
+    leaseFailureCall?: number;
     localVerifyFails?: boolean;
     resumeFails?: boolean;
     workspacePath?: string;
@@ -104,6 +105,7 @@ export function createHarness(
   let remainingDestroyFailures = options.destroyFailureCount ?? 0;
   let remainingReconcileFailures = options.reconcileFailureCount ?? 0;
   let remainingLeaseFailures = options.leaseFailureCount ?? 0;
+  let leaseCalls = 0;
   let verifyCalls = 0;
   const log: string[] = [];
   const reportWorkspaceResultConflict = vi.fn(async () => {});
@@ -218,7 +220,12 @@ export function createHarness(
       return {
         assertActive: vi.fn(async () => {
           log.push("workspace:lease");
-          if (options.leaseFails || remainingLeaseFailures > 0) {
+          leaseCalls += 1;
+          if (
+            options.leaseFails ||
+            remainingLeaseFailures > 0 ||
+            leaseCalls === options.leaseFailureCall
+          ) {
             remainingLeaseFailures -= 1;
             throw new Error("workspace quiescence expired");
           }
@@ -276,9 +283,17 @@ export function createHarness(
         stagedResult.record(stagedResult.ref);
       }
       await options.afterReconcile?.();
+      const verifyLocalStable = async () => {
+        log.push("workspace:verify-local");
+        if (options.localVerifyFails) {
+          throw new Error("local workspace changed after reconciliation");
+        }
+      };
       return {
         manifestRef: reconciledManifestRef,
         changed: options.reconcileChanged ?? true,
+        publishStagedResult: async () => {},
+        discardPreparedStagedResult: async () => {},
         verifyStable: async () => {
           log.push("workspace:verify");
           verifyCalls += 1;
@@ -286,12 +301,11 @@ export function createHarness(
             throw new Error("workspace changed after reconciliation");
           }
         },
-        verifyLocalStable: async () => {
-          log.push("workspace:verify-local");
-          if (options.localVerifyFails) {
-            throw new Error("local workspace changed after reconciliation");
-          }
-        },
+        verifyLocalStable,
+        acceptUnchangedStagedResult:
+          options.reconcileChanged === false && !options.reconcileConflictPaths?.length
+            ? verifyLocalStable
+            : undefined,
         getAppliedWorkspaceResult: options.reconcileConflictPaths?.length
           ? () => ({
               manifestRef: reconciledManifestRef,
@@ -306,7 +320,6 @@ export function createHarness(
                 log.push("workspace:apply-prepared");
                 journal.commit(reconciledManifestRef);
               },
-              publishStagedResult: async () => {},
             }
           : {}),
       };

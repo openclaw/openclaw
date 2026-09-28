@@ -1,13 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { z } from "zod";
 import { WORKER_BUNDLE_PREWARM_VERSION } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { parseWorkerSlotSummary } from "../shared/node-list-parse.js";
-import {
-  isWorkerToolName,
-  WORKER_TOOL_NAMES,
-  type WorkerToolName,
-} from "../worker/tool-authority.js";
-
-export { NODE_WORKER_CAPACITY_MAX } from "../shared/node-list-parse.js";
+import { workerProtocolObject } from "../worker/protocol-record.js";
+import { WORKER_TOOL_NAMES, type WorkerToolName } from "../worker/tool-authority.js";
 
 export const NODE_RUNNER_INVENTORY_UPDATE_METHOD = "node.runnerInventory.update";
 export const NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE = "node-worker-supervisor-v6";
@@ -22,6 +18,7 @@ export const NODE_WORKER_BUNDLE_RETENTION_VERSION = 1;
 export const NODE_WORKER_BUNDLE_STATUS_VERSION = 1;
 export const NODE_WORKER_PORTAL_STREAM_VERSION = 1;
 export const NODE_WORKER_ENVIRONMENT_SESSION_VERSION = 1;
+export const NODE_WORKER_STATUS_WAIT_VERSION = 1;
 export const NODE_WORKER_PREPARED_WORKSPACE_VERSION = 1;
 
 // Supervisors predating launchToolNames admit this closed vocabulary: OpenClaw 2026.9.6
@@ -49,25 +46,41 @@ export const NODE_RUNNER_UPDATE_REQUIRED_ISSUE = {
 } as const;
 
 export type NodeRunnerInventoryIssue = typeof NODE_RUNNER_UPDATE_REQUIRED_ISSUE;
-export type NodeWorkerCapacitySnapshot = Readonly<{
-  total: number;
-  available: number;
-}>;
-
-export type NodeWorkerHostDeclaration =
-  | { enabled: false }
-  | {
-      enabled: true;
-      capacity: NodeWorkerCapacitySnapshot;
-      bundlePrewarm?: typeof WORKER_BUNDLE_PREWARM_VERSION;
-      bundleRetention?: typeof NODE_WORKER_BUNDLE_RETENTION_VERSION;
-      bundleStatus?: typeof NODE_WORKER_BUNDLE_STATUS_VERSION;
-      portalStream?: typeof NODE_WORKER_PORTAL_STREAM_VERSION;
-      environmentSession?: typeof NODE_WORKER_ENVIRONMENT_SESSION_VERSION;
-      preparedWorkspace?: typeof NODE_WORKER_PREPARED_WORKSPACE_VERSION;
-      capturedExecPolicy?: true;
-      launchToolNames?: readonly WorkerToolName[];
-    };
+const CapacitySnapshot = z.transform((value, context) => {
+  const capacity = parseWorkerSlotSummary(value);
+  if (!capacity) {
+    context.addIssue({ code: "custom", message: "invalid worker capacity" });
+    return z.NEVER;
+  }
+  return capacity;
+});
+// Unknown names are ignored so newer nodes can still declare to this Gateway.
+const LaunchToolNames = z
+  .array(z.string().min(1).max(64))
+  .max(64)
+  .refine((names) => new Set(names).size === names.length)
+  .transform((names): readonly WorkerToolName[] => {
+    const declared = new Set<string>(names);
+    return WORKER_TOOL_NAMES.filter((name) => declared.has(name));
+  });
+const WorkerHost = z.union([
+  workerProtocolObject({ enabled: z.literal(false) }),
+  workerProtocolObject({
+    enabled: z.literal(true),
+    capacity: CapacitySnapshot,
+    bundlePrewarm: z.literal(WORKER_BUNDLE_PREWARM_VERSION).optional(),
+    bundleRetention: z.literal(NODE_WORKER_BUNDLE_RETENTION_VERSION).optional(),
+    bundleStatus: z.literal(NODE_WORKER_BUNDLE_STATUS_VERSION).optional(),
+    portalStream: z.literal(NODE_WORKER_PORTAL_STREAM_VERSION).optional(),
+    environmentSession: z.literal(NODE_WORKER_ENVIRONMENT_SESSION_VERSION).optional(),
+    statusWait: z.literal(NODE_WORKER_STATUS_WAIT_VERSION).optional(),
+    preparedWorkspace: z.literal(NODE_WORKER_PREPARED_WORKSPACE_VERSION).optional(),
+    capturedExecPolicy: z.literal(true).optional(),
+    launchToolNames: LaunchToolNames.optional(),
+  }).refine((host) => host.bundleStatus === undefined || host.bundleRetention !== undefined),
+]);
+export type NodeWorkerCapacitySnapshot = Readonly<z.infer<typeof CapacitySnapshot>>;
+export type NodeWorkerHostDeclaration = z.infer<typeof WorkerHost>;
 
 export type NodeRunnerInventoryDeclaration =
   | { protocolFeatures: readonly [] }
@@ -80,94 +93,6 @@ export type NodeRunnerInventoryDeclaration =
       protocolFeatures: readonly [typeof NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE];
       workerHost: NodeWorkerHostDeclaration;
     };
-
-function parseWorkerHostDeclaration(value: unknown): NodeWorkerHostDeclaration | null {
-  if (!isRecord(value) || typeof value.enabled !== "boolean") {
-    return null;
-  }
-  const keys = Object.keys(value);
-  if (!value.enabled) {
-    return keys.length === 1 && keys[0] === "enabled" ? { enabled: false } : null;
-  }
-  const capacity = parseWorkerSlotSummary(value.capacity);
-  if (
-    !capacity ||
-    keys.length < 2 ||
-    keys.length > 10 ||
-    !keys.includes("enabled") ||
-    !keys.includes("capacity") ||
-    keys.some(
-      (key) =>
-        key !== "enabled" &&
-        key !== "capacity" &&
-        key !== "bundlePrewarm" &&
-        key !== "bundleRetention" &&
-        key !== "bundleStatus" &&
-        key !== "portalStream" &&
-        key !== "environmentSession" &&
-        key !== "preparedWorkspace" &&
-        key !== "capturedExecPolicy" &&
-        key !== "launchToolNames",
-    ) ||
-    (value.bundlePrewarm !== undefined && value.bundlePrewarm !== WORKER_BUNDLE_PREWARM_VERSION) ||
-    (value.bundleRetention !== undefined &&
-      value.bundleRetention !== NODE_WORKER_BUNDLE_RETENTION_VERSION) ||
-    (value.bundleStatus !== undefined &&
-      value.bundleStatus !== NODE_WORKER_BUNDLE_STATUS_VERSION) ||
-    (value.portalStream !== undefined &&
-      value.portalStream !== NODE_WORKER_PORTAL_STREAM_VERSION) ||
-    (value.environmentSession !== undefined &&
-      value.environmentSession !== NODE_WORKER_ENVIRONMENT_SESSION_VERSION) ||
-    (value.preparedWorkspace !== undefined &&
-      value.preparedWorkspace !== NODE_WORKER_PREPARED_WORKSPACE_VERSION) ||
-    (value.capturedExecPolicy !== undefined && value.capturedExecPolicy !== true) ||
-    (value.bundleStatus !== undefined && value.bundleRetention === undefined)
-  ) {
-    return null;
-  }
-  let launchToolNames: WorkerToolName[] | undefined;
-  if ("launchToolNames" in value) {
-    const declared = value.launchToolNames;
-    if (
-      !Array.isArray(declared) ||
-      declared.length > 64 ||
-      new Set(declared).size !== declared.length
-    ) {
-      return null;
-    }
-    for (const name of declared) {
-      if (typeof name !== "string" || name.length === 0 || name.length > 64) {
-        return null;
-      }
-    }
-    const knownNames = new Set(declared.filter(isWorkerToolName));
-    launchToolNames = WORKER_TOOL_NAMES.filter((name) => knownNames.has(name));
-  }
-  return {
-    enabled: true,
-    capacity,
-    ...(value.bundlePrewarm === WORKER_BUNDLE_PREWARM_VERSION
-      ? { bundlePrewarm: WORKER_BUNDLE_PREWARM_VERSION }
-      : {}),
-    ...(value.bundleRetention === NODE_WORKER_BUNDLE_RETENTION_VERSION
-      ? { bundleRetention: NODE_WORKER_BUNDLE_RETENTION_VERSION }
-      : {}),
-    ...(value.bundleStatus === NODE_WORKER_BUNDLE_STATUS_VERSION
-      ? { bundleStatus: NODE_WORKER_BUNDLE_STATUS_VERSION }
-      : {}),
-    ...(value.portalStream === NODE_WORKER_PORTAL_STREAM_VERSION
-      ? { portalStream: NODE_WORKER_PORTAL_STREAM_VERSION }
-      : {}),
-    ...(value.environmentSession === NODE_WORKER_ENVIRONMENT_SESSION_VERSION
-      ? { environmentSession: NODE_WORKER_ENVIRONMENT_SESSION_VERSION }
-      : {}),
-    ...(value.preparedWorkspace === NODE_WORKER_PREPARED_WORKSPACE_VERSION
-      ? { preparedWorkspace: NODE_WORKER_PREPARED_WORKSPACE_VERSION }
-      : {}),
-    ...(value.capturedExecPolicy === true ? { capturedExecPolicy: true } : {}),
-    ...(launchToolNames !== undefined ? { launchToolNames } : {}),
-  };
-}
 
 /** Parses the closed reconnect-scoped node-host runner declaration. */
 export function parseNodeRunnerInventoryDeclaration(
@@ -199,7 +124,16 @@ export function parseNodeRunnerInventoryDeclaration(
   if (feature !== NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE || keys.length !== 2) {
     return null;
   }
-  const workerHost = parseWorkerHostDeclaration(value.workerHost);
+  const workerHost = WorkerHost.safeParse(value.workerHost).data;
+  if (workerHost) {
+    // Optional undefined values are absent in the reconnect declaration.
+    const fields: Record<string, unknown> = workerHost;
+    for (const key of Object.keys(fields)) {
+      if (fields[key] === undefined) {
+        delete fields[key];
+      }
+    }
+  }
   return workerHost
     ? { protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE], workerHost }
     : null;

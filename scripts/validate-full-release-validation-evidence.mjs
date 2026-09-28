@@ -161,6 +161,13 @@ export function validateFullReleaseValidationEvidence({
   isTrustedMainAncestor,
   validateEvidenceReuseStrictly,
 }) {
+  if (
+    expectedReleaseTag?.includes("-alpha.") ||
+    expectedCoreNpmPublication?.npmDistTag === "alpha" ||
+    expectedTrustedWorkflowFullRef?.includes("tideclaw/alpha/")
+  ) {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
   if (expectedPublicationSelection && expectedCoreNpmPublication) {
     throw new Error("Publication evidence requires one actual consumption selection.");
   }
@@ -583,11 +590,9 @@ async function main() {
               JSON.stringify({
                 route: process.env.PREPARED_PLUGINS?.trim()
                   ? "prepared"
-                  : process.env.RELEASE_NPM_DIST_TAG === "alpha"
-                    ? "alpha"
-                    : process.env.RELEASE_NPM_DIST_TAG === "extended-stable"
-                      ? "extended-stable"
-                      : "normal",
+                  : process.env.RELEASE_NPM_DIST_TAG === "extended-stable"
+                    ? "extended-stable"
+                    : "normal",
                 npmDistTag: process.env.RELEASE_NPM_DIST_TAG,
                 publishOpenclawNpm: process.env.PUBLISH_OPENCLAW_NPM === "true",
                 pluginPublishScope: process.env.PLUGIN_PUBLISH_SCOPE,

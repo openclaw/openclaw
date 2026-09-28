@@ -1,11 +1,29 @@
 import type { Server } from "node:http";
+import { createServer, type Server as TcpServer } from "node:net";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { reserveGatewayTestListener } from "./test-helpers.listener.js";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
+import { captureEnv } from "../test-utils/env.js";
+import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
+import { startGatewayServerHarness } from "./server.e2e-ws-harness.js";
+import type { GatewayServer } from "./server.js";
+import { reserveGatewayTestListener, startClaimedGateway } from "./test-helpers.listener.js";
+
+const observed = vi.hoisted(() => ({
+  server: vi.fn<(claim: TestPortClaim) => Promise<GatewayServer>>(),
+  adopted: vi.fn<(listener: Server | undefined) => void>(),
+}));
+vi.mock("./test-helpers.js", () => ({
+  startTestGatewayServer: observed.server,
+  connectOk: vi.fn(),
+  trackConnectChallengeNonce: vi.fn(),
+}));
 
 vi.mock("./server-runtime-state.js", () => ({
-  createGatewayHttpTransport: async (params: { port: number; testListener?: Server }) =>
-    params.testListener,
+  createGatewayHttpTransport: async (params: { port: number; testListener?: Server }) => {
+    observed.adopted(params.testListener);
+    return params.testListener;
+  },
 }));
 
 function createTestTransport(transport: typeof import("./server-runtime-state.js"), port: number) {
@@ -76,5 +94,95 @@ describe("reserved Gateway test listeners", () => {
         );
       }
     },
+  );
+});
+
+function listen(server: TcpServer, port: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const failed = (error: Error) => {
+      server.off("listening", listening);
+      reject(error);
+    };
+    const listening = () => {
+      server.off("error", failed);
+      resolve();
+    };
+    server.once("error", failed);
+    server.once("listening", listening);
+    server.listen(port, "127.0.0.1");
+  });
+}
+
+async function closeListener(server: TcpServer | undefined): Promise<void> {
+  if (server?.listening) {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+}
+
+it("prevents an unclaimed listener from stealing the Gateway startup socket", async () => {
+  const transport = await import("./server-runtime-state.js");
+  const env = captureEnv(["OPENCLAW_GATEWAY_TOKEN"]);
+  const entered = createDeferred<TestPortClaim>();
+  const proceed = createDeferred();
+  const competitor = createServer();
+  let selected: TestPortClaim | undefined;
+  let reclaimed: TestPortClaim | undefined;
+  let settled:
+    | Promise<PromiseSettledResult<Awaited<ReturnType<typeof startGatewayServerHarness>>>[]>
+    | undefined;
+  observed.adopted.mockClear();
+  observed.server.mockImplementation((claim) =>
+    startClaimedGateway(claim, async () => {
+      selected = claim;
+      entered.resolve(claim);
+      await proceed.promise;
+      // The real reservation dispatcher hands its bound socket to this transport seam.
+      await createTestTransport(transport, claim.port);
+      return {
+        getTailscaleIngressEndpoint: () => undefined,
+        startupSettled: Promise.resolve(),
+        close: () => closeListener(observed.adopted.mock.lastCall?.[0]),
+      };
+    }),
+  );
+
+  await runQaGatewayFixture(
+    async () => {
+      const starting = startGatewayServerHarness();
+      settled = Promise.allSettled([starting]);
+      const claim = await Promise.race([
+        entered.promise,
+        starting.then(() => {
+          throw new Error("Gateway startup settled before the socket handoff gate");
+        }),
+      ]);
+      await expect(listen(competitor, claim.port)).rejects.toMatchObject({ code: "EADDRINUSE" });
+      proceed.resolve();
+      const harness = await starting;
+      expect(observed.adopted).toHaveBeenCalledOnce();
+      expect(observed.adopted.mock.lastCall?.[0]?.listening).toBe(true);
+      expect(harness.port).toBe(claim.port);
+
+      await harness.close();
+      reclaimed = await acquireTestPortBlock({ port: claim.port, offsets: [0, 1, 2, 3, 4] });
+      await listen(competitor, claim.port);
+      expect(competitor.address()).toMatchObject({ address: "127.0.0.1", port: claim.port });
+    },
+    () => proceed.resolve(),
+    async () => {
+      const result = (await settled)?.[0];
+      if (result?.status === "fulfilled") {
+        await result.value.close();
+      }
+    },
+    () => closeListener(competitor),
+    () => closeListener(observed.adopted.mock.lastCall?.[0]),
+    () => selected?.release(),
+    () => reclaimed?.release(),
+    () => env.restore(),
+    () => observed.server.mockReset(),
+    () => observed.adopted.mockReset(),
   );
 });

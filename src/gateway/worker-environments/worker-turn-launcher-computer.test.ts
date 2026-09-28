@@ -334,6 +334,8 @@ describe("worker launch capabilities", () => {
             changed: false,
             verifyStable: vi.fn(async () => {}),
             verifyLocalStable: vi.fn(async () => {}),
+            publishStagedResult: async () => {},
+            discardPreparedStagedResult: async () => {},
           };
         },
       );

@@ -358,6 +358,8 @@ describe("worker turn execution", () => {
           changed: false,
           verifyStable: async () => {},
           verifyLocalStable: async () => {},
+          publishStagedResult: async () => {},
+          discardPreparedStagedResult: async () => {},
         };
       },
     };

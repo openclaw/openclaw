@@ -221,6 +221,8 @@ describe("cloud transcript write admission", () => {
             changed: false,
             verifyStable: async () => {},
             verifyLocalStable: async () => {},
+            publishStagedResult: async () => {},
+            discardPreparedStagedResult: async () => {},
             getAppliedWorkspaceResult: () => ({
               manifestRef: MANIFEST_REF,
               manifest: { version: 1, baseCommit: null, entries: [] },

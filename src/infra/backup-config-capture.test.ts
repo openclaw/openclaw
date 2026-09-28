@@ -44,7 +44,6 @@ async function configGraph(state: OpenClawTestState) {
   const snapshot = await createConfigIO({ observe: false }).readConfigFileSnapshot();
   expect(snapshot.issues).toEqual([]);
   return {
-    includePath,
     leafPath,
     files: new Map([
       [state.configPath, root],
@@ -85,7 +84,6 @@ describe("full backup config include capture", () => {
           const raw = graph.files
             .get(state.configPath)!
             .replace('ownership: "explicit"', "defaults: { workspace: 42 }");
-          graph.files.set(state.configPath, raw);
           await fs.writeFile(state.configPath, raw);
           await expect(
             createBackupArchive({ output: state.path("backup.tar.gz"), includeWorkspace: false }),
@@ -98,11 +96,7 @@ describe("full backup config include capture", () => {
           await fs.symlink(authoredRoot, state.configPath);
         }
         await fs.writeFile(state.statePath("ordinary.txt"), "ordinary");
-        const { archive, restoredPath } = await restore(
-          state,
-          state.path("backup.tar.gz"),
-          !invalid,
-        );
+        const { archive, restoredPath } = await restore(state, state.path("backup.tar.gz"));
         const entries: string[] = [];
         await tar.t({
           file: archive.archivePath,
@@ -127,12 +121,10 @@ describe("full backup config include capture", () => {
           configPath: restoredPath(state.configPath),
           observe: false,
         }).readConfigFileSnapshot();
-        expect(snapshot.valid).toBe(!invalid);
+        expect(snapshot.valid).toBe(true);
         expect(snapshot.includeProvenance).toBeDefined();
-        expect(snapshot.issues.map((issue) => issue.path)).toEqual(
-          invalid ? ["agents.defaults.workspace"] : [],
-        );
-        expect(archive.skipped.some(({ reason }) => reason === "unresolved")).toBe(invalid);
+        expect(snapshot.issues.map((issue) => issue.path)).toEqual([]);
+        expect(archive.skipped.some(({ reason }) => reason === "unresolved")).toBe(false);
         expect(snapshot.config.gateway?.mode).toBe("local");
       });
     },

@@ -1,4 +1,3 @@
-// Control UI component implements the resizable divider element.
 import { css, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
@@ -197,7 +196,7 @@ class ResizableDivider extends OpenClawLitElement {
 
     e.preventDefault();
     this.emitResize(nextRatio);
-    this.emitResizeEnd(nextRatio);
+    this.emitResize(nextRatio, "resize-end");
   };
 
   private readonly finishDragging = (event: Event) => {
@@ -210,7 +209,7 @@ class ResizableDivider extends OpenClawLitElement {
         this.dragFrame = 0;
       }
       this.flushPointerMove();
-      this.emitResizeEnd(this.dragRatio);
+      this.emitResize(this.dragRatio, "resize-end");
     }
     this.stopDragging();
   };
@@ -237,27 +236,19 @@ class ResizableDivider extends OpenClawLitElement {
     }
   }
 
-  private emitResize(nextRatio: number) {
+  private emitResize(nextRatio: number, type: "resize" | "resize-end" = "resize") {
     const splitRatio = this.clampRatio(nextRatio);
-    this.setCurrentAriaValue(splitRatio);
+    if (type === "resize") {
+      this.setCurrentAriaValue(splitRatio);
+    }
     this.dispatchEvent(
-      new CustomEvent("resize", {
+      new CustomEvent(type, {
         detail: { splitRatio },
         bubbles: true,
         composed: true,
       }),
     );
     return splitRatio;
-  }
-
-  private emitResizeEnd(nextRatio: number) {
-    this.dispatchEvent(
-      new CustomEvent("resize-end", {
-        detail: { splitRatio: this.clampRatio(nextRatio) },
-        bubbles: true,
-        composed: true,
-      }),
-    );
   }
 
   private clampRatio(value: number) {

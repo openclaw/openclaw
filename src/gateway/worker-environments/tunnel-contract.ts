@@ -170,7 +170,7 @@ export type WorkerLocalWorkspaceReconcileRequest = {
   baseManifestRef: string;
   journal: WorkerWorkspaceReconciliationJournalAdapter;
   assertCurrent?: () => void;
-  stagedResult?: {
+  stagedResult: {
     ref: string;
     record(ref: string): void;
   };
@@ -185,7 +185,7 @@ export type WorkerWorkspaceReconcileRequest = {
         path: string;
         journal: WorkerWorkspaceReconciliationJournalAdapter;
         assertCurrent?: () => void;
-        stagedResult?: WorkerLocalWorkspaceReconcileRequest["stagedResult"];
+        stagedResult: WorkerLocalWorkspaceReconcileRequest["stagedResult"];
       }
     | {
         kind: "repository";
@@ -206,11 +206,13 @@ export type WorkerWorkspaceReconcileResult = {
   verifyLocalStable(): Promise<void>;
   /** Apply the prepared candidate locally without making it restart-authoritative. */
   applyPreparedStagedResult?(): Promise<void>;
+  /** Reverify and accept an exact local/base match without mutating either workspace. */
+  acceptUnchangedStagedResult?: () => Promise<void>;
   /** Return the accepted local manifest and any keep-local conflicts after apply. */
   getAppliedWorkspaceResult?(): WorkerWorkspaceApplyResult | undefined;
   /** Publish the verified candidate for restart recovery. */
-  publishStagedResult?(): Promise<void>;
-  discardPreparedStagedResult?(): Promise<void>;
+  publishStagedResult(): Promise<void>;
+  discardPreparedStagedResult(): Promise<void>;
 };
 
 export type WorkerWorkspaceQuiescence = {

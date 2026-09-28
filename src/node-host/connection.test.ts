@@ -15,57 +15,43 @@ import * as hostStats from "./host-stats.js";
 const stats = { cpuCount: 8, memoryTotalBytes: 100, memoryFreeBytes: 50 };
 const gateway = { url: "wss://gateway.example.test", protocol: 4, capabilities: [] };
 
-it.each([
-  {
-    name: "captured exec policy",
-    capability: GATEWAY_SERVER_CAPS.NODE_WORKER_CAPTURED_EXEC_POLICY,
-    support: { capturedExecPolicy: true },
-  },
-  {
-    name: "launch tool names",
-    capability: GATEWAY_SERVER_CAPS.NODE_WORKER_LAUNCH_TOOL_NAMES,
-    support: { launchToolNames: [...WORKER_TOOL_NAMES] },
-  },
-])(
-  "negotiates $name per connection without widening older inventory",
-  async ({ capability, support }) => {
-    const { connection, request, start, prepared } = startConnectionFixture(true);
-    try {
-      start.mock.calls[0]![0].onRunnerCapacityChanged?.({ total: 2, available: 2 });
-      for (const supported of [false, true, false]) {
-        connection.connect({
-          ...gateway,
-          capabilities: supported ? [capability] : [],
-        });
-        await vi.advanceTimersByTimeAsync(0);
-        const declaration = request.mock.calls.findLast(
-          ([method]) => method === NODE_RUNNER_INVENTORY_UPDATE_METHOD,
-        )?.[1];
-        expect(declaration).toEqual({
-          protocolFeatures: ["node-worker-supervisor-v6"],
-          workerHost: {
-            enabled: true,
-            capacity: { total: 2, available: 2 },
-            bundlePrewarm: 1,
-            ...(supported ? support : {}),
-          },
-        });
-        expect(parseNodeRunnerInventoryDeclaration(declaration)).toEqual(declaration);
-        expect(prepared.manifest).toEqual({ commands: [], caps: [], pathEnv: "/bin" });
-      }
-      connection.connect({ ...gateway, capabilities: [capability] });
-      start.mock.calls[0]![0].onWorkerHostingDisabled?.("hosting disabled");
+it("negotiates optional worker capabilities per connection without widening older inventory", async () => {
+  const { connection, request, start, prepared } = startConnectionFixture(true);
+  try {
+    start.mock.calls[0]![0].onRunnerCapacityChanged?.({ total: 2, available: 2 });
+    for (const supported of [false, true, false]) {
+      connection.connect({
+        ...gateway,
+        capabilities: supported
+          ? [
+              GATEWAY_SERVER_CAPS.NODE_WORKER_CAPTURED_EXEC_POLICY,
+              GATEWAY_SERVER_CAPS.NODE_WORKER_LAUNCH_TOOL_NAMES,
+              GATEWAY_SERVER_CAPS.NODE_WORKER_STATUS_WAIT,
+            ]
+          : [],
+      });
       await vi.advanceTimersByTimeAsync(0);
-      expect(
-        request.mock.calls.findLast(
-          ([method]) => method === NODE_RUNNER_INVENTORY_UPDATE_METHOD,
-        )?.[1],
-      ).toMatchObject({ workerHost: { enabled: false } });
-    } finally {
-      await connection.close();
+      const declaration = request.mock.calls.findLast(
+        ([method]) => method === NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+      )?.[1];
+      expect(declaration).toEqual({
+        protocolFeatures: ["node-worker-supervisor-v6"],
+        workerHost: {
+          enabled: true,
+          capacity: { total: 2, available: 2 },
+          bundlePrewarm: 1,
+          ...(supported
+            ? { capturedExecPolicy: true, launchToolNames: [...WORKER_TOOL_NAMES], statusWait: 1 }
+            : {}),
+        },
+      });
+      expect(parseNodeRunnerInventoryDeclaration(declaration)).toEqual(declaration);
+      expect(prepared.manifest).toEqual({ commands: [], caps: [], pathEnv: "/bin" });
     }
-  },
-);
+  } finally {
+    await connection.close();
+  }
+});
 
 it("keeps the published 2026.9.6 supervisor launch vocabulary when no names are declared", () => {
   const declaration = parseNodeRunnerInventoryDeclaration({

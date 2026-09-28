@@ -96,6 +96,14 @@ execution and other approved node commands retain their existing requirements.
 Updating a node first remains compatible with an older Gateway; the node
 advertises this support only when the Gateway understands it.
 
+Turn completion uses a bounded status wait when both the Gateway and node host
+support `node-worker-status-wait-v1`. The node wakes the waiting request as soon
+as the exact turn's terminal result is journaled; transcript settlement and
+worker cleanup ownership remain unchanged. This optional capability supports
+mixed Gateway/node versions: update either side first, and older node hosts
+continue to use status polling. A newer node advertises `workerHost.statusWait: 1`
+only to a Gateway that announces the capability. Reconnects renegotiate support.
+
 Worker tools newer than a node's installed OpenClaw, such as `presence`, are
 offered only when the node's supervisor declares support. Older nodes keep
 hosting OpenClaw worker turns without those tools. Update OpenClaw on the node
