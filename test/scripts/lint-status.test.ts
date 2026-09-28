@@ -246,12 +246,12 @@ async function runLintFixture(
   signal: AbortSignal,
   {
     phase = "oxlint",
-    parallel = false,
+    multipleShards = false,
     timeout = false,
     forwarded,
   }: {
     phase?: string;
-    parallel?: boolean;
+    multipleShards?: boolean;
     timeout?: boolean;
     forwarded?: "SIGINT" | "SIGTERM";
   } = {},
@@ -260,7 +260,7 @@ async function runLintFixture(
   const args =
     entry === "run-oxlint.mjs"
       ? ["--tsconfig", "extensions/tsconfig.json", "extensions"]
-      : parallel
+      : multipleShards
         ? ["--only=core", "--only=extensions", "--only=scripts"]
         : ["--only=extensions"];
   let readiness: Promise<void> | undefined;
@@ -276,7 +276,7 @@ async function runLintFixture(
       ],
       {
         ...env,
-        OPENCLAW_OXLINT_SHARDS_SERIAL: parallel ? "0" : "1",
+        OPENCLAW_OXLINT_SHARDS_SERIAL: multipleShards ? "0" : "1",
         OPENCLAW_OXLINT_SHARD_HEARTBEAT_MS: "0",
         OPENCLAW_OXLINT_SHARD_TIMEOUT_MS: timeout ? "1500" : "0",
       },
@@ -323,7 +323,7 @@ async function runLintFixture(
   expect(fs.existsSync(path.join(root, ".artifacts/dist-artifacts.lock/owner.json")), details).toBe(
     mode === "unjoined",
   );
-  // Every stdout line remains machine-readable, including parallel sibling output.
+  // Every stdout line remains machine-readable, including sequential shard output.
   expect(
     result.stdout
       .trim()
@@ -508,14 +508,14 @@ describe.skipIf(process.platform === "win32")("lint failure reporting boundary",
   );
 
   it.for(["run-oxlint-shards.mts", "run-lint.mts"] as const)(
-    "%s joins parallel siblings before one final failure",
+    "%s joins the failed shard and skips later shards before final reporting",
     (entry, { signal }) =>
       fixture.run(async () => {
         const { result, details, steps, trailers } = await runLintFixture(
           entry,
           "nonzero",
           signal,
-          { parallel: true },
+          { multipleShards: true },
         );
         expect(result.status, details).toBe(7);
         expect(
@@ -523,7 +523,7 @@ describe.skipIf(process.platform === "win32")("lint failure reporting boundary",
             .filter((step) => step.step === "oxlint")
             .map((step) => step.shard)
             .toSorted(),
-        ).toEqual(["core", "extensions", "scripts"]);
+        ).toEqual(["core"]);
         expect(trailers, details).toEqual([
           {
             text: `[${entry === "run-lint.mts" ? "lint" : "oxlint"}] FAILED (exit 7)`,

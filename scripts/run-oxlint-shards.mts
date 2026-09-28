@@ -31,7 +31,6 @@ const DEFAULT_SHARD_HEARTBEAT_MS = 30_000;
 const DEFAULT_SHARD_TIMEOUT_MS = 15 * 60_000;
 const DEFAULT_SHARD_KILL_GRACE_MS = 5_000;
 const POST_FORCE_KILL_WAIT_MS = 1_000;
-const DEFAULT_SPLIT_CORE_SHARD_CONCURRENCY = 4;
 const FAST_LOCAL_CHECK_MIN_CPUS = 12;
 const FAST_LOCAL_CHECK_MIN_MEMORY_BYTES = 48 * 1024 ** 3;
 const EXTENSION_TS_CONFIG = "extensions/tsconfig.json";
@@ -61,7 +60,6 @@ type RunnerOptions = {
 };
 type ShardRunnerOptions = RunnerOptions & { shard: OxlintShard; onCompleted?: () => void };
 type ShardBatchOptions = RunnerOptions & {
-  concurrency: number;
   entries: OxlintShard[];
   evidenceId?: string;
 };
@@ -140,14 +138,14 @@ export function createOxlintShards({
   splitCore = false,
   splitExtensions = false,
 }: PlatformShardOptions = {}) {
-  const constrainedSerial =
+  const constrainedShards =
     hostResources.totalMemoryBytes < CI_PARALLEL_MIN_MEMORY_BYTES &&
-    shouldRunOxlintShardsSerial({ env, platform, hostResources });
+    shouldUseConstrainedOxlintShards({ env, platform, hostResources });
   const coreGroups =
-    splitCore || constrainedSerial ? createCoreOxlintShards({ cwd, readDir }) : [CORE_SHARD];
+    splitCore || constrainedShards ? createCoreOxlintShards({ cwd, readDir }) : [CORE_SHARD];
   // Bound semantic checker caches without rebuilding the full type graph for every directory.
   const coreShards =
-    constrainedSerial && !splitCore
+    constrainedShards && !splitCore
       ? Array.from({ length: DEFAULT_CONSTRAINED_CORE_STRIPES }, (_, index) =>
           selectCoreOxlintStripe(coreGroups, {
             index: index + 1,
@@ -157,13 +155,13 @@ export function createOxlintShards({
       : coreGroups;
   // Unsplit plugin lint can exceed small-host RAM even with a single lint thread.
   // Chunk serial runs; explicit stripes use independently bounded Programs that stay serial.
-  const chunkExtensions = splitExtensions || platform === "win32" || constrainedSerial;
+  const chunkExtensions = splitExtensions || platform === "win32" || constrainedShards;
   // Larger serial Programs amortize type-graph startup on the measured Linux CI
   // class. Unknown/ancestor-constrained memory and explicit stripes retain eight.
   const extensionChunkSize =
     platform === "linux" &&
     (env.CI === "true" || env.GITHUB_ACTIONS === "true") &&
-    constrainedSerial &&
+    constrainedShards &&
     !splitExtensions &&
     !env.OPENCLAW_OXLINT_SHARDS_SERIAL?.trim() &&
     hostResources.logicalCpuCount >= 4 &&
@@ -241,7 +239,7 @@ export function resolveWindowsExtensionChunkSize(env: NodeJS.ProcessEnv = proces
   );
 }
 
-export function shouldRunOxlintShardsSerial({
+export function shouldUseConstrainedOxlintShards({
   env = process.env,
   platform = process.platform,
   hostResources,
@@ -361,20 +359,13 @@ export async function main(
         return code;
       }
     }
-    const shardConcurrency = resolveOxlintShardConcurrency({
-      env,
-      platform: process.platform,
-      hostResources,
-      splitCore: shardArgs.splitCore,
-      splitExtensions,
-    });
-    // stderr: stdout may carry machine-readable oxlint output for callers.
+    // CPU count is not admission to retain multiple complete compiler graphs.
+    // Keep target planning independent from the single active semantic leaf.
     console.error(
-      `[oxlint] shard concurrency ${Math.max(1, Math.min(shardConcurrency, selectedShards.length))} ` +
+      `[oxlint] shard concurrency 1 ` +
         `(cpus=${hostResources.logicalCpuCount}, memGB=${Math.round(hostResources.totalMemoryBytes / 1024 ** 3)})`,
     );
     const results = await runShards({
-      concurrency: Math.max(1, Math.min(shardConcurrency, selectedShards.length)),
       entries: selectedShards,
       env,
       extraArgs: shardArgs.oxlintArgs,
@@ -605,81 +596,45 @@ function matchesShardSelector(shard: { name: string }, selector: string) {
   return selector === shard.name || selector === shard.name.split(":")[0];
 }
 
-export function resolveOxlintShardConcurrency({
-  env = process.env,
-  platform = process.platform,
-  hostResources,
-  splitCore = false,
-  splitExtensions = false,
-}: ResourceOptions & { splitCore?: boolean; splitExtensions?: boolean } = {}) {
-  if (splitExtensions || shouldRunOxlintShardsSerial({ env, platform, hostResources })) {
-    return 1;
-  }
-
-  const explicitConcurrency = resolvePositiveEnvInt(env, "OPENCLAW_OXLINT_SHARD_CONCURRENCY");
-  if (explicitConcurrency !== null) {
-    return explicitConcurrency;
-  }
-
-  if (!splitCore) {
-    return Number.MAX_SAFE_INTEGER;
-  }
-
-  const resources = resolveHostResources(hostResources);
-  return Math.max(
-    1,
-    Math.min(DEFAULT_SPLIT_CORE_SHARD_CONCURRENCY, Math.floor(resources.logicalCpuCount / 4)),
-  );
-}
-
-async function runShards({
-  concurrency,
-  entries,
-  env,
-  extraArgs,
-  runner,
-  evidenceId,
-}: ShardBatchOptions) {
-  // Dependency-less worktrees establish their primary-checkout toolchain link
-  // before this lazy import, avoiding a top-level package-resolution failure.
-  const { default: pMap } = await import("p-map");
+async function runShards({ entries, env, extraArgs, runner, evidenceId }: ShardBatchOptions) {
   let completed = 0;
-  const results = await pMap(
-    entries,
-    async (shard, index) => {
-      if (isParentTerminationRequested()) {
-        return undefined;
-      }
-      // File projection must retain the measured parent Program's resource bounds.
-      const targets = shard.canonicalTargets ?? shard.args.slice(2);
-      const boundedTargets =
-        (shard.name.startsWith("core:") &&
-          (targets.length === 1 ||
-            targets.every((target) => !ISOLATED_CORE_TARGETS.has(target)))) ||
-        (shard.name.startsWith("extensions:") && targets.length <= DEFAULT_EXTENSION_CHUNK_SIZE);
-      const boundedArgs =
-        boundedTargets &&
-        extraArgs.every((arg) => /^--(?:threads=[12]|format=(?:json|stylish))$/u.test(arg));
-      return await runShard({
-        env: {
-          ...env,
-          ...(evidenceId ? { OPENCLAW_CI_STATIC_EVIDENCE_ID: `${evidenceId}:${index}` } : {}),
-          OPENCLAW_OXLINT_BATCH_CONCURRENCY: String(concurrency),
-          OPENCLAW_OXLINT_BOUNDED_SHARD_ARGS: boundedArgs
-            ? JSON.stringify([...shard.args, ...extraArgs])
-            : "",
-        },
-        extraArgs,
-        runner,
-        shard,
-        onCompleted: () => {
-          completed++;
-        },
-      });
-    },
-    { concurrency, stopOnError: false },
-  );
-  return { statuses: results.filter((status) => status !== undefined), completed };
+  const statuses: number[] = [];
+  for (const [index, shard] of entries.entries()) {
+    if (isParentTerminationRequested()) {
+      break;
+    }
+    // File projection must retain the measured parent Program's resource bounds.
+    const targets = shard.canonicalTargets ?? shard.args.slice(2);
+    const boundedTargets =
+      (shard.name.startsWith("core:") &&
+        (targets.length === 1 || targets.every((target) => !ISOLATED_CORE_TARGETS.has(target)))) ||
+      (shard.name.startsWith("extensions:") && targets.length <= DEFAULT_EXTENSION_CHUNK_SIZE);
+    const boundedArgs =
+      boundedTargets &&
+      extraArgs.every((arg) => /^--(?:threads=[12]|format=(?:json|stylish))$/u.test(arg));
+    const status = await runShard({
+      env: {
+        ...env,
+        ...(evidenceId ? { OPENCLAW_CI_STATIC_EVIDENCE_ID: `${evidenceId}:${index}` } : {}),
+        OPENCLAW_OXLINT_BATCH_CONCURRENCY: "1",
+        OPENCLAW_OXLINT_BOUNDED_SHARD_ARGS: boundedArgs
+          ? JSON.stringify([...shard.args, ...extraArgs])
+          : "",
+      },
+      extraArgs,
+      runner,
+      shard,
+      onCompleted: () => {
+        completed++;
+      },
+    });
+    statuses.push(status);
+    // Join the failed leaf before returning. Later --fix shards must not mutate files.
+    if (status !== 0) {
+      break;
+    }
+  }
+  return { statuses, completed };
 }
 
 export async function runShard({ env, extraArgs, runner, shard, onCompleted }: ShardRunnerOptions) {
@@ -714,7 +669,7 @@ export async function runShard({ env, extraArgs, runner, shard, onCompleted }: S
   let output = "";
   let outputOverflow = false;
   if (collectEvidence) {
-    // Concurrent shards must publish each native JSON report and receipt together.
+    // Publish each native JSON report and receipt together for completion evidence.
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
       if (!outputOverflow && output.length + chunk.length > 16 * 1024 * 1024) {
