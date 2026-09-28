@@ -9,6 +9,9 @@ export function transformCliResultText(
   return {
     ...output,
     rawText: output.text,
+    ...(output.textParts && output.textParts.length > 1
+      ? { rawFinalText: output.textParts.at(-1) }
+      : {}),
     text: applyPluginTextReplacements(output.text, replacements),
     ...(output.textParts
       ? {

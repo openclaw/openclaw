@@ -18,7 +18,8 @@ export function resolveDiagnosticModelResponse(result: EmbeddedAgentRunResult): 
     return undefined;
   }
   // finalAssistantVisibleText is never read: CLI settlement fills it with the
-  // delivery mirror for tool-only turns.
-  const rawText = result.meta.finalAssistantRawText;
+  // delivery mirror for tool-only turns. CLI raw text is cumulative across
+  // results, so its last-message text wins when present.
+  const rawText = result.meta.finalAssistantMessageRawText ?? result.meta.finalAssistantRawText;
   return typeof rawText === "string" && rawText.trim() ? rawText : undefined;
 }

@@ -11,6 +11,7 @@ import {
 } from "../../usage.js";
 import type { EmbeddedAgentMeta } from "../types.js";
 import { toNormalizedUsage, type UsageAccumulator } from "../usage-accumulator.js";
+import { isRunnerToolCallBlock } from "./attempt-tool-call-block-type.js";
 
 export type RuntimeAuthState = {
   generation: number;
@@ -180,6 +181,24 @@ export function resolveFinalAssistantVisibleText(
   }
   const visibleText = extractAssistantVisibleText(lastAssistant).trim();
   return visibleText || undefined;
+}
+
+/**
+ * Raw text of the model's final message for diagnostic capture. A message that
+ * ended in a tool call is not final: the turn continued past it, so its text is
+ * narration even when a later message never completed.
+ */
+export function resolveFinalMessageRawText(
+  lastAssistant: AssistantMessage | undefined,
+): string | undefined {
+  if (
+    !lastAssistant ||
+    lastAssistant.stopReason === "toolUse" ||
+    lastAssistant.content.some(isRunnerToolCallBlock)
+  ) {
+    return undefined;
+  }
+  return resolveFinalAssistantRawText(lastAssistant);
 }
 
 export function resolveFinalAssistantRawText(

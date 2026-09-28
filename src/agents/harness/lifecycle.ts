@@ -26,7 +26,10 @@ import {
   normalizeAgentRunAttemptTerminal,
   projectAgentRunAttemptTerminal,
 } from "../agent-run-terminal-outcome.js";
-import { resolveFinalAssistantRawText } from "../embedded-agent-runner/run/helpers.js";
+import {
+  resolveFinalAssistantRawText,
+  resolveFinalMessageRawText,
+} from "../embedded-agent-runner/run/helpers.js";
 import type { EmbeddedRunAttemptResult } from "../embedded-agent-runner/run/types.js";
 import { copyCoreTtsAttemptResultProvenance } from "../tools/tts-tool-result-provenance.js";
 import { subscribeAgentCommentaryDiagnostics } from "./commentary-diagnostics.js";
@@ -59,10 +62,10 @@ type AgentRunMessageContent = { userPrompt?: string; finalResponse?: string };
 /** Gated, bounded prompt/answer for child run.completed, like embedded and CLI runs. */
 function agentRunMessageContent(
   prompt: string | undefined,
-  assistant?: Parameters<typeof resolveFinalAssistantRawText>[0],
+  assistant?: Parameters<typeof resolveFinalMessageRawText>[0],
 ): AgentRunMessageContent | undefined {
   const policy = resolveDiagnosticModelContentCapturePolicy(getRuntimeConfig());
-  const finalText = policy.outputMessages ? resolveFinalAssistantRawText(assistant) : undefined;
+  const finalText = policy.outputMessages ? resolveFinalMessageRawText(assistant) : undefined;
   const finalResponse = finalText ? joinDiagnosticContent([finalText]) : undefined;
   const userPrompt = policy.inputMessages && prompt ? truncateDiagnosticContent(prompt) : undefined;
   return userPrompt || finalResponse
@@ -248,7 +251,7 @@ function emitAgentHarnessRunCompleted(params: {
     outcome === "error" ? diagnosticErrorMessage(terminal.promptError) : undefined;
   const contentPolicy = resolveDiagnosticModelContentCapturePolicy(getRuntimeConfig());
   const finalAssistantText = contentPolicy.outputMessages
-    ? resolveFinalAssistantRawText(
+    ? resolveFinalMessageRawText(
         result.currentAttemptCompletedAssistant ?? result.currentAttemptAssistant,
       )
     : undefined;

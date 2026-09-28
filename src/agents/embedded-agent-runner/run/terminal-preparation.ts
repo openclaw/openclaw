@@ -24,6 +24,7 @@ import {
   buildUsageAgentMetaFields,
   normalizeAssistantUsageForContext,
   resolveFinalAssistantRawText,
+  resolveFinalMessageRawText,
   resolveFinalAssistantVisibleText,
   resolveReportedModelRef,
 } from "./helpers.js";
@@ -168,14 +169,14 @@ export function prepareEmbeddedRunTerminal(input: {
   const finalAssistantRawText = terminalAssistantCanOwnFinalText
     ? (resolveFinalAssistantRawText(terminalAssistant) ?? attemptFinalText)
     : undefined;
-  // The model's actual last message exists but carries no text, so any raw text
-  // above is earlier turn text. Harnesses that project their final answer only
-  // through assistantTexts (no last-message text) are not marked.
+  // The model's actual last message carries no final text (empty, or it ended in
+  // a tool call), so any raw text above is earlier turn narration. Harnesses that
+  // project their final answer only through assistantTexts are not marked.
   const lastModelMessage = terminalAssistant ?? attempt.currentAttemptAssistant;
   const finalAssistantRawTextIsFallback =
     finalAssistantRawText !== undefined &&
     lastModelMessage !== undefined &&
-    resolveFinalAssistantRawText(lastModelMessage) === undefined;
+    resolveFinalMessageRawText(lastModelMessage) === undefined;
   const terminalTurnId = (attempt as { terminalTurnId?: string }).terminalTurnId;
   Object.assign(agentMeta, {
     terminalReceipt: {

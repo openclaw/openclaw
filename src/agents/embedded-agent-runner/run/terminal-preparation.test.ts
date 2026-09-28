@@ -262,6 +262,31 @@ describe("prepareEmbeddedRunTerminal", () => {
     expect(prepared.finalAssistantRawTextIsFallback).toBe(true);
   });
 
+  it("marks narration from a completed tool-call message when the next message never finished", async () => {
+    const toolTurn = {
+      ...assistantMessage("toolUse"),
+      content: [
+        { type: "text" as const, text: "Checking now" },
+        { type: "toolCall" as const, id: "tool_1", name: "exec", arguments: {} },
+      ],
+    };
+    const prepared = await prepareAttempt({
+      attempt: attemptResult({
+        assistantTexts: ["Checking now"],
+        lastAssistant: toolTurn,
+        currentAttemptAssistant: toolTurn,
+        currentAttemptCompletedAssistant: toolTurn,
+      }),
+      currentAttemptCompletedAssistant: toolTurn,
+      terminalState: {
+        outcome: { reason: "completed", status: "ok", stopReason: "stop" },
+        signalOwnedInterruption: false,
+      },
+    });
+
+    expect(prepared.finalAssistantRawTextIsFallback).toBe(true);
+  });
+
   it("does not mark the model's own final text as a fallback", async () => {
     const final = {
       ...assistantMessage("stop"),

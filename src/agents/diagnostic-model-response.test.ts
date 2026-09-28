@@ -45,6 +45,19 @@ describe("resolveDiagnosticModelResponse", () => {
   });
 });
 
+describe("CLI multi-result turns", () => {
+  it("records only the last result, not the cumulative turn text", () => {
+    expect(
+      resolveDiagnosticModelResponse(
+        result({
+          finalAssistantRawText: "Checking now\nDone",
+          finalAssistantMessageRawText: "Done",
+        }),
+      ),
+    ).toBe("Done");
+  });
+});
+
 describe("tool-only turns", () => {
   const sent = [
     { tool: "message", provider: "slack", text: "Done, 3 restarted", sourceReplyFinal: true },
