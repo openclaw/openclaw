@@ -81,7 +81,7 @@ export function diffInstalledPluginIndexInvalidationReasons(
     }
   }
   for (const [pluginId, plugin] of currentByPluginId) {
-    if (!previousByPluginId.has(pluginId) && plugin.enabled !== false) {
+    if (!previousByPluginId.has(pluginId) && plugin.enabled) {
       reasons.add("source-changed");
     }
   }

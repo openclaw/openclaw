@@ -38,17 +38,16 @@ export function findCatalogTemplate(params: {
   providerId: string;
   templateIds: readonly string[];
 }) {
-  for (const templateId of params.templateIds) {
-    const selected = params.entries.find(
+  let selected: (typeof params.entries)[number] | undefined;
+  params.templateIds.some((templateId) => {
+    selected = params.entries.find(
       (entry) =>
         normalizeProviderId(entry.provider) === normalizeProviderId(params.providerId) &&
         normalizeLowercaseStringOrEmpty(entry.id) === normalizeLowercaseStringOrEmpty(templateId),
     );
-    if (selected) {
-      return selected;
-    }
-  }
-  return undefined;
+    return selected !== undefined;
+  });
+  return selected;
 }
 
 /** Selects one complete auth result in caller-defined order, including unresolved secret markers. */
