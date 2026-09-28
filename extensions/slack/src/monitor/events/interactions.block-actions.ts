@@ -24,7 +24,6 @@ import {
   SLACK_APPROVAL_HEADER_BLOCK_ID,
   type SlackApprovalAction,
 } from "../../approval-actions.js";
-import { isSlackPluginApprovalAuthorizedSender } from "../../approval-auth.js";
 import {
   hasSlackApprovalControl,
   runSlackApprovalMessageUpdate,
@@ -44,7 +43,6 @@ import {
   SLACK_REPLY_SELECT_ACTION_ID,
   SLACK_SESSION_LINK_ACTION_ID,
 } from "../../reply-action-ids.js";
-import { formatSlackTarget } from "../../target-parsing.js";
 import { truncateSlackText } from "../../truncate.js";
 import {
   authorizeSlackSystemEventSender,
@@ -57,6 +55,7 @@ import { resolveSlackDeferredActionTarget } from "../deferred-action-routing.js"
 import { resolveSlackListenerEventScope, type SlackEventScope } from "../event-scope.js";
 import { escapeSlackMrkdwn } from "../mrkdwn.js";
 import { enqueueSlackInteractionEvent } from "./interaction-event.js";
+import { resolveSlackPluginApprovalSender } from "./interactions.approval-sender.js";
 import type { ModalInputSummary } from "./modal-input-summary.js";
 
 type InteractionMessageBlock = {
@@ -524,23 +523,13 @@ async function handleSlackPluginBindingApproval(
   return true;
 }
 
-function formatSlackPluginApprovalSenderId(userId: string, teamId: string | undefined): string {
-  // Carry the listener-validated team into Gateway custody. A bare Enterprise
-  // user ID would lose the configured workspace boundary after this callback.
-  return formatSlackTarget({ kind: "user", id: userId, teamId });
-}
-
 async function handleSlackApprovalInteraction(
   params: SlackBlockActionContext & { approval: SlackApprovalAction },
 ): Promise<boolean> {
-  const pluginSenderId = formatSlackPluginApprovalSenderId(
-    params.parsed.userId,
-    params.eventScope?.teamId ?? params.ctx.teamId,
-  );
-  const pluginApprovalAuthorizedSender = isSlackPluginApprovalAuthorizedSender({
-    cfg: params.ctx.cfg,
-    accountId: params.ctx.accountId,
-    senderId: pluginSenderId,
+  const pluginSender = resolveSlackPluginApprovalSender({
+    ctx: params.ctx,
+    eventScope: params.eventScope,
+    userId: params.parsed.userId,
   });
   const execApprovalAuthorizedSender = isSlackExecApprovalAuthorizedSender({
     cfg: params.ctx.cfg,
@@ -549,7 +538,7 @@ async function handleSlackApprovalInteraction(
   });
   const authorized =
     params.approval.approvalKind === "plugin"
-      ? pluginApprovalAuthorizedSender
+      ? pluginSender.authorized
       : execApprovalAuthorizedSender;
   if (!authorized) {
     params.ctx.runtime.log?.(
@@ -567,7 +556,8 @@ async function handleSlackApprovalInteraction(
       decision: params.approval.decision,
       channel: "slack",
       accountId: params.ctx.accountId,
-      senderId: params.approval.approvalKind === "plugin" ? pluginSenderId : params.parsed.userId,
+      senderId:
+        params.approval.approvalKind === "plugin" ? pluginSender.senderId : params.parsed.userId,
     });
     const terminalLabel = resolveSlackApprovalTerminalLabel(result.approval);
     const prefix = result.applied ? "Resolved" : "Already resolved";
@@ -641,14 +631,10 @@ async function handleSlackLegacyApprovalInteraction(
   if (!parsedApproval) {
     return false;
   }
-  const pluginSenderId = formatSlackPluginApprovalSenderId(
-    params.parsed.userId,
-    params.eventScope?.teamId ?? params.ctx.teamId,
-  );
-  const pluginAuthorized = isSlackPluginApprovalAuthorizedSender({
-    cfg: params.ctx.cfg,
-    accountId: params.ctx.accountId,
-    senderId: pluginSenderId,
+  const pluginSender = resolveSlackPluginApprovalSender({
+    ctx: params.ctx,
+    eventScope: params.eventScope,
+    userId: params.parsed.userId,
   });
   const execAuthorized = isSlackExecApprovalAuthorizedSender({
     cfg: params.ctx.cfg,
@@ -659,7 +645,7 @@ async function handleSlackLegacyApprovalInteraction(
   if (execAuthorized) {
     resolveMethods.push("exec");
   }
-  if (pluginAuthorized) {
+  if (pluginSender.authorized) {
     resolveMethods.push("plugin");
   }
   if (resolveMethods.length === 0) {
@@ -678,7 +664,7 @@ async function handleSlackLegacyApprovalInteraction(
         decision: parsedApproval.decision,
         channel: "slack",
         accountId: params.ctx.accountId,
-        senderId: resolveMethod === "plugin" ? pluginSenderId : params.parsed.userId,
+        senderId: resolveMethod === "plugin" ? pluginSender.senderId : params.parsed.userId,
         resolveMethod,
       });
       try {

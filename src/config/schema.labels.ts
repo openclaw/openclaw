@@ -2,6 +2,7 @@
 import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
 import { GATEWAY_FIELD_LABELS } from "./schema.gateway-labels.js";
 import { AGENT_MODEL_FIELD_LABELS } from "./schema.labels.agent-models.js";
+import { APPROVAL_FIELD_LABELS } from "./schema.labels.approvals.js";
 import { BROWSER_FIELD_LABELS } from "./schema.labels.browser.js";
 import { SESSION_FIELD_LABELS } from "./schema.labels.session.js";
 import { WORKSPACE_FIELD_LABELS } from "./schema.labels.workspace.js";
@@ -235,30 +236,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.exec.grantExpiryDays": "Standing Grant Expiry (Days)",
   "tools.exec.safeBinTrustedDirs": "Exec Safe Bin Trusted Dirs",
   "tools.exec.safeBinProfiles": "Exec Safe Bin Profiles",
-  approvals: "Approvals",
-  "approvals.exec": "Exec Approval Forwarding",
-  "approvals.exec.enabled": "Forward Exec Approvals",
-  "approvals.exec.mode": "Approval Forwarding Mode",
-  "approvals.exec.agentFilter": "Approval Agent Filter",
-  "approvals.exec.sessionFilter": "Approval Session Filter",
-  "approvals.exec.targets": "Approval Forwarding Targets",
-  "approvals.exec.targets[].channel": "Approval Target Channel",
-  "approvals.exec.targets[].to": "Approval Target Destination",
-  "approvals.exec.targets[].accountId": "Approval Target Account ID",
-  "approvals.exec.targets[].threadId": "Approval Target Thread ID",
-  "approvals.plugin": "Plugin Approval Forwarding",
-  "approvals.plugin.enabled": "Forward Plugin Approvals",
-  "approvals.plugin.mode": "Plugin Approval Forwarding Mode",
-  "approvals.plugin.agentFilter": "Plugin Approval Agent Filter",
-  "approvals.plugin.sessionFilter": "Plugin Approval Session Filter",
-  "approvals.plugin.targets": "Plugin Approval Forwarding Targets",
-  "approvals.plugin.targets[].channel": "Plugin Approval Target Channel",
-  "approvals.plugin.targets[].to": "Plugin Approval Target Destination",
-  "approvals.plugin.targets[].accountId": "Plugin Approval Target Account ID",
-  "approvals.plugin.targets[].threadId": "Plugin Approval Target Thread ID",
-  "approvals.plugin.slack": "Slack Plugin Reviewers",
-  "approvals.plugin.slack.approvers": "Default Slack Plugin Reviewers",
-  "approvals.plugin.slack.plugins": "Slack Plugin Reviewer Overrides",
+  ...APPROVAL_FIELD_LABELS,
   "tools.message.crossContext.allowWithinProvider": "Allow Cross-Context (Same Provider)",
   "tools.message.crossContext.allowAcrossProviders": "Allow Cross-Context (Across Providers)",
   "tools.message.crossContext.marker.enabled": "Cross-Context Marker",

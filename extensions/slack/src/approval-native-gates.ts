@@ -64,7 +64,7 @@ export function isSlackPluginApprovalRequest(
   return resolveApprovalKind(request) === "plugin";
 }
 
-export function isSlackPluginApprovalPolicyRouteEligible(params: {
+function isSlackPluginApprovalPolicyRouteEligible(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   request: PluginApprovalRequest;

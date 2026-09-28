@@ -188,9 +188,11 @@ function restoreApprovalRequestForSuppression(params: {
     expiresAtMs: 0,
   };
   try {
-    return resolveApprovalRequestKind(restored) === params.approvalKind
-      ? (restored as ApprovalRequestInput)
-      : undefined;
+    if (resolveApprovalRequestKind(restored) !== params.approvalKind) {
+      return undefined;
+    }
+    // SAFETY: resolved.request retains the typed approval payload; the derived owner matches it.
+    return restored as ApprovalRequestInput;
   } catch {
     return undefined;
   }
