@@ -35,13 +35,16 @@ it.skipIf(process.platform === "win32").each([
   { exit: "stalled-close-failure", code: 7 },
   { exit: "stalled-close-late", code: 7 },
   { exit: "stalled-close-pending", code: 0 },
+  { exit: "stalled-close-nonzero-pending", code: 7, recordedCode: 0, pendingCode: 7 },
   { exit: "stalled-close-failed-mutation", code: 1, recordedCode: 0, failure: "mutation" },
   { exit: "stalled-close-failed-recovery", code: 1, recordedCode: 0, failure: "recovery" },
   { exit: "stalled-close-failed-recovery-nonzero", code: 7, failure: "recovery" },
   { exit: "stalled-close-failed-recovery-pending", code: 1, recordedCode: 0, failure: "recovery" },
+  { exit: "removal-in-flight", code: 0 },
+  { exit: "removal-in-flight-error", code: 0 },
 ])(
   "settles or preserves the retained runtime before $exit exits",
-  async ({ exit, code, recordedCode = code, failure }) => {
+  async ({ exit, code, recordedCode = code, pendingCode = recordedCode, failure }) => {
     const result = spawnNodeEvalSync(
       `import fs from "node:fs/promises";
      import path from "node:path";
@@ -63,6 +66,27 @@ it.skipIf(process.platform === "win32").each([
          await retain({ mutationRoots: [root], timeoutMs: 30000, assertCurrent() {} });
          const retained = (await fs.readdir(path.dirname(root))).filter(name => name.startsWith("openclaw-update-runtime-"));
          process.stdout.write(JSON.stringify({ retained }) + "\\n");
+         if (outcome.startsWith("removal-in-flight")) {
+           const directory = path.join(path.dirname(root), retained[0]);
+           const first = path.join(directory, "first-to-remove");
+           await fs.writeFile(first, "synthetic partial-removal marker");
+           const remove = fs.rm.bind(fs);
+           mock.method(fs, "rm", async (target, options) => {
+             if (target !== directory) return await remove(target, options);
+             await remove(first);
+             mock.timers.enable({ apis: ["setTimeout"] });
+             watchCliExitAfterOutput(${JSON.stringify(recordedCode)}, () => {});
+             mock.timers.tick(10000);
+             await new Promise(resolve => setImmediate(() => setImmediate(resolve)));
+             if (outcome.endsWith("-error")) {
+               process.stdout.write("REMOVAL_SETTLED_WITH_ERROR\\n");
+               throw new Error("Synthetic removal failure");
+             }
+             await remove(target, options);
+             process.stdout.write("REMOVAL_COMPLETED\\n");
+           });
+           return;
+         }
          if (outcome.startsWith("stalled-close")) {
            const directory = path.join(path.dirname(root), retained[0]);
            let releaseBarrier;
@@ -80,7 +104,7 @@ it.skipIf(process.platform === "win32").each([
              mock.timers.enable({ apis: ["setTimeout"] });
              let stalled = false;
              process.exitCode = 91; // unrelated cleanup status cannot replace the recorded outcome
-             if (outcome.endsWith("-pending")) exitAfterSignalExitBarriers(${JSON.stringify(recordedCode)});
+             if (outcome.endsWith("-pending")) exitAfterSignalExitBarriers(${JSON.stringify(pendingCode)});
              watchCliExitAfterOutput(${JSON.stringify(recordedCode)}, () => { stalled = true; });
              mock.timers.tick(9999);
              assert.equal(stalled, false);
@@ -128,7 +152,7 @@ it.skipIf(process.platform === "win32").each([
           OPENCLAW_STATE_DIR: path.join(base, "state"),
           OPENCLAW_CONFIG_PATH: path.join(base, "state/openclaw.json"),
           XDG_CACHE_HOME: path.join(base, "cache"),
-          OPENCLAW_LOG_LEVEL: "silent",
+          OPENCLAW_LOG_LEVEL: exit === "removal-in-flight-error" ? "warn" : "silent",
         },
       },
     );
@@ -150,8 +174,17 @@ it.skipIf(process.platform === "win32").each([
       expect(remaining).toHaveLength(1);
       expect(result.stderr).toContain(`Runtime retained at ${path.join(base, remaining[0]!)}:`);
       expect(result.stderr).toContain("exit deadline");
+    } else if (exit === "removal-in-flight-error") {
+      expect(remaining).toHaveLength(1);
+      expect(result.stdout).toContain("REMOVAL_SETTLED_WITH_ERROR");
+      expect(result.stderr).toContain("cleanup failed: Synthetic removal failure");
+      expect(result.stderr).not.toContain("exit deadline");
     } else {
       expect(remaining).toEqual([]);
+      if (exit === "removal-in-flight") {
+        expect(result.stdout).toContain("REMOVAL_COMPLETED");
+        expect(result.stderr).not.toContain("exit deadline");
+      }
     }
   },
 );

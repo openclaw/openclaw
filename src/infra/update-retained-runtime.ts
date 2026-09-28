@@ -223,7 +223,7 @@ export async function withRetainedUpdateRuntime<T>(
         })();
         return preparation;
       }),
-    async (signal) => {
+    async (signal, beginRemoval) => {
       closing = true;
       // A signal can arrive during projection; stop and join its last filesystem write.
       await preparation?.catch(() => undefined);
@@ -232,6 +232,7 @@ export async function withRetainedUpdateRuntime<T>(
       }
       const retained = directory;
       if (retained) {
+        beginRemoval();
         await removeTemporaryArtifacts(retained, "Updater runtime", (error) => {
           reportRetainedUpdateRuntime(retained, `cleanup failed: ${formatErrorMessage(error)}`);
         });

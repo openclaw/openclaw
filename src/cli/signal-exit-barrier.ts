@@ -77,8 +77,11 @@ export function exitAfterSignalExitBarriers(
       const recordedCode = recordedProcessExitCode;
       recordedProcessExitCode = undefined;
       // The watchdog may arrive during an existing exit drain. Its recorded
-      // outcome survives disposable stalls, but cannot hide a rejected drain.
+      // outcome survives disposable stalls, but cannot hide an earlier failure.
       let exitCode = recordedCode ?? code;
+      if ((exitCode === 0 || exitCode === "0") && code !== 0 && code !== "0") {
+        exitCode = code;
+      }
       if (exitCode === 0 || exitCode === "0") {
         exitCode = failed ? 1 : (recordedCode ?? outcome ?? exitCode);
       }

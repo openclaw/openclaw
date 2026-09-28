@@ -27,13 +27,14 @@ export function captureRuntimeWorkerSource(url: URL): {
 
 export async function withRuntimeWorkerGeneration<T>(
   operation: (bind: (resolve: (url: URL) => URL) => void) => Promise<T>,
-  release: (signal: AbortSignal) => Promise<void>,
+  release: (signal: AbortSignal, beginRemoval: () => void) => Promise<void>,
   retainedDirectory?: (reason: string, immediate?: boolean) => string | undefined,
 ): Promise<T> {
   const current: GenerationScope = {};
   const resources = new Map<object, () => Promise<void>>();
   let closing = false;
   let released = false;
+  let removalStarted = false;
   const retirement = new AbortController();
   const { promise: retained, resolve: stopWaiting } = createDeferredCore();
   return await scope.run(current, async () => {
@@ -64,7 +65,9 @@ export async function withRuntimeWorkerGeneration<T>(
                 (directory ? `. Runtime retained at ${directory}: ${reason}.` : ""),
             );
           }
-          await release(retirement.signal);
+          await release(retirement.signal, () => {
+            removalStarted = true;
+          });
           released = !retirement.signal.aborted;
         })(),
         retained,
@@ -72,7 +75,8 @@ export async function withRuntimeWorkerGeneration<T>(
     };
     // Signal owners drain mutation/recovery barriers before retiring worker code.
     const unregister = registerSignalExitFinalizer(settleGeneration, () => {
-      if (released || retirement.signal.aborted) {
+      // Once removal starts, exit must join it to avoid leaving a partial tree.
+      if (released || removalStarted || retirement.signal.aborted) {
         return;
       }
       closing = true;
