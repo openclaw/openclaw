@@ -18,6 +18,12 @@ export type SessionRowFacts =
     }
   | { kind: "member"; sessionId: string; identityId: string; present: boolean }
   | {
+      kind: "owner";
+      sessionId: string;
+      lifecycleRevision: string | null;
+      owner: SessionEntry["owner"];
+    }
+  | {
       kind: "participants";
       /** Participant history belongs to the logical key, across transcript replacements. */
       projection?: Pick<SessionEntry, "participants" | "participantCount">;

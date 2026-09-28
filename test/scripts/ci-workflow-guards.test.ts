@@ -1492,9 +1492,12 @@ AFTER_CD
 
   it("starts Apple builds and screenshots directly on hosted capacity", () => {
     const workflow = readCiWorkflow();
-    for (const jobName of ["macos-swift", "ios-build", "ios-screenshot-shard"]) {
+    for (const jobName of ["macos-swift", "ios-build"]) {
       expect(evaluateWorkflowRunner(workflow.jobs[jobName]["runs-on"]), jobName).toBe("xcode-27");
     }
+    expect(evaluateWorkflowRunner(workflow.jobs["ios-screenshot-shard"]["runs-on"])).toBe(
+      "xcode-27-xlarge",
+    );
     expect(workflow.jobs["macos-swift"]["timeout-minutes"]).toBe(30);
   });
 
@@ -3632,7 +3635,7 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
       for (const jobName of jobNames) {
         const job = workflow.jobs[jobName];
         expect(evaluateWorkflowRunner(job["runs-on"]), `${workflowPath}: ${jobName}`).toBe(
-          "xcode-27",
+          jobName === "ios-screenshot-shard" ? "xcode-27-xlarge" : "xcode-27",
         );
         const selection = expectDefined(
           job.steps.find((step: WorkflowStep) =>
