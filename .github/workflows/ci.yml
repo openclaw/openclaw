@@ -2302,6 +2302,16 @@ jobs:
                     plan.shard_name ?? plan.shardName,
                   );
                 }),
+                requires_sandbox_image: (shard.groups ?? [shard]).some((plan) => {
+                  const patterns = plan.targets ?? plan.includePatterns;
+                  if (patterns) {
+                    return patterns.some((pattern) => [
+                      "test/e2e/qa-lab/runtime/agent-sandboxed-exec-behavior.e2e.test.ts",
+                      "test/e2e/qa-lab/runtime/openclaw-sandbox-workspace-isolation.e2e.test.ts",
+                    ].some((test) => matchesGlob(test, pattern)));
+                  }
+                  return plan.configs?.includes("test/vitest/vitest.e2e.config.ts") ?? false;
+                }),
               };
             });
           const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
@@ -4540,6 +4550,14 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends ripgrep
 
+      - name: Prepare Docker sandbox image
+        if: matrix.requires_sandbox_image == true && runner.os == 'Linux'
+        shell: bash
+        run: |
+          if ! docker image inspect openclaw-sandbox:bookworm-slim >/dev/null 2>&1; then
+            scripts/sandbox-setup.sh
+          fi
+
       - name: Configure Node test resources
         env:
           PREDICTED_TEST_SECONDS: ${{ matrix.predicted_seconds || '' }}
@@ -6646,7 +6664,7 @@ jobs:
     name: "ios-screenshots-${{ matrix.device_family }}"
     needs: [preflight]
     if: &ios_screenshot_capture_gate ${{ needs.preflight.outputs.validation_tier != 'main' && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && ((github.event_name == 'workflow_dispatch' && !inputs.release_gate) || needs.preflight.outputs.run_ios_screenshots == 'true') }}
-    runs-on: *hosted_xcode_runner
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON('xcode-27-xlarge'))) || ('xcode-27-xlarge') }}
     timeout-minutes: 90
     env:
       BUNDLE_DEPLOYMENT: "true"
@@ -6695,22 +6713,12 @@ jobs:
 
       - *install_watch_rust_toolchain
 
-      - name: Install iOS simulator tooling
-        id: ios_simslim
-        run: |
-          set -euo pipefail
-          if [[ -x ./scripts/install-simslim.sh && -x ./scripts/ios-simulator-prepare.sh ]]; then
-            simslim_dir="$RUNNER_TEMP/openclaw-simslim"
-            ./scripts/install-simslim.sh "$simslim_dir"
-            echo "binary=$simslim_dir/simslim" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Capture iOS device screenshot shard
         id: device_screenshots
         env:
           OPENCLAW_SNAPSHOT_DEVICE_FAMILY: ${{ matrix.device_family }}
           OPENCLAW_SNAPSHOT_SKIP_WATCH: ${{ matrix.device_family == 'iphone' && '1' || '0' }}
-          OPENCLAW_CI_SIMSLIM_BINARY: ${{ steps.ios_simslim.outputs.binary }}
+          OPENCLAW_SNAPSHOT_DIAGNOSTICS: "1"
         run: pnpm ios:screenshots
 
       - name: Package iOS screenshot shard evidence
@@ -6767,6 +6775,7 @@ jobs:
             apps/ios/build/SnapshotTestResults/capture-attempts.json
             apps/ios/build/SnapshotTestResults/*.xcresult
             apps/ios/build/SnapshotLogs/*.log
+            apps/ios/build/screenshot-diagnostics.json
           if-no-files-found: warn
           retention-days: 14
 

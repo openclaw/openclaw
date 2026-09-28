@@ -1023,7 +1023,7 @@ describe("gateway server chat", () => {
       expect(sendRes.ok).toBe(true);
       expect(sendRes.payload?.status).toBe("started");
 
-      await waitForAgentRunOk(runId);
+      await waitForAgentRunDrained(runId);
     });
   });
 
@@ -2029,7 +2029,7 @@ describe("gateway server chat", () => {
             cause,
           });
         });
-        await waitForAgentRunOk(runId);
+        await waitForAgentRunDrained(runId);
         expectRecordFields(settledEvent.payload, {
           activeRunIds: [],
           hasActiveRun: false,
