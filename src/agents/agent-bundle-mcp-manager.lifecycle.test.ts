@@ -76,7 +76,7 @@ function createRuntimeFixture(input: Parameters<CreateSessionMcpRuntime>[0]): Se
 }
 
 function createManager(createRuntime?: CreateSessionMcpRuntime) {
-  const manager = createSessionMcpRuntimeManager({ createRuntime, enableIdleSweepTimer: false });
+  const manager = createSessionMcpRuntimeManager({ createRuntime });
   managers.push(manager);
   return manager;
 }
@@ -481,7 +481,6 @@ describe("MCP manager creation ownership", () => {
         const manager = createSessionMcpRuntimeManager({
           scheduler: survivorScheduler,
           createRuntime: held.createRuntime,
-          enableIdleSweepTimer: false,
         });
         managers.push(manager);
         const previous = Reflect.get(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);

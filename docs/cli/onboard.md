@@ -154,7 +154,13 @@ baseline setup resumes under its existing onboarding owner.
 In guided mode, `--workspace <dir>` supplies OpenClaw's proposed workspace
 and the isolated inference context. It is not persisted until you approve the
 OpenClaw setup proposal. Classic and noninteractive onboarding persist their
-workspace through their normal setup flow. On a rerun with an existing agent
+workspace through their normal setup flow. A workspace must be a directory or
+a new path beneath directories; a file, non-directory ancestor, dangling
+symbolic link, or symlink loop is rejected before setup or reset, with the
+failing path named. Other inspection failures, such as permission errors, are
+reported rather than treated as missing directories.
+Symbolic links to existing directories, including new paths beneath them, are
+allowed. On a rerun with an existing agent
 roster, onboarding preserves the configured fleet workspace: the classic
 wizard shows both paths and requires explicit confirmation before moving it,
 while non-interactive setup warns and keeps the current value.
@@ -188,7 +194,9 @@ loopback Gateway, and waits up to five minutes. A successful connection
 continues in the browser; an unreachable Gateway or a timeout falls back to the
 same terminal hatch as before. Pass `--tui` to skip the browser handoff and
 force that terminal hatch.
-If applying setup fails, onboarding falls back to the conversational OpenClaw
+If applying setup fails after inference succeeds, the status identifies workspace,
+Gateway, or general setup failure rather than an AI check failure. The detailed
+error keeps its recovery guidance, and onboarding falls back to the conversational OpenClaw
 chat to finish interactively. Channels, agents,
 plugins, and other optional features remain OpenClaw chat territory: run
 `openclaw` and use `open channel wizard for <channel>` to hand channel

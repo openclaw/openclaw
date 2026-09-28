@@ -4222,13 +4222,77 @@ printf '%s\n' "$status" >"$TMPDIR/status"
     },
   );
 
+  it("records delegated post-core systemd callers only with the environment marker", () => {
+    const workDir = tempDirs.make("openclaw-survivor-systemd-caller-");
+    const preload = join(workDir, "proc-fixture.mjs");
+    const output = join(workDir, "callers.jsonl");
+    writeFileSync(
+      preload,
+      `import fs from "node:fs";
+const readFileSync = fs.readFileSync;
+fs.readFileSync = (file, ...args) => {
+  if (file === "/proc/123/cmdline") return process.env.CALLER_ARGV.split("|").join("\\0");
+  if (file === "/proc/123/environ") {
+    if (process.env.CALLER_ENV === "EACCES") throw Object.assign(new Error("unreadable"), { code: "EACCES" });
+    return process.env.CALLER_ENV;
+  }
+  if (file === "/proc/123/stat") return "123 (fixture) S 124";
+  if (file === "/proc/124/cmdline") return "openclaw-doctor\\0";
+  if (file === "/proc/124/stat") return "124 (fixture) S 1";
+  return readFileSync(file, ...args);
+};
+`,
+    );
+    for (const [argv, marker, expected] of [
+      [["openclaw-update"], "", ["update", "doctor"]],
+      [
+        ["node", "/package/dist/infra/update-migrated-finalize.worker.js", "--post-core"],
+        "OPENCLAW_UPDATE_POST_CORE=1",
+        ["update", "doctor"],
+      ],
+      [
+        ["node", "/package/dist/infra/update-migrated-finalize.worker.js", "--post-core"],
+        "",
+        ["doctor"],
+      ],
+      [
+        ["node", "/package/dist/infra/update-migrated-finalize.worker.js", "--post-core"],
+        "EACCES",
+        ["doctor"],
+      ],
+    ] as const) {
+      const child = spawnSync(
+        testNodeExecPath,
+        [
+          "--import",
+          preload,
+          "scripts/e2e/lib/upgrade-survivor/systemd-fixture.mjs",
+          "record-caller",
+          output,
+          "123",
+          "restart",
+        ],
+        {
+          env: { ...process.env, CALLER_ARGV: argv.join("|"), CALLER_ENV: marker },
+          encoding: "utf8",
+        },
+      );
+      expect(child.status, child.stderr).toBe(0);
+      expect(JSON.parse(readFileSync(output, "utf8").trim().split("\n").at(-1)!)).toEqual({
+        action: "restart",
+        roles: expected,
+      });
+    }
+  });
+
   it.each([
-    ["warning", 0],
-    ["error", 0],
-    ["error", 78],
+    ["warning", 0, "update"],
+    ["error", 0, "update"],
+    ["error", 78, "update"],
+    ["warning", 0, "--post-core"],
   ] as const)(
-    "retains the original post-core %s result separately from exit %i",
-    (status, code) => {
+    "retains the original post-core %s result separately from exit %i via %s",
+    (status, code, command) => {
       const { workDir, artifacts, resultDir, env, preloadOptions } = survivorPostCoreFixture();
       const result = {
         status,
@@ -4263,7 +4327,14 @@ printf '%s\n' "$status" >"$TMPDIR/status"
         integrityDrifts: [],
         credentials: "PRIVATE_RESULT_EXTRA",
       };
-      const childPath = join(workDir, "cli.mjs");
+      writeFileSync(
+        join(workDir, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "2026.9.7", type: "module" }),
+      );
+      const childPath = join(
+        workDir,
+        command === "--post-core" ? "update-migrated-finalize.worker.js" : "cli.mjs",
+      );
       writeFileSync(
         childPath,
         `import fs from "node:fs";
@@ -4272,12 +4343,17 @@ process.stdout.write("original stdout\\n");
 process.exit(${code});
 `,
       );
-      const child = spawnSync(testNodeExecPath, [childPath, "update", "--json"], {
+      const child = spawnSync(testNodeExecPath, [childPath, command, "--json"], {
         env: { ...env, NODE_OPTIONS: preloadOptions },
         encoding: "utf8",
       });
       expect(child.status, child.stderr).toBe(code);
       expect(child.stdout).toBe("original stdout\n");
+      expect(
+        JSON.parse(
+          readFileSync(join(artifacts, "diagnostics", `process-${child.pid}-started.json`), "utf8"),
+        ),
+      ).toMatchObject({ role: "post-core", event: "started", packageVersion: "2026.9.7" });
       // The historical parent removes the handoff directory before attempting restart.
       rmSync(resultDir, { recursive: true });
       expect(existsSync(join(artifacts, "diagnostics", "post-core.json"))).toBe(true);
@@ -4309,6 +4385,7 @@ process.exit(${code});
     "doctor",
     "worker",
     "missing-context",
+    "delegated-missing-context",
     "missing",
     "invalid",
     "wrong-file",
@@ -4346,7 +4423,7 @@ process.exit(${code});
       if (scenario === "missing") {
         rmSync(resultPath);
       }
-      if (scenario === "missing-context") {
+      if (scenario === "missing-context" || scenario === "delegated-missing-context") {
         env.OPENCLAW_UPDATE_POST_CORE = "";
       }
       if (scenario === "wrong-file") {
@@ -4364,7 +4441,12 @@ process.exit(${code});
       if (scenario === "blocked-output") {
         symlinkSync(workDir, join(artifacts, "diagnostics"));
       }
-      const childPath = join(workDir, "child.mjs");
+      const childPath = join(
+        workDir,
+        scenario === "delegated-missing-context"
+          ? "update-migrated-finalize.worker.js"
+          : "child.mjs",
+      );
       writeFileSync(
         childPath,
         scenario === "worker"
@@ -4379,7 +4461,14 @@ process.exit(78);
       );
       const child = spawnSync(
         testNodeExecPath,
-        [childPath, ["doctor", "worker"].includes(scenario) ? "doctor" : "update"],
+        [
+          childPath,
+          scenario === "delegated-missing-context"
+            ? "--post-core"
+            : ["doctor", "worker"].includes(scenario)
+              ? "doctor"
+              : "update",
+        ],
         { env: { ...env, NODE_OPTIONS: preloadOptions }, encoding: "utf8" },
       );
       expect(child.status, child.stderr).toBe(scenario === "sigterm" ? null : 78);

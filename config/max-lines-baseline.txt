@@ -251,7 +251,6 @@ src/agents/agent-tools.before-tool-call.e2e.test.ts
 src/agents/agent-tools.before-tool-call.integration.e2e.test.ts
 src/agents/agent-tools.create-openclaw-coding-tools.test.ts
 src/agents/agent-tools.read.ts
-src/agents/agent-tools.schema.test.ts
 src/agents/agent-tools.ts
 src/agents/auth-profiles/oauth-manager.ts
 src/agents/auth-profiles/persisted.ts

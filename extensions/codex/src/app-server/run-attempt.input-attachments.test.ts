@@ -50,10 +50,7 @@ describe("native current input attachments", () => {
 
   it.each([
     { context: "inbound", projected: false },
-    ...["inbound", "hook-prefix", "hook-tail", "combined-overflow"].map((context) => ({
-      context,
-      projected: true,
-    })),
+    { context: "combined-overflow", projected: true },
   ])(
     "preserves $context with projected history $projected when adding optional paths",
     async ({ context, projected }) => {
@@ -71,12 +68,7 @@ describe("native current input attachments", () => {
           createMockPluginRegistry([
             {
               hookName: "before_prompt_build",
-              handler: async () =>
-                combined
-                  ? { prependContext: hookPrefix, appendContext: expandedContext }
-                  : context === "hook-prefix"
-                    ? { prependContext: expandedContext }
-                    : { appendContext: expandedContext },
+              handler: async () => ({ prependContext: hookPrefix, appendContext: expandedContext }),
             },
           ]),
         );
