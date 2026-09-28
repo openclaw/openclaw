@@ -39,10 +39,50 @@ export type StateDatabaseSchemaLease = {
   release(this: void): void;
 };
 
+export type GatewayStateProjection = {
+  readonly lockPath: string;
+  verifyStillHeld(): boolean;
+  retain(): GatewayStateProjection;
+  release(): void;
+};
+
+/** Carry the same physical sidecar through relocation and accepted schema work. */
+export function createGatewayStateProjection(
+  lock: ReturnType<typeof acquireFileLockSync>,
+): GatewayStateProjection {
+  let references = 1;
+  const reference = (): GatewayStateProjection => {
+    let released = false;
+    return {
+      lockPath: lock.lockPath,
+      verifyStillHeld: () => !released && lock.verifyStillHeld(),
+      retain() {
+        if (released || !lock.verifyStillHeld()) {
+          throw new Error("Gateway state projection is no longer current");
+        }
+        references += 1;
+        return reference();
+      },
+      release() {
+        if (released) {
+          return;
+        }
+        if (references === 1) {
+          lock.release();
+        }
+        references -= 1;
+        released = true;
+      },
+    };
+  };
+  return reference();
+}
+
 type ProcessOwner = {
   kind: "process" | "schema";
   payload: LockPayload;
   projectionPath?: string;
+  retainProjection?: () => GatewayStateProjection | undefined;
   locks: Set<ReturnType<typeof acquireFileLockSync>>;
   projectionDirectories: { path: string; dev: bigint; ino: bigint }[];
   // Retained leases keep custody after this stops new admission.
@@ -324,7 +364,7 @@ function leaseForFile(
   pathname: string,
   lock: ReturnType<typeof acquireFileLockSync>,
   owner: ProcessOwner,
-  projection?: ReturnType<typeof acquireFileLockSync>,
+  projection?: Pick<GatewayStateProjection, "verifyStillHeld" | "release">,
 ): StateDatabaseSchemaLease {
   let released = false;
   const lease: StateDatabaseSchemaLease = {
@@ -381,6 +421,7 @@ export function acquireGatewayStateOwner(params: {
   databasePath: string;
   payload?: LockPayload;
   projectionPath?: string;
+  retainProjection?: () => GatewayStateProjection | undefined;
 }): StateDatabaseSchemaLease {
   const pathname = resolveGatewayStateOwnerPath(params.databasePath);
   if (owners.has(pathname)) {
@@ -394,6 +435,7 @@ export function acquireGatewayStateOwner(params: {
     kind: "process",
     payload,
     projectionPath: params.projectionPath,
+    retainProjection: params.retainProjection,
     locks: new Set([lock]),
     projectionDirectories: [],
     accepting: true,
@@ -466,20 +508,21 @@ export function acquireStateDatabaseSchemaLease(
       ),
       "gateway.state.lock",
     );
-  let projection: ReturnType<typeof acquireFileLockSync>;
+  let projection: Pick<GatewayStateProjection, "verifyStillHeld" | "release">;
   try {
-    // Published Gateways know this sidecar, not the external owner. Retain the
-    // same fs-safe reference as the root until this accepted schema work settles.
-    projection = acquireOwnerFile(
-      databasePath,
-      projectionPath,
-      {
-        ...payload,
-        role: payload.role === "gateway" ? "gateway" : "agent-embedded",
-      },
-      0,
-      projectionDirectories,
-    );
+    // The process owner retains its exact sidecar even when its root path moves.
+    projection =
+      owner?.retainProjection?.() ??
+      acquireOwnerFile(
+        databasePath,
+        projectionPath,
+        {
+          ...payload,
+          role: payload.role === "gateway" ? "gateway" : "agent-embedded",
+        },
+        0,
+        projectionDirectories,
+      );
   } catch (error) {
     return runWithSqliteCleanup(
       {

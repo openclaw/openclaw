@@ -13,6 +13,7 @@
     "../../dist",
     "../../**/dist/**",
     "../../ui/src/pages/**",
-    "../../ui/src/e2e/**"
+    "../../ui/src/e2e/**",
+    "../../ui/src/app/shell-layout-traits.test.ts"
   ]
 }

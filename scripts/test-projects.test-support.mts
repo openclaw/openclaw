@@ -612,6 +612,7 @@ const BROAD_CHANGED_FALLBACK_PATTERNS = [
   /^test\/helpers\//u,
 ];
 const PRECISE_SOURCE_TEST_TARGETS = new Map<string, string[]>([
+  ["src/plugins/runtime.retention.test-support.ts", ["src/plugins/runtime.retention.test.ts"]],
   [
     "src/agents/bash-tools.process-liveness-child.test-support.ts",
     ["src/agents/bash-tools.process.liveness.test.ts"],
@@ -2887,7 +2888,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   [".github/workflows/update-migration.yml", [packageAcceptance, workflowGuards]],
   [
     ".github/actions/setup-node-env/action.yml",
-    ["setup-node-env-bun", packageAcceptance, workflowGuards],
+    ["setup-node-env-bun", "setup-node-env-semantic-memory", packageAcceptance, workflowGuards],
   ],
   [
     ".github/actions/setup-node-env/dependency-fingerprint.mjs",

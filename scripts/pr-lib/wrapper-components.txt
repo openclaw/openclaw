@@ -1452,4 +1452,5 @@ scripts/github/security-review-rollout.mjs
 scripts/github/security-review.mjs
 scripts/github/security-sensitive-guard.mjs
 scripts/lib/bounded-response.mjs
+scripts/pr-lib/merge-prior-ci-cancellation.mjs
 scripts/pr-lib/merge-prior-ci-security.mjs

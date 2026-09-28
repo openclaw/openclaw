@@ -487,7 +487,16 @@ These are intentionally guarded by the `ci-workflow-guards`,
   remain intact.
   The canonical shard executor admits two CI children only with at least eight
   available CPUs and 24 GiB actual memory; otherwise it admits one. Inner project
-  parallelism stays one and each overlapping child keeps two Vitest workers.
+  parallelism stays one during outer overlap and each overlapping child keeps two Vitest workers.
+  A serial changed-extension envelope may overlap two source-only Telegram database-worker
+  singleton processes, retaining two workers per process, only with scheduler-owned caches,
+  at least two actual CPUs and 7.5 GiB effective memory (the smaller of physical memory and
+  a positive finite process constraint). Require self-hosted Linux, an explicit current-target
+  receipt (`FROZEN_TARGET=false`), and one unchanged Node invocation from the canonical
+  runtime selector; `bun-compatible` can still select Node. Other shapes, runtimes and
+  unknown/insufficient capacity retain one inner process. Use the actual inner-cap receipt
+  in timing identity; parallel envelopes never supply serial singleton or wrapper-overhead
+  prices. Keep conservative serial placement until qualified exact parallel measurements exist.
   Gateway methods use four workers in serial, non-frozen self-hosted jobs with
   at least eight actual CPUs and 28 GiB memory, with the existing two-worker
   fallback elsewhere. Keep its worker-specific timing identity and require

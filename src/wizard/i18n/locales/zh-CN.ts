@@ -57,7 +57,7 @@ export const zh_CN = {
       verificationFailedError: "验证失败：{error}",
       verificationFailedStatus: "验证失败：状态码 {status}",
       verificationSuccessful: "验证成功。",
-      validUrl: "请输入有效 URL（例如 http://...）",
+      validUrl: "请输入有效的 HTTP 或 HTTPS URL（例如 http://localhost:11434/v1）",
     },
     gateway: {
       auth: "Gateway 认证",

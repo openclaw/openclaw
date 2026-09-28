@@ -923,6 +923,43 @@ describe("CI changed Node test plan", () => {
     ]);
   });
 
+  it.each(["blacksmith", "github", "hybrid"])(
+    "retains exact plugin selections in their canonical process owner without enabling the unrelated sweep (%s)",
+    (runnerBackend) => {
+      const pluginConfig = "test/vitest/vitest.plugins.config.ts";
+      const targets = [
+        "src/plugins/activation-planner.test.ts",
+        "src/plugins/manifest-registry.test.ts",
+        "src/infra/retry.test.ts",
+      ];
+      const selected = createSelectedNodeTestShardBundles(targets, { runnerBackend });
+      expect(selected).not.toBeNull();
+      const groups = selected?.flatMap((row) => row.groups) ?? [];
+      expect(groups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
+        targets.toSorted(),
+      );
+      const pluginGroups = groups.filter((group) => group.configs.includes(pluginConfig));
+      expect(pluginGroups.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
+        targets.slice(0, 2).toSorted(),
+      );
+      for (const group of pluginGroups) {
+        expect(group.requiresDist).toBe(false);
+      }
+
+      const unrelated = createNodeTestShardBundles({
+        runnerBackend,
+        compactMode: "pull-request",
+        includeReleaseOnlyPluginShards: false,
+        includeReleaseOnlyToolingShards: false,
+      });
+      expect(
+        unrelated
+          .flatMap((row) => row.groups ?? [row])
+          .some((group) => group.configs.includes(pluginConfig)),
+      ).toBe(false);
+    },
+  );
+
   it("retains selected compact coverage when time splitting exceeds the non-dist matrix cap", async () => {
     const targets = [
       "test/scripts/ci-node-test-plan.test.ts",
@@ -3228,6 +3265,7 @@ describe("CI changed Node test plan", () => {
               `2026-09-26T00:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups(groups)}`,
               ...groups.flatMap((group, index) => [
                 `2026-09-26T00:0${index * 4}:00Z [shard:${group.shard_name}] begin`,
+                `2026-09-26T00:0${index * 4}:01Z [shard:${group.shard_name}] [test] inner parallelism 2`,
                 `2026-09-26T00:0${index * 4 + 3}:12Z [shard:${group.shard_name}] end (exit 0)`,
               ]),
             ].join("\n"),

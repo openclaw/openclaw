@@ -170,6 +170,20 @@ To reserve capacity outside ordinary PR/main pools:
 2. Grant `openclaw/openclaw` access to the group.
 3. Set `OPENCLAW_RELEASE_RUNNER_GROUP` to the group name; unset it to release the reservation and restore ordinary routing.
 
+Linux runners for jobs that set `semantic-checks: true` also require:
+
+- systemd as PID 1 and an active `systemd-logind` service.
+- Noninteractive sudo access to check logind, enable linger for the runner user,
+  and start that user's systemd manager.
+- cgroup v2 with memory and swap accounting, delegated to the user manager.
+
+These requirements apply to custom release groups as well as ordinary runners.
+The shared setup action starts the user manager and verifies a real 64 MiB scope
+with swap disabled and group OOM termination before checks run. Unsupported
+runners fail setup; provision these capabilities before assigning the validation
+labels, or unset the release-group override to restore ordinary routing. Setup
+qualifies the backend; it does not itself limit later lint or compiler commands.
+
 Full Release Validation starts source-only children alongside artifact producers
 after admission and reuse selection. Candidate consumers start as soon as the
 candidate is verified, while npm qualification and independent validation can
