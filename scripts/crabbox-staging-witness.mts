@@ -569,7 +569,8 @@ export async function verifySourceWitness(params: {
     );
     const revalidate = () => {
       params.signal?.throwIfAborted();
-      const revalidationDeadline = Date.now() + baseBudgetMs;
+      // Automatic rechecks share the original bound so post-command cleanup never exceeds it.
+      const revalidationDeadline = params.automatic ? deadline : Date.now() + baseBudgetMs;
       const currentStorage = storageIdentity(gitDir, payloadRoot, refName, revalidationDeadline);
       const after = resolveRef(location, refName, revalidationDeadline);
       if (

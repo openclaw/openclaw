@@ -43,6 +43,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
   fsck.timeOut = false;
   fsck.budgets.length = 0;
 });
@@ -201,5 +202,18 @@ exec '${realGit.replaceAll("'", "'\\''")}' "$@"
     const [explicit, automatic] = fsck.budgets;
     expect(explicit).toBeGreaterThan(200_000);
     expect(automatic).toBeLessThanOrEqual(120_000);
+  });
+
+  it("automatic revalidation before disposal stays inside the original bound", async () => {
+    const f = fixture();
+    const explicit = await verifySourceWitness(f.params);
+    const automatic = await verifySourceWitness({ ...f.params, automatic: true });
+    if (!explicit.ok || !automatic.ok) {
+      throw new Error("fixture witness must verify");
+    }
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 121_000);
+
+    expect(() => automatic.revalidate()).toThrow("exceeded its work budget");
+    expect(() => explicit.revalidate()).not.toThrow();
   });
 });
