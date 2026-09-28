@@ -50,6 +50,7 @@ import { mockPostCoreConvergenceOnce } from "./update-cli/update-cli-config.test
 import {
   packageTargetStatus,
   writeJsonFixture,
+  writeOpenClawPackageFixture,
 } from "./update-cli/update-cli-package.test-support.js";
 import * as runtimeRecovery from "./update-cli/update-command-runtime-recovery.test-support.js";
 
