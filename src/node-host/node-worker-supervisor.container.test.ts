@@ -2,14 +2,10 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { describe, expect, it, vi } from "vitest";
 import * as processExec from "../process/exec.js";
 import { createChildAdapter } from "../process/supervisor/adapters/child.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../state/openclaw-state-db.js";
+import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { completeWorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
 import type { WorkerConnectionEndpoint } from "../worker/worker-connection-endpoint.js";
 import { buildWorkerProcessTurn } from "../worker/worker-process-protocol.js";
@@ -36,23 +32,13 @@ import {
 } from "./node-worker-supervisor.test-support.js";
 import { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    cleanup();
-  }),
-);
+const tempDirs = useStateDatabaseTempDirs();
 const endpoint: WorkerConnectionEndpoint = {
   kind: "websocket",
   url: "wss://gateway.example/__openclaw__/worker",
 };
 const DAEMON_TIMER_SCALE = 5;
 const fileLockModule = createRequire(import.meta.url).resolve("@openclaw/fs-safe/file-lock");
-
-afterEach(() => {
-  vi.restoreAllMocks();
-});
 
 function containerFixture(options: Parameters<typeof createNodeWorkerContainerFixture>[2] = {}) {
   return createNodeWorkerContainerFixture(

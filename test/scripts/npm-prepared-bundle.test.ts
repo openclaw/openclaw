@@ -940,6 +940,8 @@ describe("prepared npm bundle", () => {
       },
       ...proof,
     });
+    const manifestBytes = readFileSync(join(outputDir, "preflight-manifest.json"));
+    expect(manifestBytes.byteLength).toBe(Buffer.byteLength(`${JSON.stringify(manifest)}\n`));
     expect(manifest.version).toBe(3);
     expect(manifest.preparedBundle).toEqual(fixture.descriptor);
     for (const [name, value] of Object.entries(dependencyReports)) {
