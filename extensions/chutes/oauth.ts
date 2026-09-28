@@ -315,7 +315,7 @@ export async function loginChutes(params: {
       port: redirect.port,
       callbackPath: redirect.pathname,
       redirectUri: params.app.redirectUri,
-      successTitle: "Chutes OAuth complete",
+      successTitle: "Chutes authorization received",
       hostname: redirect.hostname,
       onProgress: params.onProgress,
       ...(params.signal ? { signal: params.signal } : {}),

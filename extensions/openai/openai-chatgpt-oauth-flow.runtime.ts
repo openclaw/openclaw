@@ -119,7 +119,9 @@ async function startLocalOAuthServer(
       sendOAuthHtmlResponse(
         res,
         200,
-        oauthSuccessHtml("OpenAI authentication completed. You can close this window."),
+        oauthSuccessHtml(
+          "OpenAI authorization received. You can close this window while sign-in finishes.",
+        ),
       );
       settleWait?.({ code });
     } catch {
