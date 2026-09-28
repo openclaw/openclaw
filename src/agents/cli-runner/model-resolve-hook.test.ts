@@ -117,6 +117,9 @@ describe("applyCliModelResolveHookForRun", () => {
     const call = hookRunnerStub.runBeforeModelResolve.mock.calls[0]!;
     expect(call[0]).toEqual({ prompt: "hello" });
     expect(call[1].modelProviderId).toBe("anthropic");
+    // Same selection the embedded before_model_resolve context reports; routers
+    // compare the caller-selected model before proposing an override.
+    expect(call[1].modelId).toBe("claude-opus-5-5");
     expect(call[1].channelId).toBe("chan-1");
     expect(call[1].accountId).toBe("acct-1");
   });

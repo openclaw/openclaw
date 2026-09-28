@@ -23,7 +23,7 @@ function writeTracingPlugin(file: string) {
     registration: [
       `const traceFile = ${JSON.stringify(file)};`,
       'api.on("before_model_resolve", (event, ctx) => {',
-      '  require("node:fs").appendFileSync(traceFile, JSON.stringify({ prompt: event.prompt, modelProviderId: ctx.modelProviderId, sessionId: ctx.sessionId, trigger: ctx.trigger, channelId: ctx.channelId ?? null }) + "\\n");',
+      '  require("node:fs").appendFileSync(traceFile, JSON.stringify({ prompt: event.prompt, modelProviderId: ctx.modelProviderId, modelId: ctx.modelId, sessionId: ctx.sessionId, trigger: ctx.trigger, channelId: ctx.channelId ?? null }) + "\\n");',
       '  return { providerOverride: "anthropic", modelOverride: "claude-sonnet-5" };',
       "});",
     ].join("\n"),
@@ -89,6 +89,7 @@ describe("applyCliModelResolveHookForRun with a real loaded plugin", () => {
     expect(JSON.parse(lines[0]!)).toEqual({
       prompt: "route this turn",
       modelProviderId: "anthropic",
+      modelId: "claude-opus-5-5",
       sessionId: "session-1",
       trigger: "agent-turn",
       channelId: "chan-1",

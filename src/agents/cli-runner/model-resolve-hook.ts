@@ -93,6 +93,9 @@ async function resolveCliModelOverrideForTurn(
       sessionId: params.sessionId,
       workspaceDir: params.workspaceDir,
       modelProviderId: params.logicalProvider,
+      // Same caller-selected model the embedded before_model_resolve context
+      // reports, so routers can compare the current selection on CLI turns too.
+      modelId: params.modelId,
       trigger: params.trigger,
       messageProvider: params.messageProvider,
       ...(params.channelId ? { channelId: params.channelId } : {}),
