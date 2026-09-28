@@ -40,6 +40,7 @@ async function useReadPool() {
 }
 `;
   return {
+    ...scheduledCloseFixtureFiles(),
     ...stateReadPoolFixtureFiles(),
     ...failedDrainFixtureFiles(readPoolFixture),
     "11-a-sqlite-owner.test.ts": `
@@ -206,6 +207,76 @@ it("retains installed-schema repair ownership through retired agent lease cleanu
   await useReadPool();
   await closeOpenClawStateDatabaseAsync();
   expect(readPool.close).toHaveBeenCalledOnce();
+});
+`,
+  };
+}
+
+function scheduledCloseFixtureFiles(): Record<string, string> {
+  return {
+    "10-a-scheduled-close.test.ts": `
+import { afterEach, expect, it } from "vitest";
+import { closeOpenClawAgentDatabasesForTest } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db.ts"))};
+import { hasOpenClawAgentDatabaseAsyncResources, registerOpenClawAgentDatabaseAsyncResource } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db-resources.ts"))};
+const events: string[] = [];
+// The synchronous test closer only schedules asynchronous Worker retirement.
+afterEach(() => closeOpenClawAgentDatabasesForTest());
+function registerClose(agentId: string) {
+  registerOpenClawAgentDatabaseAsyncResource({
+    agentId,
+    path: "/synthetic/" + agentId + ".sqlite",
+    revoke() {},
+    // Worker retirement crosses threads, so it is still in flight when teardown returns.
+    close: () => new Promise<void>((resolve) => setTimeout(() => {
+      events.push(agentId + " close settled");
+      resolve();
+    }, 100)),
+  });
+}
+it("schedules a Worker close that its teardown does not await", () => {
+  registerClose("scheduled");
+});
+it("starts only after that close settled", () => {
+  events.push("next test started");
+  expect(events).toEqual(["scheduled close settled", "next test started"]);
+  expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
+});
+it("schedules a Worker close and then skips itself", (context) => {
+  registerClose("skipped");
+  context.skip();
+});
+it("starts only after the skipped test's close settled", () => {
+  events.push("test after skip started");
+  expect(events.slice(2)).toEqual(["skipped close settled", "test after skip started"]);
+  expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
+});
+`,
+    "10-b-around-each-close.test.ts": `
+import { aroundEach, expect, it } from "vitest";
+import { closeOpenClawAgentDatabasesForTest } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db.ts"))};
+import { hasOpenClawAgentDatabaseAsyncResources, registerOpenClawAgentDatabaseAsyncResource } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db-resources.ts"))};
+const events: string[] = [];
+// aroundEach setup and teardown both run outside the runner's per-attempt hook.
+aroundEach(async (runTest) => {
+  events.push(hasOpenClawAgentDatabaseAsyncResources() ? "setup saw a pending close" : "setup");
+  await runTest();
+  closeOpenClawAgentDatabasesForTest();
+});
+it("schedules a Worker close from aroundEach teardown", () => {
+  registerOpenClawAgentDatabaseAsyncResource({
+    agentId: "around",
+    path: "/synthetic/around.sqlite",
+    revoke() {},
+    close: () => new Promise<void>((resolve) => setTimeout(() => {
+      events.push("around close settled");
+      resolve();
+    }, 100)),
+  });
+});
+it("starts only after the aroundEach close settled", () => {
+  events.push("next test started");
+  expect(events).toEqual(["setup", "around close settled", "setup", "next test started"]);
+  expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
 });
 `,
   };
