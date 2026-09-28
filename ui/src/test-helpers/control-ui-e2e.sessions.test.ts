@@ -741,6 +741,53 @@ it("commits targeted and session-wide aborts without replacing session edits or 
   expect(frames.filter((frame) => frame.event === "sessions.changed")).toHaveLength(2);
 });
 
+it.for(["direct", "descendant"] as const)(
+  "settles %s activity for every later read after a session-only abort",
+  async (activity, { connect }) => {
+    const active = {
+      key: "agent:main:main",
+      updatedAt: 1_000,
+      status: activity === "direct" ? "running" : "done",
+      hasActiveRun: activity === "direct",
+      hasActiveSubagentRun: activity === "descendant",
+      ...(activity === "direct" ? { activeRunIds: ["cached-run"] } : {}),
+    };
+    const other = { key: "agent:main:other", status: "running", hasActiveRun: true };
+    const { request } = await connect({
+      sessionKey: active.key,
+      sessions: [active, other],
+      sessionInfo: active,
+      methodResponses: {
+        "sessions.abort": { ok: true, abortedRunId: null, status: "no-active-run" },
+      },
+    });
+    await request("sessions.abort", { key: active.key, clearQueued: true });
+    // The Gateway computes these rows at read time, so no read issued after Stop may
+    // republish the pre-Stop activity with an older timestamp.
+    const settled = {
+      key: active.key,
+      hasActiveRun: false,
+      hasActiveSubagentRun: false,
+      activeRunIds: [],
+      updatedAt: expect.toSatisfy((value: number) => value > active.updatedAt),
+    };
+    expect((await request("sessions.describe", { key: active.key })).payload.session).toEqual(
+      expect.objectContaining(settled),
+    );
+    for (const method of ["chat.history", "chat.startup"]) {
+      expect((await request(method, { sessionKey: active.key })).payload.sessionInfo).toEqual(
+        expect.objectContaining(settled),
+      );
+    }
+    expect((await request("sessions.list")).payload.sessions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ ...settled, status: "done" }),
+        expect.objectContaining({ key: other.key, status: "running", hasActiveRun: true }),
+      ]),
+    );
+  },
+);
+
 it("registers a started send for targeted abort without cancelling another run or reviving a replayed ACK", async ({
   connect,
 }) => {
