@@ -56,7 +56,7 @@ describe("plugin MCP sign-in", () => {
       const alert = page.querySelector(".plugin-auth-alert");
       if (state && state !== "authorized") {
         expect(alert?.textContent).toContain("Sign in to Workboard");
-        expect(alert?.previousElementSibling?.className).toBe("plugin-catalog-detail__hero");
+        expect(page.querySelector(".plugin-catalog-detail__panel")?.contains(alert)).toBe(true);
       } else {
         expect(alert).toBeNull();
       }
