@@ -27,13 +27,9 @@ import {
 installUpdateLeaseHarness();
 
 describe("update resume completion ownership", () => {
-  it.each(
-    [false, true].flatMap((changed) =>
-      [false, true].map((parentOwnsCompletion) => ({ changed, parentOwnsCompletion })),
-    ),
-  )(
-    "resume honors completion ownership before its result (parent=$parentOwnsCompletion, changed=$changed)",
-    async ({ changed, parentOwnsCompletion }) => {
+  it.each([false, true])(
+    "resume honors completion ownership before its changed result (parent=%s)",
+    async (parentOwnsCompletion) => {
       await writeScenario("resume");
       if (!parentOwnsCompletion) {
         await fs.rm(state.path("handoff.json"));
@@ -45,14 +41,14 @@ describe("update resume completion ownership", () => {
           parentOwnsCompletion ? [] : ["post-attempt", "post-acquired"],
         );
         expect(await fs.stat(resultPath).catch(() => null)).toBeNull();
-        return { ...pluginResult, changed };
+        return { ...pluginResult, changed: true };
       });
 
       await invoke("resume");
 
       expect(JSON.parse(await fs.readFile(resultPath, "utf8"))).toMatchObject({
         status: "ok",
-        changed,
+        changed: true,
       });
       expect(await events()).toEqual(
         parentOwnsCompletion
@@ -60,7 +56,8 @@ describe("update resume completion ownership", () => {
           : [
               "post-attempt",
               "post-acquired",
-              ...(changed ? ["post-attempt", "post-acquired"] : []),
+              "post-attempt",
+              "post-acquired",
               "validate",
               "readiness",
             ],
@@ -73,65 +70,44 @@ describe("update resume completion ownership", () => {
     },
   );
 
-  it.each([
-    { changed: false, pluginError: false },
-    { changed: true, pluginError: false },
-    { changed: true, pluginError: true },
-  ])(
-    "legacy resume preserves Doctor warnings without replacing plugin failure (changed=$changed, error=$pluginError)",
-    async ({ changed, pluginError }) => {
-      const beforeWarning = "  Doctor retained optional legacy data.  ";
-      const afterWarning = "Doctor retained a plugin notice.";
-      const pluginWarning = {
-        reason: "existing-plugin-warning",
-        message: "Plugin convergence diagnostic.",
-        guidance: [],
-      };
-      await writeScenario("resume", {
-        doctorWarningsByInvocation: [[beforeWarning, " "], [afterWarning]],
-      });
-      await fs.rm(state.path("handoff.json"));
-      mocks.plugins.mockResolvedValueOnce({
-        ...pluginResult,
-        status: pluginError ? "error" : "ok",
-        ...(pluginError ? { reason: "plugin-fixture-failure" } : {}),
-        warnings: [pluginWarning],
-        changed,
-      });
+  it("legacy resume preserves Doctor warnings without replacing plugin failure", async () => {
+    const beforeWarning = "  Doctor retained optional legacy data.  ";
+    const afterWarning = "Doctor retained a plugin notice.";
+    const pluginWarning = {
+      reason: "existing-plugin-warning",
+      message: "Plugin convergence diagnostic.",
+      guidance: [],
+    };
+    await writeScenario("resume", {
+      doctorWarningsByInvocation: [[beforeWarning, " "], [afterWarning]],
+    });
+    await fs.rm(state.path("handoff.json"));
+    mocks.plugins.mockResolvedValueOnce({
+      ...pluginResult,
+      status: "error",
+      reason: "plugin-fixture-failure",
+      warnings: [pluginWarning],
+      changed: true,
+    });
 
-      await invoke("resume");
+    await invoke("resume");
 
-      expect(reportedResult("resume")).toMatchObject({
-        status: pluginError ? "error" : "warning",
-        ...(pluginError ? { reason: "plugin-fixture-failure" } : {}),
-        warnings: [
-          pluginWarning,
-          {
-            reason: "doctor-advisory",
-            message: beforeWarning.trim(),
-            guidance: ["Run `openclaw doctor --fix` after repairing the plugin."],
-          },
-          ...(changed && !pluginError
-            ? [
-                {
-                  reason: "doctor-advisory",
-                  message: afterWarning,
-                  guidance: ["Run `openclaw doctor --fix` after repairing the plugin."],
-                },
-              ]
-            : []),
-        ],
-      });
-      expect(await events()).toEqual([
-        "post-attempt",
-        "post-acquired",
-        ...(changed && !pluginError ? ["post-attempt", "post-acquired"] : []),
-        ...(!pluginError ? ["validate", "readiness"] : []),
-      ]);
-      expect(mocks.restart).not.toHaveBeenCalled();
-      expectDoctorDiagnostics();
-    },
-  );
+    expect(reportedResult("resume")).toMatchObject({
+      status: "error",
+      reason: "plugin-fixture-failure",
+      warnings: [
+        pluginWarning,
+        {
+          reason: "doctor-advisory",
+          message: beforeWarning.trim(),
+          guidance: ["Run `openclaw doctor --fix` after repairing the plugin."],
+        },
+      ],
+    });
+    expect(await events()).toEqual(["post-attempt", "post-acquired"]);
+    expect(mocks.restart).not.toHaveBeenCalled();
+    expectDoctorDiagnostics();
+  });
 
   it.each([false, true])(
     "resume reads the parent migration owner's committed generation (empty=%s)",

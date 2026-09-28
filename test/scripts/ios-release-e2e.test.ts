@@ -1,4 +1,5 @@
 import { spawnSync, type ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -15,6 +16,7 @@ import {
   runTrials,
   summarizeMeasurements,
   testRunnerEnv,
+  type TestIdentity,
   type TrialDependencies,
 } from "../../scripts/ios-release-e2e.js";
 import { createNativeDependencies } from "../../scripts/lib/ios-release-e2e-native.js";
@@ -24,12 +26,16 @@ import { evaluateWorkflowExpression } from "./ci-workflow.test-support.js";
 
 const nativeMocks = vi.hoisted(() => ({
   command: vi.fn(),
+  build: vi.fn(),
   gateway: vi.fn(),
   rpc: vi.fn(),
 }));
 vi.mock("../../scripts/lib/managed-child-process.mjs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../scripts/lib/managed-child-process.mjs")>()),
   runManagedCommand: nativeMocks.command,
+}));
+vi.mock("../../scripts/lib/ios-release-e2e-build.js", () => ({
+  prepareIOSReleaseNativeBuild: nativeMocks.build,
 }));
 vi.mock("../helpers/openclaw-test-instance.js", () => ({
   createOpenClawTestInstance: nativeMocks.gateway,
@@ -42,6 +48,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
   nativeMocks.command.mockReset();
+  nativeMocks.build.mockReset();
   nativeMocks.gateway.mockReset();
   nativeMocks.rpc.mockReset();
 });
@@ -95,7 +102,7 @@ describe("iOS release test identity", () => {
     ["skipped", { result: "Skipped" }],
     ["failed", { result: "Failed" }],
     ["failed child", { children: [{ nodeType: "Test Case Run", result: "Failed" }] }],
-    ["wrong class", { nodeIdentifier: "OtherTests/testLiveGatewayFreshInstallSetupAndRelaunch()" }],
+    ["wrong class", { nodeIdentifier: "OtherTests/testLiveGatewayPairChatAndRelaunch()" }],
     [
       "retry to green",
       {
@@ -221,7 +228,7 @@ describe("sampled simulator-tree footprint", () => {
 
 function fixture(
   options: {
-    fail?: "prepare" | "test" | "cleanup";
+    fail?: "prepare" | "test" | "reader" | "cleanup";
     measure?: boolean;
     invalidMeasurement?: boolean;
     cancel?: boolean;
@@ -243,8 +250,8 @@ function fixture(
         };
         signal.addEventListener("abort", () => reject(new Error("stopped")), { once: true });
       }),
-    create: vi.fn(async (test, arm, index) => {
-      trace.push(`create:${index}:${arm}:${test}`);
+    create: vi.fn(async (arm, index) => {
+      trace.push(`create:${index}:${arm}`);
       return {
         prepare: async () => {
           trace.push(`prepare:${index}`);
@@ -253,8 +260,8 @@ function fixture(
             throw new Error("private preparation diagnostics");
           }
         },
-        test: async () => {
-          trace.push(`test:${index}`);
+        test: async (test: TestIdentity) => {
+          trace.push(`test:${index}:${test}`);
           if (options.measure && !options.invalidMeasurement) {
             wake?.();
             await new Promise<void>((resolve) => {
@@ -265,7 +272,11 @@ function fixture(
           if (options.cancel) {
             abort.abort();
           }
-          if (index === 1 && options.fail === "test") {
+          if (
+            index === 1 &&
+            (options.fail === "test" ||
+              (options.fail === "reader" && test === IOS_RELEASE_TESTS[1]))
+          ) {
             throw Object.assign(new Error("private timeout diagnostics"), { code: "ETIMEDOUT" });
           }
           return result(test);
@@ -300,37 +311,75 @@ describe("fresh trial ownership", () => {
       TEST_RUNNER_OPENCLAW_IOS_LIVE_SETUP_CODE: "synthetic-setup-code",
     });
   });
-  it("runs a stock gate with fresh resources per test and no meter", async () => {
+  it("runs live pairing and the independent reader test on one prepared simulator", async () => {
     const { deps, trace } = fixture();
     const report = await runTrials("stock", deps);
     expect(report.complete).toBe(true);
-    expect(report.trials.map((trial) => trial.status)).toEqual(["passed", "passed"]);
-    expect(deps.create).toHaveBeenNthCalledWith(1, IOS_RELEASE_TESTS[0], "stock", 1);
-    expect(deps.create).toHaveBeenNthCalledWith(2, IOS_RELEASE_TESTS[1], "stock", 2);
-    expect(trace.filter((entry) => entry.startsWith("measure:"))).toEqual([]);
-    expect(trace.indexOf("cleanup:1")).toBeLessThan(trace.indexOf("prepare:2"));
+    expect(report.trials).toEqual([
+      expect.objectContaining({
+        status: "passed",
+        tests: IOS_RELEASE_TESTS.map((test) => ({ test, status: "passed", ms: 10 })),
+        preparationMs: 100,
+        testMs: 20,
+        totalMs: 125,
+      }),
+    ]);
+    expect(deps.create).toHaveBeenCalledExactlyOnceWith("stock", 1);
+    expect(trace).toEqual([
+      "create:1:stock",
+      "prepare:1",
+      ...IOS_RELEASE_TESTS.map((test) => `test:1:${test}`),
+      "cleanup:1",
+    ]);
   });
-  it("retains all sixteen fresh trials in fixed AB BA AB BA order", async () => {
+  it("retains all eight fresh arms in fixed AB BA AB BA order after a failed arm", async () => {
     const { deps, trace } = fixture({ fail: "test", measure: true });
     const report = await runTrials("compare", deps);
-    expect(armPlan("compare").map(({ arm }) => arm)).toEqual([
-      "stock",
-      "simslim",
-      "simslim",
-      "stock",
-      "stock",
-      "simslim",
-      "simslim",
-      "stock",
-    ]);
-    expect(deps.create).toHaveBeenCalledTimes(16);
-    expect(report.trials).toHaveLength(16);
-    expect(report.trials[0]?.status).toBe("failed");
-    expect(report.trials[0]?.errors).toEqual(["test-timeout"]);
-    expect(report.trials.slice(1).every((trial) => trial.status === "passed")).toBe(true);
-    expect(trace.filter((entry) => entry.startsWith("cleanup:"))).toHaveLength(16);
+    const order = ["stock", "simslim", "simslim", "stock", "stock", "simslim", "simslim", "stock"];
+    expect(armPlan("compare").map(({ arm }) => arm)).toEqual(order);
+    expect(report.trials.map(({ arm }) => arm)).toEqual(order);
+    expect(deps.create).toHaveBeenCalledTimes(8);
+    expect(report.trials[0]).toMatchObject({
+      status: "failed",
+      errors: ["test-timeout"],
+      tests: [{ test: IOS_RELEASE_TESTS[0], status: "failed" }],
+    });
+    expect(
+      report.trials
+        .slice(1)
+        .every((trial) => trial.status === "passed" && trial.tests.length === 2),
+    ).toBe(true);
+    expect(trace.filter((entry) => entry.startsWith("cleanup:"))).toHaveLength(8);
+    for (let index = 1; index < 8; index++) {
+      expect(trace.indexOf(`cleanup:${index}`)).toBeLessThan(trace.indexOf(`prepare:${index + 1}`));
+    }
     expect(JSON.stringify(report)).not.toContain("private");
   });
+  it.each(["test", "reader"] as const)(
+    "fails the arm after its %s failure without repeating either test",
+    async (fail) => {
+      const { deps, trace } = fixture({ fail });
+      const report = await runTrials("stock", deps);
+      expect(report.trials).toHaveLength(1);
+      expect(report.trials[0]).toMatchObject({
+        status: "failed",
+        errors: ["test-timeout"],
+        tests:
+          fail === "test"
+            ? [{ test: IOS_RELEASE_TESTS[0], status: "failed" }]
+            : [
+                { test: IOS_RELEASE_TESTS[0], status: "passed" },
+                { test: IOS_RELEASE_TESTS[1], status: "failed" },
+              ],
+      });
+      expect(trace.filter((entry) => entry.startsWith("test:"))).toEqual(
+        (fail === "test" ? [IOS_RELEASE_TESTS[0]] : IOS_RELEASE_TESTS).map(
+          (test) => `test:1:${test}`,
+        ),
+      );
+      expect(trace.at(-1)).toBe("cleanup:1");
+    },
+  );
   it("refuses comparison without a meter", async () => {
     const { deps } = fixture();
     await expect(runTrials("compare", deps)).rejects.toThrow("comparison-meter-required");
@@ -341,7 +390,8 @@ describe("fresh trial ownership", () => {
     const report = await runTrials("stock", deps);
     expect(report.trials[0]?.errors).toEqual(["preparation-failed"]);
     expect(trace.filter((entry) => entry === "prepare:1")).toHaveLength(1);
-    expect(trace).not.toContain("test:1");
+    expect(trace.some((entry) => entry.startsWith("test:"))).toBe(false);
+    expect(report.trials[0]?.tests).toEqual([]);
     expect(trace).toContain("cleanup:1");
   });
   it("joins the collector and fails incomplete measurement without discarding the trial", async () => {
@@ -362,6 +412,11 @@ describe("fresh trial ownership", () => {
       expect(report.trials).toHaveLength(1);
       expect(report.trials[0]?.status).toBe("failed");
       expect(trace).toContain("cleanup:1");
+      if ("cancel" in options && options.cancel) {
+        expect(trace.filter((entry) => entry.startsWith("test:"))).toEqual([
+          `test:1:${IOS_RELEASE_TESTS[0]}`,
+        ]);
+      }
     }
   });
 });
@@ -410,22 +465,33 @@ describe("release qualification workflow authority", () => {
       trials: [],
     });
   });
-  it("qualifies the checked-out release source before accessing signing assets", () => {
-    const steps = release.jobs.release.steps;
-    const qualify = steps.findIndex(
-      (step: { name: string }) => step.name === "Qualify native iOS pairing and chat",
-    );
+  it("isolates qualification builds from the release checkout before accessing signing assets", () => {
+    const releaseJob = release.jobs.release;
+    const qualification = release.jobs[releaseJob.needs];
+    expect(qualification).toMatchObject({
+      uses: "./.github/workflows/ios-release-e2e.yml",
+      permissions: { contents: "read" },
+      with: { target_sha: "${{ github.sha }}", mode: "stock" },
+    });
+    expect(qualification.if).toBe(releaseJob.if);
+    expect(qualification.secrets).toBeUndefined();
+    expect(qualification["continue-on-error"]).toBeUndefined();
+    expect(releaseJob["continue-on-error"]).toBeUndefined();
+    expect(releaseJob.if).not.toMatch(/\b(?:always|failure|cancelled)\s*\(/u);
+
+    const steps = releaseJob.steps;
+    expect(
+      steps.some((step: { run?: string }) => step.run?.includes("scripts/ios-release-e2e.ts")),
+    ).toBe(false);
     const signing = steps.findIndex(
       (step: { name: string }) => step.name === "Create apps-signing read token",
     );
     const upload = steps.findIndex(
       (step: { name: string }) => step.name === "Prepare and upload iOS release",
     );
-    expect(qualify).toBeGreaterThan(-1);
-    expect(signing).toBeGreaterThan(qualify);
+    expect(signing).toBeGreaterThan(-1);
     expect(upload).toBeGreaterThan(signing);
-    expect(steps[qualify].run).toContain('--mode stock --target-sha "$(git rev-parse HEAD)"');
-    for (const step of [steps[qualify], steps[signing], steps[upload]]) {
+    for (const step of [steps[signing], steps[upload]]) {
       expect(step.if).toBeUndefined();
       expect(step["continue-on-error"]).toBeUndefined();
     }
@@ -445,6 +511,7 @@ describe("release qualification workflow authority", () => {
     }
     expect(recovery.with["if-no-files-found"]).toBe("error");
     expect(workflow.permissions).toEqual({ contents: "read" });
+    expect(workflow.jobs.qualify["runs-on"]).toBe("xcode-27-xlarge");
     expect(workflow.jobs.qualify.environment).toBeUndefined();
     expect(workflow.on.workflow_dispatch.inputs.target_sha).toBeUndefined();
     expect(workflow.jobs.qualify.env.TARGET_SHA).toBe("${{ inputs.target_sha || github.sha }}");
@@ -501,16 +568,6 @@ describe("release qualification workflow authority", () => {
       );
     },
   );
-  it("uses ad-hoc Debug products, exact destinations and the XCTest result CLI", () => {
-    const source = readFileSync("scripts/lib/ios-release-e2e-native.ts", "utf8");
-    expect(source).not.toContain('"CODE_SIGNING_ALLOWED=NO"');
-    expect(source).toContain('"Debug"');
-    expect(source).toContain("`platform=iOS Simulator,id=${udid}`");
-    expect(source).toContain('"test-without-building"');
-    expect(source).toContain('"test-results"');
-    expect(source).not.toContain('"--format"');
-    expect(source).not.toContain("autoapprove");
-  });
 });
 
 describe("native command adapter", () => {
@@ -518,6 +575,8 @@ describe("native command adapter", () => {
     "success",
     "dirty-tracked",
     "dirty-untracked",
+    "source-late-dirty",
+    "source-late-head-change",
     "different-xcode",
     "different-xcode-build",
     "invalid-xcode-output",
@@ -530,10 +589,28 @@ describe("native command adapter", () => {
     "cleanup-failure",
     "build-unjoined",
     "build-exit",
+    "boot-timeout",
+    "gateway-start-failure",
+    "setup-status-timeout",
+    "setup-status-failure",
+    "status-unjoined-gateway-exit",
+    "gateway-exit-during-create",
+    "gateway-exit-during-boot",
+    "cancel-during-boot",
+    "gateway-only",
     "setup-code-timeout",
     "setup-code-rpc-timeout",
     "test-unjoined",
     "test-exit",
+    "reader-failure",
+    "fixture-exit",
+    "gateway-exit",
+    "missing-first",
+    "missing-second",
+    "missing-relaunch",
+    "provider-duplicate",
+    "provider-out-of-order",
+    "provider-extra",
     "test-timeout-output",
     "reply-failure-evidence",
     "reply-failure-history-error",
@@ -542,6 +619,7 @@ describe("native command adapter", () => {
     "reply-failure-app-log-error",
   ])("owns admission, build, test and cleanup for %s", async (scenario) => {
     const temp = tempDirs.make("ios-release-e2e-adapter-");
+    const developerDir = tempDirs.make("ios-release-e2e-developer-");
     vi.spyOn(os, "tmpdir").mockReturnValue(temp);
     vi.stubGlobal(
       "process",
@@ -552,6 +630,22 @@ describe("native command adapter", () => {
     );
     vi.stubEnv("OPENCLAW_CI_SIMSLIM_BINARY", "");
     const instances: { cleanup: ReturnType<typeof vi.fn> }[] = [];
+    const lifecycle: string[] = [];
+    let simulatorReady = false;
+    let sourceChanged = false;
+    let exitMock: (() => void) | undefined;
+    let requestLog = "";
+    let xctestrunPath = "";
+    nativeMocks.build.mockImplementation(async (options) => {
+      const derivedDataPath = path.join(options.buildDir, "DerivedData");
+      xctestrunPath = path.join(derivedDataPath, "Build/Products/OpenClawUITests.xctestrun");
+      await options.build(derivedDataPath);
+      return { derivedDataPath, xctestrunPath, reused: false };
+    });
+    const gatewayChild: EventEmitter & {
+      exitCode: number | null;
+      signalCode: NodeJS.Signals | null;
+    } = Object.assign(new EventEmitter(), { exitCode: null, signalCode: null });
     let nativeCommandActive = false;
     let historyReadBeforeCommandExit = false;
     nativeMocks.rpc.mockImplementation(async (options) => {
@@ -562,11 +656,42 @@ describe("native command adapter", () => {
         }
         return {
           messages: [
-            { role: "user", content: [{ type: "text", text: "OPENCLAW_E2E_OK_200" }] },
-            { role: "assistant", content: [{ type: "text", text: "OPENCLAW_E2E_SEED_0_100" }] },
+            { role: "user", content: [{ type: "text", text: "OPENCLAW_E2E_RELAUNCH" }] },
+            { role: "assistant", content: [{ type: "text", text: "OPENCLAW_E2E_FIRST" }] },
           ],
         };
       }
+      options.onHelloOk?.();
+      options.assertDispatchCurrent?.();
+      if (options.method === "device.pair.setupStatus") {
+        expect(simulatorReady).toBe(false);
+        lifecycle.push("setup-status");
+        if (scenario === "status-unjoined-gateway-exit") {
+          gatewayChild.exitCode = 17;
+          gatewayChild.emit("exit", 17, null);
+          throw Object.assign(new Error("private status cleanup failure"), {
+            code: "ETIMEDOUT",
+            processTreeState: "unknown",
+          });
+        }
+        if (scenario === "setup-status-timeout") {
+          throw new GatewayTransportError({
+            kind: "timeout",
+            message: "private status timeout",
+            connectionDetails: { url: "ws://private", urlSource: "private", message: "private" },
+            timeoutMs: 30_000,
+            requestDispatched: true,
+          });
+        }
+        if (scenario === "setup-status-failure") {
+          throw new Error("private status preparation failure");
+        }
+        lifecycle.push("setup-status-ready");
+        return {};
+      }
+      expect(options.method).toBe("device.pair.setupCode");
+      expect(simulatorReady).toBe(scenario !== "gateway-only");
+      lifecycle.push("setup-code");
       if (scenario === "setup-code-timeout") {
         throw new Error("private fixture command failed", {
           cause: Object.assign(new Error("private setup code and path"), { code: "ETIMEDOUT" }),
@@ -583,14 +708,25 @@ describe("native command adapter", () => {
       return { setupCode: `synthetic-code-${instances.length}` };
     });
     nativeMocks.gateway.mockImplementation(async () => {
+      expect(simulatorReady).toBe(false);
+      lifecycle.push("gateway-create");
       const index = instances.length + 1;
       const instance = {
         url: `ws://127.0.0.1:${20000 + index}`,
         gatewayToken: `synthetic-token-${index}`,
         configPath: `/private/fixture-${index}/config.json`,
-        startGateway: vi.fn(async () => {}),
+        child: gatewayChild,
+        startGateway: vi.fn(async () => {
+          lifecycle.push("gateway-start");
+          if (scenario === "gateway-start-failure") {
+            throw new Error("private Gateway startup failure");
+          }
+        }),
         logs: () => "private log\n[responses] start private\n[responses] completed private\n",
         cleanup: vi.fn(async () => {
+          lifecycle.push("gateway-cleanup");
+          gatewayChild.exitCode = 0;
+          gatewayChild.emit("exit", 0, null);
           if (scenario === "cleanup-failure") {
             throw new Error("private cleanup failure");
           }
@@ -609,50 +745,38 @@ describe("native command adapter", () => {
       options.onReady?.({ stdout, stderr } as unknown as ChildProcess);
       const args = options.args as string[];
       if (args.includes("scripts/e2e/mock-openai-server.mjs")) {
-        const body = scenario.startsWith("reply-failure-")
-          ? {
-              model: "ios-e2e",
-              input: [
-                {
-                  role: "user",
-                  content: "Reply exactly with OPENCLAW_E2E_OK_200 and no other text.",
-                },
-              ],
-              metadata: { title: "OPENCLAW_E2E_SEED_0_100" },
-            }
-          : { model: "ios-e2e" };
-        const requests = [body];
-        if (scenario.startsWith("reply-failure-")) {
-          requests.push({ model: "ios-e2e" });
+        expect(simulatorReady).toBe(false);
+        if (scenario !== "gateway-only") {
+          expect(lifecycle).toContain("native-build-complete");
         }
-        writeFileSync(
-          options.env.MOCK_REQUEST_LOG,
-          requests
-            .map((requestBody) =>
-              JSON.stringify({ path: "/v1/responses", body: JSON.stringify(requestBody) }),
-            )
-            .join("\n") + "\n",
-        );
+        lifecycle.push("mock-start");
+        requestLog = options.env.MOCK_REQUEST_LOG;
         stdout.write("mock-openai listening on 20001\n");
-        await new Promise<void>((_resolve, reject) => {
-          options.signal.addEventListener(
-            "abort",
-            () => {
-              joinedMocks++;
-              reject(Object.assign(new Error("stopped"), { code: "ABORT_ERR" }));
-            },
-            { once: true },
-          );
+        await new Promise<void>((resolve, reject) => {
+          const onAbort = () => {
+            joinedMocks++;
+            lifecycle.push("mock-cleanup");
+            reject(Object.assign(new Error("stopped"), { code: "ABORT_ERR" }));
+          };
+          exitMock = () => {
+            options.signal.removeEventListener("abort", onAbort);
+            joinedMocks++;
+            lifecycle.push("mock-exit");
+            resolve();
+          };
+          options.signal.addEventListener("abort", onAbort, { once: true });
         });
       } else if (args[0] === "status") {
         expect(args).toEqual(["status", "--porcelain=v1", "--untracked-files=all"]);
-        if (scenario === "dirty-tracked") {
+        if (scenario === "dirty-tracked" || (scenario === "source-late-dirty" && sourceChanged)) {
           stdout.write(" M scripts/ios-release-e2e.ts\n");
         } else if (scenario === "dirty-untracked") {
           stdout.write("?? untracked-source.ts\n");
         }
       } else if (options.bin === "git") {
-        stdout.write("1".repeat(40));
+        stdout.write(
+          (scenario === "source-late-head-change" && sourceChanged ? "2" : "1").repeat(40),
+        );
       } else if (args.includes("-version")) {
         stdout.write(
           scenario === "different-xcode"
@@ -663,6 +787,10 @@ describe("native command adapter", () => {
                 ? "unrecognized toolchain\n"
                 : "Xcode 27.0\nBuild version 27A266a\n",
         );
+      } else if (args.includes("--print-path")) {
+        stdout.write(`${developerDir}\n`);
+      } else if (args.includes("--show-sdk-build-version")) {
+        stdout.write("27.0\n");
       } else if (args.includes("runtimes")) {
         const runtime = {
           isAvailable: scenario !== "unavailable-runtime",
@@ -713,6 +841,8 @@ describe("native command adapter", () => {
           }),
         );
       } else if (args.includes("create")) {
+        expect(lifecycle).toContain("setup-status-ready");
+        lifecycle.push("simulator-create");
         expect(args.at(-1)).toBe(
           scenario === "different-runtime"
             ? "com.apple.CoreSimulator.SimRuntime.iOS-27-0"
@@ -720,7 +850,34 @@ describe("native command adapter", () => {
               ? "com.apple.CoreSimulator.SimRuntime.iOS-26-10"
               : "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
         );
+        if (scenario === "gateway-exit-during-create") {
+          gatewayChild.exitCode = 17;
+          gatewayChild.emit("exit", 17, null);
+          expect(options.signal.aborted).toBe(false);
+        }
         stdout.write(`11111111-2222-3333-4444-${String(++created).padStart(12, "0")}`);
+      } else if (args.includes("bootstatus")) {
+        lifecycle.push("boot-wait");
+        await Promise.resolve();
+        if (scenario === "boot-timeout") {
+          throw Object.assign(new Error("private simulator boot timeout"), { code: "ETIMEDOUT" });
+        }
+        if (scenario === "gateway-exit-during-boot" || scenario === "cancel-during-boot") {
+          if (scenario === "gateway-exit-during-boot") {
+            gatewayChild.exitCode = 17;
+            gatewayChild.emit("exit", 17, null);
+          } else {
+            abort.abort();
+          }
+          expect(options.signal.aborted).toBe(true);
+          throw Object.assign(new Error("private simulator boot interrupted"), {
+            code: "ABORT_ERR",
+          });
+        }
+        simulatorReady = true;
+        lifecycle.push("boot-ready");
+      } else if (args.includes("delete")) {
+        lifecycle.push("simulator-delete");
       } else if (args.includes("build-for-testing")) {
         appContainer = path.join(
           path.dirname(args[args.indexOf("-derivedDataPath") + 1]!),
@@ -736,20 +893,125 @@ describe("native command adapter", () => {
           stderr.write("BUILD FAILED: private setup code and private path\n");
           return 65;
         }
+        lifecycle.push("native-build-complete");
       } else if (args.includes("test-without-building")) {
+        const testArgument = args.find((arg) => arg.startsWith("-only-testing:"));
+        if (!testArgument) {
+          throw new Error("native test selection missing");
+        }
+        selectedTest = testArgument.slice("-only-testing:".length);
+        const reader = selectedTest === IOS_RELEASE_TESTS[1];
+        lifecycle.push(reader ? "reader-test" : "live-test");
+        if (!reader) {
+          stdout.write(
+            "IOS_RELEASE_CHECKPOINT paired\nIOS_RELEASE_CHECKPOINT private-credential\n",
+          );
+        }
+        if (reader) {
+          expect(instances[0]?.cleanup).toHaveBeenCalledOnce();
+          expect(joinedMocks).toBe(1);
+          expect(options.env.TEST_RUNNER_OPENCLAW_IOS_LIVE_SETUP_CODE).toBe("");
+          expect(options.env.TEST_RUNNER_OPENCLAW_IOS_LIVE_GATEWAY).not.toBe("1");
+          if (scenario === "reader-failure") {
+            return 65;
+          }
+        } else {
+          const stages =
+            scenario === "provider-duplicate"
+              ? ["first", "first", "second", "relaunch"]
+              : scenario === "provider-out-of-order"
+                ? ["second", "first", "relaunch"]
+                : [
+                    "first",
+                    "second",
+                    "relaunch",
+                    ...(scenario === "provider-extra" ? ["unexpected"] : []),
+                  ];
+          const requests = scenario.startsWith("reply-failure-")
+            ? [
+                {
+                  model: "ios-e2e",
+                  input: [
+                    {
+                      role: "user",
+                      content: "Reply exactly with OPENCLAW_E2E_RELAUNCH and no other text.",
+                    },
+                  ],
+                  metadata: { title: "OPENCLAW_E2E_FIRST" },
+                },
+                { model: "ios-e2e" },
+              ]
+            : stages.map((stage) => {
+                const marker = `OPENCLAW_E2E_${stage.toUpperCase()}`;
+                const missing = scenario === `missing-${stage}`;
+                return {
+                  model: "ios-e2e",
+                  input: [
+                    { role: "user", content: `Reply exactly with ${marker} and no other text.` },
+                    { role: "assistant", content: marker },
+                    {
+                      role: "user",
+                      content: [
+                        {
+                          type: "input_text",
+                          text:
+                            "[Sun 2026-09-27 21:02 CDT] " +
+                            "Conversation info: ⟦openclaw:ctx⟧\n```json\n" +
+                            JSON.stringify({ sender: { id: "fixture-owner", name: marker } }) +
+                            "\n```\n\n" +
+                            (missing
+                              ? "No requested marker here."
+                              : `Reply exactly with ${marker} and no other text.`),
+                        },
+                      ],
+                    },
+                    {
+                      role: "user",
+                      content: [
+                        {
+                          type: "input_text",
+                          text:
+                            "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\n" +
+                            "OPENCLAW_E2E_FIRST\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+                        },
+                      ],
+                    },
+                  ],
+                  metadata: { title: marker },
+                };
+              });
+          writeFileSync(
+            requestLog,
+            requests
+              .map((body) => JSON.stringify({ path: "/v1/responses", body: JSON.stringify(body) }))
+              .join("\n") + "\n",
+          );
+        }
+        if (scenario === "gateway-exit") {
+          gatewayChild.exitCode = 17;
+          gatewayChild.emit("exit", 17, null);
+          expect(options.signal.aborted).toBe(true);
+          throw Object.assign(new Error("private native command interrupted"), {
+            code: "ABORT_ERR",
+          });
+        }
+        if (scenario === "fixture-exit") {
+          exitMock?.();
+          await Promise.resolve();
+        }
         if (
           scenario.startsWith("reply-failure-") &&
-          args.includes(`-only-testing:${IOS_RELEASE_TESTS[1]}`)
+          args.includes(`-only-testing:${IOS_RELEASE_TESTS[0]}`)
         ) {
           nativeCommandActive = true;
           const failureMessage =
             scenario === "reply-failure-source-only"
               ? ""
-              : `IOS_RELEASE_CHAT_FAILURE final ${scenario === "reply-failure-submission" ? "submission" : "reply"} draft=false keyboard=true reply=false writing=false jump=true foreground=true input=true transcript=true send=false`;
+              : `IOS_RELEASE_CHAT_FAILURE relaunch ${scenario === "reply-failure-submission" ? "submission" : "reply"} draft=false keyboard=true reply=false writing=false jump=true foreground=true input=true transcript=true send=false`;
           stdout.write(
-            "Test Case '-[OpenClawUITests.OpenClawSnapshotUITests testLiveGatewayChatRoundTripAndControlOverview]' started.\n" +
+            "Test Case '-[OpenClawUITests.OpenClawSnapshotUITests testLiveGatewayPairChatAndRelaunch]' started.\n" +
               `/private/checkout/OpenClawSnapshotUITests.swift:1913: error: private ${failureMessage}\n` +
-              "Test Case '-[OpenClawUITests.OpenClawSnapshotUITests testLiveGatewayChatRoundTripAndControlOverview]' failed (99 seconds).\n",
+              "Test Case '-[OpenClawUITests.OpenClawSnapshotUITests testLiveGatewayPairChatAndRelaunch]' failed (99 seconds).\n",
           );
           await Promise.resolve();
           nativeCommandActive = false;
@@ -757,11 +1019,11 @@ describe("native command adapter", () => {
         }
         if (scenario === "test-timeout-output") {
           stdout.write(
-            "Test Case '-[OpenClawUITests.OpenClawSnapshotUITests testLiveGatewayChatRoundTripAndControlOverview]' started.\n" +
+            "Test Case '-[OpenClawUITests.OpenClawSnapshotUITests testLiveGatewayPairChatAndRelaunch]' started.\n" +
               "/private/checkout/OpenClawSnapshotUITests.swift:1904: error: private assertion details\n" +
               "/private/checkout/OpenClawSnapshotUITests.swift:1904: error: repeated private details\n" +
               "/private/Other.swift:42: error: private details\n" +
-              "Test Case '-[OpenClawUITests.OpenClawSnapshotUITests testLiveGatewayChatRoundTripAndControlOverview]' failed (39.615 seconds).\n",
+              "Test Case '-[OpenClawUITests.OpenClawSnapshotUITests testLiveGatewayPairChatAndRelaunch]' failed (39.615 seconds).\n",
           );
           throw Object.assign(new Error("private timeout diagnostics"), { code: "ETIMEDOUT" });
         }
@@ -779,16 +1041,16 @@ describe("native command adapter", () => {
           stderr.write("TEST FAILED: private setup code and private path\n");
           return 65;
         }
-        selectedTest = args
-          .find((arg) => arg.startsWith("-only-testing:"))!
-          .slice("-only-testing:".length);
+        if (!reader) {
+          stdout.write("IOS_RELEASE_CHECKPOINT overview\n");
+        }
       } else if (options.bin === "/usr/bin/plutil") {
         stdout.write("ai.synthetic.private\n");
       } else if (args.includes("get_app_container")) {
         expect(args).toEqual([
           "simctl",
           "get_app_container",
-          "11111111-2222-3333-4444-000000000002",
+          "11111111-2222-3333-4444-000000000001",
           "ai.synthetic.private",
           "data",
         ]);
@@ -813,11 +1075,17 @@ describe("native command adapter", () => {
       return 0;
     });
     const proof: Record<string, unknown> = {};
+    const progressSnapshots: string[] = [];
+    const abort = new AbortController();
     const admission = createNativeDependencies({
       mode: "stock",
       targetSha: "1".repeat(40),
-      signal: new AbortController().signal,
+      signal: abort.signal,
+      gatewayOnly: scenario === "gateway-only",
       proof,
+      onProgress: async () => {
+        progressSnapshots.push(JSON.stringify(proof));
+      },
     });
     if (scenario.startsWith("dirty-")) {
       await expect(admission).rejects.toMatchObject({
@@ -882,21 +1150,51 @@ describe("native command adapter", () => {
             : "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
     });
     try {
+      if (scenario === "gateway-only") {
+        const gatewayProbe = await native.dependencies.create("stock", 1);
+        try {
+          await gatewayProbe.prepare();
+        } finally {
+          await gatewayProbe.cleanup();
+        }
+        expect(lifecycle).toEqual([
+          "mock-start",
+          "gateway-create",
+          "gateway-start",
+          "setup-status",
+          "setup-status-ready",
+          "setup-code",
+          "gateway-cleanup",
+          "mock-cleanup",
+        ]);
+        expect(nativeMocks.build).not.toHaveBeenCalled();
+        expect(created).toBe(0);
+        expect(joinedMocks).toBe(1);
+        expect(nativeMocks.rpc.mock.calls.map(([options]) => options.method)).toEqual([
+          "device.pair.setupStatus",
+          "device.pair.setupCode",
+        ]);
+        expect(proof.fixtures).toEqual([expect.objectContaining({ cleanupConfirmed: true })]);
+        return;
+      }
       const report = await runTrials("stock", native.dependencies);
+      expect(JSON.stringify(proof)).not.toMatch(/private|synthetic|OPENCLAW_E2E_|metadata/);
+      expect(progressSnapshots.length).toBeGreaterThan(0);
+      expect(progressSnapshots.join("\n")).not.toMatch(/private|synthetic|OPENCLAW_E2E_|metadata/);
       if (scenario.startsWith("reply-failure-")) {
         expect(report.complete).toBe(true);
-        expect(report.trials.map((trial) => trial.status)).toEqual(["passed", "failed"]);
-        expect(report.trials[1]).toMatchObject({
+        expect(report.trials.map((trial) => trial.status)).toEqual(["failed"]);
+        expect(report.trials[0]).toMatchObject({
           errors: ["test-timeout"],
           diagnostics: [{ operation: "native-test", code: "timeout", errorCode: "ETIMEDOUT" }],
         });
-        const context = report.trials[1]?.diagnostics[0]?.context;
+        const context = report.trials[0]?.diagnostics[0]?.context;
         expect(context).toEqual(
           expect.arrayContaining([
             ...(scenario === "reply-failure-source-only"
               ? []
               : [
-                  "chat-stage:final",
+                  "chat-stage:relaunch",
                   `chat-checkpoint:${scenario === "reply-failure-submission" ? "submission" : "reply"}`,
                   "chat-draft-retained:false",
                   "chat-keyboard:true",
@@ -908,8 +1206,8 @@ describe("native command adapter", () => {
                   "chat-transcript-present:true",
                   "chat-send-present:false",
                 ]),
-            "provider-latest-user:final",
-            "provider-body-tail:seed-0",
+            "provider-latest-user:relaunch",
+            "provider-body-tail:first",
             "provider-marker-match:false",
             "model-any-request-stage:start",
             "model-any-request-stage:completed",
@@ -926,7 +1224,7 @@ describe("native command adapter", () => {
                 ]),
             ...(scenario === "reply-failure-history-error"
               ? ["history-evidence-unavailable"]
-              : ["history-user:final", "history-assistant:seed-0"]),
+              : ["history-user:relaunch", "history-assistant:first"]),
           ]),
         );
         expect(context).not.toContain("provider-marker-match:true");
@@ -960,22 +1258,194 @@ describe("native command adapter", () => {
         expect(JSON.stringify(report)).not.toContain("private");
         return;
       }
+      if (scenario === "boot-timeout" || scenario === "gateway-start-failure") {
+        expect(report.trials).toMatchObject([
+          {
+            status: "failed",
+            tests: [],
+            errors: [scenario === "boot-timeout" ? "preparation-timeout" : "preparation-failed"],
+            diagnostics: [
+              {
+                operation: scenario === "boot-timeout" ? "simulator-ready" : "gateway-start",
+                code: scenario === "boot-timeout" ? "timeout" : "failed",
+              },
+            ],
+          },
+        ]);
+        expect(lifecycle).not.toContain("live-test");
+        expect(lifecycle).not.toContain("setup-code");
+        expect(instances[0]?.cleanup).toHaveBeenCalledOnce();
+        expect(joinedMocks).toBe(1);
+        if (scenario === "boot-timeout") {
+          expect(lifecycle).toContain("setup-status-ready");
+          expect(lifecycle.at(-1)).toBe("simulator-delete");
+        } else {
+          expect(created).toBe(0);
+          expect(nativeMocks.rpc).not.toHaveBeenCalled();
+        }
+        return;
+      }
+      if (scenario.startsWith("setup-status-")) {
+        expect(report.trials).toMatchObject([
+          {
+            status: "failed",
+            tests: [],
+            errors: [
+              scenario === "setup-status-timeout" ? "preparation-timeout" : "preparation-failed",
+            ],
+            diagnostics: [
+              {
+                operation: "setup-status",
+                code: scenario === "setup-status-timeout" ? "timeout" : "failed",
+                context:
+                  scenario === "setup-status-timeout"
+                    ? [
+                        "rpc-authenticated:true",
+                        "rpc-dispatch-entered:true",
+                        "rpc-request-dispatched:true",
+                      ]
+                    : [],
+              },
+            ],
+          },
+        ]);
+        expect(nativeMocks.rpc).toHaveBeenCalledOnce();
+        expect(created).toBe(0);
+        expect(lifecycle).not.toContain("setup-code");
+        expect(lifecycle).not.toContain("live-test");
+        expect(instances[0]?.cleanup).toHaveBeenCalledOnce();
+        expect(joinedMocks).toBe(1);
+        expect(proof.fixtures).toEqual([
+          expect.objectContaining({
+            cleanupConfirmed: true,
+            setupStatusRpc: { authenticated: true, dispatchEntered: true, responseReceived: false },
+          }),
+        ]);
+        return;
+      }
+      if (scenario === "status-unjoined-gateway-exit") {
+        expect(report.complete).toBe(false);
+        expect(report.trials).toMatchObject([
+          {
+            status: "failed",
+            tests: [],
+            errors: ["preparation-failed", "cleanup-failed"],
+            diagnostics: [
+              { operation: "gateway-start", code: "exit", exitCode: 17 },
+              { operation: "cleanup", code: "cleanup-unconfirmed" },
+            ],
+          },
+        ]);
+        expect(proof.resourcesPreserved).toBe(true);
+        expect(nativeMocks.rpc).toHaveBeenCalledOnce();
+        expect(created).toBe(0);
+        expect(instances[0]?.cleanup).toHaveBeenCalledOnce();
+        expect(joinedMocks).toBe(1);
+        return;
+      }
+      if (
+        scenario === "gateway-exit-during-create" ||
+        scenario === "gateway-exit-during-boot" ||
+        scenario === "cancel-during-boot"
+      ) {
+        expect(report.trials).toMatchObject([
+          {
+            status: "failed",
+            tests: [],
+            errors: [scenario === "cancel-during-boot" ? "cancelled" : "preparation-failed"],
+            diagnostics: [
+              scenario === "cancel-during-boot"
+                ? { operation: "simulator-ready", code: "cancelled" }
+                : { operation: "gateway-start", code: "exit", exitCode: 17 },
+            ],
+          },
+        ]);
+        expect(lifecycle).not.toContain("setup-code");
+        expect(lifecycle).not.toContain("live-test");
+        expect(instances[0]?.cleanup).toHaveBeenCalledOnce();
+        expect(joinedMocks).toBe(1);
+        expect(lifecycle.at(-1)).toBe("simulator-delete");
+        expect(gatewayChild.listenerCount("exit")).toBe(0);
+        return;
+      }
+      if (
+        scenario.startsWith("missing-") ||
+        scenario.startsWith("provider-") ||
+        scenario === "fixture-exit" ||
+        scenario === "gateway-exit"
+      ) {
+        expect(report.trials).toMatchObject([
+          {
+            status: "failed",
+            tests: [{ test: IOS_RELEASE_TESTS[0], status: "failed" }],
+            errors: ["test-failed"],
+            diagnostics: [
+              {
+                operation:
+                  scenario === "fixture-exit"
+                    ? "fixture-server"
+                    : scenario === "gateway-exit"
+                      ? "gateway-start"
+                      : "provider-rpc",
+                code: scenario === "gateway-exit" ? "exit" : "failed",
+                ...(scenario === "gateway-exit" ? { exitCode: 17 } : {}),
+              },
+            ],
+          },
+        ]);
+        expect(lifecycle.filter((event) => event === "live-test")).toHaveLength(1);
+        expect(lifecycle).not.toContain("reader-test");
+        expect(instances[0]?.cleanup).toHaveBeenCalledOnce();
+        expect(joinedMocks).toBe(1);
+        return;
+      }
+      if (scenario === "reader-failure") {
+        expect(report.trials).toMatchObject([
+          {
+            status: "failed",
+            tests: [
+              { test: IOS_RELEASE_TESTS[0], status: "passed" },
+              { test: IOS_RELEASE_TESTS[1], status: "failed" },
+            ],
+            errors: ["test-failed"],
+            diagnostics: [{ operation: "native-test", code: "exit", exitCode: 65 }],
+          },
+        ]);
+        expect(lifecycle.filter((event) => event.endsWith("-test"))).toEqual([
+          "live-test",
+          "reader-test",
+        ]);
+        expect(lifecycle.indexOf("gateway-cleanup")).toBeLessThan(lifecycle.indexOf("reader-test"));
+        expect(lifecycle.indexOf("mock-cleanup")).toBeLessThan(lifecycle.indexOf("reader-test"));
+        expect(instances[0]?.cleanup).toHaveBeenCalledOnce();
+        return;
+      }
       if (scenario === "setup-code-timeout" || scenario === "setup-code-rpc-timeout") {
         expect(report.complete).toBe(true);
         for (const trial of report.trials) {
           expect(trial).toMatchObject({
             status: "failed",
-            errors: ["test-timeout"],
+            errors: ["preparation-timeout"],
             diagnostics: [
               {
                 operation: "setup-code",
                 code: "timeout",
                 ...(scenario === "setup-code-timeout" ? { errorCode: "ETIMEDOUT" } : {}),
-                context: [],
+                context:
+                  scenario === "setup-code-rpc-timeout"
+                    ? ["rpc-authenticated:true", "rpc-dispatch-entered:true"]
+                    : [],
               },
             ],
           });
         }
+        expect(report.trials[0]?.tests).toEqual([]);
+        expect(proof.fixtures).toEqual([
+          expect.objectContaining({
+            trial: 1,
+            setupRpc: { authenticated: true, dispatchEntered: true, responseReceived: false },
+          }),
+        ]);
         expect(
           nativeMocks.command.mock.calls.some(([{ args }]) =>
             args.includes("test-without-building"),
@@ -993,23 +1463,68 @@ describe("native command adapter", () => {
         return;
       }
       if (scenario === "test-exit") {
-        expect(report.trials.map((trial) => trial.status)).toEqual(["failed", "failed"]);
+        expect(report.trials.map((trial) => trial.status)).toEqual(["failed"]);
         expect(report.trials[0]?.diagnostics).toEqual([
           {
             operation: "native-test",
             code: "exit",
             exitCode: 65,
-            context: ["test-failed", "xctest-line:1904"],
+            context: expect.arrayContaining(["test-failed", "xctest-line:1904"]),
           },
         ]);
         expect(JSON.stringify(report)).not.toContain("private");
         return;
       }
-      expect(report.trials.map((trial) => trial.status)).toEqual(["passed", "passed"]);
-      expect(created).toBe(2);
-      expect(joinedMocks).toBe(2);
+      if (scenario === "source-late-dirty" || scenario === "source-late-head-change") {
+        expect(report.trials.map((trial) => trial.status)).toEqual(["passed"]);
+        expect(report.trials[0]?.tests).toHaveLength(2);
+        sourceChanged = true;
+        await expect(native.assertCurrentSource()).rejects.toMatchObject({
+          diagnostic:
+            scenario === "source-late-dirty"
+              ? { operation: "source-status", code: "dirty-source" }
+              : { operation: "source-head", code: "identity-mismatch" },
+        });
+        expect(instances[0]?.cleanup).toHaveBeenCalledOnce();
+        expect(lifecycle.filter((entry) => entry.endsWith("-test"))).toEqual([
+          "live-test",
+          "reader-test",
+        ]);
+        return;
+      }
+      expect(report.trials.map((trial) => trial.status)).toEqual(["passed"]);
+      expect(report.trials[0]?.tests.map(({ test, status }) => ({ test, status }))).toEqual(
+        IOS_RELEASE_TESTS.map((test) => ({ test, status: "passed" })),
+      );
+      expect(lifecycle.indexOf("mock-start")).toBeLessThan(lifecycle.indexOf("boot-ready"));
+      expect(lifecycle.indexOf("gateway-start")).toBeLessThan(lifecycle.indexOf("boot-ready"));
+      expect(lifecycle.indexOf("gateway-start")).toBeLessThan(lifecycle.indexOf("setup-status"));
+      expect(lifecycle.indexOf("setup-status-ready")).toBeLessThan(
+        lifecycle.indexOf("simulator-create"),
+      );
+      expect(lifecycle.indexOf("boot-ready")).toBeLessThan(lifecycle.indexOf("setup-code"));
+      expect(lifecycle.indexOf("setup-code")).toBeLessThan(lifecycle.indexOf("live-test"));
+      expect(lifecycle.indexOf("gateway-cleanup")).toBeLessThan(lifecycle.indexOf("reader-test"));
+      expect(lifecycle.indexOf("mock-cleanup")).toBeLessThan(lifecycle.indexOf("reader-test"));
+      expect(lifecycle.at(-1)).toBe("simulator-delete");
+      expect(created).toBe(1);
+      expect(joinedMocks).toBe(1);
       for (const [index, instance] of instances.entries()) {
-        expect(nativeMocks.rpc).toHaveBeenNthCalledWith(index + 1, {
+        expect(nativeMocks.rpc).toHaveBeenCalledTimes(2);
+        expect(nativeMocks.rpc).toHaveBeenNthCalledWith(
+          1,
+          expect.objectContaining({
+            method: "device.pair.setupStatus",
+            params: {
+              setupId: expect.stringMatching(/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u),
+            },
+            timeoutMs: 30_000,
+            sharedStateMode: "read-only",
+            token: `synthetic-token-${index + 1}`,
+            url: `ws://127.0.0.1:${20001 + index}`,
+          }),
+        );
+        expect(nativeMocks.rpc).toHaveBeenNthCalledWith(2, {
           config: {},
           configPath: `/private/fixture-${index + 1}/config.json`,
           url: `ws://127.0.0.1:${20001 + index}`,
@@ -1020,34 +1535,78 @@ describe("native command adapter", () => {
           method: "device.pair.setupCode",
           params: { publicUrl: `ws://127.0.0.1:${20001 + index}`, includeQr: false },
           timeoutMs: 30_000,
-          signal: native.dependencies.signal,
+          signal: expect.any(AbortSignal),
+          onHelloOk: expect.any(Function),
+          assertDispatchCurrent: expect.any(Function),
         });
         expect(instance.cleanup).toHaveBeenCalledOnce();
       }
+      expect(proof.fixtures).toEqual([
+        expect.objectContaining({
+          trial: 1,
+          cleanupConfirmed: true,
+          setupStatusRpc: { authenticated: true, dispatchEntered: true, responseReceived: true },
+          setupRpc: { authenticated: true, dispatchEntered: true, responseReceived: true },
+          providerMessages: [
+            { stage: "first", received: true },
+            { stage: "second", received: true },
+            { stage: "relaunch", received: true },
+          ],
+        }),
+      ]);
+      expect(proof.fixtures).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ gatewayExited: true })]),
+      );
+      expect(gatewayChild.listenerCount("exit")).toBe(0);
+      expect(proof.phases).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            operation: "native-test",
+            trial: 1,
+            status: "passed",
+            checkpoint: "overview",
+          }),
+        ]),
+      );
       const commands = nativeMocks.command.mock.calls.map(([options]) => options);
       expect(commands.filter(({ args }) => args.includes("build-for-testing"))).toHaveLength(1);
-      for (const { args: nativeArgs } of commands.filter(
-        ({ args }) => args.includes("build-for-testing") || args.includes("test-without-building"),
-      )) {
-        expect(nativeArgs).toEqual(
-          expect.arrayContaining([
-            "CODE_SIGNING_ALLOWED=YES",
-            "CODE_SIGN_IDENTITY=-",
-            "CODE_SIGN_STYLE=Manual",
-            "PROVISIONING_PROFILE=",
-            "PROVISIONING_PROFILE_SPECIFIER=",
-          ]),
-        );
-        expect(nativeArgs).not.toContain("-allowProvisioningUpdates");
-      }
+      const nativeBuild = commands.find(({ args }) => args.includes("build-for-testing"));
+      expect(nativeBuild.args).toEqual(
+        expect.arrayContaining([
+          "-configuration",
+          "Debug",
+          "CODE_SIGNING_ALLOWED=YES",
+          "CODE_SIGN_IDENTITY=-",
+          "CODE_SIGN_STYLE=Manual",
+          "PROVISIONING_PROFILE=",
+          "PROVISIONING_PROFILE_SPECIFIER=",
+        ]),
+      );
+      expect(nativeBuild.args).not.toContain("-allowProvisioningUpdates");
+      expect(nativeMocks.build).toHaveBeenCalledOnce();
+      expect(nativeMocks.build.mock.calls[0]?.[0].identity).toMatchObject({
+        sourceSha: "1".repeat(40),
+        sdkVersion: "27.0",
+        platform: "darwin",
+        arch: "arm64",
+      });
       expect(
         commands
           .filter(({ args }) => args.includes("test-without-building"))
           .map(({ env }) => env.TEST_RUNNER_OPENCLAW_IOS_LIVE_SETUP_CODE),
-      ).toEqual(["synthetic-code-1", "synthetic-code-2"]);
+      ).toEqual(["synthetic-code-1", ""]);
       for (const { args: testArgs } of commands.filter(({ args }) =>
         args.includes("test-without-building"),
       )) {
+        expect(testArgs).toContain(
+          "platform=iOS Simulator,id=11111111-2222-3333-4444-000000000001",
+        );
+        expect(
+          testArgs.slice(testArgs.indexOf("-xctestrun"), testArgs.indexOf("-xctestrun") + 2),
+        ).toEqual(["-xctestrun", xctestrunPath]);
+        expect(testArgs).not.toContain("-project");
+        expect(testArgs).not.toContain("-derivedDataPath");
+        expect(testArgs.some((argument: string) => argument.startsWith("CODE_SIGN"))).toBe(false);
         const diagnosticsIndex = testArgs.indexOf("-collect-test-diagnostics");
         expect(testArgs.slice(diagnosticsIndex, diagnosticsIndex + 2)).toEqual([
           "-collect-test-diagnostics",
@@ -1058,8 +1617,16 @@ describe("native command adapter", () => {
         expect(testArgs).not.toContain("-run-tests-until-failure");
       }
       expect(
+        commands
+          .filter(({ args }) => args.includes("xcresulttool"))
+          .map(({ args }) => args.slice(0, 4)),
+      ).toEqual([
+        ["xcresulttool", "get", "test-results", "tests"],
+        ["xcresulttool", "get", "test-results", "tests"],
+      ]);
+      expect(
         commands.filter(({ args }) => args.includes("delete")).map(({ args }) => args.at(-1)),
-      ).toEqual(["11111111-2222-3333-4444-000000000001", "11111111-2222-3333-4444-000000000002"]);
+      ).toEqual(["11111111-2222-3333-4444-000000000001"]);
       expect(nativeMocks.gateway.mock.calls[0]?.[0]).toMatchObject({
         config: {
           gateway: { controlUi: { enabled: false } },
@@ -1068,7 +1635,11 @@ describe("native command adapter", () => {
         env: gatewayEnv,
       });
     } finally {
-      if (scenario === "cleanup-failure" || scenario === "test-unjoined") {
+      if (
+        scenario === "cleanup-failure" ||
+        scenario === "test-unjoined" ||
+        scenario === "status-unjoined-gateway-exit"
+      ) {
         // This is the outer owner's cleanup call after the trial loop has stopped.
         await expect(native.cleanup()).rejects.toMatchObject({
           diagnostic: { operation: "cleanup", code: "cleanup-unconfirmed" },

@@ -426,21 +426,6 @@ export function createPlacementMoveOps(runtime: PlacementStoreRuntime) {
       return results;
     },
 
-    listPlacementMoves(): WorkerPlacementMoveIntent[] {
-      const db = read();
-      if (!ensureExistingWorkerPlacementMoveSchema(db)) {
-        return [];
-      }
-      return executeSqliteQuerySync(
-        db,
-        moveQuery(db)
-          .selectFrom("worker_session_placement_moves")
-          .selectAll()
-          .orderBy("created_at_ms")
-          .orderBy("session_id"),
-      ).rows.map(fromRow);
-    },
-
     beginPlacementMove(input: {
       sessionId: string;
       source: WorkerPlacementMoveSource;

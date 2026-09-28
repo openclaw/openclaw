@@ -1,6 +1,7 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { html } from "lit";
 import { GatewayRequestError, type GatewayEventFrame } from "../../api/gateway.ts";
+import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 
 export type CustodianEventNudge = {
@@ -92,7 +93,7 @@ export function renderCustodianEventNudge(params: {
       aria-label=${t("custodian.nudge.dismiss")}
       @click=${params.onDismiss}
     >
-      ×
+      ${icons.x}
     </button>
   </div>`;
 }
@@ -119,7 +120,7 @@ export function renderCustodianChannelOnboardingNudge(params: {
       aria-label=${t("custodian.nudge.channelSetupDismiss")}
       @click=${params.onDismiss}
     >
-      ×
+      ${icons.x}
     </button>
   </div>`;
 }
@@ -148,7 +149,7 @@ export function renderCustodianChannelOnboardingError(params: {
       aria-label=${t("custodian.nudge.channelSetupDismiss")}
       @click=${params.onDismiss}
     >
-      ×
+      ${icons.x}
     </button>
   </div>`;
 }

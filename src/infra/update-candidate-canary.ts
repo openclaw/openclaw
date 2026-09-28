@@ -102,6 +102,10 @@ export async function validateUpdateCandidateCanary(params: {
   let stepStartedAt = started;
   let activeLintStep: UpdateStepResult | undefined;
   const steps: UpdateStepResult[] = [];
+  const recordStep = (step: UpdateStepResult) => {
+    steps.push(step);
+    params.onStep?.(step);
+  };
   const cleanupRehearsal = async () => {
     if (!rehearsal) {
       return;
@@ -115,10 +119,7 @@ export async function validateUpdateCandidateCanary(params: {
             ? "candidate-state-cleanup"
             : "candidate-plugin-inventory-cleanup",
         onProgress: params.onProgress,
-        onWarning: (step) => {
-          steps.push(step);
-          params.onStep?.(step);
-        },
+        onWarning: recordStep,
       });
     }
   };
@@ -178,8 +179,7 @@ export async function validateUpdateCandidateCanary(params: {
           "Update cleanup deadline elapsed before process close and termination requests both completed. Update validation results are unchanged.",
       },
     };
-    steps.push(step);
-    params.onStep?.(step);
+    recordStep(step);
     return false;
   };
   try {
@@ -208,8 +208,7 @@ export async function validateUpdateCandidateCanary(params: {
         stdoutTail: message,
         advisory: { kind: "candidate-runtime-unavailable", message },
       };
-      steps.push(step);
-      params.onStep?.(step);
+      recordStep(step);
       // Older targets also lack the isolated canary CLI; retain their shipped finalization path.
       return { status: "ok", phase, durationMs: Date.now() - started, logTail, steps };
     }
@@ -244,8 +243,7 @@ export async function validateUpdateCandidateCanary(params: {
       snapshotCapacity: rehearsal.snapshotCapacity,
       diagnostics: rehearsal.snapshotDiagnostics,
     };
-    steps.push(snapshotStep);
-    params.onStep?.(snapshotStep);
+    recordStep(snapshotStep);
     env = { ...rehearsal.env };
     const { port, stateDir: copiedStateDir } = rehearsal;
     const doctorResultOptions = { tmpdir: () => copiedStateDir };
@@ -617,8 +615,7 @@ export async function validateUpdateCandidateCanary(params: {
             }
           : {}),
       };
-      steps.push(step);
-      params.onStep?.(step);
+      recordStep(step);
     } finally {
       await stopCanary(
         running,

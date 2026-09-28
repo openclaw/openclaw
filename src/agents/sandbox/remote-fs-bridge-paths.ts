@@ -60,7 +60,7 @@ export function buildRemoteProtectedSkillRoots(params: {
 }
 
 export function normalizeContainerPath(value: string): string {
-  const normalized = normalizeContainerPathCore(value.trim() || "/");
+  const normalized = normalizeContainerPathCore(value || "/");
   return normalized.startsWith("/") ? normalized : `/${normalized}`;
 }
 

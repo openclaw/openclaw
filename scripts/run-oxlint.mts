@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import JSON5 from "json5";
 import type { DummyRuleMap, OxlintConfig } from "oxlint";
 import { limitsAreAdvisory, reportLimitViolations } from "./lib/check-limits.mts";
+import { parseStaticDiagnostics } from "./lib/ci-static-check-evidence.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
   distArtifactEntryArgs,
@@ -20,6 +21,7 @@ import {
   resolveRepoToolBinPath,
 } from "./lib/local-check-runtime.mts";
 import { createManagedCommandInvocation, runManagedCommand } from "./lib/managed-child-process.mts";
+import { readProcessMemoryCapacity } from "./lib/process-memory.mts";
 import { resolvePathEnvKey } from "./windows-cmd-helpers.mjs";
 
 const PREPARE_EXTENSION_BOUNDARY_ARGS = distArtifactEntryArgs(
@@ -72,6 +74,20 @@ type OxlintDiagnostic = {
   help?: string;
   labels?: { span: { line?: number; column?: number } }[];
 };
+
+type OxlintRunResult = {
+  status: number;
+  evidence?: {
+    version: 1;
+    id: string;
+    config: string;
+    exitCode: number;
+    stdout: string;
+    stderr: string;
+  };
+};
+
+const MAX_EVIDENCE_OUTPUT = 1024 * 1024;
 
 function oxlintOption(args: string[], name: string, short: string) {
   const end = args.indexOf("--");
@@ -128,7 +144,7 @@ async function runWithAdvisoryLimits(
   bin: string,
   args: string[],
   env: NodeJS.ProcessEnv,
-): Promise<number> {
+): Promise<OxlintRunResult> {
   const configOption = oxlintOption(args, "--config", "-c");
   const configPath = path.resolve(configOption.value ?? ".oxlintrc.json");
   const command = {
@@ -137,12 +153,18 @@ async function runWithAdvisoryLimits(
     env,
     requireProcessTreeExit: process.platform !== "win32",
   };
+  const evidenceId = env.OPENCLAW_CI_STATIC_EVIDENCE_ID;
+  const evidenceEnabled =
+    env.OPENCLAW_CI_STATIC_EVIDENCE === "1" &&
+    typeof evidenceId === "string" &&
+    /^[\w:-]{1,160}$/u.test(evidenceId) &&
+    !args.some((arg) => /^(?:--output-file|--fix(?:-suggestions|-dangerously)?)(?:=|$)/u.test(arg));
   if (
-    !limitsAreAdvisory(env) ||
-    args.some((arg) => OXLINT_PREPARE_SKIP_FLAGS.has(arg)) ||
+    (!limitsAreAdvisory(env) && !evidenceEnabled) ||
+    args.some((arg) => OXLINT_PREPARE_SKIP_FLAGS.has(arg.replace(/[=][\s\S]*$/u, ""))) ||
     !fs.existsSync(configPath)
   ) {
-    return await runManagedCommand(command);
+    return { status: await runManagedCommand(command) };
   }
   const config = JSON5.parse<OxlintConfig>(fs.readFileSync(configPath, "utf8"));
   const rootRules = advisoryLimitRules(config.rules);
@@ -154,51 +176,93 @@ async function runWithAdvisoryLimits(
       ? [{ files: scope.files, excludeFiles: scope.excludeFiles, rules: scopedRules.rules }]
       : [];
   });
-  if (!enabled) {
-    return await runManagedCommand(command);
+  enabled &&= limitsAreAdvisory(env);
+  if (!enabled && !evidenceEnabled) {
+    return { status: await runManagedCommand(command) };
   }
 
   // CLI --warn cannot replace scoped severities and enables rules outside their file scopes.
   // Keep the transient config beside its owner so relative globs and plugin paths do not move.
-  const advisoryConfig = path.join(path.dirname(configPath), `.oxlint-limits-${randomUUID()}.json`);
+  const advisoryConfig = enabled
+    ? path.join(path.dirname(configPath), `.oxlint-limits-${randomUUID()}.json`)
+    : undefined;
   // Extending the original preserves native syntax/schema validation before the override.
-  fs.writeFileSync(
-    advisoryConfig,
-    JSON.stringify({
-      extends: [configPath],
-      rules: rootRules.rules,
-      overrides,
-      plugins: config.plugins,
-      categories: config.categories,
-      // Oxlint 1.82 keeps these fields from the child rather than inheriting them.
-      env: config.env,
-      globals: config.globals,
-      settings: config.settings,
-      ignorePatterns: config.ignorePatterns,
-    }),
-    { flag: "wx" },
-  );
+  if (advisoryConfig) {
+    fs.writeFileSync(
+      advisoryConfig,
+      JSON.stringify({
+        extends: [configPath],
+        rules: rootRules.rules,
+        overrides,
+        plugins: config.plugins,
+        categories: config.categories,
+        // Oxlint 1.82 keeps these fields from the child rather than inheriting them.
+        env: config.env,
+        globals: config.globals,
+        settings: config.settings,
+        ignorePatterns: config.ignorePatterns,
+      }),
+      { flag: "wx" },
+    );
+  }
   try {
-    const configuredArgs = configOption.replace(advisoryConfig);
+    const configuredArgs = advisoryConfig ? configOption.replace(advisoryConfig) : args;
     const format = oxlintOption(configuredArgs, "--format", "-f");
     let output = "";
+    let stderr = "";
+    let overflow = false;
     const status = await runManagedCommand({
       ...command,
       args: format.replace("json"),
-      stdio: ["inherit", "pipe", "inherit"],
+      stdio: ["inherit", "pipe", evidenceEnabled ? "pipe" : "inherit"],
       onReady(child) {
         if (!child.stdout) {
           throw new Error("Oxlint JSON report pipe is unavailable");
         }
         child.stdout.setEncoding("utf8");
         child.stdout.on("data", (chunk: string) => {
-          output += chunk;
+          if (
+            evidenceEnabled &&
+            output.length + stderr.length + chunk.length > MAX_EVIDENCE_OUTPUT
+          ) {
+            if (!overflow) {
+              process.stdout.write(output);
+              output = "";
+              overflow = true;
+            }
+          }
+          if (overflow) {
+            process.stdout.write(chunk);
+          } else {
+            output += chunk;
+          }
         });
+        if (evidenceEnabled) {
+          if (!child.stderr) {
+            throw new Error("Oxlint diagnostic error pipe is unavailable");
+          }
+          child.stderr.setEncoding("utf8");
+          child.stderr.on("data", (chunk: string) => {
+            process.stderr.write(chunk);
+            if (output.length + stderr.length + chunk.length > MAX_EVIDENCE_OUTPUT) {
+              if (!overflow) {
+                process.stdout.write(output);
+                output = "";
+                overflow = true;
+              }
+            } else if (!overflow) {
+              stderr += chunk;
+            }
+          });
+        }
       },
     });
+    if (overflow) {
+      return { status };
+    }
     if (status !== 0 && status !== 1) {
       process.stdout.write(output);
-      return status;
+      return { status };
     }
     let report: { diagnostics: OxlintDiagnostic[] };
     try {
@@ -207,7 +271,7 @@ async function runWithAdvisoryLimits(
       // Configuration failures can be plain text even when JSON output was requested.
       process.stdout.write(output);
       if (status !== 0) {
-        return status;
+        return { status };
       }
       throw error;
     }
@@ -225,7 +289,7 @@ async function runWithAdvisoryLimits(
       })),
       env,
     );
-    if (format.value === "json") {
+    if (evidenceEnabled || format.value === "json") {
       process.stdout.write(output);
     } else {
       for (const diagnostic of report.diagnostics) {
@@ -247,9 +311,32 @@ async function runWithAdvisoryLimits(
         `Found ${warnings} warning${warnings === 1 ? "" : "s"} and ${errors} error${errors === 1 ? "" : "s"}.`,
       );
     }
-    return status;
+    const diagnostics = evidenceEnabled ? parseStaticDiagnostics(output, "oxlint") : null;
+    return {
+      status,
+      ...(evidenceEnabled &&
+      stderr === "" &&
+      diagnostics !== null &&
+      (status === 0 ? diagnostics.length === 0 : diagnostics.length > 0)
+        ? {
+            evidence: {
+              version: 1,
+              id: evidenceId,
+              config:
+                oxlintOption(args, "--tsconfig", "").value ??
+                configOption.value ??
+                ".oxlintrc.json",
+              exitCode: status,
+              stdout: output,
+              stderr,
+            },
+          }
+        : {}),
+    };
   } finally {
-    fs.unlinkSync(advisoryConfig);
+    if (advisoryConfig) {
+      fs.unlinkSync(advisoryConfig);
+    }
   }
 }
 
@@ -450,10 +537,11 @@ async function prepareExtensionPackageBoundaryArtifacts(env: NodeJS.ProcessEnv) 
 async function runOxlint(
   argv: string[] = process.argv.slice(2),
   runtimeEnv: NodeJS.ProcessEnv = process.env,
-): Promise<number> {
+): Promise<OxlintRunResult> {
   const focusedConfig = argv.includes(OPENCLAW_FOCUSED_CONFIG_FLAG);
   const oxlintArgs = argv.filter((arg) => arg !== OPENCLAW_FOCUSED_CONFIG_FLAG);
   const localEnv = resolveLocalCheckEnv(runtimeEnv);
+  const memory = focusedConfig ? null : readProcessMemoryCapacity({});
   // Focused configs are syntax-only guards; keep wrapper process handling
   // without the broad type-aware policy or package artifact preparation.
   const { args: policyArgs, env } = focusedConfig
@@ -461,6 +549,10 @@ async function runOxlint(
     : applyLocalOxlintPolicy(oxlintArgs, localEnv, {
         logicalCpuCount: os.availableParallelism(),
         totalMemoryBytes: os.totalmem(),
+        memoryCapacityBytes: memory?.capacityBytes,
+        memoryLimitBytes:
+          memory?.usageKnown && memory.availableBytes !== null ? memory.limitBytes : null,
+        platform: process.platform,
       });
   const sparseTargets = filterSparseMissingOxlintTargets(policyArgs);
   const finalArgs = sparseTargets.args;
@@ -470,6 +562,7 @@ async function runOxlint(
     env.OPENCLAW_OXLINT_SKIP_PREPARE !== "1" &&
     shouldPrepareExtensionPackageBoundaryArtifacts(finalArgs);
   if (sparseTargets.skippedTargets.length > 0) {
+    delete env.OPENCLAW_CI_STATIC_EVIDENCE;
     console.error(
       `[oxlint] sparse checkout is missing tracked target(s); skipping ${sparseTargets.skippedTargets.join(", ")}`,
     );
@@ -478,11 +571,11 @@ async function runOxlint(
     console.error(
       `[oxlint] sparse checkout is missing tracked config(s); skipping oxlint: ${sparseTargets.skippedConfigs.join(", ")}`,
     );
-    return 0;
+    return { status: 0 };
   }
   if (sparseTargets.hadExplicitTargets && sparseTargets.remainingExplicitTargets === 0) {
     console.error("[oxlint] no present sparse-checkout targets remain; skipping oxlint.");
-    return 0;
+    return { status: 0 };
   }
 
   if (needsArtifactPreparation) {
@@ -500,9 +593,13 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   const argv = process.argv.slice(2);
   // Skip-prepare callers still consume shared declarations. Source-only lint
   // remains independent; sharded lint inherits its parent's owner.
-  process.exitCode =
+  const result =
     !argv.includes(OPENCLAW_FOCUSED_CONFIG_FLAG) &&
     shouldPrepareExtensionPackageBoundaryArtifacts(argv)
       ? await withDistArtifactOwnership(process.cwd(), () => runOxlint(argv))
       : await runOxlint(argv);
+  process.exitCode = result.status;
+  if (result.evidence) {
+    console.log(`\n[ci-static:oxlint:leaf] ${JSON.stringify(result.evidence)}`);
+  }
 }

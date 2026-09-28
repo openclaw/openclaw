@@ -70,6 +70,14 @@ import {
   shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
 import { tryRunUpdateAdmissionBeforeStartup } from "./run-main-update-admission.js";
+import type {
+  BareRootLaunchTarget,
+  GatewayLaunchTarget,
+  GatewayProbeAuth,
+  GatewayProbeTarget,
+  GatewayResolution,
+  ReachableGateway,
+} from "./run-main.gateway-types.js";
 import type { CliHarnessCleanup } from "./runtime-cleanup-scope.js";
 import { closeCliResources, runCliDisposer } from "./runtime-cleanup.js";
 import { registerSignalExitBarrier, waitForSignalExitBarriers } from "./signal-exit-barrier.js";
@@ -248,20 +256,6 @@ export async function shouldStartOnboardingForFreshInstall(argv: string[]): Prom
   return shouldStartLocalOnboarding(snapshot);
 }
 
-type GatewayLaunchTarget = {
-  config: OpenClawConfig;
-  gatewayUrl: string;
-  token?: string;
-  password?: string;
-  tlsFingerprint?: string;
-};
-
-type BareRootLaunchTarget =
-  | { kind: "onboarding"; classic?: boolean }
-  | { kind: "remote-gateway-inference"; target: GatewayLaunchTarget }
-  | { kind: "tui"; local: true }
-  | ({ kind: "tui"; local: false } & GatewayLaunchTarget);
-
 async function resolveBareRootLaunchTarget(argv: string[]): Promise<BareRootLaunchTarget | null> {
   if (!shouldHandleBareRoot(argv)) {
     return null;
@@ -286,7 +280,12 @@ async function resolveConfiguredTuiLaunchTarget(
   const gatewayResolution = await resolveReachableGateway(config, options);
   if (gatewayResolution.kind !== "unreachable") {
     const { url, remote, ...auth } = gatewayResolution.gateway;
-    const target: GatewayLaunchTarget = { config, gatewayUrl: url, ...auth };
+    const target: GatewayLaunchTarget = {
+      config,
+      gatewayUrl: url,
+      ...(remote ? { configuredRemote: true } : {}),
+      ...auth,
+    };
     if (gatewayResolution.kind !== "missing-configured-model") {
       return { kind: "tui", local: false, ...target };
     }
@@ -301,33 +300,6 @@ async function resolveConfiguredTuiLaunchTarget(
   }
   return { kind: "tui", local: true };
 }
-
-type GatewayProbeTarget = {
-  url: string;
-  scope: "local-loopback" | "local-configured" | "remote";
-  tlsFingerprint?: string;
-  preauthHandshakeTimeoutMs?: number;
-};
-
-type ReachableGateway = {
-  url: string;
-  remote: boolean;
-  token?: string;
-  password?: string;
-  tlsFingerprint?: string;
-};
-
-type GatewayResolution =
-  | { kind: "configured"; gateway: ReachableGateway }
-  | { kind: "missing-configured-model"; gateway: ReachableGateway }
-  | { kind: "reachable-unverified"; gateway: ReachableGateway }
-  | { kind: "configured-unreachable"; gateway: ReachableGateway }
-  | { kind: "unreachable" };
-
-type GatewayProbeAuth = {
-  token?: string;
-  password?: string;
-};
 
 function toReachableGateway(target: GatewayProbeTarget, auth: GatewayProbeAuth): ReachableGateway {
   return {
@@ -363,7 +335,9 @@ async function resolveReachableGateway(
     const probeOptions: Parameters<typeof probeGatewayConfiguredModel>[0] = {
       url: target.url,
       // A configured remote origin stays remote through a loopback tunnel.
-      ...(target.scope === "remote" ? { originScopedDeviceAuth: true } : {}),
+      ...(target.scope === "remote"
+        ? { config, originScopedDeviceAuth: true, configuredRemote: true }
+        : {}),
     };
     if (config.gateway?.remote?.edgeAuth) {
       probeOptions.config = config;
@@ -1397,6 +1371,7 @@ async function runCliWithPreparedOutputMode(
                 config: bareRootLaunchTarget.config,
                 boundGateway: {
                   url: bareRootLaunchTarget.gatewayUrl,
+                  ...(bareRootLaunchTarget.configuredRemote ? { configuredRemote: true } : {}),
                   ...(bareRootLaunchTarget.token ? { token: bareRootLaunchTarget.token } : {}),
                   ...(bareRootLaunchTarget.password
                     ? { password: bareRootLaunchTarget.password }

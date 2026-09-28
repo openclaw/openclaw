@@ -213,36 +213,27 @@ function sanitizeControlUiPublicUrl(url: string | null): string | null {
   return stripSensitiveQueryParams(withoutFragment);
 }
 
+const QA_EVIDENCE_CONTENT_TYPES: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".webm": "video/webm",
+  ".mp4": "video/mp4",
+  ".mov": "video/quicktime",
+  ".json": "application/json; charset=utf-8",
+  ".jsonl": "application/json; charset=utf-8",
+  ".md": "text/plain; charset=utf-8",
+  ".txt": "text/plain; charset=utf-8",
+  ".log": "text/plain; charset=utf-8",
+};
+
 function detectQaEvidenceArtifactContentType(filePath: string): string {
   const lower = filePath.toLowerCase();
-  if (lower.endsWith(".png")) {
-    return "image/png";
-  }
-  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) {
-    return "image/jpeg";
-  }
-  if (lower.endsWith(".gif")) {
-    return "image/gif";
-  }
-  if (lower.endsWith(".webp")) {
-    return "image/webp";
-  }
-  if (lower.endsWith(".webm")) {
-    return "video/webm";
-  }
-  if (lower.endsWith(".mp4")) {
-    return "video/mp4";
-  }
-  if (lower.endsWith(".mov")) {
-    return "video/quicktime";
-  }
-  if (lower.endsWith(".json") || lower.endsWith(".jsonl")) {
-    return "application/json; charset=utf-8";
-  }
-  if (lower.endsWith(".md") || lower.endsWith(".txt") || lower.endsWith(".log")) {
-    return "text/plain; charset=utf-8";
-  }
-  return "application/octet-stream";
+  return (
+    QA_EVIDENCE_CONTENT_TYPES[lower.slice(lower.lastIndexOf("."))] ?? "application/octet-stream"
+  );
 }
 
 async function startQaGatewayLoop(params: { baseUrl: string }) {
@@ -507,18 +498,12 @@ export async function startQaLabServer(
         if (req.method === "GET" && url.pathname === "/api/evidence") {
           const evidencePath =
             url.searchParams.get("path")?.trim() || runnerSnapshot.artifacts?.evidencePath;
-          if (!evidencePath) {
-            res.writeHead(200, {
-              "content-type": "application/json; charset=utf-8",
-              "cache-control": "no-store",
-            });
-            res.end(JSON.stringify({ evidence: null }));
-            return;
-          }
           // Build the model before sending any headers so a thrown QaEvidenceGalleryError
           // still routes through writeQaLabServerError (writing headers first would make the
           // error response throw ERR_HTTP_HEADERS_SENT and reset the connection).
-          const evidence = await buildQaEvidenceGalleryModel({ evidencePath, repoRoot });
+          const evidence = evidencePath
+            ? await buildQaEvidenceGalleryModel({ evidencePath, repoRoot })
+            : null;
           res.writeHead(200, {
             "content-type": "application/json; charset=utf-8",
             "cache-control": "no-store",
@@ -867,24 +852,10 @@ export async function startQaLabServer(
         }
 
         const asset = tryResolveUiAsset(url.pathname, params?.uiDistDir, repoRoot);
-        if (!asset) {
-          const html = missingUiHtml();
-          res.writeHead(200, {
-            "content-type": "text/html; charset=utf-8",
-            "content-length": Buffer.byteLength(html),
-          });
-          if (req.method === "HEAD") {
-            res.end();
-            return;
-          }
-          res.end(html);
-          return;
-        }
-
-        const body = fs.readFileSync(asset);
+        const body = asset ? fs.readFileSync(asset) : missingUiHtml();
         res.writeHead(200, {
-          "content-type": detectContentType(asset),
-          "content-length": body.byteLength,
+          "content-type": asset ? detectContentType(asset) : "text/html; charset=utf-8",
+          "content-length": Buffer.byteLength(body),
         });
         if (req.method === "HEAD") {
           res.end();
@@ -971,11 +942,7 @@ export async function startQaLabServer(
       baseUrl: publicBaseUrl,
       listenUrl,
       state,
-      setControlUi(next: {
-        controlUiUrl?: string | null;
-        controlUiProxyToken?: string | null;
-        controlUiProxyTarget?: string | null;
-      }) {
+      setControlUi(next: Parameters<QaLabServerHandle["setControlUi"]>[0]) {
         controlUiUrl = sanitizeControlUiPublicUrl(next.controlUiUrl?.trim() || null);
         controlUiProxyToken = next.controlUiProxyToken?.trim() || null;
         controlUiProxyTarget = next.controlUiProxyTarget?.trim()

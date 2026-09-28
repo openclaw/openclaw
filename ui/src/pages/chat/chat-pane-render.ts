@@ -205,18 +205,17 @@ export class ChatPane extends ChatPaneLayoutRender {
           ? t("chat.catalog.remoteViewOnly")
           : t("chat.catalog.unsupportedViewOnly")
         : null;
-    const { backgroundTasks, closePanelSlot, openPanelSlot, sessionWorkspace } =
-      createChatPaneRails({
-        state,
-        sidebarLayout,
-        presentationId: this.presentationId,
-        sessionTitle: this.resolveHeaderSessionTitle(selectedSession),
-        paneLabel: this.paneLabel,
-        presented: this.presented,
-        gatewaySnapshot,
-        setObserverVisibility: this.setSessionObserverVisibility,
-        updateSidebarLayout: (layout) => this.commitSidebarLayout(layout),
-      });
+    const { closePanelSlot, openPanelSlot, sessionWorkspace } = createChatPaneRails({
+      state,
+      sidebarLayout,
+      presentationId: this.presentationId,
+      sessionTitle: this.resolveHeaderSessionTitle(selectedSession),
+      paneLabel: this.paneLabel,
+      presented: this.presented,
+      gatewaySnapshot,
+      setObserverVisibility: this.setSessionObserverVisibility,
+      updateSidebarLayout: (layout) => this.commitSidebarLayout(layout),
+    });
     const selfUser = resolveCurrentSelfUser({
       snapshotUser: gatewaySnapshot.selfUser,
       presenceEntries: readPresenceEntries(this.presencePayload),
@@ -495,6 +494,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       onOpenDictationSettings: () => this.context.navigate("model-setup"),
       suggestionComposer: suggestionViewer,
       typingActors: multiIdentity ? this.typingActorViews() : [],
+      typingOverflow: multiIdentity ? this.typingOverflow : undefined,
       onTypingChange: typingEnabled
         ? (typing, preview) => this.sendTypingState(typing, preview)
         : undefined,
@@ -553,7 +553,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       },
       composerControls: composerControls?.composerControls ?? nothing,
       permissionPicker: composerControls?.permissionPicker,
-      backgroundTasks: catalogKey ? undefined : backgroundTasks,
       ...this.suggestionChatProps(state.connected, selectedSessionArchived, multiIdentity),
       pullRequests: this.visibleSessionPullRequests,
       // Until catalog success, a lowercase name may be a hidden/ambiguous alias.
@@ -691,7 +690,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       board,
       sidebarLayout,
       sessionWorkspace,
-      backgroundTasks,
       chatProps: props,
       observerDigest,
       observerRunId,

@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { isMainThread } from "node:worker_threads";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-coordinator.js";
+import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { registerOpenClawAgentDatabaseReadCandidateResource } from "../../state/openclaw-agent-db-resources.js";
@@ -443,11 +443,15 @@ export async function createSessionEntryWithTranscript<TError = string>(
           await runExclusiveSqliteSessionWrite(
             transcriptScope,
             async () => {
-              runOpenClawAgentWriteTransaction((database) => {
-                commitGuard?.();
-                assertSourceCurrent?.();
-                ensureTranscriptHeader(database, transcriptScope, cwd);
-              }, toDatabaseOptions(transcriptScope));
+              runOpenClawAgentWriteTransaction(
+                (database) => {
+                  commitGuard?.();
+                  assertSourceCurrent?.();
+                  ensureTranscriptHeader(database, transcriptScope, cwd);
+                },
+                toDatabaseOptions(transcriptScope),
+                { operationLabel: "session.entry.create-transcript" },
+              );
             },
             "session.entry.create-with-transcript",
           );

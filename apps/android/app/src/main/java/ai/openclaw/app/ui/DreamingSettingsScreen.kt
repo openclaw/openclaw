@@ -19,8 +19,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -51,7 +49,7 @@ internal fun DreamingSettingsScreen(
   SettingsDetailFrame(
     title = nativeString("Dreaming"),
     subtitle = nativeString("Memory consolidation and dream diary."),
-    icon = Icons.Default.Storage,
+    icon = SettingsRoute.Dreaming.icon,
     onBack = onBack,
   ) {
     SettingsRefreshControls(isConnected, state.refreshing, state.errorText, viewModel::refreshDreaming)

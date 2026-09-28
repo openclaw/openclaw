@@ -1,10 +1,18 @@
 // Exercise the provider, shared factory, and guarded HTTP transport together.
 import { once } from "node:events";
+import fs from "node:fs";
 import { createServer, type Server, type ServerResponse } from "node:http";
+import os from "node:os";
+import path from "node:path";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  saveAuthProfileStore,
+} from "openclaw/plugin-sdk/agent-runtime";
 import {
   createRemoteEmbeddingProvider,
   type MemoryEmbeddingProviderCreateOptions,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createOpenAiEmbeddingProvider } from "./embedding-provider.js";
 
@@ -99,6 +107,109 @@ afterEach(async () => {
 });
 
 describe("OpenAI embedding provider HTTP contract", () => {
+  it.each([
+    { additional: "none", custom: false, binding: undefined },
+    { additional: "codex", custom: false, binding: undefined },
+    { additional: "token", custom: false, binding: undefined },
+    { additional: "api-key", custom: false, binding: undefined },
+    { additional: "token", custom: true, binding: undefined },
+    { additional: "token", custom: true, binding: "openai:api" },
+    { additional: "none", custom: true, binding: undefined },
+  ])(
+    "selects compatible embedding auth with SIWC and $additional (custom=$custom, binding=$binding)",
+    async ({ additional, custom, binding }) => {
+      const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-embedding-auth-"));
+      vi.stubEnv("OPENAI_API_KEY", "");
+      try {
+        const server = custom ? await startEmbeddingServer() : undefined;
+        saveAuthProfileStore(
+          {
+            version: 1,
+            profiles: {
+              "openai:siwc": {
+                type: "oauth",
+                provider: "openai",
+                authFlow: "chatgpt-token-sharing",
+                access: "fixture-siwc-access",
+                refresh: "fixture-siwc-refresh",
+                expires: Date.now() + 3_600_000,
+              },
+              ...(additional === "api-key"
+                ? {
+                    "openai:api": {
+                      type: "api_key" as const,
+                      provider: "openai",
+                      key: "fixture-embedding-api-key",
+                    },
+                  }
+                : additional === "codex"
+                  ? {
+                      "openai:api": {
+                        type: "oauth" as const,
+                        provider: "openai",
+                        access: "fixture-codex-access",
+                        refresh: "fixture-codex-refresh",
+                        expires: Date.now() + 3_600_000,
+                      },
+                    }
+                  : additional === "token"
+                    ? {
+                        "openai:api": {
+                          type: "token" as const,
+                          provider: "openai",
+                          token: "fixture-embedding-token",
+                        },
+                      }
+                    : {}),
+            },
+          },
+          agentDir,
+          { filterExternalAuthProfiles: false, syncExternalCli: false },
+        );
+        const result = createOpenAiEmbeddingProvider(
+          createOptions({
+            agentDir,
+            config: {
+              auth: { order: { openai: ["openai:siwc", "openai:api"] } },
+              ...(server
+                ? {
+                    models: {
+                      providers: {
+                        openai: { baseUrl: server.baseUrl, apiKey: binding, models: [] },
+                      },
+                    },
+                  }
+                : {}),
+            },
+            remote: { apiKey: undefined },
+          }),
+        );
+        if (additional === "api-key") {
+          await expect(result).resolves.toMatchObject({
+            client: { headers: { Authorization: "Bearer fixture-embedding-api-key" } },
+          });
+        } else if (server && additional === "token") {
+          const { provider } = await result;
+          await expect(provider.embed("hello")).resolves.toEqual([5, 1]);
+          expect(server.requests).toHaveLength(1);
+          expect(server.requests[0]).toMatchObject({
+            url: "/tenant/v1/embeddings",
+            authorization: "Bearer fixture-embedding-token",
+            body: { model: "text-embedding-3-small", input: ["hello"] },
+          });
+        } else {
+          await expect(result).rejects.toThrow('No API key found for provider "openai"');
+          expect(server?.requests ?? []).toHaveLength(0);
+        }
+      } finally {
+        clearRuntimeAuthProfileStoreSnapshots();
+        closeOpenClawAgentDatabasesForTest();
+        fs.rmSync(agentDir, { recursive: true, force: true });
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
   it.each([
     {
       name: "overridden",

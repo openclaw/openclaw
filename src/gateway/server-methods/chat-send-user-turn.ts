@@ -13,6 +13,7 @@ import {
   discardPreparedInboundMedia,
   persistInboundImagesForTranscript,
 } from "../chat-attachments.js";
+import { transferGatewayLocalUserIngress } from "../local-user-ingress.js";
 import { resolveCreatorSandbox } from "../operator-role-policy.js";
 import { resolveGatewayInputParticipant } from "../session-input-participant.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
@@ -40,6 +41,7 @@ async function persistChatSendImages(params: {
   offloadedRefs: OffloadedRef[];
   client: GatewayRequestHandlerOptions["client"];
   logGateway: GatewayRequestContext["logGateway"];
+  assertCurrent?: () => void;
 }): Promise<Awaited<ReturnType<typeof persistInboundImagesForTranscript>>> {
   if (
     (params.images.length === 0 && params.offloadedRefs.length === 0) ||
@@ -52,6 +54,7 @@ async function persistChatSendImages(params: {
     offloadedRefs: params.offloadedRefs,
     log: params.logGateway,
     logContext: "chat.send",
+    assertCurrent: params.assertCurrent,
   });
 }
 
@@ -118,7 +121,8 @@ export function prepareChatSendUserTurn(params: {
   >;
   session: Pick<PreparedChatSendSession, "agentId" | "clientRunId" | "sessionKey"> &
     Partial<Pick<PreparedChatSendSession, "cfg">>;
-  admission: Pick<AdmittedChatSend, "originatingRoute">;
+  admission: Pick<AdmittedChatSend, "originatingRoute"> &
+    Partial<Pick<AdmittedChatSend, "assertWorkAdmissionCurrent" | "assertClientUploadAllowed">>;
   attachments: PreparedChatSendAttachments;
   client: GatewayRequestHandlerOptions["client"];
   logGateway: GatewayRequestContext["logGateway"];
@@ -131,6 +135,10 @@ export function prepareChatSendUserTurn(params: {
     offloadedRefs: attachments.offloadedRefs,
     client,
     logGateway,
+    assertCurrent: () => {
+      admission.assertWorkAdmissionCurrent?.();
+      admission.assertClientUploadAllowed?.();
+    },
   });
   userTurn.setInputPromise(
     persistedMediaForTranscriptPromise.then((result) => {
@@ -239,6 +247,9 @@ export function prepareChatSendUserTurn(params: {
     GatewayRunToolBindings: request.toolBindings,
     GatewayUiCommandTarget: gatewayUiCommandTarget,
   };
+  if (client) {
+    transferGatewayLocalUserIngress(client, ctx);
+  }
   if (attachments.mediaPathOffloads.length > 0) {
     // Pre-staged offloads must use structured facts and marker text so the
     // dispatch path renders their prompt note without staging them a second time.

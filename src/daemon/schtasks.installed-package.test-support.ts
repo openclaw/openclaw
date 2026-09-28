@@ -155,6 +155,8 @@ export function createInstalledProgressRecorder(params: {
       outputPhase = "selected-status-verified";
     } else if (phase.startsWith("authority:")) {
       outputPhase = "authority-checkpoint";
+    } else if (phase.startsWith("task-sibling-refusal:")) {
+      outputPhase = "sibling-refusal-checkpoint";
     } else if (phase.endsWith(":hash-verified")) {
       outputPhase = "install-hash-verified";
     } else if (phase.endsWith("cleanup:command-result")) {

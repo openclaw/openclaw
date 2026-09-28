@@ -632,16 +632,8 @@ export function startQaCredentialLeaseHeartbeat(
     clearTimeoutImpl?: typeof clearTimeout;
   },
 ): QaCredentialLeaseHeartbeat {
-  if (lease.source !== "convex") {
-    return {
-      getFailure: () => null,
-      async stop() {},
-      throwIfFailed() {},
-      whenFailed: new Promise<Error>(() => {}),
-    };
-  }
   const intervalMs = opts?.intervalMs ?? lease.heartbeatIntervalMs;
-  if (!Number.isFinite(intervalMs) || intervalMs < 1) {
+  if (lease.source !== "convex" || !Number.isFinite(intervalMs) || intervalMs < 1) {
     return {
       getFailure: () => null,
       async stop() {},

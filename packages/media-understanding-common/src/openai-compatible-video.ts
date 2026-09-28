@@ -1,5 +1,3 @@
-// OpenAI-compatible video request/response helpers.
-
 /** Minimal OpenAI-compatible video response payload shape. */
 export type OpenAiCompatibleVideoPayload = {
   choices?: Array<{

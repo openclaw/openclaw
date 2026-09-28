@@ -415,20 +415,26 @@ it("waits for a missing projection and serves the original history request", asy
       )
       .run(target.sessionId);
 
-    const page = await readChatHistoryPage({
-      entry,
-      provider: undefined,
-      sessionId: target.sessionId,
-      storePath: target.storePath,
-      sessionAgentId: target.agentId,
-      canonicalKey: target.sessionKey,
-      max: 10,
-      maxHistoryBytes: 100_000,
-      effectiveMaxChars: 8000,
-      offset: undefined,
-      messageId: undefined,
-    });
-    expect(page.messages.map(readChatHistoryMessageId)).toEqual(["recovered"]);
+    // Runtime tests own the recovery deadline; real worker startup must not spend it here.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const page = await readChatHistoryPage({
+        entry,
+        provider: undefined,
+        sessionId: target.sessionId,
+        storePath: target.storePath,
+        sessionAgentId: target.agentId,
+        canonicalKey: target.sessionKey,
+        max: 10,
+        maxHistoryBytes: 100_000,
+        effectiveMaxChars: 8000,
+        offset: undefined,
+        messageId: undefined,
+      });
+      expect(page.messages.map(readChatHistoryMessageId)).toEqual(["recovered"]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

@@ -141,7 +141,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
@@ -245,26 +244,7 @@ private data class SessionCatalogProgressOwner(
 
 internal const val WEAR_AGENT_PULSE_PHONE_BUDGET_MILLIS = 8_000L
 
-internal data class WearAgentPulseReads<Tasks, Swarm>(
-  val tasks: Tasks?,
-  val swarm: Swarm?,
-)
-
-internal suspend fun <Tasks, Swarm> readWearAgentPulseConcurrently(
-  readTasks: suspend () -> Tasks,
-  readSwarm: suspend () -> Swarm,
-  budgetMillis: Long = WEAR_AGENT_PULSE_PHONE_BUDGET_MILLIS,
-): WearAgentPulseReads<Tasks, Swarm> =
-  coroutineScope {
-    val tasks = async { readWearAgentPulseComponent(budgetMillis, readTasks) }
-    val swarm = async { readWearAgentPulseComponent(budgetMillis, readSwarm) }
-    WearAgentPulseReads(
-      tasks = tasks.await(),
-      swarm = swarm.await(),
-    )
-  }
-
-private suspend fun <T> readWearAgentPulseComponent(
+internal suspend fun <T> readWearAgentPulseComponent(
   budgetMillis: Long,
   read: suspend () -> T,
 ): T? =
@@ -1127,6 +1107,7 @@ class NodeRuntime private constructor(
     val token: String?,
     val password: String?,
     val tlsFingerprintSha256: String?,
+    val browserFocusAvailable: Boolean = false,
   )
 
   private val appContext = context.applicationContext
@@ -1694,7 +1675,7 @@ class NodeRuntime private constructor(
           // device-owned session without changing the shipped key or its existing transcript.
           chat.onGatewayConnected(mainSessionBinding(mainSessionKey))
         }
-        refreshGatewayControlPage()
+        refreshGatewayControlPage(browserFocusAvailable = hello.capabilities?.contains("control-ui-browser-focus") == true)
         updateStatus {
           operatorConnectionProblem = null
           operatorConnected = true
@@ -1902,23 +1883,16 @@ class NodeRuntime private constructor(
     val gatewayScope = captureGatewayDataScope()
     val agentId = currentWearAgentId()
     val connected = gatewayScope != null && operatorSession.isReady()
-    val reads =
-      if (connected && agentId != null) {
-        readWearAgentPulseConcurrently(
-          readTasks = { chat.listBackgroundTasks(agentId) },
-          readSwarm = {
-            requestedSessionKey?.let { sessionKey ->
-              chat.readSwarmSnapshotFor(sessionKey, agentId)
-            }
-          },
-        )
+    val swarmSnapshot =
+      if (connected && agentId != null && requestedSessionKey != null) {
+        readWearAgentPulseComponent(WEAR_AGENT_PULSE_PHONE_BUDGET_MILLIS) {
+          chat.readSwarmSnapshotFor(requestedSessionKey, agentId)
+        }
       } else {
         null
       }
-    val tasks = reads?.tasks
-    val swarmSnapshot = reads?.swarm
     // Capture every projection input before the final route check so a route
-    // change cannot mix a current task result with later-route aggregates.
+    // change cannot mix a current swarm result with later-route aggregates.
     val approvals = currentWearAgentPulseApprovals()
     val routeStillCurrent =
       gatewayScope?.let { capturedScope ->
@@ -1933,7 +1907,6 @@ class NodeRuntime private constructor(
         swarmSnapshot?.isAvailableFor(requestedSessionKey) == true
     return projectWearAgentPulse(
       gatewayConnected = routeStillCurrent,
-      tasks = tasks.takeIf { routeStillCurrent },
       swarmAvailable = swarmAvailable,
       swarmGroups = if (swarmAvailable) swarmSnapshot.groups else emptyList(),
       pendingApprovalCount = approvals.pendingCount,
@@ -1997,6 +1970,7 @@ class NodeRuntime private constructor(
     _gatewayUpdateAvailable.value = null
     replaceGatewayMethods(null, present = false)
     replaceGatewayCapabilities(null)
+    _gatewayControlPage.value = _gatewayControlPage.value?.copy(browserFocusAvailable = false)
     _operatorScopes.value = emptyList()
     _devicePairingCapabilities.value = GatewayDevicePairingCapabilities()
     _gatewayAccentArgb.value = null
@@ -3256,6 +3230,7 @@ class NodeRuntime private constructor(
         token = null,
         password = null,
         tlsFingerprintSha256 = null,
+        browserFocusAvailable = AndroidScreenshotFixture.browserFocusAvailable,
       )
     _gatewaySourcePreviewConfig.value = AndroidScreenshotFixture.sourcePreviewConfig
     updateGatewayDefaultAgentId("main")
@@ -5208,6 +5183,7 @@ class NodeRuntime private constructor(
     endpoint: GatewayEndpoint? = connectedEndpoint,
     auth: GatewayConnectAuth? = activeGatewayConnection?.auth,
     storedOperatorToken: String? = endpoint?.let { loadStoredRoleDeviceAuthEntry(it, "operator")?.token },
+    browserFocusAvailable: Boolean = false,
   ) {
     if (endpoint == null) {
       _gatewayControlPage.value = null
@@ -5220,6 +5196,7 @@ class NodeRuntime private constructor(
         token = pageAuth.token,
         password = pageAuth.password,
         tlsFingerprintSha256 = gatewayControlPageTlsFingerprint(prefs, endpoint),
+        browserFocusAvailable = browserFocusAvailable,
       )
   }
 
@@ -9708,6 +9685,9 @@ internal fun gatewayRegistryEntry(
       stableId = endpoint.stableId,
       kind = GatewayRegistryEntryKind.DISCOVERED,
       name = endpoint.name,
+      host = endpoint.host,
+      port = endpoint.port,
+      contextPath = endpoint.contextPath,
       tls = true,
       lastConnectedAtMs = existing?.lastConnectedAtMs ?: 0L,
     )

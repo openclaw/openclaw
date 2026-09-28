@@ -37,6 +37,7 @@ import type {
 } from "../gateway/session-group-catalog.types.js";
 import type {
   WorkerPlacementConflictBinding,
+  WorkerPlacementRecoveryCandidate,
   WorkerSessionPlacementReadResult,
 } from "../gateway/worker-environments/placement-read-projection.types.js";
 import type { WorkerSessionPlacementChangeSnapshot } from "../gateway/worker-environments/placement-record.js";
@@ -68,11 +69,6 @@ import type {
 } from "../plugin-state/plugin-blob-worker-contract.js";
 import type { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type { SkillLibraryReadOnlyOperations } from "../skills/library/selection-read.kernel.js";
-import type { TaskRetentionSource } from "../tasks/task-registry-retention-source.js";
-import type {
-  TaskRegistryMutationScope,
-  TaskRegistryStoreSnapshot,
-} from "../tasks/task-registry.store.types.js";
 import type { TuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
 import type {
   AgentDatabaseDeletionSnapshot,
@@ -164,11 +160,6 @@ export type OpenClawStateReadCommand =
   | { type: "agentDeletionJournal.status"; agentId: string }
   | { type: "workerEnvironments.snapshot"; ids?: readonly string[] }
   | { type: "workerEnvironments.pruneCandidates"; input: WorkerEnvironmentPruneReadInput }
-  | {
-      type: "tasks.mutationSnapshot";
-      input: TaskRegistryMutationScope | readonly TaskRegistryMutationScope[] | undefined;
-    }
-  | { type: "tasks.retentionSource"; taskId: string }
   | { type: "sessionGroups.snapshot" }
   | { type: "sessionGroups.members"; cfg: OpenClawConfig }
   | { type: "onboardingRecommendations.read"; configKey: string }
@@ -213,6 +204,7 @@ export type OpenClawStateReadCommand =
   | { type: "sandboxRegistry.get"; containerName: string }
   | { type: "sandboxRegistry.runtimeIds"; backendId: string; scopeKey: string }
   | { type: "sandboxRegistry.browsers" }
+  | { type: "workers.placementRecoveryCandidates" }
   | {
       type: "workers.placementProjection";
       sessionIds: readonly string[];
@@ -281,14 +273,6 @@ export type OpenClawStateReadResult =
       blob: string | null;
     }
   | { type: "subagents.forChildSession"; runs: SubagentRunRecord[] }
-  | {
-      type: "tasks.mutationSnapshot";
-      snapshot: TaskRegistryStoreSnapshot;
-    }
-  | {
-      type: "tasks.retentionSource";
-      source: TaskRetentionSource | undefined;
-    }
   | {
       [Kind in keyof SkillLibraryReadOnlyOperations]: {
         type: Kind;
@@ -456,6 +440,7 @@ export type OpenClawStateReadResult =
       type: "sandboxRegistry.browsers";
       entries: SandboxBrowserRegistryEntry[];
     }
+  | { type: "workers.placementRecoveryCandidates"; candidates: WorkerPlacementRecoveryCandidate[] }
   | {
       type: "workers.placementProjection";
       result: WorkerSessionPlacementReadResult;

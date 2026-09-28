@@ -18,7 +18,6 @@ import { OPENAI_QUICKSILVER_OFFER_PATH } from "./realtime-quicksilver-session.js
 import { buildOpenAIRealtimeTranscriptionProvider } from "./realtime-transcription-provider-factory.js";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider-factory.js";
 import { buildOpenAISpeechProvider } from "./speech-provider.js";
-import { buildOpenAIVideoGenerationProvider } from "./video-generation-provider.js";
 
 export default definePluginEntry({
   id: "openai",
@@ -92,8 +91,5 @@ export default definePluginEntry({
     });
     api.registerSpeechProvider(buildOpenAISpeechProvider());
     api.registerMediaUnderstandingProvider(openaiMediaUnderstandingProvider);
-    api.registerVideoGenerationProvider(
-      buildOpenAIVideoGenerationProvider({ isProviderApiKeyConfigured }),
-    );
   },
 });

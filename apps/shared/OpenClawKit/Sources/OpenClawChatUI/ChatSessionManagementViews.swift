@@ -37,25 +37,23 @@ enum ChatSessionBatchMutationRunner {
         maxConcurrent: Int = 4,
         operation: @escaping @Sendable (String) async throws -> Void) async -> ChatSessionBatchResult
     {
-        guard !keys.isEmpty else {
-            return ChatSessionBatchResult(succeededKeys: [], errorsByKey: [:])
+        let limit = min(keys.count, max(1, maxConcurrent))
+        let run: @Sendable (Int) async -> (Int, String, String?) = { index in
+            let key = keys[index]
+            do {
+                try await operation(key)
+                return (index, key, nil)
+            } catch {
+                return (index, key, error.localizedDescription)
+            }
         }
-        let limit = max(1, min(maxConcurrent, keys.count))
         var succeeded: [(Int, String)] = []
         var failures: [String: String] = [:]
         await withTaskGroup(of: (Int, String, String?).self) { group in
             var nextIndex = 0
             while nextIndex < limit {
                 let index = nextIndex
-                let key = keys[index]
-                group.addTask {
-                    do {
-                        try await operation(key)
-                        return (index, key, nil)
-                    } catch {
-                        return (index, key, error.localizedDescription)
-                    }
-                }
+                group.addTask { await run(index) }
                 nextIndex += 1
             }
             while let (index, key, error) = await group.next() {
@@ -66,15 +64,7 @@ enum ChatSessionBatchMutationRunner {
                 }
                 if nextIndex < keys.count {
                     let pendingIndex = nextIndex
-                    let pendingKey = keys[pendingIndex]
-                    group.addTask {
-                        do {
-                            try await operation(pendingKey)
-                            return (pendingIndex, pendingKey, nil)
-                        } catch {
-                            return (pendingIndex, pendingKey, error.localizedDescription)
-                        }
-                    }
+                    group.addTask { await run(pendingIndex) }
                     nextIndex += 1
                 }
             }
@@ -140,7 +130,6 @@ struct ChatSessionInspectorDetails: Equatable {
 @MainActor
 struct ChatSessionInspectorSheet: View {
     @Bindable var viewModel: OpenClawChatViewModel
-    let session: OpenClawChatSessionEntry
 
     @Environment(\.dismiss) private var dismiss
     @State private var displayedSession: OpenClawChatSessionEntry
@@ -150,7 +139,6 @@ struct ChatSessionInspectorSheet: View {
 
     init(viewModel: OpenClawChatViewModel, session: OpenClawChatSessionEntry) {
         self.viewModel = viewModel
-        self.session = session
         _displayedSession = State(initialValue: session)
     }
 

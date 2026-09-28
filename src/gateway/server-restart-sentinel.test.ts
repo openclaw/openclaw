@@ -321,7 +321,7 @@ vi.mock("../infra/session-delivery-queue-recovery.js", async (importOriginal) =>
   };
 });
 
-vi.mock("../tasks/cron-run-continuation-cleanup.js", () => ({
+vi.mock("../cron/run-continuation-cleanup.js", () => ({
   removeCronRunContinuationSessionIfIdle: mocks.removeCronRunContinuationSessionIfIdle,
 }));
 
@@ -788,7 +788,6 @@ describe("scheduleRestartSentinelWake", () => {
       } as const;
       await recovery?.onSettled?.(entry, outcome, queueContext);
 
-      expect(mocks.settleCorrelatedSubagentDelivery).toHaveBeenCalledWith(entry, outcome);
       expect(mocks.removeCronRunContinuationSessionIfIdle).toHaveBeenCalledWith(
         entry.sessionKey,
         entry.id,

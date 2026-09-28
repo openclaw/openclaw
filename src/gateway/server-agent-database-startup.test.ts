@@ -370,7 +370,7 @@ it.each([
       const hostJournalRead = createDeferredCore();
       let hostJournalReads = 0;
       if (outcome === "recover") {
-        observeHostDataSql(env, (sql) => {
+        observeHostDataSql((sql) => {
           if (sql.includes("agent_deletion_journal")) {
             hostJournalReads++;
             hostJournalRead.resolve();

@@ -7,10 +7,12 @@ import {
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { loadMutableCronStoreInWorker } from "./load.worker.js";
+import { recordCronRunInDatabase } from "./run-history.kernel.js";
 import {
   bindCronRunReceiptExecutionInDatabase,
   ensureCronRunReceiptSchema,
 } from "./run-receipt-store.js";
+import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
 import { executeCronStoreSaveCommand } from "./save.worker.js";
 import type { CronStateWorkerOperations } from "./worker-contract.js";
 
@@ -37,7 +39,9 @@ export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> 
     });
   }
   if (
-    (type === "cron.scheduleUnowned" || type === "cron.recordFailureAlertOutcome") &&
+    (type === "cron.scheduleUnowned" ||
+      type === "cron.recordFailureAlertOutcome" ||
+      type === "cron.maintainHistory") &&
     !maintenance
   ) {
     return loadMaintenance().then((loaded) => {
@@ -57,6 +61,7 @@ export function isCronStateWorkerCommand(command: {
   input: unknown;
 }): command is SqliteWorkerCommand<CronStateWorkerOperations> {
   switch (command.type) {
+    case "cron.recordRun":
     case "cron.activateRun":
     case "cron.releaseReservations":
     case "cron.finishReceipt":
@@ -65,6 +70,7 @@ export function isCronStateWorkerCommand(command: {
     case "cron.initializeRunReceipts":
     case "cron.repairRun":
     case "cron.scheduleUnowned":
+    case "cron.maintainHistory":
     case "cron.recordFailureAlertOutcome":
     case "cron.save":
     case "cron.saveChanges":
@@ -80,6 +86,17 @@ export function executeCronStateCommand(
   database: OpenClawStateDatabase,
 ): CronStateWorkerOperations[keyof CronStateWorkerOperations]["output"] {
   switch (command.type) {
+    case "cron.recordRun":
+      return runOpenClawStateWriteTransaction(
+        ({ db }) => {
+          requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+          const result = recordCronRunInDatabase(db, command.input);
+          requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+          return result;
+        },
+        { database, path: database.path, env: getSqliteWorkerStateContext().environment },
+        { operationLabel: command.type },
+      );
     case "cron.activateRun":
     case "cron.releaseReservations":
     case "cron.finishReceipt":
@@ -105,9 +122,13 @@ export function executeCronStateCommand(
       }
       return recovery.repairCronRunInWorker(database, command.input);
     case "cron.scheduleUnowned":
+    case "cron.maintainHistory":
     case "cron.recordFailureAlertOutcome":
       if (!maintenance) {
         throw new Error("Cron maintenance worker is not prepared");
+      }
+      if (command.type === "cron.maintainHistory") {
+        return maintenance.maintainCronRunHistoryInWorker(database, command.input);
       }
       return command.type === "cron.scheduleUnowned"
         ? maintenance.scheduleUnownedCronJobsInWorker(database, command.input)
@@ -133,6 +154,7 @@ export function executeCronStateCommand(
             db,
             command.input.handle,
             command.input.binding,
+            prepareCronRunReceiptWriteSchema(db),
           );
           requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
           return result;

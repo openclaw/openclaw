@@ -18,7 +18,6 @@ const panelCases = [
   { key: "b", slot: "workspace", altKey: false },
   { key: "s", slot: "companion", altKey: false },
   { key: "u", slot: "browser", altKey: true },
-  { key: "k", slot: "tasks", altKey: true },
   { key: "d", slot: "desktop", altKey: true },
   { key: "j", slot: "discussion", altKey: true },
   { key: "g", slot: "dashboard", altKey: true },

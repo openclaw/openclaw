@@ -2705,19 +2705,6 @@ syncBuiltinESMExports();
     expect(result.stderr).not.toContain("Bun is required");
   });
 
-  it("resolves the matching candidate AI package without changing the public registry", () => {
-    const script = readFileSync(BUN_GLOBAL_SMOKE_PATH, "utf8");
-
-    expect(script).toContain("assert-release-versions");
-    expect(script).toContain('"$BUN_INSTALL/install/global/package.json"');
-    expect(script).toContain("package/node_modules/@openclaw/ai");
-    expect(script).toContain("--strip-components=4");
-    expect(script).toContain('npm pack --ignore-scripts --silent --pack-destination "$PACK_DIR"');
-    expect(script).toContain('overrides: { "@openclaw/ai": `file:${aiPackageTarball}` }');
-    expect(script).not.toContain("--registry");
-    expect(script).not.toContain("@openclaw:registry");
-  });
-
   it("requires root and AI candidate versions to match", () => {
     const tempDir = tempDirs.make("openclaw-bun-candidate-versions-");
     const rootManifestPath = join(tempDir, "openclaw.json");
@@ -2830,6 +2817,13 @@ syncBuiltinESMExports();
       statusExit: 0,
     },
     {
+      name: "rejects a mismatched bundled AI candidate before installation",
+      bundledAi: true,
+      bunRuntime: "supported",
+      statusExit: 0,
+      aiVersion: "2026.6.18",
+    },
+    {
       name: "installs an older tarball with no bundled AI dependency unchanged",
       bundledAi: false,
       bunRuntime: "supported",
@@ -2853,7 +2847,7 @@ syncBuiltinESMExports();
       bunRuntime: "unexpected-failure",
       statusExit: 0,
     },
-  ])("$name", ({ bundledAi, bunRuntime, statusExit }) => {
+  ])("$name", ({ bundledAi, bunRuntime, statusExit, aiVersion = "2026.6.17" }) => {
     const tempDir = tempDirs.make("openclaw-bun-prebuilt-");
     const packageDir = join(tempDir, "fixture", "package");
     const aiDir = join(packageDir, "node_modules", "@openclaw", "ai");
@@ -2879,7 +2873,7 @@ syncBuiltinESMExports();
       mkdirSync(aiDir, { recursive: true });
       writeFileSync(
         join(aiDir, "package.json"),
-        JSON.stringify({ name: "@openclaw/ai", version: "2026.6.17" }),
+        JSON.stringify({ name: "@openclaw/ai", version: aiVersion }),
       );
     }
     const packed = spawnSync(
@@ -3013,6 +3007,15 @@ node -e 'const fs=require("node:fs");const p=process.argv[1];const value=JSON.pa
         OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_MS: "10000",
       },
     });
+
+    if (aiVersion !== "2026.6.17") {
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "candidate version mismatch: openclaw=2026.6.17, dependency=2026.6.17, @openclaw/ai=2026.6.18",
+      );
+      expect(existsSync(statePath)).toBe(false);
+      return;
+    }
 
     const expectedExit = bunRuntime === "unexpected-failure" ? 42 : statusExit;
     expect(result.status, result.stderr).toBe(expectedExit);

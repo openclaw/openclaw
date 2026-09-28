@@ -9,7 +9,7 @@
   "type": "module",
   "dependencies": {
     "apache-arrow": "21.2.0",
-    "openai": "7.18.0",
+    "openai": "7.20.0",
     "typebox": "1.3.34"
   },
   "devDependencies": {

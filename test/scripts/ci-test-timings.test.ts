@@ -29,6 +29,7 @@ import {
   type RuntimePlacementTiming,
 } from "../../scripts/lib/ci-test-timings-schema.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
+import { createExtensionTestTimingKey } from "../../scripts/lib/extension-test-plan.mts";
 import * as localCheckRuntime from "../../scripts/lib/local-check-runtime.mts";
 import { createCompactSplitTimingGeneration } from "../../scripts/lib/vitest-shard-metadata.mts";
 import {
@@ -83,6 +84,189 @@ const baseline: CiTestTimings = {
 };
 
 const sampleNow = "2026-08-28T12:00:00.000Z";
+
+describe("native singleton invocation timings", () => {
+  const config = "test/vitest/vitest.extension-database-workers.config.ts";
+  const files = ["extensions/telegram/src/one.test.ts", "extensions/telegram/src/two.test.ts"];
+  const shard = "changed-extensions-config-1";
+  const descriptor = { configs: [config], includePatterns: files, shard_name: shard };
+  const line = (second: number, body: string) =>
+    `${new Date(Date.parse("2026-09-26T00:00:00Z") + second * 1000).toISOString()} [shard:${shard}] ${body}`;
+  const invocationLog = () =>
+    [
+      "2026-09-26T00:00:00Z OPENCLAW_VITEST_MAX_WORKERS: 2",
+      `2026-09-26T00:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups([descriptor])}`,
+      line(0, "begin"),
+      line(1, `[test] starting ${config}`),
+      line(2, "RUN v5.0.1 /checkout"),
+      line(3, `✓ extension-database-workers ${files[0]} > first case 1ms`),
+      line(9, "Test Files 1 passed (1)"),
+      line(9, "Duration 8s (tests 60%, import 40%)"),
+      line(11, `[test] starting ${config}`),
+      line(12, "RUN v5.0.1 /checkout"),
+      line(14, `✓ extension-database-workers ${files[1]} > second case 2ms`),
+      line(30, "Test Files 1 passed (1)"),
+      line(30, "Duration 18s (tests 70%, import 30%)"),
+      line(32, "[vitest-workers] verifying completed generation before cleanup"),
+      line(33, "[test] passed 2 Vitest shards in 32s"),
+      line(34, "end (exit 0)"),
+    ].join("\n");
+  const refit = (text: string, pullRequestMergeRef = true) =>
+    refitTestTimings(
+      [1, 2].map((id) =>
+        Object.assign(
+          timingRun(id, [{ kind: "compact", labels: ["blacksmith-8vcpu-ubuntu-2404"], text }]),
+          { pullRequestMergeRef, completeInventory: !pullRequestMergeRef },
+        ),
+      ),
+    ).timings.compactGroupSeconds.blacksmith;
+
+  it.each([false, true])(
+    "retains invocation walls and shared overhead without parent folding (PR: %s)",
+    (pullRequestMergeRef) => {
+      expect(refit(invocationLog(), pullRequestMergeRef)).toEqual({
+        [createExtensionTestTimingKey(config, files)!]: 34,
+        [createExtensionTestTimingKey(config, [files[0]!], undefined, "singleton-invocation")!]: 10,
+        [createExtensionTestTimingKey(config, [files[1]!], undefined, "singleton-invocation")!]: 21,
+        [createExtensionTestTimingKey(config, [], undefined, "wrapper-overhead")!]: 3,
+      });
+    },
+  );
+
+  it.each([false, true])(
+    "records only the parallel envelope wall (interleaved=%s)",
+    (interleaved) => {
+      const env = { OPENCLAW_VITEST_MAX_WORKERS: "2", OPENCLAW_TEST_PROJECTS_PARALLEL: "2" };
+      let text = invocationLog()
+        .replace(encodeNodeTestGroups([descriptor]), encodeNodeTestGroups([{ ...descriptor, env }]))
+        .replace(
+          line(0, "begin"),
+          [line(0, "begin"), line(0, "[test] inner parallelism 2")].join("\n"),
+        );
+      if (interleaved) {
+        text = text
+          .replace(line(11, `[test] starting ${config}`) + "\n", "")
+          .replace(
+            line(2, "RUN v5.0.1 /checkout"),
+            [line(2, `[test] starting ${config}`), line(2, "RUN v5.0.1 /checkout")].join("\n"),
+          );
+      }
+      expect(refit(text)).toEqual({ [createExtensionTestTimingKey(config, files, env)!]: 34 });
+    },
+  );
+
+  it.each(["fallback", "missing", "contradictory"])(
+    "qualifies requested overlap using its %s receipt",
+    (kind) => {
+      const env = { OPENCLAW_VITEST_MAX_WORKERS: "2", OPENCLAW_TEST_PROJECTS_PARALLEL: "2" };
+      const receipt =
+        kind === "missing"
+          ? []
+          : kind === "fallback"
+            ? [line(0, "[test] inner parallelism 1")]
+            : [line(0, "[test] inner parallelism 1"), line(0, "[test] inner parallelism 2")];
+      const text = invocationLog()
+        .replace(encodeNodeTestGroups([descriptor]), encodeNodeTestGroups([{ ...descriptor, env }]))
+        .replace(line(0, "begin"), [line(0, "begin"), ...receipt].join("\n"));
+      const observed = refit(text);
+      expect(observed[createExtensionTestTimingKey(config, files, env)!]).toBeUndefined();
+      expect(observed).toEqual(kind === "fallback" ? refit(invocationLog()) : {});
+    },
+  );
+
+  it("keeps an outer singleton wall distinct from its invocation and shared overhead", () => {
+    const only = [files[0]!];
+    const text = [
+      "2026-09-26T00:00:00Z OPENCLAW_VITEST_MAX_WORKERS: 2",
+      `2026-09-26T00:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups([{ ...descriptor, includePatterns: only }])}`,
+      line(0, "begin"),
+      line(1, `[test] starting ${config}`),
+      line(2, "RUN v5.0.1 /checkout"),
+      line(19, `✓ extension-database-workers ${only[0]} > case 1ms`),
+      line(20, "Test Files 1 passed (1)"),
+      line(20, "Duration 18s"),
+      line(21, "[vitest-workers] verifying completed generation before cleanup"),
+      line(21, "[test] passed 1 Vitest shard in 21s"),
+      line(22, "end (exit 0)"),
+    ].join("\n");
+    expect(refit(text)).toEqual({
+      [createExtensionTestTimingKey(config, only)!]: 22,
+      [createExtensionTestTimingKey(config, only, undefined, "singleton-invocation")!]: 20,
+      [createExtensionTestTimingKey(config, [], undefined, "wrapper-overhead")!]: 2,
+    });
+    const noOverhead = text
+      .replace(line(0, "begin"), line(1, "begin"))
+      .replace(line(22, "end (exit 0)"), line(21, "end (exit 0)"));
+    expect(
+      refit(noOverhead)[createExtensionTestTimingKey(config, [], undefined, "wrapper-overhead")!],
+    ).toBeUndefined();
+  });
+
+  it.each([
+    { name: "failed outer group", replace: "end (exit 0)", with: "end (exit 1)" },
+    {
+      name: "invalid timestamp",
+      replace: line(11, `[test] starting ${config}`),
+      with: `2026-99-26T00:00:11Z [shard:${shard}] [test] starting ${config}`,
+    },
+    { name: "missing completion", replace: "[test] passed 2 Vitest shards in 32s", with: "" },
+    { name: "duplicate file", replace: files[1]!, with: files[0]! },
+    { name: "foreign file", replace: files[1]!, with: "extensions/telegram/src/foreign.test.ts" },
+    {
+      name: "wrong config",
+      replace: `[test] starting ${config}`,
+      with: "[test] starting test/vitest/vitest.extension-codex.config.ts",
+    },
+    {
+      name: "multi-file invocation",
+      replace: "Test Files 1 passed (1)",
+      with: "Test Files 2 passed (2)",
+    },
+    {
+      name: "duplicate duration",
+      replace: line(9, "Duration 8s (tests 60%, import 40%)"),
+      with: [line(9, "Duration 8s"), line(9, "Duration 8s")].join("\n"),
+    },
+    {
+      name: "invalid duration",
+      replace: "Duration 8s (tests 60%, import 40%)",
+      with: "Duration 1.2.3s",
+    },
+    {
+      name: "duplicate start",
+      replace: line(1, `[test] starting ${config}`),
+      with: [line(1, `[test] starting ${config}`), line(1, `[test] starting ${config}`)].join("\n"),
+    },
+    {
+      name: "ambiguous worker environment",
+      replace: "OPENCLAW_VITEST_MAX_WORKERS: 2",
+      with: "OPENCLAW_VITEST_MAX_WORKERS: 2\n2026-09-26T00:00:00Z OPENCLAW_VITEST_MAX_WORKERS: 8",
+    },
+    {
+      name: "unsupported arguments",
+      replace: "OPENCLAW_VITEST_MAX_WORKERS: 2",
+      with: 'OPENCLAW_VITEST_MAX_WORKERS: 2\n2026-09-26T00:00:00Z OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: ["--exclude=**/two.test.ts"]',
+    },
+  ])("rejects derived singleton prices atomically for $name", (mutation) => {
+    const result = refit(invocationLog().replace(mutation.replace, mutation.with));
+    expect(
+      Object.keys(result).filter(
+        (key) => key.includes("#include-1-") || key.includes("#wrapper-overhead"),
+      ),
+    ).toEqual([]);
+  });
+
+  it("does not infer singleton prices for a multi-file process owner", () => {
+    const ordinaryConfig = "test/vitest/vitest.extension-telegram.config.ts";
+    const text = invocationLog()
+      .replace(
+        encodeNodeTestGroups([descriptor]),
+        encodeNodeTestGroups([{ ...descriptor, configs: [ordinaryConfig] }]),
+      )
+      .replaceAll(`[test] starting ${config}`, `[test] starting ${ordinaryConfig}`);
+    expect(refit(text)).toEqual({ [createExtensionTestTimingKey(ordinaryConfig, files)!]: 34 });
+  });
+});
 
 describe("runtime placement observations", () => {
   it("retains recorded runtime work when its current group gains a file", () => {
@@ -145,7 +329,7 @@ describe("runtime placement observations", () => {
       );
       expect(corpusJob).toBeDefined();
       expect(handoffJob).toBeDefined();
-      // These recorded workloads exceed the shared 440s budget, including
+      // These recorded workloads exceed the shared 360s budget, including
       // preparation. Added files must not make the known reader appear cheap.
       expect(corpusJob).not.toBe(handoffJob);
     } finally {
@@ -217,9 +401,15 @@ describe("runtime placement observations", () => {
       shard_name: `reader-${id}`,
       timing_key: generation.timingKeys[0]!,
     };
+    const sibling = {
+      ...descriptor,
+      shard_name: `ordinary-${id}`,
+      includePatterns: [`src/ordinary-${id}.test.ts`],
+      timing_key: generation.timingKeys[1]!,
+    };
     const [begin, end] = compactLog(20, descriptor.timing_key).split("\n");
     return [
-      `2026-08-27T23:00:00Z   OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups([descriptor])}`,
+      `2026-08-27T23:00:00Z   OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups([descriptor, sibling])}`,
       begin,
       `2026-08-27T23:00:01Z [shard:${descriptor.shard_name}] [test] preparing ${group.pretestBuildMode} runtime before Vitest workers`,
       end,
@@ -336,15 +526,18 @@ describe("runtime placement observations", () => {
         infrastructure,
         ...(gatewayRecipient ? [] : ["test/vitest/vitest.gateway-database-workers.config.ts"]),
       ]);
-      // Synthetic recipients must not inherit production costs that split their fixture jobs.
-      const compactSpy = vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue(
-        gatewayRecipient
-          ? {
-              "agentic-gateway-server-isolated": 30,
-              "agentic-agents-core-subagents": 20,
-            }
-          : {},
+      // Keep full inventories, but make spare placement capacity independent of
+      // growing production prices. Runtime observations below supply the overload.
+      const compactCosts = new Proxy<Record<string, number>>(
+        { "agentic-gateway-server-isolated": 30, "agentic-agents-core-subagents": 20 },
+        {
+          get: (target, key) =>
+            typeof key === "string" ? (target[key] ?? 39) : Reflect.get(target, key),
+        },
       );
+      const compactSpy = vi
+        .spyOn(testTimings, "readCompactGroupTimings")
+        .mockReturnValue(compactCosts);
       const spy = vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
       const options = {
         compactMode,
@@ -408,11 +601,11 @@ describe("runtime placement observations", () => {
           includePatterns: group.includePatterns!,
           pretestBuildMode: "runtime",
           seconds: group.configs.includes(runtimeConfig)
-            ? 200
+            ? 180
             : group.includePatterns?.includes(
                   "src/infra/update-managed-service-handoff-lifecycle.test.ts",
                 )
-              ? 300
+              ? 250
               : 20,
         }));
         spy.mockImplementation((profile) => (profile === "blacksmith" ? blacksmith : []));
@@ -479,7 +672,7 @@ describe("runtime placement observations", () => {
           }
         }
         for (const job of changed) {
-          expect(job.predictedSeconds).toBeLessThanOrEqual(440);
+          expect(job.predictedSeconds).toBeLessThanOrEqual(360);
           expect(job.planConcurrency).toBe(1);
           expect(job.groups.every((group) => !isExclusiveCompactShardName(group.shard_name))).toBe(
             true,
@@ -510,11 +703,12 @@ describe("runtime placement observations", () => {
           before.map((job) => [job.checkName, job.runner, job.groups]),
         );
         const readerJob = unmeasured.find((job) =>
-          job.groups.some((group) => group.configs.includes(runtimeConfig)),
+          job.groups.some((group) => group.includePatterns?.includes(selected[0]!)),
         )!;
-        // The 300s sibling costs 261s in hybrid plus one 100s build. Unknown readers
-        // retain a positive cost instead of disappearing from that shared estimate.
-        expect(readerJob.predictedSeconds).toBeGreaterThan(361);
+        // Known siblings cost 218s + a 39s cold floor, plus one 60s build.
+        // The unknown reader still contributes positive cost within the 360s budget.
+        expect(readerJob.predictedSeconds).toBeGreaterThan(317);
+        expect(readerJob.predictedSeconds).toBeLessThanOrEqual(360);
         spy.mockImplementation((profile) =>
           profile === "blacksmith"
             ? blacksmith.map((entry) => Object.assign({}, entry, { seconds: 1_000 }))
@@ -525,7 +719,7 @@ describe("runtime placement observations", () => {
         expect(unfit.map((job) => [job.checkName, job.runner, job.groups])).toEqual(
           before.map((job) => [job.checkName, job.runner, job.groups]),
         );
-        expect(unfit.some((job) => (job.predictedSeconds ?? 0) > 440)).toBe(true);
+        expect(unfit.some((job) => (job.predictedSeconds ?? 0) > 360)).toBe(true);
       } finally {
         spy.mockRestore();
         compactSpy.mockRestore();
@@ -684,11 +878,14 @@ function samplerJob(id: number, runId: number, overrides: Record<string, unknown
 
 const toolingFile = "test/scripts/measured.test.ts";
 
-function samplerToolingLog(seconds: number) {
+function samplerToolingLog(
+  seconds: number,
+  additionalGroups: Parameters<typeof encodeNodeTestGroups>[0] = [],
+) {
   const shard = "core-tooling-1-hosted-1";
   const [begin, end] = compactLog(seconds + 1, shard).split("\n");
   return [
-    `2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups([{ shard_name: shard, configs: ["test/vitest/vitest.tooling.config.ts"], includePatterns: [toolingFile] }])}`,
+    `2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups([{ shard_name: shard, configs: ["test/vitest/vitest.tooling.config.ts"], includePatterns: [toolingFile] }, ...additionalGroups])}`,
     begin,
     `2026-08-27T23:00:01Z [shard:${shard}] ✓ tooling ${toolingFile} (1 test) ${seconds * 1000}ms`,
     `2026-08-27T23:00:01Z [shard:${shard}] Duration ${seconds + 1}s`,
@@ -1062,6 +1259,413 @@ it.todo("retains todo coverage");
     });
   });
 
+  it.each(["plugin bundle", "plugin singleton", "Doctor"] as const)(
+    "refits complete explicit %s PR work without trusting ordinal or family names",
+    (kind) => {
+      const plugin = kind !== "Doctor";
+      const configs = [
+        plugin
+          ? "test/vitest/vitest.extension-database-workers.config.ts"
+          : "test/vitest/vitest.commands.config.ts",
+      ];
+      const files = plugin
+        ? ["extensions/telegram/src/native-a.test.ts", "extensions/telegram/src/native-b.test.ts"]
+        : ["src/commands/doctor-a.test.ts", "src/commands/doctor-b.test.ts"];
+      const env = { OPENCLAW_VITEST_MAX_WORKERS: "2" };
+      const parent = "changed-agentic-commands-doctor#file-parallel-2";
+      const key = plugin
+        ? createExtensionTestTimingKey(configs[0]!, files, env)!
+        : createCompactSplitTimingGeneration({
+            configs,
+            env,
+            parentShardName: parent,
+            stripes: [files],
+          }).timingKeys[0]!;
+      const runs = [1, 2].map((id) => {
+        const name = plugin ? `changed-extensions-config-${id * 20}` : parent;
+        const descriptor = { configs, includePatterns: files.toReversed(), shard_name: name };
+        const text = [
+          "2026-08-27T23:00:00Z OPENCLAW_VITEST_MAX_WORKERS: 2",
+          ...(kind === "plugin singleton"
+            ? [
+                `2026-08-27T23:00:00Z OPENCLAW_VITEST_SHARD_NAME: ${name}`,
+                `2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_CONFIGS_JSON: ${JSON.stringify(configs, null, 2)}`,
+                `2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${JSON.stringify(files, null, 2)}`,
+                "2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_ENV_JSON: null",
+              ]
+            : [
+                `2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups([descriptor])}`,
+              ]),
+          compactLog(id === 1 ? 180 : 220, name),
+          // Nested tests cannot overwrite their containing job's resource/worker provenance.
+          "2026-08-27T23:04:00Z [shard:fixture] OPENCLAW_VITEST_MAX_WORKERS: 8",
+          `2026-08-27T23:04:01Z [shard:fixture] [shard:${name}] begin`,
+          `2026-08-27T23:59:00Z [shard:fixture] [shard:${name}] end (exit 0)`,
+          `2026-08-27T23:04:01Z [shard:fixture] job\tstep\t2026-08-27T23:04:01Z [shard:${name}] begin`,
+          `2026-08-27T23:59:00Z [shard:fixture] job\tstep\t2026-08-27T23:59:00Z [shard:${name}] end (exit 0)`,
+        ].join("\n");
+        return Object.assign(
+          timingRun(id, [
+            { kind: "compact" as const, labels: ["blacksmith-8vcpu-ubuntu-2404"], text },
+          ]),
+          { completeInventory: false, pullRequestMergeRef: true },
+        );
+      });
+      expect(refitTestTimings([runs[0]!, runs[0]!]).timings.compactGroupSeconds.blacksmith).toEqual(
+        {},
+      );
+      const result = refitTestTimings(runs);
+      expect(result.timings.compactGroupSeconds.blacksmith).toEqual({ [key]: 200 });
+      expect(result.timings.runtimePlacementTimings.blacksmith).toEqual([]);
+      if (plugin) {
+        for (const run of runs) {
+          run.completeInventory = true;
+          run.pullRequestMergeRef = false;
+        }
+        expect(refitTestTimings(runs).timings.compactGroupSeconds.blacksmith).toEqual({
+          [key]: 200,
+        });
+      }
+    },
+  );
+
+  it.each([
+    "missing workers",
+    "duplicate descriptor",
+    "glob",
+    "duplicate file",
+    "native shard",
+    "partial runtime",
+    "mismatched workers",
+  ])("rejects unsplit PR timing with %s evidence", (reason) => {
+    const key =
+      reason === "mismatched workers" ? "doctor#file-parallel-2" : "changed-extensions-config-1";
+    const group = {
+      configs: ["test/vitest/vitest.extension-database-workers.config.ts"],
+      includePatterns:
+        reason === "glob"
+          ? ["extensions/telegram/*.test.ts"]
+          : ["extensions/telegram/native.test.ts"],
+      shard_name: key,
+      ...(reason === "native shard"
+        ? { env: { OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--shard=1/2"]' } }
+        : {}),
+    };
+    if (reason === "duplicate file") {
+      group.includePatterns.push(group.includePatterns[0]!);
+    }
+    const text = [
+      ...(reason === "missing workers"
+        ? []
+        : [
+            `2026-08-27T23:00:00Z OPENCLAW_VITEST_MAX_WORKERS: ${reason === "mismatched workers" ? 8 : 2}`,
+          ]),
+      `2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups(reason === "duplicate descriptor" ? [group, group] : [group])}`,
+      compactLog(200, reason === "partial runtime" ? `node-subset:${key}` : key),
+    ].join("\n");
+    const runs = [1, 2].map((id) =>
+      Object.assign(
+        timingRun(id, [
+          { kind: "compact" as const, labels: ["blacksmith-8vcpu-ubuntu-2404"], text },
+        ]),
+        { completeInventory: false, pullRequestMergeRef: true },
+      ),
+    );
+    expect(refitTestTimings(runs).timings.compactGroupSeconds.blacksmith).toEqual({});
+  });
+
+  it("keeps mixed worker ceilings out of compact weights and keys runtime observations by their inherited ceiling", () => {
+    const descriptor = {
+      configs: ["test/vitest/reader.config.ts"],
+      includePatterns: ["src/reader.test.ts"],
+      shard_name: "reader",
+      timing_key: createCompactSplitTimingGeneration({
+        configs: ["test/vitest/reader.config.ts"],
+        parentShardName: "reader-parent",
+        stripes: [["src/reader.test.ts"]],
+      }).timingKeys[0]!,
+    };
+    const previous: CiTestTimings = {
+      ...baseline,
+      compactGroupSeconds: {
+        blacksmith: { [descriptor.timing_key]: 100, "reader-parent": 100 },
+        github: {},
+      },
+    };
+    const log = (workers: number, groupWorkers?: number, jobWorkers?: number) => {
+      const [begin, end] = compactLog(40, descriptor.timing_key).split("\n");
+      return [
+        `2026-08-27T23:00:00Z OPENCLAW_VITEST_MAX_WORKERS: ${workers}`,
+        `2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_ENV_JSON: ${JSON.stringify(jobWorkers ? { OPENCLAW_VITEST_MAX_WORKERS: String(jobWorkers) } : null, null, 2)}`,
+        `2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups([{ ...descriptor, ...(groupWorkers ? { env: { OPENCLAW_VITEST_MAX_WORKERS: String(groupWorkers) } } : {}) }])}`,
+        begin,
+        "2026-08-27T23:00:01Z [shard:reader] [test] preparing runtime runtime before Vitest workers",
+        end,
+      ].join("\n");
+    };
+    const runs = [2, 8, 8].map((workers, index) =>
+      timingRun(index + 1, [
+        { kind: "compact", labels: ["blacksmith-32vcpu-ubuntu-2404"], text: log(workers) },
+        { kind: "compact", labels: ["ubuntu-24.04"], text: log(4) },
+      ]),
+    );
+    const mixed = refitTestTimings(runs, previous);
+    expect(mixed.timings.compactGroupSeconds).toEqual({
+      blacksmith: previous.compactGroupSeconds.blacksmith,
+      github: { [descriptor.timing_key]: 40, "reader-parent": 40 },
+    });
+    expect(mixed.rejectedWorkerKeys).toEqual({
+      blacksmith: ["reader-parent", descriptor.timing_key].toSorted(),
+      github: [],
+    });
+    expect(mixed.timings.runtimePlacementTimings.blacksmith).toEqual([
+      {
+        configs: descriptor.configs,
+        includePatterns: descriptor.includePatterns,
+        env: { OPENCLAW_VITEST_MAX_WORKERS: "8" },
+        pretestBuildMode: "runtime",
+        seconds: 40,
+      },
+    ]);
+    // Both the job JSON and group pins can lower, but never raise, an inherited ceiling.
+    const pinned = refitTestTimings(
+      [log(8, 2), log(2, 8), log(8, 8, 2)].map((text, index) =>
+        timingRun(index + 1, [
+          { kind: "compact", labels: ["blacksmith-32vcpu-ubuntu-2404"], text },
+        ]),
+      ),
+    );
+    expect(pinned.rejectedWorkerKeys.blacksmith).toEqual([]);
+    expect(pinned.timings.compactGroupSeconds.blacksmith).toEqual({
+      [descriptor.timing_key]: 40,
+      "reader-parent": 40,
+    });
+    expect(pinned.timings.runtimePlacementTimings.blacksmith[0]?.env).toEqual({
+      OPENCLAW_VITEST_MAX_WORKERS: "2",
+    });
+    const subset = refitTestTimings(
+      [log(8, 2), log(2, 8)].map((text, index) =>
+        timingRun(index + 1, [
+          {
+            kind: "compact",
+            labels: ["blacksmith-32vcpu-ubuntu-2404"],
+            text: text.replaceAll(
+              `[shard:${descriptor.timing_key}]`,
+              `[shard:bun:${descriptor.timing_key}]`,
+            ),
+          },
+        ]),
+      ),
+    );
+    expect(subset.rejectedWorkerKeys.blacksmith).toEqual([]);
+    expect(subset.timings.compactGroupSeconds.blacksmith).toEqual({
+      [`bun:${descriptor.timing_key}`]: 40,
+      "bun:reader-parent": 40,
+    });
+    expect(subset.timings.runtimePlacementTimings.blacksmith).toEqual([]);
+    const admissionLog = log(8).replace(
+      encodeNodeTestGroups([descriptor]),
+      encodeNodeTestGroups([
+        {
+          ...descriptor,
+          fallbackMaxWorkers: 2,
+          minTotalMemoryBytes: 28 * 1024 ** 3,
+        },
+      ]),
+    );
+    for (const { label, gib, plans, cpus, runner, frozen, expected } of [
+      {
+        label: "qualified",
+        gib: 32,
+        plans: 1,
+        cpus: 8,
+        runner: "self-hosted",
+        frozen: "false",
+        expected: 8,
+      },
+      {
+        label: "memory floor",
+        gib: 27,
+        plans: 1,
+        cpus: 8,
+        runner: "self-hosted",
+        frozen: "false",
+        expected: 2,
+      },
+      {
+        label: "overlapping plans",
+        gib: 32,
+        plans: 2,
+        cpus: 8,
+        runner: "self-hosted",
+        frozen: "false",
+        expected: 2,
+      },
+      {
+        label: "constrained CPU",
+        gib: 32,
+        plans: 1,
+        cpus: 4,
+        runner: "self-hosted",
+        frozen: "false",
+        expected: 2,
+      },
+      {
+        label: "hosted",
+        gib: 32,
+        plans: 1,
+        cpus: 8,
+        runner: "github-hosted",
+        frozen: "false",
+        expected: 2,
+      },
+      {
+        label: "frozen target",
+        gib: 32,
+        plans: 1,
+        cpus: 8,
+        runner: "self-hosted",
+        frozen: "true",
+        expected: 2,
+      },
+      {
+        label: "missing resources",
+        gib: undefined,
+        plans: 1,
+        cpus: 8,
+        runner: "self-hosted",
+        frozen: "false",
+        expected: undefined,
+      },
+      {
+        label: "missing runner",
+        gib: 32,
+        plans: 1,
+        cpus: 8,
+        runner: undefined,
+        frozen: "false",
+        expected: undefined,
+      },
+    ]) {
+      const text = [
+        ...(runner ? [`2026-08-27T23:00:00Z RUNNER_ENVIRONMENT: ${runner}`] : []),
+        `2026-08-27T23:00:00Z FROZEN_TARGET: ${frozen}`,
+        ...(gib
+          ? [
+              `2026-08-27T23:00:00Z [shard:resources] logicalCpuCount=${cpus} totalMemoryBytes=${gib * 1024 ** 3} requested plans=${plans} admitted plans=${plans}`,
+            ]
+          : []),
+        admissionLog,
+      ].join("\n");
+      const result = refitTestTimings(
+        [1, 2].map((id) =>
+          timingRun(id, [{ kind: "compact", labels: ["blacksmith-32vcpu-ubuntu-2404"], text }]),
+        ),
+        previous,
+      );
+      expect(result.timings.compactGroupSeconds.blacksmith[descriptor.timing_key], label).toBe(
+        expected === undefined ? 100 : 40,
+      );
+      expect(
+        result.timings.runtimePlacementTimings.blacksmith[0]?.env.OPENCLAW_VITEST_MAX_WORKERS,
+        label,
+      ).toBe(expected?.toString());
+      expect(result.rejectedWorkerKeys.blacksmith, label).toEqual(
+        expected === undefined ? ["reader-parent", descriptor.timing_key].toSorted() : [],
+      );
+    }
+    const wholeConfigLog = log(8).replace(
+      encodeNodeTestGroups([descriptor]),
+      encodeNodeTestGroups([
+        {
+          ...descriptor,
+          includePatterns: undefined,
+          fallbackMaxWorkers: 2,
+          minTotalMemoryBytes: 28 * 1024 ** 3,
+        },
+      ]),
+    );
+    const wholeConfigRuns = [27, 32].map((gib, index) =>
+      timingRun(index + 1, [
+        {
+          kind: "compact",
+          labels: ["blacksmith-32vcpu-ubuntu-2404"],
+          text: [
+            "2026-08-27T23:00:00Z RUNNER_ENVIRONMENT: self-hosted",
+            "2026-08-27T23:00:00Z FROZEN_TARGET: false",
+            `2026-08-27T23:00:00Z [shard:resources] logicalCpuCount=8 totalMemoryBytes=${gib * 1024 ** 3} requested plans=1 admitted plans=1`,
+            wholeConfigLog,
+          ].join("\n"),
+        },
+      ]),
+    );
+    const whole = refitTestTimings(wholeConfigRuns, previous);
+    expect(whole.timings.compactGroupSeconds.blacksmith).toEqual(
+      previous.compactGroupSeconds.blacksmith,
+    );
+    expect(whole.rejectedWorkerKeys.blacksmith).toEqual(
+      ["reader-parent", descriptor.timing_key].toSorted(),
+    );
+    expect(whole.timings.runtimePlacementTimings.blacksmith).toEqual([]);
+    for (const suffix of ["#workers-4", "#file-parallel-4"]) {
+      const namedKey = createCompactSplitTimingGeneration({
+        configs: descriptor.configs,
+        parentShardName: `reader${suffix}`,
+        stripes: [descriptor.includePatterns],
+      }).timingKeys[0]!;
+      const namedLog = admissionLog
+        .replace(
+          encodeNodeTestGroups([
+            { ...descriptor, fallbackMaxWorkers: 2, minTotalMemoryBytes: 28 * 1024 ** 3 },
+          ]),
+          encodeNodeTestGroups([
+            {
+              ...descriptor,
+              timing_key: namedKey,
+              env: { OPENCLAW_VITEST_MAX_WORKERS: "4" },
+              fallbackMaxWorkers: 2,
+              minTotalMemoryBytes: 28 * 1024 ** 3,
+            },
+          ]),
+        )
+        .replaceAll(`[shard:${descriptor.timing_key}]`, `[shard:${namedKey}]`);
+      const previousNamed: CiTestTimings = {
+        ...baseline,
+        compactGroupSeconds: { blacksmith: { [namedKey]: 100 }, github: {} },
+      };
+      for (const gib of [27, 32]) {
+        const text = [
+          "2026-08-27T23:00:00Z RUNNER_ENVIRONMENT: self-hosted",
+          "2026-08-27T23:00:00Z FROZEN_TARGET: false",
+          `2026-08-27T23:00:00Z [shard:resources] logicalCpuCount=8 totalMemoryBytes=${gib * 1024 ** 3} requested plans=1 admitted plans=1`,
+          namedLog,
+        ].join("\n");
+        const samples = [1, 2].map((id) =>
+          timingRun(id, [{ kind: "compact", labels: ["blacksmith-32vcpu-ubuntu-2404"], text }]),
+        );
+        const result = refitTestTimings(samples, previousNamed);
+        expect(result.timings.compactGroupSeconds.blacksmith[namedKey], `${suffix} ${gib}GiB`).toBe(
+          gib === 27 ? 100 : 40,
+        );
+        expect(result.rejectedWorkerKeys.blacksmith.includes(namedKey)).toBe(gib === 27);
+      }
+      const missingWorkers = refitTestTimings(
+        [1, 2].map((id) =>
+          timingRun(id, [
+            {
+              kind: "compact",
+              labels: ["blacksmith-32vcpu-ubuntu-2404"],
+              text: compactLog(40, namedKey),
+            },
+          ]),
+        ),
+        previousNamed,
+      );
+      expect(missingWorkers.timings.compactGroupSeconds.blacksmith[namedKey]).toBe(100);
+      expect(missingWorkers.rejectedWorkerKeys.blacksmith).toContain(namedKey);
+    }
+  });
+
   it("retains measured parent costs across split inventory changes without double-counting retries", () => {
     const parentShardName = "agentic-control-plane-agent-chat";
     const generations = [0, 1, 2].map((index) =>
@@ -1106,6 +1710,100 @@ it.todo("retains todo coverage");
     expect(refitTestTimings([runs[0]!]).timings.compactGroupSeconds).toEqual({
       blacksmith: {},
       github: {},
+    });
+  });
+
+  it("does not promote selected PR generations into full-parent samples", () => {
+    const parent = "changed-agentic-cli";
+    const configs = ["test/vitest/vitest.cli.config.ts"];
+    const files = ["src/cli/selected.test.ts"];
+    const child = createCompactSplitTimingGeneration({
+      configs,
+      parentShardName: parent,
+      stripes: [files],
+    }).timingKeys[0]!;
+    const descriptor = {
+      shard_name: "selected-cli",
+      timing_key: child,
+      configs,
+      includePatterns: files,
+    };
+    const selectionLine = `2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups([descriptor])}`;
+    const previous: CiTestTimings = {
+      ...baseline,
+      compactGroupSeconds: { blacksmith: { [parent]: 1_000 }, github: {} },
+    };
+    const runs = [20, 40, 60].map((seconds, index) =>
+      Object.assign(
+        timingRun(index + 1, [
+          {
+            kind: "compact",
+            labels: ["blacksmith-8vcpu-ubuntu-2404"],
+            text: `${selectionLine}\n2026-08-27T23:00:00Z OPENCLAW_VITEST_MAX_WORKERS: 2\n${compactLog(seconds, child)}\n${compactLog(600, parent)}`,
+          },
+        ]),
+        { pullRequestMergeRef: true, completeInventory: false },
+      ),
+    );
+    // Neither selected generations nor repeated unsplit PR spans prove the
+    // full owner inventory. Only the exact selected child can refit.
+    const expected = {
+      [parent]: 1_000,
+      [child]: 40,
+    };
+    expect(refitTestTimings(runs, previous).timings.compactGroupSeconds.blacksmith).toEqual(
+      expected,
+    );
+    const fragments = runs.flatMap((run) => [{ ...run, pullRequestMergeRef: false }, run]);
+    expect(refitTestTimings(fragments, previous).timings.compactGroupSeconds.blacksmith).toEqual(
+      expected,
+    );
+    const missingWorkers = runs.map((run) => ({
+      ...run,
+      logs: run.logs.map((log) => ({
+        ...log,
+        text: log.text.replace("2026-08-27T23:00:00Z OPENCLAW_VITEST_MAX_WORKERS: 2\n", ""),
+      })),
+    }));
+    expect(
+      refitTestTimings(missingWorkers, previous).timings.compactGroupSeconds.blacksmith,
+    ).toEqual(previous.compactGroupSeconds.blacksmith);
+    for (const [reason, selection] of [
+      ["missing descriptor", ""],
+      [
+        "malformed descriptor",
+        "2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: invalid",
+      ],
+      [
+        "duplicate descriptor",
+        `2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups([descriptor, descriptor])}`,
+      ],
+      [
+        "different files",
+        `2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups([{ ...descriptor, includePatterns: ["src/cli/other.test.ts"] }])}`,
+      ],
+      [
+        "glob files",
+        `2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups([{ ...descriptor, includePatterns: ["src/cli/*.test.ts"] }])}`,
+      ],
+      [
+        "filtered invocation",
+        `${selectionLine}\n2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: ["--shard=1/2"]`,
+      ],
+    ] as const) {
+      const incomplete = runs.map((run) => ({
+        ...run,
+        logs: run.logs.map((log) => ({ ...log, text: log.text.replace(selectionLine, selection) })),
+      }));
+      expect(
+        refitTestTimings(incomplete, previous).timings.compactGroupSeconds.blacksmith,
+        reason,
+      ).toEqual(previous.compactGroupSeconds.blacksmith);
+    }
+    const main = runs.map((run) => Object.assign({}, run, { pullRequestMergeRef: false }));
+    expect(refitTestTimings(main, previous).timings.compactGroupSeconds.blacksmith).toEqual({
+      [parent]: 600,
+      [child]: 40,
     });
   });
 
@@ -1516,7 +2214,7 @@ describe("CI timing sampler provenance", () => {
                 : timings.repoE2eFileSeconds["test/release.e2e.test.ts"],
           ).toBe(40);
           expect(result.stderr).toContain(
-            `Skipped ${source} run 1: jobs completed after frozen UTC cutoff ${sampleNow}.`,
+            `Skipped ${source === "tooling" ? "pull-request" : source} run 1: jobs completed after frozen UTC cutoff ${sampleNow}.`,
           );
           const requests = fixture.requests();
           expect(requests.some((args) => args[1]?.includes("/runs/1/attempts/2/jobs?"))).toBe(true);
@@ -1638,22 +2336,64 @@ describe("CI timing sampler provenance", () => {
     );
   });
 
-  it("samples PR merge-ref tooling without replacing main, release, or UI measurements", () => {
+  it("requires two PR runs before repricing tooling from compact logs", () => {
+    const runs = [1, 2, 3, 4].map((id) =>
+      Object.assign(
+        timingRun(id, [
+          {
+            kind: "compact",
+            labels: ["blacksmith-8vcpu-ubuntu-2404"],
+            text: samplerToolingLog(id * 10),
+          },
+        ]),
+        { pullRequestMergeRef: id > 2, completeInventory: id <= 2 },
+      ),
+    );
+    expect(refitTestTimings(runs.slice(0, 3)).timings.toolingFileSeconds).toEqual({
+      blacksmith: {},
+      github: {},
+    });
+    const result = refitTestTimings(runs);
+    expect(result.timings.toolingFileSeconds).toEqual({
+      blacksmith: { [toolingFile]: 35 },
+      github: {},
+    });
+    expect(result.contributingRunIds.toolingBlacksmith).toEqual([3, 4]);
+  });
+
+  it("samples contributing PR compact and tooling jobs while retaining partial-plan history and runner identity", () => {
+    const gatewayGroup = createCompactSplitTimingGeneration({
+      configs: ["test/vitest/vitest.gateway-methods.config.ts"],
+      parentShardName: "agentic-gateway-methods-hosted-2",
+      stripes: [["src/gateway/selected.test.ts"]],
+    }).timingKeys[0]!;
+    const gatewayDescriptor = {
+      shard_name: "agentic-gateway-methods-hosted-2",
+      timing_key: gatewayGroup,
+      configs: ["test/vitest/vitest.gateway-methods.config.ts"],
+      includePatterns: ["src/gateway/selected.test.ts"],
+    };
+    const extensionConfig = "test/vitest/vitest.extension-database-workers.config.ts";
+    const extensionFiles = ["extensions/telegram/src/native.test.ts"];
+    const extensionKey = createExtensionTestTimingKey(extensionConfig, extensionFiles)!;
     withSamplerFixture(
       {
         baseline: retained,
         runs: [samplerRun(1), samplerRun(2)],
-        toolingRuns: [3, 4].map((id) =>
+        toolingRuns: [7, 8, 3, 4, 5].map((id) =>
           samplerRun(id, { event: "pull_request", head_branch: "feature" }),
         ),
         jobs: [
           samplerJob(11, 1),
           samplerJob(21, 2),
-          ...[3, 4].flatMap((id) => [
+          samplerJob(81, 8, { log: "No complete shard spans" }),
+          ...[3, 4, 5].flatMap((id) => [
             samplerJob(id * 10 + 1, id, {
+              name: `checks-node-${id === 3 ? "changed-" : id === 4 ? "changed-config-" : ""}compact-large-1`,
               log: [
-                samplerToolingLog(id === 3 ? 30 : 50),
-                compactLog(900),
+                "2026-08-27T23:00:00Z OPENCLAW_VITEST_MAX_WORKERS: 2",
+                samplerToolingLog((id - 2) * 20, [gatewayDescriptor]),
+                compactLog((id - 2) * 100 + 700, gatewayGroup),
                 uiLog({ [measuredFile]: 900 }),
               ].join("\n"),
             }),
@@ -1661,25 +2401,59 @@ describe("CI timing sampler provenance", () => {
               name: "checks-ui-e2e (1/6)",
               log: uiLog({ [measuredFile]: 900 }),
             }),
+            samplerJob(id * 10 + 3, id, {
+              name: "checks-node-changed-config-compact-small-1",
+              labels: ["ubuntu-24.04"],
+              log: `2026-08-27T23:00:00Z OPENCLAW_VITEST_MAX_WORKERS: 2\n2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups([gatewayDescriptor])}\n${compactLog(600, gatewayGroup)}`,
+            }),
+            samplerJob(id * 10 + 4, id, {
+              name:
+                id === 4
+                  ? "checks-node-changed-extensions-config"
+                  : `checks-node-changed-extensions-bundle-${id}`,
+              log: [
+                "2026-08-27T23:00:00Z OPENCLAW_VITEST_MAX_WORKERS: 2",
+                `2026-08-27T23:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups(
+                  [
+                    {
+                      configs: [extensionConfig],
+                      includePatterns: extensionFiles,
+                      shard_name: `changed-extensions-config-${id}`,
+                    },
+                  ],
+                )}`,
+                compactLog(160 + id * 10, `changed-extensions-config-${id}`),
+              ].join("\n"),
+            }),
           ]),
         ],
       },
       (fixture) => {
-        const result = fixture.invoke();
+        const result = fixture.invoke(false, 3);
         expect(result.status, result.stderr).toBe(0);
         const timings = ciTestTimingsSchema.parse(JSON.parse(fixture.contents()));
         expect(timings).toMatchObject({
-          compactGroupSeconds: retained.compactGroupSeconds,
           runtimePlacementTimings: retained.runtimePlacementTimings,
           repoE2eFileSeconds: retained.repoE2eFileSeconds,
           uiE2e: retained.uiE2e,
         });
-        expect(timings.compactGroupSeconds).toEqual(retained.compactGroupSeconds);
+        expect(timings.compactGroupSeconds).toEqual({
+          blacksmith: {
+            ...retained.compactGroupSeconds.blacksmith,
+            [gatewayGroup]: 900,
+            [extensionKey]: 200,
+          },
+          github: { ...retained.compactGroupSeconds.github, [gatewayGroup]: 600 },
+        });
         expect(timings.toolingFileSeconds).toEqual({
           blacksmith: { ...retained.toolingFileSeconds.blacksmith, [toolingFile]: 40 },
           github: retained.toolingFileSeconds.github,
         });
-        expect(result.stdout).toContain("PR tooling measurements execute the merge-ref");
+        expect(result.stdout).toContain(
+          "PR compact and tooling measurements execute the merge-ref",
+        );
+        expect(result.stdout).toContain("Independent PR compact contributors: 3");
+        expect(timings.source).toContain("pull_request merge-ref runs: 3, 4, 5");
         const request = fixture.requests().find((args) => args[1]?.includes("event=pull_request"));
         expect(request).toBeDefined();
         const params = new URL(request![1]!, "https://api.github.com").searchParams;
@@ -1687,8 +2461,14 @@ describe("CI timing sampler provenance", () => {
         expect(params.get("created")).toBe(`2026-08-21T12:00:00.000Z..${sampleNow}`);
         expect(params.has("branch")).toBe(false);
         expect(
-          fixture.requests().some((args) => /\/jobs\/(?:32|42)\/logs$/u.test(args[1] ?? "")),
+          fixture.requests().some((args) => /\/jobs\/(?:32|42|52)\/logs$/u.test(args[1] ?? "")),
         ).toBe(false);
+        expect(
+          fixture.requests().filter((args) => /\/jobs\/(?:31|41|51)\/logs$/u.test(args[1] ?? "")),
+        ).toHaveLength(3);
+        expect(
+          fixture.requests().filter((args) => /\/jobs\/(?:34|44|54)\/logs$/u.test(args[1] ?? "")),
+        ).toHaveLength(3);
       },
     );
   });
@@ -1723,7 +2503,12 @@ describe("CI timing sampler provenance", () => {
         baseline: retained,
         runs: [],
         toolingRuns: [samplerRun(3, { event: "pull_request", head_branch: "feature" })],
-        jobs: [samplerJob(31, 3, { log: samplerToolingLog(40) })],
+        jobs: [
+          samplerJob(31, 3, {
+            name: "checks-node-changed-config-compact-large-1",
+            log: `${samplerToolingLog(40)}\n${compactLog(900)}`,
+          }),
+        ],
       },
       (fixture) => {
         const dryRun = fixture.invoke(true, 2, [3]);
@@ -1776,7 +2561,7 @@ describe("CI timing sampler provenance", () => {
     },
   );
 
-  it("does not let a retried PR satisfy the ordinary two-run tooling minimum", () => {
+  it("does not let a retried PR satisfy the ordinary two-run compact or tooling minimum", () => {
     withSamplerFixture(
       {
         baseline: retained,
@@ -1785,8 +2570,11 @@ describe("CI timing sampler provenance", () => {
         jobs: [
           samplerJob(11, 1),
           samplerJob(21, 2),
-          samplerJob(31, 3, { log: samplerToolingLog(30) }),
-          samplerJob(32, 3, { run_attempt: 2, log: samplerToolingLog(50) }),
+          samplerJob(31, 3, { log: `${samplerToolingLog(30)}\n${compactLog(900, "pr-only")}` }),
+          samplerJob(32, 3, {
+            run_attempt: 2,
+            log: `${samplerToolingLog(50)}\n${compactLog(900, "pr-only")}`,
+          }),
         ],
       },
       (fixture) => {

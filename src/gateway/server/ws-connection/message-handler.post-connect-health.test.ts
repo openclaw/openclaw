@@ -3,11 +3,12 @@ import { once } from "node:events";
 import type { IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes, PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resetDiagnosticEventsForTest } from "../../../infra/diagnostic-events.js";
 import { tryBeginGatewaySuspendAdmission } from "../../../process/gateway-work-admission.js";
 import {
@@ -24,9 +25,7 @@ import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../../auth.js";
 import { gitHubPublicApi } from "../../github-public-api.js";
 import type { HealthSummary } from "../../health/types.js";
-import type { GatewayAttributedIngress } from "../../ingress-attribution.js";
 import { getOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
-import { GatewayConnectionWork } from "../../server-connection-work.js";
 import {
   HEALTH_REFRESH_INTERVAL_MS,
   MAX_PREAUTH_PAYLOAD_BYTES,
@@ -40,16 +39,19 @@ import {
   enforceSharedGatewaySessionGenerationForConfigWrite,
   SharedGatewaySessionGenerationState,
 } from "../../server-shared-auth-generation.js";
-import { GatewayClientRegistry } from "../client-registry.js";
 import { createGatewayWsTestLogger as createLogger } from "../ws-connection.test-helpers.js";
+import { disconnectDisallowedGatewayPolicyClients } from "../ws-origin-policy.js";
 import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
+import type { GatewayWsClient } from "../ws-types.js";
 import { expectAuthenticatedOwnerReconnect } from "./message-handler.owner-reconnect.test-support.js";
 import {
+  attachGatewayHarness,
   BACKEND_CONNECT_PARAMS,
+  cleanupGatewayHarnesses,
+  createGatewayHarnessGate,
   captureSecurityEvents,
   createCloseMock,
   createConnectedTestClient,
-  createGatewayAttachmentCompletion,
   createHealthSummary,
   createSetCloseCauseMock,
   createTestAgentRuntimeIdentityLease,
@@ -57,10 +59,9 @@ import {
   localUserIngressFor,
   NODE_PAIR_REMOVE_PARAMS,
   useGatewayTestConfig,
+  withGatewayTestState,
   type CloseGatewayConnection,
-  type SetCloseCause,
 } from "./message-handler.post-connect-health.test-support.js";
-import { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
 
 const {
   buildGatewaySnapshotMock,
@@ -72,6 +73,7 @@ const {
   ensureProfileForEmailMock,
   ensureGatewayOwnerProfileMock,
   prepareGatewayNodeConnectMock,
+  prewarmGatewaySessionHistoryMock,
   resolveConnectAuthStateMock,
   upsertPresenceMock,
 } = vi.hoisted(() => ({
@@ -102,6 +104,7 @@ const {
   ensureProfileForEmailMock: vi.fn(),
   ensureGatewayOwnerProfileMock: vi.fn(),
   prepareGatewayNodeConnectMock: vi.fn(),
+  prewarmGatewaySessionHistoryMock: vi.fn(async () => {}),
   resolveConnectAuthStateMock: vi.fn(),
   upsertPresenceMock: vi.fn(),
 }));
@@ -146,6 +149,10 @@ vi.mock("./connect-node-session.js", async (importOriginal) => {
   return { ...actual, prepareGatewayNodeConnect: prepareGatewayNodeConnectMock };
 });
 
+vi.mock("../../server-history-prewarm.js", () => ({
+  prewarmGatewaySessionHistory: prewarmGatewaySessionHistoryMock,
+}));
+
 vi.mock("../../../config/config.js", () => ({
   getRuntimeConfig: loadConfigMock,
   loadConfig: loadConfigMock,
@@ -173,280 +180,12 @@ vi.mock("../health-state.js", () => ({
   getHealthVersion: getHealthVersionMock,
 }));
 
-import { attachGatewayWsMessageHandler } from "./message-handler.js";
-
-const harnessCleanups: Array<() => Promise<void>> = [];
-const fixtureGateReleases: Array<() => void> = [];
-let harnessCleanupPromise: Promise<void> | undefined;
-
-function createGatewayHarnessGate<T = void>() {
-  const gate = createDeferred<T>();
-  // Cleanup can precede a mock's first call; cancel its gate without an unhandled rejection.
-  void gate.promise.catch(() => {});
-  fixtureGateReleases.push(() => gate.reject(new Error("Gateway test fixture closed")));
-  return gate;
-}
-
-function cleanupGatewayHarnesses() {
-  // A native timeout can overlap afterEach with the state callback's finally.
-  return (harnessCleanupPromise ??= Promise.resolve().then(async () => {
-    for (const release of fixtureGateReleases.splice(0)) {
-      release();
-    }
-    const results = await Promise.allSettled(harnessCleanups.splice(0).map((cleanup) => cleanup()));
-    const errors = results.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
-    if (errors.length > 0) {
-      throw new AggregateError(errors, "Gateway test connections failed to close");
-    }
-  }));
-}
-
 beforeEach(() => {
-  harnessCleanupPromise = undefined;
   loadConfigMock.mockReset();
 });
-afterEach(cleanupGatewayHarnesses);
-
-async function withGatewayTestState(
-  options: Parameters<typeof withOpenClawTestState>[0],
-  run: () => Promise<void>,
-) {
-  await withOpenClawTestState(options, async () => {
-    try {
-      await run();
-    } finally {
-      // Test-finished hooks run after this state owner has already restored its environment.
-      await cleanupGatewayHarnesses();
-    }
-  });
-}
 
 function waitForFast(assertion: () => void | Promise<void>) {
   return vi.waitFor(assertion, { interval: 1 });
-}
-
-function attachGatewayHarness(options: {
-  connId: string;
-  connectNonce: string;
-  deferSocketSend?: boolean;
-  socket?: WebSocket;
-  refreshHealthSnapshot?: GatewayRequestContext["refreshHealthSnapshot"];
-  requestOrigin?: string;
-  requestHost?: string;
-  headers?: Record<string, string>;
-  ingressAttribution?: GatewayAttributedIngress;
-  remoteAddr?: string;
-  localAddr?: string;
-  resolvedAuth?: ResolvedGatewayAuth;
-  getRequiredSharedGatewaySessionGeneration?: () => string | undefined;
-  rateLimiter?: AuthRateLimiter;
-  client?: unknown;
-  close?: CloseGatewayConnection;
-  isClosed?: () => boolean;
-  setCloseCause?: SetCloseCause;
-  clearHandshakeTimer?: () => void;
-  handoffAuthenticatedReceive?: () => void;
-}) {
-  const connectionWork = new GatewayConnectionWork();
-  const logWsControl = createLogger();
-  const attachment = createGatewayAttachmentCompletion(
-    options.connId,
-    () => logWsControl.warn.mock.calls,
-  );
-  let closed = false;
-  const close = options.close ?? createCloseMock();
-  const closeSocket: CloseGatewayConnection = (code, reason) => {
-    closed = true;
-    attachment.closed(code, reason);
-    close(code, reason);
-  };
-  harnessCleanups.push(async () => {
-    closeSocket();
-    connectionWork.beginClose();
-    await connectionWork.drain();
-  });
-  let finishSocketSend: ((error?: Error) => void) | undefined;
-  const socketSend = vi.fn((_payload: string, cb?: (err?: Error) => void) => {
-    if (options.deferSocketSend) {
-      finishSocketSend = (error) => cb?.(error);
-      return;
-    }
-    cb?.();
-  });
-  let onMessage: ((data: Buffer) => void) | undefined;
-  const socket =
-    options.socket ??
-    ({
-      readyState: 1,
-      _receiver: { _maxPayload: MAX_PREAUTH_PAYLOAD_BYTES, _allowSynchronousEvents: false },
-      send: socketSend,
-      on: vi.fn((event: string, handler: (data: Buffer) => void) => {
-        if (event === "message") {
-          onMessage = handler;
-        }
-        return socket;
-      }),
-    } as unknown as WebSocket);
-  const send = vi.fn((_frame: unknown) => ({ kind: "sent" }) as const);
-  let client: unknown = options.client ?? null;
-  let registeredProfileId: string | undefined;
-  const refreshedProfileIds: Array<string | undefined> = [];
-  const requestHost = options.requestHost ?? "127.0.0.1:19001";
-  const remoteAddr = options.remoteAddr ?? "127.0.0.1";
-  const localAddr = options.localAddr ?? "127.0.0.1";
-  const resolvedAuth: ResolvedGatewayAuth = options.resolvedAuth ?? {
-    mode: "none",
-    allowTailscale: false,
-  };
-  const advanceHandshakePhase = vi.fn();
-  const clearHandshakeTimer = options.clearHandshakeTimer ?? vi.fn();
-  const handoffAuthenticatedReceive = vi.fn(() =>
-    attachment.attached(options.handoffAuthenticatedReceive),
-  );
-  const refreshConnectedUserProfile = vi.fn<
-    NonNullable<GatewayRequestContext["refreshConnectedUserProfile"]>
-  >((profile) => {
-    refreshedProfileIds.push(
-      (client as { preparedRecipientProfileId?: string } | null)?.preparedRecipientProfileId,
-    );
-    const authenticatedUserProfile = (
-      client as { authenticatedUserProfile?: Record<string, unknown> } | null
-    )?.authenticatedUserProfile;
-    if (authenticatedUserProfile && profile) {
-      Object.assign(authenticatedUserProfile, {
-        profileId: profile.id,
-        displayName: profile.displayName,
-        avatarRevision: profile.avatarRevision,
-        hasAvatar: profile.hasAvatar,
-        updatedAt: profile.updatedAt,
-      });
-    }
-  });
-  const setClient = vi.fn((next: unknown) => {
-    if (closed || options.isClosed?.()) {
-      return false;
-    }
-    registeredProfileId = (next as { preparedRecipientProfileId?: string })
-      .preparedRecipientProfileId;
-    client = next;
-    return true;
-  });
-  attachGatewayWsMessageHandler({
-    clients: new GatewayClientRegistry(),
-    socket,
-    prepareAuthenticatedReceive: () => ({ ok: true, value: handoffAuthenticatedReceive }),
-    connectionWork,
-    bootId: "post-connect-health-test-boot",
-    upgradeReq: {
-      headers: {
-        host: requestHost,
-        ...(options.requestOrigin ? { origin: options.requestOrigin } : {}),
-        ...options.headers,
-      },
-      socket: { localAddress: localAddr, remoteAddress: remoteAddr },
-    } as unknown as IncomingMessage,
-    ingressAttribution:
-      options.ingressAttribution ??
-      (remoteAddr === "127.0.0.1"
-        ? {
-            kind: "direct-local",
-            clientIp: remoteAddr,
-            rateLimit: { subject: { key: remoteAddr }, resetOnSuccess: true },
-          }
-        : {
-            kind: "direct-remote",
-            clientIp: remoteAddr,
-            rateLimit: { subject: { key: remoteAddr }, resetOnSuccess: true },
-          }),
-    connId: options.connId,
-    remoteAddr,
-    localAddr,
-    requestHost,
-    requestOrigin: options.requestOrigin,
-    connectNonce: options.connectNonce,
-    getResolvedAuth: () => resolvedAuth,
-    getRequiredSharedGatewaySessionGeneration: options.getRequiredSharedGatewaySessionGeneration,
-    rateLimiter: options.rateLimiter,
-    gatewayMethods: [],
-    events: [],
-    extraHandlers: {},
-    buildRequestContext: () =>
-      ({
-        refreshConnectedUserProfile,
-        broadcast: vi.fn(),
-        publishPresence: vi.fn(),
-      }) as never,
-    nodeLifecycleDispatch: new GatewayNodeLifecycleDispatchTracker(),
-    refreshHealthSnapshot:
-      options.refreshHealthSnapshot ?? vi.fn(async () => createHealthSummary()),
-    send,
-    close: closeSocket,
-    isClosed: () => closed || options.isClosed?.() === true,
-    clearHandshakeTimer,
-    getClient: () => client as never,
-    setClient,
-    setHandshakeState: vi.fn(),
-    advanceHandshakePhase,
-    setCloseCause: options.setCloseCause ?? createSetCloseCauseMock(),
-    setLastFrameMeta: vi.fn(),
-    originCheckMetrics: { hostHeaderFallbackAccepted: 0 },
-    logGateway: createLogger() as never,
-    logHealth: createLogger() as never,
-    logWsControl: logWsControl as never,
-  });
-  if (onMessage === undefined && !options.socket) {
-    throw new Error("expected websocket message handler");
-  }
-  const sendMessage = (data: string) => {
-    if (!onMessage) {
-      throw new Error("synthetic websocket message handler is unavailable for a real socket");
-    }
-    onMessage(Buffer.from(data));
-  };
-  return {
-    whenAttached: attachment.promise,
-    runWhenIdle: () => connectionWork.runWhenIdle(() => {}),
-    advanceHandshakePhase,
-    clearHandshakeTimer,
-    finishSocketSend: (error?: Error) => finishSocketSend?.(error),
-    handoffAuthenticatedReceive,
-    logWsControl,
-    refreshConnectedUserProfile,
-    refreshedProfileIds,
-    send,
-    setClient,
-    socket,
-    socketSend,
-    sendMessage,
-    sendRequest: (id: string, method: string, params: Record<string, unknown> = {}) => {
-      sendMessage(
-        JSON.stringify({
-          type: "req",
-          id,
-          method,
-          params,
-        }),
-      );
-    },
-    sendConnect: (id: string, params: Record<string, unknown>) => {
-      sendMessage(
-        JSON.stringify({
-          type: "req",
-          id,
-          method: "connect",
-          params,
-        }),
-      );
-    },
-    get client() {
-      return client;
-    },
-    get registeredProfileId() {
-      return registeredProfileId;
-    },
-  };
 }
 
 function connectTrustedProxyUser(
@@ -542,6 +281,50 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         });
       },
     );
+  });
+
+  it("prewarms cold session history for an admitted operator without delaying hello", async () => {
+    const prewarm = createGatewayHarnessGate();
+    const prewarmStarted = createGatewayHarnessGate();
+    const helloSent = createGatewayHarnessGate();
+    prewarmGatewaySessionHistoryMock.mockImplementationOnce(() => {
+      prewarmStarted.resolve();
+      return prewarm.promise;
+    });
+    const harness = connectTrustedProxyUser("history-prewarm");
+    harness.socketSend.mockImplementation((_payload, callback) => {
+      callback?.();
+      helloSent.resolve();
+    });
+    try {
+      await harness.whenAttached;
+      await Promise.all([prewarmStarted.promise, helloSent.promise]);
+      expect(prewarmGatewaySessionHistoryMock).toHaveBeenCalledWith(
+        loadConfigMock(),
+        expect.objectContaining({ onlyIfCold: true }),
+      );
+      expect(JSON.parse(harness.socketSend.mock.calls[0]![0])).toMatchObject({
+        ok: true,
+        payload: { type: "hello-ok" },
+      });
+    } finally {
+      prewarm.resolve();
+    }
+  });
+
+  it("skips history prewarm for an admitted backend operator", async () => {
+    const harness = attachGatewayHarness({
+      connId: "backend-history-prewarm",
+      connectNonce: "backend-history-prewarm",
+    });
+    harness.sendConnect("connect-backend-history-prewarm", BACKEND_CONNECT_PARAMS);
+    await harness.runWhenIdle();
+    expect(harness.socketSend).toHaveBeenCalledOnce();
+    expect(JSON.parse(harness.socketSend.mock.calls[0]![0])).toMatchObject({
+      ok: true,
+      payload: { type: "hello-ok" },
+    });
+    expect(prewarmGatewaySessionHistoryMock).not.toHaveBeenCalled();
   });
 
   it("keeps one editable owner profile across shared-secret and device-token reconnects", async () => {
@@ -2281,6 +2064,8 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       | undefined;
     expect(response?.error).not.toHaveProperty("retryable");
     expect(response?.error).not.toHaveProperty("retryAfterMs");
+    await harness.runWhenIdle();
+    expect(prewarmGatewaySessionHistoryMock).not.toHaveBeenCalled();
   });
 
   it("returns retry timing when gateway auth is rate-limited", async () => {
@@ -2517,6 +2302,33 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       });
     },
   );
+
+  it("binds handshake policy to the verified login rather than unrelated identity grants", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const harness = connectTrustedProxyUser("identity-policy", { id: "openclaw-control-ui" }, [
+        "operator.read",
+      ]);
+      await harness.whenAttached;
+      const client = harness.client as GatewayWsClient;
+      expect(client.authenticatedUserId).toBe("alice@example.com");
+      const config = structuredClone(loadConfigMock());
+      const next: OpenClawConfig = {
+        ...config,
+        gateway: {
+          ...config.gateway,
+          auth: { ...config.gateway.auth, mode: "trusted-proxy" },
+        },
+      };
+      const scopes = next.gateway!.auth!.identityScopes!;
+      scopes["other@example.test"] = ["operator.admin"];
+      disconnectDisallowedGatewayPolicyClients([client], next);
+      expect(client.invalidated).not.toBe(true);
+      const removed = structuredClone(next);
+      delete removed.gateway!.auth!.identityScopes!["alice@example.com"];
+      disconnectDisallowedGatewayPolicyClients([client], removed);
+      expect(client.invalidated).toBe(true);
+    });
+  });
 
   it("marks operator approval clients with the server runtime token", async () => {
     const harness = attachGatewayHarness({

@@ -25,6 +25,7 @@ import {
   reconcileClientPluginNodeCapabilities,
   type PluginNodeCapabilitySurface,
 } from "../plugin-node-capability.js";
+import { serializeGatewayFrame } from "../serialized-json.js";
 import type { GatewayConnectionWork } from "../server-connection-work.js";
 import { MAX_BUFFERED_BYTES, WEBSOCKET_OPEN_READY_STATE } from "../server-constants.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
@@ -311,14 +312,18 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
       closeWithGrace(1008, connectionKind === "worker" ? "slow-consumer" : "slow consumer");
       return { kind: "unavailable" } as const;
     }
-    let encoded: string;
+    let encoded: string | Buffer;
     try {
-      encoded = JSON.stringify(obj);
+      encoded = serializeGatewayFrame(obj);
     } catch (error) {
       return { kind: "serialization", error } as const;
     }
     try {
-      socket.send(encoded);
+      if (typeof encoded === "string") {
+        socket.send(encoded);
+      } else {
+        socket.send(encoded, { binary: false });
+      }
       return { kind: "sent" } as const;
     } catch {
       socket.terminate();

@@ -323,24 +323,8 @@ export function sanitizeMatrixCliText(value: string): string {
     index++;
   }
 
-  let sanitized = "";
-  for (const character of withoutAnsi) {
-    const code = character.charCodeAt(0);
-    if (!isUnsafeMatrixCliTerminalCode(code)) {
-      sanitized += character;
-    }
-  }
-  return sanitized;
-}
-
-function isUnsafeMatrixCliTerminalCode(code: number): boolean {
-  return (
-    code < 0x20 ||
-    code === 0x7f ||
-    (code >= 0x80 && code <= 0x9f) ||
-    (code >= 0x202a && code <= 0x202e) ||
-    (code >= 0x2066 && code <= 0x2069)
-  );
+  // Strip terminal controls and directional overrides after removing escape sequences.
+  return withoutAnsi.replace(/[\p{Cc}\u202a-\u202e\u2066-\u2069]/gu, "");
 }
 
 function isAnsiFinalByte(code: number): boolean {
@@ -469,10 +453,8 @@ export function printMatrixVerificationSummary(summary: MatrixVerificationSummar
   if (summary.chosenMethod) {
     console.log(`Chosen method: ${sanitizeMatrixCliText(summary.chosenMethod)}`);
   }
-  if (summary.hasSas && summary.sas?.emoji?.length) {
-    console.log(`SAS emoji: ${formatMatrixCliSasEmoji(summary.sas.emoji)}`);
-  } else if (summary.hasSas && summary.sas?.decimal) {
-    console.log(`SAS decimals: ${summary.sas.decimal.join(" ")}`);
+  if (summary.hasSas && (summary.sas?.emoji?.length || summary.sas?.decimal)) {
+    printMatrixVerificationSas(summary.sas);
   }
   if (summary.error) {
     console.log(`Verification error: ${sanitizeMatrixCliText(summary.error)}`);

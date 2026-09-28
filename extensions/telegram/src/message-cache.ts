@@ -111,10 +111,6 @@ const DEFAULT_MAX_MESSAGES = 5000;
 const PERSISTENT_BUCKET_KEY = `plugin-state:${TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE}`;
 const TELEGRAM_MESSAGE_CACHE_BUCKETS_KEY = Symbol.for("openclaw.telegram.messageCacheBuckets");
 
-function getPersistedMessageCacheBuckets(): Map<string, TelegramMessageCacheBucket> {
-  return resolveGlobalMap(TELEGRAM_MESSAGE_CACHE_BUCKETS_KEY);
-}
-
 type TelegramMessageCachePersistentStore = {
   register(key: string, value: PersistedTelegramMessageCacheValue): Promise<void>;
   entries(): Promise<Array<{ key: string; value: unknown }>>;
@@ -199,7 +195,9 @@ function resolveMessageCacheBucket(params: {
       hydrated: true,
     };
   }
-  const persistedMessageCacheBuckets = getPersistedMessageCacheBuckets();
+  const persistedMessageCacheBuckets = resolveGlobalMap<string, TelegramMessageCacheBucket>(
+    TELEGRAM_MESSAGE_CACHE_BUCKETS_KEY,
+  );
   const existing = persistedMessageCacheBuckets.get(bucketKey);
   if (existing) {
     existing.persistentStore = params.persistentStore ?? existing.persistentStore;

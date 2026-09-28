@@ -4,7 +4,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
 import type { SessionTranscriptInitializationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
+import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
 import {
   SQLITE_WORKER_CLOSE_RECEIPT,
@@ -351,6 +351,10 @@ function openAgentDatabaseBackend(
     | typeof import("../config/sessions/session-accessor.sqlite-replacement-state.js")
     | undefined;
   let trajectory: typeof import("../trajectory/runtime-store.sqlite.js") | undefined;
+  let acpEntry: typeof import("../acp/runtime/session-meta-entry.worker.js") | undefined;
+  let pendingInputWithdrawal:
+    | typeof import("../config/sessions/session-pending-input-withdrawal.worker.js")
+    | undefined;
   const domain = createAgentDatabaseDomainOwner({
     databasePath: input.databasePath,
     assertCurrent() {
@@ -463,6 +467,9 @@ function openAgentDatabaseBackend(
         },
       );
     }
+    if (command.type === "session.entry.acp" && acpEntry) {
+      return acpEntry.mutateAcpSessionEntryInWorker(openWriter(), options, command.input, admit);
+    }
     if (command.type === "session.entries.replace" && replacements) {
       const replace = replacements.commitSessionEntryReplacementsInDatabase;
       const preparePublication = replacements.prepareSessionEntryReplacementPublication;
@@ -504,6 +511,14 @@ function openAgentDatabaseBackend(
         admit,
       );
     }
+    if (command.type === "session.pendingInputs.withdraw" && pendingInputWithdrawal) {
+      return pendingInputWithdrawal.discardSessionPendingInputInWorker(
+        openWriter(),
+        options,
+        command.input,
+        admit,
+      );
+    }
     if (command.type === "session.archivePruning.deletePublished" && archivePruning) {
       return archivePruning.deletePublishedSessionArchiveInDatabase(
         openWriter(),
@@ -531,6 +546,11 @@ function openAgentDatabaseBackend(
   };
   return {
     prepare(command) {
+      if (command.type === "session.entry.acp") {
+        return import("../acp/runtime/session-meta-entry.worker.js").then((module) => {
+          acpEntry = module;
+        });
+      }
       if (command.type === "session.entry.read") {
         return import("../config/sessions/session-accessor.sqlite-entry-read.js").then((module) => {
           entryReader = module;
@@ -591,6 +611,13 @@ function openAgentDatabaseBackend(
         return import("../config/sessions/provider-review-store.worker.js").then((module) => {
           providerReview = module;
         });
+      }
+      if (command.type === "session.pendingInputs.withdraw") {
+        return import("../config/sessions/session-pending-input-withdrawal.worker.js").then(
+          (module) => {
+            pendingInputWithdrawal = module;
+          },
+        );
       }
       if (
         command.type === "database.domain.bind" ||

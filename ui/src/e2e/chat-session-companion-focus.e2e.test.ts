@@ -35,7 +35,7 @@ suite.define(() => {
           .toBe(true);
         expect(await input.inputValue()).toBe("Ready to ask");
 
-        await openChatSidePanelType(page, "Tasks");
+        await openChatSidePanelType(page, "Files");
         await page.getByRole("tab", { name: "Side chat", exact: true }).click();
         await expect
           .poll(() => input.evaluate((element) => document.activeElement === element))
@@ -130,7 +130,7 @@ suite.define(() => {
           } else if (action === "minimize") {
             await page.locator(".side-panel__minimize").click();
           } else {
-            await openChatSidePanelType(page, "Tasks");
+            await openChatSidePanelType(page, "Files");
           }
           held.release();
           if (action === "close") {

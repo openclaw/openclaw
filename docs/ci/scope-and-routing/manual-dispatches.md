@@ -182,7 +182,7 @@ cell and never substitutes successful runner teardown for worker qualification.
 The same workflow can measure one immutable npm package on the selected Windows
 runner. Set `target_ref` to the full tooling commit, `run_windows_ci=false`,
 `keepalive_minutes=0`, and `startup_node_version` to an exact Node version
-(default `26.8.2`). Leave WSL and Defender inputs at their defaults. The optional
+(default `26.9.0`). Leave WSL and Defender inputs at their defaults. The optional
 `installed_startup_package` input is a JSON object with `runId`, `runAttempt`,
 `workflowSha`, `artifactId`, `artifactDigest`, `packageSha256`, and `sourceSha`.
 Use the immutable `package-under-test-<runId>-<runAttempt>` artifact from a

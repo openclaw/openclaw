@@ -80,16 +80,10 @@ export function assertWorkspaceSkillSupportPathSetIsFileOnly(paths: readonly str
 }
 
 export async function readWorkspaceSkillFile(filePath: string): Promise<string | null> {
-  if (!(await pathExists(filePath))) {
-    return null;
-  }
-  const skillRoot = await root(path.dirname(filePath));
-  const read = await skillRoot.read(path.basename(filePath), {
-    hardlinks: "reject",
-    maxBytes: 1024 * 1024,
-    symlinks: "reject",
-  });
-  return read.buffer.toString("utf8");
+  return readPreparedWorkspaceFile(
+    { rootDir: path.dirname(filePath), relativePath: path.basename(filePath) },
+    1024 * 1024,
+  );
 }
 
 export async function readWorkspaceSupportFile(params: {

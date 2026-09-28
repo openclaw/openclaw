@@ -1,16 +1,13 @@
 /** Tests session-scoped MCP runtime catalog, transport, validation, and lifecycle behavior. */
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { CallToolResult, ReadResourceResult } from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { materializeRequesterScopedMcpToolsForHarnessRun } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import {
   cleanupTempDirs,
@@ -19,10 +16,15 @@ import {
 } from "../../test/helpers/temp-dir.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { startCatalogRecoveryMcpServer } from "./agent-bundle-mcp-catalog-recovery.test-support.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
 import { completeDeferredSessionMcpRuntimeRetirement } from "./agent-bundle-mcp-manager-api.js";
 import {
+  bindSessionMcpRuntimeTestScheduler,
   createSessionMcpRuntimeManager,
   getOrCreateSessionMcpRuntime,
   makeRequesterParams,
@@ -30,6 +32,7 @@ import {
 } from "./agent-bundle-mcp-manager.test-support.js";
 import { createMcpProbeFixture } from "./agent-bundle-mcp-probe.test-support.js";
 import { runWithSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
+import { startRequesterScopedMcpProofServer } from "./agent-bundle-mcp-requester.test-support.js";
 import { SESSION_MCP_RUNTIME_MANAGER_KEY } from "./agent-bundle-mcp-runtime-shared.js";
 import {
   createBundleMcpJsonSchemaValidator,
@@ -82,7 +85,20 @@ vi.mock("./mcp-auth-profile.js", () => ({
 }));
 
 const tempDirs: string[] = [];
-const tempDirTracker = useAutoCleanupTempDirTracker(afterEach);
+beforeEach(async () => {
+  await testing.resetSessionMcpRuntimeManager();
+  // A drained manager must not retain another test file's mocked config loader.
+  Reflect.deleteProperty(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
+  await bindSessionMcpRuntimeTestScheduler();
+});
+const tempDirTracker = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(async () => {
+    await testing.resetSessionMcpRuntimeManager();
+    Reflect.deleteProperty(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);
+    cleanupTempDirs(tempDirs);
+    cleanup();
+  });
+});
 
 type RuntimeFactoryOptions = NonNullable<Parameters<typeof createSessionMcpRuntimeManager>[0]>;
 type RuntimeFactory = NonNullable<RuntimeFactoryOptions["createRuntime"]>;
@@ -94,60 +110,6 @@ type ConfiguredMcpServer = NonNullable<
 const LIST_TOOLS_SERVER_LOG_TIMEOUT_MS = 2_000;
 const LIST_TOOLS_TEST_DEADLINE_MS = 4_000;
 const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/;
-
-async function startRequesterScopedMcpProofServer(): Promise<{
-  url: string;
-  session: { current?: string; closed?: string };
-  close: () => Promise<void>;
-}> {
-  const server = new McpServer({ name: "openclaw-requester-proof", version: "1.0.0" });
-  const session: { current?: string; closed?: string } = {};
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: randomUUID,
-    onsessioninitialized(nextSessionId) {
-      session.current = nextSessionId;
-    },
-    onsessionclosed(nextSessionId) {
-      session.closed = nextSessionId;
-    },
-  });
-  server.registerTool(
-    "requester_probe",
-    { description: "Return the live requester-scoped MCP transport identity" },
-    async () => ({ content: [{ type: "text", text: session.current ?? "missing-session" }] }),
-  );
-  await server.connect(transport);
-  const httpServer = http.createServer((request, response) => {
-    if (request.url !== "/mcp" || request.headers.authorization !== "Bearer proof-token") {
-      response.writeHead(404).end();
-      return;
-    }
-    void transport.handleRequest(request, response).catch(() => {
-      if (!response.headersSent) {
-        response.writeHead(500).end();
-      }
-    });
-  });
-  await new Promise<void>((resolve, reject) => {
-    httpServer.once("error", reject);
-    httpServer.listen(0, "127.0.0.1", resolve);
-  });
-  const address = httpServer.address();
-  if (!address || typeof address === "string") {
-    throw new Error("requester-scoped MCP proof server did not bind a loopback port");
-  }
-  return {
-    url: `http://127.0.0.1:${address.port}/mcp`,
-    session,
-    close: async () => {
-      await server.close();
-      httpServer.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        httpServer.close((error) => (error ? reject(error) : resolve()));
-      });
-    },
-  };
-}
 
 function readMcpText(
   result: { content: ReadonlyArray<{ type: string; text?: string }> },
@@ -705,11 +667,6 @@ async function makeStdioRuntime(
     ...(options.toolOverrides ? { toolOverrides: options.toolOverrides } : {}),
   });
 }
-
-afterEach(async () => {
-  cleanupTempDirs(tempDirs);
-  await testing.resetSessionMcpRuntimeManager();
-});
 
 describe("session MCP runtime", () => {
   it("advertises the stable MCP Apps client extension only when enabled", () => {
@@ -3674,15 +3631,16 @@ describe("requester-scoped MCP connection resolution", () => {
     async (entrypoint, expectedExpired) => {
       const resolverRegistry = createMcpProofPluginRegistry();
       await withPluginRuntimeRegistryScope(resolverRegistry.registry, async () => {
-        let nowMs = 100_000;
-        const clock = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+        const time = createGatewaySchedulerClock(100_000);
+        const clock = vi.spyOn(Date, "now").mockImplementation(time.clock.now);
 
         const resolverApi = resolverRegistry.apiFor("test-plugin");
         resolverApi.registerMcpServerConnectionResolver({
           serverName: "user-mail",
           resolve: async () => ({ url: "https://mcp.example.test/user" }),
         });
-        const manager = createSessionMcpRuntimeManager({ enableIdleSweepTimer: false });
+        const scheduler = createTestGatewayScheduler(time.clock);
+        const manager = createSessionMcpRuntimeManager({ scheduler, enableIdleSweepTimer: false });
         const sessionKey = "agent:test:session-fixed-idle";
         const params: RuntimeParams = {
           sessionId: "session-fixed-idle",
@@ -3707,15 +3665,15 @@ describe("requester-scoped MCP connection resolution", () => {
             : manager.getOrCreate(params);
         try {
           await getRuntime();
-          nowMs += 1_200_000 - 1;
+          await time.advanceBy(1_200_000 - 1);
           expect(await manager.sweepIdleRuntimes()).toBe(0);
 
           const reused = expectDefined(await getRuntime(), "admitted MCP runtime");
-          expect(reused.lastUsedAt).toBe(nowMs);
-          nowMs += 1_200_000 - 1;
+          expect(reused.lastUsedAt).toBe(time.clock.now());
+          await time.advanceBy(1_200_000 - 1);
           expect(await manager.sweepIdleRuntimes()).toBe(0);
           const release = expectDefined(reused.acquireLease, "MCP runtime lease")();
-          nowMs += 1;
+          await time.advanceBy(1);
           expect(await manager.sweepIdleRuntimes()).toBe(0);
           expect(manager.listSessionIds()).toContain(params.sessionId);
 
@@ -3725,6 +3683,7 @@ describe("requester-scoped MCP connection resolution", () => {
           expect(manager.resolveSessionId(sessionKey)).toBeUndefined();
         } finally {
           await manager.disposeAll();
+          await scheduler.stop();
           clock.mockRestore();
         }
       });

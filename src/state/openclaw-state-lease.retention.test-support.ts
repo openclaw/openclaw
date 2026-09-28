@@ -52,14 +52,6 @@ async function captureCompletedLease(options: LeaseOptions) {
   return { reference, retained };
 }
 
-function renewFromCaller(lease: OpenClawStateLeaseContext) {
-  assert.equal(typeof lease.renew, "function");
-  const caller = { label: "renewing caller" };
-  const reference = new WeakRef(caller);
-  callerScope.run(caller, () => lease.renew?.());
-  return reference;
-}
-
 await withOpenClawTestState({ label: "lease-retention" }, async (state) => {
   const options: LeaseOptions = {
     scope: "core:test-retention",
@@ -92,18 +84,6 @@ await withOpenClawTestState({ label: "lease-retention" }, async (state) => {
     } finally {
       clearInterval(retained.timer);
     }
-  } else if (scenario === "paused") {
-    await withOpenClawStateLease(options, async (lease) => {
-      const reference = renewFromCaller(lease);
-      assert.ok(lease.withDatabaseFileExclusion);
-      await lease.withDatabaseFileExclusion(async (assertCurrent) => {
-        await assertCollected(reference, scenario);
-        assertCurrent();
-        lease.assertOwned();
-      });
-      lease.assertOwned();
-      lease.renew?.();
-    });
   } else {
     throw new Error(`Unknown lease retention scenario: ${scenario}`);
   }

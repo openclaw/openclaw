@@ -121,7 +121,7 @@ describe("SQLite session handle lifecycle", () => {
   });
 
   it("reads complete mirror facts across key batches without per-message selections", async () => {
-    const messages = Array.from({ length: 1_000 }, (_, index) => ({
+    const messages = Array.from({ length: 901 }, (_, index) => ({
       eventId: "event-" + index,
       parentId: index === 0 ? null : "event-" + (index - 1),
       message: { role: "user", content: "body " + index, idempotencyKey: "mirror-" + index },
@@ -133,41 +133,39 @@ describe("SQLite session handle lifecycle", () => {
       .get(scope.sessionId)?.generation;
 
     await withTranscriptWriteLock(scope, async (transcript) => {
-      for (const count of [900, 901, 1_000]) {
-        const selected = messages.slice(0, count);
-        const keys = selected.map(({ message }) => message.idempotencyKey);
-        const counter = trackSqliteStatementExecutions(database.db, ["reads"], (query) =>
-          query.startsWith("select ") ? "reads" : null,
+      const count = messages.length;
+      const keys = messages.map(({ message }) => message.idempotencyKey);
+      const counter = trackSqliteStatementExecutions(database.db, ["reads"], (query) =>
+        query.startsWith("select ") ? "reads" : null,
+      );
+      try {
+        const facts = await transcript.readMessageFacts({ idempotencyKeys: keys });
+        expect([...facts.existingIdempotencyKeys]).toEqual(keys);
+        expect([...facts.messagesByIdempotencyKey]).toEqual(
+          messages.map(({ message }) => [message.idempotencyKey, message]),
         );
-        try {
-          const facts = await transcript.readMessageFacts({ idempotencyKeys: keys });
-          expect([...facts.existingIdempotencyKeys]).toEqual(keys);
-          expect([...facts.messagesByIdempotencyKey]).toEqual(
-            selected.map(({ message }) => [message.idempotencyKey, message]),
-          );
-          expect([...facts.anchorsByIdempotencyKey]).toEqual(
-            selected.map(({ eventId, parentId, message }, index) => [
-              message.idempotencyKey,
-              {
-                agentId: "main",
-                sessionId: scope.sessionId,
-                sessionKey: scope.sessionKey,
-                storePath: database.path,
-                generation,
-                entryId: eventId,
-                rawSeq: index + 1,
-                effectiveParentId: parentId,
-                activeMessagePosition: index,
-                idempotencyKey: message.idempotencyKey,
-              },
-            ]),
-          );
-          expect([...facts.anchorsByIdempotencyKey.values()].every(Object.isFrozen)).toBe(true);
-          expect.soft(counter.counts.reads, "selected " + count).toBeLessThanOrEqual(12);
-          expect.soft(counter.rowCounts.reads, "selected " + count).toBeLessThanOrEqual(count + 10);
-        } finally {
-          counter.restore();
-        }
+        expect([...facts.anchorsByIdempotencyKey]).toEqual(
+          messages.map(({ eventId, parentId, message }, index) => [
+            message.idempotencyKey,
+            {
+              agentId: "main",
+              sessionId: scope.sessionId,
+              sessionKey: scope.sessionKey,
+              storePath: database.path,
+              generation,
+              entryId: eventId,
+              rawSeq: index + 1,
+              effectiveParentId: parentId,
+              activeMessagePosition: index,
+              idempotencyKey: message.idempotencyKey,
+            },
+          ]),
+        );
+        expect([...facts.anchorsByIdempotencyKey.values()].every(Object.isFrozen)).toBe(true);
+        expect.soft(counter.counts.reads, "selected " + count).toBeLessThanOrEqual(12);
+        expect.soft(counter.rowCounts.reads, "selected " + count).toBeLessThanOrEqual(count + 10);
+      } finally {
+        counter.restore();
       }
     });
   });
@@ -181,7 +179,6 @@ describe("SQLite session handle lifecycle", () => {
     ],
     ["historical message", "DELETE FROM session_transcript_active_events"],
     ["missing generation", "DELETE FROM transcript_rewrite_watermarks"],
-    ["non-message position", "UPDATE session_transcript_active_events SET message_position = NULL"],
   ])("retains mirror messages without certifying anchors for %s", async (_name, mutation) => {
     const message = { role: "user", content: "retained", idempotencyKey: "mirror-state" };
     const appended = await appendTranscriptMessage(scope, { message });
@@ -251,24 +248,18 @@ describe("SQLite session handle lifecycle", () => {
       sessionId: staleDashboardScope.sessionId,
       updatedAt: 1,
     });
-    let markWriterStarted!: () => void;
-    const writerStarted = new Promise<void>((resolve) => {
-      markWriterStarted = resolve;
-    });
-    let releaseWriter!: () => void;
-    const writerRelease = new Promise<void>((resolve) => {
-      releaseWriter = resolve;
-    });
+    const writerStarted = createDeferred();
+    const writerRelease = createDeferred();
     const blockedWrite = patchSessionEntryCore(
       scope,
       async () => {
-        markWriterStarted();
-        await writerRelease;
+        writerStarted.resolve();
+        await writerRelease.promise;
         return { label: "replacement handle write" };
       },
       { skipMaintenance: true },
     );
-    await writerStarted;
+    await writerStarted.promise;
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
@@ -279,7 +270,7 @@ describe("SQLite session handle lifecycle", () => {
 
     expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
     const replacement = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
-    releaseWriter();
+    writerRelease.resolve();
     await Promise.all([blockedWrite, ...drains]);
 
     expect(replacement.db.isOpen).toBe(true);

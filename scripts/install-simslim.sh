@@ -11,8 +11,8 @@ if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
   exit 1
 fi
 
-readonly simslim_version="0.8.0"
-readonly simslim_checksum="c7d33ba033488521eb42ec2057c3a069b13b6551c9ebfe4455128befe2ad9b19"
+readonly simslim_version="0.10.0"
+readonly simslim_checksum="eec00b27f0694fa899fb3bbc71362309a9da11ec670f430633cfae855eaf4a1d"
 
 umask 077
 install_dir="$1"

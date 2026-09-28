@@ -63,15 +63,17 @@ export function createAdmittedRunOperatorAuthority(
   const check = source.assertCurrent;
   const signal = source.signal;
   let revoked = false;
+  let revocationReason: unknown;
   const assertCurrent = () => {
     if (revoked) {
-      throw new Error("operator execution authority is no longer active");
+      throw revocationReason;
     }
     try {
       signal?.throwIfAborted();
       check();
     } catch (error) {
       revoked = true;
+      revocationReason = error;
       throw error;
     }
   };

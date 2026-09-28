@@ -793,7 +793,7 @@ describe("board gateway methods", () => {
 
   it("rejects a resolved canvas document above the board HTML limit", async () => {
     const readCanvasDocument = vi.fn(async () => ({
-      html: "x".repeat(262_145),
+      html: "x".repeat(10 * 1024 * 1024 + 1),
       cspSandbox: "scripts" as const,
     }));
     const { invoke, store, broadcast } = createHarness(readCanvasDocument);

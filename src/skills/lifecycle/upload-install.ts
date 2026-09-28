@@ -47,6 +47,7 @@ export async function installUploadedSkillArchive(params: {
   config: OpenClawConfig;
   log?: ArchiveLogger;
   store?: SkillUploadStore;
+  beforePersistentApply?: () => void;
 }): Promise<UploadedSkillInstallResult> {
   const store = params.store ?? defaultSkillUploadStore;
   if (!areUploadedSkillArchivesEnabled(params.config)) {
@@ -57,6 +58,7 @@ export async function installUploadedSkillArchive(params: {
     };
   }
   try {
+    params.beforePersistentApply?.();
     const requestedSlug = validateRequestedSkillSlug(params.slug);
     const requestedSha = normalizeSkillUploadSha256(params.sha256);
     return await store.withCommittedUpload(params.uploadId, async (record, upload) => {
@@ -87,6 +89,7 @@ export async function installUploadedSkillArchive(params: {
         force: record.force,
         timeoutMs: params.timeoutMs,
         logger: params.log,
+        beforePersistentApply: params.beforePersistentApply,
         policy: {
           config: params.config,
           installId: "upload",

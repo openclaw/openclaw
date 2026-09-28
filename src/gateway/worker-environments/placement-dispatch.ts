@@ -98,7 +98,8 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     ...options,
     environments: recoveryEnvironments,
     failure: createPlacementFailureActions({ environments: recoveryEnvironments, placements }),
-    recoverPlacementMoves: (environmentId) => moveService.recoverAll(environmentId),
+    recoverPlacementMoves: (projection, environmentId) =>
+      moveService.recoverSession(projection, environmentId),
   });
 
   const dispatch = async (
