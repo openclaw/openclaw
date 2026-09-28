@@ -92,6 +92,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
   isTerminalAborted?: () => boolean | undefined;
   /** Override the terminal stop reason from the current abort owner. */
   resolveTerminalStopReason?: () => string | undefined;
+  /** Same-prompt checks can retain ordinary streaming instead of buffering a draft. */
+  deferTerminalDelivery?: boolean;
   /** Gate final block delivery/lifecycle after the natural answer is known. */
   onBeforeTerminalDelivery?: (event: {
     messages: AgentMessage[];
@@ -103,7 +105,11 @@ export type SubscribeEmbeddedAgentSessionParams = {
     isError: boolean;
     incompleteTerminalAssistant: boolean;
     hadDeterministicSideEffect: boolean;
-  }) => void | Promise<void | { suppressTerminalDelivery?: boolean }>;
+    hasPendingContinuation: boolean;
+  }) => void | Promise<void | {
+    suppressTerminalDelivery?: boolean;
+    continueCurrentTurn?: boolean;
+  }>;
   /** Best-effort hook invoked immediately before the terminal lifecycle event is emitted. */
   onBeforeLifecycleTerminal?: () => void | Promise<void>;
   enforceFinalTag?: boolean;

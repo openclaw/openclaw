@@ -161,6 +161,13 @@ it.each([
     accepted: false,
   },
   {
+    name: "nonempty transcript with matching session",
+    key: "agent:ops:guarded-parent",
+    expectedLeafEntryId: null,
+    sessionId: "ops-parent",
+    accepted: false,
+  },
+  {
     name: "copied leaf from another session",
     key: "agent:ops:guarded-parent",
     expectedLeafEntryId: "current-leaf",
