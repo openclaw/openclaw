@@ -569,6 +569,25 @@ describe("runtime.llm.complete isolated agent runtime", () => {
     ).rejects.toMatchObject({ code: "LLM_ISOLATED_UNSUPPORTED" });
   });
 
+  it.each([null, undefined])(
+    "maps an empty adapter rejection (%s) to a stable error",
+    async (error) => {
+      hoisted.runIsolatedCompletion.mockRejectedValueOnce(error);
+      const llm = createRuntimeLlm({ getConfig: () => cfg, authority: { allowComplete: true } });
+
+      await expect(
+        llm.complete({
+          messages: [{ role: "user", content: "Return JSON" }],
+          execution: { mode: "isolated-agent-runtime" },
+        }),
+      ).rejects.toMatchObject({
+        code: "LLM_COMPLETION_FAILED",
+        message: "Plugin LLM completion failed.",
+      });
+      expect(hoisted.runIsolatedCompletion).toHaveBeenCalledOnce();
+    },
+  );
+
   it.each([
     ["input-rejected", "LLM_ISOLATED_INPUT_REJECTED"],
     ["output-rejected", "LLM_COMPLETION_OUTPUT_REJECTED"],

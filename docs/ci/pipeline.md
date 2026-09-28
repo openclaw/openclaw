@@ -143,9 +143,9 @@ compiler assertions in mixed runtime suites; their cases remain enabled.
 The Node Code Mode executor suite also stays on Node: its warm-worker cleanup
 requires diagnostics-channel delivery to preserve sibling subscribers when a
 callback unsubscribes during publication. Bun can skip the next subscriber.
-The complete fake-timer lane also supports Bun. Control UI retains the GC-sensitive
-`usage-page-details.test.ts` on Node and runs the remaining files on Bun, including
-chat presentation retirement checks.
+The complete fake-timer lane also supports Bun. Control UI keeps its GC-sensitive
+retention proofs (`chat-pane-retained-presentation.test.ts`, `chat-thread.test.ts`,
+and `usage-page-details.test.ts`) on Node and runs the remaining files on Bun.
 The missing-Docker test also runs on Bun, using an empty executable directory
 instead of an empty `PATH`, which Bun resolves through its default search path.
 Other families retain Node until they pass on the pinned fork within their
@@ -838,3 +838,5 @@ artifacts remain errors in report-only mode.
 
 - [Install overview](/install)
 - [Release channels](/install/development-channels)
+
+When exactly one non-control workload remains, the PR failure monitor exits successfully. The aggregate still waits for and validates that workload; retiring the observer does not admit a failed or unfinished job.

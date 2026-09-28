@@ -53,6 +53,18 @@ import {
 } from "./server/ws-connection/authenticated-request-dispatch.test-support.js";
 import { disconnectDisallowedGatewayPolicyClients } from "./server/ws-origin-policy.js";
 
+// A write that lands while the previous reload finishes its tail is re-armed from that reload's
+// finally, after a single zero-delay tick has run. Zero-delay ticks never move the fake clock.
+async function tickUntilSettled(operation: Promise<unknown>): Promise<void> {
+  const settled = operation.then(
+    () => true,
+    () => true,
+  );
+  while (!(await Promise.race([settled, Promise.resolve(false)]))) {
+    await vi.advanceTimersByTimeAsync(0);
+  }
+}
+
 let registrySnapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
 const registry = createEmptyPluginRegistry();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -296,7 +308,7 @@ it("keeps unrelated identity reloads out of retained operator and delegated run 
             "source-" + revision,
           ),
         );
-        await vi.advanceTimersByTimeAsync(0);
+        await tickUntilSettled(application);
         await expect(application).resolves.toBe("applied");
       };
       const allowedEffect = await prepareEffect("allowed.txt", original.authority);

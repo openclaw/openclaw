@@ -34,7 +34,7 @@ import {
   callAgentToolGatewayRequest,
   getInProcessGatewayToolContext,
   hasGatewayToolRoutingContext,
-  type AgentToolGatewayRequestCaller,
+  type AgentToolGatewayRequestCaller as GatewayCaller,
 } from "./in-process-gateway.js";
 import { resolveSessionToolTargetAgentId } from "./scoped-session-access.js";
 import {
@@ -110,8 +110,6 @@ const SessionsListOutputSchema = Type.Object(
   },
   { additionalProperties: false },
 );
-
-type GatewayCaller = AgentToolGatewayRequestCaller;
 
 const SESSIONS_LIST_TRANSCRIPT_FIELD_ROWS = 100;
 const SESSIONS_LIST_MAX_SCAN_PAGES = 5;
@@ -218,10 +216,9 @@ export function createSessionsListTool(opts?: {
         Boolean(gatewayContext) ||
         hasGatewayToolRoutingContext();
       const hydrateTranscriptFieldsAfterFiltering = includeDerivedTitles || includeLastMessage;
-      const defaultAgentId = requesterAgentId;
       const visibilityGuard = createSessionVisibilityRowChecker({
         action: "list",
-        defaultAgentId,
+        defaultAgentId: requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
         mainSessionKey,
         visibility,

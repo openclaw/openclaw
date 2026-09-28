@@ -104,12 +104,21 @@ openclaw_resolve_frozen_gateway_network_layout() {
 }
 
 openclaw_resolve_frozen_upgrade_survivor_capabilities() {
-  local source_root="${1:?missing selected source root}" authorization_status=0 has_trust has_legacy
+  local source_root="${1:?missing selected source root}" authorization_status=0 has_trust has_legacy has_tool_search_recipe
 
-  export OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE="current"
+  export OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE="current" \
+    OPENCLAW_FROZEN_UPGRADE_SURVIVOR_TOOL_SEARCH_RECIPE="current"
   openclaw_prepare_frozen_target_context "$source_root" || authorization_status=$?
   [ "$authorization_status" -eq 1 ] && return 0
   [ "$authorization_status" -eq 0 ] || return "$authorization_status"
+
+  # New tooling may author a migration specimen absent from the selected cut.
+  # Bind coverage to its committed recipe, not release version or migrated state.
+  has_tool_search_recipe="$(openclaw_frozen_target_source_flag has "$source_root" \
+    scripts/e2e/lib/upgrade-survivor/config-recipe/tools-tool-search.json)" || return 2
+  if [ "$has_tool_search_recipe" = 0 ]; then
+    export OPENCLAW_FROZEN_UPGRADE_SURVIVOR_TOOL_SEARCH_RECIPE="absent"
+  fi
 
   # The older shipped installer fetched its official companion through ClawHub
   # and therefore owns a three-request audit instead of the current idle ledger.

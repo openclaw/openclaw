@@ -90,14 +90,10 @@ function expectedOriginsForExtensionIds(extensionIds: string[]): string[] {
   );
 }
 
-function pathDerivedExtensionIds(extensionIds: string[]): string[] {
-  return extensionIds.filter(
-    (extensionId) => extensionId !== FOUNDATION_CHROME_WEB_STORE_EXTENSION_ID,
-  );
-}
-
 function isSafeOriginMigration(existingIds: string[], desiredPathIds: string[]): boolean {
-  const existingPathIds = pathDerivedExtensionIds(existingIds).toSorted();
+  const existingPathIds = existingIds
+    .filter((extensionId) => extensionId !== FOUNDATION_CHROME_WEB_STORE_EXTENSION_ID)
+    .toSorted();
   const desiredIds = [...new Set(desiredPathIds)].toSorted();
   if (JSON.stringify(existingPathIds) === JSON.stringify(desiredIds)) {
     return true;

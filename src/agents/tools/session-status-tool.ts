@@ -499,13 +499,12 @@ export function createSessionStatusTool(opts?: {
       const requestedKeyParam = readToolStringParam(params, "sessionKey");
       const isImplicitRunSessionStatus =
         requestedKeyParam === undefined && Boolean(opts?.runSessionKey?.trim());
-      let requestedKeyRaw = requestedKeyParam ?? opts?.agentSessionKey;
-
       // No-arg status should prefer the live run session when available (#82669).
-      if (isImplicitRunSessionStatus) {
-        requestedKeyRaw = opts?.runSessionKey;
-      }
-      let requestedKeyInput = requestedKeyRaw?.trim() ?? "";
+      let requestedKeyInput =
+        (isImplicitRunSessionStatus
+          ? opts?.runSessionKey
+          : (requestedKeyParam ?? opts?.agentSessionKey)
+        )?.trim() ?? "";
 
       // Track whether this is a semantic-current request (literal "current" or a
       // current-client alias) BEFORE any rewrite, so visibility treats it as self.
@@ -523,8 +522,7 @@ export function createSessionStatusTool(opts?: {
       // In sandboxed channel runs there may be no separate runSessionKey because the sandbox
       // key already is the live requester; avoid probing literal "current" through the gateway.
       if (requestedKeyInput === "current" && (opts?.runSessionKey || opts?.sandboxed === true)) {
-        requestedKeyRaw = opts.runSessionKey ?? effectiveRequesterKey;
-        requestedKeyInput = requestedKeyRaw?.trim() ?? "";
+        requestedKeyInput = (opts.runSessionKey ?? effectiveRequesterKey).trim();
       }
 
       const currentSessionAlias = resolveCurrentSessionClientAlias({
@@ -532,8 +530,7 @@ export function createSessionStatusTool(opts?: {
         requesterInternalKey: effectiveRequesterKey,
       });
       if (currentSessionAlias) {
-        requestedKeyRaw = opts?.runSessionKey ?? currentSessionAlias;
-        requestedKeyInput = requestedKeyRaw?.trim() ?? "";
+        requestedKeyInput = (opts?.runSessionKey ?? currentSessionAlias).trim();
       }
       const effectiveRequesterLookupKey = effectiveRequesterKey.trim();
       let resolvedViaSessionId = false;
@@ -541,7 +538,6 @@ export function createSessionStatusTool(opts?: {
       if (!requestedKeyInput) {
         throw new Error("sessionKey required");
       }
-      requestedKeyRaw = requestedKeyInput;
       let resolvedRequesterOwned = false;
 
       const deferTargetOwnerResolution =
@@ -589,7 +585,7 @@ export function createSessionStatusTool(opts?: {
       // Resolve against the requester-scoped store first to avoid leaking default agent data.
       let resolved = deferTargetOwnerResolution
         ? undefined
-        : readStatusEntry(requestedKeyRaw, requestedKeyInput !== "current");
+        : readStatusEntry(requestedKeyInput, requestedKeyInput !== "current");
 
       if (
         !resolved &&
@@ -643,8 +639,7 @@ export function createSessionStatusTool(opts?: {
           }
           resolvedRequesterOwned = visibleSession.requesterOwned;
           resolvedViaSessionId = resolvedSession.resolvedViaSessionId;
-          requestedKeyRaw = visibleSession.key;
-          requestedKeyInput = requestedKeyRaw.trim();
+          requestedKeyInput = visibleSession.key.trim();
           agentId = visibleAgentId;
           storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
           storeScopedRequesterKey = resolveStoreScopedRequesterKey({
@@ -652,7 +647,7 @@ export function createSessionStatusTool(opts?: {
             agentId,
             mainKey,
           });
-          resolved = readStatusEntry(requestedKeyRaw);
+          resolved = readStatusEntry(requestedKeyInput);
         } else if (!resolvedSession.notFound || resolvedSession.status === "forbidden") {
           throw new Error(resolvedSession.error);
         }
@@ -663,12 +658,12 @@ export function createSessionStatusTool(opts?: {
       }
 
       if (!resolved && requestedKeyInput === "current") {
-        resolved = readStatusEntry(requestedKeyRaw, true);
+        resolved = readStatusEntry(requestedKeyInput, true);
       }
 
       if (!resolved && requestedKeyParam === undefined) {
         for (const fallbackKey of listImplicitDefaultDirectFallbackKeys({
-          keyRaw: requestedKeyRaw,
+          keyRaw: requestedKeyInput,
           mainKey,
         })) {
           resolved = readStatusEntry(fallbackKey, true);

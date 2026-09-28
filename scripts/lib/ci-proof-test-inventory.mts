@@ -42,7 +42,6 @@ export const RELEASE_ONLY_RUNTIME_TEST_FILES = [
   "src/commands/doctor-config-preflight.container-upgrade.test.ts",
   "src/commands/doctor-config-preflight.pristine.process.test.ts",
   "src/commands/doctor-config-preflight.process.test.ts",
-  "src/commands/doctor-config-preflight.refusal.process.test.ts",
   "src/commands/doctor-config-preflight.test.ts",
   "src/commands/doctor-model-metadata-corruption.persistence.test.ts",
   "src/commands/doctor-plugin-install-config.process.test.ts",

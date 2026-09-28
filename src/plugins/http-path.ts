@@ -25,13 +25,9 @@ export function normalizePluginHttpPath(
   path?: string | null,
   fallback?: string | null,
 ): string | null {
-  const trimmed = normalizeOptionalString(path);
+  const trimmed = normalizeOptionalString(path) ?? normalizeOptionalString(fallback);
   if (!trimmed) {
-    const fallbackTrimmed = normalizeOptionalString(fallback);
-    if (!fallbackTrimmed) {
-      return null;
-    }
-    return fallbackTrimmed.startsWith("/") ? fallbackTrimmed : `/${fallbackTrimmed}`;
+    return null;
   }
   return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
 }

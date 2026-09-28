@@ -280,7 +280,7 @@ describe("buildOpenAIProvider", () => {
       choiceHint: "Use your OpenAI API key directly",
       groupId: "openai",
       groupLabel: "OpenAI",
-      groupHint: "Codex login, Sign in with ChatGPT, or API key",
+      groupHint: "Codex login, Sign in with ChatGPT (Beta), or API key",
     });
     expect(apiKey?.starterModel).toBe("openai/gpt-6-astra");
   });
