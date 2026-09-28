@@ -26,7 +26,7 @@ describe("renderLobsterdex", () => {
     const container = document.createElement("div");
     render(renderLobsterdex(entries), container);
 
-    expect(container.querySelector(".lobsterdex-page__count")?.textContent).toBe("1/47 visited");
+    expect(container.querySelector(".lobsterdex-page__count")?.textContent).toBe("1/46 visited");
 
     const seen = container.querySelector(".lobster-pet--palette-crimson")?.closest("article");
     expect(seen?.id).toBe("lobsterdex-crimson");
@@ -56,12 +56,6 @@ describe("renderLobsterdex", () => {
       "Clawnstantine",
       "All tides lead here.",
       "Built an empire. Still rules from the ledge.",
-    ],
-    [
-      "clawdia",
-      "Clawdia",
-      "Forecast: a chance of claws.",
-      "Carries sunshine through cloudy builds.",
     ],
     [
       "clawiestardust",

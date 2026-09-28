@@ -916,6 +916,7 @@ describe("lobster plans", () => {
     localStorage.setItem(
       "openclaw.control.lobsterdex.v1",
       JSON.stringify({
+        clawdia: { firstSeenAt: 1, name: "Clawdia", shinySeenAt: 2 },
         coral: { firstSeenAt: 1, name: "Faded" },
         teal: { firstSeenAt: 2, name: "Lagoon" },
         tangerine: { firstSeenAt: 3, name: "Marmalade" },
@@ -929,6 +930,12 @@ describe("lobster plans", () => {
     const neutralDate = new Date("2026-07-15T12:00:00");
     const identity = resolveLobsterLoadIdentity(191, createLobsterPetLook(191, neutralDate));
     expect(identity.oldFriend).toBe(false);
+    expect(identity.look.palette.id).not.toBe("clawdia");
+    expect(getLobsterdexEntries().get("clawdia")).toEqual({
+      firstSeenAt: 1,
+      name: "Clawdia",
+      shinySeenAt: 2,
+    });
     expect(identity.look.palette.id).not.toBe("coral");
     expect(identity.look.palette.id).not.toBe("teal");
   });
@@ -956,7 +963,6 @@ describe("lobster plans", () => {
 describe("rare lobster loads", () => {
   it.each([
     ["clawnstantine", "Clawnstantine"],
-    ["clawdia", "Clawdia"],
     ["clawiestardust", "Clawie Stardust"],
     ["taylorpinch", "Taylor Pinch"],
     ["clawtoodeetoo", "Clawtoo Deetoo"],

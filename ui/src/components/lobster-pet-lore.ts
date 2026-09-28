@@ -20,7 +20,6 @@ const RARE_NAMES: Partial<Record<LobsterPetPaletteId, string>> = {
   rubberduck: "Debuggy",
   watermelon: "Pips",
   clawnstantine: "Clawnstantine",
-  clawdia: "Clawdia",
   clawiestardust: "Clawie Stardust",
   taylorpinch: "Taylor Pinch",
   clawtoodeetoo: "Clawtoo Deetoo",
@@ -126,10 +125,6 @@ export const LOBSTER_PALETTE_LORE: Record<LobsterPetPaletteId, LobsterPaletteLor
   clawnstantine: {
     flavor: "Built an empire. Still rules from the ledge.",
     hint: "All tides lead here.",
-  },
-  clawdia: {
-    flavor: "Carries sunshine through cloudy builds.",
-    hint: "Forecast: a chance of claws.",
   },
   clawiestardust: {
     flavor: "Changes shells. Never changes style.",

@@ -205,10 +205,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
   --lob-glint: #ffe09a;
 }
 
-.lobster-pet--palette-clawdia {
-  --lob-glint: #ffd166;
-}
-
 .lobster-pet--palette-clawiestardust {
   --lob-glint: #8be9fd;
 }

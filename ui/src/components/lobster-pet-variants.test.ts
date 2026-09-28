@@ -35,7 +35,7 @@ describe("lobster pet variants", () => {
     let shinies = 0;
     const total = 20_000;
     const neutralDate = new Date("2026-07-15T12:00:00");
-    expect(LOBSTER_PET_PALETTES).toHaveLength(47);
+    expect(LOBSTER_PET_PALETTES).toHaveLength(46);
     for (let seed = 0; seed < total; seed++) {
       const look = createLobsterPetLook(seed, neutralDate);
       counts.set(look.palette.id, (counts.get(look.palette.id) ?? 0) + 1);
@@ -48,7 +48,6 @@ describe("lobster pet variants", () => {
     }
     for (const grail of [
       "clawnstantine",
-      "clawdia",
       "clawiestardust",
       "taylorpinch",
       "clawtoodeetoo",
@@ -91,7 +90,7 @@ describe("lobster pet variants", () => {
     const retroWeight = expectDefined(weights.get("retro"), "retro weight");
     const totalWeight = [...weights.values()].reduce((sum, weight) => sum + weight, 0);
     const crimsonWeight = expectDefined(weights.get("crimson"), "crimson weight");
-    expect(totalWeight).toBeCloseTo(84.15, 10);
+    expect(totalWeight).toBeCloseTo(83.15, 10);
     expect(crimsonWeight / totalWeight).toBeGreaterThan(0.25);
     expect(goldenRetroWeight).toBeLessThan(retroWeight);
     for (const [paletteId, weight] of weights) {
@@ -106,7 +105,6 @@ describe("lobster pet variants", () => {
 
   it.each([
     ["clawnstantine", "Clawnstantine"],
-    ["clawdia", "Clawdia"],
     ["clawiestardust", "Clawie Stardust"],
     ["taylorpinch", "Taylor Pinch"],
     ["clawtoodeetoo", "Clawtoo Deetoo"],
