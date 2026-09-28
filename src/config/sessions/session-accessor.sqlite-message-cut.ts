@@ -16,7 +16,6 @@ import {
   withSqliteSessionContextReset,
 } from "./session-accessor.sqlite-deletion.js";
 import {
-  collectSessionEntryLookupKeys,
   readSessionEntryRow,
   readSessionIdentitySnapshot,
   writeSessionEntry,
@@ -47,7 +46,7 @@ import {
   SYNC_REBUILD_MAX_BYTES,
   SYNC_REBUILD_MAX_ROWS,
 } from "./session-transcript-index.js";
-import { normalizeStoreSessionKey } from "./store-entry.js";
+import { collectSessionEntryLookupKeys, normalizeStoreSessionKey } from "./store-entry.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import {
   isSessionTranscriptLeafControl,
@@ -157,8 +156,8 @@ async function mutateSqliteSessionAtMessage(
             assertPreparedCurrent?.();
             params.commitGuard?.();
             const identityKeys = uniqueStrings([
-              ...collectSessionEntryLookupKeys(database, sourceKey),
-              ...collectSessionEntryLookupKeys(database, targetKey),
+              ...collectSessionEntryLookupKeys(sourceKey),
+              ...collectSessionEntryLookupKeys(targetKey),
             ]);
             previousIdentity = readSessionIdentitySnapshot(database, identityKeys);
             const mutationResult = mutateSqliteSessionAtMessageInTransaction(database, resolved, {

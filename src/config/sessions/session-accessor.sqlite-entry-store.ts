@@ -74,7 +74,6 @@ export {
   readSessionEntryRow,
   type ResolvedSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
-export { collectSessionEntryLookupKeys } from "./store-entry.js";
 export {
   iterateSessionEntryKeys,
   readSessionEntryCount,

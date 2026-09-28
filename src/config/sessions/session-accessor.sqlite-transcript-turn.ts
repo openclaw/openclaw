@@ -21,7 +21,6 @@ import type {
 import { runSqliteSessionDeletionTransaction as runOpenClawAgentWriteTransaction } from "./session-accessor.sqlite-deletion.js";
 import { readQualifiedSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import {
-  collectSessionEntryLookupKeys,
   readSessionEntryRow,
   readSessionIdentitySnapshot,
   writeSessionEntry,
@@ -51,6 +50,7 @@ import {
   buildExpectedTranscriptTurnSessionPatch,
   sessionMatchesExpectedTranscriptTurn,
 } from "./session-transcript-turn-state.js";
+import { collectSessionEntryLookupKeys } from "./store-entry.js";
 import { mergeSessionEntry, type SessionEntry } from "./types.js";
 
 type SqliteExpectedSessionTranscriptTurnResult = {
@@ -345,7 +345,7 @@ export async function appendExpectedSessionTranscriptTurn(
               : appendedEntry;
           let publishIdentity: (() => void) | undefined;
           if (initialEntry || next !== appendedEntry) {
-            const identityKeys = collectSessionEntryLookupKeys(transactionDb, resolved.sessionKey);
+            const identityKeys = collectSessionEntryLookupKeys(resolved.sessionKey);
             const previousIdentity = readSessionIdentitySnapshot(
               transactionDb,
               identityKeys.filter((key) => key !== resolved.sessionKey),

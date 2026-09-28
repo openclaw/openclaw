@@ -5,12 +5,12 @@ import {
   type SqliteLifecycleTargetSnapshot,
 } from "./session-accessor.sqlite-entry-equality.js";
 import {
-  collectSessionEntryLookupKeys,
   readSessionIdentitySnapshot,
   readUnchangedLifecycleTargetSnapshot,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
+import { collectSessionEntryLookupKeys } from "./store-entry.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 type SessionEntryIdentityChange = {
@@ -24,7 +24,7 @@ export function replaceSessionEntryInDatabase(
   sessionKey: string,
   entry: SessionEntry,
 ): SessionEntryIdentityChange {
-  const identityKeys = collectSessionEntryLookupKeys(database, sessionKey);
+  const identityKeys = collectSessionEntryLookupKeys(sessionKey);
   const previous = readSessionIdentitySnapshot(database, identityKeys);
   writeSessionEntry(database, sessionKey, entry);
   const current = readSessionIdentitySnapshot(database, identityKeys);
