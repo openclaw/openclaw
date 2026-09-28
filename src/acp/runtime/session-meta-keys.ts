@@ -28,6 +28,17 @@ export function getAcpSessionKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<AcpSessionMetaDatabase>(db);
 }
 
+export function selectAcpSessionRows(db: DatabaseSync): AcpSessionRow[] {
+  return executeSqliteQuerySync(
+    db,
+    getAcpSessionKysely(db)
+      .selectFrom("acp_sessions")
+      .selectAll()
+      .orderBy("last_activity_at", "desc")
+      .orderBy("session_key", "asc"),
+  ).rows;
+}
+
 export function selectAcpSessionRow(
   db: DatabaseSync,
   sessionKey: string,

@@ -252,46 +252,33 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
           ),
       };
       switch (action.kind) {
-        case "toggle-pin": {
-          const currentSession = resolveCurrentSession(true);
-          if (currentSession) {
-            await operations.patchSession(
-              host,
-              currentSession,
-              { pinned: !currentSession.pinned },
-              scope,
-              { sessionScope: true },
-            );
-          }
-          break;
-        }
         case "toggle-involving-me":
           await operations.setSessionInvolvement(host, session, !row.hiddenFromInvolvingMe, scope);
           break;
-        case "toggle-unread": {
-          const currentSession = resolveCurrentSession(true);
-          if (currentSession) {
-            await operations.patchSession(
-              host,
-              currentSession,
-              { unread: !currentSession.unread },
-              scope,
-            );
-          }
-          break;
-        }
+        case "toggle-pin":
+        case "toggle-unread":
         case "set-icon":
         case "set-color":
         case "reset-appearance": {
           const currentSession = resolveCurrentSession(true);
           if (currentSession) {
             const patch =
-              action.kind === "set-icon"
-                ? { icon: action.icon }
-                : action.kind === "set-color"
-                  ? { color: action.color }
-                  : { icon: null, color: null };
-            await operations.patchSession(host, currentSession, patch, scope);
+              action.kind === "toggle-pin"
+                ? { pinned: !currentSession.pinned }
+                : action.kind === "toggle-unread"
+                  ? { unread: !currentSession.unread }
+                  : action.kind === "set-icon"
+                    ? { icon: action.icon }
+                    : action.kind === "set-color"
+                      ? { color: action.color }
+                      : { icon: null, color: null };
+            await operations.patchSession(
+              host,
+              currentSession,
+              patch,
+              scope,
+              action.kind === "toggle-pin" ? { sessionScope: true } : undefined,
+            );
           }
           break;
         }

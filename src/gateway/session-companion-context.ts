@@ -4,9 +4,10 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { extractStoredAssistantText } from "../agents/tools/chat-history-text.js";
 import { readSessionTranscriptBoundedMessageTailPage } from "../config/sessions/session-accessor.sqlite-active-events.js";
 import { redactToolPayloadText } from "../logging/redact.js";
-import type {
-  SessionCompanionContextMessage,
-  SessionCompanionPreparedContext,
+import {
+  selectSessionCompanionReferenceItems,
+  type SessionCompanionContextMessage,
+  type SessionCompanionPreparedContext,
 } from "./session-companion-state.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
@@ -82,20 +83,6 @@ function appendContextMessages(
       messages.push({ role, text, ts: readMessageTimestamp(message) });
     }
   }
-}
-
-function selectContextMessages(messages: SessionCompanionContextMessage[]) {
-  const selected: SessionCompanionContextMessage[] = [];
-  let bytes = 2;
-  for (const message of messages) {
-    const messageBytes = Buffer.byteLength(JSON.stringify(message), "utf8") + 1;
-    if (bytes + messageBytes > CONTEXT_MAX_BYTES) {
-      break;
-    }
-    selected.push(message);
-    bytes += messageBytes;
-  }
-  return selected.toReversed();
 }
 
 async function readSessionCompanionContext(params: {
@@ -211,7 +198,7 @@ async function readSessionCompanionContext(params: {
       kind: "ready",
       context: {
         empty: totalMessages === 0,
-        messages: selectContextMessages(contextMessages),
+        messages: selectSessionCompanionReferenceItems(contextMessages, CONTEXT_MAX_BYTES),
         sessionId,
       },
     };

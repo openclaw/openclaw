@@ -1,4 +1,3 @@
-// Telegram type declarations define plugin contracts.
 import type { Bot } from "grammy";
 import type { Message } from "grammy/types";
 import type {
@@ -63,23 +62,6 @@ export type TelegramLogger = {
   info: (obj: Record<string, unknown>, msg: string) => void;
 };
 
-type ResolveTelegramGroupConfig = (
-  chatId: string | number,
-  messageThreadId: number | undefined,
-  cfg: OpenClawConfig,
-) => {
-  groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
-  topicConfig?: TelegramTopicConfig;
-};
-
-type ResolveGroupActivation = (params: {
-  agentId?: string;
-  sessionKey: string;
-  cfg: OpenClawConfig;
-}) => boolean | undefined;
-
-type ResolveGroupRequireMention = (chatId: string | number, cfg: OpenClawConfig) => boolean;
-
 type TelegramMessageContextRuntimeOverrides = Partial<
   typeof import("./bot-message-context.runtime.js")
 >;
@@ -108,9 +90,20 @@ export type BuildTelegramMessageContextParams = {
   groupAllowFrom?: Array<string | number>;
   ackReactionScope: "off" | "none" | "group-mentions" | "group-all" | "direct" | "all";
   logger: TelegramLogger;
-  resolveGroupActivation: ResolveGroupActivation;
-  resolveGroupRequireMention: ResolveGroupRequireMention;
-  resolveTelegramGroupConfig: ResolveTelegramGroupConfig;
+  resolveGroupActivation: (params: {
+    agentId?: string;
+    sessionKey: string;
+    cfg: OpenClawConfig;
+  }) => boolean | undefined;
+  resolveGroupRequireMention: (chatId: string | number, cfg: OpenClawConfig) => boolean;
+  resolveTelegramGroupConfig: (
+    chatId: string | number,
+    messageThreadId: number | undefined,
+    cfg: OpenClawConfig,
+  ) => {
+    groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
+    topicConfig?: TelegramTopicConfig;
+  };
   runtime?: TelegramMessageContextRuntimeOverrides;
   sessionRuntime?: TelegramMessageContextSessionRuntimeOverrides;
   upsertPairingRequest?: typeof import("openclaw/plugin-sdk/conversation-runtime").upsertChannelPairingRequest;

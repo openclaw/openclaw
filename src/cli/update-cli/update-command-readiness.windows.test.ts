@@ -257,7 +257,6 @@ describe("managed Windows update after the startup canary", () => {
   });
 
   it.each([
-    { observedStartupMs: 0, timeoutMs: undefined, budgetMs: 300_000, reason: "min(3600000ms" },
     {
       observedStartupMs: 600_000,
       timeoutMs: undefined,

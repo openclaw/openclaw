@@ -4,6 +4,7 @@ import {
   buildHarnessParityCell,
   buildHarnessParityResult,
   type HarnessRuntimeParityCell,
+  type RuntimeParitySystemPromptReport,
 } from "./harness-parity.js";
 import type { RuntimeId } from "./runtime-parity.js";
 import type { RuntimeParityComparisonMode } from "./runtime-tool-metadata.js";
@@ -77,90 +78,54 @@ function classify(
   }).drift;
 }
 
+function promptReport(overrides: RuntimeParitySystemPromptReport) {
+  return { systemPromptReport: { ...BASE_PROMPT_REPORT, ...overrides } };
+}
+
 describe("harness parity", () => {
   it("classifies prompt and tool surface drift before behavioral drift", () => {
     expect(
       classify(
         {},
-        {
-          systemPromptReport: {
-            ...BASE_PROMPT_REPORT,
-            systemPrompt: { chars: 101, projectContextChars: 40, nonProjectContextChars: 61 },
-          },
-        },
+        promptReport({
+          systemPrompt: { chars: 101, projectContextChars: 40, nonProjectContextChars: 61 },
+        }),
       ),
     ).toBe("system-prompt");
     expect(
       classify(
         {},
-        {
-          systemPromptReport: {
-            ...BASE_PROMPT_REPORT,
-            systemPrompt: {
-              chars: 100,
-              projectContextChars: 40,
-              nonProjectContextChars: 60,
-              hash: "system-b",
-            },
+        promptReport({
+          systemPrompt: {
+            ...BASE_PROMPT_REPORT.systemPrompt,
+            hash: "system-b",
           },
-        },
+        }),
       ),
     ).toBe("system-prompt");
+    expect(classify({}, promptReport({ skills: { promptChars: 12, hash: "skills-b" } }))).toBe(
+      "system-prompt",
+    );
     expect(
       classify(
         {},
-        {
-          systemPromptReport: {
-            ...BASE_PROMPT_REPORT,
-            skills: { promptChars: 12, hash: "skills-b" },
+        promptReport({
+          tools: {
+            schemaChars: 20,
+            entries: [{ ...BASE_PROMPT_REPORT.tools.entries[0], summaryHash: "summary-b" }],
           },
-        },
-      ),
-    ).toBe("system-prompt");
-    expect(
-      classify(
-        {},
-        {
-          systemPromptReport: {
-            ...BASE_PROMPT_REPORT,
-            tools: {
-              schemaChars: 20,
-              entries: [
-                {
-                  name: "read",
-                  summaryChars: 8,
-                  summaryHash: "summary-b",
-                  schemaChars: 20,
-                  schemaHash: "schema-a",
-                  propertiesCount: 1,
-                },
-              ],
-            },
-          },
-        },
+        }),
       ),
     ).toBe("tool-description");
     expect(
       classify(
         {},
-        {
-          systemPromptReport: {
-            ...BASE_PROMPT_REPORT,
-            tools: {
-              schemaChars: 20,
-              entries: [
-                {
-                  name: "read",
-                  summaryChars: 8,
-                  summaryHash: "summary-a",
-                  schemaChars: 20,
-                  schemaHash: "schema-b",
-                  propertiesCount: 1,
-                },
-              ],
-            },
+        promptReport({
+          tools: {
+            schemaChars: 20,
+            entries: [{ ...BASE_PROMPT_REPORT.tools.entries[0], schemaHash: "schema-b" }],
           },
-        },
+        }),
       ),
     ).toBe("tool-schema");
   });
@@ -240,10 +205,9 @@ describe("harness parity", () => {
       classify(
         {},
         {
-          systemPromptReport: {
-            ...BASE_PROMPT_REPORT,
+          ...promptReport({
             systemPrompt: { chars: 101, projectContextChars: 40, nonProjectContextChars: 61 },
-          },
+          }),
           toolCalls: [{ tool: "bash", argsHash: "changed", resultHash: "changed" }],
         },
         "codex-native-workspace",
@@ -253,13 +217,12 @@ describe("harness parity", () => {
       classify(
         {},
         {
-          systemPromptReport: {
-            ...BASE_PROMPT_REPORT,
+          ...promptReport({
             tools: {
               schemaChars: 20,
               entries: [{ name: "read", summaryChars: 9, schemaChars: 20, propertiesCount: 1 }],
             },
-          },
+          }),
           toolCalls: [{ tool: "bash", argsHash: "changed", resultHash: "changed" }],
         },
         "outcome-only",

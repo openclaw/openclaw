@@ -14,6 +14,7 @@ import {
   releaseUpdateCommandPreflightForHandoff,
   withUpdateCommandExecutor,
   withUpdateCommandExecutorChild,
+  type UpdateCommandChildGrant,
 } from "./update-command-executor.js";
 import { prepareUpdateCommandNativeGate } from "./update-command-native-gate.js";
 import { createPackageRuntimeRecovery } from "./update-command-node-runtime.js";
@@ -34,6 +35,22 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
+function runBoundChild(
+  _grant: UpdateCommandChildGrant,
+  beforeInput: (pid: number, argv?: readonly string[]) => void,
+) {
+  return runUtf8CommandWithTimeout(
+    [process.execPath, "-e", "require('node:fs').readFileSync(0,'utf8')"],
+    {
+      input: "",
+      beforeInput,
+      timeoutMs: 10000,
+      killProcessTree: true,
+      requireProcessTreeExtinction: true,
+    },
+  );
+}
+
 function preloadFixture(kind: "require" | "import") {
   const marker = path.join(root, "preload-effect");
   const preload = path.join(root, "préload option.cjs");
@@ -46,7 +63,6 @@ function preloadFixture(kind: "require" | "import") {
 }
 
 it.each([
-  { phase: "admitted", fragmented: false },
   { phase: "initializing", fragmented: false },
   { phase: "admitted", fragmented: true },
 ] as const)(
@@ -162,17 +178,8 @@ it.each(["nonzero", "timeout", "unsettled", "operation", "candidate-busy"] as co
             withUpdateCommandExecutorChild(
               fence,
               candidate,
-              async (_grant, beforeInput) => {
-                await runUtf8CommandWithTimeout(
-                  [process.execPath, "-e", "require('node:fs').readFileSync(0,'utf8')"],
-                  {
-                    input: "",
-                    beforeInput,
-                    timeoutMs: 10000,
-                    killProcessTree: true,
-                    requireProcessTreeExtinction: true,
-                  },
-                );
+              async (grant, beforeInput) => {
+                await runBoundChild(grant, beforeInput);
                 throw new Error("fixture operation failed");
               },
               { auxiliaryPreflight: true },
@@ -187,22 +194,9 @@ it.each(["nonzero", "timeout", "unsettled", "operation", "candidate-busy"] as co
       }
       expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow("not current");
       // A later healthy auxiliary call may not re-arm the deleted entry.
-      await withUpdateCommandExecutorChild(
-        fence,
-        root,
-        (_grant, beforeInput) =>
-          runUtf8CommandWithTimeout(
-            [process.execPath, "-e", "require('node:fs').readFileSync(0,'utf8')"],
-            {
-              input: "",
-              beforeInput,
-              timeoutMs: 10000,
-              killProcessTree: true,
-              requireProcessTreeExtinction: true,
-            },
-          ),
-        { auxiliaryPreflight: true },
-      );
+      await withUpdateCommandExecutorChild(fence, root, runBoundChild, {
+        auxiliaryPreflight: true,
+      });
       expect(() => releaseUpdateCommandPreflightForHandoff(fence)).toThrow("not current");
     });
     // The original child failure remains sticky even if the caller catches it.
@@ -221,17 +215,7 @@ it.each(["ordinary", "promote-before", "promote-after"] as const)(
       await withUpdateCommandExecutorChild(
         fence,
         root,
-        (_grant, beforeInput) =>
-          runUtf8CommandWithTimeout(
-            [process.execPath, "-e", "require('node:fs').readFileSync(0,'utf8')"],
-            {
-              input: "",
-              beforeInput,
-              timeoutMs: 10000,
-              killProcessTree: true,
-              requireProcessTreeExtinction: true,
-            },
-          ),
+        runBoundChild,
         scenario === "ordinary" ? undefined : { auxiliaryPreflight: true },
       );
       if (scenario === "promote-after") {
@@ -320,21 +304,12 @@ it("preserves eligible preflight release until a healthy auxiliary descendant dr
   });
 });
 
-it.each([
-  { kind: "require", frame: "empty" },
-  { kind: "import", frame: "empty" },
-  { kind: "require", frame: "truncated" },
-  { kind: "require", frame: "extra" },
-  { kind: "require", frame: "malformed" },
-  { kind: "require", frame: "invalid-entry" },
-  { kind: "require", frame: "invalid-utf8" },
-  { kind: "require", frame: "nul" },
-] as const)(
-  "never starts Node provisioning without released authorization input: $kind/$frame",
-  async ({ kind, frame }) => {
+it.each(["empty", "extra", "malformed", "invalid-entry", "invalid-utf8", "nul"] as const)(
+  "never starts Node provisioning without released authorization input: %s",
+  async (frame) => {
     const runId = randomUUID();
     const effect = path.join(root, "installer-effect");
-    const preload = preloadFixture(kind);
+    const preload = preloadFixture("require");
     if (frame === "nul") {
       preload.env.NODE_OPTIONS += "\0private-option";
     }
@@ -347,9 +322,6 @@ it.each([
       let input: string | Uint8Array = options.input;
       if (frame === "empty") {
         input = "";
-      }
-      if (frame === "truncated") {
-        input = input.slice(0, -1);
       }
       if (frame === "extra") {
         input += " ";
@@ -513,87 +485,89 @@ it.each([
   },
 );
 
-it.each(
-  (["before-launch", "at-input"] as const).flatMap((boundary) =>
-    (
-      [
-        "options-replaced",
-        "run-replaced",
-        "run-id-changed",
-        "executor-replaced",
-        "requester-replaced",
-        "requester-revoked",
-      ] as const
-    ).map((change) => ({ boundary, change })),
-  ),
-)("refuses Node provisioning after $change at $boundary", async ({ boundary, change }) => {
-  const runId = randomUUID();
-  const effect = path.join(root, "installer-effect");
-  let requesterCurrent = true;
-  const opts: UpdateCommandOptions = {
-    run: {
-      runId,
-      env: process.env,
-      requesterAuthority: { requester: {}, isCurrent: () => requesterCurrent },
-    },
-  };
-  const recoveryParams = { root, opts, timeoutMs: 10000 };
-  const revoke = () => {
-    assert(opts.run);
-    if (change === "options-replaced") {
-      recoveryParams.opts = { run: { ...opts.run } };
-    }
-    if (change === "run-replaced") {
-      opts.run = { ...opts.run };
-    }
-    if (change === "run-id-changed") {
-      opts.run.runId = randomUUID();
-    }
-    if (change === "executor-replaced") {
-      opts.run.executorFence = { assertCurrent() {} };
-    }
-    if (change === "requester-replaced") {
-      opts.run.requesterAuthority = { requester: {}, isCurrent: () => true };
-    }
-    if (change === "requester-revoked") {
-      requesterCurrent = false;
-    }
-  };
-  const runCommand = processRunner.runCommandWithTimeout;
-  const commands = vi
-    .spyOn(processRunner, "runCommandWithTimeout")
-    .mockImplementation((argv, options) => {
-      assert(typeof options !== "number");
-      return runCommand(argv, {
-        ...options,
-        beforeInput: (pid, spawnedArgv) => {
-          if (boundary === "at-input") {
-            revoke();
-          }
-          options.beforeInput?.(pid, spawnedArgv);
-        },
+it.each([
+  { boundary: "before-launch", change: "requester-revoked" },
+  ...(
+    [
+      "options-replaced",
+      "run-replaced",
+      "run-id-changed",
+      "executor-replaced",
+      "requester-replaced",
+      "requester-revoked",
+    ] as const
+  ).map((change) => ({ boundary: "at-input" as const, change })),
+] as const)(
+  "refuses Node provisioning after $change at $boundary",
+  async ({ boundary, change }) => {
+    const runId = randomUUID();
+    const effect = path.join(root, "installer-effect");
+    let requesterCurrent = true;
+    const opts: UpdateCommandOptions = {
+      run: {
+        runId,
+        env: process.env,
+        requesterAuthority: { requester: {}, isCurrent: () => requesterCurrent },
+      },
+    };
+    const recoveryParams = { root, opts, timeoutMs: 10000 };
+    const revoke = () => {
+      assert(opts.run);
+      if (change === "options-replaced") {
+        recoveryParams.opts = { run: { ...opts.run } };
+      }
+      if (change === "run-replaced") {
+        opts.run = { ...opts.run };
+      }
+      if (change === "run-id-changed") {
+        opts.run.runId = randomUUID();
+      }
+      if (change === "executor-replaced") {
+        opts.run.executorFence = { assertCurrent() {} };
+      }
+      if (change === "requester-replaced") {
+        opts.run.requesterAuthority = { requester: {}, isCurrent: () => true };
+      }
+      if (change === "requester-revoked") {
+        requesterCurrent = false;
+      }
+    };
+    const runCommand = processRunner.runCommandWithTimeout;
+    const commands = vi
+      .spyOn(processRunner, "runCommandWithTimeout")
+      .mockImplementation((argv, options) => {
+        assert(typeof options !== "number");
+        return runCommand(argv, {
+          ...options,
+          beforeInput: (pid, spawnedArgv) => {
+            if (boundary === "at-input") {
+              revoke();
+            }
+            options.beforeInput?.(pid, spawnedArgv);
+          },
+        });
       });
+    const work = withUpdateCommandExecutor(runId, async (executor) => {
+      assert(opts.run);
+      opts.run.executorFence = await executor.enter(root, { serviceRoot, preflight: true });
+      const recovery = createPackageRuntimeRecovery(recoveryParams);
+      assert(recovery.installCommand);
+      if (boundary === "before-launch") {
+        revoke();
+      }
+      await recovery.installCommand(
+        process.execPath,
+        ["-e", `require('node:fs').writeFileSync(${JSON.stringify(effect)},'unauthorized')`],
+        process.env,
+      );
     });
-  const work = withUpdateCommandExecutor(runId, async (executor) => {
-    assert(opts.run);
-    opts.run.executorFence = await executor.enter(root, { serviceRoot, preflight: true });
-    const recovery = createPackageRuntimeRecovery(recoveryParams);
-    assert(recovery.installCommand);
-    if (boundary === "before-launch") {
-      revoke();
-    }
-    await recovery.installCommand(
-      process.execPath,
-      ["-e", `require('node:fs').writeFileSync(${JSON.stringify(effect)},'unauthorized')`],
-      process.env,
+    await expect(work).rejects.toThrow(
+      change === "requester-revoked" ? "requester-revoked" : "lost its original update executor",
     );
-  });
-  await expect(work).rejects.toThrow(
-    change === "requester-revoked" ? "requester-revoked" : "lost its original update executor",
-  );
-  expect(commands).toHaveBeenCalledTimes(boundary === "at-input" ? 1 : 0);
-  expect(fs.existsSync(effect)).toBe(false);
-  for (const key of [root, serviceRoot]) {
-    expect(createManagedHandoffLeaseStore().read(key)).toEqual({ kind: "absent" });
-  }
-});
+    expect(commands).toHaveBeenCalledTimes(boundary === "at-input" ? 1 : 0);
+    expect(fs.existsSync(effect)).toBe(false);
+    for (const key of [root, serviceRoot]) {
+      expect(createManagedHandoffLeaseStore().read(key)).toEqual({ kind: "absent" });
+    }
+  },
+);

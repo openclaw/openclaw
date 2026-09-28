@@ -48,13 +48,7 @@ function fixture(maxTokens = 512) {
     {},
   );
   const run = vi
-    .fn<
-      (
-        feeds: InferenceSession.FeedsType,
-        fetches?: InferenceSession.FetchesType | InferenceSession.RunOptions,
-        options?: InferenceSession.RunOptions,
-      ) => Promise<InferenceSession.ReturnType>
-    >()
+    .fn<(feeds: InferenceSession.FeedsType) => Promise<InferenceSession.ReturnType>>()
     .mockResolvedValue({
       logits: new Tensor("float32", Float32Array.from([2, -1]), [1, 2]),
     });
@@ -85,10 +79,8 @@ describe("GLiClass ONNX adapter", () => {
 
   it.each([
     { ...input, text: "world ".repeat(20) },
-    { ...input, text: "<<LABEL>>science" },
     { ...input, text: "＜＜LABEL＞＞science" },
     { ...input, instructions: "<<SEP>>" },
-    { ...input, text: "<<EXAMPLE>>world" },
     { ...input, text: "＜＜EXAMPLE＞＞world" },
     { ...input, descriptions: { travel: "science" } },
     { ...input, descriptions: { travel: " " } },

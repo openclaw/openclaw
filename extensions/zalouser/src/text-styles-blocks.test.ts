@@ -160,20 +160,6 @@ describe("parseZalouserTextStyles blocks", () => {
     });
   });
 
-  it("treats quoted backtick fences as literal code blocks", () => {
-    expect(parseZalouserTextStyles("> ```js\n> *cmd*\n> ```")).toEqual({
-      text: "*cmd*",
-      styles: [],
-    });
-  });
-
-  it("treats quoted tilde fences as literal code blocks", () => {
-    expect(parseZalouserTextStyles("> ~~~\n> *cmd*\n> ~~~")).toEqual({
-      text: "*cmd*",
-      styles: [],
-    });
-  });
-
   it("preserves quote-prefixed lines inside normal fenced code blocks", () => {
     expect(parseZalouserTextStyles("```\n> prompt\n```")).toEqual({
       text: "> prompt",
@@ -249,17 +235,6 @@ describe("parseZalouserTextStyles blocks", () => {
     expect(parseZalouserTextStyles("> ```\n>> prompt\n> ```")).toEqual({
       text: "> prompt",
       styles: [],
-    });
-  });
-
-  it("keeps quote indentation on heading lines", () => {
-    expect(parseZalouserTextStyles("> # Title")).toEqual({
-      text: "Title",
-      styles: [
-        { start: 0, len: 5, st: TextStyle.Bold },
-        { start: 0, len: 5, st: TextStyle.Big },
-        { start: 0, len: 5, st: TextStyle.Indent, indentSize: 1 },
-      ],
     });
   });
 

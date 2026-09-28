@@ -28,6 +28,12 @@ export function manualProviderActivation(
     : null;
 }
 
+export function revealManualProvider(root: ParentNode): void {
+  const input = root.querySelector<HTMLInputElement>('.model-setup__manual input[type="password"]');
+  root.querySelector("openclaw-modal-dialog")?.setReturnFocusTarget(input);
+  input?.scrollIntoView?.({ block: "nearest", behavior: "auto" });
+}
+
 type WebAwesomeSelectEvent = CustomEvent<{
   item: HTMLElement & { checked?: boolean; value?: string };
 }>;

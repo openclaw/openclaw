@@ -1,27 +1,16 @@
+import type { ChannelGroupContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   buildChannelGroupsScopeTree,
   resolveScopeRequireMention,
   resolveScopeToolsPolicy,
   type GroupToolPolicyConfig,
 } from "openclaw/plugin-sdk/channel-policy";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 
-type IMessageGroupContext = {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  groupId?: string | null;
-  senderPolicyMode?: "always" | "never";
-  senderId?: string | null;
-  senderName?: string | null;
-  senderUsername?: string | null;
-  senderE164?: string | null;
-};
-
-function resolveScopePath(params: IMessageGroupContext) {
+function resolveScopePath(params: ChannelGroupContext) {
   return params.groupId ? [params.groupId] : [];
 }
 
-export function resolveIMessageGroupRequireMention(params: IMessageGroupContext): boolean {
+export function resolveIMessageGroupRequireMention(params: ChannelGroupContext): boolean {
   return resolveScopeRequireMention({
     tree: buildChannelGroupsScopeTree(params.cfg, "imessage", params.accountId),
     path: resolveScopePath(params),
@@ -29,7 +18,7 @@ export function resolveIMessageGroupRequireMention(params: IMessageGroupContext)
 }
 
 export function resolveIMessageGroupToolPolicy(
-  params: IMessageGroupContext,
+  params: ChannelGroupContext,
 ): GroupToolPolicyConfig | undefined {
   return resolveScopeToolsPolicy({
     ...params,

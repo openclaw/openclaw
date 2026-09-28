@@ -118,6 +118,10 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
         set: displayAction("save", ["agentId"]),
       },
     },
+    presence: {
+      emoji: "🧩",
+      title: "Presence",
+    },
     attach: {
       emoji: "📎",
       title: "Attach",

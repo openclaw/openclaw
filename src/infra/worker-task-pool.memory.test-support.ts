@@ -9,7 +9,8 @@ serveWorkerTasks((input) => {
   assert.ok(isRecord(input));
   if (input.receipt instanceof MessagePort) {
     const receipt = input.receipt;
-    const payload = Array.from({ length: 16 * 1024 * 1024 }, () => 37);
+    const payload =
+      input.allocate === true ? Array.from({ length: 16 * 1024 * 1024 }, () => 37) : undefined;
     const before = getHeapStatistics().used_heap_size;
     let gcMs: number | undefined;
     const observer = new PerformanceObserver((list) => {
@@ -30,11 +31,16 @@ serveWorkerTasks((input) => {
     setImmediate(() =>
       setImmediate(() => {
         observer.disconnect();
-        receipt.postMessage({ heap: getHeapStatistics().used_heap_size, gcMs }, []);
+        receipt.postMessage({ heap: getHeapStatistics().used_heap_size, gcMs, threadId }, []);
         receipt.close();
       }),
     );
-    return { heap: before, checksum: payload[0]! + payload.at(-1)!, threadId, resourceLimits };
+    return {
+      heap: before,
+      checksum: payload ? payload[0]! + payload.at(-1)! : undefined,
+      threadId,
+      resourceLimits,
+    };
   }
   return { heap: getHeapStatistics().used_heap_size, threadId, resourceLimits };
 });

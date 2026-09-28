@@ -1,4 +1,3 @@
-// Resolves provider usage auth tokens from profiles, plugins, and env.
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   dedupeProfileIds,
@@ -135,14 +134,6 @@ function hasProviderUsageAuthEnvCredentialSource(params: {
   } catch {
     return false;
   }
-}
-
-function resolveProviderApiKeyFromConfigAndStore(params: {
-  state: UsageAuthState;
-  providerIds: string[];
-  envDirect?: Array<string | undefined>;
-}): string | undefined {
-  return resolveProviderApiKeyCandidatesFromConfigAndStoreSync(params)[0];
 }
 
 function resolveProviderApiKeyCandidatesFromConfigAndStoreSync(params: {
@@ -340,7 +331,7 @@ async function resolveOAuthToken(params: {
       }
       const credential = resolved.credential ?? cred;
       return {
-        provider: params.provider as UsageProviderId,
+        provider: params.provider,
         token: resolved.apiKey,
         ...(credential.type === "oauth" && credential.authFlow
           ? { authFlow: credential.authFlow }
@@ -388,11 +379,11 @@ async function resolveProviderUsageAuthViaPlugin(params: {
       // Provider-owned hooks may route API keys to a different billing endpoint
       // even when generic fallback for this usage provider remains OAuth-only.
       resolveApiKeyFromConfigAndStore: (options) =>
-        resolveProviderApiKeyFromConfigAndStore({
+        resolveProviderApiKeyCandidatesFromConfigAndStoreSync({
           state: params.state,
           providerIds: options?.providerIds ?? [params.provider],
           envDirect: options?.envDirect,
-        }),
+        })[0],
       resolveApiKeyCandidatesFromConfigAndStore: (options) =>
         resolveProviderApiKeyCandidatesFromConfigAndStore({
           state: params.state,
@@ -453,10 +444,10 @@ async function resolveProviderUsageAuthFallback(params: {
     return null;
   }
 
-  const apiKey = resolveProviderApiKeyFromConfigAndStore({
+  const apiKey = resolveProviderApiKeyCandidatesFromConfigAndStoreSync({
     state: params.state,
     providerIds: [params.provider],
-  });
+  })[0];
   if (apiKey) {
     return {
       provider: params.provider,

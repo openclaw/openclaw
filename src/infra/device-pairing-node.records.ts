@@ -32,7 +32,6 @@ export type NodePairingRequestInput = NodeDeclaredSurface & {
 export type NodePairingPendingRequest = NodePairingRequestInput & {
   requestId: string;
   requiredApproveScopes: NodeApprovalScope[];
-  silent?: boolean;
   ts: number;
 };
 

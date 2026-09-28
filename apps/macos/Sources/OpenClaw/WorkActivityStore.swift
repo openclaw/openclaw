@@ -53,7 +53,8 @@ final class WorkActivityStore {
                 label: "job",
                 startedAt: Date(),
                 lastUpdate: Date())
-            self.setJobActive(activity)
+            self.jobs[sessionKey] = activity
+            self.updateCurrentSession(with: activity)
         } else {
             // Job ended (done/error/aborted/etc). Clear everything for this session.
             self.clearTool(sessionKey: sessionKey)
@@ -81,7 +82,8 @@ final class WorkActivityStore {
                 label: label,
                 startedAt: Date(),
                 lastUpdate: Date())
-            self.setToolActive(activity)
+            self.tools[sessionKey] = activity
+            self.updateCurrentSession(with: activity)
         } else {
             // Delay removal slightly to avoid flicker on rapid result/start bursts.
             let key = sessionKey
@@ -101,16 +103,6 @@ final class WorkActivityStore {
 
     func resolveIconState(override selection: IconOverrideSelection) {
         self.iconState = selection.fixedIconState() ?? self.deriveIconState()
-    }
-
-    private func setJobActive(_ activity: Activity) {
-        self.jobs[activity.sessionKey] = activity
-        self.updateCurrentSession(with: activity)
-    }
-
-    private func setToolActive(_ activity: Activity) {
-        self.tools[activity.sessionKey] = activity
-        self.updateCurrentSession(with: activity)
     }
 
     private func updateCurrentSession(with activity: Activity) {
@@ -135,20 +127,17 @@ final class WorkActivityStore {
     }
 
     private func clearJob(sessionKey: String) {
-        guard self.jobs[sessionKey] != nil else { return }
-        self.jobs.removeValue(forKey: sessionKey)
-
-        if self.currentSessionKey == sessionKey, !self.isActive(sessionKey: sessionKey) {
-            self.pickNextSession()
-        }
-        self.refreshDerivedState()
+        guard self.jobs.removeValue(forKey: sessionKey) != nil else { return }
+        self.didClearActivity(sessionKey: sessionKey)
     }
 
     private func clearTool(sessionKey: String) {
-        guard self.tools[sessionKey] != nil else { return }
-        self.tools.removeValue(forKey: sessionKey)
+        guard self.tools.removeValue(forKey: sessionKey) != nil else { return }
         self.toolCleanupOwners.removeValue(forKey: sessionKey)
+        self.didClearActivity(sessionKey: sessionKey)
+    }
 
+    private func didClearActivity(sessionKey: String) {
         if self.currentSessionKey == sessionKey, !self.isActive(sessionKey: sessionKey) {
             self.pickNextSession()
         }
@@ -220,34 +209,12 @@ final class WorkActivityStore {
         meta: String?,
         args: [String: OpenClawProtocol.AnyCodable]?) -> String
     {
-        let wrappedArgs = self.wrapToolArgs(args)
+        let wrappedArgs = args.map { OpenClawKit.AnyCodable($0.mapValues(\.foundationValue)) }
         let display = ToolDisplayRegistry.resolve(name: name ?? "tool", args: wrappedArgs, meta: meta)
         if let detail = display.detailLine, !detail.isEmpty {
             return "\(display.label): \(detail)"
         }
 
         return display.label
-    }
-
-    private static func wrapToolArgs(_ args: [String: OpenClawProtocol.AnyCodable]?) -> OpenClawKit.AnyCodable? {
-        guard let args else { return nil }
-        let converted: [String: Any] = args.mapValues { self.unwrapJSONValue($0.value) }
-        return OpenClawKit.AnyCodable(converted)
-    }
-
-    private static func unwrapJSONValue(_ value: Any) -> Any {
-        if let dict = value as? [String: OpenClawProtocol.AnyCodable] {
-            return dict.mapValues { self.unwrapJSONValue($0.value) }
-        }
-        if let array = value as? [OpenClawProtocol.AnyCodable] {
-            return array.map { self.unwrapJSONValue($0.value) }
-        }
-        if let dict = value as? [String: Any] {
-            return dict.mapValues { self.unwrapJSONValue($0) }
-        }
-        if let array = value as? [Any] {
-            return array.map { self.unwrapJSONValue($0) }
-        }
-        return value
     }
 }

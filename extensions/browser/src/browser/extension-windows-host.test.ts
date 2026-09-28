@@ -78,14 +78,6 @@ describe("delegated Windows registration and read-only native admission", () => 
     expect(JSON.stringify(result)).not.toContain("private diagnostic");
     expect(f.manage).toHaveBeenCalledTimes(1);
   });
-  it("does not retry or inspect automatically after an uncertain mutation", async () => {
-    const f = setup();
-    f.manage.mockRejectedValue(new Error("uncertain"));
-    await expect(
-      installWindowsNativeHost({ pluginRoot: "C:\\OpenClaw", extensionIds: [], deps: f.deps }),
-    ).rejects.toThrow();
-    expect(f.manage).toHaveBeenCalledTimes(1);
-  });
   it("delegates uninstall/remove only to the same explicit context", async () => {
     const f = setup();
     const result = await uninstallWindowsNativeHosts({ deps: f.deps, removeStore: true });

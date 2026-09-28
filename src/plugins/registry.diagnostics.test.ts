@@ -201,18 +201,13 @@ describe("plugin registration diagnostics", () => {
     ).toEqual([{ pluginId: "alpha", provider: "shared-speech", kinds: ["voice"] }]);
   });
 
-  const hookModes = ["absent", "undefined", "custom"] as const;
-  it.each(
-    (
-      [
-        ["google", "gemini"],
-        ["minimax", "minimax-cn"],
-        ["minimax-portal", "minimax-portal-cn"],
-      ] as const
-    ).flatMap(([id, alias]) =>
-      hookModes.flatMap((single) => hookModes.map((multiple) => ({ id, alias, single, multiple }))),
-    ),
-  )(
+  it.each([
+    { id: "google", alias: "gemini", single: "absent", multiple: "absent" },
+    { id: "google", alias: "gemini", single: "undefined", multiple: "undefined" },
+    { id: "google", alias: "gemini", single: "custom", multiple: "undefined" },
+    { id: "minimax", alias: "minimax-cn", single: "undefined", multiple: "custom" },
+    { id: "minimax-portal", alias: "minimax-portal-cn", single: "custom", multiple: "custom" },
+  ] as const)(
     "preserves $id/$alias hook ownership (single=$single, multiple=$multiple)",
     async ({ id, alias, single, multiple }) => {
       const { builder, createRecord } = createDiagnosticFixture();

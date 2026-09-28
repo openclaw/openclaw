@@ -9,6 +9,7 @@ export function registerRequesterWakeSettlementBoundaryTests({
   requesterSessionKey,
   spawnVisibleChild,
   emitCompleted,
+  flushOwnedWork,
   waitForDeliveredCleanup,
   getRequesterWakeCalls,
   useGlobalSessionScope,
@@ -20,6 +21,7 @@ export function registerRequesterWakeSettlementBoundaryTests({
     requesterTurnRunId: string;
   }) => Promise<void>;
   emitCompleted: (runId: string, childSessionKey: string, text: string) => void;
+  flushOwnedWork: () => Promise<void>;
   waitForDeliveredCleanup: (runId: string) => Promise<void>;
   getRequesterWakeCalls: () => GatewayRequest[];
   useGlobalSessionScope: () => void;
@@ -93,6 +95,7 @@ export function registerRequesterWakeSettlementBoundaryTests({
       }),
     );
     emitCompleted(child.runId, child.childSessionKey, "current counting result");
+    await flushOwnedWork();
     await waitForDeliveredCleanup(child.runId);
 
     expect(getRequesterWakeCalls()).toHaveLength(1);
@@ -132,7 +135,7 @@ export function registerRequesterWakeSettlementBoundaryTests({
     registry.addSubagentRunForTests({
       runId: "run-main-stale",
       childSessionKey: "agent:main:subagent:stale",
-      requesterSessionKey,
+      requesterSessionKey: "agent:main:subagent:batch",
       requesterDisplayKey: "main",
       requesterAgentId: "main",
       task: "main stale settle blocker",

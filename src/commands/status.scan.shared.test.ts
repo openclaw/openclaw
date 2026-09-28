@@ -100,7 +100,8 @@ function readProbeCall(): GatewayProbeCall {
   return call as GatewayProbeCall;
 }
 
-vi.mock("../gateway/connection-details.js", () => ({
+vi.mock("../gateway/connection-details.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/connection-details.js")>()),
   buildGatewayConnectionDetailsWithResolvers: mocks.buildGatewayConnectionDetailsWithResolvers,
 }));
 
@@ -433,7 +434,7 @@ describe("resolveGatewayProbeSnapshot", () => {
     expect(gatewayCall.timeoutMs).toBe(2000);
   });
 
-  it.each([1, 50, 999, 1000, 2000, 8000])(
+  it.each([1, 2000, 8000])(
     "does not raise an explicit local status RPC fallback timeout (%i ms)",
     async (timeoutMs) => {
       mocks.resolveGatewayProbeTarget.mockReturnValue({

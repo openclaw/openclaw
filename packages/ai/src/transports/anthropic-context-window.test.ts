@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
+import {
+  anthropicModel,
+  createAnthropicResponse,
+} from "../provider-transport-parity.test-support.js";
 import { streamAnthropic } from "../providers/anthropic.js";
 import type { Context, Model } from "../types.js";
 import { createAnthropicMessagesTransportStreamFn } from "./anthropic-transport-stream.js";
@@ -7,23 +11,16 @@ import { createAnthropicMessagesTransportStreamFn } from "./anthropic-transport-
 const originalHost = getAiTransportHost();
 
 const model: Model<"anthropic-messages"> = {
+  ...anthropicModel,
   id: "claude-fable-5",
   name: "Claude Fable 5",
-  provider: "anthropic",
-  api: "anthropic-messages",
-  baseUrl: "https://api.anthropic.com",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 200_000,
-  maxTokens: 4_096,
 };
 const context: Context = {
   messages: [{ role: "user", content: "Finish the answer.", timestamp: 0 }],
 };
 
 function contextWindowResponse(): Response {
-  const events = [
+  return createAnthropicResponse([
     {
       type: "message_start",
       message: {
@@ -49,11 +46,7 @@ function contextWindowResponse(): Response {
       usage: { output_tokens: 3 },
     },
     { type: "message_stop" },
-  ];
-  const body = events
-    .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
-    .join("");
-  return new Response(body, { headers: { "content-type": "text/event-stream" } });
+  ]);
 }
 
 describe("Anthropic context-window completion", () => {

@@ -32,26 +32,32 @@ function classifyLockReason(reason: string | undefined): LockState {
   return isPidDefinitelyDead(pid) ? { kind: "dead", pid } : { kind: "live", pid };
 }
 
-/** One GC pass may conservatively skip these paths; removal still rereads lockState. */
-export function createWorktreeLockPrefilter(): (record: ManagedWorktreeRecord) => Promise<boolean> {
-  const repositories = new Map<string, Promise<Map<string, string>>>();
-  return async (record) => {
+/** One GC pass may skip these paths; removal still rechecks locks and HEAD under its lease. */
+export function createWorktreeGcPrefilter() {
+  type Entry = Awaited<ReturnType<typeof listGitWorktrees>>[number];
+  const repositories = new Map<string, Promise<Map<string, Entry>>>();
+  return async (record: ManagedWorktreeRecord) => {
     const root = path.resolve(record.repoRoot);
     let reasons = repositories.get(root);
     if (!reasons) {
       reasons = listGitWorktrees(root).then((entries) => {
-        const paths = new Map<string, string>();
+        const paths = new Map<string, Entry>();
         for (const entry of entries) {
-          if (entry.lockedReason !== undefined) {
-            paths.set(path.resolve(entry.path), entry.lockedReason);
-          }
+          paths.set(path.resolve(entry.path), entry);
         }
         return paths;
       });
       repositories.set(root, reasons);
     }
-    const state = classifyLockReason((await reasons).get(path.resolve(record.path)));
-    return state.kind === "live" || state.kind === "foreign";
+    const entry = (await reasons).get(path.resolve(record.path));
+    const state = classifyLockReason(entry?.lockedReason);
+    if (state.kind === "live" || state.kind === "foreign") {
+      return "worktree has a live or foreign lock";
+    }
+    if (entry?.branch !== undefined && entry.branch !== `refs/heads/${record.branch}`) {
+      return "branch-moved";
+    }
+    return undefined;
   };
 }
 

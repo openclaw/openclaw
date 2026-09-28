@@ -1,5 +1,4 @@
 // Generic node.invoke command with shell-exec commands intentionally blocked.
-import { randomUUID } from "node:crypto";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -8,6 +7,7 @@ import type { Command } from "commander";
 import { defaultRuntime } from "../../runtime.js";
 import { runNodesCommand } from "./cli-utils.js";
 import {
+  buildNodeInvokeParams,
   callNodesGatewayCli,
   nodesCallOpts,
   parseOptionalNodeInteger,
@@ -55,15 +55,13 @@ export function registerNodesInvokeCommands(nodes: Command) {
           }
           const nodeId = await resolveCliNodeId(opts, nodeQuery);
 
-          const invokeParams: Record<string, unknown> = {
+          const invokeParams = buildNodeInvokeParams({
             nodeId,
             command,
             params,
-            idempotencyKey: opts.idempotencyKey ?? randomUUID(),
-          };
-          if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
-            invokeParams.timeoutMs = timeoutMs;
-          }
+            idempotencyKey: opts.idempotencyKey,
+            timeoutMs,
+          });
 
           const result = await callNodesGatewayCli("node.invoke", opts, invokeParams);
           defaultRuntime.writeJson(result);

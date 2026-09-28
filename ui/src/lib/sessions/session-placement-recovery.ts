@@ -156,14 +156,6 @@ function parseStoredSessionPlacementRecovery(
   }
 }
 
-function sessionPlacementRecoveryClaimsScope(
-  value: Partial<SessionPlacementRecovery>,
-  gatewayUrl: string,
-  recoveryScope: string,
-): boolean {
-  return value.gatewayUrl === gatewayUrl && value.recoveryScope === recoveryScope;
-}
-
 function parseSessionPlacementTarget(value: unknown): SessionPlacementTarget | null {
   if (!isRecord(value)) {
     return null;
@@ -211,7 +203,8 @@ function validateSessionPlacementRecovery(
     (value.attachments !== undefined && !Array.isArray(value.attachments)) ||
     !parseSessionPlacementTarget(value.target) ||
     !isNonEmptyString(value.agentId) ||
-    !sessionPlacementRecoveryClaimsScope(value, gatewayUrl, recoveryScope) ||
+    value.gatewayUrl !== gatewayUrl ||
+    value.recoveryScope !== recoveryScope ||
     (value.phase !== "creating" &&
       value.phase !== "dispatching" &&
       value.phase !== "sending" &&

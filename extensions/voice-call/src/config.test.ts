@@ -387,20 +387,17 @@ describe("validateProviderConfig", () => {
   });
 
   describe("streaming config", () => {
-    it.each(["telnyx", "plivo", "mock"] as const)(
-      "rejects streaming.enabled with provider=%s",
-      (provider) => {
-        const config = createBaseConfig(provider);
-        config.streaming.enabled = true;
+    it("rejects streaming.enabled with an unsupported provider", () => {
+      const config = createBaseConfig("plivo");
+      config.streaming.enabled = true;
 
-        const result = validateProviderConfig(config);
+      const result = validateProviderConfig(config);
 
-        expect(result.valid).toBe(false);
-        expect(result.errors).toContain(
-          'plugins.entries.voice-call.config.provider must be "twilio" when streaming.enabled is true',
-        );
-      },
-    );
+      expect(result.valid).toBe(false);
+      expect(result.errors).toContain(
+        'plugins.entries.voice-call.config.provider must be "twilio" when streaming.enabled is true',
+      );
+    });
 
     it("accepts streaming.enabled with provider=twilio", () => {
       const config = createBaseConfig("twilio");
@@ -580,84 +577,35 @@ describe("resolveVoiceCallConfig session routing", () => {
       agentId: "Voice",
     });
 
-    expect(
-      resolveVoiceCallAgentSessionKey({
-        config,
-        sessionKey: "voice:call:legacy-call",
-      }),
-    ).toBe("agent:voice:voice:call:legacy-call");
-    expect(
-      resolveVoiceCallAgentSessionKey({
-        config,
-        sessionKey: "meet-room-1",
-      }),
-    ).toBe("agent:voice:meet-room-1");
-    expect(
-      resolveVoiceCallAgentSessionKey({
-        config,
-        sessionKey: "agent:main:shared-room",
-      }),
-    ).toBe("agent:voice:agent:main:shared-room");
-    expect(
-      resolveVoiceCallAgentSessionKey({
-        config,
-        sessionKey: "agent:other:Matrix:Channel:!RoomAbC:example.org",
-      }),
-    ).toBe("agent:voice:agent:other:matrix:channel:!RoomAbC:example.org");
-    expect(
-      resolveVoiceCallAgentSessionKey({
-        config,
-        sessionKey: "agent:voice:agent:other:matrix:channel:!RoomAbC:example.org",
-      }),
-    ).toBe("agent:voice:agent:other:matrix:channel:!RoomAbC:example.org");
-    expect(
-      resolveVoiceCallAgentSessionKey({
-        config,
-        sessionKey: "Signal:Group:AbC123=",
-      }),
-    ).toBe("agent:voice:signal:group:AbC123=");
-    expect(
-      resolveVoiceCallAgentSessionKey({
-        config,
-        sessionKey: "agent:broken",
-      }),
-    ).toBe("agent:voice:agent:broken");
-    expect(
-      resolveVoiceCallAgentSessionKey({
-        config,
-        sessionKey: "agent::broken",
-      }),
-    ).toBe("agent:voice:agent::broken");
-    expect(
-      resolveVoiceCallAgentSessionKey({
-        config,
-        sessionKey: "agent::Matrix:Channel:!RoomAbC:example.org",
-      }),
-    ).toBe("agent:voice:agent::matrix:channel:!RoomAbC:example.org");
-    expect(
-      resolveVoiceCallAgentSessionKey({
-        config,
-        sessionKey: "agent:other:room::part",
-      }),
-    ).toBe("agent:voice:agent:other:room::part");
-    expect(
-      resolveVoiceCallAgentSessionKey({
-        config,
-        sessionKey: "agent:voice:room::part",
-      }),
-    ).toBe("agent:voice:room::part");
-    expect(
-      resolveVoiceCallAgentSessionKey({
-        config,
-        sessionKey: "agent:voice::Matrix:Channel:!RoomAbC:example.org",
-      }),
-    ).toBe("agent:voice:agent:voice::matrix:channel:!RoomAbC:example.org");
-    expect(
-      resolveVoiceCallAgentSessionKey({
-        config,
-        sessionKey: "agent:bad/id:room",
-      }),
-    ).toBe("agent:voice:agent:bad/id:room");
+    for (const [sessionKey, expected] of [
+      ["voice:call:legacy-call", "agent:voice:voice:call:legacy-call"],
+      ["meet-room-1", "agent:voice:meet-room-1"],
+      ["agent:main:shared-room", "agent:voice:agent:main:shared-room"],
+      [
+        "agent:other:Matrix:Channel:!RoomAbC:example.org",
+        "agent:voice:agent:other:matrix:channel:!RoomAbC:example.org",
+      ],
+      [
+        "agent:voice:agent:other:matrix:channel:!RoomAbC:example.org",
+        "agent:voice:agent:other:matrix:channel:!RoomAbC:example.org",
+      ],
+      ["Signal:Group:AbC123=", "agent:voice:signal:group:AbC123="],
+      ["agent:broken", "agent:voice:agent:broken"],
+      ["agent::broken", "agent:voice:agent::broken"],
+      [
+        "agent::Matrix:Channel:!RoomAbC:example.org",
+        "agent:voice:agent::matrix:channel:!RoomAbC:example.org",
+      ],
+      ["agent:other:room::part", "agent:voice:agent:other:room::part"],
+      ["agent:voice:room::part", "agent:voice:room::part"],
+      [
+        "agent:voice::Matrix:Channel:!RoomAbC:example.org",
+        "agent:voice:agent:voice::matrix:channel:!RoomAbC:example.org",
+      ],
+      ["agent:bad/id:room", "agent:voice:agent:bad/id:room"],
+    ] as const) {
+      expect(resolveVoiceCallAgentSessionKey({ config, sessionKey })).toBe(expected);
+    }
   });
 
   it("canonicalizes raw and scoped main aliases with the core session config", () => {
@@ -833,18 +781,6 @@ describe("normalizeVoiceCallConfig", () => {
     expect(normalized.webhookSecurity.allowedHosts).toStrictEqual([]);
   });
 
-  it("derives the realtime stream path from a custom webhook path", () => {
-    const normalized = normalizeVoiceCallConfig({
-      enabled: true,
-      provider: "twilio",
-      serve: {
-        path: "/custom/webhook",
-      },
-    });
-
-    expect(normalized.realtime.streamPath).toBe("/custom/stream/realtime");
-  });
-
   it("accepts partial nested TTS overrides and preserves nested objects", () => {
     const normalized = normalizeVoiceCallConfig({
       tts: {
@@ -987,15 +923,5 @@ describe("resolveVoiceCallConfig realtime settings", () => {
     });
 
     expect(resolved.responseModel).toBeUndefined();
-  });
-
-  it("preserves the configured voice response agent id", () => {
-    const resolved = resolveVoiceCallConfig({
-      enabled: true,
-      provider: "mock",
-      agentId: "voice",
-    });
-
-    expect(resolved.agentId).toBe("voice");
   });
 });

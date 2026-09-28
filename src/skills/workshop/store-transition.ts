@@ -10,6 +10,7 @@ export function commitPendingSkillProposalTransition(
   params: CommitPendingSkillProposalTransitionInput & {
     store?: SkillWorkshopStoreOptions;
     operationLabel: string;
+    assertCommitAllowed?: () => void;
   },
 ) {
   return executeSkillWorkshopOperation(
@@ -22,6 +23,7 @@ export function commitPendingSkillProposalTransition(
       invalidateRollback: params.invalidateRollback,
     },
     params.store,
+    params.assertCommitAllowed,
   );
 }
 

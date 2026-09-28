@@ -1,6 +1,5 @@
 // Pre-install selectors use only built-ins and the shared Node executable resolver.
 import { spawnSync } from "node:child_process";
-import { lstatSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import nodeModule from "node:module";
 import path from "node:path";
@@ -479,101 +478,6 @@ function configuredRuntimeImports(source: string, file: string): string[] {
   return [...imports];
 }
 
-/** Proves runtime emptiness for module source; callers retain compiler and policy owners. */
-export function isErasedTypeScriptModuleSource(source: string): boolean {
-  const original = sourceTokens(source);
-  if (
-    original.uncertain ||
-    original.tokens.some((token) => !token.literal && token.value === "declare") ||
-    /^\s*\/\/\/\s*<(?:reference|amd-module|amd-dependency)\b/mu.test(source)
-  ) {
-    return false;
-  }
-  let runtime: ReturnType<typeof sourceTokens>;
-  try {
-    runtime = sourceTokens(nodeModule.stripTypeScriptTypes(source, { mode: "strip" }));
-  } catch {
-    return false;
-  }
-  if (runtime.uncertain) {
-    return false;
-  }
-  if (runtime.tokens.length === 0) {
-    return true;
-  }
-  // Under the repository's ESM contract, export {} only marks the module.
-  const values = runtime.tokens.map((token) => (token.literal ? undefined : token.value));
-  return (
-    (values.length === 3 || (values.length === 4 && values[3] === ";")) &&
-    values[0] === "export" &&
-    values[1] === "{" &&
-    values[2] === "}"
-  );
-}
-
-/** Missing history cannot establish a type-only addition or removal of runtime code. */
-export function isErasedTypeScriptFileChange(
-  cwd: string,
-  file: string,
-  baseRef: string | undefined,
-): boolean {
-  if (
-    !baseRef ||
-    !/^[a-f0-9]{40}$/u.test(baseRef) ||
-    !file.endsWith(".ts") ||
-    file.endsWith(".d.ts") ||
-    path.posix.normalize(file) !== file ||
-    file.startsWith("../") ||
-    path.isAbsolute(file)
-  ) {
-    return false;
-  }
-  try {
-    const current = path.join(cwd, file);
-    if (
-      !lstatSync(current, { throwIfNoEntry: false })?.isFile() ||
-      !isErasedTypeScriptModuleSource(readFileSync(current, "utf8"))
-    ) {
-      return false;
-    }
-    const git = (args: string[]) => {
-      const result = spawnSync("git", ["--literal-pathspecs", ...args], {
-        cwd,
-        encoding: "utf8",
-        maxBuffer: 32 * 1024 * 1024,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      if (result.status !== 0 || result.error) {
-        throw new Error("TypeScript source history is unavailable");
-      }
-      return result.stdout;
-    };
-    if (
-      git(["ls-files", "-z", "--", file]) !== `${file}\0` ||
-      git(["cat-file", "-t", baseRef]).trim() !== "commit"
-    ) {
-      return false;
-    }
-    const entries = git(["ls-tree", "-z", baseRef, "--", file]).split("\0").filter(Boolean);
-    if (entries.length === 0) {
-      return true;
-    }
-    if (entries.length !== 1) {
-      return false;
-    }
-    const entry = entries[0]!;
-    const separator = entry.indexOf("\t");
-    const blob = /^(?:100644|100755) blob ([a-f0-9]{40})$/u.exec(entry.slice(0, separator));
-    return (
-      entry.slice(separator + 1) === file &&
-      blob !== null &&
-      isErasedTypeScriptModuleSource(git(["cat-file", "blob", blob[1]!]))
-    );
-  } catch {
-    return false;
-  }
-}
-
 function parseStrings(value: unknown): string[] {
   if (!Array.isArray(value) || !value.every((item: unknown) => typeof item === "string")) {
     throw new Error("Expected a string array in test selector source scan");
@@ -606,6 +510,7 @@ export function readTestSelectorSourceFacts(
   files: SourceFile[],
   terms: string[],
   maxBuffer: number,
+  options: { matchingOnly?: boolean } = {},
 ) {
   if (files.length === 0) {
     return [];
@@ -621,7 +526,7 @@ export function readTestSelectorSourceFacts(
   const result = spawnSync(executable, [fileURLToPath(import.meta.url)], {
     cwd,
     env,
-    input: JSON.stringify({ files, terms }),
+    input: JSON.stringify({ files, terms, matchingOnly: options.matchingOnly === true }),
     encoding: "utf8",
     maxBuffer,
     stdio: ["pipe", "pipe", "pipe"],
@@ -632,7 +537,7 @@ export function readTestSelectorSourceFacts(
       { cause: result.error },
     );
   }
-  // Position is the file identity: require every requested row, including unreadable files.
+  // Position is the file identity, including unreadable and filtered rows.
   const rows: unknown = JSON.parse(result.stdout);
   if (!Array.isArray(rows) || rows.length !== files.length) {
     throw new Error("Invalid test selector source scan row count");
@@ -672,6 +577,7 @@ async function readSourceFacts() {
     return { file: value.file, parseImports: value.parseImports };
   });
   const matchTerms = createSourceTermMatcher(parseStrings(request.terms));
+  const matchingOnly = "matchingOnly" in request && request.matchingOnly === true;
   const readFacts = async ({ file, parseImports }: SourceFile) => {
     let source: string;
     try {
@@ -681,6 +587,11 @@ async function readSourceFacts() {
       return null;
     }
     const { matches, references } = matchTerms(source);
+    // Targeted scans only need candidate edges. Omit nonmatches rather than
+    // publishing empty imports that could poison a later complete graph read.
+    if (matchingOnly && matches.length === 0) {
+      return null;
+    }
     const facts = parseImports ? importFacts(source) : { imports: [], typeOnlyImports: [] };
     if (parseImports) {
       // Vitest loads these modules from config values instead of JavaScript imports.

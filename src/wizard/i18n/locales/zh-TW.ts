@@ -57,7 +57,7 @@ export const zh_TW = {
       verificationFailedError: "驗證失敗：{error}",
       verificationFailedStatus: "驗證失敗：狀態碼 {status}",
       verificationSuccessful: "驗證成功。",
-      validUrl: "請輸入有效 URL（例如 http://...）",
+      validUrl: "請輸入有效的 HTTP 或 HTTPS URL（例如 http://localhost:11434/v1）",
     },
     gateway: {
       auth: "Gateway 認證",
@@ -310,6 +310,9 @@ export const zh_TW = {
       lookAroundYes: "可以，去看看吧",
       settingUp: "正在設定你的工作區、閘道與工作階段…",
       setupDone: "一切就緒。",
+      setupFailed: "設定失敗",
+      workspaceSetupFailed: "工作區設定失敗",
+      gatewaySetupFailed: "Gateway 設定失敗",
       appliedTitle: "推理已就緒",
       complete: "OpenClaw 已準備就緒。",
       completeWithoutAi: "OpenClaw 設定已儲存。連接 AI 後再開啟聊天。",
@@ -426,6 +429,11 @@ export const zh_TW = {
         "現有 agent 目前使用 {current}。要求的工作區是 {requested}。變更此 fleet-wide 預設值可能會使 agent 與其記憶和 bootstrap 檔案中斷連線。",
       workspaceConflictTitle: "現有 agent 工作區",
       workspaceDirectory: "工作區目錄",
+      workspaceNotDirectory: '"{path}" 不是目錄。請在目錄中選擇工作區路徑。',
+      workspacePathError: '無法檢查 "{path}"：{error}。請檢查路徑後重試。',
+      workspaceSymlinkLoop: '"{path}" 因符號連結循環而無法解析。請修復符號連結或選擇其他工作區。',
+      workspaceSymlinkNotDirectory:
+        '"{path}" 是無法解析至現有目錄的符號連結。請在目錄中選擇工作區路徑。',
     },
     security: {
       askForHelp: "啟用工具或暴露到網際網路之前，請找有經驗的人協助。",

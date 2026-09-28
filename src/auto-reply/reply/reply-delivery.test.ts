@@ -3,21 +3,153 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
-import type { ReplyPayload } from "../types.js";
+import type { BlockReplyContext, ReplyPayload } from "../types.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
+import { setBlockReplyDelivery } from "./block-reply-delivery.js";
 import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
+import { createReplyTurnLedger } from "./dispatch-from-config.turn-ledger.js";
 import {
   createBlockReplyDeliveryHandler,
   type DirectBlockDelivery,
   normalizeReplyPayloadDirectives,
 } from "./reply-delivery.js";
+import { createReplyDispatcher } from "./reply-dispatcher.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
 type BlockReplyPipelineLike = NonNullable<
   Parameters<typeof createBlockReplyDeliveryHandler>[0]["blockReplyPipeline"]
 >;
 
+const quietTypingSignals: TypingSignaler = {
+  mode: "never",
+  shouldStartImmediately: false,
+  shouldStartOnMessageStart: false,
+  shouldStartOnText: false,
+  shouldStartOnReasoning: false,
+  signalRunStart: async () => {},
+  signalMessageStart: async () => {},
+  signalTextDelta: async () => {},
+  signalReasoningDelta: async () => {},
+  signalToolStart: async () => {},
+};
+
 describe("createBlockReplyDeliveryHandler", () => {
+  it.each([false, true])(
+    "delivers independent replies without buffering or completing the turn (streaming=%s)",
+    async (blockStreamingEnabled) => {
+      const delivered: Array<{ payload: ReplyPayload; context?: BlockReplyContext }> = [];
+      const dispatcher = createReplyDispatcher({ deliver: async () => {} });
+      const ledger = createReplyTurnLedger(dispatcher);
+      const onBlockReply = async (payload: ReplyPayload, context?: BlockReplyContext) => {
+        context?.abortSignal?.throwIfAborted();
+        delivered.push({ payload, context });
+        ledger.recordRoutedDelivery("block", payload, { ok: true, delivered: true });
+      };
+      const pipeline = createBlockReplyPipeline({
+        onBlockReply,
+        timeoutMs: 0,
+        coalescing: { minChars: 100, maxChars: 200, idleMs: 0, joiner: " " },
+      });
+      const directBlockDeliveries: DirectBlockDelivery[] = [];
+      const handler = createBlockReplyDeliveryHandler({
+        onBlockReply,
+        normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+        applyReplyToMode: (payload) => payload,
+        typingSignals: quietTypingSignals,
+        blockStreamingEnabled,
+        blockReplyPipeline: pipeline,
+        directBlockDeliveries,
+      });
+      const context: BlockReplyContext = {
+        deliveryIntentId: "block-reply:v1:codex-app-server:thread:turn:side-answer",
+        abortSignal: new AbortController().signal,
+        assistantMessageIndex: 7,
+        timeoutMs: 5000,
+      };
+      try {
+        await handler({ text: "Buffered ordinary reply." });
+        await handler({ text: "The list contains Casey." }, context);
+
+        expect(delivered).toEqual([
+          { payload: expect.objectContaining({ text: "The list contains Casey." }), context },
+        ]);
+        expect(delivered[0]?.context).toBe(context);
+        expect(pipeline.hasBuffered()).toBe(blockStreamingEnabled);
+        expect(ledger.resolveTerminalDelivery()).toBe("missing");
+
+        const { replyPayloads } = await buildReplyPayloads({
+          payloads: [{ text: "The list contains Casey." }, { text: "The audit is complete." }],
+          isHeartbeat: false,
+          didLogHeartbeatStrip: false,
+          blockStreamingEnabled,
+          blockReplyPipeline: pipeline,
+          directBlockDeliveries,
+          replyToMode: "off",
+        });
+        expect(replyPayloads.map((payload) => payload.text)).toEqual([
+          "The list contains Casey.",
+          "The audit is complete.",
+        ]);
+        await pipeline.flush({ force: true });
+        expect(delivered.map(({ payload }) => payload.text)).toEqual(
+          blockStreamingEnabled
+            ? ["The list contains Casey.", "Buffered ordinary reply."]
+            : ["The list contains Casey."],
+        );
+      } finally {
+        pipeline.stop();
+        dispatcher.markComplete();
+        await dispatcher.waitForIdle();
+      }
+    },
+  );
+
+  it.each(["aborted", "failed", "cancelled", "recovery-owned"] as const)(
+    "preserves independent delivery settlement when %s",
+    async (outcome) => {
+      const controller = new AbortController();
+      const failure = new PlatformMessageNotDispatchedError("Synthetic delivery failure", {
+        cause: undefined,
+      });
+      const delivered: string[] = [];
+      const handler = createBlockReplyDeliveryHandler({
+        onBlockReply: async (payload, context) => {
+          context?.abortSignal?.throwIfAborted();
+          if (outcome === "failed") {
+            throw failure;
+          }
+          delivered.push(payload.text ?? "");
+          setBlockReplyDelivery(
+            Promise.resolve({ outcome: outcome === "cancelled" ? outcome : "recovery-owned" }),
+          );
+        },
+        normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+        applyReplyToMode: (payload) => payload,
+        typingSignals: quietTypingSignals,
+        blockStreamingEnabled: false,
+        blockReplyPipeline: null,
+        directBlockDeliveries: [],
+      });
+      if (outcome === "aborted") {
+        controller.abort(failure);
+      }
+      const sending = handler(
+        { text: "Independent answer." },
+        { deliveryIntentId: "independent-answer", abortSignal: controller.signal },
+      );
+      if (outcome === "recovery-owned") {
+        await expect(sending).resolves.toBeUndefined();
+        expect(delivered).toEqual(["Independent answer."]);
+      } else if (outcome === "cancelled") {
+        await expect(sending).rejects.toMatchObject({ outcome: "cancelled" });
+        expect(delivered).toEqual(["Independent answer."]);
+      } else {
+        await expect(sending).rejects.toBe(failure);
+        expect(delivered).toEqual([]);
+      }
+    },
+  );
+
   it.each([
     ["reasoning", { text: "internal reasoning", isReasoning: true }, "reasoningPayloadsEnabled"],
     [
@@ -723,7 +855,7 @@ it("keeps completed CLI segments distinct through coalescing and final dedupe", 
 });
 
 it("retains deferred-tail recovery after multiple completed CLI replies", async () => {
-  const { createBlockReplySource, setBlockReplyDelivery, recoverBlockReplySources } =
+  const { createBlockReplySource, recoverBlockReplySources } =
     await import("./block-reply-delivery.js");
   const { prepareCliReplyPayload } = await import("./cli-reply-payload.js");
   const source = createBlockReplySource();

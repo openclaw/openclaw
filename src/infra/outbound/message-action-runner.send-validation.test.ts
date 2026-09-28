@@ -158,6 +158,7 @@ describe("runMessageAction send validation", () => {
       reasonCode: "message_target_missing",
       policyRef: "message-target:required",
     });
+    await expect(failure).rejects.toThrow(/requires a target/i);
   });
 
   it("types disabled broadcast as an outcome-owning policy denial", async () => {
@@ -171,23 +172,6 @@ describe("runMessageAction send validation", () => {
       reasonCode: "message_broadcast_disabled",
       policyRef: "message-broadcast:enabled",
     });
-  });
-
-  it("preserves the missing-target user-facing error", async () => {
-    await expect(
-      runMessageAction({
-        cfg: emptyConfig,
-        action: "send",
-        params: {
-          message: "telegram reply",
-        },
-        toolContext: {
-          currentChannelProvider: "telegram",
-        },
-        sessionKey: "agent:main:telegram:direct:123456789",
-        sourceReplyDeliveryMode: "message_tool_only",
-      }),
-    ).rejects.toThrow(/requires a target/i);
   });
 
   it("strips unsupported citation control markers from internal UI source replies", async () => {

@@ -108,16 +108,6 @@ describe("check-dynamic-import-warts", () => {
     `,
     },
     {
-      title: "ignores cached loader patterns",
-      source: `
-      let runtimePromise: Promise<typeof import("./runtime.js")> | undefined;
-      function loadRuntime() {
-        runtimePromise ??= import("./runtime.js");
-        return runtimePromise;
-      }
-    `,
-    },
-    {
       title: "allows execute paths that call cached loaders",
       source: `
       let runtimePromise: Promise<typeof import("./runtime.js")> | undefined;

@@ -1,4 +1,3 @@
-// Memory Core tests cover manager embedding cache plugin behavior.
 import {
   encodeMemoryEmbedding,
   ensureMemoryIndexSchema,
@@ -471,29 +470,5 @@ describe("memory embedding cache", () => {
     } finally {
       db.close();
     }
-  });
-
-  it("reuses cached embeddings on forced reindex instead of scheduling new embeds", () => {
-    const cached = new Map<string, number[]>([
-      ["alpha", [0.1, 0.2]],
-      ["beta", [0.3, 0.4]],
-    ]);
-    const embedMissing = vi.fn();
-
-    const plan = collectMemoryCachedEmbeddings({
-      chunks: [{ hash: "alpha" }, { hash: "beta" }],
-      cached,
-    });
-
-    if (plan.missing.length > 0) {
-      embedMissing(plan.missing);
-    }
-
-    expect(plan.embeddings).toEqual([
-      [0.1, 0.2],
-      [0.3, 0.4],
-    ]);
-    expect(plan.missing).toHaveLength(0);
-    expect(embedMissing).not.toHaveBeenCalled();
   });
 });

@@ -53,15 +53,6 @@ const COMPUTER_NODE_MESSAGES: EligibleNodeMessages<NodeListNode> = {
       .join(", ")}`,
 };
 
-async function resolveComputerNode(
-  gatewayOpts: GatewayCallOptions,
-  query?: string,
-  signal?: AbortSignal,
-): Promise<NodeListNode> {
-  const nodes = await listNodes(gatewayOpts, signal);
-  return resolveEligibleNodeFromList(nodes, query, isEligibleComputerNode, COMPUTER_NODE_MESSAGES);
-}
-
 export async function resolveComputerBinding(params: {
   executionId: string;
   sessionTransport?: ComputerToolTransport;
@@ -241,7 +232,12 @@ export async function resolveComputerBinding(params: {
       );
     }
   }
-  const node = await resolveComputerNode(params.gatewayOpts, params.node, params.signal);
+  const node = resolveEligibleNodeFromList(
+    await listNodes(params.gatewayOpts, params.signal),
+    params.node,
+    isEligibleComputerNode,
+    COMPUTER_NODE_MESSAGES,
+  );
   return {
     host: { host: "node", nodeId: node.nodeId },
     gatewayOpts: params.gatewayOpts,

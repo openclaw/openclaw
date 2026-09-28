@@ -86,6 +86,7 @@ class PluginsPage extends OpenClawLightDomElement {
     onCatalogUrlsChange: (urls) => {
       this.catalogIconUrls = urls;
     },
+    onLoadingChange: () => this.requestUpdate(),
   });
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
@@ -154,10 +155,6 @@ class PluginsPage extends OpenClawLightDomElement {
   private readonly subscriptions = new SubscriptionsController(this).effect(
     () => this.context?.runtimeConfig,
     (runtimeConfig) => {
-      if (this.surface === "settings") {
-        void runtimeConfig.ensureLoaded();
-        void runtimeConfig.ensureSchemaLoaded();
-      }
       this.configAutoSaveStatus = runtimeConfig.state.configAutoSaveStatus;
       return runtimeConfig.subscribe(() => {
         const nextStatus = runtimeConfig.state.configAutoSaveStatus;
@@ -286,13 +283,9 @@ class PluginsPage extends OpenClawLightDomElement {
       this.busy = {};
     }
     if (shouldRefreshAfterChange) {
-      if (this.surface === "discovery" && !this.activeRoutePluginId) {
-        void this.discovery.ensureCategories();
-      }
       void this.refreshCatalog();
-    } else {
-      this.ensureInitialData();
     }
+    this.ensureInitialData();
   }
 
   private applyRouteData() {
@@ -351,7 +344,7 @@ class PluginsPage extends OpenClawLightDomElement {
     this.consentController.reset();
   }
 
-  private replaceResult(result: PluginListResult | null, preserveIcons = false) {
+  private replaceResult(result: PluginListResult | null) {
     // Uninstall publishes generations before its final result. Keep the selected
     // view intact until settlement refreshes inventory and retires its detail.
     if (this.uninstallingSelection) {
@@ -365,7 +358,8 @@ class PluginsPage extends OpenClawLightDomElement {
       // A late removal failure must survive the disappearance of its row.
       this.pageNotice = this.messages[pluginRowKey(this.detail.pluginId)] ?? this.pageNotice;
     }
-    if (preserveIcons) {
+    // Route changes reuse artwork; a new Gateway plugin generation retires it.
+    if (this.result?.generation === result?.generation) {
       this.icons.reconcileInstalled(result);
     } else {
       this.icons.resetInstalled();
@@ -413,9 +407,12 @@ class PluginsPage extends OpenClawLightDomElement {
     if (!this.routeDataConsumed || !this.gateway.connected || !this.gateway.client) {
       return;
     }
-    // Direct links and refreshes initialize Settings through the same route
-    // lifecycle as navigation; the click handler only selects the location.
-    if (this.activeRoutePluginId && this.installedDetailTab === "configuration") {
+    // A settings page can mount before connection; admit its reads through
+    // both route changes and connected snapshots, including Advanced.
+    if (
+      this.surface === "settings" ||
+      (this.activeRoutePluginId && this.installedDetailTab === "configuration")
+    ) {
       void this.context.runtimeConfig.ensureLoaded();
       void this.context.runtimeConfig.ensureSchemaLoaded();
     }
@@ -503,7 +500,7 @@ class PluginsPage extends OpenClawLightDomElement {
 
   private applyMutationResult(result: PluginMutationResult) {
     this.icons.invalidateInstalled(result.plugin.id);
-    this.replaceResult(mergePluginCatalogItem(this.result, result.plugin), true);
+    this.replaceResult(mergePluginCatalogItem(this.result, result.plugin));
   }
 
   private showDetails(pluginId: string | null) {
@@ -629,6 +626,8 @@ class PluginsPage extends OpenClawLightDomElement {
       pageNotice: this.pageNotice,
       iconUrls: this.iconUrls,
       catalogIconUrls: this.catalogIconUrls,
+      iconLoading: this.icons.isInstalledLoading,
+      catalogIconLoading: this.icons.isCatalogLoading,
       catalogDetail: this.catalogDetail,
       installedDetailTab: this.installedDetailTab,
       canMutate: this.canMutate(),
@@ -672,7 +671,10 @@ class PluginsPage extends OpenClawLightDomElement {
         removeConfig: (path) => this.settings.patch(path, undefined),
         reloadConfig: () => {
           this.pluginConfigEditPending = false;
-          void this.context.runtimeConfig.discardDraft({ reloadOnly: true });
+          const runtimeConfig = this.context.runtimeConfig;
+          void runtimeConfig
+            .discardDraft({ reloadOnly: true })
+            .then(() => runtimeConfig.ensureSchemaLoaded());
         },
         retryConfigRead: () => {
           void this.context.runtimeConfig.refresh();

@@ -1,4 +1,3 @@
-// Normalizes preserved environment-variable config for subprocess launches.
 import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isPlainObject } from "../infra/plain-object.js";
@@ -9,22 +8,6 @@ import {
   preservesAuthoredEscapedEnvRefs,
 } from "./env-preserve-authored.js";
 import { resolveConfigEnvVars, scanEnvTemplateTokens } from "./env-substitution.js";
-
-/**
- * Preserves `${VAR}` environment variable references during config write-back.
- *
- * When config is read, `${VAR}` references are resolved to their values.
- * When writing back, callers pass the resolved config. This module detects
- * values that match what a `${VAR}` reference would resolve to and restores
- * the original reference, so env var references survive config round-trips.
- *
- * A value is restored only if:
- * 1. The pre-substitution value contained a `${VAR}` pattern
- * 2. The corresponding resolved source value matches the incoming value
- *
- * If a caller intentionally set a new value (different from what the env var
- * resolves to), the new value is kept as-is.
- */
 
 class EnvRefArrayMutationError extends Error {
   constructor() {
@@ -56,32 +39,24 @@ function getArrayIdentityPathValue(value: unknown, path: ArrayIdentityPath): unk
   return current;
 }
 
-function findStableArrayIdentityPath(value: unknown): ArrayIdentityPath | undefined {
-  if (!isPlainObject(value)) {
-    return undefined;
-  }
-  for (const key of ["id", "agentId"]) {
-    const child = value[key];
-    if (typeof child === "string" && !hasEnvVarRef(child)) {
-      return [key];
-    }
-  }
-  return undefined;
-}
-
 function resolveStableArrayIdentityMatch(params: {
   incoming: unknown[];
   parsed: unknown[];
   parsedIndex: number;
 }): { kind: "none" } | { kind: "invalid" } | { kind: "match"; incomingIndex: number } {
   const parsedItem = params.parsed[params.parsedIndex];
-  const identityPath = findStableArrayIdentityPath(parsedItem);
-  if (!identityPath) {
+  if (!isPlainObject(parsedItem)) {
     return { kind: "none" };
   }
-  const identityValue = getArrayIdentityPathValue(parsedItem, identityPath);
+  const identityKey = ["id", "agentId"].find(
+    (key) => typeof parsedItem[key] === "string" && !hasEnvVarRef(parsedItem[key]),
+  );
+  if (!identityKey) {
+    return { kind: "none" };
+  }
+  const identityValue = parsedItem[identityKey];
   const matchesIdentity = (item: unknown) =>
-    isDeepStrictEqual(getArrayIdentityPathValue(item, identityPath), identityValue);
+    isPlainObject(item) && isDeepStrictEqual(item[identityKey], identityValue);
   if (params.parsed.filter(matchesIdentity).length !== 1) {
     return { kind: "none" };
   }
@@ -190,6 +165,19 @@ function hasStableSameIndexNeighbors(params: {
         index === params.parsedIndex ||
         matchesArrayElementAtSameIndex(params.incoming[index], item, params.resolved[index]),
     )
+  );
+}
+
+function canMatchEditedArrayItemAtSameIndex(params: {
+  incoming: unknown[];
+  parsed: unknown[];
+  parsedIndex: number;
+  resolved: unknown[];
+}): boolean {
+  return (
+    (params.incoming.length === 1 && params.parsed.length === 1) ||
+    hasStableSameIndexLiteralShape(params) ||
+    hasStableSameIndexNeighbors(params)
   );
 }
 
@@ -337,19 +325,7 @@ function matchAuthoredTemplateArrayItems(params: {
     }
 
     if (isPlainObject(parsedItem) || Array.isArray(parsedItem)) {
-      const isSinglePositionEdit = params.incoming.length === 1 && params.parsed.length === 1;
-      const hasSameIndexLiteralIdentity = hasStableSameIndexLiteralShape({
-        incoming: params.incoming,
-        parsed: params.parsed,
-        parsedIndex,
-      });
-      const hasSameIndexNeighbors = hasStableSameIndexNeighbors({
-        incoming: params.incoming,
-        parsed: params.parsed,
-        parsedIndex,
-        resolved: params.resolved,
-      });
-      if (!isSinglePositionEdit && !hasSameIndexLiteralIdentity && !hasSameIndexNeighbors) {
+      if (!canMatchEditedArrayItemAtSameIndex({ ...params, parsedIndex })) {
         throw new EnvRefArrayMutationError();
       }
       addMatch(parsedIndex, parsedIndex);
@@ -421,11 +397,9 @@ function matchAuthoredEscapedTemplateArrayItems(params: {
       parsed: params.parsed,
       parsedIndex,
     });
-    if (stableIdentity.kind !== "none") {
-      if (stableIdentity.kind === "match") {
-        addMatch(parsedIndex, stableIdentity.incomingIndex);
-        continue;
-      }
+    if (stableIdentity.kind === "match") {
+      addMatch(parsedIndex, stableIdentity.incomingIndex);
+      continue;
     }
 
     const resolvedItem = params.resolved[parsedIndex];
@@ -456,23 +430,11 @@ function matchAuthoredEscapedTemplateArrayItems(params: {
     }
 
     if (isPlainObject(parsedItem) || Array.isArray(parsedItem)) {
-      const isSinglePositionEdit = params.incoming.length === 1 && params.parsed.length === 1;
-      const hasSameIndexLiteralIdentity = hasStableSameIndexLiteralShape({
-        incoming: params.incoming,
-        parsed: params.parsed,
-        parsedIndex,
-      });
-      const hasSameIndexNeighbors = hasStableSameIndexNeighbors({
-        incoming: params.incoming,
-        parsed: params.parsed,
-        parsedIndex,
-        resolved: params.resolved,
-      });
       if (
         stableIdentity.kind === "none" &&
         parsedIndex < params.incoming.length &&
         !usedIncomingIndexes.has(parsedIndex) &&
-        (isSinglePositionEdit || hasSameIndexLiteralIdentity || hasSameIndexNeighbors)
+        canMatchEditedArrayItemAtSameIndex({ ...params, parsedIndex })
       ) {
         addMatch(parsedIndex, parsedIndex);
         continue;
@@ -525,25 +487,17 @@ export function restoreEnvVarRefsFromResolved(
   resolved: unknown,
   explicitSetPaths?: readonly (readonly string[])[],
 ): unknown {
-  // If parsed has no env var refs at this level, return incoming as-is
   if (parsed === null || parsed === undefined) {
     return incoming;
   }
 
-  // String leaf: check if parsed was a ${VAR} template that resolves to incoming
   if (typeof incoming === "string" && typeof parsed === "string") {
     // An explicitly authored template is intent, even when an old escaped
     // template resolved to the same string. Literal descendants still restore.
     if (hasEnvVarRef(incoming) && explicitSetPaths?.some((path) => path.length === 0)) {
       return incoming;
     }
-    if (hasEnvVarRef(parsed)) {
-      if (resolved === incoming) {
-        // The incoming value matches what the env var resolves to — restore the reference
-        return parsed;
-      }
-    }
-    return incoming;
+    return hasEnvVarRef(parsed) && resolved === incoming ? parsed : incoming;
   }
 
   const childExplicitPaths = (key: string) =>
@@ -647,7 +601,6 @@ export function restoreEnvVarRefsFromResolved(
     return next;
   }
 
-  // Objects: walk key by key
   if (isPlainObject(incoming) && isPlainObject(parsed) && isPlainObject(resolved)) {
     const result: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(incoming)) {
@@ -659,14 +612,12 @@ export function restoreEnvVarRefsFromResolved(
           childExplicitPaths(key),
         );
       } else {
-        // New key added by caller — keep as-is
         result[key] = value;
       }
     }
     return result;
   }
 
-  // Mismatched types or primitives — keep incoming
   return incoming;
 }
 

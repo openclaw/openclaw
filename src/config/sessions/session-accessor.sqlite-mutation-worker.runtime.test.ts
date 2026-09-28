@@ -82,7 +82,6 @@ it("keeps idle collection after buffered admission replies and cancels it for th
     databasePath: "/fixture/state.sqlite",
     stateContext: {
       environment: { OPENCLAW_STATE_DIR: "/fixture" },
-      coordinatorRuntime: { directory: "/fixture/runtime", keepAlive: false },
     },
   };
   const running = runReclamationWorkerPort(worker, databaseOptions);

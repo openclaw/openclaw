@@ -37,8 +37,6 @@ import { deriveGatewaySessionLifecycleSnapshot } from "../session-lifecycle-stat
 import { boundedWorkerError } from "../worker-environments/worker-error.js";
 import type { GatewayRequestContext } from "./types.js";
 
-export { hasRestartRecoveryTerminalRun };
-
 const RESTART_SAFE_CHAT_REQUEST_VERIFIER_DOMAIN = "openclaw.chat.restart-retry.v1";
 const log = createSubsystemLogger("gateway/restart-recovery");
 
@@ -281,28 +279,18 @@ function hasRestartUnsafeChatWork(params: {
   ) {
     return true;
   }
-  for (const active of params.context.chatAbortControllers.values()) {
-    if (
-      (active.sessionKey === params.sessionKey || active.sessionId === params.sessionId) &&
-      resolveChatRunOwnerAgentId({
-        agentId: active.agentId,
-        sessionKey: active.sessionKey,
-        defaultAgentId: params.agentId,
-      }) === params.agentId
-    ) {
-      return true;
-    }
-  }
-  for (const queued of params.context.chatQueuedTurns?.values() ?? []) {
-    if (
-      (queued.sessionKey === params.sessionKey || queued.sessionId === params.sessionId) &&
-      resolveChatRunOwnerAgentId({
-        agentId: queued.agentId,
-        sessionKey: queued.sessionKey,
-        defaultAgentId: params.agentId,
-      }) === params.agentId
-    ) {
-      return true;
+  for (const runs of [params.context.chatAbortControllers, params.context.chatQueuedTurns]) {
+    for (const active of runs?.values() ?? []) {
+      if (
+        (active.sessionKey === params.sessionKey || active.sessionId === params.sessionId) &&
+        resolveChatRunOwnerAgentId({
+          agentId: active.agentId,
+          sessionKey: active.sessionKey,
+          defaultAgentId: params.agentId,
+        }) === params.agentId
+      ) {
+        return true;
+      }
     }
   }
   return false;

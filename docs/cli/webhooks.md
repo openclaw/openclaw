@@ -9,7 +9,7 @@ title: "Webhooks"
 
 # `openclaw webhooks`
 
-`openclaw webhooks` sets up and runs the Gmail Pub/Sub transport through `gog` (gogcli). It does not register [internal `HOOK.md` hooks](/automation/hooks), manage arbitrary [Gateway hook mappings](/automation/cron-jobs#webhooks), or manage the [TaskFlow Webhooks plugin](/plugins/webhooks).
+`openclaw webhooks` sets up and runs the Gmail Pub/Sub transport through `gog` (gogcli). It does not register [internal `HOOK.md` hooks](/automation/hooks) or manage arbitrary [Gateway hook mappings](/automation/cron-jobs#webhooks).
 
 ## Subcommands
 

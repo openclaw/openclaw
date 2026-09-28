@@ -121,7 +121,9 @@ export function projectNormalizedToolItem(params: {
   const args = itemToolArgs(item);
   const commandBearing = isCommandBearingToolItem(item, args);
   const meta = itemMeta(item, params.detailMode);
-  const event = shouldEmitTranscriptToolProgress(name)
+  const emit = shouldEmitTranscriptToolProgress(name);
+  const result = emit && params.phase === "result" ? itemToolResult(item) : undefined;
+  const event = emit
     ? {
         stream: "tool",
         data: {
@@ -136,7 +138,7 @@ export function projectNormalizedToolItem(params: {
             ? {
                 status,
                 isError: isNonSuccessItemStatus(status),
-                ...itemToolResult(item),
+                ...(result ? { result } : {}),
               }
             : {}),
         },
@@ -523,7 +525,7 @@ export class CodexEventProjection {
           ...(suppressChannelProgress ? { suppressChannelProgress: true } : {}),
         },
         {
-          args: itemToolArgs(item),
+          args,
           ...(item.type === "collabAgentToolCall" && item.tool === "wait"
             ? { nativeOperation: "wait" as const }
             : {}),

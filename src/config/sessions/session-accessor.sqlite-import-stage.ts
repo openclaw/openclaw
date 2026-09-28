@@ -228,13 +228,11 @@ export class SqliteSessionImportStage {
             }
           }
         }
-        const metadata = { ...entry };
-        delete metadata.message;
         // Navigation needs only these fields, never a tool result or opaque payload.
         const navigation: Record<string, unknown> = {};
         for (const key of ["type", "id", "parentId", "targetId", "appendParentId", "appendMode"]) {
-          if (Object.hasOwn(metadata, key)) {
-            navigation[key] = metadata[key];
+          if (Object.hasOwn(entry, key)) {
+            navigation[key] = entry[key];
           }
         }
         lastEntry = navigation;

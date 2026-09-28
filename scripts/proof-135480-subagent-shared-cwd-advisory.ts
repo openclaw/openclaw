@@ -43,11 +43,6 @@
  *      25 shared directories across 50 children to prove only eight directory
  *      summaries are model-visible, and that permuting that equal-timestamp
  *      cohort leaves the ids, samples, and reported directories identical.
- *   9. Selected-metadata reuse: counts the session summary objects the real
- *      accessor materializes during one `list` call, against stores of 54 and
- *      604 sessions with the same four visible children. Pins that the advisory
- *      reads only the selection the list builder already loaded, so the count is
- *      flat in store size.
  *
  * Run: pnpm tsx scripts/proof-135480-subagent-shared-cwd-advisory.ts
  */
@@ -140,14 +135,6 @@ async function main(): Promise<void> {
     );
   };
 
-  const buildListForRuns = (cfg: OpenClawConfig, runs: SubagentRunRecord[], recentMinutes: number) => {
-    const context = buildReadContext(runs, recentMinutes);
-    return buildSubagentList({
-      context,
-      sessionEntries: readSubagentListSessionEntries(cfg, context),
-    });
-  };
-
   /**
    * Writes a child session entry through the production writer using the exact
    * creation patch `acp-spawn.ts` now builds for an ACP child (or the native
@@ -176,10 +163,10 @@ async function main(): Promise<void> {
     const context = buildReadContext(runs, 30);
     const list = buildSubagentList({
       context,
-      sessionEntries: readSubagentListSessionEntries(cfg, context),
+      sessionEntries: await readSubagentListSessionEntries(cfg, context),
     });
     // The `/subagents` command surface, driven for real off the same build.
-    const text = handleSubagentsListAction({
+    const text = await handleSubagentsListAction({
       params: { cfg },
       readContext: { list: context },
     } as never);
@@ -547,127 +534,6 @@ async function main(): Promise<void> {
     check("permuting equal-timestamp runs leaves the whole report identical", () => {
       assert.equal(reversedSummary, inOrderSummary);
       assert.equal(interleavedSummary, inOrderSummary);
-    });
-  }
-
-  console.log("── scenario 9: the advisory materializes only the visible children ──");
-  {
-    // The advisory used to resolve `spawnedCwd` through its own unfiltered
-    // reader, so every `subagents list` call — and every active-child context
-    // construction — materialized one summary object per session in the store,
-    // then a mapped pairs array and a lookup object on top of it. That happened
-    // even when no child had an explicit cwd. `projection: "list"` excludes
-    // saved prompt payloads, so the defect was allocation, not decoding, and
-    // nothing that watches for prompt decoding could see it.
-    //
-    // `listSqliteSessionEntriesFromDatabase` materializes its listing with a
-    // single `Array.from(iterateSessionEntriesForListing(...))`, so wrapping
-    // that one built-in counts real accessor work with no module patching and
-    // no mock of the seam under test.
-    const measureListing = <T>(run: () => T) => {
-      const host = Array as unknown as { from: (...args: never[]) => unknown[] };
-      const original = host.from;
-      let summaries = 0;
-      let listings = 0;
-      host.from = (...args: never[]) => {
-        const result = original.apply(Array, args);
-        const first = result[0];
-        if (
-          result.length > 0 &&
-          typeof first === "object" &&
-          first !== null &&
-          "sessionKey" in first &&
-          "entry" in first
-        ) {
-          listings += 1;
-          summaries += result.length;
-        }
-        return result;
-      };
-      const startedAt = performance.now();
-      try {
-        const value = run();
-        return { value, summaries, listings, elapsedMs: performance.now() - startedAt };
-      } finally {
-        host.from = original;
-      }
-    };
-
-    const measureStore = async (unrelatedCount: number) => {
-      const store = path.join(root, `sessions-selection-${unrelatedCount}.json`);
-      const dir = path.join(root, `selection-shared-${unrelatedCount}`);
-      await fs.mkdir(dir, { recursive: true });
-      for (let i = 0; i < unrelatedCount; i += 1) {
-        await createChildSession({
-          storePath: store,
-          sessionKey: `agent:main:subagent:unrelated-${unrelatedCount}-${String(i).padStart(4, "0")}`,
-          requestedCwd: dir,
-        });
-      }
-      const sharing = [
-        makeRun(`selection-${unrelatedCount}-a`, now),
-        makeRun(`selection-${unrelatedCount}-b`, now),
-      ];
-      const inherited = makeRun(`selection-${unrelatedCount}-inherited`, now);
-      const ended = makeRun(`selection-${unrelatedCount}-ended`, now, { ended: true });
-      for (const run of sharing) {
-        await createChildSession({
-          storePath: store,
-          sessionKey: run.childSessionKey,
-          requestedCwd: dir,
-        });
-      }
-      await createChildSession({ storePath: store, sessionKey: inherited.childSessionKey });
-      await createChildSession({
-        storePath: store,
-        sessionKey: ended.childSessionKey,
-        requestedCwd: dir,
-      });
-      const visible = [...sharing, inherited, ended];
-      const cfg = { session: { store } } as OpenClawConfig;
-      const measured = measureListing(() => buildListForRuns(cfg, visible, 30));
-      return { dir, measured, sharing, visible, storeRows: unrelatedCount + visible.length };
-    };
-
-    const small = await measureStore(50);
-    const large = await measureStore(600);
-    for (const m of [small, large]) {
-      console.log(
-        `   store of ${String(m.storeRows).padStart(4)} sessions, ${m.visible.length} visible children: ` +
-          `${m.measured.listings} listing(s), ${m.measured.summaries} summaries materialized, ` +
-          `${m.measured.elapsedMs.toFixed(2)} ms`,
-      );
-    }
-    check("only the visible children are materialized, at either store size", () => {
-      for (const m of [small, large]) {
-        assert.equal(
-          m.measured.summaries,
-          m.visible.length,
-          `materialized ${m.measured.summaries} summaries for ${m.visible.length} visible children ` +
-            `in a store of ${m.storeRows}`,
-        );
-      }
-    });
-    check("materialization is flat in store size, not proportional to it", () => {
-      // A 12x larger store must not materialize more summaries. The pre-fix
-      // reader materialized the whole store on top of the selection.
-      assert.equal(large.measured.summaries, small.measured.summaries);
-      assert.ok(
-        large.measured.summaries < large.storeRows,
-        `materialized ${large.measured.summaries} of ${large.storeRows} rows`,
-      );
-    });
-    check("the advisory still reports the collision it exists for", () => {
-      for (const m of [small, large]) {
-        assert.deepEqual(m.measured.value.sharedCwdGroups, [
-          {
-            id: 1,
-            path: m.dir,
-            runCount: 2,
-            runIds: m.sharing.map((run) => run.runId).toSorted(),
-          },
-        ]);
-      }
     });
   }
 

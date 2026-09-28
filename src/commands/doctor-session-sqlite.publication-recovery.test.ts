@@ -5,7 +5,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import * as directoryDurability from "../infra/directory-durability.js";
 import * as migrationArtifact from "../infra/session-sqlite-migration-artifact.js";
-import { ExitError } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
@@ -18,24 +17,19 @@ import {
   canonicalTestPath,
   useDoctorSessionSqliteTestFixture,
 } from "./doctor-session-sqlite.test-support.js";
-import { doctorCommand } from "./doctor.js";
 
 const { createHistoricalRestoreStore, createVerifiedRecoveryStore } =
   useDoctorSessionSqliteTestFixture();
 
 describe("runDoctorSessionSqlite", () => {
   it.each([
-    { kind: "transcript", mode: "import", entry: "inner" },
-    { kind: "legacy-store", mode: "import", entry: "inner" },
-    { kind: "transcript", mode: "restore", entry: "inner" },
-    { kind: "legacy-store", mode: "restore", entry: "inner" },
-    { kind: "transcript", mode: "import", entry: "public" },
-    { kind: "legacy-store", mode: "import", entry: "public" },
-    { kind: "transcript", mode: "restore", entry: "public" },
-    { kind: "legacy-store", mode: "restore", entry: "public" },
+    { kind: "transcript", mode: "import" },
+    { kind: "legacy-store", mode: "import" },
+    { kind: "transcript", mode: "restore" },
+    { kind: "legacy-store", mode: "restore" },
   ] as const)(
-    "recovers interrupted $kind publication through $entry $mode",
-    async ({ kind, mode, entry }) => {
+    "recovers interrupted $kind publication through public $mode",
+    async ({ kind, mode }) => {
       const { store } = await createVerifiedRecoveryStore();
       await runDoctorSessionSqlite({ env: store.env, mode: "restore", store: store.storePath });
       const source = kind === "transcript" ? store.transcriptPath : store.storePath;
@@ -71,29 +65,9 @@ describe("runDoctorSessionSqlite", () => {
       expect(fs.readFileSync(source)).toEqual(original);
       expect(fs.statSync(source).nlink).toBe(2);
       expect(fs.statSync(source).ino).toBe(fs.statSync(move.archivePath).ino);
-      if (entry === "public") {
-        const runtime = {
-          log: vi.fn(),
-          error: vi.fn(),
-          exit: vi.fn((code: number): never => {
-            throw new ExitError(code);
-          }),
-        };
-        await expect(
-          doctorCommand(runtime, {
-            sessionSqlite: mode,
-            sessionSqliteStore: store.storePath,
-            json: true,
-          }),
-        ).rejects.toMatchObject({ code: 0 });
-      } else {
-        const recovered = await runDoctorSessionSqlite({
-          env: store.env,
-          mode,
-          store: store.storePath,
-        });
-        expect(recovered.targets[0]?.issues).toEqual([]);
-      }
+      const recovered = await runPublicSessionSqlite(store, mode);
+      expect(recovered.exitCode).toBe(0);
+      expect(recovered.report.targets[0]?.issues).toEqual([]);
       expect(readMigrationManifest(manifestPath).restore?.consumedArchives).toContain(
         move.archivePath,
       );
@@ -131,20 +105,9 @@ describe("runDoctorSessionSqlite", () => {
       }
       const before = fs.readFileSync(move.sourcePath);
       for (const mode of ["import", "restore"] as const) {
-        const runtime = {
-          log: vi.fn(),
-          error: vi.fn(),
-          exit: vi.fn((code: number): never => {
-            throw new ExitError(code);
-          }),
-        };
-        await expect(
-          doctorCommand(runtime, {
-            sessionSqlite: mode,
-            sessionSqliteStore: store.storePath,
-            json: true,
-          }),
-        ).rejects.toThrow(/hard-linked|publication paths changed/);
+        await expect(runPublicSessionSqlite(store, mode)).rejects.toThrow(
+          /hard-linked|archive identity or contents changed/,
+        );
         expect(fs.readFileSync(move.sourcePath)).toEqual(before);
         expect(fs.readFileSync(move.archivePath)).toEqual(before);
         expect(fs.statSync(move.sourcePath).nlink).toBe(fault === "third-link" ? 3 : 2);

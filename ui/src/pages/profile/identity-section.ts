@@ -3,6 +3,7 @@ import {
   GATEWAY_OWNER_PROFILE_ID,
   type UserProfile,
 } from "../../../../packages/gateway-protocol/src/index.ts";
+import type { ApplicationConfigCapability } from "../../app/config.ts";
 import {
   renderSettingsRow,
   renderSettingsSection,
@@ -12,14 +13,16 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { registerProfileEnglish } from "../../i18n/locales/en-profile.ts";
-import "../../components/viewer-facepile.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
+import "../../components/viewer-facepile.ts";
 import type { PresenceViewer } from "../../lib/presence-users.ts";
+import { uploadsEnabled } from "../../lib/uploads.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 
 registerProfileEnglish();
 
 type IdentitySectionProps = {
+  config?: ApplicationConfigCapability;
   profile: UserProfile;
   avatarUrl: string | null;
   displayName: string;
@@ -64,39 +67,43 @@ export function renderIdentitySection(props: IdentitySectionProps) {
                 .user=${avatarViewer(props.profile, props.avatarUrl)}
                 variant="profile"
               ></openclaw-viewer-avatar>
-              <button
-                type="button"
-                class="btn btn--sm"
-                ?disabled=${props.busy !== null}
-                @click=${(event: Event) => {
-                  const button = event.currentTarget;
-                  const input =
-                    button instanceof HTMLButtonElement ? button.nextElementSibling : null;
-                  if (input instanceof HTMLInputElement) {
-                    input.click();
-                  }
-                }}
-              >
-                ${
-                  props.busy === "avatar"
-                    ? t("profilePage.identity.processingAvatar")
-                    : t("profilePage.identity.chooseAvatar")
-                }
-              </button>
-              <input
-                type="file"
-                accept="image/png,image/jpeg,image/webp"
-                hidden
-                ?disabled=${props.busy !== null}
-                @change=${(event: Event) => {
-                  const input = event.currentTarget as HTMLInputElement;
-                  const file = input.files?.[0];
-                  input.value = "";
-                  if (file) {
-                    props.onAvatarSelect(file);
-                  }
-                }}
-              />
+              ${
+                uploadsEnabled(props.config)
+                  ? html`<button
+                        type="button"
+                        class="btn btn--sm"
+                        ?disabled=${props.busy !== null}
+                        @click=${(event: Event) => {
+                          const button = event.currentTarget;
+                          const input =
+                            button instanceof HTMLButtonElement ? button.nextElementSibling : null;
+                          if (uploadsEnabled(props.config) && input instanceof HTMLInputElement) {
+                            input.click();
+                          }
+                        }}
+                      >
+                        ${
+                          props.busy === "avatar"
+                            ? t("profilePage.identity.processingAvatar")
+                            : t("profilePage.identity.chooseAvatar")
+                        }
+                      </button>
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp"
+                        hidden
+                        ?disabled=${props.busy !== null}
+                        @change=${(event: Event) => {
+                          const input = event.currentTarget as HTMLInputElement;
+                          const file = input.files?.[0];
+                          input.value = "";
+                          if (file && uploadsEnabled(props.config)) {
+                            props.onAvatarSelect(file);
+                          }
+                        }}
+                      />`
+                  : nothing
+              }
             </span>
           `,
         })}

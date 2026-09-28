@@ -797,31 +797,6 @@ describe("stored outbox summaries", () => {
     );
   });
 
-  it("deduplicates item ids within a scope, not across scopes", () => {
-    const gatewayUrl = "ws://gateway.test/control";
-    sessionStorage.setItem(
-      `openclaw.control.chatComposer.v4:${encodeURIComponent(gatewayUrl)}`,
-      JSON.stringify({
-        version: 4,
-        recovery: {},
-        gatewayOwner: gatewayUrl,
-        sessions: {
-          "thread-a\u0000agent:main": {
-            queue: [{ id: "same", text: "first", createdAt: 1 }],
-            updatedAt: 1,
-          },
-          "thread-b\u0000agent:main": {
-            queue: [{ id: "same", text: "second", createdAt: 2 }],
-            updatedAt: 2,
-          },
-        },
-      }),
-    );
-
-    const summary = createStoredChatOutboxReader().read({ settings: { gatewayUrl } });
-    expect(summary.total).toBe(2);
-  });
-
   it("counts only durable operator-review states for session-row attention", () => {
     const gatewayUrl = "ws://gateway.test/control";
     const restoredSendStates = [

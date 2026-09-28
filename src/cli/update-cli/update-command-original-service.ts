@@ -138,6 +138,7 @@ export async function revalidateOriginalManagedServiceRuntime(
     resolveGatewayService(),
     original.service.serviceEnv,
     timeoutMs,
+    { managerUid: original.service.serviceManagerUid, assertCurrent },
   );
   assertCurrent();
   const definition = await fingerprintGatewayServiceDefinition(state.command);

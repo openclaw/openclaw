@@ -15,7 +15,9 @@ import {
   authorizeUserChannelIdentityInDatabase,
   publishUserChannelPolicyInDatabase,
   resolveUserChannelAuthorizationPolicy,
+  configuredCommandOwnerPolicyFingerprint,
 } from "./user-channel-identities.js";
+import { prepareConfiguredCommandOwnerAuthority } from "./user-channel-identity-operations.js";
 import {
   listUserProfilesSync,
   readUserProfileEmailBindings,
@@ -244,7 +246,7 @@ describe("user profile role schema", () => {
 
 it.each([false, true])(
   "upgrades channel links without granting legacy recovery custody (deferred: %s)",
-  (deferred) => {
+  async (deferred) => {
     const options = stateOptions();
     const profile = ensureProfileForEmail("upgrade@example.test", options);
     const identity = { channelId: "discord", accountId: "team", senderId: "100" };
@@ -281,9 +283,17 @@ it.each([false, true])(
         },
       },
     });
+    const owners = [identity.senderId];
+    // Config activation publishes once; the update watcher can publish v19 later without a reload.
+    runOpenClawStateWriteTransaction(({ db: writer }) => {
+      publishUserChannelPolicyInDatabase(
+        writer,
+        policy,
+        configuredCommandOwnerPolicyFingerprint(owners),
+      );
+    }, options);
     const mint = () =>
       runOpenClawStateWriteTransaction(({ db: writer }) => {
-        publishUserChannelPolicyInDatabase(writer, policy);
         return authorizeUserChannelIdentityInDatabase(writer, {
           identity,
           profileId: profile.id,
@@ -294,6 +304,7 @@ it.each([false, true])(
     if (deferred) {
       expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 18 });
       expect(mint()).toBeUndefined();
+      expect(await prepareConfiguredCommandOwnerAuthority(owners, options)).toBeUndefined();
       db.prepare(
         "UPDATE update_runs SET status = 'succeeded', phase = 'finished', finished_at_ms = ? WHERE run_id = ?",
       ).run(Date.now() - 300_001, runId);
@@ -305,7 +316,12 @@ it.each([false, true])(
     });
     const reference = mint();
     expect(reference).toEqual({ version: 1, id: expect.any(String) });
+    const configured = await prepareConfiguredCommandOwnerAuthority(owners, options);
+    expect(configured?.recoveryReference).toEqual({ version: 2, id: expect.any(String) });
     closeOpenClawStateDatabaseForTest();
     expect(mint()).toEqual(reference);
+    expect(
+      (await prepareConfiguredCommandOwnerAuthority(owners, options))?.recoveryReference,
+    ).toEqual(configured?.recoveryReference);
   },
 );

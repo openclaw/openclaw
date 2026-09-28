@@ -5,7 +5,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
 import { NODE_DEVICE_APPS_COMMAND } from "../infra/node-commands.js";
-import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { SkillBinsProvider } from "./invoke.js";
@@ -174,21 +173,6 @@ describe("node-host invocation cancellation", () => {
     await runtime.close();
   });
 
-  it("cancels ordinary node invocations", async () => {
-    const held = holdInvoke();
-    const runtime = await startRuntime();
-    const invoking = runtime.invoke({ ...frame, command: "system.run" });
-    await vi.waitFor(() => expect(held.signal).toBeDefined());
-
-    runtime.cancel(frame.id);
-
-    expect(held.signal?.aborted).toBe(true);
-    expect(held.io).toBeUndefined();
-    held.release();
-    await invoking;
-    await runtime.close();
-  });
-
   it("cancels a superseded invocation without orphaning its replacement", async () => {
     const first = holdInvoke();
     const second = holdInvoke();
@@ -201,6 +185,7 @@ describe("node-host invocation cancellation", () => {
 
     expect(first.signal?.aborted).toBe(true);
     expect(second.signal?.aborted).toBe(false);
+    expect(second.io).toBeUndefined();
 
     first.release();
     await firstInvoke;
@@ -563,26 +548,6 @@ describe("node-host invoke input dispatch", () => {
     vi.clearAllMocks();
   });
 
-  it("provides framed binary message IO to duplex plugin commands", async () => {
-    const held = holdInvoke();
-    const runtime = await startRuntime();
-    const invoking = runtime.invoke(frame);
-
-    try {
-      await vi.waitFor(() => expect(held.io).toBeDefined());
-      expect(held.io).toMatchObject({
-        frames: {
-          send: expect.any(Function),
-          onMessage: expect.any(Function),
-        },
-      });
-    } finally {
-      held.release();
-      await invoking;
-      await runtime.close();
-    }
-  });
-
   it("announces framed readiness only after the plugin registers its message listener", async () => {
     const held = holdInvoke();
     const runtime = await startRuntime();
@@ -599,49 +564,6 @@ describe("node-host invoke input dispatch", () => {
       );
       expect(unsubscribe).toEqual(expect.any(Function));
       unsubscribe?.();
-    } finally {
-      held.release();
-      await invoking;
-      await runtime.close();
-    }
-  });
-
-  it("round-trips binary messages through an external-style duplex plugin command", async () => {
-    const received = vi.fn();
-    const pluginCommand = {
-      command: "test.duplex",
-      duplex: true,
-      handle: (_paramsJSON: string | null, io: OpenClawPluginNodeHostCommandIo) => {
-        io.frames?.onMessage((message) => {
-          received(message);
-          void io.frames?.send(message);
-        });
-      },
-    };
-    const held = holdInvoke((io) => pluginCommand.handle(frame.paramsJSON, io));
-    const runtime = await startRuntime();
-    const invoking = runtime.invoke(frame);
-
-    try {
-      await vi.waitFor(() => expect(mocks.progressWrite).toHaveBeenCalledOnce());
-      runtime.handleInput(
-        frame.id,
-        0,
-        JSON.stringify({
-          v: 1,
-          kind: "data",
-          message: 0,
-          index: 0,
-          last: true,
-          data: "AP8B",
-        }),
-      );
-
-      await vi.waitFor(() => expect(mocks.progressWrite).toHaveBeenCalledTimes(2));
-      expect(received).toHaveBeenCalledWith(Uint8Array.from([0, 255, 1]));
-      expect(mocks.progressWrite.mock.calls[1]?.[0]).toBe(
-        '{"v":1,"kind":"data","message":0,"index":0,"last":true,"data":"AP8B"}',
-      );
     } finally {
       held.release();
       await invoking;

@@ -202,8 +202,6 @@ enum GatewayLaunchAgentManager {
                 "--force",
                 "--port",
                 "\(port)",
-                "--runtime",
-                "node",
             ]
             if allowUnconfigured { arguments.append("--allow-unconfigured") }
             return await self.runDaemonCommand(arguments)

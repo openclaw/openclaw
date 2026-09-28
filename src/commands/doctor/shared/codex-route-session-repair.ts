@@ -1,9 +1,6 @@
 import fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  normalizeOptionalLowercaseString as normalizeString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "../../../agents/agent-scope.js";
 import {
   areOAuthCredentialsEquivalent,
@@ -15,7 +12,6 @@ import {
   parseLegacyCredentialEntry,
 } from "../../../agents/auth-profiles/persisted.js";
 import { isLegacyCodexProviderId } from "../../../config/legacy-codex-provider.js";
-import { getCliSessionBinding } from "../../../config/sessions/cli-session-binding.js";
 import {
   applySessionEntryReplacements,
   iterateDoctorSessionKeyBatches,
@@ -28,6 +24,8 @@ import {
 } from "../../../config/sessions/targets.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { readDeferredPluginMigrations } from "../../../infra/deferred-plugin-migrations.js";
+import { preserveDeferredPluginSessionSource } from "../../../infra/deferred-plugin-session-sources.js";
 import { loadJsonFileThroughSymlink } from "../../../infra/json-file.js";
 import {
   loadLegacySessionStore,
@@ -52,6 +50,7 @@ import type {
   CodexSessionRouteRepairSummary,
   SessionRouteRepairResult,
 } from "./codex-route-types.js";
+import { migrateLegacyClaudeSessionField } from "./legacy-cli-session-binding.js";
 import {
   migrateLegacyRuntimeModelRef,
   resolveLegacyRuntimeModelProviderAlias,
@@ -237,37 +236,6 @@ function repairProviderlessCodexSessionOverride(
   if (entry.contextBudgetStatus !== undefined) {
     delete entry.contextBudgetStatus;
   }
-  return true;
-}
-
-function migrateLegacyClaudeSessionField(
-  entry: SessionEntry,
-  sessionKey: string,
-  warnings?: string[],
-): boolean {
-  if (entry.claudeCliSessionId === undefined) {
-    return false;
-  }
-  if (!getCliSessionBinding(entry, "claude-cli")) {
-    const sessionId = normalizeOptionalString(entry.claudeCliSessionId);
-    // An incomplete binding can carry account/checkpoint metadata for another
-    // conversation. Preserve it rather than attaching that metadata to a guessed ID.
-    const hasUnboundMetadata = Object.entries(entry.cliSessionBindings?.["claude-cli"] ?? {}).some(
-      ([key, value]) => key !== "sessionId" && value !== undefined,
-    );
-    if (!sessionId || hasUnboundMetadata) {
-      const warning = `Session ${sessionKey}: legacy Claude CLI binding needs manual reconciliation; legacy binding state was preserved.`;
-      if (warnings && !warnings.includes(warning)) {
-        warnings.push(warning);
-      }
-      return false;
-    }
-    entry.cliSessionBindings = {
-      ...entry.cliSessionBindings,
-      "claude-cli": { sessionId },
-    };
-  }
-  delete entry.claudeCliSessionId;
   return true;
 }
 
@@ -530,6 +498,7 @@ export async function maybeRepairCodexSessionRoutes(params: {
   const authProfileOnly = !params.shouldRepair && params.authProfileOnly === true;
   const shouldRepair = params.shouldRepair || authProfileOnly;
   const warnings: string[] = [];
+  const pending = readDeferredPluginMigrations({ env });
   const isRetained = createRetainedAgentDatabaseMatcher(env, () =>
     resolveConfiguredAgentDatabaseTargets(params.cfg, { env }),
   );
@@ -597,7 +566,10 @@ export async function maybeRepairCodexSessionRoutes(params: {
     const sqliteEntryCount = shouldRepair
       ? scanDoctorSessionEntriesStrict(sessionScope, scanEntry)
       : scanDoctorSessionEntriesTolerant(sessionScope, scanEntry);
-    const hasLegacyStore = !target.storePath.endsWith(".sqlite") && fs.existsSync(target.storePath);
+    const hasLegacyStore =
+      !target.storePath.endsWith(".sqlite") &&
+      fs.existsSync(target.storePath) &&
+      !preserveDeferredPluginSessionSource({ cfg: params.cfg, env, target, pending });
     return sqliteEntryCount > 0 || hasLegacyStore
       ? [
           {

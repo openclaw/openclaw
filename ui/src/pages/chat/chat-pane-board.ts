@@ -499,13 +499,16 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
           parentKey,
           agentId,
           sourceEpoch,
-          readParent: () =>
-            client
-              .request<{ session: GatewaySessionRow | null }>("sessions.describe", {
-                key: parentKey,
-                ...(parseAgentSessionKey(parentKey) ? {} : { agentId }),
-              })
-              .then((result) => result.session),
+          readParent: (refresh) =>
+            context.sessions
+              .describe(
+                {
+                  key: parentKey,
+                  ...(parseAgentSessionKey(parentKey) ? {} : { agentId }),
+                },
+                { client, refresh },
+              )
+              .then((result) => result.session ?? null),
           currentRows: () => (isCurrent() ? (state.sessionsResult?.sessions ?? []) : []),
           onRows: () => {
             if (isCurrent()) {

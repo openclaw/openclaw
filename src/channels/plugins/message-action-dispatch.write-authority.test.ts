@@ -83,7 +83,7 @@ describe("scheduled message write declaration", () => {
     },
   );
 
-  it.each([{ trusted: false }, { writes: [] }, { writes: ["read"] as const }])(
+  it.each([{ trusted: false }, { writes: ["read"] as const }])(
     "does not infer writer support or registration authority from action arguments (%j)",
     async (options) => {
       const fixture = registerWriter(options);

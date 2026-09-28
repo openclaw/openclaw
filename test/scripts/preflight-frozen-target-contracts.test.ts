@@ -93,6 +93,7 @@ function fixture(
       "record-shared.mjs",
       "update-compat-contract.mjs",
       "openclaw-e2e-instance.sh",
+      "docker-e2e-watchdog.mjs",
       "direct-run.mjs",
     ]) {
       copyFileSync(join(repo, "scripts/lib", file), join(toolingRoot, "scripts/lib", file));
@@ -115,10 +116,17 @@ function fixture(
       recursive: true,
       dereference: true,
     });
-    cpSync(dirname(installedNative), join(toolingRoot, "node_modules", nativeName), {
-      recursive: true,
-      dereference: true,
-    });
+    // A joined writer keeps concurrent test forks from inheriting the executable's writable fd.
+    execFileSync(
+      process.execPath,
+      [
+        "-e",
+        "require('node:fs').cpSync(process.argv[1], process.argv[2], { recursive: true, dereference: true })",
+        dirname(installedNative),
+        join(toolingRoot, "node_modules", nativeName),
+      ],
+      { stdio: "pipe", timeout: 20_000 },
+    );
   }
   const log = join(root, "forbidden-commands");
   const bin = join(root, "bin");
@@ -465,6 +473,8 @@ describe("frozen admission upgrade Docker aliases", () => {
     expect(record.contracts).toHaveLength(1);
     expect(record.contracts[0].modes).toEqual({
       OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE: "current",
+      OPENCLAW_FROZEN_UPGRADE_SURVIVOR_TOOL_SEARCH_RECIPE: "absent",
+      OPENCLAW_FROZEN_UPGRADE_SURVIVOR_MEMBERSHIP_MODE: "native",
       releaseTrain: train,
     });
     expect(record.selectedSha).toBe(f.selected.sha);
@@ -522,11 +532,11 @@ describe("frozen admission upgrade Docker aliases", () => {
       const oid = f.selected.git("rev-parse", `${f.selected.sha}:${path}`);
       rmSync(join(f.selected.root, ".git/objects", oid.slice(0, 2), oid.slice(2)));
     }
-    const lanes = expandUpdateFirstHopCompatLanes([lane]);
-    const result = f.run({ docker: { lanes } });
+    const requestedLanes = expandUpdateFirstHopCompatLanes([lane]);
+    const result = f.run({ docker: { lanes: requestedLanes } });
     expect(result.status, result.stderr).toBe(0);
     const record = JSON.parse(result.stdout);
-    expect(record.docker).toEqual({ lanes, omitted: [], status: "ADMITTED" });
+    expect(record.docker).toEqual({ lanes: requestedLanes, omitted: [], status: "ADMITTED" });
     expect(record.selection.consumers).toEqual(lane === "plugins-offline" ? ["plugins"] : []);
     expect(record.contracts.map((contract: { consumer: string }) => contract.consumer)).toEqual(
       record.selection.consumers,

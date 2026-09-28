@@ -1,6 +1,7 @@
 import { html } from "lit";
 import { state } from "lit/decorators.js";
 import { titleForRoute } from "../../app-navigation.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { getLobsterdexEntries } from "../../components/lobster-dex.ts";
 import type { LobsterPetPaletteId } from "../../components/lobster-pet-contract.ts";
 import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
@@ -81,7 +82,7 @@ class LobsterdexPage extends OpenClawLightDomElement {
 
   override render() {
     return html`
-      <section class="content-header">
+      <section class="content-header" ${shellLayoutTraits({ toolbarHeader: true })}>
         <h1 class="page-title">${titleForRoute("lobsterdex")}</h1>
       </section>
       ${renderSettingsWorkspace(
