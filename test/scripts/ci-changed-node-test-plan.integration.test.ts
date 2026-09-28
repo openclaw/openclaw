@@ -422,6 +422,8 @@ it("keeps UI and core changes with exact owners and direct consumers", () => {
       includeReleaseOnlyToolingShards: true,
       includeProofTests: false,
       includeReleaseOnlyRuntimeTests: true,
+      // Match the focused selector's admitted owner inventory before comparing resources.
+      includePrExemptRuntimeTests: true,
     });
   } finally {
     placement.mockRestore();
