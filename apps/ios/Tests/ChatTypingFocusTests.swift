@@ -8,12 +8,12 @@ import XCTest
 
 @MainActor
 private enum ChatTypingMainRunLoop {
-    /// Returns only when the main run loop idles at the test's own stack base with `isSettled` true.
+    /// Checks readiness at the test's own stack base, without requiring the run loop to idle.
     /// An awaited continuation can instead resume inside UIKit's nested keyboard run loop, mid-SwiftUI
     /// update, where a retired composer is still attached and cleared but not yet replaced.
-    static func settle(until isSettled: @escaping @MainActor () -> Bool = { true }) {
-        let settled = XCTestExpectation(description: "Main run loop settled at the test's stack base")
-        settled.assertForOverFulfill = false
+    static func settle(until isSettled: @escaping @MainActor () -> Bool) {
+        let runLoop = CFRunLoopGetMain()
+        let deadline = Date(timeIntervalSinceNow: 5)
         var depth = 0
         let observer = CFRunLoopObserverCreateWithHandler(
             nil,
@@ -25,13 +25,17 @@ private enum ChatTypingMainRunLoop {
             case .entry: depth += 1
             case .exit: depth -= 1
             default:
-                // Depth 1 is the waiter's own loop; SwiftUI and Core Animation commit earlier in this callout.
-                if depth == 1, MainActor.assumeIsolated(isSettled) { settled.fulfill() }
+                // Avoid sleeping after SwiftUI commits readiness without delivering another input source.
+                if depth == 1, MainActor.assumeIsolated(isSettled) { CFRunLoopStop(runLoop) }
             }
         }
-        CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
-        defer { CFRunLoopRemoveObserver(CFRunLoopGetMain(), observer, .commonModes) }
-        XCTAssertEqual(XCTWaiter.wait(for: [settled], timeout: 5), .completed)
+        CFRunLoopAddObserver(runLoop, observer, .commonModes)
+        defer { CFRunLoopRemoveObserver(runLoop, observer, .commonModes) }
+        repeat {
+            // A busy source can suppress beforeWaiting. Return after handling it, outside nested UIKit loops.
+            CFRunLoopRunInMode(.defaultMode, max(0, deadline.timeIntervalSinceNow), true)
+        } while !isSettled() && deadline.timeIntervalSinceNow > 0
+        XCTAssertTrue(isSettled(), "Main run loop did not reach the expected state at the test's stack base")
     }
 }
 
@@ -156,6 +160,30 @@ final class ChatTypingFocusTests: XCTestCase {
         XCTAssertFalse(keyboardLoop.isRunning, "The wait must return after the nested keyboard loop unwinds.")
         XCTAssertNil(retiredEditor.window)
         XCTAssertTrue(replacementEditor.window === window)
+    }
+
+    func testSettleDoesNotRequireAnIdleRunLoop() throws {
+        var ready = false
+        var context = CFRunLoopSourceContext()
+        context.perform = { _ in }
+        let source = try XCTUnwrap(CFRunLoopSourceCreate(nil, 0, &context))
+        let pressure = CFRunLoopObserverCreateWithHandler(
+            nil, CFRunLoopActivity.beforeSources.rawValue, true, 0)
+        { _, _ in
+            ready = true
+            // A continuously ready source prevents beforeWaiting, even after rendering is ready.
+            CFRunLoopSourceSignal(source)
+        }
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .defaultMode)
+        CFRunLoopAddObserver(CFRunLoopGetMain(), pressure, .defaultMode)
+        defer {
+            CFRunLoopRemoveObserver(CFRunLoopGetMain(), pressure, .defaultMode)
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .defaultMode)
+        }
+
+        ChatTypingMainRunLoop.settle { ready }
+
+        XCTAssertTrue(ready)
     }
 
     private static func checkComposerReadiness(disabledByAncestor: Bool) throws {

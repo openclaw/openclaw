@@ -297,6 +297,7 @@ jobs:
             const allExtensionShards = planner.createExtensionTestShards({
               shardCount: planner.DEFAULT_EXTENSION_TEST_SHARD_COUNT,
             });
+            const batchedExtensionIds = new Set(allExtensionShards.flatMap((shard) => shard.extensionIds));
             const hasJobSplitter = typeof planner.splitExtensionTestJobTargets === "function";
             const telegramPlanGroups = hasJobSplitter
               ? planner.createExtensionTestShards({ extensionIds: ["telegram"], shardCount: 1 })
@@ -310,7 +311,8 @@ jobs:
                 ? sources.collectTrackedBundledPluginSourceCandidates(process.cwd())
                 : sources.collectBundledPluginSources({ repoRoot: process.cwd() });
               if (!candidates) throw new Error("Cannot enumerate bundled plugin source metadata");
-              const sourceRoots = candidates.filter((entry) => entry.manifestPath && !entry.packageJsonPath)
+              // Older planners omit manifest-only plugins; supplement only their missing owners.
+              const sourceRoots = candidates.filter((entry) => entry.manifestPath && !entry.packageJsonPath && !batchedExtensionIds.has(entry.dirName))
                 .map((entry) => `extensions/${entry.dirName}`);
               const sourceFiles = [
                 ...planner.listExtensionTestFilesForRoots(sourceRoots),

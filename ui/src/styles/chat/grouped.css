@@ -14,11 +14,9 @@
    bubble only, not the virtual row positioning or measured layout dimensions. */
 @keyframes chat-message-enter {
   from {
-    opacity: 0;
     transform: translateY(8px);
   }
   to {
-    opacity: 1;
     transform: translateY(0);
   }
 }

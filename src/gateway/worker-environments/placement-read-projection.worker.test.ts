@@ -13,10 +13,8 @@ import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.tes
 import { placementTurnOwner, type WorkerPlacementExecutionMode } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
-import {
-  matchesWorkspaceResultClaim,
-  type WorkerWorkspacePendingResult,
-} from "./placement-workspace-result.js";
+import { matchesWorkspaceResultClaim } from "./placement-workspace-result.js";
+import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 
 const roots = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {

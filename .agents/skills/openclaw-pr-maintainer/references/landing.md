@@ -224,10 +224,41 @@ enable PR fail-fast, and have no `continue-on-error`. GitHub's job API omits mat
 ownership; membership and cancellation cause remain explicitly inspected operator
 attestations supported by the named artifacts, not facts inferred from prefixes.
 Either mechanism refuses cancelled jobs with failed steps or missing step evidence;
-those cannot be hidden as collateral cancellation.
+those cannot be hidden as collateral cancellation. The successful monitor route
+has one narrowly qualified historical exception: the Discord attachment uploader
+ran after cancellation skipped its entire built-artifact producer. This does not
+apply to matrix-only cancellation, test/cleanup failures, upload transport errors,
+or a producer that ran and failed or was cancelled.
+
+For that exact shape, add one `cancellation.secondaryFailures` entry with
+`kind: "missing-artifact-after-skipped-producer"`, numeric `jobId`, failed upload
+`step`, skipped `producerStep`, `log` (an existing artifact name), `reason`, and
+`evidence` names including that log. Keep this job in the exhaustive cancelled
+`jobIds`; do not add it to `failures` or either `causedBy` root list.
+
+The log must be the complete retained `gh run view --job --log` output with job,
+step, and timestamp columns, including multiline continuations and final cleanup.
+Its existing artifact SHA-256 is rechecked. The verifier binds the unique live
+build/producer/upload step names and numbers, successful monitor, cancelled build,
+skipped producer, and upload timing. It requires the tested workflow to equal the
+baseline, the reviewed historical producer body digest, and exact pinned uploader,
+selection, paths, and missing-file error policy. The log must identify the tested
+checkout/workflow and show only build cancellation followed by the absence of
+both declared JSON/log outputs. Other error annotations or failed steps block.
+The producer digest recognizes this inspected skipped-output contract; it grants
+no authority and does not evaluate arbitrary shell code. Source/log provenance
+and causal interpretation remain inspected attestations. This retains the
+secondary failure explicitly without turning cancellation into passing coverage.
 
 The tool verifies live run/attempt/PR/head identities, complete job accounting,
 the current effective GitHub Actions gate check-run, and source/artifact hashes.
+During active prior-CI admission, unrelated main movement can pass when it is
+forward from both captured main anchors and produces a conflict-free, nonempty
+merge. Exact PR/policy facts and final live authority checks still apply; the
+intent and landing-parent audit retain their original main anchor. The last
+reread uses local objects only, so a newly unavailable main is a pre-dispatch
+refusal, not permission to fetch after authority verification. Crabbox admission
+and retained-outcome reconciliation keep their existing strict main binding.
 A fork run with an empty GitHub PR association must match the current PR's exact
 head, branch, and source repository identity as well as that check-run; an
 explicit association with another PR is rejected. The retained result names

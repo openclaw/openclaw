@@ -46,12 +46,22 @@ it("rechecks a foreign commit before the next worker operation", async () => {
 });
 
 it("retires an existing-only idle actor without opening its missing database", async () => {
+  const databasePath = openOpenClawStateDatabase().path;
+  await closeOpenClawStateDatabaseAsync();
   const context = captureOpenClawStateWorkerContext();
   const backend = runWithSqliteWorkerStateContext(context, () =>
-    openExistingSqliteWorkerBackend(undefined, { databasePath: context.admission.databasePath }),
+    openExistingSqliteWorkerBackend(undefined, {
+      databasePath,
+      existingIdentity: context.admission.identity.key,
+    }),
   );
+  unlinkSync(databasePath);
   try {
-    expect(backend.execute({ type: "database.inspectIdle", input: undefined })).toBe("retire");
+    expect(
+      runWithSqliteWorkerStateContext(context, () =>
+        backend.execute({ type: "database.inspectIdle", input: undefined }),
+      ),
+    ).toBe("retire");
     expect(existsSync(context.admission.databasePath)).toBe(false);
   } finally {
     await backend.close();
@@ -68,7 +78,10 @@ it.each(["removed", "replaced"] as const)(
     const original = readFileSync(alias);
     const context = captureOpenClawStateWorkerContext();
     const backend = runWithSqliteWorkerStateContext(context, () =>
-      openExistingSqliteWorkerBackend(undefined, { databasePath }),
+      openExistingSqliteWorkerBackend(undefined, {
+        databasePath,
+        existingIdentity: context.admission.identity.key,
+      }),
     );
     unlinkSync(databasePath);
     if (kind === "replaced") {

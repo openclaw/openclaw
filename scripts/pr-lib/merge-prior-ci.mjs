@@ -1,11 +1,11 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync } from "node:fs";
-import { parse } from "yaml";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
 import { runBelongsToPullRequest } from "../verify-pr-hosted-gates.mts";
 import { parseGithubResponse } from "./gh-api-preflight.mjs";
 import { execPrGh, execPrGhJson } from "./github.mjs";
+import { verifyPriorCiCancellation } from "./merge-prior-ci-cancellation.mjs";
 import { verifyPriorCiSecurity } from "./merge-prior-ci-security.mjs";
 import { readMergePolicy, readRequiredMergeChecks } from "./merge-rest.mjs";
 
@@ -118,57 +118,6 @@ function verifyUnchangedEvidence(path, expected) {
     verifyFailureArtifacts(evidence);
   }
   return { evidenceSha256: expected };
-}
-
-function verifyMatrixCancellation(evidence, run, cancellation, members) {
-  const workflowJob = "checks-node-core-test-nondist-shard";
-  requireEvidence(
-    run.event === "pull_request" &&
-      cancellation.workflowJob === workflowJob &&
-      cancellation.jobId === undefined &&
-      cancellation.step === undefined,
-    "matrix cancellation requires the existing PR Node matrix owner",
-  );
-  const workflowPath = ".github/workflows/ci.yml";
-  const baseline = git(["rev-parse", `${evidence.priorHead}:${workflowPath}`])
-    .toString("utf8")
-    .trim();
-  const workflowBlob = git(["rev-parse", `${evidence.testedMerge}:${workflowPath}`])
-    .toString("utf8")
-    .trim();
-  requireEvidence(
-    oid.test(workflowBlob) && workflowBlob === baseline,
-    "matrix cancellation workflow changed in the tested PR merge",
-  );
-  const workflow = parse(git(["show", `${evidence.testedMerge}:${workflowPath}`]).toString("utf8"));
-  const owner = workflow?.jobs?.[workflowJob];
-  requireEvidence(
-    owner?.name === "${{ matrix.check_name || 'checks-node-core-test-nondist-shard' }}" &&
-      Array.isArray(owner.needs) &&
-      owner.needs.includes("preflight") &&
-      owner.strategy?.matrix ===
-        "${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}" &&
-      [true, "${{ github.event_name == 'pull_request' }}"].includes(
-        owner.strategy?.["fail-fast"],
-      ) &&
-      [undefined, false].includes(owner["continue-on-error"]),
-    "the tested workflow must enable the existing PR matrix fail-fast contract",
-  );
-  // GitHub jobs omit their matrix owner. Membership and cause remain inspected
-  // operator attestations; exact names/IDs bind them without inferring from prefixes.
-  requireEvidence(
-    Array.isArray(cancellation.members) &&
-      cancellation.members.length === members.length &&
-      new Set(cancellation.members.map((member) => member?.jobId)).size === members.length &&
-      cancellation.members.every(
-        (member) =>
-          positiveInteger(member?.jobId) &&
-          nonempty(member.name) &&
-          members.some((job) => job.id === member.jobId && job.name === member.name),
-      ),
-    "matrix membership bindings must name every admitted root and cancelled job exactly",
-  );
-  return { ...cancellation, workflowBlob };
 }
 
 async function verifyPreExistingFailure(evidence, run, jobs, checks, main, repositoryId) {
@@ -303,62 +252,17 @@ async function verifyPreExistingFailure(evidence, run, jobs, checks, main, repos
     evidence.aggregate?.jobId === gates[0].id && causedByRoots(evidence.aggregate),
     "the failed CI aggregate needs inspected attribution to the admitted root failures",
   );
-  const cancelled = jobs.filter((job) => job.conclusion === "cancelled" && job !== gates[0]);
-  let matrixCancellation;
-  if (cancelled.length > 0) {
-    const cancellation = evidence.cancellation;
-    requireEvidence(
-      causedByRoots(cancellation) &&
-        Array.isArray(cancellation.jobIds) &&
-        JSON.stringify(cancellation.jobIds.toSorted((a, b) => a - b)) ===
-          JSON.stringify(cancelled.map((job) => job.id).toSorted((a, b) => a - b)),
-      "all cancelled jobs require explicit inspected fail-fast provenance; cancellation is not passing coverage",
-    );
-    requireEvidence(
-      cancelled.every(
-        (job) =>
-          Array.isArray(job.steps) &&
-          job.steps.every(
-            (step) =>
-              !["failure", "timed_out", "action_required", "startup_failure"].includes(
-                step.conclusion,
-              ),
-          ),
-      ),
-      "cancelled jobs must not hide failed steps or omit step evidence",
-    );
-    if (cancellation.kind === "matrix-fail-fast") {
-      matrixCancellation = verifyMatrixCancellation(evidence, run, cancellation, [
-        ...failed,
-        ...cancelled,
-      ]);
-    } else {
-      const owner = jobs.find((job) => job.id === cancellation.jobId);
-      requireEvidence(
-        [undefined, "pr-fail-fast"].includes(cancellation.kind) &&
-          owner?.name === "pr-fail-fast" &&
-          owner.conclusion === "success" &&
-          positiveInteger(cancellation.step) &&
-          Array.isArray(owner.steps) &&
-          owner.steps.some(
-            (step) =>
-              step.number === cancellation.step &&
-              [
-                "Cancel remaining PR work after a failure",
-                "Classify PR failures and cancel eligible same-repository work",
-              ].includes(step.name) &&
-              step.status === "completed" &&
-              step.conclusion === "success",
-          ),
-        "all cancelled jobs require explicit inspected fail-fast provenance; cancellation is not passing coverage",
-      );
-    }
-  } else {
-    requireEvidence(
-      evidence.cancellation === undefined,
-      "cancellation attribution has no matching jobs",
-    );
-  }
+  const cancellationProof = verifyPriorCiCancellation({
+    evidence,
+    run,
+    jobs,
+    failed,
+    gate: gates[0],
+    causedByRoots,
+    references,
+    git,
+    requireEvidence,
+  });
   const securityReview = await verifyPriorCiSecurity({
     repository: evidence.repository,
     repositoryId,
@@ -378,10 +282,9 @@ async function verifyPreExistingFailure(evidence, run, jobs, checks, main, repos
   );
   return {
     failures,
-    cancelledJobIds: cancelled.map((job) => job.id).toSorted((a, b) => a - b),
+    ...cancellationProof,
     gateCheckRunId: current[0].checkRunId,
     securityReview,
-    ...(matrixCancellation ? { cancellation: matrixCancellation } : {}),
   };
 }
 

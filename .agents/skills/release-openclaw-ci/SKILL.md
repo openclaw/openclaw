@@ -647,8 +647,11 @@ pnpm ci:full-release \
   -f dispatch_release_evidence=false
 ```
 
-The helper verifies both SHAs, creates the transport ref with the equivalent of
-the following GitHub refs operation, and dispatches from that branch:
+The helper verifies both SHAs and proves GitHub serves the exact Validation SHA
+by bare-SHA fetch in a fresh temporary repository, including in dry runs, before
+retaining a request or mutating remote state. It creates one immutable workflow
+transport ref with the equivalent of the following GitHub refs operation, and
+dispatches from that branch:
 
 ```bash
 gh api --method POST repos/openclaw/openclaw/git/refs \
@@ -733,7 +736,7 @@ node scripts/release-ci-summary.mjs <full-release-run-id> --watch
 Do not start this watcher when the SHA-pinned helper is still the foreground
 owner. The helper reads the exact Release Decision artifact itself. On
 `blocked_diagnostics_running`, it exits nonzero immediately, keeps the temporary
-refs, and leaves Diagnostic Drain collecting the remaining terminal evidence.
+workflow ref, and leaves Diagnostic Drain collecting the remaining terminal evidence.
 The watcher behaves the same way for separately dispatched parents: it reports
 the Release Decision blocker once and exits while the drain continues.
 

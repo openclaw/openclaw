@@ -34,6 +34,7 @@ it.each(["main", "global"])(
     const observations = createSessionRosterObservations(
       {
         connection,
+        observerError: () => null,
         readState: () => ({ result: primary, agentId: "main" }),
         decorate: (value) => value,
       },

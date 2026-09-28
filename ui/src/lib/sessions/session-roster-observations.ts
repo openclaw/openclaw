@@ -7,6 +7,7 @@ import type {
   SessionRowEventListener,
   SessionRowListener,
 } from "./session-capability.ts";
+import { createSessionDescribeReads } from "./session-describe.ts";
 import {
   createSessionEventDelivery,
   type SessionEventDelivery,
@@ -58,6 +59,7 @@ type RowEventDelivery = SessionEventDelivery<RegisteredSessionRow>;
 export function createSessionRosterObservations(
   host: {
     connection: SessionConnectionOwner;
+    observerError: () => string | null;
     readState: () => {
       result: SessionsListResult | null;
       agentId: string | null;
@@ -516,11 +518,28 @@ export function createSessionRosterObservations(
       rows.map((row) => ({ row, revision: issuedRevision ?? rowRevision(row) })),
     ).notify;
   };
+  const descriptions = createSessionDescribeReads({
+    connection: host.connection,
+    canReuse: () => host.observerError() === null,
+    currentRow: (params) => {
+      const held = observations.publishedRow((row, ownerAgentId) => {
+        const agentId = parseAgentSessionKey(params.key)?.agentId ?? params.agentId;
+        return (
+          areUiSessionKeysEquivalent(row.key, params.key) &&
+          (!agentId || owner(row, ownerAgentId) === normalizeAgentId(agentId)) &&
+          provenance.hasObservation(row)
+        );
+      });
+      return held ? projectFields(held, params.agentId) : undefined;
+    },
+  });
   const observations = {
+    descriptions,
     reset() {
       // Retained cache rows carry presentation, not evidence from the retired connection.
       provenance.reset();
       registeredRows.clear();
+      descriptions.clear();
     },
     registerRow(
       this: void,

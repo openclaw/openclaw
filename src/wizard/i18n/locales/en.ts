@@ -58,7 +58,7 @@ export const en = {
       verificationFailedError: "Verification failed: {error}",
       verificationFailedStatus: "Verification failed: status {status}",
       verificationSuccessful: "Verification successful.",
-      validUrl: "Please enter a valid URL (e.g. http://...)",
+      validUrl: "Please enter a valid HTTP or HTTPS URL (e.g. http://localhost:11434/v1)",
     },
     gateway: {
       auth: "Gateway auth",

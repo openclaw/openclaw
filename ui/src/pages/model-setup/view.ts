@@ -2,6 +2,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { cache } from "lit/directives/cache.js";
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { icons } from "../../components/icons.ts";
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
@@ -560,7 +561,7 @@ export function renderModelSetup(props: ModelSetupViewProps): TemplateResult {
     `;
   }
   return html`
-    <section class="content-header">
+    <section class="content-header" ${shellLayoutTraits({ toolbarHeader: true })}>
       <div>
         <div class="page-title">${titleForRoute("model-setup")}</div>
         <div class="page-subtitle">

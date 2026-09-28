@@ -538,27 +538,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     }
     const routeSessionKey = this.sessionKey.trim();
     const catalogRouteKey = parseCatalogSessionKey(routeSessionKey);
-    if (
-      sourceChanged &&
-      snapshot.phase === "connected" &&
-      state.sessionKey &&
-      !clientChanged &&
-      !catalogRouteKey
-    ) {
-      // A logical reconnect can retain the browser client and skip full startup.
-      // Disconnect cleanup drops transient tool rows, so reload this pane's
-      // active-run snapshot before secondary session surfaces hydrate.
-      const historyRefresh = refreshPageChat(state, {
-        startup: true,
-        awaitHistory: true,
-        deferBranches: true,
-        historyLoad: resumedHistory,
-      });
-      this.deferSessionHydrationUntilTranscript(
-        state.sessionKey,
-        historyRefresh.then(() => getChatHistoryLoadState(state).phase === "committed"),
-      );
-    }
     const canonicalRouteSessionKey =
       routeSessionKey && !catalogRouteKey
         ? resolveSessionKey(routeSessionKey, snapshot.hello)

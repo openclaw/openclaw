@@ -1059,6 +1059,33 @@ extension DashboardManager {
         }
     }
 
+    private func documentBrowserStore(
+        configuration: WindowConfiguration, target: DashboardGatewayTarget) -> DashboardBrowserSessionStore?
+    {
+        guard case let .profile(profileID) = target,
+              configuration.browserSession != nil || configuration.signedOut != nil
+        else { return nil }
+        return self.browserStore(profileID: profileID, currentSession: configuration.browserSession)
+    }
+
+    func conversationDocument(
+        for target: DashboardGatewayTarget,
+        installCapabilities: (WKUserContentController, URL) -> Void) async throws -> ControlUIDocumentHost
+    {
+        let (configuration, _) = try await self.windowConfiguration(for: target)
+        if configuration.signedOut != nil { throw GatewayBrowserSessionError.expired }
+        let store = self.documentBrowserStore(configuration: configuration, target: target)
+        return ControlUIDocumentHost(
+            url: configuration.url,
+            auth: configuration.auth,
+            websiteDataStore: store?.dataStore ?? self.websiteDataStore,
+            tlsParams: configuration.tlsParams,
+            browserSessionLease: store?.lease(for: configuration.browserSession))
+        {
+            installCapabilities($0, configuration.url)
+        }
+    }
+
     private func makeController(
         configuration: WindowConfiguration,
         target: DashboardGatewayTarget,
@@ -1067,14 +1094,7 @@ extension DashboardManager {
         reusingWindow: NSWindow? = nil) -> DashboardWindowController
     {
         let primaryLocal = !auxiliary && target == .primary && configuration.mode == .local
-        let browserStore: DashboardBrowserSessionStore? = if case let .profile(profileID) = target,
-                                                             configuration.browserSession != nil ||
-                                                             configuration.signedOut != nil
-        {
-            self.browserStore(profileID: profileID, currentSession: configuration.browserSession)
-        } else {
-            nil
-        }
+        let browserStore = self.documentBrowserStore(configuration: configuration, target: target)
         let controller = DashboardWindowController(
             url: configuration.url,
             auth: configuration.auth,

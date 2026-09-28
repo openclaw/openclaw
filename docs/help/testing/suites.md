@@ -120,6 +120,10 @@ Native dependency policy:
     - Provider plugin shards reuse workers with the shared cleanup runner.
       Track global replacements with `vi.stubGlobal` so cleanup can restore them
       before the next file.
+    - Before each test attempt and before a file's cleanup, the shared runner
+      waits for agent database closes that earlier teardown scheduled without
+      awaiting, so a Worker lease release never overlaps the next test. A failed
+      close stays with its owner and the file-end drain, as before.
     - Each `pnpm test` shard inherits the platform pool and `isolate: false`
       defaults from the shared Vitest config unless its owner selects otherwise.
     - `scripts/run-vitest.mjs` adds `--no-maglev` for Vitest child Node

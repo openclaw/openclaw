@@ -3,6 +3,7 @@ import path from "node:path";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import {
+  findChangedDatabasePaths,
   inspectDatabasePathIdentitySync,
   readDatabasePathIdentitySync,
   type DatabasePathIdentity,
@@ -428,21 +429,22 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
   };
   const findPhysicalRecord = (identity: DatabasePathIdentity): IdentityRecord | undefined => {
     const record = records.get(identity.key);
-    if (
-      !record ||
-      !identity.key.startsWith("file:") ||
-      record.paths.has(identity.canonicalPath) ||
-      isSealed(record)
-    ) {
+    if (!record || !identity.key.startsWith("file:") || isSealed(record)) {
       return record;
     }
-    // A closed, deleted database can leave an inode that a new path reuses.
-    // Only cold identity binding probes aliases; warmed captures stay unchanged.
-    if (
-      [...record.paths].some(
-        (pathname) => inspectDatabasePathIdentitySync(pathname)?.key === identity.key,
-      )
-    ) {
+    // Cold binding retires vanished paths even when another hardlink keeps the file alive.
+    // Warm captures use the retained admission without polling the filesystem.
+    for (const pathname of findChangedDatabasePaths(record.paths, identity)) {
+      record.admissions.delete(pathname);
+      record.paths.delete(pathname);
+      if (recordsByPath.get(pathname) === record) {
+        recordsByPath.delete(pathname);
+      }
+    }
+    if (record.paths.size > 0) {
+      if (!record.paths.has(record.identity.canonicalPath)) {
+        record.identity = identity;
+      }
       return record;
     }
     invalidate(record);
@@ -557,7 +559,11 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
       },
       assertCurrent() {
         assertOpen(record);
-        if (records.get(record.identity.key) !== record || record.generation !== generation) {
+        if (
+          records.get(record.identity.key) !== record ||
+          record.generation !== generation ||
+          record.admissions.get(databasePath) !== admission
+        ) {
           throw new StateDatabaseReadAdmissionInvalidatedError(
             "OpenClaw state database read admission changed",
           );

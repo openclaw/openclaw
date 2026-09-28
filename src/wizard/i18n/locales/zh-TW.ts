@@ -57,7 +57,7 @@ export const zh_TW = {
       verificationFailedError: "驗證失敗：{error}",
       verificationFailedStatus: "驗證失敗：狀態碼 {status}",
       verificationSuccessful: "驗證成功。",
-      validUrl: "請輸入有效 URL（例如 http://...）",
+      validUrl: "請輸入有效的 HTTP 或 HTTPS URL（例如 http://localhost:11434/v1）",
     },
     gateway: {
       auth: "Gateway 認證",

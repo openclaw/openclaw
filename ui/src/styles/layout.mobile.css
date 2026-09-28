@@ -72,7 +72,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   display: none;
 }
 
-.shell--mobile-nav:has(> .shell-connection-status) {
+.shell--mobile-nav.shell--connection-status {
   grid-template-rows: var(--shell-topbar-height) auto minmax(0, 1fr);
   grid-template-areas:
     "topbar"
@@ -471,12 +471,12 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     max-height: 380px;
   }
 
-  .content:has(openclaw-logs-page) {
+  main.content:where(.content--logs-page) {
     display: block;
     overflow-y: auto;
   }
 
-  .content:has(openclaw-logs-page) > openclaw-router-outlet,
+  main.content:where(.content--logs-page) > openclaw-router-outlet,
   .content openclaw-logs-page,
   .content .settings-workspace--fill-height,
   .content .settings-workspace--fill-height > .settings-workspace__body,

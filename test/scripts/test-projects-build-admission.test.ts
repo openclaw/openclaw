@@ -583,6 +583,7 @@ describe("packed CI config continuation", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     vi.stubEnv("CI", "1");
     vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "1");
+    vi.stubEnv("OPENCLAW_VITEST_SHARD_NAME", "serial-fixture");
     vi.stubEnv("OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT", "");
     vi.stubEnv("OPENCLAW_VITEST_FS_MODULE_CACHE_PATH", "");
     vi.stubEnv("OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE", scenario.enabled ? "1" : "");
@@ -613,6 +614,7 @@ describe("packed CI config continuation", () => {
     } else {
       await running;
     }
+    expect(console.error).toHaveBeenCalledWith("[test] inner parallelism 1");
     expect(selected).toEqual(configs.slice(0, scenario.expected));
     if (scenario.signaled) {
       expect(exit).toHaveBeenCalledWith("SIGTERM");
@@ -1178,6 +1180,7 @@ describe("cache lease completion", () => {
       }
       expect(commands.reader).toHaveBeenCalledTimes(expected);
       if (focused) {
+        expect(console.error).toHaveBeenCalledWith("[test] inner parallelism 2");
         const selected = selections.flat();
         expect(
           selections.every((selection) => Array.isArray(selection) && selection.length === 1),

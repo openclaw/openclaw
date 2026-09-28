@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import type { DoctorMemoryStatusPayload } from "../../../../src/gateway/server-methods/doctor.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { lobsterPetSeed } from "../../components/lobster-pet-contract.ts";
 import {
   createLobsterPetLook,
@@ -322,7 +323,7 @@ function renderShortcuts(props: MemoryOverviewProps) {
 export function renderMemoryOverview(props: MemoryOverviewProps) {
   const active = props.engineSelection.kind !== "off" && !props.engineDisabled;
   return html`
-    <div class="settings-page memory-overview">
+    <div class="settings-page memory-overview" ${shellLayoutTraits({ settingsPage: true })}>
       ${renderHero(props)} ${active ? renderStatusCards(props) : nothing} ${renderShortcuts(props)}
     </div>
   `;

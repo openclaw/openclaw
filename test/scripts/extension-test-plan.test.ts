@@ -43,6 +43,20 @@ describe("extension executable test plans", () => {
     );
     timings[key(workerConfig, files)!] = 60;
     expect(extensionTestPlan.estimateExtensionTestCost(workerConfig, 2, files)).toBe(60);
+    const parallelEnv = { OPENCLAW_VITEST_MAX_WORKERS: "2", OPENCLAW_TEST_PROJECTS_PARALLEL: "2" };
+    const parallelKey = key(workerConfig, files, parallelEnv)!;
+    expect(parallelKey).not.toBe(key(workerConfig, files));
+    expect(key(workerConfig, files, { ...parallelEnv, OPENCLAW_TEST_PROJECTS_PARALLEL: "1" })).toBe(
+      key(workerConfig, files),
+    );
+    expect(extensionTestPlan.estimateExtensionTestCost(workerConfig, 2, files, parallelEnv)).toBe(
+      60,
+    );
+    timings[parallelKey] = 25;
+    expect(extensionTestPlan.estimateExtensionTestCost(workerConfig, 2, files, parallelEnv)).toBe(
+      25,
+    );
+    expect(extensionTestPlan.estimateExtensionTestCost(workerConfig, 2, files)).toBe(60);
 
     samples.mockReturnValue({
       [key(telegramConfig, [files[0]!], undefined, "singleton-invocation")!]: 100,
@@ -74,6 +88,29 @@ describe("extension executable test plans", () => {
       [key(workerConfig, [], undefined, "wrapper-overhead")!]: 2,
     });
     expect(extensionTestPlan.estimateExtensionTestCost(workerConfig, 1, only)).toBe(22);
+  });
+
+  it("requests overlap only for selected Telegram singleton envelopes", async () => {
+    const { createChangedExtensionConfigShards } =
+      await import("../../scripts/lib/ci-extension-test-shards.mts");
+    const files = [
+      "extensions/telegram/src/telegram-ingress-spool.test.ts",
+      "extensions/telegram/src/telegram-ingress-drain.test.ts",
+      "extensions/telegram/src/webhook.test.ts",
+    ];
+    vi.spyOn(extensionTestPlan, "listExtensionTestFilesForRoots").mockReturnValue(files);
+    const shards = createChangedExtensionConfigShards(["extensions/telegram"], {
+      targets: new Set(files),
+      includeReleaseOnlyRuntimeTests: true,
+    });
+    expect(shards).toHaveLength(1);
+    expect(shards[0]).toMatchObject({
+      configs: [workerConfig],
+      env: { OPENCLAW_VITEST_MAX_WORKERS: "2", OPENCLAW_TEST_PROJECTS_PARALLEL: "2" },
+      planConcurrency: 1,
+      requiresDist: false,
+    });
+    expect(shards[0]!.includePatterns?.toSorted()).toEqual(files.toSorted());
   });
 
   it.each(["git", "filesystem"])("reads each candidate checkout's %s plugin inventory", (kind) => {

@@ -418,13 +418,17 @@ function selectedFiles(shards: ReturnType<typeof createChangedNodeTestShards>) {
   );
 }
 
-function expectCanonicalGroupedConcurrency(shards: ReturnType<typeof createChangedNodeTestShards>) {
+function expectCanonicalGroupedConcurrency(
+  shards: ReturnType<typeof createChangedNodeTestShards>,
+  runnerBackend?: string,
+) {
   const grouped = expectDefined(shards, "changed owner plan").filter((shard) => shard.groups);
   const files = grouped.flatMap((shard) =>
     (shard.groups ?? []).flatMap((group) => group.includePatterns ?? []),
   );
   const canonical = expectDefined(
     createSelectedNodeTestShardBundles(files, {
+      runnerBackend,
       includeReleaseOnlyRuntimeTests: true,
       includePrExemptRuntimeTests: true,
     }),
@@ -1368,7 +1372,7 @@ describe("CI changed Node test plan", () => {
       expect(tooling.flatMap((group) => group.includePatterns ?? []).toSorted()).toEqual(
         expectedTargets.toSorted(),
       );
-      expectCanonicalGroupedConcurrency(shards);
+      expectCanonicalGroupedConcurrency(shards, runnerBackend);
       const full = createNodeTestShardBundles({
         compactMode: "pull-request",
         runnerBackend,
@@ -3224,6 +3228,7 @@ describe("CI changed Node test plan", () => {
               `2026-09-26T00:00:00Z OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups(groups)}`,
               ...groups.flatMap((group, index) => [
                 `2026-09-26T00:0${index * 4}:00Z [shard:${group.shard_name}] begin`,
+                `2026-09-26T00:0${index * 4}:01Z [shard:${group.shard_name}] [test] inner parallelism 2`,
                 `2026-09-26T00:0${index * 4 + 3}:12Z [shard:${group.shard_name}] end (exit 0)`,
               ]),
             ].join("\n"),
