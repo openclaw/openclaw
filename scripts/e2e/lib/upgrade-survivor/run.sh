@@ -1857,6 +1857,8 @@ repair_update_restart_auth() {
       native | absent) ;;
       *) echo "invalid selected service membership mode: $membership_mode" >&2; return 2 ;;
     esac
+    # Standalone Doctor may have started the service after the first update.
+    phase stop-recovery-service stop_update_restart_probe_gateway "$COMMAND_TIMEOUT" || return "$?"
     # Historical preservation has already passed. This separate current-runtime
     # update needs a configured inference route for its real serving receipt.
     phase prepare-restart-inference prepare_restart_inference || return "$?"

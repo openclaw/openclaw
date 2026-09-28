@@ -368,6 +368,7 @@ src/config/backup-rotation.ts
 src/config/bundled-channel-config-metadata.generated.ts
 src/config/byte-size.ts
 src/config/channel-config-metadata.ts
+src/config/channel-config-activation.ts
 src/config/channel-configured-shared.ts
 src/config/channel-configured.ts
 src/config/channel-schema-selection.ts

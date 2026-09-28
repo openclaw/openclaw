@@ -1154,6 +1154,7 @@ export const zh_TW = {
         "Onboarding 完成，但閘道健康檢查失敗。請先解決上面的問題，再用 {command} 驗證。",
       outroSeeded: "Onboarding 完成。Web UI 已在背景初始化，可隨時用上面的 dashboard 連結開啟。",
       quickstartNodeRuntime: "QuickStart 使用 Node 執行 Gateway 服務（穩定且受支援）。",
+      quickstartBunRuntime: "QuickStart 使用 Bun 執行 Gateway 服務。",
       reinstall: "重新安裝",
       rerunInstallDaemon: "或重新執行：{command}",
       restart: "重新啟動",

@@ -649,21 +649,21 @@ suite.define(() => {
         activeRunIds: [],
         status: "done",
       };
-      await gateway.setMethodResponse("chat.history", {
-        messages: [{ role: "assistant", content: "Cached activity has finished." }],
-        sessionId: `session:${sessionKey}`,
-        sessionInfo: finishedSession,
-      });
       const historyCount = (await gateway.getRequests("chat.history")).length;
-      await gateway.deferNext("chat.history");
       await gateway.deferNext("sessions.abort");
       await stop.click();
       const abort = await gateway.waitForRequest("sessions.abort");
       expect(abort.params).toEqual({ key: sessionKey, clearQueued: true });
       expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
+      // Post-Stop reads begin when the Gateway answers Stop. Publishing them earlier
+      // lets a still-pending startup read settle the run before Stop is clicked.
+      await gateway.setMethodResponse("chat.history", {
+        messages: [{ role: "assistant", content: "Cached activity has finished." }],
+        sessionId: `session:${sessionKey}`,
+        sessionInfo: finishedSession,
+      });
+      await gateway.deferNext("chat.history");
       await composer.fill("keep this draft");
-      // Finish the backend without a terminal event; every fresh read must agree.
-      await gateway.setSessionsListResponse({ sessions: [finishedSession] });
       await gateway.resolveDeferred("sessions.abort", {
         ok: true,
         abortedRunId: null,

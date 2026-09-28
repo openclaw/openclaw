@@ -47,13 +47,7 @@ internal fun slashCommandCompletion(command: ChatCommandEntry): String {
   return if (command.acceptsArgs) "$text " else text
 }
 
-private fun slashCommandPrefixes(command: ChatCommandEntry): List<String> =
-  buildList {
-    add(normalizedSlashCommandName(command.name))
-    command.textAliases.forEach { alias ->
-      add(normalizedSlashCommandName(alias))
-    }
-  }.filter { it.isNotEmpty() }
+private fun slashCommandPrefixes(command: ChatCommandEntry): List<String> = (listOf(command.name) + command.textAliases).map(::normalizedSlashCommandName).filter(String::isNotEmpty)
 
 private fun ChatCommandEntry.withMatchedSlashAliasFirst(query: String): ChatCommandEntry {
   if (query.isEmpty()) return this

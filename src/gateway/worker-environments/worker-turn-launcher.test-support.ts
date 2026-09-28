@@ -108,6 +108,8 @@ export const reconcileUnchangedLocalWorkspace: WorkerTurnTunnelHandle["reconcile
       changed: false,
       verifyStable: async () => {},
       verifyLocalStable: async () => {},
+      publishStagedResult: async () => {},
+      discardPreparedStagedResult: async () => {},
     };
   };
 

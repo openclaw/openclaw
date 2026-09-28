@@ -13,7 +13,6 @@ import android.util.Log
 import androidx.annotation.RequiresApi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -83,7 +82,6 @@ class GatewayDiscovery(
   /** Current discovered gateway list, merged from local DNS-SD and optional wide-area DNS-SD. */
   val gateways: StateFlow<List<GatewayEndpoint>> = _gateways.asStateFlow()
 
-  private var unicastJob: Job? = null
   private val dnsExecutor: Executor = Executors.newCachedThreadPool()
   private val serviceInfoExecutor = context.mainExecutor
   private val availableNetworks = ConcurrentHashMap.newKeySet<Network>()
@@ -162,17 +160,16 @@ class GatewayDiscovery(
   }
 
   private fun startUnicastDiscovery(domain: String) {
-    unicastJob =
-      scope.launch(Dispatchers.IO) {
-        while (true) {
-          try {
-            refreshUnicast(domain)
-          } catch (_: Throwable) {
-            // ignore (best-effort)
-          }
-          delay(5000)
+    scope.launch(Dispatchers.IO) {
+      while (true) {
+        try {
+          refreshUnicast(domain)
+        } catch (_: Throwable) {
+          // ignore (best-effort)
         }
+        delay(5000)
       }
+    }
   }
 
   private fun resolve(serviceInfo: NsdServiceInfo) {
