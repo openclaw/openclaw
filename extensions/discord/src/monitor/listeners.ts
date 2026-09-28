@@ -94,7 +94,7 @@ export class DiscordInteractionListener extends InteractionCreateListener {
     // Hand off immediately so slash/component handling can wait on session locks
     // or compaction without blocking later gateway events.
     void Promise.resolve()
-      .then(() => client.handleInteraction(data as Parameters<Client["handleInteraction"]>[0], {}))
+      .then(() => client.handleInteraction(data))
       .catch((err: unknown) => {
         const logger = this.logger ?? discordEventQueueLog;
         logger.error(danger(`discord interaction handler failed: ${String(err)}`));
@@ -658,7 +658,7 @@ export class DiscordThreadDeleteListener extends ThreadDeleteListener {
       event: this.type,
       run: async () => {
         const threadId = data.id;
-        getThreadBindingManager(this.accountId)?.unbindThread({
+        await getThreadBindingManager(this.accountId)?.unbindThread({
           threadId,
           reason: "thread-delete",
           sendFarewell: false,

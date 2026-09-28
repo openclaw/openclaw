@@ -3001,7 +3001,7 @@ class ChatControllerOutboxTest {
       runCurrent()
       chat.setThinkingLevel("off")
 
-      chat.sendMessage(message = "waits for recovery", thinkingLevel = "off", attachments = emptyList())
+      val send = async { chat.sendMessageAwaitAcceptance(message = "waits for recovery", thinkingLevel = "off", attachments = emptyList()) }
       runCurrent()
       try {
         // The row is journaled but must not be claimed 'sending' while the unscoped recovery
@@ -3012,6 +3012,7 @@ class ChatControllerOutboxTest {
       } finally {
         recoveryGate.complete(Unit)
       }
+      assertTrue(send.await())
       advanceUntilIdle()
       assertEquals(listOf("waits for recovery"), gateway.sentMessages)
       assertTrue(outbox.rows().isEmpty())

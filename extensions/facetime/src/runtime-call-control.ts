@@ -379,18 +379,9 @@ export function createFaceTimeCallControl(params: {
           },
           async onFailure(error) {
             const failureReason = `talk-failed: ${formatErrorMessage(error)}`;
-            if (!call.talk) {
-              const carrierClosed = await waitForStartupCarrierHangup(call, failureReason);
-              if (carrierClosed) {
-                queueMicrotask(() => {
-                  void closeCall(call, failureReason);
-                });
-              }
-              return carrierClosed;
-            }
-            const carrierClosed = await attemptCarrierHangup(call, failureReason, {
-              closeLocal: false,
-            });
+            const carrierClosed = call.talk
+              ? await attemptCarrierHangup(call, failureReason, { closeLocal: false })
+              : await waitForStartupCarrierHangup(call, failureReason);
             if (carrierClosed) {
               queueMicrotask(() => {
                 void closeCall(call, failureReason);

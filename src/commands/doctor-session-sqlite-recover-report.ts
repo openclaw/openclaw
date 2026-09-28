@@ -39,6 +39,7 @@ import {
   createSessionSqliteMigrationFailureIssue,
   writeSessionSqliteMigrationFailureReports,
 } from "./doctor-session-sqlite-failure.js";
+import type { collectRecoveryInventory } from "./doctor-session-sqlite-recovery-inventory.js";
 import { restoreSessionSqliteMigrationRun } from "./doctor-session-sqlite-restore.js";
 import {
   createDoctorSessionSqliteTargetReport,
@@ -61,6 +62,7 @@ export async function recoverDoctorSessionSqliteTargets(params: {
   options: DoctorSessionSqliteOptions;
   targets: readonly SessionStoreTarget[];
   historicalArchiveStores?: ReadonlySet<string>;
+  recoveryInventory?: ReturnType<typeof collectRecoveryInventory>;
   validateTarget: SessionSqliteRecoverTargetValidator;
 }): Promise<DoctorSessionSqliteReport> {
   const trustedTargets = resolveRecoverTargets(params.targets, params.env);
@@ -93,7 +95,14 @@ export async function recoverDoctorSessionSqliteTargets(params: {
         );
       }
     }
-    if (retainedReports.length > 0) {
+    if (
+      retainedReports.length > 0 ||
+      (params.recoveryInventory &&
+        !params.recoveryInventory.report.artifacts.some(
+          (artifact) =>
+            artifact.outcome === "blocked" || artifact.reason === "unsupported-target-ownership",
+        ))
+    ) {
       return summarizeRecoverReport(retainedReports);
     }
     return summarizeRecoverReport([

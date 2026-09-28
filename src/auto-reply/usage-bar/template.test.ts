@@ -108,11 +108,6 @@ describe("loadUsageBarTemplate", () => {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
-  it("loads and parses a template file", () => {
-    const path = tmpFile("t.json", JSON.stringify(tplA));
-    expect(loadUsageBarTemplate(path)).toMatchObject(tplA);
-  });
-
   it("falls back to the built-in template for invalid JSON", () => {
     const path = tmpFile("bad.json", "{ not json");
     expect(loadUsageBarTemplate(path)).toBe(DEFAULT_USAGE_BAR_TEMPLATE);

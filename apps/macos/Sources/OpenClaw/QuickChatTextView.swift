@@ -135,11 +135,11 @@ private final class QuickChatNSTextView: NSTextView {
     var onEscape: (() -> Void)?
 
     override func keyDown(with event: NSEvent) {
+        guard !self.hasMarkedText() else {
+            super.keyDown(with: event)
+            return
+        }
         if event.keyCode == 53 {
-            guard !self.hasMarkedText() else {
-                super.keyDown(with: event)
-                return
-            }
             self.onEscape?()
             return
         }
@@ -148,11 +148,6 @@ private final class QuickChatNSTextView: NSTextView {
             super.keyDown(with: event)
             return
         }
-        guard !self.hasMarkedText() else {
-            super.keyDown(with: event)
-            return
-        }
-
         let modifiers = event.modifierFlags.intersection([.command, .shift])
         if modifiers.contains(.shift), !modifiers.contains(.command) {
             self.insertNewline(nil)

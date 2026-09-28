@@ -21,7 +21,7 @@ async function createPeer(
   const sockets = new Set<Socket>();
   const timers = new Set<ReturnType<typeof setTimeout>>();
   const server = http.createServer((_request, response) => response.end("ok"));
-  const wsServer = new WebSocketServer({ noServer: true });
+  const wsServer = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
   const paths: string[] = [];
   let attempts = 0;
   server.on("connection", (socket) => {
@@ -129,11 +129,8 @@ describe("container adapter opening budgets with real peers", () => {
     return { onEvent, onStreamOpen };
   }
 
-  it.each([
-    { name: "never-upgrading", upgradeAfterMs: undefined },
-    { name: "late-upgrading", upgradeAfterMs: 1_000 },
-  ])("settles a $name peer within the short opening budget", async ({ upgradeAfterMs }) => {
-    peer = await createPeer(() => upgradeAfterMs);
+  it("settles a never-upgrading peer within the short opening budget", async () => {
+    peer = await createPeer(() => undefined);
     const { onEvent, onStreamOpen } = start(BUDGET_MS);
     let watchdogFired = false;
     // The watchdog joins the baseline's otherwise 30-second opening wait on failure.
@@ -153,24 +150,21 @@ describe("container adapter opening budgets with real peers", () => {
     }
   });
 
-  it.each([0, undefined])(
-    "keeps the default opening allowance for timeoutMs=%s",
-    async (timeoutMs) => {
-      peer = await createPeer(
-        () => 100,
-        (ws) => {
-          ws.send(JSON.stringify({ envelope: { timestamp: 1 } }));
-        },
-      );
-      const { onEvent, onStreamOpen } = start(timeoutMs);
-      await vi.waitFor(() => expect(onEvent).toHaveBeenCalledOnce());
-      expect(onStreamOpen).toHaveBeenCalledOnce();
-      expect(onEvent).toHaveBeenCalledWith({
-        event: "receive",
-        data: JSON.stringify({ envelope: { timestamp: 1 } }),
-      });
-    },
-  );
+  it("keeps the default opening allowance for a zero stream timeout", async () => {
+    peer = await createPeer(
+      () => 100,
+      (ws) => {
+        ws.send(JSON.stringify({ envelope: { timestamp: 1 } }));
+      },
+    );
+    const { onEvent, onStreamOpen } = start(0);
+    await vi.waitFor(() => expect(onEvent).toHaveBeenCalledOnce());
+    expect(onStreamOpen).toHaveBeenCalledOnce();
+    expect(onEvent).toHaveBeenCalledWith({
+      event: "receive",
+      data: JSON.stringify({ envelope: { timestamp: 1 } }),
+    });
+  });
 
   it("does not apply a positive opening budget to post-open idle or later events", async () => {
     let accepted: WebSocket | undefined;

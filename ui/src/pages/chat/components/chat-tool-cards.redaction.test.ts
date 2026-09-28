@@ -5,6 +5,29 @@ import { describe, expect, it, vi } from "vitest";
 import { renderToolCard } from "./chat-tool-cards.ts";
 
 describe("tool-card redaction", () => {
+  it.each([
+    ["/Users/alice/Pictures/base.png", "~/Pictures/base.png"],
+    ["/home/alice/Pictures/base.png", "~/Pictures/base.png"],
+    ["C:\\Users\\alice\\Pictures\\base.png", "~\\Pictures\\base.png"],
+    ["D:\\Users\\alice\\Pictures\\base.png", "~\\Pictures\\base.png"],
+    ["/var/folders/demo/screenshots/base.png", "/var/folders/demo/screenshots/base.png"],
+    ["D:\\screenshots\\base.png", "D:\\screenshots\\base.png"],
+  ])("keeps image path %s readable in the tool row", (path, expected) => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        { id: "msg:image", name: "view_image", args: { path } },
+        { messageKey: "test-message", expanded: false, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
+      "View Image",
+    );
+    expect(container.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe(expected);
+  });
+
   const publicUrl = "https://x.com/EliXPampa/status/2097727549400871286";
   const secret = "Ab9Q".repeat(10);
   const numericSlashSecret = "1234/" + "Ab9Q".repeat(8) + "Ab9";

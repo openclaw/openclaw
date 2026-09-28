@@ -1,5 +1,5 @@
 // Scheduled work must use free shared-admission slots across timer ticks (#119083).
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import {
   createCronRegressionState,
   createDueIsolatedJob,
@@ -9,10 +9,17 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../config/cron-limits.js";
 import {
   getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
   resetGatewayWorkAdmission,
+  tryBeginGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { stop } from "./service/ops-lifecycle.js";
+import { observeCronTimerAdmissions } from "./service/run-recovery.test-support.js";
 import { onTimer } from "./service/timer.test-support.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
@@ -22,6 +29,7 @@ import {
   prepareCronRunReceiptClaim,
 } from "./store/run-receipt-store.js";
 import { inspectActiveCronRunReceipt } from "./store/run-receipt-store.test-support.js";
+import { prepareCronRunReceiptWriteSchema } from "./store/run-receipt-write-admission.js";
 import type { CronRunReceiptHandle } from "./store/run-receipt.types.js";
 import type { CronJob } from "./types.js";
 
@@ -331,6 +339,7 @@ describe("cron service cross-tick bounded admission", () => {
     const receipt = runOpenClawStateWriteTransaction(({ db }) =>
       claimCronRunReceiptInDatabase({
         database: db,
+        receiptSchema: prepareCronRunReceiptWriteSchema(db),
         prepared,
         resolveAgentId: (job) => job.agentId ?? "main",
       }),
@@ -351,13 +360,17 @@ describe("cron service cross-tick bounded admission", () => {
     });
     state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - 1;
 
+    const unrelated = tryBeginGatewayIndependentRootWorkAdmission("test:concurrent-request");
+    expect(unrelated).not.toBeNull();
+    const admissions = observeCronTimerAdmissions(state);
+
     try {
       await onTimer(state);
 
       expect(peakTicks).toBe(1);
       expect(state.stopped).toBe(false);
       expect(state.activeTimerTicks).toBe(0);
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      await admissions.expectReleased(1);
       expect(state.runAdmission.active).toBe(DEFAULT_CRON_MAX_CONCURRENT_RUNS - 1);
       expect(state.queuedRunReservationsByJobId.size).toBe(0);
       expect(state.timer).not.toBeNull();
@@ -366,6 +379,8 @@ describe("cron service cross-tick bounded admission", () => {
       finishCronRunReceipt({ handle: receipt, status: "skipped", finishedAtMs: t0 });
       await onTimer(state);
 
+      // The resumed tick rechecks capacity to run the second due job.
+      await admissions.expectReleased(3);
       expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
       expect(state.activeTimerTicks).toBe(0);
       expect(
@@ -374,6 +389,7 @@ describe("cron service cross-tick bounded admission", () => {
         ),
       ).toBe(true);
     } finally {
+      unrelated!.release();
       finishCronRunReceipt({ handle: receipt, status: "skipped", finishedAtMs: t0 });
       stop(state);
     }
@@ -418,6 +434,7 @@ describe("cron service cross-tick bounded admission", () => {
           foreignReceipt = runOpenClawStateWriteTransaction(({ db }) => {
             const receipt = claimCronRunReceiptInDatabase({
               database: db,
+              receiptSchema: prepareCronRunReceiptWriteSchema(db),
               prepared: preparedForeignReceipt,
               resolveAgentId: (job) => job.agentId ?? "main",
             });
@@ -460,9 +477,10 @@ describe("cron service cross-tick bounded admission", () => {
   });
 
   it("runs the next future wake under its own Gateway root while an earlier batch runs", async () => {
-    vi.useRealTimers();
     const store = fixtures.makeStorePath();
     const t0 = Date.now();
+    const clock = createGatewaySchedulerClock(t0);
+    const scheduler = createTestGatewayScheduler(clock.clock);
     const jobA = createDueIsolatedJob({
       id: "timer-a",
       nowMs: t0,
@@ -497,15 +515,21 @@ describe("cron service cross-tick bounded admission", () => {
       }
     });
     const state = createCronRegressionState({
+      scheduler,
       storePath: store.storePath,
-      nowMs: () => Date.now(),
+      nowMs: clock.clock.now,
       runIsolatedAgentJob,
     });
     state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - 2;
 
     const tickA = onTimer(state);
+    let tickB: ReturnType<typeof clock.advanceTo> = undefined;
     try {
       await aStarted.promise;
+      const nextWakeAtMs = scheduler.nextWakeAtMs;
+      assert.isNotNull(nextWakeAtMs);
+      expect(nextWakeAtMs).toBeGreaterThanOrEqual(t0 + 500);
+      tickB = clock.advanceTo(nextWakeAtMs);
       await bStarted.promise;
 
       expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
@@ -520,15 +544,20 @@ describe("cron service cross-tick bounded admission", () => {
 
       releaseA.resolve({ status: "ok", summary: "a done" });
       await tickA;
-      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      expect(
+        getActiveGatewayRootWorkCount(),
+        JSON.stringify(getActiveGatewayRootWorkHolders()),
+      ).toBe(1);
       releaseB.resolve({ status: "ok", summary: "b done" });
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      await tickB;
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
       expect(state.activeTimerTicks).toBe(0);
     } finally {
       releaseA.resolve({ status: "ok", summary: "a cleanup" });
       releaseB.resolve({ status: "ok", summary: "b cleanup" });
-      await tickA;
+      await Promise.all([tickA, tickB]);
       stop(state);
+      await scheduler.stop();
     }
   });
 });

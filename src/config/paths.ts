@@ -5,7 +5,11 @@ import path from "node:path";
 import { normalizeHomeDirValue } from "@openclaw/normalization-core/home-dir";
 import { normalizeProfileName, resolveProfileStateDir } from "../cli/profile-utils.js";
 import { resolveGatewayNativeServiceIdentityConflict } from "../daemon/constants.js";
-import { resolveHomeRelativePath, resolveRequiredHomeDir } from "../infra/home-dir.js";
+import {
+  resolveHomeRelativePath,
+  resolveRequiredHomeDir,
+  resolveUserPath,
+} from "../infra/home-dir.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
 import { isFastTestRuntimeEnv } from "../infra/test-runtime-env.js";
 import { resolveLegacyStateDirs, resolveNewStateDir, resolveStateDir } from "./state-dir.js";
@@ -166,14 +170,6 @@ export function normalizeStateDirEnv(env: NodeJS.ProcessEnv = process.env): void
   if (openclawOverride) {
     env.OPENCLAW_STATE_DIR = resolveUserPath(openclawOverride, env, effectiveHomedir);
   }
-}
-
-function resolveUserPath(
-  input: string,
-  env: NodeJS.ProcessEnv = process.env,
-  homedir: () => string = envHomedir(env),
-): string {
-  return resolveHomeRelativePath(input, { env, homedir });
 }
 
 /**
@@ -401,7 +397,7 @@ export function resolveOAuthDir(
   return path.join(stateDir, "credentials");
 }
 
-function parseGatewayPortEnvValue(raw: string | undefined): number | null {
+export function parseGatewayPortEnvValue(raw: string | undefined): number | null {
   const trimmed = raw?.trim();
   if (!trimmed) {
     return null;

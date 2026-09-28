@@ -262,10 +262,6 @@ Existing apps that already use `features.assistant_view` can keep that feature s
       "description": "Show runtime status, including provider usage/quota when available"
     },
     {
-      "command": "/tasks",
-      "description": "List active/recent background tasks for the current session"
-    },
-    {
       "command": "/context",
       "description": "Explain how context is assembled",
       "usage_hint": "[list|detail|json]"

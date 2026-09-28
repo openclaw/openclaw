@@ -31,11 +31,19 @@ const bundledUnitExcludePatterns = unitTestAdditionalExcludePatterns.filter(
 );
 
 export function createBundledVitestConfig(env: Record<string, string | undefined> = process.env) {
-  return createUnitVitestConfigWithOptions(env, {
+  const config = createUnitVitestConfigWithOptions(env, {
     includePatterns: bundledPluginDependentUnitTestFiles,
     extraExcludePatterns: bundledUnitExcludePatterns,
     name: "bundled",
   });
+  return {
+    ...config,
+    test: {
+      ...config.test,
+      // Loader fixtures acquire the SQLite broker on the process main thread.
+      pool: "forks" as const,
+    },
+  };
 }
 
 export default createBundledVitestConfig();

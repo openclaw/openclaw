@@ -60,13 +60,11 @@ export async function stageSkillProposalGeneration(params: {
   const generationDir = path.join(generationsDir, generationId);
   try {
     await stateRoot.mkdir(stagingDir);
-    await createDurableGenerationFile(
-      stateRoot,
-      path.join(stagingDir, PROPOSAL_DRAFT_FILE),
-      params.content,
-    );
+    await stateRoot.create(path.join(stagingDir, PROPOSAL_DRAFT_FILE), params.content, {
+      durable: "file",
+    });
     for (const file of params.supportFiles ?? []) {
-      await createDurableGenerationFile(stateRoot, path.join(stagingDir, file.path), file.content);
+      await stateRoot.create(path.join(stagingDir, file.path), file.content, { durable: "file" });
     }
     // The record only names the destination after this same-filesystem move, so
     // readers can never observe a partially populated generation.
@@ -76,20 +74,6 @@ export async function stageSkillProposalGeneration(params: {
     await removeGenerationPath(stateDir, stagingDir).catch(() => undefined);
     await removeGenerationPath(stateDir, generationDir).catch(() => undefined);
     throw error;
-  }
-}
-
-async function createDurableGenerationFile(
-  stateRoot: Awaited<ReturnType<typeof root>>,
-  relativePath: string,
-  content: string,
-): Promise<void> {
-  await stateRoot.create(relativePath, content, { encoding: "utf8", mkdir: true });
-  const opened = await stateRoot.openWritable(relativePath, { writeMode: "update" });
-  try {
-    await opened.handle.sync();
-  } finally {
-    await opened.handle.close();
   }
 }
 

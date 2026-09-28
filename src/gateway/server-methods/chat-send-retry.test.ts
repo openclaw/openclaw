@@ -79,3 +79,29 @@ describe("accepted chat-send retry classification", () => {
     expect(waitForRetry).toHaveBeenCalledTimes(2);
   });
 });
+
+it.each([false, true])(
+  "never replays a dispatch after SQLite contention (effects=%s)",
+  async (effects) => {
+    const error = Object.assign(new Error("database is locked"), {
+      code: "ERR_SQLITE_ERROR",
+      errcode: 5,
+    });
+    const operation = vi.fn().mockRejectedValue(error);
+    const waitForRetry = vi.fn();
+    await expect(
+      runAcceptedChatSendDispatch({
+        operation,
+        waitForRetry,
+        classify: (failure) =>
+          classifyAcceptedChatSendFailure({
+            error: failure,
+            phase: "post-ack",
+            sideEffectsObserved: effects,
+          }),
+      }),
+    ).rejects.toBe(error);
+    expect(operation).toHaveBeenCalledOnce();
+    expect(waitForRetry).not.toHaveBeenCalled();
+  },
+);

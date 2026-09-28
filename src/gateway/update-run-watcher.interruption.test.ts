@@ -3,6 +3,7 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { INTERRUPTED_UPDATE_SETTLE_TIMEOUT_MS } from "../cli/daemon-cli/restart-health.constants.js";
 import { noteStaleUpdateRuns } from "../commands/doctor-update-run.js";
+import { createGatewayUpdateLifecycle } from "../infra/update-check-lifecycle.js";
 import type { InterruptedUpdateSettlement } from "../infra/update-run-interruption-contract.js";
 import { persistInterruptedUpdateObservation } from "../infra/update-run-interruption-store.js";
 import { reconcileInterruptedUpdateRuns } from "../infra/update-run-interruption.js";
@@ -25,6 +26,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { startUpdateRunWatcher } from "./update-run-watcher.js";
 
 const observation = vi.hoisted(() => ({
@@ -76,7 +78,8 @@ vi.mock("../infra/update-run-driver.js", async (original) => ({
   inspectUpdateRunDriver: (driver: { pid: number }) =>
     driver.pid === 23457 ? observation.previousDriver : observation.driver,
 }));
-vi.mock("../infra/openclaw-root.js", () => ({
+vi.mock("../infra/openclaw-root.js", async (original) => ({
+  ...(await original<typeof import("../infra/openclaw-root.js")>()),
   resolveOpenClawPackageRoot: async () => "/synthetic/openclaw",
 }));
 vi.mock("../infra/package-json.js", () => ({ readPackageVersion: async () => "2026.9.4" }));
@@ -104,10 +107,14 @@ await import("../infra/update-run-interruption-health.js");
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 let watcher: ReturnType<typeof startUpdateRunWatcher> | undefined;
+let scheduler: ReturnType<typeof createTestGatewayScheduler>;
+let lifecycle: ReturnType<typeof createGatewayUpdateLifecycle>;
 const now = Date.parse("2026-09-18T22:00:00Z");
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(now);
+  scheduler = createTestGatewayScheduler();
+  lifecycle = createGatewayUpdateLifecycle(scheduler);
   vi.stubEnv("OPENCLAW_STATE_DIR", dirs.make("update-interruption-"));
   observation.installedBuild = "candidate-build";
   observation.servingBuild = "candidate-build";
@@ -132,7 +139,9 @@ function health() {
 }
 afterEach(async () => {
   await watcher?.stop();
+  await lifecycle.stop();
   watcher = undefined;
+  await scheduler.stop();
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -171,7 +180,7 @@ it.each([false, true])(
       reconcileAbandonedUpdateRuns();
     }
     const broadcast = vi.fn();
-    watcher = startUpdateRunWatcher({ broadcast, log: { warn: vi.fn() } });
+    watcher = startUpdateRunWatcher({ lifecycle, broadcast, log: { warn: vi.fn() } });
     await vi.waitFor(() => expect(getUpdateRun(runId)?.status).toBe("succeeded"));
     expect(getUpdateRun(runId)).toMatchObject({
       reason: null,
@@ -252,7 +261,7 @@ it.each([
   if (boundary === "unsettled") {
     observation.settle.mockResolvedValue({ ...health(), healthy: false });
   }
-  watcher = startUpdateRunWatcher({ broadcast: vi.fn(), log: { warn: vi.fn() } });
+  watcher = startUpdateRunWatcher({ lifecycle, broadcast: vi.fn(), log: { warn: vi.fn() } });
   await vi.advanceTimersByTimeAsync(0);
   await watcher.stop();
   expect(getUpdateRun(runId)?.status).not.toBe("succeeded");
@@ -287,7 +296,7 @@ it("cancels pending verification at watcher shutdown without publishing a late s
     return probe.promise;
   });
   const broadcast = vi.fn();
-  watcher = startUpdateRunWatcher({ broadcast, log: { warn: vi.fn() } });
+  watcher = startUpdateRunWatcher({ lifecycle, broadcast, log: { warn: vi.fn() } });
   await started.promise;
   let stopped = false;
   const stop = watcher.stop().then(() => {

@@ -40,6 +40,7 @@ type CallGateway = <T>(options: CallGatewayCliOptions) => Promise<T>;
 type RemoteGatewayInferenceTarget = {
   config: OpenClawConfig;
   gatewayUrl: string;
+  configuredRemote?: boolean;
   token?: string;
   password?: string;
   tlsFingerprint?: string;
@@ -183,6 +184,7 @@ function bindGatewayConfig(target: RemoteGatewayInferenceTarget): OpenClawConfig
       remote: {
         ...target.config.gateway?.remote,
         url: target.gatewayUrl,
+        ...(target.configuredRemote ? {} : { transport: "direct" as const }),
       },
     },
   };
@@ -248,10 +250,9 @@ export async function runRemoteGatewayInferenceOnboarding(
     await callGateway<T>({
       ...params,
       config: boundConfig,
-      // Authenticated calls can pin the URL directly. Auth-free loopback
-      // Gateways use the equivalently pinned config target because URL
-      // overrides intentionally require explicit credentials.
-      ...(explicitAuth ? { url: target.gatewayUrl } : {}),
+      // Preserve configured SSH routing across RPCs; an explicitly selected
+      // listener must not acquire that route merely because its URL matches.
+      ...(explicitAuth && !target.configuredRemote ? { url: target.gatewayUrl } : {}),
       ...(target.token ? { token: target.token } : {}),
       ...(target.password ? { password: target.password } : {}),
       ...(target.tlsFingerprint ? { tlsFingerprint: target.tlsFingerprint } : {}),
@@ -486,6 +487,7 @@ export async function runRemoteGatewayInferenceOnboarding(
         ...(agentDraft === "hatch" ? { message: t("wizard.finalize.bootstrapHatchMessage") } : {}),
         boundGateway: {
           url: target.gatewayUrl,
+          ...(target.configuredRemote ? { configuredRemote: true } : {}),
           ...(target.token ? { token: target.token } : {}),
           ...(target.password ? { password: target.password } : {}),
           ...(target.tlsFingerprint ? { tlsFingerprint: target.tlsFingerprint } : {}),

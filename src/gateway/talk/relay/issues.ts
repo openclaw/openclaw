@@ -75,12 +75,7 @@ export function buildTalkRealtimeRelayIssuePayload(
   return {
     relaySessionId,
     type: "error" as const,
-    message: issue.message,
-    code: issue.code,
-    provider: issue.provider,
-    ...(issue.model ? { model: issue.model } : {}),
-    transport: issue.transport,
-    phase: issue.phase,
+    ...issue,
   };
 }
 

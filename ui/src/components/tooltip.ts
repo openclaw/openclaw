@@ -97,7 +97,12 @@ class Tooltip extends OpenClawLitElement {
   static readonly #activeByDocument = new WeakMap<Document, Tooltip>();
 
   static readonly consumeEscape = (event: KeyboardEvent, ownerDocument: Document): boolean => {
-    if (event.key !== "Escape" || event.defaultPrevented) {
+    if (
+      event.key !== "Escape" ||
+      event.defaultPrevented ||
+      event.isComposing ||
+      event.keyCode === 229
+    ) {
       return false;
     }
     const active = Tooltip.#activeByDocument.get(ownerDocument);
@@ -585,10 +590,16 @@ class Tooltip extends OpenClawLitElement {
       (root instanceof ShadowRoot ? root : this).append(description);
       this.#descriptionElement = description;
     }
-    this.#descriptionElement.textContent = richText || this.content;
+    const descriptionText = richText || this.content;
+    if (this.#descriptionElement.textContent !== descriptionText) {
+      this.#descriptionElement.textContent = descriptionText;
+    }
     const ids = new Set((current ?? "").split(/\s+/u).filter(Boolean));
     ids.add(this.#descriptionId);
-    trigger.setAttribute("aria-describedby", [...ids].join(" "));
+    const descriptionIds = [...ids].join(" ");
+    if (current !== descriptionIds) {
+      trigger.setAttribute("aria-describedby", descriptionIds);
+    }
   }
 
   #restoreDescription() {

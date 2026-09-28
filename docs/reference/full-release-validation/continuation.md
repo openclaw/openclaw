@@ -29,7 +29,12 @@ pnpm frv status --run <parent-run-id> --json
 pnpm frv rerun --run <parent-run-id> --job "normalCi:checks-node-agentic-control-plane-agent-chat"
 pnpm frv continue --failed --run <parent-run-id>
 pnpm frv verify --run <successful-parent-run-id>
+pnpm frv prioritize --restore <record> [--dry-run]
 ```
+
+`prioritize --restore` recovers runs deferred by the former release-priority gate
+(see [Release priority](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#deferred-ci-recovery)). Active validation
+no longer pauses CI or supporting workflows.
 
 `rerun --job` selects an exact executed, terminal job name inside a child key shown by
 `status --json` (for example, `normalCi`, `pluginPrerelease`, or
@@ -119,6 +124,20 @@ from current `origin/main`. The helper rejects a pinned Tooling SHA that does
 not declare the current release-isolation contract or the `expected_sha`
 dispatch input; it never silently substitutes newer tooling. The workflow never
 creates or updates repository refs itself.
+
+### Automatic retries for declared flakes
+
+Automatic test retries are disabled. A failed or timed out child job remains a
+blocker; `known_flaky_jobs_json` is rejected on new dispatches. Inspect the
+original failure and fix its owner before requesting another execution. The
+explicit `frv rerun` and `frv continue --failed` commands remain operator recovery
+operations and never run as an automatic response to a test outcome.
+
+Published artifacts may contain empty `knownFlakyJobs` and `automaticRetries`
+fields. Readers retain their original plan digest and reject nonempty allowances
+or retry records. Current qualification requires successful selected child
+results. Evidence carrying retired waivers or advisory failure allowances must
+be replaced with a fresh qualifying run; it cannot authorize publication.
 
 ### Read publication observations
 

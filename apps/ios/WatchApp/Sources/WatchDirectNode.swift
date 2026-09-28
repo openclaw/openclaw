@@ -529,14 +529,16 @@ final class WatchDirectNode {
         baseURL: URL,
         path: String,
         method: String,
-        token: String?) async throws -> Data
+        token: String?,
+        body: some Encodable) async throws -> Data
     {
-        try await self.performRequest(
+        let encodedBody = try JSONEncoder().encode(body)
+        return try await self.request(
             baseURL: baseURL,
             path: path,
             method: method,
             token: token,
-            body: nil)
+            encodedBody: encodedBody)
     }
 
     private func request(
@@ -544,23 +546,7 @@ final class WatchDirectNode {
         path: String,
         method: String,
         token: String?,
-        body: some Encodable) async throws -> Data
-    {
-        let encodedBody = try JSONEncoder().encode(body)
-        return try await self.performRequest(
-            baseURL: baseURL,
-            path: path,
-            method: method,
-            token: token,
-            body: encodedBody)
-    }
-
-    private func performRequest(
-        baseURL: URL,
-        path: String,
-        method: String,
-        token: String?,
-        body: Data?) async throws -> Data
+        encodedBody: Data? = nil) async throws -> Data
     {
         let url = baseURL
             .appendingPathComponent("api")
@@ -574,8 +560,8 @@ final class WatchDirectNode {
         if let token {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
-        if let body {
-            request.httpBody = body
+        if let encodedBody {
+            request.httpBody = encodedBody
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
         let (data, response) = try await urlSession.data(for: request)

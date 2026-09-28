@@ -60,37 +60,39 @@ describe("physical session disk usage", () => {
         const scans: Promise<unknown>[] = [];
         let followupFinished = false;
         let spy = vi.spyOn(WorkerTaskPool.prototype, "run");
-        spy.mockImplementation(
-          function trackRun(this: WorkerTaskPool<unknown, unknown>, input, options) {
-            spy.mockRestore();
-            const invoke = this.run.bind(this);
-            spy = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(trackRun);
-            const first = scans.length === 0;
-            const result = invoke(async () => {
-              if (first) {
-                await releaseFirst.promise;
-                throw failure;
-              }
-              followupEntered.resolve();
-              await releaseFollowup.promise;
-              return input;
-            }, options);
-            const completion = first
-              ? result
-              : result.then(
-                  (value) => {
-                    followupFinished = true;
-                    return value;
-                  },
-                  (error: unknown) => {
-                    followupFinished = true;
-                    throw error;
-                  },
-                );
-            scans.push(completion);
-            return completion;
-          },
-        );
+        spy.mockImplementation(function trackRun(
+          this: WorkerTaskPool<unknown, unknown>,
+          input,
+          options,
+        ) {
+          spy.mockRestore();
+          const invoke = this.run.bind(this);
+          spy = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(trackRun);
+          const first = scans.length === 0;
+          const result = invoke(async () => {
+            if (first) {
+              await releaseFirst.promise;
+              throw failure;
+            }
+            followupEntered.resolve();
+            await releaseFollowup.promise;
+            return input;
+          }, options);
+          const completion = first
+            ? result
+            : result.then(
+                (value) => {
+                  followupFinished = true;
+                  return value;
+                },
+                (error: unknown) => {
+                  followupFinished = true;
+                  throw error;
+                },
+              );
+          scans.push(completion);
+          return completion;
+        });
         const maintenanceConfig = resolveMaintenanceConfigFromInput({
           mode: "enforce",
           maxDiskBytes: 1024 * 1024,
@@ -147,30 +149,32 @@ describe("physical session disk usage", () => {
     let scans = 0;
     let observedSdkSweeps = 0;
     let scanSpy = vi.spyOn(WorkerTaskPool.prototype, "run");
-    scanSpy.mockImplementation(
-      function trackScan(this: WorkerTaskPool<unknown, unknown>, input, options) {
-        scanSpy.mockRestore();
-        const invoke = this.run.bind(this);
-        scanSpy = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(trackScan);
-        if (input !== storePath) {
-          return invoke(input, options);
-        }
-        const scan = ++scans;
-        const result = invoke(
-          scan === 1
-            ? async () => {
-                await releasePreparation.promise;
-                return input;
-              }
-            : input,
-          options,
-        );
-        if (scan === 2) {
-          secondScanAdmitted.resolve();
-        }
-        return result;
-      },
-    );
+    scanSpy.mockImplementation(function trackScan(
+      this: WorkerTaskPool<unknown, unknown>,
+      input,
+      options,
+    ) {
+      scanSpy.mockRestore();
+      const invoke = this.run.bind(this);
+      scanSpy = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(trackScan);
+      if (input !== storePath) {
+        return invoke(input, options);
+      }
+      const scan = ++scans;
+      const result = invoke(
+        scan === 1
+          ? async () => {
+              await releasePreparation.promise;
+              return input;
+            }
+          : input,
+        options,
+      );
+      if (scan === 2) {
+        secondScanAdmitted.resolve();
+      }
+      return result;
+    });
     let retirement: MockInstance<Worker["terminate"]> | undefined;
     const diskWorkerUrl = resolveRuntimeWorkerUrl({
       currentModuleUrl: import.meta.url,
@@ -257,15 +261,17 @@ describe("physical session disk usage", () => {
       const storePath = path.join(directory, "openclaw-agent.sqlite");
       await fs.writeFile(storePath, Buffer.alloc(321));
       const release = createDeferredCore();
-      const spy = vi
-        .spyOn(WorkerTaskPool.prototype, "run")
-        .mockImplementationOnce(function (this: WorkerTaskPool<unknown, unknown>, input, options) {
-          spy.mockRestore();
-          return this.run(async () => {
-            await release.promise;
-            return input;
-          }, options);
-        });
+      const spy = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementationOnce(function (
+        this: WorkerTaskPool<unknown, unknown>,
+        input,
+        options,
+      ) {
+        spy.mockRestore();
+        return this.run(async () => {
+          await release.promise;
+          return input;
+        }, options);
+      });
       let completed = 0;
       const first = measureSessionPhysicalDiskUsage(storePath).then(() => completed++);
       const drainage = drainSessionDiskBudgetWorkers();
@@ -347,16 +353,18 @@ describe("physical session disk usage", () => {
       await fs.writeFile(storePath, Buffer.alloc(321));
       await fs.writeFile(archivePath, Buffer.alloc(100));
       const release = createDeferredCore();
-      const spy = vi
-        .spyOn(WorkerTaskPool.prototype, "run")
-        .mockImplementationOnce(function (this: WorkerTaskPool<unknown, unknown>, input, options) {
-          spy.mockRestore();
-          // Delay preparation, not the caller's result or the pool's capacity decision.
-          return this.run(async () => {
-            await release.promise;
-            return input;
-          }, options);
-        });
+      const spy = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementationOnce(function (
+        this: WorkerTaskPool<unknown, unknown>,
+        input,
+        options,
+      ) {
+        spy.mockRestore();
+        // Delay preparation, not the caller's result or the pool's capacity decision.
+        return this.run(async () => {
+          await release.promise;
+          return input;
+        }, options);
+      });
       let settledScans = 0;
       const accepted = Array.from({ length: 128 }, () =>
         measureSessionPhysicalDiskUsage(storePath).then((usage) => {

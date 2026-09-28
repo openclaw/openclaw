@@ -47,7 +47,8 @@ const isWin = process.platform === "win32";
 const describeNonWin = isWin ? describe.skip : describe;
 const describeWin = isWin ? describe : describe.skip;
 const createPreflightTool = () =>
-  createExecTool({ host: "gateway", security: "full", ask: "on-miss" });
+  // Each fixture owns its cwd until the command settles; no process tool polls a continuation.
+  createExecTool({ host: "gateway", security: "full", ask: "on-miss", allowBackground: false });
 const runExecPreflight = (params: { command: string; workdir: string }) =>
   createPreflightTool().execute("call-script-preflight", params);
 

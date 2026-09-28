@@ -7,8 +7,30 @@ import Testing
 
 @MainActor
 struct QuickChatCatalogPublicationTests {
-    @Test(arguments: ["config.changed", "chat.metadata.changed"])
-    func `Gateway publications refresh the presentation without discarding a draft`(_ event: String) async throws {
+    @Test(arguments: [
+        ("config.changed", false, true),
+        ("chat.metadata.changed", false, false),
+        ("chat.metadata.changed", true, true),
+    ])
+    func `Gateway publications refresh the presentation without discarding a draft`(
+        _ event: String,
+        modelSelectionChanged: Bool,
+        retiresChoices: Bool) async throws
+    {
+        let policy: OpenClawChatModelSelectionPolicy? = if modelSelectionChanged {
+            try JSONDecoder().decode(
+                OpenClawChatModelSelectionPolicy.self,
+                from: Data(#"{"restricted":true,"defaultModel":null}"#.utf8))
+        } else {
+            nil
+        }
+        func publication(_ seq: Int) -> Data {
+            let payload = modelSelectionChanged ? #"{"modelSelectionChanged":true}"# : "{}"
+            return Data(
+                """
+                {"type":"event","event":"\(event)","payload":\(payload),"seq":\(seq)}
+                """.utf8)
+        }
         let session = GatewayTestWebSocketSession(taskFactory: {
             GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
                 guard sendIndex > 0 else { return }
@@ -42,7 +64,8 @@ struct QuickChatCatalogPublicationTests {
                     currentModelSelectionID: "fixture/choice",
                     currentThinkingLevel: nil,
                     thinkingOptions: [],
-                    defaultProvider: "fixture")
+                    defaultProvider: "fixture",
+                    modelSelectionPolicy: policy)
             },
             modelCatalogEventsProvider: {
                 let events = await gateway.subscribe()
@@ -55,26 +78,32 @@ struct QuickChatCatalogPublicationTests {
             await model.refreshForPresentation(id: presentation)
             try await self.waitUntil { subscriptions == 1 && !model.isLoadingModelControls }
             model.text = "Unsent draft"
+            model.selectModel("fixture/choice")
+            #expect(model.selectedModelSelectionID == "fixture/choice")
             print("Quick Chat catalog \(event): initial=\(model.modelChoices.map(\.name)), draft=\(model.text)")
 
             publishedName = "Published choice"
-            socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.eventData(event: event, seq: 1)))
+            socket.emitReceiveSuccess(.data(publication(1)))
             try await self.waitUntil { model.modelChoices.first?.name == "Published choice" }
             #expect(model.text == "Unsent draft")
             print(
                 "Quick Chat catalog \(event): seq=1, published=\(model.modelChoices.map(\.name)), draft=\(model.text)")
 
             fails = true
-            socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.eventData(event: event, seq: 2)))
+            socket.emitReceiveSuccess(.data(publication(2)))
             try await self.waitUntil { model.modelControlStatusMessage != nil }
-            #expect(model.modelChoices.map(\.name) == ["Published choice"])
+            #expect(model.modelChoices.map(\.name) == (retiresChoices ? [] : ["Published choice"]))
+            #expect(model.canSelectDefaultModel == !retiresChoices)
+            #expect(model.currentSessionModelSelectionID == "fixture/choice")
+            #expect(model.selectedModelSelectionID == (retiresChoices ? nil : "fixture/choice"))
+            #expect(model.displayedModelSelectionID == (retiresChoices ? nil : "fixture/choice"))
             #expect(model.text == "Unsent draft")
             print(
                 "Quick Chat catalog \(event): seq=2, failedRefresh=\(model.modelControlStatusMessage != nil), retained=\(model.modelChoices.map(\.name)), draft=\(model.text)")
 
             fails = false
             publishedName = "Recovered choice"
-            socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.eventData(event: event, seq: 3)))
+            socket.emitReceiveSuccess(.data(publication(3)))
             try await self.waitUntil { model.modelChoices.first?.name == "Recovered choice" }
             #expect(model.modelControlStatusMessage == nil)
             print(

@@ -26,6 +26,7 @@ import { createWorkerEnvironmentStore } from "./store.js";
 import { createWorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
 import { measureLaunchTurn } from "./worker-turn-launcher.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
+import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
 
 describe("worker node provisioning shutdown replay", () => {
   support.setupWorkerEnvironmentServiceSuite();
@@ -83,7 +84,7 @@ describe("worker node provisioning shutdown replay", () => {
       database: support.testState.stateDb,
       now: () => support.testState.nowMs,
     });
-    const requested = placements.startDispatch(REQUEST);
+    const requested = await placements.startDispatch(REQUEST);
     const intent = deriveEnvironmentIntent(
       `session-dispatch:${REQUEST.sessionId}:${requested.generation}`,
     );
@@ -152,9 +153,9 @@ describe("worker node provisioning shutdown replay", () => {
         runReclaimBarrier: async ({ begin, reclaim }) =>
           await reclaim({ kind: "local", path: "/gateway/workspace" }, begin()),
         runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
-        resolveWorkspace: async () => ({ kind: "local", path: "/gateway/workspace" }),
-        reportWorkspaceResultConflict: async () => {},
-        resolveWorkspaceResultConflict: async () => ({ kind: "absent" }),
+        ...createWorkerWorkspaceRecoveryFixture({
+          resolveWorkspace: async () => ({ kind: "local", path: "/gateway/workspace" }),
+        }),
       });
     const firstDispatch = createDispatch(first);
     const uninstallFirstGuard = first.installReconcileEnvironmentGuard(

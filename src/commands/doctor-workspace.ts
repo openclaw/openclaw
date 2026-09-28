@@ -1,12 +1,15 @@
 /** Doctor checks and repairs for workspace memory files and legacy workspace hints. */
 import fs from "node:fs";
 import path from "node:path";
+import { readRegularFile } from "@openclaw/fs-safe/advanced";
+import { safeStatSync } from "@openclaw/fs-safe/path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import { DEFAULT_AGENTS_FILENAME } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { safeRealpathSync } from "../infra/boundary-path.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { readRegularFile } from "../infra/regular-file.js";
+import { findGitRoot } from "../infra/git-root.js";
 import {
   CANONICAL_ROOT_MEMORY_FILENAME,
   LEGACY_ROOT_MEMORY_FILENAME,
@@ -32,6 +35,18 @@ export const MEMORY_SYSTEM_PROMPT = [
   "https://github.com/openclaw/openclaw/commit/9ffea23f31ca1df5183b25668f8f814bee0fb34e",
   "https://github.com/openclaw/openclaw/commit/7d1fee70e76f2f634f1b41fca927ee663914183a",
 ].join("\n");
+
+/** Returns the workspace git-backup tip when the workspace exists but is not a git repo. */
+export function collectWorkspaceBackupTip(workspaceDir: string): string | null {
+  if (!safeStatSync(workspaceDir)?.isDirectory()) {
+    return null;
+  }
+  const resolvedWorkspaceDir = safeRealpathSync(workspaceDir);
+  if (!resolvedWorkspaceDir || findGitRoot(resolvedWorkspaceDir)) {
+    return null;
+  }
+  return "- Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended-private";
+}
 
 /** Returns true when the workspace appears to lack canonical memory guidance. */
 export async function shouldSuggestMemorySystem(workspaceDir: string): Promise<boolean> {
@@ -70,7 +85,7 @@ export async function shouldSuggestMemorySystem(workspaceDir: string): Promise<b
   return true;
 }
 
-export type RootMemoryFilesDetection = {
+type RootMemoryFilesDetection = {
   workspaceDir: string;
   canonicalPath: string;
   legacyPath: string;
@@ -112,9 +127,7 @@ async function listWorkspaceEntries(workspaceDir: string): Promise<Set<string>> 
 }
 
 /** Detects canonical and legacy root memory files in a workspace. */
-export async function detectRootMemoryFiles(
-  workspaceDir: string,
-): Promise<RootMemoryFilesDetection> {
+async function detectRootMemoryFiles(workspaceDir: string): Promise<RootMemoryFilesDetection> {
   const resolvedWorkspace = path.resolve(workspaceDir);
   const canonicalPath = resolveCanonicalRootMemoryPath(resolvedWorkspace);
   const legacyPath = resolveLegacyRootMemoryPath(resolvedWorkspace);
@@ -143,7 +156,7 @@ function formatBytes(bytes?: number): string {
 }
 
 /** Formats the warning for split canonical/legacy root memory files. */
-export function formatRootMemoryFilesWarning(detection: RootMemoryFilesDetection): string | null {
+function formatRootMemoryFilesWarning(detection: RootMemoryFilesDetection): string | null {
   if (detection.canonicalExists && detection.legacyExists) {
     return [
       "Split root durable memory files detected:",
@@ -157,7 +170,7 @@ export function formatRootMemoryFilesWarning(detection: RootMemoryFilesDetection
   return null;
 }
 
-export type RootMemoryMigrationResult = {
+type RootMemoryMigrationResult = {
   changed: boolean;
   canonicalPath: string;
   legacyPath: string;
@@ -208,7 +221,7 @@ function buildMergedLegacyRootMemorySection(params: {
 }
 
 /** Archives and merges a legacy root memory file into canonical memory. */
-export async function migrateLegacyRootMemoryFile(
+async function migrateLegacyRootMemoryFile(
   workspaceDir: string,
 ): Promise<RootMemoryMigrationResult> {
   const detection = await detectRootMemoryFiles(workspaceDir);

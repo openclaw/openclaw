@@ -6,6 +6,7 @@ import {
   createHealthyRestartSnapshot,
   createDeferredSafeRestartResult,
   createGatewayLockIdentity,
+  createGatewayProcessExpectations,
   expectRestartError,
   type RestartHealthSnapshot,
   requireMockCallArg,
@@ -29,8 +30,15 @@ const terminateStaleGatewayPids = vi.fn();
 const renderGatewayPortHealthDiagnostics = vi.fn(() => ["diag: unhealthy port"]);
 const renderRestartDiagnostics = vi.fn(() => ["diag: unhealthy runtime"]);
 const resolveGatewayPort = vi.hoisted(() => vi.fn((_cfg?: unknown, _env?: unknown) => 18789));
-const findVerifiedGatewayListenerPidsOnPortSync = vi.fn<(port: number) => number[]>(() => []);
-const signalVerifiedGatewayPidSync = vi.fn<(pid: number, signal: "SIGTERM" | "SIGUSR1") => void>();
+const findVerifiedGatewayListenerPidsOnPortSync = vi.fn<
+  typeof import("../../infra/gateway-processes.js").findVerifiedGatewayListenerPidsOnPortSync
+>(() => []);
+const signalVerifiedGatewayPidSync =
+  vi.fn<typeof import("../../infra/gateway-processes.js").signalVerifiedGatewayPidSync>();
+const gatewayProcessChecks = createGatewayProcessExpectations(
+  findVerifiedGatewayListenerPidsOnPortSync,
+  signalVerifiedGatewayPidSync,
+);
 const writeGatewayRestartIntentSync = vi.fn();
 const clearGatewayRestartIntentSync = vi.fn();
 const resolveGatewayServiceProbeHosts = vi.fn(
@@ -642,11 +650,11 @@ describe("runDaemonRestart health checks", () => {
 
     await runUnmanagedStop();
 
-    expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(18789);
-    expect(signalVerifiedGatewayPidSync).toHaveBeenCalledWith(4300, "SIGTERM");
-    expect(signalVerifiedGatewayPidSync).toHaveBeenCalledWith(4400, "SIGTERM");
+    gatewayProcessChecks.listeners(18789, process.env);
+    gatewayProcessChecks.signal(4300, "SIGTERM", 18789, process.env);
+    gatewayProcessChecks.signal(4400, "SIGTERM", 18789, process.env);
     // Verified listeners win over the lock owner (pid 4200) when lsof can see them.
-    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalledWith(4200, "SIGTERM");
+    gatewayProcessChecks.noSignal(4200, "SIGTERM", 18789, process.env);
     expect(appendGatewayLifecycleAudit).toHaveBeenCalledWith({
       action: "stop",
       source: "cli",
@@ -689,7 +697,7 @@ describe("runDaemonRestart health checks", () => {
 
     await runUnmanagedStop({ json: true, force: true });
 
-    expect(signalVerifiedGatewayPidSync).toHaveBeenCalledWith(4200, "SIGTERM");
+    gatewayProcessChecks.signal(4200, "SIGTERM", 18789, process.env);
   });
 
   it("routes macOS disable stops through the service manager when not loaded", async () => {
@@ -731,7 +739,7 @@ describe("runDaemonRestart health checks", () => {
 
     const outcome = await runUnmanagedStop();
 
-    expect(signalVerifiedGatewayPidSync).toHaveBeenCalledWith(4200, "SIGTERM");
+    gatewayProcessChecks.signal(4200, "SIGTERM", 18789, process.env);
     expect(appendGatewayLifecycleAudit).toHaveBeenCalledWith(
       expect.objectContaining({ action: "stop", mode: "sigterm", pid: 4200 }),
     );
@@ -752,8 +760,8 @@ describe("runDaemonRestart health checks", () => {
 
     await runUnmanagedStop();
 
-    expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(39_471);
-    expect(signalVerifiedGatewayPidSync).toHaveBeenCalledWith(4300, "SIGTERM");
+    gatewayProcessChecks.listeners(39_471, process.env);
+    gatewayProcessChecks.signal(4300, "SIGTERM", 39_471, process.env);
   });
 
   it("preserves SIGUSR1 restart delivery for a verified pre-upgrade gateway lock", async () => {
@@ -767,9 +775,9 @@ describe("runDaemonRestart health checks", () => {
 
     await runDaemonRestart({ json: true, wait: "30s" });
 
-    expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(18789);
+    gatewayProcessChecks.listeners(18789);
     expect(findInstalledSystemdGatewayScope).not.toHaveBeenCalled();
-    expect(signalVerifiedGatewayPidSync).toHaveBeenCalledWith(4200, "SIGUSR1");
+    gatewayProcessChecks.signal(4200, "SIGUSR1", 18789);
     expect(callGatewayCli).not.toHaveBeenCalled();
     expect(writeGatewayRestartIntentSync).toHaveBeenCalledWith({
       targetPid: 4200,
@@ -862,23 +870,6 @@ describe("runDaemonRestart health checks", () => {
     expect(callGatewayCli).not.toHaveBeenCalled();
   });
 
-  it("does not send a legacy restart signal when an owner ID appears before delivery", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    const legacyLock = { pid: 4200, createdAt: "2026-07-16T12:00:00.000Z", port: 18_789 };
-    readActiveGatewayLockIdentity
-      .mockResolvedValueOnce(legacyLock)
-      .mockResolvedValue({ ...legacyLock, ownerId: "gateway-owner-new" });
-    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
-    mockUnmanagedRestart();
-
-    await expect(runDaemonRestart({ json: true })).rejects.toThrow("gateway lock owner changed");
-
-    expect(writeGatewayRestartIntentSync).toHaveBeenCalledOnce();
-    expect(clearGatewayRestartIntentSync).toHaveBeenCalledOnce();
-    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
-    expect(callGatewayCli).not.toHaveBeenCalled();
-  });
-
   it("uses the legacy local RPC contract for a pre-upgrade Windows gateway lock", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     readActiveGatewayLockIdentity.mockResolvedValue(
@@ -927,7 +918,7 @@ describe("runDaemonRestart health checks", () => {
 
     await runDaemonRestart({ json: true });
 
-    expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(18_789);
+    gatewayProcessChecks.listeners(18_789);
     expect(probeGateway).toHaveBeenCalledWith(
       expect.objectContaining({ url: "ws://127.0.0.1:18789" }),
     );

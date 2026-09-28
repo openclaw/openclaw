@@ -58,6 +58,14 @@ it.each([
         sessions: [],
         defaults: { model: null, modelProvider: null, contextTokens: null },
         people: [{ identity: { type: "profile", id: "person" }, label: "Person", sessionCount: 0 }],
+        activityPulse: {
+          since: 0,
+          until: 86_400_000,
+          hours: Array.from({ length: 24 }, () => 0),
+          sessions: 0,
+          started: 0,
+          running: 0,
+        },
       },
       expandedAutomationDays: new Set(),
       onRetry: vi.fn(),
@@ -67,7 +75,7 @@ it.each([
     render(renderSessionActivityView(props), container);
     const main = container.querySelector<HTMLElement>(".activity-feed__main")!;
     const content = main.querySelector<HTMLElement>(
-      personId ? "[data-activity-identity]" : ".activity-feed__summary",
+      personId ? "[data-activity-identity]" : ".activity-pulse",
     )!;
     expect(getComputedStyle(container.querySelector(".activity-feed__feedback")!).minHeight).toBe(
       "32px",
@@ -106,7 +114,7 @@ it.each([
       void controller.load(client, props.filters);
       await vi.waitFor(() => expect(controller.loading).toBe(false));
       const retained = container.querySelector<HTMLElement>(
-        personId ? "[data-activity-identity]" : ".activity-feed__summary",
+        personId ? "[data-activity-identity]" : ".activity-pulse",
       )!;
       const retainedTop = retained.getBoundingClientRect().top;
       request.mockRejectedValueOnce(new Error("Refresh failed"));

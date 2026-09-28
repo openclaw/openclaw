@@ -26,7 +26,7 @@ import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
 import type {
   FileSidebarNavigation,
   AttachmentSidebarRuntime,
-  SidebarContent,
+  FileSidebarContent,
   ChatDetailPanelContent,
 } from "./chat-sidebar-content-types.ts";
 import {
@@ -43,8 +43,6 @@ import {
 import type { FileEditorViewHandle } from "./file-editor-view.ts";
 
 registerFilePreviewEnglish();
-
-type FileSidebarContent = Extract<SidebarContent, { kind: "file" }>;
 
 class ChatDetailPanel extends OpenClawLightDomElement {
   @property({ attribute: false }) content: ChatDetailPanelContent | null = null;
@@ -230,11 +228,8 @@ class ChatDetailPanel extends OpenClawLightDomElement {
   };
 
   private scrollToFileLine(content: FileSidebarContent) {
-    if (this.visibleContent !== content || this.showingRawText) {
-      return;
-    }
     const line = this.fileNavigation?.line ?? content.line;
-    if (line != null) {
+    if (this.visibleContent === content && !this.showingRawText && line != null) {
       this.fileEditor?.scrollToLine(line, true);
     }
   }
@@ -288,9 +283,10 @@ class ChatDetailPanel extends OpenClawLightDomElement {
         this.fileDraftContent = null;
         editor.onDocChanged((nextContent) => {
           const draft = captureFileEditorDraft(current, {
-            editing: this.fileEditing,
+            // Reload synchronization may normalize display text without a user edit.
+            editing: this.fileEditing && !this.fileReloading,
             content: nextContent,
-            savedContent: this.fileSavedContent,
+            dirty: !editor.contentEquals(this.fileSavedContent),
             expectedHash: this.fileHash,
           });
           if (!draft) {
@@ -493,7 +489,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     const draftContent = this.currentFileText();
     this.fileSavedContent = nextContent;
     this.fileHash = hash;
-    this.fileDirty = draftContent !== nextContent;
+    this.fileDirty = !(this.fileEditor?.contentEquals(nextContent) ?? draftContent === nextContent);
     this.fileDraftContent = !this.fileEditor && this.fileDirty ? draftContent : null;
     setFileDraft(content, this.fileDirty ? { content: draftContent, expectedHash: hash } : null);
     this.fileSaveNotice = null;
@@ -503,7 +499,6 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     if (content.edit) {
       content.edit.hash = hash;
     }
-    this.visibleContent = content;
   }
 
   private async saveFileContent(
@@ -542,20 +537,10 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     const version = this.fileOperationVersion;
     this.fileSaving = true;
     this.fileSaveNotice = null;
-    void this.saveFileContent(content, this.currentFileText(), this.fileHash, version)
-      .catch((error: unknown) => {
-        if (version === this.fileOperationVersion) {
-          this.fileSaveNotice = {
-            kind: "error",
-            message: formatUiError(error),
-          };
-        }
-      })
-      .finally(() => {
-        if (version === this.fileOperationVersion) {
-          this.fileSaving = false;
-        }
-      });
+    this.trackFileOperation(
+      this.saveFileContent(content, this.currentFileText(), this.fileHash, version),
+      version,
+    );
   };
 
   private readonly reloadFile = () => {
@@ -567,9 +552,8 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     this.fileSaving = true;
     this.fileReloading = true;
     this.fileEditor?.setEditable(false);
-    void content.edit
-      .fetchLatest()
-      .then((latest) => {
+    this.trackFileOperation(
+      content.edit.fetchLatest().then((latest) => {
         if (version !== this.fileOperationVersion || this.visibleContent?.kind !== "file") {
           return;
         }
@@ -588,27 +572,15 @@ class ChatDetailPanel extends OpenClawLightDomElement {
         // mode (e.g. the agent rewrote the file with mixed line endings);
         // drop the edit capability instead of letting a save corrupt it.
         if (!latest.editable && this.visibleContent?.kind === "file") {
+          setFileDraft(this.visibleContent, null);
           this.fileEditing = false;
           this.fileDirty = false;
           const { edit: _removed, ...readOnly } = this.visibleContent;
           this.visibleContent = readOnly;
         }
-      })
-      .catch((error: unknown) => {
-        if (version === this.fileOperationVersion) {
-          this.fileSaveNotice = {
-            kind: "error",
-            message: formatUiError(error),
-          };
-        }
-      })
-      .finally(() => {
-        if (version === this.fileOperationVersion) {
-          this.fileReloading = false;
-          this.fileSaving = false;
-          this.fileEditor?.setEditable(this.fileEditing);
-        }
-      });
+      }),
+      version,
+    );
   };
 
   private readonly overwriteFile = () => {
@@ -621,9 +593,8 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     // would fail the edit gates) with the local editor text the user chose.
     const localContent = this.currentFileText();
     this.fileSaving = true;
-    void content.edit
-      .fetchLatest()
-      .then(async (latest) => {
+    this.trackFileOperation(
+      content.edit.fetchLatest().then(async (latest) => {
         if (version !== this.fileOperationVersion) {
           return;
         }
@@ -635,21 +606,28 @@ class ChatDetailPanel extends OpenClawLightDomElement {
           return;
         }
         await this.saveFileContent(content, localContent, latest.hash, version);
-      })
+      }),
+      version,
+    );
+  };
+
+  private trackFileOperation(operation: Promise<unknown>, version: number) {
+    void operation
       .catch((error: unknown) => {
         if (version === this.fileOperationVersion) {
-          this.fileSaveNotice = {
-            kind: "error",
-            message: formatUiError(error),
-          };
+          this.fileSaveNotice = { kind: "error", message: formatUiError(error) };
         }
       })
       .finally(() => {
         if (version === this.fileOperationVersion) {
           this.fileSaving = false;
+          if (this.fileReloading) {
+            this.fileReloading = false;
+            this.fileEditor?.setEditable(this.fileEditing);
+          }
         }
       });
-  };
+  }
 
   private readonly close = () => {
     this.dispatchEvent(new CustomEvent("chat-detail-panel-close", { bubbles: true }));

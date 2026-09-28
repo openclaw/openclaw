@@ -3,17 +3,26 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   getChatAttachmentDataUrl,
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
+import {
+  createAttachmentSidebarHarness,
+  renderAttachmentHarness,
+  renderSettledPastedTextAttachment,
+} from "./chat-attachment-picker.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
-import { createChatProps, createPasteEvent } from "./chat-view.test-helpers.ts";
+import { createChatProps, createPasteEvent, requireElement } from "./chat-view.test-helpers.ts";
 import { renderChat } from "./chat-view.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import { resetTranscriptTestDom } from "./components/chat-transcript.test-support.ts";
+import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.ts";
 
 const payloads: ChatAttachment[] = [];
 
@@ -49,6 +58,69 @@ function getComposerTextarea(container: Element) {
 }
 
 describe("chat attachment paste", () => {
+  it("preserves pasted-text presentation and restore behavior across handoff", async () => {
+    let attachments: ChatAttachment[] = [];
+    const producer = renderAttachmentHarness(
+      () => attachments,
+      (next) => {
+        attachments = next;
+      },
+    );
+    const pastedText = `First words from a remounted paste ${"x".repeat(1100)}`;
+    getComposerTextarea(producer).dispatchEvent(createPasteEvent(pastedText));
+    const original = expectDefined(attachments[0], "pasted attachment");
+    const originalDataUrl = getChatAttachmentDataUrl(original);
+
+    const handoff = createChatAttachmentHandoff(createApplicationGateway().gateway);
+    onTestFinished(() => handoff.dispose());
+    const owner = {} as GatewayBrowserClient;
+    handoff.prepare({
+      reviewPrivateDraft: reviewPrivateComposerDraft,
+      owner,
+      paneId: "p1",
+      scopeKey: "agent:main:one",
+      attachments,
+      fallbacks: {},
+    });
+    attachments = expectDefined(
+      handoff.consume({ owner, paneId: "p1", scopeKey: "agent:main:one" }),
+      "restored attachments",
+    ).attachments;
+
+    expect(attachments).toHaveLength(1);
+    expect(attachments[0]).toBe(original);
+    expect(getChatAttachmentDataUrl(original)).toBe(originalDataUrl);
+
+    const onAttachmentsChange = vi.fn();
+    const onDraftChange = vi.fn();
+    const sidebar = createAttachmentSidebarHarness();
+    const remounted = await renderSettledPastedTextAttachment({
+      onOpenSidebar: sidebar.open,
+      attachments,
+      getAttachments: () => attachments,
+      draft: "intro",
+      getDraft: () => "intro",
+      onAttachmentsChange,
+      onDraftChange,
+    });
+    expect(remounted.querySelector(".chat-attachment-file__open")?.textContent).toContain(
+      "First words from a remounted p…",
+    );
+    expect(attachments[0]?.origin).toBe("paste");
+    requireElement(remounted, ".chat-attachment-file__open", "pasted text excerpt").dispatchEvent(
+      new MouseEvent("click", { bubbles: true }),
+    );
+    requireElement(
+      sidebar.container,
+      ".chat-attachment-text-action",
+      "show pasted text button",
+    ).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(onAttachmentsChange).toHaveBeenCalledWith([]);
+    expect(onDraftChange).toHaveBeenCalledWith(`intro\n\n${pastedText}`);
+    expect(getChatAttachmentDataUrl(original)).toBeNull();
+  });
+
   it("converts supported-size pasted image bytes into an attachment", () => {
     const onAttachmentsChange = vi.fn<(attachments: ChatAttachment[]) => void>();
     const container = renderChatView({ onAttachmentsChange });
@@ -82,11 +154,11 @@ describe("chat attachment reading", () => {
     "waits for an in-flight %s attachment before accepting an immediate send",
     async (entry) => {
       const readers: FileReader[] = [];
-      vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(
-        function (this: FileReader) {
-          readers.push(this);
-        },
-      );
+      vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function (
+        this: FileReader,
+      ) {
+        readers.push(this);
+      });
       const container = document.createElement("div");
       const file = new File(["attachment proof"], "proof.png", { type: "image/png" });
       const draft = "Send the attachment with this message";

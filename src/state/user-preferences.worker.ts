@@ -1,7 +1,10 @@
 import { ok } from "@openclaw/normalization-core/result";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
-import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import {
+  deferSqliteWorkerCommitReceipt,
+  requestSqliteWorkerOperationAdmission,
+} from "../infra/sqlite-worker-operation-admission.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -10,9 +13,13 @@ import {
 import {
   ensureUserPreferencesSchema,
   readUserPreferences,
+  updatesGitCoauthorPreference,
   writeUserPreferences,
 } from "./user-preferences.store.js";
-import type { UserPreferenceWorkerOperations } from "./user-preferences.types.js";
+import type {
+  UserPreferenceCoauthorMutation,
+  UserPreferenceWorkerOperations,
+} from "./user-preferences.types.js";
 import { selectResolvedUserProfileMetadataById } from "./user-profiles-internal.js";
 import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
 
@@ -43,7 +50,14 @@ export function executeUserPreferenceCommand(
           return undefined;
         }
         const result = writeUserPreferences(db, profile.id, command.input.update);
-        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+        const facts: UserPreferenceCoauthorMutation | undefined =
+          result.ok && updatesGitCoauthorPreference(update)
+            ? { kind: "user-preference-coauthor", profileId: profile.id }
+            : undefined;
+        requestSqliteWorkerOperationAdmission({ stage: "commit", facts });
+        if (facts) {
+          deferSqliteWorkerCommitReceipt(db, facts);
+        }
         return result.ok ? ok({ profileId: profile.id }) : result;
       },
       options,

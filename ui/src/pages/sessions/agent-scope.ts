@@ -1,7 +1,8 @@
 import type { AgentIdentityResult, SessionsListResult } from "../../api/types.ts";
+import type { AgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 
-export function sessionAgentIds(result: SessionsListResult | null): string[] {
+function sessionAgentIds(result: SessionsListResult | null): string[] {
   return [
     ...new Set(
       (result?.sessions ?? [])
@@ -20,4 +21,18 @@ export function sessionAgentIdentityById(
       .map((agentId) => [agentId, getIdentity(agentId)] as const)
       .filter((entry): entry is readonly [string, AgentIdentityResult] => Boolean(entry[1])),
   );
+}
+
+export function ensureSessionAgentIdentities(
+  identity: Pick<AgentIdentityCapability, "get" | "ensure"> | undefined,
+  result: SessionsListResult | null,
+): void {
+  if (!identity || !result) {
+    return;
+  }
+  const agentIds = sessionAgentIds(result).filter((agentId) => !identity.get(agentId));
+  if (agentIds.length === 0) {
+    return;
+  }
+  void identity.ensure(agentIds);
 }

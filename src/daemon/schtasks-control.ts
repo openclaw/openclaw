@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { isGatewayArgv } from "../infra/gateway-process-argv.js";
+import { classifyOpenClawArgv } from "../infra/gateway-process-argv.js";
 import { sleep } from "../utils.js";
 import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
 import { formatLine } from "./output.js";
@@ -65,11 +65,13 @@ async function shouldFallbackScheduledTaskLaunch(params: {
   env: GatewayServiceEnv;
   scriptPath: string;
 }): Promise<boolean> {
-  const readLaunchObservation = async (): Promise<{
+  const readLaunchObservation = async (
+    timeoutMs?: number,
+  ): Promise<{
     state: "running" | "not-yet-run" | "stopped-success" | "other";
     signature: string;
   }> => {
-    const runtime = await readScheduledTaskRuntime(params.env).catch(() => null);
+    const runtime = await readScheduledTaskRuntime(params.env, { timeoutMs }).catch(() => null);
     if (runtime?.status === "running") {
       return { state: "running", signature: runtimeSignature(runtime) };
     }
@@ -133,7 +135,7 @@ async function shouldFallbackScheduledTaskLaunch(params: {
         taskPort,
         installedArguments,
         manageGatewayPort
-          ? (argv) => isGatewayArgv(argv, { allowGatewayBinary: true })
+          ? (argv) => classifyOpenClawArgv(argv, { command: "gateway" }).kind === "openclaw"
           : isNodeHostArgv,
       ) != null
     );
@@ -146,7 +148,8 @@ async function shouldFallbackScheduledTaskLaunch(params: {
   const deadline = Date.now() + SCHEDULED_TASK_FALLBACK_TIMEOUT_MS;
   while (Date.now() < deadline) {
     await sleep(SCHEDULED_TASK_FALLBACK_POLL_MS);
-    const current = await readLaunchObservation();
+    // Periodic observations keep their existing short budget after the initial cold read.
+    const current = await readLaunchObservation(5_000);
     if (current.state !== "not-yet-run" && current.state !== "stopped-success") {
       return false;
     }

@@ -22,13 +22,12 @@ const MANAGED_OUTGOING_IMAGE_FETCH_TIMEOUT_MS = 30_000;
 const MANAGED_OUTGOING_IMAGE_RETRY_MS = 5_000;
 type ManagedImageVariant = "full" | "thumbnail";
 
-export function resolveManagedImageResource(
+function managedImageResourceIdentity(
   source: string | undefined,
   opts?: ImageRenderOptions,
   artifactId?: string,
   variant: ManagedImageVariant = "thumbnail",
-  retryFailed = false,
-): ChatMediaResource<string | null> {
+) {
   const variantUrl = source
     ? buildManagedOutgoingImageVariantUrl(source, variant, opts?.resourceBasePath)
     : undefined;
@@ -44,11 +43,35 @@ export function resolveManagedImageResource(
     variantUrl,
     artifactKey,
   ]);
+  return { cacheKey, subscriberScope: `${variantUrl}::${artifactKey}` };
+}
+
+export function readCachedManagedImageUrl(
+  source: string | undefined,
+  opts?: ImageRenderOptions,
+  artifactId?: string,
+) {
+  return readManagedImageBlobUrl(managedImageResourceIdentity(source, opts, artifactId).cacheKey);
+}
+
+export function resolveManagedImageResource(
+  source: string | undefined,
+  opts?: ImageRenderOptions,
+  artifactId?: string,
+  variant: ManagedImageVariant = "thumbnail",
+  retryFailed = false,
+): ChatMediaResource<string | null> {
+  const { cacheKey, subscriberScope } = managedImageResourceIdentity(
+    source,
+    opts,
+    artifactId,
+    variant,
+  );
   const resource = observeChatMediaResource<string | null>(
     "managed-image",
     cacheKey,
     opts?.onRequestUpdate,
-    `${variantUrl}::${artifactKey}`,
+    subscriberScope,
   );
   if (resource.subscribers.size > 0 && !resource.releaseAuthRecovery) {
     resource.releaseAuthRecovery = subscribeBrowserAuthRestored(() => {

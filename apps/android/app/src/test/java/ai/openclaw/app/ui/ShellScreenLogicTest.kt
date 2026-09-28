@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.runtime.saveable.SaverScope
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -279,32 +280,6 @@ class ShellScreenLogicTest {
   }
 
   @Test
-  fun skillWorkshopSummaryPrioritizesPendingAndHeldProposals() {
-    assertEquals(
-      "2 pending",
-      skillWorkshopSummaryText(
-        GatewaySkillWorkshopSummary(
-          proposals =
-            listOf(
-              skillWorkshopProposal("one", "pending"),
-              skillWorkshopProposal("two", "pending"),
-              skillWorkshopProposal("three", "applied"),
-            ),
-        ),
-      ),
-    )
-    assertEquals(
-      "1 held",
-      skillWorkshopSummaryText(
-        GatewaySkillWorkshopSummary(proposals = listOf(skillWorkshopProposal("held", "quarantined"))),
-      ),
-    )
-    assertEquals(null, skillWorkshopStatus(GatewaySkillWorkshopSummary(proposals = emptyList())))
-    assertEquals(false, skillWorkshopStatus(GatewaySkillWorkshopSummary(proposals = listOf(skillWorkshopProposal("pending", "pending")))))
-    assertEquals(true, skillWorkshopStatus(GatewaySkillWorkshopSummary(proposals = listOf(skillWorkshopProposal("applied", "applied")))))
-  }
-
-  @Test
   fun skillWorkshopFilteringMatchesHeldAndSearchText() {
     val proposals =
       listOf(
@@ -492,10 +467,9 @@ class ShellScreenLogicTest {
     assertEquals(listOf("Gateway", "Nodes", "Approvals", "Threads", "Files"), cards.map { it.title })
     assertEquals("Online", cards.single { it.title == "Gateway" }.value)
     assertEquals("Review highlighted items", cards.single { it.title == "Gateway" }.subtitle)
-    assertEquals("1/1", cards.single { it.title == "Nodes" }.value)
+    assertNull(cards.single { it.title == "Nodes" }.value)
     assertEquals("Review node access", cards.single { it.title == "Nodes" }.subtitle)
     assertEquals(ClawStatus.Warning, cards.single { it.title == "Nodes" }.status)
-    assertEquals(1f, cards.single { it.title == "Nodes" }.progressFraction ?: 0f, 0.001f)
     assertEquals("2", cards.single { it.title == "Approvals" }.value)
     assertEquals("4", cards.single { it.title == "Threads" }.value)
     assertEquals("Browse", cards.single { it.title == "Files" }.value)
@@ -509,7 +483,7 @@ class ShellScreenLogicTest {
         ChatSessionEntry(key = "session-$index", updatedAtMs = index.toLong())
       }
 
-    assertEquals(50, overviewRecentSessionCount(sessions))
+    assertEquals(50, overviewRecentSessions(sessions).size)
     assertEquals((51 downTo 2).map { "session-$it" }, overviewRecentSessions(sessions).map { it.key })
   }
 
@@ -614,39 +588,47 @@ class ShellScreenLogicTest {
   }
 
   @Test
-  fun overviewNodeCardShowsRoundedOnlinePercentWhenNoNodeApprovalIsPending() {
-    val cards =
-      overviewMetricCardSpecs(
-        isConnected = true,
-        hasAttention = false,
-        nodesDevicesSummary =
-          GatewayNodesDevicesSummary(
-            nodes =
-              (1..3).map { index ->
-                GatewayNodeSummary(
-                  id = "node-$index",
-                  displayName = "Node $index",
-                  remoteIp = null,
-                  version = null,
-                  deviceFamily = null,
-                  paired = true,
-                  connected = index <= 2,
-                  approvalState = GatewayNodeCapabilityApproval.Approved,
-                  capabilities = emptyList(),
-                  commands = emptyList(),
-                )
-              },
-            pendingDevices = emptyList(),
-            pairedDevices = emptyList(),
-          ),
-        pendingApprovals = 0,
-        sessionCount = 0,
-      )
+  fun overviewNodeCardSummarizesOnlineNodesOnceWhenNoApprovalIsPending() {
+    for ((online, total, expected) in listOf(
+      Triple(8, 9, "8 of 9 online"),
+      Triple(9, 9, "9 online"),
+      Triple(0, 9, "0 of 9 online"),
+      Triple(0, 0, "None paired"),
+      Triple(1, 1, "1 online"),
+    )) {
+      val cards =
+        overviewMetricCardSpecs(
+          isConnected = true,
+          hasAttention = false,
+          nodesDevicesSummary =
+            GatewayNodesDevicesSummary(
+              nodes =
+                (1..total).map { index ->
+                  GatewayNodeSummary(
+                    id = "node-$index",
+                    displayName = "Node $index",
+                    remoteIp = null,
+                    version = null,
+                    deviceFamily = null,
+                    paired = true,
+                    connected = index <= online,
+                    approvalState = GatewayNodeCapabilityApproval.Approved,
+                    capabilities = emptyList(),
+                    commands = emptyList(),
+                  )
+                },
+              pendingDevices = emptyList(),
+              pairedDevices = emptyList(),
+            ),
+          pendingApprovals = 0,
+          sessionCount = 0,
+        )
 
-    val nodes = cards.single { it.title == "Nodes" }
-    assertEquals("2/3", nodes.value)
-    assertEquals("67% online", nodes.subtitle)
-    assertEquals(2f / 3f, nodes.progressFraction ?: 0f, 0.001f)
+      val nodes = cards.single { it.title == "Nodes" }
+      assertNull(nodes.value)
+      assertEquals(expected, nodes.subtitle)
+      assertEquals(SettingsRoute.NodesDevices, nodes.settingsRoute)
+    }
   }
 
   @Test
@@ -792,7 +774,7 @@ class ShellScreenLogicTest {
   }
 
   @Test
-  fun settingsSectionsPreserveMeaningfulOrder() {
+  fun settingsSectionsSeparatePersonalConfigurationFromWorkspaceAndFeaturedRoutes() {
     val sections =
       settingsSections(
         listOf(
@@ -812,11 +794,11 @@ class ShellScreenLogicTest {
 
     assertEquals(
       listOf(
-        "Connection" to listOf(SettingsRoute.Gateway, SettingsRoute.NodesDevices),
-        "Agents & automation" to listOf(SettingsRoute.SystemAgent, SettingsRoute.ProvidersModels, SettingsRoute.Approvals, SettingsRoute.CronJobs),
-        "Phone context & privacy" to listOf(SettingsRoute.Voice, SettingsRoute.PhoneCapabilities, SettingsRoute.Notifications),
-        "Profile & device" to listOf(SettingsRoute.Appearance),
-        "Diagnostics" to listOf(SettingsRoute.Health),
+        "Profile & appearance" to listOf(SettingsRoute.Appearance),
+        "This phone" to listOf(SettingsRoute.Voice, SettingsRoute.PhoneCapabilities, SettingsRoute.Notifications),
+        "Connections" to listOf(SettingsRoute.Gateway, SettingsRoute.NodesDevices),
+        "Configuration" to listOf(SettingsRoute.ProvidersModels, SettingsRoute.Approvals),
+        "System" to listOf(SettingsRoute.Health),
       ),
       sections.map { section -> section.title.resolveNativeText() to section.rows.map { it.route } },
     )

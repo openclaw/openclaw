@@ -162,6 +162,8 @@ export type RunCliAgentParams = {
   };
   /** Caller-owned authority for credential use; cancellation alone is not authorization. */
   assertCurrent?: () => void;
+  /** Internal completion caller's representation of operator authorization failures. */
+  mapOperatorAuthorizationError?: (error: unknown) => Error;
   onExecutionStarted?: () => unknown;
   onExecutionPhase?: (info: {
     phase: EmbeddedAgentExecutionPhase;

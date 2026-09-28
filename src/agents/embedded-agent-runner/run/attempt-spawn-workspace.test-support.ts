@@ -1,3 +1,4 @@
+import "./attempt-spawn-workspace.tools-mock.test-support.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -669,16 +670,10 @@ vi.mock("../../provider-stream.js", () => ({
   registerProviderStreamForModel: vi.fn(),
 }));
 
-vi.mock("../../sandbox/runtime-status.js", () => ({
-  resolveSandboxRuntimeStatus: () => ({
-    agentId: "main",
-    sessionKey: "agent:main:main",
-    mainSessionKey: "agent:main:main",
-    mode: "off",
-    sandboxed: false,
-    toolPolicy: { allow: [], deny: [], sources: { allow: { key: "" }, deny: { key: "" } } },
-  }),
-}));
+vi.mock(
+  "../../sandbox/runtime-status.js",
+  () => import("./attempt-spawn-workspace.sandbox-mock.test-support.js"),
+);
 
 vi.mock("../../tool-fs-policy.js", () => ({
   resolveSessionPermissionExecMode: (policy: { mode: string }) =>
@@ -799,12 +794,6 @@ vi.mock("../thinking.js", async (importOriginal) => {
     dropThinkingBlocks: <T>(messages: T) => messages,
   };
 });
-
-vi.mock("../tool-split.js", () => ({
-  splitSdkTools: ({ tools }: { tools: unknown[] }) => ({
-    customTools: tools,
-  }),
-}));
 
 vi.mock("../utils.js", async () => {
   const actual = await vi.importActual<typeof import("../utils.js")>("../utils.js");

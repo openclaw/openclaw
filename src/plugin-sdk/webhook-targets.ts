@@ -216,17 +216,8 @@ export async function withResolvedWebhookRequestPipeline<T>(params: {
       ? params.inFlightKey({ req: params.req, path: resolved.path, targets: resolved.targets })
       : (params.inFlightKey ?? `${resolved.path}:${params.req.socket?.remoteAddress ?? "unknown"}`);
   const requestLifecycle = beginWebhookRequestPipelineOrReject({
-    req: params.req,
-    res: params.res,
-    allowMethods: params.allowMethods,
-    rateLimiter: params.rateLimiter,
-    rateLimitKey: params.rateLimitKey,
-    nowMs: params.nowMs,
-    requireJsonContentType: params.requireJsonContentType,
-    inFlightLimiter: params.inFlightLimiter,
+    ...params,
     inFlightKey,
-    inFlightLimitStatusCode: params.inFlightLimitStatusCode,
-    inFlightLimitMessage: params.inFlightLimitMessage,
   });
   if (!requestLifecycle.ok) {
     return true;
@@ -248,23 +239,6 @@ export type WebhookTargetMatchResult<T> =
   | { kind: "single"; target: T }
   | { kind: "ambiguous" };
 
-function updateMatchedWebhookTarget<T>(
-  matched: T | undefined,
-  target: T,
-): { ok: true; matched: T } | { ok: false; result: WebhookTargetMatchResult<T> } {
-  if (matched) {
-    return { ok: false, result: { kind: "ambiguous" } };
-  }
-  return { ok: true, matched: target };
-}
-
-function finalizeMatchedWebhookTarget<T>(matched: T | undefined): WebhookTargetMatchResult<T> {
-  if (!matched) {
-    return { kind: "none" };
-  }
-  return { kind: "single", target: matched };
-}
-
 /** Match exactly one synchronous target or report whether resolution was empty or ambiguous. */
 export function resolveSingleWebhookTarget<T>(
   targets: readonly T[],
@@ -277,13 +251,12 @@ export function resolveSingleWebhookTarget<T>(
     }
     // Stop at the second match so auth callers can reject ambiguous secrets without inspecting
     // or accidentally selecting a later target.
-    const updated = updateMatchedWebhookTarget(matched, target);
-    if (!updated.ok) {
-      return updated.result;
+    if (matched) {
+      return { kind: "ambiguous" };
     }
-    matched = updated.matched;
+    matched = target;
   }
-  return finalizeMatchedWebhookTarget(matched);
+  return matched ? { kind: "single", target: matched } : { kind: "none" };
 }
 
 /** Async variant of single-target resolution for auth checks that need I/O. */
@@ -296,13 +269,12 @@ export async function resolveSingleWebhookTargetAsync<T>(
     if (!(await isMatch(target))) {
       continue;
     }
-    const updated = updateMatchedWebhookTarget(matched, target);
-    if (!updated.ok) {
-      return updated.result;
+    if (matched) {
+      return { kind: "ambiguous" };
     }
-    matched = updated.matched;
+    matched = target;
   }
-  return finalizeMatchedWebhookTarget(matched);
+  return matched ? { kind: "single", target: matched } : { kind: "none" };
 }
 
 /** Resolve an authorized target and send the standard unauthorized or ambiguous response on failure. */

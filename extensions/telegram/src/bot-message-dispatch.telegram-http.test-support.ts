@@ -59,7 +59,10 @@ export function createTelegramDispatchHttpFixture() {
   const pendingDispatches = new Set<Promise<unknown>>();
   const bindingAdapters = new Map<string, SessionBindingAdapter>();
   const pendingRequests = new Set<Promise<unknown>>();
-  type Rejection = { error_code: number; description: string } | "no-message-id" | undefined;
+  type Rejection =
+    | { error_code: number; description: string; parameters?: { retry_after?: number } }
+    | "no-message-id"
+    | undefined;
   let respondToCall: ((call: RecordedBotApiCall) => Rejection | Promise<Rejection>) | undefined;
   let rejectNextQuote = false;
   let holdNextCall:
@@ -106,6 +109,8 @@ export function createTelegramDispatchHttpFixture() {
           await Promise.race([held.release.promise, stopped]);
         }
         response.setHeader("content-type", "application/json");
+        // Idle keep-alive expiry must not race later fixture requests under load.
+        response.setHeader("connection", "close");
         const rejection = await Promise.race([
           Promise.resolve(respondToCall?.({ method, fields })),
           stopped,
@@ -253,7 +258,11 @@ export function createTelegramDispatchHttpFixture() {
       }
     });
     holdNextCall = undefined;
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // SQLite workers share native hrtime deadlines with the dispatching thread.
+    vi.useFakeTimers({
+      shouldAdvanceTime: true,
+      toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
     calls.length = 0;
     visibleMessages.clear();
     visibleMarkup.clear();

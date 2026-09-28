@@ -9,6 +9,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { advanceCronActiveJobGeneration, markCronJobActive } from "../active-jobs.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
@@ -18,10 +19,11 @@ import {
   prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.js";
 import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
+import { prepareCronRunReceiptWriteSchema } from "../store/run-receipt-write-admission.js";
 import type { CronJob } from "../types.js";
 import { reserveQueuedCronRun } from "./run-admission.js";
+import { createCronRunHandle } from "./run-history.js";
 import { createCronServiceState } from "./state.js";
-import { tryCreateCronTaskRunHandle } from "./task-runs.js";
 import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
 import { finalizeCompletedCronRunOutcomes } from "./timer-outcome-finalization.js";
 import { authorCronRunCompletion } from "./timer.js";
@@ -39,6 +41,7 @@ function claimReceipt(storePath: string, job: CronJob, startedAtMs: number) {
   return runOpenClawStateWriteTransaction(({ db }) =>
     claimCronRunReceiptInDatabase({
       database: db,
+      receiptSchema: prepareCronRunReceiptWriteSchema(db),
       prepared,
       resolveAgentId: (current) => current.agentId ?? "main",
     }),
@@ -80,7 +83,7 @@ describe("cron outcome receipt finalization", () => {
         nowMs: () => startedAt,
         runIsolatedAgentJob: vi.fn(),
       });
-      const taskRunId = tryCreateCronTaskRunHandle({
+      const taskRunId = createCronRunHandle({
         state,
         job: retired,
         startedAt,
@@ -302,6 +305,7 @@ describe("cron outcome receipt finalization", () => {
     const events: Array<{ action: string; jobId: string }> = [];
     const warn = vi.fn();
     const state = createCronServiceState({
+      scheduler: createTestGatewayScheduler(),
       cronEnabled: true,
       storePath: store.storePath,
       log: { ...noopLogger, warn },

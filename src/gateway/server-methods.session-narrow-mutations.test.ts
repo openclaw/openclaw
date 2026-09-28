@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.js";
@@ -450,6 +451,9 @@ describe("invocation-owned session mutations", () => {
       client.connect.scopes = ["operator.read", "operator.approvals", "operator.sessions.write"];
       const owner = roleClient("view", "mixed-owner");
       const cfg = rolePolicyConfig();
+      expectDefined(cfg.gateway?.roles?.definitions.view, "mixed-grant role").scopes.push(
+        "operator.approvals",
+      );
       await upsertSessionEntryCore(scope, {
         sessionId: "mixed-session",
         updatedAt: 1,
@@ -596,8 +600,8 @@ describe("invocation-owned session mutations", () => {
     },
   );
 
-  it.each(["source", "generation"] as const)(
-    "batch mutation preserves the original %s fence",
+  it.each(["source", "generation", "missing-single", "missing-batch"] as const)(
+    "session mutation preserves the original %s fence",
     async (changed) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const client = roleClient("view", "batch-owner");
@@ -613,7 +617,11 @@ describe("invocation-owned session mutations", () => {
             id: client.authenticatedUserProfile!.profileId,
           },
         };
-        await upsertSessionEntryCore(scope, entry);
+        const missing = changed.startsWith("missing");
+        const method = changed === "missing-single" ? "sessions.patch" : "sessions.patchMany";
+        if (!missing) {
+          await upsertSessionEntryCore(scope, entry);
+        }
         const entered = createDeferredCore();
         const resume = createDeferredCore();
         let current = true;
@@ -621,24 +629,44 @@ describe("invocation-owned session mutations", () => {
         const handler: GatewayRequestHandler = async (options) => {
           entered.resolve();
           await resume.promise;
-          await sessionMutationHandlers["sessions.patchMany"]!(options);
+          await sessionMutationHandlers[method]!(options);
         };
         const request = handleGatewayRequest({
           req: {
             type: "req",
             id: changed,
-            method: "sessions.patchMany",
-            params: { targets: [{ key }], patch: { unread: true } },
+            method,
+            params:
+              method === "sessions.patch"
+                ? { key, label: "Unowned claim" }
+                : {
+                    targets: [{ key }],
+                    patch: missing ? { label: "Unowned claim" } : { unread: true },
+                  },
           },
           client,
           context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
           respond,
           hasCurrentClientAuthority: () => current,
           isWebchatConnect: () => false,
-          extraHandlers: { "sessions.patchMany": handler },
+          extraHandlers: { [method]: handler },
         });
         try {
           await Promise.race([entered.promise, request]);
+          if (missing) {
+            resume.resolve();
+            await request;
+            expect(respond).toHaveBeenCalledExactlyOnceWith(
+              false,
+              undefined,
+              expect.objectContaining({
+                code: "INVALID_REQUEST",
+                message: expect.stringContaining("was not found"),
+              }),
+            );
+            expect(loadSessionEntry(scope)).toBeUndefined();
+            return;
+          }
           expect(respond).not.toHaveBeenCalled();
           if (changed === "source") {
             current = false;

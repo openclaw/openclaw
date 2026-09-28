@@ -2,7 +2,10 @@ import type { Bot } from "grammy";
 import type { Message } from "grammy/types";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { SavedRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import {
+  createChannelIngressQueueForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   createTestRegistry,
   resetPluginRuntimeStateForTest,
@@ -15,6 +18,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, vi } from "vitest";
+import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { defaultTelegramBotDeps } from "./bot-deps.js";
 import {
@@ -23,19 +27,32 @@ import {
 } from "./bot-native-command-menu-state.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { createTelegramBot } from "./bot.js";
+import { apiThrottler } from "./bot.runtime.js";
 import { telegramPlugin } from "./channel.js";
 import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
+import { getTelegramRuntime, setTelegramRuntime } from "./runtime.js";
 import {
   clearTelegramRuntimeForTest,
   resetTelegramAccountThrottlersForTest,
 } from "./runtime.test-support.js";
 import { useTelegramHttpFixture } from "./send.telegram-http.test-support.js";
+import { createTelegramTransportIngressMonitor } from "./telegram-ingress-drain-factory.js";
 import { resolveTelegramBotUserIdFromToken } from "./token-fingerprint.js";
 
 const saveRemoteMedia = vi.fn();
-vi.mock("./telegram-media.runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./telegram-media.runtime.js")>()),
+const transcribeFirstAudio = vi.fn<
+  typeof import("openclaw/plugin-sdk/media-runtime").transcribeFirstAudio
+>(async (...args) => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
+    "openclaw/plugin-sdk/media-runtime",
+  );
+  return await actual.transcribeFirstAudio(...args);
+});
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
   saveRemoteMedia: (...args: unknown[]) => saveRemoteMedia(...args),
+  transcribeFirstAudio: (...args: Parameters<typeof transcribeFirstAudio>) =>
+    transcribeFirstAudio(...args),
 }));
 const http = useTelegramHttpFixture();
 
@@ -43,11 +60,21 @@ type ReplyResolver = NonNullable<Parameters<typeof dispatchInboundMessage>[0]["r
 const replySpy = vi.fn<ReplyResolver>();
 const buildModelsProviderData = vi.fn(defaultTelegramBotDeps.buildModelsProviderData);
 const listSkillCommandsForAgents = vi.fn(defaultTelegramBotDeps.listSkillCommandsForAgents);
+const pendingUpdates = new Set<Promise<void>>();
+
+async function settleUpdates(): Promise<void> {
+  while (pendingUpdates.size > 0) {
+    await Promise.allSettled(pendingUpdates);
+  }
+}
+
 export const harness = {
   get state() {
     return state;
   },
   replySpy,
+  transcribeFirstAudio,
+  settleUpdates,
   listSkillCommandsForAgents,
   telegramBotDepsForTest: {
     ...defaultTelegramBotDeps,
@@ -103,7 +130,7 @@ export function publishTelegramTestConfig(cfg: OpenClawConfig): void {
   setRuntimeConfigSnapshot(cfg);
 }
 
-export function createBot(
+export async function createBot(
   native = true,
   text = true,
   override?: OpenClawConfig,
@@ -121,12 +148,20 @@ export function createBot(
   publishTelegramTestConfig(cfg);
   const abort = new AbortController();
   const token = resolveTelegramAccount({ cfg, accountId }).token;
+  // Routing and delivery assertions retain real scheduling without wall-clock pacing.
+  getOrCreateAccountThrottler(token, () =>
+    apiThrottler({
+      global: {},
+      group: { maxConcurrent: 1 },
+      out: { maxConcurrent: 1 },
+    }),
+  );
   const botInfo = {
     ...telegramBotInfoForTest,
     id: resolveTelegramBotUserIdFromToken(token) ?? telegramBotInfoForTest.id,
     has_topics_enabled: dmTopicsEnabled,
   };
-  const bot = createTelegramBot({
+  const bot = await createTelegramBot({
     token,
     botInfo,
     config: cfg,
@@ -137,9 +172,52 @@ export function createBot(
     dispatchReplyFromConfig: (params) =>
       dispatchInboundMessage({ ...params, replyResolver: replySpy }),
   });
+  const handleUpdate = bot.handleUpdate.bind(bot);
+  bot.handleUpdate = (...args) => {
+    const pending = handleUpdate(...args);
+    pendingUpdates.add(pending);
+    void pending.then(
+      () => pendingUpdates.delete(pending),
+      () => pendingUpdates.delete(pending),
+    );
+    return pending;
+  };
   menuOwnerIds.add(botInfo.id);
   bots.push({ bot, abort });
   return bot;
+}
+
+export async function admitSpooledUpdate(
+  bot: Awaited<ReturnType<typeof createBot>>,
+  update: unknown,
+) {
+  const runtime = getTelegramRuntime();
+  setTelegramRuntime({
+    ...runtime,
+    state: {
+      ...runtime.state,
+      openChannelIngressQueue: (options) =>
+        createChannelIngressQueueForTests({ ...options, channelId: "telegram" }),
+    },
+  });
+  try {
+    const monitor = createTelegramTransportIngressMonitor({
+      bot,
+      accountId: "default",
+      botInfo: bot.botInfo,
+    });
+    try {
+      monitor.start();
+      const admission = await monitor.admit(update);
+      await monitor.waitForIdle();
+      await monitor.waitForDeferredClaims();
+      return admission;
+    } finally {
+      await monitor.stop();
+    }
+  } finally {
+    setTelegramRuntime(runtime);
+  }
 }
 
 let messageId = 10000;
@@ -198,6 +276,7 @@ beforeEach(async () => {
     return undefined;
   };
   replySpy.mockReset().mockResolvedValue({ text: "Test response" });
+  transcribeFirstAudio.mockReset();
   listSkillCommandsForAgents
     .mockReset()
     .mockImplementation(defaultTelegramBotDeps.listSkillCommandsForAgents);
@@ -218,6 +297,11 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  // A webhook deadline does not cancel handleUpdate; abort its transport before joining.
+  for (const { abort } of bots) {
+    abort.abort();
+  }
+  await settleUpdates();
   for (const botId of menuOwnerIds) {
     await new Promise<void>((resolve, reject) => {
       enqueueTelegramMenuSync({
@@ -228,12 +312,7 @@ afterEach(async () => {
     });
   }
   menuOwnerIds.clear();
-  await Promise.all(
-    bots.splice(0).map(async ({ bot, abort }) => {
-      abort.abort();
-      await bot.stop();
-    }),
-  );
+  await Promise.all(bots.splice(0).map(({ bot }) => bot.stop()));
   clearRuntimeConfigSnapshot();
   clearTelegramRuntimeForTest();
   resetPluginRuntimeStateForTest();

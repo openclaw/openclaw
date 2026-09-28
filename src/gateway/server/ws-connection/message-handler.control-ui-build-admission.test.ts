@@ -14,6 +14,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../../config/runtime-snapshot.js";
+import { getPairedDevice, requestDevicePairing } from "../../../infra/device-pairing.js";
 import { rawDataToString } from "../../../infra/ws.js";
 import { GatewayConnectionWork } from "../../server-connection-work.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
@@ -22,13 +23,11 @@ import { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.j
 
 const {
   handleGatewayRequestMock,
-  incrementPresenceVersionMock,
   resolveRuntimeServiceBuildIdMock,
   setLastFrameMetaMock,
   upsertPresenceMock,
 } = vi.hoisted(() => ({
   handleGatewayRequestMock: vi.fn(),
-  incrementPresenceVersionMock: vi.fn(() => 2),
   resolveRuntimeServiceBuildIdMock: vi.fn<() => string | null>(() => "gateway-build"),
   setLastFrameMetaMock: vi.fn(),
   upsertPresenceMock: vi.fn(),
@@ -99,13 +98,27 @@ import { attachGatewayWsMessageHandler } from "./message-handler.js";
 // only reachable once the device passes connect auth and silent local pairing.
 const temporaryIdentityPaths: string[] = [];
 
-async function buildSignedControlUiDevice(nonce: string) {
+async function prepareSignedControlUiDevice(nonce: string) {
   const { buildDeviceAuthPayload } = await import("../../device-auth.js");
   const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
     await import("../../../infra/device-identity.js");
   const identityPath = path.join(tmpdir(), `openclaw-build-admission-${randomUUID()}.sqlite`);
   temporaryIdentityPaths.push(identityPath);
   const identity = loadOrCreateDeviceIdentity({ path: identityPath });
+  const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
+  // Prepare pairing workers before timing admission; connect must still approve this device.
+  await requestDevicePairing({
+    deviceId: identity.deviceId,
+    publicKey,
+    platform: "web",
+    clientId: "openclaw-control-ui",
+    clientMode: "webchat",
+    role: "operator",
+    scopes: [],
+    remoteIp: "127.0.0.1",
+    silent: true,
+  });
+  expect(await getPairedDevice(identity.deviceId)).toBeNull();
   const signedAtMs = Date.now();
   const payload = buildDeviceAuthPayload({
     deviceId: identity.deviceId,
@@ -119,7 +132,7 @@ async function buildSignedControlUiDevice(nonce: string) {
   });
   return {
     id: identity.deviceId,
-    publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+    publicKey,
     signature: signDevicePayload(identity.privateKeyPem, payload),
     signedAt: signedAtMs,
     nonce,
@@ -230,8 +243,7 @@ describe("Control UI build admission over WebSocket", () => {
         buildRequestContext: () =>
           ({
             broadcast: vi.fn(),
-            incrementPresenceVersion: incrementPresenceVersionMock,
-            getHealthVersion: () => 1,
+            publishPresence: vi.fn(),
           }) as unknown as GatewayRequestContext,
         nodeLifecycleDispatch: new GatewayNodeLifecycleDispatchTracker(),
         refreshHealthSnapshot: vi.fn(),
@@ -266,7 +278,7 @@ describe("Control UI build admission over WebSocket", () => {
       });
     });
 
-    const device = await buildSignedControlUiDevice("legacy-build-nonce");
+    const device = await prepareSignedControlUiDevice("legacy-build-nonce");
     const ws = new WebSocket(`ws://127.0.0.1:${address.port}`, {
       headers: {
         origin,
@@ -287,12 +299,9 @@ describe("Control UI build admission over WebSocket", () => {
         }),
         "connect rejection",
       );
-      const closed = withDeadline(
-        new Promise<number>((resolve) => {
-          ws.once("close", (code) => resolve(code));
-        }),
-        "socket close",
-      );
+      const closed = new Promise<number>((resolve) => {
+        ws.once("close", (code) => resolve(code));
+      });
       ws.send(
         JSON.stringify({
           type: "req",
@@ -343,7 +352,7 @@ describe("Control UI build admission over WebSocket", () => {
           params: {},
         }),
       );
-      expect(await closed).toBe(1008);
+      expect(await withDeadline(closed, "socket close")).toBe(1008);
       expect(connectedClient).toBeNull();
       expect(upsertPresenceMock).not.toHaveBeenCalled();
       expect(setLastFrameMetaMock).toHaveBeenCalledWith({

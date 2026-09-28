@@ -66,6 +66,14 @@ export function createSubagentPersistenceMock(
     persistSubagentRunsToDisk: publishAfter(methods.persistSubagentRunsToDisk),
     persistSubagentRunsToDiskOrThrow: publishAfter(methods.persistSubagentRunsToDiskOrThrow),
     restoreSubagentRunsFromDisk: publishAfter(methods.restoreSubagentRunsFromDisk),
+    persistSubagentRunsToDiskAsyncOrThrow: (async (runs, ids, options) => {
+      const snapshot = structuredClone(runs);
+      await Promise.resolve();
+      options.assertCurrent?.();
+      methods.persistSubagentRunsToDiskOrThrow(snapshot, ids);
+      options.onCommitted?.();
+      notifyListeners(listeners, undefined);
+    }) satisfies typeof RegistryPersistence.persistSubagentRunsToDiskAsyncOrThrow,
   };
 }
 
@@ -243,7 +251,9 @@ export function mockCallArg(
 type SubagentRegistryModule =
   typeof import("./subagents/registry/subagent-registry.test-helpers.js");
 export type SubagentRegistryHarness = Omit<SubagentRegistryModule, "registerSubagentRun"> & {
-  registerSubagentRun(params: SubagentRunParamsOverrides): void;
+  registerSubagentRun(
+    params: SubagentRunParamsOverrides,
+  ): ReturnType<SubagentRegistryModule["registerSubagentRun"]>;
 };
 
 export function createSubagentRegistryHarness(
@@ -251,18 +261,6 @@ export function createSubagentRegistryHarness(
 ): SubagentRegistryHarness {
   return {
     ...registry,
-    registerSubagentRun: (params) => {
-      const registration = createSubagentRunParams(params);
-      if (registration.taskRowOwnership !== "required") {
-        return registry.registerSubagentRun({
-          ...registration,
-          taskRowOwnership: registration.taskRowOwnership,
-        });
-      }
-      if (registration.queued) {
-        throw new Error("Required queued registration belongs in awaited fixtures");
-      }
-      return registry.registerSubagentRun({ ...registration, queued: false });
-    },
+    registerSubagentRun: (params) => registry.registerSubagentRun(createSubagentRunParams(params)),
   };
 }

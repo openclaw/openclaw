@@ -27,6 +27,30 @@ import {
 
 const nodeTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+async function nativeCommands(
+  factory: ReturnType<typeof createCodexSessionCatalogControlFactory>,
+  thread: ReturnType<typeof idleThread>,
+) {
+  if (thread.path) {
+    await fs.mkdir(path.dirname(thread.path), { recursive: true });
+    await fs.writeFile(
+      thread.path,
+      `${JSON.stringify({
+        type: "session_meta",
+        payload: { id: thread.id, source: "cli", originator: "codex_cli_rs" },
+      })}\n`,
+    );
+  }
+  commandRpcMocks.codexControlRequest.mockImplementation(async (_config, method) =>
+    method === "thread/list" ? { data: [thread] } : { data: [] },
+  );
+  pinnedConnectionMocks.request.mockImplementation(async ({ method }) =>
+    method === "thread/read" ? { thread } : { data: [thread] },
+  );
+  const commands = createCodexSessionCatalogNodeHostCommands(factory);
+  return (command: string) => commands.find((candidate) => candidate.command === command)!;
+}
+
 describe("Codex node catalog sources", () => {
   it("marks paired-node rows continuable only with complete permitted capabilities", async () => {
     const sourceByNode = new Map([
@@ -35,7 +59,6 @@ describe("Codex node catalog sources", () => {
       ["ready-atlas", { status: "notLoaded", source: "atlas" }],
       ["older-node", { status: "notLoaded", source: "cli" }],
       ["unix-source", { status: "notLoaded", source: "cli" }],
-      ["websocket-source", { status: "notLoaded", source: "cli" }],
       ["missing-source", { status: "notLoaded", source: "cli" }],
       ["invalid-source", { status: "notLoaded", source: "cli" }],
       ["missing-run", { status: "idle", source: "cli" }],
@@ -55,7 +78,7 @@ describe("Codex node catalog sources", () => {
               ? undefined
               : nodeId === "invalid-source"
                 ? "true"
-                : !["unix-source", "websocket-source"].includes(nodeId),
+                : nodeId !== "unix-source",
           sessions: [
             {
               threadId: `thread-${nodeId}`,
@@ -95,18 +118,12 @@ describe("Codex node catalog sources", () => {
       hostIds: [...sourceByNode.keys()].map((id) => `node:${id}`),
     });
     const sessionByHost = new Map(hosts?.map((host) => [host.hostId, host.sessions[0]]) ?? []);
-    expect(sessionByHost.get("node:ready-cli")).toMatchObject({
-      canContinue: true,
-      canArchive: false,
-    });
-    expect(sessionByHost.get("node:ready-vscode")).toMatchObject({
-      canContinue: true,
-      canArchive: false,
-    });
-    expect(sessionByHost.get("node:ready-atlas")).toMatchObject({
-      canContinue: true,
-      canArchive: false,
-    });
+    for (const nodeId of ["ready-cli", "ready-vscode", "ready-atlas"]) {
+      expect(sessionByHost.get(`node:${nodeId}`)).toMatchObject({
+        canContinue: true,
+        canArchive: false,
+      });
+    }
     expect(sessionByHost.get("node:older-node")).toMatchObject({
       threadId: "thread-older-node",
       canContinue: false,
@@ -123,7 +140,7 @@ describe("Codex node catalog sources", () => {
     expect(sessionByHost.get("node:missing-run")).toMatchObject({ canContinue: false });
     expect(sessionByHost.get("node:active")).toMatchObject({ canContinue: false });
     expect(sessionByHost.get("node:noninteractive")).toMatchObject({ canContinue: false });
-    for (const nodeId of ["unix-source", "websocket-source", "missing-source", "invalid-source"]) {
+    for (const nodeId of ["unix-source", "missing-source", "invalid-source"]) {
       expect(sessionByHost.get(`node:${nodeId}`)).toMatchObject({
         threadId: `thread-${nodeId}`,
         canContinue: false,
@@ -194,17 +211,11 @@ describe("Codex node catalog sources", () => {
 
   it("keeps node list and transcript reads on the native home across Gateway agent names and config reload", async () => {
     const codexHome = nodeTempDirs.make("codex-node-native-");
-    const sessionsRoot = path.join(codexHome, "sessions");
-    await fs.mkdir(sessionsRoot);
-    const rollout = path.join(sessionsRoot, "source.jsonl");
-    const thread = idleThread({ id: "thread-native", source: "cli", path: rollout });
-    await fs.writeFile(
-      rollout,
-      `${JSON.stringify({
-        type: "session_meta",
-        payload: { id: thread.id, source: "cli", originator: "codex_cli_rs" },
-      })}\n`,
-    );
+    const thread = idleThread({
+      id: "thread-native",
+      source: "cli",
+      path: path.join(codexHome, "sessions", "source.jsonl"),
+    });
     let runtimeConfig: OpenClawConfig = {
       agents: { ownership: "explicit", entries: { nodeAlpha: {}, nodeBeta: {} } },
     };
@@ -213,22 +224,10 @@ describe("Codex node catalog sources", () => {
       getPluginConfig: () => undefined,
       getRuntimeConfig: () => runtimeConfig,
     });
-    commandRpcMocks.codexControlRequest.mockImplementation(async (_config, method) =>
-      method === "thread/list" ? { data: [thread] } : { data: [] },
-    );
-    pinnedConnectionMocks.request.mockImplementation(async ({ method }) =>
-      method === "thread/read" ? { thread } : { data: [thread] },
-    );
-    const commands = createCodexSessionCatalogNodeHostCommands(factory);
-    const listCommand = commands.find(
-      (candidate) => candidate.command === CODEX_APP_SERVER_THREADS_LIST_COMMAND,
-    )!;
-    const transcriptCommand = commands.find(
-      (candidate) => candidate.command === CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
-    )!;
-    const boundedTranscriptCommand = commands.find(
-      (candidate) => candidate.command === CODEX_CATALOG_TRANSCRIPT_READ_COMMAND,
-    )!;
+    const command = await nativeCommands(factory, thread);
+    const listCommand = command(CODEX_APP_SERVER_THREADS_LIST_COMMAND);
+    const transcriptCommand = command(CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND);
+    const boundedTranscriptCommand = command(CODEX_CATALOG_TRANSCRIPT_READ_COMMAND);
 
     for (const agentId of ["gatewayOnly", undefined]) {
       await (await factory.forNode(agentId)).control.initialize();
@@ -306,33 +305,9 @@ describe("Codex node catalog sources", () => {
         source: "cli",
         ...(rollout ? { path: rollout } : {}),
       });
-      if (rollout) {
-        await fs.mkdir(path.dirname(rollout), { recursive: true });
-        await fs.writeFile(
-          rollout,
-          `${JSON.stringify({
-            type: "session_meta",
-            payload: {
-              id: thread.id,
-              source: "cli",
-              originator: "codex_cli_rs",
-            },
-          })}\n`,
-        );
-      }
-      commandRpcMocks.codexControlRequest.mockImplementation(async (_config, method) =>
-        method === "thread/list" ? { data: [thread] } : { data: [] },
-      );
-      pinnedConnectionMocks.request.mockImplementation(async ({ method }) =>
-        method === "thread/read" ? { thread } : { data: [thread] },
-      );
-      const commands = createCodexSessionCatalogNodeHostCommands(factory);
-      const command = commands.find(
-        (candidate) => candidate.command === CODEX_APP_SERVER_THREADS_LIST_COMMAND,
-      )!;
-      const read = commands.find(
-        (candidate) => candidate.command === CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND,
-      )!;
+      const commands = await nativeCommands(factory, thread);
+      const command = commands(CODEX_APP_SERVER_THREADS_LIST_COMMAND);
+      const read = commands(CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND);
       await (await factory.forNode("beta")).control.initialize();
       expect(
         JSON.parse(await command.handle(JSON.stringify({ agentId: "beta", limit: 25 }))),

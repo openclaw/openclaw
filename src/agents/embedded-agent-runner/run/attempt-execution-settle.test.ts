@@ -611,7 +611,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
         const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
         const admissionSpy = vi
           .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-          .mockImplementation((admit) =>
+          .mockImplementation((admit, attachment) =>
             createAdmission((request, grant) => {
               if (
                 transition === "cancel before commit" &&
@@ -622,7 +622,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
                 fixture.input.runAbortController.abort(cancellation);
               }
               admit(request, grant);
-            }),
+            }, attachment),
           );
         const runOperation = workerStore.runSqliteWorkerStoreOperation;
         const operationSpy = vi
@@ -634,7 +634,6 @@ describe("runEmbeddedAttemptSettledPhase", () => {
               stateContext?: Parameters<typeof runOperation>[2],
               assertCurrent?: Parameters<typeof runOperation>[3],
               admission?: Parameters<typeof runOperation>[4],
-              requireStateLifecycle?: Parameters<typeof runOperation>[5],
             ) =>
               runOperation(
                 store,
@@ -672,7 +671,6 @@ describe("runEmbeddedAttemptSettledPhase", () => {
                 stateContext,
                 assertCurrent,
                 admission,
-                requireStateLifecycle,
               ),
           );
         const outcome = runEmbeddedAttemptSettledPhase(fixture.input).then(

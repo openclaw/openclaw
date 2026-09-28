@@ -194,7 +194,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
       : null;
   },
   handleAction: async (ctx) => {
-    const { handleMatrixAction } = await import("./tool-actions.runtime.js");
+    const { handleMatrixAction } = await import("./tool-actions.js");
     return await handleMatrixAction(ctx);
   },
 };

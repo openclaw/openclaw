@@ -1,3 +1,4 @@
+import type { Result } from "@openclaw/normalization-core/result";
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { ErrorShape, SessionVisibility } from "../../packages/gateway-protocol/src/index.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
@@ -7,6 +8,7 @@ import type {
   SessionEntry,
   SessionToolOverrides,
 } from "../config/sessions.js";
+import type { SessionEntryCreateWithTranscriptOptions } from "../config/sessions/session-accessor.types.js";
 import type {
   SessionCreatedActor,
   SessionCreatedVia,
@@ -18,13 +20,40 @@ import type {
   UserModelAccountSelection,
 } from "./model-account-authority.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
-import type { PrepareGatewaySessionLifecycle } from "./session-lifecycle-preparation.js";
+import type { SessionCreatePhase } from "./session-create-diagnostics.js";
 
 type TrustedCatalogSessionTarget = {
   model: string;
   agentRuntime: string;
   pluginOwnerId: string;
 };
+
+export type GatewaySessionTitleModelSelection = Pick<
+  InternalSessionEntry,
+  "agentRuntimeOverride" | "authProfileOverride" | "modelOverride" | "providerOverride"
+>;
+
+export type PreparedGatewaySessionLifecycle = {
+  spawnedCwd?: string;
+  sessionRoot?: string;
+  worktree?: NonNullable<InternalSessionEntry["worktree"]>;
+  repositoryWorkspaceId?: string;
+  pendingWorktree?: InternalSessionEntry["pendingWorktree"];
+  /** Reacquire source custody only around the final persistence operation. */
+  withCommit?: <T>(run: (assertSourceCurrent: () => void) => Promise<T>) => Promise<T>;
+  rollback?: () => Promise<void>;
+};
+
+export type PrepareGatewaySessionLifecycle = (target: {
+  agentId: string;
+  entry?: InternalSessionEntry;
+  key: string;
+  storePath: string;
+  titleModelSelection?: GatewaySessionTitleModelSelection | null;
+  projectId?: string;
+  /** Inherited or existing policy, resolved while the creation owner holds lifecycle custody. */
+  sandboxRequired?: boolean;
+}) => Promise<Result<PreparedGatewaySessionLifecycle, ErrorShape>>;
 
 export type CreatedGatewaySession = {
   key: string;
@@ -65,8 +94,15 @@ export type CreateGatewaySessionResult =
   | Extract<GatewaySessionCommitResult, { ok: false }>;
 
 export type CreateGatewaySessionParams = {
+  onPhase?: (phase: SessionCreatePhase) => void;
   cfg: OpenClawConfig;
-  operatorAuthority?: import("../agents/admitted-run-context.js").AdmittedRunOperatorAuthority;
+  operatorAuthority?: Promise<
+    | {
+        authority: import("../agents/admitted-run-context.js").AdmittedRunOperatorAuthority;
+      }
+    | undefined
+  >;
+  getCurrentConfig?: () => OpenClawConfig;
   key?: string;
   agentId?: string;
   label?: string;
@@ -125,6 +161,11 @@ export type CreateGatewaySessionParams = {
   activeParentFork?: { requesterSessionKey: string; assertCurrent: () => void };
   /** Live spawn-owned selection; public model inputs remain raw. */
   preparedModelSelection?: { ref: ModelRef; assertCurrent: () => void };
+  /** Effective host-prepared spawn mode, bound to the live requester until commit. */
+  preparedPermissionSelection?: {
+    mode: NonNullable<SessionEntry["permissionMode"]>;
+    assertCurrent: () => void;
+  };
   /**
    * Controls whether a distinct child terminates its parent. Omission preserves
    * the legacy rollover; callers use `false` for a parallel child.
@@ -166,6 +207,7 @@ export type CreateGatewaySessionParams = {
   afterCreate?: (created: CreatedGatewaySession) => Promise<void>;
   /** Non-throwing notification of the exact newly committed row, before initial-turn work. */
   onCreatedSessionCommitted?: (created: CreatedGatewaySession) => void;
+  afterSessionCommitted?: SessionEntryCreateWithTranscriptOptions["afterCommitted"];
   /** Synchronous caller-authority guard checked by each durable owner boundary. */
   commitGuard?: () => void;
 };

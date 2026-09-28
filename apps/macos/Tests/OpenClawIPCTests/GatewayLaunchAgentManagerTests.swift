@@ -38,10 +38,9 @@ struct GatewayLaunchAgentManagerTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let executable = root.appendingPathComponent("node_modules/.bin/openclaw")
         try makeExecutableForTests(at: executable)
-        let command = await CommandResolver.openclawCommand(
+        let command = await CommandResolver.localOpenclawCommand(
             subcommand: "gateway",
             extraArgs: ["status", "--json"],
-            configRoot: ["gateway": ["mode": "local"]],
             projectRoot: root,
             profile: AppProfile(environment: ["OPENCLAW_PROFILE": "work"]))
 
@@ -221,6 +220,44 @@ struct GatewayLaunchAgentManagerTests {
             let error = await GatewayLaunchAgentManager.kickstart()
 
             #expect(error == "Gateway daemon commands require explicit interception during tests")
+        }
+    }
+
+    @Test func `intercepted requests reserve responses before completion hooks`() async {
+        await TestIsolation.withIsolatedState {
+            let firstStarted = AsyncTestGate()
+            let finishFirst = AsyncTestGate()
+            defer {
+                finishFirst.open()
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            }
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayloads([
+                #"{"ok":false,"error":"first response"}"#,
+                #"{"ok":false,"error":"second response"}"#,
+            ])
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true) { arguments in
+                if arguments.last == "first" {
+                    firstStarted.open()
+                    await finishFirst.wait()
+                }
+            }
+            let first = Task {
+                await GatewayLaunchAgentManager.runDaemonCommand(["status", "first"])
+            }
+            await firstStarted.wait()
+            let admitted = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+            let second = await GatewayLaunchAgentManager.runDaemonCommand(["status", "second"])
+            finishFirst.open()
+
+            #expect(await first.value == "first response")
+            #expect(second == "second response")
+            #expect(admitted == [["status", "first"]])
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == [
+                ["status", "first"], ["status", "second"],
+            ])
         }
     }
 

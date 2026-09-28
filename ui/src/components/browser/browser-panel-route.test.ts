@@ -118,6 +118,32 @@ function controllerFor(panel: Panel): BrowserPanelController {
 }
 
 describe("browser panel route handoff", () => {
+  it("refreshes referenced tabs and preserves a still-listed active tab", async () => {
+    const gateway = browserGateway();
+    const panel = await mountPanel(gateway.client, false);
+    panel.sessionTabs = [hostTab];
+    const controller = controllerFor(panel);
+    const select = vi.spyOn(controller, "selectTab");
+    panel.presented = true;
+    await panel.updateComplete;
+    await select.mock.results[0]?.value;
+    expect(controller.activeTargetId).toBe("t1");
+
+    const refresh = vi.spyOn(controller, "refreshAll");
+    gateway.request.mockClear();
+    panel.sessionTabs = [hostTab, { ...hostTab, targetId: "t2" }];
+    await panel.updateComplete;
+    await refresh.mock.results[0]?.value;
+    expect(gateway.request).toHaveBeenCalledWith("browser.request", {
+      method: "GET",
+      path: "/tabs",
+      target: "host",
+      query: { profile: "managed" },
+      tabScope: { sessionKey: panel.sessionKey, referencedTabs: panel.sessionTabs },
+    });
+    expect(controller.activeTargetId).toBe("t1");
+  });
+
   it("follows session results once on presentation, keeps card choices, and clears session/gateway ownership", async () => {
     const gateway = browserGateway();
     const focusCount = () =>
@@ -392,7 +418,17 @@ describe("browser panel route handoff", () => {
       await panel.updateComplete;
       const stage = panel.shadowRoot!.querySelector<HTMLElement>(".bp-stage")!;
       vi.spyOn(stage, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 100, 100));
+      const clickCompleted = createDeferred();
+      const respond = gateway.request.getMockImplementation()!;
+      gateway.request.mockImplementation(async (method, params, options) => {
+        const response = await respond(method, params, options);
+        if ((params as BrowserRequestEnvelope).body?.kind === "clickCoords") {
+          clickCompleted.resolve();
+        }
+        return response;
+      });
       controller.handleStageClick(new MouseEvent("click", { clientX: 10, clientY: 20 }));
+      await clickCompleted.promise;
       controller.setMode("inspect");
       controller.handleOverlayPointerMove(createPointer(10, 20));
       await waitForFast(() => expect(controller.inspected?.name).toBe("Selected"));
@@ -407,7 +443,7 @@ describe("browser panel route handoff", () => {
       const annotation = vi.fn((event: Event) => event.preventDefault());
       window.addEventListener(BROWSER_ANNOTATION_EVENT, annotation);
       try {
-        await controller.sendAnnotation({ element: controller.inspected });
+        await controller.input.sendAnnotation({ element: controller.inspected });
       } finally {
         window.removeEventListener(BROWSER_ANNOTATION_EVENT, annotation);
       }

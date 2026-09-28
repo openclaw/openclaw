@@ -4,6 +4,12 @@ This gate starts only after stable publication. It is a narrow shipped-state
 closeout, not permission to heal broader `main`. Stable publication is not
 complete until `main` carries the actual shipped release state.
 
+Closeout requires the original strict stable/full publication evidence with
+soak, blocking performance, and successful selected validation lanes. Historical
+waiver-bearing receipt replay and repair are unsupported. Completion requires both the closeout manifest and its matching checksum. If only the checksum is missing,
+replay an eligible strict-evidence closeout to regenerate identical bytes; do not manufacture
+new evidence. Invalid or mismatched assets remain blocking.
+
 1. Start from fresh latest `main`. Use a same-repository PR targeting `main`,
    with branch `release/<version>-main-closeout` and exact title
    `chore(release): close out <version> on main`. `<version>` is the published
@@ -30,6 +36,14 @@ complete until `main` carries the actual shipped release state.
    generated index consistent.
    `OPENCLAW_ALLOW_ROOT_CHANGELOG_PR=1` remains an explicit override
    for release automation outside this convention.
+   Refresh hosted full-release costs from the exact completed normal-CI child in
+   the verified validation evidence:
+   `node --import ./scripts/tsx.mjs scripts/ci-shard-timings-refresh.mts --run <ci-child-run-id>`.
+   Review and commit the generated `config/ci-test-timings.json` in this closeout.
+   Successful hosted jobs from failed children remain usable timing samples.
+   Keep measured values generator-owned; never adjust them by hand. Native job
+   walls include setup; full-release planning targets 12 minutes per measured
+   shard to leave headroom for the 20-minute objective.
 4. Do not add `YYYY.M.PATCH+1`, a beta version, or an empty future changelog
    section to `main` until the operator explicitly starts that release train.
 5. Run `pnpm release:generated:check`, `pnpm deps:npm-lock:check`, and
@@ -52,5 +66,43 @@ complete until `main` carries the actual shipped release state.
    recovery, and asset fields byte-for-byte while recomputing authoritative
    release fields. Do not declare stable complete until it writes the immutable
    closeout manifest to the GitHub release. The drill must be within 90 days;
-   manual dispatch is only for repair/replay, and private rollback commands
-   remain in the maintainer-only runbook.
+   private rollback commands remain in the maintainer-only runbook.
+   When the main forward-port preceded publication, start initial closeout after
+   Release Publish succeeds with `pnpm release:stable YYYY.M.PATCH --from closeout`
+   using the saved orchestrator state, or dispatch
+   `gh workflow run openclaw-stable-main-closeout.yml --ref main -f tag=vYYYY.M.PATCH`
+   after a direct Actions publication. Unrelated source pushes do not poll for
+   publication completion. Manual initial closeout or replay needs only `tag`
+   when repository drill variables are configured. Replay requires successful
+   stable/full evidence with soak and blocking performance. Complete
+   manifest/checksum pairs remain recorded without rewriting. Historical
+   waiver-bearing receipt replay and repair are unsupported: the original
+   postpublish evidence binds its validation run, which a fresh run cannot
+   replace. Preserve those artifacts and stop instead of overwriting them or
+   publishing again to repair a receipt.
+   Push runs are never cancelled by later `main` pushes; verification serializes
+   per resolved stable tag.
+7. A macOS build pulled from Sparkle on purpose (for example a crashing
+   in-app update) is a third appcast state, not a contract failure. Withdraw
+   it with a `main` commit whose subject is exactly
+   `chore(release): withdraw the <version> macOS build from the Sparkle feed`
+   and a `Refs #NNN` body line naming the incident; the closeout looks that
+   marker up on `main` (`appcast.xml` history) only when the complete macOS
+   asset set is attached and the newest `appcast.xml` entry is an older
+   version than the release. It then records `appcast: withdrawn`,
+   `appPlatforms.macos: withdrawn`, `apps: pending`, and
+   `appcastWithdrawal: { commit, reason }` instead of the feed link checks;
+   replay preserves those fields byte-for-byte. Any other feed mismatch still
+   fails. The later hotfix release (for example `2026.9.7`) verifies its own
+   appcast at its own closeout; the withdrawn record is never rewritten.
+
+## Recover a failed publication parent
+
+If publication succeeded but its parent failed, first repair and verify npm,
+Docker, and GitHub publication. Manual closeout may then use
+`allow_failed_publish_recovery=true` for that completed failed parent; automatic
+closeout never enables it. Keep all publication evidence checks. If npm succeeded
+in the original run and Docker in a separate recovery run, the checksummed
+postpublish evidence must select both through `operatorRecovery.npmPublishRunId`
+and `operatorRecovery.dockerPromotionRunId`. Closeout verifies both runs for the
+exact requested tag; missing, expired, or mismatched evidence still blocks it.

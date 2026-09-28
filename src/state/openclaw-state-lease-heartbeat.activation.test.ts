@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { expect, it } from "vitest";
 import { resolveRuntimeWorkerThreadExecArgv } from "../infra/runtime-worker-url.js";
+import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -58,12 +59,14 @@ it("keeps deferred activation pending until renewal commits after contention", a
     const worker = new Worker(driverUrl, {
       workerData: {
         path: database.path,
+        expectedIdentity: readDatabasePathIdentitySync(database.path).key,
         identity,
         leaseMs: 30_000,
         acquiredAt: acquired.expiresAt - 30_000,
         heartbeatMs: 250,
         deferActivation: true,
         shared: shared.buffer,
+        renewalProgress: new SharedArrayBuffer(BigInt64Array.BYTES_PER_ELEMENT),
       } satisfies LeaseHeartbeatWorkerData,
       execArgv: resolveRuntimeWorkerThreadExecArgv(driverUrl),
       env: {},

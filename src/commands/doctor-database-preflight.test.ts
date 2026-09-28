@@ -71,8 +71,20 @@ it.each([true, false])(
       );
       if (!knownHistory) {
         expect(result.agentDatabaseMigrationDiscovery?.discovery).toMatchObject({
-          retainedDeletions: "unavailable",
+          deletionJournal: {
+            status: "unavailable",
+            reason: "shared state database missing",
+          },
           targets: [],
+          retainedTargets: [],
+          unverifiedTargets: [
+            {
+              agentId: "retired-owner",
+              path: pathname,
+              realPath: fs.realpathSync.native(pathname),
+              source: "configured",
+            },
+          ],
           registryRemovals: [],
           failures: [],
         });

@@ -1,0 +1,387 @@
+import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
+import { expect, it, vi } from "vitest";
+import { listAvailableExtensionIds } from "../../scripts/lib/changed-extensions.mts";
+import {
+  createChangedNodeTestShards,
+  createPrExemptExtensionTestShards,
+  hasControlUiPerformanceAffectingChange,
+} from "../../scripts/lib/ci-changed-node-test-plan.mts";
+import {
+  createChangedExtensionConfigShards,
+  packChangedExtensionConfigShards,
+} from "../../scripts/lib/ci-extension-test-shards.mts";
+import {
+  createNodeTestShardBundles,
+  createUiTestShardGroups,
+  resolveCanonicalNodeTestConfig,
+  type CompactNodeTestShard,
+} from "../../scripts/lib/ci-node-test-plan.mts";
+import {
+  isReleaseOnlyRuntimeTestFile,
+  listPrExemptRuntimeTestFiles,
+} from "../../scripts/lib/ci-proof-test-inventory.mts";
+import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
+import { buildVitestRunPlans } from "../../scripts/test-projects.test-support.mts";
+import * as testProjects from "../../scripts/test-projects.test-support.mts";
+import { intersectIncludePatterns } from "../vitest/vitest.include-patterns.js";
+
+// Real-checkout compositions share the planner's process-scoped import-graph cache.
+// Small synthetic graphs and canonical process selection remain in the unit file.
+function fallbackGroups(shards: NonNullable<ReturnType<typeof createChangedNodeTestShards>>) {
+  return shards.flatMap((shard) => shard.groups ?? [{ ...shard, shard_name: shard.shardName }]);
+}
+
+function selectedFiles(shards: ReturnType<typeof createChangedNodeTestShards>) {
+  return (shards ?? []).flatMap((shard) =>
+    (shard.targets ?? []).concat(
+      shard.includePatterns ?? [],
+      shard.groups?.flatMap((group) => group.includePatterns ?? []) ?? [],
+    ),
+  );
+}
+
+it("retains every PR-exempt file in hourly and release plans with its canonical owner", () => {
+  const prExemptFiles = listPrExemptRuntimeTestFiles();
+  expect(prExemptFiles.length).toBeGreaterThan(0);
+  const common = {
+    runnerBackend: "github",
+    includeReleaseOnlyPluginShards: false,
+    includeReleaseOnlyRuntimeTests: false,
+  };
+  // The census needs the full inventory, without resolving a synthetic changed subject's
+  // import graph. Changed-subject and broad-fallback opt-in are exercised below.
+  const extensionRoots = listAvailableExtensionIds().map((id) => `extensions/${id}`);
+  const createPrGroups = (changedPaths: string[]) => [
+    ...createNodeTestShardBundles({
+      ...common,
+      compactMode: "pull-request",
+      changedPaths,
+      includePrExemptRuntimeTests: false,
+      includeReleaseOnlyToolingShards: true,
+    }).flatMap((job) => job.groups),
+    ...fallbackGroups(
+      packChangedExtensionConfigShards(
+        createChangedExtensionConfigShards(extensionRoots, {
+          changedPaths,
+          includePrExemptRuntimeTests: false,
+          fullConfigInventory: true,
+        }),
+      ),
+    ),
+  ];
+  const prGroups = createPrGroups([]);
+  const changedPrGroups = createPrGroups(prExemptFiles);
+  const retainedExtensions = createPrExemptExtensionTestShards();
+  const hourly = createNodeTestShardBundles({
+    ...common,
+    compactMode: "push",
+    includePrExemptRuntimeTests: true,
+    includeReleaseOnlyToolingShards: false,
+    compactNodeJobCap: 70 - retainedExtensions.filter((job) => !job.requiresDist).length,
+  });
+  const release = createNodeTestShardBundles({
+    ...common,
+    includeReleaseOnlyRuntimeTests: true,
+    includePrExemptRuntimeTests: true,
+    includeReleaseOnlyToolingShards: true,
+  });
+  const uiPr = createUiTestShardGroups({ includePrExemptRuntimeTests: false }).ui[0];
+  const uiHourly = createUiTestShardGroups({ includeReleaseOnlyTests: false }).ui[0];
+  expect(
+    [...hourly, ...retainedExtensions].filter((job) => !job.requiresDist).length,
+  ).toBeLessThanOrEqual(70);
+  const hourlyGroups = [
+    ...hourly.flatMap((job) => job.groups),
+    ...fallbackGroups(retainedExtensions),
+  ];
+  const releaseGroups = fallbackGroups([...release, ...retainedExtensions]);
+  const configsByFile = new Map(
+    prExemptFiles.map((file) => {
+      const rawConfig = expectDefined(buildVitestRunPlans([file])[0]?.config, file);
+      return [file, resolveCanonicalNodeTestConfig(file, rawConfig) ?? rawConfig];
+    }),
+  );
+  const indexOwners = (groups: typeof prGroups) => {
+    const owners = new Map<string, typeof groups>();
+    for (const group of groups) {
+      const candidates = prExemptFiles.filter((file) =>
+        group.configs.includes(expectDefined(configsByFile.get(file), file)),
+      );
+      const files = group.includePatterns
+        ? expectDefined(
+            intersectIncludePatterns(group.includePatterns, candidates, path.matchesGlob),
+            group.shard_name,
+          )
+        : candidates;
+      for (const file of files) {
+        const entries = owners.get(file) ?? [];
+        entries.push(group);
+        owners.set(file, entries);
+      }
+    }
+    return owners;
+  };
+  const prOwners = indexOwners(prGroups);
+  const changedPrOwners = indexOwners(changedPrGroups);
+  const hourlyOwners = indexOwners(hourlyGroups);
+  const releaseOwners = indexOwners(releaseGroups);
+  for (const file of prExemptFiles) {
+    expect(prOwners.get(file) ?? [], file).toHaveLength(0);
+    expect(changedPrOwners.get(file)?.length ?? 0, file).toBeGreaterThan(0);
+    expect(hourlyOwners.get(file) ?? [], file).toHaveLength(1);
+    expect(releaseOwners.get(file) ?? [], file).toHaveLength(1);
+    if (file.startsWith("ui/")) {
+      expect(uiPr?.includePatterns, file).not.toContain(file);
+      expect(uiHourly?.includePatterns, file).toContain(file);
+    }
+  }
+});
+
+it("opts in a PR-exempt process proof for test and opaque subject edits even on broad fallback", () => {
+  const target = "test/scripts/upgrade-survivor-plugin-registry.test.ts";
+  const source = "scripts/e2e/upgrade-survivor-docker.sh";
+  expect(listPrExemptRuntimeTestFiles()).toContain(target);
+  const options = {
+    runnerBackend: "github",
+    includeReleaseOnlyRuntimeTests: false,
+    includePrExemptRuntimeTests: false,
+    includeReleaseOnlyToolingShards: false,
+  };
+  for (const changedPath of [target, source]) {
+    const precise = createChangedNodeTestShards([changedPath], options);
+    expect(precise, changedPath).not.toBeNull();
+    expect(selectedFiles(precise), changedPath).toContain(target);
+    const fallback = createNodeTestShardBundles({
+      ...options,
+      compactMode: "pull-request",
+      changedPaths: ["tsconfig.json", changedPath],
+    });
+    expect(
+      fallback.flatMap((job) => job.groups.flatMap((group) => group.includePatterns ?? [])),
+      changedPath,
+    ).toContain(target);
+  }
+});
+
+it("keeps precise first-signin targets under exclusive Gateway admission", () => {
+  const target = "src/gateway/setup-inference.first-signin.integration.test.ts";
+  const jobs = createChangedNodeTestShards([target], { runnerBackend: "hybrid" });
+  expect(jobs).not.toBeNull();
+  const owner = jobs?.find((job) =>
+    job.groups?.some((group) => group.includePatterns?.includes(target)),
+  );
+  expect(owner).toMatchObject({ planConcurrency: 1 });
+  expect(jobs?.flatMap((job) => job.targets ?? [])).not.toContain(target);
+});
+
+it("keeps boundary coverage when only a deferred proof helper changes", () => {
+  const helper = "test/helpers/sqlite-sessions-transcripts-flip-proof-assertions.ts";
+  const shards = createChangedNodeTestShards([helper]);
+  expect(shards).toEqual([
+    expect.objectContaining({
+      checkName: "checks-node-changed-boundary",
+      configs: ["test/vitest/vitest.boundary.config.ts"],
+    }),
+  ]);
+  expect(createChangedNodeTestShards([helper, "src/deleted-unowned-source.ts"])).toBeNull();
+});
+
+it("retains package and plugin consumers together in a mixed diff", () => {
+  const changedPaths = [
+    "packages/gateway-protocol/src/frame-guards.ts",
+    "extensions/codex/src/session-upstream-marker.ts",
+  ];
+
+  const fallbackReasons: string[] = [];
+  const shards = createChangedNodeTestShards(changedPaths, {
+    onFallback: (reason) => fallbackReasons.push(reason),
+  });
+  expect(shards, fallbackReasons.join("\n")).not.toBeNull();
+  expect(selectedFiles(shards)).toEqual(
+    expect.arrayContaining([
+      "packages/gateway-protocol/src/frame-guards.test.ts",
+      "extensions/codex/src/session-upstream-marker.test.ts",
+    ]),
+  );
+  const extensionGroups = fallbackGroups(shards ?? []).filter((group) =>
+    group.configs.some((config) => config.includes("vitest.extension")),
+  );
+  expect(extensionGroups.length).toBeGreaterThan(0);
+  expect(extensionGroups.every((group) => (group.includePatterns?.length ?? 0) > 0)).toBe(true);
+});
+
+it("keeps UI fallback with its complete canonical owners beside precise core changes", () => {
+  const paths = [
+    "ui/src/components/markdown-file-links.ts",
+    "src/agents/live-provider-owner.ts",
+    "ui/config/control-ui-boot-modules.json",
+  ];
+  const options = {
+    runnerBackend: "hybrid",
+    dedicatedUiE2e: true,
+    includeReleaseOnlyToolingShards: false,
+    includeReleaseOnlyRuntimeTests: false,
+  };
+  const shards = createChangedNodeTestShards(paths, options);
+  expect(shards).not.toBeNull();
+  expect(hasControlUiPerformanceAffectingChange([paths[2]!])).toBe(true);
+  const full = createNodeTestShardBundles({
+    changedPaths: paths,
+    compactMode: "pull-request",
+    runnerBackend: "hybrid",
+    includeReleaseOnlyPluginShards: false,
+    includeReleaseOnlyToolingShards: true,
+    includeReleaseOnlyRuntimeTests: false,
+  });
+  const uiOwners = full.filter((shard) =>
+    shard.groups?.some((group) =>
+      group.configs.some((config) =>
+        /^test\/vitest\/vitest\.ui(?:-isolated|-timing)?\.config\.ts$/u.test(config),
+      ),
+    ),
+  );
+  expect(uiOwners.length).toBeGreaterThan(0);
+  for (const owner of uiOwners) {
+    expect(shards).toContainEqual({
+      ...owner,
+      groups: owner.groups.filter((group) =>
+        group.configs.some((config) =>
+          /^test\/vitest\/vitest\.ui(?:-isolated|-timing)?\.config\.ts$/u.test(config),
+        ),
+      ),
+      configs: [],
+      checkName: `checks-node-changed-ui-${owner.shardName}`,
+      shardName: `changed-ui-${owner.shardName}`,
+    });
+  }
+  expect(shards!.length).toBeLessThan(full.length);
+  expect(new Set(shards?.map((shard) => shard.checkName)).size).toBe(shards?.length);
+  const selectedGroups = fallbackGroups(shards ?? []);
+  expect(
+    selectedGroups
+      .flatMap((group) => group.includePatterns ?? [])
+      .some(isReleaseOnlyRuntimeTestFile),
+  ).toBe(false);
+  for (const consumer of [
+    "src/agents/live-model-filter.test.ts",
+    "test/ui.presenter-next-run.test.ts",
+    "test/talk-browser-defaults.test.ts",
+    "test/vitest-ui-package-config.test.ts",
+    "src/audit/execution-decision-facts.test.ts",
+    "src/auto-reply/reply/commands-export-session.test.ts",
+    "src/gateway/server-methods/session-change-event.fallback.test.ts",
+  ]) {
+    const consumerConfig = buildVitestRunPlans([consumer])[0]!.config;
+    expect(
+      selectedFiles(shards).includes(consumer) ||
+        selectedGroups.some(
+          (group) =>
+            group.configs.includes(consumerConfig) &&
+            (!group.includePatterns ||
+              group.includePatterns.some((pattern) => path.matchesGlob(consumer, pattern))),
+        ),
+      consumer,
+    ).toBe(true);
+  }
+  const toolingFiles = selectedGroups
+    .filter((group) => group.configs.includes("test/vitest/vitest.tooling.config.ts"))
+    .flatMap((group) => group.includePatterns ?? []);
+  for (const unrelated of [
+    "test/scripts/pr-worktree-provision.test.ts",
+    "test/scripts/pr-merge-recovery.test.ts",
+    "test/scripts/mobile-release-ci.test.ts",
+  ]) {
+    expect(toolingFiles, unrelated).not.toContain(unrelated);
+  }
+  expect(shards?.some((shard) => shard.requiresDist)).toBe(false);
+  const precise = createChangedNodeTestShards(paths, { ...options, dedicatedUiE2e: false });
+  expect(precise).not.toBeNull();
+  const preciseFiles = selectedFiles(precise);
+  expect(preciseFiles).toEqual(
+    expect.arrayContaining([
+      "ui/src/components/markdown-file-links.test.ts",
+      "ui/src/app/control-ui-chunking.test.ts",
+      "ui/src/app/vite-config.node.test.ts",
+      "src/agents/live-model-filter.test.ts",
+      "src/agents/live-model-dynamic-candidates.test.ts",
+      "src/agents/live-target-matcher.test.ts",
+      "src/agents/model-compat.test.ts",
+    ]),
+  );
+  expect(new Set(preciseFiles).size).toBe(preciseFiles.length);
+  expect(preciseFiles.some(isReleaseOnlyRuntimeTestFile)).toBe(false);
+  expect(precise!.length).toBeLessThan(shards!.length);
+  // Precise plans retain full runtime templates before whole-plan runtime relocation.
+  const placement = vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
+  let preciseOwners: CompactNodeTestShard[];
+  try {
+    preciseOwners = createNodeTestShardBundles({
+      compactMode: "pull-request",
+      runnerBackend: "hybrid",
+      includeReleaseOnlyPluginShards: false,
+      includeReleaseOnlyToolingShards: true,
+      includeProofTests: false,
+      includeReleaseOnlyRuntimeTests: true,
+    });
+  } finally {
+    placement.mockRestore();
+  }
+  for (const job of precise ?? []) {
+    for (const group of job.groups ?? []) {
+      const ownerJob = expectDefined(
+        preciseOwners.find((candidate) =>
+          candidate.groups.some((owner) => owner.shard_name === group.shard_name),
+        ),
+        `canonical UI consumer job for ${group.shard_name}`,
+      );
+      const owner = expectDefined(
+        ownerJob.groups.find((candidate) => candidate.shard_name === group.shard_name),
+        "canonical UI consumer group",
+      );
+      expect(group.includePatterns?.length).toBeGreaterThan(0);
+      expect(group.configs.every((config) => owner.configs.includes(config))).toBe(true);
+      expect(group.env).toEqual(owner.env);
+      expect(group.fallbackMaxWorkers).toBe(owner.fallbackMaxWorkers);
+      expect(group.minTotalMemoryBytes).toBe(owner.minTotalMemoryBytes);
+      expect(job.env).toEqual(ownerJob.env);
+      expect(job.runner).toBe(ownerJob.runner);
+      expect(job.planConcurrency).toBe(ownerJob.planConcurrency);
+    }
+  }
+  expect(createChangedNodeTestShards([paths[1]!, "ui/src/AGENTS.md"], options)).toEqual(
+    createChangedNodeTestShards([paths[1]!], options),
+  );
+  const onFallback = vi.fn();
+  expect(
+    createChangedNodeTestShards([...paths, "package.json"], { ...options, onFallback }),
+  ).toBeNull();
+  expect(onFallback).toHaveBeenCalledWith("dependency resolution requires an exact base revision");
+
+  const consumers = testProjects.resolveControlUiTestConsumers([paths[0]!]);
+  for (const missing of [
+    "test/scripts/missing-ui-consumer.test.ts",
+    "test/scripts/missing-ui-consumer.e2e.test.ts",
+  ]) {
+    const unresolvedConsumer = vi
+      .spyOn(testProjects, "resolveControlUiTestConsumers")
+      .mockReturnValue([...consumers, missing]);
+    try {
+      expect(createChangedNodeTestShards(paths, options), missing).toBeNull();
+    } finally {
+      unresolvedConsumer.mockRestore();
+    }
+  }
+  const resolvePlans = testProjects.buildVitestRunPlans;
+  const missingOwner = vi
+    .spyOn(testProjects, "buildVitestRunPlans")
+    .mockImplementation((targets, cwd) =>
+      targets.includes("test/vitest-ui-package-config.test.ts") ? [] : resolvePlans(targets, cwd),
+    );
+  try {
+    expect(createChangedNodeTestShards(paths, { ...options, onFallback })).toBeNull();
+    expect(onFallback).toHaveBeenCalledWith("unresolved UI host consumer");
+  } finally {
+    missingOwner.mockRestore();
+  }
+});

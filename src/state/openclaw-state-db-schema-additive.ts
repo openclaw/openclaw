@@ -1,7 +1,8 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
+import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import {
   ORDERED_STARTUP_ADDITIVE_STATE_COLUMNS as columns,
@@ -14,46 +15,14 @@ import {
   backfillCronRunLogEntryJson,
   backfillDeliveryQueueEntriesFromEntryJson,
   ensureOperatorApprovalResolutionRefs,
-  repairLegacyTaskAgentAttribution,
-  repairLegacyTaskDeliveryStatuses,
   repairLegacySubagentExecutionPayloads,
   repairLegacySubagentRetainedResults,
   repairLegacySubagentSuspensionReasons,
-  repairLegacySubagentTaskBindings,
 } from "./openclaw-state-db-legacy-backfills.js";
-import {
-  ensureColumn,
-  tableHasColumn,
-  tableHasColumns,
-} from "./openclaw-state-db-schema-helpers.js";
-import { repairLegacyTaskIdentifiers } from "./openclaw-state-db-task-identifiers.js";
+import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const repositoryWorkspacePendingSchemas = new WeakSet<DatabaseSync>();
-const taskExecutionOwnerSchemas = new WeakSet<DatabaseSync>();
-
-export function ensureTaskExecutionOwnerSchema(database: DatabaseSync): void {
-  if (taskExecutionOwnerSchemas.has(database)) {
-    return;
-  }
-  const ownerColumns = [
-    "execution_owner_host",
-    "execution_owner_pid",
-    "execution_owner_start_identity",
-  ];
-  if (!tableHasColumns(database, "task_runs", ownerColumns)) {
-    ensureColumn(database, "task_runs", "execution_owner_host TEXT");
-    ensureColumn(database, "task_runs", "execution_owner_pid INTEGER");
-    ensureColumn(database, "task_runs", "execution_owner_start_identity INTEGER");
-  }
-  const rememberSchema = () => taskExecutionOwnerSchemas.add(database);
-  if (database.isTransaction) {
-    // An outer transaction can still roll back its first-use DDL.
-    deferSqlitePostCommitPublication(database, rememberSchema);
-  } else {
-    rememberSchema();
-  }
-}
 
 export function hasRepositoryWorkspacePendingResultSchema(database: DatabaseSync): boolean {
   if (repositoryWorkspacePendingSchemas.has(database)) {
@@ -143,12 +112,29 @@ export function ensureConfigRevisionKeySchema(database: DatabaseSync): void {
   ); // sqlite-allow-raw -- Canonical additive DDL only; key rows use Kysely.
 }
 
-export function ensureAgentDeletionJournalSchema(database: DatabaseSync): void {
-  database.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "agent_deletion_journal"));
+export function assertAgentDeletionJournalAvailable(database: DatabaseSync): void {
+  if (!tableHasColumn(database, "agent_deletion_journal", "agent_id")) {
+    throw new Error(
+      "Agent deletion journal missing; run openclaw doctor --fix to reconstruct it before restoring or deleting agents.",
+    );
+  }
+}
+
+/** Doctor calls this inside the transaction that records its recovery receipt. */
+export function reconstructAgentDeletionJournalSchema(
+  database: DatabaseSync,
+  databasePath: string,
+): boolean {
+  const schema = extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "agent_deletion_journal");
+  const existed = tableExists(database, "agent_deletion_journal");
+  if (!existed) {
+    database.exec(schema);
+  }
+  assertSqliteSchemaContains(database, databasePath, schema);
+  return !existed;
 }
 
 export function ensureAgentDatabaseLeaseSchema(database: DatabaseSync): void {
-  ensureAgentDeletionJournalSchema(database);
   database.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "agent_database_leases"));
 }
 
@@ -189,13 +175,8 @@ function resolveLegacyManagedImageRoot(recordJson: unknown): string | null {
   if (typeof recordJson !== "string") {
     return null;
   }
-  let record: unknown;
-  try {
-    record = JSON.parse(recordJson) as unknown;
-  } catch {
-    return null;
-  }
-  if (!isRecord(record) || !isRecord(record.original)) {
+  const record = safeParseJsonRecord(recordJson);
+  if (!record || !isRecord(record.original)) {
     return null;
   }
   const mediaRoot = record.original.mediaRoot;
@@ -368,19 +349,12 @@ export function ensureAdditiveStateColumns(db: DatabaseSync, scope: "runtime" | 
     backfillLegacyManagedImageRoots(db);
   }
   ensureColumns(db, columns.beforeTaskAttribution);
-  const addedTaskRequesterAgentId = ensureColumn(db, ...columns.taskRequester[0]);
-  if (addedTaskRequesterAgentId) {
-    repairLegacyTaskAgentAttribution(db);
-  }
-  if (repairHistoricalRows) {
-    repairLegacyTaskDeliveryStatuses(db);
-  }
+  // Keep the released physical layout without repairing retired Task attribution or bindings.
+  ensureColumns(db, columns.taskRequester);
   ensureColumns(db, columns.taskRunDetails);
   if (repairHistoricalRows) {
     repairLegacySubagentSuspensionReasons(db);
     repairLegacySubagentExecutionPayloads(db);
-    repairLegacyTaskIdentifiers(db);
-    repairLegacySubagentTaskBindings(db);
     repairLegacySubagentRetainedResults(db);
   }
   ensureColumns(db, columns.workerEnvironments);

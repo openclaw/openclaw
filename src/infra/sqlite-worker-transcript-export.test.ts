@@ -174,12 +174,13 @@ describe("transcript export digest worker", () => {
       };
       // oxlint-disable-next-line typescript/unbound-method -- Preserve the intercepted native receiver.
       const prepare = DatabaseSync.prototype.prepare;
-      const prepareSpy = vi
-        .spyOn(DatabaseSync.prototype, "prepare")
-        .mockImplementation(function (this: DatabaseSync, sql) {
-          observe(sql);
-          return prepare.call(this, sql);
-        });
+      const prepareSpy = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+        this: DatabaseSync,
+        sql,
+      ) {
+        observe(sql);
+        return prepare.call(this, sql);
+      });
       // Catch execution even when a preceding export has cached the native statement.
       // oxlint-disable-next-line typescript/unbound-method -- Preserve the intercepted statement receiver.
       const iterate = StatementSync.prototype.iterate;
@@ -230,11 +231,12 @@ describe("transcript export digest worker", () => {
                   execute: new Proxy(scope.execute, {
                     async apply(execute, executeReceiver, args: Parameters<typeof scope.execute>) {
                       const result = await Reflect.apply(execute, executeReceiver, args);
-                      // Recovery reads its canonical session after materialization selects it.
                       if (
-                        change !== "append-after-digest" &&
-                        args[0].type === "transcripts.session" &&
-                        ++sessionReads === 2
+                        (change === "append-after-digest" &&
+                          args[0].type === "transcripts.summary") ||
+                        (change !== "append-after-digest" &&
+                          args[0].type === "transcripts.session" &&
+                          ++sessionReads === 2)
                       ) {
                         selected.resolve();
                         await resume.promise;
@@ -248,21 +250,6 @@ describe("transcript export digest worker", () => {
           },
         }),
       );
-      // The summary read was already an await after the digest on the original path.
-      // oxlint-disable-next-line typescript/unbound-method -- Called with the actual Store receiver.
-      const readSummary = TranscriptsStore.prototype.readSummary;
-      const summarySpy =
-        change === "append-after-digest"
-          ? vi.spyOn(TranscriptsStore.prototype, "readSummary").mockImplementation(async function (
-              this: TranscriptsStore,
-              ...args
-            ) {
-              const result = await readSummary.apply(this, args);
-              selected.resolve();
-              await resume.promise;
-              return result;
-            })
-          : undefined;
       const appended = { id: "later", text: "Speech admitted during recovery", final: false };
       let recovery: Promise<string> | undefined;
       try {
@@ -301,7 +288,6 @@ describe("transcript export digest worker", () => {
         resume.resolve();
         await Promise.allSettled(recovery ? [recovery] : []);
         workerSpy.mockRestore();
-        summarySpy?.mockRestore();
       }
       if (change === "append-after-digest") {
         await runTranscriptsCli(["path", session.sessionId, "--transcript"]);

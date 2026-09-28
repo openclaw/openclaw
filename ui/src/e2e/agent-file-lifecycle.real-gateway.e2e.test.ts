@@ -361,7 +361,11 @@ catalogSuite.define(() => {
           ).toBe(0);
 
           rejectCatalog = true;
-          await publish("held");
+          // Refresh the same catalog owner; a config write retires its display facts.
+          inventoryModel = "inventory-read-failure";
+          const failedReadRefresh = await refreshInventory();
+          commands.push({ args: refreshInventoryArgs, publishedInventory: failedReadRefresh });
+          expect(failedReadRefresh.stdout).toContain("inventory-read-failure");
           const error = editor
             .getByRole("alert")
             .filter({ hasText: "Catalog transport unavailable" });

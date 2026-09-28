@@ -95,6 +95,14 @@ const MAX_SCANNABLE_FILE_BYTES = 1024 * 1024;
 const MAX_SCANNABLE_TOTAL_BYTES_PER_PACKAGE = 64 * 1024 * 1024;
 const PACKAGE_SCAN_CONCURRENCY = 4;
 const CANONICAL_NPM_PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u;
+const PLUGIN_TARBALL_INSPECTION_LIMITS = {
+  maxArchiveBytes: MAX_PLUGIN_TARBALL_BYTES,
+  maxEntries: MAX_PACKED_FILES_PER_PACKAGE,
+  maxEntryBytes: MAX_PACKED_FILE_BYTES,
+  maxExpandedBytes: MAX_PACKED_TOTAL_BYTES_PER_PACKAGE,
+  maxPathBytes: 4 * 1024 * 1024,
+  maxTotalFileBytes: MAX_PACKED_TOTAL_BYTES_PER_PACKAGE,
+};
 
 const RELEASE_2026_9_1_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS = new Map<string, number>([
   ["@openclaw/acpx:dangerous-exec:src/codex-auth-bridge.ts", 1],
@@ -330,6 +338,14 @@ const FROZEN_EXTENDED_STABLE_2026_7_33_LAYOUT = {
   findings: FROZEN_EXTENDED_STABLE_2026_6_33_LAYOUT.findings,
 };
 
+const FROZEN_EXTENDED_STABLE_2026_8_33_LAYOUT = {
+  id: "extended-stable-2026.8.33",
+  findings: new Map<string, number>([
+    ["@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/sandbox-child.ts", 1],
+    ["@openclaw/codex:dangerous-exec:src/app-server/transport-process-snapshot.ts", 1],
+  ]),
+};
+
 const FROZEN_RELEASE_SECURITY_INVENTORY_POLICIES = new Map<string, PluginSecurityInventoryPolicy>([
   [
     "release/2026.9.1",
@@ -389,6 +405,14 @@ const FROZEN_RELEASE_SECURITY_INVENTORY_POLICIES = new Map<string, PluginSecurit
       requiredSourceFindingCounts: FROZEN_RELEASE_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
     },
   ],
+  [
+    "extended-stable/2026.8.33",
+    {
+      layout: FROZEN_EXTENDED_STABLE_2026_8_33_LAYOUT,
+      optionalPackedFindingCounts: FROZEN_RELEASE_2026_9_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+      requiredSourceFindingCounts: RELEASE_2026_9_1_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
+    },
+  ],
 ]);
 
 function selectPluginSecurityInventoryPolicy(
@@ -402,6 +426,7 @@ function selectPluginSecurityInventoryPolicy(
 const REVIEWED_LAYOUT_FINDING_COUNTS = new Map<string, number>([
   ...CURRENT_REVIEWED_RELEASE_LAYOUT.findings,
   ...FROZEN_EXTENDED_STABLE_2026_6_33_LAYOUT.findings,
+  ...FROZEN_EXTENDED_STABLE_2026_8_33_LAYOUT.findings,
 ]);
 
 function expandFindingCounts(counts: ReadonlyMap<string, number>): string[] {
@@ -413,7 +438,7 @@ function compareCodeUnits(left: string, right: string): number {
 }
 
 function sortStrings(values: readonly string[]): string[] {
-  return [...values].toSorted(compareCodeUnits);
+  return values.toSorted(compareCodeUnits);
 }
 
 function arraysEqual(left: readonly string[], right: readonly string[]): boolean {
@@ -618,17 +643,16 @@ function parseExpectedPackages(value: unknown): PublishablePluginPackage[] {
     throw new Error("Expected plugin package inventory is invalid.");
   }
   const packages = value.map((entry, index) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    if (!isRecord(entry)) {
       throw new Error(`Expected plugin package entry ${index} is invalid.`);
     }
-    const candidate = entry as Record<string, unknown>;
-    const extensionId = candidate.extensionId;
-    const packageDir = candidate.packageDir;
+    const extensionId = entry.extensionId;
+    const packageDir = entry.packageDir;
     const packageName = assertCanonicalNpmPackageName(
-      candidate.packageName,
+      entry.packageName,
       `Expected plugin package entry ${index}`,
     );
-    const packageVersion = candidate.packageVersion;
+    const packageVersion = entry.packageVersion;
     if (
       typeof extensionId !== "string" ||
       !/^[a-z0-9][a-z0-9._-]*$/u.test(extensionId) ||
@@ -747,14 +771,7 @@ function readPluginSecurityArtifact(
   });
   let inspection: ReturnType<typeof inspectPackageTarballBytes>;
   try {
-    inspection = inspectPackageTarballBytes(tarballBytes, {
-      maxArchiveBytes: MAX_PLUGIN_TARBALL_BYTES,
-      maxEntries: MAX_PACKED_FILES_PER_PACKAGE,
-      maxEntryBytes: MAX_PACKED_FILE_BYTES,
-      maxExpandedBytes: MAX_PACKED_TOTAL_BYTES_PER_PACKAGE,
-      maxPathBytes: 4 * 1024 * 1024,
-      maxTotalFileBytes: MAX_PACKED_TOTAL_BYTES_PER_PACKAGE,
-    });
+    inspection = inspectPackageTarballBytes(tarballBytes, PLUGIN_TARBALL_INSPECTION_LIMITS);
   } catch {
     throw new Error("Plugin security artifact tarball structure is invalid.");
   }
@@ -910,20 +927,6 @@ export function loadPluginNpmSecurityArtifacts(params: {
   };
 }
 
-export function listPluginNpmSecurityArtifacts(params: {
-  artifactRoot: string;
-  candidateSha: string;
-  expectedPackages: unknown;
-  limits?: PluginNpmSecurityArtifactLimits;
-  toolingSha: string;
-}): PluginNpmSecurityArtifact[] {
-  const result = loadPluginNpmSecurityArtifacts(params);
-  if (result.ingestionErrors.length > 0) {
-    throw new Error(result.ingestionErrors.join("\n"));
-  }
-  return result.artifacts;
-}
-
 export function stageScannerRelevantPluginTarballFiles(tarballPath: string): {
   directlyScannedFileCount: number;
   directlyScannedFindings: SkillScanFinding[];
@@ -948,14 +951,10 @@ export function stageScannerRelevantPluginTarballFiles(tarballPath: string): {
       label: "Plugin security tarball",
       maxBytes: MAX_PLUGIN_TARBALL_BYTES,
     });
-    const inspection = inspectPackageTarballBytes(tarballBytes, {
-      maxArchiveBytes: MAX_PLUGIN_TARBALL_BYTES,
-      maxEntries: MAX_PACKED_FILES_PER_PACKAGE,
-      maxEntryBytes: MAX_PACKED_FILE_BYTES,
-      maxExpandedBytes: MAX_PACKED_TOTAL_BYTES_PER_PACKAGE,
-      maxPathBytes: 4 * 1024 * 1024,
-      maxTotalFileBytes: MAX_PACKED_TOTAL_BYTES_PER_PACKAGE,
-    }) as {
+    const inspection = inspectPackageTarballBytes(
+      tarballBytes,
+      PLUGIN_TARBALL_INSPECTION_LIMITS,
+    ) as {
       inventory: Array<{ path: string; sizeBytes: number; type: string }>;
       packageManifest: Record<string, unknown>;
       tarballSha256: string;
@@ -974,12 +973,7 @@ export function stageScannerRelevantPluginTarballFiles(tarballPath: string): {
       packedFiles,
     );
     inspectPackageTarballBytes(tarballBytes, {
-      maxArchiveBytes: MAX_PLUGIN_TARBALL_BYTES,
-      maxEntries: MAX_PACKED_FILES_PER_PACKAGE,
-      maxEntryBytes: MAX_PACKED_FILE_BYTES,
-      maxExpandedBytes: MAX_PACKED_TOTAL_BYTES_PER_PACKAGE,
-      maxPathBytes: 4 * 1024 * 1024,
-      maxTotalFileBytes: MAX_PACKED_TOTAL_BYTES_PER_PACKAGE,
+      ...PLUGIN_TARBALL_INSPECTION_LIMITS,
       onFile: ({ content, path }: { content: Uint8Array; path: string }) => {
         if (!path.startsWith("package/")) {
           throw new Error("Plugin tarball file escaped package/.");

@@ -4,7 +4,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
-import type { SharedGitHubPublicationSession } from "./github-publication-shared-read.js";
+import type { PublicationSessionIdentity } from "./github-publication-availability.js";
 import {
   digestGitHubPublicationRequest,
   ensureGitHubPublicationStore,
@@ -23,7 +23,7 @@ import {
 import { repositoryGitHubPublicationDigest } from "./github-repository-publication-store.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
-export const sharedPublicationSession: SharedGitHubPublicationSession = {
+export const sharedPublicationSession: PublicationSessionIdentity = {
   sessionId: SESSION_ID,
   sessionKey: SESSION_KEY,
   agentId: "main",
@@ -39,7 +39,7 @@ export function sharedPublicationCoordinator() {
 export function insertSharedWorktreeReceipt(
   requestId: string,
   options: {
-    session?: SharedGitHubPublicationSession;
+    session?: PublicationSessionIdentity;
     idempotencyKey?: string;
     createdAtMs?: number;
     worktreeId?: string;

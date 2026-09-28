@@ -88,7 +88,7 @@ type ChatComposerViewContext = {
   slashMenuVisible: boolean;
   skillMenuVisible: boolean;
   mentionMenuVisible: boolean;
-  emojiMenuVisible: boolean;
+  menuVisible: boolean;
   mentionMenuHost: HumanMentionMenuHost;
   mentionError: string | null;
   skillMenuHost: SkillMenuHost;
@@ -131,7 +131,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     slashMenuVisible,
     skillMenuVisible,
     mentionMenuVisible,
-    emojiMenuVisible,
+    menuVisible,
     mentionMenuHost,
     mentionError,
     skillMenuHost,
@@ -179,22 +179,26 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             }
             <div class="agent-chat__disabled-banner-detail">${props.disabledBanner.text}</div>
           </div>
-          <button
-            type="button"
-            class="btn btn--sm ${props.disabledBanner.actionStyle ?? ""}"
-            ?disabled=${Boolean(props.disabledBanner.disabledReason) || props.disabledBanner.busy}
-            aria-busy=${props.disabledBanner.busy ? "true" : "false"}
-            title=${props.disabledBanner.disabledReason ?? nothing}
-            @click=${props.disabledBanner.onAction}
-          >
-            ${
-              props.disabledBanner.busy
-                ? html`<span class="btn__spinner" aria-hidden="true"></span>${
-                      props.disabledBanner.busyLabel ?? props.disabledBanner.actionLabel
-                    }`
-                : props.disabledBanner.actionLabel
-            }
-          </button>
+          ${
+            props.disabledBanner.onAction
+              ? html`<button
+                  type="button"
+                  class="btn btn--sm ${props.disabledBanner.actionStyle ?? ""}"
+                  ?disabled=${Boolean(props.disabledBanner.disabledReason) || props.disabledBanner.busy}
+                  aria-busy=${props.disabledBanner.busy ? "true" : "false"}
+                  title=${props.disabledBanner.disabledReason ?? nothing}
+                  @click=${props.disabledBanner.onAction}
+                >
+                  ${
+                    props.disabledBanner.busy
+                      ? html`<span class="btn__spinner" aria-hidden="true"></span>${
+                            props.disabledBanner.busyLabel ?? props.disabledBanner.actionLabel
+                          }`
+                      : props.disabledBanner.actionLabel
+                  }
+                </button>`
+              : nothing
+          }
           ${
             props.disabledBanner.kind === "composer-replacement" && showAbortableUi
               ? renderChatAbortAction(runControlsProps)
@@ -211,16 +215,12 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
   const composerAlerts = showComposerInput
     ? html`
         ${renderChatVoiceStatus({
-          status:
-            props.realtimeTalkCameraError || props.realtimeTalkVoice?.error
-              ? "error"
-              : props.realtimeTalkStatus,
-          detail: props.realtimeTalkVoice?.error ?? props.realtimeTalkDetail,
+          status: props.realtimeTalkCameraError ? "error" : props.realtimeTalkStatus,
+          detail: props.realtimeTalkDetail,
           onUseSystemDefaultMicrophone: props.onUseSystemDefaultMicrophone,
-          onDismissError:
-            props.realtimeTalkCameraError || props.realtimeTalkVoice?.error
-              ? undefined
-              : props.onDismissRealtimeTalkError,
+          onDismissError: props.realtimeTalkCameraError
+            ? undefined
+            : props.onDismissRealtimeTalkError,
         })}
         ${
           props.realtimeTalkInputNotice
@@ -233,11 +233,10 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
         }
       `
     : nothing;
-  const offlineText = props.offline
-    ? props.queuedOutboxCount
+  const offlineText =
+    props.offline && props.queuedOutboxCount
       ? t("chat.composer.offlineQueuedHint", { count: String(props.queuedOutboxCount) })
-      : t("chat.composer.offlineHint")
-    : null;
+      : null;
   const primaryComposerStatus = props.disabledReason
     ? {
         text: props.disabledReason,
@@ -306,7 +305,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             readingHistory: props.readingHistory,
             onManipulate: props.onProgressManipulate,
           },
-          props.connected && canCompose ? props.progressCardRefresh : undefined,
+          props.connected && props.canSend ? props.progressCardRefresh : undefined,
         )}
       </div>`
     : props.progressCardInitialLoading
@@ -321,10 +320,15 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     displayQueue: props.displayQueue,
     offline: props.offline,
     canAbort: showAbortableUi,
+    canRemoveServerQueued: props.connected && props.canSend && !props.submitDisabledReason,
     onQueueRetry:
-      props.connected && canCompose && !props.submitDisabledReason ? props.onQueueRetry : undefined,
+      props.connected && props.canSend && !props.submitDisabledReason
+        ? props.onQueueRetry
+        : undefined,
     onQueueSteer:
-      props.connected && canCompose && !props.submitDisabledReason ? props.onQueueSteer : undefined,
+      props.connected && props.canSend && !props.submitDisabledReason
+        ? props.onQueueSteer
+        : undefined,
     // Reordering is local bookkeeping, so it stays available while offline —
     // exactly when a queue is long enough to need it.
     onQueueMove: props.onQueueMove,
@@ -341,7 +345,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
   const goalCard = activeSession?.goal
     ? html`<div class="agent-chat__goal-float">
         ${renderChatGoal(state, activeSession.goal, {
-          canAct: props.connected && canCompose && !props.goalRecovery,
+          canAct: props.connected && props.canSend && !props.goalRecovery,
           onGoalAction: props.onGoalAction,
           onGoalEdit: props.onGoalSubmit ? (goal) => goalComposer.begin(goal) : undefined,
           requestUpdate,
@@ -375,7 +379,6 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
               @wa-show=${handleChatComposerDropdownShow}
               @wa-after-show=${restorePointerOpenedChatComposerTrigger}
               @openclaw-composer-dismiss-invocations=${() => {
-                state.slashMenuOpen = false;
                 resetSlashMenuState(state);
                 resetSkillMenuState(state);
                 state.mentionMenu.close();
@@ -499,16 +502,8 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     ?disabled=${!canCompose}
                     ?readonly=${dictation?.locksComposer === true || goalComposer.pending}
                     aria-autocomplete="list"
-                    aria-controls=${ifDefined(
-                      slashMenuVisible || skillMenuVisible || mentionMenuVisible || emojiMenuVisible
-                        ? slashMenuListboxId
-                        : undefined,
-                    )}
-                    aria-haspopup=${ifDefined(
-                      slashMenuVisible || skillMenuVisible || mentionMenuVisible || emojiMenuVisible
-                        ? "listbox"
-                        : undefined,
-                    )}
+                    aria-controls=${ifDefined(menuVisible ? slashMenuListboxId : undefined)}
+                    aria-haspopup=${ifDefined(menuVisible ? "listbox" : undefined)}
                     aria-activedescendant=${ifDefined(activeSlashMenuOptionId ?? undefined)}
                     aria-describedby=${`${slashMenuAnnouncementId}${
                       props.disabledReason ? ` ${disabledReasonId}` : ""

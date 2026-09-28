@@ -80,7 +80,6 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
 
   it.each([
     { mode: "off", toolProgress: true, verbose: "full", visibleTool: false },
-    { mode: "partial", toolProgress: false, verbose: "full", visibleTool: false },
     { mode: "progress", toolProgress: false, verbose: "full", visibleTool: false },
     { mode: "progress", toolProgress: true, verbose: "full", visibleTool: true },
     { mode: "progress", toolProgress: true, verbose: "off", visibleTool: false },

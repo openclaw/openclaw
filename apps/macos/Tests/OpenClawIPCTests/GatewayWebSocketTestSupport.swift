@@ -79,7 +79,8 @@ enum GatewayWebSocketTestSupport {
         mainSessionKey: String? = nil,
         canvasPluginSurfaceURL: String? = nil,
         methods: [String] = [],
-        capabilities: [String] = []) -> Data
+        capabilities: [String] = [],
+        scopes: [String] = []) -> Data
     {
         let deviceTokenField = deviceToken.map { #", "deviceToken": "\#($0)""# } ?? ""
         let sessionDefaultsField = mainSessionKey.map { #", "sessionDefaults": {"mainSessionKey": "\#($0)"}"# } ?? ""
@@ -88,6 +89,7 @@ enum GatewayWebSocketTestSupport {
         } ?? ""
         let methodsJSON = methods.map { #""\#($0)""# }.joined(separator: ",")
         let capabilitiesJSON = capabilities.map { #""\#($0)""# }.joined(separator: ",")
+        let scopesJSON = scopes.map { #""\#($0)""# }.joined(separator: ",")
         let json = """
         {
           "type": "res",
@@ -108,7 +110,7 @@ enum GatewayWebSocketTestSupport {
               "stateVersion": { "presence": 0, "health": 0 },
               "uptimeMs": 0\(sessionDefaultsField)
             },
-            "auth": { "role": "operator", "scopes": []\(deviceTokenField) },
+            "auth": { "role": "operator", "scopes": [\(scopesJSON)]\(deviceTokenField) },
             "policy": { "maxPayload": 1, "maxBufferedBytes": 1, "tickIntervalMs": \(tickIntervalMs) }
           }
         }

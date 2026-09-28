@@ -158,7 +158,7 @@ vi.mock("./empty-source.js", () => ({
 }));
 vi.mock("./git-lock.js", () => ({
   lockState: async () => ({ kind: "none" }),
-  createWorktreeLockPrefilter: fixture.forbidden,
+  createWorktreeGcPrefilter: fixture.forbidden,
   lockWorktreeForProcess: fixture.forbidden,
   unlockWorktree: fixture.forbidden,
 }));
@@ -254,7 +254,8 @@ vi.mock("./registry.js", () => ({
   insertRegistryWorktree: fixture.forbidden,
   WorktreeRemovalContentionError: class extends Error {},
 }));
-vi.mock("./removal-git.js", () => ({
+vi.mock("./removal-git.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./removal-git.js")>()),
   requireManagedWorktreeHead: async () => "branch-head",
   prepareSnapshotBranchDeletion: async () => ({}),
 }));

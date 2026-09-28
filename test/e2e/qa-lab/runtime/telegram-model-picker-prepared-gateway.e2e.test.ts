@@ -8,13 +8,11 @@ import { pathToFileURL } from "node:url";
 import { createWindowsCmdShimFixture, withServer, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { expect, test } from "vitest";
 import { createQaGatewayChild, writeJson } from "../../../../extensions/qa-lab/api.js";
-import {
-  createChannelIngressQueue,
-  getChannelIngressKysely,
-} from "../../../../src/channels/message/ingress-queue.js";
+import { createChannelIngressQueue } from "../../../../src/channels/message/ingress-queue.js";
 import type { ModelDefinitionConfig } from "../../../../src/config/types.models.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
-import { executeSqliteQuerySync } from "../../../../src/infra/kysely-sync.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../../../src/infra/kysely-sync.js";
+import type { DB } from "../../../../src/state/openclaw-state-db.generated.js";
 import { openExistingOpenClawStateDatabaseReadOnly } from "../../../../src/state/openclaw-state-db.js";
 import { withTestTimeout } from "../../../helpers/promise.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
@@ -174,7 +172,7 @@ async function readTelegramIngressStatuses(stateDir: string, eventIds: string[])
   try {
     return executeSqliteQuerySync(
       database.db,
-      getChannelIngressKysely(database.db)
+      getNodeSqliteKysely<Pick<DB, "channel_ingress_events">>(database.db)
         .selectFrom("channel_ingress_events")
         .select([
           "account_id as accountId",

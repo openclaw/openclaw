@@ -1,5 +1,7 @@
+import { StatementSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   deleteSessionEntryLifecycle,
   replaceSessionEntrySync,
@@ -7,20 +9,33 @@ import {
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import * as placementRead from "./server-methods/session-placement-read-projection.js";
 import {
   canRunSessionListBackgroundWork,
   retainSessionListForegroundWork,
 } from "./session-projection-work.js";
+import { withReadySessionRows } from "./session-row-prepared-read.js";
 import * as materialization from "./session-row-projection-materialize.js";
 import * as databaseFactsRead from "./session-row-projection-read.js";
-import { ready } from "./session-row-projection-record.js";
+import * as records from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import * as transcriptBackfill from "./session-row-transcript-backfill.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+const { ready } = records;
+
+type Projection = Awaited<ReturnType<typeof createSessionRowProjection>>;
+type SnapshotQuery = Parameters<Projection["snapshot"]>[0];
+
+function preparedSnapshot(projection: Projection, query: SnapshotQuery) {
+  return withReadySessionRows(
+    projection,
+    () => [query],
+    () => projection.snapshot(query),
+  );
+}
 
 it("keeps archived rows cold at hydration and across broad refreshes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -29,7 +44,7 @@ it("keeps archived rows cold at hydration and across broad refreshes", async () 
     const archived = 8;
     const placements = createWorkerSessionPlacementStore();
     for (let index = 0; index < live + archived; index++) {
-      placements.startDispatch({
+      await placements.startDispatch({
         agentId: "main",
         sessionKey: `agent:main:row-${index}`,
         sessionId: `row-${index}`,
@@ -59,7 +74,7 @@ it("keeps archived rows cold at hydration and across broad refreshes", async () 
       for (const scope of ["catalog", "config", "stores", { agentId: "main" }] as const) {
         const before = projection.materializedCount;
         sessionChanges.emit({ all: true, scope });
-        expect(projection.dirtyRowCount).toBe(live);
+        expect(projection.dirtyRowCount).toBe(scope === "catalog" ? live : live + archived);
         await projection.ensureMaterialized();
         expect(projection.materializedCount - before).toBe(live);
         expect(reads.mock.calls.some(([row]) => row.entry?.archivedAt !== undefined)).toBe(false);
@@ -123,6 +138,7 @@ it("reindexes cold lineage when a literal parent appears and disappears", async 
     );
     const release = retainSessionListForegroundWork();
     let projection: Awaited<ReturnType<typeof createSessionRowProjection>> | undefined;
+    let boardReads: ReturnType<typeof observeSqliteReadSql> | undefined;
     try {
       projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
       const initial = projection
@@ -130,11 +146,14 @@ it("reindexes cold lineage when a literal parent appears and disappears", async 
         .find((row) => row.key === child)!;
       expect(initial).toBeDefined();
       expect(ready(initial)).toBe(false);
-      const boardReads = vi.spyOn(placementRead, "readSessionRowHasBoard");
+      boardReads = observeSqliteReadSql(StatementSync.prototype);
       const check = async (literal: boolean) => {
         if (!projection) {
           throw new Error("Expected a live projection");
         }
+        do {
+          await projection.prepareMembership();
+        } while (projection.needsMembershipPreparation());
         // Query the parent index first: describing the child would hide a stale cold edge.
         const selected = projection.selectEntries({
           parentSessionKey: literal ? parent : "global",
@@ -150,7 +169,7 @@ it("reindexes cold lineage when a literal parent appears and disappears", async 
         expect(row?.membership).toBe(initial.membership);
         expect(row?.hasBoard).toBe(initial.hasBoard);
         expect(row?.materialized).toBeUndefined();
-        expect(boardReads).not.toHaveBeenCalled();
+        expect(boardReads?.queries.filter((sql) => sql.includes("board_tabs"))).toEqual([]);
         if (literal) {
           expect(
             projection.selectEntries({ parentSessionKey: "global" }).map((entry) => entry.key),
@@ -185,6 +204,7 @@ it("reindexes cold lineage when a literal parent appears and disappears", async 
         expect.objectContaining({ key: child, model: "qwen3:14b" }),
       ]);
     } finally {
+      boardReads?.restore();
       projection?.dispose();
       release();
     }
@@ -204,7 +224,7 @@ it("promotes unarchived rows, demotes archived rows, and refreshes only requeste
       sessionChanges.emit(target);
       await projection.ensureMaterialized();
       expect(projection.materializedCount).toBe(0);
-      expect(projection.snapshot({ agentId: "main", key }).row).toMatchObject({
+      expect((await preparedSnapshot(projection, { agentId: "main", key })).row).toMatchObject({
         key,
         archivedAt: 1,
       });
@@ -212,7 +232,9 @@ it("promotes unarchived rows, demotes archived rows, and refreshes only requeste
       replaceSessionEntrySync(target, { ...entry, archivedAt: 1, label: "Updated archive" });
       await projection.ensureMaterialized();
       expect(projection.materializedCount).toBe(2);
-      expect(projection.snapshot({ agentId: "main", key }).row?.label).toBe("Updated archive");
+      expect((await preparedSnapshot(projection, { agentId: "main", key })).row?.label).toBe(
+        "Updated archive",
+      );
 
       sessionChanges.emit({ all: true, scope: "catalog" });
       await projection.ensureMaterialized();
@@ -231,7 +253,9 @@ it("promotes unarchived rows, demotes archived rows, and refreshes only requeste
       expect(projection.selectEntries().filter(ready)).toHaveLength(0);
       await projection.ensureMaterialized();
       expect(projection.materializedCount).toBe(3);
-      expect(projection.snapshot({ agentId: "main", key }).row?.archivedAt).toBe(2);
+      expect((await preparedSnapshot(projection, { agentId: "main", key })).row?.archivedAt).toBe(
+        2,
+      );
       expect(projection.materializedCount).toBe(4);
     } finally {
       projection.dispose();
@@ -272,7 +296,7 @@ it("bounds archived residency across pages and evicts the least recently read ro
       expect(projection.selectEntries().filter(ready)).toHaveLength(100);
       const query = { agentId: "main", key: "agent:main:archive-127" };
       expect(projection.capture(query)?.materialized).toBeUndefined();
-      expect(projection.snapshot(query).row?.sessionId).toBe("archive-127");
+      expect((await preparedSnapshot(projection, query)).row?.sessionId).toBe("archive-127");
       expect(projection.materializedCount).toBe(129);
       expect(projection.selectEntries().filter(ready)).toHaveLength(100);
       const pagePrepared = createDeferredCore();
@@ -422,7 +446,7 @@ it("backfills only requested archives and discards enrichment after demotion", a
       expect(backfill.mock.calls[0]?.[0].sessionKey).toBe("agent:main:live");
       const query = { agentId: "main", key: "agent:main:archived" };
       expect(projection.capture(query)?.materialized).toBeUndefined();
-      expect(projection.snapshot(query).row?.sessionId).toBe("archived");
+      expect((await preparedSnapshot(projection, query)).row?.sessionId).toBe("archived");
       await vi.waitFor(() => expect(backfill).toHaveBeenCalledTimes(2));
       sessionChanges.emit({ all: true, scope: "catalog" });
       await projection.ensureMaterialized();
@@ -505,7 +529,9 @@ it("expires archives read while a newer catalog is still loading", async () => {
     try {
       refresh = true;
       sessionChanges.emit({ all: true, scope: "catalog" });
-      expect(projection.snapshot({ agentId: "main", key }).row?.contextTokens).toBe(8192);
+      expect(
+        (await preparedSnapshot(projection, { agentId: "main", key })).row?.contextTokens,
+      ).toBe(8192);
       expect(projection.materializedCount).toBe(1);
       loading.resolve([{ ...catalog[0]!, contextWindow: 16384, contextTokens: 16384 }]);
       await loading.promise;
@@ -514,7 +540,9 @@ it("expires archives read while a newer catalog is still loading", async () => {
       expect(projection.selectEntries().filter(ready)).toHaveLength(0);
       await projection.ensureMaterialized();
       expect(projection.materializedCount).toBe(1);
-      expect(projection.snapshot({ agentId: "main", key }).row?.contextTokens).toBe(16384);
+      expect(
+        (await preparedSnapshot(projection, { agentId: "main", key })).row?.contextTokens,
+      ).toBe(16384);
       expect(projection.materializedCount).toBe(2);
     } finally {
       loading.resolve(catalog);
@@ -547,4 +575,86 @@ it("withdraws in-flight live backfill authority when its row is archived", async
       projection.dispose();
     }
   });
+});
+
+it("discards backfill superseded by a same-lifecycle publication after rematerialization", ({
+  signal,
+  onTestFinished,
+}) => {
+  const run = withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const target = { agentId: "main", sessionKey: "agent:main:backfill-successor" };
+    const query = { agentId: "main", key: target.sessionKey };
+    const entry = {
+      sessionId: "backfill-successor",
+      lifecycleRevision: "original",
+      updatedAt: 1,
+    };
+    const reads = ["Superseded preview", "Current preview"].map((preview) => ({
+      preview,
+      started: createDeferredCore(),
+      release: createDeferredCore(),
+    }));
+    const published = createDeferredCore();
+    const aborted = createDeferredCore();
+    const abort = () => aborted.reject(signal.reason);
+    const wait = (promise: Promise<void>) => Promise.race([promise, aborted.promise]);
+    let readIndex = 0;
+    vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields").mockImplementation(
+      async () => {
+        const read = reads[readIndex++];
+        if (!read) {
+          throw new Error("Unexpected backfill read");
+        }
+        read.started.resolve();
+        await read.release.promise;
+        return { lastMessagePreview: read.preview, fallbackModel: undefined };
+      },
+    );
+    const publishTranscriptFields = records.publishTranscriptFields;
+    const publish = vi.spyOn(records, "publishTranscriptFields").mockImplementation((...args) => {
+      const changed = publishTranscriptFields(...args);
+      published.resolve();
+      return changed;
+    });
+    replaceSessionEntrySync(target, entry);
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    signal.addEventListener("abort", abort, { once: true });
+    try {
+      signal.throwIfAborted();
+      await wait(reads[0]!.started.promise);
+      const previous = projection.capture(query)!;
+      const materialized = previous.materialized;
+      replaceSessionEntrySync(target, { ...entry, updatedAt: 2, label: "Updated metadata" });
+      await projection.ensureMaterialized();
+      const current = projection.capture(query)!;
+      expect(current.generation).toBe(previous.generation);
+      expect(current.materialized).not.toBe(materialized);
+      expect(current.entry).toMatchObject({ ...entry, updatedAt: 2, label: "Updated metadata" });
+      expect(ready(current)).toBe(true);
+
+      reads[0]!.release.resolve();
+      // The successor can start only after the previous read's publication decision.
+      await wait(reads[1]!.started.promise);
+      expect(publish).not.toHaveBeenCalled();
+      expect(
+        projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview,
+      ).toBeUndefined();
+
+      reads[1]!.release.resolve();
+      await wait(published.promise);
+      expect(projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview).toBe(
+        "Current preview",
+      );
+      expect(publish).toHaveBeenCalledTimes(1);
+    } finally {
+      signal.removeEventListener("abort", abort);
+      projection.dispose();
+      for (const read of reads) {
+        read.release.resolve();
+      }
+    }
+  });
+  onTestFinished(() => run);
+  return run;
 });

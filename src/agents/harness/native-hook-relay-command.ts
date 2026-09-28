@@ -35,17 +35,9 @@ export function resolveNativeHookRelayCommandTimeoutMs(
   return Math.min(configured, override);
 }
 
-export function buildNativeHookRelayCommand(params: {
-  provider: NativeHookRelayProvider;
-  relayId: string;
-  generation?: string;
-  event: NativeHookRelayEvent;
-  preToolUseUnavailable?: "noop";
-  timeoutMs?: number;
-  executable?: string;
-  nice?: number | false;
-  nodeExecutable?: string;
-}): string {
+export function buildNativeHookRelayCommand(
+  params: Omit<Parameters<typeof buildNativeHookRelayCommandWithStateDatabase>[0], "stateDbPath">,
+): string {
   return buildNativeHookRelayCommandWithStateDatabase(params);
 }
 

@@ -240,73 +240,49 @@ async function runLane(params: {
       lane: params.lane,
       runner: params.runner,
     });
-    if (!params.opts.skipInstall) {
-      await runMantisCommand({
+    const runPnpmStage = (stage: "install" | "build" | "qa", args: readonly string[]) =>
+      runMantisCommand({
         command: "pnpm",
-        args: ["--dir", worktreeDir, "install", "--frozen-lockfile"],
+        args: ["--dir", worktreeDir, ...args],
         execution: {
           cwd: params.repoRoot,
           env: process.env,
           signal: params.signal,
-          stage: "install",
-          timeoutMs: params.commandTimeouts.install,
+          stage,
+          timeoutMs: params.commandTimeouts[stage],
         },
         lane: params.lane,
         runner: params.runner,
       });
+    if (!params.opts.skipInstall) {
+      await runPnpmStage("install", ["install", "--frozen-lockfile"]);
     }
     if (!params.opts.skipBuild) {
-      await runMantisCommand({
-        command: "pnpm",
-        args: ["--dir", worktreeDir, "build"],
-        execution: {
-          cwd: params.repoRoot,
-          env: process.env,
-          signal: params.signal,
-          stage: "build",
-          timeoutMs: params.commandTimeouts.build,
-        },
-        lane: params.lane,
-        runner: params.runner,
-      });
+      await runPnpmStage("build", ["build"]);
     }
-    await runMantisCommand({
-      command: "pnpm",
-      args: [
-        "--dir",
-        worktreeDir,
-        "openclaw",
-        "qa",
-        "discord",
-        "--repo-root",
-        worktreeDir,
-        "--output-dir",
-        worktreeOutputDir,
-        "--provider-mode",
-        params.opts.providerMode,
-        "--model",
-        DEFAULT_MODEL,
-        "--alt-model",
-        DEFAULT_MODEL,
-        ...(params.opts.fastMode ? ["--fast"] : []),
-        "--credential-source",
-        params.opts.credentialSource,
-        "--credential-role",
-        params.opts.credentialRole,
-        "--scenario",
-        params.scenario,
-        "--allow-failures",
-      ],
-      execution: {
-        cwd: params.repoRoot,
-        env: process.env,
-        signal: params.signal,
-        stage: "qa",
-        timeoutMs: params.commandTimeouts.qa,
-      },
-      lane: params.lane,
-      runner: params.runner,
-    });
+    await runPnpmStage("qa", [
+      "openclaw",
+      "qa",
+      "discord",
+      "--repo-root",
+      worktreeDir,
+      "--output-dir",
+      worktreeOutputDir,
+      "--provider-mode",
+      params.opts.providerMode,
+      "--model",
+      DEFAULT_MODEL,
+      "--alt-model",
+      DEFAULT_MODEL,
+      ...(params.opts.fastMode ? ["--fast"] : []),
+      "--credential-source",
+      params.opts.credentialSource,
+      "--credential-role",
+      params.opts.credentialRole,
+      "--scenario",
+      params.scenario,
+      "--allow-failures",
+    ]);
     // Git owns worktree removal, so preserve the lane artifacts before cleanup.
     await stageMantisLaneOutput(path.join(worktreeDir, worktreeOutputDir), stagedLaneDir);
     // Resolve producer coordinates and preserve referenced media before Git removes the worktree.

@@ -234,6 +234,7 @@ async function runCliAgentInternal(
   const modelExecution = bindOperatorModelExecution(
     readRunOperatorAuthority(params),
     params.requesterModel,
+    params.mapOperatorAuthorizationError,
   );
   const assertCallerCurrent = params.assertCurrent;
   try {
@@ -254,12 +255,12 @@ async function runCliAgentInternal(
     try {
       context = await prepareCliRunContext(runParams);
     } catch (error) {
-      runParams.assertCurrent?.();
       await settleCliPreparationError(error, runParams);
       throw error;
     }
-    // Preparation resolves the session's execution owner for diagnostic attribution.
-    diagnosticLifecycle?.setExecutionOwner(context.params.agentId);
+    // Preparation resolves the execution owner and effective capture config;
+    // publish both before commentary can arrive from the prepared run.
+    diagnosticLifecycle?.setExecutionContext(context.params);
     const result = await settlePreparedCliRun({
       context,
       diagnosticLifecycle,

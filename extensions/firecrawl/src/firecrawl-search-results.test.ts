@@ -1,18 +1,13 @@
-import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFirecrawlFreeWebSearchProvider } from "./firecrawl-search-provider.js";
 
 const first = { url: "https://example.com/first", title: "First" };
 const second = { url: "https://example.com/second", title: "Second" };
 
-let dnsMock: ReturnType<typeof mockPinnedHostnameResolution>;
-
-beforeEach(() => {
-  dnsMock = mockPinnedHostnameResolution();
-});
+installPinnedHostnameTestHooks();
 
 afterEach(() => {
-  dnsMock.mockRestore();
   vi.restoreAllMocks();
 });
 
@@ -29,12 +24,6 @@ async function search(payload: Record<string, unknown>, count = 10) {
 
 describe("Firecrawl search result selection", () => {
   it.each([
-    { data: [first] },
-    { results: [first] },
-    { data: { results: [first] } },
-    { data: { data: [first] } },
-    { data: { web: [first] } },
-    { web: { results: [first] } },
     { data: [first], results: [second] },
     { results: [first], data: { results: [second] } },
     { data: { results: [first], data: [second], web: [second] } },

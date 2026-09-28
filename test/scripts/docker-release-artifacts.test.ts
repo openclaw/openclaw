@@ -699,6 +699,7 @@ describe("prepared Docker publication", () => {
       uses?: string;
       run?: string;
       if?: string;
+      "continue-on-error"?: boolean;
       with?: Record<string, unknown>;
     }[];
     expect(build.strategy.matrix.include).toEqual([
@@ -744,7 +745,9 @@ describe("prepared Docker publication", () => {
       const relay = steps.find((step) => step.name === `Relay ${variant} image limit warnings`);
       expect(relay?.if).toBe(`\${{ always() && steps.${buildId}.outputs.metadata != '' }}`);
       expect(relay?.run).toContain('["buildx.build.ref"]');
+      expect(relay?.["continue-on-error"]).toBe(true);
       expect(relay?.run).toContain('docker buildx history logs --progress plain "$build_ref"');
+      expect(relay?.run).toContain("::notice title=Build limit warning relay skipped::");
       expect(relay?.run).toContain("node workflow-source/scripts/relay-build-limit-warnings.mts");
     }
     const smoke = steps.findIndex((step) =>

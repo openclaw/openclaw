@@ -1,4 +1,5 @@
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
+import { registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type { SetupInferenceFailureStatus } from "./setup-inference-core.js";
 
@@ -16,6 +17,22 @@ export type SetupTurnSuccess = {
   text: string;
   auth: AgentExecutionAuthBinding;
 };
+
+/** The probe is setup evidence, not a chat turn: its events must never reach Gateway projection. */
+export function registerHiddenSetupInferenceProbeRun(
+  runId: string,
+  agentId: string,
+  sessionKey: string,
+) {
+  registerAgentRunContext(runId, {
+    agentId,
+    sessionKey,
+    isControlUiVisible: false,
+    projectSessionActive: false,
+    projectSessionLifecycle: false,
+    projectSessionMessages: false,
+  });
+}
 
 /** Setup must release the isolated probe generation before activation can replace it. */
 export async function runSetupInferenceProbeWork<TParams, TResult>(

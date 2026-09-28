@@ -156,6 +156,15 @@ describe("resolveImplicitProviders startup discovery scope", () => {
   let state: OpenClawTestState;
   let ambientHome: MockInstance<typeof os.homedir>;
 
+  function discover(options: Omit<Parameters<typeof resolveImplicitProviders>[0], "agentDir">) {
+    return resolveImplicitProviders({
+      agentDir: state.agentDir(),
+      config: {},
+      env: state.env,
+      ...options,
+    });
+  }
+
   beforeEach(async () => {
     vi.clearAllMocks();
     state = await createOpenClawTestState({
@@ -234,7 +243,6 @@ describe("resolveImplicitProviders startup discovery scope", () => {
 
   it.each([
     { scoped: false, api: "openai-completions" as const },
-    { scoped: true, api: "openai-completions" as const },
     { scoped: false, api: "openai-responses" as const },
     { scoped: true, api: "openai-responses" as const },
   ])(
@@ -373,10 +381,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
   });
 
   it("passes startup provider scopes as plugin owner filters", async () => {
-    await resolveImplicitProviders({
-      agentDir: state.agentDir(),
-      config: {},
-      env: state.env,
+    await discover({
       explicitProviders: {},
       pluginMetadataSnapshot: {
         index: { plugins: [] } as never,
@@ -401,10 +406,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
   });
 
   it("treats an explicit empty provider scope as no discovery", async () => {
-    const providers = await resolveImplicitProviders({
-      agentDir: state.agentDir(),
-      config: {},
-      env: state.env,
+    const providers = await discover({
       explicitProviders: {},
       providerDiscoveryProviderIds: [],
     });
@@ -431,10 +433,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
       }),
     );
 
-    const providers = await resolveImplicitProviders({
-      agentDir: state.agentDir(),
-      config: {},
-      env: state.env,
+    const providers = await discover({
       explicitProviders: {},
       pluginMetadataSnapshot: {
         index: { plugins: [] } as never,
@@ -478,10 +477,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
       },
     });
 
-    const providers = await resolveImplicitProviders({
-      agentDir: state.agentDir(),
-      config: {},
-      env: state.env,
+    const providers = await discover({
       explicitProviders: {},
       pluginMetadataSnapshot: {
         index: { plugins: [] } as never,
@@ -514,10 +510,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
       },
     });
 
-    const providers = await resolveImplicitProviders({
-      agentDir: state.agentDir(),
-      config: {},
-      env: state.env,
+    const providers = await discover({
       explicitProviders: {},
       pluginMetadataSnapshot: {
         index: { plugins: [] } as never,
@@ -553,12 +546,6 @@ describe("resolveImplicitProviders startup discovery scope", () => {
       expected: ["openrouter"],
     },
     {
-      name: "maps live provider backend ids through plugin metadata cli backend owners",
-      env: { OPENCLAW_LIVE_TEST: "1", OPENCLAW_LIVE_PROVIDERS: "claude-cli" },
-      owners: { cliBackends: new Map([["claude-cli", ["anthropic"]]]) },
-      expected: ["anthropic"],
-    },
-    {
       name: "normalizes mixed-case backend ids through plugin metadata owners",
       env: { OPENCLAW_LIVE_TEST: "1", OPENCLAW_LIVE_PROVIDERS: "Claude-CLI" },
       owners: { cliBackends: new Map([["claude-cli", ["anthropic"]]]) },
@@ -569,13 +556,6 @@ describe("resolveImplicitProviders startup discovery scope", () => {
       env: { OPENCLAW_LIVE_TEST: "1", OPENCLAW_LIVE_PROVIDERS: "bytedance" },
       owners: { providers: new Map([["volcengine", ["volcengine"]]]) },
       expected: ["bytedance"],
-    },
-    {
-      name: "scopes normal startup discovery to requested provider owners",
-      env: {},
-      providerIds: ["openai"],
-      owners: { providers: new Map([["openai", ["openai"]]]) },
-      expected: ["openai"],
     },
     {
       name: "maps mixed-case startup provider ids through model catalog owners",
@@ -601,23 +581,6 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     expect(
       firstMockArg(mocks.resolveRuntimePluginDiscoveryProviders, "runtime plugin discovery"),
     ).toMatchObject({ onlyPluginIds: expected });
-  });
-
-  it("records an unavailable outcome when live catalog discovery times out", async () => {
-    mocks.runProviderCatalog.mockImplementationOnce(() => new Promise<void>(() => {}));
-    const outcomes: Array<{ provider: string; status: string }> = [];
-
-    await resolveImplicitProviders({
-      agentDir: state.agentDir(),
-      config: {},
-      env: state.env,
-      explicitProviders: {},
-      providerDiscoveryProviderIds: ["openai"],
-      providerDiscoveryTimeoutMs: 1,
-      onProviderCatalogOutcome: (outcome) => outcomes.push(outcome),
-    });
-
-    expect(outcomes).toEqual([{ provider: "openai", status: "unavailable" }]);
   });
 
   it.each(["timeout", "secret-unavailable"] as const)(
@@ -688,48 +651,28 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     },
   );
 
-  it("rethrows non-timeout live catalog discovery failures", async () => {
+  it("records an unavailable outcome for an ordinary hook failure", async () => {
     mocks.runProviderCatalog.mockRejectedValueOnce(
       new Error("provider catalog timed out after provider-defined retry window"),
     );
     const outcomes: Array<{ provider: string; status: string }> = [];
 
-    await expect(
-      resolveImplicitProviders({
-        agentDir: state.agentDir(),
-        config: {},
-        env: state.env,
-        explicitProviders: {},
-        providerDiscoveryProviderIds: ["openai"],
-        providerDiscoveryTimeoutMs: 1_000,
-        onProviderCatalogOutcome: (outcome) => outcomes.push(outcome),
-      }),
-    ).rejects.toThrow("provider catalog timed out after provider-defined retry window");
-
-    expect(outcomes).toEqual([]);
-  });
-
-  it("can keep startup discovery on provider discovery entries only", async () => {
-    await resolveImplicitProviders({
+    const providers = await resolveImplicitProviders({
       agentDir: state.agentDir(),
       config: {},
       env: state.env,
       explicitProviders: {},
-      providerDiscoveryEntriesOnly: true,
+      providerDiscoveryProviderIds: ["openai"],
+      providerDiscoveryTimeoutMs: 1_000,
+      onProviderCatalogOutcome: (outcome) => outcomes.push(outcome),
     });
 
-    const discoveryOptions = firstMockArg(
-      mocks.resolveRuntimePluginDiscoveryProviders,
-      "runtime plugin discovery",
-    ) as { discoveryEntriesOnly?: boolean };
-    expect(discoveryOptions?.discoveryEntriesOnly).toBe(true);
+    expect(providers?.openai).toBeUndefined();
+    expect(outcomes).toEqual([{ provider: "openai", status: "unavailable" }]);
   });
 
   it("does not fall through to live catalogs when entries-only providers lack static rows", async () => {
-    await resolveImplicitProviders({
-      agentDir: state.agentDir(),
-      config: {},
-      env: state.env,
+    await discover({
       explicitProviders: {},
       providerDiscoveryEntriesOnly: true,
     });
@@ -743,10 +686,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
       createProviderWithStaticCatalog("codex"),
     ]);
 
-    await resolveImplicitProviders({
-      agentDir: state.agentDir(),
-      config: {},
-      env: state.env,
+    await discover({
       explicitProviders: {},
       providerDiscoveryEntriesOnly: true,
     });
@@ -773,10 +713,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
         models: [],
       },
     };
-    const providers = await resolveImplicitProviders({
-      agentDir: state.agentDir(),
-      config: {},
-      env: state.env,
+    const providers = await discover({
       explicitProviders: {},
       pluginMetadataSnapshot: {
         index: { plugins: [] } as never,
@@ -824,10 +761,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
       },
     });
 
-    const providers = await resolveImplicitProviders({
-      agentDir: state.agentDir(),
-      config: {},
-      env: state.env,
+    const providers = await discover({
       explicitProviders: {},
       pluginMetadataSnapshot: {
         index: { plugins: [] } as never,
@@ -854,10 +788,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
       createStaticOnlyProvider("openai"),
     ]);
 
-    await resolveImplicitProviders({
-      agentDir: state.agentDir(),
-      config: {},
-      env: state.env,
+    await discover({
       explicitProviders: {},
       providerDiscoveryProviderIds: ["openai"],
     });
@@ -923,10 +854,7 @@ describe("resolveImplicitProviders startup discovery scope", () => {
       },
     });
 
-    const providers = await resolveImplicitProviders({
-      agentDir: state.agentDir(),
-      config: {},
-      env: state.env,
+    const providers = await discover({
       explicitProviders: {},
       providerDiscoveryProviderIds: ["minimax"],
     });

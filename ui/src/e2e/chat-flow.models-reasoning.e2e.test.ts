@@ -408,6 +408,7 @@ suite.define(() => {
       await selectModel("bedrock/claude-opus-4.5");
       const patchRequest = await gateway.waitForRequest("sessions.patch");
       expect(requireRecord(patchRequest.params)).toEqual({
+        expectedSessionId: "session:agent:main:session-a",
         key: "agent:main:session-a",
         model: "bedrock/claude-opus-4.5",
       });
@@ -529,6 +530,7 @@ suite.define(() => {
       await selectChatModelOption(main.locator('[data-chat-model-option="openai/gpt-5.5"]'));
       const firstPatch = await gateway.waitForRequest("sessions.patch");
       expect(requireRecord(firstPatch.params)).toEqual({
+        expectedSessionId: "session:agent:ops:session-a",
         key: "agent:ops:session-a",
         model: "openai/gpt-5.5",
       });
@@ -546,6 +548,7 @@ suite.define(() => {
       await defaultModel.click();
       const patches = await waitForRequests(gateway, "sessions.patch", 2);
       expect(requireRecord(patches[1]?.params)).toMatchObject({
+        expectedSessionId: "session:agent:ops:session-a",
         key: "agent:ops:session-a",
         model: null,
         agentRuntime: null,
@@ -786,9 +789,7 @@ suite.define(() => {
       const patchRequest = await gateway.waitForRequest("sessions.patch");
       expect(requireRecord(patchRequest.params)).toMatchObject({
         key: "agent:main:session-a",
-        ...(setting.label === "Full Access permission"
-          ? { expectedSessionId: "session-a-send-barrier" }
-          : {}),
+        expectedSessionId: "session-a-send-barrier",
         ...setting.patch,
       });
 
@@ -898,6 +899,7 @@ suite.define(() => {
       await search.press("Enter");
       const patches = await waitForRequests(gateway, "sessions.patch", 2);
       expect(requireRecord(patches[1]?.params)).toMatchObject({
+        expectedSessionId: `session:${sessionKey}`,
         key: sessionKey,
         model: "anthropic/claude-fable-5",
       });

@@ -41,6 +41,7 @@ export function initializeSessionReadContext(context: GatewayRequestContext) {
     pending = createSessionRowProjection({
       cfg: context.getRuntimeConfig(),
       getConfig: context.getRuntimeConfig,
+      getPolicyConfig: context.getCommittedRuntimeConfig ?? context.getRuntimeConfig,
       getModelCatalog: () =>
         readPreparedServerMethodModelCatalogs(context, listAgentIds(context.getRuntimeConfig())),
       context,
@@ -69,6 +70,7 @@ export function initializeSessionReadContext(context: GatewayRequestContext) {
                 moves: placements.getPlacementMoves?.(sessionIds) ?? new Map(),
                 workspaceResultReconcilingSessionIds:
                   placements.getWorkspaceResultReconcilingSessionIds?.(sessionIds) ?? new Set(),
+                workspaceRecoveryPendingSessionIds: new Set(),
                 environments,
               };
             },
@@ -119,6 +121,7 @@ export function requestContext(config: OpenClawConfig): GatewayRequestContext {
     chatAbortControllers: new Map(),
     getRuntimeConfig: () => config,
     getSessionEventSubscriberConnIds: () => new Set(),
+    forgetConnectionAncestors: vi.fn(),
     loadGatewayModelCatalog: async () => [],
     logGateway: { debug: vi.fn() },
   } as unknown as GatewayRequestContext;

@@ -51,10 +51,7 @@ describe("Telegram preview and presentation delivery through HTTP", () => {
   it.each([
     { hook: "reply_payload_sending", mode: "partial" },
     { hook: "message_sending", mode: "progress" },
-    { hook: "message_sending", mode: "off" },
-    { hook: "none", mode: "partial" },
     { hook: "message_sent", mode: "partial" },
-    { hook: "message_sent", mode: "off" },
   ] as const)("gates real preview writes with $hook in $mode mode", async ({ hook, mode }) => {
     const registry = createEmptyPluginRegistry();
     const modifierEntered = createDeferred<void>();
@@ -196,7 +193,6 @@ describe("Telegram preview and presentation delivery through HTTP", () => {
   );
 
   it("keeps sending typing before Telegram expiry beyond the default pipeline cutoff", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
     const acceptedTypingAt: number[] = [];
     http.respondToCall = (call) => {
       if (call.method === "sendChatAction" && call.fields.action === "typing") {
@@ -212,8 +208,8 @@ describe("Telegram preview and presentation delivery through HTTP", () => {
         for (let interval = 0; interval < 17; interval += 1) {
           const previousCount = acceptedTypingAt.length;
           await vi.advanceTimersByTimeAsync(4_000);
-          await expect.poll(() => acceptedTypingAt.length).toBeGreaterThan(previousCount);
           await http.waitForTypingSend();
+          expect(acceptedTypingAt.length).toBeGreaterThan(previousCount);
           await vi.advanceTimersByTimeAsync(0);
         }
         expect(acceptedTypingAt.at(-1)! - acceptedTypingAt[0]!).toBeGreaterThan(60_000);

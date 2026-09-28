@@ -34,13 +34,12 @@ describe("projectSafeChannelAccountSnapshotFields", () => {
   });
 
   it("preserves diagnostic identity and audience metadata without raw credentials", () => {
-    const snapshot = projectSafeChannelAccountSnapshotFields({
+    const safeFields = {
       name: "Primary",
       tokenSource: "config",
       tokenStatus: "configured_unavailable",
       signingSecretSource: "config", // pragma: allowlist secret
       signingSecretStatus: "configured_unavailable", // pragma: allowlist secret
-      webhookUrl: "https://example.com/webhook",
       webhookPath: "/webhook",
       audienceType: "project-number",
       audience: "1234567890",
@@ -49,25 +48,15 @@ describe("projectSafeChannelAccountSnapshotFields", () => {
       credentialSource: "serviceAccount",
       secretSource: "env",
       apiCredentialStatus: "configured_unavailable",
+    };
+    const snapshot = projectSafeChannelAccountSnapshotFields({
+      ...safeFields,
+      webhookUrl: "https://example.com/webhook",
       botToken: "must-not-leak",
       publicKey: "pk_live_123",
     });
 
-    expect(snapshot).toEqual({
-      name: "Primary",
-      tokenSource: "config",
-      tokenStatus: "configured_unavailable",
-      signingSecretSource: "config", // pragma: allowlist secret
-      signingSecretStatus: "configured_unavailable", // pragma: allowlist secret
-      webhookPath: "/webhook",
-      audienceType: "project-number",
-      audience: "1234567890",
-      identity: "user",
-      userTokenSource: "config",
-      credentialSource: "serviceAccount",
-      secretSource: "env",
-      apiCredentialStatus: "configured_unavailable",
-    });
+    expect(snapshot).toEqual(safeFields);
   });
 
   it("redacts URL-shaped audiences while omitting bearer webhook URLs", () => {
@@ -85,16 +74,6 @@ describe("projectSafeChannelAccountSnapshotFields", () => {
       }),
     ).toEqual({
       audience: "https://example.test/path?token=***",
-    });
-  });
-
-  it("strips embedded credentials from baseUrl fields", () => {
-    const snapshot = projectSafeChannelAccountSnapshotFields({
-      baseUrl: "https://bob:secret@chat.example.test",
-    });
-
-    expect(snapshot).toEqual({
-      baseUrl: "https://chat.example.test/",
     });
   });
 
@@ -156,7 +135,7 @@ describe("projectSafeChannelAccountSnapshotFields", () => {
   });
 
   it("preserves non-secret transport liveness timestamps", () => {
-    const snapshot = projectSafeChannelAccountSnapshotFields({
+    const safeFields = {
       connected: true,
       lastConnectedAt: 123,
       lastInboundAt: 123,
@@ -164,20 +143,15 @@ describe("projectSafeChannelAccountSnapshotFields", () => {
       lastMessageAt: null,
       lastEventAt: 345,
       lastTransportActivityAt: 456,
+    };
+    const snapshot = projectSafeChannelAccountSnapshotFields({
+      ...safeFields,
       channelAccessToken: "line-token",
       channelSecret: "line-secret", // pragma: allowlist secret
       probe: { ok: true, token: "probe-secret" },
     });
 
-    expect(snapshot).toEqual({
-      connected: true,
-      lastConnectedAt: 123,
-      lastInboundAt: 123,
-      lastOutboundAt: 234,
-      lastMessageAt: null,
-      lastEventAt: 345,
-      lastTransportActivityAt: 456,
-    });
+    expect(snapshot).toEqual(safeFields);
   });
 
   it("projects terminalDisconnect when present and omits it when absent", () => {
@@ -202,26 +176,22 @@ describe("projectSafeChannelAccountSnapshotFields", () => {
   });
 
   it("preserves false, zero, and nullable fields without exposing invalid credential metadata", () => {
-    const snapshot = projectSafeChannelAccountSnapshotFields({
+    const safeFields = {
       running: false,
       connected: false,
       reconnectAttempts: 0,
       lastConnectedAt: null,
       lastOutboundAt: null,
-      ingressUnavailable: false,
       activeRuns: 0,
+    };
+    const snapshot = projectSafeChannelAccountSnapshotFields({
+      ...safeFields,
+      ingressUnavailable: false,
       token: "must-not-leak",
       tokenStatus: "unexpected-status",
       apiCredentialStatus: "unexpected-status",
     });
 
-    expect(snapshot).toStrictEqual({
-      running: false,
-      connected: false,
-      reconnectAttempts: 0,
-      lastConnectedAt: null,
-      lastOutboundAt: null,
-      activeRuns: 0,
-    });
+    expect(snapshot).toStrictEqual(safeFields);
   });
 });

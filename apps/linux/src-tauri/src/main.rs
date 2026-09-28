@@ -3152,6 +3152,15 @@ async fn gateway_action(
 }
 
 fn main() {
+    // Xlib requires thread initialization before GTK opens a display. Older
+    // libX11 versions do not initialize it automatically for WebKit's threads.
+    #[cfg(target_os = "linux")]
+    assert_ne!(
+        unsafe { x11::xlib::XInitThreads() },
+        0,
+        "Could not initialize X11 thread safety."
+    );
+
     // AppIndicator uses the GTK application name for the tray menu heading.
     #[cfg(target_os = "linux")]
     gtk::glib::set_application_name("OpenClaw");

@@ -1,6 +1,6 @@
+import { SsrFBlockedError } from "openclaw/plugin-sdk/security-runtime";
 // Browser tests cover pw tools core.interactions.batch plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import {
   BrowserObservedDialogBlockedError,
   isBrowserObservedDialogBlockedError,
@@ -346,33 +346,7 @@ describe("batchViaPlaywright", () => {
   it.each([
     { name: "hover", action: { kind: "hover", ref: "1" } as const },
     { name: "scrollIntoView", action: { kind: "scrollIntoView", ref: "1" } as const },
-    {
-      name: "drag",
-      action: { kind: "drag", startRef: "1", endRef: "2" } as const,
-    },
-  ])("forwards navigation policy to batched $name actions", async ({ action }) => {
-    const ssrfPolicy = { dangerouslyAllowPrivateNetwork: false } as const;
-
-    const result = await batchViaPlaywright({
-      cdpUrl: "http://127.0.0.1:9222",
-      targetId: "tab-1",
-      actions: [action],
-      ssrfPolicy,
-      browserProxyMode: "explicit-browser-proxy",
-    });
-
-    expect(result).toEqual({ results: [{ ok: true }] });
-    expect(withPageNavigationRequestGuard).toHaveBeenCalledWith({
-      action: expect.any(Function),
-      onPolicyCheckStarted: expect.any(Function),
-      onPolicyDenied: expect.any(Function),
-      page,
-      ssrfPolicy,
-      browserProxyMode: "explicit-browser-proxy",
-    });
-  });
-
-  it.each([
+    { name: "drag", action: { kind: "drag", startRef: "1", endRef: "2" } as const },
     { name: "click", action: { kind: "click", ref: "1" } as const },
     { name: "clickCoords", action: { kind: "clickCoords", x: 10, y: 20 } as const },
     { name: "type", action: { kind: "type", ref: "1", text: "value" } as const },

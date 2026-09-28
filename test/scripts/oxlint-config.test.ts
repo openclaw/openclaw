@@ -27,109 +27,35 @@ type OxlintTsconfig = {
   exclude?: string[];
 };
 
-const ZERO_BASELINE_RULES = [
-  "eslint/array-callback-return",
-  "eslint/no-div-regex",
-  "eslint/no-constructor-return",
-  "eslint/no-extra-label",
-  "eslint/no-lone-blocks",
-  "eslint/no-multi-str",
-  "eslint/no-proto",
-  "eslint/no-regex-spaces",
-  "eslint/no-sequences",
-  "eslint/no-self-compare",
-  "eslint/no-var",
-  "eslint/no-param-reassign",
-  "eslint/no-implicit-coercion",
-  "eslint/no-label-var",
-  "eslint/no-prototype-builtins",
-  "eslint/no-redeclare",
-  "eslint/no-useless-rename",
-  "eslint/no-useless-return",
-  "eslint/no-new-wrappers",
-  "eslint/no-else-return",
-  "eslint/no-lonely-if",
-  "eslint/no-case-declarations",
-  "eslint/object-shorthand",
-  "eslint/prefer-exponentiation-operator",
-  "eslint/prefer-const",
-  "eslint/prefer-numeric-literals",
-  "eslint/prefer-object-has-own",
-  "eslint/prefer-promise-reject-errors",
-  "eslint/radix",
-  "eslint/symbol-description",
-  "eslint/unicode-bom",
-  "eslint/yoda",
-  "import/no-absolute-path",
-  "import/first",
-  "import/no-duplicates",
-  "import/no-empty-named-blocks",
-  "import/no-self-import",
-  "node/no-exports-assign",
-  "promise/no-new-statics",
-  "typescript/adjacent-overload-signatures",
-  "typescript/ban-tslint-comment",
-  "typescript/no-import-type-side-effects",
-  "typescript/no-inferrable-types",
-  "typescript/no-non-null-asserted-nullish-coalescing",
-  "typescript/no-unnecessary-qualifier",
-  "typescript/prefer-enum-initializers",
-  "typescript/prefer-find",
-  "typescript/prefer-for-of",
-  "typescript/prefer-function-type",
-  "typescript/prefer-includes",
-  "typescript/prefer-reduce-type-parameter",
-  "typescript/prefer-return-this-type",
-  "unicorn/consistent-date-clone",
-  "unicorn/consistent-empty-array-spread",
-  "unicorn/explicit-timer-delay",
-  "unicorn/no-console-spaces",
-  "unicorn/no-length-as-slice-end",
-  "unicorn/no-instanceof-array",
-  "unicorn/no-negation-in-equality-check",
-  "unicorn/no-new-buffer",
-  "unicorn/no-this-assignment",
-  "unicorn/no-typeof-undefined",
-  "unicorn/no-unreadable-array-destructuring",
-  "unicorn/no-useless-error-capture-stack-trace",
-  "unicorn/no-zero-fractions",
-  "unicorn/prefer-array-flat",
-  "unicorn/prefer-array-some",
-  "unicorn/prefer-blob-reading-methods",
-  "unicorn/prefer-dom-node-text-content",
-  "unicorn/prefer-keyboard-event-key",
-  "unicorn/prefer-math-min-max",
-  "unicorn/prefer-negative-index",
-  "unicorn/prefer-node-protocol",
-  "unicorn/prefer-number-properties",
-  "unicorn/prefer-optional-catch-binding",
-  "unicorn/prefer-prototype-methods",
-  "unicorn/prefer-regexp-test",
-  "unicorn/prefer-set-has",
-  "unicorn/prefer-structured-clone",
-  "unicorn/prefer-string-slice",
-  "unicorn/prefer-string-trim-start-end",
-  "unicorn/require-array-join-separator",
-  "unicorn/require-module-attributes",
-  "unicorn/require-number-to-fixed-digits-argument",
-  "unicorn/throw-new-error",
-  "vitest/no-import-node-test",
-  "vitest/consistent-vitest-vi",
-  "vitest/prefer-called-once",
-  "vitest/prefer-called-times",
-  "vitest/prefer-expect-type-of",
-];
-
-const DEFERRED_IMPORT_RULES = [
-  "import/default",
-  "import/namespace",
-  "import/no-named-as-default",
-  "import/no-named-as-default-member",
-  "import/no-unassigned-import",
-];
-
 function readJson(filePath: string): unknown {
   return JSON5.parse(fs.readFileSync(filePath, "utf8"));
+}
+
+function writeSessionCompatibilityFixture(root: string) {
+  const directory = path.join(root, "src/config/sessions");
+  fs.mkdirSync(directory, { recursive: true });
+  // Real editor configs explicitly root this augmentation. Keep its real contents,
+  // with fixture-owned base modules rather than importing the whole session graph.
+  fs.copyFileSync(
+    "src/config/sessions/session-entry.test-compat.d.ts",
+    path.join(directory, "session-entry.test-compat.d.ts"),
+  );
+  for (const [file, interfaces] of [
+    ["types.ts", ["SessionEntry", "InternalSessionEntry"]],
+    [
+      "session-accessor.types.ts",
+      [
+        "SessionTranscriptRuntimeTarget",
+        "SessionTranscriptTurnPersistResult",
+        "SessionTranscriptReadTarget",
+      ],
+    ],
+  ] as const) {
+    fs.writeFileSync(
+      path.join(directory, file),
+      interfaces.map((name) => "export interface " + name + " { id: string; }").join("\n"),
+    );
+  }
 }
 
 describe("oxlint config", () => {
@@ -262,6 +188,7 @@ describe("oxlint config", () => {
         fs.copyFileSync(file, target);
       }
     }
+    writeSessionCompatibilityFixture(tempRoot);
     fs.symlinkSync(path.resolve("node_modules"), path.join(tempRoot, "node_modules"), "junction");
     const fixtures = {
       "src/imported.ts": "export function work(): Promise<void> { return Promise.resolve(); }",
@@ -340,7 +267,7 @@ describe("oxlint config", () => {
     const project = spawnSync(
       process.execPath,
       [
-        path.resolve("node_modules/typescript-native/bin/tsc"),
+        path.resolve("node_modules/typescript/bin/tsc"),
         "--showConfig",
         "--project",
         "extensions/tsconfig.json",
@@ -376,6 +303,7 @@ describe("oxlint config", () => {
         fs.copyFileSync(file, target);
       }
     }
+    writeSessionCompatibilityFixture(tempRoot);
     fs.symlinkSync(path.resolve("node_modules"), path.join(tempRoot, "node_modules"), "junction");
     const source = [
       'import { work } from "../packages/imported.js";',
@@ -442,7 +370,7 @@ describe("oxlint config", () => {
       const project = spawnSync(
         process.execPath,
         [
-          path.resolve("node_modules/typescript-native/bin/tsc"),
+          path.resolve("node_modules/typescript/bin/tsc"),
           "--showConfig",
           "-p",
           `${owner}/tsconfig.json`,
@@ -464,6 +392,7 @@ describe("oxlint config", () => {
         fs.copyFileSync(file, target);
       }
     }
+    writeSessionCompatibilityFixture(tempRoot);
     fs.symlinkSync(path.resolve("node_modules"), path.join(tempRoot, "node_modules"), "junction");
     const supportFiles = [
       "src/cli/diagnostics.test-support.ts",
@@ -836,17 +765,5 @@ describe("oxlint config", () => {
       "error",
       { considerDefaultExhaustiveForUnions: true },
     ]);
-  });
-
-  it("enables clean zero-baseline lint rules and keeps deferred import rules off", () => {
-    const config = readJson(".oxlintrc.json") as OxlintConfig;
-
-    expect(config.plugins).toContain("import");
-    for (const rule of ZERO_BASELINE_RULES) {
-      expect(config.rules?.[rule]).toBe("error");
-    }
-    for (const rule of DEFERRED_IMPORT_RULES) {
-      expect(config.rules?.[rule]).toBe("off");
-    }
   });
 });

@@ -2,8 +2,10 @@
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import type { TriageFailureContext } from "../../commands/triage-prompt.js";
+import { resolveStateDir } from "../../config/paths.js";
 import { formatServiceInspectionReason } from "../../daemon/service-inspection-error.js";
 import { isAbortError } from "../../infra/abort-signal.js";
+import { isContainerEnvironment } from "../../infra/container-environment.js";
 import {
   attachErrorDiagnostic,
   formatErrorMessageForDisplay,
@@ -18,6 +20,7 @@ import {
   writeControlPlaneUpdateRestartSentinel,
   type ControlPlaneUpdateSentinelMetaFile,
 } from "../../infra/update-control-plane-sentinel.js";
+import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
 import { formatUpdateFailureFact } from "../../infra/update-failure-facts-format.js";
 import {
   createUpdateErrorFact,
@@ -30,14 +33,15 @@ import { UpdateRunAdmissionBusyError } from "../../infra/update-run-admission.js
 import {
   getUpdateRun,
   recordUpdateRunDiagnostics,
-  recordUpdateRunPhase,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import { updateRunReportInputFromResult } from "../../infra/update-run-report.js";
 import { isFailedUpdateStep, updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
-import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner-types.js";
+import { mutateRun } from "../../infra/update-run-write.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isVerifiedUpdateRollback, type UpdateRecoveryStep } from "../../shared/update-outcome.js";
@@ -113,9 +117,11 @@ export function collectServiceInspectionFailureFacts(
         createUpdateFailureFact({
           check: "managed-service",
           code: verdict.inspectionReason ?? "service-inspection-unavailable",
-          message: verdict.inspectionReason
-            ? formatServiceInspectionReason(verdict.inspectionReason)
-            : verdict.message,
+          message:
+            verdict.inspectionReason &&
+            verdict.inspectionReason !== "windows-task-inspection-failed"
+              ? formatServiceInspectionReason(verdict.inspectionReason)
+              : verdict.message,
         }),
       ]
     : undefined;
@@ -223,6 +229,7 @@ export type MutableUpdateExecutionResult = {
   ownedManagedUpdateContext: OwnedManagedUpdateContext | undefined;
   recoveryEnv: NodeJS.ProcessEnv | undefined;
   packageTransaction?: PackageUpdateTransaction;
+  databaseBackup?: UpdateDatabaseBackup;
   schemaVersions?: Awaited<ReturnType<typeof readUpdateStateSchemaVersions>>;
   candidateSchemaVersions?: OpenClawSchemaVersions;
   previousSchemaVersions?: OpenClawSchemaVersions;
@@ -252,7 +259,8 @@ export function createUpdateCommandFailureResult(
         : admissionFailure
           ? "managed-service-preflight"
           : "update-failed";
-  const failedStep: UpdateStepResult = {
+  const stepResult = preMutationFailure ? cause.stepResult : undefined;
+  const failedStep: UpdateStepResult = stepResult?.failedStep ?? {
     name:
       preMutationFailure || pkgOwnershipFailure || admissionFailure ? reason : (phase ?? "update"),
     command: "openclaw update",
@@ -268,7 +276,13 @@ export function createUpdateCommandFailureResult(
         ? cause.failureFacts
         : [createUpdateErrorFact(phase ?? "update", cause)],
   };
-  return { ...result, status: "error", reason, failedStep, steps: [failedStep] };
+  return {
+    ...result,
+    status: "error",
+    reason,
+    failedStep,
+    steps: stepResult?.failedStep ? stepResult.steps : [...(stepResult?.steps ?? []), failedStep],
+  };
 }
 
 /** Mutable exceptions cannot authorize recovery while command cleanup is unknown. */
@@ -499,12 +513,14 @@ export function resolveAutomaticUpdateTriage(
 
 export type UpdateAdmissionReportParams = {
   mode?: UpdateRunResult["mode"];
+  stepResult?: Pick<UpdateRunResult, "steps" | "failedStep">;
   recoverySteps?: readonly UpdateRecoveryStep[];
   failureFacts?: readonly UpdateFailureFact[];
   root: string;
   installKind: "git" | "package" | "unknown";
   reason: string;
   message?: string;
+  nextAction?: string;
   opts: UpdateCommandOptions;
   controlPlaneUpdateSentinelMeta: ControlPlaneUpdateSentinelMetaFile["meta"] | null;
 };
@@ -518,12 +534,19 @@ export type RefuseUpdate = (
 
 /** A fresh admission decision is data until its staging and executor owners settle. */
 export class UnreportedUpdateAdmissionOutcome extends Error {
+  readonly #report: UpdateAdmissionReportParams;
+
+  get report(): UpdateAdmissionReportParams {
+    return this.#report;
+  }
+
   constructor(
-    readonly report: UpdateAdmissionReportParams,
+    report: UpdateAdmissionReportParams,
     readonly skipped?: { exitCode: 0 | 1 },
   ) {
     super(report.message ?? report.reason);
     this.name = "UnreportedUpdateAdmissionOutcome";
+    this.#report = report;
   }
 }
 
@@ -582,28 +605,45 @@ export function recordUpdateResultNextAction(
   committed?: UpdateRunRecord,
 ) {
   const run = params.opts.run;
-  const active = committed ?? (run ? getUpdateRun(run.runId, { env: run.env }) : undefined);
-  const { verification, steps } = updateRunReportInputFromResult(result, active);
-  const failedVerification = steps.findLast(
-    (step) =>
-      (step.step === "gateway verification" || step.step === "gateway recovery verification") &&
-      step.status === "failed",
-  );
-  const nextAction = resolveUpdateResultNextAction({
-    result:
-      result.verification === undefined
-        ? result
-        : { ...result, recovery: verification.recovery ?? undefined },
-    restart: params.coreAlreadyCurrent ? params.opts.restart : undefined,
-    serviceRunning: verification.serviceRunning,
-    runningVersion: verification.runningVersion,
-    verificationFailure: failedVerification?.failureFacts?.length
-      ? failedVerification.failureFacts.map(formatUpdateFailureFact).join("; ")
-      : failedVerification?.detail,
-    env: run?.env ?? params.ownedManagedUpdateEnv ?? process.env,
-  });
-  if (run && active?.status === "running" && active.origin.nextAction !== nextAction) {
-    recordUpdateRunPhase(run.runId, active.phase, { origin: { nextAction } }, { env: run.env });
+  const env = run?.env ?? params.ownedManagedUpdateEnv ?? process.env;
+  const environment = { container: isContainerEnvironment(), stateDir: resolveStateDir(env) };
+  const resolveNextAction = (active?: UpdateRunRecord) => {
+    const { verification, steps } = updateRunReportInputFromResult(result, active);
+    const failedVerification = steps.findLast(
+      (step) =>
+        (step.step === "gateway verification" || step.step === "gateway recovery verification") &&
+        step.status === "failed",
+    );
+    return resolveUpdateResultNextAction({
+      result:
+        result.verification === undefined
+          ? result
+          : { ...result, recovery: verification.recovery ?? undefined },
+      restart: params.coreAlreadyCurrent ? params.opts.restart : undefined,
+      serviceRunning: verification.serviceRunning,
+      runningVersion: verification.runningVersion,
+      verificationFailure: failedVerification?.failureFacts?.length
+        ? failedVerification.failureFacts.map(formatUpdateFailureFact).join("; ")
+        : failedVerification?.detail,
+      env,
+      environment,
+    });
+  };
+  if (!run || committed) {
+    return resolveNextAction(committed);
   }
+  // Derive guidance from the same admitted row that records it. A separate
+  // filesystem snapshot can lose to normal writes from the restarted Gateway.
+  let nextAction: ReturnType<typeof resolveNextAction>;
+  mutateRun(
+    run.runId,
+    (record) => {
+      nextAction = resolveNextAction(record);
+      if (record.status === "running") {
+        record.origin.nextAction = nextAction;
+      }
+    },
+    { env: run.env },
+  );
   return nextAction;
 }

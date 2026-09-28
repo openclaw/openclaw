@@ -64,15 +64,16 @@ describe("SessionManager.open", () => {
       // oxlint-disable-next-line typescript/unbound-method
       const nativePrepare = DatabaseSync.prototype.prepare;
       const hostWrites: string[] = [];
-      const prepare = vi
-        .spyOn(DatabaseSync.prototype, "prepare")
-        .mockImplementation(function (this: DatabaseSync, sql) {
-          const mutation = /^\s*(insert|update|delete|replace)\b/i.exec(sql)?.[1];
-          if (mutation && /\b(?:transcript_events|session_windows|session_nodes)\b/i.test(sql)) {
-            hostWrites.push(mutation);
-          }
-          return nativePrepare.call(this, sql);
-        });
+      const prepare = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+        this: DatabaseSync,
+        sql,
+      ) {
+        const mutation = /^\s*(insert|update|delete|replace)\b/i.exec(sql)?.[1];
+        if (mutation && /\b(?:transcript_events|session_windows|session_nodes)\b/i.test(sql)) {
+          hostWrites.push(mutation);
+        }
+        return nativePrepare.call(this, sql);
+      });
       const cloneEnv = configEnv.cloneEnvWithPlatformSemantics;
       const clone =
         environment === "windows"

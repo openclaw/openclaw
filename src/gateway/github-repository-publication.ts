@@ -12,7 +12,7 @@ import {
   encodeGitHubPublicationRequester,
   matchesGitHubPublicationRequester,
 } from "../state/github-publication-requester.js";
-import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.js";
+import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import { personalGitHubStatus, type PersonalGitHubAction } from "./github-personal-oauth.js";
 import {
   assertPersonalGitHubPublicationReplay,
@@ -24,6 +24,7 @@ import {
   assertExpectedSharedGitHubPublisher,
   prepareCurrentGitHubPublicationIdentity,
   sameGitHubPublicationWorkspace,
+  type PublicationSessionIdentity as SessionIdentity,
 } from "./github-publication-availability.js";
 import {
   exactClaimForPlacement,
@@ -69,7 +70,6 @@ import {
   assertReceiptOwner,
   captureCheckpoint,
   type PreparedRepositoryPublicationSnapshot,
-  type RepositoryPublicationSessionIdentity as SessionIdentity,
 } from "./github-repository-publication-workspace.js";
 import type { RepositoryGitHubPublicationStatusRow } from "./github-repository-publication.kernel.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";

@@ -31,7 +31,9 @@ vi.mock("@openclaw/ai/transports", async (importOriginal) => ({
 }));
 
 let delegate: typeof import("../../context-engine/delegate.js").delegateCompactionToRuntime;
-let compactQueued: typeof import("./compact.queued.js").compactEmbeddedAgentSession;
+let compactQueued: Awaited<
+  ReturnType<typeof loadCompactHooksHarness>
+>["compactEmbeddedAgentSession"];
 let sessions: typeof import("../sessions/index.js");
 let accessor: typeof import("../../config/sessions/session-accessor.js");
 let databases: typeof import("../../state/openclaw-agent-db.js");
@@ -88,6 +90,9 @@ beforeEach(async () => {
     await vi.importActual<typeof import("../agent-scope.js")>("../agent-scope.js");
   const scope = await import("../agent-scope.js");
   vi.mocked(scope.listAgentEntries).mockImplementation(actualScope.listAgentEntries);
+  vi.mocked(scope.listAgentEntriesWithSource).mockImplementation(
+    actualScope.listAgentEntriesWithSource,
+  );
   vi.mocked(scope.resolveSessionAgentId).mockImplementation(actualScope.resolveSessionAgentId);
   vi.mocked(scope.resolveSessionAgentIds).mockImplementation(actualScope.resolveSessionAgentIds);
   requestPreparedCompaction.mockReset();

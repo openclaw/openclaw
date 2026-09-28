@@ -5,7 +5,6 @@ import {
   createDelegatedSetupWizardProxy,
   createPatchedAccountSetupAdapter,
   createSetupInputPresenceValidator,
-  DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   patchScopedAccountConfig,
   createSetupTranslator,
@@ -68,10 +67,9 @@ export const zaloDmPolicy = createChannelDmPolicy({
   label: "Zalo",
   channel,
   resolveAccount: (cfg, accountId) => {
-    const resolvedAccountId =
-      accountId && normalizeAccountId(accountId)
-        ? (normalizeAccountId(accountId) ?? DEFAULT_ACCOUNT_ID)
-        : resolveDefaultZaloAccountId(cfg);
+    const resolvedAccountId = accountId
+      ? normalizeAccountId(accountId)
+      : resolveDefaultZaloAccountId(cfg);
     return resolveZaloAccount({ cfg, accountId: resolvedAccountId });
   },
   applyPatch: ({ cfg, account, patch }) =>

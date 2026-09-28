@@ -114,8 +114,14 @@ struct OpenClawApp: App {
                 }
             }
             SidebarCommands()
-            if !self.state.nativeExperienceEnabled {
-                CommandMenu("Navigate") {
+            CommandMenu("Navigate") {
+                if self.state.nativeExperienceEnabled {
+                    Button("Command Palette…") {
+                        WebChatManager.shared.showCommandPalette()
+                    }
+                    .keyboardShortcut("k", modifiers: .command)
+                    .disabled(!WebChatManager.shared.canShowCommandPalette)
+                } else {
                     Button("Back") {
                         DashboardManager.shared.navigateBack()
                     }
@@ -337,6 +343,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         TerminationSignalWatcher.shared.start()
         MacNodeModeCoordinator.shared.start()
         if launchPlan.allowsInteractiveServices {
+            GatewayBrowserSignInCoordinator.shared.start()
             GatewaysMainMenu.shared.install()
             BackgroundSessionNotifications.shared.start()
             NodePairingApprovalPrompter.shared.start()

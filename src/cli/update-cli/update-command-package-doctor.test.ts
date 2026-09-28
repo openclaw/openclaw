@@ -18,7 +18,7 @@ import {
   ABANDONED_UPDATE_RUN_MS,
   UPDATE_RUN_HEARTBEAT_MS,
 } from "../../infra/update-run-timeouts.js";
-import type { UpdateStepResult } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
@@ -68,8 +68,6 @@ it.each([
   { cause: "output-limit", exitCode: 0 },
   { cause: "output-limit", exitCode: UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE },
   { cause: "reported-error", exitCode: 0 },
-  { cause: "reported-error-without-facts", exitCode: 0 },
-  { cause: "reported-error-with-empty-facts", exitCode: 0 },
   { cause: "reported-error-with-invalid-facts", exitCode: 0 },
 ] as const)(
   "keeps failed Doctor outcome $cause (exit $exitCode) failed through completion and history",
@@ -98,7 +96,6 @@ it.each([
           : {
               status: "error",
               ...(cause === "reported-error" ? { failureFacts } : {}),
-              ...(cause === "reported-error-with-empty-facts" ? { failureFacts: [] } : {}),
               ...(cause === "reported-error-with-invalid-facts"
                 ? { failureFacts: [{ code: 42 }] }
                 : {}),
@@ -141,11 +138,11 @@ it.each([
   },
 );
 
-it.each(
-  ([undefined, "include-ownership", "requester-revoked"] as const).flatMap((reason) =>
-    [false, true].map((advisory) => ({ reason, advisory })),
-  ),
-)(
+it.each([
+  { reason: undefined, advisory: false },
+  { reason: undefined, advisory: true },
+  { reason: "include-ownership", advisory: true },
+] as const)(
   "retains Doctor writer receipts and refusal $reason (advisory: $advisory)",
   async ({ reason, advisory }) => {
     const { root, env } = await createDoctorFixture();

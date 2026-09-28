@@ -42,9 +42,11 @@ function resolveBundledPluginConfigEnablement(params: {
 
 export async function installBundledPluginSource(params: {
   snapshot: ConfigSnapshotForInstallPersist;
+  env?: NodeJS.ProcessEnv;
   rawSpec: string;
   bundledSource: BundledPluginSource;
   warning?: string;
+  enable?: boolean;
   invalidateRuntimeCache?: boolean;
   runtime?: Pick<RuntimeEnv, "log">;
   beforePersistentApply?: () => void;
@@ -85,7 +87,7 @@ export async function installBundledPluginSource(params: {
       sourcePath: params.bundledSource.localPath,
       installPath: params.bundledSource.localPath,
     },
-    enable: shouldEnable,
+    enable: params.enable !== false && shouldEnable,
     ...(warnings.length > 0 ? { warningMessage: warnings.join("\n") } : {}),
   });
   return { pluginId: params.bundledSource.pluginId, warnings, config };

@@ -6,7 +6,6 @@ import { resolveFutureConfigActionBlock } from "../config/future-version-guard.j
 import {
   parseConfigJson5,
   recoverConfigFromJsonRootSuffix,
-  recoverConfigFromLastKnownGood,
   type ConfigSnapshotReadMeasure,
 } from "../config/io.js";
 import { resolveCanonicalConfigPath, resolveIsConfigReadOnly } from "../config/paths.js";
@@ -16,16 +15,22 @@ import { formatErrorMessage } from "../infra/errors.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-records.js";
 import { resolveHomeDir } from "../utils.js";
-import {
-  shouldSkipPluginValidationForDoctorConfigPreflight,
-  type DoctorConfigPreflightPluginSnapshotRead,
-} from "./doctor-config-preflight-plugin-index.js";
-import { planAutomaticConfigRepair } from "./doctor/shared/automatic-startup-config-repair.js";
+import type { ConfigPreflightSnapshotRead } from "./config-preflight-snapshot.js";
+import { shouldSkipPluginValidationForDoctorConfigPreflight } from "./doctor-config-preflight-plugin-index.js";
+import { planAutomaticConfigRepair } from "./doctor/shared/automatic-config-repair.js";
 import type { DoctorConfigPreflightOptions } from "./doctor/shared/config-migration-result.js";
+import {
+  prepareDoctorConfigRecoverySnapshot,
+  recoverDoctorConfigFromLastKnownGood,
+} from "./doctor/shared/config-recovery.js";
+import {
+  isRecord,
+  visitAgentConfigScopes,
+  visitChannelEntries,
+} from "./doctor/shared/legacy-config-record-shared.js";
 
 export function createDoctorConfigRepairPlanner(params: {
   options: DoctorConfigPreflightOptions;
-  gatewayStartupCheckpointRequired: boolean;
   stateMigrationsRequested: boolean;
   skipLegacyParentConfigWrite: boolean;
   hasImportedPluginConfig: () => boolean;
@@ -45,8 +50,7 @@ export function createDoctorConfigRepairPlanner(params: {
     snapshot: ConfigFileSnapshot,
     prepared: ReturnType<typeof planAutomaticConfigRepair> = null,
   ) =>
-    (params.gatewayStartupCheckpointRequired ||
-      params.options.repairPrefixedConfig === true ||
+    (params.options.repairPrefixedConfig === true ||
       (params.stateMigrationsRequested && params.options.migrateLegacyConfig !== false)) &&
     !snapshot.valid &&
     !params.skipLegacyParentConfigWrite &&
@@ -59,34 +63,97 @@ export function createDoctorConfigRepairPlanner(params: {
   return { planScopedConfigRepair, planAdmittedConfigRepair };
 }
 
-export function createDoctorLegacyConfigMigration(params: {
+export async function migrateLegacyDoctorConfig(params: {
   enabled: boolean;
   measure: ConfigSnapshotReadMeasure;
-}): () => Promise<void> {
-  let complete = false;
-  return async () => {
-    if (complete || !params.enabled) {
+}): Promise<void> {
+  if (!params.enabled) {
+    return;
+  }
+  const changes = await params.measure("legacy-config-migration", maybeMigrateLegacyConfig);
+  if (changes.length > 0) {
+    note(changes.map((entry) => `- ${entry}`).join("\n"), "Doctor changes");
+  }
+}
+
+function assertPreJuneConfigMigrated(config: unknown): void {
+  if (!isRecord(config)) {
+    return;
+  }
+  const retired: string[] = [];
+  const checkKeys = (scope: unknown, configPath: string, keys: string[]) => {
+    if (!isRecord(scope)) {
       return;
     }
-    complete = true;
-    const changes = await params.measure("legacy-config-migration", maybeMigrateLegacyConfig);
-    if (changes.length > 0) {
-      note(changes.map((entry) => `- ${entry}`).join("\n"), "Doctor changes");
+    for (const key of keys) {
+      if (Object.hasOwn(scope, key)) {
+        retired.push(configPath ? `${configPath}.${key}` : key);
+      }
     }
   };
+  checkKeys(config, "", ["heartbeat"]);
+  checkKeys(config.routing, "routing", ["allowFrom", "groupChat"]);
+  checkKeys(config.gateway, "gateway", ["webchat"]);
+  const channels = isRecord(config.channels) ? config.channels : {};
+  checkKeys(channels, "channels", ["webchat"]);
+  checkKeys(channels.telegram, "channels.telegram", ["requireMention"]);
+  for (const channelId of ["discord", "line", "matrix", "telegram"]) {
+    visitChannelEntries(config, channelId, (scope, configPath) => {
+      checkKeys(scope.threadBindings, `${configPath}.threadBindings`, ["ttlHours"]);
+    });
+  }
+  visitChannelEntries(config, "feishu", (scope, configPath) => {
+    if (configPath !== "channels.feishu") {
+      checkKeys(scope, configPath, ["botName"]);
+    }
+  });
+  const session = isRecord(config.session) ? config.session : {};
+  checkKeys(session.threadBindings, "session.threadBindings", ["ttlHours"]);
+  visitAgentConfigScopes(config, (scope, configPath) => {
+    checkKeys(
+      scope,
+      configPath,
+      configPath === "agents.defaults"
+        ? ["llm", "embeddedPi", "embeddedHarness"]
+        : ["embeddedPi", "embeddedHarness"],
+    );
+    checkKeys(scope.sandbox, `${configPath}.sandbox`, ["perSession"]);
+  });
+  if (retired.length > 0) {
+    throw new Error(
+      `Config contains retired pre-June keys: ${retired.join(", ")}. Doctor cannot remove these settings safely. ` +
+        `Install OpenClaw 2026.9.5, run "${formatCliCommand("openclaw doctor --fix")}", then upgrade to latest. ` +
+        "See https://docs.openclaw.ai/install/updating#upgrading-very-old-versions.",
+    );
+  }
 }
 
 /** Repair active legacy bytes before considering an older backup. */
 export async function prepareDoctorConfigRecovery(params: {
   enabled: boolean;
-  snapshotRead: DoctorConfigPreflightPluginSnapshotRead;
+  snapshotRead: ConfigPreflightSnapshotRead;
   planRepair: (snapshot: ConfigFileSnapshot) => ReturnType<typeof planAutomaticConfigRepair>;
-  readSnapshot: () => Promise<DoctorConfigPreflightPluginSnapshotRead>;
+  readSnapshot: () => Promise<ConfigPreflightSnapshotRead>;
 }) {
   let snapshotRead = params.snapshotRead;
   let snapshot = snapshotRead.snapshot;
+  // Refuse before backup recovery or unknown-key cleanup can discard authored settings.
+  assertPreJuneConfigMigrated(snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig);
   let activeConfigRepair: ReturnType<typeof planAutomaticConfigRepair> = null;
-  if (params.enabled && snapshot.exists && !snapshot.valid) {
+  const recoveryEnabled =
+    params.enabled && !resolveFutureConfigActionBlock({ action: "recover config", snapshot });
+  if (recoveryEnabled && snapshot.valid) {
+    const recovery = await prepareDoctorConfigRecoverySnapshot(
+      { configPath: snapshot.path },
+      snapshot,
+    );
+    if (recovery) {
+      await recovery.apply();
+      snapshotRead = await params.readSnapshot();
+      snapshot = snapshotRead.snapshot;
+    }
+  }
+  if (recoveryEnabled && snapshot.exists && !snapshot.valid) {
     const pendingPluginInstallConfig =
       inspectShippedPluginInstallConfigRecords(snapshot.sourceConfig).status !== "missing";
     // One retired key must not discard newer valid settings by restoring an older backup.
@@ -102,7 +169,7 @@ export async function prepareDoctorConfigRecovery(params: {
       !activeConfigRepair &&
       // Config preparation imports these records; backup recovery would erase its source.
       !pendingPluginInstallConfig &&
-      (await recoverConfigFromLastKnownGood({ snapshot, reason: "doctor-invalid-config" }))
+      (await recoverDoctorConfigFromLastKnownGood({ snapshot, reason: "doctor-invalid-config" }))
     ) {
       note(
         "Restored openclaw.json from last-known-good; original saved as .clobbered.*.",
@@ -139,18 +206,10 @@ async function maybeMigrateLegacyConfig(): Promise<string[]> {
     // missing config
   }
 
-  const legacyCandidates = [path.join(home, ".clawdbot", "clawdbot.json")];
-  let legacyPath: string | null = null;
-  for (const candidate of legacyCandidates) {
-    try {
-      await fs.access(candidate);
-      legacyPath = candidate;
-      break;
-    } catch {
-      // continue
-    }
-  }
-  if (!legacyPath) {
+  const legacyPath = path.join(home, ".clawdbot", "clawdbot.json");
+  try {
+    await fs.access(legacyPath);
+  } catch {
     return changes;
   }
 

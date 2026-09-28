@@ -18,8 +18,8 @@ const mocks = vi.hoisted(() => ({
   stage: vi.fn<(request: { body: unknown }) => Promise<{ body: unknown }>>(),
   close: vi.fn<typeof closeTrackedCdpTarget>(async () => ({ status: "closed" })),
 }));
-vi.mock("../sdk-config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../sdk-config.js")>()),
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
   getRuntimeConfig: () => mocks.config,
   getRuntimeConfigSourceSnapshot: () => mocks.config,
 }));
@@ -159,20 +159,21 @@ describe("node browser proxy admission", () => {
     );
   });
 
-  it.each(["PUT", "OPTIONS"])(
-    "rejects %s before it can become a host-local GET",
-    async (method) => {
-      await expect(
-        runBrowserProxyCommand(JSON.stringify({ method, path: "/system-profiles" })),
-      ).rejects.toThrow(/method must be GET, POST, or DELETE/);
-      expect(mocks.dispatch).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects PUT before it can become a host-local GET", async () => {
+    await expect(
+      runBrowserProxyCommand(JSON.stringify({ method: "PUT", path: "/system-profiles" })),
+    ).rejects.toThrow(/method must be GET, POST, or DELETE/);
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+  });
 
-  it.each(["GET", "DELETE"])("does not close an owned target through %s", async (method) => {
+  it("does not close an owned target through DELETE", async () => {
     await expect(
       runBrowserProxyCommand(
-        JSON.stringify({ method, path: BROWSER_PROXY_OWNED_TAB_CLOSE_PATH, body: { ownership } }),
+        JSON.stringify({
+          method: "DELETE",
+          path: BROWSER_PROXY_OWNED_TAB_CLOSE_PATH,
+          body: { ownership },
+        }),
       ),
     ).rejects.toThrow(/requires POST/);
     expect(mocks.close).not.toHaveBeenCalled();

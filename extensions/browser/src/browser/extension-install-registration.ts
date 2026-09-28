@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   assertCurrentNativeHostLaunchContext,
   assertExpectedNativeHostProfile,
@@ -110,10 +111,6 @@ function isSafeOriginMigration(existingIds: string[], desiredPathIds: string[]):
     added.length === 1 &&
     overlap
   );
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
 function parseOwnedLauncher(params: {
@@ -228,11 +225,10 @@ export async function inspectRegistration(
   expectedPathExtensionIds?: string[],
 ): Promise<NativeHostRegistrationStatus> {
   const manifestPath = path.join(root.nativeManifestDir, `${BROWSER_NATIVE_HOST_NAME}.json`);
+  const registration = { product: root.product, browser: root.label, manifestPath };
   if (!(await pathInfo(manifestPath))) {
     return {
-      product: root.product,
-      browser: root.label,
-      manifestPath,
+      ...registration,
       extensionIds: [],
       state: "missing",
     };
@@ -259,9 +255,7 @@ export async function inspectRegistration(
       (expectedLauncher !== baseLauncher && !versionedPathPattern.test(expectedLauncher))
     ) {
       return {
-        product: root.product,
-        browser: root.label,
-        manifestPath,
+        ...registration,
         extensionIds: ids,
         state: "foreign",
         issue: "same host name is registered to a foreign manifest or launcher",
@@ -333,9 +327,7 @@ export async function inspectRegistration(
         "registered native host runtime or entry is unavailable or unsafe; run openclaw browser extension install";
     }
     return {
-      product: root.product,
-      browser: root.label,
-      manifestPath,
+      ...registration,
       extensionIds: ids.toSorted(),
       state: "owned",
       nativeHostPath: parsedLauncher.targets[1],
@@ -348,9 +340,7 @@ export async function inspectRegistration(
     };
   } catch (error) {
     return {
-      product: root.product,
-      browser: root.label,
-      manifestPath,
+      ...registration,
       extensionIds: [],
       state: "invalid",
       issue: error instanceof Error ? error.message : String(error),
@@ -435,7 +425,7 @@ export async function installRegistration(params: {
     description: NATIVE_HOST_DESCRIPTION,
     path: launcherPath,
     type: "stdio",
-    allowed_origins: expectedOriginsForExtensionIds(extensionIds),
+    allowed_origins: desiredOrigins,
   };
   const manifestContent = `${JSON.stringify(manifest, null, 2)}\n`;
   try {

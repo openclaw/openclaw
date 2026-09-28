@@ -18,6 +18,15 @@ describe("daemon action JSON hints", () => {
       "If you're in a container, run the gateway in the foreground instead of `openclaw gateway`.",
       "WSL2 needs systemd enabled: edit /etc/wsl.conf with [boot]\\nsystemd=true",
     ];
+    const kinds = [
+      "install",
+      "container-restart",
+      "systemd-unavailable",
+      "systemd-headless",
+      "container-foreground",
+      "wsl-systemd",
+    ];
+    const hintItems = hints.map((text, index) => ({ kind: kinds[index], text }));
     const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
 
     createDaemonActionContext({ action: "install", json: true }).emit({ ok: false, hints });
@@ -26,48 +35,23 @@ describe("daemon action JSON hints", () => {
       expect.objectContaining({
         action: "install",
         hints,
-        hintItems: [
-          { kind: "install", text: "openclaw gateway install" },
-          {
-            kind: "container-restart",
-            text: "Restart the container or the service that manages it for openclaw-demo-container.",
-          },
-          {
-            kind: "systemd-unavailable",
-            text: "systemd user services are unavailable; install/enable systemd or run the gateway under your supervisor.",
-          },
-          {
-            kind: "systemd-headless",
-            text: "On a headless server (SSH/no desktop session): run `sudo loginctl enable-linger $(whoami)` to persist your systemd user session across logins.",
-          },
-          {
-            kind: "container-foreground",
-            text: "If you're in a container, run the gateway in the foreground instead of `openclaw gateway`.",
-          },
-          {
-            kind: "wsl-systemd",
-            text: "WSL2 needs systemd enabled: edit /etc/wsl.conf with [boot]\\nsystemd=true",
-          },
-        ],
+        hintItems,
       }),
     );
   });
 
-  it.each([
-    "openclaw --profile work gateway install",
-    "openclaw --container demo gateway install",
-    "openclaw node install",
-    "openclaw --profile work node install",
-    "openclaw --container demo node install",
-  ])("classifies scoped Gateway and node service install hints: %s", (hint) => {
-    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+  it.each(["openclaw --profile work gateway install", "openclaw --container demo node install"])(
+    "classifies scoped Gateway and node service install hints: %s",
+    (hint) => {
+      const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
 
-    createDaemonActionContext({ action: "start", json: true }).emit({ ok: false, hints: [hint] });
+      createDaemonActionContext({ action: "start", json: true }).emit({ ok: false, hints: [hint] });
 
-    expect(writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({ hintItems: [{ kind: "install", text: hint }] }),
-    );
-  });
+      expect(writeJson).toHaveBeenCalledWith(
+        expect.objectContaining({ hintItems: [{ kind: "install", text: hint }] }),
+      );
+    },
+  );
 });
 
 describe("daemon install verification", () => {

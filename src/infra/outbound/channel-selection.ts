@@ -229,46 +229,15 @@ export async function resolveMessageChannelSelection(params: {
   source: MessageChannelSelectionSource;
 }> {
   const normalized = normalizeMessageChannel(params.channel);
-  if (normalized) {
-    const availableExplicit = resolveAvailableChannel({
-      cfg: params.cfg,
-      value: params.channel,
-      agentId: params.agentId,
-    });
-    if (!availableExplicit) {
-      const fallback = resolveAvailableChannel({
+  const explicit = normalized
+    ? resolveAvailableChannel({
         cfg: params.cfg,
-        value: params.fallbackChannel,
+        value: params.channel,
         agentId: params.agentId,
-      });
-      if (fallback) {
-        return {
-          channel: fallback.channel,
-          plugin: fallback.plugin,
-          configured: [],
-          source: "tool-context-fallback",
-        };
-      }
-      if (!isDeliverableMessageChannel(normalized) && !getRuntimeVisibleChannelPlugin(normalized)) {
-        throw new Error(formatUnknownChannelMessage({ channel: normalized }));
-      }
-      const repairHint = isConfiguredChannel(params.cfg, normalized)
-        ? resolveMissingOfficialExternalChannelPluginRepairHint({
-            config: params.cfg,
-            channelId: normalized,
-          })
-        : null;
-      if (repairHint?.channelId === normalized) {
-        throw new Error(`Channel is unavailable: ${normalized}. ${repairHint.repairHint}`);
-      }
-      throw new Error(`Channel is unavailable: ${normalized}`);
-    }
-    return {
-      channel: availableExplicit.channel,
-      plugin: availableExplicit.plugin,
-      configured: [],
-      source: "explicit",
-    };
+      })
+    : undefined;
+  if (explicit) {
+    return { ...explicit, configured: [], source: "explicit" };
   }
 
   const fallback = resolveAvailableChannel({
@@ -283,6 +252,22 @@ export async function resolveMessageChannelSelection(params: {
       configured: [],
       source: "tool-context-fallback",
     };
+  }
+
+  if (normalized) {
+    if (!isDeliverableMessageChannel(normalized) && !getRuntimeVisibleChannelPlugin(normalized)) {
+      throw new Error(formatUnknownChannelMessage({ channel: normalized }));
+    }
+    const repairHint = isConfiguredChannel(params.cfg, normalized)
+      ? resolveMissingOfficialExternalChannelPluginRepairHint({
+          config: params.cfg,
+          channelId: normalized,
+        })
+      : null;
+    if (repairHint?.channelId === normalized) {
+      throw new Error(`Channel is unavailable: ${normalized}. ${repairHint.repairHint}`);
+    }
+    throw new Error(`Channel is unavailable: ${normalized}`);
   }
 
   const configuredPlugins = await listConfiguredMessageChannelPlugins(

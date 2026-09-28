@@ -253,6 +253,48 @@ it("retains each queued writer's caller context through async and reentrant work
   expect(queues.size).toBe(0);
 });
 
+it("cancels only waiting writers while retaining active settlement and follower FIFO", async () => {
+  const queues = new Map<string, StoreWriterQueue>();
+  const release = createDeferred();
+  const activeController = new AbortController();
+  const waitingController = new AbortController();
+  const denied = new Error("writer revoked before admission");
+  const calls: string[] = [];
+  const write = (fn: () => Promise<string>, signal?: AbortSignal) =>
+    runQueuedStoreWrite({ queues, storePath: "cancelable", label: "cancelable", fn, signal });
+  const active = write(async () => {
+    calls.push("active");
+    await release.promise;
+    calls.push("settled");
+    return "committed";
+  }, activeController.signal);
+  const canceled = write(async () => {
+    calls.push("canceled");
+    return "forbidden";
+  }, waitingController.signal);
+  const outcome = canceled.catch((error: unknown) => error);
+  const followers = ["first", "second"].map((name) =>
+    write(async () => {
+      calls.push(name);
+      return name;
+    }),
+  );
+  try {
+    activeController.abort(denied);
+    waitingController.abort(denied);
+    expect(await Promise.race([outcome, nextTurn().then(() => "still queued")])).toBe(denied);
+    await expect(write(async () => "forbidden", waitingController.signal)).rejects.toBe(denied);
+    expect(calls).toEqual(["active"]);
+    release.resolve();
+    await expect(active).resolves.toBe("committed");
+    await expect(Promise.all(followers)).resolves.toEqual(["first", "second"]);
+    expect(calls).toEqual(["active", "settled", "first", "second"]);
+  } finally {
+    release.resolve();
+    await Promise.allSettled([active, canceled, ...followers]);
+  }
+});
+
 it("queues ordinary nested writes behind the active writer", async () => {
   const queues = new Map<string, StoreWriterQueue>();
   const releaseOuter = createDeferred();
@@ -329,6 +371,33 @@ it("shares reentrant writer context across duplicate module instances", async ()
 
   expect(result).toBe("nested-result");
   expect(order).toEqual(["outer:start", "inner", "outer:end"]);
+  expect(queues.size).toBe(0);
+});
+
+it("keeps an active writer's lane through clear cleanup", async () => {
+  const queues = new Map<string, StoreWriterQueue>();
+  const gate = createDeferred();
+  const active = runQueuedStoreWrite({
+    queues,
+    storePath: "cleanup",
+    label: "active",
+    fn: () => gate.promise,
+  });
+  clearStoreWriterQueuesForTest(queues, "test cleanup");
+  let laterStarted = false;
+  const later = runQueuedStoreWrite({
+    queues,
+    storePath: "cleanup",
+    label: "later",
+    fn: async () => {
+      laterStarted = true;
+    },
+  });
+  // A fresh lane would admit this writer while the active one still owns the store.
+  expect(laterStarted).toBe(false);
+  gate.resolve();
+  await Promise.all([active, later]);
+  expect(laterStarted).toBe(true);
   expect(queues.size).toBe(0);
 });
 

@@ -49,7 +49,8 @@ export function captureOperatorToolGatewayAuthority():
   const admitted = getGatewayToolCallerIdentity()?.operatorAuthority;
   const assertCallerCurrent = captureGatewayToolCallerAssertion();
   const direct = readOperatorToolGatewayAuthority();
-  const scope = getPluginRuntimeGatewayRequestScope();
+  const ambientScope = getPluginRuntimeGatewayRequestScope();
+  const scope = ambientScope ? { ...ambientScope } : undefined;
   const authority =
     admitted ?? direct?.operatorRunAuthority ?? scope?.client?.internal?.operatorRunAuthority;
   const requiresOperatorAuthority = Boolean(
@@ -80,15 +81,16 @@ export function captureOperatorToolGatewayAuthority():
 }
 
 /** Acquire the ambient requester; consumers own retention through their distinct work lifetimes. */
-export function captureAmbientGatewayOperatorAuthority(params: {
+export async function captureAmbientGatewayOperatorAuthority(params: {
   missingBindingError: () => Error;
   retainInherited?: true;
-}): {
+}): Promise<{
   authority?: AdmittedRunOperatorAuthority;
   assertInvocationCurrent?: () => void;
   release?: () => void;
-} {
-  const scope = getPluginRuntimeGatewayRequestScope();
+}> {
+  const ambientScope = getPluginRuntimeGatewayRequestScope();
+  const scope = ambientScope ? { ...ambientScope } : undefined;
   const invocation = captureOperatorToolGatewayAuthority();
   const inheritedOperator = invocation?.authority;
   const context = scope?.context ?? scope?.resolveGatewayContext?.();
@@ -116,7 +118,7 @@ export function captureAmbientGatewayOperatorAuthority(params: {
   }
   const capturedOperator =
     scope?.client && context
-      ? captureGatewayOperatorRunAuthority({
+      ? await captureGatewayOperatorRunAuthority({
           client: scope.client,
           context,
           hasCurrentClientAuthority: scope.hasCurrentClientAuthority,
@@ -126,5 +128,19 @@ export function captureAmbientGatewayOperatorAuthority(params: {
           },
         })
       : undefined;
-  return { ...capturedOperator, assertInvocationCurrent };
+  try {
+    assertInvocationCurrent?.();
+    scope?.signal?.throwIfAborted();
+    if (
+      scope?.hasCurrentClientAuthority?.() === false ||
+      (scope?.resolveGatewayContext && scope.resolveGatewayContext() !== context)
+    ) {
+      throw new Error("Gateway caller authority is no longer active.");
+    }
+    capturedOperator?.authority.assertCurrent();
+    return { ...capturedOperator, assertInvocationCurrent };
+  } catch (error) {
+    capturedOperator?.release();
+    throw error;
+  }
 }

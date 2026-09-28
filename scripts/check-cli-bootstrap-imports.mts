@@ -4,11 +4,12 @@
 import fs from "node:fs";
 import module from "node:module";
 import path from "node:path";
-import { parse, type Node as AcornNode, type Program } from "acorn";
+import type { Node as AcornNode } from "acorn";
 import { WORKER_BUNDLE_ARTIFACT_PATHS } from "../src/shared/worker-bundle-hash.js";
 import { reportLimitViolations, type LimitViolation } from "./lib/check-limits.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { readGatewayRunChunks } from "./lib/gateway-run-chunk-metadata.mts";
+import { visitJavaScriptStatements } from "./lib/javascript-statements.mjs";
 import { isUnstagedWorkerDeployRuntimeArtifact } from "./lib/worker-deploy-build-plugin.mts";
 
 const DEFAULT_ENTRYPOINTS = ["dist/entry.js", "dist/cli/run-main.js"];
@@ -138,18 +139,8 @@ function isRequireLikeCallee(value: unknown): boolean {
 
 function listRuntimeImportSpecifiers(source: string): string[] {
   const specifiers: string[] = [];
-  const program: Program = {
-    type: "Program",
-    start: 0,
-    end: 0,
-    sourceType: "module",
-    body: [],
-  };
-  const collectCompletedStatements = () => {
-    if (program.body.length === 0) {
-      return;
-    }
-    const stack: unknown[] = program.body.splice(0);
+  visitJavaScriptStatements(source, { sourceType: "module", allowHashBang: true }, (statements) => {
+    const stack: unknown[] = statements;
     while (stack.length > 0) {
       const value = stack.pop();
       if (!value || typeof value !== "object") {
@@ -191,16 +182,7 @@ function listRuntimeImportSpecifiers(source: string): string[] {
         }
       }
     }
-  };
-  // Acorn appends completed statements while keeping module binding checks in parser scope.
-  parse(source, {
-    ecmaVersion: "latest",
-    sourceType: "module",
-    allowHashBang: true,
-    program,
-    onToken: collectCompletedStatements,
   });
-  collectCompletedStatements();
   return [...new Set(specifiers)].toSorted((left, right) => left.localeCompare(right));
 }
 

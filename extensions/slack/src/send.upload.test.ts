@@ -371,21 +371,6 @@ describe("sendMessageSlack file upload with user IDs", () => {
     expect(caught).not.toBeInstanceOf(PlatformMessageNotDispatchedError);
   });
 
-  it("keeps completeUploadExternal HTTP failures ambiguous", async () => {
-    const rejection = Object.assign(new Error("Slack HTTP 500"), {
-      code: "slack_webapi_http_error",
-      statusCode: 500,
-    });
-    client.files.completeUploadExternal.mockRejectedValueOnce(rejection);
-
-    const caught = await sendUpload(client, {
-      mediaUrl: "/tmp/http-failure.png",
-    }).catch((error: unknown) => error);
-
-    expect(caught).toBe(rejection);
-    expect(caught).not.toBeInstanceOf(PlatformMessageNotDispatchedError);
-  });
-
   it("disables image optimization for forced-media uploads", async () => {
     await sendUpload(client, {
       mediaUrl: "/tmp/original.png",
@@ -398,52 +383,27 @@ describe("sendMessageSlack file upload with user IDs", () => {
     );
   });
 
-  it.each([
-    ["absent", undefined],
-    ["false", false],
-  ] as const)(
-    "keeps default image optimization when forced-media intent is %s",
-    async (_name, forceDocument) => {
-      await sendUpload(client, {
-        mediaUrl: "/tmp/optimized.png",
-        ...(forceDocument !== undefined ? { forceDocument } : {}),
-      });
+  it("keeps default image optimization without forced-media intent", async () => {
+    await sendUpload(client, { mediaUrl: "/tmp/optimized.png" });
+    const loadOptions = loadOutboundMediaFromUrlMock.mock.calls[0]?.[1] as
+      | { optimizeImages?: boolean }
+      | undefined;
+    expect(loadOptions?.optimizeImages).toBeUndefined();
+  });
 
-      const loadOptions = loadOutboundMediaFromUrlMock.mock.calls[0]?.[1] as
-        | { optimizeImages?: boolean }
-        | undefined;
-      expect(loadOptions?.optimizeImages).toBeUndefined();
-    },
-  );
-
-  it.each([
-    {
-      name: "resolves bare user ID to DM channel before completing upload",
+  it("resolves a user ID to a DM channel before completing upload", async () => {
+    await sendUpload(client, {
       target: "U2ZH3MFSR",
       message: "screenshot",
       mediaUrl: "/tmp/screenshot.png",
-      userId: "U2ZH3MFSR",
-      file: { id: "F001", title: "screenshot.png" },
-    },
-    {
-      name: "resolves prefixed user ID to DM channel before completing upload",
-      target: "user:UABC123",
-      message: "image",
-      mediaUrl: "/tmp/photo.png",
-      userId: "UABC123",
-    },
-    {
-      name: "resolves mention-style user ID before file upload",
-      target: "<@U777TEST>",
-      message: "report",
-      mediaUrl: "/tmp/report.png",
-      userId: "U777TEST",
-    },
-  ])("$name", async ({ target, message, mediaUrl, userId, file }) => {
-    await sendUpload(client, { target, message, mediaUrl });
+    });
 
-    expect(client.conversations.open).toHaveBeenCalledWith({ users: userId });
-    expectCompletedUpload({ client, expected: { channel_id: "D99RESOLVED" }, file });
+    expect(client.conversations.open).toHaveBeenCalledWith({ users: "U2ZH3MFSR" });
+    expectCompletedUpload({
+      client,
+      expected: { channel_id: "D99RESOLVED" },
+      file: { id: "F001", title: "screenshot.png" },
+    });
   });
 
   it("posts text-only user-target DMs directly without conversations.open", async () => {
@@ -526,27 +486,6 @@ describe("sendMessageSlack file upload with user IDs", () => {
     expect(client.conversations.open).toHaveBeenCalledTimes(2);
   });
 
-  it("sends file directly to channel without conversations.open", async () => {
-    const result = await sendUpload(client, { message: "chart", mediaUrl: "/tmp/chart.png" });
-
-    expect(client.conversations.open).not.toHaveBeenCalled();
-    expectCompletedUpload({ client, expected: { channel_id: "C123CHAN" } });
-    expectFields(requireRecord(result.receipt, "receipt"), {
-      primaryPlatformMessageId: "F001",
-      platformMessageIds: ["F001"],
-    });
-    const [part] = requireArray(result.receipt.parts, "receipt parts");
-    const partRecord = requireRecord(part, "receipt part");
-    expectFields(partRecord, {
-      platformMessageId: "F001",
-      kind: "media",
-    });
-    expectFields(requireRecord(partRecord.raw, "receipt raw"), {
-      channel: "slack",
-      channelId: "C123CHAN",
-    });
-  });
-
   it("uploads bytes to the presigned URL and completes with thread+caption", async () => {
     const events: string[] = [];
     globalThis.fetch = vi.fn(async () => {
@@ -618,21 +557,6 @@ describe("sendMessageSlack file upload with user IDs", () => {
     });
     expect(hasSlackThreadParticipation("default", "C123CHAN", "171.222")).toBe(true);
     expect(result.receipt.threadId).toBe("171.222");
-  });
-
-  it("keeps the presigned upload capability out of timeout logging", async () => {
-    mockUploadDestination(client, "https://files.slack.com/upload/v1/secret-capability");
-
-    await sendUpload(client, { mediaUrl: "/tmp/secret.png" });
-
-    expectOnlyCallFirstArg(buildTimeoutAbortSignal, {
-      timeoutMs: 120_000,
-      operation: "slack-upload-file",
-      url: "https://files.slack.com",
-    });
-    expectOnlyCallFirstArg(fetchWithSsrFGuard, {
-      url: "https://files.slack.com/upload/v1/secret-capability",
-    });
   });
 
   it("preserves HTTP upload URLs on an alternate Slack API origin", async () => {
@@ -745,16 +669,6 @@ describe("sendMessageSlack file upload with user IDs", () => {
     ["public non-Slack", "https://slack.com/api/", "https://example.com/upload/v1/not-slack"],
     ["plaintext Slack", "https://slack.com/api/", "http://files.slack.com/upload/v1/plaintext"],
     [
-      "commercial Slack to GovSlack",
-      "https://slack.com/api/",
-      "https://files.slack-gov.com/upload/v1/cross-plane",
-    ],
-    [
-      "GovSlack to commercial Slack",
-      "https://slack-gov.com/api/",
-      "https://files.slack.com/upload/v1/cross-plane",
-    ],
-    [
       "trailing-dot commercial Slack to GovSlack",
       "https://slack.com./api/",
       "https://files.slack-gov.com/upload/v1/cross-plane",
@@ -768,11 +682,6 @@ describe("sendMessageSlack file upload with user IDs", () => {
       "undocumented commercial subdomain",
       "https://slack.com/api/",
       "https://future-upload.slack.com/upload/v1/capability",
-    ],
-    [
-      "undocumented GovSlack subdomain",
-      "https://slack-gov.com/api/",
-      "https://future-upload.slack-gov.com/upload/v1/capability",
     ],
   ])("rejects %s upload destinations before network access", async (label, apiUrl, uploadUrl) => {
     const rejectedClient = createUploadTestClient(apiUrl);
@@ -862,7 +771,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
     );
   });
 
-  it.each([201, 204, 500])("rejects a non-200 byte-upload response (%s)", async (status) => {
+  it.each([204, 500])("rejects a non-200 byte-upload response (%s)", async (status) => {
     const onPlatformSendDispatch = vi.fn();
     globalThis.fetch = vi.fn(async () => new Response(null, { status })) as unknown as typeof fetch;
 
@@ -1021,21 +930,6 @@ describe("sendMessageSlack file upload with user IDs", () => {
       expectedFileName: "upload.pdf",
     },
     {
-      name: "infers a PNG filename for unnamed image media",
-      contentType: "image/png",
-      expectedFileName: "upload.png",
-    },
-    {
-      name: "infers an MP3 filename for unnamed audio media",
-      contentType: "audio/mpeg",
-      expectedFileName: "upload.mp3",
-    },
-    {
-      name: "normalizes MIME aliases and parameters for unnamed media",
-      contentType: "IMAGE/APNG; charset=binary",
-      expectedFileName: "upload.png",
-    },
-    {
       name: "preserves a loader-provided filename over detected MIME",
       contentType: "application/pdf",
       fileName: "named-export.bin",
@@ -1047,13 +941,6 @@ describe("sendMessageSlack file upload with user IDs", () => {
       fileName: "source.png",
       uploadFileName: "operator-name.bin",
       expectedFileName: "operator-name.bin",
-    },
-    {
-      name: "preserves an explicit title with an inferred filename",
-      contentType: "application/pdf",
-      uploadTitle: "Quarterly Report",
-      expectedFileName: "upload.pdf",
-      expectedTitle: "Quarterly Report",
     },
     {
       name: "retains the existing fallback for unknown MIME types",

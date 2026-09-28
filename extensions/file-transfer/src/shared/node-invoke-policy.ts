@@ -1,4 +1,3 @@
-// File Transfer plugin module implements node invoke policy behavior.
 import crypto from "node:crypto";
 import { ARCHIVE_LIMIT_ERROR_CODE, ArchiveLimitError } from "openclaw/plugin-sdk/archive";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -7,7 +6,7 @@ import type {
   OpenClawPluginNodeInvokePolicyContext,
   OpenClawPluginNodeInvokePolicyResult,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asNullableRecord, asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { appendFileTransferAudit, type FileTransferAuditOp } from "./audit.js";
 import { inspectDirFetchArchive } from "./dir-fetch-archive.js";
 import { DIR_FETCH_MAX_ENTRIES } from "./dir-fetch-limits.js";
@@ -19,26 +18,14 @@ import {
 import { prepareParams, validateFetchMaxBytesParam } from "./node-invoke-policy-params.js";
 import {
   policyDeniedResult,
-  runDirFetchPreflight,
   runPathPreflight,
   validateCanonicalAuthorization,
   validateDirFetchEntries,
 } from "./node-invoke-policy-preflight.js";
-import type { PathBinding } from "./path-binding.js";
 import { persistLiteralGrant } from "./policy.js";
 const DIR_FETCH_ARCHIVE_INSPECTION_TIMEOUT_MS = 30_000;
 
 type FileTransferCommand = FileTransferNodeInvokeCommand;
-
-function readPath(params: Record<string, unknown>): string {
-  return typeof params.path === "string" ? params.path : "";
-}
-
-function readResultPayload(result: { payload?: unknown }): Record<string, unknown> | null {
-  return result.payload && typeof result.payload === "object" && !Array.isArray(result.payload)
-    ? (result.payload as Record<string, unknown>)
-    : null;
-}
 
 function readAuditSizeBytes(
   command: FileTransferCommand,
@@ -114,7 +101,7 @@ async function handleFileTransferInvoke(
   const command = ctx.command as FileTransferCommand;
   const op: FileTransferAuditOp = command;
   const params = asOptionalRecord(ctx.params) ?? {};
-  const requestedPath = readPath(params);
+  const requestedPath = typeof params.path === "string" ? params.path : "";
   const nodeDisplayName = ctx.node?.displayName;
   const startedAt = Date.now();
 
@@ -157,74 +144,21 @@ async function handleFileTransferInvoke(
       message: error instanceof Error ? error.message : String(error),
     };
   }
-  let boundCanonicalPath: string | undefined;
-  let boundFilesystemIdentity: PathBinding | undefined;
-  if (command === "file.fetch" || command === "file.stat") {
-    const preflight = await runPathPreflight({
-      ctx,
-      op,
-      kind: "read",
-      authorization: gate,
-      params: forwardedParams,
-      requestedPath,
-      startedAt,
-    });
-    if (!preflight.ok) {
-      return preflight.result;
-    }
-    boundCanonicalPath = preflight.canonicalPath;
-    boundFilesystemIdentity = preflight.binding;
-  } else if (command === "file.write" || command === "file.create") {
-    const preflight = await runPathPreflight({
-      ctx,
-      op,
-      kind: "write",
-      authorization: gate,
-      params: forwardedParams,
-      requestedPath,
-      startedAt,
-    });
-    if (!preflight.ok) {
-      return preflight.result;
-    }
-    boundCanonicalPath = preflight.canonicalPath;
-    boundFilesystemIdentity = preflight.binding;
-  } else if (command === "dir.fetch") {
-    const preflight = await runDirFetchPreflight({
-      ctx,
-      op,
-      authorization: gate,
-      params: forwardedParams,
-      requestedPath,
-      startedAt,
-    });
-    if (!preflight.ok) {
-      return preflight.result;
-    }
-    boundCanonicalPath = preflight.canonicalPath;
-    boundFilesystemIdentity = preflight.binding;
-  } else if (command === "dir.list") {
-    const preflight = await runPathPreflight({
-      ctx,
-      op,
-      kind: "read",
-      authorization: gate,
-      params: forwardedParams,
-      requestedPath,
-      startedAt,
-    });
-    if (!preflight.ok) {
-      return preflight.result;
-    }
-    boundCanonicalPath = preflight.canonicalPath;
-    boundFilesystemIdentity = preflight.binding;
+  const preflight = await runPathPreflight({
+    ctx,
+    op,
+    kind: commandKind(command),
+    authorization: gate,
+    params: forwardedParams,
+    requestedPath,
+    startedAt,
+  });
+  if (!preflight.ok) {
+    return preflight.result;
   }
-
-  if (boundCanonicalPath !== undefined) {
-    // The node must reject target drift before the final filesystem effect.
-    forwardedParams.expectedCanonicalPath = boundCanonicalPath;
-    forwardedParams.expectedBinding = boundFilesystemIdentity;
-  }
+  // The node must reject target drift before the final filesystem effect.
+  forwardedParams.expectedCanonicalPath = preflight.canonicalPath;
+  forwardedParams.expectedBinding = preflight.binding;
 
   const result = await ctx.invokeNode({ params: forwardedParams });
   if (!result.ok) {
@@ -247,7 +181,7 @@ async function handleFileTransferInvoke(
     };
   }
 
-  const payload = readResultPayload(result);
+  const payload = asNullableRecord(result.payload);
   if (payload?.ok === false) {
     await appendFileTransferAudit({
       op,
@@ -271,7 +205,7 @@ async function handleFileTransferInvoke(
       message: "node result did not return a canonical path",
     });
   }
-  if (boundCanonicalPath !== undefined && boundCanonicalPath !== canonicalPath) {
+  if (preflight.canonicalPath !== canonicalPath) {
     return policyDeniedResult({
       op,
       code: "CANONICAL_PATH_CHANGED",

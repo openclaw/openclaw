@@ -186,6 +186,27 @@ jobs:
           if-no-files-found: warn
           path: ${{ runner.temp }}/linux-desktop-sharing
 
+      - name: Test native Quick Chat
+        id: quick-chat
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          mkdir -p "${RUNNER_TEMP}/linux-quick-chat"
+          xvfb-run -a -s '-screen 0 1440x1080x24' dbus-run-session -- \
+            /usr/bin/python3 apps/linux/tests/first_run.py \
+            apps/linux/src-tauri/target/debug/openclaw-desktop --quick-chat \
+            --artifacts-dir "${RUNNER_TEMP}/linux-quick-chat" \
+            2>&1 | tee "${RUNNER_TEMP}/linux-quick-chat/run.log"
+
+      - name: Upload native Quick Chat proof
+        if: always() && steps.quick-chat.outcome != 'skipped'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: linux-quick-chat
+          retention-days: 14
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/linux-quick-chat
+
       - name: Stage AppImage GStreamer plugins
         if: github.event_name == 'workflow_dispatch'
         run: |

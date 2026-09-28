@@ -48,11 +48,7 @@ function applyFieldDocumentation(node: JsonSchemaObject, prefixes: readonly stri
     if (itemsObj) {
       const itemPrefixes = Array.from(
         new Set(
-          prefixes.flatMap((prefix) => {
-            const arrayPath = prefix ? `${prefix}[]` : "[]";
-            const wildcardAlias = prefix ? `${prefix}.*` : "*";
-            return wildcardAlias === arrayPath ? [arrayPath] : [wildcardAlias, arrayPath];
-          }),
+          prefixes.flatMap((prefix) => (prefix ? [`${prefix}.*`, `${prefix}[]`] : ["*", "[]"])),
         ),
       );
       applyNodeDocumentation(itemsObj, itemPrefixes);

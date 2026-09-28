@@ -13,15 +13,17 @@ private const val XORSHIFT_MULTIPLIER: ULong = 2_685_821_657_736_338_717uL
 private const val TAU = PI * 2.0
 private const val BLINK_DURATION = 0.16
 
-private enum class Gesture {
-  Wave,
-  Hop,
-  Celebrate,
-  Sigh,
-  Yawn,
-  ClawSnap,
-  DonHardHat,
-  WipeBrow,
+private enum class Gesture(
+  val durationSeconds: Double,
+) {
+  Wave(1.5),
+  Hop(0.7),
+  Celebrate(2.4),
+  Sigh(1.8),
+  Yawn(2.0),
+  ClawSnap(0.6),
+  DonHardHat(1.0),
+  WipeBrow(2.0),
 }
 
 private fun clamp(
@@ -58,25 +60,6 @@ private fun plateau(
   if (t > release) return easeInOut((1.0 - t) / (1.0 - release))
   return 1.0
 }
-
-private fun gestureDuration(gesture: Gesture): Double =
-  when (gesture) {
-    Gesture.Wave -> 1.5
-
-    Gesture.Hop -> 0.7
-
-    Gesture.Celebrate -> 2.4
-
-    Gesture.Sigh -> 1.8
-
-    Gesture.Yawn,
-    Gesture.WipeBrow,
-    -> 2.0
-
-    Gesture.ClawSnap -> 0.6
-
-    Gesture.DonHardHat -> 1.0
-  }
 
 private class SeededGenerator(
   seed: ULong,
@@ -141,7 +124,7 @@ class MascotAnimator(
     applyBlinks(pose, timeSeconds)
 
     activeGesture?.let { gesture ->
-      val progress = (timeSeconds - activeGestureStart) / gestureDuration(gesture)
+      val progress = (timeSeconds - activeGestureStart) / gesture.durationSeconds
       if (progress >= 1.0) {
         activeGesture = null
       } else {
@@ -168,15 +151,8 @@ class MascotAnimator(
   private fun advanceSchedules(timeSeconds: Double) {
     if (timeSeconds >= nextBlinkAt) {
       blinkStarts.add(timeSeconds)
-      if (pendingDoubleBlink) {
-        pendingDoubleBlink = false
-        nextBlinkAt = timeSeconds + blinkInterval()
-      } else if (random(0.0, 1.0) < 0.14) {
-        pendingDoubleBlink = true
-        nextBlinkAt = timeSeconds + 0.34
-      } else {
-        nextBlinkAt = timeSeconds + blinkInterval()
-      }
+      pendingDoubleBlink = !pendingDoubleBlink && random(0.0, 1.0) < 0.14
+      nextBlinkAt = timeSeconds + if (pendingDoubleBlink) 0.34 else blinkInterval()
     }
     blinkStarts.removeAll { start -> timeSeconds - start > BLINK_DURATION }
 

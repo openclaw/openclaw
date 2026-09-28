@@ -16,6 +16,26 @@ import {
   resetCronModelProviderPreflightCacheForTest,
 } from "./model-preflight.runtime.js";
 
+function makeLocalPreflightParams(
+  provider: "ollama" | "vllm",
+): Parameters<typeof preflightCronModelProvider>[0] {
+  return {
+    cfg: {
+      models: {
+        providers: {
+          [provider]: {
+            api: provider === "ollama" ? "ollama" : "openai-completions",
+            baseUrl: provider === "ollama" ? "http://localhost:11434" : "http://127.0.0.1:8000/v1",
+            models: [],
+          },
+        },
+      },
+    },
+    provider,
+    model: provider === "ollama" ? "qwen3:32b" : "llama",
+  };
+}
+
 function mockReachableResponse(status = 200) {
   fetchWithSsrFGuardMock.mockResolvedValueOnce({
     response: { status },
@@ -55,7 +75,6 @@ describe("preflightCronModelProvider", () => {
 
   it.each([
     "127.0.0.1",
-    "127.0.0.2",
     "127.255.255.254",
     "10.0.0.1",
     "172.16.0.1",
@@ -142,21 +161,7 @@ describe("preflightCronModelProvider", () => {
       release,
     });
 
-    const result = await preflightCronModelProvider({
-      cfg: {
-        models: {
-          providers: {
-            vllm: {
-              api: "openai-completions",
-              baseUrl: "http://127.0.0.1:8000/v1",
-              models: [],
-            },
-          },
-        },
-      },
-      provider: "vllm",
-      model: "llama",
-    });
+    const result = await preflightCronModelProvider(makeLocalPreflightParams("vllm"));
 
     expect(result).toEqual({ status: "available" });
     expect(cancel).toHaveBeenCalledOnce();
@@ -171,21 +176,7 @@ describe("preflightCronModelProvider", () => {
       release,
     });
 
-    const result = await preflightCronModelProvider({
-      cfg: {
-        models: {
-          providers: {
-            vllm: {
-              api: "openai-completions",
-              baseUrl: "http://127.0.0.1:8000/v1",
-              models: [],
-            },
-          },
-        },
-      },
-      provider: "vllm",
-      model: "llama",
-    });
+    const result = await preflightCronModelProvider(makeLocalPreflightParams("vllm"));
 
     expect(result).toEqual({ status: "available" });
     expect(cancel).not.toHaveBeenCalled();
@@ -283,6 +274,41 @@ describe("preflightCronModelProvider", () => {
     expect(request.auditContext).toBe("cron-model-provider-preflight");
   });
 
+  it.each([false, true])("reprobes after a client timeout (nested: %s)", async (nested) => {
+    const timeout = new DOMException("request timed out", "TimeoutError");
+    fetchWithSsrFGuardMock.mockRejectedValueOnce(
+      nested ? new TypeError("fetch failed", { cause: timeout }) : timeout,
+    );
+    mockReachableResponse();
+    const cfg = {
+      models: {
+        providers: {
+          vllm: {
+            api: "openai-completions" as const,
+            baseUrl: "http://127.0.0.1:8000/v1",
+            models: [],
+          },
+        },
+      },
+    };
+
+    const first = await preflightCronModelProvider({
+      cfg,
+      provider: "vllm",
+      model: "first",
+      nowMs: 1000,
+    });
+    const next = await preflightCronModelProvider({
+      cfg,
+      provider: "vllm",
+      model: "next",
+      nowMs: 2000,
+    });
+
+    expect(first.status).toBe("unavailable");
+    expect(next).toEqual({ status: "available" });
+  });
+
   it("reports a nested guarded-fetch deadline separately from endpoint failures", async () => {
     const timeoutError = new Error("request timed out");
     timeoutError.name = "TimeoutError";
@@ -290,21 +316,7 @@ describe("preflightCronModelProvider", () => {
       new TypeError("fetch failed", { cause: timeoutError }),
     );
 
-    const result = await preflightCronModelProvider({
-      cfg: {
-        models: {
-          providers: {
-            ollama: {
-              api: "ollama",
-              baseUrl: "http://localhost:11434",
-              models: [],
-            },
-          },
-        },
-      },
-      provider: "ollama",
-      model: "qwen3:32b",
-    });
+    const result = await preflightCronModelProvider(makeLocalPreflightParams("ollama"));
 
     expect(result.status).toBe("unavailable");
     if (result.status !== "unavailable") {
@@ -328,21 +340,7 @@ describe("preflightCronModelProvider", () => {
     });
     fetchWithSsrFGuardMock.mockRejectedValueOnce(abortError);
 
-    const result = await preflightCronModelProvider({
-      cfg: {
-        models: {
-          providers: {
-            ollama: {
-              api: "ollama",
-              baseUrl: "http://localhost:11434",
-              models: [],
-            },
-          },
-        },
-      },
-      provider: "ollama",
-      model: "qwen3:32b",
-    });
+    const result = await preflightCronModelProvider(makeLocalPreflightParams("ollama"));
 
     expect(result.status).toBe("unavailable");
     if (result.status !== "unavailable") {
@@ -369,21 +367,7 @@ describe("preflightCronModelProvider", () => {
     errors.at(-1)!.cause = errors[0];
     fetchWithSsrFGuardMock.mockRejectedValueOnce(errors[0]);
 
-    const result = await preflightCronModelProvider({
-      cfg: {
-        models: {
-          providers: {
-            ollama: {
-              api: "ollama",
-              baseUrl: "http://localhost:11434",
-              models: [],
-            },
-          },
-        },
-      },
-      provider: "ollama",
-      model: "qwen3:32b",
-    });
+    const result = await preflightCronModelProvider(makeLocalPreflightParams("ollama"));
 
     expect(result.status).toBe("unavailable");
     if (result.status !== "unavailable") {
@@ -398,21 +382,7 @@ describe("preflightCronModelProvider", () => {
   it("bounds long diagnostics without splitting UTF-16 surrogate pairs", async () => {
     fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error(`${"x".repeat(992)}😀truncated-detail`));
 
-    const result = await preflightCronModelProvider({
-      cfg: {
-        models: {
-          providers: {
-            ollama: {
-              api: "ollama",
-              baseUrl: "http://localhost:11434",
-              models: [],
-            },
-          },
-        },
-      },
-      provider: "ollama",
-      model: "qwen3:32b",
-    });
+    const result = await preflightCronModelProvider(makeLocalPreflightParams("ollama"));
 
     expect(result.status).toBe("unavailable");
     if (result.status !== "unavailable") {

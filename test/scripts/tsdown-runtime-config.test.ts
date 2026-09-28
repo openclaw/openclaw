@@ -235,11 +235,13 @@ describe("tsdown config", () => {
     const executableGraphs = new Set([
       unifiedGraph,
       expectDefined(workerGraph, "deploy worker graph"),
+      requireStandaloneRuntimeGraph("worker/file-tool-planning.worker"),
       requireStandaloneRuntimeGraph("worker/image-processor.worker"),
       requireStandaloneRuntimeGraph("worker/sqlite-store.worker"),
       expectDefined(handoffGraph, "managed handoff graph"),
       requireNativeHookRelayGraph(),
       requireStandaloneRuntimeGraph("infra/sqlite-readonly-location.worker"),
+      requireStandaloneRuntimeGraph("infra/sqlite-source-revision.worker"),
       requireStandaloneRuntimeGraph("state/openclaw-state-read.worker"),
       requireStandaloneRuntimeGraph("agents/harness/native-hook-relay-client.worker"),
       requireStandaloneRuntimeGraph("process/spawn-broker/worker"),
@@ -285,7 +287,6 @@ describe("tsdown config", () => {
       "state/openclaw-database-verify.worker",
       "plugins/memory-state",
       "subagent-registry.runtime",
-      "task-registry-control.runtime",
       "link-understanding/apply.runtime",
       "media-understanding/apply.runtime",
       "index",
@@ -312,6 +313,11 @@ describe("tsdown config", () => {
       label: "read-only snapshot child",
       entry: "infra/sqlite-readonly-location.worker",
       source: "src/infra/sqlite-readonly-location.worker.ts",
+    },
+    {
+      label: "raw source revision child",
+      entry: "infra/sqlite-source-revision.worker",
+      source: "src/infra/sqlite-source-revision.worker.ts",
     },
     {
       label: "shared-state reader",

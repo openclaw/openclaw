@@ -1,15 +1,16 @@
 /**
- * Fresh, prompt-only inference with an exact zero-tool execution contract.
+ * Fresh, prompt-only inference through the selected runtime.
  *
  * This operation deliberately bypasses the ordinary agent attempt, retry,
  * transcript, hook, and delivery lifecycle. Execution owners either prove a
- * literal empty native tool surface or fail before inference starts.
+ * literal empty native tool surface or fail before inference starts, except
+ * Agents API: its restricted sessions may retain service-owned helpers.
  */
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { withTempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import type { Model } from "../llm/types.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
@@ -81,6 +82,8 @@ type RunIsolatedCompletionParams = {
   assertCurrent?: () => void;
   /** Explicit requester restriction; automatic metadata callers remain system-owned. */
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  /** Adapt host authorization failures to the calling completion API's error contract. */
+  mapOperatorAuthorizationError?: (error: unknown) => Error;
   thinkLevel?: ThinkLevel;
   outputTextPolicy?: AgentHarnessIsolatedCompletionParamsV2["outputTextPolicy"];
   streamParams?: AgentHarnessIsolatedCompletionParamsV2["streamParams"];
@@ -171,6 +174,7 @@ async function runCliIsolatedCompletion(params: {
           streamParams: params.request.streamParams,
           abortSignal: params.request.abortSignal,
           assertCurrent: params.request.assertCurrent,
+          mapOperatorAuthorizationError: params.request.mapOperatorAuthorizationError,
           executionMode: "side-question",
           cliToolAvailability: { native: [], openClaw: [] },
           disableTools: true,
@@ -295,7 +299,7 @@ function prepareIsolatedHostAuthorization<
   };
 }
 
-/** Run one fresh, zero-tool completion through its selected runtime. */
+/** Run one fresh completion with the selected runtime's documented isolation boundary. */
 export async function runIsolatedCompletion(
   params: RunIsolatedCompletionParams,
 ): Promise<IsolatedCompletionResult> {
@@ -332,7 +336,11 @@ async function runIsolatedCompletionOwned(
       throw new IsolatedCompletionError("runtime-unavailable", "Isolated completion has ended.");
     }
     input.assertCurrent?.();
-    assertOperatorModelAllowed(input.operatorAuthority, modelForAuthorization);
+    try {
+      assertOperatorModelAllowed(input.operatorAuthority, modelForAuthorization);
+    } catch (error) {
+      throw input.mapOperatorAuthorizationError?.(error) ?? error;
+    }
     input.abortSignal?.throwIfAborted();
   };
   const resolveAuthorizedModel: typeof resolveModelAsync = async (...args) => {
@@ -370,6 +378,7 @@ async function runIsolatedCompletionOwned(
   );
   const modelAuthority = createIsolatedCompletionModelAuthority({
     operatorAuthority: input.operatorAuthority,
+    mapOperatorAuthorizationError: input.mapOperatorAuthorizationError,
     abortSignal: input.abortSignal,
     assertCurrent,
     runtime: lease,

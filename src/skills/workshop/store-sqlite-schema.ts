@@ -2,14 +2,14 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawStateDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
-  openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase as StateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
+import type { OpenClawStateAsyncLeaseContext } from "../../state/openclaw-state-lease-context.js";
+import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 
 export type SkillWorkshopDatabase = Pick<
   OpenClawStateDatabase,
@@ -24,6 +24,10 @@ export type SkillWorkshopStoreOptions = {
   stateDir?: string;
   agentId?: string;
   config?: OpenClawConfig;
+  execution?: {
+    context: OpenClawStateWorkerContext;
+    leases: readonly OpenClawStateAsyncLeaseContext[];
+  };
 };
 export type SkillWorkshopDirectoryStoreOptions = SkillWorkshopStoreOptions & {
   config: OpenClawConfig;
@@ -110,35 +114,23 @@ export function databaseOptions(
   return options.env ? { env: options.env } : {};
 }
 
-export function ensureSkillWorkshopSchema(options: SkillWorkshopStoreOptions = {}): void {
-  const dbOptions = databaseOptions(options);
-  const database = openOpenClawStateDatabase(dbOptions);
-  ensureSkillWorkshopSchemaInDatabase(database, dbOptions);
-}
-
 export function ensureSkillWorkshopSchemaInDatabase(
   database: StateDatabase,
   dbOptions: OpenClawStateDatabaseOptions,
+  assertWrite?: (database: DatabaseSync, stage: "transaction" | "commit") => void,
 ): void {
   if (ensuredDatabases.has(database.db)) {
     return;
   }
   runOpenClawStateWriteTransaction(
     ({ db }) => {
+      assertWrite?.(db, "transaction");
       // sqlite-allow-raw -- Feature-local additive schema DDL; proposal rows use Kysely.
       db.exec(SCHEMA_SQL);
+      assertWrite?.(db, "commit");
     },
     dbOptions,
     { operationLabel: "skill-workshop.schema.ensure" },
   );
   ensuredDatabases.add(database.db);
-}
-
-export function openSkillWorkshopStore(options: SkillWorkshopStoreOptions = {}) {
-  ensureSkillWorkshopSchema(options);
-  const database = openOpenClawStateDatabase(databaseOptions(options));
-  return {
-    database,
-    kysely: getNodeSqliteKysely<SkillWorkshopDatabase>(database.db),
-  };
 }

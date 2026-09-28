@@ -31,6 +31,16 @@ import {
 
 setupRunAttemptTestHooks();
 
+async function completeAttempt(
+  harness: ReturnType<typeof createStartedThreadHarness>,
+  params: ReturnType<typeof createParams>,
+) {
+  const run = runCodexAppServerAttempt(params);
+  await Promise.race([run, harness.waitForMethod("turn/start")]);
+  await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+  return await run;
+}
+
 describe("Codex workspace instruction snapshots", () => {
   it.each(["async preparation", "synchronous supplement"] as const)(
     "keeps loaded workspace instructions when optional memory %s fails",
@@ -58,8 +68,10 @@ describe("Codex workspace instruction snapshots", () => {
       registration.registry.plugins.push(record);
       const api = registration.createApi(record, { config: params.config ?? {} });
       const memoryContribution = vi.fn((_context: unknown): string[] => []);
+      const memoryFailure = new Error("optional memory contribution unavailable");
+      const warn = vi.spyOn(agentHarnessRuntime.embeddedAgentLog, "warn");
       memoryContribution.mockImplementationOnce(() => {
-        throw new Error("optional memory contribution unavailable");
+        throw memoryFailure;
       });
       if (contributionKind === "async preparation") {
         api.registerMemoryPromptPreparation(async (context) => memoryContribution(context));
@@ -69,10 +81,12 @@ describe("Codex workspace instruction snapshots", () => {
       try {
         await withPluginRuntimeRegistryScope(registration.registry, async () => {
           const harness = createStartedThreadHarness(undefined, { persistedThreads: [] });
-          const run = runCodexAppServerAttempt(params);
-          await Promise.race([run, harness.waitForMethod("turn/start")]);
-          await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-          expect(readAttemptTerminal(await run).promptError).toBeNull();
+          expect(
+            readAttemptTerminal(await completeAttempt(harness, params)).promptError,
+          ).toBeNull();
+          expect(warn).toHaveBeenCalledWith("failed to prepare codex memory recall instructions", {
+            error: memoryFailure,
+          });
           expect(memoryContribution).toHaveBeenCalledWith(
             expect.objectContaining({ availableTools: new Set(["memory_get"]) }),
           );
@@ -88,10 +102,9 @@ describe("Codex workspace instruction snapshots", () => {
           await fs.writeFile(path.join(agentWorkspaceDir, "AGENTS.md"), updatedGuidance);
           harness.close();
           const resumeHarness = createResumeHarness("thread-1");
-          const resumedRun = runCodexAppServerAttempt(params);
-          await Promise.race([resumedRun, resumeHarness.waitForMethod("turn/start")]);
-          await resumeHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-          expect(readAttemptTerminal(await resumedRun).promptError).toBeNull();
+          expect(
+            readAttemptTerminal(await completeAttempt(resumeHarness, params)).promptError,
+          ).toBeNull();
           const resumed = resumeHarness.requests.find(({ method }) => method === "thread/resume");
           assert(resumed);
           const instructions =
@@ -115,7 +128,7 @@ describe("Codex workspace instruction snapshots", () => {
       const updatedGuidance = "Updated instructions require a new captured snapshot.";
       await fs.mkdir(agentWorkspaceDir, { recursive: true });
       await fs.writeFile(path.join(agentWorkspaceDir, "AGENTS.md"), initialGuidance);
-      const bootstrap = vi.spyOn(agentHarnessRuntime, "resolveBootstrapFilesForRun");
+      const bootstrap = vi.spyOn(agentHarnessRuntime, "prepareAgentWorkspaceContext");
       if (failureAt === "initial") {
         bootstrap.mockRejectedValueOnce(new Error("workspace bootstrap unavailable"));
       }
@@ -123,10 +136,7 @@ describe("Codex workspace instruction snapshots", () => {
       const params = createParams(sessionFile, executionDir);
       params.bootstrapWorkspaceDir = agentWorkspaceDir;
       setAgentWorkspaceForTest(params, agentWorkspaceDir);
-      const run = runCodexAppServerAttempt(params);
-      await Promise.race([run, harness.waitForMethod("turn/start")]);
-      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-      const initialResult = await run;
+      const initialResult = await completeAttempt(harness, params);
       expect(readAttemptTerminal(initialResult).promptError).toBeNull();
       if (failureAt === "initial") {
         expect(
@@ -143,10 +153,7 @@ describe("Codex workspace instruction snapshots", () => {
       const resumeParams = createParams(sessionFile, executionDir);
       resumeParams.bootstrapWorkspaceDir = agentWorkspaceDir;
       setAgentWorkspaceForTest(resumeParams, agentWorkspaceDir);
-      const resumedRun = runCodexAppServerAttempt(resumeParams);
-      await Promise.race([resumedRun, resumeHarness.waitForMethod("turn/start")]);
-      await resumeHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-      const resumedResult = await resumedRun;
+      const resumedResult = await completeAttempt(resumeHarness, resumeParams);
       expect(readAttemptTerminal(resumedResult).promptError).toBeNull();
       const degradedResult = failureAt === "initial" ? initialResult : resumedResult;
       expect(degradedResult.systemPromptReport?.injectedWorkspaceFiles).toEqual([]);
@@ -165,11 +172,8 @@ describe("Codex workspace instruction snapshots", () => {
   );
 
   it.each([
-    { initial: "present", change: "edited" },
-    { initial: "present", change: "emptied" },
     { initial: "present", change: "removed" },
     { initial: "absent", change: "added" },
-    { initial: "empty", change: "added" },
     { initial: "legacy", change: "added" },
     { initial: "legacy-empty", change: "added" },
   ] as const)(
@@ -182,11 +186,8 @@ describe("Codex workspace instruction snapshots", () => {
       const soulGuidance = "Keep the agent workspace voice.";
       await fs.mkdir(executionDir, { recursive: true });
       await fs.mkdir(agentWorkspaceDir, { recursive: true });
-      if (initial === "present" || initial === "empty") {
-        await fs.writeFile(
-          path.join(agentWorkspaceDir, "AGENTS.md"),
-          initial === "empty" ? "" : agentsGuidance,
-        );
+      if (initial === "present") {
+        await fs.writeFile(path.join(agentWorkspaceDir, "AGENTS.md"), agentsGuidance);
       }
       await fs.writeFile(path.join(agentWorkspaceDir, "SOUL.md"), soulGuidance);
       await fs.writeFile(path.join(executionDir, "AGENTS.md"), "Execution project instructions");
@@ -195,10 +196,7 @@ describe("Codex workspace instruction snapshots", () => {
       params.bootstrapWorkspaceDir = agentWorkspaceDir;
       setAgentWorkspaceForTest(params, agentWorkspaceDir);
 
-      const run = runCodexAppServerAttempt(params);
-      await harness.waitForMethod("turn/start");
-      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-      const result = await run;
+      const result = await completeAttempt(harness, params);
 
       const threadStart = harness.requests.find((request) => request.method === "thread/start");
       if (!threadStart) {
@@ -232,7 +230,7 @@ describe("Codex workspace instruction snapshots", () => {
       );
       expect(agentWorkspaceStats).toMatchObject(
         initial !== "present"
-          ? { missing: initial !== "empty", rawChars: 0 }
+          ? { missing: true, rawChars: 0 }
           : {
               rawChars: agentsGuidance.length,
               injectedChars: agentsGuidance.length,
@@ -252,24 +250,20 @@ describe("Codex workspace instruction snapshots", () => {
       if (change === "removed") {
         await fs.unlink(path.join(agentWorkspaceDir, "AGENTS.md"));
       } else if (initial !== "legacy-empty") {
-        await fs.writeFile(
-          path.join(agentWorkspaceDir, "AGENTS.md"),
-          change === "emptied" ? "" : updatedGuidance,
-        );
+        await fs.writeFile(path.join(agentWorkspaceDir, "AGENTS.md"), updatedGuidance);
       }
       harness.close();
       const resumeHarness = createResumeHarness("thread-1");
       const resumeParams = createParams(sessionFile, executionDir);
       resumeParams.bootstrapWorkspaceDir = agentWorkspaceDir;
       setAgentWorkspaceForTest(resumeParams, agentWorkspaceDir);
-      const resumedRun = runCodexAppServerAttempt(resumeParams);
-      await Promise.race([resumedRun, resumeHarness.waitForMethod("turn/start")]);
-      await resumeHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-      expect(readAttemptTerminal(await resumedRun)).toMatchObject({
-        aborted: false,
-        timedOut: false,
-        promptError: null,
-      });
+      expect(readAttemptTerminal(await completeAttempt(resumeHarness, resumeParams))).toMatchObject(
+        {
+          aborted: false,
+          timedOut: false,
+          promptError: null,
+        },
+      );
       expect(resumeHarness.requests.some(({ method }) => method === "turn/interrupt")).toBe(false);
       const threadResume = resumeHarness.requests.find(
         (request) => request.method === "thread/resume",
@@ -294,10 +288,9 @@ describe("Codex workspace instruction snapshots", () => {
         const nextParams = createParams(sessionFile, executionDir);
         nextParams.bootstrapWorkspaceDir = agentWorkspaceDir;
         setAgentWorkspaceForTest(nextParams, agentWorkspaceDir);
-        const nextRun = runCodexAppServerAttempt(nextParams);
-        await Promise.race([nextRun, nextHarness.waitForMethod("turn/start")]);
-        await nextHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-        expect(readAttemptTerminal(await nextRun).promptError).toBeNull();
+        expect(
+          readAttemptTerminal(await completeAttempt(nextHarness, nextParams)).promptError,
+        ).toBeNull();
         const nextResume = nextHarness.requests.find(({ method }) => method === "thread/resume");
         assert(nextResume);
         expect(

@@ -1,4 +1,3 @@
-// Googlechat plugin module owns raw webhook durable admission and draining.
 import { createStandardRawEventIngressMonitor } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   createChannelIngressError,
@@ -93,12 +92,12 @@ function deserializeGoogleChatIngressEvent(rawEvent: string, claimedId: string):
 
 function normalizeClaimedGoogleChatEvent(raw: unknown, claimedId: string): GoogleChatEvent {
   try {
-    const parsed = parseGoogleChatInboundPayload(raw);
-    const eventType = parsed.event.type ?? parsed.event.eventType;
+    const event = parseGoogleChatInboundPayload(raw);
+    const eventType = event.type ?? event.eventType;
     if (eventType !== "MESSAGE") {
       throw new GoogleChatEventPayloadError();
     }
-    return parsed.event;
+    return event;
   } catch (error) {
     throw new GoogleChatIngressPermanentError(
       "invalid-event",

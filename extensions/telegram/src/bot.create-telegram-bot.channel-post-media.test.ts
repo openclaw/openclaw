@@ -6,6 +6,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   holdTelegramMediaTimeouts,
   flushChannelPostMediaGroup,
+  withTelegramGetFileRetryClock,
 } from "./bot-media-timers.test-support.js";
 import {
   createChannelPostContext,
@@ -34,8 +35,8 @@ vi.mock("openclaw/plugin-sdk/hook-runtime", async () => {
   };
 });
 
-vi.mock("./telegram-media.runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./telegram-media.runtime.js")>();
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
   return {
     ...actual,
     saveRemoteMedia: (...args: unknown[]) => saveRemoteMedia(...args),
@@ -60,7 +61,7 @@ const {
   runWithTelegramSpooledReplayUpdate,
   runWithTelegramUpdateProcessingFrame,
 } = await import("./bot-processing-outcome.js");
-const { MediaFetchError } = await import("./telegram-media.runtime.js");
+const { MediaFetchError } = await import("openclaw/plugin-sdk/media-runtime");
 
 let createTelegramBot: (
   opts: import("./bot.types.js").TelegramBotOptions,
@@ -296,17 +297,17 @@ describe("createTelegramBot channel_post media", () => {
 
   it("warns and dispatches a type-only fact when Telegram getFile fails (#100000)", async () => {
     setOpenTelegramDirectConfig();
-    createTelegramBot({ token: "tok" });
+    await createTelegramBot({ token: "tok" });
     const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-    await handler(
-      createTelegramPrivateMediaContext({
-        messageId: 100000,
-        fileId: "doc-100000",
-        fileName: "report.pdf",
-        getFile: async () => {
-          throw new Error("Network request for 'getFile' failed!");
-        },
-      }),
+    await withTelegramGetFileRetryClock("Network request for 'getFile' failed!", (getFile) =>
+      handler(
+        createTelegramPrivateMediaContext({
+          messageId: 100000,
+          fileId: "doc-100000",
+          fileName: "report.pdf",
+          getFile,
+        }),
+      ),
     );
     await waitForTelegramMockCalls(sendMessageSpy, 1);
     expectTelegramDownloadWarning(100000);
@@ -322,7 +323,7 @@ describe("createTelegramBot channel_post media", () => {
     "reports the effective $expectedLimitMb MB limit for Telegram Bot API failures (#100000)",
     async ({ mediaMaxMb, expectedLimitMb }) => {
       setOpenTelegramDirectConfig(mediaMaxMb);
-      createTelegramBot({ token: "tok" });
+      await createTelegramBot({ token: "tok" });
       const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
       const messageId = 100001 + expectedLimitMb;
       await handler(
@@ -378,7 +379,7 @@ describe("createTelegramBot channel_post media", () => {
   ])("preserves durable replay handling for $name (#98076)", async (testCase) => {
     setOpenTelegramDirectConfig();
     saveRemoteMedia.mockRejectedValue(testCase.error);
-    createTelegramBot({ token: "tok" });
+    await createTelegramBot({ token: "tok" });
     const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
     const update = { update_id: testCase.messageId };
     const ctx = createTelegramPrivateMediaContext({
@@ -447,7 +448,7 @@ describe("createTelegramBot channel_post media", () => {
       }));
       const fetchSpy = createImageFetchSpy();
       try {
-        createTelegramBot({ token: "tok" });
+        await createTelegramBot({ token: "tok" });
         await dispatchTelegramGroupPhoto({
           messageId: 92067,
           topicId: topicIngest === undefined ? undefined : 42,
@@ -478,22 +479,32 @@ describe("createTelegramBot channel_post media", () => {
   );
 
   it.each([
-    { failure: "a download error", error: "Network request for 'getFile' failed!" },
-    { failure: "an oversized file", error: "Bad Request: file is too big" },
-  ])("silently ingests unmentioned group media after $failure (#92067)", async ({ error }) => {
-    setTelegramIngestGroupConfig();
-    createTelegramBot({ token: "tok" });
-    await dispatchTelegramGroupPhoto({
-      messageId: 92070,
-      getFile: async () => {
-        throw new Error(error);
-      },
-    });
-    expect(sendMessageSpy).not.toHaveBeenCalled();
-    expect(replySpy).not.toHaveBeenCalled();
-    expect(saveRemoteMedia).not.toHaveBeenCalled();
-    expectTelegramIngestHook([]);
-  });
+    {
+      failure: "a download error",
+      error: "Network request for 'getFile' failed!",
+      retryable: true,
+    },
+    { failure: "an oversized file", error: "Bad Request: file is too big", retryable: false },
+  ])(
+    "silently ingests unmentioned group media after $failure (#92067)",
+    async ({ error, retryable }) => {
+      setTelegramIngestGroupConfig();
+      await createTelegramBot({ token: "tok" });
+      const dispatch = (getFile: () => Promise<never>) =>
+        dispatchTelegramGroupPhoto({ messageId: 92070, getFile });
+      if (retryable) {
+        await withTelegramGetFileRetryClock(error, dispatch);
+      } else {
+        await dispatch(async () => {
+          throw new Error(error);
+        });
+      }
+      expect(sendMessageSpy).not.toHaveBeenCalled();
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(saveRemoteMedia).not.toHaveBeenCalled();
+      expectTelegramIngestHook([]);
+    },
+  );
 
   it.each([
     { name: "all", messageIds: [92068, 92069], partial: false, deniedMention: false },
@@ -524,7 +535,7 @@ describe("createTelegramBot channel_post media", () => {
       file_path: "photos/ingested-album.jpg",
     }));
     try {
-      createTelegramBot({ token: "tok", testTimings: TELEGRAM_TEST_TIMINGS });
+      await createTelegramBot({ token: "tok", testTimings: TELEGRAM_TEST_TIMINGS });
       // Admit both messages inside one window, including their awaited state writes.
       for (const messageId of testCase.messageIds) {
         const commandCaption = unauthorizedCommand && messageId === testCase.messageIds[1];
@@ -617,7 +628,7 @@ describe("createTelegramBot channel_post media", () => {
     saveRemoteMedia.mockRejectedValueOnce(new MediaFetchError("fetch_failed", "ECONNRESET"));
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("ECONNRESET"));
     try {
-      createTelegramBot({ token: "tok" });
+      await createTelegramBot({ token: "tok" });
       await dispatchTelegramGroupPhoto({
         messageId: testCase.messageId,
         ...("caption" in testCase ? { caption: testCase.caption } : {}),
@@ -658,7 +669,7 @@ describe("createTelegramBot channel_post media", () => {
 
     const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
     try {
-      createTelegramBot({
+      await createTelegramBot({
         token: "tok",
         testTimings: TELEGRAM_TEST_TIMINGS,
         fetchAbortSignal: shutdown.signal,
@@ -710,7 +721,7 @@ describe("createTelegramBot channel_post media", () => {
     const runtimeError = vi.fn();
     const setTimeoutSpy = holdTelegramMediaTimeouts(TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
     try {
-      createTelegramBot({
+      await createTelegramBot({
         token: "tok",
         testTimings: TELEGRAM_TEST_TIMINGS,
         runtime: { error: runtimeError } as unknown as RuntimeEnv,

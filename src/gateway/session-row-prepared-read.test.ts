@@ -224,6 +224,7 @@ it.each(["child", "parent"] as const)(
       moves: new Map(),
       environments: new Map(),
       workspaceResultReconcilingSessionIds: new Set(),
+      workspaceRecoveryPendingSessionIds: new Set(),
     };
     const readPlacement = vi
       .fn()
@@ -247,6 +248,7 @@ it.each(["child", "parent"] as const)(
       referenced: (key) => projection.describe({ agentId: "main", key }),
       lookup: projection.describe,
       prepareExactRows: () => undefined,
+      retainExactPreparation: () => () => {},
       assertExactRowsPrepared: () => {},
       retainArchiveRows: () => ({ update: () => {}, release: () => {} }),
       describe: projection.describe,

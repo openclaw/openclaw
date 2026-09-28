@@ -228,13 +228,13 @@ export function createWebSocketTransport(
   };
 }
 
-/** Opens the owner-scoped Codex control socket used by the WebSocket upgrade. */
+/** Named local-only socket boundary for the egress classifier. */
 function connectCodexAppServerUnixSocket(socketPath: string): net.Socket {
   return net.createConnection(socketPath);
 }
 
 /** Resolves the canonical or explicitly configured Codex control socket. */
-function resolveCodexAppServerUnixSocketPath(
+export function resolveCodexAppServerUnixSocketPath(
   options: Pick<CodexAppServerStartOptions, "env" | "transport" | "url">,
 ): string | undefined {
   if (options.transport !== "unix") {

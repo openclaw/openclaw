@@ -301,7 +301,7 @@ describe("prepared worker intent admission", () => {
     const retention = await f.owner.prepareRetention(record);
     expect(retention).toBeDefined();
     f.provider.supportsProjectPreparation = () => false;
-    expect(() => retention!.assertCurrent()).toThrow("retention policy changed");
+    expect(retention!.isCurrent()).toBe(false);
     f.provider.supportsProjectPreparation = () => true;
     const entered = createDeferredCore();
     const release = createDeferredCore();

@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { MediaFact } from "../../media/media-facts.js";
 import { parseInboundMediaUri } from "../../media/media-reference.js";
 import { resolveChatAttachmentMaxBytes } from "../chat-attachment-policy.js";
 import {
@@ -62,12 +63,12 @@ async function prestageMediaPathOffloads(params: {
   agentId: string;
   abortSignal: AbortSignal;
   assertWorkAdmissionCurrent: () => void;
-}): Promise<{ paths: string[]; types: string[]; workspaceDir?: string }> {
+}): Promise<MediaFact[]> {
   const mediaPathRefs = params.offloadedRefs.filter(
     (ref) => params.includeImageRefs || !ref.mimeType.startsWith("image/"),
   );
   if (mediaPathRefs.length === 0) {
-    return { paths: [], types: [] };
+    return [];
   }
   try {
     const [{ ensureSandboxWorkspaceForSession }, { SANDBOX_MEDIA_MAX_BYTES, stageSandboxMedia }] =
@@ -77,19 +78,17 @@ async function prestageMediaPathOffloads(params: {
       ]);
     params.abortSignal.throwIfAborted();
     params.assertWorkAdmissionCurrent();
-    const refsByManagedPath = (refs: OffloadedRef[]) => ({
-      paths: refs.map((ref) => ref.path),
-      types: refs.map((ref) => ref.mimeType),
-    });
-    const passThroughRefs: OffloadedRef[] = [];
-    const refsToStage: OffloadedRef[] = [];
-    for (const ref of mediaPathRefs) {
-      // Host-readable managed PDFs above the staging cap do not need a sandbox copy.
-      (ref.sizeBytes > SANDBOX_MEDIA_MAX_BYTES && isManagedInboundPdfOffloadRef(ref)
-        ? passThroughRefs
-        : refsToStage
-      ).push(ref);
-    }
+    const refsByManagedPath = (refs: OffloadedRef[]): MediaFact[] =>
+      refs.map((ref) => ({
+        path: ref.path,
+        contentType: ref.mimeType,
+        fileName: ref.label,
+        workspaceDir: path.dirname(ref.path),
+      }));
+    // Host-readable managed PDFs above the staging cap do not need a sandbox copy.
+    const refsToStage = mediaPathRefs.filter(
+      (ref) => !(ref.sizeBytes > SANDBOX_MEDIA_MAX_BYTES && isManagedInboundPdfOffloadRef(ref)),
+    );
     if (refsToStage.length === 0) {
       return refsByManagedPath(mediaPathRefs);
     }
@@ -169,17 +168,15 @@ async function prestageMediaPathOffloads(params: {
         mimeType: stagedMedia[index]?.contentType ?? ref.mimeType,
       });
     });
-    for (const ref of passThroughRefs) {
-      resolvedByRef.set(ref, { path: ref.path, mimeType: ref.mimeType });
-    }
-    const ordered = mediaPathRefs.map(
-      (ref) => resolvedByRef.get(ref) ?? { path: ref.path, mimeType: ref.mimeType },
-    );
-    return {
-      paths: ordered.map((entry) => entry.path),
-      types: ordered.map((entry) => entry.mimeType),
-      workspaceDir: sandbox.workspaceDir,
-    };
+    return mediaPathRefs.map((ref) => {
+      const resolved = resolvedByRef.get(ref) ?? { path: ref.path, mimeType: ref.mimeType };
+      return {
+        path: resolved.path,
+        contentType: resolved.mimeType,
+        fileName: ref.label,
+        workspaceDir: sandbox.workspaceDir,
+      };
+    });
   } catch (err) {
     if (
       (params.abortSignal.aborted && Object.is(err, params.abortSignal.reason)) ||
@@ -217,9 +214,7 @@ export async function prepareChatSendAttachments(params: {
   let parsedImages: Awaited<ReturnType<typeof parseMessageWithAttachments>>["images"] = [];
   let imageOrder: Awaited<ReturnType<typeof parseMessageWithAttachments>>["imageOrder"] = [];
   let offloadedRefs: OffloadedRef[] = [];
-  let mediaPathOffloadPaths: string[] = [];
-  let mediaPathOffloadTypes: string[] = [];
-  let mediaPathOffloadWorkspaceDir: string | undefined;
+  let mediaPathOffloads: MediaFact[] = [];
   const explicitOriginTargetsPlugin = explicitOriginTargetsPluginBinding(explicitOrigin);
   let prepareAttachmentsMs: number | undefined;
 
@@ -250,6 +245,8 @@ export async function prepareChatSendAttachments(params: {
             log: context.logGateway,
             supportsImages: imageSupport.value ?? resolveSupportsImages,
             acceptNonImage: true,
+            signal: activeRunAbort.controller.signal,
+            assertCurrent: admission.assertWorkAdmissionCurrent,
           });
           // The parser owns MIME classification. An unresolved capability means no image was seen,
           // so post-processing must not trigger catalog discovery for a non-image attachment.
@@ -260,11 +257,7 @@ export async function prepareChatSendAttachments(params: {
           parsedImages = parsed.images;
           imageOrder = parsed.imageOrder;
           offloadedRefs = parsed.offloadedRefs;
-          ({
-            paths: mediaPathOffloadPaths,
-            types: mediaPathOffloadTypes,
-            workspaceDir: mediaPathOffloadWorkspaceDir,
-          } = await prestageMediaPathOffloads({
+          mediaPathOffloads = await prestageMediaPathOffloads({
             offloadedRefs,
             includeImageRefs: !parsedSupportsImages,
             cfg,
@@ -272,7 +265,7 @@ export async function prepareChatSendAttachments(params: {
             agentId,
             abortSignal: activeRunAbort.controller.signal,
             assertWorkAdmissionCurrent: admission.assertWorkAdmissionCurrent,
-          }));
+          });
         },
         {
           phase: "agent-turn",
@@ -322,9 +315,7 @@ export async function prepareChatSendAttachments(params: {
     value: {
       explicitOriginTargetsPlugin,
       imageOrder,
-      mediaPathOffloadPaths,
-      mediaPathOffloadTypes,
-      mediaPathOffloadWorkspaceDir,
+      mediaPathOffloads,
       offloadedRefs,
       parsedImages,
       parsedMessage,
@@ -332,3 +323,8 @@ export async function prepareChatSendAttachments(params: {
     },
   };
 }
+
+export type PreparedChatSendAttachments = Extract<
+  Awaited<ReturnType<typeof prepareChatSendAttachments>>,
+  { ok: true }
+>["value"];

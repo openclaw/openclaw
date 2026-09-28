@@ -1,4 +1,3 @@
-// Whatsapp plugin module owns one attached inbound socket session.
 import type {
   AnyMessageContent,
   ConnectionState,
@@ -13,7 +12,12 @@ import { readWebSelfIdentityForDecision, WhatsAppAuthUnstableError } from "../au
 import { getWhatsAppConnectionController } from "../connection-controller-runtime-context.js";
 import { identitiesOverlap, type WhatsAppSelfIdentity } from "../identity.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";
-import { DEFAULT_RECONNECT_POLICY, computeBackoff, sleepWithAbort } from "../reconnect.js";
+import {
+  DEFAULT_RECONNECT_POLICY,
+  computeBackoff,
+  sleepWithAbort,
+  type ReconnectPolicy,
+} from "../reconnect.js";
 import { formatError, getStatusCode } from "../session.js";
 import {
   createWhatsAppSocketOperationTimeoutAdapter,
@@ -28,7 +32,7 @@ import {
   resolveJidToE164,
   toWhatsappJid,
   toWhatsappJidWithLid,
-} from "../text-runtime.js";
+} from "../targets-runtime.js";
 import {
   rememberWhatsAppBaileysCacheEntry,
   type WhatsAppBaileysMessageCache,
@@ -56,13 +60,7 @@ type SocketSessionOptions = {
   selfChatMode?: boolean;
   socketTiming: Required<WhatsAppSocketTimingOptions>;
   shouldRetryDisconnect?: () => boolean;
-  disconnectRetryPolicy?: {
-    initialMs: number;
-    maxMs: number;
-    factor: number;
-    jitter: number;
-    maxAttempts: number;
-  };
+  disconnectRetryPolicy?: ReconnectPolicy;
   disconnectRetryAbortSignal?: AbortSignal;
   recentMessageKeys?: WhatsAppBaileysMessageCache;
   logVerbose: (message: string) => void;
@@ -147,10 +145,7 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
     options.logVerbose(`Failed to send '${presence}' presence on connect: ${String(error)}`);
   }
 
-  const selfIdentity = await readWebSelfIdentityForDecision(
-    options.authDir,
-    sock.user as { id?: string | null; lid?: string | null } | undefined,
-  );
+  const selfIdentity = await readWebSelfIdentityForDecision(options.authDir, sock.user);
   if (selfIdentity.outcome === "unstable") {
     throw new WhatsAppAuthUnstableError(
       "WhatsApp auth state is still stabilizing; retrying inbox attach.",
@@ -203,11 +198,8 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
     );
   };
 
-  const rememberOutboundMessage = (remoteJid: string, result: unknown) => {
-    const messageId =
-      typeof result === "object" && result && "key" in result
-        ? ((result as { key?: { id?: string } }).key?.id ?? "")
-        : "";
+  const rememberOutboundMessage = (remoteJid: string, result: WAMessage | undefined) => {
+    const messageId = result?.key?.id;
     if (!messageId) {
       return;
     }
@@ -216,10 +208,7 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
       remoteJid,
       messageId,
     });
-    const message =
-      typeof result === "object" && result && "message" in result
-        ? (result as { message?: proto.IMessage }).message
-        : undefined;
+    const message = result?.message;
     rememberBaileysMessage(remoteJid, messageId, message);
     // Baileys derives the participant for fromMe quotes from its own userJid.
     // Retain only the facts needed to avoid the cache-miss fromMe=false fallback.
@@ -392,7 +381,7 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
   };
 
   const socketOperations: WhatsAppSocketOperationAdapter = {
-    sendMessage: (jid, content, sendOptions) => sendTrackedMessage(jid, content, sendOptions),
+    sendMessage: sendTrackedMessage,
     sendPresenceUpdate: async (presenceLocal, jid) => {
       const currentSock = getCurrentSock();
       if (!currentSock) {

@@ -37,16 +37,13 @@ describe("system-agent TUI operations", () => {
   it("refuses doctor repairs before any write or audit", async () => {
     await withTempHome(async (home) => {
       const { runtime, lines } = createSystemAgentTestRuntime();
-      const runDoctor = vi.fn(async () => {});
 
       const result = await executeSystemAgentOperation({ kind: "doctor-fix" }, runtime, {
         approved: true,
-        deps: { runDoctor },
         auditDetails: { rescue: true },
       });
       expect(result).toEqual({ applied: false });
       expect(isPersistentSystemAgentOperation({ kind: "doctor-fix" })).toBe(false);
-      expect(runDoctor).not.toHaveBeenCalled();
       expect(lines.join("\n")).toContain("with OpenClaw stopped");
       expect(lines.join("\n")).toContain("openclaw doctor --fix");
       expect(lines.join("\n")).not.toContain("[openclaw] running: doctor.fix");
@@ -133,22 +130,6 @@ describe("system-agent TUI operations", () => {
       deliver: false,
       historyLimit: 200,
       message: "Wake up, my friend!",
-    });
-  });
-
-  it("keeps the embedded TUI fallback when the Gateway is unreachable", async () => {
-    const { runtime } = createSystemAgentTestRuntime();
-    const runTui = vi.fn(async () => ({ exitReason: "exit" as const }));
-
-    await executeSystemAgentOperation({ kind: "open-tui", agentId: "work" }, runtime, {
-      deps: { runTui, loadOverview: async () => createOverview(false) },
-    });
-
-    expect(runTui).toHaveBeenCalledWith({
-      local: true,
-      session: "agent:work:main",
-      deliver: false,
-      historyLimit: 200,
     });
   });
 

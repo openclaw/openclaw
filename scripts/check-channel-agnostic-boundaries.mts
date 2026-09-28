@@ -3,14 +3,15 @@
 // Checks channel-agnostic core surfaces for channel-specific coupling.
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import ts from "typescript";
-import { visitModuleSpecifiers } from "./lib/guard-inventory-utils.mjs";
+import * as ts from "typescript/unstable/ast";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   collectTypeScriptFiles,
   getPropertyNameText,
   runAsScript,
   toLine,
+  visitModuleSpecifiers,
 } from "./lib/ts-guard-utils.mts";
 
 const repoRoot = resolveRepoRoot(import.meta.url);
@@ -72,8 +73,6 @@ const comparisonOperators: ReadonlySet<ts.SyntaxKind> = new Set([
   ts.SyntaxKind.ExclamationEqualsToken,
 ]);
 
-const allowedViolations = new Set<string>();
-
 type BoundaryViolation = { line: number; reason: string };
 type BoundaryOptions = {
   checkModuleSpecifiers?: boolean;
@@ -81,12 +80,6 @@ type BoundaryOptions = {
   checkChannelComparisons?: boolean;
   checkChannelAssignments?: boolean;
   moduleSpecifierMatcher?: (specifier: string) => boolean;
-};
-type ModuleSpecifierVisit = {
-  kind: string;
-  node: ts.Node;
-  specifier: string;
-  specifierNode: ts.Node;
 };
 function isChannelsPropertyAccess(node: ts.Node) {
   if (ts.isPropertyAccessExpression(node)) {
@@ -99,13 +92,7 @@ function isChannelsPropertyAccess(node: ts.Node) {
 }
 
 function readStringLiteral(node: ts.Node) {
-  if (ts.isStringLiteral(node)) {
-    return node.text;
-  }
-  if (ts.isNoSubstitutionTemplateLiteral(node)) {
-    return node.text;
-  }
-  return null;
+  return ts.isStringLiteralLikeNode(node) ? node.text : null;
 }
 
 function isChannelLiteralNode(node: ts.Node) {
@@ -137,8 +124,9 @@ function isModuleSpecifierStringNode(node: ts.Node) {
  * Finds channel-specific references inside channel-agnostic protected sources.
  */
 export function findChannelAgnosticBoundaryViolations(
-  content: string,
-  fileName = "source.ts",
+  _content: string,
+  _fileName: string,
+  sourceFile: ts.SourceFile,
   options: BoundaryOptions = {},
 ) {
   const checkModuleSpecifiers = options.checkModuleSpecifiers ?? true;
@@ -147,14 +135,12 @@ export function findChannelAgnosticBoundaryViolations(
   const checkChannelAssignments = options.checkChannelAssignments ?? true;
   const moduleSpecifierMatcher = options.moduleSpecifierMatcher ?? matchesChannelModuleSpecifier;
 
-  const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
   const violations: BoundaryViolation[] = [];
   const moduleViolations = new Map<ts.Node, BoundaryViolation>();
   if (checkModuleSpecifiers) {
     visitModuleSpecifiers(
-      ts,
       sourceFile,
-      ({ kind, node, specifier, specifierNode }: ModuleSpecifierVisit) => {
+      ({ kind, node, specifier, specifierNode }) => {
         if (moduleSpecifierMatcher(specifier)) {
           const verb =
             kind === "export"
@@ -230,7 +216,7 @@ export function findChannelAgnosticBoundaryViolations(
       }
     }
 
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
 
   visit(sourceFile);
@@ -242,9 +228,10 @@ export function findChannelAgnosticBoundaryViolations(
  */
 export function findChannelCoreReverseDependencyViolations(
   content: string,
-  fileName = "source.ts",
+  fileName: string,
+  sourceFile: ts.SourceFile,
 ) {
-  return findChannelAgnosticBoundaryViolations(content, fileName, {
+  return findChannelAgnosticBoundaryViolations(content, fileName, sourceFile, {
     checkModuleSpecifiers: true,
     checkConfigPaths: false,
     checkChannelComparisons: false,
@@ -256,8 +243,11 @@ export function findChannelCoreReverseDependencyViolations(
 /**
  * Finds user-facing channel names in ACP-owned text sources.
  */
-export function findAcpUserFacingChannelNameViolations(content: string, fileName = "source.ts") {
-  const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
+export function findAcpUserFacingChannelNameViolations(
+  _content: string,
+  _fileName: string,
+  sourceFile: ts.SourceFile,
+) {
   const violations: BoundaryViolation[] = [];
 
   const visit = (node: ts.Node): void => {
@@ -268,7 +258,7 @@ export function findAcpUserFacingChannelNameViolations(content: string, fileName
         reason: `user-facing text references channel name (${JSON.stringify(text)})`,
       });
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
 
   visit(sourceFile);
@@ -278,8 +268,11 @@ export function findAcpUserFacingChannelNameViolations(content: string, fileName
 /**
  * Finds raw system mark literals where shared constants should be used.
  */
-export function findSystemMarkLiteralViolations(content: string, fileName = "source.ts") {
-  const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
+export function findSystemMarkLiteralViolations(
+  _content: string,
+  _fileName: string,
+  sourceFile: ts.SourceFile,
+) {
   const violations: BoundaryViolation[] = [];
 
   const visit = (node: ts.Node): void => {
@@ -290,7 +283,7 @@ export function findSystemMarkLiteralViolations(content: string, fileName = "sou
         reason: `hardcoded system mark literal (${JSON.stringify(text)})`,
       });
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
 
   visit(sourceFile);
@@ -324,28 +317,21 @@ const boundaryRuleSets = [
  * Runs all channel-agnostic boundary checks.
  */
 export async function main() {
+  using parser = createNativeTypeScriptParser({ cwd: repoRoot });
   const violations: string[] = [];
   for (const ruleSet of boundaryRuleSets) {
     const files = (
       await Promise.all(
-        ruleSet.sources.map(
-          async (sourcePath) =>
-            await collectTypeScriptFiles(sourcePath, {
-              ignoreMissing: true,
-            }),
+        ruleSet.sources.map((sourcePath) =>
+          collectTypeScriptFiles(sourcePath, { ignoreMissing: true }),
         ),
       )
     ).flat();
     for (const filePath of files) {
       const relativeFile = path.relative(repoRoot, filePath);
-      if (
-        allowedViolations.has(`${ruleSet.id}:${relativeFile}`) ||
-        allowedViolations.has(relativeFile)
-      ) {
-        continue;
-      }
       const content = await fs.readFile(filePath, "utf8");
-      for (const violation of ruleSet.scan(content, relativeFile)) {
+      const sourceFile = parser.parseSourceFile(filePath, content);
+      for (const violation of ruleSet.scan(content, relativeFile, sourceFile)) {
         violations.push(`${ruleSet.id} ${relativeFile}:${violation.line}: ${violation.reason}`);
       }
     }
@@ -362,7 +348,7 @@ export async function main() {
   console.error(
     "Move channel-specific logic to channel adapters or add a justified allowlist entry.",
   );
-  process.exit(1);
+  process.exitCode = 1;
 }
 
 runAsScript(import.meta.url, main);

@@ -30,7 +30,6 @@ import {
 } from "./deliver-handoff.js";
 import {
   resolveOutboundDurableFinalDeliverySupport,
-  type DurableFinalDeliveryRequirements,
   type OutboundDeliveryResult,
   type OutboundDeliveryQueuePolicy,
   type OutboundSendDeps,
@@ -267,28 +266,6 @@ function assertPollOptionSupport(params: {
   }
 }
 
-async function resolveRequiredChannel(params: {
-  cfg: OpenClawConfig;
-  channel?: string;
-}): Promise<{ channel: string; plugin: ChannelPlugin }> {
-  return await resolveMessageChannelSelection({
-    cfg: params.cfg,
-    channel: params.channel,
-  });
-}
-
-function deriveRequiredMessageSendCapabilities(params: {
-  payloads: ReplyPayload[];
-  replyToId?: string | null;
-  threadId?: string | number | null;
-  silent?: boolean;
-}): DurableFinalDeliveryRequirements {
-  return deriveDurableFinalDeliveryRequirementsForBatch({
-    ...params,
-    reconcileUnknownSend: true,
-  });
-}
-
 async function assertRequiredMessageSendDurability(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -302,7 +279,10 @@ async function assertRequiredMessageSendDurability(params: {
     cfg: params.cfg,
     agentId: params.agentId,
     channel: params.channel,
-    requirements: deriveRequiredMessageSendCapabilities(params),
+    requirements: deriveDurableFinalDeliveryRequirementsForBatch({
+      ...params,
+      reconcileUnknownSend: true,
+    }),
   });
   if (support.ok) {
     return;
@@ -317,10 +297,6 @@ async function assertRequiredMessageSendDurability(params: {
   );
 }
 
-function resolveGatewayOptions(opts?: OutboundMessageGatewayOptionsInput) {
-  return resolveOutboundMessageGatewayOptions(opts);
-}
-
 async function callMessageGateway<T>(params: {
   gateway?: OutboundMessageGatewayOptionsInput;
   method: string;
@@ -328,7 +304,7 @@ async function callMessageGateway<T>(params: {
   onPlatformSendDispatch?: () => Promise<void>;
   assertDirectAdapterHandoff?: () => void;
 }): Promise<T> {
-  const gateway = resolveGatewayOptions(params.gateway);
+  const gateway = resolveOutboundMessageGatewayOptions(params.gateway);
   // Mint before the local dispatch fence so revocation during RPC is enforced
   // by the Gateway's live operational-run validator, not token freshness.
   const agentRuntimeIdentityToken = params.gateway?.request
@@ -373,7 +349,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
   const reply = normalizeOutboundReplyFacts({ reply: params.reply, replyToId: params.replyToId });
   const prepared = params.preparedPlugin
     ? { channel: params.preparedPlugin.id, plugin: params.preparedPlugin }
-    : await resolveRequiredChannel({ cfg, channel: params.channel });
+    : await resolveMessageChannelSelection({ cfg, channel: params.channel });
   const { channel, plugin } = prepared;
   const deliveryMode = plugin.outbound?.deliveryMode ?? "direct";
   const mediaSources = [params.mediaUrl, ...(params.mediaUrls ?? [])].filter(
@@ -594,7 +570,7 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
   const cfg = await resolveMessageConfig(params.cfg);
   const prepared = params.preparedPlugin
     ? { channel: params.preparedPlugin.id, plugin: params.preparedPlugin }
-    : await resolveRequiredChannel({ cfg, channel: params.channel });
+    : await resolveMessageChannelSelection({ cfg, channel: params.channel });
   const { channel, plugin } = prepared;
 
   const pollInput: PollInput = {

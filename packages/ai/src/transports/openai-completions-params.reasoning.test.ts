@@ -49,21 +49,6 @@ describe("openai completions params", () => {
     expect(params.messages?.[0]?.content).toBe("Stable prefix\nDynamic suffix");
   });
 
-  it("uses shared stream reasoning as OpenAI completions effort", () => {
-    const params = buildOpenAICompletionsParams(
-      makeCompletionsModel({
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-      }),
-      emptyContext(),
-      {
-        reasoning: "medium",
-      } as never,
-    ) as { reasoning_effort?: unknown };
-
-    expect(params.reasoning_effort).toBe("medium");
-  });
-
   it("maps minimal shared reasoning to low for OpenAI completions", () => {
     const params = buildOpenAICompletionsParams(
       makeCompletionsModel({
@@ -331,6 +316,20 @@ describe("openai completions params", () => {
     expect(disabled.enable_thinking).toBe(false);
     expect(enabled).not.toHaveProperty("reasoning_effort");
     expect(disabled).not.toHaveProperty("reasoning_effort");
+
+    const nearCapModel = { ...baseModel, contextWindow: 1016 };
+    const nearCapContext = { systemPrompt: "x".repeat(3200), messages: [], tools: [] };
+    expect(
+      buildOpenAICompletionsParams(nearCapModel, nearCapContext, { reasoning: "off" }),
+    ).toMatchObject({ enable_thinking: false, max_completion_tokens: 15 });
+    expect(() =>
+      buildOpenAICompletionsParams(nearCapModel, nearCapContext, { reasoning: "medium" }),
+    ).toThrowError(expect.objectContaining({ code: "context_length_exceeded" }));
+    expect(
+      buildOpenAICompletionsParams({ ...baseModel, contextWindow: 1000 }, nearCapContext, {
+        reasoning: "off",
+      }),
+    ).toMatchObject({ enable_thinking: false, max_completion_tokens: 1 });
   });
 
   it("maps qwen-chat-template thinking format to chat_template_kwargs", () => {

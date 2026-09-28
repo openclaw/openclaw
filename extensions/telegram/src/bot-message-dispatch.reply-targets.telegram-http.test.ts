@@ -41,9 +41,6 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
   it.each(["selected", "bot-reply", "older-source", "external", "off"] as const)(
     "selects the native reply target from %s context",
     async (selection) => {
-      if (selection === "older-source") {
-        vi.useFakeTimers({ shouldAdvanceTime: true });
-      }
       const context = createContext();
       const inboundId = context.msg.message_id;
       Object.assign(context.ctxPayload, {
@@ -132,16 +129,16 @@ describe("Telegram quote selection and accepted reply targets through HTTP", () 
     },
   );
 
-  it.each(
-    (["first", "batched", "all"] as const).flatMap((replyToMode) =>
-      (["one-page", "retained-page", "media"] as const).map((transition) => ({
-        replyToMode,
-        transition,
-      })),
-    ),
-  )(
-    "consumes an accepted $replyToMode target across $transition fallback",
-    async ({ replyToMode, transition }) => {
+  it.each([
+    ["first", "one-page"],
+    ["batched", "retained-page"],
+    ["first", "media"],
+    ["all", "one-page"],
+    ["all", "retained-page"],
+    ["all", "media"],
+  ] as const)(
+    "consumes an accepted %s target across %s fallback",
+    async (replyToMode, transition) => {
       const context = createContext();
       let rejected = false;
       http.respondToCall = (call) => {

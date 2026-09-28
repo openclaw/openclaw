@@ -41,13 +41,8 @@ import {
   normalizeShortTermRecallStore,
 } from "./short-term-promotion-utils.js";
 
-export function resolveShortTermRecallStorePath(workspaceDir: string): string {
-  return resolveStorePath(workspaceDir);
-}
-
-export function resolveShortTermRecallLockPath(workspaceDir: string): string {
-  return resolveLockPath(workspaceDir);
-}
+export { resolveStorePath as resolveShortTermRecallStorePath } from "./short-term-promotion-store.js";
+export { resolveLockPath as resolveShortTermRecallLockPath } from "./memory-workspace-lock.js";
 
 export async function auditShortTermPromotionArtifacts(params: {
   workspaceDir: string;
@@ -71,22 +66,15 @@ export async function auditShortTermPromotionArtifacts(params: {
   const exists = rawEntryCount > 0;
   if (exists) {
     const store = normalizeShortTermRecallStore(raw, nowIso);
-    const normalizedEntryCount = Object.keys(store.entries).length;
+    const entries = Object.values(store.entries);
+    const taggedEntries = entries.filter((entry) => (entry.conceptTags?.length ?? 0) > 0);
     updatedAt = store.updatedAt;
-    entryCount = normalizedEntryCount;
-    promotedCount = Object.values(store.entries).filter((entry) =>
-      Boolean(entry.promotedAt),
-    ).length;
-    spacedEntryCount = Object.values(store.entries).filter(
-      (entry) => (entry.recallDays?.length ?? 0) > 1,
-    ).length;
-    conceptTaggedEntryCount = Object.values(store.entries).filter(
-      (entry) => (entry.conceptTags?.length ?? 0) > 0,
-    ).length;
+    entryCount = entries.length;
+    promotedCount = entries.filter((entry) => Boolean(entry.promotedAt)).length;
+    spacedEntryCount = entries.filter((entry) => (entry.recallDays?.length ?? 0) > 1).length;
+    conceptTaggedEntryCount = taggedEntries.length;
     conceptTagScripts = summarizeConceptTagScriptCoverage(
-      Object.values(store.entries)
-        .filter((entry) => (entry.conceptTags?.length ?? 0) > 0)
-        .map((entry) => entry.conceptTags ?? []),
+      taggedEntries.map((entry) => entry.conceptTags ?? []),
     );
     invalidEntryCount = rawEntryCount - entryCount;
     if (invalidEntryCount > 0) {
@@ -99,9 +87,9 @@ export async function auditShortTermPromotionArtifacts(params: {
     }
     const liveEntries = await filterLiveShortTermRecallEntries({
       workspaceDir,
-      entries: Object.values(store.entries),
+      entries,
     });
-    danglingEntryCount = normalizedEntryCount - liveEntries.length;
+    danglingEntryCount = entryCount - liveEntries.length;
     if (danglingEntryCount > 0) {
       issues.push({
         severity: "warn",
@@ -110,11 +98,11 @@ export async function auditShortTermPromotionArtifacts(params: {
         fixable: true,
       });
     }
-    if (normalizedEntryCount > SHORT_TERM_RECALL_MAX_ENTRIES) {
+    if (entryCount > SHORT_TERM_RECALL_MAX_ENTRIES) {
       issues.push({
         severity: "warn",
         code: "recall-store-over-limit",
-        message: `Short-term recall store contains ${normalizedEntryCount} entries; only the newest ${SHORT_TERM_RECALL_MAX_ENTRIES} are kept at runtime.`,
+        message: `Short-term recall store contains ${entryCount} entries; only the newest ${SHORT_TERM_RECALL_MAX_ENTRIES} are kept at runtime.`,
         fixable: true,
       });
     }

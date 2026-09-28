@@ -308,6 +308,20 @@ authority, and contract errors reject; do not turn cancellation into fallback wo
 See the [SDK contract](/plugins/sdk-overview/capabilities#decision-models-contract-version-1)
 for the complete lifecycle and error behavior.
 
+Consumers should build bounded useful evidence, evaluate it once, and retain their
+normal behavior when the provider returns `unsupported-input`, including context
+overflow. The runtime does not estimate model tokens, truncate evidence, retry,
+or choose another provider/model. Input rejection does not open the provider
+circuit; cancellation and closed authority remain terminal.
+
+The `decisions` logger records DEBUG outcomes, dispatch status, elapsed time,
+question count, supplied JSON byte count, and actual provider usage when available.
+JSON bytes are not model tokens. Purpose/provider/model identifiers are hashed;
+existing ambient trace correlation is preserved. It logs no submitted text,
+rubrics, credentials, or provider error bodies, and does no extra input serialization
+when DEBUG is disabled. Generic input-rejection warnings are rate limited. Logs
+distinguish the provider result from the caller effect, which remains unobserved here.
+
 For ONNX, cold-loading a large model can exceed the deadline on slower machines.
 Keep active models warm when memory permits, or choose a smaller model. See
 [ONNX lifecycle and runtime](/plugins/onnx#lifecycle-and-runtime) for cache settings

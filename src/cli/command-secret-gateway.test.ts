@@ -1196,55 +1196,51 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     });
   });
 
-  it("marks web SecretRefs inactive when the web surface is disabled during local fallback", async () => {
-    const restoreDeps = setGoogleWebSearchTargetDeps();
-    try {
-      callGateway.mockRejectedValueOnce(new Error("gateway closed"));
-      const result = await resolveCommandSecretRefsViaGateway({
-        config: {
-          tools: {
-            web: {
-              search: {
-                enabled: false,
-                provider: "gemini",
-              },
-            },
-          },
-          plugins: {
-            entries: {
-              google: {
-                config: {
-                  webSearch: {
-                    apiKey: {
-                      source: "env",
-                      provider: "default",
-                      id: "WEB_SEARCH_DISABLED_KEY",
+  it.each([
+    { kind: "search", credentialKind: "webSearch", pluginId: "google", disabled: true },
+    { kind: "fetch", credentialKind: "webFetch", pluginId: "firecrawl", disabled: true },
+    { kind: "search", credentialKind: "webSearch", pluginId: "google", disabled: false },
+    { kind: "fetch", credentialKind: "webFetch", pluginId: "firecrawl", disabled: false },
+  ] as const)(
+    "marks web $kind refs inactive for disabled=$disabled or another selected provider",
+    async ({ kind, credentialKind, pluginId, disabled }) => {
+      const targetPath = `plugins.entries.${pluginId}.config.${credentialKind}.apiKey`;
+      const restoreDeps = setSingleSecretTargetDeps({
+        path: targetPath,
+        pathSegments: ["plugins", "entries", pluginId, "config", credentialKind, "apiKey"],
+        resolveManifestContractOwnerPluginId: () => "other-plugin",
+      });
+      try {
+        callGateway.mockRejectedValueOnce(new Error("gateway closed"));
+        const result = await resolveCommandSecretRefsViaGateway({
+          config: {
+            tools: { web: { [kind]: { enabled: !disabled, provider: "other-provider" } } },
+            plugins: {
+              entries: {
+                [pluginId]: {
+                  config: {
+                    [credentialKind]: {
+                      apiKey: { source: "env", provider: "default", id: "WEB_INACTIVE_KEY" },
                     },
                   },
                 },
               },
             },
           },
-        } as OpenClawConfig,
-        commandName: "agent",
-        targetIds: new Set(["plugins.entries.google.config.webSearch.apiKey"]),
-      });
+          commandName: "agent",
+          targetIds: new Set([targetPath]),
+        });
 
-      expect(result.hadUnresolvedTargets).toBe(false);
-      expect(result.targetStatesByPath["plugins.entries.google.config.webSearch.apiKey"]).toBe(
-        "inactive_surface",
-      );
-      expect(
-        result.diagnostics.some((entry) =>
-          entry.includes(
-            "plugins.entries.google.config.webSearch.apiKey: tools.web.search is disabled.",
-          ),
-        ),
-      ).toBe(true);
-    } finally {
-      restoreDeps();
-    }
-  });
+        expect(result.hadUnresolvedTargets).toBe(false);
+        expect(result.targetStatesByPath[targetPath]).toBe("inactive_surface");
+        expect(result.diagnostics).toContain(
+          `${targetPath}: tools.web.${kind}${disabled ? " is disabled." : '.provider is "other-provider".'}`,
+        );
+      } finally {
+        restoreDeps();
+      }
+    },
+  );
 
   it("returns a version-skew hint when gateway does not support secrets.resolve", async () => {
     const envKey = "TALK_API_KEY_UNSUPPORTED";

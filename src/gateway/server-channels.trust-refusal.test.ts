@@ -11,6 +11,7 @@ import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 import { createChannelManager, type ChannelManager } from "./server-channels.js";
 
@@ -93,6 +94,7 @@ describe("channel startup trust refusal", () => {
       channelRuntimeEnvs: { discord: runtimeForLogger(log) },
     });
     const healthMonitor = startChannelHealthMonitor({
+      scheduler: createTestGatewayScheduler("fake-timers"),
       channelManager: manager,
       checkIntervalMs: 60_000,
       timing: { monitorStartupGraceMs: 50, channelConnectGraceMs: 0 },
