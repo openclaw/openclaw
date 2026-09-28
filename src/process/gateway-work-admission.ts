@@ -175,7 +175,8 @@ function invalidateSuspendAdmission(): void {
   }
 }
 
-function clearRestartSignalFence(): boolean {
+/** Reopens a reversible restart-signal fence; one-way restart drain retains admission. */
+export function rollbackGatewayRestartSignalFence(): boolean {
   if (
     GATEWAY_WORK_ADMISSION_STATE.restartDraining ||
     !GATEWAY_WORK_ADMISSION_STATE.restartSignalPending
@@ -317,17 +318,9 @@ export function beginGatewayRestartSignalAdmission(): GatewayRestartSignalAdmiss
       ) {
         return false;
       }
-      return clearRestartSignalFence();
+      return rollbackGatewayRestartSignalFence();
     },
   };
-}
-
-/**
- * Reopens a reversible restart-signal fence that no longer has a live lease.
- * No-op while one-way restart drain owns admission.
- */
-export function rollbackGatewayRestartSignalFence(): boolean {
-  return clearRestartSignalFence();
 }
 
 /** Root RPC/timer admission. Nested work in the same async chain counts once. */

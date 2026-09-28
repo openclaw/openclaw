@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { NODE_WORKER_CAPACITY_MAX } from "../infra/node-runner-inventory.js";
+import { NODE_WORKER_CAPACITY_MAX } from "../shared/node-list-parse.js";
 
 export const NODE_HOST_FIELD_LABELS: Record<string, string> = {
   nodeHost: "Node Host",

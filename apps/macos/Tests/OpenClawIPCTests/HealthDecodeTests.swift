@@ -23,10 +23,8 @@ struct HealthDecodeTests {
         #expect(snap?.channels["telegram"]?.probe?.elapsedMs == 800)
     }
 
-    @Test func `fails without braces`() {
-        let data = Data("no json here".utf8)
-        let snap = decodeHealthSnapshot(from: data)
-
-        #expect(snap == nil)
+    @Test(arguments: ["no json here", "{", "}", "} diagnostic {"])
+    func `rejects output without a JSON object`(_ output: String) {
+        #expect(decodeHealthSnapshot(from: Data(output.utf8)) == nil)
     }
 }
