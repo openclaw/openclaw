@@ -283,7 +283,7 @@ describe("Crabbox warm-image final write authority", () => {
     const now = Date.now();
     const source = currentAuthority("capture source");
     const projectKey = "b".repeat(64);
-    const key = resolveCrabboxWarmImageProfileKey(parsedProfile, projectKey);
+    const captureKey = resolveCrabboxWarmImageProfileKey(parsedProfile, projectKey);
     const checkpointId = "chk_publication_returned";
     const preparation = {
       key: "c".repeat(64),
@@ -343,7 +343,7 @@ describe("Crabbox warm-image final write authority", () => {
           boundary !== "lost publication reply" ||
           delivered.length > 0 ||
           namespace !== "warm-images" ||
-          changedKey !== key ||
+          changedKey !== captureKey ||
           intent.operation !== "update" ||
           intent.action !== "set" ||
           !isRecord(intent.value) ||
@@ -353,7 +353,7 @@ describe("Crabbox warm-image final write authority", () => {
           return;
         }
         expect(result.status).toBe("applied");
-        const persisted = await f.store.lookup(key);
+        const persisted = await f.store.lookup(captureKey);
         if (persisted?.image?.checkpointId !== checkpointId) {
           throw new Error("Publication reply fault requires the exact native committed image");
         }
@@ -364,7 +364,7 @@ describe("Crabbox warm-image final write authority", () => {
       },
       { refreshAfterMs: 86_400_000, retainUnusedMs: 14 * 86_400_000, keepPrevious: 1 },
     );
-    await f.store.register(key, before);
+    await f.store.register(captureKey, before);
     const claims: Array<Extract<WarmProfileRecord["operation"], { type: "capture" }>> = [];
     let replacement: WarmProfileRecord | undefined;
     // CLI effects are modeled. Worker, SQLite, comparison and final grants are real.
@@ -374,7 +374,7 @@ describe("Crabbox warm-image final write authority", () => {
         expect(argv.slice(0, 3)).toEqual(["crabbox", "checkpoint", "create"]);
         expect(argv[argv.indexOf("--id") + 1]).toBe(leaseId);
         expect(argv).toEqual(expect.arrayContaining(["--mode", "native", "--wait", "--json"]));
-        const row = await f.store.lookup(key);
+        const row = await f.store.lookup(captureKey);
         if (row?.operation?.type !== "capture" || row.operation.phase !== "creating") {
           throw new Error("Native create must own its exact durable creating claim");
         }
@@ -388,7 +388,7 @@ describe("Crabbox warm-image final write authority", () => {
             ...row,
             operation: { ...row.operation, id: "successor-publication-selector" },
           };
-          await f.store.register(key, replacement);
+          await f.store.register(captureKey, replacement);
         }
         catalog.add(checkpointId);
         return checkpointResult(checkpointId, leaseId, "completed");
@@ -426,7 +426,7 @@ describe("Crabbox warm-image final write authority", () => {
         return created;
       });
     const gate = observeWarmComparisonAdmission({
-      key,
+      key: captureKey,
       matches: (row) =>
         boundary === "refused custody write"
           ? row.operation?.type === "retire" && row.operation.checkpointId === checkpointId
@@ -472,7 +472,7 @@ describe("Crabbox warm-image final write authority", () => {
       gate.restore();
       parsed.mockRestore();
     }
-    const durable = await f.reopen(key);
+    const durable = await f.reopen(captureKey);
     expect(parsedCalls).toBe(1);
     expect(claims).toHaveLength(1);
     expect(claims[0]).toMatchObject({
@@ -590,7 +590,7 @@ describe("Crabbox warm-image final write authority", () => {
     expect(
       f.runCommand.mock.calls.filter(([argv]) => argv[2] === "fork").map(([argv]) => argv[3]),
     ).toEqual([selected]);
-    expect((await f.reopen(key))?.allocations.cbx_publication_borrower?.choice).toEqual({
+    expect((await f.reopen(captureKey))?.allocations.cbx_publication_borrower?.choice).toEqual({
       kind: "checkpoint",
       checkpointId: selected,
     });
@@ -598,10 +598,10 @@ describe("Crabbox warm-image final write authority", () => {
       // Fresh independent cleanup deletes only the refused result, not either
       // preexisting generation or the already-released source allocation.
       await f.manager.maintain({ binaries: ["crabbox"] });
-      expect((await f.reopen(key))?.operation).toBeUndefined();
+      expect((await f.reopen(captureKey))?.operation).toBeUndefined();
       expect(catalog).toEqual(new Set([image.checkpointId, previous.checkpointId]));
       if (boundary === "command return") {
-        expect((await f.store.lookup(key))?.allocations[leaseId]).toBeUndefined();
+        expect((await f.store.lookup(captureKey))?.allocations[leaseId]).toBeUndefined();
       }
     }
   });
