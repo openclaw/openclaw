@@ -2101,19 +2101,24 @@ function listImportGraphGrepMatches(
     maxBuffer: GIT_LS_FILES_MAX_BUFFER_BYTES,
     stdio: ["pipe", "pipe", "pipe"],
   };
-  const result = spawnSync(
-    "git",
-    ["grep", "-l", "-z", "--fixed-strings", "-f", "-", "--", ...grepPaths],
-    spawnOptions,
-  );
+  // Git's fixed-string prefilter rescans for each term. Large frontiers use the
+  // source reader's single-pass multi-term matcher over the same inventory.
+  const result =
+    missing.length <= 64
+      ? spawnSync(
+          "git",
+          ["grep", "-l", "-z", "--fixed-strings", "-f", "-", "--", ...grepPaths],
+          spawnOptions,
+        )
+      : undefined;
   for (const term of missing) {
     matches.set(term, []);
   }
-  if (result.status !== 1) {
+  if (result?.status !== 1) {
     const trackedFiles = new Set(listImportGraphFilesForCwd(cwd, { tooling }));
     // Source archives use the same filesystem inventory and native reader as the full graph.
     const candidates = (
-      result.status === 0
+      result?.status === 0
         ? result.stdout.split("\0").filter((file) => trackedFiles.has(file))
         : [...trackedFiles].filter((file) => !testFilesOnly || isTestFileTarget(file))
     ).toSorted((left, right) => left.localeCompare(right));
