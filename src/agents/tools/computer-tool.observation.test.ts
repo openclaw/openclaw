@@ -1,9 +1,15 @@
 import { createHash } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionState } from "../../logging/diagnostic-session-state.js";
 import { getImageMetadata } from "../../media/image-ops.js";
 import { createSolidPngBuffer } from "../../plugin-sdk/test-helpers/image-fixtures.js";
 import type { ComputerActResult } from "../../plugins/computer-use-contract.js";
+import {
+  detectToolCallLoop,
+  recordToolCall,
+  recordToolCallOutcome,
+} from "../tool-loop-detection.js";
 import type { ComputerToolTransport } from "./computer-tool-shared.js";
 import {
   createVisionComputerTool,
@@ -110,6 +116,44 @@ function createObservedTool(
 
 describe("computer targeted action observations", () => {
   beforeEach(resetComputerToolMocks);
+
+  it.each([false, true])(
+    "detects unchanged window reads without discarding fresh refs (changing=%s)",
+    async (changing) => {
+      let revision = 1;
+      const fixture = createObservedTool({
+        followUp: () => {
+          const result = observationResult(++revision);
+          if (changing) {
+            result.observation!.elements![0]!.label = `Save ${revision}`;
+          }
+          return result;
+        },
+      });
+      const state: SessionState = { lastActivity: 0, state: "processing", queueDepth: 0 };
+      const params = { action: "get_window_state", windowRef: "window-1" };
+      const config = { enabled: true };
+      for (let index = 1; index <= 20; index++) {
+        const id = `read-${index}`;
+        recordToolCall(state, "computer", params, id, config);
+        const result = await fixture.tool.execute(id, params);
+        expect(JSON.stringify(result.content)).toContain(`observation-${index}`);
+        expect(JSON.stringify(result.content)).toContain(`element-${index}`);
+        recordToolCallOutcome(state, {
+          toolName: "computer",
+          toolParams: params,
+          toolCallId: id,
+          result,
+        });
+      }
+      expect(detectToolCallLoop(state, "computer", params, config)).toMatchObject({
+        stuck: true,
+        level: changing ? "warning" : "critical",
+      });
+      await expect(fixture.click(1)).rejects.toThrow("COMPUTER_STALE_OBSERVATION");
+      expect(fixture.counts().mutations).toBe(0);
+    },
+  );
 
   it("returns fresh refs and preserves input evidence without an extra model observation turn", async () => {
     const fixture = createObservedTool();
