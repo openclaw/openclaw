@@ -282,42 +282,23 @@ export function prepareModelForSimpleCompletion<TApi extends Api>(params: {
   agentId?: string;
 }): Model {
   const { apiRegistry, model, cfg, auth, agentId } = params;
+  const wrap = (prepared: Model) =>
+    applyProviderSimpleCompletionWrapper(apiRegistry, prepared, cfg, model.api, auth, agentId);
   const providerStreamModel = prepareProviderStreamModel({ model, cfg, apiRegistry });
   if (providerStreamModel) {
-    return applyProviderSimpleCompletionWrapper(
-      apiRegistry,
-      providerStreamModel,
-      cfg,
-      model.api,
-      auth,
-      agentId,
-    );
+    return wrap(providerStreamModel);
   }
 
   const codexTransportModel = prepareCodexSimpleTransportModel(apiRegistry, model, cfg);
   if (codexTransportModel) {
-    return applyProviderSimpleCompletionWrapper(
-      apiRegistry,
-      codexTransportModel,
-      cfg,
-      model.api,
-      auth,
-      agentId,
-    );
+    return wrap(codexTransportModel);
   }
 
   const transportAwareModel = prepareTransportAwareSimpleModel(model, { cfg });
   if (transportAwareModel !== model) {
     const streamFn = buildTransportAwareSimpleStreamFn(model, { cfg });
     if (streamFn && registerCustomApi(apiRegistry, transportAwareModel.api, streamFn)) {
-      return applyProviderSimpleCompletionWrapper(
-        apiRegistry,
-        transportAwareModel,
-        cfg,
-        model.api,
-        auth,
-        agentId,
-      );
+      return wrap(transportAwareModel);
     }
   }
 
@@ -326,17 +307,9 @@ export function prepareModelForSimpleCompletion<TApi extends Api>(params: {
     const host = getAiTransportHost();
     const streamFn = host.plugin.createAnthropicVertexStream(model);
     if (registerCustomApi(apiRegistry, api, streamFn)) {
-      const transportModel = projectModel(model, { api });
-      return applyProviderSimpleCompletionWrapper(
-        apiRegistry,
-        transportModel,
-        cfg,
-        model.api,
-        auth,
-        agentId,
-      );
+      return wrap(projectModel(model, { api }));
     }
   }
 
-  return applyProviderSimpleCompletionWrapper(apiRegistry, model, cfg, model.api, auth, agentId);
+  return wrap(model);
 }

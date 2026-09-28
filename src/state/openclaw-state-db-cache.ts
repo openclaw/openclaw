@@ -1,7 +1,10 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { assertStateDatabaseAccessAllowed } from "../infra/gateway-state-owner.js";
+import {
+  assertStateDatabaseAccessAllowed,
+  assertStateDatabaseReadAllowed,
+} from "../infra/gateway-state-owner.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   registerNodeSqliteKyselyQueryErrorHandler,
@@ -200,8 +203,8 @@ export const {
   borrowForRead: borrowOpenClawStateDatabaseForAsyncRead,
   retainForIndependentRead: retainOpenClawStateDatabaseForIndependentRead,
 } = createStateDatabaseRetainer(stateDatabaseLifecycle, {
-  assertOpen(pathname) {
-    assertOpenClawStateDatabaseOpenAllowed(pathname);
+  assertOpen(pathname, ownership) {
+    assertOpenClawStateDatabaseOpenAllowed(pathname, ownership);
     assertExistingOpenClawStateSchemaCacheAdmission(pathname, stateDatabaseLifecycle);
   },
   capture: (pathname) => asyncResources.capture(pathname),
@@ -423,8 +426,12 @@ export async function getOpenClawStateDatabaseTerminalFailureAsync(
 }
 
 /** Reject shared-state access after a process-local terminal failure. */
-function assertOpenClawStateDatabaseOpenAllowed(pathname: string): void {
-  assertStateDatabaseAccessAllowed(pathname);
+function assertOpenClawStateDatabaseOpenAllowed(pathname: string, ownership?: "cached-read"): void {
+  if (ownership === "cached-read") {
+    assertStateDatabaseReadAllowed(pathname);
+  } else {
+    assertStateDatabaseAccessAllowed(pathname);
+  }
   const { identity } = asyncResources.capture(pathname);
   const terminalFailure = terminalOpenLatch.get(pathname);
   if (terminalFailure) {

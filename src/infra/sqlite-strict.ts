@@ -62,9 +62,9 @@ const DEFAULT_STRICT_MIGRATION_BUSY_TIMEOUT_MS = 5_000;
 const STRICT_MIGRATION_TABLE_PREFIX = "__openclaw_strict_migration_";
 const SQLITE_ROWID_ALIASES = ["_rowid_", "rowid", "oid"] as const;
 
-function readMainTableList(db: DatabaseSync): TableListRow[] {
+function readMainTableList(db: DatabaseSync): Array<TableListRow & { name: string }> {
   return (db.prepare("PRAGMA table_list").all() as TableListRow[]).filter(
-    (row) =>
+    (row): row is TableListRow & { name: string } =>
       row.schema === "main" && typeof row.name === "string" && !row.name.startsWith("sqlite_"),
   );
 }
@@ -127,9 +127,7 @@ function readCanonicalStrictTables(schemaSql: string): CanonicalStrictTable[] {
   try {
     canonical.exec(schemaSql);
     const tables = readMainTableList(canonical).filter((row) => row.type === "table");
-    const nonStrict = tables.flatMap((row) =>
-      Number(row.strict ?? 0) === 1 || typeof row.name !== "string" ? [] : [row.name],
-    );
+    const nonStrict = tables.filter((row) => Number(row.strict ?? 0) !== 1).map((row) => row.name);
     if (nonStrict.length > 0) {
       throw new Error(
         `Canonical SQLite schema contains non-STRICT tables: ${nonStrict.toSorted().join(", ")}`,
@@ -137,9 +135,6 @@ function readCanonicalStrictTables(schemaSql: string): CanonicalStrictTable[] {
     }
     return tables
       .map((row) => {
-        if (typeof row.name !== "string") {
-          throw new Error("Canonical SQLite schema contains an unnamed table");
-        }
         const schemaRow = canonical
           .prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?")
           .get(row.name) as { sql?: unknown } | undefined;
@@ -286,8 +281,8 @@ export function migrateSqliteSchemaToStrictInTransaction(
   db.exec(schemaSql);
   const currentTableRows = new Map(
     readMainTableList(db)
-      .filter((row) => row.type === "table" && typeof row.name === "string")
-      .map((row) => [row.name as string, row]),
+      .filter((row) => row.type === "table")
+      .map((row) => [row.name, row]),
   );
   const tablesToMigrate = canonicalTables.filter(
     (table) => Number(currentTableRows.get(table.name)?.strict ?? 0) !== 1,

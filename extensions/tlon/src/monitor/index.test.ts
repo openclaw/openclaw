@@ -65,6 +65,70 @@ function getSubscription(app: string, path?: string) {
   return subscription;
 }
 
+it.each([
+  { ship: "~nec", text: "approve missing", reply: "No pending approval found for ID: missing" },
+  { ship: "~nec", text: "pending", reply: "No pending approval requests." },
+  { ship: "~nec", text: "approveable", reply: undefined },
+  { ship: "~bus", text: "pending", reply: undefined },
+])("routes $ship's '$text' through the owner command boundary", async ({ ship, text, reply }) => {
+  const controller = new AbortController();
+  const connected = Promise.withResolvers<void>();
+  const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
+  authenticateMock.mockResolvedValueOnce("urbauth-~zod=proof");
+  settingsManagerMock.load.mockResolvedValueOnce({ dmAllowlist: ["~bus"] });
+  sseClientMock.connect.mockImplementationOnce(async () => connected.resolve());
+  ingressMock.receive.mockResolvedValueOnce({ kind: "ignored" });
+
+  const monitor = monitorTlonProvider({ abortSignal: controller.signal, runtime });
+  try {
+    await Promise.race([connected.promise, monitor]);
+    const subscription = getSubscription("chat");
+    sseClientMock.poke.mockClear();
+
+    await subscription.event({
+      whom: ship,
+      id: "owner-command",
+      response: {
+        add: {
+          essay: { author: ship, content: [{ inline: [text] }], sent: 1_700_000_000_000 },
+        },
+      },
+    });
+
+    if (reply) {
+      expect(inboundRuntimeMock.dispatch).not.toHaveBeenCalled();
+      expect(sseClientMock.poke).toHaveBeenCalledExactlyOnceWith({
+        app: "chat",
+        mark: "chat-dm-action",
+        json: {
+          ship: "~nec",
+          diff: {
+            id: expect.any(String),
+            delta: {
+              add: {
+                memo: {
+                  content: [{ inline: [reply] }],
+                  author: "~zod",
+                  sent: expect.any(Number),
+                },
+                kind: null,
+                time: null,
+              },
+            },
+          },
+        },
+      });
+    } else {
+      expect(inboundRuntimeMock.dispatch).toHaveBeenCalledOnce();
+      expect(sseClientMock.poke).not.toHaveBeenCalled();
+    }
+    expect(runtime.error).not.toHaveBeenCalled();
+  } finally {
+    controller.abort();
+    await monitor;
+  }
+});
+
 describe("monitorTlonProvider authentication retry", () => {
   it("uses the shared abort-aware sleep for retry backoff", async () => {
     const controller = new AbortController();

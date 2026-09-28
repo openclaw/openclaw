@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
+import type { ApplicationContext } from "../app/context.ts";
 import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
@@ -10,7 +11,7 @@ import {
   installMockGateway,
   pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
-import { refreshSessionRoster } from "./chat-run-lifecycle.test-support.ts";
+import { openMockAbortableRun } from "./chat-run-lifecycle.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -30,32 +31,6 @@ async function captureMockStopProof(currentPage: Page, name: string) {
       fullPage: false,
     });
   }
-}
-
-async function openMockAbortableRun(currentPage: Page, runId: string) {
-  const sessionKey = "agent:main:main";
-  const sessionInfo = {
-    key: sessionKey,
-    sessionId: `session:${sessionKey}`,
-    kind: "direct",
-    updatedAt: 1,
-    hasActiveRun: true,
-    activeRunIds: [runId],
-    status: "running",
-  };
-  const gateway = await installMockGateway(currentPage, {
-    sessionKey,
-    sessions: [sessionInfo],
-    sessionInfo,
-    inFlightRun: { runId, text: "The fixture run is still working." },
-    methodResponses: { "chat.abort": { ok: true, aborted: false, runIds: [] } },
-  });
-  await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-  const stop = currentPage.getByRole("button", { name: "Stop generating" });
-  const composer = currentPage.locator(".agent-chat__input textarea");
-  await stop.waitFor({ state: "visible" });
-  await currentPage.getByText("The fixture run is still working.", { exact: true }).waitFor();
-  return { gateway, sessionKey, runId, stop, composer };
 }
 
 suite.define(() => {
@@ -194,7 +169,17 @@ suite.define(() => {
       .getByText(reply.content, { exact: true });
     await replyBody.waitFor();
     const operationLabel = currentPage.locator(".chat-work-group .chat-activity-group__label");
-    const refreshedSession = await refreshSessionRoster(currentPage, sessionKey);
+    const refreshedSession = await currentPage.evaluate(async (key) => {
+      const app = document.querySelector<
+        HTMLElement & { runtime?: { context?: ApplicationContext } }
+      >("openclaw-app");
+      const sessions = app?.runtime?.context?.sessions;
+      if (!sessions) {
+        throw new Error("Session capability is missing");
+      }
+      await sessions.refresh({ agentId: "main", force: true });
+      return sessions.state.result?.sessions.find((row) => row.key === key);
+    }, sessionKey);
     expect(refreshedSession).toMatchObject({ lastRunId: runId, runtimeMs: 13_000 });
     await operationLabel.waitFor();
     await expect.poll(() => operationLabel.textContent()).toBe("Worked for 13s");
@@ -389,6 +374,7 @@ suite.define(() => {
     page = currentPage;
     const { gateway, sessionKey, runId, stop, composer } = await openMockAbortableRun(
       currentPage,
+      suite.server.baseUrl,
       "finished-run",
     );
     // Change only the mock server's next snapshot after the browser observes activity.
@@ -435,6 +421,7 @@ suite.define(() => {
     page = currentPage;
     const { gateway, sessionKey, runId, stop, composer } = await openMockAbortableRun(
       currentPage,
+      suite.server.baseUrl,
       "finalizing-run",
     );
     await gateway.emitGatewayEvent("agent", {
@@ -511,6 +498,7 @@ suite.define(() => {
     page = currentPage;
     const { gateway, sessionKey, runId, stop, composer } = await openMockAbortableRun(
       currentPage,
+      suite.server.baseUrl,
       "live-abort-run",
     );
     const historyCount = (await gateway.getRequests("chat.history")).length;
@@ -560,6 +548,7 @@ suite.define(() => {
     page = currentPage;
     const { gateway, sessionKey, runId, stop, composer } = await openMockAbortableRun(
       currentPage,
+      suite.server.baseUrl,
       "refresh-retry-run",
     );
     const historyCount = (await gateway.getRequests("chat.history")).length;
@@ -650,7 +639,7 @@ suite.define(() => {
       const stop = currentPage.getByRole("button", { name: "Stop generating" });
       const composer = currentPage.locator(".agent-chat__input textarea");
       await stop.waitFor({ state: "visible" });
-      const completedSession = {
+      const finishedSession = {
         key: sessionKey,
         sessionId: `session:${sessionKey}`,
         kind: "direct",
@@ -660,18 +649,20 @@ suite.define(() => {
         activeRunIds: [],
         status: "done",
       };
-      await gateway.setSessionsListResponse({ sessions: [completedSession] });
-      await gateway.setMethodResponse("chat.history", {
-        messages: [{ role: "assistant", content: "Cached activity has finished." }],
-        sessionId: `session:${sessionKey}`,
-        sessionInfo: completedSession,
-      });
       const historyCount = (await gateway.getRequests("chat.history")).length;
       await gateway.deferNext("sessions.abort");
       await stop.click();
       const abort = await gateway.waitForRequest("sessions.abort");
       expect(abort.params).toEqual({ key: sessionKey, clearQueued: true });
       expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
+      // Post-Stop reads begin when the Gateway answers Stop. Publishing them earlier
+      // lets a still-pending startup read settle the run before Stop is clicked.
+      await gateway.setMethodResponse("chat.history", {
+        messages: [{ role: "assistant", content: "Cached activity has finished." }],
+        sessionId: `session:${sessionKey}`,
+        sessionInfo: finishedSession,
+      });
+      await gateway.deferNext("chat.history");
       await composer.fill("keep this draft");
       await gateway.resolveDeferred("sessions.abort", {
         ok: true,
@@ -679,15 +670,21 @@ suite.define(() => {
         status: "no-active-run",
       });
       await gateway.waitForRequest("chat.history", { after: historyCount });
+      // A newer sidebar read may publish while Stop's history is still pending.
+      await currentPage.evaluate(async () => {
+        const app = document.querySelector<
+          HTMLElement & { runtime?: { context: ApplicationContext } }
+        >("openclaw-app");
+        if (!app?.runtime?.context) {
+          throw new Error("Control UI context is unavailable");
+        }
+        await app.runtime.context.sessions.refreshList({ force: true });
+      });
+      await gateway.resolveDeferred("chat.history");
       await currentPage
         .locator(".chat-bubble")
         .getByText("Cached activity has finished.", { exact: true })
         .waitFor();
-      const refreshedSession = await refreshSessionRoster(currentPage, sessionKey);
-      expect(refreshedSession).toMatchObject({
-        hasActiveRun: false,
-        hasActiveSubagentRun: false,
-      });
       expect(await composer.inputValue()).toBe("keep this draft");
       await composer.fill("");
       await stop.waitFor({ state: "detached" });

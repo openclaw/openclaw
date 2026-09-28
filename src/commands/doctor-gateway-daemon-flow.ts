@@ -39,11 +39,7 @@ import { isWSL } from "../infra/wsl.js";
 import { ExitError, type RuntimeEnv } from "../runtime.js";
 import { sleep } from "../utils.js";
 import { buildGatewayInstallPlan, gatewayInstallErrorHint } from "./daemon-install-helpers.js";
-import {
-  DEFAULT_GATEWAY_DAEMON_RUNTIME,
-  GATEWAY_DAEMON_RUNTIME_OPTIONS,
-  type GatewayDaemonRuntime,
-} from "./daemon-runtime.js";
+import { GATEWAY_DAEMON_RUNTIME_OPTIONS, type GatewayDaemonRuntime } from "./daemon-runtime.js";
 import { buildGatewayRuntimeHints } from "./doctor-format.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import {
@@ -382,14 +378,14 @@ export async function maybeRepairGatewayDaemon(params: {
       const selection = await resolveGatewaySetupRuntime({
         env: process.env,
         existingCommand: serviceState.command,
-        selectRuntime: () =>
+        selectRuntime: (suggested) =>
           params.prompter.select<GatewayDaemonRuntime>(
             {
               message: "Gateway service runtime",
               options: GATEWAY_DAEMON_RUNTIME_OPTIONS,
-              initialValue: DEFAULT_GATEWAY_DAEMON_RUNTIME,
+              initialValue: suggested,
             },
-            DEFAULT_GATEWAY_DAEMON_RUNTIME,
+            suggested,
           ),
       });
       const tokenResolution = await resolveGatewayInstallToken({
@@ -415,6 +411,8 @@ export async function maybeRepairGatewayDaemon(params: {
         env: selection.env,
         port,
         runtime: selection.runtime,
+        runtimeExplicit: selection.runtimeExplicit,
+        runtimePath: selection.runtimePath,
         pinnedRuntimePath: selection.pinnedRuntimePath,
         existingCommand: serviceState.command,
         warn: (message, title) => note(message, title),

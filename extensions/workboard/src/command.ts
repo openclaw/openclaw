@@ -70,22 +70,16 @@ function isWorkboardStatus(value: string): value is WorkboardStatus {
   return (WORKBOARD_STATUSES as readonly string[]).includes(value);
 }
 
-function canMutateWorkboard(params: {
-  senderIsOwner?: boolean;
-  gatewayClientScopes?: readonly string[];
-}): boolean {
-  const scopes = params.gatewayClientScopes;
-  if (scopes) {
-    return scopes.includes(ADMIN_SCOPE) || scopes.includes(WRITE_SCOPE);
-  }
-  return params.senderIsOwner === true;
-}
-
 function requireWriteAccess(params: {
   senderIsOwner?: boolean;
   gatewayClientScopes?: readonly string[];
 }): { text: string; isError: true } | undefined {
-  if (canMutateWorkboard(params)) {
+  const scopes = params.gatewayClientScopes;
+  if (
+    scopes
+      ? scopes.includes(ADMIN_SCOPE) || scopes.includes(WRITE_SCOPE)
+      : params.senderIsOwner === true
+  ) {
     return undefined;
   }
   return {

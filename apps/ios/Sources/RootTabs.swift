@@ -192,7 +192,7 @@ struct RootTabs: View {
             let layoutContainerSize = Self.sidebarLayoutContainerSize(
                 contentSize: proxy.size,
                 windowSize: self.foregroundKeyWindowSize())
-            let isDrawerLayout = self.shouldUseSidebarDrawer(containerSize: layoutContainerSize)
+            let isDrawerLayout = self.sidebarLayoutMode(containerSize: layoutContainerSize) == .drawer
             let sidebarWidth = Self.sidebarWidth(
                 containerWidth: layoutContainerSize.width,
                 isDrawerLayout: isDrawerLayout)
@@ -440,10 +440,6 @@ struct RootTabs: View {
             containerSize: containerSize,
             isPad: UIDevice.current.userInterfaceIdiom == .pad,
             usesAccessibilityText: self.dynamicTypeSize.isAccessibilitySize)
-    }
-
-    private func shouldUseSidebarDrawer(containerSize: CGSize) -> Bool {
-        self.sidebarLayoutMode(containerSize: containerSize) == .drawer
     }
 
     private func foregroundKeyWindowSize() -> CGSize? {

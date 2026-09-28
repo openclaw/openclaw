@@ -826,13 +826,12 @@ export async function runRuntimeToolFixture(
       }),
     );
   }
-  const happyPlannedOnly = Boolean(happyPlannedRequest && !happyPathOutputRequired);
-  if (!happyRequest && happyPlannedOnly) {
-    skipFixture(
-      `${toolName} mock provider report-only: a planned call without a linked successful result is not product execution evidence`,
-    );
-  }
-  if (!happyRequest && !happyPlannedOnly) {
+  if (!happyRequest) {
+    if (happyPlannedRequest && !happyPathOutputRequired) {
+      skipFixture(
+        `${toolName} mock provider report-only: a planned call without a linked successful result is not product execution evidence`,
+      );
+    }
     if (dynamicExposureIntentionallyExcluded && !requireCodexNativePatchCoverage) {
       skipFixture(
         formatCodexNativeWorkspaceDetails({
@@ -849,13 +848,12 @@ export async function runRuntimeToolFixture(
         : `expected mock happy-path request for ${toolName}`,
     );
   }
-  if (happyRequest && requestHasHappyPathFailureToolOutput(happyRequest.outputRequest)) {
+  if (requestHasHappyPathFailureToolOutput(happyRequest.outputRequest)) {
     failFixture(`expected mock happy-path successful tool output for ${toolName}`);
   }
   if (
     toolName === "apply_patch" &&
     metadata.required &&
-    happyRequest &&
     !matchesRuntimePatchArguments({
       args: happyRequest.plannedRequest.plannedToolArgs,
       workspaceDir: env.gateway.workspaceDir,
@@ -885,17 +883,12 @@ export async function runRuntimeToolFixture(
     );
   }
   if (!requestHasFailureLikeToolOutput(failureRequest.outputRequest)) {
-    if (isRecord(config.knownHarnessGap)) {
-      skipFixture(formatKnownHarnessGapDetails(toolName, config));
-    }
     const patchFailureDiagnostics =
       toolName === "apply_patch"
         ? `; received ${formatRuntimePatchFailureOutput(failureRequest.outputRequest)}`
         : "";
-    throw fixtureError(
-      new Error(
-        `expected mock failure-path tool failure output for ${toolName}${patchFailureDiagnostics}`,
-      ),
+    failFixture(
+      `expected mock failure-path tool failure output for ${toolName}${patchFailureDiagnostics}`,
     );
   }
   if (
@@ -926,7 +919,7 @@ export async function runRuntimeToolFixture(
         toolName,
         tools,
         reason: metadata.reason,
-        happyRequest: happyRequest?.plannedRequest ?? happyPlannedRequest,
+        happyRequest: happyRequest.plannedRequest,
         failureRequest: failureRequest.plannedRequest,
       }),
     );
@@ -934,7 +927,7 @@ export async function runRuntimeToolFixture(
 
   return withSessionDetails(
     [
-      `${toolName} mock provider happy planned args (diagnostic only): ${formatPlannedToolArgs((happyRequest?.plannedRequest ?? happyPlannedRequest)?.plannedToolArgs)}`,
+      `${toolName} mock provider happy planned args (diagnostic only): ${formatPlannedToolArgs(happyRequest.plannedRequest.plannedToolArgs)}`,
       happyPathOutputRequired
         ? undefined
         : `${toolName} mock provider happy direct output not required for this async fixture`,

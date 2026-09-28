@@ -9,6 +9,7 @@ import chokidar from "chokidar";
 import { afterEach, describe, expect, it, onTestFailed, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { resolveSkillsWatcherUsePolling } from "./refresh-watch-path.js";
 import { shouldUseNativeSkillsWatcher } from "./refresh-watch-transport.js";
 import {
@@ -30,7 +31,6 @@ it.each(["initial", "closed", "disabled", "evicted"] as const)(
     const skillFile = path.join(skillDir, "SKILL.md");
     const { ensureSkillsWatcher, closeSkillsWatchers } = await import("./refresh.js");
     const { getSkillsSnapshotVersion } = await import("./refresh-state.js");
-    const { loadWorkspaceSkills } = await import("../loading/workspace-skill-loader.js");
     const options = { config: {}, agentId: "main" };
     try {
       await fs.mkdir(skillDir, { recursive: true });
@@ -89,7 +89,6 @@ it.each(["create", "edit"] as const)(
     const contents = (description: string) =>
       `---\nname: scan-proof\ndescription: ${description}\n---\n`;
     const { ensureSkillsWatcher, closeSkillsWatchers } = await import("./refresh.js");
-    const { loadWorkspaceSkills } = await import("../loading/workspace-skill-loader.js");
     const options = { config: {}, agentId: "main" };
     try {
       await fs.mkdir(path.dirname(skillDir), { recursive: true });
@@ -374,8 +373,7 @@ describe("shared missing skill ancestors", () => {
       phase = "import refresh owner";
       const { ensureSkillsWatcher, closeSkillsWatchers, registerSkillsChangeListener } =
         await import("./refresh.js");
-      phase = "import skill loader";
-      const { loadWorkspaceSkills } = await import("../loading/workspace-skill-loader.js");
+      phase = "import refresh state";
       const { getSkillsSourceVersion } = await import("./refresh-state.js");
       const originalWatch = chokidar.watch;
       const watch = vi.spyOn(chokidar, "watch").mockImplementation((...args) => {
@@ -906,7 +904,6 @@ describe("shared missing skill ancestors", () => {
     syncBuiltinESMExports();
     const { ensureSkillsWatcher } = await import("./refresh.js");
     const { getSkillsSourceVersion } = await import("./refresh-state.js");
-    const { loadWorkspaceSkills } = await import("../loading/workspace-skill-loader.js");
     const read = () =>
       loadWorkspaceSkills(workspaceDir, {
         config,

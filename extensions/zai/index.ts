@@ -38,6 +38,7 @@ import {
 } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { resolveThinkingProfile, resolveZaiReasoningEffort } from "./provider-policy-api.js";
+import { buildZaiVideoGenerationProvider } from "./video-generation-provider.js";
 
 const PROVIDER_ID = "zai";
 const GLM5_TEMPLATE_MODEL_ID = "glm-4.7";
@@ -344,5 +345,6 @@ export default defineSingleProviderPluginEntry({
   },
   register(api) {
     api.registerMediaUnderstandingProvider(zaiMediaUnderstandingProvider);
+    api.registerVideoGenerationProvider(buildZaiVideoGenerationProvider());
   },
 });

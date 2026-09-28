@@ -90,6 +90,10 @@ export class ChannelWizardController {
   private stepIndex = 0;
   private generation = 0;
   private abortController: AbortController | null = null;
+  private pendingCancellation: {
+    client: WizardGatewayClient;
+    completion: Promise<unknown>;
+  } | null = null;
 
   constructor(
     private readonly getClient: () => WizardGatewayClient | null,
@@ -118,6 +122,13 @@ export class ChannelWizardController {
     this.stepIndex = 0;
     this.setState({ phase: "starting", channel });
     try {
+      const cancellation = this.pendingCancellation;
+      if (cancellation?.client === client) {
+        await cancellation.completion;
+        if (this.generation !== generation) {
+          return;
+        }
+      }
       const result = await requestWithTimeout<WizardNextResult>(
         client,
         "wizard.start",
@@ -213,10 +224,16 @@ export class ChannelWizardController {
     this.channel = null;
     this.setState({ phase: "idle" });
     if (client && sessionId) {
-      try {
-        await client.request("wizard.cancel", { sessionId });
-      } catch {
-        // Session may already be finished/purged; closing the modal wins.
+      // Replacement starts await this settlement, so it needs the same ceiling as wizard.start.
+      const completion = Promise.resolve()
+        .then(() => requestWithTimeout(client, "wizard.cancel", { sessionId, closeInput: true }))
+        .catch(() => {
+          // Session may already be finished/purged; closing the modal wins.
+        });
+      this.pendingCancellation = { client, completion };
+      await completion;
+      if (this.pendingCancellation?.completion === completion) {
+        this.pendingCancellation = null;
       }
     }
   }

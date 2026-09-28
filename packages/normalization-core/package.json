@@ -133,6 +133,11 @@
       "types": "./dist/utf16-slice.d.mts",
       "import": "./dist/utf16-slice.mjs",
       "default": "./dist/utf16-slice.mjs"
+    },
+    "./uuid": {
+      "types": "./dist/uuid.d.mts",
+      "import": "./dist/uuid.mjs",
+      "default": "./dist/uuid.mjs"
     }
   },
   "scripts": {
