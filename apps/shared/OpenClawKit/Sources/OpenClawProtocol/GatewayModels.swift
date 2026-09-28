@@ -16841,17 +16841,20 @@ public struct SessionsCompanionAskParams: Codable, Sendable {
     public let sessionkey: String
     public let agentid: String?
     public let question: String
+    public let selectioncontext: String?
     public let attachments: [[String: AnyCodable]]?
 
     public init(
         sessionkey: String,
         agentid: String? = nil,
         question: String,
+        selectioncontext: String? = nil,
         attachments: [[String: AnyCodable]]? = nil)
     {
         self.sessionkey = sessionkey
         self.agentid = agentid
         self.question = question
+        self.selectioncontext = selectioncontext
         self.attachments = attachments
     }
 
@@ -16859,6 +16862,7 @@ public struct SessionsCompanionAskParams: Codable, Sendable {
         case sessionkey = "sessionKey"
         case agentid = "agentId"
         case question
+        case selectioncontext = "selectionContext"
         case attachments
     }
 }
