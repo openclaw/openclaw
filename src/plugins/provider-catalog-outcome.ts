@@ -5,4 +5,6 @@ export type ProviderCatalogOutcome = {
   /** Limits an auth rejection to catalog discovery rather than model execution. */
   rejectionScope?: "catalog";
   status: "ready" | "auth-rejected" | "unavailable";
+  /** Optional successful discovery order for models already present in the catalog. */
+  modelOrder?: readonly string[];
 };

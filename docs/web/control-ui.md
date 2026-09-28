@@ -66,6 +66,9 @@ not whether the active run’s narration survives a history refresh. Completed
 dashboard turns collapse their narration and tool activity under **Worked for …**
 above the answer. Expanding it restores the sequence with the existing tool-call
 groups. When no run duration is available, the heading reads **Worked**.
+The heading includes the total tool-call count followed by any failures, such as
+**Worked · 200 tool calls · 20 failed**. Calls without failures still show the
+total; turns without tool calls omit it.
 
 Consecutive tool activity shares one expandable log, including when background
 work resumes in a new run. Visible messages, media, and conversation markers
@@ -88,6 +91,8 @@ active tasks. Select the indicator to open the full task list, including finishe
 Select a session's title in the chat header to rename it. Enter saves the name;
 Escape cancels the edit. While an input method is composing text, Enter and
 Escape stay with composition. Finish composing before saving or canceling.
+Once the Gateway confirms a rename, the saved name stays visible while the session
+list refreshes, even if an older snapshot arrives late.
 
 Dragging a session between sidebar groups updates its placement immediately. A successful
 save keeps that placement even if the subsequent list refresh fails; the UI reports
@@ -116,6 +121,26 @@ Opening **New agent** keeps your existing Ask OpenClaw conversation. Finish any
 pending wizard or approval before opening the creation choices.
 If team creation stops partway through, the custodian reports the retained
 agents so you can inspect them before creating the missing members.
+
+## Take a photo in chat
+
+Choose **Add attachment → Take photo** in chat or New Session to open a camera
+preview. Allow camera access when your browser asks, then choose **Capture**,
+**Retake**, or **Use photo**. The chosen photo becomes a draft attachment; it does
+not send the message. The preview stays in your browser and does not request
+microphone access.
+
+The live preview requires HTTPS or localhost and a browser that supports camera
+access. On plain HTTP LAN addresses or browsers without the camera API, choose
+**Use device camera** to open the native capture picker instead. This preserves
+mobile camera capture without silently substituting a picker for the preview;
+your browser decides whether it shows a camera or a file picker. If access is denied,
+allow the site in your browser and operating-system camera settings and retry.
+If no camera is available, choose **Upload photo** instead.
+
+The camera stops when you capture a photo, close the dialog, or leave its draft.
+File and photo uploads remain available through their existing pickers, including
+the combined **Attach…** picker on iOS Safari.
 
 ## Watch a desktop in Picture-in-Picture
 
@@ -179,7 +204,8 @@ agent switcher. This enables **team mode**, a browser preference that is off by
 default. The top row becomes a workspace header with the configured Gateway display
 name, or **OpenClaw**, and the OpenClaw mark. Its menu contains **Show one agent**,
 **Agent settings**, and the existing documentation, help, community, and changelog
-links. Sessions appear under collapsible agent headers in configured roster order,
+links. Pinned sessions stay in **Pages**, using their agent's avatar as the icon.
+Other sessions appear under collapsible agent headers in configured roster order,
 which stays stable as activity changes. **Home** disappears from Pages: click an agent header's avatar or name to
 open that agent's main chat. The separate collapse control only folds its sessions.
 The top **+**, labeled **New conversation**, opens an agent menu with avatars and names in

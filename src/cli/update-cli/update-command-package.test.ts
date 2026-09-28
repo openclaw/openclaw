@@ -256,6 +256,8 @@ it.each(["guidance", "staging"])(
 it.each(["1.0.0", "https://example.invalid/candidate.tgz", "openclaw@file:/owned/candidate"])(
   "honors the explicit package artifact without changing registry no-op semantics: %s",
   async (tag) => {
+    // Swap bounds tests own deadline progression; artifact selection keeps real filesystem work.
+    vi.spyOn(Date, "now").mockReturnValue(Date.now());
     await withTestDir({ prefix: "update-exact-artifact-" }, async (base) => {
       const { params, root, launcher, expectOriginalInstallation } =
         await createPackageInstallFixture(base);

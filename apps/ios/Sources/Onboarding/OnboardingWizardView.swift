@@ -881,7 +881,7 @@ extension OnboardingWizardView {
         let link = await self.gatewayController.selectReachableSetupLink(parsedLink)
         guard self.setupAttemptID == attemptID else { return }
 
-        await self.applyGatewayLink(link)
+        guard await self.applyGatewayLink(link) else { return }
         self.setupCode = ""
         self.setupCodeStatus = "Setup code applied. Connecting…"
         self.connectMessage = "Connecting via setup code…"
@@ -925,8 +925,8 @@ extension OnboardingWizardView {
         }
         let link = await self.gatewayController.selectReachableSetupLink(parsedLink)
         guard self.setupAttemptID == attemptID else { return }
+        guard await self.applyGatewayLink(link) else { return }
         self.qrCodeCompletion.stage(link)
-        await self.applyGatewayLink(link)
         self.connectMessage = "Connecting via setup code…"
         self.statusLine = "Setup code loaded. Connecting to \(link.host):\(link.port)…"
         self.navigate(to: .connect)
@@ -969,8 +969,8 @@ extension OnboardingWizardView {
         defer { self.pendingTargetSuppression.resumeAutoConnect(.setupLink, controller: self.gatewayController) }
         await self.appModel.resetGatewaySessionsForTargetSwitch()
         guard self.setupLinkStaging.link == link else { return }
+        guard await self.applyGatewayLink(link, disconnectExistingGatewayForBootstrap: false) else { return }
         _ = self.setupLinkStaging.take()
-        await self.applyGatewayLink(link, disconnectExistingGatewayForBootstrap: false)
         self.setupCodeStatus = "Setup link applied. Connecting…"
         self.issue = .none
         self.connectMessage = "Connecting to \(link.host)…"
@@ -989,15 +989,9 @@ extension OnboardingWizardView {
 
     private func applyGatewayLink(
         _ link: GatewayConnectDeepLink,
-        disconnectExistingGatewayForBootstrap: Bool = true) async
+        disconnectExistingGatewayForBootstrap: Bool = true) async -> Bool
     {
-        self.manualHost = link.host
-        self.manualPort = link.port
-        self.manualPortText = String(link.port)
-        self.manualTLS = link.tls
-        self.manualContextPath = link.contextPath
         let setupAuth = GatewayConnectionController.ManualAuthOverride.setupAuth(from: link)
-        self.gatewayCredentialFieldStableID = setupAuth.targetStableID
         if setupAuth.hasBootstrapToken {
             guard await GatewayOnboardingReset.prepareForBootstrapPairing(
                 appModel: self.appModel,
@@ -1006,11 +1000,18 @@ extension OnboardingWizardView {
                 disconnectGateway: disconnectExistingGatewayForBootstrap)
             else {
                 let message = "Could not safely replace the gateway's offline data. Try again."
+                self.setupCodeStatus = message
                 self.connectMessage = message
-                self.statusLine = message
-                return
+                self.setConnectionFailure(message)
+                return false
             }
         }
+        self.manualHost = link.host
+        self.manualPort = link.port
+        self.manualPortText = String(link.port)
+        self.manualTLS = link.tls
+        self.manualContextPath = link.contextPath
+        self.gatewayCredentialFieldStableID = setupAuth.targetStableID
         self.gatewayToken = setupAuth.token
         self.gatewayPassword = setupAuth.password
         self.pendingManualAuthOverride = setupAuth.manualAuthOverride
@@ -1027,6 +1028,7 @@ extension OnboardingWizardView {
         if self.selectedMode == nil {
             self.selectedMode = link.tls ? .remoteDomain : .homeNetwork
         }
+        return true
     }
 
     private func handleScannedSetupCode(_ code: String) {

@@ -92,7 +92,7 @@ OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL="stable"
 if [ "$SCENARIO" = "prerelease-plugin-registry" ] ||
   { [ "$UPDATE_RESTART_MODE" = "auto-auth" ] &&
     [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ] &&
-    [[ "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION:-}" =~ -(alpha|beta)\.[1-9][0-9]*$ ]]; }; then
+    [[ "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION:-}" =~ -beta\.[1-9][0-9]*$ ]]; }; then
   OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL="beta"
 fi
 export OPENCLAW_UPGRADE_SURVIVOR_UPDATE_CHANNEL
@@ -1857,6 +1857,8 @@ repair_update_restart_auth() {
       native | absent) ;;
       *) echo "invalid selected service membership mode: $membership_mode" >&2; return 2 ;;
     esac
+    # Standalone Doctor may have started the service after the first update.
+    phase stop-recovery-service stop_update_restart_probe_gateway "$COMMAND_TIMEOUT" || return "$?"
     # Historical preservation has already passed. This separate current-runtime
     # update needs a configured inference route for its real serving receipt.
     phase prepare-restart-inference prepare_restart_inference || return "$?"

@@ -47,12 +47,7 @@ import {
 import { createZalouserIngressMonitor, type ZalouserIngressLifecycle } from "./ingress.js";
 import { formatZalouserMessageSidFull, resolveZalouserMessageSid } from "./message-sid.js";
 import { getZalouserRuntime } from "./runtime.js";
-import {
-  sendDeliveredZalouser,
-  sendMessageZalouser,
-  sendSeenZalouser,
-  sendTypingZalouser,
-} from "./send.js";
+import { sendMessageZalouser } from "./send.js";
 import { resolveZalouserDmSessionScope } from "./session-scope.js";
 import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
 import {
@@ -60,6 +55,9 @@ import {
   listZaloGroups,
   resolveZaloOwnUserId,
   resolveZaloGroupContext,
+  sendZaloDeliveredEvent,
+  sendZaloSeenEvent,
+  sendZaloTypingEvent,
   startZaloListener,
 } from "./zalo-js.js";
 
@@ -189,8 +187,8 @@ async function sendZalouserDeliveryAcks(params: {
   isGroup: boolean;
   message: NonNullable<ZaloInboundMessage["eventMessage"]>;
 }): Promise<void> {
-  await sendDeliveredZalouser({ ...params, isSeen: true });
-  await sendSeenZalouser(params);
+  await sendZaloDeliveredEvent({ ...params, isSeen: true });
+  await sendZaloSeenEvent(params);
 }
 
 async function processMessage(
@@ -510,11 +508,7 @@ async function processMessage(
               sender: senderName || senderId,
               body: rawBody,
               timestamp: message.timestampMs,
-              messageId: resolveZalouserMessageSid({
-                msgId: message.msgId,
-                cliMsgId: message.cliMsgId,
-                fallback: `${message.timestampMs}`,
-              }),
+              messageId: messageSid,
             }
           : null,
     });
@@ -620,7 +614,7 @@ async function processMessage(
   const replyPipeline = {
     typing: {
       start: async () => {
-        await sendTypingZalouser(chatId, {
+        await sendZaloTypingEvent(chatId, {
           profile: account.profile,
           isGroup,
         });
@@ -662,7 +656,7 @@ async function processMessage(
       }),
       deliver: async (payload) => {
         return await deliverZalouserReply({
-          payload: payload as { text?: string; mediaUrls?: string[]; mediaUrl?: string },
+          payload,
           profile: account.profile,
           mediaMaxBytes: account.mediaMaxBytes,
           chatId,

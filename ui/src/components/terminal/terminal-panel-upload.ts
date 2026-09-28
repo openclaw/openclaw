@@ -142,15 +142,22 @@ export class TerminalPanelUploadController {
     return Array.from(event.dataTransfer?.types ?? []).includes("Files");
   }
 
-  handleDragEnter = (event: DragEvent): void => {
-    if (this.hasDraggedFiles(event) && !this.uploadsEnabled()) {
+  private admitDraggedFiles(event: DragEvent): boolean {
+    if (!this.hasDraggedFiles(event)) {
+      return false;
+    }
+    if (!this.uploadsEnabled()) {
       event.preventDefault();
       if (event.dataTransfer) {
         event.dataTransfer.dropEffect = "none";
       }
-      return;
+      return false;
     }
-    if (!this.hasDraggedFiles(event) || !this.hasActiveTab() || this.hasPendingBatch()) {
+    return this.hasActiveTab() && !this.hasPendingBatch();
+  }
+
+  handleDragEnter = (event: DragEvent): void => {
+    if (!this.admitDraggedFiles(event)) {
       return;
     }
     event.preventDefault();
@@ -160,14 +167,7 @@ export class TerminalPanelUploadController {
   };
 
   handleDragOver = (event: DragEvent): void => {
-    if (this.hasDraggedFiles(event) && !this.uploadsEnabled()) {
-      event.preventDefault();
-      if (event.dataTransfer) {
-        event.dataTransfer.dropEffect = "none";
-      }
-      return;
-    }
-    if (!this.hasDraggedFiles(event) || !this.hasActiveTab() || this.hasPendingBatch()) {
+    if (!this.admitDraggedFiles(event)) {
       return;
     }
     event.preventDefault();

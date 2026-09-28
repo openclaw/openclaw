@@ -37,10 +37,10 @@ type StartupMigrationLeaseTestDatabase = Pick<
   "schema_meta" | "state_leases"
 >;
 
-/** Rewrites only the recorded owner start time so the live owner PID looks recycled. */
-function overwriteStartupMigrationLeaseOwnerStartedAt(
+/** Models a prior host or recycled PID without replacing the real lease store. */
+function overwriteStartupMigrationLeaseOwner(
   env: NodeJS.ProcessEnv,
-  startedAt: number,
+  changes: { host?: string; startedAt?: number },
 ): void {
   withOpenClawStateStartupMigrationCheckpointDatabase(
     (db) => {
@@ -53,7 +53,7 @@ function overwriteStartupMigrationLeaseOwnerStartedAt(
       executeSqliteQuerySync(
         db,
         kysely.updateTable("state_leases").set({
-          payload_json: JSON.stringify({ ...payload, owner: { ...payload.owner, startedAt } }),
+          payload_json: JSON.stringify({ ...payload, owner: { ...payload.owner, ...changes } }),
         }),
       );
     },
@@ -279,70 +279,115 @@ describe("startup migration lease", () => {
     }
   });
 
-  it("waits for a live same-host startup migration lease to be released", async () => {
-    const env = {
-      OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
-    };
-    let nowMs = 1001;
-    let elapsedMs = 0;
-    let sleepCount = 0;
-    const lease = await acquireStartupMigrationLeaseWithWait({
-      env,
-      now: () => 1000,
-      owner: "first",
-      timeoutMs: 0,
-    });
-    const acquired = await acquireStartupMigrationLeaseWithWait({
-      env,
-      owner: "second",
-      timeoutMs: 1000,
-      pollIntervalMs: 250,
-      now: () => nowMs,
-      monotonicNow: () => elapsedMs,
-      sleep: async (ms) => {
-        sleepCount += 1;
-        lease.release();
-        nowMs += ms;
-        elapsedMs += ms;
-      },
-    });
-
-    expect(sleepCount).toBe(1);
-    expect(acquired.owner).toBe("second");
-    acquired.release();
-  });
-
-  it("preserves the existing lease error when the wait bound expires", async () => {
-    const env = {
-      OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
-    };
-    let nowMs = 1001;
-    let elapsedMs = 0;
-    const lease = await acquireStartupMigrationLeaseWithWait({
-      env,
-      now: () => 1000,
-      owner: "first",
-      timeoutMs: 0,
-    });
-
-    await expect(
-      acquireStartupMigrationLeaseWithWait({
+  it.each([false, true])(
+    "waits for a startup migration lease to be released (other host: %s)",
+    async (otherHost) => {
+      const env = {
+        OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
+      };
+      let nowMs = 1001;
+      let elapsedMs = 0;
+      let sleepCount = 0;
+      const lease = await acquireStartupMigrationLeaseWithWait({
+        env,
+        now: () => 1000,
+        owner: "first",
+        timeoutMs: 0,
+      });
+      if (otherHost) {
+        overwriteStartupMigrationLeaseOwner(env, { host: "previous-pod" });
+      }
+      const acquired = await acquireStartupMigrationLeaseWithWait({
         env,
         owner: "second",
-        timeoutMs: 500,
+        timeoutMs: 1000,
         pollIntervalMs: 250,
         now: () => nowMs,
         monotonicNow: () => elapsedMs,
         sleep: async (ms) => {
+          sleepCount += 1;
+          lease.release();
           nowMs += ms;
           elapsedMs += ms;
         },
-      }),
-    ).rejects.toThrow(
-      `OpenClaw startup migrations are already running for this state directory; retry after the other OpenClaw process finishes or after 1970-01-01T00:05:01.000Z. (held by pid ${process.pid})`,
-    );
+      });
 
-    lease.release();
+      expect(sleepCount).toBe(1);
+      expect(acquired.owner).toBe("second");
+      acquired.release();
+    },
+  );
+
+  it.each([false, true])(
+    "preserves the lease and error when the wait bound expires (other host: %s)",
+    async (otherHost) => {
+      const env = {
+        OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
+      };
+      let nowMs = 1001;
+      let elapsedMs = 0;
+      const lease = await acquireStartupMigrationLeaseWithWait({
+        env,
+        now: () => 1000,
+        owner: "first",
+        timeoutMs: 0,
+      });
+      if (otherHost) {
+        overwriteStartupMigrationLeaseOwner(env, { host: "previous-pod" });
+      }
+
+      await expect(
+        acquireStartupMigrationLeaseWithWait({
+          env,
+          owner: "second",
+          timeoutMs: 500,
+          pollIntervalMs: 250,
+          now: () => nowMs,
+          monotonicNow: () => elapsedMs,
+          sleep: async (ms) => {
+            nowMs += ms;
+            elapsedMs += ms;
+          },
+        }),
+      ).rejects.toThrow(
+        `OpenClaw startup migrations are already running for this state directory; retry after the other OpenClaw process finishes or after 1970-01-01T00:05:01.000Z. (held by pid ${process.pid})`,
+      );
+      expect(elapsedMs).toBe(500);
+      expect(hasActiveStartupMigrationLease({ env, nowMs })).toBe(true);
+      lease.release();
+    },
+  );
+
+  it("waits for an unknown prior-host owner to expire before acquiring its lease", async () => {
+    const env = {
+      OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
+    };
+    const prior = await acquireStartupMigrationLeaseWithWait({
+      env,
+      now: () => 1000,
+      owner: "prior",
+      timeoutMs: 0,
+    });
+    overwriteStartupMigrationLeaseOwner(env, { host: "previous-pod" });
+    let nowMs = 1000 + STARTUP_MIGRATION_LEASE_TTL_MS - 1;
+    let elapsedMs = 0;
+    const acquired = await acquireStartupMigrationLeaseWithWait({
+      env,
+      owner: "replacement",
+      timeoutMs: 500,
+      pollIntervalMs: 250,
+      now: () => nowMs,
+      monotonicNow: () => elapsedMs,
+      sleep: async (ms) => {
+        expect(hasActiveStartupMigrationLease({ env, nowMs })).toBe(true);
+        nowMs += ms;
+        elapsedMs += ms;
+      },
+    });
+    expect(elapsedMs).toBe(250);
+    prior.release();
+    expect(hasActiveStartupMigrationLease({ env, nowMs })).toBe(true);
+    acquired.release();
   });
 
   it("reclaims an active startup migration lease whose owner process is gone", async () => {
@@ -386,7 +431,7 @@ describe("startup migration lease", () => {
       });
 
       // The owner PID is this live test process; only the recorded start identity is stale.
-      overwriteStartupMigrationLeaseOwnerStartedAt(env, 1);
+      overwriteStartupMigrationLeaseOwner(env, { startedAt: 1 });
 
       expect(hasActiveStartupMigrationLease({ env, nowMs: 1001 })).toBe(false);
 

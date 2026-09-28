@@ -54,6 +54,7 @@ const ref = {
   runId: "human-wait-run",
 };
 let manager: QuestionManager;
+let scheduler: ReturnType<typeof createTestGatewayScheduler>;
 let authority: AgentRunDelegatedAuthority;
 let unregister: () => void;
 let client: GatewayClient;
@@ -76,7 +77,8 @@ beforeEach(async () => {
   vi.useFakeTimers();
   vi.setSystemTime(Date.parse("2026-08-20T12:00:00Z"));
   setDiagnosticsEnabledForProcess(true);
-  manager = new QuestionManager();
+  scheduler = createTestGatewayScheduler("fake-timers");
+  manager = new QuestionManager(scheduler);
   onBroadcast = () => {};
   requesterActive = true;
   const validateRunAuthority = createAgentRuntimeApprovalAuthorityValidator();
@@ -103,6 +105,7 @@ beforeEach(async () => {
   handlers = createQuestionHandlers(
     manager,
     createSecretStoreWriteService({ reloadSecrets: async () => ({ warningCount: 0 }) }),
+    scheduler,
   );
   abort.mockReset().mockImplementation(() => {
     releaseAgentRunDelegatedAuthority(authority);

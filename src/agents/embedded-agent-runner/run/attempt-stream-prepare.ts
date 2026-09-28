@@ -67,6 +67,7 @@ import {
   resolveReportedModelRef,
 } from "./helpers.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
+import { resolveProviderRefusal } from "./provider-refusal.js";
 import type { EmbeddedRunAttemptParams, StreamRunState } from "./types.js";
 
 type AttemptStreamQueueHandle = EmbeddedAgentQueueHandle & {
@@ -134,129 +135,176 @@ function prepareStream(
   const shouldRunBeforeAgentFinalize =
     attempt.operation !== "settled-tool-finalization" &&
     hookRunner?.hasHooks("before_agent_finalize");
+  const completionCheck =
+    attempt.operation !== "settled-tool-finalization" &&
+    !attempt.silentExpected &&
+    resolveReplyExpectation(attempt) === "required"
+      ? attempt.completionCheck
+      : undefined;
   const onBeforeTerminalDelivery: Parameters<
     typeof subscribeEmbeddedAgentSession
-  >[0]["onBeforeTerminalDelivery"] = shouldRunBeforeAgentFinalize
-    ? async (event): Promise<void | { suppressTerminalDelivery: true }> => {
-        if (
-          beforeAgentFinalizeRevisionReason ||
-          event.willRetry ||
-          event.isError ||
-          event.incompleteTerminalAssistant ||
-          !event.hasAssistantVisibleText
-        ) {
-          return;
-        }
-        const lastAssistant = event.lastAssistant as AssistantMessage | undefined;
-        const lastAssistantMessage =
-          normalizeOptionalString(resolveFinalAssistantVisibleText(lastAssistant)) ??
-          normalizeOptionalString(resolveFinalAssistantRawText(lastAssistant)) ??
-          normalizeOptionalString(event.assistantTexts.join("\n\n"));
-        if (!lastAssistantMessage) {
-          return;
-        }
-        const state = input.getRunState();
-        const hasCompletedClientToolCall = agentSession.clientToolCallSlots.some(
-          (slot) => slot.completed,
-        );
-        if (
-          state.aborted ||
-          state.promptError ||
-          state.timedOut ||
-          hasCompletedClientToolCall ||
-          state.yieldDetected ||
-          (attempt.silentExpected && isSilentReplyText(lastAssistantMessage, SILENT_REPLY_TOKEN))
-        ) {
-          return;
-        }
-        const hookMessages = projectNestedToolActivityForHooks(
-          activeSession.messages,
-          input.nestedToolActivities,
-        );
-        const reportedModelRef = resolveReportedModelRef({
-          provider: attempt.provider,
-          model: attempt.modelId,
-          assistant: lastAssistant,
-        });
-        const maxRevisionAttempts = attempt.maxBeforeAgentFinalizeRevisions ?? 0;
-        if (
-          maxRevisionAttempts > 0 &&
-          (attempt.beforeAgentFinalizeRevisionAttempts ?? 0) >= maxRevisionAttempts
-        ) {
-          log.warn(
-            `before_agent_finalize revision limit reached; finalizing ` +
-              `runId=${attempt.runId} sessionId=${attempt.sessionId} ` +
-              `attempts=${attempt.beforeAgentFinalizeRevisionAttempts ?? 0}/${maxRevisionAttempts}`,
+  >[0]["onBeforeTerminalDelivery"] =
+    shouldRunBeforeAgentFinalize || completionCheck
+      ? async (
+          event,
+        ): Promise<void | { continueCurrentTurn: true } | { suppressTerminalDelivery: true }> => {
+          if (
+            beforeAgentFinalizeRevisionReason ||
+            event.willRetry ||
+            event.isError ||
+            event.incompleteTerminalAssistant ||
+            !event.hasAssistantVisibleText
+          ) {
+            return;
+          }
+          const lastAssistant = event.lastAssistant as AssistantMessage | undefined;
+          const lastAssistantMessage =
+            normalizeOptionalString(resolveFinalAssistantVisibleText(lastAssistant)) ??
+            normalizeOptionalString(resolveFinalAssistantRawText(lastAssistant)) ??
+            normalizeOptionalString(event.assistantTexts.join("\n\n"));
+          if (!lastAssistantMessage) {
+            return;
+          }
+          const state = input.getRunState();
+          const hasCompletedClientToolCall = agentSession.clientToolCallSlots.some(
+            (slot) => slot.completed,
           );
-          return;
-        }
-        // A queued user message wins over finalization. Close admission before
-        // awaiting the hook so no later steer can become a child of the draft.
-        admission.accepting = false;
-        if (
-          activeQueueAdmissions > 0 ||
-          activeSession.pendingMessageCount > 0 ||
-          activeSession.agent.hasQueuedMessages()
-        ) {
-          admission.accepting = true;
-          return;
-        }
-        let keepAdmissionClosed = false;
-        try {
-          const outcome = await runAgentHarnessBeforeAgentFinalizeHook({
-            event: {
-              runId: attempt.runId,
-              sessionId: attempt.sessionId,
-              ...(attempt.sessionKey ? { sessionKey: attempt.sessionKey } : {}),
-              provider: reportedModelRef.provider,
-              model: reportedModelRef.model,
-              ...((attempt.cwd ?? attempt.workspaceDir)
-                ? { cwd: attempt.cwd ?? attempt.workspaceDir }
-                : {}),
-              ...(attempt.sessionFile ? { transcriptPath: attempt.sessionFile } : {}),
-              stopHookActive: false,
-              lastAssistantMessage,
-              messages: hookMessages,
-            },
-            ctx: {
-              ...buildEmbeddedAgentHookContext(
-                attempt,
-                input.hookAgentId,
-                freezeDiagnosticTraceContext(input.diagnosticTrace),
-              ),
-              modelProviderId: reportedModelRef.provider,
-              modelId: reportedModelRef.model,
-            },
-            hookRunner,
-          });
-          if (outcome.action !== "revise") {
+          if (
+            state.aborted ||
+            input.runAbortController.signal.aborted ||
+            state.promptError ||
+            state.timedOut ||
+            hasCompletedClientToolCall ||
+            state.yieldDetected ||
+            (attempt.silentExpected && isSilentReplyText(lastAssistantMessage, SILENT_REPLY_TOKEN))
+          ) {
             return;
           }
-          if (event.hadDeterministicSideEffect) {
+          const maxRevisionAttempts = attempt.maxBeforeAgentFinalizeRevisions ?? 0;
+          const hookRevisionLimitReached =
+            maxRevisionAttempts > 0 &&
+            (attempt.beforeAgentFinalizeRevisionAttempts ?? 0) >= maxRevisionAttempts;
+          if (shouldRunBeforeAgentFinalize && hookRevisionLimitReached) {
             log.warn(
-              `before_agent_finalize requested revision after potential side effects; finalizing ` +
-                `runId=${attempt.runId} sessionId=${attempt.sessionId}`,
+              `before_agent_finalize revision limit reached; skipping further finalize hooks ` +
+                `runId=${attempt.runId} sessionId=${attempt.sessionId} ` +
+                `attempts=${attempt.beforeAgentFinalizeRevisionAttempts ?? 0}/${maxRevisionAttempts}`,
             );
-            return;
           }
-          if (!event.assistantEntryId) {
-            log.warn(
-              `before_agent_finalize revision lacks a persisted assistant entry; finalizing ` +
-                `runId=${attempt.runId} sessionId=${attempt.sessionId}`,
-            );
-            return;
-          }
-          keepAdmissionClosed = true;
-          beforeAgentFinalizeRevisionEntryId = event.assistantEntryId;
-          beforeAgentFinalizeRevisionReason = outcome.reason;
-          return { suppressTerminalDelivery: true };
-        } finally {
-          if (!keepAdmissionClosed) {
+          // A queued user message wins over finalization. Close admission before
+          // awaiting the hook so no later steer can become a child of the draft.
+          admission.accepting = false;
+          if (
+            activeQueueAdmissions > 0 ||
+            activeSession.pendingMessageCount > 0 ||
+            activeSession.agent.hasQueuedMessages()
+          ) {
             admission.accepting = true;
+            return;
+          }
+          let keepAdmissionClosed = false;
+          try {
+            let outcome: Awaited<ReturnType<typeof runAgentHarnessBeforeAgentFinalizeHook>> = {
+              action: "continue",
+            };
+            if (shouldRunBeforeAgentFinalize && !hookRevisionLimitReached) {
+              const hookMessages = projectNestedToolActivityForHooks(
+                activeSession.messages,
+                input.nestedToolActivities,
+              );
+              const reportedModelRef = resolveReportedModelRef({
+                provider: attempt.provider,
+                model: attempt.modelId,
+                assistant: lastAssistant,
+              });
+              outcome = await runAgentHarnessBeforeAgentFinalizeHook({
+                event: {
+                  runId: attempt.runId,
+                  sessionId: attempt.sessionId,
+                  ...(attempt.sessionKey ? { sessionKey: attempt.sessionKey } : {}),
+                  provider: reportedModelRef.provider,
+                  model: reportedModelRef.model,
+                  ...((attempt.cwd ?? attempt.workspaceDir)
+                    ? { cwd: attempt.cwd ?? attempt.workspaceDir }
+                    : {}),
+                  ...(attempt.sessionFile ? { transcriptPath: attempt.sessionFile } : {}),
+                  stopHookActive: false,
+                  lastAssistantMessage,
+                  messages: hookMessages,
+                },
+                ctx: {
+                  ...buildEmbeddedAgentHookContext(
+                    attempt,
+                    input.hookAgentId,
+                    freezeDiagnosticTraceContext(input.diagnosticTrace),
+                  ),
+                  modelProviderId: reportedModelRef.provider,
+                  modelId: reportedModelRef.model,
+                },
+                hookRunner,
+              });
+            }
+            if (outcome.action === "finalize") {
+              return;
+            }
+            if (outcome.action === "revise") {
+              if (event.hadDeterministicSideEffect) {
+                log.warn(
+                  `before_agent_finalize requested revision after potential side effects; not rewinding ` +
+                    `runId=${attempt.runId} sessionId=${attempt.sessionId}`,
+                );
+              } else if (!event.assistantEntryId) {
+                log.warn(
+                  `before_agent_finalize revision lacks a persisted assistant entry; not rewinding ` +
+                    `runId=${attempt.runId} sessionId=${attempt.sessionId}`,
+                );
+              } else {
+                keepAdmissionClosed = true;
+                beforeAgentFinalizeRevisionEntryId = event.assistantEntryId;
+                beforeAgentFinalizeRevisionReason = outcome.reason;
+                return { suppressTerminalDelivery: true };
+              }
+            }
+            const currentState = input.getRunState();
+            if (
+              !completionCheck?.unfinishedPlan ||
+              completionCheck.checked ||
+              lastAssistant?.stopReason !== "stop" ||
+              resolveProviderRefusal(lastAssistant) ||
+              event.hasPendingContinuation ||
+              agentSession.hasDeliveredSourceReply() ||
+              input.runAbortController.signal.aborted ||
+              currentState.aborted ||
+              currentState.timedOut ||
+              currentState.promptError ||
+              currentState.yieldDetected ||
+              admission.closed ||
+              activeSession.pendingMessageCount > 0 ||
+              activeSession.agent.hasQueuedMessages() ||
+              !hasCurrentRegistration()
+            ) {
+              return;
+            }
+            // This is a same-prompt follow-up, not a replay or draft rewind.
+            // Retain every completed effect and consume the check across retries.
+            completionCheck.checked = true;
+            await activeSession.sendCustomMessage(
+              {
+                customType: "openclaw.plan-completion-check",
+                display: false,
+                content:
+                  "This run’s latest successfully saved plan still has unfinished steps. Before ending, check whether those steps remain required and authorized under the latest user instructions. Continue feasible work from the current transcript; do not repeat completed actions, and reconcile uncertain effects before retrying. If work is complete, reconcile the plan. If user input, approval, an external dependency, or an explicit pause prevents further work, report that concrete limitation. Do not invent completion or new authority.",
+              },
+              { deliverAs: "followUp" },
+            );
+            return { continueCurrentTurn: true };
+          } finally {
+            if (!keepAdmissionClosed) {
+              admission.accepting = true;
+            }
           }
         }
-      }
-    : undefined;
+      : undefined;
 
   let toolMetasForTerminal: readonly AsyncStartedToolMeta[] = [];
   // Terminal callbacks run after queue construction; keep the queue in this
@@ -291,6 +339,7 @@ function prepareStream(
     onBlockReply: input.onBlockReply,
     onBlockReplyFlush: input.onBlockReplyFlush,
     onBeforeTerminalDelivery,
+    deferTerminalDelivery: shouldRunBeforeAgentFinalize === true,
     blockReplyBreak: attempt.blockReplyBreak,
     blockReplyChunking: attempt.blockReplyChunking,
     onPartialReply: attempt.onPartialReply,
@@ -394,18 +443,18 @@ function prepareStream(
           : undefined;
     input.abortRun(false, abortReason);
   };
-  const canInject = () => {
+  const hasCurrentRegistration = () => {
     // The session awaits transcript/question preparation after the global queue
     // check. Revalidate this exact publication and its live scope at the effect.
     registration?.toolAuthority?.assertActive();
     return (
-      isSteeringAdmissionOpen() &&
       registration !== undefined &&
       ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(queueHandle) === registration &&
       ACTIVE_EMBEDDED_RUNS.get(attempt.sessionId) === queueHandle &&
       ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(attempt.runId) === queueHandle
     );
   };
+  const canInject = () => isSteeringAdmissionOpen() && hasCurrentRegistration();
   type InputAuthority = NonNullable<
     Parameters<typeof cancelPendingAgentQuestionForSession>[0]["authority"]
   >;

@@ -51,16 +51,13 @@ enum ExecHostRequestEvaluator {
         } else {
             delayedPolicySnapshot = nil
         }
-        switch self.validateCommand(command: request.command, rawCommand: request.rawCommand) {
-        case let .success(validated):
-            return .success(ExecHostValidatedRequest(
+        return self.validateCommand(command: request.command, rawCommand: request.rawCommand).map { validated in
+            ExecHostValidatedRequest(
                 command: validated.command,
                 displayCommand: validated.displayCommand,
                 evaluationRawCommand: validated.evaluationRawCommand,
                 approvalSource: approvalSource,
-                delayedPolicySnapshot: delayedPolicySnapshot))
-        case let .failure(error):
-            return .failure(error)
+                delayedPolicySnapshot: delayedPolicySnapshot)
         }
     }
 

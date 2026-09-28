@@ -1,5 +1,6 @@
 /** Map installed managed Gateway services to profile-scoped inspection bindings. */
 import fs from "node:fs/promises";
+import path from "node:path";
 import { isRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveGatewayLaunchAgentLabel } from "./constants.js";
@@ -14,6 +15,7 @@ export type ManagedGatewayBinding = {
   readonly env: GatewayServiceEnv;
   readonly scope?: "user" | "system";
   readonly systemdReadTarget?: SystemdServiceReadTarget;
+  readonly windowsStartupEntry?: string;
 };
 
 function bindingSelectorKey(binding: ManagedGatewayBinding): string {
@@ -21,6 +23,9 @@ function bindingSelectorKey(binding: ManagedGatewayBinding): string {
     binding.profile,
     binding.scope ?? binding.systemdReadTarget?.scope ?? "",
     binding.systemdReadTarget?.unitPath ?? "",
+    binding.windowsStartupEntry
+      ? path.win32.normalize(binding.windowsStartupEntry).toLowerCase()
+      : "",
     binding.env.OPENCLAW_SYSTEMD_UNIT ?? "",
     binding.env.OPENCLAW_LAUNCHD_LABEL ?? "",
     binding.env.OPENCLAW_WINDOWS_TASK_NAME ?? "",
@@ -185,6 +190,7 @@ function bindingFromWindowsTask(
  */
 export async function discoverManagedGatewayBindings(
   env: Record<string, string | undefined>,
+  options: { requireComplete?: boolean } = {},
 ): Promise<ManagedGatewayBinding[]> {
   const results: ManagedGatewayBinding[] = [];
   const seen = new Set<string>();
@@ -198,8 +204,11 @@ export async function discoverManagedGatewayBindings(
   };
 
   try {
-    const { services } = await listManagedOpenClawGatewayServices(env);
-    // Discovery warnings cannot establish a live process holding this checkout's dist.
+    const { services, errors } = await listManagedOpenClawGatewayServices(env, options);
+    if (options.requireComplete && errors.length > 0) {
+      throw new Error("Managed Gateway inventory could not be completely inspected.");
+    }
+    // Best-effort callers retain known bindings; automatic writers require complete discovery.
     for (const svc of services) {
       if (svc.platform === "linux") {
         push(await bindingFromSystemdService(svc, env));
@@ -209,11 +218,24 @@ export async function discoverManagedGatewayBindings(
         push(await bindingFromLaunchdService(svc, env));
         continue;
       }
-      if (svc.windowsProfile !== undefined) {
-        push(bindingFromWindowsTask(svc.label, svc.windowsProfile, env));
+      if (svc.windowsProfile === undefined) {
+        continue;
       }
+      if (svc.windowsStartupEntry !== undefined) {
+        push({
+          profile: svc.windowsProfile,
+          scope: "user",
+          windowsStartupEntry: svc.windowsStartupEntry,
+          env: hostBindingEnv(env, profileEnvFields(svc.windowsProfile)),
+        });
+        continue;
+      }
+      push(bindingFromWindowsTask(svc.label, svc.windowsProfile, env));
     }
-  } catch {
+  } catch (error) {
+    if (options.requireComplete) {
+      throw error;
+    }
     return results;
   }
 

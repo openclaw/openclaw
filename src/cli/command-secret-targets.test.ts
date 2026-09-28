@@ -238,9 +238,7 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
 import {
   getAgentRuntimeCommandSecretTargetIds,
   getCapabilityWebFetchCommandSecretTargets,
-  getCapabilityWebFetchCommandSecretTargetIds,
   getCapabilityWebSearchCommandSecretTargets,
-  getCapabilityWebSearchCommandSecretTargetIds,
   getModelsCommandSecretTargetIds,
   getQrRemoteCommandSecretTargetIds,
   getScopedChannelsCommandSecretTargets,
@@ -287,7 +285,7 @@ describe("command secret target ids", () => {
   });
 
   it("scopes capability web search commands to search credential surfaces only", () => {
-    const ids = getCapabilityWebSearchCommandSecretTargetIds();
+    const { targetIds: ids } = getCapabilityWebSearchCommandSecretTargets({});
     expect(ids.has("plugins.entries.exa.config.webSearch.apiKey")).toBe(true);
     expect(ids.has("plugins.entries.firecrawl.config.webFetch.apiKey")).toBe(false);
     expect(ids.has("plugins.entries.voice-call.config.twilio.authToken")).toBe(false);
@@ -299,7 +297,7 @@ describe("command secret target ids", () => {
   });
 
   it("scopes capability web fetch commands to fetch credential surfaces only", () => {
-    const ids = getCapabilityWebFetchCommandSecretTargetIds();
+    const { targetIds: ids } = getCapabilityWebFetchCommandSecretTargets({});
     expect(ids.has("plugins.entries.exa.config.webSearch.apiKey")).toBe(false);
     expect(ids.has("plugins.entries.firecrawl.config.webFetch.apiKey")).toBe(true);
     expect(ids.has("plugins.entries.voice-call.config.twilio.authToken")).toBe(false);
@@ -619,7 +617,15 @@ describe("command secret target ids", () => {
       },
     } as never);
 
-    expect(scoped.targetIds).toEqual(getCapabilityWebSearchCommandSecretTargetIds());
+    expect(scoped.targetIds).toEqual(
+      new Set([
+        "plugins.entries.brave.config.webSearch.apiKey",
+        "plugins.entries.exa.config.webSearch.apiKey",
+        "plugins.entries.firecrawl.config.webSearch.apiKey",
+        "plugins.entries.gemini.config.webSearch.apiKey",
+        "plugins.entries.other-fetch.config.webSearch.apiKey",
+      ]),
+    );
     expect(scoped.forcedActivePaths).toBeUndefined();
   });
 
@@ -767,7 +773,12 @@ describe("command secret target ids", () => {
       }),
     } as never);
 
-    expect(scoped.targetIds).toEqual(getCapabilityWebFetchCommandSecretTargetIds());
+    expect(scoped.targetIds).toEqual(
+      new Set([
+        "plugins.entries.firecrawl.config.webFetch.apiKey",
+        "plugins.entries.other-fetch.config.webFetch.apiKey",
+      ]),
+    );
     expect(scoped.forcedActivePaths).toBeUndefined();
   });
 

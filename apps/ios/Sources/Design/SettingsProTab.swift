@@ -141,7 +141,7 @@ struct SettingsProTab: View {
                 self.syncSettingsState()
                 self.refreshNotificationSettings()
                 self.applyGatewaySetupRequestIfNeeded()
-                self.notifyRouteChange()
+                self.onRouteChange?(self.directRoute)
             }
             .onDisappear {
                 self.scannerResultHandoff.cancel()
@@ -302,9 +302,5 @@ struct SettingsProTab: View {
     func openNotificationsRouteFromApprovals() {
         let approvalID = ExecApprovalIdentifier.exact(self.appModel.pendingExecApprovalPrompt?.id)
         self.onApprovalNotificationsRoute?(approvalID)
-    }
-
-    private func notifyRouteChange() {
-        self.onRouteChange?(self.directRoute)
     }
 }

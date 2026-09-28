@@ -1,4 +1,19 @@
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
+
+export type AcpSessionRuntimeLocator = Readonly<
+  Pick<SessionAcpMeta, "backend" | "runtimeSessionName">
+>;
+
+/** Runtime names are opaque backend locators; ordinary metadata enrichment may continue. */
+export function matchesAcpSessionRuntimeLocator(
+  current: AcpSessionRuntimeLocator | undefined,
+  expected: AcpSessionRuntimeLocator,
+): boolean {
+  return (
+    current?.backend === expected.backend &&
+    current.runtimeSessionName === expected.runtimeSessionName
+  );
+}
 
 /** ACP task control keeps the spawner authoritative over a navigation parent. */
 export function resolveAcpSessionControlOwner(

@@ -227,7 +227,7 @@ it("authorizes exact rows independently of bulk validation and fences dirty rows
       });
       expect(respond).toHaveBeenCalledWith(
         true,
-        { subscribed: true, key: "agent:main:clean" },
+        { subscribed: true, key: "agent:main:clean", agentId: "main" },
         undefined,
       );
       expect(

@@ -19,7 +19,8 @@
   color: var(--muted);
   font: inherit;
   text-align: left;
-  user-select: text;
+  -webkit-user-select: none;
+  user-select: none;
   cursor: var(--cursor-action);
   transition: color 150ms ease-out;
 }
@@ -1126,6 +1127,18 @@
 
 .chat-work-group .chat-activity-group__label {
   color: inherit;
+}
+
+.chat-work-group__total,
+.chat-work-group__outcomes {
+  flex: none;
+  white-space: nowrap;
+}
+
+.chat-work-group__outcomes {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .chat-group--activity .chat-activity-group__label {

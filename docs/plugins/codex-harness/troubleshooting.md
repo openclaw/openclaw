@@ -166,8 +166,10 @@ limit includes the root thread and cannot be combined with `agents.max_threads`.
 For more Codex headroom, increase the host, container, or cgroup memory
 allocation. An OS hard limit can terminate Codex rather than backpressure it.
 
-**Model discovery is slow:** lower
-`plugins.entries.codex.config.discovery.timeoutMs` or disable discovery.
+**Model discovery is slow:** check the app-server's connectivity to its model
+catalog endpoint. The default `plugins.entries.codex.config.discovery.timeoutMs`
+is 10 seconds so Codex can finish its native refresh or fallback. A shorter
+override can interrupt that fallback and make native models unavailable.
 See [Codex harness reference](/plugins/codex-harness-reference#model-discovery).
 
 **Codex plugin state has reached its row limit:** run `openclaw doctor` to

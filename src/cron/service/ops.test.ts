@@ -25,7 +25,6 @@ import { loadCronJobsStoreWithConfigJobs, loadCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import * as runReceiptStore from "../store/run-receipt-store.js";
 import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
-import { prepareCronRunReceiptWriteSchema } from "../store/run-receipt-write-admission.js";
 import type { CronJob } from "../types.js";
 import { start, stop } from "./ops-lifecycle.js";
 import {
@@ -40,7 +39,11 @@ import { list, writeScratch } from "./ops-read.js";
 import { inspectManualRunDisposition } from "./ops-run-preparation.js";
 import { run } from "./ops-run.js";
 import * as taskRuns from "./run-history.js";
-import { observeCronRecoveryForTest, recoverCronRunForTest } from "./run-recovery.test-support.js";
+import {
+  claimCronRecoveryReceipt,
+  observeCronRecoveryForTest,
+  recoverCronRunForTest,
+} from "./run-recovery.test-support.js";
 import type { CronAddResult, CronEvent } from "./state.js";
 import { runMissedJobs } from "./timer.js";
 
@@ -955,20 +958,7 @@ describe("cron service ops seam coverage", () => {
     const job = createInterruptedMainJob(now);
     job.state.runningAtMs = startedAt;
     await writeCronStoreSnapshot({ storePath, jobs: [job] });
-    const preparedReceipt = runReceiptStore.prepareCronRunReceiptClaim({
-      storePath,
-      job,
-      agentId: "main",
-      startedAtMs: startedAt,
-    });
-    const receipt = runOpenClawStateWriteTransaction(({ db }) =>
-      runReceiptStore.claimCronRunReceiptInDatabase({
-        database: db,
-        receiptSchema: prepareCronRunReceiptWriteSchema(db),
-        prepared: preparedReceipt,
-        resolveAgentId: (current) => current.agentId ?? "main",
-      }),
-    );
+    const receipt = claimCronRecoveryReceipt(storePath, job, startedAt, "main");
     const completedJob = structuredClone(job);
     delete completedJob.state.runningAtMs;
     completedJob.state.lastRunAtMs = startedAt;
@@ -1052,21 +1042,8 @@ describe("cron service ops seam coverage", () => {
         job.payload = { kind: "script", script: "return { state: { cursor: 'payload' } }" };
         job.state.triggerState = { cursor: "old" };
         await writeCronStoreSnapshot({ storePath, jobs: [job] });
-        const preparedReceipt = runReceiptStore.prepareCronRunReceiptClaim({
-          storePath,
-          job,
-          agentId: "main",
-          startedAtMs: startedAt,
-        });
         const receipt = hasReceipt
-          ? runOpenClawStateWriteTransaction(({ db }) =>
-              runReceiptStore.claimCronRunReceiptInDatabase({
-                database: db,
-                receiptSchema: prepareCronRunReceiptWriteSchema(db),
-                prepared: preparedReceipt,
-                resolveAgentId: (current) => current.agentId ?? "main",
-              }),
-            )
+          ? claimCronRecoveryReceipt(storePath, job, startedAt, "main")
           : undefined;
         const events: CronEvent[] = [];
         const state = createCronServiceState({
@@ -1193,20 +1170,7 @@ describe("cron service ops seam coverage", () => {
       job.id = "invalid-finalized-receipt";
       job.state.runningAtMs = startedAt;
       await writeCronStoreSnapshot({ storePath, jobs: [job] });
-      const preparedReceipt = runReceiptStore.prepareCronRunReceiptClaim({
-        storePath,
-        job,
-        agentId: "main",
-        startedAtMs: startedAt,
-      });
-      const receipt = runOpenClawStateWriteTransaction(({ db }) =>
-        runReceiptStore.claimCronRunReceiptInDatabase({
-          database: db,
-          receiptSchema: prepareCronRunReceiptWriteSchema(db),
-          prepared: preparedReceipt,
-          resolveAgentId: (current) => current.agentId ?? "main",
-        }),
-      );
+      const receipt = claimCronRecoveryReceipt(storePath, job, startedAt, "main");
       runReceiptStore.releaseLocalCronRunReceiptOwnership(receipt);
       const state = createCronServiceState({
         storePath,

@@ -111,11 +111,7 @@ async function collectReferencedAddedOverridePaths(params: {
     })),
   ];
 
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (!current) {
-      continue;
-    }
+  for (const current of queue) {
     // Shared added files are rescanned per override root to retain each
     // importer's complete dependency closure in the recovery manifest.
     const scanKey = `${current.rootPath}\0${current.path}`;

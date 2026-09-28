@@ -42,7 +42,7 @@ describe("vitest E2E global setup", () => {
     await setupPromise;
     expect(runCommand.mock.calls).toEqual([
       [
-        ["scripts/run-node.mjs", "--version"],
+        ["scripts/prepare-vitest-runtime.mjs"],
         {
           ...process.env,
           OPENCLAW_BUILD_PRIVATE_QA: "1",
@@ -79,7 +79,7 @@ describe("vitest E2E global setup", () => {
 
   posixIt("forwards output and SIGTERM through the runner process group", async () => {
     const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-setup-group-"));
-    const fixturePath = path.join(fixtureDir, "scripts", "run-node.mjs");
+    const fixturePath = path.join(fixtureDir, "scripts", "prepare-vitest-runtime.mjs");
     const pidPaths = ["child.pid", "descendant.pid"].map((name) => path.join(fixtureDir, name));
     let cleanup = async () => fs.rmSync(fixtureDir, { force: true, recursive: true });
     await runQaGatewayFixture(

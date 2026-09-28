@@ -18,6 +18,7 @@ import {
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { resetAgentEventsForTest } from "../../infra/agent-events.js";
+import type { SpawnResult } from "../../process/exec.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -31,17 +32,23 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import type { WorkerComputerLaunchDescriptor } from "../../worker/launch-descriptor.js";
+import { WORKER_TOOL_NAMES } from "../../worker/tool-authority.js";
 import type { MintedWorkerCredential } from "./credential.js";
 import { measureNodeWorkerLaunchBytes } from "./node-launch-adapter.js";
 import type {
   WorkerSessionPlacementDispatchIdentity,
   WorkerSessionPlacementRecord,
+  WorkerSessionTurnClaim,
 } from "./placement-record.js";
 import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
-import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
+import {
+  advancePlacementFixtureToActive,
+  seedAttachedPlacementEnvironment,
+} from "./placement-test-fixtures.js";
+import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import { createWorkerSessionTurnPlacementProvider as createRawWorkerSessionTurnPlacementProvider } from "./worker-turn-launcher.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
@@ -60,6 +67,9 @@ const BUNDLE_HASH = "a".repeat(64);
 export const MANIFEST_REF = `sha256:${"b".repeat(64)}`;
 const HOST_KEY = [["ssh", "ed25519"].join("-"), "AAAA"].join(" ");
 
+export const readLaunchToolNames: WorkerTurnTunnelHandle["readLaunchToolNames"] = async () =>
+  WORKER_TOOL_NAMES;
+
 export const measureLaunchTurn: WorkerTurnTunnelHandle["measureLaunchTurn"] = (plan, claim) =>
   measureNodeWorkerLaunchBytes("fixture-node", {
     environmentSession: 1,
@@ -69,6 +79,67 @@ export const measureLaunchTurn: WorkerTurnTunnelHandle["measureLaunchTurn"] = (p
     placementGeneration: claim.placementGeneration,
     descriptor: plan,
   });
+
+export function createWorkerTurnTunnel<
+  Overrides extends Pick<WorkerTurnTunnelHandle, "launchTurn" | "reconcileWorkspace"> &
+    Partial<WorkerTurnTunnelHandle>,
+>(overrides: Overrides): WorkerTurnTunnelHandle & Overrides {
+  return {
+    environmentId: ENVIRONMENT_ID,
+    ownerEpoch: OWNER_EPOCH,
+    runWorkspaceCommand: vi.fn(),
+    quiesceWorkspace: vi.fn(async () => ({
+      assertActive: vi.fn(async () => {}),
+      resume: vi.fn(async () => {}),
+    })),
+    measureLaunchTurn,
+    readLaunchToolNames,
+    syncWorkspace: vi.fn(async () => {
+      throw new Error("unexpected workspace sync");
+    }),
+    stop: vi.fn(async () => {}),
+    ...overrides,
+  };
+}
+
+export const reconcileUnchangedLocalWorkspace: WorkerTurnTunnelHandle["reconcileWorkspace"] =
+  async (request) => {
+    if (request.source.kind !== "local") {
+      throw new Error("expected a local workspace source");
+    }
+    request.source.journal.commit(MANIFEST_REF);
+    return {
+      manifestRef: MANIFEST_REF,
+      changed: false,
+      verifyStable: async () => {},
+      verifyLocalStable: async () => {},
+      publishStagedResult: async () => {},
+      discardPreparedStagedResult: async () => {},
+    };
+  };
+
+export function acknowledgeCompletedWorkerTurn(
+  claim: WorkerSessionTurnClaim,
+  transcriptLeafId: string,
+): SpawnResult {
+  createWorkerSessionPlacementGate(placements).updateAckCursors({
+    claim,
+    transcriptSeq: 2,
+    liveSeq: 1,
+  });
+  return {
+    stdout: JSON.stringify({
+      status: "completed",
+      transcriptLeafId,
+      transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
+    }),
+    stderr: "",
+    code: 0,
+    signal: null,
+    killed: false,
+    termination: "exit",
+  };
+}
 
 let testState: OpenClawTestState;
 export let database: OpenClawStateDatabase;
@@ -223,48 +294,23 @@ export async function seedActivePlacement(
   remoteWorkspaceDir = "/worker/workspace",
   workspaceBaseManifestRef = MANIFEST_REF,
 ): Promise<void> {
-  let placement = await placements.startDispatch({
-    sessionId: SESSION_ID,
-    sessionKey: sessionTarget.sessionKey,
-    agentId: sessionTarget.agentId,
-    executionMode,
-  });
-  placement = placements.transition({
-    sessionId: SESSION_ID,
-    from: "requested",
-    to: "provisioning",
-    expectedGeneration: placement.generation,
-    patch: { environmentId: ENVIRONMENT_ID },
-  });
-  placement = placements.transition({
-    sessionId: SESSION_ID,
-    from: "provisioning",
-    to: "syncing",
-    expectedGeneration: placement.generation,
-    patch: { workerBundleHash: BUNDLE_HASH },
-  });
-  placement = placements.transition({
-    sessionId: SESSION_ID,
-    from: "syncing",
-    to: "starting",
-    expectedGeneration: placement.generation,
-    patch: {
+  await advancePlacementFixtureToActive(
+    placements,
+    database,
+    {
+      sessionId: SESSION_ID,
+      sessionKey: sessionTarget.sessionKey,
+      agentId: sessionTarget.agentId,
+      executionMode,
+    },
+    {
+      environmentId: ENVIRONMENT_ID,
+      ownerEpoch: OWNER_EPOCH,
+      workerBundleHash: BUNDLE_HASH,
       remoteWorkspaceDir,
       workspaceBaseManifestRef,
     },
-  });
-  seedAttachedPlacementEnvironment(database, {
-    environmentId: ENVIRONMENT_ID,
-    sessionId: SESSION_ID,
-    ownerEpoch: OWNER_EPOCH,
-  });
-  placements.transition({
-    sessionId: SESSION_ID,
-    from: "starting",
-    to: "active",
-    expectedGeneration: placement.generation,
-    patch: { activeOwnerEpoch: OWNER_EPOCH },
-  });
+  );
 }
 
 export async function seedReclaimedPlacement() {
