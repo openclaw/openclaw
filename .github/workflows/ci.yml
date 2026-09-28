@@ -4644,6 +4644,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.ci-harness/.github/actions/setup-node-env
         with:
+          semantic-checks: "true"
           cache-mode: *cache_mode
           install-bun: "false"
           dependency-cache: ${{ runner.environment == 'self-hosted' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'true' || 'false' }}
@@ -4695,7 +4696,7 @@ jobs:
       - name: Setup Node environment
         if: steps.npm-lock-scope.outputs.skip != 'true'
         uses: ./.ci-harness/.github/actions/setup-node-env
-        with:
+        with: &semantic_node_inputs
           semantic-checks: "true"
           cache-mode: *cache_mode
           install-bun: "false"
@@ -5164,11 +5165,7 @@ jobs:
       - &semantic_node_setup_step
         name: Setup Node environment
         uses: ./.ci-harness/.github/actions/setup-node-env
-        with:
-          semantic-checks: "true"
-          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
-          install-bun: "false"
-          dependency-cache: *trusted_dependency_cache
+        with: *semantic_node_inputs
 
       - name: Compute extension boundary input fingerprint
         id: extension-boundary-inputs

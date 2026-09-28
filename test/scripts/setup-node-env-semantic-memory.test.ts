@@ -10,6 +10,7 @@ it.each([
   [
     "ci.yml",
     [
+      "check-plan",
       "check-shard",
       "check-lint-hosted-core-shard",
       "check-lint-hosted-extension-shard",
