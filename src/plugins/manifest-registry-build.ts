@@ -304,6 +304,7 @@ export function buildPluginManifestRegistry(
       Number(left.origin === "config" || left.configSelected === true),
   );
   const seenIds = new Map<string, SeenIdEntry>();
+  const manifestWarnings = new Map<string, string[]>();
   const reportedExplicitOverrides = new Set<string>();
   const currentHostVersion = resolveCompatibilityHostVersion(env);
   const explicitConfiguredFileSources = new Set(
@@ -370,6 +371,9 @@ export function buildPluginManifestRegistry(
           : {}),
       });
       continue;
+    }
+    if ("warnings" in manifestRes && manifestRes.warnings) {
+      manifestWarnings.set(manifestRes.manifestPath, manifestRes.warnings);
     }
     const manifest = manifestRes.manifest;
     const effectivePluginId = candidate.effectivePluginId ?? manifest.id;
@@ -582,6 +586,14 @@ export function buildPluginManifestRegistry(
   const records = [...seenIds.values()].map(({ record }) => record);
   const plugins = rejectCaseFoldedIdCollisions(records, diagnostics);
   for (const record of plugins) {
+    for (const warning of manifestWarnings.get(record.manifestPath) ?? []) {
+      diagnostics.push({
+        level: "warn",
+        pluginId: sanitizeForLog(record.id),
+        source: sanitizeForLog(record.manifestPath),
+        message: sanitizeForLog(warning),
+      });
+    }
     pushNonBundledChannelConfigDescriptorDiagnostic({ record, diagnostics, normalized });
   }
   const registry = { plugins, diagnostics: dedupePluginDiagnostics(diagnostics, discovered) };

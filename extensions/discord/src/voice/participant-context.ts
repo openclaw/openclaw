@@ -1,7 +1,6 @@
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { APIVoiceState, Client } from "../internal/discord.js";
-import type { GatewayPlugin } from "../internal/gateway.js";
 import type { DiscordLivePolicyReader } from "../monitor/live-policy.js";
 import { type DiscordVoiceIngressContext, resolveDiscordVoiceIngressContext } from "./ingress.js";
 import type { VoiceSessionEntry } from "./session.js";
@@ -41,7 +40,7 @@ export function listDiscordVoiceParticipantStates(params: {
   guildId: string;
   channelId: string;
 }): APIVoiceState[] | null {
-  const gateway = params.client.getPlugin<GatewayPlugin>("gateway");
+  const gateway = params.client.getPlugin("gateway");
   if (!gateway || typeof gateway.listVoiceChannelStates !== "function") {
     return null;
   }
@@ -281,10 +280,7 @@ export async function resolveDiscordVoiceIngressContextWithParticipants(params: 
     cfg: params.cfg,
     discordConfig: params.discordConfig,
     admissionAllowFrom: params.admissionAllowFrom,
-    fetchGuildName: async (guildId) => {
-      const guild = await params.client.fetchGuild(guildId).catch(() => null);
-      return guild && typeof guild.name === "string" && guild.name.trim() ? guild.name : undefined;
-    },
+    client: params.client,
     speakerContext: params.speakerContext,
   });
   if (!context || context.isCurrent?.() === false) {

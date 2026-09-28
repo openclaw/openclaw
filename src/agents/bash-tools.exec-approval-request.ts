@@ -73,44 +73,6 @@ type ExecApprovalRequestToolParams = RequestExecApprovalDecisionParams & {
   twoPhase: true;
 };
 
-function buildExecApprovalRequestToolParams(
-  params: RequestExecApprovalDecisionParams,
-): ExecApprovalRequestToolParams {
-  return {
-    id: params.id,
-    ...(params.command ? { command: params.command } : {}),
-    ...(params.commandArgv ? { commandArgv: params.commandArgv } : {}),
-    systemRunPlan: params.systemRunPlan,
-    env: params.env,
-    cwd: params.cwd,
-    nodeId: params.nodeId,
-    host: params.host,
-    security: params.security,
-    ask: params.ask,
-    warningText: params.warningText,
-    commandSpans: params.commandSpans,
-    ...(params.unavailableDecisions?.length
-      ? { unavailableDecisions: params.unavailableDecisions }
-      : {}),
-    agentId: params.agentId,
-    resolvedPath: params.resolvedPath,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-    runId: params.runId,
-    toolCallId: params.toolCallId,
-    turnSourceChannel: params.turnSourceChannel,
-    turnSourceTo: params.turnSourceTo,
-    turnSourceAccountId: params.turnSourceAccountId,
-    turnSourceThreadId: params.turnSourceThreadId,
-    approvalReviewerDeviceIds: params.approvalReviewerDeviceIds,
-    requireDeliveryRoute: params.requireDeliveryRoute,
-    suppressDelivery: params.suppressDelivery,
-    deliverToApprovalClientsOnly: params.deliverToApprovalClientsOnly,
-    timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
-    twoPhase: true,
-  };
-}
-
 type ParsedDecision = { present: boolean; value: string | null };
 
 function parseDecision(value: unknown): ParsedDecision {
@@ -124,10 +86,6 @@ function parseDecision(value: unknown): ParsedDecision {
   }
   const decision = (value as { decision?: unknown }).decision;
   return { present: true, value: typeof decision === "string" ? decision : null };
-}
-
-function parseExpiresAtMs(value: unknown): number | undefined {
-  return asDateTimestampMs(value);
 }
 
 function resolveDefaultExecApprovalExpiresAtMs(): number {
@@ -154,21 +112,21 @@ export function isExecApprovalRunAbortedError(error: unknown): boolean {
 
 /** Registers a two-phase exec approval request with the gateway. */
 async function registerExecApprovalRequest(
-  params: RequestExecApprovalDecisionParams,
+  params: ExecApprovalRequestToolParams,
 ): Promise<ExecApprovalRegistration> {
   // Two-phase registration is critical: the ID must be registered server-side
   // before exec returns `approval-pending`, otherwise `/approve` can race and orphan.
   const registrationResult = await callGatewayTool(
     "exec.approval.request",
     { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
-    buildExecApprovalRequestToolParams(params),
+    params,
     { expectFinal: false },
   );
   markToolDecisionRecorded();
   const decision = parseDecision(registrationResult);
   const id = parseString(registrationResult?.id) ?? params.id;
   const expiresAtMs =
-    parseExpiresAtMs(registrationResult?.expiresAtMs) ?? resolveDefaultExecApprovalExpiresAtMs();
+    asDateTimestampMs(registrationResult?.expiresAtMs) ?? resolveDefaultExecApprovalExpiresAtMs();
   if (decision.present) {
     return { id, expiresAtMs, finalDecision: decision.value };
   }
@@ -206,52 +164,15 @@ export async function resolveRegisteredExecApprovalDecision(params: {
   }
 }
 
-type HostExecApprovalParams = {
+type HostExecApprovalParams = Omit<
+  RequestExecApprovalDecisionParams,
+  "id" | "cwd" | "deliverToApprovalClientsOnly"
+> & {
   approvalId: string;
-  command?: string;
-  commandArgv?: string[];
-  systemRunPlan?: SystemRunApprovalPlan;
-  env?: Record<string, string>;
   workdir: string | undefined;
-  host: "gateway" | "node";
-  nodeId?: string;
-  security: ExecSecurity;
-  ask: ExecAsk;
-  warningText?: string;
-  commandSpans?: ExecApprovalCommandSpan[];
-  unavailableDecisions?: readonly ExecApprovalUnavailableDecision[];
   commandHighlighting?: boolean;
-  agentId?: string;
-  resolvedPath?: string;
-  sessionKey?: string;
-  sessionId?: string;
-  runId?: string;
-  toolCallId?: string;
-  turnSourceChannel?: string;
-  turnSourceTo?: string;
-  turnSourceAccountId?: string;
-  turnSourceThreadId?: string | number;
-  approvalReviewerDeviceIds?: string[];
   trigger?: string;
-  requireDeliveryRoute?: boolean;
-  suppressDelivery?: boolean;
 };
-
-type ExecApprovalRequesterContext = {
-  agentId?: string;
-  sessionKey?: string;
-};
-
-/** Builds requester identity context for an approval payload. */
-export function buildExecApprovalRequesterContext(params: ExecApprovalRequesterContext): {
-  agentId?: string;
-  sessionKey?: string;
-} {
-  return {
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-  };
-}
 
 type ExecApprovalTurnSourceContext = {
   turnSourceChannel?: string;
@@ -312,7 +233,7 @@ function shouldSkipGeneratedCommandSpans(params: HostExecApprovalParams): boolea
 
 async function buildHostApprovalDecisionParams(
   params: HostExecApprovalParams,
-): Promise<RequestExecApprovalDecisionParams> {
+): Promise<ExecApprovalRequestToolParams> {
   const commandSpans =
     params.commandHighlighting === true
       ? (params.commandSpans ??
@@ -322,8 +243,8 @@ async function buildHostApprovalDecisionParams(
       : undefined;
   return {
     id: params.approvalId,
-    command: params.command,
-    commandArgv: params.commandArgv,
+    ...(params.command ? { command: params.command } : {}),
+    ...(params.commandArgv ? { commandArgv: params.commandArgv } : {}),
     systemRunPlan: params.systemRunPlan,
     env: params.env,
     cwd: params.workdir,
@@ -333,11 +254,11 @@ async function buildHostApprovalDecisionParams(
     ask: params.ask,
     warningText: params.warningText,
     commandSpans,
-    unavailableDecisions: params.unavailableDecisions,
-    ...buildExecApprovalRequesterContext({
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-    }),
+    ...(params.unavailableDecisions?.length
+      ? { unavailableDecisions: params.unavailableDecisions }
+      : {}),
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
     resolvedPath: params.resolvedPath,
     sessionId: params.sessionId,
     runId: params.runId,
@@ -359,14 +280,9 @@ async function buildHostApprovalDecisionParams(
       params.trigger === "cron" && params.host === "gateway" ? true : undefined,
     approvalReviewerDeviceIds: params.approvalReviewerDeviceIds,
     ...buildExecApprovalTurnSourceContext(params),
+    timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
+    twoPhase: true,
   };
-}
-
-/** Registers a host/node approval request without waiting for a decision. */
-async function registerExecApprovalRequestForHost(
-  params: HostExecApprovalParams,
-): Promise<ExecApprovalRegistration> {
-  return await registerExecApprovalRequest(await buildHostApprovalDecisionParams(params));
 }
 
 /** Registers a host/node approval request and wraps failures for exec callers. */
@@ -374,7 +290,7 @@ export async function registerExecApprovalRequestForHostOrThrow(
   params: HostExecApprovalParams,
 ): Promise<ExecApprovalRegistration> {
   try {
-    return await registerExecApprovalRequestForHost(params);
+    return await registerExecApprovalRequest(await buildHostApprovalDecisionParams(params));
   } catch (err) {
     throw new Error(`Exec approval registration failed: ${String(err)}`, { cause: err });
   }

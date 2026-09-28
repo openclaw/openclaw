@@ -23,6 +23,8 @@ import {
   classifyAgentRunTerminalOutcome,
   mergeAgentRunTerminalOutcome,
 } from "../agent-run-terminal-outcome.js";
+import { normalizeAgentRunTerminalReceipt } from "../agent-run-terminal-receipt.js";
+import { normalizeAgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
 import { OPENCLAW_AGENT_RUNTIME_ID } from "../agent-runtime-id.js";
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import type { AcceptedCompactionSuccessor } from "../embedded-agent-runner/compaction-successor.js";
@@ -90,21 +92,6 @@ export async function clearCommandRecoveryClaim(params: {
         },
         shouldPersist: (current) =>
           shouldPersistRestartRecoveryCleanup(current, params.runOwnedSessionId, runId),
-      });
-    }
-    // Finalization may already have cleared the active claim before this finally.
-    // Its durable receipt, not the transient monitor waiter, settles the task.
-    if (
-      (sessionStore[sessionKey] ?? entry)?.restartRecoveryTerminalDeliveryEvidence?.some(
-        (receipt) => receipt.harnessCompletion,
-      )
-    ) {
-      const { reconcileSessionHarnessCompletionDeliveries } =
-        await import("../agent-harness-completion-delivery.js");
-      reconcileSessionHarnessCompletionDeliveries({
-        agentId: params.prepared.sessionAgentId,
-        sessionKey,
-        storePath,
       });
     }
   } catch (error) {
@@ -213,7 +200,20 @@ export async function finalizeEmbeddedAgentCommand(params: {
   const effectiveCwd = cwd ?? workspaceDir;
   const isHeartbeatLifecycleRun = isHeartbeatLifecycleRunKind(params.opts.bootstrapContextRunKind);
   let sessionEntry = params.sessionEntry;
-  let result = params.attempt.result;
+  // Return the same producer-owned facts published to agent.wait. Payloads and
+  // display history cannot reconstruct a yielded or intentionally empty result.
+  const terminalReply = normalizeAgentRunTerminalReplySnapshot(terminal.metadata.terminalReply);
+  const terminalReceipt = normalizeAgentRunTerminalReceipt(terminal.metadata.terminalReceipt);
+  let result = {
+    ...params.attempt.result,
+    meta: {
+      ...params.attempt.result.meta,
+      ...(terminalReply ? { terminalReply } : {}),
+      ...(terminalReceipt && params.attempt.result.meta.agentMeta
+        ? { agentMeta: { ...params.attempt.result.meta.agentMeta, terminalReceipt } }
+        : {}),
+    },
+  };
   let deliveryResult: AgentCommandDeliveryResult;
   let hasResultError: boolean;
   let terminalError: string | undefined;
@@ -360,6 +360,11 @@ export async function finalizeEmbeddedAgentCommand(params: {
 
     const payloads = result.payloads ?? [];
     const pendingFinalDeliveryMarker = await persistPendingFinalDeliveryMarker({
+      assertCurrent: () => {
+        assertSourceCurrent?.();
+        operatorAuthority?.assertCurrent();
+        assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+      },
       commandOwnerReference: params.opts.assertSourceCurrent?.recoveryReference,
       agentId: sessionAgentId,
       deliver: params.opts.deliver === true,

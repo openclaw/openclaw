@@ -1,4 +1,3 @@
-// Matrix tests cover exact single-event message reads.
 import { describe, expect, it, vi } from "vitest";
 import type { MatrixClient } from "../sdk.js";
 import { readMatrixMessage } from "./messages.js";
@@ -80,18 +79,15 @@ describe("readMatrixMessage", () => {
     expect(calls.stop).not.toHaveBeenCalled();
   });
 
-  it.each(["inaccessible", "fetch failed", "decryption failed"])(
-    "preserves the %s failure outcome",
-    async (reason) => {
-      const { calls, client } = createClient();
-      calls.getEvent.mockRejectedValue(new Error(reason));
-      await expect(readMatrixMessage("!room:example.org", "$older", { client })).rejects.toThrow(
-        "was not found",
-      );
-      expect(calls.doRequest).not.toHaveBeenCalled();
-      expect(calls.stop).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects an inaccessible event without falling back to history", async () => {
+    const { calls, client } = createClient();
+    calls.getEvent.mockRejectedValue(new Error("inaccessible"));
+    await expect(readMatrixMessage("!room:example.org", "$older", { client })).rejects.toThrow(
+      "was not found",
+    );
+    expect(calls.doRequest).not.toHaveBeenCalled();
+    expect(calls.stop).not.toHaveBeenCalled();
+  });
 
   it("uses existing replacement and attachment summary behavior", async () => {
     const { calls, client } = createClient();

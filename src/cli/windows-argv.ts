@@ -28,12 +28,11 @@ export function normalizeWindowsArgv(
     return out;
   };
 
-  const normalizeArg = (value: string): string =>
+  const normalizeCandidate = (value: string): string =>
     stripControlChars(value)
       .replace(/^['"]+|['"]+$/g, "")
-      .trim();
-  const normalizeCandidate = (value: string): string =>
-    normalizeArg(value).replace(/^\\\\\\?\\/, "");
+      .trim()
+      .replace(/^\\\\\\?\\/, "");
   const basename = (value: string): string => value.split(/[\\/]/).pop() ?? value;
 
   const execPath = normalizeCandidate(options.execPath ?? process.execPath);
@@ -49,22 +48,12 @@ export function normalizeWindowsArgv(
     }
     const lower = normalizeLowercaseStringOrEmpty(normalized);
     const base = basename(lower);
-    return (
-      lower === execPathLower ||
-      base === execBase ||
-      lower.endsWith("\\node.exe") ||
-      lower.endsWith("/node.exe") ||
-      base === "node.exe"
-    );
+    return lower === execPathLower || base === execBase || base === "node.exe";
   };
 
   const next = [...argv];
-  for (const i = 1; i < next.length;) {
-    if (isExecPath(next[i])) {
-      next.splice(i, 1);
-      continue;
-    }
-    break;
+  while (isExecPath(next[1])) {
+    next.splice(1, 1);
   }
   return next;
 }

@@ -6,16 +6,11 @@ import { createLazyRuntimeMethodBinder, createLazyRuntimeModule } from "../share
 import type { PluginInspectOptions } from "./plugins-inspect-command.js";
 import type { PluginsListOptions } from "./plugins-list-command.js";
 import type { PluginsReloadOptions } from "./plugins-reload-command.js";
+import type { PluginsSearchOptions } from "./plugins-search-command.js";
+import type { PluginUninstallOptions } from "./plugins-uninstall-command.js";
+import type { RunPluginUpdateCommandParams } from "./plugins-update-command.js";
 import { parseStrictPositiveIntOption } from "./program/helpers.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
-
-type PluginUpdateOptions = {
-  all?: boolean;
-  acceptCapabilities?: boolean;
-  acknowledgeInstallPolicyWarning?: boolean;
-  dryRun?: boolean;
-  dangerouslyForceUnsafeInstall?: boolean;
-};
 
 export type PluginMarketplaceListOptions = {
   json?: boolean;
@@ -33,19 +28,6 @@ export type PluginMarketplaceRefreshOptions = {
   feedProfile?: string;
   feedUrl?: string;
   json?: boolean;
-};
-
-type PluginSearchOptions = {
-  json?: boolean;
-  limit?: number;
-};
-
-type PluginUninstallOptions = {
-  keepFiles?: boolean;
-  /** @deprecated Use keepFiles. */
-  keepConfig?: boolean;
-  force?: boolean;
-  dryRun?: boolean;
 };
 
 export type PluginRegistryOptions = {
@@ -90,7 +72,7 @@ export function registerPluginsCli(program: Command) {
     .argument("[query...]", "Search query")
     .option("--limit <n>", "Max results", (value) => parseStrictPositiveIntOption(value, "--limit"))
     .option("--json", "Print JSON", false)
-    .action(async (queryParts: string[], opts: PluginSearchOptions) => {
+    .action(async (queryParts: string[], opts: PluginsSearchOptions) => {
       const { runPluginsSearchCommand } = await import("./plugins-search-command.js");
       await runPluginsSearchCommand(queryParts, opts);
     });
@@ -136,6 +118,7 @@ export function registerPluginsCli(program: Command) {
     .description("Reload one or more plugins in the running Gateway")
     .argument("<ids...>", "Plugin ids")
     .option("--accept-capabilities", "Accept changed declared capabilities", false)
+    .option("--wait", "Wait for admitted work without a deadline; Ctrl-C cancels the wait", false)
     .option("--json", "Print the applied runtime generation", false)
     .action(async (ids: string[], opts: PluginsReloadOptions) => {
       const { runPluginsReloadCommand } = await import("./plugins-reload-command.js");
@@ -206,7 +189,7 @@ export function registerPluginsCli(program: Command) {
       "Acknowledge security.installPolicy warnings without prompting; blocks and failures remain terminal",
       false,
     )
-    .action(async (ids: string[], opts: PluginUpdateOptions) => {
+    .action(async (ids: string[], opts: RunPluginUpdateCommandParams["opts"]) => {
       const { runPluginUpdateCommand } = await import("./plugins-update-command.js");
       await runPluginUpdateCommand({ ids, opts });
     });

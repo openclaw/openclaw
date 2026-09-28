@@ -25,7 +25,7 @@ const SNAPSHOT_SECTIONS = new Set(["dependencies", "optionalDependencies"]);
 const IMPORTER_SECTIONS = ["dependencies", "optionalDependencies"];
 const LOCAL_REFERENCE_PREFIXES = ["file:", "link:", "portal:", "workspace:"];
 
-export function stripVersionDecorators(reference) {
+function stripVersionDecorators(reference) {
   const openParenIndex = reference.indexOf("(");
   if (openParenIndex === -1) {
     return reference;

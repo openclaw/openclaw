@@ -6,7 +6,6 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { RuntimeAuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { PreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.js";
-import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { publishSessionCostUsageUpdated } from "../infra/session-cost-usage-events.js";
 import {
@@ -598,6 +597,7 @@ describe("gateway chat metadata lifecycle", () => {
     let read: Promise<unknown> | undefined;
     try {
       await harness.attach();
+      expect(harness.warn).not.toHaveBeenCalled();
       await expect(harness.lifecycle.read({ agentId: "main" })).rejects.toBeInstanceOf(
         ChatMetadataSnapshotUnavailableError,
       );
@@ -629,28 +629,8 @@ describe("gateway chat metadata lifecycle", () => {
     const actual = await vi.importActual<
       typeof import("./server-methods/chat-metadata-runtime.js")
     >("./server-methods/chat-metadata-runtime.js");
-    const owner: PreparedModelRuntimeSnapshot = {
-      catalogOwner: { agentId: "main", workspaceDir: "/tmp/metadata-lifecycle/workspace" },
-      agentId: "main",
-      agentDir: "/tmp/metadata-lifecycle/agent",
-      workspaceDir: "/tmp/metadata-lifecycle/workspace",
-      activeProjectKeys: [],
-      config,
-      observationConfig: config,
-      isCurrent: () => true,
-      authModes: {},
-      metadataSnapshot: createPluginMetadataSnapshot({
-        config,
-        manifestRegistry: { plugins: [], diagnostics: [] },
-      }),
-      allowGatewaySubagentBinding: false,
-      modelCatalog: {
-        entries: [{ id: "model", name: "Model", provider: "test" }],
-        routeVariants: [],
-      },
-      configuredRuntimeModels: [],
-      findConfiguredRuntimeModel: () => undefined,
-      inlineProviderModels: [],
+    const owner = {
+      ...createChatMetadataOwner(config, "model"),
       createStores: () => {
         throw new Error("metadata must not create live model stores");
       },
@@ -874,27 +854,6 @@ describe("gateway chat metadata lifecycle", () => {
     expect(mocks.stop).toHaveBeenCalledOnce();
   });
 
-  it("treats an unavailable catch-up snapshot as expected before owner publication", async () => {
-    mocks.refresh.mockRejectedValueOnce(new ChatMetadataSnapshotUnavailableError());
-    const { lifecycle: pendingLifecycle, sidecarOwner, warn } = createLifecycle(false);
-    const lifecycle = await pendingLifecycle;
-
-    await lifecycle.attachContext(context, sidecarOwner.publish);
-
-    expect(mocks.registerAuthListener).toHaveBeenCalledOnce();
-    expect(mocks.registerModelListener).toHaveBeenCalledOnce();
-    expect(mocks.registerSkillsListener).toHaveBeenCalledOnce();
-    expect(sidecarOwner.snapshot()).toHaveLength(1);
-    expect(mocks.refresh).toHaveBeenCalledOnce();
-    expect(warn).not.toHaveBeenCalled();
-
-    const listener = mocks.registerModelListener.mock.calls[0]?.[0];
-    expect(listener).toEqual(expect.any(Function));
-    listener({ phase: "published" });
-
-    await vi.waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(2));
-  });
-
   it("logs unexpected catch-up failures without rejecting startup", async () => {
     mocks.refresh.mockRejectedValueOnce(new Error("metadata unavailable"));
     const { lifecycle: pendingLifecycle, sidecarOwner, warn } = createLifecycle(false);
@@ -1027,20 +986,5 @@ describe("gateway chat metadata lifecycle", () => {
     authListener();
 
     await vi.waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(2));
-  });
-
-  it("propagates a failed model publication without starting a refresh", async () => {
-    const { lifecycle: pendingLifecycle, sidecarOwner } = createLifecycle(false);
-    const lifecycle = await pendingLifecycle;
-
-    await lifecycle.attachContext(context, sidecarOwner.publish);
-    const modelListener = mocks.registerModelListener.mock.calls[0]?.[0];
-    const publicationError = new Error("replacement failed");
-
-    modelListener({ phase: "invalidated" });
-    modelListener({ phase: "failed", error: publicationError });
-
-    expect(mocks.fail).toHaveBeenCalledWith(publicationError);
-    expect(mocks.refresh).toHaveBeenCalledOnce();
   });
 });

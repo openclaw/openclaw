@@ -902,6 +902,20 @@ describe("openclaw live updater", () => {
     writeFileSync(path.join(foreignRoot, "package.json"), '{"name":"openclaw"}\n');
     const configuredPluginFile = path.join(foreignRoot, "configured-plugin.ts");
     writeFileSync(configuredPluginFile, "export default {};\n");
+    const attributedError = (second: string, message: string, fullFilePath: string) => {
+      const time = `2026-07-11T08:00:${second}.000Z`;
+      return {
+        type: "log",
+        time,
+        level: "error",
+        message,
+        raw: JSON.stringify({
+          "0": message,
+          time,
+          _meta: { date: time, logLevelName: "ERROR", path: { fullFilePath } },
+        }),
+      };
+    };
     const output = [
       {
         type: "log",
@@ -909,72 +923,22 @@ describe("openclaw live updater", () => {
         level: "error",
         message: "managed failure",
       },
-      {
-        type: "log",
-        time: "2026-07-11T08:00:04.000Z",
-        level: "error",
-        message: "foreign failure",
-        raw: JSON.stringify({
-          "0": "foreign failure",
-          time: "2026-07-11T08:00:04.000Z",
-          _meta: {
-            date: "2026-07-11T08:00:04.000Z",
-            logLevelName: "ERROR",
-            path: {
-              fullFilePath: pathToFileURL(path.join(foreignRoot, "dist/console-foreign.js")).href,
-            },
-          },
-        }),
-      },
-      {
-        type: "log",
-        time: "2026-07-11T08:00:05.000Z",
-        level: "error",
-        message: "installed plugin failure",
-        raw: JSON.stringify({
-          "0": "installed plugin failure",
-          time: "2026-07-11T08:00:05.000Z",
-          _meta: {
-            date: "2026-07-11T08:00:05.000Z",
-            logLevelName: "ERROR",
-            path: {
-              fullFilePath: path.join(root, "extensions/example/dist/logger.js"),
-            },
-          },
-        }),
-      },
-      {
-        type: "log",
-        time: "2026-07-11T08:00:06.000Z",
-        level: "error",
-        message: "configured foreign-checkout plugin failure",
-        raw: JSON.stringify({
-          "0": "configured foreign-checkout plugin failure",
-          time: "2026-07-11T08:00:06.000Z",
-          _meta: {
-            date: "2026-07-11T08:00:06.000Z",
-            logLevelName: "ERROR",
-            path: {
-              fullFilePath: path.join(foreignRoot, "extensions/configured/dist/logger.js"),
-            },
-          },
-        }),
-      },
-      {
-        type: "log",
-        time: "2026-07-11T08:00:07.000Z",
-        level: "error",
-        message: "configured standalone plugin failure",
-        raw: JSON.stringify({
-          "0": "configured standalone plugin failure",
-          time: "2026-07-11T08:00:07.000Z",
-          _meta: {
-            date: "2026-07-11T08:00:07.000Z",
-            logLevelName: "ERROR",
-            path: { fullFilePath: `${configuredPluginFile}:12:3` },
-          },
-        }),
-      },
+      attributedError(
+        "04",
+        "foreign failure",
+        pathToFileURL(path.join(foreignRoot, "dist/console-foreign.js")).href,
+      ),
+      attributedError(
+        "05",
+        "installed plugin failure",
+        path.join(root, "extensions/example/dist/logger.js"),
+      ),
+      attributedError(
+        "06",
+        "configured foreign-checkout plugin failure",
+        path.join(foreignRoot, "extensions/configured/dist/logger.js"),
+      ),
+      attributedError("07", "configured standalone plugin failure", `${configuredPluginFile}:12:3`),
     ]
       .map((entry) => JSON.stringify(entry))
       .join("\n");
@@ -1641,12 +1605,6 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
         }),
       ),
     ).toThrow(/not retargeted/u);
-  });
-
-  test("production fetch refreshes the remote-tracking main ref", () => {
-    const source = readFileSync(script, "utf8");
-    expect(source).toContain("refs/heads/main:refs/remotes/${remoteName}/main");
-    expect(source).not.toContain('["fetch", "--prune", remoteName, "main"]');
   });
 
   test("rejects Git URL rewrites that change the effective fetch source", () => {
@@ -2660,22 +2618,18 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     const snapshot = path.join(root, "gateway-ancestor/dist/index.js");
     const source = path.join(mirror, "dist/index.js");
     const configPath = path.join(root, "openclaw.json");
-    const plistPath = path.join(root, "ai.openclaw.gateway.plist");
+    const { deployment: managedDeployment, plistPath } = createManagedLaunchAgentFixture(
+      root,
+      mirror,
+    );
     writeFileSync(configPath, "{}\n");
-    writeFileSync(plistPath, "plist\n", { mode: 0o600 });
     let deployedEntrypoint = snapshot;
     let controlEntrypoint: string | undefined;
     const restartObservedAt = Date.parse("2026-07-31T18:00:00.000Z");
     const inspectGatewayDeployment = () => ({
-      configPath,
+      ...managedDeployment,
       entrypoint: deployedEntrypoint,
-      entrypointIndex: 1,
-      executable: process.execPath,
       invocationPrefix: [deployedEntrypoint],
-      label: "ai.openclaw.gateway",
-      plistPath,
-      port: 18789,
-      runtime: process.execPath,
       serviceEnvironment: { PRIVATE_MARKER: "not-serialized" },
     });
 
@@ -2837,20 +2791,16 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     const commands = fakeCommands(mirror);
     const snapshot = path.join(root, "gateway-ancestor/dist/index.js");
     const source = path.join(mirror, "dist/index.js");
-    const plistPath = path.join(root, "ai.openclaw.gateway.plist");
-    writeFileSync(plistPath, "plist\n", { mode: 0o600 });
+    const { deployment: managedDeployment, plistPath } = createManagedLaunchAgentFixture(
+      root,
+      mirror,
+    );
     let deployedEntrypoint = snapshot;
 
     const inspectGatewayDeployment = () => ({
-      configPath: path.join(root, "openclaw.json"),
+      ...managedDeployment,
       entrypoint: deployedEntrypoint,
-      entrypointIndex: 1,
-      executable: process.execPath,
       invocationPrefix: [deployedEntrypoint],
-      label: "ai.openclaw.gateway",
-      plistPath,
-      port: 18789,
-      runtime: process.execPath,
     });
 
     await expect(
@@ -2936,26 +2886,14 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
   test("reports primary invariant and rollback command diagnostics", async () => {
     const { root, mirror } = makeFixture();
     mkdirSync(path.join(mirror, "node_modules"));
-    const source = path.join(mirror, "dist/index.js");
-    const plistPath = path.join(root, "ai.openclaw.gateway.plist");
-    writeFileSync(plistPath, "plist\n", { mode: 0o600 });
+    const { deployment } = createManagedLaunchAgentFixture(root, mirror);
     let failure: unknown;
 
     try {
       await maintainFixture(
         { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
         {
-          inspectGatewayDeployment: () => ({
-            configPath: path.join(root, "openclaw.json"),
-            entrypoint: source,
-            entrypointIndex: 1,
-            executable: process.execPath,
-            invocationPrefix: [source],
-            label: "ai.openclaw.gateway",
-            plistPath,
-            port: 18789,
-            runtime: process.execPath,
-          }),
+          inspectGatewayDeployment: () => deployment,
           runCommand(command: string, args: string[]) {
             if (command === "pnpm" && args[0] === "build") {
               resolveLaunchAgentExitTimeoutSeconds(0);
@@ -3022,23 +2960,19 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     git(seed, "push");
     const snapshot = path.join(root, "gateway-ancestor/dist/index.js");
     const source = path.join(mirror, "dist/index.js");
-    const plistPath = path.join(root, "ai.openclaw.gateway.plist");
-    writeFileSync(plistPath, "plist\n", { mode: 0o600 });
+    const { deployment: managedDeployment, plistPath } = createManagedLaunchAgentFixture(
+      root,
+      mirror,
+    );
     const calls: string[] = [];
     let bootoutCount = 0;
     let serviceLoaded = true;
     let deployedEntrypoint = snapshot;
 
     const inspectGatewayDeployment = () => ({
-      configPath: path.join(root, "openclaw.json"),
+      ...managedDeployment,
       entrypoint: deployedEntrypoint,
-      entrypointIndex: 1,
-      executable: process.execPath,
       invocationPrefix: [deployedEntrypoint],
-      label: "ai.openclaw.gateway",
-      plistPath,
-      port: 18789,
-      runtime: process.execPath,
     });
     const runCommand = (command: string, args: string[]) => {
       const call = [command, ...args].join(" ");
@@ -3175,9 +3109,11 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     const snapshot = path.join(root, "gateway-ancestor/dist/index.js");
     const source = path.join(mirror, "dist/index.js");
     const configPath = path.join(root, "openclaw.json");
-    const plistPath = path.join(root, "ai.openclaw.gateway.plist");
+    const { deployment: managedDeployment, plistPath } = createManagedLaunchAgentFixture(
+      root,
+      mirror,
+    );
     writeFileSync(configPath, "{}\n");
-    writeFileSync(plistPath, "plist\n", { mode: 0o600 });
     let deployedEntrypoint = snapshot;
     let controlEntrypoint = "";
     let stoppedProofAttempts = 0;
@@ -3191,15 +3127,9 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
           return { status: "ready", suspensionId: "fixture-suspension" };
         },
         inspectGatewayDeployment: () => ({
-          configPath,
+          ...managedDeployment,
           entrypoint: deployedEntrypoint,
-          entrypointIndex: 1,
-          executable: process.execPath,
           invocationPrefix: [deployedEntrypoint],
-          label: "ai.openclaw.gateway",
-          plistPath,
-          port: 18789,
-          runtime: process.execPath,
         }),
         verifyAndAuditGateway: passGatewayRestartVerification,
         proveGatewayStopped: () => {
@@ -3270,9 +3200,11 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     const snapshot = path.join(root, "gateway-ancestor/dist/index.js");
     const source = path.join(mirror, "dist/index.js");
     const configPath = path.join(root, "openclaw.json");
-    const plistPath = path.join(root, "ai.openclaw.gateway.plist");
+    const { deployment: managedDeployment, plistPath } = createManagedLaunchAgentFixture(
+      root,
+      mirror,
+    );
     writeFileSync(configPath, "{}\n");
-    writeFileSync(plistPath, "plist\n", { mode: 0o600 });
     let deployedEntrypoint = snapshot;
     let prepareCalled = false;
 
@@ -3285,15 +3217,9 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
           throw new Error("must not execute an unavailable control build");
         },
         inspectGatewayDeployment: () => ({
-          configPath,
+          ...managedDeployment,
           entrypoint: deployedEntrypoint,
-          entrypointIndex: 1,
-          executable: process.execPath,
           invocationPrefix: [deployedEntrypoint],
-          label: "ai.openclaw.gateway",
-          plistPath,
-          port: 18789,
-          runtime: process.execPath,
         }),
         verifyAndAuditGateway: passGatewayRestartVerification,
         proveGatewayStopped: () => ({
@@ -3411,19 +3337,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     writeBuild(mirror);
     const commands = fakeCommands(mirror);
     const source = path.join(mirror, "dist/index.js");
-    const plistPath = path.join(root, "ai.openclaw.gateway.plist");
-    writeFileSync(plistPath, "plist\n", { mode: 0o600 });
-    const deployment = {
-      configPath: path.join(root, "openclaw.json"),
-      entrypoint: source,
-      entrypointIndex: 1,
-      executable: process.execPath,
-      invocationPrefix: [source],
-      label: "ai.openclaw.gateway",
-      plistPath,
-      port: 18789,
-      runtime: process.execPath,
-    };
+    const { deployment, plistPath } = createManagedLaunchAgentFixture(root, mirror);
 
     const output = await maintainFixture(
       { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
@@ -3475,8 +3389,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     mkdirSync(path.join(mirror, "node_modules"));
     writeBuild(mirror);
     const source = path.join(mirror, "dist/index.js");
-    const plistPath = path.join(root, "ai.openclaw.gateway.plist");
-    writeFileSync(plistPath, "plist\n", { mode: 0o600 });
+    const { deployment, plistPath } = createManagedLaunchAgentFixture(root, mirror);
     const calls: string[] = [];
     let processObserved = false;
 
@@ -3492,17 +3405,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
             });
           }
         },
-        inspectGatewayDeployment: () => ({
-          configPath: path.join(root, "openclaw.json"),
-          entrypoint: source,
-          entrypointIndex: 1,
-          executable: process.execPath,
-          invocationPrefix: [source],
-          label: "ai.openclaw.gateway",
-          plistPath,
-          port: 18789,
-          runtime: process.execPath,
-        }),
+        inspectGatewayDeployment: () => deployment,
         isGatewayLoaded: () => false,
         verifyGateway: () => {
           throw new Error("managed job is unloaded");
@@ -3534,25 +3437,13 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     const { root, mirror } = makeFixture();
     mkdirSync(path.join(mirror, "node_modules"));
     writeBuild(mirror);
-    const source = path.join(mirror, "dist/index.js");
-    const plistPath = path.join(root, "ai.openclaw.gateway.plist");
-    writeFileSync(plistPath, "plist\n", { mode: 0o600 });
+    const { deployment } = createManagedLaunchAgentFixture(root, mirror);
     let processObserved = false;
 
     const failure = await maintainFixture(
       { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
       {
-        inspectGatewayDeployment: () => ({
-          configPath: path.join(root, "openclaw.json"),
-          entrypoint: source,
-          entrypointIndex: 1,
-          executable: process.execPath,
-          invocationPrefix: [source],
-          label: "ai.openclaw.gateway",
-          plistPath,
-          port: 18789,
-          runtime: process.execPath,
-        }),
+        inspectGatewayDeployment: () => deployment,
         isGatewayLoaded: () => false,
         runManagedCommand: ({ args, bin }: { args: string[]; bin: string }) => {
           if (bin === "/bin/launchctl" && args[0] === "bootstrap") {

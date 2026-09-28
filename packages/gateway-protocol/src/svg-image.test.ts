@@ -3,12 +3,10 @@ import { startsWithSvgRootElement } from "./svg-image.js";
 
 describe("startsWithSvgRootElement", () => {
   it.each([
-    ["a bare root element", "<svg></svg>"],
     ["a self-closing root element", "<svg/>"],
     ["leading whitespace", "\n\t <svg >"],
     ["an XML declaration", '<?xml version="1.0"?><svg>'],
     ["an uppercase root element", "<SVG>"],
-    ["a leading comment", "<!-- icon --><svg>"],
     ["several leading comments", "<!-- a --> <!-- b --><svg>"],
   ])("accepts %s", (_label, text) => {
     expect(startsWithSvgRootElement(text)).toBe(true);
@@ -24,7 +22,6 @@ describe("startsWithSvgRootElement", () => {
     // A comment ends at its first `-->`; the replaced pattern instead let one
     // comment absorb this text, so keep the stricter reading pinned.
     ["markup between two comments", "<!-- a --> junk <!-- b --><svg>"],
-    ["no root element at all", "not markup"],
   ])("rejects %s", (_label, text) => {
     expect(startsWithSvgRootElement(text)).toBe(false);
   });

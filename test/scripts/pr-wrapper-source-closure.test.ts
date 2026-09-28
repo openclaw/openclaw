@@ -11,7 +11,7 @@ const components = [
 ];
 
 it.each([
-  "src/infra/sqlite-coordinator.ts",
+  "src/infra/gateway-state-owner.ts",
   "src/plugins/discovery.ts",
   "src/infra/sqlite-readonly-location.worker.ts",
 ])(

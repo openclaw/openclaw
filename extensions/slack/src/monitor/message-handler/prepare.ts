@@ -7,7 +7,6 @@ import {
   buildMentionRegexes,
   classifyChannelInboundEvent,
   formatInboundEnvelope,
-  implicitMentionKindWhen,
   matchesMentionWithExplicit,
   resolveInboundMentionDecision,
   resolveGroupThreadMentionFacts,
@@ -51,8 +50,7 @@ import type { ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
 import { normalizeSlackAppContextEntities, isSlackAppContext } from "../../agent-context.js";
 import { formatSlackError } from "../../errors.js";
-import { sendMessageSlack, type SlackSendIdentity } from "../../send.js";
-import { hasSlackThreadParticipationWithPersistence } from "../../sent-thread-cache.js";
+import { sendMessageSlack } from "../../send.js";
 import { formatSlackTarget } from "../../target-parsing.js";
 import type { SlackFile, SlackMessageEvent } from "../../types.js";
 import { normalizeSlackAllowOwnerEntry } from "../allow-list.js";
@@ -90,9 +88,10 @@ import { resolveSlackDmHistoryContext, resolveSlackDmHistoryLimit } from "./prep
 import { resolveSlackRoomHistory } from "./prepare-room-history.js";
 import { resolveSlackRoutingContext } from "./prepare-routing.js";
 import { resolveSlackThreadContextData } from "./prepare-thread-context.js";
+import { resolveSlackThreadMentionPolicy } from "./prepare-thread-mentions.js";
 import { isSlackSubteamMentionForBot, normalizeSlackId } from "./subteam-mentions.js";
 import { resolveSlackTimestampMs } from "./timestamp.js";
-import type { PreparedSlackMessage } from "./types.js";
+import type { PreparedSlackMessage, SlackMessageSourceOptions } from "./types.js";
 
 const mentionRegexCache = new WeakMap<SlackMonitorContext, Map<string, RegExp[]>>();
 const SLACK_ANY_MENTION_RE = /<@[^>]+>|<!subteam\^[^>]+>/;
@@ -542,11 +541,7 @@ export async function prepareSlackMessage(params: {
   ctx: SlackMonitorContext;
   account: ResolvedSlackAccount;
   message: SlackMessageEvent;
-  opts: {
-    source: "message" | "app_mention";
-    wasMentioned?: boolean;
-    relayIdentity?: SlackSendIdentity;
-    eventScope?: SlackEventScope;
+  opts: SlackMessageSourceOptions & {
     /** Handler-owned signal that a gate produced a user-visible terminal outcome. */
     onVisibleDrop?: () => void;
     sourceMessageIds?: readonly string[];
@@ -844,26 +839,6 @@ export async function prepareSlackMessage(params: {
         (error: unknown) => ({ ok: false, error }),
       )
     : Promise.resolve({ ok: true, name: undefined });
-  let implicitMentionKinds: ReturnType<typeof implicitMentionKindWhen> = [];
-  if (!isDirectMessage && message.thread_ts && !wasMentioned) {
-    const replyToBotKinds = implicitMentionKindWhen(
-      "reply_to_bot",
-      Boolean(ctx.botUserId && message.parent_user_id === ctx.botUserId),
-    );
-    implicitMentionKinds =
-      replyToBotKinds.length > 0
-        ? replyToBotKinds
-        : implicitMentionKindWhen(
-            "bot_thread_participant",
-            await hasSlackThreadParticipationWithPersistence({
-              accountId: account.accountId,
-              channelId: message.channel,
-              threadTs: message.thread_ts,
-              teamId: opts.eventScope?.teamId,
-            }),
-          );
-  }
-
   let threadStarterPromise: Promise<SlackThreadStarter | null> | undefined;
   const getThreadStarter = () => {
     threadStarterPromise ??=
@@ -911,9 +886,21 @@ export async function prepareSlackMessage(params: {
     cfg,
     surface: "slack",
   });
-  const shouldRequireMention = isRoom
-    ? (channelConfig?.requireMention ?? ctx.defaultRequireMention)
-    : false;
+  const { requireMention: shouldRequireMention, implicitMentionKinds } =
+    await resolveSlackThreadMentionPolicy({
+      ctx,
+      account,
+      message,
+      conversation,
+      thread: routing,
+      wasMentioned,
+      teamId: opts.eventScope?.teamId,
+      getThreadStarter,
+    });
+  opts.abortSignal?.throwIfAborted();
+  if (opts.isRuntimePolicyCurrent?.() === false) {
+    return drop("final-route-denied");
+  }
   const implicitMentions = resolveChannelImplicitMentions({
     cfg,
     channel: "slack",
@@ -938,6 +925,7 @@ export async function prepareSlackMessage(params: {
       ctx,
       teamId: opts.eventScope?.teamId ?? ctx.teamId,
       senderId,
+      senderAuthentication: message.user ? opts.senderAuthentication : undefined,
       senderName: senderNameForAuth,
       channelType: conversation.resolvedChannelType ?? "channel",
       channelId: message.channel,
@@ -1183,6 +1171,10 @@ export async function prepareSlackMessage(params: {
   });
   const threadStarter = await getThreadStarter();
   const resolvedMessageContent = await getMessageContent();
+  opts.abortSignal?.throwIfAborted();
+  if (opts.isRuntimePolicyCurrent?.() === false) {
+    return drop("final-route-denied");
+  }
   if (!resolvedMessageContent) {
     return drop("empty-content");
   }
@@ -1689,13 +1681,7 @@ export async function prepareSlackMessage(params: {
                     ? {
                         ownerRecipient: pinnedMainDmOwner,
                         senderRecipient: normalizeLowercaseStringOrEmpty(message.user),
-                        onSkip: ({
-                          ownerRecipient,
-                          senderRecipient,
-                        }: {
-                          ownerRecipient: string;
-                          senderRecipient: string;
-                        }) => {
+                        onSkip: ({ ownerRecipient, senderRecipient }) => {
                           logVerbose(
                             `slack: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
                           );

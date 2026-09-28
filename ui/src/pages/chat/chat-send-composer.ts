@@ -5,7 +5,7 @@ import type {
   ChatReplyTarget,
   HumanMention,
 } from "../../lib/chat/chat-types.ts";
-import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
+import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
 import {
   getChatAttachmentDataUrl,
@@ -341,7 +341,7 @@ export function settleChatCommandComposer(
   }
 }
 
-type PendingComposerSnapshot = {
+export type PendingComposerSnapshot = {
   previousAttachments?: ChatAttachment[];
   previousDraft?: string;
   previousMentions?: readonly HumanMention[];

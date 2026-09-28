@@ -1,7 +1,7 @@
-// Codex plugin module implements source behavior.
 import path from "node:path";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
+import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import {
   defaultCodexAppInventoryCache,
   type CodexAppInventoryRequest,
@@ -24,7 +24,7 @@ import {
   withCodexAppServerJsonClient,
   type CodexAppServerScopedRequest,
 } from "../app-server/request.js";
-import { exists, isDirectory, resolveHomePath, resolveUserHomeDir } from "./helpers.js";
+import { isDirectory, resolveHomePath, resolveUserHomeDir } from "./helpers.js";
 import {
   discoverCodexMemorySources,
   discoverPluginDirs,
@@ -178,22 +178,6 @@ function sourceCodexAppServerStartOptions(codexHome: string): CodexAppServerStar
   };
 }
 
-function buildInstalledPluginSource(plugin: v2.PluginSummary): CodexPluginSource | undefined {
-  const pluginName = pluginNameFromSummary(plugin);
-  if (!pluginName) {
-    return undefined;
-  }
-  return {
-    name: plugin.name,
-    pluginName,
-    marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-    source: `${CODEX_PLUGINS_MARKETPLACE_NAME}/${pluginName}`,
-    migratable: true,
-    installed: plugin.installed,
-    enabled: plugin.enabled,
-  };
-}
-
 function discoverInstalledCuratedPluginSources(
   response: v2.PluginInstalledResponse,
 ): InstalledCuratedPlugin[] {
@@ -210,20 +194,28 @@ function discoverInstalledCuratedPluginSources(
       if (!summary.installed) {
         continue;
       }
-      const plugin = buildInstalledPluginSource(summary);
-      if (!plugin?.pluginName) {
+      const pluginName = pluginNameFromSummary(summary);
+      if (!pluginName) {
         continue;
       }
-      const existing = installedByName.get(plugin.pluginName);
+      const existing = installedByName.get(pluginName);
       if (existing && (!remote || existing.remote)) {
         continue;
       }
-      installedByName.set(plugin.pluginName, {
-        plugin,
+      installedByName.set(pluginName, {
+        plugin: {
+          name: summary.name,
+          pluginName,
+          marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+          source: `${CODEX_PLUGINS_MARKETPLACE_NAME}/${pluginName}`,
+          migratable: true,
+          installed: summary.installed,
+          enabled: summary.enabled,
+        },
         marketplace: marketplaceRef(marketplace, CODEX_PLUGINS_MARKETPLACE_NAME),
         ...(remote
           ? { readPluginName: summary.remotePluginId?.trim() || undefined }
-          : { readPluginName: plugin.pluginName }),
+          : { readPluginName: pluginName }),
         remote,
       });
     }
@@ -275,7 +267,7 @@ async function withPluginMigrationEligibility(params: {
     }
 
     const apps = detail.detail.apps
-      .map(sourcePluginAppFact)
+      .map(({ id, name }) => ({ id, name }))
       .toSorted((left, right) => left.id.localeCompare(right.id));
     pending.push({ plugin, apps });
   }
@@ -294,60 +286,44 @@ async function withPluginMigrationEligibility(params: {
   } catch (error) {
     sourceAccountError = coerceErrorMessage(error);
   }
-  if (sourceAccountError && !params.verifyPluginApps) {
-    for (const { plugin, apps } of pending) {
-      evaluated.push({
+  const unavailable = (
+    code: CodexPluginMigrationBlockCode,
+    reason: string,
+    error?: string,
+  ): CodexPluginSource[] =>
+    evaluated.concat(
+      pending.map(({ plugin, apps }) => ({
         ...plugin,
         migratable: false,
-        migrationBlock: { code: "codex_account_unavailable", apps, error: sourceAccountError },
-        message: `Codex plugin "${plugin.pluginName ?? plugin.name}" owns apps, but the source Codex app-server account could not be read: ${sourceAccountError}`,
-      });
-    }
-    return evaluated;
+        migrationBlock: { code, apps, ...(error !== undefined ? { error } : {}) },
+        message: `Codex plugin "${plugin.pluginName ?? plugin.name}" owns apps, but ${reason}`,
+      })),
+    );
+  if (sourceAccountError && !params.verifyPluginApps) {
+    return unavailable(
+      "codex_account_unavailable",
+      `the source Codex app-server account could not be read: ${sourceAccountError}`,
+      sourceAccountError,
+    );
   }
   if (sourceAccount === "non_chatgpt") {
-    for (const { plugin, apps } of pending) {
-      evaluated.push({
-        ...plugin,
-        migratable: false,
-        migrationBlock: { code: "codex_subscription_required", apps },
-        message: codexSubscriptionRequiredMessage(plugin),
-      });
-    }
-    return evaluated;
+    return unavailable("codex_subscription_required", codexPluginMigrationSubscriptionWarning());
   }
-
   if (!params.verifyPluginApps) {
-    for (const { plugin, apps } of pending) {
-      evaluated.push({
-        ...plugin,
-        apps,
-        migratable: true,
-      });
-    }
-    return evaluated;
+    return evaluated.concat(
+      pending.map(({ plugin, apps }) => ({ ...plugin, apps, migratable: true })),
+    );
   }
-
-  const snapshot = await refreshSourceAppInventory(params.requestOptions).catch(
-    (error: unknown) => {
-      const message = coerceErrorMessage(error);
-      for (const { plugin, apps } of pending) {
-        evaluated.push({
-          ...plugin,
-          migratable: false,
-          migrationBlock: {
-            code: "app_inventory_unavailable",
-            apps,
-            error: message,
-          },
-          message: `Codex plugin "${plugin.pluginName ?? plugin.name}" owns apps, but source app inventory could not be read: ${message}`,
-        });
-      }
-      return undefined;
-    },
-  );
-  if (!snapshot) {
-    return evaluated;
+  let snapshot: Awaited<ReturnType<typeof refreshSourceAppInventory>>;
+  try {
+    snapshot = await refreshSourceAppInventory(params.requestOptions);
+  } catch (error) {
+    const message = coerceErrorMessage(error);
+    return unavailable(
+      "app_inventory_unavailable",
+      `source app inventory could not be read: ${message}`,
+      message,
+    );
   }
 
   const appInfoById = new Map(snapshot.apps.map((app) => [app.id, app] as const));
@@ -385,14 +361,7 @@ async function readSourceCodexAccount(
     method: "account/read",
     requestParams: { refreshToken: false },
   });
-  if (
-    !response.account ||
-    typeof response.account !== "object" ||
-    Array.isArray(response.account)
-  ) {
-    return "missing";
-  }
-  switch (response.account.type) {
+  switch (response.account?.type) {
     case "chatgpt":
       return "chatgpt";
     case "apiKey":
@@ -442,13 +411,6 @@ async function refreshSourceAppInventory(
     request,
     forceRefetch: true,
   });
-}
-
-function sourcePluginAppFact(app: v2.AppSummary): CodexPluginMigrationAppFact {
-  return {
-    id: app.id,
-    name: app.name,
-  };
 }
 
 type SourcePluginRuntimeAppFact = CodexPluginMigrationAppFact & {
@@ -525,10 +487,6 @@ export function codexPluginMigrationSubscriptionWarning(): string {
   return "Codex app-backed plugin migration requires the Codex app-server source account to be logged in with a ChatGPT subscription account. Log in to the Codex app with subscription auth; OpenClaw auth or API-key auth does not satisfy Codex app connector access.";
 }
 
-function codexSubscriptionRequiredMessage(plugin: CodexPluginSource): string {
-  return `Codex plugin "${plugin.pluginName ?? plugin.name}" owns apps, but ${codexPluginMigrationSubscriptionWarning()}`;
-}
-
 function pluginNameFromSummary(summary: v2.PluginSummary): string | undefined {
   const candidates = [summary.name, summary.id];
   for (const candidate of candidates) {
@@ -594,7 +552,7 @@ export async function discoverCodexSource(
     a.source.localeCompare(b.source),
   );
   const archivePaths: CodexArchiveSource[] = [];
-  if (!skipAssets && (await exists(configPath))) {
+  if (!skipAssets && (await pathExists(configPath))) {
     archivePaths.push({
       id: "archive:config.toml",
       path: configPath,
@@ -602,7 +560,7 @@ export async function discoverCodexSource(
       message: "Codex config is archived for manual review; it is not activated automatically",
     });
   }
-  if (!skipAssets && (await exists(hooksPath))) {
+  if (!skipAssets && (await pathExists(hooksPath))) {
     archivePaths.push({
       id: "archive:hooks/hooks.json",
       path: hooksPath,
@@ -614,7 +572,7 @@ export async function discoverCodexSource(
   const skills = [...codexSkills, ...personalAgentSkills].toSorted((a, b) =>
     a.source.localeCompare(b.source),
   );
-  const hasAuth = !options.memoryOnly && (await exists(authPath));
+  const hasAuth = !options.memoryOnly && (await pathExists(authPath));
   const high = Boolean(
     memoryFiles.length || codexSkills.length || plugins.length || archivePaths.length || hasAuth,
   );
@@ -626,7 +584,7 @@ export async function discoverCodexSource(
     ...((await isDirectory(codexSkillsDir)) ? { codexSkillsDir } : {}),
     ...((await isDirectory(agentsSkillsDir)) ? { personalAgentsSkillsDir: agentsSkillsDir } : {}),
     ...(hasAuth ? { authPath } : {}),
-    ...((await exists(modelsCachePath)) ? { modelsCachePath } : {}),
+    ...((await pathExists(modelsCachePath)) ? { modelsCachePath } : {}),
     memoryFiles,
     skills,
     plugins,

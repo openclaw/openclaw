@@ -233,7 +233,6 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
         : nothing
     }
     ${renderSettingsWorkspace(html`
-      <openclaw-plugin-manager></openclaw-plugin-manager>
       ${renderPluginRowMessage(model.pageNotice ?? undefined)}
       ${
         model.surface === "discovery"

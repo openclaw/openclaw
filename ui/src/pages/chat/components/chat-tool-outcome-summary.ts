@@ -12,10 +12,9 @@ export function renderToolOutcomeSummary(
 ) {
   const failures = cards.filter(isToolCardError);
   // Prepared outcomes remain authoritative even when their raw card is absent.
-  const failureCount = activity
-    ? summarizeAgentActivity(activity).outcomes.failed
-    : failures.length;
-  const skipped = cards.filter(isToolCardSkipped).length;
+  const outcomes = activity ? summarizeAgentActivity(activity).outcomes : undefined;
+  const failureCount = outcomes?.failed ?? failures.length;
+  const skipped = outcomes?.skipped ?? cards.filter(isToolCardSkipped).length;
   const first = failures[0];
   if (failureCount === 0 && skipped === 0) {
     return nothing;

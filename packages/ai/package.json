@@ -118,12 +118,12 @@
     }
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "0.126.0",
+    "@anthropic-ai/sdk": "0.127.0",
     "@google/genai": "2.23.0",
     "@mistralai/mistralai": "2.7.0",
-    "openai": "7.17.0",
+    "openai": "7.18.0",
     "partial-json": "0.1.7",
-    "typebox": "1.3.33"
+    "typebox": "1.3.34"
   },
   "devDependencies": {
     "@openclaw/model-catalog-core": "workspace:*",

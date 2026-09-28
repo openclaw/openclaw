@@ -10,33 +10,49 @@ export type AgentsApiBinding = { sessionId: string; authFingerprint: string };
 
 /** Native identity is plugin-owned; shared runtime owns mutation and lease coordination. */
 export function createAgentsApiBindings(runtime: PluginRuntime) {
-  const state = runtime.state.openSyncKeyedStore<StoredBinding>({
+  const stateOptions = {
     namespace: "agentsapi-sessions",
     maxEntries: 100_000,
-    overflowPolicy: "reject-new",
-  });
-  const lifecycle = createNativeSessionBindingLifecycle(state, {
-    readRecord,
-    lease: {
-      staleMs: 65_000,
-      waitMs: 70_000,
-      retryIntervalMs: 1_000,
-      renewIntervalMs: 21_000,
+    overflowPolicy: "reject-new" as const,
+  };
+  const state = runtime.state.openSyncKeyedStore<StoredBinding>(stateOptions);
+  const mutationState = runtime.state.openKeyedStore<StoredBinding>(stateOptions);
+  const lifecycle = createNativeSessionBindingLifecycle(
+    {
+      lookup: state.lookup.bind(state),
+      deleteIf: state.deleteIf?.bind(state),
+      registerIfAbsent: state.registerIfAbsent.bind(state),
+      withCurrent(authority) {
+        if (!mutationState.withCurrent) {
+          throw new Error("Agents API bindings require action-bound plugin-state mutations");
+        }
+        return mutationState.withCurrent(authority);
+      },
     },
-    // Reset removes the old binding; keep an empty row only until its lease releases.
-    releaseTtlMs: (_key, current) => (current.sessionId ? undefined : 1),
-    errors: {
-      atomicUpdatesRequired: "Agents API bindings require atomic plugin-state updates",
-      invalidRow: (key) => new Error(`Invalid Agents API binding row: ${key}`),
-      lostLease: (key, cause) => new Error(`Agents API binding lease lost: ${key}`, { cause }),
-      leaseTimeout: (key) => new Error(`Timed out waiting for Agents API binding lease: ${key}`),
-      acquisitionRejected: (key) => new Error(`Agents API binding acquisition rejected: ${key}`),
-      mutationBlocked: "Agents API binding mutation blocked during an exclusive operation",
-      conditionalDeletionRequired: "Agents API deletion requires conditional plugin-state deletion",
-      deletionChanged: "Agents API binding changed before session deletion",
-      rollbackChanged: "Agents API binding changed before session deletion rollback",
+    {
+      readRecord,
+      lease: {
+        staleMs: 65_000,
+        waitMs: 70_000,
+        retryIntervalMs: 1_000,
+        renewIntervalMs: 21_000,
+      },
+      // Reset removes the old binding; keep an empty row only until its lease releases.
+      releaseTtlMs: (_key, current) => (current.sessionId ? undefined : 1),
+      errors: {
+        atomicUpdatesRequired: "Agents API bindings require atomic plugin-state updates",
+        invalidRow: (key) => new Error(`Invalid Agents API binding row: ${key}`),
+        lostLease: (key, cause) => new Error(`Agents API binding lease lost: ${key}`, { cause }),
+        leaseTimeout: (key) => new Error(`Timed out waiting for Agents API binding lease: ${key}`),
+        acquisitionRejected: (key) => new Error(`Agents API binding acquisition rejected: ${key}`),
+        mutationBlocked: "Agents API binding mutation blocked during an exclusive operation",
+        conditionalDeletionRequired:
+          "Agents API deletion requires conditional plugin-state deletion",
+        deletionChanged: "Agents API binding changed before session deletion",
+        rollbackChanged: "Agents API binding changed before session deletion rollback",
+      },
     },
-  });
+  );
   const acquisition = (assertCurrent: () => void) => ({
     assertCurrent,
     prepareLease: (

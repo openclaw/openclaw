@@ -1,4 +1,3 @@
-// Discord tests cover resolve channels plugin behavior.
 import { ChannelType } from "discord-api-types/v10";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
@@ -183,79 +182,43 @@ describe("resolveDiscordChannelAllowlist", () => {
     expect(res[0]?.channelId).toBe("444555666");
   });
 
-  it("marks invalid numeric channelId as unresolved without aborting batch", async () => {
-    const fetcher = withFetchPreconnect(async (input: RequestInfo | URL) => {
-      const url = urlToString(input);
-      if (url.endsWith("/users/@me/guilds")) {
-        return jsonResponse([{ id: "111", name: "Test Server" }]);
-      }
-      if (url.endsWith("/guilds/111/channels")) {
-        return jsonResponse([{ id: "444555666", name: "general", guild_id: "111", type: 0 }]);
-      }
-      if (url.endsWith("/channels/999000111")) {
+  it.each([
+    { status: 404, failedId: "999000111", message: "not found" },
+    { status: 403, failedId: "777888999", message: "Missing Access" },
+  ])(
+    "keeps resolving a batch after a $status channel lookup",
+    async ({ status, failedId, message }) => {
+      const fetcher = withFetchPreconnect(async (input: RequestInfo | URL) => {
+        const url = urlToString(input);
+        if (url.endsWith("/users/@me/guilds")) {
+          return jsonResponse([{ id: "111", name: "Test Server" }]);
+        }
+        if (url.endsWith("/guilds/111/channels")) {
+          return jsonResponse([{ id: "444555666", name: "general", guild_id: "111", type: 0 }]);
+        }
+        if (url.endsWith(`/channels/${failedId}`)) {
+          return new Response(message, { status });
+        }
+        if (url.endsWith("/channels/444555666")) {
+          return jsonResponse({ id: "444555666", name: "general", guild_id: "111", type: 0 });
+        }
         return new Response("not found", { status: 404 });
-      }
-      if (url.endsWith("/channels/444555666")) {
-        return jsonResponse({
-          id: "444555666",
-          name: "general",
-          guild_id: "111",
-          type: 0,
-        });
-      }
-      return new Response("not found", { status: 404 });
-    });
+      });
 
-    const res = await resolveDiscordChannelAllowlist({
-      token: "test",
-      entries: ["111/999000111", "111/444555666"],
-      fetcher,
-    });
+      const res = await resolveDiscordChannelAllowlist({
+        token: "test",
+        entries: [`111/${failedId}`, "111/444555666"],
+        fetcher,
+      });
 
-    expect(res).toHaveLength(2);
-    expect(res[0]?.resolved).toBe(false);
-    expect(res[0]?.channelId).toBe("999000111");
-    expect(res[0]?.guildId).toBe("111");
-    expect(res[1]?.resolved).toBe(true);
-    expect(res[1]?.channelId).toBe("444555666");
-  });
-
-  it("treats 403 channel lookup as unresolved without aborting batch", async () => {
-    const fetcher = withFetchPreconnect(async (input: RequestInfo | URL) => {
-      const url = urlToString(input);
-      if (url.endsWith("/users/@me/guilds")) {
-        return jsonResponse([{ id: "111", name: "Test Server" }]);
-      }
-      if (url.endsWith("/guilds/111/channels")) {
-        return jsonResponse([{ id: "444555666", name: "general", guild_id: "111", type: 0 }]);
-      }
-      if (url.endsWith("/channels/777888999")) {
-        return new Response("Missing Access", { status: 403 });
-      }
-      if (url.endsWith("/channels/444555666")) {
-        return jsonResponse({
-          id: "444555666",
-          name: "general",
-          guild_id: "111",
-          type: 0,
-        });
-      }
-      return new Response("not found", { status: 404 });
-    });
-
-    const res = await resolveDiscordChannelAllowlist({
-      token: "test",
-      entries: ["111/777888999", "111/444555666"],
-      fetcher,
-    });
-
-    expect(res).toHaveLength(2);
-    expect(res[0]?.resolved).toBe(false);
-    expect(res[0]?.channelId).toBe("777888999");
-    expect(res[0]?.guildId).toBe("111");
-    expect(res[1]?.resolved).toBe(true);
-    expect(res[1]?.channelId).toBe("444555666");
-  });
+      expect(res).toHaveLength(2);
+      expect(res[0]?.resolved).toBe(false);
+      expect(res[0]?.channelId).toBe(failedId);
+      expect(res[0]?.guildId).toBe("111");
+      expect(res[1]?.resolved).toBe(true);
+      expect(res[1]?.channelId).toBe("444555666");
+    },
+  );
 
   it("falls back to name matching when numeric channel name is not a valid ID", async () => {
     const res = await resolveGuild111Entry2024({
@@ -311,8 +274,6 @@ describe("resolveDiscordChannelAllowlist", () => {
 
   it("bare numeric guild id is misrouted as channel id (regression)", async () => {
     // Demonstrates why provider.ts must prefix guild-only entries with "guild:"
-    // In reality, Discord returns 404 when a guild ID is sent to /channels/<guildId>,
-    // which causes fetchDiscord to throw and the entire resolver to crash.
     const fetcher = withFetchPreconnect(async (input: RequestInfo | URL) => {
       const url = urlToString(input);
       if (url.endsWith("/users/@me/guilds")) {
@@ -334,15 +295,5 @@ describe("resolveDiscordChannelAllowlist", () => {
     expect(res[0]?.resolved).toBe(false);
     expect(res[0]?.channelId).toBe("999");
     expect(res[0]?.guildId).toBeUndefined();
-
-    // With the guild: prefix, it correctly resolves as a guild (never hits /channels/)
-    const res2 = await resolveDiscordChannelAllowlist({
-      token: "test",
-      entries: ["guild:999"],
-      fetcher,
-    });
-    expect(res2[0]?.resolved).toBe(true);
-    expect(res2[0]?.guildId).toBe("999");
-    expect(res2[0]?.channelId).toBeUndefined();
   });
 });

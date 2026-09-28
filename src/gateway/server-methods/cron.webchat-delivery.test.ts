@@ -20,6 +20,7 @@ import {
   createDirectOutboundTestAdapter,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { isRecord } from "../../utils.js";
 import {
@@ -73,6 +74,8 @@ async function withWebchatTool(
     );
     const storePath = state.statePath("cron", "jobs.json");
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
       storePath,
       cronEnabled: false,
       defaultAgentId: "main",

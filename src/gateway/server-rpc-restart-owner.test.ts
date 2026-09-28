@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import type { ChatEvent } from "../../packages/gateway-protocol/src/index.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as followupDelivery from "../auto-reply/reply/followup-delivery.js";
@@ -39,7 +39,7 @@ it(
     const firstGate = createDeferred();
     const finalGate = createDeferred();
     const finalReached = createDeferred();
-    const queuedDispatchSettled = createDeferred<ChatEvent>();
+    const queuedRunTerminal = createDeferred<unknown>();
     let firstReceived = false;
     let followupReceived = false;
     const tasks = new Set<Promise<void>>();
@@ -141,16 +141,14 @@ it(
         configPath: state.configPath,
         token,
         onEvent: ({ event, payload }) => {
-          if (event !== "chat") {
-            return;
-          }
-          const chat = payload as ChatEvent;
           if (
-            chat.runId === "rpc-queued" &&
-            chat.sessionKey === sessionKey &&
-            (chat.state === "final" || chat.state === "error" || chat.state === "aborted")
+            event === "chat" &&
+            isRecord(payload) &&
+            payload.sessionKey === sessionKey &&
+            payload.runId === "rpc-queued" &&
+            (payload.state === "final" || payload.state === "error" || payload.state === "aborted")
           ) {
-            queuedDispatchSettled.resolve(chat);
+            queuedRunTerminal.resolve(payload);
           }
         },
       });
@@ -169,8 +167,9 @@ it(
         idempotencyKey: "rpc-queued",
         queueMode: "followup",
       });
-      // The ACK precedes detached dispatch; its terminal event follows queue admission.
-      expect(await queuedDispatchSettled.promise).toMatchObject({ state: "final" });
+      // chat.send acknowledges before dispatch reaches queue admission. Its source
+      // run terminalizes after handoff, while the held first reply keeps it queued.
+      await expect(queuedRunTerminal.promise).resolves.toMatchObject({ state: "final" });
       expect(context?.chatQueuedTurns.has("rpc-queued")).toBe(true);
       firstGate.resolve();
       await finalReached.promise;

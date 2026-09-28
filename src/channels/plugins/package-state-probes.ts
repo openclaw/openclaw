@@ -1,8 +1,3 @@
-/**
- * Bundled channel package-state probes.
- *
- * Resolves lightweight configured/auth state checkers from package metadata and source overlays.
- */
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
@@ -117,21 +112,14 @@ function listBuiltBundledPackageStateModules(params: {
   return locations;
 }
 
-function resolveChannelPackageStateModuleLocation(params: {
-  entry: PluginChannelCatalogEntry;
-  specifier: string;
-}): ChannelPackageStateModuleLocation {
-  return {
-    modulePath: resolveExistingPluginModulePath(params.entry.rootDir, params.specifier),
-    rootDir: params.entry.rootDir,
-  };
-}
-
 function listChannelPackageStateModuleLocations(params: {
   entry: PluginChannelCatalogEntry;
   specifier: string;
 }): ChannelPackageStateModuleLocation[] {
-  const source = resolveChannelPackageStateModuleLocation(params);
+  const source = {
+    modulePath: resolveExistingPluginModulePath(params.entry.rootDir, params.specifier),
+    rootDir: params.entry.rootDir,
+  };
   // Prefer built bundled artifacts when present so probes match shipped runtime
   // behavior, then fall back to source for local development.
   const built = listBuiltBundledPackageStateModules({

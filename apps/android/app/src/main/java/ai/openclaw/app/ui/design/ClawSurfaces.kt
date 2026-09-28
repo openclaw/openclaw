@@ -40,9 +40,6 @@ internal fun ClawPanel(
   }
 }
 
-/**
- * Shared empty state used when a screen has no records but can still offer an action.
- */
 @Composable
 internal fun ClawEmptyState(
   title: String,
@@ -63,9 +60,6 @@ internal fun ClawEmptyState(
   }
 }
 
-/**
- * Shared loading placeholder that keeps async screen states visually consistent.
- */
 @Composable
 internal fun ClawLoadingState(
   title: String,

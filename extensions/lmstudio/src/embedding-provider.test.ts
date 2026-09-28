@@ -135,44 +135,42 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
     await expect(readRequestedContextLength(buildConfig({ model }))).resolves.toBe(expected);
   });
 
-  it.each(["lmstudio", "lmstudio-spark"])(
-    "honors the preload opt-out for %s while retaining request-time service leases",
-    async (providerId) => {
-      const release = vi.fn();
-      const acquireLocalService = vi.fn(async () => ({ release }));
-      const { provider } = await createLmstudioEmbeddingProvider({
-        config: {
-          models: {
-            providers: {
-              [providerId]: {
-                baseUrl: "http://spark.local:1234/v1",
-                params: { preload: false },
-                localService: { command: "/usr/bin/lms-spark" },
-                models: [{ id: EMBEDDING_MODEL }],
-              },
+  it("honors the alias preload opt-out while retaining request-time service leases", async () => {
+    const providerId = "lmstudio-spark";
+    const release = vi.fn();
+    const acquireLocalService = vi.fn(async () => ({ release }));
+    const { provider } = await createLmstudioEmbeddingProvider({
+      config: {
+        models: {
+          providers: {
+            [providerId]: {
+              baseUrl: "http://spark.local:1234/v1",
+              params: { preload: false },
+              localService: { command: "/usr/bin/lms-spark" },
+              models: [{ id: EMBEDDING_MODEL }],
             },
           },
-        } as unknown as OpenClawConfig,
-        provider: providerId,
-        model: `${providerId}/${EMBEDDING_MODEL}`,
-        fallback: "none",
-        acquireLocalService,
-      });
+        },
+      } as unknown as OpenClawConfig,
+      provider: providerId,
+      model: `${providerId}/${EMBEDDING_MODEL}`,
+      fallback: "none",
+      acquireLocalService,
+    });
 
-      expect(prepareLmstudioModelForInferenceMock).not.toHaveBeenCalled();
-      expect(fetchLmstudioModelsMock).not.toHaveBeenCalled();
-      expect(acquireLocalService).not.toHaveBeenCalled();
+    expect(prepareLmstudioModelForInferenceMock).not.toHaveBeenCalled();
+    expect(fetchLmstudioModelsMock).not.toHaveBeenCalled();
+    expect(acquireLocalService).not.toHaveBeenCalled();
 
-      await expect(provider.embed("hello", { inputType: "query" })).resolves.toEqual([1, 0]);
+    await expect(provider.embed("hello", { inputType: "query" })).resolves.toEqual([1, 0]);
 
-      expect(acquireLocalService).toHaveBeenCalledOnce();
-      expect(acquireLocalService).toHaveBeenCalledWith(
-        expect.objectContaining({ providerId, baseUrl: "http://spark.local:1234/v1" }),
-        undefined,
-      );
-      expect(release).toHaveBeenCalledOnce();
-    },
-  );
+    expect(acquireLocalService).toHaveBeenCalledOnce();
+    expect(acquireLocalService).toHaveBeenCalledWith(
+      expect.objectContaining({ providerId, baseUrl: "http://spark.local:1234/v1" }),
+      undefined,
+    );
+    expect(release).toHaveBeenCalledOnce();
+  });
 
   it("keeps each query-batch service lease until its request settles", async () => {
     const firstRelease = vi.fn();

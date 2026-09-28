@@ -4,6 +4,7 @@ import { getRuntimeConfig } from "../config/config.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../infra/device-identity-async.js";
 import { getPairedDevice } from "../infra/device-pairing.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
@@ -113,6 +114,7 @@ export async function loadGatewayWorkerEnvironmentStartupState(): Promise<Gatewa
 }
 
 export async function createGatewayWorkerEnvironmentRuntime(params: {
+  scheduler: GatewayScheduler;
   getPluginRegistry: () => PluginRegistry;
   getPortalRuntime: () => Pick<GatewayRequestContext, "portalService" | "broadcast"> | undefined;
   resolveGatewayContext: GatewayContextResolver;
@@ -180,11 +182,12 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     });
   let workerBundleProducer: WorkerBundleProducer | undefined;
   let workerNpmArtifact: Promise<WorkerNpmArtifact> | undefined;
-  const prepareInstallation = async (install: "bundle" | "npm") => {
+  const prepareInstallation = async (install: "bundle" | "npm", signal?: AbortSignal) => {
     const [workerRuntime, { WORKER_PROTOCOL_FEATURES }] = await Promise.all([
       loadWorkerEnvironmentRuntimeModule(),
       import("../../packages/gateway-protocol/src/schema/worker-admission.js"),
     ]);
+    signal?.throwIfAborted();
     const producer = (workerBundleProducer ??= workerRuntime.createWorkerBundleProducer({
       protocolFeatures: WORKER_PROTOCOL_FEATURES,
       cacheOwnership: "exclusive",
@@ -194,6 +197,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     }));
     const bundle = await producer.prepare();
     await producer.prune(listRetainedBundleHashes);
+    signal?.throwIfAborted();
     if (install === "bundle") {
       return bundle;
     }
@@ -379,6 +383,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     gatewayNamespace: nodeWorkerGatewayNamespace,
   });
   const workerEnvironmentServiceBase = createWorkerEnvironmentService({
+    scheduler: params.scheduler,
     projectNamespace: nodeWorkerGatewayNamespace,
     prepareComputer: computers.prepare,
     prepareAttachedComputer: computers.prepareAttached,
@@ -407,15 +412,25 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     prepareNodeArtifacts: async (profileSnapshot, signal) => {
       const pin = new AbortController();
       try {
-        const preparedBootstrap = await prepareNodeArtifact(
-          profileSnapshot,
-          signal ? AbortSignal.any([signal, pin.signal]) : pin.signal,
+        const preparationSignal = signal ? AbortSignal.any([signal, pin.signal]) : pin.signal;
+        // Cancellation releases the caller; the producers retain their shared work.
+        const [bootstrapResult, bundleResult] = await racePromiseWithAbortSignal(
+          Promise.allSettled([
+            prepareNodeArtifact(profileSnapshot, preparationSignal),
+            prepareInstallation("bundle", preparationSignal),
+          ]),
+          signal,
         );
         signal?.throwIfAborted();
+        if (bootstrapResult.status === "rejected") {
+          throw bootstrapResult.reason;
+        }
+        if (bundleResult.status === "rejected") {
+          throw bundleResult.reason;
+        }
+        const preparedBootstrap = bootstrapResult.value;
         const bootstrap = preparedBootstrap.artifact;
-        preparedBootstrap.assertCurrent();
-        const bundle = await racePromiseWithAbortSignal(prepareInstallation("bundle"), signal);
-        signal?.throwIfAborted();
+        const bundle = bundleResult.value;
         preparedBootstrap.assertCurrent();
         if (bundle.install !== "bundle") {
           throw new Error("Worker preparation requires a bundle artifact");
@@ -474,20 +489,25 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     placementStore: placementGate,
     executeSessionTool: (request) => executeSessionTool(request),
     liveEvents: workerLiveEvents,
-    resolveSshIdentity: async ({ provider, leaseId, profile, keyRef }) => {
+    resolveSshIdentity: async ({ provider, leaseId, profile, keyRef, assertAuthorized }) => {
+      assertAuthorized();
       const workerRuntime = await loadWorkerEnvironmentRuntimeModule();
+      assertAuthorized();
       return await workerRuntime.resolveWorkerSshIdentity({
         provider,
         leaseId,
         profile,
         keyRef,
-        resolveGeneric: async (genericKeyRef) => ({
-          kind: "material",
-          contents: await workerRuntime.resolveSecretRefString(genericKeyRef, {
+        assertAuthorized,
+        resolveGeneric: async (genericKeyRef, assertCurrent) => {
+          assertCurrent();
+          const contents = await workerRuntime.resolveSecretRefString(genericKeyRef, {
             config: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig ?? getRuntimeConfig(),
             env: getActiveSecretsRuntimeEnvState(),
-          }),
-        }),
+          });
+          assertCurrent();
+          return { kind: "material", contents };
+        },
       });
     },
     bootstrapWorker: async ({

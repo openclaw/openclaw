@@ -6,7 +6,10 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatSlackFileReferenceList } from "../file-reference.js";
 import type { SlackAttachment, SlackFile } from "../types.js";
 import {
@@ -59,9 +62,7 @@ function pushUniqueText(
   options: { preserveWhitespace?: boolean } = {},
 ): void {
   const text = options.preserveWhitespace
-    ? typeof value === "string" && value.trim().length > 0
-      ? value
-      : undefined
+    ? readNonBlankString(value)
     : normalizeOptionalString(value);
   if (text && !parts.includes(text)) {
     parts.push(text);

@@ -19,7 +19,6 @@ import {
   resolveUiSelectedSessionAgentId,
   resolveUiConversationIdentity,
   uiSessionRowMatchesSelectedChat,
-  type UiSessionDefaultsHost,
 } from "../../lib/sessions/session-key.ts";
 import {
   chatAbortTargetSession,
@@ -30,7 +29,6 @@ import {
   type ChatAbortTargetState,
   type PendingChatAbort,
 } from "./chat-abort-request.ts";
-import type { ChatRunStartupState } from "./chat-run-startup.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { formatConnectError } from "./connect-error.ts";
 import {
@@ -40,12 +38,7 @@ import {
   setChatRunOwner,
 } from "./history-merge.ts";
 import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./input-history.ts";
-import type {
-  CompactionStatus,
-  FallbackStatus,
-  ToolStreamHost,
-  WaitingApprovalStatus,
-} from "./tool-stream-contract.ts";
+import type { ToolStreamHost } from "./tool-stream-contract.ts";
 import { canResetToolStream, resetToolStream, resetToolStreamRun } from "./tool-stream-state.ts";
 
 export const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
@@ -83,28 +76,18 @@ export type LocalTerminalReconcile = {
 
 type TimerHandle = ReturnType<typeof globalThis.setTimeout>;
 
-type RunLifecycleHost = Omit<Partial<ToolStreamHost>, "hello" | "sessions"> & {
+type RunLifecycleHost = Omit<Partial<ToolStreamHost>, "sessions"> & {
   sessionKey: string;
-  agentsList?: UiSessionDefaultsHost["agentsList"];
-  hello?: { snapshot?: unknown } | null;
-  chatRunId?: string | null;
   chatRunError?: ChatRunError | null;
   chatRunLifecycleGeneration?: number;
   chatRunSessionAbortable?: boolean;
-  chatStream?: string | null;
-  chatStreamStartedAt?: number | null;
-  chatRunStartup?: ChatRunStartupState | null;
-  compactionStatus?: CompactionStatus | null;
   compactionClearTimer?: TimerHandle | number | null;
-  fallbackStatus?: FallbackStatus | null;
   fallbackClearTimer?: TimerHandle | number | null;
-  waitingApprovalStatuses?: Map<string, WaitingApprovalStatus>;
   chatRunStatus?: ChatRunUiStatus | null;
   chatRunStatusClearTimer?: TimerHandle | number | null;
   sessionsResult?: SessionsListResult | null;
   sessions?: Partial<Pick<SessionCapability, "reconcileRunTerminal">>;
   lastLocalTerminalReconcile?: LocalTerminalReconcile | null;
-  requestUpdate?: () => void;
 };
 
 type ReconcileOptions = {

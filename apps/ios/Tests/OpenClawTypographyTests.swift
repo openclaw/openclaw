@@ -396,7 +396,6 @@ struct OpenClawTypographyTests {
         #expect(chatTab.contains("title: \"New chat in worktree\""))
         #expect(!chatTab.contains("title: String(localized: \"Sessions…\")"))
         #expect(chatTab.contains("title: \"New session options…\""))
-        #expect(chatTab.contains("title: \"Background tasks\""))
         #expect(chatTab.contains("title: \"Export transcript\""))
         #expect(chatTab.contains("title: \"Gateway settings\""))
         #expect(chatTab.contains("title: String(localized: \"Show reasoning & tool activity\")"))

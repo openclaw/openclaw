@@ -1,4 +1,3 @@
-import { GATEWAY_CLIENT_MODES } from "../../../packages/gateway-protocol/src/client-info.js";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../../agents/internal-event-contract.js";
@@ -7,11 +6,6 @@ import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-a
 import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveSessionWorkStartError, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type {
-  CronScheduledToolCallerOrigin,
-  CronScheduledToolPolicy,
-  CronToolsAllowExecTarget,
-} from "../../cron/scheduled-tool-policy.js";
 import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
 import {
   AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE,
@@ -30,22 +24,20 @@ import { loadSessionEntry, resolveDeletedAgentIdFromSessionKey } from "../sessio
 
 export const CRON_CONTINUATION_RELEASE_RECOVERY_DELAYS_MS = [250, 1_000, 4_000, 15_000] as const;
 
-export type RestoredCronContinuation = {
-  lifecycleRevision: string;
+export type RestoredCronContinuation = Pick<
+  NonNullable<SessionEntry["cronRunContinuation"]>,
+  | "lifecycleRevision"
+  | "toolsAllow"
+  | "toolsAllowIsDefault"
+  | "scheduledToolPolicy"
+  | "scheduledToolCallerOrigin"
+  | "toolsAllowExecTarget"
+  | "cliSessionBindingFacts"
+> & {
   sessionId: string;
   provider: string;
   model: string;
   thinking?: string;
-  toolsAllow?: string[];
-  toolsAllowIsDefault?: boolean;
-  scheduledToolPolicy?: CronScheduledToolPolicy;
-  scheduledToolCallerOrigin?: CronScheduledToolCallerOrigin;
-  toolsAllowExecTarget?: CronToolsAllowExecTarget;
-  cliSessionBindingFacts?: {
-    extraSystemPromptStatic?: string;
-    sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
-    requireExplicitMessageTarget?: boolean;
-  };
 };
 
 export function clientHasAdminScope(client: GatewayRequestHandlerOptions["client"]): boolean {
@@ -115,24 +107,6 @@ export function respondUnavailableAgentSessionForKey(params: {
   }
   params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, sessionError));
   return true;
-}
-
-export function resolveAllowModelOverrideFromClient(
-  client: GatewayRequestHandlerOptions["client"],
-): boolean {
-  return clientHasAdminScope(client) || client?.internal?.allowModelOverride === true;
-}
-
-export function resolveCanUseInternalRuntimeHandoff(
-  client: GatewayRequestHandlerOptions["client"],
-): boolean {
-  return client?.connect?.client?.mode === GATEWAY_CLIENT_MODES.BACKEND;
-}
-
-export function resolveCanUseCronRunContinuation(
-  client: GatewayRequestHandlerOptions["client"],
-): boolean {
-  return client?.internal?.cronRunContinuation === true;
 }
 
 export function cronContinuationHasReusableRuntime(params: {

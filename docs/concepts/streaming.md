@@ -202,13 +202,13 @@ instead of being overwritten in one editable draft.
 Discord defaults to `off` when `streaming` is unset, Telegram and Slack default
 to `progress`, and Mattermost and MS Teams default to `partial`.
 
-| Channel    | `off`         | `partial` | `block` | `progress`                        |
-| ---------- | ------------- | --------- | ------- | --------------------------------- |
-| Telegram   | Yes           | Yes       | Yes     | editable progress draft (default) |
-| Discord    | Yes (default) | Yes       | Yes     | editable progress draft (opt-in)  |
-| Slack      | Yes           | Yes       | Yes     | Block Kit session card (default)  |
-| Mattermost | Yes           | Yes       | Yes     | Yes                               |
-| MS Teams   | Yes           | Yes       | Yes     | native progress stream            |
+| Channel    | `off`         | `partial` | `block` | `progress`                                    |
+| ---------- | ------------- | --------- | ------- | --------------------------------------------- |
+| Telegram   | Yes           | Yes       | Yes     | editable progress draft (default)             |
+| Discord    | Yes (default) | Yes       | Yes     | editable progress draft (opt-in)              |
+| Slack      | Yes           | Yes       | Yes     | native card in threads; quiet outside threads |
+| Mattermost | Yes           | Yes       | Yes     | Yes                                           |
+| MS Teams   | Yes           | Yes       | Yes     | native progress stream                        |
 
 Preview chunk config (`streaming.preview.chunk.*`, e.g. under
 `channels.discord.streaming` or `channels.telegram.streaming`) defaults to
@@ -305,7 +305,7 @@ Slack-only:
 - `partial` can use Slack native streaming (`chat.startStream`/`append`/`stop`)
   when available.
 - `block` uses append-style draft previews.
-- `progress` streams Slack's native agent card by default: one message carries
+- In reply threads, `progress` streams Slack's native agent card by default: one message carries
   narration, the live plan card (authored milestones, or one work-summary row
   until `streaming.progress.toolProgress: true` gives each tool call a row),
   and the final answer. Routine progress updates coalesce at one-second
@@ -316,8 +316,16 @@ Slack-only:
   final text as a separate message.
 - Cards include **Open in OpenClaw** only when the session is actually openable:
   `gateway.publicOrigin` is set and `gateway.controlUi.enabled` is not `false`.
-- Top-level DMs without a reply thread use draft preview posts and edits
-  instead of Slack native streaming.
+- Without a reply thread, default `progress` turns leave only the final answer
+  and use a temporary `hourglass_flowing_sand` typing reaction during work.
+  Configured `typingReaction` wins; `""` disables it. Any explicit
+  `streaming.progress` setting opts top-level turns into a preview, including
+  `commentary: true` or a custom `label`. The sole exception is
+  `nativeTaskCards: true`, which only affects threads. Empty progress settings
+  stay quiet. The rule uses the merged root and account settings.
+  This includes plain top-level DMs; Agent View and
+  Assistant View keep their threaded behavior. Explicit `off`, `partial`, and
+  `block` modes are unchanged.
 - Native and draft preview streaming suppress block replies for that turn, so a
   Slack reply is streamed by one delivery path only.
 - A successful turn with no visible reply still deletes its draft card. A

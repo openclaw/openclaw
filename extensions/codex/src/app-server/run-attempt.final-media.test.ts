@@ -27,17 +27,7 @@ setupRunAttemptTestHooks();
 
 const execFileAsync = promisify(execFile);
 
-it.each([
-  "relative",
-  "absolute",
-  "alias",
-  "partial",
-  "async",
-  "denied",
-  "missing",
-  "too-large",
-  "cancel",
-] as const)(
+it.each(["alias", "partial", "async", "denied", "missing", "too-large", "cancel"] as const)(
   "delivers remote reply media without reading stale Gateway files: %s",
   async (scenario) => {
     const workspaceDir = path.join(tempDir, "gateway-workspace");
@@ -99,11 +89,7 @@ it.each([
     });
     await harness.waitForMethod("turn/start");
     const sourcePath =
-      scenario === "absolute"
-        ? path.join(remoteWorkspaceRoot, artifactName)
-        : scenario === "alias"
-          ? `${remoteWorkspaceRoot}/./${artifactName}`
-          : `./${artifactName}`;
+      scenario === "alias" ? `${remoteWorkspaceRoot}/./${artifactName}` : `./${artifactName}`;
     const sourceText = `Artifact ready\n${scenario === "partial" ? "MEDIA:./missing-artifact.txt\n" : ""}MEDIA:${sourcePath}`;
     const item = {
       id: "final-artifact",

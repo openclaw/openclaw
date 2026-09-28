@@ -40,6 +40,10 @@ const row = {
   agentConfigDigest: "original",
 };
 
+function schemaVersions(agentConfigDigest: string) {
+  return new Map([["worker", { kind: "ok", schemaVersion: row.schemaVersion, agentConfigDigest }]]);
+}
+
 beforeEach(() => {
   options = { path: `/claw-consent-preparation-${++pathSequence}.sqlite` };
   worker.assertCurrent.mockReset();
@@ -61,12 +65,7 @@ describe("asynchronous Claw consent preparation", () => {
         initializeCachedClawInstallSchemaVersions(options);
         expect(readCachedClawInstallSchemaVersions(options)).toEqual({
           kind: "ready",
-          schemaVersions: new Map([
-            [
-              "worker",
-              { kind: "ok", schemaVersion: row.schemaVersion, agentConfigDigest: "original" },
-            ],
-          ]),
+          schemaVersions: schemaVersions("original"),
         });
         await Promise.resolve();
       }
@@ -128,9 +127,7 @@ describe("asynchronous Claw consent preparation", () => {
 
     expect(readCachedClawInstallSchemaVersions(options)).toEqual({
       kind: "ready",
-      schemaVersions: new Map([
-        ["worker", { kind: "ok", schemaVersion: row.schemaVersion, agentConfigDigest: "original" }],
-      ]),
+      schemaVersions: schemaVersions("original"),
     });
   });
 
@@ -138,6 +135,9 @@ describe("asynchronous Claw consent preparation", () => {
     "keeps a newer committed %s when an older read publishes",
     async (mutation) => {
       (await prepareClawInstallSchemaVersions(options)).publish();
+      if (mutation === "update") {
+        worker.read.mockRejectedValueOnce(new Error("Read failed"));
+      }
       const stale = await prepareClawInstallSchemaVersions(options);
       if (mutation === "update") {
         cacheClawInstallSchemaVersion("worker", row.schemaVersion, "newer", options);
@@ -151,15 +151,7 @@ describe("asynchronous Claw consent preparation", () => {
       expect(readCachedClawInstallSchemaVersions(options)).toBe(current);
       expect(current).toEqual({
         kind: "ready",
-        schemaVersions:
-          mutation === "update"
-            ? new Map([
-                [
-                  "worker",
-                  { kind: "ok", schemaVersion: row.schemaVersion, agentConfigDigest: "newer" },
-                ],
-              ])
-            : new Map(),
+        schemaVersions: mutation === "update" ? schemaVersions("newer") : new Map(),
       });
     },
   );
@@ -180,18 +172,5 @@ describe("asynchronous Claw consent preparation", () => {
       knownAgentIds: new Set(["worker"]),
       ownershipUnknown: true,
     });
-  });
-
-  it("does not let an obsolete failed read poison a newer consent snapshot", async () => {
-    (await prepareClawInstallSchemaVersions(options)).publish();
-    worker.read.mockRejectedValueOnce(new Error("Read failed"));
-    const failed = await prepareClawInstallSchemaVersions(options);
-    cacheClawInstallSchemaVersion("worker", row.schemaVersion, "newer", options);
-    const current = readCachedClawInstallSchemaVersions(options);
-
-    failed.publish();
-
-    expect(readCachedClawInstallSchemaVersions(options)).toBe(current);
-    expect(current.kind).toBe("ready");
   });
 });

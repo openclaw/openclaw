@@ -1,9 +1,3 @@
-/**
- * Browser tab management routes.
- *
- * Lists, opens, focuses, closes, and mutates tabs while applying navigation
- * policy checks and profile reachability probes.
- */
 import { clampPositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   BrowserProfileUnavailableError,
@@ -107,7 +101,6 @@ async function ensureBrowserRunning(
     await new Promise<void>((resolve) => {
       setTimeout(resolve, TAB_REACHABILITY_RETRY_DELAY_MS);
     });
-    // Keep false reserved for paths where jsonError already wrote a response.
     signal?.throwIfAborted();
     isReachable = await checkTabReachability(ctx, profileCtx, signal);
   }
@@ -219,7 +212,6 @@ async function runTabTargetMutation(params: {
   }
 }
 
-/** Register tab listing and mutation endpoints on the browser control server. */
 export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: BrowserRouteContext) {
   const listTabs = async (profileCtx: ProfileContext, signal: AbortSignal) => {
     const running = await checkTabReachability(ctx, profileCtx, signal);
@@ -410,26 +402,19 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
           return { ok: true, tab };
         }
 
-        if (action === "close") {
-          await ensureBrowserRunning(ctx, profileCtx, signal);
-          const tabs = await profileCtx.listTabs({ signal });
-          const target = typeof index === "number" ? tabs[index] : tabs.at(0);
-          if (!target) {
-            throw new BrowserTabNotFoundError();
-          }
-          signal.throwIfAborted();
-          await profileCtx.closeTab(target.targetId, { exactTargetId: true, signal });
-          clearSnapshotKeysForTab(ctx, profileCtx.profile.name, target.targetId);
-          return { ok: true, targetId: target.targetId };
-        }
-
         await ensureBrowserRunning(ctx, profileCtx, signal);
         const tabs = await profileCtx.listTabs({ signal });
-        const target = tabs[index!];
+        const target = tabs[index ?? 0];
         if (!target) {
           throw new BrowserTabNotFoundError();
         }
-        await focusTab(req, profileCtx, target, signal);
+        if (action === "close") {
+          signal.throwIfAborted();
+          await profileCtx.closeTab(target.targetId, { exactTargetId: true, signal });
+          clearSnapshotKeysForTab(ctx, profileCtx.profile.name, target.targetId);
+        } else {
+          await focusTab(req, profileCtx, target, signal);
+        }
         return { ok: true, targetId: target.targetId };
       },
     });

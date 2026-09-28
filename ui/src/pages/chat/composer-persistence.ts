@@ -10,6 +10,7 @@ import {
   rememberDraftRevision,
   readDraftRevisionState,
 } from "../../lib/chat/outbox-store-draft-state.ts";
+import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
 import {
   captureChatOutboxAdmission,
   notifyStoredChatOutboxChanges,
@@ -19,7 +20,6 @@ import {
   storageTargetForGateway,
   writeStoredOutboxStore as writeStore,
   type ChatComposerScope,
-  type StoredChatOutboxScope,
 } from "../../lib/chat/outbox-store.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { getSafeSessionStorage } from "../../local-storage.ts";
@@ -62,7 +62,7 @@ export const CHAT_COMPOSER_DRAFT_STORAGE_ERROR =
 
 export { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 export { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
-export type { ChatComposerScope, StoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
+export type { ChatComposerScope } from "../../lib/chat/outbox-store.ts";
 export type { StoredChatOutbox } from "../../lib/chat/outbox-store-projection.ts";
 
 export type { ChatComposerDraftRetry } from "../../lib/chat/chat-types.ts";
@@ -587,27 +587,20 @@ export class ChatComposerPersistence {
     if (!this.ready || !state) {
       return;
     }
-    if (this.isUnchanged(state)) {
-      if (!this.pending) {
-        this.clearTimer();
-        return;
-      }
-      if (this.matchesCurrentContent(this.pending, state)) {
-        this.clearTimer();
-        this.timer = globalThis.setTimeout(
-          () => this.persistNow(),
-          CHAT_COMPOSER_DRAFT_PERSIST_DELAY_MS,
-        );
-        return;
-      }
+    const unchanged = this.isUnchanged(state);
+    if (unchanged && !this.pending) {
+      this.clearTimer();
+      return;
     }
-    const baseline = Math.max(this.latestDraftRevision, this.pending?.draftRevision ?? 0);
-    const draftRevision = nextDraftRevision(baseline);
-    this.latestDraftRevision = draftRevision;
-    this.pending = this.snapshot(state, draftRevision, this.committedDraftRevision);
-    // An edit owns the draft before its debounced write. Otherwise another
-    // pane's older async action can publish over it and fence out that write.
-    markChatComposerEdit(state, draftRevision);
+    if (!unchanged || !this.pending || !this.matchesCurrentContent(this.pending, state)) {
+      const baseline = Math.max(this.latestDraftRevision, this.pending?.draftRevision ?? 0);
+      const draftRevision = nextDraftRevision(baseline);
+      this.latestDraftRevision = draftRevision;
+      this.pending = this.snapshot(state, draftRevision, this.committedDraftRevision);
+      // An edit owns the draft before its debounced write. Otherwise another
+      // pane's older async action can publish over it and fence out that write.
+      markChatComposerEdit(state, draftRevision);
+    }
     this.clearTimer();
     this.timer = globalThis.setTimeout(
       () => this.persistNow(),

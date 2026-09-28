@@ -151,6 +151,9 @@ export async function withUpdateCommandTerminalResult<T>(
   if ("error" in outcome && hasCommandProcessCleanupError(outcome.error)) {
     throw outcome.error;
   }
+  await run?.sourceArtifactLock?.release().catch((error: unknown) => {
+    defaultRuntime.error(`Warning: Artifact lock release failed: ${formatErrorMessage(error)}`);
+  });
   const activationTimeout =
     "error" in outcome
       ? collectNestedErrorCandidates(outcome.error).find(
@@ -437,6 +440,9 @@ export async function reportUnreportedUpdateAdmissionOutcome(error: unknown): Pr
     ? {
         ...outcome.report,
         reason: "update-admission-cleanup-failed",
+        stepResult: outcome.report.stepResult
+          ? { steps: outcome.report.stepResult.steps }
+          : undefined,
         message: candidates
           .filter((candidate): candidate is Error => candidate instanceof Error)
           .slice(0, 8)
@@ -501,8 +507,10 @@ async function publishPreMutationUpdateOutcome(
     );
   }
   const outcome = await prepareOutcome();
+  const stepResult = outcome.status === "error" ? params.stepResult : undefined;
   const failedStep: UpdateStepResult | undefined =
-    outcome.status === "error" || params.failureFacts?.length
+    stepResult?.failedStep ??
+    (outcome.status === "error" || params.failureFacts?.length
       ? {
           // A skipped admission adds facts to its phase, not evidence of update work.
           name: outcome.status === "skipped" ? (active?.phase ?? "requested") : params.reason,
@@ -519,7 +527,7 @@ async function publishPreMutationUpdateOutcome(
             run?.env,
           ),
         }
-      : undefined;
+      : undefined);
   const result = completeUpdateCommandRun(
     {
       ...outcome,
@@ -527,7 +535,9 @@ async function publishPreMutationUpdateOutcome(
       root: params.root,
       reason: params.reason,
       failedStep: outcome.status === "error" ? failedStep : undefined,
-      steps: failedStep ? [failedStep] : [],
+      steps: stepResult?.failedStep
+        ? stepResult.steps
+        : [...(stepResult?.steps ?? []), ...(failedStep ? [failedStep] : [])],
       ...(outcome.status === "skipped"
         ? { before: { version: await readPackageVersion(params.root) } }
         : {}),

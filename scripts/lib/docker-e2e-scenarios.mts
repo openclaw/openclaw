@@ -141,17 +141,8 @@ function liveProviderResource(provider: string) {
   if (provider === "codex-cli" || provider === "codex") {
     return "live:codex";
   }
-  if (provider === "droid") {
-    return "live:droid";
-  }
   if (provider === "google-gemini-cli" || provider === "gemini") {
     return "live:gemini";
-  }
-  if (provider === "opencode") {
-    return "live:opencode";
-  }
-  if (provider === "openai") {
-    return "live:openai";
   }
   return `live:${provider}`;
 }
@@ -765,66 +756,27 @@ export const tailLanes: DockerE2eLane[] = [
   liveCodexNpmPluginLane(),
   liveMcpCodeModeGatewayLane(),
   livePluginToolLane(),
-  liveLane(
-    "live-acp-bind-claude",
-    liveDockerScriptCommand("test-live-acp-bind-docker.sh", "OPENCLAW_LIVE_ACP_BIND_AGENT=claude"),
-    {
-      cacheKey: "acp-bind-claude",
-      provider: "claude-cli",
-      resources: ["npm"],
-      timeoutMs: LIVE_ACP_TIMEOUT_MS,
-      weight: 3,
-    },
-  ),
-  liveLane(
-    "live-acp-bind-codex",
-    liveDockerScriptCommand("test-live-acp-bind-docker.sh", "OPENCLAW_LIVE_ACP_BIND_AGENT=codex"),
-    {
-      cacheKey: "acp-bind-codex",
-      provider: "codex-cli",
-      resources: ["live:openai", "npm"],
-      timeoutMs: LIVE_ACP_TIMEOUT_MS,
-      weight: 3,
-    },
-  ),
-  liveLane(
-    "live-acp-bind-droid",
-    liveDockerScriptCommand(
-      "test-live-acp-bind-docker.sh",
-      "OPENCLAW_LIVE_ACP_BIND_AGENT=droid OPENCLAW_LIVE_ACP_BIND_REQUIRE_TRANSCRIPT=1",
+  ...[
+    { agent: "claude", provider: "claude-cli", requireTranscript: false },
+    { agent: "codex", provider: "codex-cli", requireTranscript: false },
+    { agent: "droid", provider: "droid", requireTranscript: true },
+    { agent: "gemini", provider: "google-gemini-cli", requireTranscript: false },
+    { agent: "opencode", provider: "opencode", requireTranscript: true },
+  ].map(({ agent, provider, requireTranscript }) =>
+    liveLane(
+      `live-acp-bind-${agent}`,
+      liveDockerScriptCommand(
+        "test-live-acp-bind-docker.sh",
+        `OPENCLAW_LIVE_ACP_BIND_AGENT=${agent}${requireTranscript ? " OPENCLAW_LIVE_ACP_BIND_REQUIRE_TRANSCRIPT=1" : ""}`,
+      ),
+      {
+        cacheKey: `acp-bind-${agent}`,
+        provider,
+        resources: agent === "codex" ? ["live:openai", "npm"] : ["npm"],
+        timeoutMs: LIVE_ACP_TIMEOUT_MS,
+        weight: 3,
+      },
     ),
-    {
-      cacheKey: "acp-bind-droid",
-      provider: "droid",
-      resources: ["npm"],
-      timeoutMs: LIVE_ACP_TIMEOUT_MS,
-      weight: 3,
-    },
-  ),
-  liveLane(
-    "live-acp-bind-gemini",
-    liveDockerScriptCommand("test-live-acp-bind-docker.sh", "OPENCLAW_LIVE_ACP_BIND_AGENT=gemini"),
-    {
-      cacheKey: "acp-bind-gemini",
-      provider: "google-gemini-cli",
-      resources: ["npm"],
-      timeoutMs: LIVE_ACP_TIMEOUT_MS,
-      weight: 3,
-    },
-  ),
-  liveLane(
-    "live-acp-bind-opencode",
-    liveDockerScriptCommand(
-      "test-live-acp-bind-docker.sh",
-      "OPENCLAW_LIVE_ACP_BIND_AGENT=opencode OPENCLAW_LIVE_ACP_BIND_REQUIRE_TRANSCRIPT=1",
-    ),
-    {
-      cacheKey: "acp-bind-opencode",
-      provider: "opencode",
-      resources: ["npm"],
-      timeoutMs: LIVE_ACP_TIMEOUT_MS,
-      weight: 3,
-    },
   ),
 ];
 

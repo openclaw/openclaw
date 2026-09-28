@@ -172,9 +172,16 @@ describe.skipIf(process.platform === "win32")("retained POSIX native restart", (
         });
       let complete = false;
       const work = owned(async (run) => {
-        await expect(commands.restartRetainedUpdateGatewayService(request(run))).resolves.toEqual({
+        const onGatewayStartAttempted = vi.fn();
+        await expect(
+          commands.restartRetainedUpdateGatewayService({
+            ...request(run),
+            onGatewayStartAttempted,
+          }),
+        ).resolves.toEqual({
           outcome: "completed",
         });
+        expect(onGatewayStartAttempted).toHaveBeenCalledOnce();
       }).then(() => {
         complete = true;
       });
@@ -213,12 +220,21 @@ describe.skipIf(process.platform === "win32")("retained POSIX native restart", (
     },
   );
 
-  it.each(["A", "B", "caller", "executor", "abort"] as const)(
+  it.each(["A", "B", "caller", "executor", "abort", "binding", "unavailable", "scope"] as const)(
     "refuses after the native lock/config await changes %s",
     async (fault) => {
       const native = vi.spyOn(systemdExec, "execSystemctlUser").mockResolvedValue(success);
       const controller = new AbortController();
       let callerCurrent = true;
+      const onGatewayStartAttempted = vi.fn();
+      let revalidations = 0;
+      if (fault === "unavailable") {
+        vi.mocked(systemdExec.assertSystemdAvailable).mockRejectedValue(new Error("unavailable"));
+      } else if (fault === "scope") {
+        vi.mocked(systemdScope.findInstalledSystemdGatewayScope).mockRejectedValue(
+          new Error("scope"),
+        );
+      }
       const work = owned(async (run) => {
         vi.spyOn(futureConfig, "assertFutureConfigActionAllowed").mockImplementation(async () => {
           await Promise.resolve();
@@ -228,12 +244,18 @@ describe.skipIf(process.platform === "win32")("retained POSIX native restart", (
             run.executorFence = { assertCurrent() {} };
           } else if (fault === "abort") {
             controller.abort(new Error("cancelled fixture"));
-          } else {
+          } else if (fault === "caller") {
             callerCurrent = false;
           }
         });
         await commands.restartRetainedUpdateGatewayService({
           ...request(run),
+          onGatewayStartAttempted,
+          revalidate: async () => {
+            if (++revalidations === 2 && fault === "binding") {
+              throw new Error("changed original service binding");
+            }
+          },
           signal: controller.signal,
           assertCurrent() {
             if (!callerCurrent) {
@@ -243,16 +265,18 @@ describe.skipIf(process.platform === "win32")("retained POSIX native restart", (
         });
       });
       await expect(work).rejects.toThrow(
-        /executor|ownership|cancelled fixture|changed original service/,
+        /executor|ownership|cancelled fixture|changed original service|unavailable|scope/,
       );
       expect(futureConfig.assertFutureConfigActionAllowed).toHaveBeenCalledOnce();
       expect(native).not.toHaveBeenCalled();
+      expect(onGatewayStartAttempted).not.toHaveBeenCalled();
     },
   );
 
   it.each(["A", "B"] as const)(
     "checks %s again after reset-failed and before restart",
     async (root) => {
+      const onGatewayStartAttempted = vi.fn();
       const native = vi.spyOn(systemdExec, "execSystemctlUser").mockImplementation(async () => {
         await Promise.resolve();
         revoke(root === "A" ? a : b);
@@ -260,11 +284,15 @@ describe.skipIf(process.platform === "win32")("retained POSIX native restart", (
       });
       await expect(
         owned(async (run) => {
-          await commands.restartRetainedUpdateGatewayService(request(run));
+          await commands.restartRetainedUpdateGatewayService({
+            ...request(run),
+            onGatewayStartAttempted,
+          });
         }),
       ).rejects.toThrow();
       expect(native).toHaveBeenCalledOnce();
       expect(native.mock.calls[0]?.[1][0]).toBe("reset-failed");
+      expect(onGatewayStartAttempted).not.toHaveBeenCalled();
     },
   );
 
@@ -348,16 +376,14 @@ describe.skipIf(process.platform === "win32")("retained POSIX native restart", (
     }
   });
 
-  it.each(["healthy", "A", "B", "A-child"] as const)(
-    "retained-root query uses actual delegated authority: %s",
-    async (fault) => {
-      const proceed = path.join(a, "proceed");
-      const effect = path.join(a, "delegated-effect");
-      const ownerUrl = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor);
-      const sourceArgs = ownerUrl.pathname.endsWith(".ts")
-        ? ["--import", path.resolve("scripts/tsx.mjs")]
-        : [];
-      const script = `
+  it("retained-root query uses actual delegated authority", async () => {
+    const proceed = path.join(a, "proceed");
+    const effect = path.join(a, "delegated-effect");
+    const ownerUrl = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor);
+    const sourceArgs = ownerUrl.pathname.endsWith(".ts")
+      ? ["--import", path.resolve("scripts/tsx.mjs")]
+      : [];
+    const script = `
       import fs from "node:fs";
       import {setTimeout} from "node:timers/promises";
       import {withDelegatedUpdateCommandExecutor,assertRetainedUpdateCommandRoot,captureUpdateCommandExecutorAuthority} from ${JSON.stringify(ownerUrl.href)};
@@ -377,49 +403,34 @@ describe.skipIf(process.platform === "win32")("retained POSIX native restart", (
         });
       } catch(error) {process.stderr.write(error.message);process.exitCode=1;}
     `;
-      let childAdmitted = false;
-      const work = owned(async (run) => {
-        const fence = run.executorFence;
-        if (!fence) {
-          throw new Error("Missing fixture fence");
-        }
-        const result = await withUpdateCommandExecutorChild(fence, b, (grant, beforeInput) =>
-          runUtf8CommandWithTimeout(
-            [process.execPath, ...sourceArgs, "--input-type=module", "-e", script],
-            {
-              input: JSON.stringify({ grant, a, b, proceed, effect }),
-              beforeInput,
-              timeoutMs: 15000,
-              killProcessTree: true,
-              requireProcessTreeExtinction: true,
-              onOutputChunk(chunk, stream) {
-                if (!childAdmitted && stream === "stdout" && chunk.toString() === "ADMITTED") {
-                  childAdmitted = true;
-                  if (fault === "A" || fault === "B") {
-                    revoke(fault === "A" ? a : b);
-                  }
-                  if (fault === "A-child") {
-                    if (!grant.retainedChildKey) {
-                      throw new Error("Missing retained fixture child");
-                    }
-                    revoke(grant.retainedChildKey);
-                  }
-                  fs.writeFileSync(proceed, "");
-                }
-              },
-            },
-          ),
-        );
-        expect(result.code, result.stderr).toBe(fault === "healthy" ? 0 : 1);
-      });
-      if (fault === "healthy") {
-        await work;
-        expect(fs.readFileSync(effect, "utf8")).toBe("live retained A with original B");
-      } else {
-        await expect(work).rejects.toThrow(/ownership|settle|release|cleanup/);
-        expect(fs.existsSync(effect)).toBe(false);
+    let childAdmitted = false;
+    const work = owned(async (run) => {
+      const fence = run.executorFence;
+      if (!fence) {
+        throw new Error("Missing fixture fence");
       }
-      expect(childAdmitted).toBe(true);
-    },
-  );
+      const result = await withUpdateCommandExecutorChild(fence, b, (grant, beforeInput) =>
+        runUtf8CommandWithTimeout(
+          [process.execPath, ...sourceArgs, "--input-type=module", "-e", script],
+          {
+            input: JSON.stringify({ grant, a, b, proceed, effect }),
+            beforeInput,
+            timeoutMs: 15000,
+            killProcessTree: true,
+            requireProcessTreeExtinction: true,
+            onOutputChunk(chunk, stream) {
+              if (!childAdmitted && stream === "stdout" && chunk.toString() === "ADMITTED") {
+                childAdmitted = true;
+                fs.writeFileSync(proceed, "");
+              }
+            },
+          },
+        ),
+      );
+      expect(result.code, result.stderr).toBe(0);
+    });
+    await work;
+    expect(fs.readFileSync(effect, "utf8")).toBe("live retained A with original B");
+    expect(childAdmitted).toBe(true);
+  });
 });

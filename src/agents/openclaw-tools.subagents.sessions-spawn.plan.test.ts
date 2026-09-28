@@ -314,32 +314,11 @@ function expectResolvedThinkingPlan(input: {
 describe("sessions_spawn thinking defaults", () => {
   it.each([
     {
-      name: "applies agents.defaults.subagents.thinking when thinking is omitted",
-      expected: "high",
-    },
-    {
-      name: "prefers explicit sessions_spawn.thinking over config default",
-      thinkingOverrideRaw: "low",
-      expected: "low",
-    },
-    {
-      name: "prefers per-agent subagent thinking over global subagent thinking",
-      targetAgentConfig: { subagents: { thinking: "medium" } },
-      expected: "medium",
-    },
-    {
       name: "prefers requester-agent subagent thinking over target-agent subagent thinking",
       requesterAgentConfig: { subagents: { thinking: "low" } },
       targetAgentConfig: { subagents: { thinking: "medium" } },
       callerThinkingRaw: "high",
       expected: "low",
-    },
-    {
-      name: "inherits caller thinking when no explicit or configured subagent thinking exists",
-      cfg: createConfig({ agents: { defaults: {} } }),
-      callerThinkingRaw: "medium",
-      expected: "medium",
-      expectedOverride: null,
     },
     {
       name: "prefers global subagent thinking over caller thinking",

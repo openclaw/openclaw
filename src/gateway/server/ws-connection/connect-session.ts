@@ -404,7 +404,10 @@ export async function attachAuthenticatedGatewayConnect(
       : undefined,
     usesSharedGatewayAuth: sessionUsesSharedGatewayAuth,
     sharedGatewaySessionGeneration: sessionSharedGatewaySessionGeneration,
-    authPolicyGeneration: resolveGatewayAuthPolicyGeneration(context.configSnapshot),
+    authPolicyGeneration: resolveGatewayAuthPolicyGeneration(
+      context.configSnapshot,
+      authenticatedUserId,
+    ),
     presenceKey,
     ...(authenticatedUserId ? { authenticatedUserId } : {}),
     ...(authenticatedUserIsTailscaleProvider ? { authenticatedUserIsTailscaleProvider: true } : {}),
@@ -571,6 +574,7 @@ export async function attachAuthenticatedGatewayConnect(
   if (presenceKey) {
     const authenticatedPresenceUser = currentAuthenticatedPresenceUser();
     upsertPresence(presenceKey, {
+      connectionId: connId,
       host: connectParams.client.displayName ?? connectParams.client.id ?? os.hostname(),
       clientId: connectParams.client.id,
       ip: isLocalClient ? undefined : reportedClientIp,

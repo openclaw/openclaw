@@ -26,6 +26,12 @@ openclaw-new-session-page {
   z-index: 45;
 }
 
+:where(html:not(.openclaw-native-macos, .openclaw-native-desktop)) .shell:not(.shell--mobile-nav) {
+  .new-session-page__incognito-rail {
+    top: calc((var(--rail-header-height) - 40px) / 2);
+  }
+}
+
 .new-session-page__draft-toggle {
   display: none;
 }
@@ -972,7 +978,7 @@ wa-popover.new-session-page__where-popover::part(body) {
   border-radius: var(--radius-md);
 }
 
-.new-session-page__start-submit[aria-busy="true"] svg {
+.new-session-page__start-submit.new-session-page__start-submit--busy svg {
   animation: new-session-start-spin 2.25s linear infinite;
 }
 
@@ -1028,7 +1034,7 @@ wa-popover.new-session-page__where-popover::part(body) {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .new-session-page__start-submit[aria-busy="true"] svg {
+  .new-session-page__start-submit.new-session-page__start-submit--busy svg {
     animation: none;
   }
 

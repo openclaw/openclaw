@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
 import type { ReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-run-registry.contracts.js";
-import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import {
+  beginReplyMessageInjectionTarget,
+  createReplyOperation,
+  replyRunRegistry,
+} from "../../auto-reply/reply/reply-run-registry.js";
 import { testing as replyTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
 import {
   prepareReplyToolAuthority,
@@ -101,10 +106,11 @@ async function published<T>(
   run: (owner: {
     handle: ReturnType<typeof createEmbeddedRunHandle>;
     queue: ReturnType<typeof vi.fn<ReturnType<typeof createEmbeddedRunHandle>["queueMessage"]>>;
+    close: () => void;
   }) => Promise<T>,
   params: Partial<typeof attempt> & { toolsAllow?: string[] } = {},
 ) {
-  return admitted(async ({ admittedRunContext }) =>
+  return admitted(async ({ admittedRunContext, close }) =>
     withPreparedEmbeddedRunToolAuthority(
       { admittedRunContext },
       { ...attempt, ...params },
@@ -115,7 +121,7 @@ async function published<T>(
         );
         const handle = publishPreparedHandle(prepared.toolAuthorityFingerprint, queue);
         try {
-          return await run({ handle, queue });
+          return await run({ handle, queue, close });
         } finally {
           clearActiveEmbeddedRun(sessionId, handle, sessionKey);
         }
@@ -140,6 +146,89 @@ afterEach(() => {
 });
 
 describe("host-prepared embedded tool authority", () => {
+  it.each([
+    { change: "trace-only", outcome: { status: "accepted" } },
+    { change: "permissions", outcome: { status: "rejected", reason: "tool_authority_mismatch" } },
+    {
+      change: "optional-reply",
+      outcome: { status: "rejected", reason: "reply_expectation_mismatch" },
+    },
+    { change: "audio", outcome: { status: "rejected", reason: "audio_input_unsupported" } },
+  ] as const)("keeps the direct owner's $change input contract", async ({ change, outcome }) => {
+    await published(async ({ handle, queue }) => {
+      handle.supportsTranscriptCommitWait = true;
+      handle.terminalReplyExpectation = change === "optional-reply" ? "optional" : "required";
+      handle.messageInjectionV2 = {
+        version: 2,
+        isAvailable: () => true,
+        queueMessage: async (text, options, assertCurrent) => {
+          assertCurrent();
+          return queue(text, options);
+        },
+      };
+      const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(sessionKey);
+      expect(target).toBeDefined();
+      expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+      if (!target) {
+        throw new Error("Expected the direct admitted owner to be injectable");
+      }
+      await expect(
+        beginReplyMessageInjectionTarget(target, "Apply the correction", {
+          isInboundUserMessage: true,
+          inboundAudio: change === "audio",
+          toolAuthorityOverlay: {
+            ...own,
+            traceAuthorized: true,
+            disableTools: change === "permissions",
+          },
+        }).outcome,
+      ).resolves.toMatchObject(outcome);
+      expect(queue).toHaveBeenCalledTimes(change === "trace-only" ? 1 : 0);
+    });
+  });
+
+  it.each(["replacement", "closed-admission", "lifecycle-rotation"] as const)(
+    "refuses a captured direct target after %s during runtime preparation",
+    async (transition) => {
+      await published(async ({ handle, queue, close }) => {
+        const entered = createDeferred();
+        const release = createDeferred();
+        handle.supportsTranscriptCommitWait = true;
+        handle.messageInjectionV2 = {
+          version: 2,
+          isAvailable: () => true,
+          queueMessage: async (text, options, assertCurrent) => {
+            assertCurrent();
+            entered.resolve();
+            await release.promise;
+            assertCurrent();
+            return queue(text, options);
+          },
+        };
+        const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(sessionKey);
+        if (!target) {
+          throw new Error("Expected the direct admitted owner to be injectable");
+        }
+        const pending = beginReplyMessageInjectionTarget(target, "Apply the correction", {
+          isInboundUserMessage: true,
+          toolAuthorityOverlay: own,
+          assertCurrent: () => {},
+        });
+        await entered.promise;
+        if (transition === "closed-admission") {
+          close();
+        } else if (transition === "lifecycle-rotation") {
+          rotateAgentEventLifecycleGeneration();
+        } else {
+          setActiveEmbeddedRun(sessionId, { ...handle }, sessionKey, attempt.sessionFile);
+        }
+        release.resolve();
+        await expect(pending.outcome).resolves.toMatchObject({ status: "failed" });
+        expect(queue).not.toHaveBeenCalled();
+      });
+    },
+  );
+
   it("captures only a matching admitted owner for legacy active-run registration", async () => {
     const params = {
       ...attempt,

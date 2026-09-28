@@ -46,22 +46,15 @@ afterEach(() => {
 });
 
 describe("resolveWorkerToolAuthority", () => {
-  it.each([
-    { modelHasVision: true, allowed: true },
-    { modelHasVision: false, allowed: false },
-    { modelHasVision: undefined, allowed: true },
-  ])(
-    "applies prepared model vision capability ($modelHasVision)",
-    ({ modelHasVision, allowed }) => {
-      const tools = resolveWorkerToolAuthority({
-        modelRef: { provider: "openai", model: "gpt-test" },
-        turn: turn({ modelHasVision, toolsAllow: ["computer", "browser"] }),
-        availableOptionalToolNames: ["computer", "browser"],
-      }).allowedToolNames;
-      expect(tools.includes("computer")).toBe(allowed);
-      expect(tools).toContain("browser");
-    },
-  );
+  it("keeps browser available when a text-only model excludes computer", () => {
+    const tools = resolveWorkerToolAuthority({
+      modelRef: { provider: "openai", model: "gpt-test" },
+      turn: turn({ modelHasVision: false, toolsAllow: ["computer", "browser"] }),
+      availableOptionalToolNames: ["computer", "browser"],
+    }).allowedToolNames;
+    expect(tools).not.toContain("computer");
+    expect(tools).toContain("browser");
+  });
 
   it.each([
     { name: "default", tools: {}, allowed: true },
@@ -255,6 +248,7 @@ describe("resolveWorkerToolAuthority", () => {
       "process",
       "sessions_spawn",
       "sessions_send",
+      "presence",
     ]);
   });
 
@@ -275,6 +269,7 @@ describe("resolveWorkerToolAuthority", () => {
       "browser",
       "sessions_spawn",
       "sessions_send",
+      "presence",
     ]);
     expect(
       resolveWorkerToolAuthority({

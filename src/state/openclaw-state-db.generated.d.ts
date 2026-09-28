@@ -1769,6 +1769,7 @@ export interface Worktrees {
   base_ref: string;
   branch: string;
   created_at: number;
+  gc_protection_json: string | null;
   id: string;
   last_active_at: number;
   owner_id: string | null;

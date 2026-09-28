@@ -108,6 +108,7 @@ describe("resolveApiKeyForProviderCore OAuth refresh failure ordering", () => {
     await expect(
       resolveApiKeyForProviderCore({
         provider: "openai",
+        cfg: { plugins: { enabled: false } },
         store,
       }),
     ).resolves.toMatchObject({
@@ -147,6 +148,7 @@ describe("resolveApiKeyForProviderCore OAuth refresh failure ordering", () => {
           const auth = await resolveApiKeyForProviderCore({
             provider: "openai",
             cfg: {
+              plugins: { enabled: false },
               auth: {
                 order: {
                   openai: [profileId],

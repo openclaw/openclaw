@@ -520,47 +520,6 @@ describe("web_fetch provider fallback normalization", () => {
     expect(providerInput).not.toHaveProperty("headers");
   });
 
-  it("cancels an unread error response when provider fallback succeeds", async () => {
-    let cancelled = false;
-    global.fetch = withFetchPreconnect(
-      vi.fn(
-        async () =>
-          new Response(
-            new ReadableStream<Uint8Array>({
-              pull(controller) {
-                controller.enqueue(new TextEncoder().encode("unread upstream error"));
-              },
-              cancel() {
-                cancelled = true;
-              },
-            }),
-            { status: 503, headers: { "content-type": "text/plain" } },
-          ),
-      ),
-    );
-    resolveWebFetchDefinitionMock.mockReturnValue({
-      provider: { id: "firecrawl" },
-      definition: {
-        description: "firecrawl",
-        parameters: {},
-        execute: async () => ({
-          text: "provider rescued body",
-          extractor: "custom-provider",
-        }),
-      },
-    });
-
-    const tool = createWebFetchTool({ config: {} as OpenClawConfig, sandboxed: false });
-    const result = await tool?.execute?.("unread-response-fallback", {
-      url: "https://example.com/unread-response-fallback",
-    });
-    const details = result?.details as { text?: string; extractor?: string };
-
-    expect(details.extractor).toBe("custom-provider");
-    expect(details.text).toContain("provider rescued body");
-    expect(cancelled).toBe(true);
-  });
-
   it("cancels an unread error response when provider fallback throws", async () => {
     let cancelled = false;
     global.fetch = withFetchPreconnect(

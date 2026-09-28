@@ -163,7 +163,19 @@ describe("MCP HTTP keepalive", () => {
       await vi.advanceTimersByTimeAsync(30_000);
       expect(decoder.decode((await within(reader.read())).value)).toMatch(/^(?::\n\n)+$/);
       await within(closeMcpLoopbackServer());
-      expect((await within(reader.read())).done).toBe(true);
+      const buffered = await within(
+        (async () => {
+          let body = "";
+          for (;;) {
+            const chunk = await reader.read();
+            if (chunk.done) {
+              return body;
+            }
+            body += decoder.decode(chunk.value);
+          }
+        })(),
+      );
+      expect(buffered).toMatch(/^(?::\n\n)*$/);
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       await reader.cancel();

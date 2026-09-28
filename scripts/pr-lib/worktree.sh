@@ -331,7 +331,7 @@ provision_pr_worktree() {
 enter_worktree() {
   # OR-list callers disable errexit throughout this function; guard required steps explicitly.
   local pr="$1"
-  local reset_to_main="${2:-false}"
+  local reset_to_main="${2:-false}" existing_only="${3:-false}"
   local invoke_cwd
   invoke_cwd="$PWD"
   local root
@@ -343,8 +343,11 @@ enter_worktree() {
 
   cd "$root" || return 1
   ensure_gh_api_auth || { PR_MAIN_SHA=""; return 1; }
-  # Fetch can launch helpers and mutate Git state even when it fails; leave validation first.
-  mark_pr_operation_side_effects_started || return 1
+  # Existing-only entry is validation. Fetch/transition-capable entry retains
+  # the normal sticky ownership contract before any possible mutation.
+  if [ "$existing_only" != true ]; then
+    mark_pr_operation_side_effects_started || return 1
+  fi
 
   local dir="$root/.worktrees/pr-$pr"
   local resolved_parent resolved_dir state registration initialized_sha=""
@@ -354,6 +357,10 @@ enter_worktree() {
 
   if [ "$registration" != registered ] ||
     ! printf '%s\n' "$state" | jq -e '.present' >/dev/null; then
+    if [ "$existing_only" = true ]; then
+      echo "Publisher resume requires the retained registered PR worktree; no checkout was created." >&2
+      return 1
+    fi
     if [ "$registration" = registered ] ||
       printf '%s\n' "$state" | jq -e '.present or .admin != ""' >/dev/null; then
       echo "Removing exact stale PR worktree .worktrees/pr-$pr"
@@ -389,6 +396,10 @@ enter_worktree() {
     echo "Refusing scripts/pr operation for PR #$pr: expected worktree $resolved_dir, Git resolved ${actual_toplevel:-no repository}; scripts/pr refuses to mutate the shared canonical checkout." >&2
     return 1
   fi
+
+  # Resume consumes retained publication authority only. It must not provision,
+  # refresh main, complete a review transition, or change the prepared checkout.
+  [ "$existing_only" != true ] || return 0
 
   [ -n "$PR_MAIN_SHA" ] || refresh_main_snapshot || return 1
   recover_review_transition "$pr" || return 1

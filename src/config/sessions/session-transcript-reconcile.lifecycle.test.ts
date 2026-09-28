@@ -5,6 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { assertNoOpenClawAgentDatabaseLeases } from "../../state/openclaw-agent-db-lease.js";
@@ -421,6 +422,8 @@ describe("session transcript reconcile worker lifecycle", () => {
       const probe = createPlanFinishFence(scope.sessionId);
       const changes = vi.fn(() => database.db.isTransaction);
       const unsubscribe = sessionChanges.subscribe(changes);
+      const facts = vi.fn();
+      const unsubscribeFacts = sessionChanges.subscribeFacts(facts);
       startSessionTranscriptIndexReconcile({
         ...databaseOptions,
         preferredSessionId: scope.sessionId,
@@ -458,6 +461,11 @@ describe("session transcript reconcile worker lifecycle", () => {
           sessionKey: scope.sessionKey,
         });
         expect(changes.mock.results[0]?.value).toBe(false);
+        expect(facts).toHaveBeenCalledWith({
+          storePath: database.path,
+          sessionKey: scope.sessionKey,
+          facts: { kind: "unchanged" },
+        });
         await vi.waitFor(() => expect(targetOutcome).toEqual({ ready: true }));
         expect(allReconciled).toBe(false);
         expect(
@@ -473,6 +481,7 @@ describe("session transcript reconcile worker lifecycle", () => {
           await Promise.all([targetReconciliation, allReconciliation]);
         } finally {
           unsubscribe();
+          unsubscribeFacts();
         }
       }
       expect(changes.mock.calls).toEqual([
@@ -643,6 +652,7 @@ describe("session transcript reconcile worker lifecycle", () => {
                 throw new Error("worker settled before the final acknowledgement");
               }),
             ]);
+            expect(probe.threadId()).toBeGreaterThan(0);
             const canonicalLeaseId = canonical.leases.get(database.path);
             const plannerLeaseId = probe.plannerLeases.get(database.path);
             expect(canonicalLeaseId).toMatch(/^[a-f0-9-]+$/u);
@@ -681,11 +691,10 @@ describe("session transcript reconcile worker lifecycle", () => {
             expect(readAgentDatabaseLeaseIds(database.path)).toEqual([
               canonical.leases.get(database.path),
             ]);
-            await vi.advanceTimersByTimeAsync(60_000);
+            await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS);
             // Timer dispatch starts native retirement; settlement must join its asynchronous close.
             await vi.waitFor(() => expect(readAgentDatabaseLeaseIds(database.path)).toEqual([]));
           }
-          expect(probe.threadId()).toBeGreaterThan(0);
           const settled = openOpenClawAgentDatabase(databaseOptions);
           expect(settled).not.toBe(database);
           // Retirement after the final commit cannot discard its acknowledged projection.

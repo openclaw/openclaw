@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { setReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
@@ -15,7 +16,8 @@ import {
   resolveManagedOutgoingMediaArtifactDownload,
 } from "../../gateway/managed-image-attachments.js";
 import { listManagedImageRecordEntries } from "../../gateway/managed-image-record-store.js";
-import { listManagedImageRecordEntriesInDatabase } from "../../gateway/managed-image-record-store.kernel.js";
+import { executeManagedImageRecordCommand } from "../../gateway/managed-image-record-store.kernel.js";
+import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import {
   beginSessionWorkAdmission,
   getActiveSessionLifecycleMutationCount,
@@ -107,7 +109,11 @@ async function createCompletionFixture(state: OpenClawTestState) {
     }
     updates += 1;
     // Observe records at publication, before a wrongly late write could make the test pass.
-    for (const { record } of listManagedImageRecordEntriesInDatabase(database.db, sessionKey)) {
+    const entries = executeManagedImageRecordCommand(
+      { type: "managedImages.entries", input: { sessionKey } },
+      database,
+    );
+    for (const { record } of entries) {
       const pending = resolveManagedOutgoingMediaArtifactDownload({
         sessionKey,
         agentId: "main",
@@ -209,15 +215,28 @@ describe("current-session completion media", () => {
     async (mode) => {
       await withOpenClawTestState({ layout: "state-only" }, async (state) => {
         const fixture = await createCompletionFixture(state);
-        const database = openOpenClawStateDatabase({ env: state.env });
+        let restorePromotionAdmission: (() => void) | undefined;
         try {
           if (mode === "promotion-failure") {
-            database.db.exec(`CREATE TEMP TRIGGER fail_report_promotion
-              BEFORE UPDATE OF message_id ON managed_outgoing_image_records
-              BEGIN SELECT RAISE(ABORT, 'report promotion failed'); END`);
+            const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
+            const spy = vi
+              .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
+              .mockImplementation((admit, attachment) =>
+                createAdmission((request, grant) => {
+                  if (
+                    request.stage === "commit" &&
+                    isRecord(request.facts) &&
+                    request.facts.type === "managedImages.attach"
+                  ) {
+                    throw new Error("report promotion failed");
+                  }
+                  admit(request, grant);
+                }, attachment),
+              );
+            restorePromotionAdmission = () => spy.mockRestore();
             await expect(fixture.commit()).rejects.toThrow("report promotion failed");
             expect(fixture.updates()).toBe(0);
-            database.db.exec("DROP TRIGGER fail_report_promotion");
+            restorePromotionAdmission();
           } else {
             await expect(fixture.commit()).resolves.toMatchObject({ ok: true });
           }
@@ -251,7 +270,7 @@ describe("current-session completion media", () => {
             expect(download).toMatchObject({ type: "image" });
           }
         } finally {
-          database.db.exec("DROP TRIGGER IF EXISTS fail_report_promotion");
+          restorePromotionAdmission?.();
           await fixture.dispose();
         }
       });

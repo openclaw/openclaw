@@ -56,6 +56,8 @@ export type WorkerTurnExecutionIdentity = Readonly<{
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
   operationalRunInstance: OperationalRunInstanceRef;
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  /** Original presence reader, retained on the Gateway without a worker-writable claim. */
+  assertPresenceSourceCurrent?: () => void;
   receiptAuthority: () => void;
   sessionKey: string;
   sessionTarget: Readonly<BoundAgentRunSessionTarget>;
@@ -135,6 +137,7 @@ export async function bindWorkerTurnOwner(
   assertRunActive: () => void,
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage,
   operatorAuthority?: AdmittedRunOperatorAuthority,
+  assertPresenceSourceCurrent?: () => void,
 ): Promise<
   Readonly<{
     capability: WorkerTurnExecutionIdentityCapability;
@@ -204,6 +207,7 @@ export async function bindWorkerTurnOwner(
     ...(token ? { executionIdentityToken: token } : {}),
     operationalRunInstance,
     ...(operatorAuthority ? { operatorAuthority } : {}),
+    ...(assertPresenceSourceCurrent ? { assertPresenceSourceCurrent } : {}),
     receiptAuthority: assertActive,
     sessionKey: sessionTarget.sessionKey,
     sessionTarget,
@@ -536,14 +540,21 @@ function closeWorkerTurnClaim(
   }
 }
 
+export function prepareWorkerTurnClaimClosed(
+  path: string,
+  claim: WorkerSessionTurnClaim,
+): () => void {
+  const captured = structuredClone(claim);
+  const owner = workerTurnOwners.get(path)?.get(claim.sessionId);
+  return () => closeWorkerTurnClaim(path, captured, owner);
+}
+
 export function deferWorkerTurnClaimClosed(
   db: DatabaseSync,
   path: string,
   claim: WorkerSessionTurnClaim,
 ): void {
-  const captured = structuredClone(claim);
-  const owner = workerTurnOwners.get(path)?.get(claim.sessionId);
-  if (!deferSqlitePostCommitPublication(db, () => closeWorkerTurnClaim(path, captured, owner))) {
+  if (!deferSqlitePostCommitPublication(db, prepareWorkerTurnClaimClosed(path, claim))) {
     throw new Error("Worker turn closure requires its owning transaction");
   }
 }

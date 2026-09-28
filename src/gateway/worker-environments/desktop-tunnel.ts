@@ -7,6 +7,7 @@ import type {
   WorkerDesktopEndpoint,
   WorkerSshEndpoint,
 } from "../../plugins/types.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   createDesktopSessionRegistry,
   DesktopSessionStaleOwnerError,
@@ -100,19 +101,24 @@ export function createWorkerDesktopTunnels(deps: {
       isCurrent: () => boolean,
       stopOwner: () => Promise<void>,
     ): Promise<DesktopAcquireResult> => {
-      if (!isCurrent()) {
-        throw new Error("Worker desktop tunnel stopped before connecting");
-      }
+      const assertCurrent = () => {
+        if (
+          !isCurrent() ||
+          !sessions.isOwnerEpochCurrent(request.environmentId, request.ownerEpoch)
+        ) {
+          throw new Error("Worker desktop tunnel stopped before connecting");
+        }
+      };
+      assertCurrent();
       prepared = await prepareWorkerSsh({
+        assertCurrent,
         ssh: request.ssh,
         pinnedHostKey: request.ssh.hostKey,
         resolveIdentity: request.resolveIdentity,
         // macOS Unix sockets allow 103 bytes; share one short private directory with SSH credentials.
         temporaryDirectoryPrefix: "/tmp/openclaw-worker-desktop-",
       });
-      if (!isCurrent()) {
-        throw new Error("Worker desktop tunnel stopped before connecting");
-      }
+      assertCurrent();
       const localSocketPath = path.join(path.dirname(prepared.knownHostsPath), "desktop.sock");
       child = deps.runner.start(
         [
@@ -155,9 +161,7 @@ export function createWorkerDesktopTunnels(deps: {
         void stopOwner();
       });
       await child.ready;
-      if (!isCurrent()) {
-        throw new Error("Worker desktop tunnel stopped before connecting");
-      }
+      assertCurrent();
       let vncPassword: string | undefined;
       if (request.desktop.passwordFilePath) {
         const result = await deps.runner.run(
@@ -175,9 +179,7 @@ export function createWorkerDesktopTunnels(deps: {
           ],
           workerSshCommandOptions({ timeoutMs: PASSWORD_READ_TIMEOUT_MS }),
         );
-        if (!isCurrent()) {
-          throw new Error("Worker desktop tunnel stopped before connecting");
-        }
+        assertCurrent();
         if (!successful(result)) {
           throw workerSshProcessError(result.stderr);
         }
@@ -270,17 +272,17 @@ export function createWorkerDesktopTunnels(deps: {
       return current.operation;
     }
     const abortController = new AbortController();
-    const startedAtMs = Date.now();
-    let startExecution!: () => void;
-    const startGate = new Promise<void>((resolve) => {
-      startExecution = resolve;
-    });
-    const execution = (async () => {
-      await startGate;
+    const assertCurrent = () => {
       abortController.signal.throwIfAborted();
       if (!sessions.isOwnerEpochCurrent(request.environmentId, request.ownerEpoch)) {
         throw new Error("Worker desktop app launch owner was replaced");
       }
+    };
+    const startedAtMs = Date.now();
+    const { promise: startGate, resolve: startExecution } = createDeferredCore();
+    const execution = (async () => {
+      await startGate;
+      assertCurrent();
       if (current) {
         current.abortController.abort(new Error("Worker desktop app launch owner replaced"));
         await current.operation.catch(() => undefined);
@@ -291,15 +293,16 @@ export function createWorkerDesktopTunnels(deps: {
           stopReplacedAppLaunches(request.environmentId, request.ownerEpoch),
         ]);
       }
-      abortController.signal.throwIfAborted();
+      assertCurrent();
       const prepared = await prepareWorkerSsh({
+        assertCurrent,
         ssh: request.ssh,
         pinnedHostKey: request.ssh.hostKey,
         resolveIdentity: request.resolveIdentity,
         temporaryDirectoryPrefix: "openclaw-worker-desktop-app-",
       });
       try {
-        abortController.signal.throwIfAborted();
+        assertCurrent();
         const remainingLaunchMs = Math.max(0, APP_LAUNCH_TIMEOUT_MS - (Date.now() - startedAtMs));
         // Launchers are stateful: SSH exit 255 cannot prove the remote app did not start.
         // Use the lifecycle-selected port once so an ambiguous disconnect cannot launch twice.

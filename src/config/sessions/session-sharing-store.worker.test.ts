@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { initializeSessionReadContext } from "../../gateway/server-methods/sessions-read-cache.test-support.js";
@@ -49,8 +50,10 @@ import {
   listSessionMembersInWorker,
   removeSessionMember,
 } from "./session-sharing-store.js";
+import { historyLane } from "./session-transcript-worker-resources.js";
+import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
-it("reads complete current member rows without executing SQLite on the caller", async () => {
+it("reads current member rows off the caller while transcript reads wait", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const scope = { agentId: "main", sessionKey: "agent:main:worker-members" };
     const entry = { sessionId: "worker-members", updatedAt: 1 };
@@ -69,6 +72,23 @@ it("reads complete current member rows without executing SQLite on the caller", 
       addedAt: 3,
     });
     const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const historyEntered = createDeferredCore();
+    const historyContended = createDeferredCore();
+    const releaseHistory = createDeferredCore();
+    const runHistory = historyLane.pool.run.bind(historyLane.pool);
+    let historyRequests = 0;
+    const historyRun = vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
+      if (++historyRequests === 1) {
+        historyEntered.resolve();
+      } else {
+        historyContended.resolve();
+      }
+      await releaseHistory.promise;
+      return await runHistory(...args);
+    });
+    const historyRead = withSessionHistoryWorkerDatabase({ agentId: "main" }, (owner) =>
+      owner.readEntryPresence({ ...scope, databaseAgentId: "main", storePath: database.path }),
+    );
     const prototype: StatementSync = Object.getPrototypeOf(database.db.prepare("SELECT 1"));
     const databasePrototype: DatabaseSync = Object.getPrototypeOf(database.db);
     const methods = [
@@ -78,11 +98,23 @@ it("reads complete current member rows without executing SQLite on the caller", 
       vi.spyOn(prototype, "run"),
       vi.spyOn(databasePrototype, "exec"),
     ];
+    let membersRead: ReturnType<typeof listSessionMembersInWorker> | undefined;
     try {
-      expect(await listSessionMembersInWorker(scope)).toEqual([
-        { identityId: "alice", addedBy: "actor-evidence:unattributed", addedAt: 3 },
-        { identityId: "zoe", addedBy: "actor-evidence:unknown", addedAt: 2 },
-      ]);
+      await Promise.race([historyEntered.promise, historyRead]);
+      expect(historyRequests).toBe(1);
+      membersRead = listSessionMembersInWorker(scope);
+      // A queued dependency signals contention directly; no timing threshold decides success.
+      expect(
+        await Promise.race([
+          membersRead.then((members) => ({ members })),
+          historyContended.promise.then(() => ({ blockedByTranscript: true })),
+        ]),
+      ).toEqual({
+        members: [
+          { identityId: "alice", addedBy: "actor-evidence:unattributed", addedAt: 3 },
+          { identityId: "zoe", addedBy: "actor-evidence:unknown", addedAt: 2 },
+        ],
+      });
       for (const method of methods) {
         expect(method).not.toHaveBeenCalled();
       }
@@ -90,7 +122,11 @@ it("reads complete current member rows without executing SQLite on the caller", 
       for (const method of methods) {
         method.mockRestore();
       }
+      releaseHistory.resolve();
+      await Promise.allSettled([historyRead, membersRead]);
+      historyRun.mockRestore();
     }
+    expect(await historyRead).toBe(true);
     await addSessionMember(scope, { identityId: "bob", addedBy: "owner", addedAt: 4 });
     expect(await listSessionMembersInWorker(scope)).toEqual([
       { identityId: "alice", addedBy: "actor-evidence:unattributed", addedAt: 3 },
@@ -225,9 +261,16 @@ it("rechecks the current manager after the membership read yields", async () => 
   });
 });
 
-it("commits worker membership and participant facts before publishing, and rejects stale authority", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const scope = { agentId: "main", sessionKey: "agent:main:worker-writes" };
+it("commits aliased worker membership and participant facts before publishing, and rejects stale authority", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const alias = state.path("member-alias");
+    fs.symlinkSync(path.dirname(database.path), alias, "junction");
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:worker-writes",
+      storePath: path.join(alias, path.basename(database.path)),
+    };
     const entry = {
       sessionId: "worker-writes",
       updatedAt: 1,
@@ -248,7 +291,6 @@ it("commits worker membership and participant facts before publishing, and rejec
         participantLifecycle(event);
       }
     });
-    const database = openOpenClawAgentDatabase({ agentId: "main" });
     const prototype: StatementSync = Object.getPrototypeOf(database.db.prepare("SELECT 1"));
     const queries: string[] = [];
     const methods = (["all", "get", "run", "iterate"] as const).map((method) => {
@@ -340,10 +382,14 @@ it("commits worker membership and participant facts before publishing, and rejec
   });
 });
 
-it("rejects the complete category update when a later member changes after preparation", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+it("rejects the complete aliased category update when a later member changes after preparation", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const alias = state.path("category-alias");
+    fs.symlinkSync(path.dirname(database.path), alias, "junction");
     const scopeAt = (index: number) => ({
       agentId: "main",
+      storePath: path.join(alias, path.basename(database.path)),
       sessionKey: `agent:main:category-revalidation:${String(index).padStart(2, "0")}`,
     });
     const firstScope = scopeAt(0);

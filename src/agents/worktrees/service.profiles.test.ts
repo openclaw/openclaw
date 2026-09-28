@@ -46,6 +46,23 @@ describe("repository source profile creation", () => {
     await git(repo, "commit", "-m", "profile inputs");
     return await git(repo, "rev-parse", "HEAD");
   }
+  async function profileTarget(destination: string) {
+    return {
+      env,
+      now: Date.now,
+      enabled: false,
+      repoRoot: repo,
+      commonDir: await git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir"),
+      worktreeRoot: path.dirname(destination),
+      destination,
+      base: commit,
+      sourceProfile: await resolveWorktreeSourceProfile(repo, commit, ["alpha"], {
+        commitGuard: () => undefined,
+      }),
+      requireSpace: vi.fn(),
+      commitGuard: () => undefined,
+    };
+  }
 
   beforeEach(async () => {
     const root = roots.make("openclaw-source-profiles-");
@@ -268,27 +285,14 @@ describe("repository source profile creation", () => {
         await fs.mkdir(destination);
         await fs.writeFile(path.join(destination, "sentinel"), "preserve\n");
       }
-      const sourceProfile = await resolveWorktreeSourceProfile(repo, commit, ["alpha"], {
-        commitGuard: () => undefined,
-      });
-      const requireSpace = vi.fn();
+      const input = await profileTarget(destination);
       await expect(
         addManagedWorktree({
-          env,
-          now: Date.now,
-          enabled: false,
-          repoRoot: repo,
-          commonDir: await git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir"),
-          worktreeRoot: path.dirname(destination),
-          destination,
-          base: commit,
-          sourceProfile,
+          ...input,
           deferGitCheckout: mode === "restore",
-          requireSpace,
-          commitGuard: () => undefined,
         }),
       ).rejects.toThrow(/fresh destination/);
-      expect(requireSpace).not.toHaveBeenCalled();
+      expect(input.requireSpace).not.toHaveBeenCalled();
       expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain(destination);
       if (mode === "existing") {
         expect(await fs.readFile(path.join(destination, "sentinel"), "utf8")).toBe("preserve\n");
@@ -298,9 +302,7 @@ describe("repository source profile creation", () => {
 
   it("preserves unexpected content appearing after registration instead of shrinking or rolling it back", async () => {
     const destination = path.join(roots.make("openclaw-profile-race-"), "target");
-    const sourceProfile = await resolveWorktreeSourceProfile(repo, commit, ["alpha"], {
-      commitGuard: () => undefined,
-    });
+    const input = await profileTarget(destination);
     let sparseCalls = 0;
     vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
       if (argv[0] === "git" && argv.includes("sparse-checkout")) {
@@ -318,21 +320,7 @@ describe("repository source profile creation", () => {
       }
       return result;
     });
-    await expect(
-      addManagedWorktree({
-        env,
-        now: Date.now,
-        enabled: false,
-        repoRoot: repo,
-        commonDir: await git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir"),
-        worktreeRoot: path.dirname(destination),
-        destination,
-        base: commit,
-        sourceProfile,
-        requireSpace: () => undefined,
-        commitGuard: () => undefined,
-      }),
-    ).rejects.toThrow(/no longer unprepared/);
+    await expect(addManagedWorktree(input)).rejects.toThrow(/no longer unprepared/);
     expect(sparseCalls).toBe(0);
     expect(await fs.readFile(path.join(destination, "sentinel"), "utf8")).toBe(
       "interrupted preparation\n",

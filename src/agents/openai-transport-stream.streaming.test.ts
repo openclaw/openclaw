@@ -30,32 +30,6 @@ import { testing } from "./openai-transport-stream.test-support.js";
 const COLD_RUNNER_HTTP_TEST_TIMEOUT_MS = 300_000;
 
 describe("openai transport stream", () => {
-  it("passes provider request timeouts to OpenAI SDK clients", () => {
-    const requestTimeoutMs = 900_000;
-
-    const responsesModel = {
-      id: "gpt-5.4",
-      name: "GPT-5.4",
-      api: "openai-responses",
-      provider: "custom-openai",
-      baseUrl: "https://api.example.com/v1",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 200000,
-      maxTokens: 8192,
-      requestTimeoutMs,
-    } satisfies Model<"openai-responses"> & { requestTimeoutMs: number };
-    const azureModel = {
-      ...responsesModel,
-      api: "azure-openai-responses",
-      provider: "azure-openai",
-      baseUrl: "https://example.openai.azure.com/openai/deployments/gpt-5.4",
-    } satisfies Model<"azure-openai-responses"> & { requestTimeoutMs: number };
-    expect(testing.buildOpenAISdkClientOptions(responsesModel).timeout).toBe(requestTimeoutMs);
-    expect(testing.buildOpenAISdkClientOptions(azureModel).timeout).toBe(requestTimeoutMs);
-  });
-
   it.each([
     {
       api: "openai-responses" as const,

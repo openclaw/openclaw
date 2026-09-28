@@ -81,32 +81,12 @@ const ATTACHMENT_MEDIA_KEYS = ["media", "mediaUrl", "path", "filePath", "fileUrl
 
 export function collectCodexMessageMediaUrls(record: Record<string, unknown>): string[] {
   const urls: string[] = [];
-  const push = (value: unknown) => {
-    if (typeof value === "string" && value.trim()) {
+  mapMessageMediaValues(record, (value) => {
+    if (value.trim()) {
       urls.push(value.trim());
     }
-  };
-  for (const key of MESSAGE_MEDIA_KEYS) {
-    push(record[key]);
-  }
-  for (const key of MESSAGE_MEDIA_ARRAY_KEYS) {
-    const value = record[key];
-    if (Array.isArray(value)) {
-      for (const entry of value) {
-        push(entry);
-      }
-    }
-  }
-  if (Array.isArray(record.attachments)) {
-    for (const attachment of record.attachments) {
-      if (!isRecord(attachment)) {
-        continue;
-      }
-      for (const key of ATTACHMENT_MEDIA_KEYS) {
-        push(attachment[key]);
-      }
-    }
-  }
+    return value;
+  });
   return urls;
 }
 
@@ -276,10 +256,7 @@ export async function prepareCodexRemoteWorkspaceMessageMedia(params: {
   const gatewayManagedPaths = new Set<string>();
   const gatewayMediaRoot = getMediaDir();
   let attachmentEntries = 0;
-  const mapMediaPath = (value: unknown): unknown => {
-    if (typeof value !== "string") {
-      return value;
-    }
+  const mappedArgs = mapMessageMediaValues(params.args, (value) => {
     if (path.isAbsolute(value) && isPathStrictlyInside(gatewayMediaRoot, value)) {
       attachmentEntries += 1;
       gatewayManagedPaths.add(value);
@@ -303,54 +280,7 @@ export async function prepareCodexRemoteWorkspaceMessageMedia(params: {
       remotePathsByLocalPath.set(mapped, { remotePath, sourcePaths });
     }
     return mapped;
-  };
-
-  let mappedArgs = params.args;
-  const setMappedValue = (key: string, value: unknown) => {
-    if (value === params.args[key]) {
-      return;
-    }
-    if (mappedArgs === params.args) {
-      mappedArgs = { ...params.args };
-    }
-    mappedArgs[key] = value;
-  };
-
-  for (const key of MESSAGE_MEDIA_KEYS) {
-    setMappedValue(key, mapMediaPath(params.args[key]));
-  }
-  for (const key of MESSAGE_MEDIA_ARRAY_KEYS) {
-    const value = params.args[key];
-    if (Array.isArray(value)) {
-      const mapped = value.map(mapMediaPath);
-      if (mapped.some((entry, index) => entry !== value[index])) {
-        setMappedValue(key, mapped);
-      }
-    }
-  }
-  if (Array.isArray(params.args.attachments)) {
-    const attachments = params.args.attachments;
-    const mapped = attachments.map((attachment) => {
-      if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) {
-        return attachment;
-      }
-      const record = attachment as Record<string, unknown>;
-      let mappedAttachment = record;
-      for (const key of ATTACHMENT_MEDIA_KEYS) {
-        const value = mapMediaPath(record[key]);
-        if (value !== record[key]) {
-          if (mappedAttachment === record) {
-            mappedAttachment = { ...record };
-          }
-          mappedAttachment[key] = value;
-        }
-      }
-      return mappedAttachment;
-    });
-    if (mapped.some((attachment, index) => attachment !== attachments[index])) {
-      setMappedValue("attachments", mapped);
-    }
-  }
+  });
 
   if (attachmentEntries > REMOTE_WORKSPACE_MEDIA_MAX_ATTACHMENTS) {
     throw new Error(
@@ -453,33 +383,45 @@ function mapMessageMediaValues(
   args: Record<string, unknown>,
   mapValue: (value: string) => string,
 ): Record<string, unknown> {
-  const mapped = { ...args };
-  for (const key of MESSAGE_MEDIA_KEYS) {
-    const value = mapped[key];
-    if (typeof value === "string") {
-      mapped[key] = mapValue(value);
-    }
-  }
-  for (const key of MESSAGE_MEDIA_ARRAY_KEYS) {
-    const value = mapped[key];
-    if (Array.isArray(value)) {
-      mapped[key] = value.map((entry) => (typeof entry === "string" ? mapValue(entry) : entry));
-    }
-  }
-  if (Array.isArray(mapped.attachments)) {
-    mapped.attachments = mapped.attachments.map((attachment) => {
-      if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) {
-        return attachment;
+  const mapString = (value: unknown) => (typeof value === "string" ? mapValue(value) : value);
+  const mapArray = (values: unknown[], map: (value: unknown) => unknown) => {
+    const mapped = values.map(map);
+    return mapped.some((value, index) => value !== values[index]) ? mapped : values;
+  };
+  const mapRecord = (
+    record: Record<string, unknown>,
+    keys: readonly string[],
+    message = false,
+  ): Record<string, unknown> => {
+    let mapped = record;
+    const assign = (key: string, value: unknown) => {
+      if (value !== record[key]) {
+        if (mapped === record) {
+          mapped = { ...record };
+        }
+        mapped[key] = value;
       }
-      const record = { ...(attachment as Record<string, unknown>) };
-      for (const key of ATTACHMENT_MEDIA_KEYS) {
+    };
+    for (const key of keys) {
+      assign(key, mapString(record[key]));
+    }
+    if (message) {
+      for (const key of MESSAGE_MEDIA_ARRAY_KEYS) {
         const value = record[key];
-        if (typeof value === "string") {
-          record[key] = mapValue(value);
+        if (Array.isArray(value)) {
+          assign(key, mapArray(value, mapString));
         }
       }
-      return record;
-    });
-  }
-  return mapped;
+      if (Array.isArray(record.attachments)) {
+        assign(
+          "attachments",
+          mapArray(record.attachments, (attachment) =>
+            isRecord(attachment) ? mapRecord(attachment, ATTACHMENT_MEDIA_KEYS) : attachment,
+          ),
+        );
+      }
+    }
+    return mapped;
+  };
+  return mapRecord(args, MESSAGE_MEDIA_KEYS, true);
 }

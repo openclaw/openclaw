@@ -182,11 +182,7 @@ function listTranscriptSessionBatch(database: DatabaseSync, afterSessionId: stri
   ).rows.map((row) => row.session_id);
 }
 
-function planTranscriptSession(
-  database: DatabaseSync,
-  pathname: string,
-  sessionId: string,
-): TranscriptRowPlan[] {
+function readTranscriptSessionRows(database: DatabaseSync, sessionId: string) {
   const db = getNodeSqliteKysely<TranscriptDirectiveMigrationDatabase>(database);
   return executeSqliteQuerySync(
     database,
@@ -196,7 +192,15 @@ function planTranscriptSession(
       .where("session_id", "=", sessionId)
       .where(transcriptEventJsonSql(database), "like", "%[[%")
       .orderBy("seq", "asc"),
-  ).rows.map((row) => {
+  ).rows;
+}
+
+function planTranscriptSession(
+  database: DatabaseSync,
+  pathname: string,
+  sessionId: string,
+): TranscriptRowPlan[] {
+  return readTranscriptSessionRows(database, sessionId).map((row) => {
     const event = parseTranscriptEvent(row.event_json, `${pathname}:${sessionId}:${row.seq}`);
     const transformed = transformHistoricalTranscriptEvent(event);
     return {
@@ -212,16 +216,7 @@ function assertTranscriptSessionSourceUnchanged(
   sessionId: string,
   planned: readonly TranscriptRowPlan[],
 ): void {
-  const db = getNodeSqliteKysely<TranscriptDirectiveMigrationDatabase>(database);
-  const current = executeSqliteQuerySync(
-    database,
-    db
-      .selectFrom("transcript_events")
-      .select([transcriptEventJsonSql(database).as("event_json"), "seq"])
-      .where("session_id", "=", sessionId)
-      .where(transcriptEventJsonSql(database), "like", "%[[%")
-      .orderBy("seq", "asc"),
-  ).rows;
+  const current = readTranscriptSessionRows(database, sessionId);
   if (
     current.length !== planned.length ||
     current.some(
@@ -267,12 +262,6 @@ function hasActiveAgentDatabaseLease(agentId: string, env: NodeJS.ProcessEnv): b
     }
     throw error;
   }
-}
-
-async function yieldBetweenTranscriptBatches(): Promise<void> {
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
 }
 
 async function migrateTranscriptSessions(params: {
@@ -338,7 +327,9 @@ async function migrateTranscriptSessions(params: {
     }
     // Keep the caller responsive between bounded batches. The next transaction
     // revalidates maintenance ownership before mutating state.
-    await yieldBetweenTranscriptBatches();
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
   }
 }
 

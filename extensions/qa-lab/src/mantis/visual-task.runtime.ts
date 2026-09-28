@@ -15,7 +15,11 @@ import {
   type MantisCrabboxLeaseOptions,
   runCommand,
 } from "./crabbox-runtime.js";
-import { renderMantisCrabboxReport, type MantisCrabboxReportSummary } from "./report.js";
+import {
+  renderMantisCrabboxReport,
+  type MantisCrabboxReportSummary,
+  type MantisCrabboxRunResult,
+} from "./report.js";
 
 type MantisVisualTaskVisionMode = "image-describe" | "metadata";
 
@@ -40,15 +44,6 @@ export type MantisVisualDriverOptions = {
   visionModel?: string;
   visionPrompt?: string;
   visionTimeoutMs?: number;
-};
-
-type MantisVisualTaskResult = {
-  outputDir: string;
-  reportPath: string;
-  screenshotPath?: string;
-  status: "pass" | "fail";
-  summaryPath: string;
-  videoPath?: string;
 };
 
 type MantisVisualDriverResult = {
@@ -418,7 +413,22 @@ export async function runMantisVisualDriver(
   const visionPrompt = buildVisionPrompt(opts.visionPrompt, expectText);
   const visionTimeoutMs = opts.visionTimeoutMs ?? DEFAULT_VISION_TIMEOUT_MS;
   const runner = opts.commandRunner ?? defaultCommandRunner;
-  let result: MantisVisualDriverResult;
+  const result: MantisVisualDriverResult = {
+    browserUrl,
+    expectText,
+    finishedAt: startedAt.toISOString(),
+    matched: false,
+    outputDir,
+    screenshotPath,
+    startedAt: startedAt.toISOString(),
+    status: "fail",
+    vision: {
+      mode: visionMode,
+      model: trimToValue(opts.visionModel),
+      prompt: visionPrompt,
+      timeoutMs: visionTimeoutMs,
+    },
+  };
 
   try {
     await runCommand({
@@ -497,50 +507,21 @@ export async function runMantisVisualDriver(
       visionText = parseImageDescribeText(described.stdout);
     }
     const { assertion, matched } = evaluateVisualExpectation(visionText, expectText);
-    result = {
-      browserUrl,
-      expectText,
-      finishedAt: new Date().toISOString(),
-      matched,
-      outputDir,
-      screenshotPath,
-      startedAt: startedAt.toISOString(),
-      status: matched ? "pass" : "fail",
-      vision: {
-        assertion,
-        mode: visionMode,
-        model: trimToValue(opts.visionModel),
-        prompt: visionPrompt,
-        text: visionText,
-        timeoutMs: visionTimeoutMs,
-      },
-    };
+    result.matched = matched;
+    result.status = matched ? "pass" : "fail";
+    result.vision.assertion = assertion;
+    result.vision.text = visionText;
   } catch (error) {
-    result = {
-      browserUrl,
-      error: formatErrorMessage(error),
-      expectText,
-      finishedAt: new Date().toISOString(),
-      matched: false,
-      outputDir,
-      screenshotPath,
-      startedAt: startedAt.toISOString(),
-      status: "fail",
-      vision: {
-        mode: visionMode,
-        model: trimToValue(opts.visionModel),
-        prompt: visionPrompt,
-        timeoutMs: visionTimeoutMs,
-      },
-    };
+    result.error = formatErrorMessage(error);
   }
+  result.finishedAt = new Date().toISOString();
   await fs.writeFile(resultPath, `${JSON.stringify(result, null, 2)}\n`, "utf8");
   return result;
 }
 
 export async function runMantisVisualTask(
   opts: MantisVisualTaskOptions = {},
-): Promise<MantisVisualTaskResult> {
+): Promise<MantisCrabboxRunResult> {
   const env = opts.env ?? process.env;
   const startedAt = (opts.now ?? (() => new Date()))();
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());

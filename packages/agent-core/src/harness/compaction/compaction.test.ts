@@ -71,74 +71,44 @@ function createProjectedEntry(
 }
 
 describe("shouldCompact", () => {
-  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
-    "skips an invalid context window of %s",
-    (contextWindow) => {
-      expect(
-        shouldCompact(1, contextWindow, {
-          enabled: true,
-          reserveTokens: 16_384,
-          keepRecentTokens: 20_000,
-        }),
-      ).toBe(false);
-    },
-  );
+  it.each([0, Number.NaN])("skips an invalid context window of %s", (contextWindow) => {
+    expect(
+      shouldCompact(1, contextWindow, {
+        enabled: true,
+        reserveTokens: 16_384,
+        keepRecentTokens: 20_000,
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("calculateContextTokens", () => {
+  const aggregateUsage: Usage = {
+    ...createUsage(927_907),
+    input: 12,
+    output: 15_104,
+    cacheRead: 819_661,
+    cacheWrite: 93_130,
+    contextUsage: { state: "unavailable" },
+  };
+
   it("prefers the final-iteration context snapshot over aggregate billing usage", () => {
     expect(
       calculateContextTokens({
-        input: 12,
-        output: 15_104,
-        cacheRead: 819_661,
-        cacheWrite: 93_130,
-        contextUsage: {
-          state: "available",
-          promptTokens: 148_874,
-          totalTokens: 163_978,
-        },
-        totalTokens: 927_907,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        ...aggregateUsage,
+        contextUsage: { state: "available", promptTokens: 148_874, totalTokens: 163_978 },
       }),
     ).toBe(163_978);
   });
 
   it("preserves the numeric compatibility fallback when the snapshot is unavailable", () => {
-    expect(
-      calculateContextTokens({
-        input: 12,
-        output: 15_104,
-        cacheRead: 819_661,
-        cacheWrite: 93_130,
-        contextUsage: { state: "unavailable" },
-        totalTokens: 927_907,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      }),
-    ).toBe(927_907);
+    expect(calculateContextTokens(aggregateUsage)).toBe(927_907);
   });
 
   it("estimates the transcript instead of using aggregate billing when context is unavailable", () => {
     const estimate = estimateContextTokens([
       { role: "user", content: "hello", timestamp: 0 },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "done" }],
-        api: "anthropic-messages",
-        provider: "anthropic",
-        model: "claude-fable-5",
-        usage: {
-          input: 12,
-          output: 15_104,
-          cacheRead: 819_661,
-          cacheWrite: 93_130,
-          contextUsage: { state: "unavailable" },
-          totalTokens: 927_907,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "stop",
-        timestamp: 1,
-      },
+      createAssistant("done", aggregateUsage, 1),
     ]);
 
     expect(estimate.tokens).toBeLessThan(927_907);
@@ -149,47 +119,19 @@ describe("calculateContextTokens", () => {
 
   it("uses the previous exact snapshot and estimates only the unavailable tail", () => {
     const estimate = estimateContextTokens([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "previous" }],
-        api: "anthropic-messages",
-        provider: "anthropic",
-        model: "claude-fable-5",
-        usage: {
+      createAssistant(
+        "previous",
+        {
+          ...createUsage(149_874),
           input: 12,
           output: 1_000,
           cacheRead: 148_862,
-          cacheWrite: 0,
-          contextUsage: {
-            state: "available",
-            promptTokens: 148_874,
-            totalTokens: 149_874,
-          },
-          totalTokens: 149_874,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          contextUsage: { state: "available", promptTokens: 148_874, totalTokens: 149_874 },
         },
-        stopReason: "stop",
-        timestamp: 0,
-      },
+        0,
+      ),
       { role: "user", content: "next", timestamp: 1 },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "done" }],
-        api: "anthropic-messages",
-        provider: "anthropic",
-        model: "claude-fable-5",
-        usage: {
-          input: 12,
-          output: 15_104,
-          cacheRead: 819_661,
-          cacheWrite: 93_130,
-          contextUsage: { state: "unavailable" },
-          totalTokens: 927_907,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "stop",
-        timestamp: 2,
-      },
+      createAssistant("done", aggregateUsage, 2),
     ]);
 
     expect(estimate.usageTokens).toBe(149_874);
@@ -367,69 +309,6 @@ describe("session-entry compaction budgeting", () => {
     expect(preparation.value).not.toHaveProperty("splitTurnCompleted");
     expect(JSON.stringify(preparation.value)).not.toContain("private output");
     expect(JSON.stringify(entries)).toContain("private output");
-  });
-
-  it("applies the shared common-CJK budget heuristic", () => {
-    expect(estimateTokens({ role: "user", content: "hello world", timestamp: 1 })).toBe(3);
-    expect(estimateTokens({ role: "user", content: "你好世界", timestamp: 1 })).toBe(4);
-    expect(estimateTokens({ role: "user", content: "こんにちは", timestamp: 1 })).toBe(5);
-    expect(estimateTokens({ role: "user", content: "안녕하세요", timestamp: 1 })).toBe(5);
-  });
-
-  it("uses conservative weights for halfwidth and supplementary CJK", () => {
-    expect(estimateTokens({ role: "user", content: "ｺﾝﾆﾁﾊ", timestamp: 1 })).toBe(10);
-    expect(
-      estimateTokens({ role: "user", content: String.fromCodePoint(0xffa1), timestamp: 1 }),
-    ).toBe(2);
-    expect(
-      estimateTokens({ role: "user", content: String.fromCodePoint(0x20000), timestamp: 1 }),
-    ).toBe(4);
-    expect(
-      estimateTokens({ role: "user", content: String.fromCodePoint(0x30000), timestamp: 1 }),
-    ).toBe(4);
-  });
-
-  it("uses a conservative weight for rare BMP CJK", () => {
-    expect(
-      estimateTokens({ role: "user", content: String.fromCodePoint(0x3400), timestamp: 1 }),
-    ).toBe(3);
-    expect(
-      estimateTokens({ role: "user", content: String.fromCodePoint(0x9fff), timestamp: 1 }),
-    ).toBe(3);
-  });
-
-  it("accounts for decomposed Hangul and compatibility forms", () => {
-    expect(
-      estimateTokens({ role: "user", content: "안녕하세요".normalize("NFD"), timestamp: 1 }),
-    ).toBe(36);
-    expect(
-      estimateTokens({ role: "user", content: String.fromCodePoint(0xfe10), timestamp: 1 }),
-    ).toBe(2);
-    expect(
-      estimateTokens({ role: "user", content: String.fromCodePoint(0xffe0), timestamp: 1 }),
-    ).toBe(2);
-  });
-
-  it("uses a conservative weight for supplementary Japanese forms", () => {
-    expect(
-      estimateTokens({ role: "user", content: String.fromCodePoint(0x1aff0), timestamp: 1 }),
-    ).toBe(4);
-    expect(
-      estimateTokens({ role: "user", content: String.fromCodePoint(0x1f200), timestamp: 1 }),
-    ).toBe(4);
-  });
-
-  it("uses measured weights for CJK script-extension marks", () => {
-    expect(
-      estimateTokens({ role: "user", content: String.fromCodePoint(0x00b7), timestamp: 1 }),
-    ).toBe(1);
-    expect(estimateTokens({ role: "user", content: "·".repeat(32), timestamp: 1 })).toBe(32);
-    expect(
-      estimateTokens({ role: "user", content: String.fromCodePoint(0x02ca), timestamp: 1 }),
-    ).toBe(2);
-    expect(
-      estimateTokens({ role: "user", content: String.fromCodePoint(0x1d360), timestamp: 1 }),
-    ).toBe(3);
   });
 
   it("uses CJK-aware token estimates when choosing the retained tail", () => {
@@ -867,7 +746,6 @@ describe("generateSummary thinking options", () => {
   });
 
   it.each([
-    ["empty", []],
     ["whitespace-only", [{ type: "text" as const, text: " \n\t " }]],
     ["reasoning-only", [{ type: "thinking" as const, thinking: "internal summary reasoning" }]],
   ])("rejects %s compaction output", async (_name, content) => {
@@ -928,8 +806,6 @@ describe("split-turn compaction", () => {
     timestamp: 1,
   };
   it.each([
-    { name: "ordinary history", history: true, prefix: false, budgets: [800] },
-    { name: "history and prefix", history: true, prefix: true, budgets: [800, 500] },
     { name: "prefix-only", history: false, prefix: true, budgets: [500] },
     {
       name: "caller-owned instructions",

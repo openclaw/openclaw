@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
+import { icons } from "../../components/icons.ts";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/tooltip.ts";
@@ -143,11 +144,11 @@ export function renderSessionDetailPanel(
         </div>
         <openclaw-tooltip .content=${t("usage.details.close")}>
           <button
-            class="btn btn--sm btn--ghost"
+            class="btn btn--sm btn--ghost session-detail-close"
             @click=${onClose}
             aria-label=${t("usage.details.close")}
           >
-            ×
+            ${icons.x}
           </button>
         </openclaw-tooltip>
       </div>

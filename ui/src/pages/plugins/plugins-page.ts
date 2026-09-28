@@ -155,10 +155,6 @@ class PluginsPage extends OpenClawLightDomElement {
   private readonly subscriptions = new SubscriptionsController(this).effect(
     () => this.context?.runtimeConfig,
     (runtimeConfig) => {
-      if (this.surface === "settings") {
-        void runtimeConfig.ensureLoaded();
-        void runtimeConfig.ensureSchemaLoaded();
-      }
       this.configAutoSaveStatus = runtimeConfig.state.configAutoSaveStatus;
       return runtimeConfig.subscribe(() => {
         const nextStatus = runtimeConfig.state.configAutoSaveStatus;
@@ -287,13 +283,9 @@ class PluginsPage extends OpenClawLightDomElement {
       this.busy = {};
     }
     if (shouldRefreshAfterChange) {
-      if (this.surface === "discovery" && !this.activeRoutePluginId) {
-        void this.discovery.ensureCategories();
-      }
       void this.refreshCatalog();
-    } else {
-      this.ensureInitialData();
     }
+    this.ensureInitialData();
   }
 
   private applyRouteData() {
@@ -415,9 +407,12 @@ class PluginsPage extends OpenClawLightDomElement {
     if (!this.routeDataConsumed || !this.gateway.connected || !this.gateway.client) {
       return;
     }
-    // Direct links and refreshes initialize Settings through the same route
-    // lifecycle as navigation; the click handler only selects the location.
-    if (this.activeRoutePluginId && this.installedDetailTab === "configuration") {
+    // A settings page can mount before connection; admit its reads through
+    // both route changes and connected snapshots, including Advanced.
+    if (
+      this.surface === "settings" ||
+      (this.activeRoutePluginId && this.installedDetailTab === "configuration")
+    ) {
       void this.context.runtimeConfig.ensureLoaded();
       void this.context.runtimeConfig.ensureSchemaLoaded();
     }
@@ -676,7 +671,10 @@ class PluginsPage extends OpenClawLightDomElement {
         removeConfig: (path) => this.settings.patch(path, undefined),
         reloadConfig: () => {
           this.pluginConfigEditPending = false;
-          void this.context.runtimeConfig.discardDraft({ reloadOnly: true });
+          const runtimeConfig = this.context.runtimeConfig;
+          void runtimeConfig
+            .discardDraft({ reloadOnly: true })
+            .then(() => runtimeConfig.ensureSchemaLoaded());
         },
         retryConfigRead: () => {
           void this.context.runtimeConfig.refresh();

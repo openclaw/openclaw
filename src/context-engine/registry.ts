@@ -49,11 +49,6 @@ import type {
 
 export type { ContextEngineFactory } from "../plugins/registry-contribution-types.js";
 
-/**
- * Runtime context passed to context engine factories during resolution.
- * Provides config and path information so plugins can initialize engines
- * without fragile workarounds.
- */
 type ContextEngineRegistrationResult = { ok: true } | { ok: false; existingOwner: string };
 
 type RegisterContextEngineForOwnerOptions = {
@@ -271,20 +266,12 @@ function wrapResolvedContextEngine(
   });
   return wrapped;
 }
-// ---------------------------------------------------------------------------
-// Registry (module-level singleton)
-// ---------------------------------------------------------------------------
-
 const CONTEXT_ENGINE_REGISTRY_STATE = Symbol.for("openclaw.contextEngineRegistryState");
 const CORE_CONTEXT_ENGINE_OWNER = "core";
 
-type ContextEngineRuntimeQuarantine = {
-  engineId: string;
-  owner?: string;
-  operation: string;
-  reason: string;
-  failedAt: Date;
-};
+type ContextEngineRuntimeQuarantine = ReturnType<
+  typeof listPersistedContextEngineQuarantines
+>[number];
 
 type ContextEngineRegistryState = {
   quarantinedEngines: Map<string, ContextEngineRuntimeQuarantine>;
@@ -499,13 +486,6 @@ async function invokeFallbackContextEngineMethod(params: {
   return fallbackResult ? { ...fallbackResult } : undefined;
 }
 
-// ---------------------------------------------------------------------------
-// Resolution
-// ---------------------------------------------------------------------------
-
-/**
- * Options for {@link resolveContextEngine}.
- */
 export type ResolveContextEngineOptions = {
   agentDir?: string;
   workspaceDir?: string;
@@ -525,19 +505,6 @@ export type LogicalTurnContextEngineResolution = {
   fallback: ResolvedContextEngineRef;
   sourceResources?: ReadonlyMap<ContextEngine, readonly ContextEngineFactoryResources[]>;
 };
-
-function resolvedContextEngineRef(params: {
-  engine: ContextEngine;
-  registeredId: string;
-  owner: string;
-}): ResolvedContextEngineRef {
-  const pluginId = pluginIdFromContextEngineOwner(params.owner);
-  return Object.freeze({
-    engine: params.engine,
-    registeredId: params.registeredId,
-    ...(pluginId ? { ownerPluginId: pluginId } : {}),
-  });
-}
 
 async function createOwnedContextEngine(
   engineId: string,
@@ -594,10 +561,12 @@ async function resolveRawContextEngineRef(
         `Available engines: ${listContextEngineIds().join(", ") || "(none)"}`,
     );
   }
-  return resolvedContextEngineRef({
-    engine: await createOwnedContextEngine(engineId, entry, factoryCtx, { source }),
+  const engine = await createOwnedContextEngine(engineId, entry, factoryCtx, { source });
+  const pluginId = pluginIdFromContextEngineOwner(entry.owner);
+  return Object.freeze({
+    engine,
     registeredId: engineId,
-    owner: entry.owner,
+    ...(pluginId ? { ownerPluginId: pluginId } : {}),
   });
 }
 

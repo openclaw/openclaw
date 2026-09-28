@@ -34,8 +34,9 @@ import {
 } from "../shared/device-bootstrap-profile.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
-import { createAuthRateLimiter } from "./auth-rate-limit.js";
+import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
 import { serializeEventPayload } from "./node-registry.js";
 import {
   connectWatchNode,
@@ -585,7 +586,9 @@ describe("watch node HTTP transport", () => {
       baseDir: abortedBaseDir,
       profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
     });
-    const abortedLimiter = createAuthRateLimiter(limiterConfig);
+    const abortedLimiter = createGatewayAuthRateLimiter(limiterConfig, {
+      scheduler: createTestGatewayScheduler(),
+    });
     try {
       const abortedRuntime = await startWatchNodeHttpRuntime(abortedBaseDir, cleanups, {
         rateLimiter: abortedLimiter,
@@ -647,7 +650,9 @@ describe("watch node HTTP transport", () => {
       baseDir: completedBaseDir,
       profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
     });
-    const completedLimiter = createAuthRateLimiter(limiterConfig);
+    const completedLimiter = createGatewayAuthRateLimiter(limiterConfig, {
+      scheduler: createTestGatewayScheduler(),
+    });
     try {
       const completedRuntime = await startWatchNodeHttpRuntime(completedBaseDir, cleanups, {
         rateLimiter: completedLimiter,
@@ -923,6 +928,9 @@ describe("watch node HTTP transport", () => {
     });
     expect(stalePollResponse.status).toBe(401);
 
+    // Keep real pairing-worker latency out of this delivery assertion.
+    const invokeNow = performance.now();
+    using _ = vi.spyOn(performance, "now").mockReturnValue(invokeNow);
     const invoke = nodeRegistry.invoke({
       nodeId: identity.deviceId,
       command: "device.info",
@@ -946,6 +954,7 @@ describe("watch node HTTP transport", () => {
       body: JSON.stringify({ id: event.payload.id, ok: true, payloadJSON: '{"model":"Watch"}' }),
     });
     expect(resultResponse.status).toBe(200);
+    await expect(readJson(resultResponse)).resolves.toEqual({ ok: true });
     await expect(invoke).resolves.toMatchObject({
       ok: true,
       payloadJSON: '{"model":"Watch"}',

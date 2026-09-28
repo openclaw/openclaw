@@ -395,19 +395,8 @@ function decodeContentFile(payload) {
   return Buffer.from(payload.content, payload.encoding ?? "base64").toString("utf8");
 }
 
-async function readJsonFileAtRef(api, { owner, repo, path, ref }) {
-  if (!ref) {
-    return null;
-  }
-  const encodedPath = path.split("/").map(encodeURIComponent).join("/");
-  const payload = await api
-    .request(`/repos/${owner}/${repo}/contents/${encodedPath}?ref=${encodeURIComponent(ref)}`)
-    .catch((error) => {
-      if (error?.status === 404) {
-        return null;
-      }
-      throw error;
-    });
+async function readJsonFileAtRef(api, options) {
+  const payload = await readContentFileMetadataAtRef(api, options);
   const text = decodeContentFile(payload);
   return text ? JSON.parse(text) : null;
 }

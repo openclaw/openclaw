@@ -49,14 +49,10 @@ async function persistAttachedScreenshot(params: {
 }
 
 function normalizeAttachedCdpUrl(raw: string): string {
-  let parsed: URL;
-  try {
-    parsed = new URL(raw);
-  } catch {
-    throw new Error("Attached Browser CDP URL must be a loopback HTTP URL with an explicit port.");
-  }
-  const port = Number(parsed.port);
+  const parsed = URL.parse(raw);
+  const port = Number(parsed?.port);
   if (
+    !parsed ||
     parsed.protocol !== "http:" ||
     parsed.hostname !== "127.0.0.1" ||
     parsed.username !== "" ||

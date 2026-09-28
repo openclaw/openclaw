@@ -1,8 +1,7 @@
-import { expectDefined } from "@openclaw/normalization-core";
 /**
  * Tests that session abort requests stay scoped to the targeted agent.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { EmbeddedAgentQueueHandle } from "../../agents/embedded-agent-runner/run-state.js";
 import {
   addSubagentRunForTests,
@@ -10,6 +9,7 @@ import {
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createWorkerInferenceCancellationService } from "../worker-environments/inference-control.test-helpers.js";
@@ -77,58 +77,13 @@ import {
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
-import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
-import { sessionAbortHandlers } from "./sessions-abort.js";
-import { sessionCompactHandlers } from "./sessions-compact.js";
-import { sessionDeleteHandlers } from "./sessions-delete.js";
-import { sessionMutationHandlers } from "./sessions-mutations.js";
-import { sessionReadHandlers } from "./sessions-read.js";
-import { sessionSubscriptionHandlers } from "./sessions-subscriptions.js";
+import { callSessions } from "./sessions.abort-agent-scope.request.test-support.js";
 import {
   createActiveRun,
   createBetaRunContext,
   createGlobalWorkRunContext,
   createContext,
 } from "./sessions.abort-agent-scope.test-support.js";
-
-function createRespond(): RespondFn {
-  return vi.fn() as unknown as RespondFn;
-}
-
-const sessionHandlers = {
-  ...sessionAbortHandlers,
-  ...sessionCompactHandlers,
-  ...sessionDeleteHandlers,
-  ...sessionMutationHandlers,
-  ...sessionReadHandlers,
-  ...sessionSubscriptionHandlers,
-};
-
-async function callSessions(
-  method: keyof typeof sessionHandlers,
-  params: Record<string, unknown>,
-  options: {
-    context: GatewayRequestContext;
-    respond?: RespondFn;
-    reqId?: string;
-    client?: GatewayClient | null;
-  },
-): Promise<RespondFn> {
-  const respond = options.respond ?? createRespond();
-  await expectDefined(
-    sessionHandlers[method],
-    "sessionHandlers[method] test invariant",
-  )({
-    req: { id: options.reqId ?? `req-${method}` } as never,
-    params,
-    respond,
-    context: options.context,
-    client: options.client ?? null,
-    isWebchatConnect: () => false,
-  });
-  await flushPendingSessionsChangedEvents(options.context);
-  return respond;
-}
 
 function expectChatAbortParams(params: Record<string, unknown>): void {
   expect(chatAbortMock).toHaveBeenCalledTimes(1);
@@ -443,20 +398,6 @@ describe("sessions.abort agent scope", () => {
     expectChatAbortParams({ sessionKey: "global", runId: "run-global", agentId: "work" });
   });
 
-  it("uses the active run agent for key and runId global aborts without agentId", async () => {
-    const activeRun = createActiveRun("global", { agentId: "work" });
-    const context = createGlobalWorkRunContext(activeRun);
-
-    await callSessions(
-      "sessions.abort",
-      { key: "global", runId: "run-global" },
-      { context, reqId: "req-global-key-run" },
-    );
-
-    expect(resolveSessionKeyForRunMock).not.toHaveBeenCalled();
-    expectChatAbortParams({ sessionKey: "global", runId: "run-global", agentId: "work" });
-  });
-
   it("emits selected global abort changes with agent scope", async () => {
     const activeRun = createActiveRun("global", { agentId: "work" });
     const broadcastToConnIds = vi.fn();
@@ -481,6 +422,8 @@ describe("sessions.abort agent scope", () => {
       { context, reqId: "req-global-abort-event" },
     );
 
+    expect(resolveSessionKeyForRunMock).not.toHaveBeenCalled();
+    expectChatAbortParams({ sessionKey: "global", runId: "run-global", agentId: "work" });
     expect(broadcastToConnIds).toHaveBeenCalledWith(
       "sessions.changed",
       expect.objectContaining({
@@ -655,8 +598,11 @@ describe("sessions.abort agent scope", () => {
     async ({ clearQueued, globalScope }) => {
       const { getOrCreateSessionMcpRuntime, unopenedMcpConfig } =
         await import("../../agents/agent-bundle-mcp-manager.test-support.js");
-      const { getSessionMcpRuntimeManagerForTesting } =
+      const { getSessionMcpRuntimeManagerForTesting, setSessionMcpRuntimeScheduler } =
         await import("../../agents/agent-bundle-mcp-manager-api.js");
+      const scheduler = createTestGatewayScheduler();
+      onTestFinished(() => scheduler.stop());
+      await setSessionMcpRuntimeScheduler(scheduler);
       const manager = getSessionMcpRuntimeManagerForTesting();
       const sessionKey = globalScope ? "global" : "agent:main:idle-mcp";
       mockChatSuccess(chatAbortMock, { ok: true, aborted: false, runIds: [] });
@@ -812,18 +758,6 @@ describe("sessions.abort agent scope", () => {
       undefined,
       undefined,
     );
-  });
-
-  it("forwards selected-agent scope for key-based global aborts", async () => {
-    const context = createContext({ globalScope: true });
-
-    await callSessions(
-      "sessions.abort",
-      { key: "global", agentId: "work" },
-      { context, reqId: "req-global-key" },
-    );
-
-    expectChatAbortParams({ sessionKey: "global", runId: undefined, agentId: "work" });
   });
 
   it("infers selected-agent global aborts from agent-prefixed aliases", async () => {
@@ -1003,22 +937,6 @@ describe("sessions.abort agent scope", () => {
 
       expectRespondErrorMessage(respond, 'Unknown agent id "typo"');
     }
-  });
-
-  it("applies agentId to legacy key-based abort aliases", async () => {
-    const context = createContext();
-
-    await callSessions(
-      "sessions.abort",
-      { key: "main", agentId: "work" },
-      { context, reqId: "req-5" },
-    );
-
-    expectChatAbortParams({
-      sessionKey: "agent:work:main",
-      runId: undefined,
-      agentId: "work",
-    });
   });
 
   it("does not use a raw legacy key alias that belongs to another agent", async () => {

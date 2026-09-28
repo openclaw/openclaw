@@ -14,7 +14,11 @@ import type {
 } from "../exec-approval-manager.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../method-scopes.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
-import { createSessionListEntryFilter, resolveSessionSharingTarget } from "../session-sharing.js";
+import {
+  createSessionListEntryFilter,
+  resolveSessionSharingTarget,
+  type canReceiveSessionEvent,
+} from "../session-sharing.js";
 import type { ApprovalRequestAuthority } from "./approval-request-authority.js";
 import type { GatewayClient, RespondFn } from "./types.js";
 
@@ -36,11 +40,14 @@ export function canAccessApprovalSession(params: {
   client: GatewayClient | null;
   sessionKey?: string | null;
   agentId?: string | null;
+  prepared?: Parameters<typeof canReceiveSessionEvent>[0]["prepared"];
 }): boolean {
   if (operatorSessionCap(params.client, params.cfg) !== "none") {
     return true;
   }
-  const visibilityFilter = createSessionListEntryFilter({ client: params.client, cfg: params.cfg });
+  const visibilityFilter = params.prepared
+    ? params.prepared.sharing.entryFilter
+    : createSessionListEntryFilter({ client: params.client, cfg: params.cfg });
   if (!visibilityFilter) {
     return true;
   }
@@ -49,11 +56,13 @@ export function canAccessApprovalSession(params: {
     return false;
   }
   const agentId = normalizeOptionalString(params.agentId);
-  const target = resolveSessionSharingTarget({
-    cfg: params.cfg,
-    sessionKey,
-    ...(agentId ? { agentId } : {}),
-  });
+  const target = params.prepared
+    ? params.prepared.target(sessionKey, agentId)
+    : resolveSessionSharingTarget({
+        cfg: params.cfg,
+        sessionKey,
+        ...(agentId ? { agentId } : {}),
+      });
   return Boolean(target && visibilityFilter(target.storeKey, target.entry));
 }
 
@@ -61,6 +70,7 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
   record: ExecApprovalRecord<TPayload>;
   client: GatewayClient | null;
   cfg?: OpenClawConfig;
+  prepared?: Parameters<typeof canAccessApprovalSession>[0]["prepared"];
 }): boolean {
   const scopes = Array.isArray(params.client?.connect?.scopes) ? params.client.connect.scopes : [];
   if (scopes.includes(ADMIN_SCOPE)) {
@@ -74,6 +84,7 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
         client: params.client,
         sessionKey: normalizeOptionalString(source?.sessionKey),
         agentId: normalizeOptionalString(source?.agentId),
+        prepared: params.prepared,
       })
     ) {
       return false;

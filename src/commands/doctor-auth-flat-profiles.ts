@@ -88,6 +88,7 @@ import {
   resumePendingAuthProfileMigrationArchives,
   type AuthProfileMigrationSourceReceipt,
 } from "./doctor-auth-migration-receipts.js";
+import { ensureConfigAuthProfiles } from "./doctor-auth-profile-config.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
   runWithAuthAliasMigrationReceipt,
@@ -116,18 +117,30 @@ function resolveMigrationTargetDatabasePath(
   return agentDir ? resolveAuthProfileDatabasePath(agentDir) : resolveSharedAuthStorePath(env);
 }
 
+function listAuthProfileMigrationTargets(
+  candidates: readonly AuthProfileRepairCandidate[],
+  env: NodeJS.ProcessEnv,
+): Map<string, string | undefined> {
+  const targets = new Map<string, string | undefined>([
+    [resolveSharedAuthStorePath(env), undefined],
+  ]);
+  for (const agentDir of [
+    resolveSharedMainAuthAgentDir(env),
+    ...candidates.flatMap((candidate) => (candidate.agentDir ? [candidate.agentDir] : [])),
+  ]) {
+    const databasePath = resolveAuthProfileDatabasePath(agentDir);
+    if (!targets.has(databasePath)) {
+      targets.set(databasePath, agentDir);
+    }
+  }
+  return targets;
+}
+
 type AwsSdkProfileMarker = {
   profileId: string;
   provider: string;
   email?: string;
   displayName?: string;
-};
-
-type AwsSdkAuthProfileMarkerStore = {
-  agentDir?: string;
-  authPath: string;
-  raw: Record<string, unknown>;
-  profiles: AwsSdkProfileMarker[];
 };
 
 class AuthProfileMigrationVerificationError extends Error {
@@ -364,7 +377,7 @@ function coerceLegacyConfigAuthProfileStore(cfg: OpenClawConfig): AuthProfileSto
       continue;
     }
     const mode = inferLegacyConfigAuthProfileMode(raw);
-    if (mode !== "api_key" && mode !== "token" && mode !== "oauth") {
+    if (!mode) {
       continue;
     }
     const provider =
@@ -903,14 +916,14 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
         unresolvedSidecarProfileIds.size > 0
           ? `Migrated ${unresolvedSidecarProfileIds.size} legacy OAuth sidecar profile${unresolvedSidecarProfileIds.size === 1 ? "" : "s"} from ${shortenHomePath(candidate.authPath)} into SQLite as configured-unavailable without credentials; re-authenticate ${unresolvedSidecarProfileIds.size === 1 ? "this profile" : "these profiles"} to restore access.`
           : undefined;
-      const awsSdkMarkerStore =
+      const awsSdkMarkers =
         isRecord(rawStore) && isRecord(rawStore.profiles)
-          ? resolveAwsSdkAuthProfileMarkerStore(candidate)
+          ? readAwsSdkAuthProfileMarkers(candidate)
           : null;
-      if (awsSdkMarkerStore && isRecord(rawStore)) {
+      if (awsSdkMarkers && isRecord(rawStore)) {
         removeAwsSdkProfileMarkers(
           rawStore,
-          awsSdkMarkerStore.profiles.map((profile) => profile.profileId),
+          awsSdkMarkers.map((profile) => profile.profileId),
         );
       }
       normalizeLegacyApiKeyAliasesForImport(rawStore);
@@ -936,7 +949,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
         !configCanonicalStore &&
         !legacyStore &&
         !hasAuthProfileState(state) &&
-        !awsSdkMarkerStore
+        !awsSdkMarkers
       ) {
         if (sourceReceipts.length > 0) {
           const archived = sourceReceipts.map((receipt) => {
@@ -1156,9 +1169,9 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
       ) {
         result.configChanged = true;
       }
-      if (awsSdkMarkerStore) {
+      if (awsSdkMarkers) {
         const configProfiles = ensureConfigAuthProfiles(params.cfg);
-        for (const marker of awsSdkMarkerStore.profiles) {
+        for (const marker of awsSdkMarkers) {
           configProfiles[marker.profileId] = {
             provider: marker.provider,
             mode: "aws-sdk",
@@ -1184,7 +1197,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
           `Migrated retired auth profile identifiers in ${shortenHomePath(candidate.authPath)}.`,
         );
       }
-      if (awsSdkMarkerStore) {
+      if (awsSdkMarkers) {
         result.changes.push(
           `Moved aws-sdk profile metadata from ${shortenHomePath(candidate.authPath)} to auth.profiles before removing the legacy auth profile JSON.`,
         );
@@ -1209,9 +1222,9 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
   return result;
 }
 
-function resolveAwsSdkAuthProfileMarkerStore(
+function readAwsSdkAuthProfileMarkers(
   candidate: AuthProfileRepairCandidate,
-): AwsSdkAuthProfileMarkerStore | null {
+): AwsSdkProfileMarker[] | null {
   if (!fs.existsSync(candidate.authPath)) {
     return null;
   }
@@ -1241,25 +1254,7 @@ function resolveAwsSdkAuthProfileMarkerStore(
         : {}),
     });
   }
-  return markers.length > 0
-    ? {
-        ...candidate,
-        raw,
-        profiles: markers,
-      }
-    : null;
-}
-
-function ensureConfigAuthProfiles(config: OpenClawConfig): Record<string, AuthProfileConfig> {
-  const root = config as Record<string, unknown>;
-  const auth = isRecord(root.auth) ? root.auth : {};
-  if (root.auth !== auth) {
-    root.auth = auth;
-  }
-  if (!isRecord(auth.profiles)) {
-    auth.profiles = {};
-  }
-  return auth.profiles as Record<string, AuthProfileConfig>;
+  return markers.length > 0 ? markers : null;
 }
 
 function removeAwsSdkProfileMarkers(raw: Record<string, unknown>, profileIds: string[]): void {
@@ -1735,35 +1730,18 @@ export function maybeRepairLegacyAuthProfileStores(params: {
 } {
   const env = params.env ?? process.env;
   const warnings: string[] = [];
-  const targets = new Map<string, string | undefined>([
-    [resolveSharedAuthStorePath(env), undefined],
-  ]);
-  const mainAgentDir = resolveSharedMainAuthAgentDir(env);
-  const mainDatabasePath = resolveAuthProfileDatabasePath(mainAgentDir);
-  if (!targets.has(mainDatabasePath)) {
-    targets.set(mainDatabasePath, mainAgentDir);
-  }
   const candidates = listAuthProfileRepairCandidates(params.cfg, env, (pathname) => {
     warnings.push(
       `Skipped auth-profile alias migration because ${shortenHomePath(pathname)} is unavailable.`,
     );
   });
-  for (const candidate of candidates) {
-    if (!candidate.agentDir) {
-      continue;
-    }
-    const databasePath = resolveAuthProfileDatabasePath(candidate.agentDir);
-    if (!targets.has(databasePath)) {
-      targets.set(databasePath, candidate.agentDir);
-    }
-  }
   const planned: Array<{
     databasePath: string;
     agentDir?: string;
     store: unknown;
     state: unknown;
   }> = [];
-  for (const [databasePath, agentDir] of targets) {
+  for (const [databasePath, agentDir] of listAuthProfileMigrationTargets(candidates, env)) {
     const store = agentDir
       ? inspectPersistedAuthProfileStoreRaw(agentDir)
       : inspectPersistedSharedAuthProfileStoreRaw(env);
@@ -2138,19 +2116,7 @@ export function collectOpenAICodexAuthProfileStoreIdMap(params: {
   };
   collectProfiles({ profiles: params.cfg.auth?.profiles ?? {}, order: params.cfg.auth?.order });
   // Legacy JSON has one shared-main import owner; relocated SQLite can also contain local main state.
-  const sqliteTargets = new Map<string, string | undefined>([
-    [resolveSharedAuthStorePath(env), undefined],
-  ]);
-  for (const agentDir of [
-    resolveSharedMainAuthAgentDir(env),
-    ...candidates.flatMap((candidate) => (candidate.agentDir ? [candidate.agentDir] : [])),
-  ]) {
-    const databasePath = resolveAuthProfileDatabasePath(agentDir);
-    if (!sqliteTargets.has(databasePath)) {
-      sqliteTargets.set(databasePath, agentDir);
-    }
-  }
-  for (const [databasePath, agentDir] of sqliteTargets) {
+  for (const [databasePath, agentDir] of listAuthProfileMigrationTargets(candidates, env)) {
     if (agentDir && inspectAuthDatabaseFiles(agentDir) === "unreadable") {
       return profileIdMap;
     }

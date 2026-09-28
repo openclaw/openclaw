@@ -1,5 +1,9 @@
 // Main job heartbeat tests cover target ordering for heartbeat delivery.
 import { describe, expect, it, vi } from "vitest";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "./service.js";
 import {
   createFinishedBarrier,
@@ -43,7 +47,9 @@ describe("cron main job passes heartbeat target=last", () => {
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
     const finished = createFinishedBarrier();
+    const clock = createGatewaySchedulerClock(Date.now());
     const cron = new CronService({
+      scheduler: createTestGatewayScheduler(clock.clock),
       storePath: params.storePath,
       cronEnabled: true,
       log: logger,
@@ -53,7 +59,7 @@ describe("cron main job passes heartbeat target=last", () => {
       onEvent: finished.onEvent,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
-    return { cron, enqueueSystemEvent, requestHeartbeat, finished };
+    return { cron, clock, enqueueSystemEvent, requestHeartbeat, finished };
   }
 
   function requireRequestHeartbeatAndWaitCall(
@@ -86,6 +92,7 @@ describe("cron main job passes heartbeat target=last", () => {
     cron: CronService,
     finished: ReturnType<typeof createFinishedBarrier>,
     jobId: string,
+    clock: ReturnType<typeof createGatewaySchedulerClock>,
   ) {
     const terminal = finished.waitForOk(jobId);
     try {
@@ -96,7 +103,7 @@ describe("cron main job passes heartbeat target=last", () => {
         if (nextRunAtMs === undefined) {
           throw new Error("expected the job to have a scheduled deadline");
         }
-        await vi.advanceTimersByTimeAsync(nextRunAtMs - Date.now());
+        await clock.advanceTo(nextRunAtMs);
       }
       await terminal;
     } finally {
@@ -121,12 +128,12 @@ describe("cron main job passes heartbeat target=last", () => {
       durationMs: 50,
     }));
 
-    const { cron, finished } = createCronWithSpies({
+    const { cron, clock, finished } = createCronWithSpies({
       storePath,
       requestHeartbeatAndWait,
     });
 
-    await runSingleTick(cron, finished, job.id);
+    await runSingleTick(cron, finished, job.id, clock);
 
     // requestHeartbeatAndWait should have been called
     expect(requestHeartbeatAndWait).toHaveBeenCalled();
@@ -156,12 +163,12 @@ describe("cron main job passes heartbeat target=last", () => {
       durationMs: 50,
     }));
 
-    const { cron, enqueueSystemEvent, requestHeartbeat, finished } = createCronWithSpies({
+    const { cron, clock, enqueueSystemEvent, requestHeartbeat, finished } = createCronWithSpies({
       storePath,
       requestHeartbeatAndWait,
     });
 
-    await runSingleTick(cron, finished, job.id);
+    await runSingleTick(cron, finished, job.id, clock);
 
     expect(requestHeartbeat).toHaveBeenCalled();
     const heartbeatRequest = requireRequestHeartbeatCall(requestHeartbeat);

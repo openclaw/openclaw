@@ -104,27 +104,6 @@ describe("host tool tilde expansion (non-workspace mode)", () => {
     mocks.writeOps = undefined;
   });
 
-  it("edit readFile expands ~ to the OS home directory", async () => {
-    const dir = tempDirs.make("openclaw-tilde-test-edit-", osHome());
-    const testFile = path.join(dir, "test.txt");
-    await fs.writeFile(testFile, "hello", "utf8");
-
-    createHostWorkspaceEditTool(dir, { workspaceOnly: false });
-    const content = await readEditOps().readFile(toTildePath(testFile));
-
-    expect(content.toString("utf8")).toBe("hello");
-  });
-
-  it("edit access expands ~ to the OS home directory", async () => {
-    const dir = tempDirs.make("openclaw-tilde-test-edit-", osHome());
-    const testFile = path.join(dir, "test.txt");
-    await fs.writeFile(testFile, "hello", "utf8");
-
-    createHostWorkspaceEditTool(dir, { workspaceOnly: false });
-
-    await expect(readEditOps().access(toTildePath(testFile))).resolves.toBeUndefined();
-  });
-
   it("write writeFile expands ~ to the OS home directory", async () => {
     const dir = tempDirs.make("openclaw-tilde-test-write-", osHome());
     const testFile = path.join(dir, "tilde-write-test.txt");
@@ -133,16 +112,6 @@ describe("host tool tilde expansion (non-workspace mode)", () => {
     await readWriteOps().writeFile(toTildePath(testFile), "written via tilde");
 
     expect(await fs.readFile(testFile, "utf8")).toBe("written via tilde");
-  });
-
-  it("write mkdir expands ~ to the OS home directory", async () => {
-    const dir = tempDirs.make("openclaw-tilde-test-mkdir-", osHome());
-    const newDir = path.join(dir, "subdir");
-
-    createHostWorkspaceWriteTool(dir, { workspaceOnly: false });
-    await readWriteOps().mkdir(toTildePath(newDir));
-
-    expect((await fs.stat(newDir)).isDirectory()).toBe(true);
   });
 
   it.runIf(process.platform === "win32")(

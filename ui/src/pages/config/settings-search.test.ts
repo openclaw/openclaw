@@ -122,23 +122,6 @@ describe("findSettingsSearchBlocks", () => {
     }
   });
 
-  it("finds the task progress disclosure preference in Chat settings", () => {
-    const matches = findSettingsSearchBlocks({
-      query: "task progress",
-      schema: null,
-      value: null,
-      uiHints: {},
-    });
-
-    expect(matches).toEqual([
-      expect.objectContaining({
-        routeId: "appearance",
-        label: "Chat",
-        hash: "#settings-appearance-chat",
-      }),
-    ]);
-  });
-
   it("uses word prefixes instead of arbitrary substrings for short queries", () => {
     const matches = findSettingsSearchBlocks({
       query: "cp",
@@ -210,34 +193,6 @@ describe("findSettingsSearchBlocks", () => {
         uiHints: {},
       }),
     ).toEqual([]);
-  });
-
-  it("matches schema sections to their owning settings page", () => {
-    const matches = findSettingsSearchBlocks({
-      query: "mcp",
-      schema: {
-        type: "object",
-        properties: {
-          mcp: {
-            type: "object",
-            properties: {
-              servers: { type: "object", title: "Servers" },
-            },
-          },
-        },
-      },
-      value: { mcp: { servers: {} } },
-      uiHints: { "mcp.servers": { advanced: false } },
-    });
-
-    expect(matches).toEqual([
-      expect.objectContaining({
-        routeId: "mcp",
-        label: "MCP",
-        search: "?section=mcp",
-        hash: "#config-section-mcp",
-      }),
-    ]);
   });
 
   it("opens every Memory schema match on the merged Settings tab", () => {
@@ -391,29 +346,6 @@ describe("findSettingsSearchBlocks", () => {
     ]);
   });
 
-  it("routes moved static blocks to their dedicated pages", () => {
-    const security = findSettingsSearchBlocks({
-      query: "exec policy",
-      schema: null,
-      value: null,
-      uiHints: {},
-    });
-    expect(security).toEqual([expect.objectContaining({ routeId: "security", label: "Security" })]);
-
-    const notifications = findSettingsSearchBlocks({
-      query: "push notifications",
-      schema: null,
-      value: null,
-      uiHints: {},
-    });
-    expect(notifications).toEqual([
-      expect.objectContaining({
-        routeId: "notifications",
-        hash: "#settings-communications-notifications",
-      }),
-    ]);
-  });
-
   it("omits admin-only static and schema results for non-admin viewers", () => {
     expect(
       findSettingsSearchBlocks({
@@ -482,38 +414,6 @@ describe("findSettingsSearchBlocks", () => {
     expect(findSettingsSearchBlocks({ query: "Plugin entries", ...common })).toEqual([]);
   });
 
-  it("maps a nested schema field to its owning settings page", () => {
-    const matches = findSettingsSearchBlocks({
-      query: "sandbox access",
-      schema: {
-        type: "object",
-        properties: {
-          tools: {
-            type: "object",
-            properties: {
-              profile: {
-                type: "string",
-                title: "Tool profile",
-                description: "Controls sandbox access",
-              },
-            },
-          },
-        },
-      },
-      value: {},
-      uiHints: { "tools.profile": { advanced: false } },
-    });
-
-    expect(matches).toEqual([
-      {
-        routeId: "ai-agents",
-        label: "Tools",
-        search: "?section=tools",
-        hash: "#config-section-tools",
-      },
-    ]);
-  });
-
   it("preserves nested schema matches for short prefix queries", () => {
     const matches = findSettingsSearchBlocks({
       query: "sa",
@@ -580,42 +480,16 @@ describe("findSettingsSearchBlocks", () => {
     ]);
   });
 
-  it("finds the active-run follow-up preference by its action", () => {
-    const matches = findSettingsSearchBlocks({
-      query: "steer",
-      schema: null,
-      value: null,
-      uiHints: {},
-    });
-
-    expect(matches).toEqual([
-      expect.objectContaining({
-        routeId: "appearance",
-        label: "Chat",
-        hash: "#settings-appearance-chat",
-      }),
-    ]);
-  });
-
   it.each([
     ["language", "Language", "#settings-language"],
-    ["locale", "Language", "#settings-language"],
     ["typography", "Typography", "#settings-appearance-typography"],
     ["font", "Typography", "#settings-appearance-typography"],
     ["typeface", "Typography", "#settings-appearance-typography"],
     ["interface", "Typography", "#settings-appearance-typography"],
     ["chat prose", "Typography", "#settings-appearance-typography"],
     ["sidebar", "Sidebar", "#settings-appearance-sidebar"],
-    ["live agent activity", "Sidebar", "#settings-appearance-sidebar"],
-    ["session observer", "Sidebar", "#settings-appearance-sidebar"],
-    ["small model", "Sidebar", "#settings-appearance-sidebar"],
     ["camera", "Chat", "#settings-appearance-chat"],
-    ["message width", "Chat", "#settings-appearance-chat"],
     ["show task progress cards", "Chat", "#settings-appearance-chat"],
-    ["centered transcript", "Chat", "#settings-appearance-chat"],
-    ["hold microphone", "Chat", "#settings-appearance-chat"],
-    ["dictate", "Chat", "#settings-appearance-chat"],
-    ["dictation", "Chat", "#settings-appearance-chat"],
   ])("finds the appearance control for %s", (query, label, hash) => {
     const matches = findSettingsSearchBlocks({
       query,
@@ -632,53 +506,6 @@ describe("findSettingsSearchBlocks", () => {
         hash,
       }),
     );
-  });
-
-  it("routes workspace queries to the sessions-hub pages", () => {
-    const matches = findSettingsSearchBlocks({
-      query: "worktree",
-      schema: null,
-      value: null,
-      uiHints: {},
-    });
-
-    expect(matches).toEqual([
-      expect.objectContaining({
-        routeId: "worktrees",
-        label: "Managed Worktrees",
-        hash: "",
-      }),
-    ]);
-  });
-
-  it("routes team secret-store searches to the dedicated page", () => {
-    const matches = findSettingsSearchBlocks({
-      query: "team store",
-      schema: null,
-      value: null,
-      uiHints: {},
-    });
-
-    expect(matches).toEqual([
-      expect.objectContaining({ routeId: "secrets", label: "Secrets", hash: "" }),
-    ]);
-  });
-
-  it("routes profile statistics searches to Usage", () => {
-    const matches = findSettingsSearchBlocks({
-      query: "usage statistics",
-      schema: null,
-      value: null,
-      uiHints: {},
-    });
-
-    expect(matches).toEqual([
-      expect.objectContaining({
-        routeId: "usage",
-        label: "Usage statistics",
-        hash: "",
-      }),
-    ]);
   });
 
   it("finds archived workspace sessions using translated filter text", async () => {

@@ -107,45 +107,16 @@ async function expectSharedOperatorScopesCleared(
   }
 }
 
-async function expectLocalBackendGatewayClientScopesPreserved(
+async function expectLocalSharedAuthScopesPreserved(
   port: number,
   auth: { token?: string; password?: string; skipDefaultAuth?: boolean },
+  client: typeof BACKEND_GATEWAY_CLIENT | typeof CLI_CLIENT,
 ) {
   const ws = await openWs(port);
   try {
     const res = await connectReq(ws, {
       ...auth,
-      client: { ...BACKEND_GATEWAY_CLIENT },
-      scopes: ["operator.admin"],
-      device: null,
-    });
-    expect(res.ok, JSON.stringify(res)).toBe(true);
-
-    const helloOk = res.payload as
-      | {
-          auth?: {
-            scopes?: unknown;
-          };
-        }
-      | undefined;
-    expect(helloOk?.auth?.scopes).toEqual(["operator.admin"]);
-
-    const adminRes = await rpcReq(ws, "set-heartbeats", { enabled: false });
-    expect(adminRes.ok).toBe(true);
-  } finally {
-    ws.close();
-  }
-}
-
-async function expectLocalCliSharedAuthScopesPreserved(
-  port: number,
-  auth: { token?: string; password?: string },
-) {
-  const ws = await openWs(port);
-  try {
-    const res = await connectReq(ws, {
-      ...auth,
-      client: { ...CLI_CLIENT },
+      client: { ...client },
       scopes: ["operator.admin"],
       device: null,
     });
@@ -202,11 +173,11 @@ describe("gateway auth compatibility baseline", () => {
     });
 
     test("preserves scopes for direct-local backend shared-token connects without device identity", async () => {
-      await expectLocalBackendGatewayClientScopesPreserved(port, { token: "secret" });
+      await expectLocalSharedAuthScopesPreserved(port, { token: "secret" }, BACKEND_GATEWAY_CLIENT);
     });
 
     test("preserves scopes for direct-local CLI shared-token connects without device identity", async () => {
-      await expectLocalCliSharedAuthScopesPreserved(port, { token: "secret" });
+      await expectLocalSharedAuthScopesPreserved(port, { token: "secret" }, CLI_CLIENT);
     });
 
     test("returns stable token-missing details for control ui without token", async () => {
@@ -430,11 +401,15 @@ describe("gateway auth compatibility baseline", () => {
     });
 
     test("preserves scopes for direct-local backend shared-password connects without device identity", async () => {
-      await expectLocalBackendGatewayClientScopesPreserved(port, { password: "secret" });
+      await expectLocalSharedAuthScopesPreserved(
+        port,
+        { password: "secret" },
+        BACKEND_GATEWAY_CLIENT,
+      );
     });
 
     test("preserves scopes for direct-local CLI shared-password connects without device identity", async () => {
-      await expectLocalCliSharedAuthScopesPreserved(port, { password: "secret" });
+      await expectLocalSharedAuthScopesPreserved(port, { password: "secret" }, CLI_CLIENT);
     });
   });
 
@@ -468,7 +443,11 @@ describe("gateway auth compatibility baseline", () => {
     });
 
     test("allows auth-none local backend connects without device identity", async () => {
-      await expectLocalBackendGatewayClientScopesPreserved(port, { skipDefaultAuth: true });
+      await expectLocalSharedAuthScopesPreserved(
+        port,
+        { skipDefaultAuth: true },
+        BACKEND_GATEWAY_CLIENT,
+      );
     });
 
     test("rejects auth-none browser-origin backend connects without device identity", async () => {

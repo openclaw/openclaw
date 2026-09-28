@@ -85,21 +85,17 @@ export function resolveCodexNativeExecutionPolicy(params: {
     requestedExecHost === "auto" ? (sandboxAvailable ? "sandbox" : "gateway") : requestedExecHost;
   const node =
     params.execOverrides?.node ?? sessionEntry?.execNode ?? agentExec?.node ?? globalExec?.node;
-  if (effectiveExecHost !== "node") {
-    return {
-      nativeToolSurfaceAllowed: true,
-      requestedExecHost,
-      effectiveExecHost,
-      node,
-    };
-  }
   return {
-    nativeToolSurfaceAllowed: false,
+    nativeToolSurfaceAllowed: effectiveExecHost !== "node",
     requestedExecHost,
     effectiveExecHost,
     node,
-    blockReason:
-      "OpenClaw exec host=node is active for this session. Codex app-server native execution cannot route shell, filesystem, MCP, or app-backed work through the selected OpenClaw node.",
+    ...(effectiveExecHost === "node"
+      ? {
+          blockReason:
+            "OpenClaw exec host=node is active for this session. Codex app-server native execution cannot route shell, filesystem, MCP, or app-backed work through the selected OpenClaw node.",
+        }
+      : {}),
   };
 }
 

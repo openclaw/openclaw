@@ -13,6 +13,14 @@ import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
 
+function runCli(args: string[]) {
+  return spawnSync(
+    process.execPath,
+    ["--import", "tsx", path.join(process.cwd(), "scripts/test-env-mutation-report.ts"), ...args],
+    { encoding: "utf8" },
+  );
+}
+
 function writeRepoFile(repoRoot: string, relativePath: string, value: string): void {
   const filePath = path.join(repoRoot, relativePath);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -121,21 +129,7 @@ describe("collectTestEnvMutationReport", () => {
 
   it("prints JSON from the CLI and exits successfully", () => {
     const repoRoot = makeEnvMutationFixture();
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        "tsx",
-        path.join(process.cwd(), "scripts/test-env-mutation-report.ts"),
-        "--",
-        "--repo-root",
-        repoRoot,
-        "--json",
-      ],
-      {
-        encoding: "utf8",
-      },
-    );
+    const result = runCli(["--", "--repo-root", repoRoot, "--json"]);
 
     expect(result.status).toBe(0);
     const report = JSON.parse(result.stdout) as TestEnvMutationReport;
@@ -144,18 +138,7 @@ describe("collectTestEnvMutationReport", () => {
   });
 
   it("prints CLI help without scanning the repository", () => {
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        "tsx",
-        path.join(process.cwd(), "scripts/test-env-mutation-report.ts"),
-        "--help",
-      ],
-      {
-        encoding: "utf8",
-      },
-    );
+    const result = runCli(["--help"]);
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("Usage:");
@@ -165,20 +148,7 @@ describe("collectTestEnvMutationReport", () => {
   });
 
   it("rejects missing or flag-shaped CLI repo roots instead of scanning zero files", () => {
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        "tsx",
-        path.join(process.cwd(), "scripts/test-env-mutation-report.ts"),
-        "--",
-        "--repo-root",
-        "--json",
-      ],
-      {
-        encoding: "utf8",
-      },
-    );
+    const result = runCli(["--", "--repo-root", "--json"]);
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("--repo-root expects a path");

@@ -532,7 +532,7 @@ export function createSessionReconciliation(host: Host) {
       const source = roster.observations.inheritRow({ ...corrected }, corrected);
       const select = roster.observations.observeFields(
         source,
-        fields,
+        rowInfo.isAncestorReference ? roster.observations.fieldNames(previousRow) : fields,
         createSessionWriteObservation(
           eventObservation.revision,
           rowInfo.updatedAt,

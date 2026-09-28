@@ -3,9 +3,6 @@ import {
   startLazyPluginServiceModule,
   type LazyPluginServiceHandle,
 } from "openclaw/plugin-sdk/plugin-runtime";
-/**
- * Browser plugin service factory that lazily starts the control server.
- */
 import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 
 type BrowserControlHandle = LazyPluginServiceHandle | null;
@@ -20,7 +17,6 @@ function validateBrowserControlOverrideSpecifier(specifier: string): string {
   return trimmed;
 }
 
-/** Creates the Browser plugin service registered by the plugin entrypoint. */
 export function createBrowserPluginService(params: {
   stopOnDemand: () => Promise<void>;
 }): OpenClawPluginService {

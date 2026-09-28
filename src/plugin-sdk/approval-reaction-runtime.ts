@@ -77,7 +77,7 @@ export type ApprovalReactionDecisionResolution = {
 /** Stored target metadata needed to convert a reaction into an approval decision. */
 export type ApprovalReactionTargetRecord<TRoute = unknown> = {
   approvalId: string;
-  /** Explicit ownership; omission is supported only by the deprecated resolver. */
+  /** Optional for legacy record shapes; typed resolution requires explicit ownership. */
   approvalKind?: ChannelApprovalKind;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
   route?: TRoute;
@@ -99,7 +99,9 @@ export function readApprovalReactionTargetRecord(
   if (
     !isRecord(target) ||
     typeof target.approvalId !== "string" ||
-    (target.approvalKind !== "exec" && target.approvalKind !== "plugin")
+    (target.approvalKind !== "exec" &&
+      target.approvalKind !== "plugin" &&
+      target.approvalKind !== "system-agent")
   ) {
     return null;
   }
@@ -197,7 +199,7 @@ function normalizeDecisionList(
 export function listApprovalReactionBindings(params: {
   allowedDecisions: readonly ExecApprovalReplyDecision[];
 }): ApprovalReactionDecisionBinding[] {
-  const allowed = new Set(normalizeDecisionList(params.allowedDecisions));
+  const allowed = new Set(params.allowedDecisions);
   return APPROVAL_REACTION_BINDINGS.filter((binding) => allowed.has(binding.decision)).map(
     (binding) => ({
       decision: binding.decision,
@@ -285,10 +287,13 @@ export function resolveApprovalReactionDecision(params: {
   return null;
 }
 
-function resolveApprovalReactionTargetInternal<TRoute>(params: {
-  target: ApprovalReactionTargetRecord<TRoute> | null | undefined;
+/** Resolve an explicitly typed target without deriving ownership from its id. */
+export function resolveTypedApprovalReactionTarget<TRoute = unknown>(params: {
+  target:
+    | (ApprovalReactionTargetRecord<TRoute> & { approvalKind: ChannelApprovalKind })
+    | null
+    | undefined;
   reactionKey: string;
-  allowLegacyKindInference: boolean;
 }): ApprovalReactionTargetResolution<TRoute> | null {
   const target = params.target;
   if (!target) {
@@ -301,53 +306,25 @@ function resolveApprovalReactionTargetInternal<TRoute>(params: {
   if (!decision) {
     return null;
   }
-  // Typed targets already carry canonical protocol identity. Preserve it byte-for-byte;
-  // only the shipped ownerless path retains its historical trimming behavior.
-  const approvalId = params.allowLegacyKindInference ? target.approvalId.trim() : target.approvalId;
+  const approvalId = target.approvalId;
   const approvalKind = target.approvalKind;
   if (!approvalId) {
     return null;
   }
-  const resolvedKind =
-    approvalKind === "exec" || approvalKind === "plugin"
-      ? approvalKind
-      : params.allowLegacyKindInference
-        ? approvalId.startsWith("plugin:")
-          ? "plugin"
-          : "exec"
-        : null;
-  if (!resolvedKind) {
+  if (approvalKind !== "exec" && approvalKind !== "plugin" && approvalKind !== "system-agent") {
     return null;
   }
   return {
     approvalId,
-    approvalKind: resolvedKind,
+    approvalKind,
     decision: decision.decision,
     normalizedEmoji: decision.normalizedEmoji,
     ...(target.route === undefined ? {} : { route: target.route }),
   };
 }
 
-/** Resolve an explicitly typed target without deriving ownership from its id. */
-export function resolveTypedApprovalReactionTarget<TRoute = unknown>(params: {
-  target:
-    | (ApprovalReactionTargetRecord<TRoute> & { approvalKind: ChannelApprovalKind })
-    | null
-    | undefined;
-  reactionKey: string;
-}): ApprovalReactionTargetResolution<TRoute> | null {
-  return resolveApprovalReactionTargetInternal({
-    ...params,
-    allowLegacyKindInference: false,
-  });
-}
-
 function formatSeverity(value: "info" | "warning" | "critical"): string {
   return value === "critical" ? "Critical" : value === "info" ? "Info" : "Warning";
-}
-
-function buildDecisionText(allowedDecisions: readonly ExecApprovalReplyDecision[]): string {
-  return allowedDecisions.join("|");
 }
 
 function buildManualInstructionSection(params: {
@@ -364,9 +341,7 @@ function buildManualInstructionSection(params: {
     );
   }
   if (params.allowedDecisions.length > 0) {
-    lines.push(
-      `Reply with: /approve ${params.approvalId} ${buildDecisionText(params.allowedDecisions)}`,
-    );
+    lines.push(`Reply with: /approve ${params.approvalId} ${params.allowedDecisions.join("|")}`);
   }
   return lines;
 }

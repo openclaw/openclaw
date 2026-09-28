@@ -1,7 +1,3 @@
-/**
- * Browser doctor checks for Chrome MCP readiness and legacy managed-profile
- * residue cleanup.
- */
 import fs from "node:fs";
 import path from "node:path";
 import { formatCliCommand, note } from "openclaw/plugin-sdk/cli-runtime";
@@ -33,7 +29,6 @@ type ExistingSessionProfile = {
   userDataDir?: string;
 };
 
-/** Legacy managed clawd profile paths that can be archived by doctor --fix. */
 export type LegacyClawdBrowserProfileResidue = {
   legacyProfileDir: string;
   legacyUserDataDir: string;
@@ -105,7 +100,6 @@ function isLegacyClawdProfileConfigured(cfg: OpenClawConfig, legacyProfileDir: s
   return false;
 }
 
-/** Detects unmanaged legacy clawd browser profile residue on disk. */
 export function detectLegacyClawdBrowserProfileResidue(
   cfg: OpenClawConfig,
   deps?: BrowserDoctorFilesystemDeps,
@@ -157,7 +151,6 @@ function formatLegacyClawdBrowserProfileResidueNote(
   ].join("\n");
 }
 
-/** Emits Browser doctor notes for Chrome MCP, managed Chrome, and legacy residue readiness. */
 export async function noteChromeMcpBrowserReadiness(
   cfg: OpenClawConfig,
   deps?: {
@@ -359,7 +352,6 @@ export async function maybeRepairOwnedChromeExtensionNativeHosts(): Promise<{
   };
 }
 
-/** Archives legacy clawd browser profile residue when doctor --fix is requested. */
 export async function maybeArchiveLegacyClawdBrowserProfileResidue(
   cfg: OpenClawConfig,
   deps?: BrowserDoctorFilesystemDeps,

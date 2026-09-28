@@ -1,19 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../../infra/kysely-sync.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import {
   appendSkillProposalEvent,
   readStoredSkillProposalEventInDatabase,
   type NewSkillProposalEvent,
 } from "./store-sqlite-event.js";
-import {
-  parseSkillProposalRow,
-  readStoredProposalInDatabase,
-  updateProposal,
-} from "./store-sqlite-record.js";
+import { readStoredProposalInDatabase, updateProposal } from "./store-sqlite-record.js";
 import type { SkillWorkshopDatabase } from "./store-sqlite-schema.js";
 import type { SkillProposalEvent, SkillProposalRecord } from "./types.js";
 
@@ -38,23 +30,15 @@ export function commitPendingSkillProposalTransitionInDatabase(
   params: CommitPendingSkillProposalTransitionInput,
 ): PendingSkillProposalTransitionCommit {
   const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(db);
-  const current = executeSqliteQueryTakeFirstSync(
-    db,
-    kysely
-      .selectFrom("skill_workshop_proposals")
-      .selectAll()
-      .where("proposal_id", "=", params.expected.id),
-  );
-  const currentRecord = current ? parseSkillProposalRow(current) : null;
+  const current = readStoredProposalInDatabase(db, params.expected.id);
   if (
     !current ||
-    !currentRecord ||
-    currentRecord.status !== "pending" ||
-    current.record_json !== JSON.stringify(params.expected)
+    current.record.status !== "pending" ||
+    current.row.record_json !== JSON.stringify(params.expected)
   ) {
     return {
       state: "conflict" as const,
-      ...(currentRecord ? { current: currentRecord } : {}),
+      ...(current ? { current: current.record } : {}),
     };
   }
   if (params.invalidateRollback) {
@@ -65,7 +49,7 @@ export function commitPendingSkillProposalTransitionInDatabase(
         .where("proposal_id", "=", params.expected.id),
     );
   }
-  updateProposal(db, current, params.record);
+  updateProposal(db, current.row, params.record);
   return {
     state: "committed" as const,
     event: appendSkillProposalEvent(db, params.event),

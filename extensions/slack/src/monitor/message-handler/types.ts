@@ -1,4 +1,5 @@
 import type { MessageMetadata } from "@slack/types";
+import type { InboundReplyRecordOptions } from "openclaw/plugin-sdk/channel-inbound";
 import type { FinalizedMsgContext, GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { ResolvedSlackAccount } from "../../accounts.js";
@@ -7,6 +8,15 @@ import type { SlackMessageEvent } from "../../types.js";
 import type { SlackChannelConfigResolved } from "../channel-config.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackEventScope } from "../event-scope.js";
+
+export type SlackMessageSourceOptions = {
+  source: "message" | "app_mention";
+  wasMentioned?: boolean;
+  relayIdentity?: SlackSendIdentity;
+  senderAuthentication?: "verified" | "asserted";
+  /** Non-serializable listener scope for a validated enterprise event. */
+  eventScope?: SlackEventScope;
+};
 
 export type PreparedSlackMessage = {
   ctx: SlackMonitorContext;
@@ -21,7 +31,7 @@ export type PreparedSlackMessage = {
   ctxPayload: FinalizedMsgContext;
   turn: {
     storePath: string;
-    record: unknown;
+    record: InboundReplyRecordOptions;
   };
   replyToMode: "off" | "first" | "all" | "batched";
   forcedReplyThreadTs?: string;

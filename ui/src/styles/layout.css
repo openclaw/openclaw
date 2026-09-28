@@ -120,7 +120,7 @@
    native macOS hosts without the full strip, they sit below the drag region. */
 .shell-chrome-controls {
   position: fixed;
-  top: 10px;
+  top: calc((var(--rail-header-height) - var(--shell-chrome-control-size)) / 2);
   left: calc(var(--shell-nav-width) + var(--shell-chrome-controls-inset));
   z-index: 45;
   display: flex;
@@ -1129,9 +1129,6 @@ openclaw-settings-save-indicator:empty {
   flex-direction: column;
   min-height: 0;
   flex: 1;
-  /* 9px top pad centers the brand row's 30px icons on the app's shared
-     24px chrome centerline (pane-header actions, floating toggles). The
-     macOS app overrides this with its 50px titlebar clearance. */
   padding: 9px var(--sidebar-pad-x) var(--sidebar-pad-bottom);
   border: none;
   border-radius: 0;
@@ -1148,6 +1145,20 @@ openclaw-settings-save-indicator:empty {
   min-height: 34px;
   padding: 0 2px 10px 0;
   flex-shrink: 0;
+}
+
+/* Desktop web shares the pane centerline. Drawers and native windows keep
+   the identity row below their own chrome and retain its separate clearance. */
+:where(html:not(.openclaw-native-macos, .openclaw-native-desktop)) .shell:not(.shell--mobile-nav) {
+  .sidebar-shell {
+    padding-top: 0;
+  }
+
+  .sidebar-brand {
+    min-height: var(--rail-header-height);
+    padding-bottom: 0;
+    margin-bottom: 9px;
+  }
 }
 
 .sidebar-brand__actions {
@@ -1234,6 +1245,13 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-shell__body {
+  /* Ease row backgrounds to clear before the clip instead of leaving an edge. */
+  --sidebar-fade-in:
+    transparent 2px, rgb(0 0 0 / 12%) 8px, rgb(0 0 0 / 50%) 16px, rgb(0 0 0 / 88%) 24px, black 32px;
+  --sidebar-fade-out:
+    black calc(100% - 32px), rgb(0 0 0 / 88%) calc(100% - 24px), rgb(0 0 0 / 50%) calc(100% - 16px),
+    rgb(0 0 0 / 12%) calc(100% - 8px), transparent calc(100% - 2px);
+
   min-height: 0;
   flex: 1;
   display: flex;
@@ -1490,26 +1508,15 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-shell__body--scroll-top {
-  --sidebar-body-mask: linear-gradient(
-    to bottom,
-    black 0,
-    black calc(100% - 23px),
-    transparent 100%
-  );
+  --sidebar-body-mask: linear-gradient(to bottom, var(--sidebar-fade-out));
 }
 
 .sidebar-shell__body--scroll-middle {
-  --sidebar-body-mask: linear-gradient(
-    to bottom,
-    transparent 0,
-    black 23px,
-    black calc(100% - 23px),
-    transparent 100%
-  );
+  --sidebar-body-mask: linear-gradient(to bottom, var(--sidebar-fade-in), var(--sidebar-fade-out));
 }
 
 .sidebar-shell__body--scroll-bottom {
-  --sidebar-body-mask: linear-gradient(to bottom, transparent 0, black 23px, black 100%);
+  --sidebar-body-mask: linear-gradient(to bottom, var(--sidebar-fade-in));
 }
 
 .sidebar-shell__body--scroll-top,
@@ -1743,7 +1750,11 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-session-group-presence--idle {
-  opacity: 0.45;
+  background: var(--warn);
+}
+
+.sidebar-session-group-presence--unknown {
+  background: var(--muted);
 }
 
 .sidebar-session-catalog-load-more {
@@ -2577,8 +2588,22 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-online__person--away {
-  filter: grayscale(0.8);
-  opacity: 0.45;
+  color: var(--muted);
+}
+
+.sidebar-online__person-status {
+  flex: none;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: calc(11px * var(--control-ui-text-scale));
+}
+
+.sidebar-online__person[data-presence-activity="active"] .sidebar-online__person-status {
+  color: var(--ok);
+}
+
+.sidebar-online__person[data-presence-activity="idle"] .sidebar-online__person-status {
+  color: var(--warn);
 }
 
 .sidebar-online__person .viewer-avatar {
@@ -2600,7 +2625,6 @@ openclaw-settings-save-indicator:empty {
   align-items: center;
   justify-content: center;
   flex: none;
-  margin-left: auto;
   color: var(--muted);
   opacity: 0;
   transition: opacity var(--duration-fast) ease;
@@ -4565,7 +4589,17 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   gap: 0;
 }
 
-.content:has(.plugin-tab-embed) > * + * {
+/* Name the children: a universal subject under this :has() restyles the whole
+   document on every insertion inside .content, including each chat row. */
+.content:has(.plugin-tab-embed)
+  > :is(
+    .connection-action-block,
+    openclaw-sidebar-attention,
+    openclaw-sidebar-update-card,
+    .native-embed-header,
+    .settings-embed-list,
+    openclaw-router-outlet
+  ) {
   margin-top: 0;
 }
 
@@ -4604,8 +4638,8 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
    window title, trailing actions at the right edge, intro text below. The
    row matches the Mac app titlebar (52px injected by DashboardWindowController;
    50px mirrors .macos-titlebar-controls for older builds) so the traffic lights
-   and hosted buttons share its centerline; the collapsed-sidebar web cluster in
-   browsers (top: 10px, 32px buttons) lands on the same centerline. The side
+   and hosted buttons share its centerline; browser rows use the shared rail
+   height below to align with sidebar and collapsed-navigation controls. The side
    columns reserve that cluster on the left and the trailing cell on the right,
    so the centered cell stays exact at normal widths and merely shifts, never
    overlaps, in narrow columns. Older Mac builds drop the web cluster below the
@@ -4680,6 +4714,12 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
       gap: 10px;
     }
   }
+}
+
+:where(html:not(.openclaw-native-macos, .openclaw-native-desktop))
+  .shell:not(.shell--mobile-nav):not(.shell--settings)
+  .content:not(.content--chat) {
+  --page-toolbar-height: var(--rail-header-height);
 }
 
 html.openclaw-native-macos

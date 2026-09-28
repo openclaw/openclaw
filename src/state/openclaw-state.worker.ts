@@ -5,6 +5,11 @@ import {
 import { assertNoActiveSqliteReaders } from "../infra/sqlite-reader-lifecycle.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
 import { SQLITE_WORKER_PREPARE_COMMAND } from "../infra/sqlite-worker-contract.js";
+import {
+  assertExistingDatabaseIdentity,
+  readDatabasePathIdentitySync,
+} from "../infra/sqlite-worker-identity.js";
+import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import {
   isPluginStateWorkerCommand,
@@ -37,6 +42,9 @@ const loadPluginState = createLazyRuntimeModule(
   () => import("../plugin-state/plugin-state.worker.js"),
 );
 let pluginState: typeof import("../plugin-state/plugin-state.worker.js") | undefined;
+
+const loadCapture = createLazyRuntimeModule(() => import("../proxy-capture/store.worker.js"));
+let capture: typeof import("../proxy-capture/store.worker.js") | undefined;
 
 const loadRuntime = createLazyRuntimeModule(() => import("./openclaw-state-worker-runtime.js"));
 let runtime: typeof import("./openclaw-state-worker-runtime.js") | undefined;
@@ -77,10 +85,21 @@ function createSharedStateWorkerBackend(
   initialDatabase?: OpenClawStateDatabase,
 ): OpenClawStateWorkerBackend {
   let nativeDatabase = initialDatabase;
+  const existingIdentity = initialDatabase
+    ? undefined
+    : readDatabasePathIdentitySync(context.databasePath);
   let borrow = nativeDatabase ? retainOpenClawStateDatabase(nativeDatabase) : undefined;
   let closed = false;
+  const assertOpening = () => {
+    if (!nativeDatabase && existingIdentity) {
+      // An artifact-preserving actor can outlive its original pathname before
+      // its first writable open. Never recreate or adopt a replacement file.
+      assertExistingDatabaseIdentity(context.databasePath, existingIdentity.key);
+    }
+  };
   const open = (): OpenClawStateDatabase => {
     if (!nativeDatabase) {
+      assertOpening();
       const opened = openOpenClawStateDatabase({
         path: context.databasePath,
         env: stateDatabaseInitializationEnvironment(),
@@ -104,6 +123,14 @@ function createSharedStateWorkerBackend(
   };
   return {
     [SQLITE_WORKER_PREPARE_COMMAND](commandType) {
+      if (commandType.startsWith("capture.")) {
+        if (capture) {
+          return undefined;
+        }
+        return loadCapture().then((loaded) => {
+          capture = loaded;
+        });
+      }
       if (commandType === "agentDatabases.releaseExitedLease") {
         if (agentCleanup) {
           return undefined;
@@ -123,6 +150,7 @@ function createSharedStateWorkerBackend(
       if (
         commandType === "plugins.metadata.read" ||
         commandType === "database.inspectIdle" ||
+        commandType === "database.walMaintenance" ||
         commandType === "stateLease.acquire" ||
         commandType === "deviceIdentity.read" ||
         commandType === "deviceIdentity.load" ||
@@ -144,6 +172,25 @@ function createSharedStateWorkerBackend(
       if (closed) {
         throw new Error("Shared-state worker is closed");
       }
+      if (
+        command.type === "capture.upsertSession" ||
+        command.type === "capture.endSession" ||
+        command.type === "capture.persistPayload" ||
+        command.type === "capture.recordEvent" ||
+        command.type === "capture.recordEventWithPayload" ||
+        command.type === "capture.listSessions" ||
+        command.type === "capture.getSessionEvents" ||
+        command.type === "capture.summarizeSessionCoverage" ||
+        command.type === "capture.readBlob" ||
+        command.type === "capture.queryPreset" ||
+        command.type === "capture.deleteSessions" ||
+        command.type === "capture.purgeAll"
+      ) {
+        if (!capture) {
+          throw new Error("Capture worker command runtime is not prepared");
+        }
+        return capture.executeCaptureCommand(command, open());
+      }
       if (command.type === "deviceIdentity.read") {
         return loadDeviceIdentityIfPresent({
           path: context.databasePath,
@@ -152,6 +199,7 @@ function createSharedStateWorkerBackend(
         });
       }
       if (command.type === "deviceIdentity.load") {
+        assertOpening();
         try {
           return loadOrCreateDeviceIdentity({
             path: context.databasePath,
@@ -180,6 +228,9 @@ function createSharedStateWorkerBackend(
         );
       }
       if (command.type === "stateLease.acquire") {
+        if (command.input.schemaPolicy === "existing") {
+          assertOpening();
+        }
         return acquireOpenClawStateLeaseInWorker(command.input, context.databasePath, open);
       }
       if (
@@ -194,6 +245,13 @@ function createSharedStateWorkerBackend(
           command.input.selector,
           { path: context.databasePath, env: getSqliteWorkerStateContext().environment },
           command.input.artifactPreservingReadOnly,
+        );
+      }
+      if (command.type === "database.walMaintenance") {
+        return (
+          open().walMaintenance.maintainPeriodic?.(command.input, (stage) => {
+            requestSqliteWorkerOperationAdmission({ stage, facts: undefined });
+          }) ?? { reclaimedPages: 0 }
         );
       }
       if (command.type === "database.inspectIdle") {

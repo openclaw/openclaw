@@ -136,6 +136,8 @@ describe("prepareBundledPluginRuntime", () => {
           readInstalledPluginOverview({
             rootDir: path.join(runtimeRoot, "extensions/demo"),
             origin: "bundled",
+            providers: [],
+            channels: [],
           }),
         )?.readme,
       ).toBe("# Candidate plugin\n");

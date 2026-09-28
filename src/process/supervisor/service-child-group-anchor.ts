@@ -547,16 +547,13 @@ export function runServiceChildGroupAnchor(): void {
     });
   };
 
-  process.on("SIGTERM", () => {
+  const onParentSignal = () => {
     if (state === "active" || (start && state === "starting")) {
       void requestCleanup("parent-lost");
     }
-  });
-  process.on("SIGINT", () => {
-    if (state === "active" || (start && state === "starting")) {
-      void requestCleanup("parent-lost");
-    }
-  });
+  };
+  process.on("SIGTERM", onParentSignal);
+  process.on("SIGINT", onParentSignal);
   process.once("disconnect", () => {
     retirementReady.resolve(false);
     if (state !== "closed") {

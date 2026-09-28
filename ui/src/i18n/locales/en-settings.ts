@@ -639,6 +639,8 @@ const enSettings = {
       noProviders: "No providers are available to connect.",
       discover: "On this Gateway",
       description: "Save credentials for this agent. Choose the active model separately.",
+      setupDescription:
+        "Choose how to connect. Verifying an API key or token can also set this agent's active model.",
       done: "Provider credentials saved.",
       missingSelection:
         "The account selected for {model} is no longer available. Connect or choose an account to use with this model.",
@@ -867,7 +869,7 @@ const enSettings = {
       controlUiCommit: "Control UI commit",
       builtAt: "Built",
       installedAt: "Installed",
-      installedAtUnknown: "Unknown · recorded after the next successful update",
+      installedAtUnknown: "Unknown",
       lastCommitAt: "Last commit",
       installKind: "Install type",
       policyTitle: "Update policy",
@@ -1320,7 +1322,6 @@ const enSettings = {
       agentQuestion: "Agent question",
       humanMentioned: "Someone mentions me",
       scheduledTaskFailed: "Scheduled task failed",
-      backgroundTaskFailed: "Background task failed",
       lockScreenDetail: "Lock-screen detail",
       lockScreenDetailHint: "Private hides names; detailed content is sanitized.",
       private: "Private",

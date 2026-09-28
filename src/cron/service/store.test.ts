@@ -6,6 +6,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
 import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
@@ -15,6 +16,7 @@ import {
   finishCronRunReceipt,
   prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.js";
+import { prepareCronRunReceiptWriteSchema } from "../store/run-receipt-write-admission.js";
 import type { CronJob } from "../types.js";
 import { findJobOrThrow } from "./jobs-scheduling.js";
 import { cronNotificationJob, type CronNotificationIntent } from "./notification-intents.js";
@@ -45,6 +47,7 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 
 function createStoreTestState(storePath: string, onEvent = vi.fn()) {
   return createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
     storePath,
     cronEnabled: true,
     log: logger,
@@ -763,6 +766,7 @@ describe("cron service store seam coverage", () => {
     const receipt = runOpenClawStateWriteTransaction(({ db }) =>
       claimCronRunReceiptInDatabase({
         database: db,
+        receiptSchema: prepareCronRunReceiptWriteSchema(db),
         prepared,
         resolveAgentId: (current) => current.agentId!,
       }),

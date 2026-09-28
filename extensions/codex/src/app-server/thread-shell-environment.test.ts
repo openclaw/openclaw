@@ -12,6 +12,22 @@ import {
   mergeCodexNativeShellEnvironment,
 } from "./thread-shell-environment.js";
 
+function buildRequestConfig(
+  action: "start" | "resume",
+  options: Pick<
+    Parameters<typeof buildThreadStartParams>[1],
+    "config" | "shellEnvironment" | "disableLoginShell" | "shellPathPrepend"
+  >,
+) {
+  const shared = { appServer: createAppServerOptions(), ...options };
+  const params = createAttemptParams({ provider: "openai" });
+  return (
+    action === "start"
+      ? buildThreadStartParams(params, { ...shared, cwd: "/repo", dynamicTools: [] })
+      : buildThreadResumeParams(params, { ...shared, threadId: "thread-1" })
+  ).config;
+}
+
 describe("Codex managed shell environment", () => {
   it("omits native absent policy fields instead of sending null TOML overrides", () => {
     expect(
@@ -27,24 +43,21 @@ describe("Codex managed shell environment", () => {
     ).toEqual({ shell_environment_policy: { set: { PATH: "" } } });
   });
 
-  it.each(["/native/bin", ""])(
-    "respects platform PATH casing for native value %s",
-    (nativePath) => {
-      const result = applyCodexManagedShellEnvironment(
-        { shell_environment_policy: { set: { PATH: nativePath } } },
-        { Path: ["/tools", "/gateway/bin"].join(path.delimiter) },
-        true,
-        ["/tools"],
-      );
-      const merged = ["/tools", ...(nativePath ? [nativePath] : [])].join(path.delimiter);
-      expect(result.shell_environment_policy).toMatchObject({
-        set:
-          process.platform === "win32"
-            ? { PATH: merged, Path: merged }
-            : { PATH: nativePath, Path: ["/tools", "/gateway/bin"].join(path.delimiter) },
-      });
-    },
-  );
+  it("respects platform PATH casing", () => {
+    const result = applyCodexManagedShellEnvironment(
+      { shell_environment_policy: { set: { PATH: "/native/bin" } } },
+      { Path: ["/tools", "/gateway/bin"].join(path.delimiter) },
+      true,
+      ["/tools"],
+    );
+    const merged = ["/tools", "/native/bin"].join(path.delimiter);
+    expect(result.shell_environment_policy).toMatchObject({
+      set:
+        process.platform === "win32"
+          ? { PATH: merged, Path: merged }
+          : { PATH: "/native/bin", Path: ["/tools", "/gateway/bin"].join(path.delimiter) },
+    });
+  });
 
   it.each([
     { label: "native", nativePath: "/native/bin", expected: "/native/bin" },
@@ -114,7 +127,6 @@ describe("Codex managed shell environment", () => {
     "applies the host environment last for thread/$action with inherit=$inherit",
     ({ action, inherit }) => {
       const options = {
-        appServer: createAppServerOptions() as never,
         config: {
           allow_login_shell: true,
           shell_environment_policy: {
@@ -138,19 +150,9 @@ describe("Codex managed shell environment", () => {
         disableLoginShell: true,
         shellPathPrepend: ["/host-tools"],
       };
-      const request =
-        action === "start"
-          ? buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
-              ...options,
-              cwd: "/repo",
-              dynamicTools: [],
-            })
-          : buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
-              ...options,
-              threadId: "thread-1",
-            });
+      const config = buildRequestConfig(action, options);
 
-      const shellEnvironmentPolicy = request.config?.shell_environment_policy;
+      const shellEnvironmentPolicy = config?.shell_environment_policy;
       if (!isJsonObject(shellEnvironmentPolicy)) {
         throw new Error("expected shell environment policy");
       }
@@ -170,7 +172,7 @@ describe("Codex managed shell environment", () => {
           OPENCLAW_WORKSPACE_DIR: "/fixture/default-workspace",
         },
       });
-      expect(request.config?.allow_login_shell).toBe(false);
+      expect(config?.allow_login_shell).toBe(false);
       const includeOnly = shellEnvironmentPolicy.include_only;
       expect(includeOnly).toHaveLength(8);
       expect(includeOnly).toEqual(
@@ -190,104 +192,66 @@ describe("Codex managed shell environment", () => {
     },
   );
 
-  it.each(["start", "resume"] as const)(
-    "disables login profiles only for protected thread/%s environments",
-    (action) => {
-      const build = (
-        config: JsonObject,
-        shellEnvironment?: Readonly<Record<string, string>>,
-        disableLoginShell?: boolean,
-      ) => {
-        const options = {
-          appServer: createAppServerOptions() as never,
-          config,
-          shellEnvironment,
-          disableLoginShell,
-        };
-        return action === "start"
-          ? buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
-              ...options,
-              cwd: "/repo",
-              dynamicTools: [],
-            })
-          : buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
-              ...options,
-              threadId: "thread-1",
-            });
-      };
+  it("disables login profiles only for protected environments", () => {
+    const build = (
+      config: JsonObject,
+      shellEnvironment?: Readonly<Record<string, string>>,
+      disableLoginShell?: boolean,
+    ) => buildRequestConfig("resume", { config, shellEnvironment, disableLoginShell });
 
-      expect(build({ allow_login_shell: true }).config?.allow_login_shell).toBe(true);
-      expect(build({}).config).not.toHaveProperty("allow_login_shell");
-      expect(build({}, { GH_TOKEN: "", GITHUB_TOKEN: "" }).config).not.toHaveProperty(
-        "allow_login_shell",
-      );
-      expect(build({}, { GH_TOKEN: "", GITHUB_TOKEN: "" }, true).config?.allow_login_shell).toBe(
-        false,
-      );
-    },
-  );
+    expect(build({ allow_login_shell: true })?.allow_login_shell).toBe(true);
+    expect(build({})).not.toHaveProperty("allow_login_shell");
+    expect(build({}, { GH_TOKEN: "", GITHUB_TOKEN: "" })).not.toHaveProperty("allow_login_shell");
+    expect(build({}, { GH_TOKEN: "", GITHUB_TOKEN: "" }, true)?.allow_login_shell).toBe(false);
+  });
 
-  it.each(["start", "resume"] as const)(
-    "admits host values through case-insensitive restrictive filters for thread/%s",
-    (action) => {
-      const options = {
-        appServer: createAppServerOptions() as never,
-        config: {
-          allow_login_shell: false,
-          shell_environment_policy: {
-            experimental_use_profile: true,
-            filters: {
-              KEEP_ME: "include",
-              path: "exclude",
-              gh_token: "exclude",
-              "GIT_*": "exclude",
-            },
-            set: { KEEP_ME: "yes" },
+  it("admits host values through case-insensitive restrictive filters", () => {
+    const options = {
+      config: {
+        allow_login_shell: false,
+        shell_environment_policy: {
+          experimental_use_profile: true,
+          filters: {
+            KEEP_ME: "include",
+            path: "exclude",
+            gh_token: "exclude",
+            "GIT_*": "exclude",
           },
+          set: { KEEP_ME: "yes" },
         },
-        shellEnvironment: {
-          PATH: "/host-tools:/usr/bin",
-          Path: "/host-tools:/usr/bin",
-          GH_CONFIG_DIR: "/host-selected",
-          GH_TOKEN: "",
-          PREVIEW_SERVICE_TOKEN: "",
-        },
-        disableLoginShell: true,
-      };
-      const request =
-        action === "start"
-          ? buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
-              ...options,
-              cwd: "/repo",
-              dynamicTools: [],
-            })
-          : buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
-              ...options,
-              threadId: "thread-1",
-            });
+      },
+      shellEnvironment: {
+        PATH: "/host-tools:/usr/bin",
+        Path: "/host-tools:/usr/bin",
+        GH_CONFIG_DIR: "/host-selected",
+        GH_TOKEN: "",
+        PREVIEW_SERVICE_TOKEN: "",
+      },
+      disableLoginShell: true,
+    };
+    const config = buildRequestConfig("start", options);
 
-      expect(request.config?.shell_environment_policy).toMatchObject({
-        experimental_use_profile: false,
-        set: {
-          KEEP_ME: "yes",
-          PATH: "/host-tools:/usr/bin",
-          Path: "/host-tools:/usr/bin",
-          GH_CONFIG_DIR: "/host-selected",
-          GH_TOKEN: "",
-          PREVIEW_SERVICE_TOKEN: "",
-        },
-        filters: {
-          KEEP_ME: "include",
-          "GIT_*": "exclude",
-          path: "include",
-          gh_config_dir: "include",
-          gh_token: "include",
-          preview_service_token: "include",
-        },
-      });
-      const policy = request.config?.shell_environment_policy;
-      expect(isJsonObject(policy) && Object.keys(policy.filters ?? {})).toHaveLength(6);
-      expect(request.config?.shell_environment_policy).not.toHaveProperty("include_only");
-    },
-  );
+    expect(config?.shell_environment_policy).toMatchObject({
+      experimental_use_profile: false,
+      set: {
+        KEEP_ME: "yes",
+        PATH: "/host-tools:/usr/bin",
+        Path: "/host-tools:/usr/bin",
+        GH_CONFIG_DIR: "/host-selected",
+        GH_TOKEN: "",
+        PREVIEW_SERVICE_TOKEN: "",
+      },
+      filters: {
+        KEEP_ME: "include",
+        "GIT_*": "exclude",
+        path: "include",
+        gh_config_dir: "include",
+        gh_token: "include",
+        preview_service_token: "include",
+      },
+    });
+    const policy = config?.shell_environment_policy;
+    expect(isJsonObject(policy) && Object.keys(policy.filters ?? {})).toHaveLength(6);
+    expect(config?.shell_environment_policy).not.toHaveProperty("include_only");
+  });
 });

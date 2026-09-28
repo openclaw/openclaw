@@ -12,11 +12,10 @@ import {
   writeSkillProposalRollback,
   readSkillProposalRollback,
 } from "../skills/workshop/store-rollback.js";
-import { hashSkillProposalContent, importLegacySkillProposal } from "../skills/workshop/store.js";
+import { importLegacySkillProposal } from "../skills/workshop/store.js";
 import * as workshopStore from "../skills/workshop/store.js";
 import {
   SKILL_WORKSHOP_ROLLBACK_SCHEMA,
-  SKILL_WORKSHOP_SCHEMA,
   type SkillProposalRecord,
   type SkillProposalRollback,
 } from "../skills/workshop/types.js";
@@ -709,37 +708,21 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
     const targetDir = path.join(workspaceDir, "skills", "missing-draft");
     const now = "2026-08-29T00:00:00.000Z";
     const record: SkillProposalRecord = {
-      schema: SKILL_WORKSHOP_SCHEMA,
-      id: proposalId,
-      kind: "create",
+      ...createAppliedLegacyProposal({
+        id: proposalId,
+        title: "Create Missing Draft",
+        description: "Proposal whose PROPOSAL.md was removed",
+        createdAt: now,
+        createdBy: "cli",
+        content: "# Missing Draft\n",
+        target: { skillName: "Missing Draft", skillKey: "missing-draft", skillDir: targetDir },
+      }),
       status: "pending",
-      title: "Create Missing Draft",
-      description: "Proposal whose PROPOSAL.md was removed",
-      createdAt: now,
-      updatedAt: now,
-      createdBy: "cli",
+      appliedAt: undefined,
       origin: { agentId: "main", runId: "missing-draft-run" },
       originRunIds: ["missing-draft-run"],
       originRunMutationCounts: { "missing-draft-run": 1 },
-      proposedVersion: "v1",
-      draftFile: "PROPOSAL.md",
-      draftHash: hashSkillProposalContent("# Missing Draft\n"),
       supportFiles: [],
-      target: {
-        skillName: "Missing Draft",
-        skillKey: "missing-draft",
-        skillDir: targetDir,
-        skillFile: path.join(targetDir, "SKILL.md"),
-        source: "openclaw-workspace",
-      },
-      scan: {
-        state: "clean",
-        scannedAt: now,
-        critical: 0,
-        warn: 0,
-        info: 0,
-        findings: [],
-      },
     };
     await fs.mkdir(proposalDir, { recursive: true });
     await fs.writeFile(path.join(proposalDir, "proposal.json"), JSON.stringify(record), "utf8");

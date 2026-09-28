@@ -187,11 +187,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     }
   }
 
-  protected async indexFiles(items: MemoryIndexWorkItem[]): Promise<void> {
-    for (const item of items) {
-      await this.indexFile(item.entry, { source: item.source });
-    }
-  }
+  protected abstract indexFiles(items: MemoryIndexWorkItem[]): Promise<void>;
 
   protected emptySourceSyncPlan(): MemorySourceSyncPlan {
     return { indexItems: [], finalize: () => {} };
@@ -265,14 +261,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
       this.sessionsDirtyFiles.size > 0;
   }
 
-  protected shouldDeferSourceWideBatch(): boolean {
-    return Boolean(
-      this.batch.enabled &&
-      this.provider &&
-      this.providerRuntime?.batchEmbed &&
-      this.providerRuntime.sourceWideBatchEmbed === true,
-    );
-  }
+  protected abstract shouldDeferSourceWideBatch(): boolean;
 
   protected advanceSyncProgress(progress: MemorySyncProgressState | undefined, count = 1): void {
     if (!progress) {
@@ -425,11 +414,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
       configuredScopeHash: resolveConfiguredScopeHash({
         workspaceDir: this.workspaceDir,
         extraPaths: this.settings.extraPaths,
-        multimodal: {
-          enabled: this.settings.multimodal.enabled,
-          modalities: this.settings.multimodal.modalities,
-          maxFileBytes: this.settings.multimodal.maxFileBytes,
-        },
+        multimodal: this.settings.multimodal,
       }),
       chunkTokens: this.settings.chunking.tokens,
       chunkOverlap: this.settings.chunking.overlap,

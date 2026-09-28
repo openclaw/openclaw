@@ -22,12 +22,13 @@ import { readConfigMachineState } from "../state/config-machine-state.js";
 import { VERSION } from "../version.js";
 import { isTruthyEnvValue } from "./env.js";
 import type { GatewayActiveWorkInspectors } from "./gateway-active-work.js";
+import type { GatewayScheduler } from "./gateway-scheduler.js";
 import {
   EXTERNAL_SUPERVISOR_UPDATE_REQUIRED_REASON,
   isGatewayExternallySupervised,
 } from "./gateway-supervision.js";
 import { checkTelemetryUpdate } from "./telemetry.js";
-import { gatewayUpdateCampaign, type UpdateCampaignController } from "./update-campaign.js";
+import { UpdateCampaignController } from "./update-campaign.js";
 import {
   channelToNpmTag,
   DEV_BRANCH,
@@ -77,9 +78,9 @@ export async function getUpdateEffectiveChannel(): Promise<UpdateChannel> {
   }).channel;
 }
 
-export function resetUpdateAvailableStateForTest(): void {
+export function resetUpdateAvailableStateForTest(scheduler: GatewayScheduler): void {
   resetUpdateStatusState();
-  createGatewayUpdateLifecycle();
+  createGatewayUpdateLifecycle(scheduler);
 }
 
 const UPDATE_CHECK_STATE_KEY = "update.checkState";
@@ -261,7 +262,6 @@ export async function runGatewayUpdateCheck(
     onUpdateScheduleChange?: (schedule: UpdateScheduleState) => void;
     onUpdateRunCreated?: () => void;
     activeWorkInspectors?: Partial<GatewayActiveWorkInspectors>;
-    updateCampaign?: UpdateCampaignController;
     runAutoUpdate?: AutoUpdateRunner;
     signal?: AbortSignal;
   },
@@ -290,8 +290,7 @@ async function runGatewayUpdateCheckOwned(
   if (params.isNixMode) {
     return;
   }
-  const updateCampaign = params.updateCampaign ?? gatewayUpdateCampaign;
-  lifecycle.campaign = gatewayUpdateCampaign;
+  const updateCampaign = (lifecycle.campaign ??= new UpdateCampaignController(lifecycle.scheduler));
   // The admitted target belongs to the applying owner until it settles.
   if (updateCampaign.getState()?.state === "applying") {
     return;
@@ -467,6 +466,35 @@ async function runGatewayUpdateCheckOwned(
   }
 
   const { root, status, installReceipt } = installStatus;
+  const announceUpdate = (
+    target: NonNullable<UpdateScheduleState["target"]>,
+    channel: "stable" | "beta" | "dev",
+    tag: string,
+  ) =>
+    updateCampaign.announce({
+      target,
+      inspect: params.activeWorkInspectors,
+      onChange: onCampaignChange,
+      apply: ({ forced }) =>
+        lifecycle.run(() =>
+          runCampaignUpdate({
+            channel,
+            mode: target.kind === "git" ? "git" : status.packageManager,
+            version: target.kind === "git" ? target.upstreamSha : target.version,
+            tag,
+            forced,
+            root: root ?? status.root ?? undefined,
+            ...(target.kind === "git" ? { devTarget: devUpdateTargetFromGitTarget(target) } : {}),
+            log: params.log,
+            runAuto,
+            canApply,
+            onAttempt: recordAutoUpdateAttempt,
+            campaign: updateCampaign,
+            onUpdateRunCreated: params.onUpdateRunCreated,
+            signal: params.signal,
+          }),
+        ),
+    });
   setSchedule(
     withUpdateInstallStatus(
       getUpdateSchedule() ?? initialSchedule,
@@ -557,30 +585,7 @@ async function runGatewayUpdateCheckOwned(
         Number.isFinite(lastAttemptAt) &&
         now - lastAttemptAt < ONE_HOUR_MS;
       if (!recentAttempt) {
-        updateCampaign.announce({
-          target,
-          inspect: params.activeWorkInspectors,
-          onChange: onCampaignChange,
-          apply: ({ forced }) =>
-            lifecycle.run(() =>
-              runCampaignUpdate({
-                channel: "dev",
-                mode: "git",
-                version: upstreamSha,
-                tag: "dev",
-                forced,
-                root: root ?? status.root ?? undefined,
-                devTarget: devUpdateTargetFromGitTarget(target),
-                log: params.log,
-                runAuto,
-                canApply,
-                onAttempt: recordAutoUpdateAttempt,
-                campaign: updateCampaign,
-                onUpdateRunCreated: params.onUpdateRunCreated,
-                signal: params.signal,
-              }),
-            ),
-        });
+        announceUpdate(target, "dev", "dev");
       }
     } else {
       updateCampaign.clear();
@@ -619,9 +624,7 @@ async function runGatewayUpdateCheckOwned(
     writeState(nextState);
     return;
   }
-  const resolvedVersion = resolved.version;
-
-  const cmp = compareSemverStrings(VERSION, resolvedVersion);
+  const cmp = compareSemverStrings(VERSION, resolved.version);
   if (cmp != null && cmp < 0) {
     const nextAvailable: UpdateAvailable = {
       currentVersion: VERSION,
@@ -692,29 +695,7 @@ async function runGatewayUpdateCheckOwned(
           tag,
         });
       } else {
-        updateCampaign.announce({
-          target,
-          inspect: params.activeWorkInspectors,
-          onChange: onCampaignChange,
-          apply: ({ forced }) =>
-            lifecycle.run(() =>
-              runCampaignUpdate({
-                channel,
-                mode: status.packageManager,
-                version: resolvedVersion,
-                tag,
-                forced,
-                root: root ?? status.root ?? undefined,
-                log: params.log,
-                runAuto,
-                canApply,
-                onAttempt: recordAutoUpdateAttempt,
-                campaign: updateCampaign,
-                onUpdateRunCreated: params.onUpdateRunCreated,
-                signal: params.signal,
-              }),
-            ),
-        });
+        announceUpdate(target, channel, tag);
       }
     }
   } else {
@@ -731,7 +712,7 @@ async function runGatewayUpdateCheckOwned(
 }
 
 export function createGatewayUpdateCheck(params: {
-  lifecycle?: UpdateCheckLifecycle;
+  lifecycle: UpdateCheckLifecycle;
   getConfig: () => OpenClawConfig;
   log: { info: (msg: string, meta?: Record<string, unknown>) => void };
   isNixMode: boolean;
@@ -744,8 +725,7 @@ export function createGatewayUpdateCheck(params: {
   start: () => void;
   stop: () => Promise<void>;
 } {
-  const lifecycle = params.lifecycle ?? createGatewayUpdateLifecycle();
-  lifecycle.campaign = gatewayUpdateCampaign;
+  const { lifecycle } = params;
   let started = false;
   let observedCatalog: { sourceUrl: string; generatedAt: number } | undefined;
   return {
@@ -756,7 +736,7 @@ export function createGatewayUpdateCheck(params: {
         return;
       }
       started = true;
-      lifecycle.schedule(async () => {
+      lifecycle.schedule("update.check", async () => {
         try {
           await runGatewayUpdateCheck(params, lifecycle);
         } catch {
@@ -764,7 +744,7 @@ export function createGatewayUpdateCheck(params: {
         }
         return resolveCheckIntervalMs(params.getConfig(), getUpdateSchedule()?.install?.kind);
       });
-      lifecycle.schedule(async () => {
+      lifecycle.schedule("update.remote-model-catalog", async () => {
         let nextCheckInMs = REMOTE_MODEL_CATALOG_TTL_MS;
         try {
           const config = params.getConfig();
@@ -806,7 +786,7 @@ export function createGatewayUpdateCheck(params: {
           }
         }
         return nextCheckInMs;
-      }, true);
+      });
     },
   };
 }

@@ -21,7 +21,10 @@ const edge = vi.hoisted(() => ({
 }));
 
 vi.mock("node:sqlite", () => ({ DatabaseSync: edge.forbidden }));
-vi.mock("node:worker_threads", () => ({ Worker: edge.forbidden }));
+vi.mock("node:worker_threads", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:worker_threads")>()),
+  Worker: edge.forbidden,
+}));
 vi.mock("../infra/sqlite-worker-identity.js", () => ({
   readDatabasePathIdentity: async (canonicalPath: string) => ({
     key: "file:synthetic-state",
@@ -79,9 +82,9 @@ it("retains installed-schema repair ownership through retired agent lease cleanu
   const databasePath = "/synthetic/state/openclaw.sqlite";
   const context: OpenClawStateWorkerContext = {
     environment: { OPENCLAW_STATE_DIR: "/synthetic" },
-    coordinatorRuntime: { directory: "/synthetic/coordinators", keepAlive: true },
     existingSchemaPath: databasePath,
     admission: {
+      coordinationKey: "file:synthetic-state",
       databasePath,
       identity: { key: "file:synthetic-state", canonicalPath: databasePath },
       assertCurrent() {},

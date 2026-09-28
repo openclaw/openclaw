@@ -147,7 +147,6 @@ cleanup_waiting_npm_children() {
     run_json="$(gh_read api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}")" || { failed=1; continue; }
     [[ "$(jq -r '.status' <<< "$run_json")" != completed ]] || continue
     release_child_has_no_active_jobs "$run_id" || continue
-    reject_pending_deployments "$run_id"
     gh run cancel --repo "$GITHUB_REPOSITORY" "$run_id" >&2 || failed=1
   done
   return "$failed"
@@ -399,7 +398,6 @@ approve_pending_deployments() {
   local workflow="$1"
   local run_id="$2"
   local expected_sha="$3"
-  local only_environment="${4:-}"
   local pending_json approved
 
   if ! verify_child_run_sha "$workflow" "$run_id" "$expected_sha"; then
@@ -428,8 +426,8 @@ approve_pending_deployments() {
       return 2
     fi
     approved=1
-  done < <(printf '%s' "${pending_json}" | jq -r --arg environment "${only_environment}" '
-    .[] | select(.current_user_can_approve == true and ($environment == "" or .environment.name == $environment)) |
+  done < <(printf '%s' "${pending_json}" | jq -r '
+    .[] | select(.current_user_can_approve == true) |
     [.environment.id, .environment.name] | @tsv')
 
   if [[ "${approved}" == "1" ]]; then
@@ -470,8 +468,7 @@ wait_for_run() {
   local expected_sha="$3"
   local started_job="${4:-}"
   local approve_environments="${5:-true}"
-  local approved_environment="${6:-}"
-  local wait_for_terminal="${7:-false}"
+  local wait_for_terminal="${6:-false}"
   local status conclusion url updated_at created_at duration_seconds duration_label last_state failed_json approval_status run_json jobs_json started_jobs state
 
   if ! verify_child_run_sha "$workflow" "$run_id" "$expected_sha"; then
@@ -501,8 +498,7 @@ wait_for_run() {
         echo "${workflow} has ambiguous ${started_job} jobs." >&2
         return 1
       fi
-      # A running environment-backed job has passed its approval gate, even
-      # when a reviewer approved it before this watcher saw the deployment.
+      # The publisher can advance independently once its job starts.
       if jq -e 'length == 1 and (.[0].status == "in_progress" or (.[0].status == "completed" and .[0].conclusion == "success"))' <<< "${started_jobs}" >/dev/null; then
         verify_child_run_sha "$workflow" "$run_id" "$expected_sha" || return 1
         echo "${workflow} ${started_job} started: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
@@ -514,7 +510,9 @@ wait_for_run() {
     state="${status}:${updated_at}"
     if [[ "$state" != "$last_state" ]]; then
       echo "${workflow} still ${status} (updated ${updated_at}): ${url}"
-      print_pending_deployments "${workflow}" "${run_id}"
+      if [[ "${approve_environments}" == "true" ]]; then
+        print_pending_deployments "${workflow}" "${run_id}"
+      fi
       last_state="$state"
     fi
     # The deployment gate can appear after the run first reports
@@ -522,16 +520,10 @@ wait_for_run() {
     # propagation lag cannot strand an approved release.
     if [[ "${approve_environments}" == "true" ]]; then
       approval_status=0
-      approve_pending_deployments "${workflow}" "${run_id}" "${expected_sha}" "${approved_environment}" ||
+      approve_pending_deployments "${workflow}" "${run_id}" "${expected_sha}" ||
         approval_status=$?
       if (( approval_status > 1 )); then
         return 1
-      fi
-      # The matching approval and post-approval SHA check are sufficient;
-      # runner allocation must not serialize other publication work.
-      if [[ -n "${started_job}" && -n "${approved_environment}" && "${approval_status}" == "0" ]]; then
-        echo "${workflow} ${approved_environment} approved: ${url}"
-        return 0
       fi
     fi
     sleep 30
@@ -1234,7 +1226,7 @@ sync_npm_beta_floor() {
 verify_published_release() {
   local release_version evidence_path canonical_evidence_path clawhub_runtime_state_path bootstrap_run_arg_present
   local expected_attempt expected_id run_attempt run_id run_label run_url target_sha
-  local validation_file workflow_ref telegram_waiver lane_waiver waived_jobs verifier
+  local validation_file workflow_ref telegram_waiver verifier
   local -a verify_args
 
   release_version="${RELEASE_TAG#v}"
@@ -1326,20 +1318,12 @@ verify_published_release() {
     exit 1
   fi
   telegram_waiver=""
-  lane_waiver=""
-  waived_jobs="[]"
   if [[ "${RELEASE_EVIDENCE_MODE}" != "authorized-beta-focused-v1" ]]; then
     telegram_waiver="$(jq -r '.validationInputs.telegramWaiver // ""' "${validation_file}")"
-    lane_waiver="$(jq -r '.validationInputs.laneWaiver // ""' "${validation_file}")"
-    waived_jobs="$(jq -c '[(.advisoryJobs // [])[] | select(.reason == "lane_waiver") | {child, job, conclusion}]' "${validation_file}")"
   fi
   run_url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
   jq \
     --arg telegram_waiver "${telegram_waiver}" \
-    --arg stable_soak_waiver "${STABLE_SOAK_WAIVER:-}" \
-    --arg lane_waiver "${lane_waiver}" \
-    --arg lane_waiver_acknowledgement "${LANE_WAIVER_ACKNOWLEDGEMENT:-}" \
-    --argjson waived_jobs "${waived_jobs}" \
     --arg release_publish_run_id "$GITHUB_RUN_ID" \
     --arg validation_label "${run_label}" \
     --arg validation_run_id "${run_id}" \
@@ -1348,8 +1332,6 @@ verify_published_release() {
     --arg validation_url "${run_url}" \
     --arg validation_workflow_ref "${workflow_ref}" '
       (if $telegram_waiver == "" then . else .telegramWaiver = $telegram_waiver end) |
-      (if $stable_soak_waiver == "" then . else .stableSoakWaiver = $stable_soak_waiver end) |
-      (if $lane_waiver == "" then . else .laneWaiver = $lane_waiver | .laneWaiverAcknowledgement = $lane_waiver_acknowledgement | .waivedJobs = $waived_jobs end) |
       .releasePublishRunId = $release_publish_run_id |
       .workflowRuns += [{
         id: $validation_run_id,
@@ -1422,9 +1404,6 @@ append_release_proof_to_github_release() {
     CLAWHUB_LINE="${clawhub_line}" \
     CLAWHUB_BOOTSTRAP_LINE="${clawhub_bootstrap_line}" \
     TELEGRAM_LINE="${telegram_line}" \
-    STABLE_SOAK_WAIVER="$(jq -r '.stableSoakWaiver // ""' "${evidence_path}")" \
-    LANE_WAIVER="$(jq -r '.laneWaiver // ""' "${evidence_path}")" \
-    WAIVED_JOBS_LINE="$(jq -r '(.waivedJobs // []) | map("\(.child) \(.job) (\(.conclusion))") | join("; ")' "${evidence_path}")" \
     ANDROID_LINE="${android_line}" \
     node --input-type=module <<'NODE'
 import { writeFileSync } from "node:fs";
@@ -1452,14 +1431,6 @@ const section = [
   ...(process.env.OPENCLAW_NPM_RUN_ID
     ? [
         `- OpenClaw npm publish: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.OPENCLAW_NPM_RUN_ID}${process.env.OPENCLAW_NPM_RUN_ATTEMPT ? `/attempts/${process.env.OPENCLAW_NPM_RUN_ATTEMPT}` : ""}`,
-      ]
-    : []),
-  ...(process.env.STABLE_SOAK_WAIVER
-    ? [`- Stable soak waived by operator: ${JSON.stringify(process.env.STABLE_SOAK_WAIVER)}`]
-    : []),
-  ...(process.env.LANE_WAIVER
-    ? [
-        `- Operator lane waiver: ${JSON.stringify(process.env.LANE_WAIVER)}; waived lanes: ${process.env.WAIVED_JOBS_LINE || "none"}`,
       ]
     : []),
   process.env.TELEGRAM_LINE,

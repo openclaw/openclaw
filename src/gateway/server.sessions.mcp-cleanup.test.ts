@@ -4,6 +4,7 @@ import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { startCatalogRecoveryMcpServer } from "../agents/agent-bundle-mcp-catalog-recovery.test-support.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import { writeSessionStore } from "./test-helpers.js";
 import {
@@ -45,7 +46,9 @@ test.each(["sessions.reset", "sessions.delete"] as const)(
     const { SESSION_MCP_RUNTIME_MANAGER_KEY } =
       await import("../agents/agent-bundle-mcp-runtime-shared.js");
     let nowMs = Date.now();
+    const scheduler = createTestGatewayScheduler();
     const manager = createSessionMcpRuntimeManager({
+      scheduler,
       now: () => nowMs,
       enableIdleSweepTimer: false,
     });
@@ -131,7 +134,11 @@ test.each(["sessions.reset", "sessions.delete"] as const)(
         await manager.disposeAll();
       } finally {
         try {
-          await server.close();
+          try {
+            await server.close();
+          } finally {
+            await scheduler.stop();
+          }
         } finally {
           if (previousManager) {
             Object.defineProperty(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY, previousManager);

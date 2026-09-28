@@ -1,5 +1,6 @@
-// Cron get-job tests cover lookup behavior for scheduled jobs.
 import { describe, expect, it, vi } from "vitest";
+// Cron get-job tests cover lookup behavior for scheduled jobs.
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { CronService } from "./service.js";
 import {
   createCronStoreHarness,
@@ -13,6 +14,8 @@ installCronTestHooks({ logger });
 
 function createCronService(storePath: string, cronEnabled = true) {
   return new CronService({
+    scheduler: createTestGatewayScheduler(),
+    nowMs: () => Date.now(),
     storePath,
     cronEnabled,
     log: logger,

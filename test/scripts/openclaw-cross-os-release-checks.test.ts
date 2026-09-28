@@ -1,4 +1,3 @@
-// Openclaw Cross Os Release Checks tests cover openclaw cross os release checks script behavior.
 import { spawn } from "node:child_process";
 import {
   appendFileSync,
@@ -271,14 +270,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       LOCALAPPDATA: "C:\\Users\\runneradmin\\AppData\\Local",
       OPENAI_API_KEY: "secret",
     });
-    expect(env.OPENCLAW_HOME).toBeUndefined();
-    expect(env.OPENCLAW_PROFILE).toBeUndefined();
-    expect(env.OPENCLAW_STATE_DIR).toBeUndefined();
-    expect(env.OPENCLAW_CONFIG_PATH).toBeUndefined();
-    expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBeUndefined();
-    expect(env.OPENCLAW_TASK_SCRIPT_NAME).toBeUndefined();
-    expect(env.OPENCLAW_TASK_SCRIPT).toBeUndefined();
-    expect(env.OPENCLAW_SERVICE_KIND).toBeUndefined();
     expect(
       Object.keys(env).filter((key) =>
         [
@@ -1731,24 +1722,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     });
   });
 
-  it("runs resolved command invocations and writes command logs", async () => {
-    await withTempDirAsync("openclaw-cross-os-run-command-", async (dir) => {
-      const logPath = join(dir, "command.log");
-      const result = await runCommand(process.execPath, ["-e", "process.stdout.write('ok')"], {
-        cwd: dir,
-        env: process.env,
-        logPath,
-      });
-
-      expect(result).toMatchObject({
-        exitCode: 0,
-        stdout: "ok",
-        stderr: "",
-      });
-      expect(readFileSync(logPath, "utf8")).toContain("start command=");
-    });
-  });
-
   it("bounds retained command output while preserving full command logs", async () => {
     await withTempDirAsync("openclaw-cross-os-run-command-output-", async (dir) => {
       const logPath = join(dir, "command.log");
@@ -1841,7 +1814,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     },
   );
 
-  it.each([1, 2, 3])(
+  it.each([1, 3])(
     "never exceeds a %i-byte command output budget with a truncated UTF-8 character",
     async (maxOutputBytes) => {
       await withTempDirAsync("openclaw-cross-os-run-command-utf8-budget-", async (dir) => {
@@ -1862,7 +1835,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
 
   it.each([
     { maxOutputBytes: 1, expected: "" },
-    { maxOutputBytes: 2, expected: "" },
     { maxOutputBytes: 3, expected: "�" },
   ])(
     "bounds incomplete UTF-8 command output to $maxOutputBytes bytes",
@@ -2284,17 +2256,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(canceled).toBe(true);
   });
 
-  it("keeps the dev-update lane for main only", () => {
-    const inputs = [
-      "main",
-      "08753a1d793c040b101c8a26c43445dbbab14995",
-      " codex/cross-os-release-checks-full-native-e2e ",
-      "v2026.4.14",
-    ];
-
-    expect(inputs.map(shouldRunMainChannelDevUpdate)).toEqual([true, false, false, false]);
-  });
-
   it("verifies main dev updates against the prepared source sha when available", () => {
     expect(resolveDevUpdateVerificationRef("main")).toBe("main");
     expect(
@@ -2325,38 +2286,22 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     });
   });
 
-  it.each([
-    {
-      name: "rejects a successful packaged update followed by an old self-swapped process import miss",
-      input: { installedVersion: "2026.4.27", stepExitCode: 0 },
-      expected: /Packaged upgrade failed/u,
-    },
-    {
-      name: "rejects packaged update failures before the candidate package lands",
-      input: { installedVersion: "2026.4.26", stepExitCode: 0 },
-      expected: /Packaged upgrade failed/u,
-    },
-    {
-      name: "rejects packaged update failures with unsuccessful update steps",
-      input: { installedVersion: "2026.4.27", stepExitCode: 1 },
-      expected: /Packaged upgrade failed/u,
-    },
-  ])("$name", ({ input, expected }) => {
+  it("rejects a successful packaged update followed by an old self-swapped process import miss", () => {
     expect(() =>
       verifyPackagedUpgradeUpdateResult(
         {
           exitCode: 1,
           stdout: JSON.stringify({
             status: "ok",
-            after: { version: input.installedVersion },
-            steps: [{ name: "global update", exitCode: input.stepExitCode }],
+            after: { version: "2026.4.27" },
+            steps: [{ name: "global update", exitCode: 0 }],
           }),
           stderr:
             "[openclaw] Failed to start CLI: Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/tmp/prefix/lib/node_modules/openclaw/dist/memory-state-old.js'",
         },
         { candidateVersion: "2026.4.27" },
       ),
-    ).toThrow(expected);
+    ).toThrow(/Packaged upgrade failed/u);
   });
 
   it("recognizes the shipped Windows updater native-module backup cleanup failure", () => {

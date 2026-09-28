@@ -1,35 +1,13 @@
 // WhatsApp monitor inbox media and session behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   getSock,
   installWebMonitorInboxUnitTestHooks,
-  mockLoadConfig,
   startInboxMonitor,
   waitForInboundWorkDrained,
 } from "./monitor-inbox.test-harness.js";
-const inboundLoggerInfoMock = vi.hoisted(() => vi.fn());
-
-vi.mock("openclaw/plugin-sdk/logging-core", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/logging-core")>(
-    "openclaw/plugin-sdk/logging-core",
-  );
-  return {
-    ...actual,
-    getChildLogger: () => ({
-      info: inboundLoggerInfoMock,
-      warn: vi.fn(),
-      error: vi.fn(),
-      debug: vi.fn(),
-    }),
-  };
-});
-
 describe("web monitor inbox", () => {
   installWebMonitorInboxUnitTestHooks();
-
-  beforeEach(() => {
-    inboundLoggerInfoMock.mockReset();
-  });
 
   async function openMonitor(onMessage = vi.fn()) {
     const { listener } = await startInboxMonitor(onMessage);
@@ -58,53 +36,6 @@ describe("web monitor inbox", () => {
       expect(message[key]).toEqual(value);
     }
   }
-
-  it("captures media path for image messages", async () => {
-    const { onMessage, listener, sock } = await runSingleUpsertAndCapture({
-      type: "notify",
-      messages: [
-        {
-          key: { id: "med1", fromMe: false, remoteJid: "888@s.whatsapp.net" },
-          message: { imageMessage: { mimetype: "image/jpeg" } },
-          messageTimestamp: 1_700_000_100,
-        },
-      ],
-    });
-
-    expect(onMessage).toHaveBeenCalledTimes(1);
-    expect(onMessage.mock.calls[0]?.[0]?.payload.body).toBe("");
-    expect(onMessage.mock.calls[0]?.[0]?.payload.media?.kind).toBe("image");
-    expect(sock.readMessages).toHaveBeenCalledWith([
-      {
-        remoteJid: "888@s.whatsapp.net",
-        id: "med1",
-        participant: undefined,
-        fromMe: false,
-      },
-    ]);
-    expect(sock.sendPresenceUpdate).toHaveBeenNthCalledWith(1, "available");
-    await listener.close();
-  });
-
-  it("sets gifPlayback on outbound video payloads when requested", async () => {
-    const onMessage = vi.fn();
-    const listener = await openMonitor(onMessage);
-    const sock = getSock();
-    const buf = Buffer.from("gifvid");
-
-    await listener.sendMessage("+1555", "gif", buf, "video/mp4", {
-      gifPlayback: true,
-    });
-
-    expect(sock.sendMessage).toHaveBeenCalledWith("1555@s.whatsapp.net", {
-      video: buf,
-      caption: "gif",
-      mimetype: "video/mp4",
-      gifPlayback: true,
-    });
-
-    await listener.close();
-  });
 
   it("socket session resolves onClose when the socket closes", async () => {
     const listener = await openMonitor(vi.fn());
@@ -140,26 +71,6 @@ describe("web monitor inbox", () => {
     expect(sock.ws.close).not.toHaveBeenCalled();
   });
 
-  it("logs inbound bodies through the inbound child logger", async () => {
-    const { listener } = await runSingleUpsertAndCapture({
-      type: "notify",
-      messages: [
-        {
-          key: { id: "abc", fromMe: false, remoteJid: "999@s.whatsapp.net" },
-          message: { conversation: "ping" },
-          messageTimestamp: 1_700_000_000,
-          pushName: "Tester",
-        },
-      ],
-    });
-
-    expect(inboundLoggerInfoMock).toHaveBeenCalledTimes(1);
-    expect(inboundLoggerInfoMock.mock.calls[0]?.[0]?.body).toBe("ping");
-    expect(inboundLoggerInfoMock.mock.calls[0]?.[0]?.from).toBe("+999");
-    expect(inboundLoggerInfoMock.mock.calls[0]?.[1]).toBe("inbound message");
-    await listener.close();
-  });
-
   it("includes participant when marking group messages read", async () => {
     const { listener, sock } = await runSingleUpsertAndCapture({
       type: "notify",
@@ -184,48 +95,6 @@ describe("web monitor inbox", () => {
         fromMe: false,
       },
     ]);
-    await listener.close();
-  });
-
-  it("passes through group messages with participant metadata", async () => {
-    const { onMessage, listener } = await runSingleUpsertAndCapture({
-      type: "notify",
-      messages: [
-        {
-          key: {
-            id: "grp2",
-            fromMe: false,
-            remoteJid: "99999@g.us",
-            participant: "777@s.whatsapp.net",
-          },
-          pushName: "Alice",
-          message: {
-            extendedTextMessage: {
-              text: "@bot ping",
-              contextInfo: { mentionedJid: ["123@s.whatsapp.net"] },
-            },
-          },
-          messageTimestamp: 1_700_000_000,
-        },
-      ],
-    });
-
-    expectSingleGroupMessage(onMessage, {
-      admission: expect.objectContaining({
-        conversation: expect.objectContaining({
-          kind: "group",
-          id: "99999@g.us",
-        }),
-      }),
-      group: expect.objectContaining({
-        mentions: expect.objectContaining({
-          jids: ["123@s.whatsapp.net"],
-        }),
-      }),
-      platform: expect.objectContaining({
-        senderE164: "+777",
-      }),
-    });
     await listener.close();
   });
 
@@ -270,62 +139,6 @@ describe("web monitor inbox", () => {
       }),
       platform: expect.objectContaining({
         senderE164: "+888",
-      }),
-    });
-    await listener.close();
-  });
-
-  it("still forwards group messages (with sender info) even when allowFrom is restrictive", async () => {
-    mockLoadConfig.mockReturnValue({
-      channels: {
-        whatsapp: {
-          // does not include +777
-          allowFrom: ["+111"],
-          groupPolicy: "open",
-        },
-      },
-      messages: {
-        messagePrefix: undefined,
-        responsePrefix: undefined,
-      },
-    });
-
-    const { onMessage, listener } = await runSingleUpsertAndCapture({
-      type: "notify",
-      messages: [
-        {
-          key: {
-            id: "grp-allow",
-            fromMe: false,
-            remoteJid: "55555@g.us",
-            participant: "777@s.whatsapp.net",
-          },
-          message: {
-            extendedTextMessage: {
-              text: "@bot hi",
-              contextInfo: { mentionedJid: ["123@s.whatsapp.net"] },
-            },
-          },
-        },
-      ],
-    });
-    expectSingleGroupMessage(onMessage, {
-      admission: expect.objectContaining({
-        conversation: expect.objectContaining({
-          kind: "group",
-          id: "55555@g.us",
-        }),
-      }),
-      group: expect.objectContaining({
-        mentions: expect.objectContaining({
-          jids: ["123@s.whatsapp.net"],
-        }),
-      }),
-      platform: expect.objectContaining({
-        senderE164: "+777",
-        senderJid: "777@s.whatsapp.net",
-        selfE164: "+123",
-        selfJid: "123@s.whatsapp.net",
       }),
     });
     await listener.close();

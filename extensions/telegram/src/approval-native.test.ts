@@ -53,6 +53,23 @@ async function writeSessionEntry(params: {
 }
 
 describe("telegram native approval adapter", () => {
+  it.each([undefined, "work"])(
+    "reserves terminal UI recovery for plugin approvals on account %s",
+    (accountId) => {
+      const params = { channel: "telegram", channelLabel: "Telegram", accountId };
+      const execText = telegramApprovalCapability.describeExecApprovalSetup?.(params);
+      const pluginText = telegramApprovalCapability.describePluginApprovalSetup?.(params);
+      const prefix = accountId ? `channels.telegram.accounts.${accountId}` : "channels.telegram";
+
+      expect(execText).toContain("Approve it from the Web UI for now.");
+      expect(execText).not.toMatch(/terminal UI|\bTUI\b/i);
+      expect(pluginText).toContain("Approve it from the Web UI or terminal UI for now.");
+      expect(pluginText).toContain("Telegram supports native plugin approvals");
+      expect(execText).toContain(`\`${prefix}.execApprovals.approvers\``);
+      expect(pluginText).toContain(`\`${prefix}.execApprovals.approvers\``);
+    },
+  );
+
   it("normalizes direct-chat origin targets so DM dedupe can converge", async () => {
     const target = await telegramApprovalCapability.native?.resolveOriginTarget?.({
       cfg: buildConfig(),

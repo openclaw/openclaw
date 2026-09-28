@@ -1,8 +1,92 @@
 import { vi } from "vitest";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import type { CronJob } from "../../cron/types.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import type { GatewayRequestContext } from "./types.js";
+
+function createPrefixOnlyChannelPlugin(
+  id: string,
+  targetPrefixes: readonly string[],
+  aliases?: readonly string[],
+): ChannelPlugin {
+  const base = createChannelTestPluginBase({
+    id,
+    config: {
+      isConfigured: (_account, cfg) => {
+        const channelConfig = cfg.channels?.[id];
+        return Boolean(channelConfig && channelConfig.enabled !== false);
+      },
+    },
+  });
+  return {
+    ...base,
+    meta: {
+      ...base.meta,
+      ...(aliases ? { aliases } : {}),
+    },
+    messaging: { targetPrefixes },
+  };
+}
+
+function createEnablementHostileChannelPlugin(id: string): ChannelPlugin {
+  const base = createPrefixOnlyChannelPlugin(id, [id]);
+  return {
+    ...base,
+    config: {
+      ...base.config,
+      // Mirrors twitch/discord: an unlisted or credential-suppressed account
+      // resolves to a not-enabled account, which must NOT read as operator intent.
+      isEnabled: () => false,
+    },
+  };
+}
+
+export function setCronValidationTestRegistry(): void {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "discord",
+        plugin: createPrefixOnlyChannelPlugin("discord", ["discord"]),
+        source: "test:discord",
+      },
+      {
+        pluginId: "telegram",
+        plugin: createPrefixOnlyChannelPlugin("telegram", ["telegram", "tg"]),
+        source: "test:telegram",
+      },
+      {
+        pluginId: "slack",
+        plugin: createPrefixOnlyChannelPlugin("slack", ["slack"]),
+        source: "test:slack",
+      },
+      {
+        pluginId: "twitch",
+        plugin: createEnablementHostileChannelPlugin("twitch"),
+        source: "test:twitch",
+      },
+      {
+        pluginId: "msteams",
+        plugin: createPrefixOnlyChannelPlugin("msteams", ["msteams", "teams"], ["teams"]),
+        source: "test:msteams",
+      },
+      {
+        pluginId: "synology-chat",
+        plugin: createPrefixOnlyChannelPlugin("synology-chat", [
+          "synology-chat",
+          "synology_chat",
+          "synology",
+        ]),
+        source: "test:synology-chat",
+      },
+    ]),
+  );
+}
 
 export function createCronTestContext(
   currentJobs: CronJob | CronJob[] | undefined,
@@ -153,4 +237,90 @@ export function createCronJob(overrides: Partial<CronJob> = {}): CronJob {
     state: {},
     ...overrides,
   };
+}
+
+export function pluginEntries(...ids: string[]): OpenClawConfig["plugins"] {
+  return {
+    entries: Object.fromEntries(ids.map((id) => [id, { enabled: true }])),
+  };
+}
+
+export function telegramConfig(): OpenClawConfig {
+  return {
+    channels: {
+      telegram: {
+        botToken: "telegram-token",
+      },
+    },
+    plugins: pluginEntries("telegram"),
+  } as OpenClawConfig;
+}
+
+export function telegramSlackConfig(params: { includeMainSession?: boolean } = {}): OpenClawConfig {
+  return {
+    ...(params.includeMainSession ? { session: { mainKey: "main" } } : {}),
+    channels: {
+      telegram: {
+        botToken: "telegram-token",
+      },
+      slack: {
+        botToken: "xoxb-slack-token",
+        appToken: "xapp-slack-token",
+      },
+    },
+    plugins: pluginEntries("telegram", "slack"),
+  } as OpenClawConfig;
+}
+
+export function telegramDisabledAccountConfig(): OpenClawConfig {
+  return {
+    channels: {
+      telegram: {
+        accounts: {
+          primary: { botToken: "telegram-token-primary" },
+          retired: { botToken: "telegram-token-retired", enabled: false },
+        },
+      },
+    },
+    plugins: pluginEntries("telegram"),
+  } as OpenClawConfig;
+}
+
+export function msteamsConfig(): OpenClawConfig {
+  return {
+    channels: {
+      msteams: {
+        botToken: "teams-token",
+      },
+    },
+    plugins: pluginEntries("msteams"),
+  } as OpenClawConfig;
+}
+
+export function slackSynologyConfig(): OpenClawConfig {
+  return {
+    channels: {
+      slack: {
+        botToken: "xoxb-slack-token",
+        appToken: "xapp-slack-token",
+      },
+      "synology-chat": {
+        token: "synology-token",
+      },
+    },
+    plugins: pluginEntries("slack", "synology-chat"),
+  } as OpenClawConfig;
+}
+
+export function slackConfig(params: { includeMainSession?: boolean } = {}): OpenClawConfig {
+  return {
+    ...(params.includeMainSession ? { session: { mainKey: "main" } } : {}),
+    channels: {
+      slack: {
+        botToken: "xoxb-slack-token",
+        appToken: "xapp-slack-token",
+      },
+    },
+    plugins: pluginEntries("slack"),
+  } as OpenClawConfig;
 }

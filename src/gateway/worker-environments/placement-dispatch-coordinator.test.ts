@@ -27,7 +27,7 @@ describe("worker placement dispatch coordinator", () => {
     { kind: "move", blocker: "sweep", cancellation: "admission" },
     { kind: "move", blocker: "dispatch", cancellation: "admission" },
   ] as const)(
-    "$cancellation cancels queued $kind without releasing the unrelated $blocker fence",
+    "$cancellation cancels queued $kind while preserving earlier $blocker work",
     async ({ kind, blocker, cancellation }) => {
       const entered = createDeferredCore();
       const release = createDeferredCore();
@@ -86,7 +86,7 @@ describe("worker placement dispatch coordinator", () => {
         expect(outcome).toMatchObject({ name: "AbortError" });
         expect(move).not.toHaveBeenCalled();
         expect(dispatch.mock.calls.map(([request]) => request.sessionId)).toEqual(
-          blocker === "dispatch" ? ["blocker"] : [],
+          blocker === "dispatch" ? ["blocker", "later"] : [],
         );
       } finally {
         release.resolve();

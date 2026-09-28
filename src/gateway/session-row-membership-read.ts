@@ -70,7 +70,22 @@ export function createSessionRowMembershipReadAccess(params: {
       : null;
   };
   return {
-    readSource(row: records.MaterializedRow) {
+    readMembership(query: records.Lookup) {
+      if (!params.isActive()) {
+        return undefined;
+      }
+      const row = params.lookup(query);
+      if (row && isIncognitoSessionKey(row.key)) {
+        return params.owner().describe(query)?.membership;
+      }
+      const members = row && membership.membership(row.storeTarget.storePath, row.key);
+      return members ? new Set(members) : undefined;
+    },
+    readSource(target: records.Row | records.Lookup) {
+      const row = "storeTarget" in target ? target : params.lookup(target);
+      if (!row) {
+        throw new Error("Session store changed while preparing authorization");
+      }
       const source = params.stores().get(row.storeTarget.storePath);
       // Incognito rows retain their process-local locator and native lifetime guard.
       if (!source && isIncognitoSessionKey(row.key)) {

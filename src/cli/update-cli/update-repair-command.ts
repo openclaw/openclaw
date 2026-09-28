@@ -41,7 +41,7 @@ import {
   waitForGatewayHttpReadiness,
 } from "../daemon-cli/restart-health-probe.js";
 import {
-  parseTimeoutMsOrExit,
+  parseUpdateTimeoutMs,
   resolveUpdateRoot,
   resolveTargetVersion,
   type UpdateFinalizeOptions,
@@ -83,10 +83,7 @@ function inspectNewerRecoveryHistory(recoveryRuns: UpdateRunRecord[], history: U
 
 /** Public repair can clear a stale ledger without entering post-core maintenance. */
 export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<void> {
-  const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
-  if (timeoutMs === null) {
-    return;
-  }
+  const timeoutMs = parseUpdateTimeoutMs(opts.timeout);
   const env = resolveServiceRefreshEnv(process.env, tryProcessCwd());
   const options = { env, busyTimeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS };
   assertConfigWriteAllowedInCurrentMode({ env });
@@ -141,7 +138,7 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
       const targetVersion =
         lastRun.target.version ??
         (lastRun.target.tag
-          ? await resolveTargetVersion(lastRun.target.tag, timeoutMs, { env })
+          ? (await resolveTargetVersion(lastRun.target.tag, timeoutMs, { env })).version
           : (await resolveNpmChannelTag({ channel, timeoutMs, env })).version);
       await assertUpdateRecoveryAdmission(options);
       // Registry resolution awaited I/O; inspect the installed version again before recording recovery.

@@ -7,7 +7,10 @@ import {
   readBoundedResponseText,
 } from "../../../lib/bounded-response.mjs";
 import { createTimeoutError } from "../../../lib/timeout-error.mjs";
-import { assertClawHubArtifactMetadata } from "../clawhub-artifact-assertions.mjs";
+import {
+  assertClawHubArtifactMetadata,
+  assertClawHubExternalInstallContract,
+} from "../clawhub-artifact-assertions.mjs";
 import { readPositiveIntEnv } from "../env-limits.mjs";
 import { assertRealPathInside, resolveHomePath } from "../openclaw-state-paths.mjs";
 import {
@@ -80,11 +83,9 @@ function openClawConfigPath() {
 
 function readOpenClawConfig() {
   const configPath = openClawConfigPath();
-  return fs.existsSync(configPath) ? readRequiredOpenClawConfig() : {};
-}
-
-function readRequiredOpenClawConfig() {
-  const configPath = openClawConfigPath();
+  if (!fs.existsSync(configPath)) {
+    return {};
+  }
   try {
     return readJson(configPath);
   } catch (error) {
@@ -370,51 +371,50 @@ function assertMarketplaceRecords() {
   }
 }
 
-function assertPluginTgz() {
-  assertSimplePlugin(
-    scratchFile("plugins2.json"),
-    scratchFile("plugins2-inspect.json"),
-    "demo-plugin-tgz",
-    "demo.tgz",
-  );
-  rememberPluginInstallPath({
-    pluginId: "demo-plugin-tgz",
-    installPathFile: scratchFile("plugins2-install-path.txt"),
-    source: "archive",
-  });
-}
-
-function assertPluginTgzRemoved() {
-  assertManagedInstallRemoved({
-    pluginId: "demo-plugin-tgz",
-    listFile: scratchFile("plugins2-uninstalled.json"),
-    installPathFile: scratchFile("plugins2-install-path.txt"),
-  });
-}
-
-function assertPluginDir() {
-  const sourceDir = process.argv[3];
-  assertSimplePlugin(
-    scratchFile("plugins3.json"),
-    scratchFile("plugins3-inspect.json"),
-    "demo-plugin-dir",
-    "demo.dir",
-  );
-  rememberPluginInstallPath({
-    pluginId: "demo-plugin-dir",
-    installPathFile: scratchFile("plugins3-install-path.txt"),
-    sourcePathFile: scratchFile("plugins3-source-path.txt"),
+const localPluginScenarios = {
+  tgz: { pluginId: "demo-plugin-tgz", stem: "plugins2", method: "demo.tgz", source: "archive" },
+  dir: { pluginId: "demo-plugin-dir", stem: "plugins3", method: "demo.dir", source: "path" },
+  file: { pluginId: "demo-plugin-file", stem: "plugins4", method: "demo.file", source: "path" },
+  "dir-deps": {
+    pluginId: "demo-plugin-dir-deps",
+    stem: "plugins-dir-deps",
+    method: "demo.dir.deps",
     source: "path",
-    sourcePath: sourceDir,
+  },
+};
+
+function localPluginPaths({ pluginId, stem, source }) {
+  return {
+    pluginId,
+    installPathFile: scratchFile(`${stem}-install-path.txt`),
+    ...(source === "path" ? { sourcePathFile: scratchFile(`${stem}-source-path.txt`) } : {}),
+  };
+}
+
+function assertLocalPlugin(scenario) {
+  const { pluginId, stem, method, source } = scenario;
+  assertSimplePlugin(
+    scratchFile(`${stem}.json`),
+    scratchFile(`${stem}-inspect.json`),
+    pluginId,
+    method,
+  );
+  rememberPluginInstallPath({
+    ...localPluginPaths(scenario),
+    source,
+    ...(source === "path" ? { sourcePath: process.argv[3] } : {}),
   });
 }
 
-function assertPluginDirRemoved() {
+// Frozen-target admission recognizes this function name in historical harnesses.
+function assertPluginTgzRemoved() {
+  assertLocalPluginRemoved(localPluginScenarios.tgz);
+}
+
+function assertLocalPluginRemoved(scenario) {
   assertManagedInstallRemoved({
-    pluginId: "demo-plugin-dir",
-    listFile: scratchFile("plugins3-uninstalled.json"),
-    installPathFile: scratchFile("plugins3-install-path.txt"),
-    sourcePathFile: scratchFile("plugins3-source-path.txt"),
+    ...localPluginPaths(scenario),
+    listFile: scratchFile(`${scenario.stem}-uninstalled.json`),
   });
 }
 
@@ -500,26 +500,6 @@ function assertGitPluginRemoved() {
   }
 }
 
-function assertClawHubExternalInstallContract(installPath) {
-  const openclawPeerPath = path.join(installPath, "node_modules", "openclaw");
-  if (!fs.existsSync(openclawPeerPath)) {
-    throw new Error(`missing ClawHub openclaw peer symlink: ${openclawPeerPath}`);
-  }
-  if (!fs.lstatSync(openclawPeerPath).isSymbolicLink()) {
-    throw new Error(`ClawHub openclaw peer is not a symlink: ${openclawPeerPath}`);
-  }
-  const hostRoot = fs.realpathSync(process.cwd());
-  const linkedHostRoot = fs.realpathSync(openclawPeerPath);
-  if (linkedHostRoot !== hostRoot) {
-    throw new Error(`expected ClawHub openclaw peer ${linkedHostRoot} to target ${hostRoot}`);
-  }
-
-  const dependencyPackagePath = path.join(installPath, "node_modules", "is-number", "package.json");
-  if (fs.existsSync(dependencyPackagePath)) {
-    assertRealPathInside(installPath, dependencyPackagePath, "ClawHub isolated dependency");
-  }
-}
-
 function assertPluginDirDeps() {
   const sourceDir = process.argv[3];
   assertSimplePlugin(
@@ -554,15 +534,6 @@ function assertPluginDirDeps() {
     sourcePathFile: scratchFile("plugins-dir-deps-source-path.txt"),
     source: "path",
     sourcePath: sourceDir,
-  });
-}
-
-function assertPluginDirDepsRemoved() {
-  assertManagedInstallRemoved({
-    pluginId: "demo-plugin-dir-deps",
-    listFile: scratchFile("plugins-dir-deps-uninstalled.json"),
-    installPathFile: scratchFile("plugins-dir-deps-install-path.txt"),
-    sourcePathFile: scratchFile("plugins-dir-deps-source-path.txt"),
   });
 }
 
@@ -629,32 +600,6 @@ function assertNpmPluginUpdateUnchanged() {
     "demo-plugin-npm is up to date (0.0.1).",
   );
   assertNpmPlugin();
-}
-
-function assertPluginFile() {
-  const sourceDir = process.argv[3];
-  assertSimplePlugin(
-    scratchFile("plugins4.json"),
-    scratchFile("plugins4-inspect.json"),
-    "demo-plugin-file",
-    "demo.file",
-  );
-  rememberPluginInstallPath({
-    pluginId: "demo-plugin-file",
-    installPathFile: scratchFile("plugins4-install-path.txt"),
-    sourcePathFile: scratchFile("plugins4-source-path.txt"),
-    source: "path",
-    sourcePath: sourceDir,
-  });
-}
-
-function assertPluginFileRemoved() {
-  assertManagedInstallRemoved({
-    pluginId: "demo-plugin-file",
-    listFile: scratchFile("plugins4-uninstalled.json"),
-    installPathFile: scratchFile("plugins4-install-path.txt"),
-    sourcePathFile: scratchFile("plugins4-source-path.txt"),
-  });
 }
 
 function assertNpmPluginRemoved() {
@@ -826,22 +771,6 @@ async function assertClawHubPreflight() {
         signal,
       }),
   );
-  if (!response.ok) {
-    const body = await withTimeout(
-      `ClawHub package preflight response for ${packageName}`,
-      limits.timeoutMs,
-      (_signal, timeoutPromise) =>
-        readBoundedResponseText(
-          response,
-          `ClawHub package preflight response for ${packageName}`,
-          limits.bodyMaxBytes,
-          { createTooLargeError: createBoundedResponseTooLargeError, timeoutPromise },
-        ),
-    );
-    throw new Error(
-      `ClawHub package preflight failed for ${packageName}: ${response.status} ${body}`,
-    );
-  }
   const rawDetail = await withTimeout(
     `ClawHub package preflight response for ${packageName}`,
     limits.timeoutMs,
@@ -853,6 +782,11 @@ async function assertClawHubPreflight() {
         { createTooLargeError: createBoundedResponseTooLargeError, timeoutPromise },
       ),
   );
+  if (!response.ok) {
+    throw new Error(
+      `ClawHub package preflight failed for ${packageName}: ${response.status} ${rawDetail}`,
+    );
+  }
   const detail = await withTimeout(
     `ClawHub package preflight JSON for ${packageName}`,
     limits.timeoutMs,
@@ -920,7 +854,7 @@ function assertClawHubInstalled() {
   const extensionsRoot = path.join(process.env.HOME, ".openclaw", "extensions");
   assertRealPathInside(extensionsRoot, installPath, "ClawHub install path");
   if (record.artifactKind === "npm-pack") {
-    assertClawHubExternalInstallContract(installPath);
+    assertClawHubExternalInstallContract(installPath, "ClawHub");
   }
   fs.writeFileSync(scratchFile("plugins-clawhub-install-path.txt"), installPath, "utf8");
 }
@@ -970,15 +904,15 @@ function assertClawHubUpdated() {
 const commands = {
   "record-fixture-plugin-trust": recordFixturePluginTrust,
   "demo-plugin": assertDemoPlugin,
-  "plugin-tgz": assertPluginTgz,
+  "plugin-tgz": () => assertLocalPlugin(localPluginScenarios.tgz),
   "plugin-tgz-removed": assertPluginTgzRemoved,
-  "plugin-dir": assertPluginDir,
-  "plugin-dir-removed": assertPluginDirRemoved,
+  "plugin-dir": () => assertLocalPlugin(localPluginScenarios.dir),
+  "plugin-dir-removed": () => assertLocalPluginRemoved(localPluginScenarios.dir),
   "plugin-dir-update-skipped": assertLocalPathUpdateSkipped,
   "plugin-dir-deps": assertPluginDirDeps,
-  "plugin-dir-deps-removed": assertPluginDirDepsRemoved,
-  "plugin-file": assertPluginFile,
-  "plugin-file-removed": assertPluginFileRemoved,
+  "plugin-dir-deps-removed": () => assertLocalPluginRemoved(localPluginScenarios["dir-deps"]),
+  "plugin-file": () => assertLocalPlugin(localPluginScenarios.file),
+  "plugin-file-removed": () => assertLocalPluginRemoved(localPluginScenarios.file),
   "plugin-npm": assertNpmPlugin,
   "plugin-npm-update": assertNpmPluginUpdateUnchanged,
   "plugin-npm-retained": assertNpmPluginRetained,

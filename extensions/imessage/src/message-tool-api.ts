@@ -1,4 +1,3 @@
-// Imessage API module exposes the plugin public contract.
 import { createActionGate } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
@@ -13,22 +12,6 @@ import {
 } from "./private-api-status.js";
 import { getCachedIMessageRemoteHost } from "./remote-host.js";
 import { inferIMessageTargetChatType } from "./targets.js";
-
-const PRIVATE_API_ACTIONS = new Set<ChannelMessageActionName>([
-  "react",
-  "edit",
-  "unsend",
-  "reply",
-  "sendWithEffect",
-  "renameGroup",
-  "setGroupIcon",
-  "addParticipant",
-  "removeParticipant",
-  "leaveGroup",
-  "sendAttachment",
-  "poll",
-  "poll-vote",
-]);
 
 function isGroupTarget(
   raw?: string | null,
@@ -68,7 +51,7 @@ export function describeIMessageMessageTool({
     if (!spec?.gate || !gate(spec.gate)) {
       continue;
     }
-    if (privateApiStatus?.available === false && PRIVATE_API_ACTIONS.has(action)) {
+    if (privateApiStatus?.available === false) {
       continue;
     }
     if (

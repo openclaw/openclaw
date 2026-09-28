@@ -65,9 +65,6 @@ function resolveDefaultStoreBase(config: VoiceCallConfig, storePath?: string): s
   return resolveDefaultVoiceCallStoreDir();
 }
 
-/**
- * Manages voice calls: state ownership and delegation to manager helper modules.
- */
 export class CallManager {
   private activeCalls = new Map<CallId, CallRecord>();
   private providerCallIdMap = new Map<string, CallId>();
@@ -81,14 +78,7 @@ export class CallManager {
   private webhookUrl: string | null = null;
   private activeTurnCalls = new Set<CallId>();
   private endCallOperations = new Map<CallId, Promise<CallEndResult>>();
-  private transcriptWaiters = new Map<
-    CallId,
-    {
-      resolve: (text: string) => void;
-      reject: (err: Error) => void;
-      timeout: NodeJS.Timeout;
-    }
-  >();
+  private transcriptWaiters: CallManagerContext["transcriptWaiters"] = new Map();
   private maxDurationTimers = new Map<CallId, NodeJS.Timeout>();
   private initialMessageInFlight = new Set<CallId>();
   private autoResponseOwners = new WeakMap<CallRecord, symbol>();
@@ -418,16 +408,10 @@ export class CallManager {
     return verified;
   }
 
-  /**
-   * Get the current provider.
-   */
   getProvider(): VoiceCallProvider | null {
     return this.provider;
   }
 
-  /**
-   * Initiate an outbound call.
-   */
   async initiateCall(
     to: string,
     sessionKey?: string,
@@ -438,9 +422,6 @@ export class CallManager {
     );
   }
 
-  /**
-   * Speak to user in an active call.
-   */
   async speak(
     callId: CallId,
     text: string,
@@ -449,9 +430,6 @@ export class CallManager {
     return this.runOperation(() => speakWithContext(this.getContext(), callId, text, options));
   }
 
-  /**
-   * Send DTMF digits to an active call.
-   */
   async sendDtmf(callId: CallId, digits: string): Promise<{ success: boolean; error?: string }> {
     return this.runOperation(() => sendDtmfWithContext(this.getContext(), callId, digits));
   }
@@ -475,9 +453,6 @@ export class CallManager {
     return this.runOperation(() => continueCallWithContext(this.getContext(), callId, prompt));
   }
 
-  /**
-   * End an active call.
-   */
   endCall(callId: CallId, options?: { reason?: EndReason }): Promise<CallEndResult> {
     return this.runOperation(() => endCallWithContext(this.getContext(), callId, options));
   }
@@ -512,9 +487,6 @@ export class CallManager {
     };
   }
 
-  /**
-   * Process a webhook event.
-   */
   processEvent(event: NormalizedEvent): Promise<ProcessEventResult> {
     return this.runOperation(() => processManagerEvent(this.getContext(), event));
   }
@@ -592,9 +564,6 @@ export class CallManager {
     });
   }
 
-  /**
-   * Get an active call by ID.
-   */
   getCall(callId: CallId): CallRecord | undefined {
     return this.activeCalls.get(callId);
   }
@@ -608,9 +577,6 @@ export class CallManager {
     );
   }
 
-  /**
-   * Get an active call by provider call ID (e.g., Twilio CallSid).
-   */
   getCallByProviderCallId(providerCallId: string): CallRecord | undefined {
     return getCallByProviderCallIdFromMaps({
       activeCalls: this.activeCalls,
@@ -619,9 +585,6 @@ export class CallManager {
     });
   }
 
-  /**
-   * Get all active calls.
-   */
   getActiveCalls(): CallRecord[] {
     return Array.from(this.activeCalls.values());
   }
@@ -635,9 +598,6 @@ export class CallManager {
     return this.runOperation(() => findCallInStore(this.storePath, callId, this.stateRuntime));
   }
 
-  /**
-   * Get call history (from persisted logs).
-   */
   async getCallHistory(limit = 50): Promise<CallRecord[]> {
     return this.runOperation(() =>
       getCallHistoryFromStore(this.storePath, limit, this.stateRuntime),

@@ -11,7 +11,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
-import { dedupeByKey } from "../shared/dedupe-by-key.js";
+import { dedupeByKey, indexFirstByKey } from "../shared/dedupe-by-key.js";
 import { modelKey as pickerModelKey } from "../shared/model-key.js";
 import {
   resolveAgentDir,
@@ -394,13 +394,7 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
           return dynamicProviders.has(id) && !Array.isArray(config?.models) ? [id] : [];
         }),
       );
-      const canonicalByKey = new Map<string, ModelCatalogEntry>();
-      for (const entry of canonicalEntries) {
-        const key = keyOf(entry);
-        if (!canonicalByKey.has(key)) {
-          canonicalByKey.set(key, entry);
-        }
-      }
+      const canonicalByKey = indexFirstByKey(canonicalEntries, keyOf);
       // Authored config owns membership; captured catalog rows own route metadata.
       const authored = buildProviderConfigModelCatalogForBrowse({
         cfg: sourceConfig,

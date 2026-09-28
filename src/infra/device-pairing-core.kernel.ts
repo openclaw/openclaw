@@ -30,7 +30,7 @@ import {
 } from "./device-pairing-state.kernel.js";
 import {
   persistDevicePairingStoreState as persistState,
-  updatePairedDevicePresenceInTransaction,
+  updatePairedDeviceInTransaction,
 } from "./device-pairing-store.js";
 import type {
   DevicePairingPendingRecord,
@@ -463,43 +463,39 @@ export function removePairedDeviceRoleInWorker(params: {
 export function updatePairedDeviceMetadataInWorker(
   deviceId: string,
   patch: Partial<PairedDeviceMetadataPatch>,
-  nowMs: number,
   baseDir?: string,
 ): boolean {
-  const state = loadDevicePairingStateForMutation(nowMs, baseDir);
-  const normalizedDeviceId = normalizeDevicePairingId(deviceId);
-  const existing = state.pairedByDeviceId[normalizedDeviceId];
-  if (!existing) {
-    return false;
-  }
-  const next = { ...existing };
-  if ("displayName" in patch) {
-    next.displayName = patch.displayName;
-  }
-  if ("operatorLabel" in patch) {
-    next.operatorLabel = patch.operatorLabel;
-  }
-  if ("platform" in patch) {
-    next.platform = patch.platform;
-  }
-  if ("clientId" in patch) {
-    next.clientId = patch.clientId;
-  }
-  if ("clientMode" in patch) {
-    next.clientMode = patch.clientMode;
-  }
-  if ("remoteIp" in patch) {
-    next.remoteIp = patch.remoteIp;
-  }
-  if ("lastSeenAtMs" in patch) {
-    next.lastSeenAtMs = patch.lastSeenAtMs;
-  }
-  if ("lastSeenReason" in patch) {
-    next.lastSeenReason = patch.lastSeenReason;
-  }
-  state.pairedByDeviceId[normalizedDeviceId] = next;
-  persistState(state, baseDir, "paired");
-  return true;
+  return updatePairedDeviceInTransaction(deviceId, baseDir, (device) => {
+    if (!device) {
+      return { value: false };
+    }
+    const next: Partial<PairedDeviceMetadataPatch> = {};
+    if ("displayName" in patch) {
+      next.displayName = patch.displayName;
+    }
+    if ("operatorLabel" in patch) {
+      next.operatorLabel = patch.operatorLabel;
+    }
+    if ("platform" in patch) {
+      next.platform = patch.platform;
+    }
+    if ("clientId" in patch) {
+      next.clientId = patch.clientId;
+    }
+    if ("clientMode" in patch) {
+      next.clientMode = patch.clientMode;
+    }
+    if ("remoteIp" in patch) {
+      next.remoteIp = patch.remoteIp;
+    }
+    if ("lastSeenAtMs" in patch) {
+      next.lastSeenAtMs = patch.lastSeenAtMs;
+    }
+    if ("lastSeenReason" in patch) {
+      next.lastSeenReason = patch.lastSeenReason;
+    }
+    return { value: true, patch: next };
+  });
 }
 
 /** Update paired-device presence only while the authenticated node generation still owns it. */
@@ -509,20 +505,18 @@ export function updatePairedDevicePresenceInWorker(
   expectedPairingGeneration: NodePairingGeneration,
   baseDir?: string,
 ): boolean {
-  return updatePairedDevicePresenceInTransaction<boolean>(deviceId, baseDir, (device) => {
+  return updatePairedDeviceInTransaction(deviceId, baseDir, (device) => {
     const currentPairingGeneration = resolveNodePairingGeneration(device);
     if (
       !device ||
       expectedPairingGeneration.nodeId !== device.deviceId ||
       currentPairingGeneration?.key !== expectedPairingGeneration.key
     ) {
-      return { value: false, persist: false };
+      return { value: false };
     }
     return {
       value: true,
-      persist: true,
-      lastSeenAtMs: patch.lastSeenAtMs,
-      lastSeenReason: patch.lastSeenReason,
+      patch: { lastSeenAtMs: patch.lastSeenAtMs, lastSeenReason: patch.lastSeenReason },
     };
   });
 }

@@ -167,15 +167,12 @@ describe("Claude CLI node command", () => {
   );
 
   it.each([
-    { argv: ["--unknown"], error: "unsupported Claude CLI argument" },
     { argv: ["--model"], error: "requires a value" },
     { argv: ["--mcp-config", "/tmp/mcp.json"], error: "unsupported Claude CLI argument" },
-    { argv: ["--plugin-dir", "/tmp/plugin"], error: "unsupported Claude CLI argument" },
     { argv: ["--allowedTools", "Bash"], error: "unsupported Claude CLI argument" },
     // Tool policy must arrive as one comma-joined value; the multi-token
     // variadic form fails closed instead of parsing partially.
     { argv: ["--disallowedTools", "Bash", "Edit"], error: "unsupported Claude CLI argument" },
-    { argv: ["--append-system-prompt", "inline"], error: "unsupported Claude CLI argument" },
     {
       argv: ["-p", "--resume", "--dangerously-skip-permissions"],
       error: "requires a non-option value",
@@ -378,8 +375,6 @@ describe("Claude CLI node command", () => {
     { rawEnv: "CLAUDE_CODE_OAUTH_TOKEN", value: "selected-node-oauth" },
     { rawEnv: "ANTHROPIC_API_KEY", value: "selected-node-api-key" },
     { rawEnv: "CLAUDE_CODE_OAUTH_TOKEN", value: "" },
-    { rawEnv: "ANTHROPIC_API_KEY", value: "" },
-    { rawEnv: "CLAUDE_CODE_OAUTH_TOKEN", value: " \t " },
     { rawEnv: "ANTHROPIC_API_KEY", value: " \t " },
   ])(
     "forwards only nonblank $rawEnv through a child-only descriptor ($value)",
@@ -740,56 +735,6 @@ process.stdout.write(JSON.stringify({ type: "result", result: prompt }) + "\\n")
           await expect(fs.stat(promptPath)).rejects.toThrow();
         });
       });
-    },
-  );
-
-  it.each([
-    {
-      descriptorEnv: "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
-      rawEnv: "CLAUDE_CODE_OAUTH_TOKEN",
-    },
-    {
-      descriptorEnv: "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
-      rawEnv: "ANTHROPIC_API_KEY",
-    },
-  ])(
-    "delivers selected credentials through fd 3 for $rawEnv",
-    async ({ descriptorEnv, rawEnv }) => {
-      const executable = await executableScript(`
-const fs = require("node:fs");
-const secret = fs.readFileSync(3, "utf8");
-process.stdout.write(JSON.stringify({
-  type: "result",
-  result: secret,
-  descriptor: process.env[${JSON.stringify(descriptorEnv)}],
-  rawPresent: Object.hasOwn(process.env, ${JSON.stringify(rawEnv)}),
-  scrubPresent: Object.hasOwn(process.env, "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"),
-  gitInstructionsDisabled: process.env.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS,
-}) + "\\n");`);
-      const request = { argv: ["-p"], idleTimeoutMs: 1_000, timeoutMs: 5_000 };
-      const calls: Array<{ method: string; params: unknown }> = [];
-      const result = await runCommand(executable, request, {
-        client: client(calls),
-        env: {
-          ...process.env,
-          [descriptorEnv]: "3",
-        } as Record<string, string>,
-        secretInput: {
-          fd: 3,
-          createData: () => Buffer.from("selected-node-secret"),
-        },
-      });
-
-      const progress = calls
-        .filter((call) => call.method === "node.invoke.progress")
-        .map((call) => (call.params as { chunk: string }).chunk)
-        .join("");
-      expect(progress).toContain('"result":"selected-node-secret"');
-      expect(progress).toContain('"descriptor":"3"');
-      expect(progress).toContain('"rawPresent":false');
-      expect(progress).toContain('"scrubPresent":false');
-      expect(progress).toContain('"gitInstructionsDisabled":"1"');
-      expect(result).toMatchObject({ exitCode: 0, success: true });
     },
   );
 

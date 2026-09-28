@@ -196,14 +196,7 @@ export async function clearFinalizableDraftMessage<T>(
 export function createFinalizableDraftLifecycle<TMessageId, TUpdate = string>(
   params: FinalizableDraftLifecycleParams<TMessageId, TUpdate>,
 ) {
-  const controls = createFinalizableDraftStreamControlsForState<TUpdate>({
-    throttleMs: params.throttleMs,
-    coalesceInFlight: params.coalesceInFlight,
-    state: params.state,
-    sendOrEditStreamMessage: params.sendOrEditStreamMessage,
-    ...(params.emptyValue !== undefined ? { emptyValue: params.emptyValue } : {}),
-    ...(params.isEmpty ? { isEmpty: params.isEmpty } : {}),
-  });
+  const controls = createFinalizableDraftStreamControlsForState<TUpdate>(params);
   type Retirement = {
     owner: DeleteFinalizableDraftMessageParams<TMessageId>;
     attempt?: Promise<boolean>;

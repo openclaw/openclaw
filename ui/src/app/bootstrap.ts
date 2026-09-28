@@ -25,7 +25,6 @@ import { createRuntimeConfigCapability } from "../lib/config/runtime-config-capa
 import { loadCurrentDeviceAuthToken } from "../lib/nodes/index.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
-import { createLiveActivity } from "../pages/activity/live-activity.ts";
 import { loadChatObserverDisplayPreference } from "../pages/chat/chat-observer-display.ts";
 import { sendSessionObserverVisibility } from "../pages/chat/chat-observer.ts";
 import {
@@ -60,9 +59,11 @@ import { createConnectionBootstrapCoordinator } from "./connection-bootstrap.ts"
 import type { ApplicationNavigationOptions, ApplicationContext } from "./context.ts";
 import { createScopeUpgradeCapability } from "./device-scope-upgrade.ts";
 import { startGatewayPageActivation } from "./gateway-page-activation.ts";
+import { startGatewayPresenceActivity } from "./gateway-presence-activity.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { startLinkReaderRouting } from "./link-reader-routing.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
+import type { NativeConversationBridge } from "./native-conversation-types.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import { isBrowserPanelAvailable } from "./panel-availability.ts";
@@ -178,7 +179,6 @@ export function bootstrapApplication(): ApplicationRuntime {
       ? getGatewayAuth()
       : {},
   );
-  const liveActivity = createLiveActivity(gateway);
   const connectionBootstrap = createConnectionBootstrapCoordinator();
   const chatSubmissions = createChatSubmissions();
   const router = createApplicationRouter();
@@ -478,6 +478,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   const navigateAndWait = (routeId: RouteId, options?: ApplicationNavigationOptions) =>
     navigateWithMode(routeId, options, "push");
   const plugins = new ControlUiPluginRuntime(() => context);
+  let nativeConversation: NativeConversationBridge | null = null;
   const context: ApplicationContext = {
     basePath,
     resourceBasePath,
@@ -495,13 +496,15 @@ export function bootstrapApplication(): ApplicationRuntime {
     sidebarAttention,
     runtimeConfig,
     sessions,
-    liveActivity,
     placementStartup,
     plugins,
     overlays,
     navigation,
     theme,
     nativeChatDrafts,
+    get nativeConversation() {
+      return nativeConversation;
+    },
     get nativeDeviceSettings() {
       return nativeDeviceSettings;
     },
@@ -543,6 +546,7 @@ export function bootstrapApplication(): ApplicationRuntime {
           return () => gateway.stop();
         },
         () => startGatewayPageActivation(gateway, document, window),
+        () => startGatewayPresenceActivity(gateway, document),
         () => {
           plugins.start();
           return () => plugins.dispose();
@@ -559,7 +563,8 @@ export function bootstrapApplication(): ApplicationRuntime {
       if (nativeWindow.webkit?.messageHandlers) {
         steps.unshift(async () => {
           const { startNativeCapabilities } = await import("./native-startup.runtime.ts");
-          return startNativeCapabilities(gateway, startupLifecycle, (capabilities) => {
+          return startNativeCapabilities(context, startupLifecycle, (capabilities) => {
+            nativeConversation = capabilities.conversation;
             nativeDeviceSettings = capabilities.deviceSettings;
             nativeNotifications = capabilities.notifications;
           });
@@ -650,7 +655,6 @@ export function bootstrapApplication(): ApplicationRuntime {
       sidebarAttention.dispose();
       placementStartup.dispose();
       sessions.dispose();
-      liveActivity.dispose();
       stopConfigWriteSuspension();
       runtimeConfig.dispose();
       overlays.dispose();

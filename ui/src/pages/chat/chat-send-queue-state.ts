@@ -6,12 +6,11 @@ import type { ChatAttachment, ChatQueueItem, HumanMention } from "../../lib/chat
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
+import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
 import {
   captureChatOutboxAdmission,
   storedChatOutboxScopeKey,
-  type StoredChatOutboxScope,
 } from "../../lib/chat/outbox-store.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
@@ -20,6 +19,7 @@ import {
   getChatHistoryLoadState,
   isExpiredIncognitoSession,
   isInitialChatHistoryUnavailable,
+  setChatError,
 } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import type {
@@ -55,15 +55,6 @@ import { hasDirectSessionRun, isChatBusy } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 
 registerChatMessageMetadataEnglish();
-
-export function setChatError(
-  host: { lastError?: string | null; chatError?: string | null },
-  error: string | null,
-) {
-  const message = error === null ? null : formatUiError(error);
-  host.lastError = message;
-  host.chatError = message;
-}
 
 export function createPendingSendMessage(
   host: ChatHost,
