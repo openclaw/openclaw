@@ -25452,13 +25452,22 @@ public struct WorkerEnvironmentMetadata: Codable, Sendable {
 public struct WorkerSlotSummary: Codable, Sendable {
     public let total: Int
     public let available: Int
+    public let reclaimableidle: Int?
 
     public init(
         total: Int,
-        available: Int)
+        available: Int,
+        reclaimableidle: Int? = nil)
     {
         self.total = total
         self.available = available
+        self.reclaimableidle = reclaimableidle
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case total
+        case available
+        case reclaimableidle = "reclaimableIdle"
     }
 }
 
