@@ -264,11 +264,8 @@ function listDefaultPluginNodeCommands(platformId: PlatformId): string[] {
 
 export function isForegroundRestrictedPluginNodeCommand(command: string): boolean {
   const registry = getActivePluginGatewayNodePolicyRegistry();
-  if (!registry) {
-    return false;
-  }
   const normalized = command.trim();
-  if (!normalized) {
+  if (!registry || !normalized) {
     return false;
   }
   return registry.nodeInvokePolicies.some(
@@ -475,8 +472,6 @@ export function formatRequiredNodeCommandUnavailable(
   const { command, state } = authority;
   const prefix = `paired-device command ${command}`;
   switch (state) {
-    case "invocable":
-      break;
     case "undeclared": {
       const registry = getActivePluginGatewayNodePolicyRegistry();
       const pluginId = registry?.nodeHostCommands.find(

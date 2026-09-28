@@ -173,13 +173,7 @@ function updateWorkerRunnerInventory(
     clientId: node.clientId,
     clientMode: "node",
     protocolFeatures: [...params.declaration.protocolFeatures],
-    ...(workerHost
-      ? {
-          workerHost: workerHost.enabled
-            ? { ...workerHost, capacity: { ...workerHost.capacity } }
-            : { ...workerHost },
-        }
-      : {}),
+    ...(workerHost ? { workerHost: structuredClone(workerHost) } : {}),
   };
   const statusCleared =
     next.workerHost?.enabled !== true ||

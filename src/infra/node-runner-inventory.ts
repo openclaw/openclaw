@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { WORKER_BUNDLE_PREWARM_VERSION } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { parseWorkerCapacity } from "../../packages/gateway-protocol/src/worker-capacity.js";
@@ -39,82 +38,65 @@ const CapacitySnapshot = z.transform((value, context) => {
   }
   return capacity;
 });
-const WorkerHost = z.union([
-  workerProtocolObject({
-    enabled: z.literal(false),
-    reason: z.string().max(NODE_WORKER_HOST_DISABLED_REASON_MAX_LENGTH).refine((value) => value.trim().length > 0).optional(),
-  }),
-  workerProtocolObject({
-    enabled: z.literal(true),
-    capacity: CapacitySnapshot,
-    bundlePrewarm: z.literal(WORKER_BUNDLE_PREWARM_VERSION).optional(),
-    bundleRetention: z.literal(NODE_WORKER_BUNDLE_RETENTION_VERSION).optional(),
-    bundleStatus: z.literal(NODE_WORKER_BUNDLE_STATUS_VERSION).optional(),
-    portalStream: z.literal(NODE_WORKER_PORTAL_STREAM_VERSION).optional(),
-    environmentSession: z.literal(NODE_WORKER_ENVIRONMENT_SESSION_VERSION).optional(),
-    statusWait: z.literal(NODE_WORKER_STATUS_WAIT_VERSION).optional(),
-    preparedWorkspace: z.literal(NODE_WORKER_PREPARED_WORKSPACE_VERSION).optional(),
-    capturedExecPolicy: z.literal(true).optional(),
-  }).refine((host) => host.bundleStatus === undefined || host.bundleRetention !== undefined),
-]);
+const WorkerHost = z
+  .union([
+    workerProtocolObject({
+      enabled: z.literal(false),
+      reason: z
+        .string()
+        .max(NODE_WORKER_HOST_DISABLED_REASON_MAX_LENGTH)
+        .refine((value) => value.trim().length > 0)
+        .optional(),
+    }),
+    workerProtocolObject({
+      enabled: z.literal(true),
+      capacity: CapacitySnapshot,
+      bundlePrewarm: z.literal(WORKER_BUNDLE_PREWARM_VERSION).optional(),
+      bundleRetention: z.literal(NODE_WORKER_BUNDLE_RETENTION_VERSION).optional(),
+      bundleStatus: z.literal(NODE_WORKER_BUNDLE_STATUS_VERSION).optional(),
+      portalStream: z.literal(NODE_WORKER_PORTAL_STREAM_VERSION).optional(),
+      environmentSession: z.literal(NODE_WORKER_ENVIRONMENT_SESSION_VERSION).optional(),
+      statusWait: z.literal(NODE_WORKER_STATUS_WAIT_VERSION).optional(),
+      preparedWorkspace: z.literal(NODE_WORKER_PREPARED_WORKSPACE_VERSION).optional(),
+      capturedExecPolicy: z.literal(true).optional(),
+    }).refine((host) => host.bundleStatus === undefined || host.bundleRetention !== undefined),
+  ])
+  .transform((host) => {
+    // Optional undefined values are absent in the reconnect declaration.
+    for (const [key, value] of Object.entries(host)) {
+      if (value === undefined) {
+        Reflect.deleteProperty(host, key);
+      }
+    }
+    return host;
+  });
 export type NodeWorkerCapacitySnapshot = Readonly<z.infer<typeof CapacitySnapshot>>;
 export type NodeWorkerHostDeclaration = z.infer<typeof WorkerHost>;
 
-export type NodeRunnerInventoryDeclaration =
-  | { protocolFeatures: readonly [] }
-  | {
-      protocolFeatures: readonly [
-        (typeof RETIRED_NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURES)[number],
-      ];
-    }
-  | {
-      protocolFeatures: readonly [typeof NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE];
-      workerHost: NodeWorkerHostDeclaration;
-    };
+const RunnerInventory = z.union([
+  workerProtocolObject({ protocolFeatures: z.tuple([]).readonly() }),
+  workerProtocolObject({
+    protocolFeatures: z
+      .tuple([z.enum(RETIRED_NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURES)])
+      .readonly(),
+    workerRuns: z.unknown().optional(),
+    workerHost: z.unknown().optional(),
+  })
+    .refine((value) => Object.keys(value).length <= 2)
+    // Retired payloads never become consent or launch authority; only their marker drives recovery.
+    .transform(({ protocolFeatures }) => ({ protocolFeatures })),
+  workerProtocolObject({
+    protocolFeatures: z.tuple([z.literal(NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE)]).readonly(),
+    workerHost: WorkerHost,
+  }),
+]);
+export type NodeRunnerInventoryDeclaration = z.infer<typeof RunnerInventory>;
 
 /** Parses the closed reconnect-scoped node-host runner declaration. */
 export function parseNodeRunnerInventoryDeclaration(
   value: unknown,
 ): NodeRunnerInventoryDeclaration | null {
-  if (!isRecord(value) || !Array.isArray(value.protocolFeatures)) {
-    return null;
-  }
-  const keys = Object.keys(value);
-  if (value.protocolFeatures.length === 0) {
-    return keys.length === 1 && keys.includes("protocolFeatures") ? { protocolFeatures: [] } : null;
-  }
-  if (value.protocolFeatures.length !== 1) {
-    return null;
-  }
-  const feature = value.protocolFeatures[0];
-  const retiredFeature = RETIRED_NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURES.find(
-    (candidate) => candidate === feature,
-  );
-  if (retiredFeature) {
-    // Retired payloads never become consent or launch authority; only their marker drives recovery.
-    return keys.length <= 2 &&
-      keys.every(
-        (key) => key === "protocolFeatures" || key === "workerRuns" || key === "workerHost",
-      )
-      ? { protocolFeatures: [retiredFeature] }
-      : null;
-  }
-  if (feature !== NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE || keys.length !== 2) {
-    return null;
-  }
-  const workerHost = WorkerHost.safeParse(value.workerHost).data;
-  if (workerHost) {
-    // Optional undefined values are absent in the reconnect declaration.
-    const fields: Record<string, unknown> = workerHost;
-    for (const key of Object.keys(fields)) {
-      if (fields[key] === undefined) {
-        delete fields[key];
-      }
-    }
-  }
-  return workerHost
-    ? { protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE], workerHost }
-    : null;
+  return RunnerInventory.safeParse(value).data ?? null;
 }
 
 export function formatNodeRunnerInventoryIssue(

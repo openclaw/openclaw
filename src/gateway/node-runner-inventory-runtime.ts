@@ -234,10 +234,7 @@ export function resolveNodeWorkerSupervisorProof(
     clientId: node.clientId,
     clientMode: "node",
     protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-    workerHost: {
-      ...declaration.workerHost,
-      capacity: { ...declaration.workerHost.capacity },
-    },
+    workerHost: structuredClone(declaration.workerHost),
     commands: [...node.commands],
   };
 }
