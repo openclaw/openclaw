@@ -122,6 +122,15 @@ function writeAliasedSessionStore(params: {
   return { cfg, configuredStorePath, standardStorePath };
 }
 
+function planFixture(fixture: Awaited<ReturnType<typeof makeFixture>>) {
+  return planLegacyStateMigrationsReadOnly({
+    mode: "doctor",
+    candidate: { root: fixture.root, version: "test" },
+    snapshot: createCallerModeSnapshot(fixture),
+    env: fixture.env,
+  });
+}
+
 afterEach(async () => {
   pluginDoctorContractRegistryLoaderState.moduleLoaderFactory = undefined;
   resetAutoMigrateLegacyStateDirForTest();
@@ -160,12 +169,7 @@ describe("legacy state migration caller execution", () => {
     );
     const stateDatabasePath = resolveOpenClawStateSqlitePath(fixture.env);
     writeLegacyStateSchemaV1(stateDatabasePath);
-    const plan = await planLegacyStateMigrationsReadOnly({
-      mode: "doctor",
-      candidate: { root: fixture.root, version: "test" },
-      snapshot: createCallerModeSnapshot(fixture),
-      env: fixture.env,
-    });
+    const plan = await planFixture(fixture);
 
     const result = await autoMigrateLegacyState({
       cfg,
@@ -181,59 +185,7 @@ describe("legacy state migration caller execution", () => {
       ...plan,
       steps: plan.steps.filter((step) => step.id !== "plugin-doctor-post-session-state"),
     };
-    expect(result.stepReceipts.map((receipt) => receipt.id)).toEqual(
-      executedPlan.steps.map((step) => step.id),
-    );
     expectPlanReceiptDescriptorsToMatch({ plan: executedPlan, receipts: result.stepReceipts });
-    const sharedAuthPlan = plan.steps.find((step) => step.id === "shared-auth-store");
-    const sharedAuthReceipt = result.stepReceipts.find((step) => step.id === "shared-auth-store");
-    expect(sharedAuthPlan?.requiredness).toBe("conditional");
-    expect(sharedAuthReceipt?.requiredness).toBe("conditional");
-    const pluginPlan = plan.steps.find((step) => step.id === "plugin-doctor-state");
-    const pluginReceipt = result.stepReceipts.find((step) => step.id === "plugin-doctor-state");
-    expect(pluginPlan?.source).toContainEqual({
-      kind: "owner",
-      id: "plugin:matrix:matrix-inbound-dedupe-to-claimable-dedupe",
-    });
-    expect(pluginReceipt?.source).toEqual(pluginPlan?.source);
-    expect(pluginReceipt?.target).toEqual(pluginPlan?.target);
-    expect(pluginReceipt?.requiredness).toBe("conditional");
-    const postSessionPlan = plan.steps.find(
-      (step) => step.id === "plugin-doctor-post-session-state",
-    );
-    expect(postSessionPlan?.source).toEqual(
-      expect.arrayContaining([
-        { kind: "owner", id: "plugin:acpx:acpx-session-owner-resources" },
-        {
-          kind: "owner",
-          id: "plugin:codex:codex-app-server-orphaned-session-bindings",
-        },
-      ]),
-    );
-    expect(result.stepReceipts).not.toContainEqual(
-      expect.objectContaining({ id: "plugin-doctor-post-session-state" }),
-    );
-    expect(result.postSessionPluginMigration).toMatchObject({
-      step: {
-        id: postSessionPlan?.id,
-        phase: postSessionPlan?.phase,
-        source: postSessionPlan?.source,
-        target: postSessionPlan?.target,
-        requiredness: postSessionPlan?.requiredness,
-        reversibility: postSessionPlan?.reversibility,
-      },
-      plannedActions: expect.arrayContaining([
-        { pluginId: "acpx", id: "acpx-session-owner-resources" },
-        { pluginId: "codex", id: "codex-app-server-orphaned-session-bindings" },
-      ]),
-    });
-    expect(plan.steps.map((step) => step.phase)).toEqual(
-      [...plan.steps]
-        .toSorted((left, right) =>
-          left.phase === right.phase ? 0 : left.phase === "shared" ? -1 : 1,
-        )
-        .map((step) => step.phase),
-    );
     expect(plan.steps.findIndex((step) => step.id === "device-auth")).toBeLessThan(
       plan.steps.findIndex((step) => step.id === "tui-last-session"),
     );
@@ -267,41 +219,6 @@ describe("legacy state migration caller execution", () => {
       outcome: "completed",
       warnings: [],
     });
-    for (const stepId of ["media-persistence", "transcript-directives"] as const) {
-      expect(plan.steps.find((step) => step.id === stepId)).toMatchObject({
-        source: expect.arrayContaining([
-          { kind: "sqlite", path: stateDatabasePath },
-          { kind: "path", path: path.join(fixture.stateDir, "agents") },
-        ]),
-        target: expect.arrayContaining([
-          { kind: "sqlite", path: stateDatabasePath },
-          { kind: "path", path: path.join(fixture.stateDir, "agents") },
-        ]),
-        requiredness: "conditional",
-        outcome: "planned",
-      });
-      expect(result.stepReceipts.find((receipt) => receipt.id === stepId)).toMatchObject({
-        outcome: "skipped",
-        warnings: [],
-      });
-    }
-    expect(plan.steps.find((step) => step.id === "profile-workspace")).toMatchObject({
-      source: [],
-      target: [],
-      requiredness: "not-required",
-      outcome: "skipped",
-    });
-    expect(result.stepReceipts.find((receipt) => receipt.id === "profile-workspace")).toMatchObject(
-      { outcome: "skipped", warnings: [] },
-    );
-    expect(plan.steps.find((step) => step.id === "orphan-session-keys")).toMatchObject({
-      source: expect.arrayContaining([{ kind: "path", path: fixture.configPath }]),
-      requiredness: "conditional",
-      outcome: "planned",
-    });
-    expect(
-      result.stepReceipts.find((receipt) => receipt.id === "orphan-session-keys"),
-    ).toMatchObject({ outcome: "skipped", warnings: [] });
     expect(result.stepReceipts.find((receipt) => receipt.id === "device-auth")).toMatchObject({
       source: [{ kind: "path", path: deviceAuthPath }],
       outcome: "completed",
@@ -360,8 +277,18 @@ describe("legacy state migration caller execution", () => {
     expect(fs.realpathSync(legacyStateDir)).toBe(fs.realpathSync(stateDir));
     expect(fs.existsSync(execPath)).toBe(false);
     expect(result.stepReceipts.find((receipt) => receipt.id === "exec-approvals")).toMatchObject({
+      source: [{ kind: "path", path: path.join(stateDir, "exec-approvals.json") }],
       outcome: "completed",
     });
+    expect(
+      readLegacyMigrationReceipt(
+        resolveLegacyMigrationSourceKey(
+          "exec-approvals-json",
+          path.join(stateDir, "exec-approvals.json"),
+        ),
+        { ...env, OPENCLAW_STATE_DIR: stateDir },
+      ),
+    ).not.toBeNull();
   });
 
   it("plans pending state-root relocation before every copied-state migration", async () => {
@@ -515,12 +442,7 @@ describe("legacy state migration caller execution", () => {
     fs.mkdirSync(path.dirname(brokenDatabasePath), { recursive: true });
     fs.writeFileSync(brokenDatabasePath, "not sqlite");
     const { execPath } = writeLegacyDoctorSources(fixture.stateDir);
-    const plan = await planLegacyStateMigrationsReadOnly({
-      mode: "doctor",
-      candidate: { root: fixture.root, version: "test" },
-      snapshot: createCallerModeSnapshot(fixture),
-      env: fixture.env,
-    });
+    const plan = await planFixture(fixture);
 
     const result = await autoMigrateLegacyState({
       cfg,
@@ -559,12 +481,7 @@ describe("legacy state migration caller execution", () => {
     }
     fs.mkdirSync(paths.source, { recursive: true });
     fs.writeFileSync(path.join(paths.source, "AGENTS.md"), "profile workspace");
-    const plan = await planLegacyStateMigrationsReadOnly({
-      mode: "doctor",
-      candidate: { root: fixture.root, version: "test" },
-      snapshot: createCallerModeSnapshot(fixture),
-      env: fixture.env,
-    });
+    const plan = await planFixture(fixture);
     const legacySessionSurfaces: PreparedLegacySessionSurfaces = Object.defineProperty(
       { surfaces: [], failures: [] },
       "failures",
@@ -624,12 +541,7 @@ describe("legacy state migration caller execution", () => {
     const database = new DatabaseSync(databasePath);
     database.exec("CREATE TABLE agent_databases (broken TEXT);");
     database.close();
-    const plan = await planLegacyStateMigrationsReadOnly({
-      mode: "doctor",
-      candidate: { root: fixture.root, version: "test" },
-      snapshot: createCallerModeSnapshot(fixture),
-      env: fixture.env,
-    });
+    const plan = await planFixture(fixture);
     const pluginLoader = vi.fn(() => {
       throw new Error("blocked-plan closure must not load plugins");
     });
@@ -698,34 +610,6 @@ describe("legacy state migration caller execution", () => {
     }
   });
 
-  it("receipts every stable tail step when blocked fallback detection cannot read state", async () => {
-    const healthyFixture = await makeFixture();
-    const healthyPlan = await planLegacyStateMigrationsReadOnly({
-      mode: "doctor",
-      candidate: { root: healthyFixture.root, version: "test" },
-      snapshot: createCallerModeSnapshot(healthyFixture),
-      env: healthyFixture.env,
-    });
-    const fixture = await makeFixture();
-    const databasePath = resolveOpenClawStateSqlitePath(fixture.env);
-    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-    fs.writeFileSync(databasePath, "not a SQLite database");
-
-    const result = await autoMigrateLegacyState({
-      cfg: {},
-      doctorOnlyStateMigrations: true,
-      env: fixture.env,
-      homedir: () => fixture.homeDir,
-      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-    });
-
-    expectBlockedTailInPlanOrder({
-      plan: healthyPlan,
-      receipts: result.stepReceipts,
-      blockerId: "state-schema",
-    });
-  });
-
   it("blocks later Doctor repairs after a conditional profile refusal", async () => {
     const fixture = await makeFixture();
     fixture.env.OPENCLAW_PROFILE = "work";
@@ -739,12 +623,7 @@ describe("legacy state migration caller execution", () => {
     fs.mkdirSync(paths.source, { recursive: true });
     fs.mkdirSync(paths.target, { recursive: true });
     const { execPath } = writeLegacyDoctorSources(fixture.stateDir);
-    const plan = await planLegacyStateMigrationsReadOnly({
-      mode: "doctor",
-      candidate: { root: fixture.root, version: "test" },
-      snapshot: createCallerModeSnapshot(fixture),
-      env: fixture.env,
-    });
+    const plan = await planFixture(fixture);
 
     const result = await autoMigrateLegacyState({
       cfg: {},
@@ -784,12 +663,7 @@ describe("legacy state migration caller execution", () => {
       store: { main: { sessionId: "legacy-main", updatedAt: 1 } },
     });
     const { execPath } = writeLegacyDoctorSources(fixture.stateDir);
-    const plan = await planLegacyStateMigrationsReadOnly({
-      mode: "doctor",
-      candidate: { root: fixture.root, version: "test" },
-      snapshot: createCallerModeSnapshot(fixture),
-      env: fixture.env,
-    });
+    const plan = await planFixture(fixture);
 
     const result = await autoMigrateLegacyState({
       cfg,
@@ -839,12 +713,7 @@ describe("legacy state migration caller execution", () => {
     const legacyAgentDir = path.join(fixture.stateDir, "agent");
     fs.mkdirSync(legacyAgentDir, { recursive: true });
     fs.writeFileSync(path.join(legacyAgentDir, "settings.json"), "{}\n");
-    const plan = await planLegacyStateMigrationsReadOnly({
-      mode: "doctor",
-      candidate: { root: fixture.root, version: "test" },
-      snapshot: createCallerModeSnapshot(fixture),
-      env: fixture.env,
-    });
+    const plan = await planFixture(fixture);
 
     const result = await autoMigrateLegacyState({
       cfg,

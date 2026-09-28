@@ -1,4 +1,4 @@
-// Read-only managed Gateway ownership and Node selection for update planning.
+// Read-only managed Gateway ownership and runtime selection for update planning.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
@@ -11,7 +11,11 @@ import { SUPPORTED_NODE_VERSION_RANGE } from "../../../node-version.mjs";
 import { createConfigIO } from "../../config/io.js";
 import { resolveGatewayPort } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveNodeRuntimeInfo } from "../../daemon/runtime-paths.js";
+import { isBunRuntime } from "../../daemon/runtime-binary.js";
+import {
+  resolveNodeRuntimeInfo,
+  resolvePinnedDaemonRuntimePath,
+} from "../../daemon/runtime-paths.js";
 import {
   formatServiceInspectionReason,
   type ServiceInspectionReason,
@@ -67,14 +71,11 @@ import { resolveNodeRunner } from "./shared.js";
 import type { PackageRuntimeRecovery } from "./update-command-node-runtime-resolution.js";
 import type {
   ManagedGatewayUpdateVerdict,
+  ManagedServicePackageUpdatePlan,
+  PackageRuntimePreflight,
   PreManagedServiceStop,
 } from "./update-command-service-context-types.js";
 import { resolveServiceRecoveryContext } from "./update-command-service-env.js";
-
-export type ManagedServiceRootRedirect = {
-  root: string;
-  previousRoot: string;
-};
 
 export class GatewayServiceUpdateOwnershipError extends Error {
   readonly failureFacts: UpdateFailureFact[];
@@ -366,12 +367,6 @@ export async function readManagedGatewayServiceForUpdate(
   });
 }
 
-export type PackageRuntimePreflight = {
-  nodeRunner?: string;
-  replacedNodeRunner?: string;
-  targetVersion?: string;
-};
-
 export async function resolvePackageRuntimePreflight(params: {
   channel?: UpdateChannel;
   requestedChannel?: UpdateChannel | null;
@@ -395,12 +390,9 @@ export async function resolvePackageRuntimePreflight(params: {
   }
 > {
   return await withCommandProcessScope(async () => {
+    const verdict = params.service?.serviceUpdateVerdict;
     const nodeRunner = normalizeOptionalString(
-      params.alreadyCurrent &&
-        !(
-          params.service?.serviceUpdateVerdict?.kind === "owned" &&
-          params.service.serviceUpdateVerdict.requiresInstallRootRefresh
-        )
+      params.alreadyCurrent && !(verdict?.kind === "owned" && verdict.requiresInstallRootRefresh)
         ? (params.service?.serviceNodeRunner ?? params.nodeRunner)
         : params.nodeRunner,
     );
@@ -426,9 +418,19 @@ export async function resolvePackageRuntimePreflight(params: {
     if (!target) {
       return ok(unchanged());
     }
-    // The current Bun already passed its startup guard; Node engines do not apply.
-    if (!nodeRunner && process.versions.bun) {
-      return ok({ ...unchanged(), targetVersion: target.version });
+    // Bun has its own capability contract; its emulated Node version is not an engine.
+    if (nodeRunner ? isBunRuntime(nodeRunner) : process.versions.bun) {
+      const runtimeEnv = params.service?.serviceEnv ?? process.env;
+      try {
+        await resolvePinnedDaemonRuntimePath(nodeRunner, "bun", runtimeEnv);
+        // Finalization keeps the updater runtime; service recovery cannot replace it.
+        const updater = process.versions.bun
+          ? ok<PackageRuntimePreflight, string>({})
+          : await resolvePackageRuntimePreflight({ target, timeoutMs: params.timeoutMs });
+        return updater.ok ? ok({ ...unchanged(), targetVersion: target.version }) : updater;
+      } catch (error) {
+        return resultError(error instanceof Error ? error.message : String(error));
+      }
     }
     const runtime = await resolvePackageRuntimeForPreflight({
       nodeRunner,
@@ -443,9 +445,7 @@ export async function resolvePackageRuntimePreflight(params: {
       return ok(unchangedRuntime);
     }
     const canRefreshCurrentService =
-      params.service?.running &&
-      params.service.serviceUpdateVerdict?.kind === "owned" &&
-      params.service.serviceUpdateVerdict.refreshDefinition;
+      params.service?.running && verdict?.kind === "owned" && verdict.refreshDefinition;
     const fallbackNodeRunner =
       params.fallbackNodeRunner ??
       (params.shouldRestart &&
@@ -500,7 +500,6 @@ export async function resolvePackageRuntimePreflight(params: {
       : "unspecified";
     const recommendation = minimumSupportedNodeVersion(engineRange ?? "*");
     const requirement = target.nodeEngine ? `Node ${target.nodeEngine}` : "a working Node runtime";
-    const verdict = params.service?.serviceUpdateVerdict;
     const context =
       verdict?.kind === "owned" && params.service?.serviceEnv
         ? resolveServiceRecoveryContext({
@@ -633,71 +632,62 @@ export async function resolveManagedServicePackageUpdatePlan(params: {
   root: string;
   pkgOwnership?: FreeBsdPkgOwnershipInspection;
   rebind?: boolean;
-}): Promise<{
-  rootRedirect: ManagedServiceRootRedirect | null;
-  serviceRoot?: string;
-  nodeRunner?: string;
-  serviceUnitTarget?: string;
-}> {
+}): Promise<ManagedServicePackageUpdatePlan> {
   const pkgOwnership =
     params.pkgOwnership ?? createFreeBsdPkgOwnershipInspection(UPDATE_RUNNER_TIMEOUT_MS);
   await pkgOwnership.assertUnowned(params.root);
+  const plan: ManagedServicePackageUpdatePlan = {
+    rootRedirect: null,
+    serviceUnitTarget: "not inspected (service management unavailable)",
+  };
   if (!isGatewayServiceManagementAllowedForUpdate(process.env)) {
-    return {
-      rootRedirect: null,
-      serviceUnitTarget: "not inspected (service management unavailable)",
-    };
+    return plan;
   }
   // Root and runtime planning share one effective command; mutation and restart
   // revalidate independently so this snapshot cannot grant later service authority.
   const inspected = await readManagedGatewayServiceForUpdate(process.env);
   const command = inspected?.command ?? null;
   const layout = await summarizeGatewayServiceLayout(command);
-  const serviceUnitTarget = layout?.entrypoint ?? "no service entrypoint found";
+  plan.serviceUnitTarget = layout?.entrypoint ?? "no service entrypoint found";
   if (!layout?.packageRootReal) {
-    return { rootRedirect: null, serviceUnitTarget };
+    return plan;
   }
   const serviceRoot = layout?.packageRoot;
   await pkgOwnership.assertUnowned(serviceRoot);
-  const serviceNode = resolveManagedServiceNodeRunner(command);
-  if (
-    layout.entrypointSourceCheckout &&
-    (await tryRealpathOrResolve(params.root)) !== layout.packageRootReal
-  ) {
-    return { rootRedirect: null, serviceUnitTarget };
+  const differentRoot = (await tryRealpathOrResolve(params.root)) !== layout.packageRootReal;
+  if (layout.entrypointSourceCheckout && differentRoot) {
+    return plan;
   }
+  const executable = command?.programArguments[0];
+  const serviceBun = executable && isBunRuntime(executable);
+  const serviceNode = serviceBun
+    ? await resolvePinnedDaemonRuntimePath(executable, "bun", inspected?.env ?? process.env)
+    : resolveManagedServiceNodeRunner(command);
   if (
-    serviceRoot &&
-    layout.entrypointSourceCheckout !== true &&
-    (await tryRealpathOrResolve(params.root)) !== layout.packageRootReal
+    serviceNode &&
+    (differentRoot ||
+      serviceBun ||
+      (await tryRealpathOrResolve(serviceNode)) !==
+        (await tryRealpathOrResolve(resolveNodeRunner())))
   ) {
+    plan.nodeRunner = serviceNode;
+  }
+  if (serviceRoot && differentRoot) {
     // Only an owned, writable definition can move from serving A to invoking B.
-    // Windows/overridden definitions retain the existing service-root update path.
-    const canRebind =
+    // Bun and protected definitions retain the existing service-root update path.
+    if (
+      !serviceBun &&
       params.rebind !== false &&
       process.platform !== "win32" &&
       !hasGatewayServiceDefinitionOverrides(command) &&
-      inspected?.verdict.refreshDefinition === true;
-    return {
-      serviceUnitTarget,
-      ...(canRebind
-        ? { rootRedirect: null, serviceRoot }
-        : { rootRedirect: { root: serviceRoot, previousRoot: params.root } }),
-      ...(serviceNode ? { nodeRunner: serviceNode } : {}),
-    };
+      inspected?.verdict.refreshDefinition === true
+    ) {
+      plan.serviceRoot = serviceRoot;
+    } else {
+      plan.rootRedirect = { root: serviceRoot, previousRoot: params.root };
+    }
   }
-  if (!serviceNode) {
-    return { rootRedirect: null, serviceUnitTarget };
-  }
-  const [serviceNodeReal, currentNodeReal] = await Promise.all([
-    tryRealpathOrResolve(serviceNode),
-    tryRealpathOrResolve(resolveNodeRunner()),
-  ]);
-  return {
-    serviceUnitTarget,
-    rootRedirect: null,
-    ...(serviceNodeReal !== currentNodeReal ? { nodeRunner: serviceNode } : {}),
-  };
+  return plan;
 }
 
 export async function gatewayServiceCommandUsesRoot(params: {
