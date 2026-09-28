@@ -23,6 +23,14 @@ import {
 import { runAgentHarnessAfterToolCallHook } from "../harness/hook-helpers.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { resolveCliToolTerminalReason } from "../run-termination.js";
+import {
+  evictOldestEntries,
+  MAX_RETAINED_TOOL_ARG_CHARS,
+  MAX_TRACKED_TOOL_NAMES,
+  MAX_TRACKED_TOOL_SUMMARIES,
+  MAX_UNFINISHED_TOOL_CALLS,
+  measureToolArgChars,
+} from "./execute-event-retention.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
 import { normalizeCliToolName, stripOpenClawMcpToolPrefix } from "./tool-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
@@ -48,21 +56,53 @@ export function createCliEventHandlers(params: {
   let signaledToolExecutionStarted = false;
   let signaledAssistantOutputStarted = false;
   let commentaryCounter = 0;
+  // Bounded; see `execute-event-retention.ts`. The counts a summary reports are
+  // kept as running totals instead of being read off this map's size, so FIFO
+  // eviction costs recent-call dedup rather than corrupting the trace.
   const toolSummaryById = new Map<
     string,
     { name: string; failed: boolean; terminalObserved?: boolean }
   >();
+  let toolCallCount = 0;
+  let toolFailureCount = 0;
   // CLI results report an outcome without repeating the request, so the terminal
   // progress event would otherwise describe the output instead of the command.
+  // Bounded twice: by how many calls may be outstanding at once, and by how many
+  // argument characters all of them together may retain.
   const toolArgsByCallId = new Map<
     string,
     {
       args: Record<string, unknown>;
+      argChars: number;
       kind: CliToolUseStartDelta["kind"];
       tracked: boolean;
       startedAt: number;
     }
   >();
+  let retainedToolArgChars = 0;
+  const releaseStartArgs = (toolCallId: string) => {
+    const retained = toolArgsByCallId.get(toolCallId);
+    if (!retained) {
+      return undefined;
+    }
+    retainedToolArgChars -= retained.argChars;
+    toolArgsByCallId.delete(toolCallId);
+    return retained;
+  };
+  /**
+   * Eviction, as opposed to a call finishing. The two holders of a start's
+   * decoded arguments keep different sets under pressure — this map evicts
+   * oldest-first, while the tracking side refuses new entries and keeps its
+   * oldest — so an evicted entry whose arguments the tracking still held would
+   * leave the two retaining DISJOINT sets, i.e. twice the intended bound. The
+   * single retention decision has to follow the arguments here too.
+   */
+  const evictStartArgs = (toolCallId: string) => {
+    const evicted = releaseStartArgs(toolCallId);
+    if (evicted?.tracked && evicted.argChars > 0) {
+      params.toolTracking.dropRetainedToolArgs(toolCallId);
+    }
+  };
   const emitToolEvent = (
     data: Parameters<typeof projectAgentToolActivity>[0] & {
       result?: unknown;
@@ -96,33 +136,60 @@ export function createCliEventHandlers(params: {
   const recordToolSummary = (event: { toolCallId: string; name: string }, failed: boolean) => {
     let current = toolSummaryById.get(event.toolCallId);
     if (current) {
-      current.failed ||= failed;
+      if (failed && !current.failed) {
+        current.failed = true;
+        toolFailureCount += 1;
+      }
       if (!current.name && event.name) {
         current.name = event.name;
       }
     } else {
       current = { name: event.name, failed };
       toolSummaryById.set(event.toolCallId, current);
+      toolCallCount += 1;
+      if (failed) {
+        toolFailureCount += 1;
+      }
+      evictOldestEntries(toolSummaryById, MAX_TRACKED_TOOL_SUMMARIES);
     }
     if (event.name) {
       toolSummaryNames.add(event.name);
+      evictOldestEntries(toolSummaryNames, MAX_TRACKED_TOOL_NAMES);
     }
     return current;
   };
   const getToolSummary = (): ToolSummaryTrace => ({
-    calls: toolSummaryById.size,
+    calls: toolCallCount,
     tools: [...toolSummaryNames],
-    failures: Array.from(toolSummaryById.values()).filter((entry) => entry.failed).length,
+    failures: toolFailureCount,
   });
-  const emitToolUseStart = (event: CliToolUseStartDelta, tracked: boolean) => {
-    observedCliActivity = true;
+  /** Retains what this call's terminal event will need, within the run's bounds. */
+  const rememberStartArgs = (event: CliToolUseStartDelta, tracked: boolean): boolean => {
+    releaseStartArgs(event.toolCallId);
     // Empty arguments are meaningful: progress-card calls use {} to clear the card.
+    const argChars = measureToolArgChars(event.args);
+    // Over the aggregate bound the correlation entry still exists — the result
+    // path reads `kind`, `tracked` and `startedAt` from it — but the arguments
+    // it would have retained are not held. The start event below already carried
+    // the real arguments downstream; what degrades is the terminal event's
+    // argument echo, on a stream that is already pathological.
+    const retainArgs = retainedToolArgChars + argChars <= MAX_RETAINED_TOOL_ARG_CHARS;
     toolArgsByCallId.set(event.toolCallId, {
-      args: event.args,
+      args: retainArgs ? event.args : {},
+      argChars: retainArgs ? argChars : 0,
       kind: event.kind,
       tracked,
       startedAt: Date.now(),
     });
+    if (retainArgs) {
+      retainedToolArgChars += argChars;
+    }
+    evictOldestEntries(toolArgsByCallId, MAX_UNFINISHED_TOOL_CALLS, evictStartArgs);
+    return retainArgs;
+  };
+  const emitToolUseStart = (event: CliToolUseStartDelta, tracked: boolean) => {
+    observedCliActivity = true;
+    const retainedArgs = rememberStartArgs(event, tracked);
     recordToolSummary(event, false);
     if (!signaledToolExecutionStarted) {
       signaledToolExecutionStarted = true;
@@ -134,7 +201,15 @@ export function createCliEventHandlers(params: {
       });
     }
     if (tracked) {
+      // Ordered: loopback correlation and messaging-delivery evidence are both
+      // decided inside this call from the real arguments, so the retention drop
+      // has to come after it rather than by handing it emptied arguments.
       params.toolTracking.handleCliToolUseStart(event);
+      if (!retainedArgs) {
+        // Both maps hold the SAME decoded object, so releasing only one frees
+        // nothing. One decision, applied to every consumer that would retain it.
+        params.toolTracking.dropRetainedToolArgs(event.toolCallId);
+      }
     }
     if (emitLiveEvents) {
       emitToolEvent({
@@ -154,8 +229,7 @@ export function createCliEventHandlers(params: {
       ? params.toolTracking.resolveCliLoopbackTerminalOutcome(event.toolCallId)
       : undefined;
     const executedArgs = tracked ? params.toolTracking.handleCliToolResult(event) : undefined;
-    const startedCall = toolArgsByCallId.get(event.toolCallId);
-    toolArgsByCallId.delete(event.toolCallId);
+    const startedCall = releaseStartArgs(event.toolCallId);
     // Gateway owns loopback completion even when CLI correlation is absent or ambiguous.
     if (
       event.name.trim() &&
@@ -237,11 +311,22 @@ export function createCliEventHandlers(params: {
   const emitCliDisplayToolResult = (event: CliToolResultDelta) => emitToolResult(event, false);
   const emitParsedToolUseStart = (event: CliToolUseStartDelta) => {
     const startedAt = Date.now();
-    activeParsedTools.set(event.toolCallId, {
-      startedAt,
-      toolName: event.name,
-      kind: event.kind,
-    });
+    // Refuse-new rather than FIFO: the oldest entry here is the long-running
+    // foreground `Agent` call that `isActiveForegroundAgentTool` needs so its
+    // attributed subagent progress keeps renewing the recovery clock. Evicting
+    // it would re-create the abort this branch exists to prevent. Past the cap a
+    // new tool is simply not tracked; its terminal still fires, through the same
+    // `activeTool === undefined` path a `server_tool_use` result already takes.
+    if (
+      activeParsedTools.has(event.toolCallId) ||
+      activeParsedTools.size < MAX_UNFINISHED_TOOL_CALLS
+    ) {
+      activeParsedTools.set(event.toolCallId, {
+        startedAt,
+        toolName: event.name,
+        kind: event.kind,
+      });
+    }
     const diagnosticEvent = {
       type: "tool.execution.started",
       runId: runParams.runId,
@@ -447,6 +532,18 @@ export function createCliEventHandlers(params: {
     emitCliThinkingProgress,
     hasObservedCliActivity: () => observedCliActivity,
     activeParsedToolCount: () => activeParsedTools.size,
+    /**
+     * What this consumer is holding right now. The caps in
+     * `execute-event-retention.ts` are only meaningful if they are observable,
+     * and a run that had to drop tool arguments is worth being able to see.
+     */
+    getRetainedStateSizes: () => ({
+      toolSummaries: toolSummaryById.size,
+      toolNames: toolSummaryNames.size,
+      unfinishedToolCalls: toolArgsByCallId.size,
+      retainedToolArgChars,
+      activeParsedTools: activeParsedTools.size,
+    }),
     isActiveForegroundAgentTool: (toolCallId: string) => {
       const tool = activeParsedTools.get(toolCallId);
       return tool !== undefined && isClaudeForegroundAgentToolName(tool.toolName);

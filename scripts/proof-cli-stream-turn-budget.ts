@@ -43,6 +43,13 @@
  *                       attributed subagent progress. Pins the liveness facts
  *                       the gateway's stall detector reads once a tool is
  *                       active; without them a healthy run is aborted as stuck.
+ *  8. consumer-retention-bound — the same post-budget tool events delivered to
+ *                       the REAL runner consumer, `createCliEventHandlers` over
+ *                       a real `createCliToolTracking`, instead of to this
+ *                       harness's own sinks. 48 MiB of decoded tool arguments
+ *                       across 3,072 calls whose results never arrive. Pins that
+ *                       the consumer's per-call maps stay inside their caps and
+ *                       that every start still reaches it.
  *
  * Run: pnpm tsx scripts/proof-cli-stream-turn-budget.ts
  */
@@ -54,6 +61,14 @@ import type {
 } from "../src/agents/cli-output-contracts.js";
 import { CLI_STREAM_JSON_OUTPUT_LIMITS } from "../src/agents/cli-output-stream-limits.js";
 import { createCliJsonlStreamingParser } from "../src/agents/cli-output-stream.js";
+import {
+  MAX_RETAINED_TOOL_ARG_CHARS,
+  MAX_TRACKED_TOOL_SUMMARIES,
+  MAX_UNFINISHED_TOOL_CALLS,
+} from "../src/agents/cli-runner/execute-event-retention.js";
+import { createCliEventHandlers } from "../src/agents/cli-runner/execute-events.js";
+import { createCliToolTracking } from "../src/agents/cli-runner/execute-tool-tracking.js";
+import type { PreparedCliRunContext } from "../src/agents/cli-runner/types.js";
 
 const SESSION_ID = "proof-budget-session";
 const FINAL_ANSWER = "Report written to ~/reports/theseus-research/context-epidemiology.md";
@@ -609,11 +624,166 @@ function scenarioProgressPastBudget(): void {
   );
 }
 
-// The two retention scenarios run first: a heap baseline taken after the other
+/**
+ * A tool call carrying a large decoded `input`, with an id nothing reuses and a
+ * result that never arrives — the shape that reaches the runner's per-call maps
+ * and stays there.
+ */
+function largeArgToolUseFrame(index: number, argChars: number): string {
+  return JSON.stringify({
+    type: "assistant",
+    parent_tool_use_id: null,
+    session_id: SESSION_ID,
+    message: {
+      id: `msg_consumer_${index}`,
+      content: [
+        {
+          type: "tool_use",
+          id: `toolu_consumer_${index}`,
+          name: "Bash",
+          // Distinct per call, so the measurement observes real retention
+          // rather than one shared string.
+          input: { command: `${index}:${"c".repeat(argChars)}` },
+        },
+      ],
+    },
+  });
+}
+
+/**
+ * The production CLI event consumer, wired to the real parser as
+ * `execute-process.ts` wires it — `createCliEventHandlers` over a real
+ * `createCliToolTracking`, not a substitute sink. The earlier scenarios prove
+ * the PARSER stays bounded past exhaustion; this one proves the runner state
+ * those preserved events now reach stays bounded too, and that bounding it does
+ * not cost the tool starts the gateway's stall detector reads.
+ *
+ * The run context is a literal (no gateway, no session file, no channel).
+ * Everything between the parser and the retained maps is the production path.
+ */
+function scenarioConsumerRetentionBound(): void {
+  const runId = "proof-consumer-retention";
+  const backend = { command: "claude", args: [], output: "jsonl" as const, serialize: true };
+  const context = {
+    params: {
+      agentId: "main",
+      sessionId: SESSION_ID,
+      sessionKey: "agent:proof:consumer",
+      workspaceDir: "/tmp",
+      prompt: "proof",
+      provider: "claude-cli",
+      model: "claude-haiku-4-5",
+      timeoutMs: 1_000,
+      runId,
+    },
+    started: Date.now(),
+    startedMonotonicMs: performance.now(),
+    workspaceDir: "/tmp",
+    backendResolved: { id: "claude-cli", config: backend, bundleMcp: false },
+    preparedBackend: { backend, env: {} },
+    executionTarget: { kind: "process" },
+    reusableCliSession: { mode: "none" },
+    hadSessionFile: false,
+    contextEngineConfig: {},
+    modelId: "claude-haiku-4-5",
+    normalizedModel: "claude-haiku-4-5",
+    systemPrompt: "system",
+    claudeSkillsPluginArgs: [],
+    authEpochVersion: 2,
+  } as unknown as PreparedCliRunContext;
+  const toolTracking = createCliToolTracking(context);
+  const handlers = createCliEventHandlers({
+    context,
+    toolTracking,
+    getRunState: () => ({ failed: false, error: undefined }),
+  });
+  const parser = createCliJsonlStreamingParser({
+    backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+    providerId: "claude-cli",
+    onAssistantDelta: handlers.emitCliAssistantDelta,
+    onCompletedReply: handlers.emitCliCompletedReply,
+    onToolUseStart: handlers.emitParsedToolUseStart,
+    onToolResult: handlers.emitParsedToolResult,
+    onDisplayToolUseStart: handlers.emitCliDisplayToolUseStart,
+    onDisplayToolResult: handlers.emitCliDisplayToolResult,
+  });
+  // Keep-alive: the maps under measurement die with these otherwise, and the
+  // scenario would report a flat heap against a build with no bound at all.
+  retainedForMeasurement.push(parser, handlers, toolTracking);
+
+  overflowRawCharBudget(parser);
+  const callsAtOverflow = handlers.getToolSummary().calls;
+  forceGarbageCollection();
+  const heapAtOverflow = process.memoryUsage().heapUsed;
+
+  const argChars = 16 * 1024;
+  let streamedAfter = 0;
+  let argCharsStreamed = 0;
+  let uniqueToolCalls = 0;
+  while (argCharsStreamed < 48 * 1024 * 1024) {
+    const frame = `${largeArgToolUseFrame(uniqueToolCalls, argChars)}\n`;
+    uniqueToolCalls += 1;
+    argCharsStreamed += argChars;
+    streamedAfter += frame.length;
+    parser.push(frame);
+  }
+  parser.push(`${terminalResultFrame()}\n`);
+  parser.finish();
+  forceGarbageCollection();
+  const heapGrowth = process.memoryUsage().heapUsed - heapAtOverflow;
+  const retainedBound = 2 * MAX_RETAINED_TOOL_ARG_CHARS;
+
+  // Both bounds have to engage, or the measurement proves nothing.
+  assert(
+    uniqueToolCalls > MAX_UNFINISHED_TOOL_CALLS,
+    `consumer-retention-bound: only ${uniqueToolCalls} unfinished calls; the count bound never engaged`,
+  );
+  assert(
+    argCharsStreamed > MAX_RETAINED_TOOL_ARG_CHARS * 4,
+    `consumer-retention-bound: only ${argCharsStreamed} argument chars streamed; the character bound never engaged`,
+  );
+  // Read before the heap assertion so a failure reports the composition, not
+  // just the number. A build without the bound fails on the measurement itself
+  // rather than on a missing accessor, because the measurement comes first.
+  const retained = handlers.getRetainedStateSizes?.();
+  assert(
+    heapGrowth < retainedBound,
+    `consumer-retention-bound: heap grew ${heapGrowth} bytes while the runner's event consumer took ${uniqueToolCalls} post-budget tool starts carrying ${argCharsStreamed} argument chars; retained runner state is not bounded (bound ${retainedBound}, consumer state ${JSON.stringify(retained)})`,
+  );
+  assert(
+    retained !== undefined,
+    "consumer-retention-bound: the consumer exposes no retained-state sizes to check against its caps",
+  );
+  assert(
+    retained.retainedToolArgChars <= MAX_RETAINED_TOOL_ARG_CHARS &&
+      retained.unfinishedToolCalls <= MAX_UNFINISHED_TOOL_CALLS &&
+      retained.toolSummaries <= MAX_TRACKED_TOOL_SUMMARIES &&
+      retained.activeParsedTools <= MAX_UNFINISHED_TOOL_CALLS,
+    `consumer-retention-bound: consumer state outside its caps: ${JSON.stringify(retained)}`,
+  );
+  // Bounding retention must not cost the liveness this branch restores.
+  const postBudgetCalls = handlers.getToolSummary().calls - callsAtOverflow;
+  assert(
+    postBudgetCalls === uniqueToolCalls,
+    `consumer-retention-bound: ${postBudgetCalls} of ${uniqueToolCalls} post-budget tool starts reached the consumer; the stall detector would stop seeing progress`,
+  );
+  assert(
+    handlers.activeParsedToolCount() > 0,
+    "consumer-retention-bound: no tool reads as active, so the blocked-tool clock would not be held at all",
+  );
+  console.log(
+    `[consumer-retention-bound] ${uniqueToolCalls} post-budget tool starts carrying ${argCharsStreamed} argument chars ` +
+      `through the real createCliEventHandlers/createCliToolTracking; heap delta ${heapGrowth} bytes against ${streamedAfter} streamed; ` +
+      `retained ${JSON.stringify(retained)}; all ${uniqueToolCalls} starts still counted`,
+  );
+}
+
+// The retention scenarios run first: a heap baseline taken after the other
 // scenarios carries their transient graphs and can mask the growth these
 // measure.
 scenarioRetentionFlat();
 scenarioStartSnapshotBound();
+scenarioConsumerRetentionBound();
 scenarioRecovered("recovered-raw", overflowRawCharBudget);
 scenarioRecovered("recovered-lines", overflowLineBudget);
 scenarioUnknowable();

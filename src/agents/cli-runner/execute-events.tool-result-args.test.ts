@@ -82,6 +82,7 @@ function buildToolTracking(): CliToolTracking {
   return {
     handleCliToolUseStart: vi.fn(),
     handleCliToolResult: vi.fn(),
+    dropRetainedToolArgs: vi.fn(),
     resolveCliLoopbackTerminalOutcome: vi.fn(() => undefined),
     beginGatewayCapture: vi.fn(),
   } as unknown as CliToolTracking;

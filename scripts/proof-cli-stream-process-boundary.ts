@@ -45,6 +45,13 @@
  *                        bytes streamed, including for repeated tool calls and a
  *                        tool block whose stop never arrives.
  *
+ * Captures: the raw stdout this harness records is genuine, unredacted model
+ * output — session ids, tool arguments, tool results, file contents. It is
+ * written under a private temporary directory only so a second real child
+ * process can replay it over a real pipe, and that directory is removed on
+ * EVERY exit below (success, failed assertion, or spawn error), with the removal
+ * verified rather than assumed.
+ *
  * Requires a working `claude` CLI on PATH (this is a maintainer-run harness, not
  * a CI lane). Set `OPENCLAW_PROOF_CLAUDE_STREAM` to a previously captured stdout
  * file to replay instead of spawning a live turn.
@@ -52,9 +59,10 @@
  * Run: pnpm tsx scripts/proof-cli-stream-process-boundary.ts
  */
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { inspect } from "node:util";
 import { setFlagsFromString } from "node:v8";
 import { runInNewContext } from "node:vm";
 import type {
@@ -240,6 +248,16 @@ function readAgentToolCallId(stream: string): string {
 
 const workDir = mkdtempSync(path.join(tmpdir(), "openclaw-proof-cli-"));
 const capturePath = path.join(workDir, "claude-stdout.jsonl");
+
+/** Removes the raw captures and reports whether the directory is actually gone. */
+function removeCaptures(): boolean {
+  try {
+    rmSync(workDir, { recursive: true, force: true });
+  } catch {
+    return false;
+  }
+  return !existsSync(workDir);
+}
 
 async function captureLiveTurn(): Promise<string> {
   const preCaptured = process.env.OPENCLAW_PROOF_CLAUDE_STREAM;
@@ -474,8 +492,27 @@ async function main(): Promise<void> {
   const stream = await captureLiveTurn();
   const { agentToolCallId } = await scenarioLiveProcess(stream);
   await scenarioPastBudget(stream, agentToolCallId);
-  console.log("All runtime assertions passed.");
 }
 
-await main();
+// Cleanup runs on every exit, and a failure is reported only after it, so the
+// original error is never masked by the removal.
+let failure: unknown;
+let removed: boolean | undefined;
+try {
+  await main();
+} catch (error) {
+  failure = error;
+} finally {
+  removed = removeCaptures();
+}
+console.log(`[cleanup] raw CLI captures removed from ${workDir}: ${removed ? "yes" : "NO"}`);
+if (failure !== undefined) {
+  console.error(failure instanceof Error ? (failure.stack ?? failure.message) : inspect(failure));
+  process.exit(1);
+}
+if (!removed) {
+  console.error(`proof assertion failed: raw CLI captures survived at ${workDir}`);
+  process.exit(1);
+}
+console.log("All runtime assertions passed.");
 process.exit(0);

@@ -46,6 +46,7 @@ import {
   projectCliMessagingDeliveryEvidence,
 } from "./delivery-evidence.js";
 import * as Deadline from "./execute-ask-user-deadline.js";
+import { MAX_UNFINISHED_TOOL_CALLS } from "./execute-event-retention.js";
 import {
   appendUniqueCliMessagingEvidence,
   buildMessagingToolSendEvidenceKey,
@@ -485,8 +486,28 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       },
     });
   };
+  // The event consumer decides once, for every map that would retain the same
+  // decoded arguments, whether they fit the run's retention budget. Releasing
+  // only one holder frees nothing, because both hold the same object.
+  const dropRetainedToolArgs = (toolCallId: string) => {
+    const activeTool = activeCliTools.get(toolCallId);
+    if (!activeTool) {
+      return;
+    }
+    activeTool.args = {};
+    // Fail closed: correlation that would have matched on the dropped arguments
+    // must not silently match on `{}` instead.
+    activeTool.loopbackAmbiguous = true;
+  };
   const handleCliToolUseStart = (event: CliToolUseStartDelta) => {
-    if (event.kind !== "server_tool_use") {
+    // Refuse-new past the cap instead of evicting, for the same reason
+    // `activeParsedTools` does: the oldest entry is the longest-running tool,
+    // and dropping it would retire a loopback correlation and an ask-user
+    // deadline that are still live. A tool refused here takes the same
+    // uncorrelated path a `server_tool_use` start already takes.
+    const trackable =
+      activeCliTools.has(event.toolCallId) || activeCliTools.size < MAX_UNFINISHED_TOOL_CALLS;
+    if (event.kind !== "server_tool_use" && trackable) {
       const activeTool: ActiveCliTool = {
         toolName: event.name,
         args: event.args,
@@ -663,6 +684,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     onActiveLoopbackAskUserDeadlineChange: askUserDeadlines.onChange,
     handleCliToolUseStart,
     handleCliToolResult,
+    dropRetainedToolArgs,
     resolveCliLoopbackTerminalOutcome,
     finishDeliveryTracking,
     finalizeCapture,
