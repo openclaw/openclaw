@@ -87,6 +87,7 @@ describe("Gateway self-profile ownership", () => {
         },
       };
       current().opts.onHello?.(admitted);
+      expect(current().request).not.toHaveBeenCalled();
       const read = gateway.loadSelfProfile();
       const queued = () =>
         createPendingSendMessage(
@@ -185,6 +186,29 @@ describe("Gateway self-profile ownership", () => {
     );
     expect(gateway.snapshot.selfUser).toMatchObject({ id: changed.id, name: changed.displayName });
     expect(current().request).toHaveBeenCalledTimes(2);
+    gateway.stop();
+  });
+
+  it("retires a pending self read when a broad reader receives a new attached identity", async () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+    const pending = createDeferred<{ profile: UserProfile }>();
+    current().request.mockReturnValue(pending.promise);
+    current().opts.onHello?.(hello(["operator.read"]));
+    const oldRead = gateway.loadSelfProfile();
+    const attached = {
+      id: "profile-2",
+      identity: { type: "profile" as const, id: "profile-2" },
+      name: "Second Person",
+    };
+    current().opts.onEvent?.(
+      createGatewayEvent("presence", {
+        presence: [{ instanceId: current().instanceId, user: attached }],
+      }),
+    );
+    pending.resolve({ profile });
+    expect(await oldRead).toBeNull();
+    expect(gateway.snapshot.selfUser).toEqual(attached);
     gateway.stop();
   });
 

@@ -492,7 +492,7 @@ export function createApplicationGateway(
             nextClient.instanceId,
           ),
         });
-        if (isCurrentClient(nextClient)) {
+        if (isCurrentClient(nextClient) && !snapshot.selfUser) {
           refreshSelfProfile();
         }
         canvasSurface.start(nextClient, canvasLeaseGeneration, canvasPluginSurfaceUrl ?? undefined);

@@ -2,7 +2,7 @@ import type { UserProfile, UsersSelfResult } from "../../../packages/gateway-pro
 import { GatewayRequestError } from "../api/gateway.ts";
 import { userProfileAvatarUrl } from "../pages/profile/profile-avatar-url.ts";
 import type { ApplicationGatewayConnection, ApplicationGatewaySnapshot } from "./gateway.ts";
-import { hasOperatorSelfReadAccess } from "./operator-access.ts";
+import { hasOperatorReadAccess, hasOperatorSelfReadAccess } from "./operator-access.ts";
 import {
   readPresenceEntries,
   resolveSelfPresenceUser,
@@ -101,14 +101,25 @@ export function createGatewaySelfProfile(options: {
     applyPresence: (payload: unknown) => {
       const snapshot = options.getSnapshot();
       const current = snapshot.selfUser;
-      if (snapshot.phase !== "connected" || !current) {
+      if (snapshot.phase !== "connected") {
         return;
       }
       const presence = resolveSelfPresenceUser(
         readPresenceEntries(payload) ?? [],
         snapshot.client?.instanceId,
       );
-      if (presence?.id === current.id) {
+      if (!presence) {
+        return;
+      }
+      if (
+        hasOperatorReadAccess(snapshot.hello?.auth ?? null) &&
+        (presence.id !== current?.id || presence.identity?.id !== current.identity?.id)
+      ) {
+        // Broad readers receive live identity attachment changes through their own presence row.
+        selfProfileRequest = null;
+        fallbackAvatarUrl = undefined;
+        options.publish(presence);
+      } else if (presence.id === current?.id) {
         const updated = {
           ...current,
           // An omitted presence name clears the display name; profile facts stay canonical.

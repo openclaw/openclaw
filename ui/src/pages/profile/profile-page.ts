@@ -138,7 +138,9 @@ export class ProfilePage extends OpenClawLightDomElement {
     const nextSelfUser = nextConnected
       ? resolveCurrentSelfUser({ snapshotUser: snapshot.selfUser })
       : null;
-    const selfProfileChanged = nextSelfUser?.id !== this.selfUser?.id;
+    const selfProfileChanged =
+      nextSelfUser?.id !== this.selfUser?.id ||
+      nextSelfUser?.identity?.id !== this.selfUser?.identity?.id;
     const identitySourceChanged =
       clientChanged || connectionChanged || selfProfileChanged || writeAccessChanged;
     this.client = snapshot.client;
@@ -408,7 +410,7 @@ export class ProfilePage extends OpenClawLightDomElement {
             control: html`<button
               type="button"
               class="btn"
-              ?disabled=${this.identityLoading || this.identityBusy !== null}
+              ?disabled=${this.identityBusy !== null}
               @click=${() => this.context.gateway.connect()}
             >
               ${t("profilePage.access.reconnect")}
