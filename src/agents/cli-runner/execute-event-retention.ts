@@ -35,6 +35,68 @@ export const MAX_UNFINISHED_TOOL_CALLS = 1024;
 // nothing here, because one tool call's decoded arguments can approach that same
 // 8 MiB on their own.
 export const MAX_RETAINED_TOOL_ARG_CHARS = 8 * 1024 * 1024;
+/**
+ * Ceiling on one delivery-evidence entry once the run's retention decision has
+ * refused its arguments. `pendingMessagingCalls` keeps at most
+ * `CLI_MESSAGING_EVIDENCE_MAX_CALLS` entries, so this is what makes the holder's
+ * worst case additive rather than a multiple of the per-line limit.
+ */
+export const MAX_REDUCED_MESSAGING_ARG_CHARS = 8 * 1024;
+/**
+ * Ceiling on one retained value inside a reduced entry. Every argument the
+ * settle path reads to decide routing — the action, the explicit-route keys,
+ * `dryRun`, `final` — is a short scalar well under this; what exceeds it is
+ * message content and inline media, which is evidence rather than a routing
+ * fact.
+ */
+const MAX_REDUCED_MESSAGING_ARG_VALUE_CHARS = 2 * 1024;
+
+function measureToolArgEntryChars(key: string, value: unknown): number {
+  try {
+    // `{"k":v}`, so the retained cost of the pair including its own framing.
+    return JSON.stringify({ [key]: value })?.length ?? MAX_REDUCED_MESSAGING_ARG_VALUE_CHARS + 1;
+  } catch {
+    return MAX_REDUCED_MESSAGING_ARG_VALUE_CHARS + 1;
+  }
+}
+
+/**
+ * Projects the arguments of a message send down to what a bounded holder may
+ * keep: every top-level entry small enough to be a routing fact, and none of
+ * the bulk.
+ *
+ * Deliberately NOT a whitelist of known keys. Channel plugins read
+ * provider-specific arguments through `extractToolSend`, so naming the keys we
+ * understand would silently break the tools we do not. Size is the honest
+ * discriminator: a target, an action or a flag is tens of bytes; what makes
+ * this holder unbounded is a near-8-MiB message body.
+ *
+ * What degrades when an entry is reduced is the *evidence* echoed for that send
+ * (its text and inline media). What is preserved is every fact the settle path
+ * reads to decide whether a real send happened and where it went.
+ */
+export function reduceMessagingToolArgs(args: Record<string, unknown>): {
+  args: Record<string, unknown>;
+  chars: number;
+  reduced: boolean;
+} {
+  const retained: Record<string, unknown> = {};
+  let budget = 0;
+  let reduced = false;
+  for (const [key, value] of Object.entries(args)) {
+    const entryChars = measureToolArgEntryChars(key, value);
+    if (
+      entryChars > MAX_REDUCED_MESSAGING_ARG_VALUE_CHARS ||
+      budget + entryChars > MAX_REDUCED_MESSAGING_ARG_CHARS
+    ) {
+      reduced = true;
+      continue;
+    }
+    retained[key] = value;
+    budget += entryChars;
+  }
+  return { args: retained, chars: measureToolArgChars(retained), reduced };
+}
 
 /** Insertion-ordered structures shrink from the front; `Map` and `Set` both qualify. */
 type OldestFirstKeys = {

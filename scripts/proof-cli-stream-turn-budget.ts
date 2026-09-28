@@ -50,9 +50,19 @@
  *                       across 3,072 calls whose results never arrive. Pins that
  *                       the consumer's per-call maps stay inside their caps and
  *                       that every start still reaches it.
+ *  9. messaging-retention-bound — 48 unresolved visible `message` sends past
+ *                       exhaustion, 1 MiB of arguments each, held under the
+ *                       64-entry delivery-evidence cap so only a byte bound can
+ *                       hold. Pins that the third holder of those arguments is
+ *                       bounded too, and — settling one send from each side of
+ *                       the bound — that delivery, the source reply and the
+ *                       send's target still settle from the facts it keeps.
  *
  * Run: pnpm tsx scripts/proof-cli-stream-turn-budget.ts
  */
+// MUST stay first: it isolates the state directory before `src/config/paths.ts`
+// resolves it. See `scripts/proof-isolated-state.ts`.
+import "./proof-isolated-state.js";
 import { setFlagsFromString } from "node:v8";
 import { runInNewContext } from "node:vm";
 import type {
@@ -62,11 +72,13 @@ import type {
 import { CLI_STREAM_JSON_OUTPUT_LIMITS } from "../src/agents/cli-output-stream-limits.js";
 import { createCliJsonlStreamingParser } from "../src/agents/cli-output-stream.js";
 import {
+  MAX_REDUCED_MESSAGING_ARG_CHARS,
   MAX_RETAINED_TOOL_ARG_CHARS,
   MAX_TRACKED_TOOL_SUMMARIES,
   MAX_UNFINISHED_TOOL_CALLS,
 } from "../src/agents/cli-runner/execute-event-retention.js";
 import { createCliEventHandlers } from "../src/agents/cli-runner/execute-events.js";
+import { CLI_MESSAGING_EVIDENCE_MAX_CALLS } from "../src/agents/cli-runner/execute-messaging.js";
 import { createCliToolTracking } from "../src/agents/cli-runner/execute-tool-tracking.js";
 import type { PreparedCliRunContext } from "../src/agents/cli-runner/types.js";
 
@@ -661,14 +673,13 @@ function largeArgToolUseFrame(index: number, argChars: number): string {
  * The run context is a literal (no gateway, no session file, no channel).
  * Everything between the parser and the retained maps is the production path.
  */
-function scenarioConsumerRetentionBound(): void {
-  const runId = "proof-consumer-retention";
+function buildProofRunContext(runId: string, sessionKey: string): PreparedCliRunContext {
   const backend = { command: "claude", args: [], output: "jsonl" as const, serialize: true };
-  const context = {
+  return {
     params: {
       agentId: "main",
       sessionId: SESSION_ID,
-      sessionKey: "agent:proof:consumer",
+      sessionKey,
       workspaceDir: "/tmp",
       prompt: "proof",
       provider: "claude-cli",
@@ -691,6 +702,10 @@ function scenarioConsumerRetentionBound(): void {
     claudeSkillsPluginArgs: [],
     authEpochVersion: 2,
   } as unknown as PreparedCliRunContext;
+}
+
+function scenarioConsumerRetentionBound(): void {
+  const context = buildProofRunContext("proof-consumer-retention", "agent:proof:consumer");
   const toolTracking = createCliToolTracking(context);
   const handlers = createCliEventHandlers({
     context,
@@ -778,12 +793,190 @@ function scenarioConsumerRetentionBound(): void {
   );
 }
 
+/** An unresolved visible `message` send carrying a large decoded payload. */
+function messageSendToolUseFrame(index: number, contentChars: number): string {
+  return JSON.stringify({
+    type: "assistant",
+    parent_tool_use_id: null,
+    session_id: SESSION_ID,
+    message: {
+      id: `msg_send_${index}`,
+      content: [
+        {
+          type: "tool_use",
+          id: `toolu_send_${index}`,
+          name: "mcp__openclaw__message",
+          input: {
+            action: "send",
+            channel: "slack",
+            target: "C0PROOF",
+            content: `${index}:${"m".repeat(contentChars)}`,
+          },
+        },
+      ],
+    },
+  });
+}
+
+/** The settled delivery the MCP message tool returns for a real send. */
+function messageSendResultFrame(index: number): string {
+  return JSON.stringify({
+    type: "user",
+    session_id: SESSION_ID,
+    message: {
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: `toolu_send_${index}`,
+          content: {
+            details: {
+              messageDelivery: {
+                status: "settled",
+                partialDelivery: false,
+                createdThreadIds: [],
+                sourceReplyDelivered: true,
+              },
+            },
+          },
+        },
+      ],
+    },
+  });
+}
+
+/**
+ * The third holder of a post-budget tool start's decoded arguments:
+ * `pendingMessagingCalls` inside `createCliToolTracking`, which keeps the
+ * arguments of a visible message send until its result settles the delivery.
+ * The consumer scenario above bounds the two runner maps; this one drives
+ * unresolved SENDS instead of ordinary tool calls, which is the traffic that
+ * reaches this holder at all.
+ *
+ * Entirely production path: the frames are the stream-json shapes the CLI emits
+ * for an MCP message call and its `tool_result`, and the settlement below is
+ * whatever the real `handleCliToolResult` and `withExecutionEvidence` produce
+ * from them. Nothing about delivery is asserted by construction.
+ */
+function scenarioMessagingRetentionBound(): void {
+  const context = buildProofRunContext("proof-messaging-retention", "agent:proof:messaging");
+  const toolTracking = createCliToolTracking(context);
+  const handlers = createCliEventHandlers({
+    context,
+    toolTracking,
+    getRunState: () => ({ failed: false, error: undefined }),
+  });
+  const parser = createCliJsonlStreamingParser({
+    backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+    providerId: "claude-cli",
+    onAssistantDelta: handlers.emitCliAssistantDelta,
+    onCompletedReply: handlers.emitCliCompletedReply,
+    onToolUseStart: handlers.emitParsedToolUseStart,
+    onToolResult: handlers.emitParsedToolResult,
+    onDisplayToolUseStart: handlers.emitCliDisplayToolUseStart,
+    onDisplayToolResult: handlers.emitCliDisplayToolResult,
+  });
+  retainedForMeasurement.push(parser, handlers, toolTracking);
+
+  // Warm the production delivery path on a throwaway tracking before the
+  // baseline. Classifying a send resolves channel plugins through the plugin
+  // metadata snapshot, whose module graph is a ~200 MB one-time process cost —
+  // charged inside the window it would read as per-send retention and the
+  // measurement would be meaningless in both directions.
+  createCliToolTracking(context).handleCliToolUseStart({
+    toolCallId: "toolu_send_warmup",
+    name: "mcp__openclaw__message",
+    kind: "mcp_tool_use",
+    args: { action: "send", channel: "slack", target: "C0PROOF", content: "warm" },
+  });
+
+  overflowRawCharBudget(parser);
+  forceGarbageCollection();
+  const heapAtOverflow = process.memoryUsage().heapUsed;
+
+  // Deliberately under the 64-entry holder cap, so only a byte bound can hold:
+  // 48 sends of 1 MiB is 48 MiB against the runner's 8 MiB retention budget.
+  const contentChars = 1024 * 1024;
+  const sends = 48;
+  let streamedAfter = 0;
+  for (let index = 0; index < sends; index += 1) {
+    const frame = `${messageSendToolUseFrame(index, contentChars)}\n`;
+    streamedAfter += frame.length;
+    parser.push(frame);
+  }
+  forceGarbageCollection();
+  const heapGrowth = process.memoryUsage().heapUsed - heapAtOverflow;
+  const retained = handlers.getRetainedStateSizes();
+  const retainedBound = 2 * MAX_RETAINED_TOOL_ARG_CHARS;
+
+  assert(
+    sends < CLI_MESSAGING_EVIDENCE_MAX_CALLS,
+    `messaging-retention-bound: ${sends} sends reaches the ${CLI_MESSAGING_EVIDENCE_MAX_CALLS}-entry count cap, so the byte bound was not what held`,
+  );
+  assert(
+    contentChars * sends > MAX_RETAINED_TOOL_ARG_CHARS * 4,
+    `messaging-retention-bound: only ${contentChars * sends} argument chars streamed; the byte bound never engaged`,
+  );
+  assert(
+    heapGrowth < retainedBound,
+    `messaging-retention-bound: heap grew ${heapGrowth} bytes while ${sends} unresolved message sends carrying ${contentChars * sends} argument chars reached the real tracking; delivery evidence is not bounded (bound ${retainedBound}, consumer state ${JSON.stringify(retained)})`,
+  );
+  assert(
+    retained.pendingMessagingCalls === sends,
+    `messaging-retention-bound: ${retained.pendingMessagingCalls} of ${sends} sends are held as delivery evidence; the holder under measurement was not exercised`,
+  );
+  assert(
+    retained.reducedMessagingCalls > 0 &&
+      retained.reducedMessagingArgChars <=
+        retained.reducedMessagingCalls * MAX_REDUCED_MESSAGING_ARG_CHARS,
+    `messaging-retention-bound: delivery evidence outside its bound: ${JSON.stringify(retained)}`,
+  );
+
+  // Bounding the holder must not cost what it exists for. Settle one send whose
+  // arguments were released and one whose arguments were kept, and read the
+  // production evidence.
+  parser.push(`${messageSendResultFrame(sends - 1)}\n`);
+  parser.push(`${messageSendResultFrame(0)}\n`);
+  parser.push(`${terminalResultFrame()}\n`);
+  parser.finish();
+  const evidence = toolTracking.withExecutionEvidence({ text: "" });
+  assert(
+    evidence.didSendViaMessagingTool === true,
+    "messaging-retention-bound: a settled send past the bound was not recorded as a visible send; a failed turn could duplicate it",
+  );
+  assert(
+    evidence.didDeliverSourceReplyViaMessageTool === true && evidence.sourceReplyDelivered === true,
+    `messaging-retention-bound: source-reply settlement was lost (${JSON.stringify({
+      didDeliverSourceReplyViaMessageTool: evidence.didDeliverSourceReplyViaMessageTool,
+      sourceReplyDelivered: evidence.sourceReplyDelivered,
+    })})`,
+  );
+  assert(
+    evidence.messagingToolSentTargets?.some((target) => target.provider === "slack") === true,
+    `messaging-retention-bound: the send's target was not recorded: ${JSON.stringify(evidence.messagingToolSentTargets)}`,
+  );
+  const sentTexts = evidence.messagingToolSentTexts ?? [];
+  assert(
+    sentTexts.some((text) => text.startsWith("0:")),
+    "messaging-retention-bound: the send inside the bound lost its content evidence, so the bound is discarding payloads it had room for",
+  );
+  assert(
+    !sentTexts.some((text) => text.startsWith(`${sends - 1}:`)),
+    "messaging-retention-bound: the send past the bound still echoed its full content as evidence; its payload was never released",
+  );
+  console.log(
+    `[messaging-retention-bound] ${sends} unresolved message sends carrying ${contentChars * sends} argument chars ` +
+      `through the real parser and createCliToolTracking; heap delta ${heapGrowth} bytes against ${streamedAfter} streamed; ` +
+      `retained ${JSON.stringify(retained)}; both settled sends recorded delivery and the source reply, only the send inside the bound kept its content`,
+  );
+}
+
 // The retention scenarios run first: a heap baseline taken after the other
 // scenarios carries their transient graphs and can mask the growth these
 // measure.
 scenarioRetentionFlat();
 scenarioStartSnapshotBound();
 scenarioConsumerRetentionBound();
+scenarioMessagingRetentionBound();
 scenarioRecovered("recovered-raw", overflowRawCharBudget);
 scenarioRecovered("recovered-lines", overflowLineBudget);
 scenarioUnknowable();

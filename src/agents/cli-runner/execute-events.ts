@@ -543,6 +543,10 @@ export function createCliEventHandlers(params: {
       unfinishedToolCalls: toolArgsByCallId.size,
       retainedToolArgChars,
       activeParsedTools: activeParsedTools.size,
+      // The tracking side holds a third copy of the same arguments for an
+      // unresolved message send, so the run's retention is only observable
+      // with it included.
+      ...params.toolTracking.getRetainedMessagingSizes(),
     }),
     isActiveForegroundAgentTool: (toolCallId: string) => {
       const tool = activeParsedTools.get(toolCallId);
