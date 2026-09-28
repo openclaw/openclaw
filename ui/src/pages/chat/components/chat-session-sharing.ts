@@ -7,6 +7,13 @@ import type {
 } from "../../../api/types.ts";
 import { icons } from "../../../components/icons.ts";
 import {
+  personActivityLink,
+  renderPersonAvatarLink,
+  renderPersonName,
+  renderStandalonePersonLink,
+  type PersonActivityRouting,
+} from "../../../components/person-activity-link.ts";
+import {
   handlePeopleMenuKeydown,
   searchablePeopleMenu,
 } from "../../../components/searchable-people-menu.ts";
@@ -32,6 +39,9 @@ export type ChatSessionSharingProps = {
   publicShareDisabledReason?: string;
   onPublicShareChange?: (enabled: boolean) => void;
   onCopyPublicLink?: () => void;
+  ownerViewing?: boolean;
+  personActivity?: PersonActivityRouting;
+  showOwner?: boolean;
   onOpen: () => void;
   onVisibilityChange: (visibility: SessionVisibility) => void;
   onMemberChange: (identityId: string, member: boolean) => void;
@@ -146,15 +156,28 @@ export function renderChatSessionSharing(props: ChatSessionSharingProps, inline 
   const canManage = canManageChatSessionSharing(session);
   const result = props.state?.result;
   const publicShare = result?.publicShare;
+  const owner = result?.owner ?? session.owner?.actor;
+  const ownerActivity = personActivityLink(
+    owner?.identity?.type === "profile" ? owner.identity.id : undefined,
+    props.personActivity,
+    owner?.label,
+  );
   if (!canManage) {
     return visibility === "draft"
-      ? html`<span class="chat-pane__draft-indicator" title=${t("chat.sessionSharing.draft")}
-          >${sharingIcon("draft")}</span
-        >`
+      ? html`${
+            props.showOwner && owner
+              ? renderStandalonePersonLink(
+                  renderSessionOwnerChip(owner, "header", "owned", props.ownerViewing),
+                  ownerActivity,
+                )
+              : nothing
+          }<span class="chat-pane__draft-indicator" title=${t("chat.sessionSharing.draft")}
+            >${sharingIcon("draft")}</span
+          >`
       : nothing;
   }
   const members = new Set(result?.members.map((member) => member.identityId) ?? []);
-  // Sharing authority belongs to the creator; assigned ownership is shown by the header.
+  // The owner row presents effective ownership; selectable rows below manage mutable members.
   const identities =
     result?.identities.filter((identity) => identity.id !== result.owner?.id) ?? [];
   const allowed = result?.allowedVisibilities ?? props.allowedVisibilities ?? [visibility];
@@ -162,7 +185,8 @@ export function renderChatSessionSharing(props: ChatSessionSharingProps, inline 
   const membersAvailable = props.membersAvailable !== false;
   const visibilityOptions = allowed.filter((option) => !canPublish || option !== "shared");
   const shouldCapMembers =
-    membersAvailable && visibilityOptions.length + identities.length + (canPublish ? 1 : 0) > 12;
+    membersAvailable &&
+    visibilityOptions.length + identities.length + (canPublish ? 1 : 0) + (owner ? 1 : 0) > 12;
   const content = html`
     ${
       canPublish
@@ -243,6 +267,32 @@ export function renderChatSessionSharing(props: ChatSessionSharingProps, inline 
                   : "chat.sessionSharing.enablePublicAccess",
               )}
             </wa-dropdown-item>
+          `
+        : nothing
+    }
+    ${
+      owner
+        ? html`
+            <div class="chat-pane__sharing-title chat-pane__sharing-owner-title">
+              ${t("chat.sessionSharing.owner")}
+            </div>
+            <div class="chat-pane__sharing-owner">
+              <span class="chat-pane__sharing-member-icon" aria-hidden="true">
+                ${
+                  owner.type === "human"
+                    ? renderPersonAvatarLink(
+                        renderSessionOwnerChip(owner, "header", "owned", props.ownerViewing),
+                        ownerActivity,
+                      )
+                    : icons.bot
+                }
+              </span>
+              ${renderPersonName(
+                owner.label ?? owner.id ?? t("chat.sessionSharing.owner"),
+                ownerActivity,
+                "session-menu__text",
+              )}
+            </div>
           `
         : nothing
     }
