@@ -489,8 +489,8 @@ export async function runManagedCommand(options: RunManagedCommandOptions): Prom
       )?.claim();
       let joined = true;
       try {
-        return await runLinuxMemoryCommand(command, (command) =>
-          runManagedCommandInner(command, false),
+        return await runLinuxMemoryCommand(command, (scopedCommand) =>
+          runManagedCommandInner(scopedCommand, false),
         );
       } catch (error) {
         joined = !hasUnjoinedWork(error);
