@@ -13,6 +13,7 @@ it("rejects invalid setup URLs inline and accepts corrected host shorthand", asy
       "/v1",
       "not a valid URL",
       "ftp://localhost:1234",
+      "http://user:secret@localhost:1234",
     ]) {
       expect(prompt.validate?.(invalid)).toMatch(/HTTP.*URL/i);
     }
