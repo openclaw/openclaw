@@ -97,7 +97,7 @@ struct ControlUIDocumentNativeAuthTests {
                     controller.addScriptMessageHandler(
                         handler, contentWorld: .page, name: NativeConversationContract.handlerName)
                 }
-                try Self.scopeNativeIdentity(document, stateDirectory: stateDir)
+                try scopeNativeDashboardIdentity(document, stateDirectory: stateDir)
                 let bridge = NativeConversationBridge(document: document)
                 handler.owner = bridge
                 hostedBridge = bridge
@@ -372,7 +372,7 @@ struct ControlUIDocumentNativeAuthTests {
                 #expect(try await webView.evaluateJavaScript("window.unsavedDraft") as? String == "keep me")
                 #expect(retained.documentHost.hasCurrentNativeStartupCredentials)
                 #expect(retained.auth.legacyCredentials == ["token": "accepted-profile-token"])
-                try Self.scopeNativeIdentity(retained.documentHost, stateDirectory: stateDir)
+                try scopeNativeDashboardIdentity(retained.documentHost, stateDirectory: stateDir)
                 let response = try await Self.decodeReply(Self.challenge(in: webView))
                 let result = try #require(response["result"] as? [String: Any], "Native auth reply: \(response)")
                 #expect(result["scopes"] as? [String] == ["operator.read", "operator.write"])
@@ -388,22 +388,6 @@ struct ControlUIDocumentNativeAuthTests {
             await oldObservation?.value
             await connection.shutdown()
             try outcome.get()
-        }
-    }
-
-    /// WebKit callbacks do not inherit the test task's identity directory. Keep
-    /// the real provider and its live validity checks inside the same private fixture.
-    private static func scopeNativeIdentity(_ document: ControlUIDocumentHost, stateDirectory: URL) throws {
-        let provider = try #require(document.nativeGatewayAuthProvider)
-        document.nativeGatewayAuthProvider = { nonce, signedAt in
-            let response = try await DeviceIdentityStore.withStateDirectory(stateDirectory) {
-                try await provider(nonce, signedAt)
-            }
-            return DashboardNativeGatewayAuth(json: response.json, isCurrent: {
-                DeviceIdentityPaths.$scopedStateDirURL.withValue(stateDirectory) {
-                    response.isCurrent()
-                }
-            })
         }
     }
 
