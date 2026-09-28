@@ -151,6 +151,8 @@ export type ConfigProps = {
   hiddenSessionCatalogIds: ReadonlySet<string>;
   hiddenSessionCatalogLabels: ReadonlyMap<string, string>;
   setSessionCatalogHidden: (catalogId: string, hidden: boolean) => void;
+  openLinksExternally?: boolean;
+  setOpenLinksExternally?: (enabled: boolean) => void;
   chatMessageMaxWidth?: string;
   setChatMessageMaxWidth: (value: string | undefined) => void;
   chatShowTaskProgress: boolean;

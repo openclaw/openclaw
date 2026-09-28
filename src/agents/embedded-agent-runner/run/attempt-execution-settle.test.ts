@@ -773,7 +773,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
         afterEntryId: null,
         startOrder: 0,
         parentToolCallId: "outer-exec",
-        toolCallId: "tool_search_code:outer-exec:read:1",
+        toolCallId: "tool_call:outer-exec:read:1",
         toolName: "read",
         input: { path: "qa/scenarios/index.yaml" },
         result: {
@@ -790,7 +790,7 @@ describe("runEmbeddedAttemptSettledPhase", () => {
         afterEntryId: null,
         startOrder: 0,
         parentToolCallId: "outer-exec",
-        toolCallId: "tool_search_code:outer-exec:write:2",
+        toolCallId: "tool_call:outer-exec:write:2",
         toolName: "write",
         input: { path: "qa/scenarios/index.yaml", content: "invalid" },
         result: {

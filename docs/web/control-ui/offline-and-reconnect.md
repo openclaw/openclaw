@@ -158,8 +158,16 @@ uncertain-delivery warning without sending the message again. The browser keeps 
 payload until consumption or cancellation is confirmed. If delivery is still unknown,
 the review warning remains.
 If the Gateway is holding that input for a later turn, it appears in the queue
-above the composer. Canceling that row withdraws the exact queued message without
-stopping the active turn. Server-held messages cannot be edited or reordered.
+above the composer. Removing that row withdraws the exact queued message without
+stopping the active turn. Once cancellation is confirmed, the removed prompt and
+its attachments disappear from the queue and conversation, including after a
+reconnect or reload. Server-held messages cannot be edited or reordered.
+If the message has already started, Remove leaves the active run alone; use Stop
+to interrupt it.
+Stopping a turn or an unsuccessful send can still leave a cancelled prompt with
+recovery guidance; those actions do not remove the prompt.
+Incognito chats keep their existing cancellation behavior: Remove cancels queued
+work, but the cancelled-message notice remains until the private session ends.
 
 If automatic restart recovery is interrupted or cancelled before the agent resumes,
 the **System · restart recovery** notice shows that outcome and asks you to send a

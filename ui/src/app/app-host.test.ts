@@ -19,6 +19,7 @@ import { selectShellRouteState } from "./app-host-route-state.ts";
 import {
   committedRouterState,
   createLazyElementSpec,
+  createRosterRefreshContext,
   resetAppHostTestGlobals,
   type ShellKeyboardState,
   type TestOptionalCustomElement,
@@ -114,55 +115,6 @@ type ShellUiCommandState = ShellKeyboardState & {
 
 function roster(defaultId: string, agents: GatewayAgentRow[]): AgentsListResult {
   return { defaultId, mainKey: "main", scope: "per-sender", agents };
-}
-
-function createRosterRefreshContext(params: {
-  previous: AgentsListResult;
-  next: AgentsListResult;
-  selectedId: string;
-}) {
-  const agentsState = { agentsList: params.previous };
-  const selectionState = { selectedId: params.selectedId, scopeId: params.selectedId };
-  const refreshList = vi.fn(async () => {
-    agentsState.agentsList = params.next;
-    return params.next;
-  });
-  const invalidateFiles = vi.fn();
-  const invalidateIdentity = vi.fn();
-  const ensureIdentity = vi.fn(async () => undefined);
-  const setSelection = vi.fn((agentId: string) => {
-    selectionState.selectedId = agentId;
-    selectionState.scopeId = agentId;
-  });
-  const refreshConfig = vi.fn(async () => null);
-  const context = {
-    agents: {
-      state: agentsState,
-      refreshList,
-      invalidateFiles,
-    },
-    agentIdentity: {
-      invalidate: invalidateIdentity,
-      ensure: ensureIdentity,
-    },
-    agentSelection: {
-      state: selectionState,
-      set: setSelection,
-    },
-    runtimeConfig: {
-      state: { configFormDirty: false },
-      refresh: refreshConfig,
-    },
-  } as unknown as ApplicationContext;
-  return {
-    context,
-    refreshList,
-    invalidateFiles,
-    invalidateIdentity,
-    ensureIdentity,
-    setSelection,
-    refreshConfig,
-  };
 }
 
 type ShellChromeEventState = {

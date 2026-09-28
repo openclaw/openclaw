@@ -1,6 +1,7 @@
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { AgentsListResult, GatewaySessionRow, SessionBranch } from "../../api/types.ts";
 import type { ApplicationChatSubmissions } from "../../app/chat-submissions.ts";
+import type { ApplicationConfigCapability } from "../../app/config.ts";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import type {
@@ -26,6 +27,7 @@ export type ChatHistorySessions = Pick<SessionCapability, "captureReconcile">;
 export type ChatHistoryHost = ChatState & { sessions: ChatHistorySessions };
 
 export type ChatState = StreamCausalBoundaryState & {
+  uploadConfig?: ApplicationConfigCapability;
   client: GatewayBrowserClient | null;
   connected: boolean;
   chatSubmissions?: ApplicationChatSubmissions;

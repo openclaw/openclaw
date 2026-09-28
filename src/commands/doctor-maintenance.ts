@@ -242,14 +242,13 @@ export async function beginDoctorMaintenance(
         }
       }
       if (
-        parentActivation === undefined &&
-        before.offline === true &&
-        before.serviceUpdateVerdict?.kind === "owned"
+        resolveDoctorRepairMode(params.options).updateInProgress ||
+        before.offline !== true ||
+        verdict?.kind !== "owned" ||
+        verdict.requiresInstallRootRefresh
       ) {
-        const warning = `Gateway was already stopped before repair; repair did not start it. Run ${formatCliCommand("openclaw gateway start", env)} to bring it online.`;
-        warn(warning);
+        return;
       }
-      return;
     }
     try {
       const serviceEnv = before.serviceEnv;

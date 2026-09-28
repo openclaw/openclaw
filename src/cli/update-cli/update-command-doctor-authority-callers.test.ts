@@ -22,7 +22,7 @@ import {
 } from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
-  closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { removePreparedWorkerOwnershipColumns } from "../../state/openclaw-state-schema-v17.test-support.js";
@@ -257,12 +257,17 @@ describe("unproved Doctor authority callers", () => {
     vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
     vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", resultPath);
     const databasePath = openOpenClawStateDatabase({ env: state.env }).path;
-    closeOpenClawStateDatabaseForTest();
+    // The deferred-migration write retains a worker connection. The synchronous
+    // close only starts its retirement, whose final checkpoint then races the
+    // raw downgrade and the read-only inspections below.
+    await closeOpenClawStateDatabaseAsync();
     const prior = new DatabaseSync(databasePath);
     try {
+      // Downgrade as the only connection, or refuse before inspecting.
+      prior.exec("PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE");
       removePreparedWorkerOwnershipColumns(prior);
       prior.exec(
-        "PRAGMA user_version=16; UPDATE schema_meta SET schema_version=16, app_version='2026.9.2'",
+        "PRAGMA user_version=16; UPDATE schema_meta SET schema_version=16, app_version='2026.9.2'; COMMIT",
       );
     } finally {
       prior.close();

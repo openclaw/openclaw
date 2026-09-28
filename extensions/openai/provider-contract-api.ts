@@ -15,7 +15,7 @@ const OPENAI_CHATGPT_DEVICE_PAIRING_HINT = "Use a browser code when OpenClaw run
 const OPENAI_ACCOUNT_WIZARD_GROUP = {
   groupId: "openai",
   groupLabel: "OpenAI",
-  groupHint: "Codex login, Sign in with ChatGPT, or API key",
+  groupHint: "Codex login, Sign in with ChatGPT (Beta), or API key",
 } as const;
 const CODEX_CHATGPT_IMPORT = {
   migrationProviderId: "codex",
@@ -125,13 +125,13 @@ export function createOpenAIProvider(): ProviderPlugin {
       {
         id: "siwc",
         kind: "oauth",
-        label: "Sign in with ChatGPT",
+        label: "Sign in with ChatGPT (Beta)",
         hint: "Use your Codex allowance with per-instance usage tracking and token limits",
         run: noopAuth,
         matchesPersonalAccount: matchesTokenSharingAccount,
         wizard: {
           choiceId: "openai-token-sharing",
-          choiceLabel: "Sign in with ChatGPT",
+          choiceLabel: "Sign in with ChatGPT (Beta)",
           choiceHint: "Use your Codex allowance with per-instance usage tracking and token limits",
           assistantPriority: -50,
           ...OPENAI_ACCOUNT_WIZARD_GROUP,

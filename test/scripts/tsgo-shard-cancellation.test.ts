@@ -63,6 +63,7 @@ Date.now = () => start + (now() - start) * 10;
           cwd: root,
           env: {
             ...process.env,
+            OPENCLAW_CI_STATIC_EVIDENCE: "1",
             NODE_OPTIONS: `--import=${pathToFileURL(clock).href}`,
           },
           stdio: ["pipe", "pipe", "pipe"],
@@ -70,6 +71,9 @@ Date.now = () => start + (now() - start) * 10;
           requireProcessTreeExit: true,
           onReady: (started) => {
             child = started;
+            started.stdout!.on("data", (chunk) => {
+              output += String(chunk);
+            });
             createInterface({ input: started.stdout! }).once("line", (line) => {
               ready.resolve(JSON.parse(line) as { pid: number });
             });
@@ -92,6 +96,7 @@ Date.now = () => start + (now() - start) * 10;
         }
         child.kill("SIGTERM");
         expect(await completion, output).toBe(143);
+        expect(output).not.toContain("[ci-static:tsgo:");
         expect(() => process.kill(compilerReady.pid, 0)).toThrow();
         expect(fs.readdirSync(path.join(root, ".artifacts/dist-artifacts.lock"))).toEqual([]);
         await withDistArtifactOwnership(root, async () => {

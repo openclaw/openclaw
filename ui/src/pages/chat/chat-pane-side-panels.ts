@@ -1,5 +1,7 @@
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { showToast } from "../../lib/toast.ts";
+import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { sendSessionObserverVisibility } from "./chat-observer.ts";
 import { ChatPaneBase } from "./chat-pane-base.ts";
 import {
@@ -169,8 +171,23 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
       this.sessionCompanionThreads.setDraft(sessionKey, text, agentId);
       return;
     }
-    const ask = (key: string, value: string, attachments?: ChatAttachment[]) =>
-      requestSessionCompanionAnswer(client, key, value, agentId, attachments);
+    const attachments =
+      typeof question === "string"
+        ? this.sessionCompanionThreads.view(sessionKey, agentId).attachments
+        : question.attachments;
+    if (attachments?.length && !uploadsEnabled(state.uploadConfig)) {
+      showToast({ message: uploadsDisabledMessage() });
+      return;
+    }
+    const ask = (key: string, value: string, requestedAttachments?: ChatAttachment[]) =>
+      requestSessionCompanionAnswer(
+        client,
+        key,
+        value,
+        agentId,
+        requestedAttachments,
+        state.uploadConfig,
+      );
     await this.sessionCompanionThreads.submit(sessionKey, question, ask, agentId);
   };
 

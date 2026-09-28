@@ -139,9 +139,16 @@ export function createSessionRosterObservations(
       ? { entry, previous, snapshot: { ...previous, row: null, visible: null, retired: true } }
       : undefined;
   };
-  const indexRows = (rows: readonly GatewaySessionRow[], agentId?: string | null) => {
+  const indexRows = (
+    rows: readonly GatewaySessionRow[],
+    agentId?: string | null,
+    sessionIds?: ReadonlySet<string | undefined>,
+  ) => {
     const indexed = new Map<string, GatewaySessionRow>();
     for (const row of rows) {
+      if (sessionIds && !sessionIds.has(row.sessionId)) {
+        continue;
+      }
       const key = identity(row, agentId);
       if (key) {
         indexed.set(key, row);
@@ -182,9 +189,9 @@ export function createSessionRosterObservations(
     });
     return projectSessionResultRows(result, sessions);
   };
-  const captureHeldRows = () => {
+  const captureHeldRows = (sessionIds?: ReadonlySet<string | undefined>) => {
     const state = host.readState();
-    const primaryRows = indexRows(state.result?.sessions ?? [], state.agentId);
+    const primaryRows = indexRows(state.result?.sessions ?? [], state.agentId, sessionIds);
     const epoch = host.connection.capture()?.epoch;
     const observedRows = new Map<string, GatewaySessionRow[]>();
     const append = (key: string, row: GatewaySessionRow) => {
@@ -200,6 +207,7 @@ export function createSessionRosterObservations(
         for (const [key, row] of indexRows(
           entry.snapshot.result?.sessions ?? [],
           entry.snapshot.agentId,
+          sessionIds,
         )) {
           append(key, row);
         }
@@ -207,15 +215,23 @@ export function createSessionRosterObservations(
     }
     for (const entry of registeredRows) {
       const row = registeredRow(entry);
-      const key = row && identity(row, entry.target.agentId);
+      const key =
+        row &&
+        (!sessionIds || sessionIds.has(row.sessionId)) &&
+        identity(row, entry.target.agentId);
       if (row && key) {
         append(key, row);
       }
     }
     return { state, primaryRows, observedRows };
   };
-  const prepareProjection = () => {
-    const { state, primaryRows, observedRows } = captureHeldRows();
+  const prepareProjection = (requestedRows?: readonly GatewaySessionRow[]) => {
+    // Identity includes the verbatim session ID; other IDs cannot donate facts.
+    // Event planning still captures every held identity once when no rows are supplied.
+    const sessionIds =
+      requestedRows &&
+      new Set(requestedRows.flatMap((row) => (row.sessionId?.trim() ? [row.sessionId] : [])));
+    const { state, primaryRows, observedRows } = captureHeldRows(sessionIds);
     const projectFields = (row: GatewaySessionRow, agentId?: string | null) => {
       const key = identity(row, agentId);
       if (!key) {
@@ -243,7 +259,7 @@ export function createSessionRosterObservations(
     };
   };
   const projectFields = (row: GatewaySessionRow, agentId?: string | null) =>
-    prepareProjection().projectFields(row, agentId);
+    prepareProjection([row]).projectFields(row, agentId);
   const heldRowsFor = (
     row: GatewaySessionRow,
     agentId?: string | null,
@@ -591,7 +607,7 @@ export function createSessionRosterObservations(
     projectFields,
     prepareProjection,
     projectRows: (rows: readonly GatewaySessionRow[]): GatewaySessionRow[] =>
-      rows.length === 0 ? [] : prepareProjection().projectRows(rows),
+      rows.length === 0 ? [] : prepareProjection(rows).projectRows(rows),
     stageObservedRows,
     stageManagedResults,
     captureEventDelivery,

@@ -4,9 +4,11 @@ import {
   errorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { isChannelPartialDeliveryError } from "../../channels/turn/partial-delivery-error.js";
+import { OutboundHandoffRejectedError } from "../../infra/outbound/deliver-handoff.js";
 import { OutboundDeliveryError } from "../../infra/outbound/deliver-types.js";
 import { mirrorDeliveredSourceReplyToTranscript } from "../../infra/outbound/source-reply-mirror.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayInflightResult } from "./inflight.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -61,6 +63,21 @@ export function createGatewayInflightUnavailableFailure(params: {
   channel: string;
   err: unknown;
 }): GatewayInflightResult {
+  // Preserve ingress-policy errors only when delivery has no accepted effect or queue custody.
+  const unsentError =
+    params.err instanceof OutboundDeliveryError &&
+    !params.err.sentBeforeError &&
+    params.err.queueCustody !== "held"
+      ? params.err.cause
+      : params.err;
+  const authorizationError =
+    unsentError instanceof OutboundHandoffRejectedError ? unsentError.cause : unsentError;
+  if (authorizationError instanceof SessionMutationAuthorizationChangedError) {
+    return createGatewayInflightResult({
+      ...params,
+      result: { ok: false, error: authorizationError.error },
+    });
+  }
   // A channel partial-delivery error carries the receipt of the part that was
   // already delivered (e.g. a caption sent before the media upload failed).
   // Preserve it on the structured error and mark the result non-retryable so

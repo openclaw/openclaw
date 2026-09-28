@@ -3811,17 +3811,20 @@ public struct ChatAbortParams: Codable, Sendable {
     public let agentid: String?
     public let runid: String?
     public let preservesideruns: Bool?
+    public let discardpendinginput: Bool?
 
     public init(
         sessionkey: String,
         agentid: String? = nil,
         runid: String? = nil,
-        preservesideruns: Bool? = nil)
+        preservesideruns: Bool? = nil,
+        discardpendinginput: Bool? = nil)
     {
         self.sessionkey = sessionkey
         self.agentid = agentid
         self.runid = runid
         self.preservesideruns = preservesideruns
+        self.discardpendinginput = discardpendinginput
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -3829,6 +3832,7 @@ public struct ChatAbortParams: Codable, Sendable {
         case agentid = "agentId"
         case runid = "runId"
         case preservesideruns = "preserveSideRuns"
+        case discardpendinginput = "discardPendingInput"
     }
 }
 
@@ -19339,19 +19343,22 @@ public struct SkillsLibrarySaveParams: Codable, Sendable {
     public let slug: String
     public let content: String
     public let files: [[String: AnyCodable]]?
+    public let retainfiles: [String]?
 
     public init(
         skillid: String? = nil,
         expectedrevision: AnyCodable,
         slug: String,
         content: String,
-        files: [[String: AnyCodable]]? = nil)
+        files: [[String: AnyCodable]]? = nil,
+        retainfiles: [String]? = nil)
     {
         self.skillid = skillid
         self.expectedrevision = expectedrevision
         self.slug = slug
         self.content = content
         self.files = files
+        self.retainfiles = retainfiles
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -19360,6 +19367,7 @@ public struct SkillsLibrarySaveParams: Codable, Sendable {
         case slug
         case content
         case files
+        case retainfiles = "retainFiles"
     }
 }
 

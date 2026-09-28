@@ -284,13 +284,7 @@ export type ChannelHeartbeatAdapter = {
     signal: AbortSignal;
     assertPlatformSendAuthorized: () => void;
   }) => Promise<void> | void;
-  clearTyping?: (params: {
-    cfg: OpenClawConfig;
-    to: string;
-    accountId?: string | null;
-    threadId?: string | number | null;
-    deps?: ChannelHeartbeatDeps;
-  }) => Promise<void> | void;
+  clearTyping?: NonNullable<ChannelHeartbeatAdapter["sendTyping"]>;
 };
 
 type ChannelDirectorySelfParams = {
@@ -371,9 +365,7 @@ export type ChannelCommandAdapter = {
   buildModelsMenuChannelData?: (params: {
     providers: Array<{ id: string; count: number }>;
   }) => ReplyPayload["channelData"] | null;
-  buildModelsProviderChannelData?: (params: {
-    providers: Array<{ id: string; count: number }>;
-  }) => ReplyPayload["channelData"] | null;
+  buildModelsProviderChannelData?: NonNullable<ChannelCommandAdapter["buildModelsMenuChannelData"]>;
   buildModelsAddProviderChannelData?: (params: {
     providers: Array<{ id: string }>;
   }) => ReplyPayload["channelData"] | null;
@@ -498,33 +490,23 @@ type ChannelApproveCommandBehavior =
 
 export type { ChannelApprovalNativeAdapter } from "./approval-native.types.js";
 
+type ChannelApprovalRenderHandlers<Request, Resolved> = {
+  buildPendingPayload?: (params: {
+    cfg: OpenClawConfig;
+    request: Request;
+    target: ChannelApprovalForwardTarget;
+    nowMs: number;
+  }) => ReplyPayload | null;
+  buildResolvedPayload?: (params: {
+    cfg: OpenClawConfig;
+    resolved: Resolved;
+    target: ChannelApprovalForwardTarget;
+  }) => ReplyPayload | null;
+};
+
 type ChannelApprovalRenderAdapter = {
-  exec?: {
-    buildPendingPayload?: (params: {
-      cfg: OpenClawConfig;
-      request: ExecApprovalRequest;
-      target: ChannelApprovalForwardTarget;
-      nowMs: number;
-    }) => ReplyPayload | null;
-    buildResolvedPayload?: (params: {
-      cfg: OpenClawConfig;
-      resolved: ExecApprovalResolved;
-      target: ChannelApprovalForwardTarget;
-    }) => ReplyPayload | null;
-  };
-  plugin?: {
-    buildPendingPayload?: (params: {
-      cfg: OpenClawConfig;
-      request: PluginApprovalRequest;
-      target: ChannelApprovalForwardTarget;
-      nowMs: number;
-    }) => ReplyPayload | null;
-    buildResolvedPayload?: (params: {
-      cfg: OpenClawConfig;
-      resolved: PluginApprovalResolved;
-      target: ChannelApprovalForwardTarget;
-    }) => ReplyPayload | null;
-  };
+  exec?: ChannelApprovalRenderHandlers<ExecApprovalRequest, ExecApprovalResolved>;
+  plugin?: ChannelApprovalRenderHandlers<PluginApprovalRequest, PluginApprovalResolved>;
 };
 
 export type ChannelApprovalAdapter = {
@@ -575,6 +557,18 @@ export type ChannelApprovalCapability = ChannelApprovalAdapter & {
   }) => ChannelApproveCommandBehavior | undefined;
 };
 
+type ChannelAllowlistConfigEditResult =
+  | { kind: "ok"; changed: boolean; pathLabel: string; writeTarget: ConfigWriteTarget }
+  | { kind: "invalid-entry" };
+
+type ChannelAllowlistConfig = {
+  dmAllowFrom?: Array<string | number>;
+  groupAllowFrom?: Array<string | number>;
+  dmPolicy?: string;
+  groupPolicy?: string;
+  groupOverrides?: Array<{ label: string; entries: Array<string | number> }>;
+};
+
 export type ChannelAllowlistAdapter = {
   applyConfigEdit?: (params: {
     cfg: OpenClawConfig;
@@ -583,43 +577,11 @@ export type ChannelAllowlistAdapter = {
     scope: "dm" | "group";
     action: "add" | "remove";
     entry: string;
-  }) =>
-    | {
-        kind: "ok";
-        changed: boolean;
-        pathLabel: string;
-        writeTarget: ConfigWriteTarget;
-      }
-    | {
-        kind: "invalid-entry";
-      }
-    | Promise<
-        | {
-            kind: "ok";
-            changed: boolean;
-            pathLabel: string;
-            writeTarget: ConfigWriteTarget;
-          }
-        | {
-            kind: "invalid-entry";
-          }
-      >
-    | null;
-  readConfig?: (params: { cfg: OpenClawConfig; accountId?: string | null }) =>
-    | {
-        dmAllowFrom?: Array<string | number>;
-        groupAllowFrom?: Array<string | number>;
-        dmPolicy?: string;
-        groupPolicy?: string;
-        groupOverrides?: Array<{ label: string; entries: Array<string | number> }>;
-      }
-    | Promise<{
-        dmAllowFrom?: Array<string | number>;
-        groupAllowFrom?: Array<string | number>;
-        dmPolicy?: string;
-        groupPolicy?: string;
-        groupOverrides?: Array<{ label: string; entries: Array<string | number> }>;
-      }>;
+  }) => ChannelAllowlistConfigEditResult | Promise<ChannelAllowlistConfigEditResult> | null;
+  readConfig?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  }) => ChannelAllowlistConfig | Promise<ChannelAllowlistConfig>;
   resolveNames?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;

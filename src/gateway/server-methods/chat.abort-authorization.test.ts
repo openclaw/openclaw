@@ -41,6 +41,41 @@ function queuedTurn(controller: AbortController): QueuedChatTurnEntry {
 }
 
 describe("chat.abort authorization", () => {
+  it.each([
+    { sessionKey: "main", runId: undefined, message: "requires an exact runId" },
+    {
+      sessionKey: "agent:main:other",
+      runId: "run-1",
+      message: "does not match sessionKey",
+    },
+    {
+      sessionKey: "agent:main:dashboard:incognito-private",
+      runId: "run-1",
+      message: "unavailable in incognito sessions",
+    },
+  ])("requires an exact discard target ($sessionKey, $runId)", async (target) => {
+    const context = createSingleAbortContext();
+    const active = context.chatAbortControllers.get("run-1");
+    const respond = await invokeChatAbortHandler({
+      handler: handleChatAbortRequestWithLifecycle,
+      context,
+      request: {
+        sessionKey: target.sessionKey,
+        runId: target.runId,
+        discardPendingInput: true,
+      },
+      client: {
+        connId: "conn-owner",
+        connect: { device: { id: "dev-owner" }, scopes: ["operator.admin"] },
+      },
+    });
+    const [ok, , error] = requireLastRespondCall(respond);
+    expect(ok).toBe(false);
+    expect(error?.message).toContain(target.message);
+    expect(context.chatAbortControllers.get("run-1")).toBe(active);
+    expect(active?.controller.signal.aborted).toBe(false);
+  });
+
   it("cancels the admitted worker session after the selected store changes", async () => {
     const cancel = vi.fn(() => ["worker-run"]);
     const context = createChatAbortContext({

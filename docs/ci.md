@@ -15,13 +15,17 @@ for runs already deferred by older workflow revisions.
 This page is an index. CI is documented on nine pages, one per reader
 job. Open the page that matches your task.
 
+Full hybrid extension lint packs the same canonical chunks into three existing rows, sharing setup and SDK preparation within each row. Targeted plans and frozen routes retain their existing layout; see [runner profiles](/ci/runners#runner-backend-modes).
+
 [Automation admission](/ci/scheduled-workflows#comment-automation) filters known
 no-op events before runner allocation and concurrency, keeping automation on
 GitHub-hosted runners.
 
-PR Node matrices stop sibling rows on failure. Same-repository PRs also cancel
-other job families through a scoped monitor, preserving a failed aggregate that
-names the originating job. Main and manual runs retain complete matrices. See
+First-attempt PR Node matrices let the scoped monitor classify failures before
+cancelling eligible same-repository work. Fork monitoring is read-only. Exact
+known hourly-main test and supported static failures can remain advisory when the PR leaves their
+subjects unchanged and all remaining checks finish. Retries retain native matrix
+fail-fast. Main and manual runs retain complete matrices. See
 [failure cancellation](/ci/pipeline#fail-fast-order).
 
 For the published-upgrade regression gate, see [selection and routing](/ci/scope-and-routing#scope-and-routing), [runner budgets](/ci/capacity#runner-registration-budget), and [Package Acceptance baselines](/ci/release-validation#suite-profiles). Weekly validation is listed under [Update Migration](/ci/scheduled-workflows#update-migration).

@@ -426,9 +426,11 @@ never triggers automatic re-enablement of the rejected installation.
 
 On macOS, a terminated update helper can leave the selected Gateway LaunchAgent
 installed but unloaded and disabled across logins. `openclaw doctor` and
-`openclaw doctor --fix` diagnose this state. `--fix` leaves an already-stopped
-Gateway stopped. If the update was interrupted or installation safety is
-uncertain, rerun `openclaw update` or use Doctor and triage before starting it.
+`openclaw doctor --fix` diagnose this state. After successful standalone repair,
+`--fix` starts and verifies an already-stopped managed Gateway whose service
+targets the current installation. Update-time Doctor leaves activation with the
+updater. If the update was interrupted or installation safety is uncertain,
+rerun `openclaw update` or use Doctor and triage before starting it manually.
 Once verified, run `openclaw gateway start` (or
 `openclaw --profile <profile> gateway start`) to re-enable and start that service.
 Keep the same state/config and custom-label overrides. Doctor prints the selected

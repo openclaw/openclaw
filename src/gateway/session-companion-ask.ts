@@ -42,6 +42,7 @@ import {
   trimSessionCompanionExchanges,
   type SessionCompanionThread,
 } from "./session-companion-state.js";
+import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import type { SessionObserverCompanionSnapshot } from "./session-observer-contract.js";
 import { sessionObserverScopeKey } from "./session-observer-model.js";
 
@@ -64,6 +65,7 @@ type SessionCompanionRunParams = {
   images?: ImageContent[];
   operatorAuthority?: AdmittedRunOperatorAuthority;
   assertSourceCurrent?: () => void;
+  assertInputCurrent?: () => void;
   signal: AbortSignal;
 };
 
@@ -124,6 +126,7 @@ function toRunnerHistoryMessage(
 
 async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
   params.assertSourceCurrent?.();
+  params.assertInputCurrent?.();
   const selectedModel = resolveSessionCompanionModel({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -225,6 +228,7 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
       }
     });
     abortSignal.throwIfAborted();
+    params.assertInputCurrent?.();
     executionStarted = true;
     const result = await runEmbeddedAgent({
       preparedRunAdmission,
@@ -437,6 +441,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     connId: string;
     operatorAuthority?: AdmittedRunOperatorAuthority;
     assertSourceCurrent?: () => void;
+    assertInputCurrent?: () => void;
     signal?: AbortSignal;
   }): Promise<{ answer: string; ts: number }> => {
     const sessionKey = request.sessionKey.trim();
@@ -576,9 +581,15 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
         maxBytes: resolveChatAttachmentMaxBytes(cfg),
         acceptNonImage: false,
         imageStorage: "inline",
+        signal: controller.signal,
+        assertCurrent: () => {
+          assertSourceCurrent?.();
+          request.assertInputCurrent?.();
+        },
       });
       controller.signal.throwIfAborted();
       assertSourceCurrent?.();
+      request.assertInputCurrent?.();
       const rawAnswer = await run({
         cfg,
         agentId,
@@ -590,6 +601,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
         ...(input.images.length ? { images: input.images } : {}),
         ...(request.operatorAuthority ? { operatorAuthority: request.operatorAuthority } : {}),
         assertSourceCurrent,
+        ...(request.assertInputCurrent ? { assertInputCurrent: request.assertInputCurrent } : {}),
         signal: controller.signal,
       });
       if (activeAsk.cancellation || params.isDisposed()) {
@@ -621,7 +633,10 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     try {
       return await Promise.race([execute(), aborted.promise]);
     } catch (error) {
-      if (error instanceof SessionCompanionAskError) {
+      if (
+        error instanceof SessionCompanionAskError ||
+        error instanceof SessionMutationAuthorizationChangedError
+      ) {
         throw error;
       }
       if (activeAsk.cancellation === "backing-session-revoked") {
