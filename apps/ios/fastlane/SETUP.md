@@ -171,8 +171,11 @@ that supports the test device and architecture, and records that runtime in its 
 It builds the Gateway runtime and ad-hoc-signed
 Debug `OpenClawUITests` simulator products once. Ad-hoc signing preserves Keychain
 entitlements without certificates or provisioning profiles; this is not a signed
-Release build. Each arm boots one new simulator before starting an isolated real
-Gateway and requesting its setup code. The live test pairs a fresh install and
+Release build. Each arm starts an isolated real Gateway, then prepares its setup
+handler and state worker with `device.pair.setupStatus` before booting one new
+simulator. This status preparation prunes expired completion records without issuing
+a credential. After boot, the same Gateway issues the fresh setup code consumed by
+the app. The live test pairs a fresh install and
 verifies the `first` and `second` message round trips. It then terminates and
 relaunches the app, verifies the `relaunch` message on the restored connection,
 and opens native Overview. Each message must reach the deterministic local
@@ -200,7 +203,7 @@ node --import ./scripts/tsx.mjs scripts/ios-release-e2e.ts \
   --mode stock --target-sha "$(git rev-parse HEAD)" \
   --build-dir /tmp/ios-e2e-build --build-only --output /tmp/ios-e2e-build.json
 
-# Exercise Gateway startup and setup-code issuance without a native build or simulator.
+# Exercise Gateway startup, setup-status preparation, and code issuance without native resources.
 node --import ./scripts/tsx.mjs scripts/ios-release-e2e.ts \
   --mode stock --target-sha "$(git rev-parse HEAD)" \
   --gateway-only --output /tmp/ios-e2e-gateway.json

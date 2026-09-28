@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -416,36 +417,6 @@ export async function createNativeDependencies(options: {
           };
           return {
             async prepare() {
-              if (!options.gatewayOnly) {
-                udid = await command("simulator-create", "xcrun", [
-                  "simctl",
-                  "create",
-                  `openclaw-ios-e2e-${index}`,
-                  DEVICE_TYPE,
-                  runtime.identifier,
-                ]);
-                if (!UUID.test(udid)) {
-                  udid = undefined;
-                  preserveResources();
-                  throw new OperationError("simulator-create", "failed");
-                }
-                if (arm === "simslim") {
-                  await command(
-                    "simulator-slim",
-                    "/bin/bash",
-                    ["scripts/ios-simulator-prepare.sh", udid],
-                    {
-                      env: { CI: "true", OPENCLAW_CI_SIMSLIM_BINARY: binary },
-                      timeoutMs: 900_000,
-                    },
-                  );
-                } else {
-                  await command("simulator-boot", "xcrun", ["simctl", "boot", udid]);
-                  await command("simulator-ready", "xcrun", ["simctl", "bootstatus", udid, "-b"], {
-                    timeoutMs: 600_000,
-                  });
-                }
-              }
               let resolvePort!: (port: number) => void;
               let rejectPort!: (error: Error) => void;
               const portReady = new Promise<number>((resolve, reject) => {
@@ -551,57 +522,127 @@ export async function createNativeDependencies(options: {
                 }));
               }
               const readyInstance = instance;
-              const rpcEvidence = {
-                authenticated: false,
-                dispatchEntered: false,
-                responseReceived: false,
-              };
-              fixtureEvidence.setupRpc = rpcEvidence;
-              try {
-                // The ready Gateway owns credential issuance; avoid another CLI startup beside the simulator.
-                const setup = await phase("setup-code", () =>
-                  callGateway<DevicePairSetupCodeResult>({
-                    config: {},
-                    configPath: readyInstance.configPath,
-                    url: readyInstance.url,
-                    token: readyInstance.gatewayToken,
-                    ignoreEnvUrlOverride: true,
-                    deviceIdentity: null,
-                    sharedStateMode: "read-only",
-                    method: "device.pair.setupCode",
-                    params: { publicUrl: readyInstance.url, includeQr: false },
-                    timeoutMs: 30_000,
-                    signal: fixtureSignal,
-                    onHelloOk: () => {
-                      rpcEvidence.authenticated = true;
-                    },
-                    assertDispatchCurrent: () => {
-                      rpcEvidence.dispatchEntered = true;
-                    },
-                  }),
-                );
-                rpcEvidence.responseReceived = true;
-                setupCode = setup.setupCode;
-              } catch (error) {
-                requireLiveFixture();
-                if (isGatewayTransportError(error) && error.kind === "timeout") {
-                  const failure = new OperationError("setup-code", "timeout");
-                  failure.diagnostic.context.push(
-                    `rpc-authenticated:${rpcEvidence.authenticated}`,
-                    `rpc-dispatch-entered:${rpcEvidence.dispatchEntered}`,
+              const callSetupRpc = async <T>(
+                operation: "setup-status" | "setup-code",
+                params: Record<string, unknown>,
+              ): Promise<T> => {
+                const rpcEvidence = {
+                  authenticated: false,
+                  dispatchEntered: false,
+                  responseReceived: false,
+                };
+                fixtureEvidence[operation === "setup-status" ? "setupStatusRpc" : "setupRpc"] =
+                  rpcEvidence;
+                try {
+                  requireLiveFixture();
+                  const result = await phase(operation, () =>
+                    callGateway<T>({
+                      config: {},
+                      configPath: readyInstance.configPath,
+                      url: readyInstance.url,
+                      token: readyInstance.gatewayToken,
+                      ignoreEnvUrlOverride: true,
+                      deviceIdentity: null,
+                      sharedStateMode: "read-only",
+                      method:
+                        operation === "setup-status"
+                          ? "device.pair.setupStatus"
+                          : "device.pair.setupCode",
+                      params,
+                      timeoutMs: 30_000,
+                      signal: fixtureSignal,
+                      onHelloOk: () => {
+                        rpcEvidence.authenticated = true;
+                      },
+                      assertDispatchCurrent: () => {
+                        requireLiveFixture();
+                        rpcEvidence.dispatchEntered = true;
+                      },
+                    }),
                   );
-                  if (typeof error.requestDispatched === "boolean") {
+                  rpcEvidence.responseReceived = true;
+                  requireLiveFixture();
+                  return result;
+                } catch (error) {
+                  if (hasUnjoinedWork(error)) {
+                    preserveResources();
+                  }
+                  if (!options.signal.aborted) {
+                    requireLiveFixture();
+                  }
+                  if (isGatewayTransportError(error) && error.kind === "timeout") {
+                    const failure = new OperationError(operation, "timeout");
                     failure.diagnostic.context.push(
-                      `rpc-request-dispatched:${error.requestDispatched}`,
+                      `rpc-authenticated:${rpcEvidence.authenticated}`,
+                      `rpc-dispatch-entered:${rpcEvidence.dispatchEntered}`,
+                    );
+                    if (typeof error.requestDispatched === "boolean") {
+                      failure.diagnostic.context.push(
+                        `rpc-request-dispatched:${error.requestDispatched}`,
+                      );
+                    }
+                    throw failure;
+                  }
+                  throw operationError(operation, error);
+                }
+              };
+              // Prepare the real setup handler and worker before cold Simulator boot.
+              // Status prunes expired completion records but issues no credential.
+              await callSetupRpc("setup-status", { setupId: randomUUID() });
+              try {
+                if (!options.gatewayOnly) {
+                  // Capture the created device before reacting to Gateway death; cleanup needs its identity.
+                  udid = await command("simulator-create", "xcrun", [
+                    "simctl",
+                    "create",
+                    `openclaw-ios-e2e-${index}`,
+                    DEVICE_TYPE,
+                    runtime.identifier,
+                  ]);
+                  if (!UUID.test(udid)) {
+                    udid = undefined;
+                    preserveResources();
+                    throw new OperationError("simulator-create", "failed");
+                  }
+                  requireLiveFixture();
+                  if (arm === "simslim") {
+                    await command(
+                      "simulator-slim",
+                      "/bin/bash",
+                      ["scripts/ios-simulator-prepare.sh", udid],
+                      {
+                        env: { CI: "true", OPENCLAW_CI_SIMSLIM_BINARY: binary },
+                        timeoutMs: 900_000,
+                        signal: fixtureSignal,
+                      },
+                    );
+                  } else {
+                    await command("simulator-boot", "xcrun", ["simctl", "boot", udid], {
+                      signal: fixtureSignal,
+                    });
+                    await command(
+                      "simulator-ready",
+                      "xcrun",
+                      ["simctl", "bootstatus", udid, "-b"],
+                      {
+                        timeoutMs: 600_000,
+                        signal: fixtureSignal,
+                      },
                     );
                   }
-                  throw failure;
                 }
-                if (hasUnjoinedWork(error)) {
-                  preserveResources();
+              } catch (error) {
+                if (!options.signal.aborted) {
+                  requireLiveFixture();
                 }
-                throw operationError("setup-code", error);
+                throw error;
               }
+              // Issue the consumed credential after boot so preparation cannot spend its TTL.
+              const setup = await callSetupRpc<DevicePairSetupCodeResult>("setup-code", {
+                publicUrl: readyInstance.url,
+                includeQr: false,
+              });
+              setupCode = setup.setupCode;
               if (!setupCode.trim()) {
                 throw new OperationError("setup-code", "failed");
               }

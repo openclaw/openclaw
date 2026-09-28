@@ -40,6 +40,7 @@ export type Operation =
   | "simulator-delete"
   | "fixture-server"
   | "gateway-start"
+  | "setup-status"
   | "setup-code"
   | "native-test"
   | "app-diagnostics"
