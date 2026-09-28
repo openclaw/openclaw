@@ -4,11 +4,7 @@ import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
 import { ensureCustomElementDefined } from "../../../app/lazy-custom-element.ts";
 import { icons } from "../../../components/icons.ts";
-import {
-  dispatchWidgetPrompt,
-  WIDGET_PROMPT_EVENT,
-  type WidgetPromptEventDetail,
-} from "../../../components/mcp-app-security.ts";
+import { dispatchWidgetPrompt } from "../../../components/mcp-app-security.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import {
@@ -29,9 +25,6 @@ import { installWidgetThemeObserver, postWidgetTheme } from "../../../lib/widget
 import { exportWidget } from "./widget-export.ts";
 import "./browser-tab-card.ts";
 
-export { WIDGET_PROMPT_EVENT };
-export type { WidgetPromptEventDetail };
-
 type WidgetCardOptions = {
   rawText?: string | null;
   canvasPluginSurfaceUrl?: string | null;
@@ -44,7 +37,17 @@ type WidgetCardOptions = {
   browserTabLatest?: boolean;
 };
 
-async function pinWidget(event: Event, pin: () => Promise<void>): Promise<void> {
+async function pinWidget(
+  event: Event,
+  preview: CanvasToolPreview,
+  provider: BoardProvider,
+  name: string,
+  mcpAppViewId?: string,
+): Promise<void> {
+  const viewId = mcpAppViewId || preview.viewId?.trim();
+  if (!viewId) {
+    return;
+  }
   const button = event.currentTarget;
   if (!(button instanceof HTMLButtonElement)) {
     return;
@@ -53,7 +56,13 @@ async function pinWidget(event: Event, pin: () => Promise<void>): Promise<void> 
   const pendingLabel = t("chat.toolCards.pinToDashboardPending");
   button.title = button.ariaLabel = pendingLabel;
   try {
-    await pin();
+    const identity = {
+      name,
+      ...(preview.title?.trim() ? { title: preview.title.trim() } : {}),
+    };
+    await (mcpAppViewId
+      ? provider.pinMcpApp({ ...identity, viewId })
+      : provider.pinWidget({ ...identity, docId: viewId }));
     const pinnedLabel = t("chat.toolCards.pinnedToDashboard");
     button.title = button.ariaLabel = pinnedLabel;
     button.dataset.pinned = "true";
@@ -64,49 +73,6 @@ async function pinWidget(event: Event, pin: () => Promise<void>): Promise<void> 
     button.title = failureLabel;
     showToast({ message: failureLabel });
   }
-}
-
-async function pinCanvasWidget(
-  event: Event,
-  preview: CanvasToolPreview,
-  provider: BoardProvider,
-  name: string,
-): Promise<void> {
-  const docId = preview.viewId?.trim();
-  if (!docId) {
-    return;
-  }
-  return pinWidget(event, () =>
-    provider.pinWidget({
-      docId,
-      name,
-      ...(preview.title?.trim() ? { title: preview.title.trim() } : {}),
-    }),
-  );
-}
-
-async function pinMcpAppWidget(
-  event: Event,
-  preview: CanvasToolPreview,
-  provider: BoardProvider,
-  name: string,
-  viewId: string,
-): Promise<void> {
-  return pinWidget(event, () =>
-    provider.pinMcpApp({
-      viewId,
-      name,
-      ...(preview.title?.trim() ? { title: preview.title.trim() } : {}),
-    }),
-  );
-}
-
-function canvasWidgetName(preview: CanvasToolPreview): string | undefined {
-  if (preview.boardWidgetName) {
-    return preview.boardWidgetName;
-  }
-  const viewId = preview.viewId?.trim();
-  return viewId ? canvasWidgetNameForDocument(viewId) : undefined;
 }
 
 function isManagedCanvasDocumentPreview(preview: CanvasToolPreview): boolean {
@@ -174,13 +140,6 @@ function rememberWidgetFrameHeight(key: string, height: number) {
     }
   }
   widgetFrameHeightsByKey.set(key, height);
-}
-
-function registerWidgetFrame(event: Event) {
-  const frame = event.currentTarget;
-  if (frame instanceof HTMLIFrameElement) {
-    widgetFrameRegistry.add(frame);
-  }
 }
 
 function handleWidgetPromptMessage(frame: HTMLIFrameElement, data: unknown) {
@@ -264,14 +223,6 @@ function installWidgetPromptOfferListener() {
   });
 }
 
-function adoptWidgetPromptPort(frame: HTMLIFrameElement) {
-  // Eligibility is granted at the frame's first prompt-capable load and the
-  // adoption itself is one-shot; first-offer-wins buffering ensures the port
-  // adopted here always belongs to the frame's original bridge document.
-  promptEligibleFrames.add(frame);
-  tryAdoptWidgetPromptPort(frame);
-}
-
 function installWidgetSizeListener() {
   if (typeof window === "undefined" || widgetSizeListenerWindows.has(window)) {
     return;
@@ -337,11 +288,13 @@ class WidgetFrameDirective extends Directive {
       installWidgetPromptOfferListener();
     }
     const handleLoad = (event: Event) => {
-      registerWidgetFrame(event);
       if (event.currentTarget instanceof HTMLIFrameElement) {
         const frame = event.currentTarget;
+        widgetFrameRegistry.add(frame);
         if (params.promptCapable) {
-          adoptWidgetPromptPort(frame);
+          // First-offer-wins buffering binds adoption to the original bridge document.
+          promptEligibleFrames.add(frame);
+          tryAdoptWidgetPromptPort(frame);
         }
         postWidgetTheme(frame);
         frame.contentWindow?.postMessage({ type: WIDGET_CHAT_HOST_MESSAGE_TYPE }, "*");
@@ -581,20 +534,19 @@ function renderWidgetActions(preview: CanvasToolPreview, hasRawDetails: boolean)
       </button>
       ${
         canExportImage
-          ? html`
-              <wa-dropdown-item class="session-menu__item" value="copy">
-                <span slot="icon" class="session-menu__icon" aria-hidden="true"
-                  >${icons.copyImage}</span
-                >
-                <span class="session-menu__text">${t("chat.toolCards.copyAsImage")}</span>
-              </wa-dropdown-item>
-              <wa-dropdown-item class="session-menu__item" value="download">
-                <span slot="icon" class="session-menu__icon" aria-hidden="true"
-                  >${icons.download}</span
-                >
-                <span class="session-menu__text">${t("chat.toolCards.downloadAsImage")}</span>
-              </wa-dropdown-item>
-            `
+          ? (
+              [
+                ["copy", icons.copyImage, "chat.toolCards.copyAsImage"],
+                ["download", icons.download, "chat.toolCards.downloadAsImage"],
+              ] as const
+            ).map(
+              ([value, icon, label]) => html`
+                <wa-dropdown-item class="session-menu__item" value=${value}>
+                  <span slot="icon" class="session-menu__icon" aria-hidden="true">${icon}</span>
+                  <span class="session-menu__text">${t(label)}</span>
+                </wa-dropdown-item>
+              `,
+            )
           : nothing
       }
       ${
@@ -613,7 +565,7 @@ function renderWidgetActions(preview: CanvasToolPreview, hasRawDetails: boolean)
   `;
 }
 
-function renderWidgetCard(
+export function renderToolPreview(
   preview: ToolPreview | undefined,
   surface: "chat_tool" | "chat_message",
   options?: WidgetCardOptions,
@@ -640,11 +592,13 @@ function renderWidgetCard(
   const sandbox = resolveEmbedSandbox(options?.embedSandboxMode ?? "scripts", preview.sandbox);
   const provider = options?.boardProvider;
   const mcpAppViewId = preview.mcpApp?.viewId?.trim();
+  const canvasViewId = preview.viewId?.trim();
   const pinName = preview.mcpApp
     ? mcpAppViewId
       ? mcpAppWidgetNameForViewId(mcpAppViewId)
       : undefined
-    : canvasWidgetName(preview);
+    : preview.boardWidgetName ||
+      (canvasViewId ? canvasWidgetNameForDocument(canvasViewId) : undefined);
   const pinnedWidget = pinName
     ? provider?.snapshot$.value.widgets.find((widget) => widget.name === pinName)
     : undefined;
@@ -667,9 +621,7 @@ function renderWidgetCard(
           title=${pinLabel}
           aria-label=${pinLabel}
           @click=${(event: Event) =>
-            contentKind === "mcp-app" && mcpAppViewId
-              ? void pinMcpAppWidget(event, preview, provider, pinName, mcpAppViewId)
-              : void pinCanvasWidget(event, preview, provider, pinName)}
+            void pinWidget(event, preview, provider, pinName, mcpAppViewId)}
         >
           ${icons.pin}
         </button>`
@@ -697,5 +649,3 @@ function renderWidgetCard(
     </div>
   `;
 }
-
-export const renderToolPreview = renderWidgetCard;

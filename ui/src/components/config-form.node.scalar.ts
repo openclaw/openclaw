@@ -1,5 +1,5 @@
-// Control UI renderers for scalar config form nodes.
 import { formatInternationalPhoneNumberForDisplay } from "@openclaw/normalization-core/phone-presentation";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { i18n, t } from "../i18n/index.ts";
@@ -18,6 +18,7 @@ import {
   renderFieldRow,
   renderSchemaDefaultDescription,
   renderSensitiveToggleButton,
+  resolveConfigFieldPresentation,
   wrapSensitiveControl,
   type ConfigNodeRenderParams,
 } from "./config-form.node.shared.ts";
@@ -29,7 +30,6 @@ import {
 import {
   beginScalarEdit,
   finishScalarEdit,
-  finishScalarEditFromEvent,
   scalarEditHintForInput,
   scalarValueBranch,
   syncScalarEditIdentity,
@@ -37,7 +37,6 @@ import {
   setControlValidity,
   type ScalarEditHint,
 } from "./config-form.scalar-edit.ts";
-import { resolveConfigFieldMeta as resolveFieldMeta } from "./config-form.search.ts";
 import {
   configFieldId,
   hintForPath,
@@ -105,105 +104,50 @@ function coerceTextInputValue(
   return numberCandidate ?? value;
 }
 
-function stringConstraintMessage(
-  value: string,
-  schema: ConfigNodeRenderParams["schema"],
-  currentValue?: unknown,
-  editHint?: ScalarEditHint,
-): string {
-  return isSupportedConfigValueValid(
-    schema,
-    coerceTextInputValue(value, schema, currentValue, editHint),
-  )
-    ? ""
-    : t("configForm.invalidString");
-}
-
-function shouldClearOptionalEmpty(
-  value: string,
-  schema: ConfigNodeRenderParams["schema"],
-  isRequired: boolean,
-  currentValue?: unknown,
-  editHint?: ScalarEditHint,
-): boolean {
-  return (
-    value === "" &&
-    !isRequired &&
-    Boolean(stringConstraintMessage(value, schema, currentValue, editHint))
-  );
-}
-
 function numericConstraintMessage(value: number, schema: ConfigNodeRenderParams["schema"]): string {
   return isSupportedConfigValueValid(schema, value) ? "" : t("configForm.invalidNumber");
 }
 
-type NumericInputState =
-  | { kind: "empty" }
-  | { kind: "invalid" }
-  | { kind: "value"; parsed: number; message: string };
+type NumericInputState = { parsed?: number; message: string };
 
 // Partial numeric text ("3.", "-", "1e") reports value === "" with
 // validity.badInput set. Treating it as an intentional clear committed
 // undefined mid-keystroke, wiping the stored value and the user's input.
 function resolveNumericInputState(
   target: HTMLInputElement,
-  schema: ConfigNodeRenderParams["schema"],
+  { schema, isRequired }: Pick<ConfigNodeRenderParams, "schema" | "isRequired">,
 ): NumericInputState {
   const raw = target.value;
   if (raw.trim() === "") {
-    return target.validity.badInput ? { kind: "invalid" } : { kind: "empty" };
+    return {
+      message: target.validity.badInput || isRequired === true ? t("configForm.invalidNumber") : "",
+    };
   }
   const parsed = coerceConfigFormNumberString(raw, schemaType(schema) === "integer");
-  if (typeof parsed !== "number") {
-    return { kind: "invalid" };
-  }
-  return { kind: "value", parsed, message: numericConstraintMessage(parsed, schema) };
-}
-
-function numericStateMessage(state: NumericInputState, isRequired: boolean): string {
-  if (state.kind === "value") {
-    return state.message;
-  }
-  return state.kind === "invalid" || isRequired ? t("configForm.invalidNumber") : "";
+  return typeof parsed === "number"
+    ? { parsed, message: numericConstraintMessage(parsed, schema) }
+    : { message: t("configForm.invalidNumber") };
 }
 
 function applyNumericInputState(
   target: HTMLInputElement,
   state: NumericInputState,
-  params: { isRequired?: boolean },
   commit: (candidate: unknown) => unknown,
 ): void {
-  if (!setControlValidity(target, numericStateMessage(state, params.isRequired === true))) {
-    return;
-  }
-  if (state.kind === "empty") {
-    commit(undefined);
-  } else if (state.kind === "value") {
+  if (setControlValidity(target, state.message)) {
     commit(state.parsed);
   }
-}
-
-function numericRevalidateMessage(
-  target: HTMLInputElement,
-  schema: ConfigNodeRenderParams["schema"],
-  isRequired: boolean,
-): string {
-  return numericStateMessage(resolveNumericInputState(target, schema), isRequired);
 }
 
 export function renderTextInput(
   params: ConfigNodeRenderParams & { inputType: "text" | "number" },
 ): TemplateResult {
   const { schema, value, path, hints, disabled, onPatch, inputType } = params;
-  const showLabel = params.showLabel ?? true;
   const hint = hintForPath(path, hints);
-  const { label, help } = resolveFieldMeta(path, schema, hints);
-  const helpId =
-    params.descriptionId ?? (showLabel && help ? configFieldId(path, "description") : undefined);
+  const field = resolveConfigFieldPresentation(params);
+  const { label, helpId } = field;
   const errorId = configFieldId(path, "scalar-error");
   const sensitiveState = getSensitiveRenderState(params);
-  const isStructuredValue =
-    value !== null && value !== undefined && typeof value === "object" && !Array.isArray(value);
   const isStructuredSecretRef = isSecretRefObject(value);
   const rawAvailable = params.rawAvailable ?? true;
   const masked = sensitiveState.isMasked;
@@ -225,7 +169,7 @@ export function renderTextInput(
         : ""));
   const displayValue = effectiveRedacted
     ? ""
-    : isStructuredValue
+    : isRecord(value)
       ? jsonValue(value)
       : (value ?? (params.compact ? schema.default : undefined) ?? "");
   const effectiveValue = value !== undefined ? value : schema.default;
@@ -253,34 +197,34 @@ export function renderTextInput(
     isPhonePresentation ? "phone" : "plain",
     isStructuredSecretRef ? (rawAvailable ? "secret-raw" : "secret-file") : "scalar",
   ].join(":");
+  const textInputState = (raw: string, editHint: ScalarEditHint) => {
+    const candidate = coerceTextInputValue(raw, schema, effectiveValue, editHint);
+    const valid = isSupportedConfigValueValid(schema, candidate);
+    const clearOptional = raw === "" && !params.isRequired && !valid;
+    return {
+      candidate: clearOptional ? undefined : candidate,
+      message: valid || clearOptional ? "" : t("configForm.invalidString"),
+    };
+  };
   const revalidate = (target: HTMLInputElement) => {
     if (effectiveRedacted) {
       setControlValidity(target, "");
       return;
     }
     if (inputType === "number") {
-      setControlValidity(
-        target,
-        numericRevalidateMessage(target, schema, params.isRequired === true),
-      );
+      setControlValidity(target, resolveNumericInputState(target, params).message);
       return;
     }
-    const raw = target.value;
-    const editHint = scalarEditHintForInput(target, initialBranch);
-    const optionalEmpty = shouldClearOptionalEmpty(
-      raw,
-      schema,
-      params.isRequired === true,
-      effectiveValue,
-      editHint,
-    );
     setControlValidity(
       target,
-      optionalEmpty ? "" : stringConstraintMessage(raw, schema, effectiveValue, editHint),
+      textInputState(target.value, scalarEditHintForInput(target, initialBranch)).message,
     );
   };
+  // Input and change may run before the patched draft is rendered.
+  let patchedValue = value;
   const commitScalarValue = (target: HTMLInputElement, candidate: unknown) => {
     if (onPatch(path, candidate) !== false) {
+      patchedValue = candidate;
       return true;
     }
     target.value = renderedValue;
@@ -292,49 +236,32 @@ export function renderTextInput(
     if (effectiveRedacted) {
       return;
     }
+    // Change follows input on blur; only a newly normalized value needs another patch.
+    const commit = (candidate: unknown) =>
+      configValuesEqual(patchedValue, candidate) || commitScalarValue(target, candidate);
     if (inputType === "number") {
-      applyNumericInputState(
-        target,
-        resolveNumericInputState(target, schema),
-        params,
-        (candidate) => commitScalarValue(target, candidate),
-      );
+      applyNumericInputState(target, resolveNumericInputState(target, params), commit);
       return;
     }
     const editHint = beginScalarEdit(target, initialBranch);
     const raw = target.value;
-    const rawMessage = stringConstraintMessage(raw, schema, effectiveValue, editHint);
-    if (!rawMessage && !isPhonePresentation) {
+    const rawState = textInputState(raw, editHint);
+    if (!rawState.message && !isPhonePresentation) {
       setControlValidity(target, "");
-      commitScalarValue(target, coerceTextInputValue(raw, schema, effectiveValue, editHint));
+      commit(rawState.candidate);
       finishScalarEdit(target);
       return;
     }
     const normalized = raw.trim();
-    if (
-      shouldClearOptionalEmpty(
-        normalized,
-        schema,
-        params.isRequired === true,
-        effectiveValue,
-        editHint,
-      )
-    ) {
-      target.value = normalized;
-      setControlValidity(target, "");
-      commitScalarValue(target, undefined);
-      finishScalarEdit(target);
-      return;
-    }
-    const normalizedMessage = stringConstraintMessage(normalized, schema, effectiveValue, editHint);
-    if (normalizedMessage) {
-      setControlValidity(target, rawMessage);
+    const normalizedState = textInputState(normalized, editHint);
+    if (normalizedState.message) {
+      setControlValidity(target, rawState.message);
       finishScalarEdit(target);
       return;
     }
     target.value = normalized;
     setControlValidity(target, "");
-    commitScalarValue(target, coerceTextInputValue(normalized, schema, effectiveValue, editHint));
+    commit(normalizedState.candidate);
     finishScalarEdit(target);
   };
 
@@ -376,32 +303,15 @@ export function renderTextInput(
           revalidate(target);
           return;
         }
-        const raw = target.value;
         if (inputType === "number") {
-          applyNumericInputState(
-            target,
-            resolveNumericInputState(target, schema),
-            params,
-            (candidate) => commitScalarValue(target, candidate),
+          applyNumericInputState(target, resolveNumericInputState(target, params), (candidate) =>
+            commitScalarValue(target, candidate),
           );
           return;
         }
-        const editHint = beginScalarEdit(target, initialBranch);
-        if (
-          shouldClearOptionalEmpty(
-            raw,
-            schema,
-            params.isRequired === true,
-            effectiveValue,
-            editHint,
-          )
-        ) {
-          setControlValidity(target, "");
-          commitScalarValue(target, undefined);
-        } else if (
-          setControlValidity(target, stringConstraintMessage(raw, schema, effectiveValue, editHint))
-        ) {
-          commitScalarValue(target, coerceTextInputValue(raw, schema, effectiveValue, editHint));
+        const state = textInputState(target.value, beginScalarEdit(target, initialBranch));
+        if (setControlValidity(target, state.message)) {
+          commitScalarValue(target, state.candidate);
         }
       }}
       @change=${(event: Event) => {
@@ -416,7 +326,7 @@ export function renderTextInput(
         if (params.commitOnBlur && target.value !== renderedValue) {
           commitChange(target);
         }
-        finishScalarEditFromEvent(event);
+        finishScalarEdit(target);
       }}
     />
   `;
@@ -442,12 +352,9 @@ export function renderTextInput(
       `
     : wrappedInput;
   return renderFieldRow({
-    label,
-    help,
-    helpId,
+    ...field,
     defaultDescription:
       effectiveRedacted || masked ? nothing : renderSchemaDefaultDescription(schema, value),
-    showLabel,
     control: presentedInput,
     errorId,
   });
@@ -455,10 +362,8 @@ export function renderTextInput(
 
 export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResult {
   const { schema, value, path, hints, disabled, onPatch } = params;
-  const showLabel = params.showLabel ?? true;
-  const { label, help } = resolveFieldMeta(path, schema, hints);
-  const helpId =
-    params.descriptionId ?? (showLabel && help ? configFieldId(path, "description") : undefined);
+  const field = resolveConfigFieldPresentation(params);
+  const { label, helpId } = field;
   const errorId = configFieldId(path, "scalar-error");
   const displayValue = value ?? (params.compact ? schema.default : undefined) ?? "";
   const effectiveValue = value !== undefined ? value : schema.default;
@@ -472,13 +377,13 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
   );
   const renderedValue = formatConfigValueText(displayValue);
   const revalidate = (target: HTMLInputElement) => {
-    setControlValidity(
-      target,
-      numericRevalidateMessage(target, schema, params.isRequired === true),
-    );
+    setControlValidity(target, resolveNumericInputState(target, params).message);
   };
+  // Input and change may run before the patched draft is rendered.
+  let patchedValue = value;
   const commitScalarValue = (target: HTMLInputElement, candidate: unknown) => {
     if (onPatch(path, candidate) !== false) {
+      patchedValue = candidate;
       return true;
     }
     target.value = renderedValue;
@@ -560,11 +465,8 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
           revalidate(target);
           return;
         }
-        applyNumericInputState(
-          target,
-          resolveNumericInputState(target, schema),
-          params,
-          (candidate) => commitScalarValue(target, candidate),
+        applyNumericInputState(target, resolveNumericInputState(target, params), (candidate) =>
+          commitScalarValue(target, candidate),
         );
       }}
       @change=${(event: Event) => {
@@ -572,14 +474,17 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
           return;
         }
         const target = event.target as HTMLInputElement;
-        const state = resolveNumericInputState(target, schema);
-        if (state.kind !== "value") {
-          setControlValidity(target, numericStateMessage(state, params.isRequired === true));
+        const state = resolveNumericInputState(target, params);
+        if (state.parsed === undefined) {
+          setControlValidity(target, state.message);
           return;
         }
         const normalized = normalizeNumericValue(state.parsed, schema);
         target.value = formatConfigValueText(normalized);
-        if (setControlValidity(target, numericConstraintMessage(normalized, schema))) {
+        if (
+          setControlValidity(target, numericConstraintMessage(normalized, schema)) &&
+          !configValuesEqual(patchedValue, normalized)
+        ) {
           commitScalarValue(target, normalized);
         }
       }}
@@ -589,26 +494,25 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
         if (!params.commitOnBlur || target.value === renderedValue) {
           return;
         }
-        const state = resolveNumericInputState(target, schema);
-        if (state.kind === "value") {
+        const state = resolveNumericInputState(target, params);
+        if (state.parsed !== undefined) {
           state.parsed = normalizeNumericValue(state.parsed, schema);
           state.message = numericConstraintMessage(state.parsed, schema);
           target.value = formatConfigValueText(state.parsed);
         }
-        applyNumericInputState(target, state, params, (candidate) =>
-          commitScalarValue(target, candidate),
-        );
+        applyNumericInputState(target, state, (candidate) => {
+          if (!configValuesEqual(patchedValue, candidate)) {
+            commitScalarValue(target, candidate);
+          }
+        });
       }}
     />
     ${renderStepButton(1)}
   `;
 
   return renderFieldRow({
-    label,
-    help,
-    helpId,
+    ...field,
     defaultDescription: renderSchemaDefaultDescription(schema, value),
-    showLabel,
     control,
     errorId,
   });
@@ -618,10 +522,8 @@ export function renderSelect(
   params: ConfigNodeRenderParams & { options: unknown[] },
 ): TemplateResult {
   const { schema, value, path, hints, disabled, options, onPatch } = params;
-  const showLabel = params.showLabel ?? true;
-  const { label, help } = resolveFieldMeta(path, schema, hints);
-  const helpId =
-    params.descriptionId ?? (showLabel && help ? configFieldId(path, "description") : undefined);
+  const field = resolveConfigFieldPresentation(params);
+  const { label, helpId } = field;
   const usingDefault = value === undefined && schema.default !== undefined;
   const resolvedValue = usingDefault ? schema.default : value;
   const currentIndex = options.findIndex((option) => configValuesEqual(option, resolvedValue));
@@ -694,11 +596,8 @@ export function renderSelect(
   `;
 
   return renderFieldRow({
-    label,
-    help,
-    helpId,
+    ...field,
     defaultDescription: renderSchemaDefaultDescription(schema, value),
-    showLabel,
     control,
   });
 }

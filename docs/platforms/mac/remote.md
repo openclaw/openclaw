@@ -50,6 +50,9 @@ A signed-in native operator device may still need a one-time approval on the
 Gateway. The Gateway's existing [automatic device approval policy](/gateway/trusted-proxy-auth#automatic-device-approval)
 determines whether verified proxy identities can enroll automatically.
 
+While OpenClaw is active and you are present, it automatically renews browser sign-in for saved Gateways in use during the last quarter of the session lifetime (at least 15 minutes, up to 7 days); a failed attempt retries after half that window, at most daily. The default browser may open to finish sign-in.
+Renewing the same account quietly reconnects the native connection and keeps the current dashboard in place; a failed automatic attempt leaves the existing session usable until it expires.
+
 When the browser session expires, opening the saved Gateway shows a sign-in
 page and starts sign-in in your browser. A window restored at launch waits for
 you to choose **Sign in again**. You can also choose **Reconnect** for that saved
@@ -71,6 +74,11 @@ To sign out of that Gateway in the Mac app,
 remove it from **Connection… → Gateways** and confirm **Remove**. This removes its
 saved credentials and dashboard browser data. Use your identity provider's
 session controls to revoke account access more broadly.
+
+If you deny or cancel a Keychain access request, automatic Gateway refreshes
+stop asking for access for the rest of that app session. Saved credentials stay
+in Keychain. Choose **Connect** or **Reconnect** to try again; restarting the app
+also allows a new request.
 
 ### Open the Mac app from a website
 

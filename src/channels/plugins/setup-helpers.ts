@@ -1,14 +1,10 @@
-/**
- * Channel setup config mutation helpers.
- *
- * Applies account names and validates setup results for channel onboarding adapters.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveChannelAccountKey,
   type ChannelAccountKeyPolicy,
 } from "../../routing/account-lookup.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+import { hasConfiguredAccountValue } from "./account-helpers.js";
 import { writeChannelSection } from "./config-helpers.js";
 import {
   resolveSingleAccountPromotion,
@@ -115,22 +111,13 @@ export function prepareScopedSetupConfig(params: {
   alwaysUseAccounts?: boolean;
   migrateBaseName?: boolean;
 }): OpenClawConfig {
-  const namedConfig = applyAccountNameToChannelSection({
-    cfg: params.cfg,
-    channelKey: params.channelKey,
-    accountKeyPolicy: params.accountKeyPolicy,
-    accountId: params.accountId,
-    name: params.name,
-    alwaysUseAccounts: params.alwaysUseAccounts,
-  });
+  const namedConfig = applyAccountNameToChannelSection(params);
   if (!params.migrateBaseName || normalizeAccountId(params.accountId) === DEFAULT_ACCOUNT_ID) {
     return namedConfig;
   }
   return migrateBaseNameToDefaultAccount({
+    ...params,
     cfg: namedConfig,
-    channelKey: params.channelKey,
-    accountKeyPolicy: params.accountKeyPolicy,
-    alwaysUseAccounts: params.alwaysUseAccounts,
   });
 }
 
@@ -201,13 +188,6 @@ type SetupInputPresenceRequirement = {
   message: string;
 };
 
-function hasPresentSetupValue(value: unknown): boolean {
-  if (typeof value === "string") {
-    return value.trim().length > 0;
-  }
-  return value !== undefined && value !== null;
-}
-
 export function createSetupInputPresenceValidator<
   Input extends { name?: string; useEnv?: boolean } = ChannelSetupInput,
 >(params: {
@@ -226,7 +206,7 @@ export function createSetupInputPresenceValidator<
     if (!inputParams.input.useEnv) {
       const inputRecord = inputParams.input as Record<string, unknown>;
       for (const requirement of params.whenNotUseEnv ?? []) {
-        if (requirement.someOf.some((key) => hasPresentSetupValue(inputRecord[key]))) {
+        if (requirement.someOf.some((key) => hasConfiguredAccountValue(inputRecord[key]))) {
           continue;
         }
         return requirement.message;
@@ -250,11 +230,7 @@ export function createEnvPatchedAccountSetupAdapter(params: {
   buildPatch: (input: ChannelSetupInput) => Record<string, unknown>;
 }): ChannelSetupAdapter {
   return createPatchedAccountSetupAdapter({
-    channelKey: params.channelKey,
-    accountKeyPolicy: params.accountKeyPolicy,
-    alwaysUseAccounts: params.alwaysUseAccounts,
-    ensureChannelEnabled: params.ensureChannelEnabled,
-    ensureAccountEnabled: params.ensureAccountEnabled,
+    ...params,
     validateInput: (inputParams) => {
       if (inputParams.input.useEnv && inputParams.accountId !== DEFAULT_ACCOUNT_ID) {
         return params.defaultAccountOnlyEnvError;
@@ -264,7 +240,6 @@ export function createEnvPatchedAccountSetupAdapter(params: {
       }
       return params.validateInput?.(inputParams) ?? null;
     },
-    buildPatch: params.buildPatch,
   });
 }
 
@@ -333,30 +308,6 @@ export function patchScopedAccountConfig(params: {
         ...accountPatch,
       },
     },
-  });
-}
-
-function moveSingleAccountKeysIntoAccount(params: {
-  cfg: OpenClawConfig;
-  channelKey: string;
-  channel: ChannelSectionBase;
-  accounts: Record<string, Record<string, unknown>>;
-  keysToMove: string[];
-  targetAccountId: string;
-  baseAccount?: Record<string, unknown>;
-}): OpenClawConfig {
-  const nextAccount: Record<string, unknown> = { ...params.baseAccount };
-  const nextChannel: ChannelSectionBase = { ...params.channel };
-  for (const key of params.keysToMove) {
-    if (!(key in nextAccount)) {
-      const value = params.channel[key];
-      nextAccount[key] = value && typeof value === "object" ? structuredClone(value) : value;
-    }
-    delete nextChannel[key];
-  }
-  return writeChannelSection(params.cfg, params.channelKey, {
-    ...nextChannel,
-    accounts: { ...params.accounts, [params.targetAccountId]: nextAccount },
   });
 }
 
@@ -430,13 +381,17 @@ export function moveSingleAccountChannelSectionToDefaultAccount(params: {
         setupSurface: params.setupSurface,
       })
     : DEFAULT_ACCOUNT_ID;
-  return moveSingleAccountKeysIntoAccount({
-    cfg: params.cfg,
-    channelKey: params.channelKey,
-    channel: base,
-    accounts,
-    keysToMove,
-    targetAccountId: targetAccountKey,
-    baseAccount: accounts[targetAccountKey],
+  const nextAccount: Record<string, unknown> = { ...accounts[targetAccountKey] };
+  const nextChannel = { ...base };
+  for (const key of keysToMove) {
+    if (!(key in nextAccount)) {
+      const value = base[key];
+      nextAccount[key] = value && typeof value === "object" ? structuredClone(value) : value;
+    }
+    delete nextChannel[key];
+  }
+  return writeChannelSection(params.cfg, params.channelKey, {
+    ...nextChannel,
+    accounts: { ...accounts, [targetAccountKey]: nextAccount },
   });
 }

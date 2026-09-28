@@ -1,4 +1,3 @@
-// Commander wiring for `openclaw update`, its status/finalize subcommands, and help text.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
@@ -130,14 +129,12 @@ function registerUpdateFinalizationCommand(update: Command, name: string, hidden
           acceptCapabilities:
             Boolean(opts.acceptCapabilities) ||
             Boolean(inheritOptionFromParent<boolean>(actionCommand, "acceptCapabilities")),
-          restart: false,
           deferCompletionCache: hidden && process.env[POST_CORE_UPDATE_ENV]?.trim() === "1",
         });
       }),
     );
 }
 
-/** Attach the update command group to the root CLI. */
 export function registerUpdateCli(program: Command) {
   program.enablePositionalOptions();
   const update = program
@@ -292,7 +289,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
     .command("wizard")
     .description("Interactive update wizard")
     .option("--accept-capabilities", "Accept widened plugin capabilities", false)
-    .option("--timeout <seconds>", "Timeout for each update step in seconds (default: 1800)")
+    .option("--timeout <seconds>", "Set a per-step deadline in seconds")
     .addHelpText(
       "after",
       `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/update")}\n`,

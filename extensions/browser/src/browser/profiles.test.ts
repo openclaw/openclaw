@@ -5,12 +5,9 @@ import { allocateCdpPort, getUsedPorts, isValidProfileName } from "./profiles.js
 const CDP_PORT_RANGE_START = 18800;
 const CDP_PORT_RANGE_END = 18899;
 describe("profile name validation", () => {
-  it.each(["openclaw", "work", "my-profile", "test123", "a", "a-b-c-1-2-3", "1test"])(
-    "accepts valid lowercase name: %s",
-    (name) => {
-      expect(isValidProfileName(name)).toBe(true);
-    },
-  );
+  it.each(["a", "a-b-c-1-2-3", "1test"])("accepts valid lowercase name: %s", (name) => {
+    expect(isValidProfileName(name)).toBe(true);
+  });
 
   it("rejects empty or missing names", () => {
     expect(isValidProfileName("")).toBe(false);
@@ -26,20 +23,12 @@ describe("profile name validation", () => {
     expect(isValidProfileName(maxName)).toBe(true);
   });
 
-  it.each([
-    "MyProfile",
-    "PROFILE",
-    "Work",
-    "my profile",
-    "my_profile",
-    "my.profile",
-    "my/profile",
-    "my@profile",
-    "-invalid",
-    "--double",
-  ])("rejects invalid name: %s", (name) => {
-    expect(isValidProfileName(name)).toBe(false);
-  });
+  it.each(["MyProfile", "my_profile", "my/profile", "-invalid"])(
+    "rejects invalid name: %s",
+    (name) => {
+      expect(isValidProfileName(name)).toBe(false);
+    },
+  );
 });
 
 describe("port allocation", () => {

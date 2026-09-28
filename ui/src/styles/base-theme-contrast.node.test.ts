@@ -6,17 +6,7 @@ import { describe, expect, it } from "vitest";
 
 const stylesDir = path.dirname(fileURLToPath(import.meta.url));
 
-/*
- * WCAG 2.1 AA guardrail for text-bearing theme tokens.
- *
- * Palette edits historically dimmed secondary text below the AA floor without
- * anyone noticing (issue #107299 measured `--muted` at 3.1–3.5:1 on dark
- * surfaces). Hex tokens are cheap to audit mechanically, so every
- * text-on-surface pairing a theme can produce is asserted here at >= 4.5:1
- * (AA, normal-size text). Text and surface tokens must resolve to opaque colors;
- * translucent component paint is composited in the surface-specific cases below.
- */
-
+// #107299: palette edits dimmed --muted to 3.1–3.5:1 on dark surfaces.
 const TEXT_TOKENS = [
   "--text",
   "--text-strong",
@@ -30,61 +20,28 @@ const SURFACE_TOKENS = ["--bg", "--bg-elevated", "--bg-muted", "--card", "--pane
 
 const AA_NORMAL_TEXT_MIN = 4.5;
 
-/*
- * Beacon is the accessibility theme: it advertises WCAG AAA rather than AA, and
- * that promise is the reason to pick it. Holding it to the shared 4.5:1 floor
- * would let a palette edit quietly demote it to an ordinary dark theme, so its
- * own floor is asserted separately.
- */
+// Beacon promises AAA; the other themes promise AA.
 const AAA_NORMAL_TEXT_MIN = 7;
 
-/*
- * The chat confirmation button defaults to --danger under --media-foreground,
- * which is a theme-invariant white, and every dark palette opts out of that
- * pairing through a selector list in chat/grouped.css. A theme with a light
- * --danger that is missing from the list therefore renders white on pale:
- * Beacon shipped that way at 1.80:1 until review caught it. Membership is read
- * back out of the stylesheet rather than restated here, so the list and the
- * palettes cannot drift apart again.
- */
+// Read overrides from CSS: missing Beacon once left white on pale at 1.80:1.
 const CONFIRM_BUTTON_RULE = ".chat-confirm-popover__yes";
 const AAA_THEMES = new Set(["beacon", "beacon-light"]);
 
-/*
- * Separation guardrail for the markdown code chip.
- *
- * Text contrast was never the failure mode here: the chip surface itself
- * collapsed. Every dark palette sets `--secondary` to the same hex as `--card`,
- * so a chip painted with it was invisible inside a user bubble while light mode
- * (which overrode the surface) looked correct. The chip tokens are read out of
- * the live rule so swapping them back for a collapsing pair fails here.
- */
-// Recognized workspace paths are excluded from the chip: they render as file
-// links, so their contrast comes from the link color, not this surface.
+// --secondary matched --card and hid chips in dark user bubbles. File links
+// are excluded because they use link ink rather than a chip surface.
 const CODE_CHIP_RULE = ".chat-text :where(:not(pre, a.markdown-file-link) > code)";
 const CODE_CHIP_HOST_SURFACES = ["--card", "--bg"] as const;
 const CHIP_SURFACE_MIN_STEP = 1.05;
 const CHIP_BORDER_MIN_STEP = 1.25;
 
-/*
- * Diff syntax uses its own translucent tint inside code surfaces. The ink must
- * remain readable after that tint is composited onto every surface a markdown
- * code block can use; missing light-mode overrides previously left additions
- * at 1.15:1 on --bg-muted.
- */
+// Missing light-mode overrides left tinted additions at 1.15:1 on --bg-muted.
 const DIFF_SELECTORS = [
   ":is(.code-block, .code-block-wrapper pre code.hljs) .hljs-addition",
   ":is(.code-block, .code-block-wrapper pre code.hljs) .hljs-deletion",
 ] as const;
 const DIFF_HOST_SURFACES = ["--bg", "--bg-muted", "--card"] as const;
 
-/*
- * Link contrast guardrail for painted chat bubbles.
- *
- * Accent-colored links can collapse into the accent-derived user fill, while
- * sender identity tints make the failing hue theme-dependent. Reading both
- * sides from the live rules keeps either CSS declaration from drifting.
- */
+// Accent-derived bubbles can swallow links; sender tints vary the failing hue.
 const CHAT_LINK_RULE = ".chat-text :where(a)";
 const CHAT_LINK_HOVER_RULE = ".chat-text :where(a:hover)";
 const USER_BUBBLE_RULE = ".chat-group.user .chat-bubble";
@@ -102,11 +59,7 @@ type TokenMap = Map<string, string>;
 type RGB = readonly [red: number, green: number, blue: number];
 type Color = { rgb: RGB; alpha: number };
 
-/*
- * Built-in palettes other than the default live in public/themes so they stay
- * out of the startup stylesheet. Contrast guarantees still cover every theme,
- * so the palette sources are read back together here.
- */
+// Include lazy palettes as well as the startup stylesheet.
 function readPaletteSources(stylesRoot: string): string {
   const themesDir = path.join(stylesRoot, "..", "..", "public", "themes");
   const palettes = fs
@@ -156,7 +109,7 @@ function resolveThemes(blocks: Map<string, TokenMap>): Map<string, TokenMap> {
   };
   return new Map([
     ["dark", layer(blocks.get(':root[data-theme="dark"]'))],
-    ["light", layer(light)],
+    ["light", layer(light, blocks.get(':root[data-theme="light"]'))],
     ["openknot", layer(blocks.get(':root[data-theme="openknot"]'))],
     ["openknot-light", layer(light, blocks.get(':root[data-theme="openknot-light"]'))],
     ["dash", layer(blocks.get(':root[data-theme="dash"]'))],
@@ -433,7 +386,6 @@ describe("Control UI theme contrast", () => {
   const themes = resolveThemes(parseThemeBlocks(baseCss));
 
   it("keeps every text token at WCAG AA on every theme surface, AAA on themes that promise it", () => {
-    const failures: string[] = [];
     for (const [themeName, tokens] of themes) {
       for (const textToken of TEXT_TOKENS) {
         const foreground = resolveOpaqueColor(`var(${textToken})`, tokens);
@@ -441,15 +393,13 @@ describe("Control UI theme contrast", () => {
           const background = resolveOpaqueColor(`var(${surfaceToken})`, tokens);
           const ratio = contrastRatio(foreground, background);
           const floor = AAA_THEMES.has(themeName) ? AAA_NORMAL_TEXT_MIN : AA_NORMAL_TEXT_MIN;
-          if (ratio < floor) {
-            failures.push(
-              `${themeName}: ${textToken} rgb(${foreground.join(", ")}) on ${surfaceToken} rgb(${background.join(", ")}) = ${ratio.toFixed(2)}:1 (< ${floor}:1)`,
-            );
-          }
+          expect(
+            ratio,
+            `${themeName}: ${textToken} rgb(${foreground.join(", ")}) on ${surfaceToken} rgb(${background.join(", ")})`,
+          ).toBeGreaterThanOrEqual(floor);
         }
       }
     }
-    expect(failures).toEqual([]);
   });
 
   it("keeps selected controls and session labels at WCAG AA across themes", () => {
@@ -485,10 +435,55 @@ describe("Control UI theme contrast", () => {
     expect(failures).toEqual([]);
   });
 
+  it("keeps filled action labels and accent glyphs legible across palettes", () => {
+    for (const [themeName, tokens] of themes) {
+      for (const [fill, ink, minimum] of [
+        ["--primary", "--primary-foreground", AA_NORMAL_TEXT_MIN],
+        ["--primary-hover", "--primary-foreground", AA_NORMAL_TEXT_MIN],
+        ["--destructive-hover", "--destructive-foreground", AA_NORMAL_TEXT_MIN],
+        ["--accent", "--accent-foreground", 3],
+      ] as const) {
+        expect(
+          contrastRatio(
+            resolveOpaqueColor(`var(${ink})`, tokens),
+            resolveOpaqueColor(`var(${fill})`, tokens),
+          ),
+          `${themeName}: ${ink} on ${fill}`,
+        ).toBeGreaterThanOrEqual(minimum);
+      }
+    }
+  });
+
+  it("preserves imported fill/ink contrast when no hover pair is supplied", () => {
+    const defaults = parseThemeBlocks(baseCss).get(":root") ?? new Map<string, string>();
+    for (const text of ["#fafafa", "#211e1a"]) {
+      for (const [primary, destructive, foreground] of [
+        ["#d92a3f", "#d32f2f", "#fafafa"],
+        ["#ffc233", "#ffabab", "#000000"],
+      ] as const) {
+        const imported = new Map(defaults);
+        imported.set("--text", text);
+        imported.set("--primary", primary);
+        imported.set("--primary-foreground", foreground);
+        imported.set("--destructive", destructive);
+        imported.set("--destructive-foreground", foreground);
+        for (const fill of ["--primary", "--destructive"]) {
+          const ink = resolveOpaqueColor(`var(${fill}-foreground)`, imported);
+          const rest = contrastRatio(ink, resolveOpaqueColor(`var(${fill})`, imported));
+          const hover = contrastRatio(ink, resolveOpaqueColor(`var(${fill}-hover)`, imported));
+          expect(rest).toBeGreaterThanOrEqual(AA_NORMAL_TEXT_MIN);
+          expect(
+            hover,
+            `${fill} hover must not reduce the imported pair contrast`,
+          ).toBeGreaterThanOrEqual(rest);
+        }
+      }
+    }
+  });
+
   it("keeps the markdown code chip separated from every surface it sits on", () => {
     const chatTextCss = fs.readFileSync(path.join(stylesDir, "chat", "text.css"), "utf8");
     const chip = readCodeChipTokens(chatTextCss);
-    const failures: string[] = [];
     for (const [themeName, tokens] of themes) {
       const surface = tokens.get(chip.surface);
       const border = tokens.get(chip.border);
@@ -501,25 +496,21 @@ describe("Control UI theme contrast", () => {
         }
         const surfaceStep = contrastRatio(parseHex(surface ?? ""), parseHex(host));
         const borderStep = contrastRatio(parseHex(border ?? ""), parseHex(host));
-        if (surfaceStep < CHIP_SURFACE_MIN_STEP) {
-          failures.push(
-            `${themeName}: chip ${chip.surface} ${surface} on ${hostToken} ${host} = ${surfaceStep.toFixed(2)}:1 (< ${CHIP_SURFACE_MIN_STEP}:1)`,
-          );
-        }
-        if (borderStep < CHIP_BORDER_MIN_STEP) {
-          failures.push(
-            `${themeName}: chip border ${chip.border} ${border} on ${hostToken} ${host} = ${borderStep.toFixed(2)}:1 (< ${CHIP_BORDER_MIN_STEP}:1)`,
-          );
-        }
+        expect(
+          surfaceStep,
+          `${themeName}: chip ${chip.surface} ${surface} on ${hostToken} ${host}`,
+        ).toBeGreaterThanOrEqual(CHIP_SURFACE_MIN_STEP);
+        expect(
+          borderStep,
+          `${themeName}: chip border ${chip.border} ${border} on ${hostToken} ${host}`,
+        ).toBeGreaterThanOrEqual(CHIP_BORDER_MIN_STEP);
       }
     }
-    expect(failures).toEqual([]);
   });
 
   it("keeps the chat confirmation button legible on every theme", () => {
     const groupedCss = fs.readFileSync(path.join(stylesDir, "chat", "grouped.css"), "utf8");
     const { base, overrides } = readConfirmButtonPaint(groupedCss);
-    const failures: string[] = [];
     for (const [themeName, tokens] of themes) {
       const paint = overrides.get(themeName) ?? base;
       const background = tokens.get(paint.background);
@@ -529,13 +520,11 @@ describe("Control UI theme contrast", () => {
       }
       const ratio = contrastRatio(parseHex(color), parseHex(background));
       const floor = AAA_THEMES.has(themeName) ? AAA_NORMAL_TEXT_MIN : AA_NORMAL_TEXT_MIN;
-      if (ratio < floor) {
-        failures.push(
-          `${themeName}: ${paint.color} ${color} on ${paint.background} ${background} = ${ratio.toFixed(2)}:1 (< ${floor}:1)`,
-        );
-      }
+      expect(
+        ratio,
+        `${themeName}: ${paint.color} ${color} on ${paint.background} ${background}`,
+      ).toBeGreaterThanOrEqual(floor);
     }
-    expect(failures).toEqual([]);
   });
 
   it("keeps highlighted diff lines at WCAG AA on every code surface", () => {
@@ -549,7 +538,6 @@ describe("Control UI theme contrast", () => {
       }
       return { foregroundToken, tint };
     });
-    const failures: string[] = [];
     for (const [themeName, tokens] of themes) {
       for (const { foregroundToken, tint } of diffStyles) {
         const foreground = resolveOpaqueColor(`var(${foregroundToken})`, tokens);
@@ -559,15 +547,86 @@ describe("Control UI theme contrast", () => {
           const background = composite(resolvedTint, host);
           const ratio = contrastRatio(foreground, background);
           const floor = AAA_THEMES.has(themeName) ? AAA_NORMAL_TEXT_MIN : AA_NORMAL_TEXT_MIN;
-          if (ratio < floor) {
-            failures.push(
-              `${themeName}: ${foregroundToken} on ${tint} over ${surfaceToken} = ${ratio.toFixed(2)}:1 (< ${floor}:1)`,
-            );
+          expect(
+            ratio,
+            `${themeName}: ${foregroundToken} on ${tint} over ${surfaceToken}`,
+          ).toBeGreaterThanOrEqual(floor);
+        }
+      }
+    }
+  });
+
+  it("keeps GitHub item ink and focus legible across every tone, theme and bubble", () => {
+    const css = fs.readFileSync(path.join(stylesDir, "chat", "text.css"), "utf8");
+    const bubble = readBubbleBackgrounds(
+      fs.readFileSync(path.join(stylesDir, "chat", "grouped.css"), "utf8"),
+    );
+    const selector = ".chat-text a.markdown-github-item";
+    const base = readRuleBody(css, selector);
+    const declaration = (body: string, property: string) => {
+      const value = body
+        .split(property + ":")[1]
+        ?.split(";")[0]
+        ?.trim();
+      if (!value) {
+        throw new Error("Missing GitHub chip paint: " + property);
+      }
+      return value;
+    };
+    const foreground = declaration(base, "color");
+    const surfaces = [
+      declaration(base, "background"),
+      declaration(readRuleBody(css, selector + ":focus-visible"), "background"),
+    ];
+    const focus = css.match(
+      /a\.markdown-github-item:focus-visible\s*\{\s*outline-color:\s*([^;]+);/u,
+    )?.[1];
+    if (!focus) {
+      throw new Error("Missing GitHub chip focus paint");
+    }
+    const failures: string[] = [];
+    for (const [theme, palette] of themes) {
+      const page = resolveOpaqueColor("var(--bg)", palette);
+      const light = theme === "light" || theme.endsWith("-light");
+      const hosts = [
+        page,
+        composite(resolveColor(light ? bubble.lightUser : bubble.user, palette), page),
+      ];
+      for (let hue = 0; hue < 360; hue++) {
+        const tokens = new Map(palette).set("--chat-sender-hue", String(hue));
+        hosts.push(
+          composite(resolveColor(light ? bubble.lightSenderTint : bubble.senderTint, tokens), page),
+        );
+        // Forwarded assistant messages retain the translucent sender skin in light mode.
+        hosts.push(composite(resolveColor(bubble.senderTint, tokens), page));
+      }
+      for (const tone of ["unknown", "neutral", "positive", "negative", "accent", "attention"]) {
+        const rule =
+          tone === "unknown" || tone === "neutral"
+            ? base
+            : readRuleBody(css, selector + '[data-link-reader-tone="' + tone + '"]');
+        const tokens = new Map(palette).set(
+          "--github-item-tone",
+          declaration(rule, "--github-item-tone"),
+        );
+        for (const surface of surfaces) {
+          for (const host of hosts) {
+            const background = composite(resolveColor(surface, tokens), host);
+            const ink = composite(resolveColor(foreground, tokens), background);
+            const ratio = contrastRatio(ink, background);
+            const floor = AAA_THEMES.has(theme) ? AAA_NORMAL_TEXT_MIN : AA_NORMAL_TEXT_MIN;
+            if (ratio < floor) {
+              failures.push(theme + "/" + tone + ": " + ratio.toFixed(2) + " < " + floor);
+            }
+            const focusRatio = contrastRatio(composite(resolveColor(focus, tokens), host), host);
+            if (focusRatio < 3) {
+              failures.push(theme + "/focus: " + focusRatio.toFixed(2));
+            }
           }
         }
       }
     }
-    expect(failures).toEqual([]);
+    expect([...new Set(failures)]).toEqual([]);
   });
 
   it("keeps chat links at WCAG AA on every bubble surface", () => {
@@ -575,7 +634,6 @@ describe("Control UI theme contrast", () => {
     const groupedCss = fs.readFileSync(path.join(stylesDir, "chat", "grouped.css"), "utf8");
     const linkTokens = readChatLinkTokens(chatTextCss);
     const bubbleBackgrounds = readBubbleBackgrounds(groupedCss);
-    const failures: string[] = [];
     for (const [themeName, tokens] of themes) {
       const page = resolveOpaqueColor("var(--bg)", tokens);
       const isLight = themeName === "light" || themeName.endsWith("-light");
@@ -587,11 +645,10 @@ describe("Control UI theme contrast", () => {
         expect(bubbleBackgrounds.lightUserText).not.toBe("");
         const foreground = resolveOpaqueColor(`var(${bubbleBackgrounds.lightUserText})`, tokens);
         const ratio = contrastRatio(foreground, userBubble);
-        if (ratio < AA_NORMAL_TEXT_MIN) {
-          failures.push(
-            `${themeName}: text ${bubbleBackgrounds.lightUserText} on user bubble ${userFill} = ${ratio.toFixed(2)}:1 (< ${AA_NORMAL_TEXT_MIN}:1)`,
-          );
-        }
+        expect(
+          ratio,
+          `${themeName}: text ${bubbleBackgrounds.lightUserText} on user bubble ${userFill}`,
+        ).toBeGreaterThanOrEqual(AA_NORMAL_TEXT_MIN);
       }
 
       for (const [state, token] of [
@@ -600,11 +657,10 @@ describe("Control UI theme contrast", () => {
       ] as const) {
         const foreground = resolveColor(`var(${token})`, tokens);
         const userRatio = contrastRatio(composite(foreground, userBubble), userBubble);
-        if (userRatio < AA_NORMAL_TEXT_MIN) {
-          failures.push(
-            `${themeName}: ${state} ${token} on user bubble ${userFill} = ${userRatio.toFixed(2)}:1 (< ${AA_NORMAL_TEXT_MIN}:1)`,
-          );
-        }
+        expect(
+          userRatio,
+          `${themeName}: ${state} ${token} on user bubble ${userFill}`,
+        ).toBeGreaterThanOrEqual(AA_NORMAL_TEXT_MIN);
 
         let worstRatio = Number.POSITIVE_INFINITY;
         let worstHue = 0;
@@ -617,13 +673,11 @@ describe("Control UI theme contrast", () => {
             worstHue = hue;
           }
         }
-        if (worstRatio < AA_NORMAL_TEXT_MIN) {
-          failures.push(
-            `${themeName}: ${state} ${token} on sender-tinted bubble ${senderTint} at hue ${worstHue} = ${worstRatio.toFixed(2)}:1 (< ${AA_NORMAL_TEXT_MIN}:1)`,
-          );
-        }
+        expect(
+          worstRatio,
+          `${themeName}: ${state} ${token} on sender-tinted bubble ${senderTint} at hue ${worstHue}`,
+        ).toBeGreaterThanOrEqual(AA_NORMAL_TEXT_MIN);
       }
     }
-    expect(failures).toEqual([]);
   });
 });

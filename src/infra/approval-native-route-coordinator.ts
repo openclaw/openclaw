@@ -14,17 +14,16 @@ import {
   resolveApprovalRoutedElsewhereNoticeText,
 } from "./approval-native-route-notice.js";
 import { buildChannelApprovalNativeTargetKey } from "./approval-native-target-key.js";
-import type { ApprovalRequestChannelRouteClass, ChannelApprovalKind } from "./approval-types.js";
-import type { ExecApprovalRequest } from "./exec-approvals.js";
-import type { PluginApprovalRequest } from "./plugin-approvals.js";
-import type { SystemAgentApprovalRequest } from "./system-agent-approvals.js";
+import type {
+  ApprovalRequestInput as ApprovalRequest,
+  ApprovalRequestChannelRouteClass,
+  ChannelApprovalKind,
+} from "./approval-types.js";
 
 type GatewayRequestFn = <T = unknown>(
   method: string,
   params: Record<string, unknown>,
 ) => Promise<T>;
-
-type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
 
 type ApprovalRouteRuntimeRecord = {
   runtimeId: string;
@@ -348,7 +347,7 @@ function resolveApprovalRouteNotice(params: {
       requestGateway,
       target,
       text: ambiguousOwner
-        ? resolveAmbiguousApprovalRouteNoticeText()
+        ? resolveAmbiguousApprovalRouteNoticeText(params.approvalKind)
         : resolveApprovalDeliveryFailedNoticeText({
             approvalId: params.request.id,
             approvalKind: params.approvalKind,

@@ -33,6 +33,8 @@ export type CanonicalSessionValidationResult = {
 /** Worker operation facts; no Worker object or plan payload is retained. */
 export type SqliteSessionReclamationDiagnostics = {
   kind?:
+    | "archive-publish-prepare"
+    | "archive-publish-record"
     | "entry"
     | "lifecycle-artifacts"
     | "history-eviction"

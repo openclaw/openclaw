@@ -21,7 +21,27 @@ const enPluginManagement = {
     installProgress: {
       title: "Installation progress",
       stopped: "Installation stopped",
-      failed: "Install failed",
+      rejected: {
+        title: "Plugin not installed",
+        recovery:
+          "This attempt did not install the plugin. Resolve the reported issue, then select Retry install.",
+      },
+      saved: {
+        title: "Installation saved",
+        recovery:
+          "The installation was saved. Resolve the reported issue before reloading the plugin; do not install it again.",
+      },
+      unknown: {
+        title: "Installation status unknown",
+        recovery:
+          "The Gateway did not confirm the installation outcome. Reconnect and check installed plugins before trying again.",
+      },
+      retry: {
+        title: "Installation failed",
+        recovery: "Resolve the reported issue, then select Retry install to try again.",
+      },
+      details: "Failure details",
+      viewStatus: "View status",
       failure: "Installation failed",
       resolve: {
         started: "Resolving package",
@@ -106,6 +126,72 @@ const enPluginManagement = {
       stale: "Configuration changed. Reload this reference before editing it.",
       saveFailed:
         "The credential could not be saved. Your draft is still available; try saving again.",
+    },
+    detailCapabilities: "Capabilities",
+    uiCapabilities: {
+      page: { name: "Pages", description: "Adds pages to OpenClaw." },
+      navigation: { name: "Navigation", description: "Adds links to OpenClaw navigation." },
+      panel: { name: "Panels", description: "Adds interface panels." },
+      action: { name: "Actions", description: "Adds buttons or menu actions." },
+      accessory: {
+        name: "Session accessories",
+        description: "Adds information or controls alongside sessions.",
+      },
+      widget: { name: "Dashboard widgets", description: "Adds widgets to the dashboard." },
+      replacement: {
+        name: "Interface replacements",
+        description: "Replaces supported parts of the interface.",
+      },
+      "link-reader": {
+        name: "Link previews",
+        description: "Shows previews and details for supported links.",
+      },
+    },
+    capabilityFamilies: {
+      speechProviders: { name: "Text to speech", description: "Turn text into spoken audio." },
+      realtimeTranscriptionProviders: {
+        name: "Live transcription",
+        description: "Transcribe audio as it arrives.",
+      },
+      realtimeVoiceProviders: {
+        name: "Realtime voice",
+        description: "Support live voice conversations.",
+      },
+      mediaUnderstandingProviders: {
+        name: "Media understanding",
+        description: "Analyze supported media inputs.",
+      },
+      imageGenerationProviders: {
+        name: "Image generation",
+        description: "Create images from prompts and supported references.",
+      },
+      videoGenerationProviders: {
+        name: "Video generation",
+        description: "Create video with supported generation models.",
+      },
+      musicGenerationProviders: {
+        name: "Music generation",
+        description: "Create music with supported generation models.",
+      },
+      embeddingProviders: {
+        name: "Embeddings",
+        description: "Represent content for semantic search and retrieval.",
+      },
+      webSearchProviders: { name: "Web search", description: "Find information on the web." },
+      webFetchProviders: { name: "Web fetching", description: "Read content from web pages." },
+      webContentExtractors: {
+        name: "Web content extraction",
+        description: "Extract readable content from web pages.",
+      },
+      documentExtractors: {
+        name: "Document extraction",
+        description: "Extract content from supported documents.",
+      },
+      transcriptSourceProviders: {
+        name: "Transcripts",
+        description: "Capture or import transcripts from supported sources.",
+      },
+      migrationProviders: { name: "Migration", description: "Bring supported data into OpenClaw." },
     },
     breadcrumb: "Breadcrumb",
     settingsDescription: "Configure installed plugins, access, and lifecycle.",
@@ -196,6 +282,7 @@ const enPluginManagement = {
     detailEnable: "Enable",
     detailDisable: "Disable",
     detailTools: "Tools",
+    detailToolInputs: "Inputs",
     detailType: "Type",
     detailSecurity: "Security audit",
     detailSecurityAudit: "View security audit",
@@ -288,6 +375,9 @@ const enPluginManagement = {
     bundlePlugin: "Bundle plugin",
     unavailable: "Unavailable",
     install: "Install",
+    retryInstall: "Retry install",
+    retryInstallNamed: "Retry install of {name}",
+    viewInstallStatusNamed: "View status of {name} installation",
     installing: "Installing",
     installNamed: "Install {name}",
     connectToChange: "Connect to the gateway to change plugins.",

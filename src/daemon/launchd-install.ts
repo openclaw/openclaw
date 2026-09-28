@@ -93,7 +93,7 @@ async function currentGatewayLaunchAgentLabel(
     ...(configuredCurrentLabel ? [assertValidLaunchAgentLabel(configuredCurrentLabel)] : []),
   ]);
   for (const label of candidates) {
-    if (await isCurrentProcessInsideLaunchdService(label, process.env)) {
+    if (await isCurrentProcessInsideLaunchdService(label)) {
       return label;
     }
   }

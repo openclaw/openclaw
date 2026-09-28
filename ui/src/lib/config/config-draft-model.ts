@@ -7,7 +7,6 @@ import type { ConfigSnapshot } from "../../api/types.ts";
 import { coerceConfigFormNumberString } from "../../components/config-form.numeric.ts";
 import { t } from "../../i18n/index.ts";
 import {
-  cloneConfigObject,
   removePathValue,
   sanitizeRedactedFormForSubmit,
   schemaMayAcceptString,
@@ -247,22 +246,12 @@ function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
   }
 
   if (type === "number" || type === "integer") {
-    if (typeof value === "string") {
-      const coerced = coerceConfigFormNumberString(value, type === "integer");
-      if (coerced === undefined || typeof coerced === "number") {
-        return coerced;
-      }
-    }
-    return value;
+    return typeof value === "string"
+      ? coerceConfigFormNumberString(value, type === "integer")
+      : value;
   }
   if (type === "boolean") {
-    if (typeof value === "string") {
-      const coerced = coerceBooleanString(value);
-      if (typeof coerced === "boolean") {
-        return coerced;
-      }
-    }
-    return value;
+    return typeof value === "string" ? coerceBooleanString(value) : value;
   }
   if (type === "string") {
     return typeof value === "string" && value.length === 0 && schema.minLength ? undefined : value;
@@ -388,7 +377,7 @@ export function adoptConfigWriteAck(
   );
   const draft =
     currentRaw === submitted.raw
-      ? cloneConfigObject(ack.config)
+      ? structuredClone(ack.config)
       : staleForm
         ? null
         : replayConfigDraftEdits(submitted.form, currentForm, ack.config);
@@ -427,7 +416,7 @@ export function adoptConfigWriteAck(
     return state.configAutoSaveStatus;
   }
   setConfigRawOriginal(state, acknowledgedRaw);
-  state.configFormOriginal = cloneConfigObject(ack.config);
+  state.configFormOriginal = structuredClone(ack.config);
   state.configForm = draft;
   state.configRaw = serializeConfigForm(draft);
   state.configFormDirty = state.configRaw !== serializeConfigForm(ack.config);
@@ -459,7 +448,7 @@ function syncConfigDraft(state: RuntimeConfigState, nextForm: Record<string, unk
  * failure moot (its error is cleared too). In-flight writes, stale snapshots,
  * reconnect pauses and publication recovery survive local edits.
  */
-function resetStaleAutoSaveStatus(state: RuntimeConfigState) {
+export function resetStaleAutoSaveStatus(state: RuntimeConfigState) {
   if (
     state.configAutoSaveStatus === "saving" ||
     state.configAutoSaveStatus === "conflict" ||
@@ -467,7 +456,10 @@ function resetStaleAutoSaveStatus(state: RuntimeConfigState) {
   ) {
     return;
   }
-  if (!state.configFormDirty && state.configAutoSaveStatus === "error") {
+  if (
+    state.configAutoSaveStatus === "rejected" ||
+    (!state.configFormDirty && state.configAutoSaveStatus === "error")
+  ) {
     state.lastError = null;
   }
   state.configAutoSaveStatus = "idle";
@@ -538,7 +530,7 @@ function mutateConfigForm(
     }
     base = parsedRawDraft;
   } else {
-    base = cloneConfigObject(
+    base = structuredClone(
       state.configForm ?? resolveEditableSnapshotConfig(state.configSnapshot) ?? {},
     );
   }
@@ -547,12 +539,9 @@ function mutateConfigForm(
 }
 
 function trackAutoAllowlistedPluginId(state: RuntimeConfigState, pluginId: string) {
-  const pluginIds = autoAllowlistedPluginIdsByState.get(state);
-  if (pluginIds) {
-    pluginIds.add(pluginId);
-  } else {
-    autoAllowlistedPluginIdsByState.set(state, new Set([pluginId]));
-  }
+  const pluginIds = autoAllowlistedPluginIdsByState.get(state) ?? new Set<string>();
+  pluginIds.add(pluginId);
+  autoAllowlistedPluginIdsByState.set(state, pluginIds);
 }
 
 function untrackAutoAllowlistedPluginId(state: RuntimeConfigState, pluginId: string) {
@@ -643,7 +632,7 @@ export function updateConfigRawValue(
     resetConfigPendingChanges(state);
   } else {
     // The refreshed snapshot may contain the pending write, not this raw revert.
-    state.configForm = cloneConfigObject(state.configFormOriginal ?? {});
+    state.configForm = structuredClone(state.configFormOriginal ?? {});
     clearConfigDraftTracking(state);
   }
   // Raw edits own submission; a clean revert also restores the saved form
@@ -656,7 +645,7 @@ export function rebaseConfigDraft(state: RuntimeConfigState) {
   const editableConfig = resolveEditableSnapshotConfig(state.configSnapshot);
   // A retained draft can predate a reconnect snapshot. Adopt its document and
   // revision together; pairing old originals with the new hash bypasses CAS.
-  state.configFormOriginal = cloneConfigObject(editableConfig ?? {});
+  state.configFormOriginal = structuredClone(editableConfig ?? {});
   const raw =
     state.configSnapshot?.raw ??
     (editableConfig ? serializeConfigForm(editableConfig) : state.configRawOriginal);
@@ -666,7 +655,7 @@ export function rebaseConfigDraft(state: RuntimeConfigState) {
 
 export function resetConfigPendingChanges(state: RuntimeConfigState) {
   rebaseConfigDraft(state);
-  state.configForm = cloneConfigObject(state.configFormOriginal ?? {});
+  state.configForm = structuredClone(state.configFormOriginal ?? {});
   state.configRaw = state.configRawOriginal;
   state.configFormDirty = false;
   state.configFormMode = "form";
@@ -691,7 +680,7 @@ export function discardConfigFormValue(state: RuntimeConfigState, path: Array<st
   ) {
     return false;
   }
-  let current = cloneConfigObject(state.configForm);
+  let current = structuredClone(state.configForm);
   const previous = path.reduce<unknown>(
     (value, segment) =>
       Array.isArray(value) && typeof segment === "number"
@@ -704,7 +693,7 @@ export function discardConfigFormValue(state: RuntimeConfigState, path: Array<st
   if (previous === undefined) {
     removePathValue(current, path);
   } else {
-    setPathValue(current, path, cloneConfigObject(previous));
+    setPathValue(current, path, structuredClone(previous));
   }
   // Restore absence with the submission owner's existing empty-container rules;
   // otherwise Cancel alone leaves a dirty draft and schedules a redundant write.

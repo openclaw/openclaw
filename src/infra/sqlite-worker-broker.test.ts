@@ -1,16 +1,19 @@
+import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
 import * as os from "node:os";
-import path from "node:path";
 import { Worker } from "node:worker_threads";
-import { afterEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { expect, it, vi } from "vitest";
 import * as logging from "../logging/logger.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
 import {
-  openSqliteWorkerStore,
+  useSqliteWorkerStoreFixture,
+  appendWorkerRow as append,
+  readWorkerRows as read,
+} from "./sqlite-worker-fixture.test-support.js";
+import {
   reserveSqliteWorkerInputPreparation,
   runSqliteWorkerStoreOperation,
   runSqliteWorkerStoreWrite,
@@ -23,38 +26,10 @@ vi.mock("node:os", async (importOriginal) => ({
   availableParallelism: () => 32,
 }));
 
-const stores = new Set<SqliteWorkerStore<FixtureOperations>>();
-const dirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-    try {
-      await Promise.all([...stores].map((store) => store.close()));
-    } finally {
-      stores.clear();
-      cleanup();
-    }
-  }),
-);
-const databasePath = () => path.join(dirs.make("sqlite-worker-broker-"), "store.sqlite");
-
-async function open(file: string) {
-  const store = await openSqliteWorkerStore<FixtureOperations>({
-    moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
-    databasePath: file,
-    input: undefined,
-  });
-  stores.add(store);
-  return store;
-}
-
-function append(store: SqliteWorkerStore<FixtureOperations>, value: string) {
-  return store.execute({ type: "append", input: { value } });
-}
-
-function read(store: SqliteWorkerStore<FixtureOperations>) {
-  return store.execute({ type: "read", input: undefined });
-}
+const { databasePath, open } = useSqliteWorkerStoreFixture("sqlite-worker-broker-", () => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 const nodeIt = process.versions.bun ? it.skip : it;
 
@@ -304,9 +279,7 @@ nodeIt.each([
         databasePath: databasePath(),
         input: undefined,
       });
-      if (!store) {
-        throw new Error("Fixture store missing");
-      }
+      assert(store, "Fixture store missing");
       threads.add((await append(store, "thread count")).threadId);
     }
     expect(threads.size).toBe(workers);

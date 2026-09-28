@@ -56,11 +56,11 @@ export class WorktreeGcProgress {
     }
   }
 
-  protect(stage: "idle" | "limits", id: string, reason: string): void {
+  protect(stage: "idle" | "limits", id: string, reason: string, detail = reason): void {
     this.result.protectedCount += 1;
     const counts = this.result.protectionReasons;
     counts[reason] = (counts[reason] ?? 0) + 1;
-    this.record(stage, "deferred", reason, id);
+    this.record(stage, "deferred", detail, id);
   }
 
   recordLimitState(satisfied: boolean, inventoryComplete = true): void {

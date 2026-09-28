@@ -1,5 +1,6 @@
 import type { ModelPricingProvider } from "@openclaw/model-catalog-core/model-catalog-pricing";
 import type { ModelCatalog } from "@openclaw/model-catalog-core/model-catalog-types";
+import type { PluginUiCapability } from "../../packages/gateway-protocol/src/plugin-ui-capabilities.js";
 import type { PluginCategorySlug } from "../../packages/plugin-package-contract/src/index.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import type { ChannelAccountKeyPolicy } from "../routing/account-lookup.js";
@@ -506,6 +507,8 @@ export type PluginManifest = {
   /** Widget data and action capabilities validated against runtime registrations. */
   dashboard?: PluginManifestDashboard;
   controlUi?: PluginManifestControlUi;
+  /** Static UI contributions; omission is unspecified and an empty list declares none. */
+  uiCapabilities?: PluginUiCapability[];
   themes?: PluginManifestTheme[];
   /** Static MCP servers contributed while this plugin is enabled. */
   mcpServers?: Record<string, PluginManifestMcpServer>;
@@ -661,6 +664,8 @@ export type PluginManifestProviderAuthChoice = {
   icon?: string;
   /** Optional HTTPS product or installation URL for onboarding surfaces. */
   website?: string;
+  /** Optional HTTPS guide comparing this provider's connection methods. */
+  docsUrl?: string;
   /** Lower values sort earlier in interactive assistant pickers. */
   assistantPriority?: number;
   /** Keep the choice out of interactive assistant pickers while preserving manual CLI support. */

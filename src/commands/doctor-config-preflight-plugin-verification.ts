@@ -46,39 +46,21 @@ async function planStartupPluginVerification(params: {
   );
 }
 
-function isStartupPluginVerificationFailureActive(params: {
-  cfg: OpenClawConfig;
-  failure: PluginPayloadSmokeFailure;
-}): boolean {
-  return resolveEffectiveEnableState({
-    id: params.failure.pluginId,
-    origin: "global",
-    config: normalizePluginsConfig(params.cfg.plugins),
-    rootConfig: params.cfg,
-  }).enabled;
-}
-
 function buildStartupPluginQuarantine(params: {
   cfg: OpenClawConfig;
   failures: readonly PluginPayloadSmokeFailure[];
 }): DegradedPlugin[] {
   return buildDegradedPluginsFromVerificationFailures(
-    params.failures.filter((failure) =>
-      isStartupPluginVerificationFailureActive({ cfg: params.cfg, failure }),
+    params.failures.filter(
+      (failure) =>
+        resolveEffectiveEnableState({
+          id: failure.pluginId,
+          origin: "global",
+          config: normalizePluginsConfig(params.cfg.plugins),
+          rootConfig: params.cfg,
+        }).enabled,
     ),
   );
-}
-
-function formatStartupPluginSmokeFailure(failure: PluginPayloadSmokeFailure): string {
-  return describePluginAvailabilityFailure(
-    failure.pluginId,
-    formatPluginVerificationDiagnostic({
-      kind: "plugin-verification",
-      reason: failure.reason,
-      detail: failure.detail,
-      ...(failure.installPath ? { installPath: failure.installPath } : {}),
-    }),
-  ).message;
 }
 
 export async function runDoctorPluginConvergence(params: {
@@ -222,36 +204,26 @@ async function verifyStartupPluginPayloads(
       }),
     params.measure,
   );
-  const result = mapStartupPluginQuarantineRefresh({
+  const quarantinedPlugins = buildStartupPluginQuarantine({
     cfg: params.cfg,
     failures: smoke.failures,
   });
-  if (result.quarantinedPlugins.length > 0) {
+  if (quarantinedPlugins.length > 0) {
     note(
-      result.quarantinedPlugins
+      quarantinedPlugins
         .map(
           (plugin) =>
-            `- ${formatStartupPluginSmokeFailure({
-              pluginId: plugin.pluginId,
-              reason: plugin.diagnostic.reason,
-              detail: plugin.diagnostic.detail,
-              ...(plugin.diagnostic.installPath
-                ? { installPath: plugin.diagnostic.installPath }
-                : {}),
-            })}`,
+            `- ${
+              describePluginAvailabilityFailure(
+                plugin.pluginId,
+                formatPluginVerificationDiagnostic(plugin.diagnostic),
+              ).message
+            }`,
         )
         .join("\n"),
       `Doctor ${PLUGIN_AVAILABILITY_POLICY.severity}s`,
     );
   }
-  return result;
-}
-
-function mapStartupPluginQuarantineRefresh(params: {
-  cfg: OpenClawConfig;
-  failures: readonly PluginPayloadSmokeFailure[];
-}): StartupPluginConvergenceResult {
-  const quarantinedPlugins = buildStartupPluginQuarantine(params);
   return {
     quarantinedPlugins,
     deferredPlugins: quarantinedPlugins.map((plugin) => ({

@@ -270,7 +270,10 @@ Profile and run-registry publications refresh their derived display facts withou
 rereading session entries. Worker environment and placement publications refresh
 only the selected rows' worker facts on their next presentation. Stored session
 writes publish exact keys; broad list notifications do not schedule an all-row
-drain. Config, store topology, and adopted model catalogs still refresh affected
+drain. Sidebar preferences and other projection-neutral config commits retain
+session rows. Agent identity edits refresh display facts on presentation; store
+admission reconciles physical generations and retains unchanged rows. Session
+policy, roster, sharing, and adopted model catalog changes still refresh affected
 live rows before lists respond. Archived rows stay cold until selected.
 
 Transcript-only row refreshes use a one-second window per resident session: the

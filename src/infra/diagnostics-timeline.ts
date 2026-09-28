@@ -4,11 +4,11 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { performance } from "node:perf_hooks";
+import { appendRegularFileSync } from "@openclaw/fs-safe/advanced";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isDiagnosticFlagEnabled } from "./diagnostic-flags.js";
 import { isTruthyEnvValue } from "./env.js";
-import { appendRegularFileSync } from "./regular-file.js";
 
 const OPENCLAW_DIAGNOSTICS_TIMELINE_SCHEMA_VERSION = "openclaw.diagnostics.v1";
 const MAX_PENDING_TIMELINE_BYTES = 64 * 1024;

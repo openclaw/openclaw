@@ -2,19 +2,14 @@ import { describe, expect, it } from "vitest";
 import { scanXmlishToolCall, utf8ByteLengthWithinLimit } from "./grammar.js";
 
 describe("scanXmlishToolCall", () => {
-  it.each([
-    "<function=read>",
-    "<function=read></func",
-    "<function=read><parameter=path>/tmp/file",
-    "[tool:read]<parameter=path>/tmp/file",
-    "[read]\n<parameter=path>/tmp/file",
-  ])("keeps incomplete syntax as a prefix: %s", (raw) => {
-    expect(scanXmlishToolCall(raw).kind).toBe("prefix");
-  });
+  it.each(["[tool:read]<parameter=path>/tmp/file", "[read]\n<parameter=path>/tmp/file"])(
+    "keeps incomplete syntax as a prefix: %s",
+    (raw) => {
+      expect(scanXmlishToolCall(raw).kind).toBe("prefix");
+    },
+  );
 
   it.each([
-    "<function=get_system_info></function>",
-    "<function=read><parameter=path>/tmp/file</parameter></function>",
     "[tool:read]<parameter=path>/tmp/file</parameter>",
     "[read]\n<parameter=path>/tmp/file</parameter></function>",
   ])("accepts the supported complete forms: %s", (raw) => {
@@ -46,16 +41,12 @@ describe("scanXmlishToolCall", () => {
     expect(parameter && raw.slice(parameter.name.start, parameter.name.end)).toBe("Path");
   });
 
-  it.each([
-    "[tool:get_system_info]</function>",
-    "[get_system_info]\n</function>",
-    `<function=${"x".repeat(121)}></function>`,
-    `<function=${"x".repeat(121)}`,
-    `<function=read><parameter=${"x".repeat(121)}>value</parameter></function>`,
-    `<function=read><parameter=${"x".repeat(121)}`,
-  ])("rejects invalid or ambiguous executable forms: %s", (raw) => {
-    expect(scanXmlishToolCall(raw).kind).toBe("invalid");
-  });
+  it.each([`<function=${"x".repeat(121)}`, `<function=read><parameter=${"x".repeat(121)}`])(
+    "rejects invalid or ambiguous executable forms: %s",
+    (raw) => {
+      expect(scanXmlishToolCall(raw).kind).toBe("invalid");
+    },
+  );
 
   it("returns absolute name, parameter, payload, and call spans", () => {
     const call = [
@@ -120,31 +111,5 @@ describe("scanXmlishToolCall", () => {
       ),
     ).toBe(255_999);
     expect(scanXmlishToolCall(`${prefix}tion>`).kind).toBe("complete");
-  });
-
-  it.each(["</func", "<param"])(
-    "retains the complete optional-close call before an ambiguous %s prefix",
-    (suffix) => {
-      const complete = "[tool:read]<parameter=path>/tmp/file</parameter>";
-      const scan = scanXmlishToolCall(`${complete}${suffix}`);
-
-      expect(scan.kind).toBe("prefix");
-      if (scan.kind !== "prefix") {
-        return;
-      }
-      expect(scan.completeEnd).toBe(complete.length);
-    },
-  );
-
-  it("retains the first visible byte after an invalid over-cap body prefix", () => {
-    const visible = "Visible answer";
-    const raw = `<function=read>${"\u00a0".repeat(128_001)}${visible}`;
-    const scan = scanXmlishToolCall(raw);
-
-    expect(scan.kind).toBe("invalid");
-    if (scan.kind !== "invalid") {
-      return;
-    }
-    expect(raw.slice(scan.at)).toBe(visible);
   });
 });

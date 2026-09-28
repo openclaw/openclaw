@@ -1,9 +1,7 @@
 import { html } from "lit";
-import {
-  formatKeyboardShortcutCombo,
-  type KeyboardShortcutCombo,
-} from "../lib/keyboard-shortcut-contract.ts";
+import type { KeyboardShortcutCombo } from "../lib/keyboard-shortcut-contract.ts";
 import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
+import { renderKbd, renderKeyboardShortcut } from "./kbd.ts";
 import { handlePeopleMenuKeydown } from "./searchable-people-menu.ts";
 
 // Single-letter context-menu shortcuts. Items opt in via data-shortcut plus a
@@ -12,7 +10,7 @@ import { handlePeopleMenuKeydown } from "./searchable-people-menu.ts";
 export function menuShortcutHint(key: string, alias?: KeyboardShortcutCombo) {
   const label = key.length === 1 ? key.toUpperCase() : key;
   return html`<span slot="details" class="session-menu__shortcut" aria-hidden="true"
-    >${alias ? `${label} / ${formatKeyboardShortcutCombo(alias)}` : label}</span
+    >${renderKbd(label, { inline: true })}${alias ? html` / ${renderKeyboardShortcut(alias, { inline: true })}` : ""}</span
   >`;
 }
 

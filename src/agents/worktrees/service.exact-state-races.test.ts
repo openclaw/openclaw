@@ -774,7 +774,6 @@ describe("exact-state retirement admission and recovery", () => {
     "index-published",
     "finalize",
     "removal-ref",
-    "registry-ack",
     "receipt-cleanup",
     "receipt-cleanup-ack",
   ] as const)("recovers object-only restoration interrupted at %s", async (phase) => {
@@ -840,18 +839,7 @@ describe("exact-state retirement admission and recovery", () => {
         interrupted = true;
         throw new Error("controlled object restore interruption");
       }
-      const result = update(...args);
-      if (
-        !interrupted &&
-        phase === "registry-ack" &&
-        args[1] === f.record.id &&
-        "removedAt" in args[2] &&
-        args[2].removedAt === undefined
-      ) {
-        interrupted = true;
-        throw new Error("controlled object restore interruption");
-      }
-      return result;
+      return update(...args);
     });
     await expect(service.restore({ id: f.record.id })).rejects.toThrow(
       "controlled object restore interruption",

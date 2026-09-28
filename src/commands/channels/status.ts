@@ -1,6 +1,7 @@
 // Implements `openclaw channels status` with gateway status and config-only fallback.
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { isGatewayProtocolResponseError } from "../../../packages/gateway-client/src/protocol-request.js";
 import { DEFAULT_RESTART_HEALTH_TIMEOUT_MS } from "../../cli/daemon-cli/restart-health.constants.js";
 import {
   formatCliFailureLines,
@@ -29,10 +30,6 @@ function redactGatewayUrlSecretsInText(text: string): string {
   return text.replace(/\b(?:wss?|https?):\/\/[^\s"'<>]+/gi, (rawUrl) => {
     return redactSensitiveUrlLikeString(rawUrl);
   });
-}
-
-function formatChannelsStatusError(err: unknown): string {
-  return redactGatewayUrlSecretsInText(formatErrorMessage(err));
 }
 
 /** Query gateway channel status, falling back to config-only output when unavailable. */
@@ -86,7 +83,10 @@ export async function channelsStatusCommand(
     const { formatGatewayChannelsStatusLines } = await loadChannelsStatusRuntime();
     runtime.log(formatGatewayChannelsStatusLines(payload).join("\n"));
   } catch (err) {
-    const safeError = formatChannelsStatusError(err);
+    if (isGatewayProtocolResponseError(err)) {
+      throw err;
+    }
+    const safeError = redactGatewayUrlSecretsInText(formatErrorMessage(err));
     const expectedError = isExpectedCliError(err);
     const gatewayAuthUnavailable =
       isGatewayCredentialsCliError(err) || isGatewaySecretRefUnavailableError(err);

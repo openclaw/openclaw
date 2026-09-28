@@ -32,7 +32,7 @@ read_when:
     For background processes started by the exec tool, ask the agent to run:
 
     ```text
-    process action:kill sessionId:XXX
+    process action:kill sessionId:<sessionId>
     ```
 
     Most slash commands must be sent as a **standalone** message starting with `/`, but a few shortcuts (like `/status`) also work inline for allowlisted senders. See [Slash commands](/tools/slash-commands).

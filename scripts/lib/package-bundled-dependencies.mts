@@ -5,9 +5,9 @@ import { pathToFileURL } from "node:url";
 import { coerceErrorMessage } from "./error-format.mts";
 import {
   collectPatchedMcpArtifactErrors,
+  isSupportedPatchedMcpVersion,
   PATCHED_MCP_CLI,
   PATCHED_MCP_NAME,
-  PATCHED_MCP_VERSION,
 } from "./package-bundled-mcp.mts";
 import { collectPackageDistImportErrors } from "./package-dist-imports.mjs";
 import { isRecord } from "./record-shared.mjs";
@@ -153,9 +153,11 @@ function collectBundledPackageRuntimeErrors(
 function collectPatchedMcpErrors(
   { entries, packageRoot, readText }: BundledPackage,
   manifest: Record<string, unknown>,
+  declaredVersion: unknown,
 ): string[] {
   const prefix = `node_modules/${PATCHED_MCP_NAME}/`;
   const errors = collectPatchedMcpArtifactErrors({
+    declaredVersion,
     manifest,
     files: new Set(
       [...entries]
@@ -210,11 +212,11 @@ export function collectBundledDependencyErrors({
     }
   }
   if (
-    typeof dependencies[PATCHED_MCP_NAME] === "string" &&
-    dependencies[PATCHED_MCP_NAME] !== PATCHED_MCP_VERSION
+    names.has(PATCHED_MCP_NAME) &&
+    !isSupportedPatchedMcpVersion(dependencies[PATCHED_MCP_NAME])
   ) {
     errors.push(
-      `package.json dependencies.${PATCHED_MCP_NAME} must be pinned to ${PATCHED_MCP_VERSION}`,
+      `package.json dependencies.${PATCHED_MCP_NAME} must be pinned to a supported patched version`,
     );
   }
   for (const name of names) {
@@ -234,9 +236,21 @@ export function collectBundledDependencyErrors({
       errors.push(`bundled ${name} package.json must name ${name}`);
       continue;
     }
+    // npm infers peers of bundled packages are already in the bundle, while
+    // packlist excludes them unless explicitly bundled. Missing peers are not
+    // installed, even when the root declares them as required dependencies.
+    const peers = isRecord(manifest.peerDependencies) ? manifest.peerDependencies : {};
+    for (const peer of Object.keys(peers)) {
+      if (
+        typeof dependencies[peer] === "string" &&
+        !runtime.entries.has(`node_modules/${peer}/package.json`)
+      ) {
+        errors.push(`bundled ${name} is missing its root dependency peer ${peer}`);
+      }
+    }
     const bundled = { ...runtime, name };
     if (name === PATCHED_MCP_NAME) {
-      errors.push(...collectPatchedMcpErrors(bundled, manifest));
+      errors.push(...collectPatchedMcpErrors(bundled, manifest, dependencies[PATCHED_MCP_NAME]));
     } else if (REQUIRED_BUNDLED_WORKSPACE_RUNTIME_ENTRIES.has(name)) {
       errors.push(...collectBundledPackageRuntimeErrors(bundled, manifest));
     }

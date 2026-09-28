@@ -3,10 +3,30 @@ import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { retainLegacyDefaultAgentId } from "../legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { loadTranscriptEvents, replaceSessionEntry } from "./session-accessor.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.transcript-turn.js";
+
+function fleetConfig(storePath: string, owner?: string): OpenClawConfig {
+  return {
+    agents: {
+      ownership: "explicit",
+      ...(owner ? { defaults: { sessionStore: { agentId: owner } } } : {}),
+      entries: { ops: {}, research: {} },
+    },
+    session: { store: storePath },
+  };
+}
+
+function turnOptions(config: OpenClawConfig, content: string) {
+  return {
+    config,
+    messages: [{ message: { role: "user", content } }],
+    updateMode: "none" as const,
+  };
+}
 
 describe("transcript turn logical ownership", () => {
   it("completes committed custody before a queued cancellation can interrupt the receipt", async () => {
@@ -49,36 +69,33 @@ describe("transcript turn logical ownership", () => {
     });
   });
 
-  it.each([undefined, "ops"])(
-    "rejects a bare-key write without a designation (provenance: %s)",
-    async (retainedOwner) => {
-      await withTempHome(async (home) => {
-        const storePath = path.join(home, "sessions.json");
-        const cfg = retainLegacyDefaultAgentId(
-          {
-            agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
-            session: { store: storePath },
-          } satisfies OpenClawConfig,
-          retainedOwner,
-        );
+  it("rejects a bare-key write without a designation despite retained provenance", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "sessions.json");
+      const cfg = retainLegacyDefaultAgentId(
+        {
+          agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+          session: { store: storePath },
+        } satisfies OpenClawConfig,
+        "ops",
+      );
 
-        await expect(
-          persistSessionTranscriptTurn(
-            {
-              sessionId: "ownerless-transcript-session",
-              sessionKey: "main",
-              storePath,
-            },
-            {
-              config: cfg,
-              messages: [{ message: { role: "user", content: "must not be attributed" } }],
-              updateMode: "none",
-            },
-          ),
-        ).rejects.toBeInstanceOf(AgentSelectionRequiredError);
-      });
-    },
-  );
+      await expect(
+        persistSessionTranscriptTurn(
+          {
+            sessionId: "ownerless-transcript-session",
+            sessionKey: "main",
+            storePath,
+          },
+          {
+            config: cfg,
+            messages: [{ message: { role: "user", content: "must not be attributed" } }],
+            updateMode: "none",
+          },
+        ),
+      ).rejects.toBeInstanceOf(AgentSelectionRequiredError);
+    });
+  });
 
   it("attributes a bare-key write to the recorded default owner", async () => {
     await withTempHome(async (home) => {
@@ -105,11 +122,7 @@ describe("transcript turn logical ownership", () => {
       );
 
       await expect(
-        persistSessionTranscriptTurn(scope, {
-          config: cfg,
-          messages: [{ message: { role: "user", content: "retained owner" } }],
-          updateMode: "none",
-        }),
+        persistSessionTranscriptTurn(scope, turnOptions(cfg, "retained owner")),
       ).resolves.toMatchObject({ appendedCount: 1 });
       await expect(loadTranscriptEvents({ ...scope, agentId: "ops" })).resolves.toContainEqual(
         expect.objectContaining({
@@ -123,14 +136,7 @@ describe("transcript turn logical ownership", () => {
   it("rejects a conflicting scope agent for a persisted fixed-store owner", async () => {
     await withTempHome(async (home) => {
       const storePath = path.join(home, "sessions.json");
-      const cfg = {
-        agents: {
-          ownership: "explicit",
-          defaults: { sessionStore: { agentId: "ops" } },
-          entries: { ops: {}, research: {} },
-        },
-        session: { store: storePath },
-      } satisfies OpenClawConfig;
+      const cfg = fleetConfig(storePath, "ops");
       const scope = {
         agentId: "research",
         sessionId: "persisted-owner-transcript-session",
@@ -139,11 +145,7 @@ describe("transcript turn logical ownership", () => {
       };
 
       await expect(
-        persistSessionTranscriptTurn(scope, {
-          config: cfg,
-          messages: [{ message: { role: "user", content: "wrong owner" } }],
-          updateMode: "none",
-        }),
+        persistSessionTranscriptTurn(scope, turnOptions(cfg, "wrong owner")),
       ).rejects.toBeInstanceOf(AgentSelectionRequiredError);
 
       await replaceSessionEntry(
@@ -151,14 +153,7 @@ describe("transcript turn logical ownership", () => {
         { sessionId: scope.sessionId, updatedAt: 1 },
       );
       await expect(
-        persistSessionTranscriptTurn(
-          { ...scope, agentId: "ops" },
-          {
-            config: cfg,
-            messages: [{ message: { role: "user", content: "right owner" } }],
-            updateMode: "none",
-          },
-        ),
+        persistSessionTranscriptTurn({ ...scope, agentId: "ops" }, turnOptions(cfg, "right owner")),
       ).resolves.toMatchObject({ appendedCount: 1 });
     });
   });
@@ -166,14 +161,7 @@ describe("transcript turn logical ownership", () => {
   it("rejects a bare-key write for a retired persisted owner", async () => {
     await withTempHome(async (home) => {
       const storePath = path.join(home, "sessions.json");
-      const cfg = {
-        agents: {
-          ownership: "explicit",
-          defaults: { sessionStore: { agentId: "retired" } },
-          entries: { ops: {}, research: {} },
-        },
-        session: { store: storePath },
-      } satisfies OpenClawConfig;
+      const cfg = fleetConfig(storePath, "retired");
 
       await expect(
         persistSessionTranscriptTurn(
@@ -182,11 +170,7 @@ describe("transcript turn logical ownership", () => {
             sessionKey: "global",
             storePath,
           },
-          {
-            config: cfg,
-            messages: [{ message: { role: "user", content: "retired owner" } }],
-            updateMode: "none",
-          },
+          turnOptions(cfg, "retired owner"),
         ),
       ).rejects.toBeInstanceOf(AgentSelectionRequiredError);
     });
@@ -196,14 +180,7 @@ describe("transcript turn logical ownership", () => {
     await withTempHome(async (home) => {
       const fixedStorePath = path.join(home, "shared-sessions.json");
       const researchStorePath = path.join(home, "research-sessions.json");
-      const cfg = {
-        agents: {
-          ownership: "explicit",
-          defaults: { sessionStore: { agentId: "ops" } },
-          entries: { ops: {}, research: {} },
-        },
-        session: { store: fixedStorePath },
-      } satisfies OpenClawConfig;
+      const cfg = fleetConfig(fixedStorePath, "ops");
       const scope = {
         agentId: "research",
         sessionId: "research-global-session",
@@ -217,10 +194,8 @@ describe("transcript turn logical ownership", () => {
 
       await expect(
         persistSessionTranscriptTurn(scope, {
-          config: cfg,
+          ...turnOptions(cfg, "research store"),
           expectedSessionId: scope.sessionId,
-          messages: [{ message: { role: "user", content: "research store" } }],
-          updateMode: "none",
         }),
       ).resolves.toMatchObject({ appendedCount: 1 });
       await expect(loadTranscriptEvents({ ...scope, agentId: "research" })).resolves.toContainEqual(
@@ -232,82 +207,81 @@ describe("transcript turn logical ownership", () => {
     });
   });
 
-  it.each([false, true])(
-    "completes a pathless injected write before a later failure: %s",
-    async (failSecondAppend) => {
-      await withTempHome(async (home) => {
-        const configuredStorePath = path.join(home, "shared-sessions.json");
-        const sessionEntry = { sessionId: "injected-research", updatedAt: 1 };
-        const sessionStore = { global: sessionEntry };
-        const cfg = {
-          agents: {
-            ownership: "explicit",
-            defaults: { sessionStore: { agentId: "ops" } },
-            entries: { ops: {}, research: {} },
-          },
-          session: { store: configuredStorePath },
-        } satisfies OpenClawConfig;
+  it("completes a pathless injected write before a later failure", async () => {
+    await withTempHome(async (home) => {
+      const configuredStorePath = path.join(home, "shared-sessions.json");
+      const sessionEntry = { sessionId: "injected-research", updatedAt: 1 };
+      const sessionStore = { global: sessionEntry };
+      const cfg = fleetConfig(configuredStorePath, "ops");
 
-        const completed: string[] = [];
-        const turn = persistSessionTranscriptTurn(
-          {
-            agentId: "research",
-            sessionId: sessionEntry.sessionId,
-            sessionKey: "global",
-            sessionStore,
-          },
-          {
-            config: cfg,
-            messages: [
-              {
-                eventId: "injected-first",
-                message: { role: "user", content: "injected research" },
-              },
-              ...(failSecondAppend
-                ? [
-                    {
-                      message: { role: "user", content: "cannot commit" },
-                      prepareMessageAfterIdempotencyCheck: () => {
-                        throw new Error("second append failed");
-                      },
-                    },
-                  ]
-                : []),
-            ],
-            onMessageCommitted: ({ messageId }) => {
-              completed.push(messageId);
+      const completed: string[] = [];
+      const accepted = createDeferredCore();
+      const release = createDeferredCore();
+      const settled: string[] = [];
+      const turn = persistSessionTranscriptTurn(
+        {
+          agentId: "research",
+          sessionId: sessionEntry.sessionId,
+          sessionKey: "global",
+          sessionStore,
+        },
+        {
+          config: cfg,
+          messages: [
+            {
+              eventId: "injected-first",
+              message: { role: "user", content: "injected research" },
             },
-            updateMode: "none",
+            {
+              message: { role: "user", content: "cannot commit" },
+              prepareMessageAfterIdempotencyCheck: () => {
+                throw new Error("second append failed");
+              },
+            },
+          ],
+          onMessageCommitted: ({ messageId }, acceptCompletion) => {
+            completed.push(messageId);
+            acceptCompletion(async () => {
+              accepted.resolve();
+              await release.promise;
+              settled.push(messageId);
+            });
           },
+          updateMode: "none",
+        },
+      );
+      const outcome = turn.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        expect(await Promise.race([accepted.promise.then(() => "accepted"), outcome])).toBe(
+          "accepted",
         );
-        if (failSecondAppend) {
-          await expect(turn).rejects.toThrow("second append failed");
-        } else {
-          await expect(turn).resolves.toMatchObject({ appendedCount: 1 });
-        }
         expect(completed).toEqual(["injected-first"]);
-        expect(
-          await loadTranscriptEvents({
-            agentId: "research",
-            sessionId: sessionEntry.sessionId,
-            sessionKey: "global",
-            storePath: configuredStorePath,
-          }),
-        ).toContainEqual(expect.objectContaining({ id: "injected-first" }));
-      });
-    },
-  );
+        expect(settled).toEqual([]);
+        release.resolve();
+        await expect(turn).rejects.toThrow("second append failed");
+      } finally {
+        release.resolve();
+        await outcome;
+      }
+      expect(completed).toEqual(["injected-first"]);
+      expect(settled).toEqual(["injected-first"]);
+      expect(
+        await loadTranscriptEvents({
+          agentId: "research",
+          sessionId: sessionEntry.sessionId,
+          sessionKey: "global",
+          storePath: configuredStorePath,
+        }),
+      ).toContainEqual(expect.objectContaining({ id: "injected-first" }));
+    });
+  });
 
   it("keeps a pathless injected session store ownerless without an explicit agent", async () => {
     await withTempHome(async (home) => {
-      const cfg = {
-        agents: {
-          ownership: "explicit",
-          defaults: { sessionStore: { agentId: "ops" } },
-          entries: { ops: {}, research: {} },
-        },
-        session: { store: path.join(home, "shared-sessions.json") },
-      } satisfies OpenClawConfig;
+      const cfg = fleetConfig(path.join(home, "shared-sessions.json"), "ops");
 
       await expect(
         persistSessionTranscriptTurn(
@@ -316,11 +290,7 @@ describe("transcript turn logical ownership", () => {
             sessionKey: "global",
             sessionStore: { global: { sessionId: "injected-ownerless", updatedAt: 1 } },
           },
-          {
-            config: cfg,
-            messages: [{ message: { role: "user", content: "must select" } }],
-            updateMode: "none",
-          },
+          turnOptions(cfg, "must select"),
         ),
       ).rejects.toBeInstanceOf(AgentSelectionRequiredError);
     });
@@ -334,14 +304,7 @@ describe("transcript turn logical ownership", () => {
         const aliasStorePath = path.join(home, "shared-store-alias.sqlite");
         await fs.writeFile(fixedStorePath, "");
         await fs.symlink(fixedStorePath, aliasStorePath);
-        const cfg = {
-          agents: {
-            ownership: "explicit",
-            defaults: { sessionStore: { agentId: "ops" } },
-            entries: { ops: {}, research: {} },
-          },
-          session: { store: fixedStorePath },
-        } satisfies OpenClawConfig;
+        const cfg = fleetConfig(fixedStorePath, "ops");
 
         await expect(
           persistSessionTranscriptTurn(
@@ -351,11 +314,7 @@ describe("transcript turn logical ownership", () => {
               sessionKey: "global",
               storePath: aliasStorePath,
             },
-            {
-              config: cfg,
-              messages: [{ message: { role: "user", content: "wrong owner" } }],
-              updateMode: "none",
-            },
+            turnOptions(cfg, "wrong owner"),
           ),
         ).rejects.toBeInstanceOf(AgentSelectionRequiredError);
       });

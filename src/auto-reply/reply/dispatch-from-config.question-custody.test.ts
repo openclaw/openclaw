@@ -10,6 +10,7 @@ import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { EmbeddedQuestionBroker } from "../../infra/embedded-question-broker.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runReplyQuestionInput } from "./agent-runner-question-input.js";
@@ -306,7 +307,7 @@ describe("dispatch input custody after a question response", () => {
   it("reports an incomplete multi-question answer and keeps the question open", async () => {
     const fixture = createQuestionDispatch("incomplete-answer");
     const dispatcher = createDispatcher();
-    const broker = new EmbeddedQuestionBroker();
+    const broker = new EmbeddedQuestionBroker(createTestGatewayScheduler());
     const questionId = "ask_incomplete_answer";
     const questions = [
       { id: "destination", header: "Where", question: "Where to?" },

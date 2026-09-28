@@ -16,6 +16,7 @@ import {
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import {
@@ -93,6 +94,7 @@ it.each([
         setActiveEmbeddedRun(sessionId, embedded, target.sessionKey);
       }
       const subscriptions = startGatewayEventSubscriptions({
+        scheduler: createTestGatewayScheduler(),
         signal: new AbortController().signal,
         log,
         broadcast: context.broadcast,
@@ -106,7 +108,6 @@ it.each([
         sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
         chatAbortControllers: context.chatAbortControllers,
         restartRecoveryCandidates: new Map(),
-        terminalSessions: { closeTaskSessions: vi.fn() },
         refreshConnectedUserProfiles: vi.fn(),
       });
       const writerEntered = createDeferred();
@@ -222,7 +223,6 @@ it.each([
         subscriptions.heartbeatUnsub();
         subscriptions.transcriptUnsub();
         subscriptions.lifecycleUnsub();
-        await subscriptions.taskUnsub();
         persistenceSpy?.mockRestore();
       }
     });

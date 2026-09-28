@@ -445,12 +445,7 @@ export function createSessionCostSummaryAccumulator(
     },
   );
   const dailyLatency = createDatedRowsAccumulator<SessionDailyLatency>((current, row) => {
-    const count = current.count + row.count;
-    current.avgMs = count > 0 ? (current.avgMs * current.count + row.avgMs * row.count) / count : 0;
-    current.count = count;
-    current.p95Ms = Math.max(current.p95Ms, row.p95Ms);
-    current.minMs = Math.min(current.minMs, row.minMs);
-    current.maxMs = Math.max(current.maxMs, row.maxMs);
+    Object.assign(current, mergeLatencyStats(current, row));
   });
   const dailyModels = createDatedRowsAccumulator<SessionDailyModelUsage>(
     (current, row) => {
@@ -464,6 +459,15 @@ export function createSessionCostSummaryAccumulator(
   return {
     add(source: SessionCostSummary): void {
       addCostUsageTotals(target, source);
+      if (source.computedAt !== undefined) {
+        target.computedAt = Math.min(target.computedAt ?? source.computedAt, source.computedAt);
+      }
+      if (source.staleSince !== undefined) {
+        target.staleSince = Math.min(target.staleSince ?? source.staleSince, source.staleSince);
+      }
+      if (source.refreshing) {
+        target.refreshing = true;
+      }
       target.firstActivity =
         target.firstActivity === undefined
           ? source.firstActivity
@@ -539,7 +543,6 @@ export function buildSessionCostSummaryFromRollup(params: {
   const messageCounts = emptyMessageCounts();
   const tools = new Map<string, number>();
   const models = new Map<string, SessionModelUsage>();
-  const activityDates = new Set<string>();
   const dailyUsage = new Map<string, CostUsageTotals>();
   const dailyMessages = new Map<string, SessionDailyMessageCounts>();
   const quarterMessages = new Map<string, SessionUtcQuarterHourMessageCounts>();
@@ -550,17 +553,12 @@ export function buildSessionCostSummaryFromRollup(params: {
   let firstActivity: number | undefined;
   let lastActivity: number | undefined;
 
-  const mergeBucket = (bucket: SessionUsageRollupBucket): void => {
+  for (const bucket of usageBucketsInRange(params.rollup, params.startMs, params.endMs)) {
     const date = new Date(bucket.timestampMs);
     const dayKey = params.formatDay(date);
     const quarter = getUtcQuarterHourBucketKey(date);
-    firstActivity =
-      firstActivity === undefined
-        ? bucket.timestampMs
-        : Math.min(firstActivity, bucket.timestampMs);
-    lastActivity =
-      lastActivity === undefined ? bucket.timestampMs : Math.max(lastActivity, bucket.timestampMs);
-    activityDates.add(dayKey);
+    firstActivity ??= bucket.timestampMs;
+    lastActivity = bucket.timestampMs;
     addCostUsageTotals(totals, bucket.totals);
     addMessageCounts(messageCounts, bucket.messageCounts);
     mergeTools(tools, bucket.tools);
@@ -620,10 +618,6 @@ export function buildSessionCostSummaryFromRollup(params: {
     const dailyLatency = dailyLatencies.get(dayKey) ?? createLatencyAggregate();
     mergeLatencyAggregate(dailyLatency, bucket.latency);
     dailyLatencies.set(dayKey, dailyLatency);
-  };
-
-  for (const bucket of usageBucketsInRange(params.rollup, params.startMs, params.endMs)) {
-    mergeBucket(bucket);
   }
   if (params.includeUntimestamped) {
     addCostUsageTotals(totals, params.rollup.untimestamped.totals);
@@ -654,7 +648,7 @@ export function buildSessionCostSummaryFromRollup(params: {
       firstActivity !== undefined && lastActivity !== undefined
         ? Math.max(0, lastActivity - firstActivity)
         : undefined,
-    activityDates: Array.from(activityDates).toSorted(),
+    activityDates: Array.from(dailyUsage.keys()).toSorted(),
     dailyBreakdown: Array.from(dailyUsage, ([date, usage]) =>
       Object.assign({ date, tokens: usage.totalTokens, cost: usage.totalCost }, usage),
     ).toSorted((a, b) => a.date.localeCompare(b.date)),

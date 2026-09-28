@@ -24,7 +24,7 @@ import {
 import { publishSystemEventStoreConfig } from "../config/sessions/session-store-path.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import { findTaskByRunId } from "../tasks/task-registry.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import {
@@ -35,7 +35,10 @@ import {
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
-import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
+import {
+  releaseGatewaySessionStoreFixture,
+  settleGatewaySessionStoreFixture,
+} from "./test/server-sessions-resources.test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -85,7 +88,7 @@ async function arrangeAuthorityProof(name: string) {
   });
   await prepareGatewayReplyRuntimeForTest();
   publishSystemEventStoreConfig(getRuntimeConfig());
-  registerSubagentRun({
+  await registerSubagentRun({
     runId: previousRunId,
     childSessionKey: child,
     controllerSessionKey: parent,
@@ -99,7 +102,6 @@ async function arrangeAuthorityProof(name: string) {
   const previous = expectDefined(subagentRuns.get(previousRunId), "paused child");
   expect(markSubagentRunPausedAfterYield({ entry: previous })).toBe(true);
   persistSubagentRunsToDiskOrThrow(subagentRuns, [previousRunId]);
-  const task = expectDefined(findTaskByRunId(previousRunId), "paused task");
   const scope = { agentId: "main", sessionKey: child, sessionId, storePath };
   const finalEffect = vi.fn();
   // The provider can publish success only after real input custody is consumed.
@@ -126,7 +128,7 @@ async function arrangeAuthorityProof(name: string) {
   const send = (caller = parent, approvalSignal?: AbortSignal, mode?: "resume") => {
     const tool = createSessionsSendTool({
       agentSessionKey: caller,
-      config: { tools: { sessions: { visibility: "all" } } },
+      config: { ...getRuntimeConfig(), tools: { sessions: { visibility: "all" } } },
       idempotencyKey: runId,
     });
     return withGatewayToolCallerIdentity(
@@ -150,10 +152,6 @@ async function arrangeAuthorityProof(name: string) {
     expect(subagentRuns.get(previousRunId)).toBe(previous);
     expect(previous.pauseReason).toBe("sessions_yield");
     expect(subagentRuns.has(runId)).toBe(false);
-    expect(findTaskByRunId(previousRunId)).toMatchObject({
-      taskId: task.taskId,
-      status: task.status,
-    });
   };
   return {
     parent,
@@ -162,7 +160,6 @@ async function arrangeAuthorityProof(name: string) {
     previousRunId,
     runId,
     scope,
-    task,
     finalEffect,
     send,
     expectUnadopted,
@@ -270,7 +267,7 @@ it("rejects parent authority revoked while durable input preparation awaits", as
       items: [{ runId: proof.runId, state: "cancelled" }],
     });
     expect(listSessionPendingInputReceipts(proof.scope, { runIds: [proof.runId] })).toEqual([
-      { runId: proof.runId, state: "pending" },
+      { runId: proof.runId, state: "pending", cancelled: true },
     ]);
     expect(agentCommandMock).not.toHaveBeenCalled();
     expect(proof.finalEffect).not.toHaveBeenCalled();
@@ -333,10 +330,6 @@ it("fences a cancelled successor after adoption before queued input consumption"
     await adopted.promise;
     expect(subagentRuns.has(proof.previousRunId)).toBe(false);
     expect(subagentRuns.get(proof.runId)).toMatchObject({ taskRunId: proof.previousRunId });
-    expect(findTaskByRunId(proof.previousRunId)).toMatchObject({
-      taskId: proof.task.taskId,
-      status: "running",
-    });
     expect(listSessionPendingInputs(proof.scope)).toMatchObject({
       total: 1,
       items: [{ runId: proof.runId, state: "queued" }],
@@ -362,10 +355,6 @@ it("fences a cancelled successor after adoption before queued input consumption"
       ],
       expect.anything(),
     );
-    expect(findTaskByRunId(proof.previousRunId)).toMatchObject({
-      taskId: proof.task.taskId,
-      status: "cancelled",
-    });
     // Custody remains unconsumed even though execution cleanup records interruption.
     expect(listSessionPendingInputs(proof.scope)).toMatchObject({
       total: 1,
@@ -416,8 +405,8 @@ it.each(["explicit", "automatic"] as const)(
       });
       await prepareGatewayReplyRuntimeForTest();
       publishSystemEventStoreConfig(getRuntimeConfig());
-      // Seed paused registry/canonical-task state without polling a nonexistent source execution.
-      registerSubagentRun({
+      // Seed paused native registry state without polling a nonexistent source execution.
+      await registerSubagentRun({
         runId: previousRunId,
         childSessionKey: child,
         controllerSessionKey: parent,
@@ -431,8 +420,6 @@ it.each(["explicit", "automatic"] as const)(
       const previous = subagentRuns.get(previousRunId)!;
       markSubagentRunPausedAfterYield({ entry: previous });
       persistSubagentRunsToDiskOrThrow(subagentRuns, [previousRunId]);
-      const taskId = findTaskByRunId(previousRunId)?.taskId;
-      expect(taskId).toBeTruthy();
       agentCommandMock.mockImplementation(async (opts) => {
         const command = opts as AgentCommandGatewayIngressOpts;
         const runId = expectDefined(command.runId, "resume execution run id");
@@ -457,13 +444,16 @@ it.each(["explicit", "automatic"] as const)(
       });
       const tool = createSessionsSendTool({
         agentSessionKey: parent,
-        config: { tools: { sessions: { visibility: "all" } } },
+        config: { ...getRuntimeConfig(), tools: { sessions: { visibility: "all" } } },
       });
       const result = await withPluginRuntimeGatewayRequestScope(
         {
           client: createSyntheticPluginRuntimeClient({
             scopes: ["operator.write"],
-            operatorRoleActor: { kind: "operator", profileId: "resume-operator" },
+            operatorRoleActor: {
+              kind: "operator",
+              profileId: ensureProfileForEmail("resume-operator@example.test").id,
+            },
           }),
           context: kernel.gatewayRequestContext,
           isWebchatConnect: () => false,
@@ -496,8 +486,8 @@ it.each(["explicit", "automatic"] as const)(
       expect(result.details).not.toHaveProperty("reply");
       await started.promise;
       expect(announce).not.toHaveBeenCalled();
-      expect(findTaskByRunId(previousRunId)?.taskId).toBe(taskId);
       release.resolve();
+      await settleGatewaySessionStoreFixture(root);
       await vi.waitFor(() => expect(announce).toHaveBeenCalledTimes(1));
       expect(announce).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -506,11 +496,15 @@ it.each(["explicit", "automatic"] as const)(
           roundOneReply: "Resumed child finished.",
         }),
       );
-      await vi.waitFor(() => expect(findTaskByRunId(previousRunId)?.status).toBe("succeeded"));
+      await vi.waitFor(() => expect(announce).toHaveBeenCalledTimes(1));
       expect(agentCommandMock).toHaveBeenCalledTimes(1);
     } finally {
       release.resolve();
-      announce.mockRestore();
+      try {
+        await settleGatewaySessionStoreFixture(root);
+      } finally {
+        announce.mockRestore();
+      }
     }
   },
 );

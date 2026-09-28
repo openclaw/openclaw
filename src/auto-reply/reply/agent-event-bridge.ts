@@ -1,6 +1,7 @@
 // Generic agent-event bridge machinery shared by the CLI runner's per-stream
 // delivery bridges (assistant, reasoning, commentary, plan).
 import { type AgentEventPayload, onAgentEventForRun } from "../../infra/agent-events.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 
 export type AgentEventDeliveryStartOrder = {
   preserveCallbackStartOrder?: boolean;
@@ -20,10 +21,8 @@ export function createAgentEventDeliveryStartOrder(options?: {
     schedule: (deliver, deliveryOptions) => {
       const previousStart = startTail;
       const previousSettlement = settledTail;
-      let releaseStart: (() => void) | undefined;
-      startTail = new Promise<void>((resolve) => {
-        releaseStart = resolve;
-      });
+      const start = createDeferredCore();
+      startTail = start.promise;
       const scheduled = (async () => {
         await previousStart;
         // Completed answers must follow earlier presentation, not merely callback invocation.
@@ -35,7 +34,7 @@ export function createAgentEventDeliveryStartOrder(options?: {
         try {
           delivery = deliver();
         } finally {
-          releaseStart?.();
+          start.resolve();
         }
         await delivery;
       })();

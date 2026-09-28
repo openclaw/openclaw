@@ -70,13 +70,6 @@ function isSlackApprovalTransportEnabled(params: {
   return isSlackPluginAccountConfigured(account);
 }
 
-function resolveSlackNativeApprovalConfig(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}) {
-  return resolveSlackAccount(params).config.execApprovals;
-}
-
 function normalizeSlackThreadMatchKey(threadId?: string | number | null): string {
   return threadId == null ? "" : String(threadId).trim();
 }
@@ -251,7 +244,7 @@ function isSlackPluginNativeApprovalClientConfigEnabled(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): boolean {
-  const slackNativeConfig = resolveSlackNativeApprovalConfig(params);
+  const slackNativeConfig = resolveSlackAccount(params).config.execApprovals;
   return isChannelExecApprovalClientEnabledFromConfig({
     enabled: slackNativeConfig?.enabled,
     approverCount: getSlackApprovalApprovers(params).length,
@@ -283,7 +276,7 @@ function isSlackNativeApprovalAccountEligible(params: {
   request: SlackNativeApprovalRequest;
   approvalKind: ChannelApprovalKind;
 }): boolean {
-  const config = resolveSlackNativeApprovalConfig(params);
+  const config = resolveSlackAccount(params).config.execApprovals;
   const approverCount =
     params.approvalKind === "exec"
       ? getSlackExecApprovalApprovers(params).length

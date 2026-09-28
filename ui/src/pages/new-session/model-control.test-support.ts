@@ -24,7 +24,7 @@ export function contextWith(
       context.gateway.snapshot.client!,
       undefined,
       undefined,
-      modelCatalogEventInvalidation({ event, payload }) === "clear",
+      modelCatalogEventInvalidation({ event, payload }) ?? "preserve",
     );
     for (const listener of listeners) {
       listener({ type: "event", event, payload });

@@ -3,7 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { SessionUpstreamJsonValue, SessionUpstreamKind } from "../plugins/session-catalog.js";
+import type { SessionUpstreamJsonValue } from "../plugins/session-catalog.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -30,16 +30,7 @@ function getSessionUpstreamKysely(db: DatabaseSync) {
 }
 
 export function upsertSessionUpstreamLink(
-  input: {
-    sessionKey: string;
-    agentId: string;
-    catalogId: string;
-    hostId: string;
-    threadId: string;
-    upstreamKind: SessionUpstreamKind;
-    upstreamRef: SessionUpstreamJsonValue;
-    marker: SessionUpstreamJsonValue;
-  },
+  input: Omit<SessionUpstreamLink, "lastScannedAt" | "createdAt" | "updatedAt">,
   options: OpenClawStateDatabaseOptions & {
     now?: number;
     ifAbsent?: true;

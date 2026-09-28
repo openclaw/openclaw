@@ -1,11 +1,13 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { z } from "zod";
 import { resolveStateDir } from "../config/paths.js";
 import {
+  redactPublicSupportDiagnosticLine,
   redactSupportDiagnosticLine,
   redactSupportString,
   type SupportRedactionContext,
@@ -153,7 +155,17 @@ export function createUpdateFailureFact(
   const context = { env, stateDir: resolveStateDir(env) };
   const line = (value: string, limit: number) => redactSupportDiagnosticLine(value, context, limit);
   // Redact credentials and complete email addresses before replacing their host suffixes.
-  const diagnostic = fact.message ? line(fact.message, Number.MAX_SAFE_INTEGER) : undefined;
+  // Protocol-1 candidate refusals carry field facts in multiline text; retain them before truncation.
+  const configDiagnostic =
+    fact.code === "invalid-config" && fact.message
+      ? redactPublicSupportDiagnosticLine(fact.message, context)
+      : undefined;
+  const diagnostic =
+    configDiagnostic && configDiagnostic !== "[redacted-diagnostic]"
+      ? configDiagnostic
+      : fact.message
+        ? line(fact.message, Number.MAX_SAFE_INTEGER)
+        : undefined;
   const message = fact.errorName
     ? diagnostic
         ?.replace(
@@ -198,14 +210,8 @@ export function parseConfigFailureFacts(
   stdout: string,
   env: NodeJS.ProcessEnv,
 ): UpdateFailureFact[] {
-  let report: unknown;
-  try {
-    report = JSON.parse(stdout);
-  } catch {
-    // A failed command may exit before it writes its configuration report.
-    return [];
-  }
-  if (!isRecord(report) || !Array.isArray(report.issues)) {
+  const report = safeParseJsonRecord(stdout);
+  if (!Array.isArray(report?.issues)) {
     return [];
   }
   return normalizeUpdateFailureFacts(

@@ -1,13 +1,14 @@
 import { addAbortListener } from "node:events";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
+import { nodeWorkerTurnMatchesIdentity } from "../worker/node-supervisor-protocol.js";
 import {
   buildWorkerProcessTurn,
   type WorkerProcessResult,
 } from "../worker/worker-process-protocol.js";
-import { nodeWorkerTurnMatchesIdentity } from "./node-worker-journal.types.js";
 import type {
   NodeWorkerLaunchClaim,
   NodeWorkerLaunchReceipt,
@@ -18,13 +19,14 @@ import { createNodeWorkerCredentialScrubber } from "./node-worker-output.js";
 import type { NodeWorkerSupervisorIdentity } from "./node-worker-supervisor-contract.js";
 import {
   createNodeWorkerActiveTurn,
+  nodeWorkerEnvironmentKey,
   type NodeWorkerActiveOwnership,
   type NodeWorkerObservedTerminal,
   type NodeWorkerPendingAdmission,
   type NodeWorkerRunningChild,
   type NodeWorkerStopState,
 } from "./node-worker-supervisor-ownership.js";
-import type { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
+import type { NodeWorkerTurnReceipt, NodeWorkerTurnStore } from "./node-worker-turn-store.js";
 
 /** Shutdown must be able to abort admission before it stops the retiring physical owner. */
 export async function waitForNodeWorkerRetirement(
@@ -189,65 +191,104 @@ export async function startNodeWorkerTurn({
   return (await store.get(claim.launchId)) ?? admitted.receipt;
 }
 
-type NodeWorkerTurnCancellationContext = {
+type NodeWorkerTurnControlContext = {
   admissions: ReadonlyMap<string, NodeWorkerPendingAdmission>;
   active: ReadonlyMap<string, NodeWorkerActiveOwnership>;
-  turns: Pick<NodeWorkerTurnStore, "getMatching">;
+  turns: Pick<NodeWorkerTurnStore, "get" | "getMatching">;
   launches: Pick<NodeWorkerLaunchStore, "get">;
   stopTimeoutMs: number;
   isClosed(): boolean;
   initialize(): Promise<void>;
-  status(launchId: string): Promise<NodeWorkerLaunchReceipt | undefined>;
+  readStatus(launchId: string): Promise<NodeWorkerTurnReceipt | undefined>;
   cancelOwner(expected: NodeWorkerSupervisorIdentity): Promise<NodeWorkerLaunchReceipt | undefined>;
   stopChild(active: NodeWorkerRunningChild, state: NodeWorkerStopState): Promise<void>;
 };
 
-/** Binds both cancellation entry points to the supervisor's existing live owners. */
-export function createNodeWorkerTurnCancellation(context: NodeWorkerTurnCancellationContext) {
+async function observeNodeWorkerTurnStatus(
+  context: NodeWorkerTurnControlContext,
+  launchId: string,
+  options?: { waitMs: number; signal?: AbortSignal },
+): Promise<NodeWorkerLaunchReceipt | undefined> {
+  options?.signal?.throwIfAborted();
+  let current = await context.readStatus(launchId);
+  if (!options || !current || (current.state !== "pending" && current.state !== "running")) {
+    return current;
+  }
+  const elapsed = createDeferredCore<boolean>();
+  const timer = setTimeout(() => elapsed.resolve(false), options.waitMs);
+  timer.unref();
+  try {
+    while (current && (current.state === "pending" || current.state === "running")) {
+      const turn: NodeWorkerActiveOwnership["turn"] = context.active.get(
+        current.ownerLaunchId,
+      )?.turn;
+      const admission = context.admissions.get(nodeWorkerEnvironmentKey(current));
+      // A journaled turn can precede its live owner. Follow admission into settlement.
+      const done: Promise<unknown> | undefined =
+        turn?.claim.launchId === launchId
+          ? turn.done
+          : admission?.launchId === launchId && admission.planHash === current.planHash
+            ? admission.done.catch(() => undefined)
+            : undefined;
+      // Completion can publish between the journal read and capturing the live owner.
+      current = await context.readStatus(launchId);
+      if (!current || (current.state !== "pending" && current.state !== "running")) {
+        break;
+      }
+      const notified: boolean = await racePromiseWithAbortSignal(
+        done ? Promise.race([done.then(() => true), elapsed.promise]) : elapsed.promise,
+        options.signal,
+      );
+      options.signal?.throwIfAborted();
+      // Settlement follows persistence; a timed-out observation also reconciles recovery.
+      current = await (notified ? context.turns.get(launchId) : context.readStatus(launchId));
+      if (!notified) {
+        break;
+      }
+    }
+    return current;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Shares the supervisor's live turn owners between status observation and cancellation. */
+export function createNodeWorkerTurnControl(context: NodeWorkerTurnControlContext) {
   const cancelTurn = (expected: NodeWorkerSupervisorIdentity) =>
     context.isClosed()
       ? context.turns.getMatching(expected)
       : cancelNodeWorkerTurn(context, expected);
   return {
+    status: (launchId: string, options?: { waitMs: number; signal?: AbortSignal }) =>
+      observeNodeWorkerTurnStatus(context, launchId, options),
     // Startup already awaits cancellation and must not join its own admission.
     cancelTurn,
-    cancel: (expected: NodeWorkerSupervisorIdentity) =>
-      cancelNodeWorkerTurnAdmission(context.admissions, expected, context.turns, () =>
-        cancelTurn(expected),
-      ),
+    cancel: async (expected: NodeWorkerSupervisorIdentity) => {
+      const admission = [...context.admissions.values()].find((pending) =>
+        nodeWorkerTurnMatchesIdentity(pending.identity, expected),
+      );
+      const cancellation = cancelTurn(expected);
+      if (!admission) {
+        return cancellation;
+      }
+      const [cancelled, admitted] = await Promise.allSettled([cancellation, admission.done]);
+      if (cancelled.status === "rejected") {
+        throw cancelled.reason;
+      }
+      if (
+        admitted.status === "rejected" &&
+        (!admission.signal.aborted || admitted.reason !== admission.signal.reason)
+      ) {
+        throw admitted.reason;
+      }
+      return context.turns.getMatching(expected);
+    },
   };
-}
-
-/** External cancellation joins admission; startup invokes only the turn primitive. */
-async function cancelNodeWorkerTurnAdmission(
-  admissions: ReadonlyMap<string, NodeWorkerPendingAdmission>,
-  expected: NodeWorkerSupervisorIdentity,
-  turns: Pick<NodeWorkerTurnStore, "getMatching">,
-  cancelTurn: () => Promise<NodeWorkerLaunchReceipt | undefined>,
-): Promise<NodeWorkerLaunchReceipt | undefined> {
-  const admission = [...admissions.values()].find((pending) =>
-    nodeWorkerTurnMatchesIdentity(pending.identity, expected),
-  );
-  const cancellation = cancelTurn();
-  if (!admission) {
-    return cancellation;
-  }
-  const [cancelled, admitted] = await Promise.allSettled([cancellation, admission.done]);
-  if (cancelled.status === "rejected") {
-    throw cancelled.reason;
-  }
-  if (
-    admitted.status === "rejected" &&
-    (!admission.signal.aborted || admitted.reason !== admission.signal.reason)
-  ) {
-    throw admitted.reason;
-  }
-  return turns.getMatching(expected);
 }
 
 /** Cancel one logical turn; physical cleanup remains with its supervisor owner. */
 async function cancelNodeWorkerTurn(
-  context: NodeWorkerTurnCancellationContext,
+  context: NodeWorkerTurnControlContext,
   expected: NodeWorkerSupervisorIdentity,
 ): Promise<NodeWorkerLaunchReceipt | undefined> {
   const afterSettlement = async (settling: Promise<void>) => {
@@ -291,7 +332,7 @@ async function cancelNodeWorkerTurn(
   await context.initialize();
   const receipt = await context.turns.getMatching(expected);
   if (!receipt || (receipt.state !== "pending" && receipt.state !== "running")) {
-    return receipt ? await context.status(receipt.launchId) : undefined;
+    return receipt ? await context.readStatus(receipt.launchId) : undefined;
   }
   if (matched?.turn.settling) {
     return await afterSettlement(matched.turn.settling);
@@ -301,7 +342,7 @@ async function cancelNodeWorkerTurn(
     (context.active.get(matched.owner.launchId) !== matched.owner ||
       matched.owner.turn !== matched.turn)
   ) {
-    return context.status(expected.launchId);
+    return context.readStatus(expected.launchId);
   }
   const active = context.active.get(receipt.ownerLaunchId);
   if (active?.state !== "running" || active.turn?.claim.launchId !== expected.launchId) {
@@ -331,7 +372,7 @@ async function cancelNodeWorkerTurn(
     }
   }
   if (context.active.get(active.launchId)?.state === "observed") {
-    return context.status(expected.launchId);
+    return context.readStatus(expected.launchId);
   }
   return context.turns.getMatching(expected);
 }

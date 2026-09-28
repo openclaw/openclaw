@@ -4,8 +4,8 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import {
-  resolveChannelDefaultBindingPlacement,
   resolveInboundConversationResolution,
+  resolveSpawnThreadBindingPlacement,
 } from "../channels/conversation-resolution.js";
 import {
   formatThreadBindingDisabledError,
@@ -31,7 +31,7 @@ type SpawnBackendKind = "subagent" | "acp";
 export type PreparedSpawnThreadBinding = {
   channel: string;
   accountId: string;
-  placement: "current" | "child";
+  placement: "child";
   conversationId: string;
   parentConversationId?: string;
 };
@@ -132,13 +132,13 @@ function buildThreadBindingUnavailableError(kind: SpawnBackendKind, mode: SpawnM
   }
   if (mode === "session") {
     return (
-      'sessions_spawn(mode="session") is only available on channels that expose thread bindings (e.g. Discord threads, Slack threads, Telegram forum topics). ' +
+      'sessions_spawn(mode="session") is only available on channels that open a separate thread for the worker (e.g. Discord or Matrix threads). ' +
       "This request is not running on a channel that can bind a subagent thread. " +
       'Use mode="run" for one-shot subagent work.'
     );
   }
   return (
-    "thread=true is only available on channels that expose thread bindings (e.g. Discord threads, Slack threads, Telegram forum topics). " +
+    "thread=true is only available on channels that open a separate thread for the worker (e.g. Discord or Matrix threads). " +
     "This request is not running on a channel that can bind a subagent thread. " +
     "Retry without thread=true, or re-run sessions_spawn from a channel that supports threads."
   );
@@ -204,13 +204,19 @@ export function prepareSpawnThreadBinding(params: {
           : buildThreadBindingUnavailableError(params.kind, params.mode),
     };
   }
-  const placement =
-    resolveChannelDefaultBindingPlacement(policy.channel) ??
-    (capabilities.placements.includes("child") ? "child" : "current");
+  const placement = resolveSpawnThreadBindingPlacement(policy.channel, capabilities.placements);
+  if (placement !== "child") {
+    return {
+      ok: false,
+      error:
+        `thread=true on ${policy.channel} would bind this conversation to the worker instead of opening a separate thread. ` +
+        'Retry without thread=true (mode="run"); the result is announced back here.',
+    };
+  }
   if (!capabilities.bindSupported || !capabilities.placements.includes(placement)) {
     return {
       ok: false,
-      error: `Thread bindings do not support ${placement} placement for ${policy.channel}.`,
+      error: `Thread bindings do not support child placement for ${policy.channel}.`,
     };
   }
   const fallback = resolveInboundConversationResolution({

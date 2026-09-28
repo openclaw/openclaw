@@ -212,12 +212,9 @@ export async function authorizeActiveMemorySearchHits(
   params: MemorySearchAuthorization,
 ): Promise<MemorySearchAuthorization["hits"]> {
   const owner = ensureMemoryRuntime(params);
-  if (!owner?.runtime) {
-    // Session artifacts need plugin-owned identity mapping before they are safe
-    // to expose. Runtimes without that capability may still return memory hits.
-    return params.hits.filter((hit) => hit.source !== "sessions");
-  }
-  return owner.runtime.authorizeSearchHits
+  // Session artifacts need plugin-owned identity mapping before they are safe
+  // to expose. Runtimes without that capability may still return memory hits.
+  return owner?.runtime?.authorizeSearchHits
     ? await owner.runtime.authorizeSearchHits(params)
     : params.hits.filter((hit) => hit.source !== "sessions");
 }

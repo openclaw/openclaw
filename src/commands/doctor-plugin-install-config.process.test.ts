@@ -223,13 +223,9 @@ describe("Doctor retired plugin install config", () => {
     expect(JSON.parse(fs.readFileSync(configPath, "utf8")).plugins).not.toHaveProperty("installs");
   }, 90_000);
 
-  it.each([
-    { mode: "doctor", invalid: false },
-    { mode: "startup", invalid: false },
-    { mode: "startup", invalid: true },
-  ])(
-    "validates enabled record-only plugin settings during $mode repair, invalid=$invalid",
-    async ({ mode, invalid }) => {
+  it.each([false, true])(
+    "leaves record-only plugin settings to Doctor, invalid=%s",
+    async (invalid) => {
       const { root, stateDir, configPath, env, config } = await createDoctorFixture();
       const pluginDir = path.join(root, "custom-plugin");
       fs.mkdirSync(pluginDir);
@@ -271,40 +267,27 @@ describe("Doctor retired plugin install config", () => {
         }),
       );
       const original = fs.readFileSync(configPath, "utf8");
-      const result =
-        mode === "doctor"
-          ? await tempDirs.track(runBuiltRuntime(runtimeRoot, env, doctorArgs, 60_000))
-          : await runIsolatedModuleScript(
-              env,
-              `
-        const { runDoctorConfigPreflight } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.preflight).href)});
-        let refused = false;
-        try {
-          const result = await runDoctorConfigPreflight({
-            migrateLegacyConfig: false,
-            requireStartupMigrationCheckpoint: true,
-            skipPristineStartupStateMigrations: true,
-          });
-          if (!result.snapshot.valid) throw new Error("startup config invalid");
-        } catch (error) {
-          if (!${invalid} || error.code !== 78) throw error;
-          refused = true;
-        }
-        if (refused !== ${invalid}) throw new Error("unexpected startup admission");
+      const startup = await runIsolatedModuleScript(
+        env,
+        `
+        const { runStartupConfigPreflight } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.startup).href)});
+        const result = await runStartupConfigPreflight({ gateway: true, observe: false });
+        if (result.snapshot.valid) throw new Error("Startup accepted retired install records.");
       `,
-              { timeoutMs: 60_000 },
-            );
-      const output = `${result.stdout}\n${result.stderr}`;
-      if ("code" in result) {
-        expect(result.code, output).toBe(0);
-      }
+        { timeoutMs: 60_000 },
+      );
       clearLoadInstalledPluginIndexInstallRecordsCache();
+      expect(fs.readFileSync(configPath, "utf8"), startup.stderr).toBe(original);
+      expect(fs.existsSync(`${configPath}.bak`)).toBe(false);
+      expect(readPersistedInstalledPluginIndexInstallRecords({ stateDir, env })).toEqual({});
       if (invalid) {
-        expect(fs.readFileSync(configPath, "utf8"), output).toBe(original);
-        expect(fs.existsSync(`${configPath}.bak`)).toBe(false);
-        expect(readPersistedInstalledPluginIndexInstallRecords({ stateDir, env })).toEqual({});
         return;
       }
+      const result = await tempDirs.track(
+        runBuiltRuntime(runtimeRoot, env, doctorArgs, DOCTOR_CHILD_TIMEOUT_MS),
+      );
+      const output = `${result.stdout}\n${result.stderr}`;
+      expect(result.code, output).toBe(0);
       const repaired = JSON.parse(fs.readFileSync(configPath, "utf8")) as OpenClawConfig;
       expect(repaired.plugins, output).not.toHaveProperty("installs");
       expect(repaired.plugins?.entries?.["migration-proof-plugin"], output).toEqual(entry);
@@ -314,6 +297,16 @@ describe("Doctor retired plugin install config", () => {
           "migration-proof-plugin"
         ],
       ).toEqual(legacy);
+      const ready = await runIsolatedModuleScript(
+        env,
+        `
+        const { runStartupConfigPreflight } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.startup).href)});
+        const result = await runStartupConfigPreflight({ gateway: true, observe: false });
+        if (!result.snapshot.valid) throw new Error("Doctor left the plugin config invalid.");
+      `,
+        { timeoutMs: 60_000 },
+      );
+      expect(JSON.parse(fs.readFileSync(configPath, "utf8")), ready.stderr).toEqual(repaired);
     },
     90_000,
   );

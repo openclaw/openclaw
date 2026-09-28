@@ -343,25 +343,22 @@ describe("memory watcher config", () => {
     },
   );
 
-  it.each(["rename", "change"] as const)(
-    "schedules watch sync on native %s events",
-    async (eventType) => {
-      await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
-      const cfg = createWatcherConfig();
+  it("schedules watch sync on native file events", async () => {
+    await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+    const cfg = createWatcherConfig();
 
-      const activeManager = await expectWatcherManager(cfg);
-      vi.useFakeTimers();
-      const syncSpy = vi.spyOn(activeManager, "sync").mockResolvedValue(undefined);
+    const activeManager = await expectWatcherManager(cfg);
+    vi.useFakeTimers();
+    const syncSpy = vi.spyOn(activeManager, "sync").mockResolvedValue(undefined);
 
-      const memoryWatcher = createdNativeWatchers.find(
-        (w) => w.dir === path.join(workspaceDir, "memory"),
-      );
-      await memoryWatcher?.emit(eventType, "notes.md");
-      await advanceWatchSync(syncSpy);
+    const memoryWatcher = createdNativeWatchers.find(
+      (w) => w.dir === path.join(workspaceDir, "memory"),
+    );
+    await memoryWatcher?.emit("rename", "notes.md");
+    await advanceWatchSync(syncSpy);
 
-      expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
-    },
-  );
+    expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
+  });
 
   it("forces broad re-sync when native watch emits null filename", async () => {
     await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });

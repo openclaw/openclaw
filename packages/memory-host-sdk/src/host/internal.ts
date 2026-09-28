@@ -4,7 +4,6 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { detectMime } from "@openclaw/media-core/mime";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
-import { runWithConcurrency as runWithConcurrencyImpl } from "./concurrency.js";
 import { MEMORY_HOST_ROOT_FILENAME, normalizeConfiguredMemoryExtraPaths } from "./config-utils.js";
 import { estimateStructuredEmbeddingInputBytes } from "./embedding-input-limits.js";
 import type { EmbeddingInput } from "./embedding-inputs.js";
@@ -138,17 +137,38 @@ export function normalizeExtraMemoryPaths(
 export function matchesExtraMemoryPathEntry(
   entry: NormalizedExtraMemoryPath,
   candidatePath: string,
+  options?: { directory?: boolean },
 ): boolean {
   if (!entry.pattern) {
     return true;
   }
   const relativePath = path.relative(entry.path, candidatePath);
   try {
-    return (
-      !relativePath ||
-      (isPathInside(entry.path, candidatePath) &&
-        path.posix.matchesGlob(relativePath.replaceAll(path.sep, "/"), entry.pattern))
-    );
+    if (!relativePath) {
+      return true;
+    }
+    if (!isPathInside(entry.path, candidatePath)) {
+      return false;
+    }
+    const normalizedRelativePath = relativePath.replaceAll(path.sep, "/");
+    if (!options?.directory) {
+      return path.posix.matchesGlob(normalizedRelativePath, entry.pattern);
+    }
+    const segments = entry.pattern.split("/");
+    // Keep complex patterns conservative; the leaf matcher owns their semantics.
+    if (
+      /[{[(]/.test(entry.pattern) ||
+      segments.some((segment) => segment === "." || segment === "..")
+    ) {
+      return true;
+    }
+    const parentCount = segments.at(-1) === "**" ? segments.length : segments.length - 1;
+    for (let length = 1; length <= parentCount; length += 1) {
+      if (path.posix.matchesGlob(normalizedRelativePath, segments.slice(0, length).join("/"))) {
+        return true;
+      }
+    }
+    return false;
   } catch {
     return false;
   }
@@ -226,17 +246,25 @@ async function collectMemoryFilesFromDir(
   files: string[],
   multimodal?: MemoryMultimodalSettings,
   shouldSkipPath?: (absPath: string) => boolean,
-  extraPathEntry?: NormalizedExtraMemoryPath,
+  extraPathEntries?: NormalizedExtraMemoryPath[],
 ): Promise<void> {
   const scan = await scanMemorySource(dir, () =>
     walkDirectory(dir, {
       symlinks: "skip",
-      descend: (entry) => shouldDescendMemoryEntry(entry, shouldSkipPath),
+      descend: (entry) =>
+        shouldDescendMemoryEntry(entry, shouldSkipPath) &&
+        (!extraPathEntries ||
+          extraPathEntries.some((extraPathEntry) =>
+            matchesExtraMemoryPathEntry(extraPathEntry, entry.path, { directory: true }),
+          )),
       include: (entry) =>
         !shouldSkipPath?.(entry.path) &&
         entry.kind === "file" &&
         isAllowedMemoryFilePath(entry.path, multimodal) &&
-        (!extraPathEntry || matchesExtraMemoryPathEntry(extraPathEntry, entry.path)),
+        (!extraPathEntries ||
+          extraPathEntries.some((extraPathEntry) =>
+            matchesExtraMemoryPathEntry(extraPathEntry, entry.path),
+          )),
     }),
   );
   const operationalFailure = scan.failedDirs.find((failure) => !isFileMissingError(failure.error));
@@ -285,40 +313,45 @@ export async function listMemoryFiles(
     }
   }
 
-  const normalizedExtraPaths = normalizeExtraMemoryPathEntries(workspaceDir, extraPaths);
-  if (normalizedExtraPaths.length > 0) {
-    for (const entry of normalizedExtraPaths) {
-      const inputPath = entry.path;
-      if (shouldSkipWorkspaceMemoryPath(inputPath)) {
+  const extraPathsByRoot = new Map<string, NormalizedExtraMemoryPath[]>();
+  for (const entry of normalizeExtraMemoryPathEntries(workspaceDir, extraPaths)) {
+    const entries = extraPathsByRoot.get(entry.path);
+    if (entries) {
+      entries.push(entry);
+    } else {
+      extraPathsByRoot.set(entry.path, [entry]);
+    }
+  }
+  for (const [inputPath, entries] of extraPathsByRoot) {
+    if (shouldSkipWorkspaceMemoryPath(inputPath)) {
+      continue;
+    }
+    try {
+      const stat = await scanMemorySource(inputPath, () => fs.lstat(inputPath));
+      if (stat.isSymbolicLink()) {
+        onSkippedSymlinkRoot?.(inputPath);
         continue;
       }
-      try {
-        const stat = await scanMemorySource(inputPath, () => fs.lstat(inputPath));
-        if (stat.isSymbolicLink()) {
-          onSkippedSymlinkRoot?.(inputPath);
-          continue;
-        }
-        if (stat.isDirectory()) {
-          await collectMemoryFilesFromDir(
-            inputPath,
-            result,
-            multimodal,
-            shouldSkipWorkspaceMemoryPath,
-            entry,
-          );
-          continue;
-        }
-        if (
-          stat.isFile() &&
-          (isExplicitExtraMarkdownFilePath(inputPath) ||
-            isAllowedMemoryFilePath(inputPath, multimodal))
-        ) {
-          result.push(inputPath);
-        }
-      } catch (error) {
-        if (!isFileMissingError(error)) {
-          throw error;
-        }
+      if (stat.isDirectory()) {
+        await collectMemoryFilesFromDir(
+          inputPath,
+          result,
+          multimodal,
+          shouldSkipWorkspaceMemoryPath,
+          entries,
+        );
+        continue;
+      }
+      if (
+        stat.isFile() &&
+        (isExplicitExtraMarkdownFilePath(inputPath) ||
+          isAllowedMemoryFilePath(inputPath, multimodal))
+      ) {
+        result.push(inputPath);
+      }
+    } catch (error) {
+      if (!isFileMissingError(error)) {
+        throw error;
       }
     }
   }
@@ -353,28 +386,28 @@ export async function buildFileEntry(
   const normalizedPath = path.relative(workspaceDir, absPath).replace(/\\/g, "/");
   const multimodalSettings = multimodal ?? DISABLED_MULTIMODAL_SETTINGS;
   const modality = classifyMemoryMultimodalPath(absPath, multimodalSettings);
-  if (modality) {
-    if (stat.size > multimodalSettings.maxFileBytes) {
+  if (modality && stat.size > multimodalSettings.maxFileBytes) {
+    return null;
+  }
+  let buffer: Buffer;
+  try {
+    buffer = (
+      await retryTransientMemoryRead(
+        () =>
+          readRegularFile({
+            filePath: absPath,
+            maxBytes: modality ? multimodalSettings.maxFileBytes : undefined,
+          }),
+        modality ? `read multimodal memory file ${absPath}` : `read memory index file ${absPath}`,
+      )
+    ).buffer;
+  } catch (err) {
+    if (isFileMissingError(err)) {
       return null;
     }
-    let buffer: Buffer;
-    try {
-      buffer = (
-        await retryTransientMemoryRead(
-          () =>
-            readRegularFile({
-              filePath: absPath,
-              maxBytes: multimodalSettings.maxFileBytes,
-            }),
-          `read multimodal memory file ${absPath}`,
-        )
-      ).buffer;
-    } catch (err) {
-      if (isFileMissingError(err)) {
-        return null;
-      }
-      throw err;
-    }
+    throw err;
+  }
+  if (modality) {
     const mimeType = await detectMime({ buffer: buffer.subarray(0, 512), filePath: absPath });
     if (!mimeType || !mimeType.startsWith(`${modality}/`)) {
       return null;
@@ -402,27 +435,12 @@ export async function buildFileEntry(
       mimeType,
     };
   }
-  let content: string;
-  try {
-    content = (
-      await retryTransientMemoryRead(
-        () => readRegularFile({ filePath: absPath }),
-        `read memory index file ${absPath}`,
-      )
-    ).buffer.toString("utf-8");
-  } catch (err) {
-    if (isFileMissingError(err)) {
-      return null;
-    }
-    throw err;
-  }
-  const hash = hashText(content);
   return {
     path: normalizedPath,
     absPath,
     mtimeMs: stat.mtimeMs,
     size: stat.size,
-    hash,
+    hash: hashText(buffer.toString("utf-8")),
     kind: "markdown",
   };
 }
@@ -505,11 +523,4 @@ export {
   type CuratedProjectAnnotations,
 } from "./curated-annotations.js";
 
-export function runMemoryHostTasksWithConcurrency<T>(
-  tasks: Array<() => Promise<T>>,
-  limit: number,
-): Promise<T[]> {
-  return runWithConcurrencyImpl(tasks, limit);
-}
-
-export { runMemoryHostTasksWithConcurrency as runWithConcurrency };
+export { runWithConcurrency } from "./concurrency.js";

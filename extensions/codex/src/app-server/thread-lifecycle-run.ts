@@ -37,7 +37,9 @@ import {
 import { CodexThreadBindingConflictError } from "./thread-lifecycle-errors.js";
 import { resumeExistingCodexThread, startFreshCodexThread } from "./thread-lifecycle-io.js";
 import {
+  buildCodexThreadBindingPolicy,
   prepareCodexThreadLifecyclePreflight,
+  prepareCodexThreadFinalConfigPatch,
   prepareCodexThreadRequestContext,
   publishCodexThreadInferenceBinding,
   resolveCodexThreadAgentDir,
@@ -88,7 +90,6 @@ export async function startOrResumeThread(
       contextEngineBinding,
       dynamicToolsContainDeferred,
       dynamicToolsFingerprint,
-      environmentSelectionFingerprint,
       hostSystemAgentActive,
       legacyDynamicToolsFingerprint,
       legacyUserMcpServersFingerprint,
@@ -109,8 +110,8 @@ export async function startOrResumeThread(
     const initialBoundThreadId = binding?.threadId;
     const initialBoundClientId = binding?.clientId;
     const throwIfAborted = () => throwIfCodexThreadLifecycleAborted(params.signal);
-    const prepareRequestContext = () =>
-      prepareCodexThreadRequestContext(params, {
+    const prepareRequestContext = async () => {
+      const context = await prepareCodexThreadRequestContext(params, {
         binding,
         selectionBinding,
         bindingIdentity,
@@ -120,6 +121,11 @@ export async function startOrResumeThread(
         assertCurrent: assert,
         throwIfAborted,
       });
+      // Managed requests own a parent-local carrier. Only uncovered connections
+      // put the catalog in native thread state; recompute after route changes.
+      params.skillsInstructions = params.inferenceRoute ? undefined : input.skillsInstructions;
+      return context;
+    };
     const releaseRetainedThread = (
       threadId: string,
       ownerClientId = initialBoundClientId,
@@ -145,15 +151,10 @@ export async function startOrResumeThread(
             params.pluginThreadConfig?.build(),
           )
         : undefined;
-      const finalConfigPatch = (await params.buildFinalConfigPatch?.({
-        action: "start",
-        ...(requestContext.nativeModelInputTools
-          ? { nativeModelInputTools: requestContext.nativeModelInputTools }
-          : {}),
-      })) ?? {
-        configPatch: params.finalConfigPatch,
-        nativeHookRelayGeneration: params.nativeHookRelayGeneration,
-      };
+      const finalConfigPatch = await prepareCodexThreadFinalConfigPatch(
+        params,
+        requestContext.nativeModelInputTools,
+      );
       const config = lifecycleTiming.measureSync("merge-thread-config", () =>
         applyCodexNativeSkillIsolation(
           mergeCodexThreadConfigs(
@@ -179,6 +180,7 @@ export async function startOrResumeThread(
           dynamicTools: params.dynamicTools,
           appServer: params.appServer,
           developerInstructions: params.developerInstructions,
+          skillsInstructions: params.skillsInstructions,
           config,
           nativeCodeModeEnabled: params.nativeCodeModeEnabled,
           nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
@@ -188,6 +190,7 @@ export async function startOrResumeThread(
           restrictedToolSurface,
           restrictedToolSurfaceInheritedMcpServerNames,
           shellEnvironment: params.shellEnvironment,
+          shellPathPrepend: params.shellPathPrepend,
           disableLoginShell: params.disableLoginShell,
           environmentSelection: params.environmentSelection,
           provisionalAppIds: pluginThreadConfig?.provisionalAppIds,
@@ -212,18 +215,12 @@ export async function startOrResumeThread(
             authProfileId: undefined,
             agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
             preserveNativeModel: true,
-            dynamicToolsFingerprint,
-            dynamicToolsContainDeferred,
+            ...buildCodexThreadBindingPolicy(params, preflight),
             webSearchThreadConfigFingerprint,
-            nativeSkillIsolationFingerprint,
-            userMcpServersFingerprint,
             mcpServersFingerprint:
               params.mcpServersFingerprintEvaluated === true
                 ? params.mcpServersFingerprint
                 : pendingBinding.mcpServersFingerprint,
-            configuredMcpOwnershipVersion: params.configuredMcpOwnershipVersion,
-            networkProxyProfileName: params.appServer.networkProxy?.profileName,
-            networkProxyConfigFingerprint,
             nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
             appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(
               params.appServer,
@@ -232,8 +229,6 @@ export async function startOrResumeThread(
             pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
             pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
             pluginAppPolicyContext: pluginThreadConfig?.policyContext,
-            contextEngine: contextEngineBinding,
-            environmentSelectionFingerprint,
             conversationSourceTransferComplete: true,
           },
         }),
@@ -325,7 +320,6 @@ export async function startOrResumeThread(
         connectionClass: params.appServer.connectionClass,
       });
       await clearCurrentBinding("rotating a stale thread binding");
-      binding = undefined;
     }
     if (
       binding?.threadId &&
@@ -345,7 +339,6 @@ export async function startOrResumeThread(
         },
       );
       await clearCurrentBinding("rotating a GPT-5.6 multi-agent thread binding");
-      binding = undefined;
     }
     selectionBinding = binding;
     // Capability read failures use managed search for this turn but must not
@@ -538,7 +531,6 @@ export async function startOrResumeThread(
           },
         );
         await clearCurrentBinding("rotating a stale thread binding");
-        binding = undefined;
         rotatedContextEngineBinding = true;
       }
     }
@@ -554,7 +546,6 @@ export async function startOrResumeThread(
         threadId: binding.threadId,
       });
       await clearCurrentBinding("rotating a stale thread binding");
-      binding = undefined;
     }
     if (
       binding?.threadId &&
@@ -568,7 +559,6 @@ export async function startOrResumeThread(
         },
       );
       await clearCurrentBinding("rotating a stale thread binding");
-      binding = undefined;
     }
     if (binding?.threadId) {
       const pluginBindingStale = isCodexPluginThreadBindingStale({
@@ -586,7 +576,6 @@ export async function startOrResumeThread(
           },
         );
         await clearCurrentBinding("rotating a stale thread binding");
-        binding = undefined;
       }
     }
     if (binding?.threadId) {
@@ -603,7 +592,6 @@ export async function startOrResumeThread(
           },
         );
         await clearCurrentBinding("rotating a stale thread binding");
-        binding = undefined;
       }
     }
     if (binding?.threadId) {

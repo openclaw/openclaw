@@ -1,4 +1,3 @@
-// Matrix helper module supports verification utils behavior.
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const VERIFICATION_EVENT_PREFIX = "m.key.verification.";

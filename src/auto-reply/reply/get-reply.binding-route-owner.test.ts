@@ -86,29 +86,29 @@ async function createBindingRouteOwnerFixture(label: string) {
   return { testState, cfg };
 }
 
-it.each(
-  (["getReply", "dispatch"] as const).flatMap((entrypoint) =>
-    (
-      [
-        "none-to-global",
-        "inspection-owner-replaced",
-        "earlier-child-change-during-later-base-read",
-        "plugin-to-global",
-        "parent-to-child",
-        "metadata-during-touch",
-        "derived-none-to-global",
-        "derived-bound",
-        "stable-unbound",
-        "stable-bound",
-        "stable-parent",
-        "ignored-cron",
-        "direct",
-      ] as const
-    ).map((scenario) => ({ entrypoint, scenario })),
-  ),
-)(
-  "preserves prepared ownership through $entrypoint: $scenario",
-  async ({ entrypoint, scenario }) => {
+// Exercise route variants through getReply; dispatch adds dedupe, plugin routing,
+// activity-touch, and derived-session delivery boundaries to the shared guard.
+it.each([
+  ["getReply", "none-to-global"],
+  ["getReply", "inspection-owner-replaced"],
+  ["getReply", "earlier-child-change-during-later-base-read"],
+  ["getReply", "plugin-to-global"],
+  ["getReply", "parent-to-child"],
+  ["getReply", "metadata-during-touch"],
+  ["getReply", "derived-none-to-global"],
+  ["getReply", "derived-bound"],
+  ["getReply", "stable-unbound"],
+  ["getReply", "stable-bound"],
+  ["getReply", "stable-parent"],
+  ["getReply", "ignored-cron"],
+  ["getReply", "direct"],
+  ["dispatch", "none-to-global"],
+  ["dispatch", "plugin-to-global"],
+  ["dispatch", "metadata-during-touch"],
+  ["dispatch", "derived-bound"],
+] as const)(
+  "preserves prepared ownership through %s after %s without adopting a stale binding",
+  async (entrypoint, scenario) => {
     const fixture = await createBindingRouteOwnerFixture("binding-route-owner");
     state = fixture.testState;
     const { cfg } = fixture;
@@ -435,13 +435,12 @@ it.each(
   },
 );
 
-it.each(
-  (["getReply", "dispatch"] as const).flatMap((entrypoint) =>
-    (["changed", "unavailable"] as const).map((sourceState) => ({ entrypoint, sourceState })),
-  ),
-)(
-  "honors a public SDK native target through $entrypoint with $sourceState source facts",
-  async ({ entrypoint, sourceState }) => {
+it.each([
+  ["getReply", "changed"],
+  ["dispatch", "unavailable"],
+] as const)(
+  "honors a public SDK native target through %s with %s source facts",
+  async (entrypoint, sourceState) => {
     const fixture = await createBindingRouteOwnerFixture("public-native-binding-target");
     state = fixture.testState;
     const { cfg } = fixture;

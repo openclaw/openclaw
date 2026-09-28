@@ -30,6 +30,7 @@ extension OpenClawChatViewModel {
             startedAt: evt.ts.map(Double.init),
             isError: nil,
             diffStat: nil)
+        pending.runID = evt.runId
         pending.activity = activity
         pending.isComplete = activity.phase == "end"
         self.turnToolCallsById[toolCallId] = pending

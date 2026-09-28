@@ -62,7 +62,7 @@
     }
   },
   "scripts": {
-    "build": "tsdown src/index.ts src/browser.ts src/readiness.ts src/scope-upgrade.ts src/timeouts.ts src/websocket-data.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+    "build": "node --import ../../scripts/tsx.mjs ../../scripts/build-workspace-package.mts gateway-client"
   },
   "dependencies": {
     "@openclaw/gateway-protocol": "workspace:*",

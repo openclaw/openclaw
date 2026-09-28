@@ -27,7 +27,7 @@ describe("Gateway startup catalog", () => {
       bundle_json: JSON.stringify(bundle),
       generated_at: 200,
       min_version: null,
-      source_url: "https://catalog.openclaw.ai/models/v1/catalog.json",
+      source_url: "https://catalog.openclaw.ai/models/v2/catalog.json",
       etag: null,
       last_modified: null,
       checked_at: 200,
@@ -37,12 +37,13 @@ describe("Gateway startup catalog", () => {
       bundledGeneratedAt: () => 100,
       readStoredCatalog: read,
     });
-    const pending = createDeferred<never>();
+    const pending = createDeferred();
     const stopped = new Error("fixture stops bootstrap");
     const prepare = vi
       .spyOn(bootstrap, "prepareGatewayServerBootstrap")
-      .mockImplementationOnce(() => {
-        return pending.promise;
+      .mockImplementationOnce(async () => {
+        await pending.promise;
+        throw stopped;
       });
     const startup = startGatewayServerCore(0).catch((error: unknown) => error);
     try {
@@ -57,9 +58,15 @@ describe("Gateway startup catalog", () => {
       expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")).toEqual(
         absent ? undefined : bundle.providers.anthropic,
       );
-      expect(getRemoteModelCatalogPricing({})).toEqual(absent ? undefined : bundle.pricing);
+      expect(getRemoteModelCatalogPricing({})).toEqual(
+        absent
+          ? undefined
+          : {
+              "anthropic/startup-model": { cost: { input: 1, output: 2 }, explicit: false },
+            },
+      );
     } finally {
-      pending.reject(stopped);
+      pending.resolve();
       const outcome = await startup;
       prepare.mockRestore();
       setRemoteModelCatalogOverlaySourcesForTest();

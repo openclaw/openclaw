@@ -50,13 +50,20 @@ export function toSignalToolResultTestError(value: unknown, fallbackMessage: str
   return value instanceof Error ? value : new Error(fallbackMessage, { cause: value });
 }
 
-export async function waitForSignalToolResultIngressIdle() {
-  const queue = signalToolResultIngressQueue;
+export async function waitForSignalToolResultIngressDispatchIdle() {
   const monitor = signalToolResultIngressMonitor.current;
-  if (!queue || !monitor) {
+  if (!monitor) {
     throw new Error("Signal tool-result ingress monitor is not initialized");
   }
   await monitor.waitForIdle();
+}
+
+export async function waitForSignalToolResultIngressIdle() {
+  const queue = signalToolResultIngressQueue;
+  if (!queue) {
+    throw new Error("Signal tool-result ingress monitor is not initialized");
+  }
+  await waitForSignalToolResultIngressDispatchIdle();
   // Canonical idle owns active delivery synchronization. Deferred debounce claims
   // settle later at turn adoption, so retain a bounded queue drain assertion.
   await vi.waitFor(

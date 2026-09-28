@@ -20,6 +20,7 @@ import {
   type AcpRuntimeTurnResult,
 } from "acpx/runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalLowercaseString as normalizeAgentName } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   AcpRuntimeError,
@@ -32,7 +33,6 @@ import {
   isClaudeAcpCommand,
   isCodexAcpCommand,
   isOpenClawBridgeCommand,
-  normalizeAgentName,
   resolveAgentCommand,
   splitCommandParts,
   type AcpxAgentCommand,

@@ -58,8 +58,6 @@ function isFallbackOnlyToolWarningFinal(payload: ReplyPayload): boolean {
   return !resolveSendableOutboundReplyParts(payload).hasMedia;
 }
 
-export { formatDiscordReplySkip } from "./reply-delivery.js";
-
 type DiscordMessageProcessObserver = {
   onFinalReplyStart?: () => void;
   onFinalReplyDelivered?: () => void;
@@ -290,7 +288,6 @@ export async function processDiscordMessage(
       token,
       accountId,
       rest: reactions.deliveryRest,
-      runtime,
       replyToMode,
       textLimit,
       maxLinesPerMessage,

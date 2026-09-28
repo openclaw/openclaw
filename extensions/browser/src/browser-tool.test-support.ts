@@ -252,8 +252,6 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
 }));
 
 vi.mock("./browser-tool.runtime.js", async () => {
-  const { BrowserToolOutputSchema, createBrowserToolSchema, resolveBrowserToolCapabilities } =
-    await vi.importActual<typeof import("./browser-tool.schema.js")>("./browser-tool.schema.js");
   const actualClient =
     await vi.importActual<typeof import("./browser/client.js")>("./browser/client.js");
   const actualActions = await vi.importActual<typeof import("./browser/client-actions.js")>(
@@ -299,9 +297,6 @@ vi.mock("./browser-tool.runtime.js", async () => {
   return {
     DEFAULT_AI_SNAPSHOT_MAX_CHARS: 40_000,
     DEFAULT_UPLOAD_DIR: "/tmp/openclaw-browser-uploads",
-    BrowserToolOutputSchema,
-    createBrowserToolSchema,
-    resolveBrowserToolCapabilities,
     ...routedClients,
     ...browserConfigMocks,
     ...configMocks,

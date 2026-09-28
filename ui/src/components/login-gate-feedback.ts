@@ -22,10 +22,12 @@ function isPasswordModeErrorCode(code: string | null): boolean {
 type LoginFailureKind =
   | "auth-required"
   | "auth-failed"
+  | "bootstrap-invalid"
   | "trusted-proxy"
   | "auth-rate-limited"
   | "profile-unavailable"
   | "verified-user-required"
+  | "access-denied"
   | "pairing-required"
   | "insecure-context"
   | "origin-not-allowed"
@@ -126,6 +128,25 @@ export function resolveLoginFailureFeedback(
   const lower = normalizeLowercaseStringOrEmpty(rawError);
   const host = formatGatewayHost(params.gatewayUrl);
 
+  if (lastErrorCode === ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID) {
+    return buildFeedback({
+      kind: "bootstrap-invalid",
+      tone: "warn",
+      rawError,
+      titleKey: "login.failure.bootstrapInvalid.title",
+      summaryKey: "login.failure.bootstrapInvalid.summary",
+      primaryCommand: "openclaw dashboard",
+      stepKeys: [
+        "login.failure.bootstrapInvalid.stepOpen",
+        {
+          key: "login.failure.bootstrapInvalid.stepJson",
+          commands: ["openclaw dashboard --json"],
+        },
+      ],
+      docsHref: "https://docs.openclaw.ai/cli/dashboard",
+    });
+  }
+
   if (lastErrorCode === ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE) {
     return buildFeedback({
       kind: "profile-unavailable",
@@ -151,6 +172,25 @@ export function resolveLoginFailureFeedback(
         "login.failure.verifiedUserRequired.stepSharedSecret",
       ],
       docsHref: "https://docs.openclaw.ai/gateway/operator-scopes",
+    });
+  }
+
+  if (lastErrorCode === ConnectErrorDetailCodes.OPERATOR_ACCESS_DENIED) {
+    return buildFeedback({
+      kind: "access-denied",
+      tone: "warn",
+      rawError,
+      titleKey: "login.failure.accessDenied.title",
+      summaryKey: "login.failure.accessDenied.summary",
+      stepKeys: [
+        "login.failure.accessDenied.stepAdmin",
+        {
+          key: "login.failure.accessDenied.stepFindProfile",
+          commands: ["openclaw users list --json"],
+        },
+        "login.failure.accessDenied.stepReconnect",
+      ],
+      docsHref: "https://docs.openclaw.ai/gateway/operator-scopes#named-operator-roles",
     });
   }
 

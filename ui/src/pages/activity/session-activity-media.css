@@ -54,7 +54,7 @@ openclaw-activity-session-media {
   display: none;
 }
 
-.activity-feed__media-note {
-  display: block;
-  margin: 4px 0;
+.activity-feed__media .activity-feed__note-action {
+  align-self: center;
+  flex: none;
 }

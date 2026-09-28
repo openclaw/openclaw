@@ -19,7 +19,7 @@ In practice:
 
 - Avatars and images served under relative paths (for example `/avatars/<id>`) still render, including authenticated avatar routes the UI fetches and converts into local `blob:` URLs.
 - Inline `data:image/...` URLs still render.
-- Local `blob:` URLs created by the Control UI still render.
+- Local `blob:` URLs created by the Control UI still render. Text attachment previews can read those local bytes before the attachment is sent.
 - HTTPS transcript images render in Chat image galleries and Activity previews. The browser contacts the image host directly, disclosing its network address; thumbnails, the expanded image viewer, and neighboring-image preloads send no page referrer.
 - Markdown attachment and Skill Workshop previews keep remote images as click-to-open links. Plugin README and agent-file previews automatically load HTTPS images and contact their hosts directly from the browser.
 - Verified GitHub account avatars render from `avatars.githubusercontent.com`; avatar helpers continue to reject arbitrary remote avatar URLs.
@@ -65,6 +65,13 @@ If you disable gateway auth (not recommended on shared hosts), the avatar route 
 Concurrent profile-photo requests can share a Gravatar lookup. Each HTTP request
 keeps its own timeout and disconnect lifecycle, so one expired or disconnected
 request does not interrupt another client loading the same photo.
+
+Saved profile photos use a bounded in-memory cache tied to the Gateway's profile
+catalog. Committed profile edits and merges invalidate cached representations;
+authentication still runs before cached responses and `304 Not Modified`.
+Cold photo reads have a separate concurrency budget to preserve shared-state read
+capacity. During overload, the endpoint returns `503 Service Unavailable` with
+`Retry-After: 1` instead of a permanent lookup failure.
 
 ## Assistant media route auth
 
@@ -114,7 +121,7 @@ before they expire.
 
 This keeps media rendering compatible with browser-native media elements without putting reusable gateway credentials in visible media URLs.
 
-Uploaded and local chat image previews rendered with native image elements keep an already-loaded image visible during temporary connection or metadata-renewal failures. Retention applies only to that mounted image; it does not extend its media ticket or authorize fresh reads. An explicit missing or access-denied response, or a change to the source, credentials, or access scope, clears the retained image.
+Uploaded and local chat image previews rendered with native image elements keep an already-loaded image visible during temporary connection or metadata-renewal failures. That failure tolerance applies only to the mounted image; it does not extend its media ticket or authorize fresh reads. Scrolling can reuse a successfully decoded image from the bounded in-memory preview cache while its existing metadata and ticket remain valid, without another image download or loading placeholder. An explicit missing or access-denied response, or a change to the source, credentials, or access scope, clears the retained image. When the UI receives a sharing invalidation, a role-configuration change, or the connection close for a role reassignment, cached previews must pass fresh admission before remounting.
 
 Uploaded images also stay visible while a new session's workspace or worktree details arrive. Media access is rechecked in the background without replacing the loaded preview with a loading card.
 

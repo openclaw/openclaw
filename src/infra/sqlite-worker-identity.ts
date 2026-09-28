@@ -6,6 +6,7 @@ import { hasErrnoCode } from "./errno.js";
 export type DatabasePathIdentity = Readonly<{
   key: string;
   canonicalPath: string;
+  birthtime?: string;
 }>;
 
 function existingIdentity(
@@ -16,10 +17,18 @@ function existingIdentity(
   if (!file.isFile()) {
     throw new Error("SQLite worker database path must identify a regular file");
   }
-  if (file.dev !== canonicalFile.dev || file.ino !== canonicalFile.ino) {
+  if (
+    file.dev !== canonicalFile.dev ||
+    file.ino !== canonicalFile.ino ||
+    file.birthtimeNs !== canonicalFile.birthtimeNs
+  ) {
     throw new Error("SQLite database pathname changed during admission");
   }
-  return { key: `file:${file.dev}:${file.ino}`, canonicalPath };
+  return {
+    key: `file:${file.dev}:${file.ino}`,
+    canonicalPath,
+    birthtime: file.birthtimeNs.toString(),
+  };
 }
 
 /** Inspect a native-owner path without replacing its diagnostic for a non-file target. */
@@ -71,6 +80,16 @@ export function readDatabasePathIdentitySync(databasePath: string): DatabasePath
   return identity;
 }
 
+/** Inspect retained aliases only while binding a newly observed database path. */
+export function findChangedDatabasePaths(
+  paths: Iterable<string>,
+  observed: DatabasePathIdentity,
+): string[] {
+  return [...paths].filter(
+    (pathname) => inspectDatabasePathIdentitySync(pathname)?.key !== observed.key,
+  );
+}
+
 export async function readDatabasePathIdentity(
   databasePath: string,
 ): Promise<DatabasePathIdentity> {
@@ -81,9 +100,16 @@ export async function readDatabasePathIdentity(
     throw error;
   });
   if (file) {
-    const canonicalPath = await realpath(databasePath);
-    const canonicalFile = await stat(canonicalPath, { bigint: true });
-    return existingIdentity(file, canonicalFile, canonicalPath);
+    try {
+      const canonicalPath = await realpath(databasePath);
+      const canonicalFile = await stat(canonicalPath, { bigint: true });
+      return existingIdentity(file, canonicalFile, canonicalPath);
+    } catch (error) {
+      if (hasErrnoCode(error, "ENOENT")) {
+        throw new Error("SQLite database pathname changed during admission", { cause: error });
+      }
+      throw error;
+    }
   }
   // Resolve the existing ancestor before a first open so directory aliases share admission.
   const missing: string[] = [];

@@ -1,8 +1,3 @@
-/**
- * sessions_list built-in tool.
- *
- * Lists visible sessions and optionally hydrates titles, last messages, and transcript-derived metadata.
- */
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import pMap from "p-map";
 import { Type } from "typebox";
@@ -39,7 +34,7 @@ import {
   callAgentToolGatewayRequest,
   getInProcessGatewayToolContext,
   hasGatewayToolRoutingContext,
-  type AgentToolGatewayRequestCaller,
+  type AgentToolGatewayRequestCaller as GatewayCaller,
 } from "./in-process-gateway.js";
 import { resolveSessionToolTargetAgentId } from "./scoped-session-access.js";
 import {
@@ -116,8 +111,6 @@ const SessionsListOutputSchema = Type.Object(
   { additionalProperties: false },
 );
 
-type GatewayCaller = AgentToolGatewayRequestCaller;
-
 const SESSIONS_LIST_TRANSCRIPT_FIELD_ROWS = 100;
 const SESSIONS_LIST_MAX_SCAN_PAGES = 5;
 const SESSIONS_LIST_MAX_RESULT_BYTES = 64 * 1024;
@@ -131,7 +124,6 @@ function readSessionRunStatus(value: unknown): SessionRunStatus | undefined {
   return Value.Check(SessionRunStatusSchema, value) ? value : undefined;
 }
 
-/** Creates the sessions-list tool with Gateway-owned listing and bounded enrichment. */
 export function createSessionsListTool(opts?: {
   agentSessionKey?: string;
   requesterAgentIdOverride?: string;
@@ -224,10 +216,9 @@ export function createSessionsListTool(opts?: {
         Boolean(gatewayContext) ||
         hasGatewayToolRoutingContext();
       const hydrateTranscriptFieldsAfterFiltering = includeDerivedTitles || includeLastMessage;
-      const defaultAgentId = requesterAgentId;
       const visibilityGuard = createSessionVisibilityRowChecker({
         action: "list",
-        defaultAgentId,
+        defaultAgentId: requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
         mainSessionKey,
         visibility,

@@ -12,8 +12,9 @@ import { retryAsync } from "openclaw/plugin-sdk/speech-provider";
 import {
   asOptionalRecord,
   normalizeOptionalString,
-  normalizeOptionalString as trimToUndefined,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveGoogleEnvApiKey } from "./gemini-auth.js";
+import type { GoogleGenerateContentResponse } from "./generate-content-response.js";
 import { GOOGLE_PREBUILT_VOICES } from "./voice-catalog.js";
 
 // Implicit default stays on the generateContent path; Gemini 3.8 is an explicit opt-in.
@@ -62,26 +63,11 @@ type GoogleTtsProviderOverrides = {
   speakerName?: string;
 };
 
-type GoogleInlineDataPart = {
-  mimeType?: string;
-  mime_type?: string;
-  data?: string;
-};
-
-type GoogleGenerateSpeechResponse = {
-  candidates?: Array<{
-    content?: {
-      parts?: Array<{
-        text?: string;
-        inlineData?: GoogleInlineDataPart;
-        inline_data?: GoogleInlineDataPart;
-      }>;
-    };
-  }>;
-};
-
-type GoogleInteractionsAudioBlock = GoogleInlineDataPart & {
+type GoogleInteractionsAudioBlock = {
   type?: string;
+  mime_type?: string;
+  mimeType?: string;
+  data?: string;
 };
 
 type GoogleInteractionsSpeechResponse = {
@@ -138,7 +124,7 @@ function assertSupportedGoogleTtsModel(model: string): void {
   }
   if (model.includes("gemini-3.8-") && model.includes("-tts")) {
     throw new Error(
-      `Google TTS model ${model} is not supported. Gemini 3.8 TTS uses the Interactions API; supported models: ${GOOGLE_TTS_INTERACTIONS_MODELS.join(", ")}.`,
+      `Google TTS model ${model} is not supported. OpenClaw sends Gemini 3.8 TTS through the Interactions API; supported models: ${GOOGLE_TTS_INTERACTIONS_MODELS.join(", ")}.`,
     );
   }
 }
@@ -160,13 +146,6 @@ function normalizeGooglePromptTemplate(
   throw new Error(`Invalid Google TTS promptTemplate: ${trimmed}`);
 }
 
-function resolveGoogleTtsEnvApiKey(): string | undefined {
-  return (
-    normalizeOptionalString(process.env.GEMINI_API_KEY) ??
-    normalizeOptionalString(process.env.GOOGLE_API_KEY)
-  );
-}
-
 function resolveGoogleTtsModelProviderApiKey(cfg?: OpenClawConfig): string | undefined {
   return normalizeResolvedSecretInputString({
     value: cfg?.models?.providers?.google?.apiKey,
@@ -181,7 +160,7 @@ function resolveGoogleTtsApiKey(params: {
   return (
     readGoogleTtsProviderConfig(params.providerConfig).apiKey ??
     resolveGoogleTtsModelProviderApiKey(params.cfg) ??
-    resolveGoogleTtsEnvApiKey()
+    resolveGoogleEnvApiKey()
   );
 }
 
@@ -190,7 +169,8 @@ function resolveGoogleTtsBaseUrl(params: {
   providerConfig: GoogleTtsProviderConfig;
 }): string | undefined {
   return (
-    params.providerConfig.baseUrl ?? trimToUndefined(params.cfg?.models?.providers?.google?.baseUrl)
+    params.providerConfig.baseUrl ??
+    normalizeOptionalString(params.cfg?.models?.providers?.google?.baseUrl)
   );
 }
 
@@ -216,14 +196,14 @@ function normalizeGoogleTtsProviderConfig(
 
 function readGoogleTtsProviderConfig(config: SpeechProviderConfig): GoogleTtsProviderConfig {
   const promptTemplate = normalizeGooglePromptTemplate(config.promptTemplate);
-  const personaPrompt = trimToUndefined(config.personaPrompt);
+  const personaPrompt = normalizeOptionalString(config.personaPrompt);
   return {
-    apiKey: trimToUndefined(config.apiKey),
-    baseUrl: trimToUndefined(config.baseUrl),
+    apiKey: normalizeOptionalString(config.apiKey),
+    baseUrl: normalizeOptionalString(config.baseUrl),
     model: normalizeGoogleTtsModel(config.model),
     voiceName: normalizeGoogleTtsVoiceName(config.voiceName ?? config.voice),
-    audioProfile: trimToUndefined(config.audioProfile),
-    speakerName: trimToUndefined(config.speakerName),
+    audioProfile: normalizeOptionalString(config.audioProfile),
+    speakerName: normalizeOptionalString(config.speakerName),
     ...(promptTemplate ? { promptTemplate } : {}),
     ...(personaPrompt ? { personaPrompt } : {}),
   };
@@ -249,8 +229,8 @@ function composeGoogleTtsText(params: {
   speakerName?: string;
 }): string {
   return [
-    trimToUndefined(params.audioProfile),
-    trimToUndefined(params.speakerName) ? `Speaker name: ${params.speakerName}` : undefined,
+    normalizeOptionalString(params.audioProfile),
+    normalizeOptionalString(params.speakerName) ? `Speaker name: ${params.speakerName}` : undefined,
     params.text,
   ]
     .filter((part): part is string => part !== undefined)
@@ -283,7 +263,7 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
 }
 
 function normalizePromptSectionText(value: string | undefined): string | undefined {
-  const trimmed = trimToUndefined(value?.replace(/\r\n?/g, "\n"));
+  const trimmed = normalizeOptionalString(value?.replace(/\r\n?/g, "\n"));
   if (!trimmed) {
     return undefined;
   }
@@ -368,16 +348,14 @@ function wrapPcm16MonoToWav(pcm: Buffer, sampleRate = GOOGLE_TTS_SAMPLE_RATE): B
   return Buffer.concat([header, pcm]);
 }
 
+// Google's 3.8 prompting guidance keeps `style` to delivery direction: speaker labels go in
+// the structured `speaker` field and voice identity comes from the selected voice, so
+// speaker and persona names are never folded into the style text.
 function composeGoogleInteractionsSpeechStyle(params: {
   audioProfile?: string;
-  speakerName?: string;
   personaPrompt?: string;
 }): string | undefined {
-  const style = [
-    trimToUndefined(params.audioProfile),
-    trimToUndefined(params.personaPrompt),
-    trimToUndefined(params.speakerName) ? `Speaker name: ${params.speakerName}` : undefined,
-  ]
+  const style = [trimToUndefined(params.audioProfile), trimToUndefined(params.personaPrompt)]
     .filter((part): part is string => part !== undefined)
     .join("\n\n");
   return style || undefined;
@@ -397,30 +375,11 @@ function extractOpenClawGoogleAudioProfileTranscript(text: string): string | und
   return text.slice(match.index + match[0].length).trim() || undefined;
 }
 
-function prepareGoogleInteractionsSynthesis(params: {
-  text: string;
-  personaPrompt?: string;
-  persona?: { id: string; label?: string };
-}): { text?: string; providerConfig?: { personaPrompt: string } } | undefined {
-  const transcript = extractOpenClawGoogleAudioProfileTranscript(params.text);
-  const label =
-    normalizePromptSectionText(params.persona?.label) ??
-    normalizePromptSectionText(params.persona?.id);
-  const notes = [
-    label ? `Persona: ${label}` : undefined,
-    normalizePromptSectionText(params.personaPrompt),
-  ]
-    .filter((part): part is string => part !== undefined)
-    .join("\n\n");
-  const providerConfig =
-    notes && notes !== trimToUndefined(params.personaPrompt) ? { personaPrompt: notes } : undefined;
-  if (!transcript && !providerConfig) {
-    return undefined;
-  }
-  return {
-    ...(transcript ? { text: transcript } : {}),
-    ...(providerConfig ? { providerConfig } : {}),
-  };
+// Gemini 3.8 speaks the transcript verbatim, so a wrapped audio-profile prompt is reduced to
+// its transcript. The persona label is identity, not delivery, and is not sent as style.
+function prepareGoogleInteractionsSynthesis(text: string): { text: string } | undefined {
+  const transcript = extractOpenClawGoogleAudioProfileTranscript(text);
+  return transcript ? { text: transcript } : undefined;
 }
 
 function stripWavContainerToPcm(audio: Buffer): Buffer {
@@ -474,12 +433,19 @@ function buildGoogleInteractionsTtsBody(params: {
   personaPrompt?: string;
 }): Record<string, unknown> {
   const style = composeGoogleInteractionsSpeechStyle(params);
+  const speaker = trimToUndefined(params.speakerName);
   const textBlock: Record<string, unknown> = {
     type: "text",
     text: params.text,
   };
-  if (style) {
-    textBlock.annotations = [{ type: "speech_metadata", style }];
+  if (style || speaker) {
+    textBlock.annotations = [
+      {
+        type: "speech_metadata",
+        ...(speaker ? { speaker } : {}),
+        ...(style ? { style } : {}),
+      },
+    ];
   }
   return {
     model: params.model,
@@ -492,7 +458,10 @@ function buildGoogleInteractionsTtsBody(params: {
       sample_rate: GOOGLE_TTS_SAMPLE_RATE,
     },
     generation_config: {
-      speech_config: [{ voice: params.voiceName }],
+      // A speaker label binds the voice through the structured speakers map instead of style text.
+      speech_config: speaker
+        ? { speakers: [{ speaker, voice: params.voiceName }] }
+        : [{ voice: params.voiceName }],
     },
   };
 }
@@ -578,7 +547,7 @@ async function synthesizeGoogleTtsPcmOnce(params: {
     }
     try {
       const payload = await readProviderJsonResponse<
-        GoogleGenerateSpeechResponse & GoogleInteractionsSpeechResponse
+        GoogleGenerateContentResponse & GoogleInteractionsSpeechResponse
       >(res, "Google TTS response");
       const encoded = interactions
         ? readGoogleInteractionsAudioData(payload)
@@ -661,22 +630,22 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
                 path: "talk.providers.google.apiKey",
               }),
             }),
-        ...(trimToUndefined(talkProviderConfig.baseUrl) == null
+        ...(normalizeOptionalString(talkProviderConfig.baseUrl) == null
           ? {}
-          : { baseUrl: trimToUndefined(talkProviderConfig.baseUrl) }),
-        ...(trimToUndefined(talkProviderConfig.modelId) == null
+          : { baseUrl: normalizeOptionalString(talkProviderConfig.baseUrl) }),
+        ...(normalizeOptionalString(talkProviderConfig.modelId) == null
           ? {}
           : { model: normalizeGoogleTtsModel(talkProviderConfig.modelId) }),
-        ...(trimToUndefined(talkProviderConfig.voiceId) == null
+        ...(normalizeOptionalString(talkProviderConfig.voiceId) == null
           ? {}
           : { voiceName: normalizeGoogleTtsVoiceName(talkProviderConfig.voiceId) }),
       };
     },
     resolveTalkOverrides: ({ params }) => ({
-      ...(trimToUndefined(params.voiceId) == null
+      ...(normalizeOptionalString(params.voiceId) == null
         ? {}
         : { voiceName: normalizeGoogleTtsVoiceName(params.voiceId) }),
-      ...(trimToUndefined(params.modelId) == null
+      ...(normalizeOptionalString(params.modelId) == null
         ? {}
         : { model: normalizeGoogleTtsModel(params.modelId) }),
     }),
@@ -689,11 +658,7 @@ export function buildGoogleSpeechProvider(): SpeechProviderPlugin {
       const model = normalizeGoogleTtsModel(overrides.model ?? config.model);
       assertSupportedGoogleTtsModel(model);
       if (isGoogleInteractionsTtsModel(model)) {
-        return prepareGoogleInteractionsSynthesis({
-          text: ctx.text,
-          personaPrompt: config.personaPrompt,
-          persona: ctx.persona,
-        });
+        return prepareGoogleInteractionsSynthesis(ctx.text);
       }
       const shouldWrap =
         config.promptTemplate === GOOGLE_AUDIO_PROFILE_PROMPT_TEMPLATE ||

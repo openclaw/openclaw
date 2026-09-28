@@ -6,12 +6,6 @@ import { coerceSecretRef } from "./types.secrets.js";
 
 type UnknownIssueRecord = Record<string, unknown>;
 type ConfigPathSegment = string | number;
-type AllowedValuesCollection = {
-  values: unknown[];
-  incomplete: boolean;
-  hasValues: boolean;
-};
-
 const SECRETREF_POLICY_DOC_URL = "https://docs.openclaw.ai/reference/secretref-credential-surface";
 
 function toConfigPathSegments(path: unknown): ConfigPathSegment[] {
@@ -22,10 +16,6 @@ function toConfigPathSegments(path: unknown): ConfigPathSegment[] {
     const segmentType = typeof segment;
     return segmentType === "string" || segmentType === "number";
   });
-}
-
-function formatConfigPath(segments: readonly ConfigPathSegment[]): string {
-  return segments.join(".");
 }
 
 export function withConfigIssuePath(
@@ -43,8 +33,7 @@ function appendNumericBoundHint(message: string, record: UnknownIssueRecord): st
   // Numeric ceiling/floor hints (too_big / too_small with numeric origin).
   // Append a parenthesized bound alongside Zod's native message,
   // matching the clarity that enum/union rejections get via (allowed: …).
-  const origin = typeof record.origin === "string" ? record.origin : "";
-  if (origin !== "number") {
+  if (record.origin !== "number") {
     return message;
   }
   const inclusive = record.inclusive === true;
@@ -67,69 +56,44 @@ function appendNumericBoundHint(message: string, record: UnknownIssueRecord): st
   return message;
 }
 
-function collectAllowedValuesFromIssue(issue: unknown): AllowedValuesCollection {
+/** Undefined means an open-ended branch prevents an exhaustive allowed-values hint. */
+function collectAllowedValuesFromIssue(issue: unknown): unknown[] | undefined {
   const record = asNullableObjectRecord(issue);
   if (!record) {
-    return { values: [], incomplete: false, hasValues: false };
+    return [];
   }
-  const code = typeof record.code === "string" ? record.code : "";
+  const code = record.code;
   if (code === "invalid_value") {
-    const values = record.values;
-    return Array.isArray(values)
-      ? { values, incomplete: false, hasValues: values.length > 0 }
-      : { values: [], incomplete: true, hasValues: false };
+    return Array.isArray(record.values) ? record.values : undefined;
   }
   if (code === "invalid_type") {
-    return record.expected === "boolean"
-      ? { values: [true, false], incomplete: false, hasValues: true }
-      : { values: [], incomplete: true, hasValues: false };
+    return record.expected === "boolean" ? [true, false] : undefined;
   }
   if (code !== "invalid_union") {
-    return { values: [], incomplete: false, hasValues: false };
+    return [];
   }
   const nested = record.errors;
   if (!Array.isArray(nested) || nested.length === 0) {
-    return { values: [], incomplete: true, hasValues: false };
+    return undefined;
   }
   const collected: unknown[] = [];
   for (const branch of nested) {
     if (!Array.isArray(branch) || branch.length === 0) {
-      return { values: [], incomplete: true, hasValues: false };
+      return undefined;
     }
-    const branchCollected = collectAllowedValuesFromIssueList(branch);
-    if (branchCollected.incomplete || !branchCollected.hasValues) {
-      return { values: [], incomplete: true, hasValues: false };
+    const branchStart = collected.length;
+    for (const branchIssue of branch) {
+      const values = collectAllowedValuesFromIssue(branchIssue);
+      if (!values) {
+        return undefined;
+      }
+      collected.push(...values);
     }
-    collected.push(...branchCollected.values);
-  }
-  return { values: collected, incomplete: false, hasValues: collected.length > 0 };
-}
-
-function collectAllowedValuesFromIssueList(
-  issues: ReadonlyArray<unknown>,
-): AllowedValuesCollection {
-  const collected: unknown[] = [];
-  let hasValues = false;
-  for (const issue of issues) {
-    const branch = collectAllowedValuesFromIssue(issue);
-    if (branch.incomplete) {
-      return { values: [], incomplete: true, hasValues: false };
-    }
-    if (branch.hasValues) {
-      hasValues = true;
-      collected.push(...branch.values);
+    if (collected.length === branchStart) {
+      return undefined;
     }
   }
-  return { values: collected, incomplete: false, hasValues };
-}
-
-function collectAllowedValuesFromUnknownIssue(issue: unknown): unknown[] {
-  const collection = collectAllowedValuesFromIssue(issue);
-  return collection.incomplete || !collection.hasValues ? [] : collection.values;
-}
-
-function isBindingsIssuePath(pathSegments: readonly ConfigPathSegment[]): boolean {
-  return pathSegments[0] === "bindings" && typeof pathSegments[1] === "number";
+  return collected;
 }
 
 function isRouteTypeMismatchIssue(issue: UnknownIssueRecord): boolean {
@@ -147,7 +111,12 @@ function extractBindingsSpecificUnionIssue(
   record: UnknownIssueRecord,
   parentPathSegments: readonly ConfigPathSegment[],
 ): ConfigValidationIssue | null {
-  if (!isBindingsIssuePath(toConfigPathSegments(record.path)) || !Array.isArray(record.errors)) {
+  const issuePath = toConfigPathSegments(record.path);
+  if (
+    issuePath[0] !== "bindings" ||
+    typeof issuePath[1] !== "number" ||
+    !Array.isArray(record.errors)
+  ) {
     return null;
   }
   let matchingBranchIssue: UnknownIssueRecord | null = null;
@@ -204,19 +173,16 @@ function extractBindingsSpecificUnionIssue(
   ];
   const message =
     typeof matchingBranchIssue.message === "string" ? matchingBranchIssue.message : "Invalid input";
-  return withConfigIssuePath(
-    { path: formatConfigPath(fullPathSegments), message },
-    fullPathSegments,
-  );
+  return withConfigIssuePath({ path: fullPathSegments.join("."), message }, fullPathSegments);
 }
 
 export function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
   const record = asNullableObjectRecord(issue);
   const pathSegments = toConfigPathSegments(record?.path);
-  const path = formatConfigPath(pathSegments);
+  const path = pathSegments.join(".");
   const message = typeof record?.message === "string" ? record.message : "Invalid input";
   const enrichedMessage = record ? appendNumericBoundHint(message, record) : message;
-  const allowedValuesSummary = summarizeAllowedValues(collectAllowedValuesFromUnknownIssue(issue));
+  const allowedValuesSummary = summarizeAllowedValues(collectAllowedValuesFromIssue(issue) ?? []);
 
   // Bindings use a plain union because legacy route bindings may omit `type`.
   // When an explicit ACP binding fails strict-object checks, Zod collapses the
@@ -241,10 +207,6 @@ export function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue 
   );
 }
 
-function isObjectSecretRefCandidate(value: unknown): boolean {
-  return isRecord(value) && Boolean(coerceSecretRef(value));
-}
-
 function formatUnsupportedMutableSecretRefMessage(path: string): string {
   return [
     `SecretRef objects are not supported at ${path}.`,
@@ -257,7 +219,7 @@ function formatUnsupportedMutableSecretRefMessage(path: string): string {
 export function collectUnsupportedSecretRefPolicyIssues(raw: unknown): ConfigValidationIssue[] {
   const issues: ConfigValidationIssue[] = [];
   for (const candidate of unsupportedSecretRefSurfacePolicy.collectConfigCandidates(raw)) {
-    if (isObjectSecretRefCandidate(candidate.value)) {
+    if (isRecord(candidate.value) && coerceSecretRef(candidate.value)) {
       issues.push({
         path: candidate.path,
         message: formatUnsupportedMutableSecretRefMessage(candidate.path),

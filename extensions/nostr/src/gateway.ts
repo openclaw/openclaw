@@ -1,3 +1,4 @@
+import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-contract";
 // Nostr plugin module implements gateway behavior.
 import type { StableChannelIngressIdentityParams } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
@@ -5,16 +6,16 @@ import {
   runPassiveAccountLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-plugin-common";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   chunkTextForOutbound,
   sanitizeAssistantVisibleText,
   stripMarkdown,
 } from "openclaw/plugin-sdk/text-chunking";
-import type { PluginRuntime } from "../runtime-api.js";
-import type { ChannelOutboundAdapter, ChannelPlugin } from "./channel-api.js";
 import type { MetricEvent } from "./metrics.js";
 import { startNostrBus, type NostrBusHandle } from "./nostr-bus.js";
 import { normalizePubkey } from "./nostr-key-utils.js";
@@ -183,7 +184,7 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
             return;
           }
 
-          const { dispatchInboundDirectDm } = await import("./inbound-direct-dm-runtime.js");
+          const { dispatchInboundDirectDm } = await import("openclaw/plugin-sdk/channel-inbound");
           await dispatchInboundDirectDm({
             channelRuntime,
             resolveChannelIngress: async (contextBinding) => {
@@ -216,13 +217,9 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
             turnAdoptionLifecycle:
               bindIngressLifecycleToReplyOptions(lifecycle).turnAdoptionLifecycle,
             deliver: async (payload) => {
-              const outboundText =
-                payload && typeof payload === "object" && "text" in payload
-                  ? ((payload as { text?: string }).text ?? "")
-                  : "";
               // Inbound DM replies bypass the outbound adapter; sanitize before
               // Markdown conversion so private tool traces cannot reach a relay.
-              const sanitizedText = sanitizeAssistantVisibleText(outboundText);
+              const sanitizedText = sanitizeAssistantVisibleText(payload.text ?? "");
               if (!sanitizedText) {
                 return;
               }

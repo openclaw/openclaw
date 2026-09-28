@@ -5,7 +5,7 @@ import { useChatAbortRegistryFixture } from "../../gateway/server-methods/chat.a
 import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { getAcpSessionManager, testing as acpTesting } from "../../acp/control-plane/manager.js";
+import { testing as acpTesting, getAcpSessionManager } from "../../acp/control-plane/manager.js";
 import { disposeAcpSessionManagerInstance } from "../../acp/control-plane/manager.lifecycle.js";
 import {
   registerAcpRuntimeBackend,
@@ -111,6 +111,17 @@ it.each(
         throw new Error("backend cancellation failed");
       }
     });
+    const settleCancelRpc = async () => {
+      expect(cancel).toHaveBeenCalledOnce();
+      const result = cancel.mock.results[0];
+      if (result?.type !== "return") {
+        throw new Error("ACP cancellation did not return its runtime promise");
+      }
+      await Promise.allSettled([result.value]);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+    };
     registerAcpRuntimeBackend({
       id: "stop-test",
       runtime: {
@@ -208,7 +219,7 @@ it.each(
         ["running", runningKey],
         ["queued", queuedKey],
       ] as const) {
-        registerSubagentRun({
+        await registerSubagentRun({
           runId,
           childSessionKey,
           requesterSessionKey: sourceKey,
@@ -266,6 +277,9 @@ it.each(
         expect(acpSignal?.aborted).toBe(true);
         expect(stopSettled).toBe(false);
         proceed.resolve();
+        await settleCancelRpc();
+        expect(stopSettled).toBe(false);
+        finishTurn.resolve();
         expect(await outcome).toEqual({ error: nativeError });
         expect(cancel).toHaveBeenCalledOnce();
         return;
@@ -314,6 +328,11 @@ it.each(
         expect(stopSettled).toBe(false);
       }
       proceed.resolve();
+      if (active) {
+        await settleCancelRpc();
+        expect(stopSettled).toBe(false);
+      }
+      finishTurn.resolve();
       expect(await pending).toEqual({
         handled: true,
         aborted: true,
@@ -324,7 +343,6 @@ it.each(
         handle: expect.objectContaining({ sessionKey: acpKey }),
         reason: "fast-abort",
       });
-      finishTurn.resolve();
       await turn;
       expect(readAcpSessionMeta({ cfg, sessionKey: acpKey })?.state).toBe(
         !active && completion === "reject" ? "error" : "idle",

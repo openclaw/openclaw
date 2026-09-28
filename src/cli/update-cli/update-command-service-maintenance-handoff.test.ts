@@ -1,12 +1,17 @@
 // Install the native service fixtures before loading the maintenance owner.
 import "./update-command-service-maintenance.test-support.js";
 import { randomUUID } from "node:crypto";
+import * as fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import * as schtasksExec from "../../daemon/schtasks-exec.js";
+import { ServiceInspectionError } from "../../daemon/service-inspection-error.js";
+import * as serviceMembership from "../../daemon/service-process-membership.js";
+import type { GatewayService } from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
+import * as processAncestry from "../../infra/restart-stale-pids.js";
 import * as openClawTmp from "../../infra/tmp-openclaw-dir.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
@@ -14,6 +19,10 @@ import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
+
+vi.mock("node:fs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:fs")>()),
+}));
 
 const { mocks, withServiceHome } =
   await import("./update-command-service-maintenance.test-support.js");
@@ -26,37 +35,78 @@ function mockHandoffServicePlatform(platform: NodeJS.Platform) {
     existingUri(pathname, hostPlatform),
   );
   mockProcessPlatform(platform);
+  return vi.spyOn(processAncestry, "inspectSelfAndAncestorPidsSync").mockReturnValue({
+    pids: new Set([process.pid, process.ppid, 1]),
+    complete: true,
+  });
+}
+
+function handoffService(home: string, overrides: Partial<GatewayService> = {}, pid = process.ppid) {
+  return createMockGatewayService({
+    readCommand: async () => ({
+      programArguments: [process.execPath, path.join(process.cwd(), "openclaw.mjs"), "gateway"],
+      ...(process.platform === "win32" ? { sourcePath: mocks.taskScriptPath } : {}),
+      environment: { HOME: home },
+    }),
+    readRuntime: async () => ({
+      status: "running",
+      pid,
+      systemd: { managerUid: 2001, controlGroup: "/system.slice/openclaw-gateway.service" },
+    }),
+    isLoaded: async () => true,
+    ...overrides,
+  });
 }
 
 const servingAncestorMaintenanceCases = [
-  ...(["linux", "darwin", "win32"] as const).flatMap((platform) =>
-    (["inspect", "prepare"] as const).flatMap((phase) =>
-      (["ancestor", "inherited environment"] as const).flatMap((ancestry) =>
-        (["current updater", "missing marker"] as const).map((identity) => ({
+  ...(["linux", "darwin", "win32"] as const).flatMap(
+    (platform) =>
+      [
+        { platform, identity: "current updater", phase: "inspect" },
+        { platform, identity: "current updater", phase: "prepare" },
+        { platform, identity: "missing marker", phase: "prepare" },
+        {
           platform,
-          identity,
-          phase,
-          ancestry,
-          authorized: identity === "current updater",
-        })),
-      ),
+          identity: "missing marker",
+          phase: "prepare",
+          ancestry: "inherited environment",
+        },
+        {
+          platform,
+          identity: "missing marker",
+          phase: "prepare",
+          ancestry: "unavailable ancestry",
+        },
+      ] as const,
+  ),
+  ...(["linux", "darwin"] as const).flatMap((platform) =>
+    (["inside", "unknown"] as const).map(
+      (membership) =>
+        ({
+          platform,
+          identity: "missing marker",
+          phase: "prepare",
+          ancestry: "reparented",
+          membership,
+        }) as const,
     ),
   ),
-  { platform: "linux", identity: "missing metadata", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "missing lease", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "replaced owner", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "different root", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "different run", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "stale start identity", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "parent lease", phase: "prepare", authorized: false },
+  { platform: "linux", identity: "missing metadata", phase: "prepare" },
+  { platform: "linux", identity: "missing lease", phase: "prepare" },
+  { platform: "linux", identity: "replaced owner", phase: "prepare" },
+  { platform: "linux", identity: "different root", phase: "prepare" },
+  { platform: "linux", identity: "different run", phase: "prepare" },
+  { platform: "linux", identity: "stale start identity", phase: "prepare" },
+  { platform: "linux", identity: "parent lease", phase: "prepare" },
+  { platform: "linux", identity: "missing run", phase: "inspect" },
+  { platform: "linux", identity: "different run", phase: "inspect" },
+  { platform: "linux", identity: "missing lease", phase: "inspect" },
+  { platform: "linux", identity: "current updater", phase: "prepare", splitRoot: false },
 ] as const;
 
 it.runIf(process.platform === "linux" || process.platform === "darwin").each(
   servingAncestorMaintenanceCases
-    .flatMap((scenario) => [
-      { ...scenario, splitRoot: false },
-      { ...scenario, splitRoot: true },
-    ])
+    .map((scenario) => Object.assign({ splitRoot: true }, scenario))
     .filter(
       // Binding a foreign PID reads native process identity, so only exercise that
       // fixture where the simulated Linux policy matches the actual host.
@@ -66,9 +116,13 @@ it.runIf(process.platform === "linux" || process.platform === "darwin").each(
   "keeps $platform serving-ancestor maintenance bound to the current updater: $identity $phase $ancestry split=$splitRoot",
   (scenario) =>
     withServiceHome(async (home) => {
-      const { platform, identity, phase, authorized, splitRoot } = scenario;
-      const inherited = "ancestry" in scenario && scenario.ancestry === "inherited environment";
-      const gatewayPid = inherited ? 2 : process.ppid;
+      const { platform, identity, phase, splitRoot } = scenario;
+      const authorized = identity === "current updater";
+      const external = "ancestry" in scenario && scenario.ancestry === "inherited environment";
+      const unresolved = "ancestry" in scenario && scenario.ancestry === "unavailable ancestry";
+      const inherited = external || unresolved;
+      const reparented = "membership" in scenario;
+      const gatewayPid = external || reparented ? 2 : process.ppid;
       vi.spyOn(schtasksExec, "execSchtasks").mockResolvedValue({
         code: 0,
         stdout: "<Task><Settings><Enabled>false</Enabled></Settings></Task>",
@@ -120,10 +174,36 @@ it.runIf(process.platform === "linux" || process.platform === "darwin").each(
         }
       }
       // Create the real lease on the host filesystem before simulating its service manager.
-      mockHandoffServicePlatform(platform);
+      const ancestryInspection = mockHandoffServicePlatform(platform);
+      vi.spyOn(serviceMembership, "inspectServiceProcessMembershipSync").mockReturnValue(
+        reparented ? scenario.membership : "outside",
+      );
+      if (reparented && platform === "linux") {
+        const nativeMembership = await vi.importActual<typeof serviceMembership>(
+          "../../daemon/service-process-membership.js",
+        );
+        vi.spyOn(serviceMembership, "inspectServiceProcessMembershipSync").mockImplementation(
+          nativeMembership.inspectServiceProcessMembershipSync,
+        );
+        const readFile = fsSync.readFileSync;
+        vi.spyOn(fsSync, "readFileSync").mockImplementation((file, options) => {
+          if (file === `/proc/${process.pid}/cgroup` || file === `/proc/${gatewayPid}/cgroup`) {
+            if (scenario.membership === "unknown") {
+              throw new Error("Fixture procfs inspection denied");
+            }
+            return `0::/system.slice/openclaw-gateway.service/${file === `/proc/${gatewayPid}/cgroup` ? "worker.service" : "caller"}`;
+          }
+          return readFile(file, options);
+        });
+      }
+      if (unresolved) {
+        ancestryInspection.mockReturnValue({ pids: new Set([process.pid]), complete: false });
+      }
       await withEnvAsync(
         {
           OPENCLAW_UPDATE_RUN_HANDOFF: identity === "missing marker" ? undefined : "1",
+          OPENCLAW_UPDATE_RUN_ID:
+            identity === "missing run" ? undefined : phase === "inspect" ? runId : randomUUID(),
           [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]:
             identity === "missing metadata" ? undefined : metaPath,
           OPENCLAW_SERVICE_MARKER: inherited ? "openclaw" : undefined,
@@ -131,18 +211,7 @@ it.runIf(process.platform === "linux" || process.platform === "darwin").each(
           OPENCLAW_GATEWAY_SERVICE_PID: inherited ? String(gatewayPid) : undefined,
         },
         async () => {
-          const service = createMockGatewayService({
-            readCommand: async () => ({
-              programArguments: [process.execPath, path.join(root, "openclaw.mjs"), "gateway"],
-              environment: { HOME: home },
-            }),
-            readRuntime: async () => ({
-              status: "running",
-              pid: gatewayPid,
-              systemd: { managerUid: 2001 },
-            }),
-            isLoaded: async () => true,
-          });
+          const service = handoffService(home, {}, gatewayPid);
           mocks.service.mockReturnValue(service);
           const inspected = await maybeStopManagedServiceBeforeMutableUpdate({
             root,
@@ -151,19 +220,42 @@ it.runIf(process.platform === "linux" || process.platform === "darwin").each(
             shouldRestart: true,
             jsonMode: true,
             phase,
-            updateRun: { runId, env: process.env },
+            // Candidate admission inspects before supplying the ledger run context.
+            updateRun: phase === "inspect" ? undefined : { runId, env: process.env },
             handoffFromGateway: async () => false,
           });
           expect(inspected.serviceUpdateVerdict?.kind).toBe("owned");
-          if (authorized) {
+          if (authorized || external) {
             expect(inspected.blockMessage).toBeUndefined();
           } else {
-            expect(inspected.blockMessage).toBe(
-              `This command is running inside the gateway process tree (gateway PID ${gatewayPid}).\nStopping or restarting the gateway from here would kill this command, so it cannot safely manage the gateway that owns it.\nRun this command from a shell outside the gateway service.`,
-            );
+            expect(inspected.blockFailureFacts).toEqual([
+              expect.objectContaining({
+                check: "managed-service-preflight",
+                code: reparented
+                  ? scenario.membership === "inside"
+                    ? "inside-gateway-service"
+                    : "service-membership-unverified"
+                  : unresolved
+                    ? "service-ancestry-unverified"
+                    : "inside-gateway-process-tree",
+              }),
+            ]);
+            if (reparented) {
+              expect(inspected.blockMessage).toContain("service");
+            } else if (unresolved) {
+              expect(inspected.blockMessage).toContain(
+                "Process ancestry could not be fully inspected",
+              );
+            } else {
+              expect(inspected.blockMessage).toBe(
+                `This command is running inside the gateway process tree (gateway PID ${gatewayPid}).\nStopping or restarting the gateway from here would kill this command, so it cannot safely manage the gateway that owns it.\nRun this command from a shell outside the gateway service.`,
+              );
+            }
           }
-          expect(service.stop).toHaveBeenCalledTimes(authorized && phase === "prepare" ? 1 : 0);
-          if (authorized && phase === "prepare") {
+          expect(service.stop).toHaveBeenCalledTimes(
+            (authorized || external) && phase === "prepare" ? 1 : 0,
+          );
+          if ((authorized || external) && phase === "prepare") {
             expect(service.stop).toHaveBeenCalledWith(
               expect.objectContaining({
                 updateHandoff: { root: packageRoot, runId },
@@ -210,11 +302,7 @@ it
       let runtimeReads = 0;
       const stop = vi.fn(async () => undefined);
       mocks.service.mockReturnValue(
-        createMockGatewayService({
-          readCommand: async () => ({
-            programArguments: [process.execPath, path.join(root, "openclaw.mjs"), "gateway"],
-            environment: { HOME: home },
-          }),
+        handoffService(home, {
           readRuntime: async () => {
             runtimeReads += 1;
             if (runtimeReads === 2) {
@@ -235,7 +323,6 @@ it
               systemd: { managerUid: 2001 },
             };
           },
-          isLoaded: async () => true,
           stop,
         }),
       );
@@ -261,5 +348,73 @@ it
       );
       expect(runtimeReads).toBe(2);
       expect(stop).not.toHaveBeenCalled();
+    }),
+);
+
+it.runIf(process.platform === "linux" || process.platform === "darwin")(
+  "records a native membership refusal discovered at the stop boundary",
+  () =>
+    withServiceHome(async (home) => {
+      const root = process.cwd();
+      mockHandoffServicePlatform("darwin");
+      const service = handoffService(home, {
+        readRuntime: async () => ({ status: "running", pid: 2 }),
+        stop: async () => {
+          throw new ServiceInspectionError("service-membership-unverified");
+        },
+      });
+      mocks.service.mockReturnValue(service);
+      await expect(
+        maybeStopManagedServiceBeforeMutableUpdate({
+          root,
+          updateInstallKind: "package",
+          shouldRestart: true,
+          jsonMode: true,
+          phase: "prepare",
+        }),
+      ).rejects.toMatchObject({
+        reason: "managed-service-preflight",
+        failureFacts: [expect.objectContaining({ code: "service-membership-unverified" })],
+      });
+      expect(service.start).not.toHaveBeenCalled();
+      expect(service.restart).not.toHaveBeenCalled();
+    }),
+);
+
+it
+  .runIf(process.platform === "linux" || process.platform === "darwin")
+  .each(["inspect", "prepare"] as const)(
+  "refuses an active systemd unit with no MainPID during %s",
+  (phase) =>
+    withServiceHome(async (home) => {
+      const root = process.cwd();
+      mockHandoffServicePlatform("linux");
+      const service = handoffService(home, {
+        readRuntime: async () => ({
+          status: "running",
+          state: "active",
+          subState: "exited",
+          systemd: {
+            managerUid: 2001,
+            tasksCurrent: 1,
+            controlGroup: "/system.slice/openclaw-gateway.service",
+          },
+        }),
+      });
+      mocks.service.mockReturnValue(service);
+      const outcome = await maybeStopManagedServiceBeforeMutableUpdate({
+        root,
+        updateInstallKind: "package",
+        shouldRestart: true,
+        jsonMode: true,
+        phase,
+        handoffFromGateway: async () => false,
+      });
+      expect(outcome.blockFailureFacts).toEqual([
+        expect.objectContaining({ code: "service-membership-unverified" }),
+      ]);
+      expect(service.stop).not.toHaveBeenCalled();
+      expect(service.start).not.toHaveBeenCalled();
+      expect(service.restart).not.toHaveBeenCalled();
     }),
 );

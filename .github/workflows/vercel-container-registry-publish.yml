@@ -3,6 +3,11 @@ name: Vercel Container Registry Publish
 on:
   workflow_call:
     inputs:
+      runner_group:
+        description: Optional dedicated release runner group; empty retains the current labels
+        required: false
+        default: ""
+        type: string
       advisory:
         description: Keep automated release mirroring non-blocking
         required: true
@@ -39,7 +44,7 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.19.0"
+  NODE_VERSION: "24.21.0"
 
 concurrency:
   # Alias promotion is read-then-write. Serialize VCR independently so a slow
@@ -50,7 +55,7 @@ concurrency:
 jobs:
   validate_recovery:
     if: ${{ !inputs.advisory }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     permissions: {}
     steps:
       - name: Require a main-branch recovery dispatch
@@ -92,7 +97,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Docker Builder
-        uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Setup trusted Node runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0

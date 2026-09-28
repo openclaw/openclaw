@@ -36,7 +36,7 @@
   );
   --shell-focus-duration: 200ms;
   --shell-focus-ease: var(--ease-out);
-  height: 100vh;
+  height: var(--shell-content-height);
   display: grid;
   grid-template-columns: var(--shell-nav-width) minmax(0, 1fr);
   grid-template-rows: var(--shell-topbar-height) 1fr;
@@ -90,12 +90,6 @@
   transform: translate(-50%, 0);
 }
 
-@supports (height: 100dvh) {
-  .shell {
-    height: 100dvh;
-  }
-}
-
 .shell--chat {
   overflow: hidden;
 }
@@ -120,7 +114,7 @@
    native macOS hosts without the full strip, they sit below the drag region. */
 .shell-chrome-controls {
   position: fixed;
-  top: 10px;
+  top: calc((var(--rail-header-height) - var(--shell-chrome-control-size)) / 2);
   left: calc(var(--shell-nav-width) + var(--shell-chrome-controls-inset));
   z-index: 45;
   display: flex;
@@ -186,7 +180,7 @@
   stroke-linejoin: round;
 }
 
-.shell:has(.shell-chrome-controls__home) {
+.shell.shell--home-control {
   --shell-controls-width: 140px;
 }
 
@@ -807,7 +801,8 @@ openclaw-settings-save-indicator:empty {
   min-width: 0;
 }
 
-.settings-save-indicator--recovery {
+.settings-save-indicator--recovery,
+.settings-save-indicator--rejected {
   flex-direction: column;
   align-items: flex-start;
   white-space: pre-line;
@@ -1081,7 +1076,7 @@ openclaw-settings-save-indicator:empty {
   z-index: 20;
 }
 
-.shell:has(.sidebar-resizer.dragging) {
+.shell.shell--nav-resizing {
   transition: grid-template-rows var(--shell-focus-duration) var(--shell-focus-ease);
 }
 
@@ -1128,9 +1123,6 @@ openclaw-settings-save-indicator:empty {
   flex-direction: column;
   min-height: 0;
   flex: 1;
-  /* 9px top pad centers the brand row's 30px icons on the app's shared
-     24px chrome centerline (pane-header actions, floating toggles). The
-     macOS app overrides this with its 50px titlebar clearance. */
   padding: 9px var(--sidebar-pad-x) var(--sidebar-pad-bottom);
   border: none;
   border-radius: 0;
@@ -1147,6 +1139,20 @@ openclaw-settings-save-indicator:empty {
   min-height: 34px;
   padding: 0 2px 10px 0;
   flex-shrink: 0;
+}
+
+/* Desktop web shares the pane centerline. Drawers and native windows keep
+   the identity row below their own chrome and retain its separate clearance. */
+:where(html:not(.openclaw-native-macos, .openclaw-native-desktop)) .shell:not(.shell--mobile-nav) {
+  .sidebar-shell {
+    padding-top: 0;
+  }
+
+  .sidebar-brand {
+    min-height: var(--rail-header-height);
+    padding-bottom: 0;
+    margin-bottom: 9px;
+  }
 }
 
 .sidebar-brand__actions {
@@ -1233,6 +1239,13 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-shell__body {
+  /* Ease row backgrounds to clear before the clip instead of leaving an edge. */
+  --sidebar-fade-in:
+    transparent 2px, rgb(0 0 0 / 12%) 8px, rgb(0 0 0 / 50%) 16px, rgb(0 0 0 / 88%) 24px, black 32px;
+  --sidebar-fade-out:
+    black calc(100% - 32px), rgb(0 0 0 / 88%) calc(100% - 24px), rgb(0 0 0 / 50%) calc(100% - 16px),
+    rgb(0 0 0 / 12%) calc(100% - 8px), transparent calc(100% - 2px);
+
   min-height: 0;
   flex: 1;
   display: flex;
@@ -1489,26 +1502,15 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-shell__body--scroll-top {
-  --sidebar-body-mask: linear-gradient(
-    to bottom,
-    black 0,
-    black calc(100% - 23px),
-    transparent 100%
-  );
+  --sidebar-body-mask: linear-gradient(to bottom, var(--sidebar-fade-out));
 }
 
 .sidebar-shell__body--scroll-middle {
-  --sidebar-body-mask: linear-gradient(
-    to bottom,
-    transparent 0,
-    black 23px,
-    black calc(100% - 23px),
-    transparent 100%
-  );
+  --sidebar-body-mask: linear-gradient(to bottom, var(--sidebar-fade-in), var(--sidebar-fade-out));
 }
 
 .sidebar-shell__body--scroll-bottom {
-  --sidebar-body-mask: linear-gradient(to bottom, transparent 0, black 23px, black 100%);
+  --sidebar-body-mask: linear-gradient(to bottom, var(--sidebar-fade-in));
 }
 
 .sidebar-shell__body--scroll-top,
@@ -1559,7 +1561,6 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-recent-sessions__head {
   --sidebar-session-group-action-size: 22px;
-  --sidebar-session-group-count-slot: 24px;
 
   position: relative;
   display: flex;
@@ -1590,7 +1591,8 @@ openclaw-settings-save-indicator:empty {
   cursor: grabbing;
 }
 
-.sidebar-session-group-toggle {
+.sidebar-session-group-toggle,
+.sidebar-session-group-status {
   display: flex;
   align-items: center;
   gap: var(--sidebar-row-gap);
@@ -1677,6 +1679,18 @@ openclaw-settings-save-indicator:empty {
   flex: 0 0 12px;
 }
 
+/* Keep counts on the trailing edge, after any running and attention indicators. */
+.sidebar-session-group-status {
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.sidebar-session-group-status > .sidebar-session-group-count {
+  order: 1;
+  min-width: 24px;
+  text-align: right;
+}
+
 .sidebar-session-group-count {
   flex: 0 0 auto;
   color: var(--muted);
@@ -1730,7 +1744,11 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-session-group-presence--idle {
-  opacity: 0.45;
+  background: var(--warn);
+}
+
+.sidebar-session-group-presence--unknown {
+  background: var(--muted);
 }
 
 .sidebar-session-catalog-load-more {
@@ -1848,54 +1866,6 @@ openclaw-settings-save-indicator:empty {
   stroke-width: 1.7px;
   stroke-linecap: round;
   stroke-linejoin: round;
-}
-
-/* Reserve the new-session button's width so provider counts line up. */
-.sidebar-session-catalog-new-spacer {
-  width: var(--sidebar-session-group-action-size);
-  height: var(--sidebar-session-group-action-size);
-  flex: 0 0 var(--sidebar-session-group-action-size);
-}
-
-.sidebar-session-catalog-action-reserve {
-  display: none;
-}
-
-@media (hover: hover) and (pointer: fine) {
-  /* Keep hover actions immediately left of the fixed count. */
-  .sidebar-session-catalog-grouping,
-  .sidebar-session-catalog-new {
-    position: absolute;
-    top: 50%;
-    right: calc(10px + var(--sidebar-session-group-count-slot));
-    transform: translateY(-50%);
-  }
-
-  .sidebar-recent-sessions__group--catalog-can-create
-    > .sidebar-recent-sessions__head
-    > .sidebar-session-catalog-grouping {
-    right: calc(
-      10px + var(--sidebar-session-group-count-slot) + var(--sidebar-session-group-action-size) +
-        8px
-    );
-  }
-
-  .sidebar-session-catalog-action-reserve {
-    display: block;
-    flex: 0 0
-      calc(var(--sidebar-session-group-count-slot) + var(--sidebar-session-group-action-size));
-  }
-
-  .sidebar-recent-sessions__group--catalog-can-create .sidebar-session-catalog-action-reserve {
-    flex-basis: calc(
-      var(--sidebar-session-group-count-slot) + var(--sidebar-session-group-action-size) +
-        var(--sidebar-session-group-action-size) + 8px
-    );
-  }
-
-  .sidebar-session-catalog-new-spacer {
-    display: none;
-  }
 }
 
 @media (hover: none), (pointer: coarse) {
@@ -2581,7 +2551,8 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-online__person {
   flex: 1;
-  display: flex;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) 38px 54px;
   align-items: center;
   gap: 8px;
   width: 100%;
@@ -2612,8 +2583,21 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-online__person--away {
-  filter: grayscale(0.8);
-  opacity: 0.45;
+  color: var(--muted);
+}
+
+.sidebar-online__person-status {
+  display: block;
+  color: var(--muted);
+  font-size: calc(11px * var(--control-ui-text-scale));
+}
+
+.sidebar-online__person[data-presence-activity="active"] .sidebar-online__person-status {
+  color: var(--ok);
+}
+
+.sidebar-online__person[data-presence-activity="idle"] .sidebar-online__person-status {
+  color: var(--warn);
 }
 
 .sidebar-online__person .viewer-avatar {
@@ -2621,6 +2605,7 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-online__person-name {
+  display: block;
   min-width: 0;
   overflow: hidden;
   color: inherit;
@@ -2630,34 +2615,98 @@ openclaw-settings-save-indicator:empty {
   white-space: nowrap;
 }
 
-.sidebar-online__person-action {
-  display: inline-flex;
+.sidebar-online__person-copy {
+  min-width: 0;
+}
+
+.sidebar-online__columns,
+.sidebar-online__totals {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 38px 54px;
   align-items: center;
-  justify-content: center;
-  flex: none;
-  margin-left: auto;
+  gap: 8px;
+  padding: 4px 8px;
   color: var(--muted);
-  opacity: 0;
-  transition: opacity var(--duration-fast) ease;
+  font-size: calc(10px * var(--control-ui-text-scale));
 }
 
-.sidebar-online__person:hover .sidebar-online__person-action,
-.sidebar-online__person:focus-visible .sidebar-online__person-action,
-.sidebar-online__person[aria-expanded="true"] .sidebar-online__person-action {
-  opacity: 1;
+.sidebar-online__column,
+.sidebar-online__filter,
+.sidebar-online__retry {
+  min-width: 0;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: right;
 }
 
-.sidebar-online__person-action svg {
-  display: block;
-  width: 13px;
-  height: 13px;
+.sidebar-online__column[aria-pressed="true"],
+.sidebar-online__filter[aria-pressed="true"] {
+  color: var(--ok);
+}
+
+.sidebar-online__filter {
+  justify-self: start;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  text-align: left;
+}
+
+.sidebar-online__column:focus-visible,
+.sidebar-online__filter:focus-visible,
+.sidebar-online__retry:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.sidebar-online__count {
+  color: var(--text);
+  font-size: calc(12px * var(--control-ui-text-scale));
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.sidebar-online__count--running {
+  justify-self: end;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+  color: var(--ok);
+}
+
+.sidebar-online__count--zero {
+  padding-right: 6px;
+  color: var(--muted);
+}
+
+.sidebar-online__totals {
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+}
+
+.sidebar-online__totals [data-session-total] {
+  text-align: right;
+}
+
+.sidebar-online__totals [data-session-total="running"] {
+  padding-right: 6px;
+  color: var(--ok);
+}
+
+.sidebar-online__empty,
+.sidebar-online__retry {
+  margin: 4px 8px;
+  color: var(--muted);
+  font-size: calc(11px * var(--control-ui-text-scale));
+  text-align: left;
 }
 
 @media (hover: none), (pointer: coarse) {
-  .sidebar-online__person-action {
-    opacity: 1;
-  }
-
   .sidebar-online__person {
     min-height: 44px;
   }
@@ -2666,8 +2715,7 @@ openclaw-settings-save-indicator:empty {
 @media (prefers-reduced-motion: reduce) {
   .sidebar-recent-sessions__head,
   .sidebar-recent-sessions__head .sidebar-recent-sessions__label-text,
-  .sidebar-online__person,
-  .sidebar-online__person-action {
+  .sidebar-online__person {
     transition: none;
   }
 }
@@ -3210,8 +3258,8 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   padding: 0 8px;
   border: 0;
   border-radius: var(--menu-item-radius);
-  background: var(--accent);
-  color: var(--accent-foreground);
+  background: var(--primary);
+  color: var(--primary-foreground);
   cursor: var(--cursor-action);
   font: inherit;
   font-size: calc(12px * var(--control-ui-text-scale));
@@ -4031,7 +4079,7 @@ button.gateway-status:focus-visible {
   background: var(--bg);
 }
 
-.shell:not(.shell--mobile-nav):has(> .shell-connection-status) {
+.shell:not(.shell--mobile-nav).shell--connection-status {
   grid-template-rows: var(--shell-topbar-height) minmax(0, 1fr) auto;
   grid-template-areas:
     "nav topbar"
@@ -4474,7 +4522,7 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
 }
 
 /* The separate status row owns bottom-dock clearance while navigation is hidden. */
-.shell:not(.shell--mobile-nav):has(> .shell-connection-status) > .content {
+.shell:not(.shell--mobile-nav).shell--connection-status > .content {
   margin-bottom: 0;
 }
 
@@ -4488,11 +4536,11 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   margin-top: 20px;
 }
 
-.shell--settings .content:has(> .connection-action-block) {
+.shell--settings .content.content--actions-blocked {
   padding-top: 0;
 }
 
-.shell--settings .content:has(> .connection-action-block) > openclaw-router-outlet {
+.shell--settings .content.content--actions-blocked > openclaw-router-outlet {
   display: block;
   margin-top: 0;
   padding-top: var(--settings-content-block-start-padding);
@@ -4592,7 +4640,7 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
 }
 
 /* Embedded pages own their spacing and scrolling inside the frame. */
-.content:has(.plugin-tab-embed) {
+.content.content--plugin-embed {
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -4600,11 +4648,20 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   gap: 0;
 }
 
-.content:has(.plugin-tab-embed) > * + * {
+/* The embed owner reports when its authenticated frame actually renders. */
+.content.content--plugin-embed
+  > :is(
+    .connection-action-block,
+    openclaw-sidebar-attention,
+    openclaw-sidebar-update-card,
+    .native-embed-header,
+    .settings-embed-list,
+    openclaw-router-outlet
+  ) {
   margin-top: 0;
 }
 
-.content:has(.plugin-tab-embed) > openclaw-router-outlet {
+.content.content--plugin-embed > openclaw-router-outlet {
   display: flex;
   flex: 1 1 0;
   min-width: 0;
@@ -4639,8 +4696,8 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
    window title, trailing actions at the right edge, intro text below. The
    row matches the Mac app titlebar (52px injected by DashboardWindowController;
    50px mirrors .macos-titlebar-controls for older builds) so the traffic lights
-   and hosted buttons share its centerline; the collapsed-sidebar web cluster in
-   browsers (top: 10px, 32px buttons) lands on the same centerline. The side
+   and hosted buttons share its centerline; browser rows use the shared rail
+   height below to align with sidebar and collapsed-navigation controls. The side
    columns reserve that cluster on the left and the trailing cell on the right,
    so the centered cell stays exact at normal widths and merely shifts, never
    overlaps, in narrow columns. Older Mac builds drop the web cluster below the
@@ -4651,7 +4708,7 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   --page-toolbar-clearance: 0px;
   --page-toolbar-reserve: 0px;
 
-  &:has(.content-header:not(.content-header--stacked)):not(:has(> .connection-action-block)) {
+  &.content--toolbar-header:not(.content--actions-blocked) {
     padding-top: 0;
   }
 
@@ -4717,6 +4774,12 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   }
 }
 
+:where(html:not(.openclaw-native-macos, .openclaw-native-desktop))
+  .shell:not(.shell--mobile-nav):not(.shell--settings)
+  .content:not(.content--chat) {
+  --page-toolbar-height: var(--rail-header-height);
+}
+
 html.openclaw-native-macos
   .shell:not(.shell--mobile-nav):not(.shell--settings)
   .content:not(.content--chat) {
@@ -4759,7 +4822,7 @@ html.openclaw-native-desktop
   }
 
   /* Stacked headers and pages without a toolbar clear floating chrome with padding. */
-  &:not(:has(.content-header:not(.content-header--stacked), > .connection-action-block)) {
+  &:not(.content--toolbar-header, .content--actions-blocked) {
     padding-top: calc(var(--page-toolbar-height) + var(--page-toolbar-clearance) + 16px);
   }
 }

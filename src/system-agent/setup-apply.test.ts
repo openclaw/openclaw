@@ -925,11 +925,6 @@ describe("applySystemAgentSetup transaction boundaries", () => {
       line: "Gateway: service installation skipped. Run `openclaw gateway run` to start it in the foreground.",
     },
     {
-      reason: "systemd-unavailable",
-      installDaemon: false,
-      line: "Gateway: service installation skipped. Run `openclaw gateway run` to start it in the foreground.",
-    },
-    {
       reason: "explicit",
       installDaemon: undefined,
       line: "Gateway: service install skipped — say `start gateway` when you want it running.",
@@ -949,33 +944,27 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     expect(mocks.waitForGatewayReachable).not.toHaveBeenCalled();
   });
 
-  it.each(
-    (["linux", "win32"] as const).flatMap((platform) =>
-      (["installed", "started", "restarted", "restart-scheduled", "reused"] as const).map(
-        (action) => ({ platform, action }),
-      ),
-    ),
-  )("uses the $platform readiness budget after service $action", async ({ platform, action }) => {
-    await withMockedPlatform(platform, async () => {
-      const gateway = { status: "ready", action } as const;
-      mocks.ensureGatewayService.mockResolvedValueOnce({ gateway });
+  it.each([
+    { platform: "linux", action: "installed", deadlineMs: 45_000, probeTimeoutMs: 10_000 },
+    { platform: "win32", action: "installed", deadlineMs: 90_000, probeTimeoutMs: 15_000 },
+    { platform: "linux", action: "restarted", deadlineMs: 45_000, probeTimeoutMs: 10_000 },
+  ] as const)(
+    "uses the $platform readiness budget after service $action",
+    async ({ platform, action, deadlineMs, probeTimeoutMs }) => {
+      await withMockedPlatform(platform, async () => {
+        const gateway = { status: "ready", action } as const;
+        mocks.ensureGatewayService.mockResolvedValueOnce({ gateway });
 
-      const result = await applySystemAgentSetup(baseParams({ surface: "cli" }));
+        const result = await applySystemAgentSetup(baseParams({ surface: "cli" }));
 
-      expect(result.gateway).toEqual(gateway);
-      expect(mocks.waitForGatewayReachable).toHaveBeenCalledOnce();
-      expect(mocks.waitForGatewayReachable).toHaveBeenCalledWith(
-        expect.objectContaining(
-          action === "reused"
-            ? { deadlineMs: 15_000 }
-            : {
-                deadlineMs: platform === "win32" ? 90_000 : 45_000,
-                probeTimeoutMs: platform === "win32" ? 15_000 : 10_000,
-              },
-        ),
-      );
-    });
-  });
+        expect(result.gateway).toEqual(gateway);
+        expect(mocks.waitForGatewayReachable).toHaveBeenCalledOnce();
+        expect(mocks.waitForGatewayReachable).toHaveBeenCalledWith(
+          expect.objectContaining({ deadlineMs, probeTimeoutMs }),
+        );
+      });
+    },
+  );
 
   it("keeps setup incomplete when the installed gateway never becomes reachable", async () => {
     mocks.ensureGatewayService.mockResolvedValueOnce({

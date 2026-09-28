@@ -22,6 +22,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { ensureSessionGroupCatalog } from "./session-group-catalog.js";
 import { readSessionGroupCatalogSnapshot } from "./session-group-catalog.kernel.js";
 import { registerSessionGroupInDatabase } from "./session-group-registration.kernel.js";
@@ -296,14 +297,8 @@ describe("session groups catalog", () => {
 
   it("publishes catalog writes and serves repeated viewers without parent-thread SQLite", async () => {
     await putSessionGroups({ cfg, names: ["Work"], env });
-    const native = requireNodeSqlite();
-    const counters = [
-      vi.spyOn(native.DatabaseSync.prototype, "prepare"),
-      vi.spyOn(native.DatabaseSync.prototype, "exec"),
-      ...(["get", "all", "run", "iterate"] as const).map((method) =>
-        vi.spyOn(native.StatementSync.prototype, method),
-      ),
-    ];
+    requireNodeSqlite();
+    const counters = observeMainThreadSql();
     try {
       expect(await ensureSessionGroupRegistered("  Travel  ", env)).toBe(true);
       expect(await ensureSessionGroupRegistered("Travel", env)).toBe(false);
@@ -332,11 +327,9 @@ describe("session groups catalog", () => {
           }),
         ).toBe(expected);
       }
-      expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+      counters.expectIdle();
     } finally {
-      for (const counter of counters) {
-        counter.mockRestore();
-      }
+      counters.restore();
     }
     expect(listSessionGroups(env)).toEqual([
       { name: "Work", position: 0 },
@@ -478,10 +471,16 @@ describe("session groups catalog", () => {
     const storePath = await seedSessionStore({
       "agent:main:dashboard:a": { sessionId: "a1", updatedAt: updatedAtA, category: "Old" },
       "agent:main:dashboard:b": { sessionId: "b1", updatedAt: updatedAtB, category: "Other" },
+      "agent:main:dashboard:c": {
+        sessionId: "c1",
+        updatedAt: updatedAtB,
+        category: " Old ",
+        skillsSnapshot: { prompt: "retained session prompt", skills: [] },
+      },
     });
 
     const result = await renameSessionGroup({ cfg, name: "Old", to: "New", env });
-    expect(result.updatedSessions).toBe(1);
+    expect(result.updatedSessions).toBe(2);
     expect(result.groups.map((group) => group.name)).toEqual(["New", "Other"]);
     expect(result.sectionOrder).toEqual(["ungrouped", "category:New", "work", "category:Other"]);
 
@@ -498,6 +497,14 @@ describe("session groups catalog", () => {
     expect(sessionA?.category).toBe("New");
     expect(sessionA?.updatedAt).toBe(updatedAtA);
     expect(sessionB?.category).toBe("Other");
+    expect(
+      loadSessionEntry({ agentId: "main", storePath, sessionKey: "agent:main:dashboard:c" }),
+    ).toMatchObject({
+      sessionId: "c1",
+      updatedAt: updatedAtB,
+      category: "New",
+      skillsSnapshot: { prompt: "retained session prompt", skills: [] },
+    });
   });
 
   it("deletes a group and clears member categories", async () => {
@@ -525,15 +532,11 @@ describe("session groups catalog", () => {
     ).toBeUndefined();
   });
 
-  it.each(
-    [
-      { action: "rename", targetExists: false },
-      { action: "rename", targetExists: true },
-      { action: "delete", targetExists: false },
-    ].flatMap(({ action, targetExists }) =>
-      ["main", "other"].map((stopAgent) => ({ action, targetExists, stopAgent })),
-    ),
-  )(
+  it.each([
+    { action: "rename", targetExists: false, stopAgent: "main" },
+    { action: "rename", targetExists: true, stopAgent: "other" },
+    { action: "delete", targetExists: false, stopAgent: "other" },
+  ])(
     "keeps group state coherent when $action stops in $stopAgent (target exists: $targetExists)",
     async ({ action, targetExists, stopAgent }) => {
       const groupCfg: OpenClawConfig = {

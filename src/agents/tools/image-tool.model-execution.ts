@@ -29,7 +29,7 @@ import {
 } from "../model-fallback-image.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import { resolveConfiguredImageModelRefs, type ImageModelConfig } from "./image-tool.helpers.js";
-import { applyImageModelConfigDefaults } from "./media-tool-shared.js";
+import { applyAgentDefaultModelConfig } from "./model-config.helpers.js";
 
 type ImageModelExecutionDeps = {
   buildProviderRegistry: typeof buildMediaUnderstandingRegistry;
@@ -42,20 +42,6 @@ type ImageModelExecutionDeps = {
     cfg?: OpenClawConfig;
   }) => MediaUnderstandingProvider | undefined;
 };
-
-export function resolveImageToolMaxTokens(
-  modelMaxTokens: number | undefined,
-  requestedMaxTokens = 4096,
-) {
-  if (
-    typeof modelMaxTokens !== "number" ||
-    !Number.isFinite(modelMaxTokens) ||
-    modelMaxTokens <= 0
-  ) {
-    return requestedMaxTokens;
-  }
-  return Math.min(requestedMaxTokens, modelMaxTokens);
-}
 
 export function resolveImageModelConfigForOverride(params: {
   cfg?: OpenClawConfig;
@@ -90,7 +76,7 @@ function resolveCompressionModelCandidates(params: {
     : null;
   const effectiveImageModelConfig = overrideConfig ?? configuredImageModelConfig;
   const effectiveCfg = effectiveImageModelConfig
-    ? applyImageModelConfigDefaults(params.cfg, effectiveImageModelConfig)
+    ? applyAgentDefaultModelConfig(params.cfg, "imageModel", effectiveImageModelConfig)
     : params.cfg;
   return resolveAllowedImageFallbackCandidates({
     cfg: effectiveCfg,
@@ -213,7 +199,11 @@ export async function runImagePrompt(
   model: string;
   attempts: Array<{ provider: string; model: string; error: string }>;
 }> {
-  const effectiveCfg = applyImageModelConfigDefaults(params.cfg, params.imageModelConfig);
+  const effectiveCfg = applyAgentDefaultModelConfig(
+    params.cfg,
+    "imageModel",
+    params.imageModelConfig,
+  );
   const providerCfg: OpenClawConfig = effectiveCfg ?? {};
   const preparedProviders =
     params.preparedModelRuntime?.mediaCapabilityProviders?.mediaUnderstandingProviders;
@@ -272,7 +262,7 @@ export async function runImagePrompt(
           provider,
           model: modelId,
           prompt: params.prompt,
-          maxTokens: resolveImageToolMaxTokens(undefined),
+          maxTokens: 4096,
           timeoutMs,
           ...(signal ? { signal } : {}),
           cfg: providerCfg,
@@ -332,9 +322,7 @@ export async function runImagePrompt(
   });
 
   return {
-    text: result.result.text,
-    provider: result.result.provider,
-    model: result.result.model,
+    ...result.result,
     attempts: result.attempts.map((attempt) => ({
       provider: attempt.provider,
       model: attempt.model,

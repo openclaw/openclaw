@@ -1,5 +1,9 @@
 import { html, nothing } from "lit";
 import {
+  createRuntimeToolMatcher,
+  createToolPolicyMatcher,
+} from "../../../../src/agents/tool-policy-match.js";
+import {
   normalizeToolList,
   normalizeToolPolicyName,
   resolveToolProfilePolicy,
@@ -34,7 +38,6 @@ import {
   renderToolPolicyDetails,
   resolveToolAccessView,
 } from "./tool-access-diagnostics.ts";
-import { isAllowedByPolicy, matchesList } from "./tool-policy.ts";
 
 registerSettingsEnglish();
 
@@ -49,10 +52,17 @@ function renderToolMetaBadges(labels: string[]) {
   `;
 }
 
-function buildCatalogBadgeLabels(section: AgentToolSection, tool: AgentToolEntry): string[] {
+function buildRowStatusBadges(
+  section: AgentToolSection,
+  tool: AgentToolEntry,
+  activeEntry: ToolsEffectiveEntry | null,
+): string[] {
   const source = tool.source ?? section.source;
   const pluginId = tool.pluginId ?? section.pluginId;
   const badges: string[] = [];
+  if (activeEntry && !activeEntry.deniedBySession) {
+    badges.push(t("agentTools.inPreview"));
+  }
   if (source === "plugin" && pluginId) {
     badges.push(t("agentTools.plugin", { id: pluginId }));
   } else if (source === "core") {
@@ -64,33 +74,19 @@ function buildCatalogBadgeLabels(section: AgentToolSection, tool: AgentToolEntry
   return badges;
 }
 
-function buildRowStatusBadges(params: {
-  section: AgentToolSection;
-  tool: AgentToolEntry;
-  activeEntry: ToolsEffectiveEntry | null;
-}) {
-  const badges = buildCatalogBadgeLabels(params.section, params.tool);
-  if (params.activeEntry && !params.activeEntry.deniedBySession) {
-    badges.unshift(t("agentTools.inPreview"));
-  }
-  return badges;
-}
-
-function formatToolPolicyState(params: {
+function formatToolPolicyLabels(params: {
   allowed: boolean;
   baseAllowed: boolean;
   denied: boolean;
 }) {
-  if (params.denied) {
-    return t("agentTools.disabledByOverride");
-  }
-  if (params.allowed && params.baseAllowed) {
-    return t("agentTools.enabledByProfile");
-  }
-  if (params.allowed) {
-    return t("agentTools.enabledByOverride");
-  }
-  return t("agentTools.notIncluded");
+  const [state, summary]: [string, string] = params.denied
+    ? ["agentTools.disabledByOverride", "agentTools.overrideOff"]
+    : params.allowed
+      ? params.baseAllowed
+        ? ["agentTools.enabledByProfile", "agentTools.enabled"]
+        : ["agentTools.enabledByOverride", "agentTools.overrideOn"]
+      : ["agentTools.notIncluded", "agentTools.profileOff"];
+  return { state: t(state), summary: t(summary) };
 }
 
 function formatToolSourceLabel(section: AgentToolSection, tool: AgentToolEntry) {
@@ -102,30 +98,9 @@ function formatToolSourceLabel(section: AgentToolSection, tool: AgentToolEntry) 
   return t("agentTools.builtIn");
 }
 
-function formatToolAccessSummary(params: {
-  allowed: boolean;
-  baseAllowed: boolean;
-  denied: boolean;
-}) {
-  if (params.denied) {
-    return t("agentTools.overrideOff");
-  }
-  if (params.allowed && params.baseAllowed) {
-    return t("agentTools.enabled");
-  }
-  if (params.allowed) {
-    return t("agentTools.overrideOn");
-  }
-  return t("agentTools.profileOff");
-}
-
 function toToolAnchorId(toolId: string) {
   const safe = normalizeToolPolicyName(toolId).replace(/[^a-z0-9_-]+/g, "-");
   return `agent-tool-${safe}`;
-}
-
-function flattenEffectiveTools(groups: ToolsEffectiveResult["groups"] | null | undefined) {
-  return (groups ?? []).flatMap((group) => group.tools);
 }
 
 const MAX_RUNTIME_TOOL_CHIPS = 12;
@@ -255,16 +230,21 @@ export function renderAgentTools(params: {
     : Array.isArray(agentTools.alsoAllow)
       ? agentTools.alsoAllow
       : [];
-  const deny = hasAgentAllow ? [] : Array.isArray(agentTools.deny) ? agentTools.deny : [];
+  const configuredDeny = Array.isArray(agentTools.deny) ? agentTools.deny : [];
+  const deny = hasAgentAllow ? [] : configuredDeny;
   const basePolicy = hasAgentAllow
-    ? { allow: agentTools.allow ?? [], deny: agentTools.deny ?? [] }
+    ? { allow: agentTools.allow ?? [], deny: configuredDeny }
     : resolveToolProfilePolicy(profile);
   const toolIds = toolSections.flatMap((section) => section.tools.map((tool) => tool.id));
+  const matchesBase = createToolPolicyMatcher(basePolicy);
+  const matchesAllow = createRuntimeToolMatcher(alsoAllow);
+  // Write implies patch access only in allow lists; denials match the named tool.
+  const matchesDeny = createRuntimeToolMatcher(deny, false);
 
   const resolveAllowed = (toolId: string) => {
-    const baseAllowed = isAllowedByPolicy(toolId, basePolicy);
-    const extraAllowed = matchesList(toolId, alsoAllow);
-    const denied = matchesList(toolId, deny);
+    const baseAllowed = matchesBase(toolId);
+    const extraAllowed = matchesAllow(toolId);
+    const denied = matchesDeny(toolId);
     const allowed = (baseAllowed || extraAllowed) && !denied;
     return {
       allowed,
@@ -275,7 +255,7 @@ export function renderAgentTools(params: {
   const enabledCount = toolIds.filter((toolId) => resolveAllowed(toolId).allowed).length;
   const { previewStatus, previewResult, unverifiedReason, toolAccess, diagnosticMap } =
     resolveToolAccessView(params);
-  const effectiveTools = flattenEffectiveTools(previewResult?.groups);
+  const effectiveTools = (previewResult?.groups ?? []).flatMap((group) => group.tools);
   const uniqueEffectiveTools = Array.from(
     new Map(
       effectiveTools
@@ -595,12 +575,8 @@ export function renderAgentTools(params: {
                     const resolved = resolveAllowed(tool.id);
                     const activeEntry = activeToolMap.get(normalizeToolPolicyName(tool.id)) ?? null;
                     const defaultProfiles = tool.defaultProfiles ?? [];
-                    const rowBadges = buildRowStatusBadges({
-                      section,
-                      tool,
-                      activeEntry,
-                    });
-                    const accessSummary = formatToolAccessSummary(resolved);
+                    const rowBadges = buildRowStatusBadges(section, tool, activeEntry);
+                    const policyLabels = formatToolPolicyLabels(resolved);
                     const diagnostic = diagnosticMap.get(normalizeToolPolicyName(tool.id)) ?? null;
                     const { summary: runtimeSummary, reason: availabilityReason } =
                       resolveToolAvailability(
@@ -623,7 +599,7 @@ export function renderAgentTools(params: {
                           <dl class="agent-tool-summary__facts">
                             <div class="agent-tool-summary__fact">
                               <dt class="label">${t("agentTools.access")}</dt>
-                              <dd>${accessSummary}</dd>
+                              <dd>${policyLabels.summary}</dd>
                             </div>
                             <div class="agent-tool-summary__fact">
                               <dt class="label">${t("agentTools.previewTitle")}</dt>
@@ -658,7 +634,7 @@ export function renderAgentTools(params: {
                           <div class="agent-tool-details-strip">
                             <div class="agent-tool-detail agent-tool-detail--inline">
                               <div class="label">${t("agentTools.access")}</div>
-                              <div>${formatToolPolicyState(resolved)}</div>
+                              <div>${policyLabels.state}</div>
                             </div>
                             <div class="agent-tool-detail agent-tool-detail--inline">
                               <div class="label">${t("agentTools.source")}</div>
@@ -669,14 +645,7 @@ export function renderAgentTools(params: {
                                 ? html`
                                     <div class="agent-tool-detail agent-tool-detail--inline">
                                       <div class="label">${t("agentTools.defaultPresets")}</div>
-                                      <div class="agent-tool-badges">
-                                        ${defaultProfiles.map(
-                                          (profileId) =>
-                                            html`<span class="settings-row__value"
-                                              >${profileId}</span
-                                            >`,
-                                        )}
-                                      </div>
+                                      ${renderToolMetaBadges(defaultProfiles)}
                                     </div>
                                   `
                                 : nothing

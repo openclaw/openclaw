@@ -3,7 +3,7 @@ import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
 import { coalesceStreamRuns } from "./chat-thread-grouping.ts";
-import { projectTranscriptMessageIndex } from "./components/chat-transcript-message-index.ts";
+import { projectTranscriptIndex } from "./components/chat-transcript-message-index.ts";
 import { rememberLiveTerminalRun } from "./terminal-message-identity.ts";
 
 const person = (id: string) => ({
@@ -49,6 +49,13 @@ function props(overrides: Partial<BuildChatItemsProps> = {}): BuildChatItemsProp
 function project(input: BuildChatItemsProps) {
   return coalesceAgentRunFrames(coalesceStreamRuns(buildChatItems(input)));
 }
+function indexItems(
+  items: ReturnType<typeof coalesceAgentRunFrames>,
+  labels: Parameters<typeof projectTranscriptIndex>[2],
+) {
+  const chain = { collapsedItems: items, transcriptItems: items, continuations: new Map() };
+  return projectTranscriptIndex(chain, new Map(), labels);
+}
 function completed() {
   return rememberLiveTerminalRun(
     { role: "assistant", content: "The answer being read.", timestamp: 40 },
@@ -57,9 +64,13 @@ function completed() {
 }
 
 describe("live terminal continuity with pending collaborators", () => {
-  it.each([null, "active"])(
-    "keeps local input before progress through custody with runId=%s",
-    (runId) => {
+  it.each([
+    { runId: null, localQueue: true },
+    { runId: "active", localQueue: true },
+    { runId: "active", localQueue: false },
+  ])(
+    "keeps the active input before progress through custody with runId=$runId, localQueue=$localQueue",
+    ({ runId, localQueue }) => {
       const local = {
         id: "active-local",
         sendRunId: "active",
@@ -81,10 +92,13 @@ describe("live terminal continuity with pending collaborators", () => {
         },
       };
       for (const pendingInputs of [[], [accepted], [accepted, pending]]) {
+        if (!localQueue && pendingInputs.length === 0) {
+          continue;
+        }
         const rows = buildChatItems(
           props({
             messages: [],
-            queue: [local],
+            queue: localQueue ? [local] : [],
             runId,
             stream: "",
             pendingInputs,
@@ -261,12 +275,11 @@ describe("live terminal continuity with pending collaborators", () => {
     const stream = frame.parts.find((part) => part.kind === "stream-run");
     const key = stream?.parts.find((part) => part.kind === "stream")?.key;
     expect(key).toBeDefined();
-    const index = projectTranscriptMessageIndex(
-      items,
-      new Map(),
-      { assistantName: "Assistant", userId: "reader", userName: "Reader" },
-      new Map(),
-    );
+    const index = indexItems(items, {
+      assistantName: "Assistant",
+      userId: "reader",
+      userName: "Reader",
+    });
     expect(index.transcriptMessageKeys.get(key!)).toBe(frame.key);
   });
   it("keeps streamed anchor keys after earlier messages in the same frame", () => {
@@ -290,12 +303,7 @@ describe("live terminal continuity with pending collaborators", () => {
     }
     const group = frame.parts.find((part) => part.kind === "group");
     expect(group?.messages[0]?.message).toBe(commentary);
-    const index = projectTranscriptMessageIndex(
-      [frame],
-      new Map(),
-      { assistantName: "Assistant" },
-      new Map(),
-    );
+    const index = indexItems([frame], { assistantName: "Assistant" });
     expect(index.transcriptMessageKeys.keys().next().value).toBe(group?.messages[0]?.key);
   });
   it("keeps standalone activity messages addressable for replies and anchors", () => {
@@ -320,18 +328,12 @@ describe("live terminal continuity with pending collaborators", () => {
       { kind: "activity-run", key: "standalone-activity", groups },
     ]);
     expect(items[0]?.kind).toBe("activity-run");
-    const loaded = new Map();
-    const index = projectTranscriptMessageIndex(
-      items,
-      new Map(),
-      { assistantName: "Assistant" },
-      loaded,
-    );
+    const index = indexItems(items, { assistantName: "Assistant" });
     expect(index.transcriptMessageKeys.get(groups[0]!.messages[0]!.key)).toBe(
       "standalone-activity",
     );
     expect(index.messageRowKeysById.get("activity-message")).toBe("standalone-activity");
-    expect(loaded.get("activity-message")).toMatchObject({
+    expect(index.loadedReplySources.get("activity-message")).toMatchObject({
       message,
       messageId: groups[0]!.messages[0]!.key,
     });

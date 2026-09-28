@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { withExistingOpenClawStateSchema } from "../state/openclaw-state-db-schema-policy.js";
-import type { StateDatabaseCoordinatorRuntime } from "./state-database-coordinator.js";
 
 /** Resolved host facts for the canonical shared-state owner, never authority. */
 export type SqliteWorkerStateContext = {
@@ -13,9 +12,23 @@ export type SqliteWorkerStateContext = {
   initializationEnvironment?: NodeJS.ProcessEnv;
   /** Known agent paths preserve deletion-history uncertainty during native initialization. */
   initializationAgentPaths?: readonly string[];
-  coordinatorRuntime: StateDatabaseCoordinatorRuntime;
   existingSchemaPath?: string;
 };
+
+export function captureSqliteWorkerStateContext(
+  context: SqliteWorkerStateContext,
+): SqliteWorkerStateContext {
+  return {
+    environment: { ...context.environment },
+    ...(context.initializationEnvironment
+      ? { initializationEnvironment: { ...context.initializationEnvironment } }
+      : {}),
+    ...(context.initializationAgentPaths
+      ? { initializationAgentPaths: [...context.initializationAgentPaths] }
+      : {}),
+    existingSchemaPath: context.existingSchemaPath,
+  };
+}
 
 /** Charge captured initialization facts together with the request bytes retained by admission. */
 export function sqliteWorkerRequestBytes(
@@ -42,8 +55,34 @@ export function sqliteWorkerRequestBytes(
 // Source hosts and built backends can load separate module copies in one Worker.
 const stateContexts = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteWorkerStateContext"),
-  () => new AsyncLocalStorage<SqliteWorkerStateContext>(),
+  () =>
+    new AsyncLocalStorage<
+      SqliteWorkerStateContext & {
+        existingDatabase?: { databasePath: string; identity: string };
+      }
+    >(),
 );
+
+/** Preserve factory facts across later commands without changing their captured host context. */
+export function withSqliteWorkerExistingDatabase<T>(
+  databasePath: string,
+  identity: string,
+  operation: () => T,
+): T {
+  return stateContexts.run(
+    {
+      ...getSqliteWorkerStateContext(),
+      existingDatabase: { databasePath, identity },
+    },
+    operation,
+  );
+}
+
+/** Only cold writable opens need this factory's prior-existence constraint. */
+export function getSqliteWorkerExistingDatabaseIdentity(databasePath: string): string | undefined {
+  const existing = stateContexts.getStore()?.existingDatabase;
+  return existing?.databasePath === databasePath ? existing.identity : undefined;
+}
 
 export function runWithSqliteWorkerStateContext<T>(
   context: SqliteWorkerStateContext,

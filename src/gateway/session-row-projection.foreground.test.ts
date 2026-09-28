@@ -20,7 +20,9 @@ import {
   listSessions,
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
+import * as projectionWork from "./session-projection-work.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
+import { observeSessionRowBackfill } from "./session-row-backfill.test-support.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import * as records from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
@@ -447,6 +449,7 @@ it.each(["before transcript work", "before preview publication"] as const)(
         sessionKey: "agent:main:foreground-backfill",
         sessionId: "foreground-backfill",
       };
+      const query = { agentId: scope.agentId, key: scope.sessionKey };
       sessions.replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
       await sessions.persistSessionTranscriptTurn(scope, {
         messages: [{ message: { role: "user", content: "Preview the legacy session" } }],
@@ -457,16 +460,35 @@ it.each(["before transcript work", "before preview publication"] as const)(
       const response = createDeferredCore();
       const previewPrepared = createDeferredCore();
       const previewPublication = createDeferredCore();
-      const backfill = transcriptBackfill.backfillSessionRowTranscriptFields;
+      const backgroundWaiting = createDeferredCore();
+      const yieldBackground = projectionWork.yieldSessionListBackgroundWork;
+      let previewReleased = false;
+      vi.spyOn(projectionWork, "yieldSessionListBackgroundWork").mockImplementation(() => {
+        const pending = yieldBackground();
+        if (phase === "before transcript work" || previewReleased) {
+          backgroundWaiting.resolve();
+        }
+        return pending;
+      });
       const before = sessions.loadSessionEntry(scope);
       if (phase === "before preview publication") {
-        vi.spyOn(transcriptBackfill, "backfillSessionRowTranscriptFields").mockImplementationOnce(
-          async (...args) => {
-            const fields = await backfill(...args);
-            previewPrepared.resolve();
-            await previewPublication.promise;
-            return fields;
-          },
+        const readDatabase = history.withSessionHistoryWorkerDatabase;
+        vi.spyOn(history, "withSessionHistoryWorkerDatabase").mockImplementation(
+          (options, consume, lane) =>
+            readDatabase(
+              options,
+              (owner) =>
+                consume({
+                  ...owner,
+                  async readRowBackfill(input) {
+                    const fields = await owner.readRowBackfill(input);
+                    previewPrepared.resolve();
+                    await previewPublication.promise;
+                    return fields;
+                  },
+                }),
+              lane,
+            ),
         );
       }
       const request = () =>
@@ -489,36 +511,31 @@ it.each(["before transcript work", "before preview publication"] as const)(
         foreground = request();
         await entered.promise;
       }
+      const backfilled = observeSessionRowBackfill([scope.sessionKey]);
       const projection = await createSessionRowProjection({ cfg });
+      // Observe the row at completion, before a later retry can conceal a premature signal.
+      const observedPreview = backfilled.then(
+        () => projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview,
+      );
       try {
         if (phase === "before preview publication") {
           await previewPrepared.promise;
           foreground = request();
           await entered.promise;
+          previewReleased = true;
           previewPublication.resolve();
         }
-        const reads = vi.spyOn(sessions, "readSessionTranscriptBoundedMessageTailPage");
-        for (let turn = 0; turn < 5; turn++) {
-          await nextTurn();
-        }
-        expect(reads).not.toHaveBeenCalled();
+        await backgroundWaiting.promise;
         expect(sessions.loadSessionEntry(scope)).toEqual(before);
         expect(
-          projection.snapshot(
-            { agentId: scope.agentId, key: scope.sessionKey },
-            { includeLastMessage: true },
-          ).row?.lastMessagePreview,
+          projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview,
         ).toBeUndefined();
         response.resolve();
         await foreground;
-        await vi.waitFor(() =>
-          expect(
-            projection.snapshot(
-              { agentId: scope.agentId, key: scope.sessionKey },
-              { includeLastMessage: true },
-            ).row?.lastMessagePreview,
-          ).toBe("Preview the legacy session"),
-        );
+        expect(await observedPreview).toBe("Preview the legacy session");
+        expect(
+          projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview,
+        ).toBe("Preview the legacy session");
         expect(sessions.loadSessionEntry(scope)).toEqual(before);
       } finally {
         previewPublication.resolve();

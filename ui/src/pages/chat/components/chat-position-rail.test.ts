@@ -4,10 +4,10 @@ import { html, nothing, render } from "lit";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { adjustTextareaHeight } from "./chat-composer-dom.ts";
+import { message, stubRailVisibility } from "./chat-position-rail.test-support.ts";
 import { renderChatPositionRail } from "./chat-position-rail.ts";
 import { getTranscriptState } from "./chat-thread-interactions.ts";
 import { renderChatThread } from "./chat-thread.ts";
-import { ChatTranscriptController } from "./chat-transcript-controller.ts";
 import { publishTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 import {
   installTranscriptDomMocks,
@@ -18,52 +18,6 @@ import {
   transcriptDomState,
   type TestContentRow,
 } from "./chat-transcript.test-support.ts";
-
-function message(id: string, role: string, content: unknown, seq: number, runId?: string) {
-  return {
-    role,
-    content,
-    timestamp: seq * 1_000,
-    __openclaw: { id, seq, ...(runId ? { runId } : {}) },
-  };
-}
-
-function stubRailVisibility() {
-  let publishVisibility: (element: Element) => void = () => {};
-  vi.stubGlobal(
-    "IntersectionObserver",
-    class implements IntersectionObserver {
-      readonly root = null;
-      readonly rootMargin = "0px";
-      readonly scrollMargin = "0px";
-      readonly thresholds = [0];
-      constructor(callback: IntersectionObserverCallback) {
-        publishVisibility = (element) => {
-          const rect = element.getBoundingClientRect();
-          callback(
-            [
-              {
-                target: element,
-                boundingClientRect: rect,
-                intersectionRect: rect,
-                rootBounds: rect,
-                intersectionRatio: 1,
-                isIntersecting: true,
-                time: 0,
-              },
-            ],
-            this,
-          );
-        };
-      }
-      takeRecords = () => [];
-      observe = vi.fn();
-      unobserve = vi.fn();
-      disconnect = vi.fn();
-    },
-  );
-  return (element: Element) => publishVisibility(element);
-}
 
 describe("conversation position rail", () => {
   beforeEach(installTranscriptDomMocks);
@@ -169,6 +123,7 @@ describe("conversation position rail", () => {
     "focus-resize",
     "pointer",
     "reader",
+    "reader-offset",
     "composer-resize-reversal-navigation",
   ] as const;
 
@@ -401,6 +356,20 @@ describe("conversation position rail", () => {
           flush();
           expect(document.activeElement).toBe(marker(79));
           expect(marks.scrollTop).toBe(720);
+        } else if (scenario === "reader-offset") {
+          // Reading within the rendered rows re-renders nothing; the published
+          // offset alone must move the current marker.
+          activeMessage.mockReturnValue("message-78");
+          root.scrollTop = 8200;
+          publishTranscriptScroll(root, {
+            type: "offset",
+            delta: -115,
+            scrolling: true,
+            touching: false,
+            programmatic: false,
+          });
+          flushFrame();
+          expect(marker(78).getAttribute("aria-current")).toBe("true");
         } else if (scenario === "pointer") {
           marker(60).dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
           marker(60).focus();
@@ -533,79 +502,6 @@ describe("conversation position rail", () => {
       expect(observed.has(replacement)).toBe(false);
     } finally {
       render(nothing, container);
-      transcript.hostDisconnected();
-    }
-  });
-
-  it("publishes consecutive reader offsets even when the virtual row range is unchanged", async () => {
-    transcriptDomState.measuredRowHeight = 120;
-    const requestUpdate = vi.fn();
-    const transcript = new ChatTranscriptController(
-      {
-        addController: () => undefined,
-        removeController: () => undefined,
-        requestUpdate,
-        updateComplete: Promise.resolve(true),
-      },
-      () => "rail-notification",
-    );
-    const rows: TestContentRow[] = Array.from({ length: 40 }, (_, index) => ({
-      kind: "content",
-      key: `row-${index}`,
-      content: html`<div>${index}</div>`,
-    }));
-    const { container, session, renderRows } = await mountTestTranscript(
-      "rail-notification",
-      rows,
-      transcript,
-    );
-    try {
-      Object.defineProperties(container, {
-        clientHeight: { configurable: true, value: 600 },
-        scrollHeight: { configurable: true, value: 4800 },
-      });
-      for (const observer of resizeObservers) {
-        observer.emitTarget(container, 800, 600);
-      }
-      const ids = rows.map((row) => row.key);
-      session.syncMessageRows(
-        new Map(ids.map((id) => [id, id])),
-        new Map(ids.map((id) => [id, id])),
-      );
-      renderRows(rows);
-      const currentId = () => session.activeMessageId(["row-2", "row-3"]);
-      container.scrollTop = 50;
-      container.dispatchEvent(new Event("scroll"));
-      expect(currentId()).toBe("row-2");
-      requestUpdate.mockClear();
-
-      // Both viewports span rows 0–5, but their midpoints straddle row 3.
-      // TanStack's range/isScrolling notification alone cannot publish this.
-      container.scrollTop = 70;
-      container.dispatchEvent(new Event("scroll"));
-      expect(requestUpdate).toHaveBeenCalled();
-      expect(currentId()).toBe("row-3");
-      requestUpdate.mockClear();
-      container.scrollTop = 50;
-      container.dispatchEvent(new Event("scroll"));
-      expect(requestUpdate).toHaveBeenCalled();
-      expect(currentId()).toBe("row-2");
-
-      Object.defineProperty(container, "clientHeight", { configurable: true, value: 640 });
-      for (const observer of resizeObservers) {
-        observer.emitTarget(container, 800, 640);
-      }
-      expect(currentId()).toBe("row-3");
-      requestUpdate.mockClear();
-      container.dispatchEvent(new Event("scroll"));
-      expect(requestUpdate).not.toHaveBeenCalled();
-
-      transcript.hostDisconnected();
-      requestUpdate.mockClear();
-      container.scrollTop = 70;
-      container.dispatchEvent(new Event("scroll"));
-      expect(requestUpdate).not.toHaveBeenCalled();
-    } finally {
       transcript.hostDisconnected();
     }
   });

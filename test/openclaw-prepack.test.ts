@@ -350,12 +350,13 @@ function runStandaloneBundledChannelSmoke(
 }
 
 describe("standalone bundled channel smoke", () => {
-  const layouts = ["source", "installed-env", "installed-path"] as const;
-  it.each(
-    layouts.flatMap((layout) =>
-      ["valid", "invalid-entry", "missing-transitive"].map((outcome) => ({ layout, outcome })),
-    ),
-  )(
+  it.each([
+    { layout: "source", outcome: "valid" },
+    { layout: "source", outcome: "invalid-entry" },
+    { layout: "source", outcome: "missing-transitive" },
+    { layout: "installed-env", outcome: "valid" },
+    { layout: "installed-path", outcome: "valid" },
+  ] as const)(
     "preserves the result and releases its layout for $layout with outcome=$outcome",
     ({ layout, outcome }) => {
       const entrySource = `

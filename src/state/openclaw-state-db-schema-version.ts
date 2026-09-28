@@ -5,6 +5,7 @@ import {
   getAdmittedSqliteSchemaFacts,
   type SqliteSchemaFacts,
 } from "../infra/sqlite-schema-facts.js";
+import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import {
   createNewerSqliteSchemaVersionError,
   readSqliteUserVersion,
@@ -55,13 +56,23 @@ function readContentVersion(db: DatabaseSync, published: number): number {
   if (!row) {
     return published;
   }
-  const contentVersion: unknown = JSON.parse(row.value_json);
+  let contentVersion: unknown;
+  try {
+    contentVersion = JSON.parse(row.value_json);
+  } catch (cause) {
+    throw new SqliteSchemaMismatchError(
+      `Invalid shared state schema content version in ${CONTENT_VERSION_KEY}.`,
+      { cause },
+    );
+  }
   if (
     typeof contentVersion !== "number" ||
     !Number.isSafeInteger(contentVersion) ||
     contentVersion < 0
   ) {
-    throw new Error(`Invalid shared state schema content version in ${CONTENT_VERSION_KEY}.`);
+    throw new SqliteSchemaMismatchError(
+      `Invalid shared state schema content version in ${CONTENT_VERSION_KEY}.`,
+    );
   }
   return Math.max(published, contentVersion);
 }
@@ -122,7 +133,7 @@ export function readStateSchemaMigrationVersion(db: DatabaseSync): number {
   if (!missingAttribution && issues.length === 0) {
     return 15;
   }
-  throw new Error(
+  throw new SqliteSchemaMismatchError(
     "Unrecognized Skill Workshop ownership schema; cannot apply the schema 16 migration.",
   );
 }

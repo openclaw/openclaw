@@ -95,32 +95,22 @@ function resultFromExistingReceipt(
         .savedReportPath
     : prepared.savedReportPath,
 ): UpdateFailureReportSubmitResult {
-  if (receipt?.status === "pending") {
+  if (
+    receipt &&
+    (receipt.status === "pending" ||
+      receipt.status === "preparing" ||
+      receipt.status === "prepared" ||
+      receipt.status === "retryable")
+  ) {
     return {
-      message: "This update attempt already has a report submission in progress.",
+      message: {
+        pending: "This update attempt already has a report submission in progress.",
+        preparing: "This update attempt already has a report preparation in progress.",
+        prepared: "This update attempt already has a report publication in progress.",
+        retryable: "No GitHub issue submission was started. This report can be retried.",
+      }[receipt.status],
       savedReportPath,
-      status: "pending",
-    };
-  }
-  if (receipt?.status === "preparing") {
-    return {
-      message: "This update attempt already has a report preparation in progress.",
-      savedReportPath,
-      status: "retryable",
-    };
-  }
-  if (receipt?.status === "prepared") {
-    return {
-      message: "This update attempt already has a report publication in progress.",
-      savedReportPath,
-      status: "retryable",
-    };
-  }
-  if (receipt?.status === "retryable") {
-    return {
-      message: "No GitHub issue submission was started. This report can be retried.",
-      savedReportPath,
-      status: "retryable",
+      status: receipt.status === "pending" ? "pending" : "retryable",
     };
   }
   const previewMatches = receipt?.previewDigest === prepared.previewDigest;
@@ -211,7 +201,9 @@ export async function submitUpdateFailureReport(
     ) => GithubIssueSubmitResult | Promise<GithubIssueSubmitResult>;
     env?: NodeJS.ProcessEnv;
     /** Browser-only callers must never use the host account, even for reconciliation. */
-    publicationMode?: "host" | "browser";
+    publicationMode?: "host" | "browser" | "reconcile";
+    /** Interactive CLI retries stay in the terminal instead of publishing a browser handoff. */
+    allowBrowserFallback?: boolean;
     artifactSweepHooks?: UpdateFailureReportSweepHooks;
     finalizeReceipt?: typeof finalizeUpdateFailureReportReceipt;
     hasCurrentAuthority?: () => boolean;
@@ -270,6 +262,16 @@ export async function submitUpdateFailureReport(
       }
       return receiptMatchesBestEffort(() => readReceipt(prepared.attemptId, stateEnv), receipt);
     });
+  const existingResult = async (receipt: UpdateFailureReportReceipt | null) => {
+    if (receipt?.status === "created") {
+      await discardSavedUpdateFailureReportBestEffort(
+        bindSavedReportArtifact(prepared, receipt.reservationId, receipt.previewDigest),
+        { reportCreated: false, reportDirCreated: false, stagedReportCreated: false },
+        true,
+      );
+    }
+    return resultFromExistingReceipt(receipt, prepared);
+  };
   let existingReceipt = readReceipt(prepared.attemptId, stateEnv);
   if (existingReceipt?.cleanup === "pending") {
     await cleanOwnedReportArtifact(prepared, existingReceipt, stateEnv, options.artifactSweepHooks);
@@ -319,24 +321,22 @@ export async function submitUpdateFailureReport(
       options.artifactSweepHooks,
     );
   }
+  // A status check cannot become a new publication if its receipt disappears.
+  if (!existingReceipt && options.publicationMode === "reconcile") {
+    return {
+      message: "The report's submission status could not be verified. No new issue was submitted.",
+      savedReportPath: prepared.savedReportPath,
+      status: "pending",
+    };
+  }
   if (
     existingReceipt &&
-    existingReceipt.status !== "preparing" &&
-    existingReceipt.status !== "prepared" &&
-    existingReceipt.status !== "retryable"
+    (options.publicationMode === "reconcile" ||
+      (existingReceipt.status !== "preparing" &&
+        existingReceipt.status !== "prepared" &&
+        existingReceipt.status !== "retryable"))
   ) {
-    if (existingReceipt.status === "created") {
-      await discardSavedUpdateFailureReportBestEffort(
-        bindSavedReportArtifact(
-          prepared,
-          existingReceipt.reservationId,
-          existingReceipt.previewDigest,
-        ),
-        { reportCreated: false, reportDirCreated: false, stagedReportCreated: false },
-        true,
-      );
-    }
-    return resultFromExistingReceipt(existingReceipt, prepared);
+    return existingResult(existingReceipt);
   }
   if (options.validateCurrentAttempt && !(await options.validateCurrentAttempt())) {
     return {
@@ -405,18 +405,7 @@ export async function submitUpdateFailureReport(
     stateEnv,
   );
   if (!reservation.reserved) {
-    if (reservation.receipt?.status === "created") {
-      await discardSavedUpdateFailureReportBestEffort(
-        bindSavedReportArtifact(
-          prepared,
-          reservation.receipt.reservationId,
-          reservation.receipt.previewDigest,
-        ),
-        { reportCreated: false, reportDirCreated: false, stagedReportCreated: false },
-        true,
-      );
-    }
-    return resultFromExistingReceipt(reservation.receipt, prepared);
+    return existingResult(reservation.receipt);
   }
 
   const ownedPrepared = bindSavedReportArtifact(prepared, reservationId);
@@ -425,6 +414,12 @@ export async function submitUpdateFailureReport(
     reportDirCreated: false,
     stagedReportCreated: false,
   };
+  const currentResult = () =>
+    resultFromExistingReceipt(
+      readReceipt(prepared.attemptId, stateEnv),
+      prepared,
+      ownedPrepared.savedReportPath,
+    );
   const cleanupOwnedPreparation = async (): Promise<boolean> => {
     const cleanupRecorded = retryUpdateReportStateWrite(() =>
       beginUpdateFailureReportReceiptCleanup(prepared.attemptId, reservationId, stateEnv),
@@ -442,11 +437,7 @@ export async function submitUpdateFailureReport(
     await savePreparedUpdateFailureReport(ownedPrepared, saved, options.hasCurrentAuthority);
     if (options.validateCurrentAttempt && !(await options.validateCurrentAttempt())) {
       if (!(await cleanupOwnedPreparation())) {
-        return resultFromExistingReceipt(
-          readReceipt(prepared.attemptId, stateEnv),
-          prepared,
-          ownedPrepared.savedReportPath,
-        );
+        return currentResult();
       }
       return {
         message: "This failed update attempt is stale or unavailable.",
@@ -467,11 +458,7 @@ export async function submitUpdateFailureReport(
     );
     if (!publicationReserved) {
       await discardSavedUpdateFailureReportBestEffort(ownedPrepared, saved, true);
-      return resultFromExistingReceipt(
-        readReceipt(prepared.attemptId, stateEnv),
-        prepared,
-        ownedPrepared.savedReportPath,
-      );
+      return currentResult();
     }
     await publishPreparedUpdateFailureReport(ownedPrepared, saved);
   } catch (error) {
@@ -484,7 +471,7 @@ export async function submitUpdateFailureReport(
   }
 
   const assertCurrentPreCreateState = () => assertUpdateReportPreCreateState(options);
-  const afterAuthPreflight = assertCurrentPreCreateState;
+  let publicationAdmitted = false;
   const beforeIssueCreate = async () => {
     await assertCurrentPreCreateState();
     // Transport invokes this after its last await, immediately before starting the child.
@@ -502,6 +489,7 @@ export async function submitUpdateFailureReport(
           "reservation",
         );
       }
+      publicationAdmitted = true;
     };
   };
   const createIssue =
@@ -521,17 +509,25 @@ export async function submitUpdateFailureReport(
       await assertCurrentPreCreateState();
       created = browserFallbackResult(prepared, "browser-requested");
     } else {
-      created = await createIssue(prepared, {
-        afterAuthPreflight,
-        beforeIssueCreate,
-        beforeIssueLookup: () => {
-          if (options.hasCurrentAuthority && !options.hasCurrentAuthority()) {
-            throw new Error(
-              "Update report reconciliation requires a current authenticated client.",
-            );
-          }
-        },
-      });
+      try {
+        created = await createIssue(prepared, {
+          afterAuthPreflight: assertCurrentPreCreateState,
+          beforeIssueCreate,
+          beforeIssueLookup: () => {
+            if (options.hasCurrentAuthority && !options.hasCurrentAuthority()) {
+              throw new Error(
+                "Update report reconciliation requires a current authenticated client.",
+              );
+            }
+          },
+        });
+      } catch (error) {
+        if (!publicationAdmitted || error instanceof UpdateReportPreCreateGuardError) {
+          throw error;
+        }
+        // Admission precedes the child start; a thrown response cannot make retry safe.
+        created = { reason: "creation-outcome-unknown", status: "outcome-unknown" };
+      }
     }
   } catch (error) {
     if (!(error instanceof UpdateReportPreCreateGuardError)) {
@@ -539,18 +535,10 @@ export async function submitUpdateFailureReport(
     }
     if (error.reason === "reservation") {
       await discardSavedUpdateFailureReportBestEffort(ownedPrepared, saved, true);
-      return resultFromExistingReceipt(
-        readReceipt(prepared.attemptId, stateEnv),
-        prepared,
-        ownedPrepared.savedReportPath,
-      );
+      return currentResult();
     }
     if (!(await cleanupOwnedPreparation())) {
-      return resultFromExistingReceipt(
-        readReceipt(prepared.attemptId, stateEnv),
-        prepared,
-        ownedPrepared.savedReportPath,
-      );
+      return currentResult();
     }
     if (error.reason === "stale") {
       return {
@@ -583,7 +571,10 @@ export async function submitUpdateFailureReport(
       status: "pending",
     };
   }
-  if (created.status === "fallback-unavailable") {
+  if (
+    created.status === "fallback-unavailable" ||
+    (created.status === "browser-fallback" && options.allowBrowserFallback === false)
+  ) {
     const receipt: UpdateFailureReportReceipt = {
       previewDigest: prepared.previewDigest,
       reservationId,
@@ -597,8 +588,16 @@ export async function submitUpdateFailureReport(
         status: "pending",
       };
     }
+    const reason = created.status === "fallback-unavailable" ? created.cause : created.reason;
+    const unavailable =
+      reason === "authentication-unavailable"
+        ? "GitHub authentication is unavailable."
+        : "GitHub submission is unavailable.";
     return {
-      message: "The sanitized report was saved, but it is too large for a browser handoff.",
+      message:
+        options.allowBrowserFallback === false
+          ? `${unavailable} No issue was submitted. Fix the problem, then choose Report update failure to retry.\nSaved sanitized report: ${ownedPrepared.savedReportPath}`
+          : "The sanitized report was saved, but it is too large for a browser handoff.",
       savedReportPath: ownedPrepared.savedReportPath,
       status: "retryable",
     };

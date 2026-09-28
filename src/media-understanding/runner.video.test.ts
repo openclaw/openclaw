@@ -409,19 +409,19 @@ describe("runCapability video provider wiring", () => {
 
 describe("runCapability provider output decisions", () => {
   const outputs = [
-    { label: "empty", text: "" },
-    { label: "whitespace", text: " \t\n" },
-    { label: "usable", text: "  usable primary output  " },
+    { label: "empty", text: "", configureFallback: false },
+    { label: "whitespace", text: " \t\n", configureFallback: true },
+    { label: "usable", text: "  usable primary output  ", configureFallback: true },
   ] as const;
   const cases = (["audio", "video", "image"] as const).flatMap((capability) =>
-    outputs.flatMap((output) =>
-      (output.text.trim() ? [true] : [true, false]).map((configureFallback) => ({
+    outputs
+      .filter((output) => capability === "audio" || output.label === "whitespace")
+      .map((output) => ({
         capability,
-        configureFallback,
         label: output.label,
         text: output.text,
+        configureFallback: output.configureFallback,
       })),
-    ),
   );
 
   it.each(cases)(

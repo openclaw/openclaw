@@ -204,7 +204,9 @@
 }
 
 .agent-chat__composer-controls .chat-controls__model-settings {
-  gap: 4px;
+  /* Keep the desktop seam, but honor the compact row's 2px chip rhythm so
+     independent 44px model/effort targets still fit the narrowest composer. */
+  gap: min(4px, var(--chat-composer-chip-gap));
 }
 
 .agent-chat__composer-run-status {
@@ -1217,7 +1219,9 @@
 
   .agent-chat__input .chat-controls__model-menu,
   .agent-chat__input .chat-controls__effort-menu {
-    width: calc(100vw - max(12px, var(--safe-area-left)) - max(12px, var(--safe-area-right)));
+    width: calc(
+      100vw - var(--safe-area-left) - var(--safe-area-right) - 2 * var(--shell-popup-inline-gutter)
+    );
     max-height: min(440px, var(--auto-size-available-height, calc(100dvh - 116px)));
   }
 }
@@ -2351,7 +2355,8 @@ html[dir="rtl"] .chat-attachment-loading > span {
   gap: inherit;
   min-width: 0;
   min-height: 32px;
-  flex: 1;
+  /* Long account metadata shrinks before the provider toggle's contents. */
+  flex: 1 0 auto;
   padding: 6px 0;
   border: 0;
   background: transparent;
@@ -2405,6 +2410,16 @@ html[dir="rtl"] .chat-attachment-loading > span {
 
 .chat-controls__model-option-copy > .chat-controls__auth-meta {
   margin-inline-start: 6px;
+}
+
+[data-chat-account-option] .chat-controls__model-option-copy {
+  align-items: flex-start;
+  flex-direction: column;
+}
+
+[data-chat-account-option] .chat-controls__auth-meta {
+  max-width: 100%;
+  margin-inline-start: 0;
 }
 
 .chat-controls__provider-settings {
@@ -2951,7 +2966,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
   border: none;
   border-radius: var(--radius-full);
   background: var(--text-strong);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-sm);
 }
 
 .chat-controls__reasoning-range:focus-visible::-webkit-slider-thumb {
@@ -2985,7 +3000,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
   border: none;
   border-radius: var(--radius-full);
   background: var(--text-strong);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-sm);
 }
 
 .chat-controls__reasoning-range--inherit::-moz-range-thumb {
@@ -3126,7 +3141,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
   height: 14px;
   border-radius: var(--radius-full);
   background: var(--text-strong);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.32);
+  box-shadow: var(--shadow-sm);
   transition: transform var(--duration-fast) var(--ease-out);
 }
 
@@ -3675,9 +3690,4 @@ html[dir="rtl"] .chat-attachment-loading > span {
   .agent-chat__suggestion {
     min-height: 44px;
   }
-}
-.chat-talk-voice-picker {
-  flex: 0 1 9rem;
-  min-width: 0;
-  max-width: 9rem;
 }

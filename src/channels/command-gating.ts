@@ -40,29 +40,20 @@ export function resolveCommandAuthorizedFromAuthorizers(params: {
     if (!anyConfigured) {
       return true;
     }
-    return authorizers.some((entry) => entry.configured && entry.allowed);
   }
   return authorizers.some((entry) => entry.configured && entry.allowed);
 }
 
 /** Resolves command authorization and whether the current text command should be blocked. */
-export function resolveControlCommandGate(params: {
-  /** Global access-group switch for the channel/runtime. */
-  useAccessGroups: boolean;
-  /** Authorization sources checked by this channel command. */
-  authorizers: CommandAuthorizer[];
-  /** Channel setting that enables text commands as an input surface. */
-  allowTextCommands: boolean;
-  /** True when the current inbound message parsed as a control command. */
-  hasControlCommand: boolean;
-  /** Policy used only when `useAccessGroups` is false. Defaults to open. */
-  modeWhenAccessGroupsOff?: CommandGatingModeWhenAccessGroupsOff;
-}): { commandAuthorized: boolean; shouldBlock: boolean } {
-  const commandAuthorized = resolveCommandAuthorizedFromAuthorizers({
-    useAccessGroups: params.useAccessGroups,
-    authorizers: params.authorizers,
-    modeWhenAccessGroupsOff: params.modeWhenAccessGroupsOff,
-  });
+export function resolveControlCommandGate(
+  params: Parameters<typeof resolveCommandAuthorizedFromAuthorizers>[0] & {
+    /** Channel setting that enables text commands as an input surface. */
+    allowTextCommands: boolean;
+    /** True when the current inbound message parsed as a control command. */
+    hasControlCommand: boolean;
+  },
+): { commandAuthorized: boolean; shouldBlock: boolean } {
+  const commandAuthorized = resolveCommandAuthorizedFromAuthorizers(params);
   const shouldBlock = params.allowTextCommands && params.hasControlCommand && !commandAuthorized;
   return { commandAuthorized, shouldBlock };
 }

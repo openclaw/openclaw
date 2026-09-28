@@ -102,6 +102,64 @@ describe("request validation behind gateway status codes", () => {
   });
 });
 
+describe("HTTP request rejection retry eligibility", () => {
+  it.each([
+    {
+      status: 400,
+      code: "rate_limit_exceeded",
+      message:
+        "400 This prompt is longer than the free tier allows for a single request. Shorten it.",
+      details: [
+        '{"code":"rate_limit_exceeded","message":"This prompt is longer than the free tier allows for a single request. Shorten it."}',
+        "rate_limit_exceeded",
+      ],
+    },
+    {
+      status: 422,
+      message: '422 {"error":{"code":"rate_limit_exceeded","message":"Request rejected"}}',
+    },
+    { status: 400, code: "RESOURCE_EXHAUSTED", message: "400 provider refusal" },
+  ])("does not replay a rejection based only on its inner code: $status", (signal) => {
+    expect(classifyFailoverSignal(signal, { providerPlugin: null })).toEqual({
+      kind: "reason",
+      reason: "rate_limit",
+      sameModelRetry: false,
+    });
+  });
+
+  it.each([
+    { status: 400, code: "ThrottlingException", message: "400 Too many concurrent requests" },
+    { status: 400, code: "ThrottlingException", message: "400 provider refusal" },
+    { status: 429, code: "rate_limit_exceeded", message: "Request rejected" },
+    { code: "rate_limit_exceeded", message: "Request rejected" },
+    {
+      status: 400,
+      code: "rate_limit_exceeded",
+      message: "400 Request rejected",
+      details: ['{"code":"rate_limit_exceeded","message":"Too many concurrent requests"}'],
+    },
+  ])("retains independent throttling or status evidence: $status $code", (signal) => {
+    expect(classifyFailoverSignal(signal, { providerPlugin: null })).toEqual({
+      kind: "reason",
+      reason: "rate_limit",
+    });
+  });
+
+  it("preserves a prepared provider's HTTP 400 throttling decision", () => {
+    expect(
+      classifyFailoverSignal(
+        { status: 400, code: "rate_limit_exceeded", message: "Request rejected" },
+        {
+          providerPlugin: {
+            id: "prepared-owner",
+            classifyFailoverReason: () => "rate_limit",
+          },
+        },
+      ),
+    ).toEqual({ kind: "reason", reason: "rate_limit" });
+  });
+});
+
 describe("Claude CLI logged-out failures", () => {
   const loggedOutMessage = "Not logged in · Please run /login";
 

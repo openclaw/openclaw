@@ -4,21 +4,22 @@ import type { SessionObserverDigest } from "../../../../packages/gateway-protoco
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
 import type { ControlUiPanel } from "../../../../src/plugin-sdk/control-ui.js";
 import type { ControlUiLinkReaderDescriptor } from "../../../../src/shared/control-ui-link-reader.js";
+import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
-import type { BrowserTabSelection } from "../../components/browser/browser-target.ts";
+import type {
+  BrowserTabSelection,
+  BrowserTabTarget,
+} from "../../components/browser/browser-target.ts";
 import { icons } from "../../components/icons.ts";
 import { EMPTY_LINK_READERS } from "../../components/link-reader-target.ts";
 import { renderPanelLoadingSkeleton } from "../../components/panel-loading-skeleton.ts";
 import { t } from "../../i18n/index.ts";
-import { registerBackgroundTasksEnglish } from "../../i18n/locales/en-background-tasks.ts";
 import { registerFilePreviewEnglish } from "../../i18n/locales/en-file-preview.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
-import { formatKeyboardShortcutCombo } from "../../lib/keyboard-shortcut-catalog.ts";
 import type { ControlUiRegistration } from "../../plugins/control-ui-capability.ts";
 import { renderPluginContribution } from "../../plugins/control-ui-view.ts";
 import { SIDEBAR_PANEL_SHORTCUTS } from "./chat-pane-panel-shortcuts.ts";
-import { resolveAssistantAttachmentAuthToken } from "./chat-pane-state.ts";
 import type {
   ChatSessionCompanionThread,
   ChatSessionCompanionTurn,
@@ -39,7 +40,6 @@ import type { SessionDiscussionPanelConfig } from "./components/session-discussi
 import type { SidebarSlotId } from "./sidebar-layout-types.ts";
 import { sidebarMainPanel } from "./sidebar-layout.ts";
 
-registerBackgroundTasksEnglish();
 registerFilePreviewEnglish();
 
 type SidebarPanelDefinitionParams = {
@@ -55,6 +55,7 @@ type SidebarPanelDefinitionParams = {
   terminalTabsInHeader: boolean;
   browserRefreshOnPresentation: boolean;
   preferredBrowserTab?: BrowserTabSelection;
+  sessionBrowserTabs?: BrowserTabTarget[];
   desktopPresented: boolean;
   desktopRefreshOnPresentation: boolean;
   desktopAvailable: boolean;
@@ -66,7 +67,6 @@ type SidebarPanelDefinitionParams = {
   ) => void;
   dashboard: TemplateResult | typeof nothing;
   workspace: TemplateResult | typeof nothing;
-  tasks: TemplateResult | typeof nothing;
   renderDetail: (content: SidebarContent) => TemplateResult;
   digest: SessionObserverDigest | null;
   activeRunId: string | null;
@@ -82,8 +82,6 @@ type SidebarPanelDefinitionParams = {
   onCompanionVisibilityChange: (visible: boolean) => void;
   connected: boolean;
   onClearCompanion: () => void;
-  onRefreshTasks: () => void;
-  tasksLoading: boolean;
   discussion: SessionDiscussionPanelConfig | null;
   discussionAvailable: boolean;
   discussionOpenUrl: string | null;
@@ -159,9 +157,7 @@ export function sidebarPanelDefinitions(
     ),
     empty: { description: t(`chat.sidePanel.${textKey}Empty`) },
     headerAction,
-    shortcut: SIDEBAR_PANEL_SHORTCUTS[slot]
-      ? formatKeyboardShortcutCombo(SIDEBAR_PANEL_SHORTCUTS[slot].combo)
-      : undefined,
+    shortcut: SIDEBAR_PANEL_SHORTCUTS[slot]?.combo,
   });
   const terminal = state?.terminalAvailable
     ? html`<openclaw-terminal-panel
@@ -190,8 +186,9 @@ export function sidebarPanelDefinitions(
         .refreshOnPresentation=${params?.browserRefreshOnPresentation ?? true}
         .sessionKey=${state.sessionKey}
         .preferredTab=${params?.preferredBrowserTab}
+        .sessionTabs=${params?.sessionBrowserTabs ?? []}
         .resourceBasePath=${state.resourceBasePath}
-        .authToken=${resolveAssistantAttachmentAuthToken(state)}
+        .authToken=${resolveControlUiAuthToken(state)}
       ></openclaw-browser-panel>`
     : null;
   const companion = params
@@ -212,6 +209,7 @@ export function sidebarPanelDefinitions(
         .onSubmit=${params.onCompanionSubmit}
         .onDraftChange=${params.onCompanionDraftChange}
         .onAttachmentsChange=${params.onCompanionAttachmentsChange}
+        .uploadConfig=${state?.uploadConfig}
         .attachmentLimits=${state?.hello?.policy?.attachments}
         .onVisibilityChange=${params.onCompanionVisibilityChange}
       ></openclaw-chat-session-rail>`
@@ -334,29 +332,6 @@ export function sidebarPanelDefinitions(
               @click=${params.onClearCompanion}
             >
               ${icons.trash}
-            </button>
-          </openclaw-tooltip>`
-        : undefined,
-    ),
-    definePanel(
-      "tasks",
-      "tasks",
-      icons.listChecks,
-      params?.tasks ?? null,
-      params
-        ? html`<openclaw-tooltip .content=${t("chat.backgroundTasks.refresh")}>
-            <button
-              class="rail-header__action chat-tasks-rail__refresh"
-              type="button"
-              aria-label=${t("chat.backgroundTasks.refresh")}
-              ?disabled=${!params.connected || params.tasksLoading}
-              @click=${params.onRefreshTasks}
-            >
-              ${
-                params.tasksLoading
-                  ? html`<span class="btn__spinner" aria-hidden="true"></span>`
-                  : icons.refresh
-              }
             </button>
           </openclaw-tooltip>`
         : undefined,

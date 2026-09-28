@@ -5,6 +5,7 @@ import {
   listSessionPendingInputs,
   type SessionPendingInput,
 } from "../../config/sessions/session-accessor.js";
+import { prepareForwardedMessageCronJobNameResolver } from "../chat-display-projection.history.js";
 import {
   createCurrentUserProfileMessageProjector,
   projectChatDisplayMessage,
@@ -22,8 +23,19 @@ export function projectPendingInputMessage(
   input: SessionPendingInput,
   maxChars: number,
   projectProfile = createCurrentUserProfileMessageProjector(resolveCurrentUserProfileDisplay),
+  resolveCronJobName?: (jobId: string) => string | undefined,
 ) {
-  const projected = projectChatDisplayMessage(input.message, { maxChars });
+  if (input.state === "cancelled" && input.message.display === false) {
+    // Retire retained client copies without returning a withdrawn prompt's content.
+    return {
+      role: "user",
+      content: [],
+      display: false,
+      timestamp: input.acceptedAt,
+      __openclaw: { id: `${CHAT_PENDING_INPUT_MESSAGE_PREFIX}${input.id}` },
+    };
+  }
+  const projected = projectChatDisplayMessage(input.message, { maxChars, resolveCronJobName });
   const message = projected ? projectProfile(projected) : undefined;
   if (!message) {
     return undefined;
@@ -39,14 +51,24 @@ export function projectPendingInputMessage(
   };
 }
 
-export function readChatPendingInputs(
+export async function readChatPendingInputs(
   scope: Parameters<typeof listSessionPendingInputs>[0],
-  options: { before?: number; limit: number; maxChars: number; queuedTurns?: QueuedChatTurnMap },
-): ChatPendingInputsPage {
+  options: {
+    before?: number;
+    limit: number;
+    maxChars: number;
+    queuedTurns?: QueuedChatTurnMap;
+    cronStorePath?: string;
+  },
+): Promise<ChatPendingInputsPage> {
   const page = listSessionPendingInputs(scope, {
     before: options.before,
     limit: Math.min(options.limit, 20),
   });
+  const resolveCronJobName = await prepareForwardedMessageCronJobNameResolver(
+    page.items.map((input) => input.message),
+    options.cronStorePath,
+  );
   let queuedCount = 0;
   for (const runId of options.queuedTurns?.keys() ?? []) {
     if (
@@ -58,7 +80,12 @@ export function readChatPendingInputs(
   }
   const projectProfile = createCurrentUserProfileMessageProjector(resolveCurrentUserProfileDisplay);
   const visible = page.items.flatMap((input) => {
-    const message = projectPendingInputMessage(input, options.maxChars, projectProfile);
+    const message = projectPendingInputMessage(
+      input,
+      options.maxChars,
+      projectProfile,
+      resolveCronJobName,
+    );
     return message ? [{ input, message }] : [];
   });
   const messages = replaceOversizedChatHistoryMessages({

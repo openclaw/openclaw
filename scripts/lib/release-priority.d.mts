@@ -1,21 +1,30 @@
 export const RELEASE_PRIORITY_VARIABLE: "OPENCLAW_RELEASE_PRIORITY_RUN";
 export const RELEASE_PRIORITY_RECORD_KIND: string;
-export const RELEASE_PRIORITY_WORKFLOWS: readonly string[];
 export interface ReleasePriorityRun {
   event: string;
   headBranch: string;
   id: string;
+  lane: string;
   name: string;
   url: string;
 }
 export interface ReleasePriorityRecord {
-  cancelled: ReleasePriorityRun[];
+  cancelled: Array<Omit<ReleasePriorityRun, "lane"> & Partial<Pick<ReleasePriorityRun, "lane">>>;
   kind: string;
   parentRunId: string;
   recordedAt: string;
   repository?: string;
 }
 export function isReleaseBranch(name: unknown): boolean;
+export function isDeferrableRun(
+  run: Record<string, unknown> | undefined,
+  parentRunId: string | number,
+): boolean;
+export function listReleasePriorityRuns(
+  query: string,
+  apiJson: (resource: string) => Promise<unknown>,
+  apiText: (resource: string, jq: string) => Promise<string>,
+): Promise<Record<string, unknown>[]>;
 export function describeRun(run: Record<string, unknown>): ReleasePriorityRun;
 export function selectQueuedRunsToCancel(
   runs: Record<string, unknown>[],

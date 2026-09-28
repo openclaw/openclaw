@@ -2,11 +2,13 @@ import { getAsyncWorkSignal } from "../../../shared/async-work-scope.js";
 import { getActiveOpenClawStateDatabaseReadSnapshot } from "../../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
+import { getSubagentRunIdLookup } from "./subagent-registry-memory.js";
 import {
   acceptedFullSnapshot,
   assertSubagentReadContext,
   consumeSubagentRuns,
   getPersistedSubagentRunsSnapshot,
+  getPersistedRunIdLookup,
   mergeSelectedFullRuns,
   prepareSubagentRunsCache,
   readCompactSubagentRuns,
@@ -55,8 +57,9 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
   fullCache: SubagentRunsCache<SubagentRunRecord>;
   compactCache: SubagentRunsCache<SubagentRunReadRecord>;
   select: (snapshot: Map<string, SubagentRunReadRecord>) => S;
+  requestedRunIds?: ReadonlySet<string>;
 }): Promise<PreparedSubagentRunRead<S>> {
-  const { inMemoryRuns, fullCache, compactCache, select } = params;
+  const { inMemoryRuns, fullCache, compactCache, select, requestedRunIds } = params;
   const requestSignal = getAsyncWorkSignal();
   const privateSnapshot = getActiveOpenClawStateDatabaseReadSnapshot();
   const context = shouldReadPersistedSubagentRuns()
@@ -80,6 +83,22 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
     return compact;
   };
   const withLiveFacts = (compact: Map<string, SubagentRunReadRecord>) => {
+    if (requestedRunIds) {
+      const liveKeys = getSubagentRunIdLookup(inMemoryRuns).select(requestedRunIds);
+      const persistedKeys = getPersistedRunIdLookup(compactCache, compact).select(
+        requestedRunIds,
+        liveKeys,
+      );
+      const snapshot = new Map<string, SubagentRunReadRecord>();
+      for (const key of new Set([...persistedKeys, ...liveKeys])) {
+        const live = inMemoryRuns.get(key);
+        const entry = live ? projectSubagentRunForSessionList(live) : compact.get(key);
+        if (entry) {
+          snapshot.set(key, entry);
+        }
+      }
+      return snapshot;
+    }
     const snapshot = new Map(compact);
     for (const [runId, entry] of inMemoryRuns) {
       snapshot.set(runId, projectSubagentRunForSessionList(entry));
@@ -127,6 +146,7 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
         scope.matches(entry) || currentScope.matches(entry);
       const full = mergeSelectedFullRuns(fullCache, inMemoryRuns, preparedPayloads, matches, {
         context,
+        ...(requestedRunIds ? { runIds: new Set([...scope.runIds, ...currentScope.runIds]) } : {}),
       });
       for (const entry of full.values()) {
         snapshot.set(entry.runId, projectSubagentRunForSessionList(entry));

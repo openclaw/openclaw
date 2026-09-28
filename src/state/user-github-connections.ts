@@ -18,6 +18,7 @@ import {
   githubOAuthDeviceFields,
   validGitHubDeviceTiming,
 } from "../shared/github-oauth-values.js";
+import { registerListener } from "../shared/listeners.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 import {
@@ -106,10 +107,7 @@ const retirementObservers = new Set<(profileIds: readonly string[]) => void>();
 export function observeUserGitHubProfileRetirement(
   observer: (profileIds: readonly string[]) => void,
 ): () => void {
-  retirementObservers.add(observer);
-  return () => {
-    retirementObservers.delete(observer);
-  };
+  return registerListener(retirementObservers, observer);
 }
 
 function retireAfterCommit(db: DatabaseSync, ids: string[]): void {

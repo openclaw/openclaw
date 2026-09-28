@@ -1,5 +1,4 @@
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
-// Msteams plugin module implements messenger behavior.
 import {
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
@@ -26,6 +25,7 @@ import {
   requireMSTeamsSharePointSiteId,
   uploadAndShareSharePoint,
 } from "./graph-upload.js";
+import { normalizeMSTeamsConversationId } from "./inbound.js";
 import { extractFilename, extractMessageId, getMimeType, isLocalPath } from "./media-helpers.js";
 import { buildMSTeamsMessageActivity } from "./message-activity.js";
 import { setPendingUploadActivityId } from "./pending-uploads.js";
@@ -106,10 +106,6 @@ type MSTeamsSendRetryEvent = {
   classification: ReturnType<typeof classifyMSTeamsSendError>;
 };
 
-function normalizeConversationId(rawId: string): string {
-  return rawId.split(";")[0] ?? rawId;
-}
-
 export function buildConversationReference(
   ref: StoredConversationReference,
 ): MSTeamsConversationReference {
@@ -137,7 +133,7 @@ export function buildConversationReference(
     user: aadObjectId ? { ...user, aadObjectId } : user,
     agent,
     conversation: {
-      id: normalizeConversationId(conversationId),
+      id: normalizeMSTeamsConversationId(conversationId),
       conversationType: ref.conversation?.conversationType,
       tenantId,
     },
@@ -191,9 +187,9 @@ function resolveRetryOptions(
   }
   return {
     enabled: true,
-    maxAttempts: Math.max(1, retry?.maxAttempts ?? 3),
-    baseDelayMs: Math.max(0, retry?.baseDelayMs ?? 250),
-    maxDelayMs: Math.max(0, retry?.maxDelayMs ?? 10_000),
+    maxAttempts: Math.max(1, retry.maxAttempts ?? 3),
+    baseDelayMs: Math.max(0, retry.baseDelayMs ?? 250),
+    maxDelayMs: Math.max(0, retry.maxDelayMs ?? 10_000),
   };
 }
 
@@ -234,35 +230,13 @@ export function renderReplyPayloadsToMessages(
       continue;
     }
 
-    if (!reply.hasMedia) {
+    const [firstMedia, ...remainingMedia] = reply.mediaUrls;
+    if (mediaMode === "inline" && firstMedia) {
+      out.push({ text: reply.text || undefined, mediaUrl: firstMedia });
+      out.push(...remainingMedia.map((mediaUrl) => ({ mediaUrl })));
+    } else {
       pushTextMessages(out, reply.text, { chunkText, chunkLimit, chunkMode });
-      continue;
-    }
-
-    if (mediaMode === "inline") {
-      // For inline mode, combine text with first media as attachment
-      const firstMedia = reply.mediaUrls[0];
-      if (firstMedia) {
-        out.push({ text: reply.text || undefined, mediaUrl: firstMedia });
-        // Additional media URLs as separate messages
-        for (let i = 1; i < reply.mediaUrls.length; i++) {
-          if (reply.mediaUrls[i]) {
-            out.push({ mediaUrl: reply.mediaUrls[i] });
-          }
-        }
-      } else {
-        pushTextMessages(out, reply.text, { chunkText, chunkLimit, chunkMode });
-      }
-      continue;
-    }
-
-    // mediaMode === "split"
-    pushTextMessages(out, reply.text, { chunkText, chunkLimit, chunkMode });
-    for (const mediaUrl of reply.mediaUrls) {
-      if (!mediaUrl) {
-        continue;
-      }
-      out.push({ mediaUrl });
+      out.push(...reply.mediaUrls.map((mediaUrl) => ({ mediaUrl })));
     }
   }
 
@@ -563,10 +537,8 @@ export async function sendMSTeamsMessages(
           // When the live turn context is revoked (e.g. debounced messages),
           // reconstruct the threaded conversation ID so the proactive
           // fallback delivers the reply into the correct channel thread.
-          const remaining = messages.slice(idx);
           return {
-            ids:
-              remaining.length > 0 ? await sendProactively(remaining, idx, resolvedThreadId) : [],
+            ids: await sendProactively(messages.slice(idx), idx, resolvedThreadId),
             fellBack: true,
           };
         },

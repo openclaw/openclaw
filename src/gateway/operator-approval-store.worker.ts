@@ -7,25 +7,17 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
-import { executeOperatorApprovalOperation } from "./operator-approval-store.operations.js";
+import {
+  executeOperatorApprovalOperation,
+  isOperatorApprovalOperation,
+} from "./operator-approval-store.operations.js";
 import { getOperatorApprovalResolutionKey } from "./operator-approval-store.rows.js";
 import type { OperatorApprovalWorkerOperations } from "./operator-approval-store.worker-contract.js";
 
 export function isOperatorApprovalCommand(command: {
   type: string;
 }): command is SqliteWorkerCommand<OperatorApprovalWorkerOperations> {
-  switch (command.type) {
-    case "operatorApprovals.insert":
-    case "operatorApprovals.get":
-    case "operatorApprovals.pending":
-    case "operatorApprovals.resolve":
-    case "operatorApprovals.deny":
-    case "operatorApprovals.expire":
-    case "operatorApprovals.consume":
-      return true;
-    default:
-      return false;
-  }
+  return isOperatorApprovalOperation(command.type);
 }
 
 export function executeOperatorApprovalCommand(

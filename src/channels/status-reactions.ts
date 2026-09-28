@@ -173,17 +173,7 @@ export function resolveToolEmoji(
   return emojis[category];
 }
 
-/**
- * Create a status reaction controller.
- *
- * Features:
- * - Promise chain serialization (prevents concurrent API calls)
- * - Debouncing (intermediate states debounce, terminal states are immediate)
- * - Stall timers (soft/hard warnings on inactivity)
- * - Terminal state protection (done/error mark finished, subsequent updates ignored)
- * - Defers reaction removals until final cleanup to avoid visible flicker on
- *   platforms without atomic reaction replacement
- */
+/** Defer reaction removal until cleanup to avoid flicker without atomic replacement. */
 export function createStatusReactionController(params: {
   enabled: boolean;
   adapter: StatusReactionAdapter;
@@ -342,19 +332,17 @@ export function createStatusReactionController(params: {
 
     pendingEmoji = emoji;
     clearDebounceTimer();
+    const applyPendingEmoji = async () => {
+      await applyEmoji(emoji);
+      pendingEmoji = "";
+    };
 
     if (options.immediate) {
-      void enqueue(async () => {
-        await applyEmoji(emoji);
-        pendingEmoji = "";
-      });
+      void enqueue(applyPendingEmoji);
     } else {
       debounceTimer = setTimeout(() => {
         debounceTimer = null;
-        void enqueue(async () => {
-          await applyEmoji(emoji);
-          pendingEmoji = "";
-        });
+        void enqueue(applyPendingEmoji);
       }, timing.debounceMs);
     }
 
@@ -401,8 +389,6 @@ export function createStatusReactionController(params: {
         }
       } else if (adapter.removeReaction) {
         await removeActiveEmojis();
-      } else {
-        // Telegram handles this atomically on the next setReaction.
       }
       currentEmoji = "";
       pendingEmoji = "";

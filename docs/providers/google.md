@@ -319,11 +319,15 @@ available.
 - Output: WAV for regular TTS attachments, Opus for voice-note targets, PCM for Talk/telephony
 - Voice-note output: Google PCM is wrapped as WAV and transcoded to 48 kHz Opus with `ffmpeg`
 
-Gemini 3.8 TTS uses the Interactions API (`POST /v1beta/interactions`). OpenClaw
-asks for headerless 24 kHz PCM (`audio/l16`) and still wraps that PCM locally.
-`audioProfile`, `speakerName`, and persona notes are sent as
-`speech_metadata.style`, not spoken as part of the transcript. Momentary 3.8
-vocal tags use angle brackets, such as `<laugh>` or `<short pause>`.
+OpenClaw sends Gemini 3.8 TTS through the Interactions API
+(`POST /v1beta/interactions`) with `store: false`. Google also documents 3.8 on
+`generateContent`; Interactions is OpenClaw's routing choice, not a model
+requirement. OpenClaw asks for headerless 24 kHz PCM (`audio/l16`) and still
+wraps that PCM locally. `audioProfile` and `personaPrompt` are sent as
+`speech_metadata.style`, `speakerName` as the structured `speaker` label, and
+none of them are spoken as part of the transcript. Momentary 3.8 vocal tags use
+angle brackets, such as `<laugh>` or `<short pause>`; sustained delivery such as
+whispering belongs in `audioProfile`.
 
 Gemini 3.1 and 2.5 preview TTS still use `generateContent`. Those models keep
 the older behavior: `audioProfile` is prepended to the transcript, and
@@ -353,9 +357,11 @@ To use Google as the default TTS provider:
 
 Gemini API TTS uses natural-language prompting for style control. Set
 `audioProfile` for a reusable delivery style. On Gemini 3.8 that style is
-`speech_metadata` and is not read aloud. On Gemini 3.1 and 2.5 preview models
-it is still prepended to the spoken text. Set `speakerName` when the performance
-needs a named speaker; 3.8 sends it as style metadata too.
+`speech_metadata.style` and is not read aloud. On Gemini 3.1 and 2.5 preview
+models it is still prepended to the spoken text. Set `speakerName` when the
+performance needs a named speaker; 3.8 sends it as the structured
+`speech_metadata.speaker` label bound to the selected voice, never as style
+text.
 
 Gemini 3.1 and 2.5 preview TTS accept expressive square-bracket audio tags in
 the text, such as `[whispers]` or `[laughs]`. Gemini 3.8 uses angle-bracket
@@ -366,7 +372,7 @@ block:
 ```text
 Here is the clean reply text.
 
-[[tts:text]]<whispers> Here is the spoken version.[[/tts:text]]
+[[tts:text]]<laugh> Here is the spoken version. <short pause> Enjoy.[[/tts:text]]
 ```
 
 <Note>
@@ -488,6 +494,49 @@ roundtrip; pass `--openai-audio-cycles 3` for a short repeated lifecycle soak.
 ## Advanced configuration
 
 <AccordionGroup>
+  <Accordion title="Gemini Interactions API (stateless)">
+    Gemini Interactions is an opt-in alternative to the default
+    `google-generative-ai` transport. Register a provider with
+    `api: "google-interactions"` and select models through that provider ID:
+
+    ```json5
+    {
+      models: {
+        mode: "merge",
+        providers: {
+          "google-interactions": {
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+            apiKey: "***",
+            api: "google-interactions",
+            models: [
+              {
+                id: "gemini-3.8-flash",
+                name: "Gemini 3.8 Flash (Interactions)",
+                reasoning: true,
+                input: ["text", "image"],
+                contextWindow: 1048576,
+                maxTokens: 65536,
+              },
+            ],
+          },
+        },
+      },
+      agents: {
+        defaults: { model: { primary: "google-interactions/gemini-3.8-flash" } },
+      },
+    }
+    ```
+
+    This transport is stateless: OpenClaw sends `store: false`, does not retain a
+    server-side interaction ID, and replays the needed conversation context on
+    each request. Explicit Gemini `cachedContent` handles are not supported on
+    this route; use `google-generative-ai` for that feature.
+
+    Interrupted text replies use the normal transient-error retry and failover
+    policy. Malformed completed tool-call arguments remain rejected.
+
+  </Accordion>
+
   <Accordion title="Direct Gemini cache reuse">
     For direct Gemini API runs (`api: "google-generative-ai"`), OpenClaw
     passes a configured `cachedContent` handle through to Gemini requests.

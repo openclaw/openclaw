@@ -85,7 +85,7 @@ describe("ChatHistoryCursorResultSchema", () => {
         inputConsumptions: [{ runId: "consumed-run", consumedByEventId: "event-1" }],
       }),
     ).toBe(true);
-    for (const status of [undefined, "running", "completed", "failed", "blocked"]) {
+    for (const status of [undefined, "running", "completed", "failed", "blocked", "skipped"]) {
       const activity = [
         { messageId: "quiet", items: [] },
         {

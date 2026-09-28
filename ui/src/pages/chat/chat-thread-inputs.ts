@@ -51,9 +51,6 @@ export function placeChatInputs(
   activeInputKey?: string;
 } {
   const orderedQueue = (props.queue ?? []).toSorted(compareChatQueueOrder);
-  const activeSubmission = currentRunId
-    ? orderedQueue.find((queued) => queued.sendRunId === currentRunId)
-    : undefined;
   const { queue, pendingInputs } = selectChatInputDisplay(
     history,
     orderedQueue,
@@ -92,12 +89,8 @@ export function placeChatInputs(
     markSearchVisibility(input.message, inputItems);
     if (input.state === "queued") {
       blocks.push({ items: inputItems, runId: input.runId });
-      // Acceptance replaces the local bubble, not its presentation floor.
-      if (
-        activeSubmission?.sendRunId &&
-        input.runId === activeSubmission.sendRunId &&
-        !hiddenKeys.has(first.key)
-      ) {
+      // The active run owns this floor even when a fresh client has no local send.
+      if (currentRunId && input.runId === currentRunId && !hiddenKeys.has(first.key)) {
         activeInputKey = first.key;
       }
       continue;
@@ -153,7 +146,7 @@ export function placeChatInputs(
     const position = orderedQueue.indexOf(queued);
     const previousPosition = orderState.keys.indexOf(block.items[0]!.key);
     const previousSuccessor =
-      previousPosition < 0 || block.initial || block.bypassesQueue
+      previousPosition < 0 || block.initial
         ? undefined
         : orderState.keys
             .slice(previousPosition + 1)
@@ -203,8 +196,13 @@ export function placeChatInputs(
           successorIndex < 0 ? items.length : successorIndex,
         );
     items.splice(index, 0, ...block.items);
+    // Steering can precede queued work when its own recovered reply anchors it
+    // there. The delivery mode alone must not reverse pending submissions at
+    // the live edge while their acknowledgments are still outstanding.
     insertionCeiling =
-      block.initial || block.bypassesQueue ? insertionCeiling + block.items.length : index;
+      block.initial || (block.bypassesQueue && outputIndex >= 0)
+        ? insertionCeiling + block.items.length
+        : index;
     pendingKeys.add(block.items[0]!.key);
   }
   // Search hides presentation, not the neighbors that keep an input in place.

@@ -88,6 +88,19 @@ it("resolves a relative script against the observed OpenClaw installation", () =
   expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [peer] });
 });
 
+it("preserves a retained runtime used by an orphaned eval worker", () => {
+  rows.set(peer, {
+    ppid: 1,
+    argv: [
+      "node",
+      "--eval",
+      "import(process.argv[1])",
+      "/tmp/openclaw-update-runtime-Ab1234/tree/2f/app/dist/terminal.js",
+    ],
+  });
+  expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [peer] });
+});
+
 it("reports an unclassified PID instead of claiming it is OpenClaw", () => {
   rows.set(peer, { ppid: 1, argv: ["node", "dist/index.js"] });
   readlink.mockImplementation(() => {

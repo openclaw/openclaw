@@ -19,7 +19,7 @@ async function verifySqliteOwnerRetirement(signal: AbortSignal) {
   try {
     const vitestDir = path.dirname(require.resolve("vitest/package.json"));
     await fs.symlink(path.dirname(vitestDir), path.join(root, "node_modules"), "junction");
-    const files = sqliteLifecycleFixtureFiles(repoRoot);
+    const files = sqliteLifecycleFixtureFiles();
     for (const [name, content] of Object.entries(files)) {
       await fs.writeFile(path.join(root, name), content);
     }
@@ -76,7 +76,7 @@ export default defineConfig({
     });
     expect(result.code, result.stdout + result.stderr).toBe(1);
     const output = result.stdout + result.stderr;
-    for (const file of Object.keys(files).filter((name) => !name.startsWith("13-"))) {
+    for (const file of Object.keys(files).filter((name) => /^1[12]-/u.test(name))) {
       const owner = file.startsWith("12-") ? "stateReadWorkers" : "sharedStateWorkerOwner";
       expect(output).toContain(`[sqlite-test-lifecycle] ${file}: retiring openclaw.${owner}`);
     }
@@ -98,16 +98,29 @@ export default defineConfig({
     expect(identity.path).toContain(path.join(root, "retained-agent-state"));
     const report: JsonTestResults = JSON.parse(await fs.readFile(reportPath, "utf8"));
     expect(report).toMatchObject({
-      numTotalTests: 7,
-      numPassedTests: 7,
+      numTotalTests: 13,
+      numPassedTests: 12,
       numFailedTests: 0,
-      numPendingTests: 0,
+      numPendingTests: 1,
       numTodoTests: 0,
     });
     expect(report.testResults.map((file) => path.basename(file.name)).toSorted()).toEqual(
       Object.keys(files).toSorted(),
     );
     for (const file of report.testResults) {
+      // Scheduled-close fixtures prove ordering, including after a runtime skip.
+      const scheduledCloseStatuses = {
+        "10-a-scheduled-close.test.ts": ["passed", "passed", "skipped", "passed"],
+        "10-b-around-each-close.test.ts": ["passed", "passed"],
+      }[path.basename(file.name)];
+      if (scheduledCloseStatuses) {
+        expect(file.status, file.name).toBe("passed");
+        expect(file.message, file.name).toBe("");
+        expect(file.assertionResults.map((assertion) => assertion.status)).toEqual(
+          scheduledCloseStatuses,
+        );
+        continue;
+      }
       const failedTeardown = path.basename(file.name) === "13-a-retained-lease.test.ts";
       expect(file.status, file.name).toBe(failedTeardown ? "failed" : "passed");
       if (failedTeardown) {

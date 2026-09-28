@@ -80,7 +80,7 @@ export async function startModelSetupFirstRunRedirectAfterLocation(params: {
           if (localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")) {
             const ownerRevision = context.gateway.connectionRevision;
             // Crypto stays lazy; only an existing receipt suspends startup.
-            void import("./model-setup-page.ts")
+            void import("./first-run-activation-receipt.ts")
               .then(({ resumeFirstRunActivation }) =>
                 resumeFirstRunActivation(
                   { context, isStillDefaultLanding, redirect },
