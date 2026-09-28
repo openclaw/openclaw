@@ -2,6 +2,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { readRegularFile } from "@openclaw/fs-safe/advanced";
+import { tempWorkspace, type TempWorkspace } from "@openclaw/fs-safe/temp";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -16,8 +18,7 @@ import type { TimedInstallModeOptions } from "../infra/install-mode-options.js";
 import { tryReadJson } from "../infra/json-files.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { tempWorkspace, type TempWorkspace } from "../infra/private-temp-workspace.js";
-import { readRegularFile } from "../infra/regular-file.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import type { InstallPolicySource } from "../security/install-policy.js";
 import { resolveUserPath } from "../utils.js";
 import { isImmutableGitCommitRef } from "./git-install.js";
@@ -242,7 +243,6 @@ function marketplaceEntrySourceToInput(source: MarketplaceEntrySource): string {
     case "github":
       return `${source.repo}${source.ref ? `#${source.ref}` : ""}`;
     case "git":
-      return `${source.url}${source.ref ? `#${source.ref}` : ""}`;
     case "git-subdir":
       return `${source.url}${source.ref ? `#${source.ref}` : ""}`;
     case "url":
@@ -848,7 +848,7 @@ async function downloadUrlToTempFile(
       const finalFileName = resolveSafeMarketplaceDownloadFileName(finalUrl, sourceFileName);
       const fileName = resolveArchiveKind(finalFileName) ? finalFileName : sourceFileName;
       workspace = await tempWorkspace({
-        rootDir: os.tmpdir(),
+        rootDir: resolvePreferredOpenClawTmpDir(),
         prefix: "openclaw-marketplace-download-",
       });
       const createdWorkspace = workspace;
@@ -890,49 +890,35 @@ async function ensureInsideMarketplaceRoot(
 ): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
   const resolved = path.resolve(rootDir, candidate);
   const resolvedExists = await pathExists(resolved);
+  const escaped = {
+    ok: false as const,
+    error: `plugin source escapes marketplace root: ${candidate}`,
+  };
   if (!isPathInside(rootDir, resolved)) {
-    return {
-      ok: false,
-      error: `plugin source escapes marketplace root: ${candidate}`,
-    };
+    return escaped;
   }
 
   if (options?.canonicalRootDir) {
-    try {
-      const rootLstat = await fs.lstat(options.canonicalRootDir);
-      if (!rootLstat.isDirectory()) {
-        throw new Error("invalid marketplace root");
-      }
+    const rootLstat = await fs.lstat(options.canonicalRootDir);
+    if (!rootLstat.isDirectory()) {
+      return escaped;
+    }
 
-      const rootRealPath = await fs.realpath(options.canonicalRootDir);
-      let existingPath = resolved;
-      // Dangling symlinks are treated as missing; live symlinks stop the ancestor
-      // search here and are canonicalized below.
-      while (!(await pathExists(existingPath))) {
-        const parentPath = path.dirname(existingPath);
-        if (parentPath === existingPath) {
-          throw new Error("unreachable marketplace path");
-        }
-        existingPath = parentPath;
+    const rootRealPath = await fs.realpath(options.canonicalRootDir);
+    let existingPath = resolved;
+    // Dangling symlinks are treated as missing; live symlinks stop the ancestor
+    // search here and are canonicalized below.
+    while (!(await pathExists(existingPath))) {
+      const parentPath = path.dirname(existingPath);
+      if (parentPath === existingPath) {
+        return escaped;
       }
+      existingPath = parentPath;
+    }
 
-      const existingRealPath = await fs.realpath(existingPath);
-      if (!isPathInside(rootRealPath, existingRealPath)) {
-        throw new Error("marketplace path escapes canonical root");
-      }
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        (error.message === "invalid marketplace root" ||
-          error.message === "unreachable marketplace path" ||
-          error.message === "marketplace path escapes canonical root")
-      ) {
-        return {
-          ok: false,
-          error: `plugin source escapes marketplace root: ${candidate}`,
-        };
-      }
-      throw error;
+    const existingRealPath = await fs.realpath(existingPath);
+    if (!isPathInside(rootRealPath, existingRealPath)) {
+      return escaped;
     }
   }
 
@@ -1041,64 +1027,44 @@ async function resolveMarketplaceEntryInstallPath(params: {
     return { ok: true, path: resolved.path };
   }
 
-  if (
-    params.source.kind === "github" ||
-    params.source.kind === "git" ||
-    params.source.kind === "git-subdir"
-  ) {
-    const sourceSpec =
-      params.source.kind === "github"
-        ? `${params.source.repo}${params.source.ref ? `#${params.source.ref}` : ""}`
-        : `${params.source.url}${params.source.ref ? `#${params.source.ref}` : ""}`;
-    const cloned = await cloneMarketplaceRepo({
-      source: sourceSpec,
-      timeoutMs: params.timeoutMs,
-      logger: params.logger,
-    });
-    if (!cloned.ok) {
-      return cloned;
+  if (params.source.kind === "url") {
+    if (resolveArchiveKind(params.source.url)) {
+      return await downloadUrlToTempFile(params.source.url, params.timeoutMs);
     }
-    const subPath =
-      params.source.kind === "github" || params.source.kind === "git"
-        ? normalizeOptionalString(params.source.path) || "."
-        : params.source.path.trim();
-    const canonicalRootDir = await fs.realpath(cloned.rootDir);
-    const target = await ensureInsideMarketplaceRoot(cloned.rootDir, subPath, {
-      canonicalRootDir,
-    });
-    if (!target.ok) {
-      await cloned.cleanup();
-      return target;
+    if (!normalizeGitCloneSource(params.source.url)) {
+      return {
+        ok: false,
+        error: `unsupported URL plugin source: ${params.source.url}`,
+      };
     }
-    return {
-      ok: true,
-      path: target.path,
-      cleanup: cloned.cleanup,
-    };
-  }
-
-  if (resolveArchiveKind(params.source.url)) {
-    return await downloadUrlToTempFile(params.source.url, params.timeoutMs);
-  }
-
-  if (!normalizeGitCloneSource(params.source.url)) {
-    return {
-      ok: false,
-      error: `unsupported URL plugin source: ${params.source.url}`,
-    };
   }
 
   const cloned = await cloneMarketplaceRepo({
-    source: params.source.url,
+    source: marketplaceEntrySourceToInput(params.source),
     timeoutMs: params.timeoutMs,
     logger: params.logger,
   });
   if (!cloned.ok) {
     return cloned;
   }
+  if (params.source.kind === "url") {
+    return { ok: true, path: cloned.rootDir, cleanup: cloned.cleanup };
+  }
+  const subPath =
+    params.source.kind === "git-subdir"
+      ? params.source.path.trim()
+      : normalizeOptionalString(params.source.path) || ".";
+  const canonicalRootDir = await fs.realpath(cloned.rootDir);
+  const target = await ensureInsideMarketplaceRoot(cloned.rootDir, subPath, {
+    canonicalRootDir,
+  });
+  if (!target.ok) {
+    await cloned.cleanup();
+    return target;
+  }
   return {
     ok: true,
-    path: cloned.rootDir,
+    path: target.path,
     cleanup: cloned.cleanup,
   };
 }
@@ -1148,21 +1114,14 @@ export async function resolveMarketplaceInstallShortcut(
     return null;
   }
 
-  if (known.installLocation) {
-    return {
-      ok: true,
-      plugin,
-      marketplaceName,
-      marketplaceSource: marketplaceName,
-    };
-  }
-
-  const normalizedSource = normalizeEntrySource(known.source);
-  if (!normalizedSource.ok) {
-    return {
-      ok: false,
-      error: `known Claude marketplace "${marketplaceName}" has an invalid source: ${normalizedSource.error}`,
-    };
+  if (!known.installLocation) {
+    const normalizedSource = normalizeEntrySource(known.source);
+    if (!normalizedSource.ok) {
+      return {
+        ok: false,
+        error: `known Claude marketplace "${marketplaceName}" has an invalid source: ${normalizedSource.error}`,
+      };
+    }
   }
 
   return {

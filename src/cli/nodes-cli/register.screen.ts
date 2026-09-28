@@ -14,8 +14,7 @@ import {
   callNodesGatewayCli,
   nodesCallOpts,
   parseOptionalNodeFiniteNumber,
-  parseOptionalNodeNonNegativeInteger,
-  parseOptionalNodePositiveInteger,
+  parseOptionalNodeInteger,
   resolveCliNodeId,
 } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
@@ -40,23 +39,24 @@ export function registerNodesScreenCommands(nodes: Command) {
       .action(async (opts: NodesRpcOpts & { out?: string }) => {
         await runNodesCommand("screen record", async () => {
           const durationMs = parseDurationMs(opts.duration ?? "");
-          const screenIndex = parseOptionalNodeNonNegativeInteger(opts.screen ?? "0", "--screen");
+          const screenIndex = parseOptionalNodeInteger(
+            opts.screen ?? "0",
+            "--screen",
+            "non-negative",
+          );
           const fps = parseOptionalNodeFiniteNumber(opts.fps ?? "10", "--fps", {
             minExclusive: 0,
           });
-          const timeoutMs = parseOptionalNodePositiveInteger(
-            opts.invokeTimeout,
-            "--invoke-timeout",
-          );
+          const timeoutMs = parseOptionalNodeInteger(opts.invokeTimeout, "--invoke-timeout");
           const nodeId = await resolveCliNodeId(opts, opts.node ?? "");
 
           const invokeParams = buildNodeInvokeParams({
             nodeId,
             command: "screen.record",
             params: {
-              durationMs: Number.isFinite(durationMs) ? durationMs : undefined,
-              screenIndex: Number.isFinite(screenIndex) ? screenIndex : undefined,
-              fps: Number.isFinite(fps) ? fps : undefined,
+              durationMs,
+              screenIndex,
+              fps,
               format: "mp4",
               includeAudio: opts.audio !== false,
             },

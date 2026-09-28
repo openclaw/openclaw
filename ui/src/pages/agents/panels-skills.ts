@@ -9,6 +9,7 @@ import {
   renderSettingsToggle,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { resolveAgentConfig, resolveAgentSkillsFilter } from "../../lib/agents/display.ts";
 import { groupSkills, type SkillGroup } from "../../lib/skills-grouping.ts";
 import {
@@ -16,6 +17,8 @@ import {
   computeSkillReasons,
   renderSkillStatusChips,
 } from "../../lib/skills-shared.ts";
+
+registerSettingsEnglish();
 
 export function renderAgentSkills(params: {
   agentId: string;

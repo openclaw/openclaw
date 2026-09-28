@@ -59,24 +59,15 @@ function resolveKeyBudget(
     return undefined;
   }
   const period = resolveLimitReset(data?.limit_reset);
-  const periodUsage =
-    period === "daily"
-      ? parseProviderUsageNonNegativeNumber(data?.usage_daily)
-      : period === "weekly"
-        ? parseProviderUsageNonNegativeNumber(data?.usage_weekly)
-        : period === "monthly"
-          ? parseProviderUsageNonNegativeNumber(data?.usage_monthly)
-          : parseProviderUsageNonNegativeNumber(data?.usage);
+  const periodUsage = parseProviderUsageNonNegativeNumber(
+    period ? data?.[`usage_${period}`] : data?.usage,
+  );
   const byokUsage =
     data?.include_byok_in_limit !== true
       ? undefined
-      : period === "daily"
-        ? parseProviderUsageNonNegativeNumber(data.byok_usage_daily)
-        : period === "weekly"
-          ? parseProviderUsageNonNegativeNumber(data.byok_usage_weekly)
-          : period === "monthly"
-            ? parseProviderUsageNonNegativeNumber(data.byok_usage_monthly)
-            : parseProviderUsageNonNegativeNumber(data.byok_usage);
+      : parseProviderUsageNonNegativeNumber(
+          period ? data[`byok_usage_${period}`] : data.byok_usage,
+        );
   const remaining = parseProviderUsageNonNegativeNumber(data?.limit_remaining);
   // `limit_remaining` already incorporates BYOK usage when the key is configured to count it.
   const usage =

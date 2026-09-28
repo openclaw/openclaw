@@ -96,7 +96,8 @@ class NodeConnectionNotificationRouter {
       this.finishAlert(pending);
       return;
     }
-    const primary = this.notificationTargets(connected)
+    const primary = connected
+      .filter(isMacNotificationNode)
       .filter((node) => node.lastActiveAtMs !== undefined)
       .toSorted(compareActivity)
       .at(0);
@@ -123,9 +124,9 @@ class NodeConnectionNotificationRouter {
       this.finishAlert(pending);
       return;
     }
-    const targets = this.notificationTargets(connected).filter(
-      (node) => node.connId !== attemptedConnId,
-    );
+    const targets = connected
+      .filter(isMacNotificationNode)
+      .filter((node) => node.connId !== attemptedConnId);
     await Promise.all(targets.map(async (node) => await this.notify(node, source, pending)));
     if (this.attemptIsCurrent(pending)) {
       this.finishAlert(pending);
@@ -161,10 +162,6 @@ class NodeConnectionNotificationRouter {
       }
       this.pendingByNodeId.delete(pending.nodeId);
     }
-  }
-
-  private notificationTargets(connected: readonly NodeSession[]): NodeSession[] {
-    return connected.filter(isMacNotificationNode);
   }
 
   private async sourceIsCurrent(pending: PendingConnectionAlert): Promise<boolean> {

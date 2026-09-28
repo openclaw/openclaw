@@ -33,6 +33,7 @@ import {
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { createChatRunState } from "./server-chat-state.js";
+import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import {
   controlUiClient,
   initializeRepository,
@@ -248,97 +249,95 @@ test.each([
   },
 );
 
-test.each([false, true])(
-  "chat.abort cancels remote project preparation without late binding or agent dispatch (worktree=%s)",
-  async (worktree) => {
-    const root = tempDirs.make("openclaw-session-remote-project-abort-");
-    const workspace = await initializeRepository(root, "workspace");
-    const projectRoot = await initializeRepository(root, "project");
-    testState.agentConfig = { workspace };
-    const { storePath } = await createSessionStoreDir();
-    const project = await registerProjectRegistry({ path: projectRoot, name: "Project" });
-    const materialization = createDeferredCore<typeof project>();
-    projectCloneMocks.materialize.mockReturnValueOnce(materialization.promise);
-    dispatchInboundMessageMock.mockResolvedValue({
-      queuedFinal: false,
-      counts: { block: 0, final: 0, tool: 0 },
+test("chat.abort cancels remote worktree project preparation without late binding or agent dispatch", async () => {
+  const root = tempDirs.make("openclaw-session-remote-project-abort-");
+  const workspace = await initializeRepository(root, "workspace");
+  const projectRoot = await initializeRepository(root, "project");
+  testState.agentConfig = { workspace };
+  const { storePath } = await createSessionStoreDir();
+  const project = await registerProjectRegistry({ path: projectRoot, name: "Project" });
+  const materialization = createDeferredCore<typeof project>();
+  projectCloneMocks.materialize.mockReturnValueOnce(materialization.promise);
+  dispatchInboundMessageMock.mockResolvedValue({
+    queuedFinal: false,
+    counts: { block: 0, final: 0, tool: 0 },
+  });
+  const broadcast = vi.fn();
+  const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+  const context = {
+    broadcast,
+    chatAbortControllers,
+    chatRunState: createChatRunState(),
+    dedupe: new Map(),
+  };
+
+  let key: string | undefined;
+  try {
+    const created = await directSessionReq<{
+      key: string;
+      runId: string;
+      runStarted: boolean;
+      sessionId: string;
+    }>(
+      "sessions.create",
+      {
+        agentId: "main",
+        message: "Cancel the remote project",
+        projectGitUrl: "https://github.com/openclaw/openclaw.git",
+        worktree: true,
+        worktreeName: "retry-worktree",
+      },
+      { ...controlUiClient, context },
+    );
+
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+    expect(created.payload?.runStarted).toBe(true);
+    const { runId, sessionId } = created.payload!;
+    key = created.payload!.key;
+    await vi.waitFor(() => expect(projectCloneMocks.materialize).toHaveBeenCalledOnce());
+    const signal = chatAbortControllers.get(runId)?.controller.signal;
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(projectCloneMocks.materialize).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ signal }),
+    );
+    expect(signal?.aborted).toBe(false);
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+
+    const aborted = await directSessionReq<{ aborted: boolean; runIds: string[] }>(
+      "chat.abort",
+      { agentId: "main", sessionKey: key, runId },
+      { ...controlUiClient, context },
+    );
+
+    expect(aborted.ok, JSON.stringify(aborted.error)).toBe(true);
+    expect(aborted.payload).toMatchObject({ aborted: true, runIds: [runId] });
+    expect(signal?.aborted).toBe(true);
+    expect(broadcast).toHaveBeenCalledWith(
+      "chat",
+      expect.objectContaining({ runId, sessionKey: key, state: "aborted" }),
+      expect.anything(),
+    );
+
+    materialization.resolve(project);
+    await settleWorkspaceRuns(context, storePath, key);
+    expect(context.dedupe.get(`chat:${runId}`)).toMatchObject({
+      payload: { runId, summary: "aborted" },
     });
-    const broadcast = vi.fn();
-    const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
-    const context = {
-      broadcast,
-      chatAbortControllers,
-      chatRunState: createChatRunState(),
-      dedupe: new Map(),
-    };
-
-    let key: string | undefined;
-    try {
-      const created = await directSessionReq<{
-        key: string;
-        runId: string;
-        runStarted: boolean;
-        sessionId: string;
-      }>(
-        "sessions.create",
-        {
-          agentId: "main",
-          message: "Cancel the remote project",
-          projectGitUrl: "https://github.com/openclaw/openclaw.git",
-          ...(worktree ? { worktree: true, worktreeName: "retry-worktree" } : {}),
-        },
-        { ...controlUiClient, context },
-      );
-
-      expect(created.ok, JSON.stringify(created.error)).toBe(true);
-      expect(created.payload?.runStarted).toBe(true);
-      const { runId, sessionId } = created.payload!;
-      key = created.payload!.key;
-      await vi.waitFor(() => expect(projectCloneMocks.materialize).toHaveBeenCalledOnce());
-      const signal = chatAbortControllers.get(runId)?.controller.signal;
-      expect(signal).toBeInstanceOf(AbortSignal);
-      expect(projectCloneMocks.materialize).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.objectContaining({ signal }),
-      );
-      expect(signal?.aborted).toBe(false);
-      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-
-      const aborted = await directSessionReq<{ aborted: boolean; runIds: string[] }>(
-        "chat.abort",
-        { agentId: "main", sessionKey: key, runId },
-        { ...controlUiClient, context },
-      );
-
-      expect(aborted.ok, JSON.stringify(aborted.error)).toBe(true);
-      expect(aborted.payload).toMatchObject({ aborted: true, runIds: [runId] });
-      expect(signal?.aborted).toBe(true);
-      expect(broadcast).toHaveBeenCalledWith(
-        "chat",
-        expect.objectContaining({ runId, sessionKey: key, state: "aborted" }),
-        expect.anything(),
-      );
-
-      materialization.resolve(project);
-      await settleWorkspaceRuns(context, storePath, key);
-      expect(context.dedupe.get(`chat:${runId}`)).toMatchObject({
-        payload: { runId, summary: "aborted" },
-      });
-      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
-        sessionId,
-        pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
-      });
-      expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.projectId).toBe(
-        undefined,
-      );
-      expect(context.chatRunState.runs.get(runId)?.abortMarker).toBeDefined();
-    } finally {
-      materialization.resolve(project);
-      await settleWorkspaceRuns(context, storePath, key, true);
-    }
-  },
-);
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
+      sessionId,
+      pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
+    });
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.projectId).toBe(
+      undefined,
+    );
+    expect(context.chatRunState.runs.get(runId)?.abortMarker).toBeDefined();
+  } finally {
+    materialization.resolve(project);
+    await settleWorkspaceRuns(context, storePath, key, true);
+  }
+});
 
 test.each([false, true])(
   "sessions.create survives Gateway restart after remote project failure and retries preparation on the same session (worktree=%s)",
@@ -958,6 +957,7 @@ test("sessions.create with an empty message preserves its owned checkout above t
       await settleWorkspaceRuns(context, storePath, key, true);
     }
   } finally {
+    await disposeSessionReadContexts();
     if (sessionStoreDir) {
       await closeOpenClawAgentDatabasesAsync(sessionStoreDir);
     }

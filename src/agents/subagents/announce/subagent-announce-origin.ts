@@ -190,7 +190,7 @@ export async function resolveSubagentCompletionOrigin(params: {
     channel && conversationId ? { channel, accountId, conversationId } : undefined;
   const router = createBoundDeliveryRouter();
   for (const targetSessionKey of [params.requesterSessionKey, params.childSessionKey]) {
-    const route = router.resolveDestination({
+    const route = await router.resolveDestination({
       eventKind: "task_completion",
       targetSessionKey,
       requester: requesterConversation,

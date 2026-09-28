@@ -34,16 +34,18 @@ run_plugins_clawhub_scenario() {
       return 1
     }
 
-    local clawhub_default_plugin_spec
+    local clawhub_default_plugin_spec="clawhub:@openclaw/plugin-e2e-fixture"
     if [[ "${OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB:-0}" = "1" ]]; then
-      clawhub_default_plugin_spec="clawhub:@openclaw/kitchen-sink"
+      if [[ -z "${OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC:-}" || -z "${OPENCLAW_PLUGINS_E2E_CLAWHUB_ID:-}" ]]; then
+        echo "Live ClawHub E2E requires OPENCLAW_PLUGINS_E2E_CLAWHUB_SPEC and OPENCLAW_PLUGINS_E2E_CLAWHUB_ID; the Kitchen Sink listing has been retired." >&2
+        return 2
+      fi
       export OPENCLAW_CLAWHUB_URL="${OPENCLAW_CLAWHUB_URL:-${CLAWHUB_URL:-https://clawhub.ai}}"
       export NPM_CONFIG_REGISTRY="${OPENCLAW_PLUGINS_E2E_LIVE_NPM_REGISTRY:-https://registry.npmjs.org/}"
     else
-      clawhub_default_plugin_spec="clawhub:@openclaw/plugin-e2e-fixture"
       # Keep the release-path smoke hermetic; live ClawHub can rate-limit CI.
       if [[ -n "${OPENCLAW_CLAWHUB_URL:-}" || -n "${CLAWHUB_URL:-}" ]]; then
-        echo "Ignoring ambient ClawHub URL for fixture-mode plugin E2E; set OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB=1 for live ClawHub."
+        echo "Ignoring ambient ClawHub URL for fixture-mode plugin E2E."
       fi
       unset OPENCLAW_CLAWHUB_URL CLAWHUB_URL
       clawhub_fixture_dir="$(mktemp -d "$OPENCLAW_PLUGINS_TMP_DIR/openclaw-clawhub-fixture.XXXXXX")"

@@ -1,11 +1,9 @@
 // Approval shared helpers normalize pending exec/plugin approval lookups,
 // decision payloads, turn-source routing, and gateway error responses.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import type {
-  ApprovalChannelReviewer,
-  ValidationError,
-} from "../../../packages/gateway-protocol/src/index.js";
+import type { ApprovalChannelReviewer } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasApprovalTurnSourceRoute } from "../../infra/approval-turn-source.js";
 import type { ChannelApprovalKind } from "../../infra/approval-types.js";
@@ -21,7 +19,6 @@ import type { OperatorApprovalStoreGuard } from "../operator-approval-store.type
 import {
   type ApprovalRecordLookupResult,
   isApprovalRecordVisibleToClient,
-  normalizeApprovalIdentities,
   resolvePendingApprovalRecord,
   resolveResolvedApprovalRecord,
   respondPendingApprovalLookupError,
@@ -30,7 +27,7 @@ import {
 import type { ApprovalRequestAuthority } from "./approval-request-authority.js";
 import { buildWaitResponse, type WaitReasonResolver } from "./approval-wait-response.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { assertValidParams, type Validator } from "./validation.js";
 
 export {
   isApprovalRecordVisibleToClient,
@@ -42,12 +39,6 @@ export {
 const APPROVAL_ALREADY_RESOLVED_DETAILS = {
   reason: "APPROVAL_ALREADY_RESOLVED",
 } as const;
-
-function resolveRecordedApprovalDecision<TPayload>(
-  record: ExecApprovalRecord<TPayload>,
-): ExecApprovalDecision | undefined {
-  return record.decision ?? record.consumedDecision;
-}
 
 type ApprovalTurnSourceFields = {
   turnSourceChannel?: string | null;
@@ -81,12 +72,6 @@ type ApprovalResolveParams = {
   reviewer?: ApprovalChannelReviewer;
 };
 
-type ApprovalResolveParamsValidator<TParams extends ApprovalResolveParams> = ((
-  params: unknown,
-) => params is TParams) & {
-  errors?: ValidationError[] | null;
-};
-
 function isApprovalDecision(value: string): value is ExecApprovalDecision {
   return value === "allow-once" || value === "allow-always" || value === "deny";
 }
@@ -106,7 +91,7 @@ export function bindApprovalReviewerDeviceIds<TPayload>(params: {
   record: ExecApprovalRecord<TPayload>;
   deviceIds?: readonly string[] | null;
 }): void {
-  const deviceIds = normalizeApprovalIdentities(params.deviceIds);
+  const deviceIds = normalizeUniqueTrimmedStringList(params.deviceIds);
   if (deviceIds.length > 0) {
     params.record.approvalReviewerDeviceIds = deviceIds;
   }
@@ -164,7 +149,7 @@ export function buildRequestedApprovalEvent<
 /** Validates approval resolve params and narrows the decision to the supported enum. */
 export function resolveApprovalDecisionParams<TParams extends ApprovalResolveParams>(params: {
   rawParams: unknown;
-  validate: ApprovalResolveParamsValidator<TParams>;
+  validate: Validator<TParams>;
   methodName: string;
   respond: RespondFn;
 }): {
@@ -465,7 +450,7 @@ function respondRepeatedApprovalResolution<TPayload>(
 ): void {
   // Identical retries are idempotent; a conflicting retry must never replace
   // or obscure the first durable operator decision.
-  if (resolveRecordedApprovalDecision(record) === decision) {
+  if ((record.decision ?? record.consumedDecision) === decision) {
     respond(true, { ok: true }, undefined);
     return;
   }

@@ -1,11 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isPidAlive } from "../../shared/pid-alive.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { peekSessionMcpRuntime, retireSessionMcpRuntime } from "../agent-bundle-mcp-manager-api.js";
+import {
+  disposeAllSessionMcpRuntimes,
+  peekSessionMcpRuntime,
+  retireSessionMcpRuntime,
+} from "../agent-bundle-mcp-manager-api.js";
+import { bindSessionMcpRuntimeTestScheduler } from "../agent-bundle-mcp-manager.test-support.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { AuthStorage } from "../sessions/auth-storage.js";
 import { ModelRegistry } from "../sessions/model-registry.js";
@@ -15,6 +20,9 @@ import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe.skipIf(process.platform === "win32")("native MCP discovery ownership", () => {
+  beforeEach(bindSessionMcpRuntimeTestScheduler);
+  afterEach(disposeAllSessionMcpRuntimes);
+
   it.each(["app-server", "cli"] as const)(
     "%s keeps prepared servers usable until session end and retires excluded discovery servers",
     async (adapter) => {

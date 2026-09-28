@@ -357,14 +357,14 @@ export async function attachAuthenticatedGatewayConnect(
   }
   // Record the authenticated ingress after device and role scope restrictions.
   // Later turns must not infer management authority from names or session routing.
+  const authenticatedOperator =
+    role === "operator" && authMethod !== undefined && authMethod !== "none";
   const authenticatedControlUi =
-    role === "operator" &&
-    authMethod !== undefined &&
-    authMethod !== "none" &&
-    connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
+    authenticatedOperator && connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
   const controlUiAdmin = authenticatedControlUi && scopes.includes(ADMIN_SCOPE);
   const internal = {
     ...(isLocalClient ? { isLocalClient: true as const } : {}),
+    ...(authenticatedOperator ? { authenticatedOperator: true as const } : {}),
     ...(authenticatedControlUi ? { authenticatedControlUi: true as const } : {}),
     ...(controlUiAdmin ? { controlUiAdmin: true as const } : {}),
     ...(isTrustedApprovalRuntime ? { approvalRuntime: true } : {}),
@@ -404,7 +404,10 @@ export async function attachAuthenticatedGatewayConnect(
       : undefined,
     usesSharedGatewayAuth: sessionUsesSharedGatewayAuth,
     sharedGatewaySessionGeneration: sessionSharedGatewaySessionGeneration,
-    authPolicyGeneration: resolveGatewayAuthPolicyGeneration(context.configSnapshot),
+    authPolicyGeneration: resolveGatewayAuthPolicyGeneration(
+      context.configSnapshot,
+      authenticatedUserId,
+    ),
     presenceKey,
     ...(authenticatedUserId ? { authenticatedUserId } : {}),
     ...(authenticatedUserIsTailscaleProvider ? { authenticatedUserIsTailscaleProvider: true } : {}),
@@ -535,6 +538,20 @@ export async function attachAuthenticatedGatewayConnect(
   handoffReceiver.value();
   setHandshakeState("connected");
   advanceHandshakePhase("session_attached");
+  // Ephemeral clients never page transcripts, so avoid starting an idle history worker for them.
+  if (role === "operator" && !isEphemeralGatewayClient(connectParams.client)) {
+    runDetachedConnectWork(
+      async () => {
+        const { prewarmGatewaySessionHistory } = await import("../../server-history-prewarm.js");
+        await prewarmGatewaySessionHistory(getRuntimeConfig(), {
+          onlyIfCold: true,
+          isCancelled: () => context.handler.connectionWork.signal.aborted,
+        });
+      },
+      (error) =>
+        logGateway.debug(`connection session history prewarm failed: ${formatForLog(error)}`),
+    );
+  }
   logWs("in", "connect", {
     connId,
     client: connectParams.client.id,
@@ -571,6 +588,7 @@ export async function attachAuthenticatedGatewayConnect(
   if (presenceKey) {
     const authenticatedPresenceUser = currentAuthenticatedPresenceUser();
     upsertPresence(presenceKey, {
+      connectionId: connId,
       host: connectParams.client.displayName ?? connectParams.client.id ?? os.hostname(),
       clientId: connectParams.client.id,
       ip: isLocalClient ? undefined : reportedClientIp,

@@ -72,9 +72,9 @@ the model ref canonical and select the CLI runtime per model:
 {
   agents: {
     defaults: {
-      model: "anthropic/claude-opus-5",
+      model: "anthropic/claude-opus-5-5",
       models: {
-        "anthropic/claude-opus-5": {
+        "anthropic/claude-opus-5-5": {
           agentRuntime: { id: "claude-cli" },
         },
       },

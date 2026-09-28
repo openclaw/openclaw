@@ -4,17 +4,21 @@ import { createGatewayCronReconciliation } from "./server-cron-reconciled.js";
 
 type RunHook = Parameters<typeof createGatewayCronReconciliation>[0]["runHook"];
 
+function createReconciliation(runHook: RunHook, isClosing = () => false) {
+  return createGatewayCronReconciliation({
+    port: 18789,
+    workspaceDir: "/tmp/openclaw-workspace",
+    isClosing,
+    runHook,
+  });
+}
+
 describe("gateway cron reconciliation lifecycle", () => {
   it("emits only the public snapshot fields and captures the reconciled service", async () => {
     const runHook = vi.fn<RunHook>(async () => undefined);
     const cron = { id: "startup-cron" };
     const config = { cron: { enabled: true } } as OpenClawConfig;
-    const reconciliation = createGatewayCronReconciliation({
-      port: 18789,
-      workspaceDir: "/tmp/openclaw-workspace",
-      isClosing: () => false,
-      runHook,
-    });
+    const reconciliation = createReconciliation(runHook);
     const cronState = {
       cron,
       storePath: "/private/cron.json",
@@ -45,12 +49,7 @@ describe("gateway cron reconciliation lifecycle", () => {
 
   it("suppresses a startup completion superseded by reload", async () => {
     const runHook = vi.fn<RunHook>(async () => undefined);
-    const reconciliation = createGatewayCronReconciliation({
-      port: 18789,
-      workspaceDir: "/tmp/openclaw-workspace",
-      isClosing: () => false,
-      runHook,
-    });
+    const reconciliation = createReconciliation(runHook);
     const startup = reconciliation.arm({
       reason: "startup",
       config: {} as OpenClawConfig,
@@ -72,12 +71,7 @@ describe("gateway cron reconciliation lifecycle", () => {
   it("suppresses invalidated and shutdown completions", async () => {
     let closing = false;
     const runHook = vi.fn<RunHook>(async () => undefined);
-    const reconciliation = createGatewayCronReconciliation({
-      port: 18789,
-      workspaceDir: "/tmp/openclaw-workspace",
-      isClosing: () => closing,
-      runHook,
-    });
+    const reconciliation = createReconciliation(runHook, () => closing);
     const invalidated = reconciliation.arm({
       reason: "reload",
       config: {} as OpenClawConfig,
@@ -111,12 +105,7 @@ describe("gateway cron reconciliation lifecycle", () => {
       }
       order.push(`${event.reason}:end`);
     });
-    const reconciliation = createGatewayCronReconciliation({
-      port: 18789,
-      workspaceDir: "/tmp/openclaw-workspace",
-      isClosing: () => false,
-      runHook,
-    });
+    const reconciliation = createReconciliation(runHook);
     const startup = reconciliation.arm({
       reason: "startup",
       config: {} as OpenClawConfig,
@@ -151,12 +140,7 @@ describe("gateway cron reconciliation lifecycle", () => {
         releaseHook = resolve;
       });
     });
-    const reconciliation = createGatewayCronReconciliation({
-      port: 18789,
-      workspaceDir: "/tmp/openclaw-workspace",
-      isClosing: () => false,
-      runHook,
-    });
+    const reconciliation = createReconciliation(runHook);
     const armed = reconciliation.arm({
       reason: "startup",
       config: {} as OpenClawConfig,

@@ -1,10 +1,17 @@
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import type { SessionOperatorScope } from "../../shared/session-method-scopes-base.js";
 import { isGatewayAuthPolicyCurrent } from "../auth-policy.js";
 import { readGatewayDeviceRevocationGuard } from "../device-revocation.js";
 import type { ExpectedProfileBinding } from "../expected-profile.js";
+import {
+  authorizeCurrentOperatorRoleScopes,
+  resolveGatewayOperatorRoleActor,
+} from "../operator-role-policy.js";
 import { SharedGatewaySessionGenerationState } from "../server-shared-auth-generation.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import type {
   GatewayRequestHandlerOptions,
   GatewayRequestOptions,
@@ -22,6 +29,8 @@ type RequestMutationAuthorityBase = {
   assertLifetimeCurrent: () => void;
   /** Host-proven child input retains its source after the spawning invocation closes. */
   assertAdmittedInputCurrent?: () => void;
+  /** Original person restrictions survive independently of the invoking tool receipt. */
+  assertOperatorCurrent?: () => void;
   expectedProfileBinding?: ExpectedProfileBinding;
   /** Recorded by the scope owner only when this invocation uses its narrow alternative. */
   sessionScope?: SessionOperatorScope;
@@ -158,7 +167,11 @@ export function bindWebSocketRequestMutationAuthority<T extends GatewayRequestOp
       options.hasCurrentClientAuthority !== hasCurrentClientAuthority ||
       options.sessionMutationCommitGuard !== undefined ||
       client.invalidated ||
-      !isGatewayAuthPolicyCurrent(client.authPolicyGeneration, getRuntimeConfigSnapshot()) ||
+      !isGatewayAuthPolicyCurrent(
+        client.authPolicyGeneration,
+        getRuntimeConfigSnapshot(),
+        client.authenticatedUserId,
+      ) ||
       !hasCurrentDeviceRevocation() ||
       client.internal?.agentRuntimeIdentity
     ) {
@@ -212,6 +225,7 @@ export function bindGatewayRequestHandlerMutationAuthority<T extends GatewayRequ
   };
   const assertCurrent = () => {
     assertHandlerCurrent();
+    source.assertOperatorCurrent?.();
     if (source.family === "worker") {
       source.assertWorkerCurrent();
     }
@@ -222,30 +236,28 @@ export function bindGatewayRequestHandlerMutationAuthority<T extends GatewayRequ
     // Keep the pre-router owner; the handler guard also contains native profile selection.
     source.assertLifetimeCurrent();
   };
-  const authority: GatewayRequestMutationAuthority =
-    source.family === "worker"
+  const authority: GatewayRequestMutationAuthority = {
+    assertCurrent,
+    assertLifetimeCurrent,
+    expectedProfileBinding: retainedProfileBinding,
+    sessionScope: retainedSessionScope,
+    assertOperatorCurrent: source.assertOperatorCurrent,
+    ...(source.family === "worker"
       ? {
-          family: "worker",
-          assertCurrent,
-          assertLifetimeCurrent,
-          expectedProfileBinding: retainedProfileBinding,
-          sessionScope: retainedSessionScope,
+          family: "worker" as const,
           assertWorkerCurrent: () => {
             assertHandlerCurrent();
+            source.assertOperatorCurrent?.();
             source.assertWorkerCurrent();
           },
         }
-      : {
-          family: "native-compatibility",
-          assertCurrent,
-          assertLifetimeCurrent,
-          expectedProfileBinding: retainedProfileBinding,
-          sessionScope: retainedSessionScope,
-        };
+      : { family: "native-compatibility" as const }),
+  };
   if (source.assertAdmittedInputCurrent) {
     const assertAdmittedInputCurrent = source.assertAdmittedInputCurrent;
     const assertTransferredHandlerCurrent = () => {
       assertHandlerCurrent();
+      source.assertOperatorCurrent?.();
       // An adapter may add an opaque host guard. Only the unchanged producer
       // guard has the known tool-receipt/source split; retain any new guard in full.
       if (sessionMutationCommitGuard !== request.sessionMutationCommitGuard) {
@@ -269,6 +281,48 @@ export function bindGatewayRequestHandlerMutationAuthority<T extends GatewayRequ
   }
   bindRequestMutationAuthority(handler, authority);
   return handler;
+}
+
+/** Retain the person's ceiling independently of the request's receipt lifetime. */
+export function captureGatewayRequestOperatorGuard(options: GatewayRequestOptions): () => void {
+  const { client, context } = options;
+  const source = readGatewayRequestMutationAuthority(options);
+  const actor = resolveGatewayOperatorRoleActor(client);
+  const role = client?.connect?.role ?? "operator";
+  const scopes = [...(client?.connect?.scopes ?? [])];
+  const profileId = client?.authenticatedUserProfile?.profileId;
+  const userId = client?.authenticatedUserId;
+  const canonicalProfileId = client?.preparedSessionProfile?.profileId;
+  const assertCurrent = () => {
+    source.assertOperatorCurrent?.();
+    const currentActor = resolveGatewayOperatorRoleActor(client);
+    if (
+      (client?.connect?.role ?? "operator") !== role ||
+      scopes.some((scope) => !operatorScopeSatisfied(scope, client?.connect?.scopes ?? [])) ||
+      client?.authenticatedUserProfile?.profileId !== profileId ||
+      client?.authenticatedUserId !== userId ||
+      (canonicalProfileId !== undefined &&
+        client?.preparedSessionProfile?.profileId !== canonicalProfileId) ||
+      currentActor?.kind !== actor?.kind ||
+      (actor?.kind === "operator" &&
+        (currentActor?.kind !== "operator" || currentActor.profileId !== actor.profileId))
+    ) {
+      throw new SessionMutationAuthorizationChangedError(
+        errorShape(ErrorCodes.FORBIDDEN, "Gateway requester authority changed"),
+      );
+    }
+    if (actor?.kind === "operator") {
+      const error = authorizeCurrentOperatorRoleScopes(
+        client,
+        (context.getCommittedRuntimeConfig ?? context.getRuntimeConfig)(),
+      );
+      if (error) {
+        throw new SessionMutationAuthorizationChangedError(error);
+      }
+    }
+  };
+  bindRequestMutationAuthority(options, { ...source, assertOperatorCurrent: assertCurrent });
+  return assertCurrent;
 }
 
 /** Keep the host lifetime and operator target policy on the same commit boundary. */

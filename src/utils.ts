@@ -3,7 +3,6 @@ import fs from "node:fs";
 import os from "node:os";
 import { normalizeHomeDirValue } from "@openclaw/normalization-core/home-dir";
 import { resolveConfigDir } from "./infra/config-dir.js";
-import { pathExists as fsSafePathExists } from "./infra/fs-safe.js";
 import { resolveEffectiveHomeDir, resolveUserPath } from "./infra/home-dir.js";
 import { shortenPathWithHome } from "./infra/home-display.js";
 import "./infra/plain-object.js";
@@ -11,6 +10,7 @@ import { escapeRegExp as escapeRegExpValue } from "./shared/regexp.js";
 export { isPlainObject } from "./infra/plain-object.js";
 export { escapeRegExp } from "./shared/regexp.js";
 export { sleep } from "./utils/sleep.js";
+export { pathExists } from "@openclaw/fs-safe/advanced";
 export { isRecord } from "@openclaw/normalization-core/record-coerce";
 export { resolveConfigDir, resolveUserPath };
 
@@ -114,10 +114,4 @@ export let CONFIG_DIR = resolveConfigDir();
 export function pinConfigDir(env: NodeJS.ProcessEnv = process.env): string {
   CONFIG_DIR = resolveConfigDir(env);
   return CONFIG_DIR;
-}
-/**
- * Check if a file or directory exists at the given path.
- */
-export async function pathExists(targetPath: string): Promise<boolean> {
-  return await fsSafePathExists(targetPath);
 }

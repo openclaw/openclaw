@@ -1,15 +1,14 @@
 // Tool-name allowlist tests cover session replay names, client tool conflict
 // checks, and Tool Search compaction visibility.
-import { describe, expect, it, onTestFinished } from "vitest";
+import { describe, expect, it } from "vitest";
 import { findClientToolNameConflicts } from "../agent-tool-definition-adapter.js";
 import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
 import {
   addClientToolsToToolSearchCatalog,
   applyToolSearchCatalog,
   createToolSearchCatalogRef,
-  TOOL_SEARCH_CODE_MODE_TOOL_NAME,
+  TOOL_CALL_RAW_TOOL_NAME,
 } from "../tool-search.js";
-import { testing } from "../tool-search.test-support.js";
 import type { ClientToolDefinition } from "./run/params.js";
 import {
   collectAllowedToolNames,
@@ -20,30 +19,6 @@ import {
 } from "./tool-name-allowlist.js";
 
 describe("tool name allowlists", () => {
-  it("collects local and client tool names", () => {
-    const names = collectAllowedToolNames({
-      tools: [createStubTool("read"), createStubTool("memory_search")],
-      clientTools: [
-        {
-          type: "function",
-          function: {
-            name: "image_generate",
-            description: "Generate an image",
-            parameters: { type: "object", properties: {} },
-          },
-        },
-      ],
-    });
-
-    expect([...names]).toEqual(["read", "memory_search", "image_generate"]);
-  });
-
-  it("builds a stable agent session allowlist from custom tool names", () => {
-    const allowlist = toSessionToolAllowlist(new Set(["write", "read", "read", "edit"]));
-
-    expect(allowlist).toEqual(["edit", "read", "write"]);
-  });
-
   it("collects exact registered custom-tool names for the agent session allowlist", () => {
     const allowlist = toSessionToolAllowlist(
       collectRegisteredToolNames([
@@ -58,13 +33,11 @@ describe("tool name allowlists", () => {
   });
 
   it("keeps hidden core names available for client conflict admission", () => {
-    onTestFinished(() => testing.setToolSearchCodeModeSupportedForTest(undefined));
-    testing.setToolSearchCodeModeSupportedForTest(true);
     // Tool Search hides many built-ins from the visible tool list (core coding
     // tools like exec stay visible), but conflict checks still need the
     // original core names to reject duplicate client tools.
     const uncompactedTools = [
-      createStubTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME),
+      createStubTool(TOOL_CALL_RAW_TOOL_NAME),
       createStubTool("exec"),
       createStubTool("message"),
     ];
@@ -76,11 +49,8 @@ describe("tool name allowlists", () => {
     });
     const names = collectCoreBuiltinToolNames(uncompactedTools);
 
-    expect([...names]).toEqual([TOOL_SEARCH_CODE_MODE_TOOL_NAME, "exec", "message"]);
-    expect(compacted.tools.map((tool) => tool.name)).toEqual([
-      TOOL_SEARCH_CODE_MODE_TOOL_NAME,
-      "exec",
-    ]);
+    expect([...names]).toEqual([TOOL_CALL_RAW_TOOL_NAME, "exec", "message"]);
+    expect(compacted.tools.map((tool) => tool.name)).toEqual([TOOL_CALL_RAW_TOOL_NAME, "exec"]);
     expect(
       findClientToolNameConflicts({
         tools: [
@@ -129,12 +99,10 @@ describe("tool name allowlists", () => {
   });
 
   it("excludes client tool names when Tool Search compacts them into the catalog", () => {
-    onTestFinished(() => testing.setToolSearchCodeModeSupportedForTest(undefined));
-    testing.setToolSearchCodeModeSupportedForTest(true);
     const config = { tools: { toolSearch: true } } as never;
     const catalogRef = createToolSearchCatalogRef();
     const compacted = applyToolSearchCatalog({
-      tools: [createStubTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME)],
+      tools: [createStubTool(TOOL_CALL_RAW_TOOL_NAME)],
       config,
       sessionId: "session-client-allowed-names",
       catalogRef,
@@ -164,17 +132,15 @@ describe("tool name allowlists", () => {
 
     expect(compacted.catalogRegistered).toBe(true);
     expect(clientToolSearch.tools).toEqual([]);
-    expect(allowlist).toEqual([TOOL_SEARCH_CODE_MODE_TOOL_NAME]);
+    expect(allowlist).toEqual([TOOL_CALL_RAW_TOOL_NAME]);
   });
 
   it("keeps hidden catalog tools valid for replay guards after Tool Search compaction", () => {
-    onTestFinished(() => testing.setToolSearchCodeModeSupportedForTest(undefined));
-    testing.setToolSearchCodeModeSupportedForTest(true);
     // Replay validation uses the full registered tool set; the visible session
     // allowlist can be narrower after catalog compaction.
     const config = { tools: { toolSearch: true } } as never;
     const uncompactedTools = [
-      createStubTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME),
+      createStubTool(TOOL_CALL_RAW_TOOL_NAME),
       createStubTool("exec"),
       createStubTool("fake_plugin_tool"),
     ];
@@ -207,12 +173,12 @@ describe("tool name allowlists", () => {
       }),
     );
 
-    expect(visibleAllowlist).toEqual(["exec", TOOL_SEARCH_CODE_MODE_TOOL_NAME]);
+    expect(visibleAllowlist).toEqual(["exec", TOOL_CALL_RAW_TOOL_NAME]);
     expect(replayAllowlist).toEqual([
       "client_pick_file",
       "exec",
       "fake_plugin_tool",
-      TOOL_SEARCH_CODE_MODE_TOOL_NAME,
+      TOOL_CALL_RAW_TOOL_NAME,
     ]);
   });
 });

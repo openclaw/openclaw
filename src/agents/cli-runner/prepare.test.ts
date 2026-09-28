@@ -34,7 +34,7 @@ import {
 } from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import type { resolveMcpLoopbackScopedTools as resolveLoopbackTools } from "../../gateway/mcp-http.runtime.js";
-import { setActiveNodeContext } from "../../infra/active-node-context.js";
+import { setActiveNodeContexts } from "../../infra/active-node-context.js";
 import {
   claimHeartbeatOutcomeForRun,
   persistHeartbeatOutcome,
@@ -102,6 +102,7 @@ import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
   buildDefaultTestCliBackend,
   createCliRunnerPrepareFixture,
+  createCliRepositorySkillFixture,
   createTestMcpLoopbackClientGrant,
   createTestMcpLoopbackServer,
   createTestMcpLoopbackServerConfig,
@@ -136,6 +137,7 @@ import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { finalizeCliContextEngineTurn } from "./cli-run-transcript.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
+import { registerCliThinkingPreparationTests } from "./prepare-thinking.test-support.js";
 import { prepareCliRunContext } from "./prepare.js";
 import {
   resetCliRunnerPrepareTestDeps,
@@ -249,7 +251,7 @@ function createCliBackendConfig(params: TestCliBackendParams = {}): OpenClawConf
 }
 
 const SHARED_CHAT_MESSAGE_TOOL_ETIQUETTE =
-  "- Group/channel: stale/joke/light ack/low-value chatter => reaction or silence. Needed reply => `message(action=send)`; final text private.";
+  "- Group/channel: stale/joke/light ack/low-value chatter => reaction or silence. Needed text reply => `message(action=send)`; final text private.";
 
 function createBundledMessageToolConfig(): OpenClawConfig {
   setCliRunnerPrepareTestDeps({
@@ -492,19 +494,10 @@ describe("prepareCliRunContext", () => {
     });
   });
 
-  it.each(["high", "off"] as const)(
-    "passes %s thinking through the CLI backend execution seam",
-    async (thinkLevel) => {
-      const prepareExecution = vi.fn(async () => undefined);
-      setCliBackendForPrepareTest({ prepareExecution });
-
-      await fixture.prepare({ provider: "claude-cli", thinkLevel });
-
-      expect(prepareExecution).toHaveBeenCalledWith(
-        expect.objectContaining({ thinkingLevel: thinkLevel }),
-      );
-    },
-  );
+  registerCliThinkingPreparationTests({
+    getFixture: () => fixture,
+    setBackend: setCliBackendForPrepareTest,
+  });
 
   it("uses the prepared model context budget before discovery cache settlement", async () => {
     const prepareExecution = vi.fn(async () => undefined);
@@ -713,7 +706,7 @@ describe("prepareCliRunContext", () => {
   });
 
   afterEach(async () => {
-    setActiveNodeContext(null);
+    setActiveNodeContexts([]);
     cliBackendsTesting.resetDepsForTest();
     resetCliRunnerPrepareTestDeps();
     resetCliAuthEpochTestDeps();
@@ -1952,7 +1945,7 @@ describe("prepareCliRunContext", () => {
   });
 
   it("prepares side questions without agent-turn context, tools, hooks, or reusable sessions", async () => {
-    setActiveNodeContext({ nodeId: "active-mac" });
+    setActiveNodeContexts([{ nodeId: "active-mac" }]);
     fixture.appendTranscript({
       id: "msg-1",
       parentId: null,
@@ -2388,7 +2381,7 @@ describe("prepareCliRunContext", () => {
 
       expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "cli-session" });
       expect(context.params.prompt).toBe(
-        "Current event:\nBob: yes\n\n[OpenClaw room event]\n\nCurrent active computer (latest physical input, not message origin): active_node=unknown",
+        "Current event:\nBob: yes\n\n[OpenClaw room event]\n\nCurrent active computer (latest reported app/system input, not message origin): active_node=unknown active_node_identity=unknown",
       );
       expect(context.openClawHistoryPrompt).toContain("Room context:\nAlice: lunch?");
       expect(context.openClawHistoryPrompt).toContain("Current event:\nBob: yes");
@@ -3160,15 +3153,11 @@ describe("prepareCliRunContext", () => {
   it.each([false, true])("uses admitted CLI repository skills (managed=%s)", async (managed) => {
     const { dir } = fixture.session;
     const taskDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-task-"));
-    const canonicalDir = path.join(dir, "canonical", "packages", "app");
-    const skillDir = path.join(managed ? canonicalDir : taskDir, ".agents", "skills", "task-proof");
-    fs.mkdirSync(skillDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(skillDir, "SKILL.md"),
-      "---\nname: task-proof\ndescription: Task-local proof\n---\n# Proof instructions\n",
-    );
+    const { canonicalDir, skillDir } = createCliRepositorySkillFixture(dir, taskDir, managed);
     try {
       const context = await fixture.prepare({
+        config: { agents: { defaults: { workspace: dir } } },
+        workspaceDir: taskDir,
         cwd: taskDir,
         skillsSnapshot: undefined,
         ...(managed
@@ -3192,6 +3181,7 @@ describe("prepareCliRunContext", () => {
       expect(context.systemPrompt).not.toContain(`Working directory: ${dir}`);
       expect(context.systemPrompt).toContain("<name>task-proof</name>");
       expect(context.systemPrompt).toContain(path.join(skillDir, "SKILL.md"));
+      expect(context.systemPrompt).not.toContain("Worktree copy");
     } finally {
       fs.rmSync(taskDir, { recursive: true, force: true });
     }
@@ -5725,7 +5715,7 @@ describe("prepareCliRunContext", () => {
   });
 
   it("preserves a Claude native-control resume when the local transcript is absent", async () => {
-    setActiveNodeContext({ nodeId: "active-mac" });
+    setActiveNodeContexts([{ nodeId: "active-mac" }]);
     setCliBackendForPrepareTest();
     const transcriptCheck = vi.fn(async () => false);
     const orphanCheck = vi.fn(async () => true);

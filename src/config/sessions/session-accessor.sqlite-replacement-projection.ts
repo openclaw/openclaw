@@ -2,11 +2,16 @@ import { isDeepStrictEqual } from "node:util";
 import { isMainThread } from "node:worker_threads";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
+import { deferOpenClawAgentPostCommitPublication } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import {
+  supportsOpenClawAgentDatabaseExecution,
+  type OpenClawAgentDatabaseExecution,
+} from "../../state/openclaw-agent-execution.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
+import { withNativeSessionCommitContext } from "./session-accessor.sqlite-commit-context.js";
 import type {
   SessionEntryReplacementSnapshot,
   SessionEntryReplacementUpdate,
@@ -20,22 +25,28 @@ import {
 import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import { finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort } from "./session-accessor.sqlite-maintenance.js";
 import { readSessionEntryReplacementState } from "./session-accessor.sqlite-replacement-read.js";
-import {
-  commitSessionEntryReplacementsInDatabase,
-  type SqliteSessionEntryReplacement,
-  type SessionEntryReplacementCommit,
-} from "./session-accessor.sqlite-replacement-state.js";
+import { commitSessionEntryReplacementsInDatabase } from "./session-accessor.sqlite-replacement-state.js";
+import type {
+  SqliteSessionEntryReplacement,
+  SessionEntryReplacementCommit,
+} from "./session-accessor.sqlite-replacement-types.js";
 import {
   commitSessionEntryReplacementsInWorker,
   prepareSessionEntryReplacementDatabase,
 } from "./session-accessor.sqlite-replacement-worker.js";
 import {
   resolveSqliteScope,
+  resolveSqliteWriteAdmissionScope,
+  prepareSqliteScope,
   resolveSqliteTranscriptArchiveDirectory,
   toDatabaseOptions,
   withSqliteSessionDatabase,
 } from "./session-accessor.sqlite-scope.js";
-import type { SessionEntryReplacement } from "./session-accessor.types.js";
+import type {
+  SessionEntryCommitContext,
+  SessionEntryCreateWithTranscriptOptions,
+  SessionEntryReplacement,
+} from "./session-accessor.types.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { captureSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
@@ -45,7 +56,15 @@ export type SessionEntryCanonicalReplacement = SessionEntryReplacement & {
 };
 
 type ReplacementProjectionOptions = {
+  retainedExecution?: OpenClawAgentDatabaseExecution;
   assertCommitAllowed?: () => void;
+  withCommit?: SessionEntryCreateWithTranscriptOptions["withCommit"];
+  ownerAssignment?: SessionEntryReplacementCommit["ownerAssignment"];
+  labelClaim?: SessionEntryReplacementCommit["labelClaim"];
+  preparedTranscript?: SessionEntryReplacementCommit["preparedTranscript"];
+  checkPendingArchiveRecovery?: boolean;
+  onLifecycleCommitted?: (pendingArchiveRecovery: boolean) => void;
+  env?: NodeJS.ProcessEnv;
   activeSessionKey?: string;
   agentId?: string;
   consumePendingReset?: boolean;
@@ -58,6 +77,7 @@ type ReplacementProjectionOptions = {
 };
 
 type ReplacementProjectionParams<T, TReplacement> = ReplacementProjectionOptions & {
+  afterCommitted?: (result: T, context: SessionEntryCommitContext) => Promise<void>;
   update: (
     entries: SessionEntryReplacementSnapshot[],
   ) =>
@@ -69,22 +89,27 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
   params: ReplacementProjectionParams<T, TReplacement>,
   normalize: (replacements: Iterable<TReplacement> | undefined) => SqliteSessionEntryReplacement[],
 ): Promise<T> {
-  const resolved = resolveSqliteScope({
+  const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
+  env.OPENCLAW_STATE_DIR = resolveStateDir(env);
+  const target = {
     ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionKey: params.activeSessionKey ?? params.sessionKeys?.[0] ?? "",
     storePath: params.storePath,
-  });
-  resolved.env = cloneEnvWithPlatformSemantics(resolved.env ?? process.env);
-  resolved.env.OPENCLAW_STATE_DIR = resolveStateDir(resolved.env);
-  const databaseOptions = {
-    ...toDatabaseOptions(resolved),
-    path: resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved)),
+    env,
   };
-  resolved.path = databaseOptions.path;
-  const useWorker = isMainThread && supportsOpenClawAgentDatabaseExecution(databaseOptions);
+  const admission = isMainThread ? resolveSqliteWriteAdmissionScope(target) : undefined;
+  const scope =
+    admission ?? (isMainThread ? await prepareSqliteScope(target) : resolveSqliteScope(target));
+  scope.path ??= resolveOpenClawAgentSqlitePath(toDatabaseOptions(scope));
   const preparedWrite = await runPreparedSqliteSessionWrite(
-    resolved,
-    async () => {
+    scope,
+    async (preparedScope) => {
+      const resolved = { ...preparedScope, env };
+      const databaseOptions = {
+        ...toDatabaseOptions(resolved),
+        path: resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved)),
+      };
+      const useWorker = isMainThread && supportsOpenClawAgentDatabaseExecution(databaseOptions);
       const readNative = () =>
         withSqliteSessionDatabase(databaseOptions, (database) => ({
           ...readSessionEntryReplacementState(database, params),
@@ -105,10 +130,14 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
               });
             let result = await read();
             if (!result.replacement) {
-              await prepareSessionEntryReplacementDatabase(databaseOptions, () => {
-                owner.assertCurrent();
-                params.assertCommitAllowed?.();
-              });
+              await prepareSessionEntryReplacementDatabase(
+                databaseOptions,
+                () => {
+                  owner.assertCurrent();
+                  params.assertCommitAllowed?.();
+                },
+                params.retainedExecution,
+              );
               result = await read();
             }
             if (!result.replacement) {
@@ -226,37 +255,60 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
             includeLabelOwners: params.includeLabelOwners,
             validationKeys: [...validationKeys],
             replacements: applicable,
+            checkPendingArchiveRecovery: params.checkPendingArchiveRecovery,
             consumePendingReset: params.consumePendingReset,
+            ownerAssignment: params.ownerAssignment,
+            labelClaim: params.labelClaim,
+            preparedTranscript: params.preparedTranscript,
             maintenance,
           };
           // Native harness rollback closures and process-held databases cannot cross isolates.
           if (!useWorker || hasPreparedNativeSessionDeletion()) {
             return withSqliteSessionDatabase(
               databaseOptions,
-              () => {
-                const committed = runOpenClawAgentWriteTransaction(
-                  (database) => {
-                    const result = commitSessionEntryReplacementsInDatabase(
-                      database,
-                      input,
-                      assertCurrent,
+              (owned) =>
+                withNativeSessionCommitContext(
+                  owned,
+                  resolved.env,
+                  (source) => {
+                    const committed = runOpenClawAgentWriteTransaction(
+                      (database) => {
+                        if (params.onLifecycleCommitted) {
+                          deferOpenClawAgentPostCommitPublication(database, () =>
+                            params.onLifecycleCommitted?.(result.pendingArchiveRecovery),
+                          );
+                        }
+                        const result = commitSessionEntryReplacementsInDatabase(
+                          database,
+                          input,
+                          () => {
+                            assertCurrent();
+                            source?.assertCurrent();
+                          },
+                        );
+                        return {
+                          ...result,
+                          publish: prepareSessionIdentityPublication(
+                            database,
+                            resolved.agentId,
+                            result.previous,
+                            result.current,
+                          ),
+                        };
+                      },
+                      databaseOptions,
+                      { operationLabel: "session.entry-replacements" },
                     );
+                    committed.publish();
                     return {
-                      ...result,
-                      publish: prepareSessionIdentityPublication(
-                        database,
-                        resolved.agentId,
-                        result.previous,
-                        result.current,
-                      ),
+                      maintenancePlans: committed.maintenancePlans,
+                      result: operation.result,
                     };
                   },
-                  databaseOptions,
-                  { operationLabel: "session.entry-replacements" },
-                );
-                committed.publish();
-                return { maintenancePlans: committed.maintenancePlans, result: operation.result };
-              },
+                  params.afterCommitted
+                    ? (source) => params.afterCommitted!(operation.result, source)
+                    : undefined,
+                ),
               assertCurrent,
             );
           }
@@ -268,16 +320,26 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
             snapshot.databaseIdentity,
             input,
             assertCurrent,
+            {
+              identityAgentId: resolved.agentId,
+              onLifecycleCommitted: params.onLifecycleCommitted,
+              afterCommitted: params.afterCommitted
+                ? (context) => params.afterCommitted!(operation.result, context)
+                : undefined,
+            },
+            params.retainedExecution,
           );
           return { maintenancePlans: committed.maintenancePlans, result: operation.result };
         },
       };
     },
     "session.entry-replacements",
+    params.withCommit,
+    admission ? () => prepareSqliteScope(target) : undefined,
   );
   const committed = preparedWrite.result;
   await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
-    resolved,
+    preparedWrite.scope,
     committed.maintenancePlans,
     { deletedEntriesBeforeMaintenance: preparedWrite.deletedEntries },
   );
@@ -285,6 +347,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
 }
 
 export async function applySessionEntryExactReplacements<T>(params: {
+  consumePendingReset?: boolean;
   assertCommitAllowed?: () => void;
   activeSessionKey?: string;
   agentId?: string;

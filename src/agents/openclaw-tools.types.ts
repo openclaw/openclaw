@@ -94,12 +94,15 @@ export type OpenClawSharedToolsOptions = {
 };
 
 export type OpenClawToolsOptions = {
+  /** Host-qualified restricted preview target; never permits Gateway-local ports. */
+  sessionPortalTarget?: import("./tools/session-portal-target.js").SessionPortalToolTarget;
   sandboxBrowserBridgeUrl?: string;
   allowHostBrowserControl?: boolean;
   agentSessionKey?: string;
   agentChannel?: string;
   /** Host-bound standalone request/grant authority, never supplied by tool arguments. */
   assertInvocationCurrent?: () => void;
+  assertInputCommitAllowed?: () => void;
   /** Exact admitted session policy shared with terminal-input authorization. */
   execSession?: ExecSessionDefaults;
   /** Effective run-local exec overrides, including prepared permission mode. */

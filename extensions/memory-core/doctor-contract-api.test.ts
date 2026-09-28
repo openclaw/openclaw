@@ -191,168 +191,168 @@ async function writeLegacyMemorySidecar(
   }
 }
 
-async function createCanonicalMemoryIndex(agentPath: string, text: string): Promise<void> {
+async function createCanonicalMemoryIndex(
+  agentPath: string,
+  text: string,
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
+  openOpenClawStateDatabase({ env });
   await fs.mkdir(path.dirname(agentPath), { recursive: true });
-  const db = new DatabaseSync(agentPath);
-  try {
-    ensureMemoryIndexSchema({
-      db,
-      cacheEnabled: true,
-      ftsEnabled: true,
-    });
-    db.prepare("INSERT INTO memory_index_meta (key, value) VALUES (?, ?)").run(
-      "memory_index_meta_v1",
-      '{"vectorDims":3}',
-    );
-    db.prepare(
-      "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)",
-    ).run("MEMORY.md", "memory", "canonical-file-hash", 11, 21);
-    db.prepare(
-      "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    ).run(
-      "canonical-chunk",
-      "MEMORY.md",
-      "memory",
-      1,
-      1,
-      "canonical-hash",
-      "embed-model",
-      text,
-      encodeMemoryEmbedding([0, 1, 0]),
-      31,
-    );
-    insertCanonicalChunkProvenance(db, "canonical-chunk", 31);
-  } finally {
-    db.close();
-  }
+  using db = new DatabaseSync(agentPath);
+  ensureMemoryIndexSchema({
+    db,
+    cacheEnabled: true,
+    ftsEnabled: true,
+  });
+  db.prepare("INSERT INTO memory_index_meta (key, value) VALUES (?, ?)").run(
+    "memory_index_meta_v1",
+    '{"vectorDims":3}',
+  );
+  db.prepare(
+    "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)",
+  ).run("MEMORY.md", "memory", "canonical-file-hash", 11, 21);
+  db.prepare(
+    "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  ).run(
+    "canonical-chunk",
+    "MEMORY.md",
+    "memory",
+    1,
+    1,
+    "canonical-hash",
+    "embed-model",
+    text,
+    encodeMemoryEmbedding([0, 1, 0]),
+    31,
+  );
+  insertCanonicalChunkProvenance(db, "canonical-chunk", 31);
 }
 
 async function createUnrelatedCanonicalMemoryIndex(
   agentPath: string,
+  env: NodeJS.ProcessEnv,
   options: { vectorDims?: number } = {},
 ): Promise<void> {
+  openOpenClawStateDatabase({ env });
   await fs.mkdir(path.dirname(agentPath), { recursive: true });
-  const db = new DatabaseSync(agentPath);
-  try {
-    ensureMemoryIndexSchema({
-      db,
-      cacheEnabled: true,
-      ftsEnabled: true,
-    });
-    db.prepare("INSERT INTO memory_index_meta (key, value) VALUES (?, ?)").run(
-      "memory_index_meta_v1",
-      JSON.stringify({ vectorDims: options.vectorDims ?? 3 }),
-    );
-    db.prepare(
-      "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)",
-    ).run("OTHER.md", "memory", "canonical-other-file-hash", 11, 21);
-    db.prepare(
-      "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    ).run(
-      "canonical-other-chunk",
-      "OTHER.md",
-      "memory",
-      1,
-      1,
-      "canonical-other-hash",
-      "embed-model",
-      "canonical unrelated memory",
-      encodeMemoryEmbedding([0, 1, 0]),
-      31,
-    );
-    insertCanonicalChunkProvenance(db, "canonical-other-chunk", 31);
-  } finally {
-    db.close();
-  }
+  using db = new DatabaseSync(agentPath);
+  ensureMemoryIndexSchema({
+    db,
+    cacheEnabled: true,
+    ftsEnabled: true,
+  });
+  db.prepare("INSERT INTO memory_index_meta (key, value) VALUES (?, ?)").run(
+    "memory_index_meta_v1",
+    JSON.stringify({ vectorDims: options.vectorDims ?? 3 }),
+  );
+  db.prepare(
+    "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)",
+  ).run("OTHER.md", "memory", "canonical-other-file-hash", 11, 21);
+  db.prepare(
+    "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  ).run(
+    "canonical-other-chunk",
+    "OTHER.md",
+    "memory",
+    1,
+    1,
+    "canonical-other-hash",
+    "embed-model",
+    "canonical unrelated memory",
+    encodeMemoryEmbedding([0, 1, 0]),
+    31,
+  );
+  insertCanonicalChunkProvenance(db, "canonical-other-chunk", 31);
 }
 
-async function createCanonicalLegacyMemoryRowsWithFts(agentPath: string, ftsText: string) {
+async function createCanonicalLegacyMemoryRowsWithFts(
+  agentPath: string,
+  ftsText: string,
+  env: NodeJS.ProcessEnv,
+) {
+  openOpenClawStateDatabase({ env });
   await fs.mkdir(path.dirname(agentPath), { recursive: true });
-  const db = new DatabaseSync(agentPath);
-  try {
-    ensureMemoryIndexSchema({
-      db,
-      cacheEnabled: true,
-      ftsEnabled: true,
-    });
-    db.prepare("INSERT INTO memory_index_meta (key, value) VALUES (?, ?)").run(
-      "memory_index_meta_v1",
-      '{"vectorDims":3}',
-    );
-    db.prepare(
-      "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)",
-    ).run("MEMORY.md", "memory", "file-hash", 10, 20);
-    db.prepare(
-      "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    ).run(
-      "chunk-1",
-      "MEMORY.md",
-      "memory",
-      1,
-      2,
-      "chunk-hash",
-      "embed-model",
-      "remember this",
-      encodeMemoryEmbedding([1, 0, 0]),
-      30,
-    );
-    db.prepare("UPDATE memory_index_chunks_fts SET text = ? WHERE id = ?").run(ftsText, "chunk-1");
-    insertCanonicalChunkProvenance(db, "chunk-1", 30);
-  } finally {
-    db.close();
-  }
+  using db = new DatabaseSync(agentPath);
+  ensureMemoryIndexSchema({
+    db,
+    cacheEnabled: true,
+    ftsEnabled: true,
+  });
+  db.prepare("INSERT INTO memory_index_meta (key, value) VALUES (?, ?)").run(
+    "memory_index_meta_v1",
+    '{"vectorDims":3}',
+  );
+  db.prepare(
+    "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)",
+  ).run("MEMORY.md", "memory", "file-hash", 10, 20);
+  db.prepare(
+    "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  ).run(
+    "chunk-1",
+    "MEMORY.md",
+    "memory",
+    1,
+    2,
+    "chunk-hash",
+    "embed-model",
+    "remember this",
+    encodeMemoryEmbedding([1, 0, 0]),
+    30,
+  );
+  db.prepare("UPDATE memory_index_chunks_fts SET text = ? WHERE id = ?").run(ftsText, "chunk-1");
+  insertCanonicalChunkProvenance(db, "chunk-1", 30);
 }
 
-async function createMismatchedCanonicalVectorIndex(agentPath: string): Promise<void> {
+async function createMismatchedCanonicalVectorIndex(
+  agentPath: string,
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
+  openOpenClawStateDatabase({ env });
   await fs.mkdir(path.dirname(agentPath), { recursive: true });
-  const db = new DatabaseSync(agentPath, { allowExtension: true });
-  try {
-    ensureMemoryIndexSchema({
-      db,
-      cacheEnabled: true,
-      ftsEnabled: true,
-    });
-    const loaded = await loadSqliteVecExtension({ db });
-    expect(loaded.ok, loaded.error).toBe(true);
-    db.exec(`
+  using db = new DatabaseSync(agentPath, { allowExtension: true });
+  ensureMemoryIndexSchema({
+    db,
+    cacheEnabled: true,
+    ftsEnabled: true,
+  });
+  const loaded = await loadSqliteVecExtension({ db });
+  expect(loaded.ok, loaded.error).toBe(true);
+  db.exec(`
       CREATE VIRTUAL TABLE memory_index_chunks_vec USING vec0(
         id TEXT PRIMARY KEY,
         embedding FLOAT[4]
       )
     `);
-  } finally {
-    db.close();
-  }
 }
 
-async function createConflictingCanonicalVectorIndex(agentPath: string): Promise<void> {
+async function createConflictingCanonicalVectorIndex(
+  agentPath: string,
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
+  openOpenClawStateDatabase({ env });
   await fs.mkdir(path.dirname(agentPath), { recursive: true });
-  const db = new DatabaseSync(agentPath, { allowExtension: true });
-  try {
-    ensureMemoryIndexSchema({
-      db,
-      cacheEnabled: true,
-      ftsEnabled: true,
-    });
-    db.prepare("INSERT INTO memory_index_meta (key, value) VALUES (?, ?)").run(
-      "memory_index_meta_v1",
-      '{"vectorDims":3}',
-    );
-    const loaded = await loadSqliteVecExtension({ db });
-    expect(loaded.ok, loaded.error).toBe(true);
-    db.exec(`
+  using db = new DatabaseSync(agentPath, { allowExtension: true });
+  ensureMemoryIndexSchema({
+    db,
+    cacheEnabled: true,
+    ftsEnabled: true,
+  });
+  db.prepare("INSERT INTO memory_index_meta (key, value) VALUES (?, ?)").run(
+    "memory_index_meta_v1",
+    '{"vectorDims":3}',
+  );
+  const loaded = await loadSqliteVecExtension({ db });
+  expect(loaded.ok, loaded.error).toBe(true);
+  db.exec(`
       CREATE VIRTUAL TABLE memory_index_chunks_vec USING vec0(
         id TEXT PRIMARY KEY,
         embedding FLOAT[3]
       )
     `);
-    db.prepare("INSERT INTO memory_index_chunks_vec (id, embedding) VALUES (?, ?)").run(
-      "chunk-1",
-      vectorToBlob([0, 1, 0]),
-    );
-  } finally {
-    db.close();
-  }
+  db.prepare("INSERT INTO memory_index_chunks_vec (id, embedding) VALUES (?, ?)").run(
+    "chunk-1",
+    vectorToBlob([0, 1, 0]),
+  );
 }
 
 function readMemoryRows(agentPath: string) {
@@ -1567,7 +1567,7 @@ describe("memory-core doctor dreaming migration", () => {
     const stateDir = path.join(rootDir, "state");
     const legacyPath = path.join(stateDir, "memory", "main.sqlite");
     const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
-    await createCanonicalMemoryIndex(agentPath, "canonical memory remains authoritative");
+    await createCanonicalMemoryIndex(agentPath, "canonical memory remains authoritative", env);
     await fs.mkdir(path.dirname(legacyPath), { recursive: true });
     await fs.symlink(path.relative(path.dirname(legacyPath), agentPath), legacyPath);
 
@@ -2253,7 +2253,7 @@ describe("memory-core doctor dreaming migration", () => {
     const legacyPath = path.join(stateDir, "memory", "main.sqlite");
     const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
     await writeLegacyMemorySidecar(legacyPath);
-    await createCanonicalMemoryIndex(agentPath, "canonical memory remains authoritative");
+    await createCanonicalMemoryIndex(agentPath, "canonical memory remains authoritative", env);
 
     const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
 
@@ -2277,7 +2277,7 @@ describe("memory-core doctor dreaming migration", () => {
     const retryPath = path.join(stateDir, "memory", "main.sqlite");
     const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
     await writeLegacyMemorySidecar(legacyPath);
-    await createCanonicalMemoryIndex(agentPath, "canonical memory remains authoritative");
+    await createCanonicalMemoryIndex(agentPath, "canonical memory remains authoritative", env);
     const config = {
       memory: {
         search: {
@@ -2366,7 +2366,7 @@ describe("memory-core doctor dreaming migration", () => {
     const legacyPath = path.join(stateDir, "memory", "main.sqlite");
     const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
     await writeLegacyMemorySidecar(legacyPath);
-    await createUnrelatedCanonicalMemoryIndex(agentPath, { vectorDims: 4 });
+    await createUnrelatedCanonicalMemoryIndex(agentPath, env, { vectorDims: 4 });
 
     const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
 
@@ -2390,7 +2390,7 @@ describe("memory-core doctor dreaming migration", () => {
     const legacyPath = path.join(stateDir, "memory", "main.sqlite");
     const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
     await writeLegacyMemorySidecar(legacyPath);
-    await createCanonicalLegacyMemoryRowsWithFts(agentPath, "remember this");
+    await createCanonicalLegacyMemoryRowsWithFts(agentPath, "remember this", env);
     const canonicalDb = new DatabaseSync(agentPath);
     try {
       canonicalDb
@@ -2421,7 +2421,7 @@ describe("memory-core doctor dreaming migration", () => {
     const legacyPath = path.join(stateDir, "memory", "main.sqlite");
     const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
     await writeLegacyMemorySidecar(legacyPath);
-    await createUnrelatedCanonicalMemoryIndex(agentPath);
+    await createUnrelatedCanonicalMemoryIndex(agentPath, env);
 
     const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
 
@@ -2451,7 +2451,7 @@ describe("memory-core doctor dreaming migration", () => {
     const legacyPath = path.join(stateDir, "memory", "main.sqlite");
     const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
     await writeLegacyMemorySidecar(legacyPath);
-    await createCanonicalLegacyMemoryRowsWithFts(agentPath, "remember this");
+    await createCanonicalLegacyMemoryRowsWithFts(agentPath, "remember this", env);
 
     const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
 
@@ -2478,7 +2478,7 @@ describe("memory-core doctor dreaming migration", () => {
     } finally {
       legacyDb.close();
     }
-    await createUnrelatedCanonicalMemoryIndex(agentPath);
+    await createUnrelatedCanonicalMemoryIndex(agentPath, env);
     const canonicalDb = new DatabaseSync(agentPath);
     try {
       canonicalDb
@@ -2582,7 +2582,7 @@ describe("memory-core doctor dreaming migration", () => {
         cacheEmbedding: legacyEmbedding,
         cacheDims: legacyDims,
       });
-      await createUnrelatedCanonicalMemoryIndex(agentPath);
+      await createUnrelatedCanonicalMemoryIndex(agentPath, env);
       const canonicalDb = new DatabaseSync(agentPath);
       try {
         canonicalDb
@@ -2627,7 +2627,7 @@ describe("memory-core doctor dreaming migration", () => {
     const legacyPath = path.join(stateDir, "memory", "main.sqlite");
     const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
     await writeLegacyMemorySidecar(legacyPath, { vector: true });
-    await createMismatchedCanonicalVectorIndex(agentPath);
+    await createMismatchedCanonicalVectorIndex(agentPath, env);
 
     const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
 
@@ -2646,7 +2646,7 @@ describe("memory-core doctor dreaming migration", () => {
     const legacyPath = path.join(stateDir, "memory", "main.sqlite");
     const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
     await writeLegacyMemorySidecar(legacyPath, { vector: true });
-    await createConflictingCanonicalVectorIndex(agentPath);
+    await createConflictingCanonicalVectorIndex(agentPath, env);
 
     const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
 
@@ -2699,7 +2699,7 @@ describe("memory-core doctor dreaming migration", () => {
     } finally {
       legacyDb.close();
     }
-    await createCanonicalLegacyMemoryRowsWithFts(agentPath, "stale text");
+    await createCanonicalLegacyMemoryRowsWithFts(agentPath, "stale text", env);
 
     const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
 
@@ -2735,7 +2735,7 @@ describe("memory-core doctor dreaming migration", () => {
     const legacyPath = path.join(stateDir, "memory", "main.sqlite");
     const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
     await writeLegacyMemorySidecar(legacyPath, { vector: true });
-    await createUnrelatedCanonicalMemoryIndex(agentPath, { vectorDims: 4 });
+    await createUnrelatedCanonicalMemoryIndex(agentPath, env, { vectorDims: 4 });
 
     const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
 
@@ -2751,7 +2751,7 @@ describe("memory-core doctor dreaming migration", () => {
     await fs.access(`${legacyPath}.migrated`);
   });
 
-  it("removes retired QMD workspace homes without following model or home symlinks", async () => {
+  it("preserves nonempty QMD homes and does not schedule them for migration", async () => {
     const stateDir = path.join(rootDir, "state");
     const qmdHome = path.join(stateDir, "agents", "main", "qmd");
     const canonicalAgentFile = path.join(
@@ -2798,18 +2798,19 @@ describe("memory-core doctor dreaming migration", () => {
     await fs.symlink(symlinkHomeTarget, symlinkHome);
 
     const migration = qmdWorkspaceMigration();
-    expect(migration.doctorOnly).toBe(true);
-    await expect(migration.detectLegacyState(migrationParams())).resolves.toEqual({
-      preview: [
-        `- Retired Memory Core QMD workspace: ${qmdHome} -> remove derived index, config, cache, and session-export artifacts`,
-      ],
-    });
+    await expect(migration.detectLegacyState(migrationParams())).resolves.toBeNull();
     await expect(migration.migrateLegacyState(migrationParams())).resolves.toEqual({
-      changes: [`Removed retired Memory Core QMD workspace: ${qmdHome}`],
+      changes: [],
       warnings: [],
     });
 
-    await expect(fs.access(qmdHome)).rejects.toMatchObject({ code: "ENOENT" });
+    for (const relativePath of [
+      "xdg-cache/qmd/index.sqlite",
+      "xdg-config/qmd/index.yml",
+      "sessions/session.md",
+    ]) {
+      await expect(fs.readFile(path.join(qmdHome, relativePath), "utf8")).resolves.toBe("derived");
+    }
     await expect(fs.access(canonicalAgentFile)).resolves.toBeUndefined();
     await expect(fs.readFile(retainedResetTranscript, "utf8")).resolves.toContain(
       "Retained reset transcript recall fact",
@@ -2826,6 +2827,58 @@ describe("memory-core doctor dreaming migration", () => {
       changes: [],
       warnings: [],
     });
+  });
+
+  it.each(["foreign", "mixed", "empty"])("safely retires a %s QMD home", async (layout) => {
+    const qmdHome = path.join(rootDir, "state", "agents", "main", "qmd");
+    const foreignConfig = path.join(qmdHome, "xdg-config", "qmd", "index.yml");
+    await fs.mkdir(qmdHome, { recursive: true });
+    if (layout !== "empty") {
+      await fs.mkdir(path.dirname(foreignConfig), { recursive: true });
+      await fs.writeFile(foreignConfig, "collections:\n  private: {}\n");
+    }
+    if (layout === "mixed") {
+      await fs.mkdir(path.join(qmdHome, "sessions"));
+      await fs.writeFile(path.join(qmdHome, "sessions", "session.md"), "# Session session\n");
+    }
+    const migration = qmdWorkspaceMigration();
+    const detected = await migration.detectLegacyState(migrationParams());
+    expect(detected === null).toBe(layout !== "empty");
+    const result = await migration.migrateLegacyState(migrationParams());
+    expect(result.warnings).toEqual([]);
+    if (layout === "empty") {
+      await expect(fs.access(qmdHome)).rejects.toMatchObject({ code: "ENOENT" });
+    } else {
+      await expect(fs.readFile(foreignConfig, "utf8")).resolves.toBe(
+        "collections:\n  private: {}\n",
+      );
+      if (layout === "mixed") {
+        await expect(
+          fs.readFile(path.join(qmdHome, "sessions", "session.md"), "utf8"),
+        ).resolves.toBe("# Session session\n");
+      }
+    }
+    await expect(migration.detectLegacyState(migrationParams())).resolves.toBeNull();
+  });
+
+  it("preserves QMD files created between inspection and removal without blocking Doctor", async () => {
+    const qmdHome = path.join(rootDir, "state", "agents", "main", "qmd");
+    const configPath = path.join(qmdHome, "index.yml");
+    await fs.mkdir(qmdHome, { recursive: true });
+    const remove = fs.rmdir;
+    vi.spyOn(fs, "rmdir").mockImplementation(async (target) => {
+      if (target === qmdHome) {
+        await fs.writeFile(configPath, "standalone QMD configuration\n");
+      }
+      return remove(target);
+    });
+
+    const result = await qmdWorkspaceMigration().migrateLegacyState(migrationParams());
+
+    await expect(fs.readFile(configPath, "utf8")).resolves.toBe("standalone QMD configuration\n");
+    expect(result.warningDisposition).toBe("recoverable");
+    expect(result.warnings).toContainEqual(expect.stringContaining(qmdHome));
+    await expect(qmdWorkspaceMigration().detectLegacyState(migrationParams())).resolves.toBeNull();
   });
 
   it("removes only exact stale QMD lock sidecars and is idempotent", async () => {

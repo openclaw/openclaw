@@ -85,7 +85,7 @@ describe("ChatHistoryCursorResultSchema", () => {
         inputConsumptions: [{ runId: "consumed-run", consumedByEventId: "event-1" }],
       }),
     ).toBe(true);
-    for (const status of [undefined, "running", "completed", "failed", "blocked"]) {
+    for (const status of [undefined, "running", "completed", "failed", "blocked", "skipped"]) {
       const activity = [
         { messageId: "quiet", items: [] },
         {
@@ -251,4 +251,20 @@ describe("ChatSendParamsSchema", () => {
       }),
     ).toBe(true);
   });
+});
+
+it("accepts distinct contention errors and quiet waits without provider retry details", () => {
+  expect(Value.Check(ChatEventSchema, { ...statusEvent, phase: "waiting_for_state" })).toBe(true);
+  const error = {
+    runId: "run-1",
+    sessionKey: "main",
+    seq: 2,
+    state: "error",
+    errorKind: "state_contention",
+    errorMessage: "Temporarily busy.\nState contention: session store.",
+  };
+  expect(Value.Check(ChatEventSchema, error)).toBe(true);
+  expect(Value.Check(ChatEventSchema, { ...error, errorKind: "unclassified_contention" })).toBe(
+    false,
+  );
 });

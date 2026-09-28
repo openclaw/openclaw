@@ -71,7 +71,7 @@ export async function readSqliteSessionArchivePruning(
   });
 }
 
-/** Retain source custody before archive admission; each page unit owns its writer separately. */
+/** Retain source custody across the sweep; archive removals and page units admit separately. */
 export async function withSqliteSessionPageReclamation<T>(
   input: OpenClawAgentDatabaseOptions,
   run: (
@@ -90,6 +90,23 @@ export async function withSqliteSessionPageReclamation<T>(
     throw new Error("SQLite archive pruning requires its existing database");
   }
   return withSqliteMutationWorkerLifetime(options, async ({ assertCurrent, signal }) => {
+    const withArchiveWriter = <Value>(
+      databaseOptions: ReclamationDatabaseOptions,
+      assertWriterCurrent: () => void,
+      operation: () => Promise<Value>,
+    ): Promise<Value> => {
+      const write = () =>
+        runExclusiveSqliteSessionWrite(
+          databaseOptions,
+          async () => {
+            assertWriterCurrent();
+            return operation();
+          },
+          "session.history.archive-prune",
+        );
+      // Cold restoration takes archive admission before its writer; pruning must keep that order.
+      return physical ? runExclusiveSqliteTranscriptArchiveWorker(write, signal) : write();
+    };
     if (nativeOwner) {
       // Incognito and explicit Doctor/cleanup maintenance retain their existing native owner.
       const {
@@ -105,68 +122,67 @@ export async function withSqliteSessionPageReclamation<T>(
           assertExistingDatabaseIdentity(databaseOptions.path, physical.key);
         }
       };
-      const runNative = () => {
-        assertNativeCurrent();
-        return run(
-          (maxPages) =>
-            runExclusiveSqliteSessionWrite(
-              databaseOptions,
-              async () =>
-                withSqliteSessionDatabase(
-                  databaseOptions,
-                  (database) => {
-                    assertNativeCurrent();
-                    return database.walMaintenance.reclaimFreePages({
-                      maxPages,
-                      beforeMutation: assertNativeCurrent,
-                      onCommit: assertNativeCurrent,
-                    });
-                  },
-                  assertNativeCurrent,
-                ),
-              "session.history.free-pages",
-            ),
-          assertNativeCurrent,
-          databaseOptions,
-          {
-            read: async () =>
-              await withSqliteSessionDatabase(
+      assertNativeCurrent();
+      return run(
+        (maxPages) =>
+          runExclusiveSqliteSessionWrite(
+            databaseOptions,
+            async () =>
+              withSqliteSessionDatabase(
                 databaseOptions,
                 (database) => {
                   assertNativeCurrent();
-                  return readSessionArchivePruningInDatabase(database);
+                  return database.walMaintenance.reclaimFreePages({
+                    maxPages,
+                    beforeMutation: assertNativeCurrent,
+                    onCommit: assertNativeCurrent,
+                  });
                 },
                 assertNativeCurrent,
               ),
-            removeLegacy: async (filePath) =>
-              await withSqliteSessionDatabase(
-                databaseOptions,
-                (database) =>
-                  removeLegacySessionArchiveInDatabase(
-                    database,
-                    databaseOptions,
-                    filePath,
-                    assertNativeCurrent,
-                  ),
-                assertNativeCurrent,
-              ),
-            deletePublished: async (row) =>
-              await withSqliteSessionDatabase(
-                databaseOptions,
-                (database) => {
-                  deletePublishedSessionArchiveInDatabase(
-                    database,
-                    databaseOptions,
-                    row,
-                    assertNativeCurrent,
-                  );
-                },
-                assertNativeCurrent,
-              ),
-          },
-        );
-      };
-      return physical ? runExclusiveSqliteTranscriptArchiveWorker(runNative, signal) : runNative();
+            "session.history.free-pages",
+          ),
+        assertNativeCurrent,
+        databaseOptions,
+        {
+          withWriter: (operation) =>
+            withArchiveWriter(databaseOptions, assertNativeCurrent, operation),
+          read: async () =>
+            await withSqliteSessionDatabase(
+              databaseOptions,
+              (database) => {
+                assertNativeCurrent();
+                return readSessionArchivePruningInDatabase(database);
+              },
+              assertNativeCurrent,
+            ),
+          removeLegacy: async (filePath) =>
+            await withSqliteSessionDatabase(
+              databaseOptions,
+              (database) =>
+                removeLegacySessionArchiveInDatabase(
+                  database,
+                  databaseOptions,
+                  filePath,
+                  assertNativeCurrent,
+                ),
+              assertNativeCurrent,
+            ),
+          deletePublished: async (row) =>
+            await withSqliteSessionDatabase(
+              databaseOptions,
+              (database) => {
+                deletePublishedSessionArchiveInDatabase(
+                  database,
+                  databaseOptions,
+                  row,
+                  assertNativeCurrent,
+                );
+              },
+              assertNativeCurrent,
+            ),
+        },
+      );
     }
     if (!physical) {
       throw new Error("SQLite archive pruning requires its existing file owner");
@@ -195,7 +211,7 @@ export async function withSqliteSessionPageReclamation<T>(
             if (!grant()) {
               throw new Error("SQLite archive pruning authority expired");
             }
-          }),
+          }, binding.attachment),
         });
       },
     };
@@ -235,60 +251,61 @@ export async function withSqliteSessionPageReclamation<T>(
       assertPruningCurrent();
       return await withSessionHistoryWorkerDatabase(
         databaseOptions,
-        async (reader) =>
-          await runExclusiveSqliteTranscriptArchiveWorker(async () => {
-            assertPruningCurrent();
-            return run(
-              async (maxPages) => {
-                const result = await write(
-                  (worker) =>
-                    worker.execute({
-                      type: "session.archivePruning.reclaimPages",
-                      input: { maxPages },
-                    }),
-                  "session.history.free-pages",
+        async (reader) => {
+          assertPruningCurrent();
+          return run(
+            async (maxPages) => {
+              const result = await write(
+                (worker) =>
+                  worker.execute({
+                    type: "session.archivePruning.reclaimPages",
+                    input: { maxPages },
+                  }),
+                "session.history.free-pages",
+              );
+              if (result.checkpoint) {
+                result.checkpoint = publishSqliteWalCheckpointObservation(
+                  databaseOptions.path,
+                  result.checkpoint,
                 );
-                if (result.checkpoint) {
-                  result.checkpoint = publishSqliteWalCheckpointObservation(
-                    databaseOptions.path,
-                    result.checkpoint,
-                  );
-                }
+              }
+              return result;
+            },
+            assertPruningCurrent,
+            databaseOptions,
+            {
+              withWriter: (operation) =>
+                withArchiveWriter(databaseOptions, assertPruningCurrent, operation),
+              read: async () => {
+                assertPruningCurrent();
+                const result = await reader.readArchivePruning({
+                  env: databaseOptions.env,
+                  expectedIdentity,
+                });
+                assertPruningCurrent();
                 return result;
               },
-              assertPruningCurrent,
-              databaseOptions,
-              {
-                read: async () => {
-                  assertPruningCurrent();
-                  const result = await reader.readArchivePruning({
-                    env: databaseOptions.env,
-                    expectedIdentity,
-                  });
-                  assertPruningCurrent();
-                  return result;
-                },
-                removeLegacy: (filePath) =>
-                  write(
-                    (worker) =>
-                      worker.execute({
-                        type: "session.archivePruning.removeLegacy",
-                        input: { filePath },
-                      }),
-                    "session.history.archive-prune",
-                  ),
-                deletePublished: (row) =>
-                  write(
-                    (worker) =>
-                      worker.execute({
-                        type: "session.archivePruning.deletePublished",
-                        input: row,
-                      }),
-                    "session.history.archive-prune",
-                  ),
-              },
-            );
-          }, signal),
+              removeLegacy: (filePath) =>
+                write(
+                  (worker) =>
+                    worker.execute({
+                      type: "session.archivePruning.removeLegacy",
+                      input: { filePath },
+                    }),
+                  "session.history.archive-prune",
+                ),
+              deletePublished: (row) =>
+                write(
+                  (worker) =>
+                    worker.execute({
+                      type: "session.archivePruning.deletePublished",
+                      input: row,
+                    }),
+                  "session.history.archive-prune",
+                ),
+            },
+          );
+        },
         maintenanceLane,
       );
     } finally {

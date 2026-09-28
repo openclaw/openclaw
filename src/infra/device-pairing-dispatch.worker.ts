@@ -10,7 +10,7 @@ import { executeDevicePairingNodeMutation } from "./device-pairing-node.worker.j
 import type { DevicePairingCommitReceipt } from "./device-pairing-read.types.js";
 import { resolveDevicePairingStoreRevision } from "./device-pairing-store-cache.js";
 import {
-  readDevicePairingStoreStateFromDatabase,
+  readPairedDevicePairingRecordsFromDatabase,
   withDevicePairingStoreDatabase,
 } from "./device-pairing-store.js";
 import type { DevicePairingMutationCommand } from "./device-pairing-worker-contract.js";
@@ -75,7 +75,7 @@ export function executeDevicePairingMutationInWorker(
     () =>
       withDevicePairingStoreDatabase(database, () =>
         withDevicePairingMutationAdmission(() => {
-          const before = readDevicePairingStoreStateFromDatabase(database.db).pairedByDeviceId;
+          const before = readPairedDevicePairingRecordsFromDatabase(database.db);
           let tokensReplaced: DevicePairingCommitReceipt["tokensReplaced"];
           let workerEnvironment: DevicePairingCommitReceipt["workerEnvironment"];
           const result = execute(
@@ -88,7 +88,7 @@ export function executeDevicePairingMutationInWorker(
               workerEnvironment = facts;
             },
           );
-          const after = readDevicePairingStoreStateFromDatabase(database.db).pairedByDeviceId;
+          const after = readPairedDevicePairingRecordsFromDatabase(database.db);
           const changed: DevicePairingCommitReceipt["changed"] = [];
           for (const deviceId of new Set([...Object.keys(before), ...Object.keys(after)])) {
             if (JSON.stringify(before[deviceId]) !== JSON.stringify(after[deviceId])) {

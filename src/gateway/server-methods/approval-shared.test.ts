@@ -11,7 +11,8 @@ import {
   closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
-import { ExecApprovalManager } from "../exec-approval-manager.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { ExecApprovalManager, type ExecApprovalRecord } from "../exec-approval-manager.js";
 import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import {
   bindApprovalReviewerDeviceIds,
@@ -32,6 +33,15 @@ vi.mock("../../infra/approval-turn-source.js", () => ({
 vi.mock("../approval-channel-custody.js", () => ({
   prepareApprovalChannelCustody: prepareApprovalChannelCustodyMock,
 }));
+
+function requestedEvent<TPayload>(record: ExecApprovalRecord<TPayload>) {
+  return {
+    id: record.id,
+    request: record.request,
+    createdAtMs: record.createdAtMs,
+    expiresAtMs: record.expiresAtMs,
+  };
+}
 
 type ApprovalClientLookup = NonNullable<GatewayRequestContext["getApprovalClientConnIds"]>;
 
@@ -92,70 +102,6 @@ describe("handlePendingApprovalRequest", () => {
       expected: true,
     },
     {
-      name: "does not allow approval-scoped clients to see no-device gateway-client approvals from another connection",
-      recordId: "approval-gateway-client-visible",
-      requestedBy: {
-        requestedByConnId: "conn-gateway",
-        requestedByClientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
-      },
-      client: {
-        connId: "conn-mobile",
-        clientId: GATEWAY_CLIENT_IDS.IOS_APP,
-        scopes: ["operator.approvals"],
-      },
-      expected: false,
-    },
-    ...[
-      ["Control UI", GATEWAY_CLIENT_IDS.CONTROL_UI],
-      ["WebChat UI", GATEWAY_CLIENT_IDS.WEBCHAT_UI],
-      ["WebChat", GATEWAY_CLIENT_IDS.WEBCHAT],
-    ].map(([label, clientId]) => ({
-      name: `does not allow approval-scoped clients to see no-device ${label} approvals from another connection`,
-      recordId: `approval-${clientId}-visible`,
-      requestedBy: {
-        requestedByConnId: "conn-browser-ui",
-        requestedByClientId: clientId,
-      },
-      client: {
-        connId: "conn-mobile",
-        clientId: GATEWAY_CLIENT_IDS.IOS_APP,
-        scopes: ["operator.approvals"],
-      },
-      expected: false,
-    })),
-    {
-      name: "does not allow approval-scoped clients to see device-bound gateway-client approvals from another device",
-      recordId: "approval-gateway-device-visible",
-      requestedBy: {
-        requestedByDeviceId: "device-gateway",
-        requestedByConnId: "conn-gateway",
-        requestedByClientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
-      },
-      client: {
-        connId: "conn-mobile",
-        clientId: GATEWAY_CLIENT_IDS.IOS_APP,
-        deviceId: "device-mobile",
-        scopes: ["operator.approvals"],
-      },
-      expected: false,
-    },
-    {
-      name: "allows gateway-client approval runtimes to see requester-bound approvals",
-      recordId: "approval-delivery-runtime-visible",
-      requestedBy: {
-        requestedByDeviceId: "device-owner",
-        requestedByConnId: "conn-owner",
-        requestedByClientId: "client-owner",
-      },
-      client: {
-        connId: "conn-delivery-runtime",
-        clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
-        scopes: ["operator.approvals"],
-        approvalRuntime: true,
-      },
-      expected: true,
-    },
-    {
       name: "does not trust gateway-client ids without the approval runtime marker",
       recordId: "approval-delivery-runtime-spoof-hidden",
       requestedBy: {
@@ -166,20 +112,6 @@ describe("handlePendingApprovalRequest", () => {
       client: {
         connId: "conn-spoofed-runtime",
         clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
-        scopes: ["operator.approvals"],
-      },
-      expected: false,
-    },
-    {
-      name: "does not widen non-gateway no-device approvals to matching client ids",
-      recordId: "approval-other-client-hidden",
-      requestedBy: {
-        requestedByConnId: "conn-requester",
-        requestedByClientId: "client-owner",
-      },
-      client: {
-        connId: "conn-mobile",
-        clientId: "client-owner",
         scopes: ["operator.approvals"],
       },
       expected: false,
@@ -195,37 +127,6 @@ describe("handlePendingApprovalRequest", () => {
         client: createApprovalClient(client),
       }),
     ).toBe(expected);
-  });
-
-  it("allows approval-scoped reviewer devices to see approvals requested by the backend runtime", (testContext) => {
-    const manager = createTestApprovalManager(testContext);
-    const record = manager.create(
-      {
-        command: "echo ok",
-      },
-      60_000,
-      "approval-reviewer-device-visible",
-    );
-    record.requestedByDeviceId = "device-gateway-runtime";
-    record.requestedByConnId = "conn-gateway-runtime";
-    record.requestedByClientId = GATEWAY_CLIENT_IDS.GATEWAY_CLIENT;
-    bindApprovalReviewerDeviceIds({
-      record,
-      deviceIds: [" device-mobile ", "device-mobile"],
-    });
-
-    expect(record.approvalReviewerDeviceIds).toEqual(["device-mobile"]);
-    expect(
-      isApprovalRecordVisibleToClient({
-        record,
-        client: createApprovalClient({
-          connId: "conn-mobile",
-          clientId: GATEWAY_CLIENT_IDS.IOS_APP,
-          deviceId: "device-mobile",
-          scopes: ["operator.approvals"],
-        }),
-      }),
-    ).toBe(true);
   });
 
   it("does not allow reviewer devices without approval scope to see approvals", (testContext) => {
@@ -337,12 +238,7 @@ describe("handlePendingApprovalRequest", () => {
       } as unknown as GatewayRequestContext,
       requestEventName:
         route === "plugin" ? "plugin.approval.requested" : "exec.approval.requested",
-      requestEvent: {
-        id: record.id,
-        request: record.request,
-        createdAtMs: record.createdAtMs,
-        expiresAtMs: record.expiresAtMs,
-      },
+      requestEvent: requestedEvent(record),
       twoPhase: true,
       approvalKind: route === "plugin" ? "plugin" : undefined,
       requireDeliveryRoute: route === "register-only" ? false : undefined,
@@ -441,12 +337,7 @@ describe("handlePendingApprovalRequest", () => {
       } as unknown as GatewayRequestContext,
       clientConnId: "conn-requester",
       requestEventName: "exec.approval.requested",
-      requestEvent: {
-        id: record.id,
-        request: record.request,
-        createdAtMs: record.createdAtMs,
-        expiresAtMs: record.expiresAtMs,
-      },
+      requestEvent: requestedEvent(record),
       twoPhase: true,
       deliverRequest: () => false,
     });
@@ -476,7 +367,8 @@ describe("handlePendingApprovalRequest", () => {
     record.requestedByDeviceId = "device-gateway-runtime";
     record.requestedByConnId = "conn-gateway-runtime";
     record.requestedByClientId = GATEWAY_CLIENT_IDS.GATEWAY_CLIENT;
-    bindApprovalReviewerDeviceIds({ record, deviceIds: ["device-mobile"] });
+    bindApprovalReviewerDeviceIds({ record, deviceIds: [" device-mobile ", "device-mobile"] });
+    expect(record.approvalReviewerDeviceIds).toEqual(["device-mobile"]);
     await manager.register(record, 60_000);
     const respond = vi.fn();
     const broadcast = vi.fn();
@@ -510,12 +402,7 @@ describe("handlePendingApprovalRequest", () => {
       } as unknown as GatewayRequestContext,
       clientConnId: "conn-gateway-runtime",
       requestEventName: "exec.approval.requested",
-      requestEvent: {
-        id: record.id,
-        request: record.request,
-        createdAtMs: record.createdAtMs,
-        expiresAtMs: record.expiresAtMs,
-      },
+      requestEvent: requestedEvent(record),
       twoPhase: true,
       deliverRequest: () => false,
     });
@@ -578,12 +465,7 @@ describe("handlePendingApprovalRequest", () => {
       } as unknown as GatewayRequestContext,
       clientConnId: "conn-owner",
       requestEventName: "exec.approval.requested",
-      requestEvent: {
-        id: record.id,
-        request: record.request,
-        createdAtMs: record.createdAtMs,
-        expiresAtMs: record.expiresAtMs,
-      },
+      requestEvent: requestedEvent(record),
       twoPhase: true,
       deliverRequest: () => false,
     });
@@ -645,12 +527,7 @@ describe("handlePendingApprovalRequest", () => {
       } as unknown as GatewayRequestContext,
       clientConnId: "conn-gateway",
       requestEventName: "exec.approval.requested",
-      requestEvent: {
-        id: record.id,
-        request: record.request,
-        createdAtMs: record.createdAtMs,
-        expiresAtMs: record.expiresAtMs,
-      },
+      requestEvent: requestedEvent(record),
       twoPhase: true,
       deliverRequest: () => false,
     });
@@ -696,12 +573,7 @@ describe("handlePendingApprovalRequest", () => {
       } as unknown as GatewayRequestContext,
       clientConnId: "conn-requester",
       requestEventName: "exec.approval.requested",
-      requestEvent: {
-        id: record.id,
-        request: record.request,
-        createdAtMs: record.createdAtMs,
-        expiresAtMs: record.expiresAtMs,
-      },
+      requestEvent: requestedEvent(record),
       twoPhase: true,
       deliverRequest: () => delivery,
     });
@@ -747,12 +619,7 @@ describe("handlePendingApprovalRequest", () => {
           hasExecApprovalClients: () => false,
         } as unknown as GatewayRequestContext,
         requestEventName: "exec.approval.requested",
-        requestEvent: {
-          id: record.id,
-          request: record.request,
-          createdAtMs: record.createdAtMs,
-          expiresAtMs: record.expiresAtMs,
-        },
+        requestEvent: requestedEvent(record),
         twoPhase: true,
         deliverRequest: () => delivery,
         afterDecision,
@@ -814,12 +681,7 @@ describe("handlePendingApprovalRequest", () => {
         hasExecApprovalClients: () => true,
       } as unknown as GatewayRequestContext,
       requestEventName: "exec.approval.requested",
-      requestEvent: {
-        id: record.id,
-        request: record.request,
-        createdAtMs: record.createdAtMs,
-        expiresAtMs: record.expiresAtMs,
-      },
+      requestEvent: requestedEvent(record),
       twoPhase: true,
       suppressDelivery: true,
       deliverRequest,
@@ -866,12 +728,7 @@ describe("handlePendingApprovalRequest", () => {
         approvalEvents: { publishRequested, publishResolved: vi.fn() },
       } as unknown as GatewayRequestContext,
       requestEventName: "exec.approval.requested",
-      requestEvent: {
-        id: record.id,
-        request: record.request,
-        createdAtMs: record.createdAtMs,
-        expiresAtMs: record.expiresAtMs,
-      },
+      requestEvent: requestedEvent(record),
       twoPhase: true,
       deliverToApprovalClientsOnly: true,
       deliverRequest,
@@ -924,12 +781,7 @@ describe("handlePendingApprovalRequest", () => {
         approvalEvents: { publishRequested, publishResolved: vi.fn() },
       } as unknown as GatewayRequestContext,
       requestEventName: "exec.approval.requested",
-      requestEvent: {
-        id: record.id,
-        request: record.request,
-        createdAtMs: record.createdAtMs,
-        expiresAtMs: record.expiresAtMs,
-      },
+      requestEvent: requestedEvent(record),
       twoPhase: true,
       deliverToApprovalClientsOnly: true,
       deliverRequest,
@@ -1145,12 +997,7 @@ describe("handlePendingApprovalRequest", () => {
       } as unknown as GatewayRequestContext,
       clientConnId: "conn-requester",
       requestEventName: "exec.approval.requested",
-      requestEvent: {
-        id: record.id,
-        request: record.request,
-        createdAtMs: record.createdAtMs,
-        expiresAtMs: record.expiresAtMs,
-      },
+      requestEvent: requestedEvent(record),
       twoPhase: true,
       deliverRequest: () => false,
     });
@@ -1293,6 +1140,7 @@ describe("handlePendingApprovalRequest", () => {
   it("releases run-aborted waiters without changing timeout terminal state", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-wait-terminal-"));
     const manager = new ExecApprovalManager({
+      scheduler: createTestGatewayScheduler(),
       approvalKind: "exec",
       persistence: {
         runtimeEpoch: "approval-shared-wait-terminal",

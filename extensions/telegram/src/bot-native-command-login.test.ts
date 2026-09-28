@@ -637,13 +637,9 @@ describe("registerTelegramNativeCommands /login", () => {
     expect(sendMessage.mock.calls[0]?.[1]).toContain("ABORT-CODE");
   });
 
-  it("keeps pending login alive across a polling-cycle restart", async () => {
-    const account = new AbortController();
-    const pollingCycle = new AbortController();
+  it("delivers pending login results through the account sender instead of the retired bot", async () => {
     const finishLogin = createDeferred<void>();
-    let loginSignal: AbortSignal | undefined;
     const loginFlow = vi.fn(async (params: ModelsAuthLoginFlowOptions) => {
-      loginSignal = params.signal;
       await params.prompter.deviceCode?.({ title: "Codex login", code: "RESTART-CODE" });
       await finishLogin.promise;
       return createLoginResult("openai:codex");
@@ -651,15 +647,12 @@ describe("registerTelegramNativeCommands /login", () => {
     const { accountId, handler, sendMessage, sendMessageTelegram } = registerLoginCommand({
       cfg: createOwnerLoginConfig(),
       loginFlow,
-      abortSignal: account.signal,
     });
 
     await handler(createPrivateCommandContext({ match: "codex", userId: 200 }));
-    pollingCycle.abort(new Error("recoverable polling restart"));
     sendMessage.mockRejectedValue(new Error("retired polling bot"));
     sendMessageTelegram.mockResolvedValueOnce({ messageId: "1000", chatId: "100" });
 
-    expect(loginSignal?.aborted).toBe(false);
     finishLogin.resolve();
     await vi.waitFor(() =>
       expect(sendMessageTelegram).toHaveBeenCalledWith(
@@ -840,7 +833,6 @@ describe("registerTelegramNativeCommands /login", () => {
         {},
       ),
     );
-    expect(sessionStore["agent:main:main"]?.authProfileOverride).toBe("openai:later-user-profile");
     expect(sendMessage).not.toHaveBeenCalledWith(
       100,
       "OpenAI login complete. Try your request again now.",

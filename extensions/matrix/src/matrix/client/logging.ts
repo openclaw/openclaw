@@ -1,19 +1,13 @@
-import { logger as matrixJsSdkRootLogger } from "matrix-js-sdk/lib/logger.js";
+import {
+  logger as matrixJsSdkRootLogger,
+  type Logger as MatrixJsSdkLogger,
+} from "matrix-js-sdk/lib/logger.js";
 import { ConsoleLogger, LogService, setMatrixConsoleLogging } from "../sdk/logger.js";
 
 let matrixSdkLoggingConfigured = false;
 let matrixSdkLogMode: "default" | "quiet" = "default";
 const matrixSdkBaseLogger = new ConsoleLogger();
 let matrixJsSdkRootLoggerSnapshot: MatrixJsSdkRootLoggerSnapshot | null = null;
-
-type MatrixJsSdkLogger = {
-  trace: (...messageOrObject: unknown[]) => void;
-  debug: (...messageOrObject: unknown[]) => void;
-  info: (...messageOrObject: unknown[]) => void;
-  warn: (...messageOrObject: unknown[]) => void;
-  error: (...messageOrObject: unknown[]) => void;
-  getChild: (namespace: string) => MatrixJsSdkLogger;
-};
 
 type MatrixJsSdkLoglevelLogger = {
   getLevel?: () => number | string;
@@ -40,9 +34,7 @@ function shouldSuppressMatrixHttpNotFound(module: string, messageOrObject: unkno
 }
 
 export function ensureMatrixSdkLoggingConfigured(): void {
-  if (!matrixSdkLoggingConfigured) {
-    matrixSdkLoggingConfigured = true;
-  }
+  matrixSdkLoggingConfigured = true;
   applyMatrixSdkLogger();
 }
 
@@ -56,10 +48,6 @@ export function setMatrixSdkLogMode(mode: "default" | "quiet"): void {
 
 export function setMatrixSdkConsoleLogging(enabled: boolean): void {
   setMatrixConsoleLogging(enabled);
-}
-
-export function createMatrixJsSdkClientLogger(prefix = "matrix"): MatrixJsSdkLogger {
-  return createMatrixJsSdkLoggerInstance(prefix);
 }
 
 function applyMatrixSdkLogger(): void {
@@ -110,15 +98,12 @@ function setMatrixJsSdkRootLoggerLevel(level: "debug" | "silent"): void {
   logger.rebuild?.();
 }
 
-function createMatrixJsSdkLoggerInstance(prefix: string): MatrixJsSdkLogger {
+export function createMatrixJsSdkClientLogger(prefix = "matrix"): MatrixJsSdkLogger {
   const log = (method: keyof ConsoleLogger, ...messageOrObject: unknown[]): void => {
     if (matrixSdkLogMode === "quiet") {
       return;
     }
-    (matrixSdkBaseLogger[method] as (module: string, ...args: unknown[]) => void)(
-      prefix,
-      ...messageOrObject,
-    );
+    matrixSdkBaseLogger[method](prefix, ...messageOrObject);
   };
 
   return {
@@ -134,7 +119,7 @@ function createMatrixJsSdkLoggerInstance(prefix: string): MatrixJsSdkLogger {
     },
     getChild: (namespace: string) => {
       const nextNamespace = namespace.trim();
-      return createMatrixJsSdkLoggerInstance(nextNamespace ? `${prefix}.${nextNamespace}` : prefix);
+      return createMatrixJsSdkClientLogger(nextNamespace ? `${prefix}.${nextNamespace}` : prefix);
     },
   };
 }

@@ -12,6 +12,19 @@ const daemonLifecycleModuleLoader = createLazyImportLoader(() => import("./lifec
 const updateExecutorModuleLoader = createLazyImportLoader(() => import("./update-executor.js"));
 const daemonStatusModuleLoader = createLazyImportLoader(() => import("./status.runtime.js"));
 
+async function runUpdateCommand(
+  mode: string | undefined,
+  action: "install" | "stop" | "restart",
+  operation: () => Promise<void>,
+): Promise<void> {
+  if (mode === undefined) {
+    await operation();
+    return;
+  }
+  const { runGatewayServiceUpdateCommand } = await updateExecutorModuleLoader.load();
+  await runGatewayServiceUpdateCommand(mode, action, operation);
+}
+
 function resolveJsonOption(cmdOpts: { json?: boolean }, command?: Command): boolean {
   const parentJson = inheritOptionFromParent<boolean>(command, "json", "cli");
   return Boolean(cmdOpts.json || parentJson);
@@ -82,7 +95,14 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .action(async (cmdOpts, command) => {
       const { runDaemonStatus } = await daemonStatusModuleLoader.load();
       await runDaemonStatus({
-        rpc: resolveGatewayRpcOptionsWithLocalPort(cmdOpts, command),
+        rpc: resolveGatewayRpcOptionsWithLocalPort(
+          {
+            ...cmdOpts,
+            timeout:
+              command.getOptionValueSource("timeout") === "default" ? undefined : cmdOpts.timeout,
+          },
+          command,
+        ),
         probe: Boolean(cmdOpts.probe),
         requireRpc: Boolean(cmdOpts.requireRpc),
         deep: Boolean(cmdOpts.deep),
@@ -107,16 +127,10 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
         .hideHelp(),
     )
     .action(async (cmdOpts, command) => {
-      const invoke = async () => {
+      await runUpdateCommand(cmdOpts.updateExecutor, "install", async () => {
         const { runDaemonInstall } = await daemonInstallModuleLoader.load();
         await runDaemonInstall(resolveInstallOptions(cmdOpts, command));
-      };
-      if (cmdOpts.updateExecutor === undefined) {
-        await invoke();
-      } else {
-        const { runGatewayServiceUpdateCommand } = await updateExecutorModuleLoader.load();
-        await runGatewayServiceUpdateCommand(cmdOpts.updateExecutor, "install", invoke);
-      }
+      });
     });
 
   parent
@@ -153,16 +167,10 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
       false,
     )
     .action(async (cmdOpts, command) => {
-      const invoke = async () => {
+      await runUpdateCommand(cmdOpts.updateExecutor, "stop", async () => {
         const { runDaemonStop } = await daemonLifecycleModuleLoader.load();
         await runDaemonStop(resolveStopOptions(cmdOpts, command));
-      };
-      if (cmdOpts.updateExecutor === undefined) {
-        await invoke();
-      } else {
-        const { runGatewayServiceUpdateCommand } = await updateExecutorModuleLoader.load();
-        await runGatewayServiceUpdateCommand(cmdOpts.updateExecutor, "stop", invoke);
-      }
+      });
     });
 
   parent
@@ -193,15 +201,9 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     )
     .option("--json", "Output JSON", false)
     .action(async (cmdOpts, command) => {
-      const invoke = async () => {
+      await runUpdateCommand(cmdOpts.updateExecutor, "restart", async () => {
         const { runDaemonRestart } = await daemonLifecycleModuleLoader.load();
         await runDaemonRestart(resolveRestartOptions(cmdOpts, command));
-      };
-      if (cmdOpts.updateExecutor === undefined) {
-        await invoke();
-      } else {
-        const { runGatewayServiceUpdateCommand } = await updateExecutorModuleLoader.load();
-        await runGatewayServiceUpdateCommand(cmdOpts.updateExecutor, "restart", invoke);
-      }
+      });
     });
 }

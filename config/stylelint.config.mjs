@@ -1,8 +1,30 @@
 // Control UI CSS hygiene: plain stylesheets plus css`` templates in Lit
 // components (postcss-lit). Error-class rules only — oxfmt owns formatting.
+const selectorFunction = String.raw`\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)`;
+const selectorTail = String.raw`(?:[^([]|${selectorFunction}|\[[^\]]*\])*`;
+
 export default {
   extends: "stylelint-config-recommended",
   rules: {
+    // Chromium builds one invalidation set for every non-subject :has(). A universal
+    // selector or pseudo-element after one widens it to whole subtrees (~9 ms per
+    // insertion with 534 messages), ::placeholder on the :has() compound cost ~8 ms, and
+    // a tick after a sibling-relative :has() restyled every position-rail tick per
+    // transcript row. Style the element directly, or set a state class or custom
+    // property on the :has() subject. Functional arguments and attributes are skipped;
+    // split lists keep safe branches independent.
+    "selector-disallowed-list": [
+      [
+        new RegExp(
+          `:has${selectorFunction}${selectorTail}[\\s>+~](?:${selectorTail}[\\s>+~(])?\\*`,
+          "i",
+        ),
+        new RegExp(`:has${selectorFunction}${selectorTail}[\\s>+~]${selectorTail}::`, "i"),
+        new RegExp(`:has${selectorFunction}${selectorTail}::placeholder(?![\\w-])`, "i"),
+        new RegExp(`:has(?=\\(\\s*[+~])${selectorFunction}${selectorTail}[\\s>+~]`, "i"),
+      ],
+      { splitList: true },
+    ],
     // Cascade-order advice, not an error class; 400+ intentional hits in the
     // existing token/override cascade make it pure noise here.
     "no-descending-specificity": null,

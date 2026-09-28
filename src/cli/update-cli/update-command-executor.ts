@@ -50,10 +50,10 @@ const admittedAuthorities = new WeakMap<
     authority: ManagedUpdateLeaseAuthority;
     assertCurrent: () => void;
     managedHandoff: boolean;
+    runId: string;
+    retainedRoot?: string;
   }
 >();
-const admittedRunIds = new WeakMap<UpdateRecoveryFence, string>();
-const retainedOwners = new WeakMap<UpdateRecoveryFence, string>();
 
 export function captureUpdateCommandExecutorAuthority(
   fence: UpdateRecoveryFence,
@@ -61,7 +61,7 @@ export function captureUpdateCommandExecutorAuthority(
 ): ManagedUpdateLeaseAuthority {
   fence.assertCurrent();
   const admitted = admittedAuthorities.get(fence);
-  if (!admitted || (runId !== undefined && admittedRunIds.get(fence) !== runId)) {
+  if (!admitted || (runId !== undefined && admitted.runId !== runId)) {
     throw new UpdateCommandRecoveryPendingError("Package recovery requires its admitted executor.");
   }
   return admitted.authority;
@@ -73,7 +73,7 @@ export function assertUpdateRequesterContinuationOwner(
   runId: string,
 ): void {
   const admitted = admittedAuthorities.get(fence);
-  if (!admitted?.managedHandoff || admittedRunIds.get(fence) !== runId) {
+  if (!admitted?.managedHandoff || admitted.runId !== runId) {
     throw new UpdateCommandRecoveryPendingError(
       "Requester continuation requires its admitted Gateway update owner.",
     );
@@ -84,12 +84,12 @@ export function assertUpdateRequesterContinuationOwner(
 /** Compatibility requirement from a live admission, never a serialized claim. */
 export function requiresRetainedUpdateCommandOwner(fence: UpdateRecoveryFence): boolean {
   captureUpdateCommandExecutorAuthority(fence);
-  return retainedOwners.has(fence);
+  return admittedAuthorities.get(fence)?.retainedRoot !== undefined;
 }
 
 export function assertRetainedUpdateCommandRoot(fence: UpdateRecoveryFence, root: string): void {
   captureUpdateCommandExecutorAuthority(fence);
-  if (retainedOwners.get(fence) !== resolveUpdateInstallRoot(root)) {
+  if (admittedAuthorities.get(fence)?.retainedRoot !== resolveUpdateInstallRoot(root)) {
     throw new UpdateCommandRecoveryPendingError(
       "Service recovery requires its retained executor root.",
     );
@@ -152,6 +152,8 @@ export async function withDelegatedUpdateCommandExecutor<T>(
         retained,
         retainedChild,
       } = resolveUpdateCommandChildBinding(grant, runId, root, identityWarnings.warn);
+      using readConnections = new DisposableStack();
+      readConnections.use(store.retainReadConnection());
       let active = true;
       const isLive = (identity: ManagedHandoffLease["executor"]) =>
         store.isProcessIdentityCurrent(identity);
@@ -245,7 +247,6 @@ export async function withDelegatedUpdateCommandExecutor<T>(
           try {
             fence.assertCurrent();
             if (databaseIdentity) {
-              admittedRunIds.set(fence, runId);
               admittedAuthorities.set(fence, {
                 authority: Object.freeze({
                   ...databaseIdentity,
@@ -254,10 +255,9 @@ export async function withDelegatedUpdateCommandExecutor<T>(
                 }),
                 assertCurrent: assertBase,
                 managedHandoff,
+                runId,
+                retainedRoot: retained?.key,
               });
-            }
-            if (retained) {
-              retainedOwners.set(fence, retained.key);
             }
             if (options) {
               activation.start(
@@ -295,8 +295,6 @@ export async function withDelegatedUpdateCommandExecutor<T>(
         active = false;
         childOwners.delete(fence);
         admittedAuthorities.delete(fence);
-        admittedRunIds.delete(fence);
-        retainedOwners.delete(fence);
       }
     }, activation.signal),
   );
@@ -337,6 +335,7 @@ export async function withUpdateCommandExecutor<T>(
       let entering = false;
       let databasePath: string | undefined;
       let store: ReturnType<typeof createManagedHandoffLeaseStore> | undefined;
+      using readConnections = new DisposableStack();
       let lease: ManagedHandoffParent | undefined;
       let borrowed = false;
       let managedHandoff = false;
@@ -565,6 +564,7 @@ export async function withUpdateCommandExecutor<T>(
               existingIdentity: authority,
               onProcessIdentityWarning: identityWarnings.warn,
             });
+            readConnections.use(store.retainReadConnection());
             if (
               borrowed &&
               !legacyChild &&
@@ -580,11 +580,9 @@ export async function withUpdateCommandExecutor<T>(
               authority,
               assertCurrent: assertBase,
               managedHandoff,
+              runId,
+              retainedRoot: serviceLease?.key,
             });
-            admittedRunIds.set(fence, runId);
-            if (serviceLease) {
-              retainedOwners.set(fence, serviceLease.key);
-            }
             if (enterOptions?.preflight && !borrowed) {
               preflightReleases.set(fence, () => {
                 assertCurrent();
@@ -595,8 +593,6 @@ export async function withUpdateCommandExecutor<T>(
                 children.close();
                 childOwners.delete(fence);
                 admittedAuthorities.delete(fence);
-                admittedRunIds.delete(fence);
-                retainedOwners.delete(fence);
                 preflightReleases.delete(fence);
                 if (serviceLease) {
                   if (!store.release(serviceLease)) {
@@ -610,6 +606,7 @@ export async function withUpdateCommandExecutor<T>(
                   throw new UpdateCommandRecoveryPendingError("Preflight executor release failed.");
                 }
                 lease = undefined;
+                readConnections.dispose();
               });
             }
             if (enterOptions?.activationTimeoutMs !== undefined) {
@@ -675,8 +672,6 @@ export async function withUpdateCommandExecutor<T>(
       preflightReleases.delete(fence);
       childOwners.delete(fence);
       admittedAuthorities.delete(fence);
-      admittedRunIds.delete(fence);
-      retainedOwners.delete(fence);
       if ("error" in outcome && hasCommandProcessCleanupError(outcome.error)) {
         throw new UpdateCommandRecoveryPendingError(
           "Command cleanup is unconfirmed; update ownership remains retained.",

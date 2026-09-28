@@ -5,6 +5,7 @@ import { state } from "lit/decorators.js";
 import type {
   WorktreeRecord,
   WorktreesBranchesResult,
+  WorktreesListResult,
   WorktreesRemoveResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -38,7 +39,6 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 
 const WORKTREES_DOCS_URL = "https://docs.openclaw.ai/concepts/managed-worktrees";
 
-type WorktreesListResult = { worktrees: WorktreeRecord[] };
 class WorktreesPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;

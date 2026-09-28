@@ -52,13 +52,14 @@ vi.mock("../../infra/sqlite-worker-operation-admission.js", async (importOrigina
     ...actual,
     createSqliteWorkerOperationAdmission: (
       admit: Parameters<typeof actual.createSqliteWorkerOperationAdmission>[0],
+      attachment?: Parameters<typeof actual.createSqliteWorkerOperationAdmission>[1],
     ) =>
       actual.createSqliteWorkerOperationAdmission((request, grant) => {
         if (request.stage === "commit") {
           admission.beforeCommit?.();
         }
         admit(request, grant);
-      }),
+      }, attachment),
   };
 });
 

@@ -18,6 +18,7 @@ import {
   settleRequesterAfterSessionSpawns,
 } from "./subagents/registry/subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagents/registry/subagent-registry.types.js";
+import { buildRequesterSettleWakeIdentity } from "./subagents/registry/subagent-requester-settle-identity.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 
 const CRON_RUN_KEY = "agent:main:cron:daily-report:run:run-42";
@@ -568,6 +569,51 @@ describe("requester yield ownership", () => {
     expect(turn2Yield).not.toHaveBeenCalled();
     // Reporting must not disturb the armed wake or claim the child for turn 2.
     expect(getSubagentRunByRunId(child.runId)).toEqual(settled);
+
+    // The completion owner stays dispatching until its requester continuation returns.
+    assert(settled?.requesterSettleWake);
+    settled.execution = { status: "terminal", startedAt: 2_000, endedAt: 3_000 };
+    settled.requesterSettleWake.status = "dispatching";
+    settled.requesterSettleWake.attemptCount = 1;
+    const wakeIdentity = {
+      requesterSessionKey,
+      requesterAgentId: "main",
+      batchRunIds: [child.runId],
+      rearmGeneration: settled.requesterSettleWake.rearmGeneration,
+    };
+    const currentWakeRunId = buildRequesterSettleWakeIdentity(wakeIdentity).runId;
+    const beforeContinuation = structuredClone(settled);
+    const continuation = createYieldToolForTurn({
+      requesterSessionKey,
+      requesterTurnRunId: currentWakeRunId,
+      onYield: turn2Yield,
+    });
+    expect((await continuation.execute("current-wake", {})).details).toMatchObject({
+      status: "error",
+      error: GENERIC_NO_CLAIM_ERROR,
+    });
+    const wrongGeneration = createYieldToolForTurn({
+      requesterSessionKey,
+      requesterTurnRunId: buildRequesterSettleWakeIdentity({
+        ...wakeIdentity,
+        rearmGeneration: (wakeIdentity.rearmGeneration ?? 0) + 1,
+      }).runId,
+    });
+    expect((await wrongGeneration.execute("other-wake", {})).details).toMatchObject({
+      status: "already_pending",
+      pendingChildren: [{ runId: child.runId }],
+    });
+    seedRequiredChild(requesterSessionKey, {
+      runId: "unrelated-child",
+      childSessionKey: "agent:main:subagent:unrelated",
+      requesterTurnRunId: "another-turn",
+    });
+    expect((await continuation.execute("other-pending-work", {})).details).toMatchObject({
+      status: "already_pending",
+      pendingChildren: [{ runId: "unrelated-child" }],
+    });
+    expect(turn2Yield).not.toHaveBeenCalled();
+    expect(getSubagentRunByRunId(child.runId)).toEqual(beforeContinuation);
   });
 
   it("reports a child an earlier turn spawned without yielding", async () => {

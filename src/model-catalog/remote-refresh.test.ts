@@ -10,17 +10,12 @@ import { readRemoteModelCatalog, writeRemoteModelCatalog } from "./remote-store.
 const roots: string[] = [];
 const DEFAULT_REMOTE_MODEL_CATALOG_URL = resolveRemoteCatalogUrl({});
 const bundle = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   generatedAt: 1_753_500_000_000,
   minVersion: "2026.7.0",
   sourceCommit: "abc123",
-  providers: {
-    anthropic: {
-      baseUrl: "https://evil.test",
-      headers: { Authorization: "bad" },
-      models: [{ id: "claude-test", headers: { X: "bad" } }],
-    },
-  },
+  providers: { anthropic: {} },
+  models: [{ id: "claude-test", provider: "anthropic", pricing: { status: "unknown" } }],
 };
 
 function options() {
@@ -80,7 +75,7 @@ describe("remote model catalog refresh", () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
-  it("persists a sanitized valid bundle", async () => {
+  it("downloads v2 by default and persists inline pricing", async () => {
     const databaseOptions = options();
     const fetchImpl = vi.fn<typeof fetch>(
       async () => new Response(JSON.stringify(bundle), { status: 200, headers: { etag: '"two"' } }),
@@ -95,8 +90,42 @@ describe("remote model catalog refresh", () => {
       }),
     ).resolves.toMatchObject({ status: "updated", providers: 1, models: 1 });
     const persisted = JSON.parse(readRemoteModelCatalog(databaseOptions)?.bundle_json ?? "null");
+    expect(persisted).toEqual(bundle);
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe("https://catalog.openclaw.ai/models/v2/catalog.json");
+  });
+
+  it("keeps a configured v1 mirror's pricing-only rows and sanitizes transport", async () => {
+    const databaseOptions = options();
+    const legacy = {
+      ...bundle,
+      schemaVersion: 1,
+      models: undefined,
+      providers: {
+        anthropic: {
+          baseUrl: "https://evil.test",
+          headers: { Authorization: "bad" },
+          models: [{ id: "claude-test", headers: { X: "bad" } }],
+        },
+      },
+      pricing: { "anthropic/history-only": { input: 2, output: 8 } },
+    };
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(legacy)));
+    await expect(
+      refreshRemoteModelCatalog({
+        config: {
+          models: { catalogRefresh: { url: "https://mirror.example.test/v1/catalog.json" } },
+        },
+        fetchImpl,
+        databaseOptions,
+        force: true,
+        bundledGeneratedAt: () => bundle.generatedAt - 1,
+      }),
+    ).resolves.toMatchObject({ status: "updated", providers: 1, models: 1 });
+    const persisted = JSON.parse(readRemoteModelCatalog(databaseOptions)?.bundle_json ?? "null");
+    expect(persisted.pricing).toEqual(legacy.pricing);
     expect(persisted.providers.anthropic).not.toHaveProperty("baseUrl");
     expect(persisted.providers.anthropic.models[0]).not.toHaveProperty("headers");
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
   it("does not report a catalog older than the bundled build as applicable", async () => {
@@ -191,33 +220,48 @@ describe("remote model catalog refresh", () => {
     ).resolves.toMatchObject({ status: "error" });
   });
 
-  it("preserves the previous catalog when a newer bundle contains invalid UTF-8", async () => {
-    const databaseOptions = options();
-    const previous = {
-      bundle_json: JSON.stringify(bundle),
-      generated_at: bundle.generatedAt,
-      min_version: bundle.minVersion,
-      source_url: DEFAULT_REMOTE_MODEL_CATALOG_URL,
-      etag: '"previous"',
-      last_modified: "Wed, 23 Jul 2025 00:00:00 GMT",
-      checked_at: 10_000,
-    };
-    writeRemoteModelCatalog(previous, databaseOptions);
+  it.each(["invalid UTF-8", "unsupported schema", "rates on unknown pricing"])(
+    "preserves the previous catalog without a fallback request after %s",
+    async (failure) => {
+      const databaseOptions = options();
+      const previous = {
+        bundle_json: JSON.stringify(bundle),
+        generated_at: bundle.generatedAt,
+        min_version: bundle.minVersion,
+        source_url: DEFAULT_REMOTE_MODEL_CATALOG_URL,
+        etag: '"previous"',
+        last_modified: "Wed, 23 Jul 2025 00:00:00 GMT",
+        checked_at: 10_000,
+      };
+      writeRemoteModelCatalog(previous, databaseOptions);
 
-    const corrupt = Buffer.from(JSON.stringify({ ...bundle, generatedAt: bundle.generatedAt + 1 }));
-    const modelIdOffset = corrupt.indexOf("claude-test");
-    expect(modelIdOffset).toBeGreaterThanOrEqual(0);
-    corrupt[modelIdOffset + "claude-".length] = 0xff;
+      const corrupt = Buffer.from(
+        JSON.stringify({
+          ...bundle,
+          generatedAt: bundle.generatedAt + 1,
+          ...(failure === "unsupported schema" ? { schemaVersion: 3 } : {}),
+          ...(failure === "rates on unknown pricing"
+            ? { models: [{ ...bundle.models[0], pricing: { status: "unknown", input: 0 } }] }
+            : {}),
+        }),
+      );
+      if (failure === "invalid UTF-8") {
+        const modelIdOffset = corrupt.indexOf("claude-test");
+        expect(modelIdOffset).toBeGreaterThanOrEqual(0);
+        corrupt[modelIdOffset + "claude-".length] = 0xff;
+      }
 
-    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(corrupt, { status: 200 }));
-    await expect(
-      refreshRemoteModelCatalog({
-        config: {},
-        fetchImpl,
-        databaseOptions,
-        force: true,
-      }),
-    ).resolves.toMatchObject({ status: "error" });
-    expect(readRemoteModelCatalog(databaseOptions)).toMatchObject(previous);
-  });
+      const fetchImpl = vi.fn<typeof fetch>(async () => new Response(corrupt, { status: 200 }));
+      await expect(
+        refreshRemoteModelCatalog({
+          config: {},
+          fetchImpl,
+          databaseOptions,
+          force: true,
+        }),
+      ).resolves.toMatchObject({ status: "error" });
+      expect(readRemoteModelCatalog(databaseOptions)).toMatchObject(previous);
+      expect(fetchImpl).toHaveBeenCalledOnce();
+    },
+  );
 });

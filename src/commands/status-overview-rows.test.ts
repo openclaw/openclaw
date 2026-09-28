@@ -66,58 +66,40 @@ describe("status-overview-rows", () => {
     );
   });
 
-  it.each([
+  it.each<{
+    label: string;
+    doNotTrack?: string;
+    noAutoUpdate?: string;
+    checkOnStart?: boolean;
+    expected: string;
+  }>([
     {
       label: "explicitly enabled",
-      telemetry: { enabled: true },
-      doNotTrack: undefined,
-      noAutoUpdate: undefined,
-      checkOnStart: true,
       expected: "ok(enabled · anonymous feature stats)",
     },
     {
       label: "blocked by DO_NOT_TRACK",
-      telemetry: { enabled: true },
       doNotTrack: "1",
-      noAutoUpdate: undefined,
-      checkOnStart: true,
       expected: "muted(disabled (DO_NOT_TRACK))",
     },
     {
       label: "blocked by a trimmed DO_NOT_TRACK value",
-      telemetry: { enabled: true },
       doNotTrack: " TRUE ",
-      noAutoUpdate: undefined,
-      checkOnStart: true,
       expected: "muted(disabled (DO_NOT_TRACK))",
     },
     {
       label: "update checks disabled",
-      telemetry: { enabled: true },
-      doNotTrack: undefined,
-      noAutoUpdate: undefined,
       checkOnStart: false,
       expected: "muted(disabled · update checks off)",
     },
     {
-      label: "update checks disabled by OPENCLAW_NO_AUTO_UPDATE=yes",
-      telemetry: { enabled: true },
-      doNotTrack: undefined,
-      noAutoUpdate: "yes",
-      checkOnStart: true,
-      expected: "muted(disabled · update checks off)",
-    },
-    {
       label: "update checks disabled by a trimmed OPENCLAW_NO_AUTO_UPDATE=on",
-      telemetry: { enabled: true },
-      doNotTrack: undefined,
       noAutoUpdate: " on ",
-      checkOnStart: true,
       expected: "muted(disabled · update checks off)",
     },
   ])(
     "shows telemetry state when $label",
-    ({ telemetry, doNotTrack, noAutoUpdate, checkOnStart, expected }) => {
+    ({ doNotTrack, noAutoUpdate, checkOnStart = true, expected }) => {
       const params = createStatusCommandOverviewRowsParams();
       const rows = buildStatusCommandOverviewRows({
         ...params,
@@ -128,7 +110,7 @@ describe("status-overview-rows", () => {
         },
         surface: {
           ...params.surface,
-          cfg: { ...params.surface.cfg, telemetry, update: { checkOnStart } },
+          cfg: { ...params.surface.cfg, telemetry: { enabled: true }, update: { checkOnStart } },
         },
       });
 

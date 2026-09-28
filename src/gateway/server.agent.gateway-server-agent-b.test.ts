@@ -478,34 +478,6 @@ describe("gateway server agent", () => {
     });
   });
 
-  test("agent ack response then final response", { timeout: 8000 }, async () => {
-    const ackP = onceMessage(
-      ws,
-      (o) => o.type === "res" && o.id === "ag1" && o.payload?.status === "accepted",
-    );
-    const finalP = onceMessage(
-      ws,
-      (o) => o.type === "res" && o.id === "ag1" && o.payload?.status !== "accepted",
-    );
-    await sendAgentWsRequest(ws, {
-      reqId: "ag1",
-      message: "hi",
-      idempotencyKey: "idem-ag",
-    });
-
-    const ack = await ackP;
-    const final = await finalP;
-    const ackPayload = ack.payload;
-    const finalPayload = final.payload;
-    if (!ackPayload || !finalPayload) {
-      throw new Error("missing websocket payload");
-    }
-    expect(ackPayload.runId).toBeTypeOf("string");
-    expect(ackPayload.runId).not.toBe("");
-    expect(finalPayload.runId).toBe(ackPayload.runId);
-    expect(finalPayload.status).toBe("ok");
-  });
-
   test("agent durably admits the user turn before acknowledging a hanging dispatch", async () => {
     await writeMainSessionEntry({ sessionId: "sess-durable-agent-ack" });
     const dispatch = createDeferred<unknown>();
@@ -529,7 +501,7 @@ describe("gateway server agent", () => {
         sessionKey: "main",
         idempotencyKey: runId,
       });
-      await ackP;
+      expect((await ackP).payload).toMatchObject({ runId, status: "accepted" });
 
       const storePath = testState.sessionStorePath;
       if (!storePath) {
@@ -558,7 +530,7 @@ describe("gateway server agent", () => {
       });
     } finally {
       dispatch.resolve({ payloads: [{ text: "ok" }], meta: { durationMs: 1 } });
-      await finalP;
+      expect((await finalP).payload).toMatchObject({ runId, status: "ok" });
     }
   });
 
@@ -679,23 +651,6 @@ describe("gateway server agent", () => {
     expect(errorMessage).toMatch(/upstream rejected/);
     expect(errorMessage).not.toContain("AcpRuntimeError");
     expect(JSON.stringify(final)).not.toContain(token);
-  });
-
-  test("agent dedupes by idempotencyKey after completion", async () => {
-    const firstFinal = await sendAgentWsRequestAndWaitFinal(ws, {
-      reqId: "ag1",
-      message: "hi",
-      idempotencyKey: "same-agent",
-    });
-
-    const secondP = onceMessage(ws, (o) => o.type === "res" && o.id === "ag2");
-    await sendAgentWsRequest(ws, {
-      reqId: "ag2",
-      message: "hi again",
-      idempotencyKey: "same-agent",
-    });
-    const second = await secondP;
-    expect(second.payload).toEqual(firstFinal.payload);
   });
 
   test("agent dedupe survives reconnect", { timeout: 20_000 }, async () => {

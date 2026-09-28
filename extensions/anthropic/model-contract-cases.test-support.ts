@@ -10,7 +10,7 @@ type Claude5ContractCase = {
 };
 
 export const claude5ContractCases: Claude5ContractCase[] = [
-  ...["claude-opus-5-5", "opus-5.5", "opus-5-5"].map((modelId) => ({
+  ...["claude-opus-5-5", "opus", "opus-5.5", "opus-5-5"].map((modelId) => ({
     name: `resolves ${modelId} with its always-adaptive API contract`,
     defaultLevel: "medium" as const,
     modelId,
@@ -19,7 +19,7 @@ export const claude5ContractCases: Claude5ContractCase[] = [
     checksMedia: true,
     restoresMissingCost: true,
   })),
-  ...["claude-opus-5", "opus", "opus-5"].map((modelId) => ({
+  ...["claude-opus-5", "opus-5"].map((modelId) => ({
     name: `resolves ${modelId} with its exact API contract`,
     modelId,
     cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },

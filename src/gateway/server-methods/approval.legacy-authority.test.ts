@@ -162,19 +162,20 @@ async function proveLegacyAuthority<
     });
   } else {
     const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation((admit) =>
-      createAdmission((request, grant) => {
-        if (request.stage === "transaction") {
-          connection.abort();
-          stages.push("transport-retired");
-        } else if (request.stage === "commit") {
-          stages.push("verdict-commit");
-          if (revoke) {
-            invalidateGatewayDeviceRevocation(invocation.context, "legacy-reviewer", "operator");
+    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
+      (admit, attachment) =>
+        createAdmission((request, grant) => {
+          if (request.stage === "transaction") {
+            connection.abort();
+            stages.push("transport-retired");
+          } else if (request.stage === "commit") {
+            stages.push("verdict-commit");
+            if (revoke) {
+              invalidateGatewayDeviceRevocation(invocation.context, "legacy-reviewer", "operator");
+            }
           }
-        }
-        return admit(request, grant);
-      }),
+          return admit(request, grant);
+        }, attachment),
     );
   }
   const response = await invocation.invoke();
@@ -297,7 +298,7 @@ it.for([false, true])(
       const stages: string[] = [];
       const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
       vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (admit) =>
+        (admit, attachment) =>
           createAdmission((request, grant) => {
             if (request.stage === "transaction") {
               connection.abort();
@@ -313,7 +314,7 @@ it.for([false, true])(
               }
             }
             return admit(request, grant);
-          }),
+          }, attachment),
       );
       if (revoke) {
         await expect(invocation.invoke()).rejects.toThrow(/authority/u);

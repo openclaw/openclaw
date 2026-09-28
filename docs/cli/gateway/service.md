@@ -24,6 +24,23 @@ openclaw gateway uninstall
 It still validates core configuration and refuses configuration written by a newer
 OpenClaw binary. Start and restart continue to validate plugin configuration.
 
+On Windows, Scheduled Task stop and restart first ask the verified Gateway to drain
+and exit. Older or unresponsive Gateways fall back to termination of the captured
+process tree; a replacement instance is preserved. Transient SQLite sharing errors
+after confirmed process exit are retried; if inspection remains unavailable, the
+command warns and checks that the Gateway port is free before continuing with restart.
+
+If task settlement inspection remains unavailable
+within the stop budget, restart still attempts the captured task after confirming
+the Gateway exited, then reports that restart is unverified. An observed replacement
+is preserved and the restart is refused.
+
+If `gateway start` reaches its readiness deadline while the managed Gateway is
+still starting, it reports `still-starting` and exits with code `2`. The service
+keeps running; check `openclaw gateway status --deep` again before restarting it.
+A crashed service or a foreign listener still produces a failure. Port ownership
+alone does not prove readiness or rule out warm-up.
+
 ### Recover an unreadable native service definition
 
 If installation or a managed update reports `SERVICE_DEFINITION_UNKNOWN`, first

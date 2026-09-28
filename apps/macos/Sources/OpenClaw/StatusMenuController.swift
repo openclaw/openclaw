@@ -391,12 +391,6 @@ private struct StatusMenuIconView: View {
 
     private var effectiveIconState: IconState {
         let selection = self.state.iconOverride
-        guard selection != .system else { return WorkActivityStore.shared.iconState }
-        return switch selection.toIconState() {
-        case let .workingMain(kind), let .workingOther(kind), let .overridden(kind):
-            .overridden(kind)
-        case .idle:
-            .idle
-        }
+        return selection.fixedIconState() ?? WorkActivityStore.shared.iconState
     }
 }

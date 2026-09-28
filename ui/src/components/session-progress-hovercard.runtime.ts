@@ -174,7 +174,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
       return;
     }
     this.progressCards = sessionProgressCardsForGateway(this.applicationGateway);
-    this.stopProgressCardUpdates = this.progressCards.subscribe(this.handleProgressCardUpdate);
+    this.stopProgressCardUpdates = this.progressCards.subscribe(this.handleCardUpdate);
   }
 
   private disconnectStore(): void {
@@ -187,26 +187,12 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     this.releasePullRequestStore();
   }
 
-  private readonly handleProgressCardUpdate = () => {
-    const session = this.activeSession;
-    if (!session || !this.open || !this.hovercard.held) {
-      return;
-    }
-    const card = this.progressCards?.get(session);
-    if (card !== undefined) {
-      this.lastProgressCard = card;
-    }
-    this.showCurrent();
-  };
-
   private readonly handleSessionUpdate = () => {
     this.sessionLinkTitler.refresh();
-    if (this.open && this.hovercard.held) {
-      this.showCurrent();
-    }
+    this.handleCardUpdate();
   };
 
-  private readonly handlePullRequestUpdate = () => {
+  private readonly handleCardUpdate = () => {
     if (this.open && this.hovercard.held) {
       this.showCurrent();
     }
@@ -372,7 +358,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     }
     this.releasePullRequestStore();
     this.pullRequests = sessionPullRequestsForGateway(gateway);
-    this.stopPullRequestUpdates = this.pullRequests.subscribe(this.handlePullRequestUpdate);
+    this.stopPullRequestUpdates = this.pullRequests.subscribe(this.handleCardUpdate);
     this.pullRequests.watch(this, [sessionKey], { foreground: true });
   }
 
@@ -419,11 +405,17 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     const revision = JSON.stringify({
       progress: this.lastProgressCard?.revision ?? null,
       pullRequests: pullRequests
-        ? { branch: pullRequests.branch, pullRequests: pullRequests.pullRequests }
+        ? {
+            branch: pullRequests.branch,
+            pullRequests: pullRequests.pullRequests,
+            status: pullRequests.status,
+          }
         : null,
       row: sidebarRow
         ? {
             label: sidebarRow.label,
+            color: sidebarRow.color,
+            attention: sidebarRow.attention,
             boardFace: sidebarRow.boardFace,
             hasAutomation: sidebarRow.hasAutomation,
             hasActiveRun: sidebarRow.hasActiveRun,
@@ -435,6 +427,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
             expandedParticipants: sidebarRow.expandedParticipants,
             participantCount: sidebarRow.participantCount,
             workContext: sidebarRow.workContext,
+            placementMachine: sidebarRow.placementMachine,
             createdAt: sidebarRow.createdAt,
             startedAt: sidebarRow.startedAt,
             updatedAt: sidebarRow.updatedAt,

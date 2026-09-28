@@ -6,12 +6,14 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
   prepareSqliteQueryTakeFirstSync,
+  sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import { readSqliteDataVersion } from "../../infra/node-sqlite.js";
 import {
   stageSqliteTransactionState,
   withSqlitePostCommitPublications,
 } from "../../infra/sqlite-post-commit.js";
+import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../../infra/sqlite-user-version.js";
 import {
@@ -51,7 +53,6 @@ export { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-r
 
 type CanonicalSessionDatabase = Pick<
   OpenClawAgentKyselyDatabase,
-  | "schema_meta"
   | "session_key_contract"
   | "session_nodes"
   | "session_windows"
@@ -342,13 +343,12 @@ export function assertCanonicalSessionKeyWrite(sessionKey: string, expectedAgent
 export function readCanonicalSessionMainKey(database: { db: DatabaseSync }): string {
   let read = mainKeyReaders.get(database.db);
   if (!read) {
-    const query = prepareSqliteQueryTakeFirstSync<void, { main_key: string }>(database.db, () =>
+    read = prepareSqliteQueryTakeFirstSync<void, { main_key: string }>(database.db, () =>
       getNodeSqliteKysely<CanonicalSessionDatabase>(database.db)
         .selectFrom("session_key_contract")
         .select("main_key")
         .where("id", "=", 1),
     );
-    read = () => query();
     mainKeyReaders.set(database.db, read);
   }
   return normalizeMainKey(read()?.main_key);
@@ -360,9 +360,6 @@ export function assertCanonicalSessionEntryLineageWrite(entry: SessionEntry): vo
     entry.spawnedBy,
     entry.forkSource?.sessionKey,
   ].filter((sessionKey): sessionKey is string => sessionKey !== undefined);
-  if (sessionKeys.length === 0) {
-    return;
-  }
   for (const sessionKey of sessionKeys) {
     assertCanonicalSessionKeyWrite(sessionKey);
   }
@@ -408,7 +405,9 @@ export function canonicalSessionValidationQuery(
 
 /** Older supported maintenance readers keep their existing full-validation path. */
 export function hasCanonicalSessionValidationProjection(database: { db: DatabaseSync }): boolean {
-  if (readSqliteUserVersion(database.db) < CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION) {
+  const version =
+    getAdmittedSqliteSchemaFacts(database.db)?.userVersion ?? readSqliteUserVersion(database.db);
+  if (version < CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION) {
     return false;
   }
   assertCanonicalSessionValidationSchema(database.db);
@@ -447,11 +446,21 @@ export function scanCanonicalSqliteSessionEntries(
   return count;
 }
 
-export function assertCanonicalSqliteSessionKeysCurrent(
-  database: { agentId: string; db: DatabaseSync; path?: string },
-  collectMetadata = false,
-): ValidatedSessionMetadata | undefined {
-  return validateCanonicalSqliteSessionKeys(database, collectMetadata).metadata;
+/** Exact reads validate their snapshot without admitting unrelated persisted rows. */
+export function assertCanonicalSqliteSessionRowsCurrent(
+  database: { agentId: string; db: DatabaseSync },
+  sessionKeys: readonly string[],
+): void {
+  for (const row of iterateSqliteQuerySync(
+    database.db,
+    canonicalSessionValidationQuery(database).where(
+      "session_nodes.session_key",
+      "in",
+      sqliteStringSet(sessionKeys),
+    ),
+  )) {
+    validateCanonicalSessionRow(row, "read");
+  }
 }
 
 /** Validate the root's database and key together within its synchronous writer transaction. */
@@ -459,14 +468,14 @@ export function assertCanonicalSqliteSessionRootWrite(
   database: { agentId: string; db: DatabaseSync },
   sessionKey: string,
 ): void {
-  validateCanonicalSqliteSessionKeys(database);
+  assertCanonicalSqliteSessionKeysCurrent(database);
   assertCanonicalSessionKeyWrite(sessionKey);
 }
 
-function validateCanonicalSqliteSessionKeys(
+export function assertCanonicalSqliteSessionKeysCurrent(
   database: { agentId: string; db: DatabaseSync; path?: string },
   collectMetadata = false,
-): { metadata?: ValidatedSessionMetadata } {
+): ValidatedSessionMetadata | undefined {
   const incremental = hasCanonicalSessionValidationProjection(database);
   const identity = findOpenClawAgentDatabaseIdentity(database);
   const pathname = database.path ?? identity?.filename;
@@ -486,7 +495,7 @@ function validateCanonicalSqliteSessionKeys(
     matchesReaderContinuationDatabase(database, continuation)
   ) {
     readScope.usedContinuation = true;
-    return {};
+    return undefined;
   }
   const admitted = readerAdmissions.get(database.db)?.proof;
   // Preserve admitted-reader parsing for raw metadata edits; new handles and
@@ -496,7 +505,7 @@ function validateCanonicalSqliteSessionKeys(
     admitted.physicalValidation === physicalValidation &&
     admitted.canonicalReady === canonicalReady
   ) {
-    return {};
+    return undefined;
   }
   if (readScope?.database === database.db && !database.db.isTransaction) {
     readScope.snapshotRequired ??= new Error(
@@ -521,43 +530,35 @@ function validateCanonicalSqliteSessionKeys(
       scanCanonicalSqliteSessionEntries(database, undefined, metadata);
       markOpenClawAgentCanonicalValidation(database);
       remember();
-      return { metadata };
+      return metadata;
     }
     const db = getNodeSqliteKysely<CanonicalSessionDatabase>(database.db);
     const pending = db.selectFrom("session_canonical_validation_pending").select("session_key");
     if (!executeSqliteQueryTakeFirstSync(database.db, pending.limit(1))) {
       remember();
-      return {};
+      return undefined;
     }
     deferCanonicalSessionValidation(database);
-    if (collectMetadata) {
-      // A list already needs the whole inventory; hand its parsed rows through once.
-      const metadata: ValidatedSessionMetadata = {
-        dataVersion: readSqliteDataVersion(database.db),
-        entries: new Map(),
-        keys: [],
-      };
-      scanCanonicalSqliteSessionEntries(database, undefined, metadata);
+    if (!collectMetadata) {
+      const query = canonicalSessionValidationQuery(database).where(
+        "session_nodes.session_key",
+        "in",
+        pending,
+      );
+      for (const row of iterateSqliteQuerySync(database.db, query)) {
+        validateCanonicalSessionRow(row);
+      }
       remember();
-      return { metadata };
+      return undefined;
     }
-    const query = canonicalSessionValidationQuery(database).where(
-      "session_nodes.session_key",
-      "in",
-      pending,
-    );
-    for (const row of iterateSqliteQuerySync(database.db, query)) {
-      validateCanonicalSessionRow(row);
-    }
-    remember();
-    return {};
   }
+  // A list already needs the whole inventory; hand its parsed rows through once.
   const metadata: ValidatedSessionMetadata | undefined = collectMetadata
     ? { dataVersion: readSqliteDataVersion(database.db), entries: new Map(), keys: [] }
     : undefined;
   scanCanonicalSqliteSessionEntries(database, undefined, metadata);
   remember();
-  return { metadata };
+  return metadata;
 }
 
 export function setCanonicalSqliteSessionMainKey(

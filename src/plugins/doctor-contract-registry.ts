@@ -24,13 +24,14 @@ import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.
 import {
   coercePluginDoctorContractModule,
   type PluginDoctorContractModule,
-  type PluginDoctorStateMigration,
+  type PluginDoctorStateMigrationEntry,
 } from "./doctor-contract-module.js";
 import { pluginDoctorContractRegistryLoaderState } from "./doctor-contract-registry-loader-state.js";
 import {
   collectRelevantDoctorPluginIds,
   collectRelevantDoctorPluginIdsForTouchedPaths,
 } from "./doctor-contract-relevance.js";
+import type { PluginDoctorMigrationResourceCollectionParams } from "./doctor-migration-resources.js";
 import type { DoctorSessionRouteStateOwner } from "./doctor-session-route-state-owner-types.js";
 import { isActivatedManifestOwner } from "./manifest-owner-policy.js";
 import { loadBundledPluginManifestRegistry } from "./manifest-registry-build.js";
@@ -75,29 +76,11 @@ export type {
   PluginDoctorStateMigrationDetection,
 } from "./doctor-contract-module.js";
 
-type PluginDoctorContractEntry = {
+type PluginDoctorContractEntry = Omit<
+  ReturnType<typeof coercePluginDoctorContractModule>,
+  "summary"
+> & {
   pluginId: string;
-  rules: LegacyConfigRule[];
-  normalizeCompatibilityConfig?: ReturnType<
-    typeof coercePluginDoctorContractModule
-  >["normalizeCompatibilityConfig"];
-  resolveSessionStoreAgentIds?: ReturnType<
-    typeof coercePluginDoctorContractModule
-  >["resolveSessionStoreAgentIds"];
-  sessionRouteStateOwners: DoctorSessionRouteStateOwner[];
-  stateMigrations: PluginDoctorStateMigration[];
-};
-
-type PluginDoctorStateMigrationEntry = {
-  pluginId: string;
-  channelIds: string[];
-  /**
-   * Mirrors the runtime proxy's durable-store gate: only bundled plugins and trusted
-   * official installs may reach channel ingress queues. Doctor must not become a way
-   * around that for an activated workspace plugin.
-   */
-  trustedForDurableStores?: boolean;
-  migration: PluginDoctorStateMigration;
 };
 
 function isTrustedForDurableStores(record: PluginManifestRegistryRecord): boolean {
@@ -105,6 +88,13 @@ function isTrustedForDurableStores(record: PluginManifestRegistryRecord): boolea
 }
 
 type PluginManifestRegistryRecord = PluginManifestRegistry["plugins"][number];
+
+type PluginDoctorRegistryParams = {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  pluginIds?: readonly string[];
+};
 
 function loadPluginDoctorContractModule(modulePath: string): PluginDoctorContractModule {
   return getCachedPluginModuleLoader({
@@ -169,9 +159,6 @@ function loadPluginDoctorContractEntry(
   record: PluginManifestRegistryRecord,
   surface: PluginDoctorContractSurface,
 ): PluginDoctorContractEntry | null {
-  if (isPluginDoctorMigrationDeferred(record.id)) {
-    return null;
-  }
   const declaration = record.doctorContract;
   // Declarations gate loading only; modules remain authoritative, while absence preserves loading.
   if (declaration && !declaresPluginDoctorContractSurface(declaration, surface)) {
@@ -197,13 +184,9 @@ function loadPluginDoctorContractEntry(
   return { pluginId: record.id, ...contract };
 }
 
-function resolvePluginDoctorManifestRecords(params: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  pluginIds?: readonly string[];
-  artifactPreservingReadOnly?: boolean;
-}): PluginManifestRegistryRecord[] {
+function resolvePluginDoctorManifestRecords(
+  params: PluginDoctorRegistryParams & { artifactPreservingReadOnly?: boolean },
+): PluginManifestRegistryRecord[] {
   if (params?.pluginIds && params.pluginIds.length === 0) {
     return [];
   }
@@ -242,13 +225,9 @@ function filterPluginDoctorRecordsByScope(
   );
 }
 
-function resolvePluginDoctorContracts(params: {
-  surface: PluginDoctorContractSurface;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  pluginIds?: readonly string[];
-}): PluginDoctorContractEntry[] {
+function resolvePluginDoctorContracts(
+  params: PluginDoctorRegistryParams & { surface: PluginDoctorContractSurface },
+): PluginDoctorContractEntry[] {
   const loadPaths = params.config?.plugins?.load?.paths ?? [];
   if (params.surface === "configRepair" && loadPaths.length > 0) {
     const warning = findUninspectedPluginDiagnostic(
@@ -306,23 +285,17 @@ function loadPluginDoctorContractEntries(params: {
     return entry ? [entry] : [];
   });
 }
-export function listPluginDoctorLegacyConfigRules(params?: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  pluginIds?: readonly string[];
-}): LegacyConfigRule[] {
+export function listPluginDoctorLegacyConfigRules(
+  params?: PluginDoctorRegistryParams,
+): LegacyConfigRule[] {
   return resolvePluginDoctorContracts({ ...params, surface: "configRepair" }).flatMap(
     (entry) => entry.rules,
   );
 }
 
-export function listPluginDoctorSessionRouteStateOwners(params?: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  pluginIds?: readonly string[];
-}): DoctorSessionRouteStateOwner[] {
+export function listPluginDoctorSessionRouteStateOwners(
+  params?: PluginDoctorRegistryParams,
+): DoctorSessionRouteStateOwner[] {
   const owners = new Map<string, DoctorSessionRouteStateOwner>();
   const records = resolvePluginDoctorManifestRecords(params ?? {});
   const manifestOwners = records.flatMap((record) => record.sessionRouteStateOwners ?? []);
@@ -339,12 +312,9 @@ export function listPluginDoctorSessionRouteStateOwners(params?: {
 }
 
 /** Resolve plugin-owned agent IDs whose core session stores need migration. */
-export function listPluginDoctorSessionStoreAgentIds(params?: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  pluginIds?: readonly string[];
-}): string[] {
+export function listPluginDoctorSessionStoreAgentIds(
+  params?: PluginDoctorRegistryParams,
+): string[] {
   const cfg = params?.config ?? {};
   const agentIds = new Set<string>();
   for (const entry of resolvePluginDoctorContracts({
@@ -409,17 +379,16 @@ function loadLegacyChannelStateMigrationDetector(
 
 export class PluginDoctorStateMigrationDeclarationError extends Error {}
 
-export function listPluginDoctorStateMigrationEntries(params?: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  pluginIds?: readonly string[];
-  validateDeclarations?: boolean;
-  onInspectedPlugin?: (pluginId: string) => void;
-  onInspectedStatelessPlugin?: (pluginId: string) => void;
-}): PluginDoctorStateMigrationEntry[] {
+export function listPluginDoctorStateMigrationEntries(
+  params?: PluginDoctorRegistryParams & {
+    inventory?: PluginDoctorStateMigrationInventory;
+    validateDeclarations?: boolean;
+    onInspectedPlugin?: (pluginId: string) => void;
+    onInspectedStatelessPlugin?: (pluginId: string) => void;
+  },
+): PluginDoctorStateMigrationEntry[] {
   return loadPluginDoctorStateMigrationEntries(
-    resolvePluginDoctorStateMigrationRecords(params ?? {}),
+    params?.inventory?.records ?? resolvePluginDoctorStateMigrationRecords(params ?? {}),
     params?.validateDeclarations,
     params?.onInspectedPlugin,
     params?.onInspectedStatelessPlugin,
@@ -505,13 +474,9 @@ function loadPluginDoctorStateMigrationEntries(
   return entries;
 }
 
-function resolvePluginDoctorStateMigrationRecords(params: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  pluginIds?: readonly string[];
-  artifactPreservingReadOnly?: boolean;
-}): PluginManifestRegistryRecord[] {
+function resolvePluginDoctorStateMigrationRecords(
+  params: PluginDoctorRegistryParams & { artifactPreservingReadOnly?: boolean },
+): PluginManifestRegistryRecord[] {
   if (params.pluginIds?.length === 0) {
     return [];
   }
@@ -561,6 +526,8 @@ function filterPluginDoctorStateMigrationRecords(
 }
 
 export type PluginDoctorStateMigrationInventory = {
+  /** Live selection, retained across maintenance scopes without rediscovery. */
+  records?: readonly PluginManifestRegistryRecord[];
   knownPluginIds: string[];
   sessionStoreOwnerPluginIds: string[];
   descriptors: Array<{
@@ -722,6 +689,7 @@ export function resolveLivePluginDoctorStateMigrationInventory(params: {
   }
 
   return {
+    records,
     knownPluginIds: [...new Set([...bundledInventory.knownPluginIds, ...records.map((r) => r.id)])],
     sessionStoreOwnerPluginIds: records
       .filter((record) => record.doctorContract?.resolveSessionStoreAgentIds === true)
@@ -733,12 +701,7 @@ export function resolveLivePluginDoctorStateMigrationInventory(params: {
 
 export function applyPluginDoctorCompatibilityMigrations(
   cfg: OpenClawConfig,
-  params?: {
-    config?: OpenClawConfig;
-    workspaceDir?: string;
-    env?: NodeJS.ProcessEnv;
-    pluginIds?: readonly string[];
-  },
+  params?: PluginDoctorRegistryParams,
 ): {
   config: OpenClawConfig;
   changes: string[];
@@ -765,4 +728,15 @@ export function applyPluginDoctorCompatibilityMigrations(
     warnings.push(...(mutation.warnings ?? []));
   }
   return { config: nextCfg, changes, ...(warnings.length ? { warnings } : {}) };
+}
+
+/** Inspect plugin-owned migration paths before the updater captures its recovery set. */
+export async function preparePluginDoctorMigrationBackupResources(
+  params: PluginDoctorMigrationResourceCollectionParams,
+) {
+  const entries = loadPluginDoctorStateMigrationEntries(
+    resolvePluginDoctorStateMigrationRecords({ ...params, artifactPreservingReadOnly: true }),
+  );
+  const { preparePluginDoctorMigrationResources } = await import("./doctor-migration-resources.js");
+  return await preparePluginDoctorMigrationResources(entries, params);
 }

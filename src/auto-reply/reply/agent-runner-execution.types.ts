@@ -146,7 +146,6 @@ export type AgentTurnParams = {
   shouldEmitToolResult: () => boolean;
   shouldEmitToolOutput: () => boolean;
   pendingToolTasks: Set<Promise<void>>;
-  resetSessionAfterRoleOrderingConflict: (reason: string) => Promise<boolean>;
   isHeartbeat: boolean;
   sessionKey?: string;
   runtimePolicySessionKey?: string;
@@ -157,7 +156,7 @@ export type AgentTurnParams = {
   toolProgressDetail?: "explain" | "raw";
   replyMediaContext?: ReplyMediaContext;
   onCompactionNoticePayload?: (payload: ReplyPayload) => Promise<void> | void;
-  isRestartRecoveryArmed?: () => boolean;
+  isRestartRecoveryArmed?: () => Promise<boolean>;
 };
 
 export type EmbeddedAgentRunResult = Awaited<ReturnType<typeof runEmbeddedAgent>>;

@@ -19,12 +19,15 @@ import { selectShellRouteState } from "./app-host-route-state.ts";
 import {
   committedRouterState,
   createLazyElementSpec,
+  createRosterRefreshContext,
   resetAppHostTestGlobals,
   type ShellKeyboardState,
   type TestOptionalCustomElement,
   stubRenderedWhenDefined,
 } from "./app-host.test-support.ts";
 import { ShellGatewayOwner, type ShellGatewayHost } from "./app-shell-gateway.ts";
+import { createApplicationNavigationPreferences } from "./bootstrap-navigation-preferences.ts";
+import { createApplicationTheme } from "./bootstrap-theme.ts";
 import { createChatSubmissions } from "./chat-submissions.ts";
 import type {
   ApplicationContext,
@@ -41,6 +44,7 @@ import {
 import { shouldMergeChatChrome } from "./mobile-nav-layout.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import { resetServerUiPrefsSync } from "./server-prefs.ts";
+import { loadSettings } from "./settings.ts";
 import { scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
 
 vi.mock("./stale-chunk-reload.ts", async () => {
@@ -111,55 +115,6 @@ type ShellUiCommandState = ShellKeyboardState & {
 
 function roster(defaultId: string, agents: GatewayAgentRow[]): AgentsListResult {
   return { defaultId, mainKey: "main", scope: "per-sender", agents };
-}
-
-function createRosterRefreshContext(params: {
-  previous: AgentsListResult;
-  next: AgentsListResult;
-  selectedId: string;
-}) {
-  const agentsState = { agentsList: params.previous };
-  const selectionState = { selectedId: params.selectedId, scopeId: params.selectedId };
-  const refreshList = vi.fn(async () => {
-    agentsState.agentsList = params.next;
-    return params.next;
-  });
-  const invalidateFiles = vi.fn();
-  const invalidateIdentity = vi.fn();
-  const ensureIdentity = vi.fn(async () => undefined);
-  const setSelection = vi.fn((agentId: string) => {
-    selectionState.selectedId = agentId;
-    selectionState.scopeId = agentId;
-  });
-  const refreshConfig = vi.fn(async () => null);
-  const context = {
-    agents: {
-      state: agentsState,
-      refreshList,
-      invalidateFiles,
-    },
-    agentIdentity: {
-      invalidate: invalidateIdentity,
-      ensure: ensureIdentity,
-    },
-    agentSelection: {
-      state: selectionState,
-      set: setSelection,
-    },
-    runtimeConfig: {
-      state: { configFormDirty: false },
-      refresh: refreshConfig,
-    },
-  } as unknown as ApplicationContext;
-  return {
-    context,
-    refreshList,
-    invalidateFiles,
-    invalidateIdentity,
-    ensureIdentity,
-    setSelection,
-    refreshConfig,
-  };
 }
 
 type ShellChromeEventState = {
@@ -536,7 +491,7 @@ describe("OpenClaw shell route session commits", () => {
     expect(replace).toHaveBeenCalledWith("chat", { pathname: "/chat/research" });
   });
 
-  it("adopts a resolved chat session after path navigation from Tasks", () => {
+  it("adopts a resolved chat session after path navigation from Cron", () => {
     vi.stubGlobal("localStorage", createStorageMock());
     const calls: string[] = [];
     const setAgent = vi.fn((agentId: string | null) => calls.push(`agent:${agentId}`));
@@ -556,7 +511,7 @@ describe("OpenClaw shell route session commits", () => {
     shell.activeSessionKey = "agent:main:session-a";
     shell.didConsiderNativeRouteRestore = true;
 
-    shell.updateRouteState(selectShellRouteState(committedRouterState("tasks", "/tasks")));
+    shell.updateRouteState(selectShellRouteState(committedRouterState("cron", "/cron")));
     shell.updateRouteState(
       selectShellRouteState(
         committedRouterState("chat", "/chat/main/session-b-12345678", {
@@ -590,8 +545,20 @@ describe("OpenClaw shell server preferences", () => {
     vi.stubGlobal("localStorage", createStorageMock());
     resetServerUiPrefsSync();
     const sidebarEntries = ["route:usage", "session:agent:main:test"];
-    const updateNavigation = vi.fn();
-    const refreshTheme = vi.fn();
+    const gateway = {
+      connection: { gatewayUrl: "ws://sidebar.test" },
+      snapshot: { phase: "connected" },
+      subscribe: () => () => undefined,
+    } as unknown as ApplicationGateway;
+    const theme = createApplicationTheme(loadSettings(gateway.connection.gatewayUrl), gateway);
+    const navigation = createApplicationNavigationPreferences(theme);
+    const navigationChanged = vi.fn();
+    const stopNavigation = navigation.subscribe(navigationChanged);
+    onTestFinished(() => {
+      stopNavigation();
+      theme.dispose();
+      resetServerUiPrefsSync();
+    });
     const runtimeConfig = {
       state: {
         configSnapshot: {
@@ -601,12 +568,9 @@ describe("OpenClaw shell server preferences", () => {
       },
     } as unknown as ApplicationContext["runtimeConfig"];
     const context = {
-      gateway: {
-        connection: { gatewayUrl: "ws://sidebar.test" },
-        snapshot: { phase: "connected" },
-      },
-      navigation: { update: updateNavigation },
-      theme: { refresh: refreshTheme },
+      gateway,
+      navigation,
+      theme,
       // reconcileServerUiPrefs only accepts the current context's capability.
       runtimeConfig,
     } as unknown as ApplicationContext;
@@ -617,9 +581,9 @@ describe("OpenClaw shell server preferences", () => {
 
     shell.reconcileServerUiPrefs(runtimeConfig);
 
-    expect(updateNavigation).toHaveBeenCalledWith({ sidebarEntries });
-    expect(refreshTheme).toHaveBeenCalledOnce();
-    resetServerUiPrefsSync();
+    expect(navigation.snapshot.sidebarEntries).toEqual(sidebarEntries);
+    expect(navigationChanged).toHaveBeenCalledWith(expect.objectContaining({ sidebarEntries }));
+    expect(loadSettings(gateway.connection.gatewayUrl).sidebarEntries).toEqual(sidebarEntries);
   });
 });
 

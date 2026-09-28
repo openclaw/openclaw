@@ -9,12 +9,21 @@ import {
   useSkillsWatcherFixture,
 } from "./refresh.watcher.test-support.js";
 
-const { createdWatchers, watchMock, nativeWatchMock, watchForSkillRoot } =
-  createSkillsWatcherMock();
+const {
+  createdWatchers,
+  watchMock,
+  nativeWatchMock,
+  nativeContentWatchMock,
+  watchForSkillRoot,
+  watcherAdmissions,
+} = createSkillsWatcherMock();
 
 vi.mock("chokidar", () => ({ default: { watch: watchMock } }));
 vi.mock("./refresh-ancestor-native.js", () => ({
   createNativeSkillsAncestorWatcher: nativeWatchMock,
+}));
+vi.mock("./refresh-content-native.js", () => ({
+  createNativeSkillsContentWatcher: nativeContentWatchMock,
 }));
 vi.mock("../loading/plugin-skills.js", () => ({
   resolvePluginSkillRoots: () => [],
@@ -22,12 +31,14 @@ vi.mock("../loading/plugin-skills.js", () => ({
 }));
 
 let refreshModule: typeof import("./refresh.js");
+let registry: typeof import("./refresh-watch-registry.js");
 
 describe("skills watcher residency", () => {
   const fixture = useSkillsWatcherFixture();
 
   beforeAll(async () => {
     refreshModule = await import("./refresh.js");
+    registry = await import("./refresh-watch-registry.js");
   });
 
   beforeEach(() => {
@@ -49,6 +60,26 @@ describe("skills watcher residency", () => {
       executionWorkspaceDir,
       watcher: watchForSkillRoot(path.join(executionWorkspaceDir, "skills")).watcher,
     };
+  }
+
+  function executionTargetStates(executionWorkspaceDir: string) {
+    const key = JSON.stringify([
+      fixture.workspaceDir,
+      path.resolve(executionWorkspaceDir),
+      undefined,
+    ]);
+    const targets = expectDefined(
+      registry.workspaceWatchTargets.get(key),
+      "execution watch targets",
+    );
+    const states = targets
+      .filter((target) => target.executionOnly)
+      .map((target) => ({
+        target,
+        state: expectDefined(registry.pathWatchers.get(target.path), "execution path owner"),
+      }));
+    expect(states.length).toBeGreaterThan(0);
+    return states;
   }
 
   it("bounds recent execution roots while retaining the most recently used and shared roots", async () => {
@@ -105,10 +136,19 @@ describe("skills watcher residency", () => {
       } else {
         expect(initial.snapshot.prompt).toContain("Original instructions");
       }
+      const retiring = executionTargetStates(first.executionWorkspaceDir);
       for (let index = 1; index <= 128; index += 1) {
         await ensureExecutionRoot(index);
       }
       expect(first.watcher.closed).toBe(true);
+      expect(retiring.every(({ state }) => state.closed)).toBe(true);
+      // A closed handle does not mean its logical owner has joined content and ancestors.
+      // This oracle covers settled re-entry; the held-retirement case below covers the gap.
+      const retired = await Promise.all(retiring.map(({ state }) => state.close()));
+      expect(retired.every((result) => result.ok)).toBe(true);
+      for (const { target, state } of retiring) {
+        expect(registry.pathWatchers.get(target.path)).not.toBe(state);
+      }
       const cached = initial.snapshot;
       if (repair) {
         await writeSkill({
@@ -189,5 +229,91 @@ describe("skills watcher residency", () => {
       await shutdown;
     }
     expect(closed).toBe(true);
+  });
+
+  it("refreshes preparation while capacity re-entry waits for retirement", async () => {
+    const { resolveReusableWorkspaceSkillSnapshot } = await import("./session-snapshot.js");
+    const first = await ensureExecutionRoot(0);
+    const skillDir = path.join(first.executionWorkspaceDir, "skills", "residency-proof");
+    await writeSkill({
+      dir: skillDir,
+      name: "residency-proof",
+      description: "Original instructions",
+    });
+    const params = {
+      workspaceDir: fixture.workspaceDir,
+      executionWorkspaceDir: first.executionWorkspaceDir,
+      config: {},
+      skillFilter: ["residency-proof"],
+    };
+    const initial = await resolveReusableWorkspaceSkillSnapshot(params);
+    const retiring = executionTargetStates(first.executionWorkspaceDir);
+    const contentRoot = path.join(first.executionWorkspaceDir, "skills").replaceAll("\\", "/");
+    const held = expectDefined(
+      retiring.find(({ target }) => target.path === contentRoot),
+      "retiring content owner",
+    );
+    const watcher = watchForSkillRoot(contentRoot).watcher;
+    const originalClose = expectDefined(watcher.close.getMockImplementation(), "watcher close");
+    const retirement = createDeferred();
+    watcher.close.mockImplementationOnce(async () => {
+      await originalClose();
+      await retirement.promise;
+    });
+    const admitted = watcherAdmissions(contentRoot, false).length;
+    const seen = vi.fn();
+    try {
+      for (let index = 1; index <= 128; index += 1) {
+        await ensureExecutionRoot(index);
+      }
+      expect(retiring.every(({ state }) => state.closed)).toBe(true);
+      // Settle unrelated execution targets so this isolates the one held retirement.
+      const otherCloses = await Promise.all(
+        retiring.filter(({ state }) => state !== held.state).map(({ state }) => state.close()),
+      );
+      expect(otherCloses.every((result) => result.ok)).toBe(true);
+      expect(registry.pathWatchers.get(contentRoot)).toBe(held.state);
+      refreshModule.registerSkillsChangeListener(seen);
+      const reentered = await resolveReusableWorkspaceSkillSnapshot({
+        ...params,
+        existingSnapshot: initial.snapshot,
+      });
+      expect(reentered.shouldRefresh).toBe(true);
+      expect(reentered.snapshot.prompt).toContain("Original instructions");
+      expect(registry.pathWatchers.get(contentRoot)).toBe(held.state);
+      expect(watcherAdmissions(contentRoot, false)).toHaveLength(admitted);
+      expect(
+        seen.mock.calls.filter(([event]) => event.reason === "watch-unavailable"),
+      ).toHaveLength(1);
+      expect(seen.mock.calls.filter(([event]) => event.reason === "watch-available")).toHaveLength(
+        0,
+      );
+
+      await writeSkill({
+        dir: skillDir,
+        name: "residency-proof",
+        description: "Edited while retiring",
+      });
+      const refreshed = await resolveReusableWorkspaceSkillSnapshot({
+        ...params,
+        existingSnapshot: reentered.snapshot,
+      });
+      expect(refreshed.shouldRefresh).toBe(true);
+      expect(refreshed.snapshot.prompt).toContain("Edited while retiring");
+      expect(registry.pathWatchers.get(contentRoot)).toBe(held.state);
+      expect(watcherAdmissions(contentRoot, false)).toHaveLength(admitted);
+      expect(
+        seen.mock.calls.filter(([event]) => event.reason === "watch-unavailable"),
+      ).toHaveLength(1);
+      expect(seen.mock.calls.filter(([event]) => event.reason === "watch-available")).toHaveLength(
+        0,
+      );
+      expect(watcher.close).toHaveBeenCalledTimes(1);
+    } finally {
+      const closing = refreshModule.closeSkillsWatchers();
+      retirement.resolve();
+      await closing;
+    }
+    expect(createdWatchers.every((created) => created.closed)).toBe(true);
   });
 });

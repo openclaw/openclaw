@@ -19,10 +19,12 @@ jobs:
     name: Comment on PR
     runs-on: ubuntu-24.04
     if: >
+      (
       github.repository == 'openclaw/openclaw' &&
       github.event.workflow_run.event == 'pull_request' &&
       (github.event.workflow_run.name == 'iOS Periphery Dead Code' ||
       github.event.workflow_run.name == 'macOS Periphery Dead Code')
+      )
     steps:
       - name: Upsert Periphery PR comment
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9

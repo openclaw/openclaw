@@ -52,6 +52,52 @@ afterEach(() => {
 });
 
 describe("DefaultResourceLoader", () => {
+  it("keeps the first prompt and theme while reporting the losing resource paths", async () => {
+    const root = tempDirs.make("openclaw-resource-collisions-");
+    const paths: [string, string] = [join(root, "first"), join(root, "second")];
+    for (const path of paths) {
+      await mkdir(path);
+      await writeFile(join(path, "shared.md"), `Prompt from ${path}`);
+      await writeFile(join(path, "shared.json"), JSON.stringify({ ...darkTheme, name: "shared" }));
+    }
+    const loader = new DefaultResourceLoader({
+      cwd: root,
+      agentDir: root,
+      settingsManager: SettingsManager.inMemory(),
+      additionalPromptTemplatePaths: paths,
+      additionalThemePaths: paths,
+      noExtensions: true,
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      noContextFiles: true,
+    });
+
+    await loader.reload();
+
+    expect(loader.getPrompts().prompts.map((prompt) => prompt.filePath)).toEqual([
+      join(paths[0], "shared.md"),
+    ]);
+    expect(loader.getThemes().themes.map((theme) => theme.sourcePath)).toEqual([
+      join(paths[0], "shared.json"),
+    ]);
+    for (const [resourceType, extension, diagnostics, name] of [
+      ["prompt", "md", loader.getPrompts().diagnostics, "/shared"],
+      ["theme", "json", loader.getThemes().diagnostics, "shared"],
+    ] as const) {
+      const winnerPath = join(paths[0], `shared.${extension}`);
+      const loserPath = join(paths[1], `shared.${extension}`);
+      expect(diagnostics).toEqual([
+        {
+          type: "collision",
+          message: `name "${name}" collision`,
+          path: loserPath,
+          collision: { resourceType, name: "shared", winnerPath, loserPath },
+        },
+      ]);
+    }
+  });
+
   it("does not load a direct local extension disabled by its package filter", async () => {
     const root = tempDirs.make("openclaw-resource-loader-filter-");
     const extensionPath = join(root, "extension.ts");
@@ -312,32 +358,74 @@ describe("DefaultResourceLoader", () => {
     const root = tempDirs.make("openclaw-resource-loader-scope-");
     const variantAgentDir = join(root, "AGENT");
     const variantPackageDir = join(root, "PACKAGE-SOURCE");
-    const defaultSkillDir = join(root, "agent", "skills", "default");
-    await mkdir(defaultSkillDir, { recursive: true });
-
-    withMockedWindowsPlatform(() => {
-      const loader = new DefaultResourceLoader({
-        cwd: root,
-        agentDir: variantAgentDir,
-      });
-      const cases = [
-        loader["getDefaultSourceInfoForPath"](defaultSkillDir),
-        loader["findSourceInfoForPath"](
-          join(root, "package-source", "extra", "SKILL.md"),
-          new Map([[variantPackageDir, sourceMetadata(variantPackageDir, "extension", "project")]]),
-        ),
-        loader["findSourceInfoForPath"](
-          join(root, "package-source", "package", "SKILL.md"),
-          undefined,
-          new Map([[variantPackageDir, sourceMetadata(variantPackageDir, "package", "user")]]),
-        ),
-      ];
-
-      expect(cases).toMatchObject([
-        { source: "local", scope: "user", baseDir: join(variantAgentDir, "skills") },
-        { source: "extension", scope: "project", baseDir: variantPackageDir },
-        { source: "package", scope: "user", baseDir: variantPackageDir },
-      ]);
+    const defaultThemeDir = join(root, "agent", "themes");
+    const packageDir = join(root, "package-source");
+    for (const directory of [defaultThemeDir, packageDir, variantPackageDir]) {
+      await mkdir(directory, { recursive: true });
+    }
+    const themePaths = [
+      join(defaultThemeDir, "default.json"),
+      join(packageDir, "package.json"),
+      join(packageDir, "extra.json"),
+    ];
+    for (const [index, name] of ["default", "package", "extra"].entries()) {
+      await writeFile(themePaths[index]!, JSON.stringify({ ...darkTheme, name }));
+    }
+    const resolvePackages = vi.spyOn(DefaultPackageManager.prototype, "resolve").mockResolvedValue({
+      extensions: [],
+      skills: [],
+      prompts: [],
+      themes: [
+        {
+          path: variantPackageDir,
+          enabled: true,
+          metadata: sourceMetadata(variantPackageDir, "package", "user"),
+        },
+      ],
     });
+
+    try {
+      await withMockedWindowsPlatform(async () => {
+        const loader = new DefaultResourceLoader({
+          cwd: root,
+          agentDir: variantAgentDir,
+          settingsManager: SettingsManager.inMemory(),
+          additionalThemePaths: themePaths,
+          noExtensions: true,
+          noSkills: true,
+          noPromptTemplates: true,
+          noContextFiles: true,
+        });
+        await loader.reload();
+        const sourceInfo = (name: string) =>
+          loader.getThemes().themes.find((theme) => theme.name === name)?.sourceInfo;
+
+        expect(sourceInfo("default")).toMatchObject({
+          source: "local",
+          scope: "user",
+          baseDir: join(variantAgentDir, "themes"),
+        });
+        expect(sourceInfo("package")).toMatchObject({
+          source: "package",
+          scope: "user",
+          baseDir: variantPackageDir,
+        });
+        loader.extendResources({
+          themePaths: [
+            {
+              path: variantPackageDir,
+              metadata: sourceMetadata(variantPackageDir, "extension", "project"),
+            },
+          ],
+        });
+        expect(sourceInfo("extra")).toMatchObject({
+          source: "extension",
+          scope: "project",
+          baseDir: variantPackageDir,
+        });
+      });
+    } finally {
+      resolvePackages.mockRestore();
+    }
   });
 });

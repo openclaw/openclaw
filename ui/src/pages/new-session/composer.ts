@@ -55,25 +55,20 @@ function renderStartControl(options: NewSessionComposerOptions) {
     ? t("newSession.starting")
     : t(options.nativeTerminal ? "newSession.startInTerminal" : "newSession.start");
   const reasonedBlock = !options.canSubmit && options.submitDisabledReason !== undefined;
+  const busy = options.submitting || options.pendingAttachmentReads > 0;
   return html` <openclaw-tooltip content=${options.submitDisabledReason ?? startLabel}>
     <button
       type="button"
       class="chat-send-btn new-session-page__start-submit ${
         reasonedBlock ? "new-session-page__start-submit--blocked" : ""
-      }"
+      } ${busy ? "new-session-page__start-submit--busy" : ""}"
       ?disabled=${!options.canSubmit && !reasonedBlock}
       aria-disabled=${String(!options.canSubmit)}
-      aria-busy=${String(options.submitting || options.pendingAttachmentReads > 0)}
+      aria-busy=${String(busy)}
       aria-label=${startLabel}
       @click=${() => submitNewSession(options)}
     >
-      ${
-        options.submitting || options.pendingAttachmentReads > 0
-          ? icons.loader
-          : options.nativeTerminal
-            ? icons.squareTerminal
-            : icons.arrowUp
-      }
+      ${busy ? icons.loader : options.nativeTerminal ? icons.squareTerminal : icons.arrowUp}
     </button>
   </openclaw-tooltip>`;
 }
@@ -85,37 +80,33 @@ function handleComposerKeydown(
   slashMenuHost: SlashMenuHost,
   mentionMenuHost: HumanMentionMenuHost,
 ) {
-  if (options.dictationActive || options.submitting || options.messageLocked) {
-    return;
-  }
-  if (options.textareaController.composing || event.isComposing || event.keyCode === 229) {
-    return;
-  }
   if (
-    options.textareaController.emojiMenu.handleKeydown(event, "new-session", options.requestUpdate)
+    options.dictationActive ||
+    options.submitting ||
+    options.messageLocked ||
+    options.textareaController.composing ||
+    event.isComposing ||
+    event.keyCode === 229
   ) {
     return;
   }
   if (
+    options.textareaController.emojiMenu.handleKeydown(
+      event,
+      "new-session",
+      options.requestUpdate,
+    ) ||
     options.textareaController.mentionMenu.handleKeydown(
       event,
       mentionMenuHost,
       options.requestUpdate,
-    )
-  ) {
-    return;
-  }
-  if (
+    ) ||
     handleSkillMenuKeydown(
       event,
       options.textareaController.skillMenuState,
       skillMenuHost,
       options.requestUpdate,
-    )
-  ) {
-    return;
-  }
-  if (
+    ) ||
     handleSlashMenuKeydown(
       event,
       options.textareaController.slashMenuState,
@@ -183,14 +174,10 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
     refreshCommands: options.refreshCommands,
   };
   const slashMenuHost: SlashMenuHost = {
-    paneId: skillMenuHost.paneId,
-    getDraft: skillMenuHost.getDraft,
-    commitDraft: skillMenuHost.commitDraft,
-    getTextarea: skillMenuHost.getTextarea,
+    ...skillMenuHost,
     resolveArgOptions: (command) => command.argOptions ?? [],
     runCommand: () => submitNewSession(options),
     canRun: (inline) => !inline,
-    refreshCommands: options.refreshCommands,
     commandFilter: (command) => command.executeLocal !== true,
   };
   const mentionMenuHost: HumanMentionMenuHost = {
@@ -225,11 +212,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
       skillMenuHost,
       options.requestUpdate,
     );
-    if (
-      event?.inputType === "insertFromPaste" ||
-      event?.inputType === "insertFromDrop" ||
-      event?.isComposing
-    ) {
+    if (event?.inputType === "insertFromPaste" || event?.inputType === "insertFromDrop") {
       mentionMenu.close();
     } else {
       mentionMenu.update(
@@ -261,6 +244,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
   const attachmentProps = {
     attachmentReads: options.attachmentReads,
     attachmentLimits: options.attachmentLimits,
+    uploadConfig: options.uploadConfig,
     attachments: options.attachments,
     get disabled() {
       return (

@@ -16,7 +16,7 @@ import { logWarn } from "../../../logger.js";
 import { withPluginRuntimeGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { isCronSessionKey } from "../../../sessions/session-key-utils.js";
-import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
+import { createLazyPromise } from "../../../shared/lazy-promise.js";
 import {
   type DeliveryContext,
   normalizeDeliveryContext,
@@ -82,13 +82,9 @@ import {
   waitForEmbeddedAgentRunEnd,
 } from "./subagent-announce.runtime.js";
 
-const subagentRegistryRuntimeLoader = createLazyImportLoader(
+const loadSubagentRegistryRuntime = createLazyPromise(
   () => import("../registry/subagent-registry-runtime.js"),
 );
-
-function loadSubagentRegistryRuntime() {
-  return subagentRegistryRuntimeLoader.load();
-}
 
 export { captureSubagentCompletionReply } from "./subagent-announce-output.js";
 
@@ -102,7 +98,6 @@ function buildAnnounceReplyInstruction(params: {
   announceType: SubagentAnnounceType;
   expectsCompletionMessage?: boolean;
   completionTarget?: "parent";
-  completionRequesterSessionId?: string;
   modelRouteChange?: string;
   preserveModelRouteNotice: boolean;
 }): string {
@@ -197,7 +192,7 @@ type SubagentAnnounceFlowParams = {
   isCompletionOwnedByRequesterYield?: () => boolean;
   signal?: AbortSignal;
   bestEffortDeliver?: boolean;
-  onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
+  onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void | Promise<void>;
   onBeforeDeleteChildSession?: () => boolean;
   resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
 };
@@ -620,12 +615,12 @@ async function runSubagentAnnounceFlowBound(
     const triggerMessage = buildAnnounceSteerMessage(internalEvents);
     const directIdempotencyKey = buildAnnounceIdempotencyKey(announceId);
     let deliveryResultReported = false;
-    const reportDeliveryResult = (delivery: SubagentAnnounceDeliveryResult) => {
+    const reportDeliveryResult = async (delivery: SubagentAnnounceDeliveryResult) => {
       if (deliveryResultReported) {
         return;
       }
       deliveryResultReported = true;
-      params.onDeliveryResult?.(delivery);
+      await params.onDeliveryResult?.(delivery);
     };
     const delivery = await deliverSubagentAnnouncement({
       requesterSessionKey: targetRequesterSessionKey,
@@ -652,7 +647,7 @@ async function runSubagentAnnounceFlowBound(
       signal: params.signal,
       resolveGatewayContext: params.resolveGatewayContext,
     });
-    reportDeliveryResult(delivery);
+    await reportDeliveryResult(delivery);
     announceOutcome =
       delivery.reason === "requester_turn_pending"
         ? "requester_turn_pending"

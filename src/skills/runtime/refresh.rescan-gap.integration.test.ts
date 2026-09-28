@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { once } from "node:events";
 import nativeFs from "node:fs";
 import fs from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
@@ -8,7 +9,9 @@ import chokidar from "chokidar";
 import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveWorkspaceSkillSourcePlan } from "../loading/workspace-skill-sources.js";
+import * as nativeContent from "./refresh-content-native.js";
 import { resolveSkillsWatcherUsePolling } from "./refresh-watch-path.js";
+import type { SkillsDirectoryWatcher } from "./refresh-watch-types.js";
 
 vi.mock("../loading/plugin-skills.js", () => ({
   resolvePluginSkillRoots: () => [],
@@ -17,7 +20,13 @@ vi.mock("../loading/plugin-skills.js", () => ({
 
 async function verifyNativeCoverage(
   phase: "initial" | "replacement",
-  mode: "root" | "nested" | "error" = "root",
+  mode:
+    | "root"
+    | "nested"
+    | "error"
+    | "root-read-loss"
+    | "root-stat-loss"
+    | "child-permission-loss" = "root",
   prelisted = false,
 ) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "skills-rescan-")));
@@ -35,6 +44,10 @@ async function verifyNativeCoverage(
     );
   };
   await fs.mkdir(skillsRoot, { recursive: true });
+  const childLoss = mode === "child-permission-loss";
+  if (childLoss) {
+    await fs.mkdir(firstDir);
+  }
   if (prelisted) {
     writeSkill();
   }
@@ -51,11 +64,12 @@ async function verifyNativeCoverage(
   const contentScan = new AsyncLocalStorage<number | undefined>();
   const releaseScan = createDeferredCore();
   const releaseNested = createDeferredCore();
+  const releaseRootRead = createDeferredCore();
   const watches: Array<{
     generation?: number;
     ready: boolean;
     directories: string[];
-    watcher: ReturnType<typeof chokidar.watch>;
+    watcher: ReturnType<typeof chokidar.watch> | SkillsDirectoryWatcher;
   }> = [];
   const errors: unknown[] = [];
   const scanError = Object.assign(new Error("verification directory read failed"), {
@@ -72,6 +86,30 @@ async function verifyNativeCoverage(
   let errorInjected = false;
   let nativeCreationObserved = false;
   let nativeNestedCreationObserved = false;
+  const rootLoss = mode === "root-read-loss" || mode === "root-stat-loss";
+  let rootReadCaptured = false;
+  let rootStatLossArmed = false;
+  let rootLossError: unknown;
+  let rootInodeBefore: number | undefined;
+  let rootInodeAfter: number | undefined;
+  let holdNativeEvents = false;
+  const delayedNativeEvents: Array<() => void> = [];
+  const restoreNativeEmits: Array<() => void> = [];
+  const nativeRegistrations: Array<{
+    generation: number;
+    directory: string;
+    watcher: nativeFs.FSWatcher;
+    retired: boolean;
+  }> = [];
+  const removeRoot = () => {
+    holdNativeEvents = true;
+    rootInodeBefore = nativeFs.statSync(skillsRoot).ino;
+    nativeFs.renameSync(skillsRoot, path.join(root, "retired-root"));
+  };
+  const restoreRoot = () => {
+    writeSkill();
+    rootInodeAfter = nativeFs.statSync(skillsRoot).ino;
+  };
   const expectedErrors = () => (errorInjected ? [scanError] : []);
   const originalWatch = chokidar.watch;
   const watch = vi.spyOn(chokidar, "watch").mockImplementation((...args) => {
@@ -89,6 +127,23 @@ async function verifyNativeCoverage(
       return watcher;
     });
   });
+  const originalNativeContent = nativeContent.createNativeSkillsContentWatcher;
+  const watchContent = vi
+    .spyOn(nativeContent, "createNativeSkillsContentWatcher")
+    .mockImplementation((...args) => {
+      const generation = args[0] === skillsRoot ? ++generationCount : undefined;
+      return contentScan.run(generation, () => {
+        const watcher = originalNativeContent(...args);
+        const observation = { generation, ready: false, directories: [] as string[], watcher };
+        watches.push(observation);
+        watcher.on("ready", () => {
+          observation.ready = true;
+          observation.directories = [...watcher.directories];
+        });
+        watcher.on("error", (error) => errors.push(error));
+        return watcher;
+      });
+    });
   const originalReaddir = fs.readdir;
   const readdir = vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
     const entries = await originalReaddir(...args);
@@ -96,8 +151,8 @@ async function verifyNativeCoverage(
     const directory = path.resolve(String(args[0]));
     if (armed && generation !== undefined && directory === skillsRoot && !snapshotCaptured) {
       armed = false;
-      // Preserve the real root listing, then create a sibling before this scan
-      // can install its native watch. Only the observing generation can see it.
+      // Preserve the real listing while another directory appears. The owner
+      // must retain observation across this scan and subsequent verification.
       firstGeneration = generation;
       snapshotContainsSecond = entries.some(
         (entry) => String(typeof entry === "string" ? entry : entry.name) === "second",
@@ -116,9 +171,73 @@ async function verifyNativeCoverage(
         // Fail the actual verifier read, after it acquired its real listing.
         errorInjected = true;
         throw scanError;
+      } else if (rootLoss && directory === skillsRoot && !rootReadCaptured) {
+        rootReadCaptured = true;
+        await releaseRootRead.promise;
+        if (mode === "root-read-loss") {
+          removeRoot();
+          try {
+            return await originalReaddir(...args);
+          } catch (error) {
+            rootLossError = error;
+            throw error;
+          } finally {
+            restoreRoot();
+          }
+        }
+        rootStatLossArmed = true;
       }
     }
     return entries;
+  });
+  const originalLstat = nativeFs.lstatSync;
+  const lstat = vi.spyOn(nativeFs, "lstatSync").mockImplementation((...args) => {
+    if (
+      rootStatLossArmed &&
+      contentScan.getStore() === firstGeneration + 1 &&
+      path.resolve(String(args[0])) === skillsRoot
+    ) {
+      rootStatLossArmed = false;
+      removeRoot();
+      try {
+        return originalLstat(...args);
+      } catch (error) {
+        rootLossError = error;
+        throw error;
+      } finally {
+        restoreRoot();
+      }
+    }
+    return originalLstat(...args);
+  });
+  const originalNativeWatch = nativeFs.watch;
+  const watchNative = vi.spyOn(nativeFs, "watch").mockImplementation((...args) => {
+    const watcher = originalNativeWatch(...args);
+    const generation = contentScan.getStore();
+    if ((rootLoss || childLoss) && generation !== undefined) {
+      const registration = {
+        generation,
+        directory: path.resolve(String(args[0])),
+        watcher,
+        retired: false,
+      };
+      nativeRegistrations.push(registration);
+      watcher.once("close", () => {
+        registration.retired = true;
+      });
+      const emit = watcher.emit.bind(watcher);
+      const delivery = vi.spyOn(watcher, "emit").mockImplementation((event, ...values) => {
+        // The OS notifications are real; hold only product change delivery so
+        // the verifier must establish coverage before old callbacks can help.
+        if (holdNativeEvents && event === "change") {
+          delayedNativeEvents.push(() => emit(event, ...values));
+          return true;
+        }
+        return emit(event, ...values);
+      });
+      restoreNativeEmits.push(() => delivery.mockRestore());
+    }
+    return watcher;
   });
   syncBuiltinESMExports();
   const pendingTimers = new Map<
@@ -207,6 +326,10 @@ async function verifyNativeCoverage(
       await expect.poll(() => nativeCreationObserved, { timeout: 3_000 }).toBe(true);
     }
     releaseScan.resolve();
+    if (rootLoss) {
+      await expect.poll(() => rootReadCaptured, { timeout: 3_000 }).toBe(true);
+      releaseRootRead.resolve();
+    }
     if (mode === "nested") {
       await expect.poll(() => nestedCaptured, { timeout: 3_000 }).toBe(true);
       expect(nestedContainsChild).toBe(prelisted);
@@ -222,9 +345,24 @@ async function verifyNativeCoverage(
       releaseNested.resolve();
     }
     await settleWatchers();
+    if (rootLoss) {
+      expect(rootLossError).toMatchObject({ code: "ENOENT" });
+      expect(rootInodeAfter).not.toBe(rootInodeBefore);
+      const verifier = watches.find(({ generation }) => generation === firstGeneration + 1)!;
+      expect(verifier.ready).toBe(true);
+      expect(verifier.watcher.closed).toBe(false);
+      expect(verifier.directories).toEqual(expect.arrayContaining([skillsRoot, skillDir]));
+      holdNativeEvents = false;
+      delayedNativeEvents.splice(0).forEach((deliver) => deliver());
+      await settleWatchers();
+    }
     if (mode !== "root") {
       const observer = watches.find(({ generation }) => generation === firstGeneration)!;
-      expect(observer.directories.includes(skillDir)).toBe(prelisted);
+      // The owned initial scan reconciles real events before its first ready.
+      // A child created later inside the held verifier still belongs to that verifier.
+      expect(observer.directories.includes(skillDir)).toBe(
+        mode === "error" || rootLoss || childLoss || prelisted,
+      );
       if (mode === "error") {
         expect(errorInjected).toBe(true);
         expect(errors).toEqual([scanError]);
@@ -236,6 +374,39 @@ async function verifyNativeCoverage(
       }
     }
     expect(read()).toEqual(["rescan-proof"]);
+    if (childLoss) {
+      const active = watches.find(
+        ({ generation, watcher }) => generation !== undefined && !watcher.closed,
+      )!;
+      const children = nativeRegistrations.filter(
+        ({ generation, directory, retired }) =>
+          generation === active.generation && directory === firstDir && !retired,
+      );
+      expect(children).toHaveLength(1);
+      const child = children[0]!.watcher;
+      holdNativeEvents = true;
+      const retired = once(child, "close");
+      child.close();
+      await retired;
+      nativeFs.rmdirSync(firstDir);
+      const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+      try {
+        // Inject the documented terminal Windows boundary before any parent
+        // notification can reconcile deletion. This is not native Windows proof.
+        Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+        child.emit("error", Object.assign(new Error("child deleted"), { code: "EPERM" }));
+      } finally {
+        Object.defineProperty(process, "platform", platform);
+      }
+      expect(errors).toEqual([]);
+      expect((active.watcher as SkillsDirectoryWatcher).directories.has(firstDir)).toBe(false);
+      await settleWatchers();
+      expect(delayedNativeEvents.length).toBeGreaterThan(0);
+      holdNativeEvents = false;
+      delayedNativeEvents.splice(0).forEach((deliver) => deliver());
+      await settleWatchers();
+      expect(read()).toEqual(["rescan-proof"]);
+    }
 
     // A ready-time inventory alone discovers the sibling, but cannot observe
     // later changes inside it unless the replacement has native coverage.
@@ -243,22 +414,31 @@ async function verifyNativeCoverage(
     if (mode === "error") {
       // Preparation, not another filesystem notification or repeated polling,
       // must refresh the cache while verification remains unavailable.
+      expect(read()).toEqual(["rescan-proof"]);
       ensureSkillsWatcher(params);
+      expect(read()).toEqual([]);
     }
     await expect.poll(read, { timeout: 3_000 }).toEqual([]);
     expect(errors).toEqual(expectedErrors());
   } finally {
     releaseScan.resolve();
     releaseNested.resolve();
+    releaseRootRead.resolve();
     observation?.close();
     nestedObservation?.close();
     let joined = false;
     try {
       await closeSkillsWatchers(true);
+      holdNativeEvents = false;
+      delayedNativeEvents.splice(0).forEach((deliver) => deliver());
       joined = true;
     } finally {
       readdir.mockRestore();
       watch.mockRestore();
+      watchContent.mockRestore();
+      watchNative.mockRestore();
+      lstat.mockRestore();
+      restoreNativeEmits.forEach((restore) => restore());
       timeoutSpy.mockRestore();
       clearTimeoutSpy.mockRestore();
       syncBuiltinESMExports();
@@ -288,4 +468,17 @@ it
   .each([false, true])(
   "refreshes preparation after a verifier read error (prelisted=%s)",
   (prelisted) => verifyNativeCoverage("initial", "error", prelisted),
+);
+
+it
+  .runIf(process.platform === "linux" && !process.versions.bun && !resolveSkillsWatcherUsePolling())
+  .each(["root-read-loss", "root-stat-loss"] as const)(
+  "re-admits a recreated root after a held verifier's %s before publishing coverage",
+  (mode) => verifyNativeCoverage("initial", mode),
+);
+
+it.runIf(
+  process.platform === "linux" && !process.versions.bun && !resolveSkillsWatcherUsePolling(),
+)("keeps cached sibling coverage when a deleted child reports terminal Windows EPERM first", () =>
+  verifyNativeCoverage("initial", "child-permission-loss"),
 );

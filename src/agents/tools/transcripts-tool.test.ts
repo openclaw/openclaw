@@ -19,7 +19,7 @@ import type {
   TranscriptSourceProvider,
   TranscriptStartRequest,
 } from "../../transcripts/provider-types.js";
-import { TranscriptsStore } from "../../transcripts/store.js";
+import { TranscriptsStore, transcriptSessionSelector } from "../../transcripts/store.js";
 import { createTranscriptsTool } from "./transcripts-tool.js";
 
 type StartCapture = NonNullable<TranscriptSourceProvider["start"]>;
@@ -44,10 +44,6 @@ function registerProvider(provider: TranscriptSourceProvider): void {
     source: import.meta.url,
   });
   setActivePluginRegistry(registry);
-}
-
-function currentDateDir(): string {
-  return new Date().toISOString().slice(0, 10);
 }
 
 async function createHarness(
@@ -116,13 +112,6 @@ describe("transcripts tool", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  it("creates the core transcripts tool", async () => {
-    const stateDir = tempDirs.make("openclaw-transcripts-");
-    const { tool } = await createHarness(stateDir);
-
-    expect(tool.name).toBe("transcripts");
-  });
-
   it("adds the trusted tool agent to live source ownership metadata", async () => {
     const stateDir = tempDirs.make("openclaw-transcripts-");
     const start = vi.fn<StartCapture>(async (request) => {
@@ -145,17 +134,12 @@ describe("transcripts tool", () => {
     const { tool } = await createHarness(stateDir, {}, "research");
 
     await expect(
-      tool.execute(
-        "call-1",
-        {
-          action: "start",
-          meetingUrl: "https://zoom.us/j/1234567890?context=opaque-value#fragment",
-          providerId: "zoom",
-          sessionId: "owned-meeting",
-        },
-        undefined,
-        vi.fn(),
-      ),
+      tool.execute("call-1", {
+        action: "start",
+        meetingUrl: "https://zoom.us/j/1234567890?context=opaque-value#fragment",
+        providerId: "zoom",
+        sessionId: "owned-meeting",
+      }),
     ).rejects.toThrow("ownership checked");
 
     expect(start).toHaveBeenCalledOnce();
@@ -178,28 +162,16 @@ describe("transcripts tool", () => {
     });
     const { tool } = await createHarness(stateDir);
 
-    await tool.execute(
-      "start-local",
-      {
-        action: "start",
-        providerId: "discord-voice",
-        accountId: "account-a",
-        sessionId: "local-account-bound",
-      },
-      undefined,
-      vi.fn(),
-    );
-    await expect(
-      tool.execute("status-local", { action: "status" }, undefined, vi.fn()),
-    ).resolves.toMatchObject({
+    await tool.execute("start-local", {
+      action: "start",
+      providerId: "discord-voice",
+      accountId: "account-a",
+      sessionId: "local-account-bound",
+    });
+    await expect(tool.execute("status-local", { action: "status" })).resolves.toMatchObject({
       details: { active: [expect.objectContaining({ sessionId: "local-account-bound" })] },
     });
-    await tool.execute(
-      "stop-local",
-      { action: "stop", sessionId: "local-account-bound" },
-      undefined,
-      vi.fn(),
-    );
+    await tool.execute("stop-local", { action: "stop", sessionId: "local-account-bound" });
     expect(stop).toHaveBeenCalledWith(
       expect.objectContaining({ source: expect.objectContaining({ accountId: "account-a" }) }),
     );
@@ -209,7 +181,7 @@ describe("transcripts tool", () => {
     const stateDir = tempDirs.make("openclaw-transcripts-");
     const { tool } = await createHarness(stateDir, { enabled: false });
 
-    await expect(tool.execute("call-1", { action: "status" }, undefined, vi.fn())).rejects.toThrow(
+    await expect(tool.execute("call-1", { action: "status" })).rejects.toThrow(
       "transcripts are disabled",
     );
   });
@@ -244,7 +216,6 @@ describe("transcripts tool", () => {
           sessionId: "cancelled-meeting",
         },
         controller.signal,
-        vi.fn(),
       ),
     ).rejects.toThrow("transcripts start aborted");
 
@@ -291,7 +262,6 @@ describe("transcripts tool", () => {
         sessionId: "ongoing-meeting",
       },
       controller.signal,
-      vi.fn(),
     );
     expect(startupSignal).not.toBe(controller.signal);
     controller.abort();
@@ -306,17 +276,9 @@ describe("transcripts tool", () => {
         text: "captured after the start action completed\nsecond\tcolumn",
       }),
     ]);
-    await tool.execute(
-      "call-2",
-      { action: "stop", sessionId: "ongoing-meeting" },
-      undefined,
-      vi.fn(),
-    );
+    await tool.execute("call-2", { action: "stop", sessionId: "ongoing-meeting" });
     await expect(
-      fs.readFile(
-        path.join(stateDir, "transcripts", currentDateDir(), "ongoing-meeting", "summary.md"),
-        "utf8",
-      ),
+      fs.readFile(path.join(ongoingStore.sessionDir(ongoingSession!), "summary.md"), "utf8"),
     ).resolves.toContain("captured after the start action completed\\nsecond\\tcolumn");
   });
 
@@ -353,7 +315,6 @@ describe("transcripts tool", () => {
           sessionId: "cancelled-meeting-retry",
         },
         controller.signal,
-        vi.fn(),
       ),
     ).rejects.toThrow("transcripts start aborted; provider cleanup failed: voice cleanup failed");
 
@@ -364,35 +325,20 @@ describe("transcripts tool", () => {
     expect(stop).toHaveBeenCalledOnce();
 
     await expect(
-      tool.execute(
-        "call-retry-start",
-        {
-          action: "start",
-          providerId: "proof-live",
-          sessionId: "cancelled-meeting-retry",
-        },
-        undefined,
-        vi.fn(),
-      ),
+      tool.execute("call-retry-start", {
+        action: "start",
+        providerId: "proof-live",
+        sessionId: "cancelled-meeting-retry",
+      }),
     ).rejects.toThrow("transcripts session already active: cancelled-meeting-retry");
     expect(start).toHaveBeenCalledOnce();
 
     await expect(
-      tool.execute(
-        "call-2",
-        { action: "stop", sessionId: "cancelled-meeting-retry" },
-        undefined,
-        vi.fn(),
-      ),
+      tool.execute("call-2", { action: "stop", sessionId: "cancelled-meeting-retry" }),
     ).rejects.toThrow("transcripts provider cleanup failed: voice cleanup failed");
     expect(stop).toHaveBeenCalledTimes(2);
 
-    await tool.execute(
-      "call-3",
-      { action: "stop", sessionId: "cancelled-meeting-retry" },
-      undefined,
-      vi.fn(),
-    );
+    await tool.execute("call-3", { action: "stop", sessionId: "cancelled-meeting-retry" });
     expect(stop).toHaveBeenCalledTimes(3);
   });
 
@@ -416,21 +362,19 @@ describe("transcripts tool", () => {
     });
     const { tool } = await createHarness(stateDir);
 
-    const firstStart = tool.execute(
-      "call-1",
-      { action: "start", providerId: "proof-live", sessionId: "shared-session" },
-      undefined,
-      vi.fn(),
-    );
+    const firstStart = tool.execute("call-1", {
+      action: "start",
+      providerId: "proof-live",
+      sessionId: "shared-session",
+    });
     await started.promise;
     try {
       await expect(
-        tool.execute(
-          "call-2",
-          { action: "start", providerId: "proof-live", sessionId: "shared-session" },
-          undefined,
-          vi.fn(),
-        ),
+        tool.execute("call-2", {
+          action: "start",
+          providerId: "proof-live",
+          sessionId: "shared-session",
+        }),
       ).rejects.toThrow("transcripts session already active: shared-session");
       await expect(
         tool.execute("stop-pending", { action: "stop", sessionId: "shared-session" }),
@@ -439,12 +383,7 @@ describe("transcripts tool", () => {
     } finally {
       startGate.resolve();
       await firstStart;
-      await tool.execute(
-        "call-3",
-        { action: "stop", sessionId: "shared-session" },
-        undefined,
-        vi.fn(),
-      );
+      await tool.execute("call-3", { action: "stop", sessionId: "shared-session" });
     }
 
     expect(start).toHaveBeenCalledOnce();
@@ -483,15 +422,9 @@ describe("transcripts tool", () => {
           sessionId: "cancelled-meeting-thrown",
         },
         controller.signal,
-        vi.fn(),
       ),
     ).rejects.toThrow("transcripts start aborted; provider cleanup failed: voice cleanup threw");
-    await tool.execute(
-      "call-2",
-      { action: "stop", sessionId: "cancelled-meeting-thrown" },
-      undefined,
-      vi.fn(),
-    );
+    await tool.execute("call-2", { action: "stop", sessionId: "cancelled-meeting-thrown" });
 
     expect(stop).toHaveBeenCalledTimes(2);
     expect(stop.mock.calls.map(([request]) => request.reason)).toEqual([
@@ -523,19 +456,13 @@ describe("transcripts tool", () => {
           sessionId: "cancelled-meeting-no-stop",
         },
         controller.signal,
-        vi.fn(),
       ),
     ).rejects.toThrow(
       "transcripts start aborted; provider cleanup failed: transcripts provider proof-live cannot stop live capture",
     );
 
     await expect(
-      tool.execute(
-        "call-2",
-        { action: "stop", sessionId: "cancelled-meeting-no-stop" },
-        undefined,
-        vi.fn(),
-      ),
+      tool.execute("call-2", { action: "stop", sessionId: "cancelled-meeting-no-stop" }),
     ).rejects.toThrow(
       "transcripts provider cleanup failed: transcripts provider proof-live cannot stop live capture",
     );
@@ -544,12 +471,7 @@ describe("transcripts tool", () => {
       sessionId: "cancelled-meeting-no-stop",
     }));
     provider.stop = stop;
-    await tool.execute(
-      "call-3",
-      { action: "stop", sessionId: "cancelled-meeting-no-stop" },
-      undefined,
-      vi.fn(),
-    );
+    await tool.execute("call-3", { action: "stop", sessionId: "cancelled-meeting-no-stop" });
     expect(stop).toHaveBeenCalledOnce();
   });
 
@@ -573,26 +495,19 @@ describe("transcripts tool", () => {
     });
     const { tool } = await createHarness(stateDir);
 
-    await tool.execute(
-      "call-1",
-      {
-        action: "start",
-        providerId: "discord-voice",
-        sessionId: "standup",
-        title: "Standup",
-      },
-      undefined,
-      vi.fn(),
-    );
-    const result = await tool.execute(
-      "call-2",
-      {
-        action: "stop",
-        sessionId: `${currentDateDir()}/standup`,
-      },
-      undefined,
-      vi.fn(),
-    );
+    await tool.execute("call-1", {
+      action: "start",
+      providerId: "discord-voice",
+      sessionId: "standup",
+      title: "Standup",
+    });
+    const store = storeFor(stateDir);
+    const stored = await store.readSession("standup");
+    expect(stored).toBeDefined();
+    const result = await tool.execute("call-2", {
+      action: "stop",
+      sessionId: transcriptSessionSelector(stored!),
+    });
 
     expect(stop).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -605,10 +520,7 @@ describe("transcripts tool", () => {
       },
     });
     await expect(
-      fs.readFile(
-        path.join(stateDir, "transcripts", currentDateDir(), "standup", "summary.md"),
-        "utf8",
-      ),
+      fs.readFile(path.join(store.sessionDir(stored!), "summary.md"), "utf8"),
     ).resolves.toContain("date-qualified selectors");
   });
 
@@ -678,26 +590,16 @@ describe("transcripts tool", () => {
     });
     const { tool } = await createHarness(stateDir);
 
-    await tool.execute(
-      "call-1",
-      {
-        action: "start",
-        providerId: "discord-voice",
-        sessionId: "standup",
-        title: "Current standup",
-      },
-      undefined,
-      vi.fn(),
-    );
-    await tool.execute(
-      "call-2",
-      {
-        action: "stop",
-        sessionId: "2026-05-21/standup",
-      },
-      undefined,
-      vi.fn(),
-    );
+    await tool.execute("call-1", {
+      action: "start",
+      providerId: "discord-voice",
+      sessionId: "standup",
+      title: "Current standup",
+    });
+    await tool.execute("call-2", {
+      action: "stop",
+      sessionId: "2026-05-21/standup",
+    });
 
     expect(stop).not.toHaveBeenCalled();
     await expect(store.readSession("2026-05-21/standup")).resolves.toMatchObject({
@@ -710,15 +612,10 @@ describe("transcripts tool", () => {
       ),
     ).resolves.toContain("preserve historical dated notes");
 
-    await tool.execute(
-      "call-3",
-      {
-        action: "stop",
-        sessionId: "standup",
-      },
-      undefined,
-      vi.fn(),
-    );
+    await tool.execute("call-3", {
+      action: "stop",
+      sessionId: "standup",
+    });
     expect(stop).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: "standup",
@@ -966,21 +863,15 @@ describe("transcripts tool", () => {
     await stopEntered.promise;
     try {
       await expect(
-        tool.execute(
-          "stop-overlap",
-          { action: "stop", sessionId: "reused-id" },
-          undefined,
-          vi.fn(),
-        ),
+        tool.execute("stop-overlap", { action: "stop", sessionId: "reused-id" }),
       ).resolves.toMatchObject({ details: { sessionId: "reused-id", skipped: true } });
       expect(stop).toHaveBeenCalledOnce();
       await expect(
-        tool.execute(
-          "start-replacement-too-early",
-          { action: "start", providerId: "discord-voice", sessionId: "reused-id" },
-          undefined,
-          vi.fn(),
-        ),
+        tool.execute("start-replacement-too-early", {
+          action: "start",
+          providerId: "discord-voice",
+          sessionId: "reused-id",
+        }),
       ).rejects.toThrow("transcripts session already active: reused-id");
     } finally {
       firstStop.resolve({ ok: true, sessionId: "reused-id" });
@@ -990,23 +881,17 @@ describe("transcripts tool", () => {
     const { tool: replacementTool } = await createHarness(
       tempDirs.make("openclaw-transcripts-replacement-"),
     );
-    await replacementTool.execute(
-      "start-replacement",
-      { action: "start", providerId: "discord-voice", sessionId: "reused-id" },
-      undefined,
-      vi.fn(),
-    );
+    await replacementTool.execute("start-replacement", {
+      action: "start",
+      providerId: "discord-voice",
+      sessionId: "reused-id",
+    });
     await expect(
-      replacementTool.execute("replacement-status", { action: "status" }, undefined, vi.fn()),
+      replacementTool.execute("replacement-status", { action: "status" }),
     ).resolves.toMatchObject({
       details: { active: [expect.objectContaining({ sessionId: "reused-id" })] },
     });
-    await replacementTool.execute(
-      "stop-replacement",
-      { action: "stop", sessionId: "reused-id" },
-      undefined,
-      vi.fn(),
-    );
+    await replacementTool.execute("stop-replacement", { action: "stop", sessionId: "reused-id" });
   });
 
   it("aborts pending auto-starts when the service stops", async () => {

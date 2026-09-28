@@ -4,20 +4,28 @@ import {
   type CommandClientPresentationAction,
 } from "../../app/command-client-presentation.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createGatewayControlUiReloadOptions } from "../../app/gateway-control-ui-reload.ts";
 import {
   autoPromptNotificationsOnSend,
   hasActiveNotificationPromptGesture,
   shouldAutoPromptNotificationsOnSend,
 } from "../../app/notifications-auto-prompt.ts";
 import { loadLocalUserIdentity, loadSettings, patchSettings } from "../../app/settings.ts";
+import { retryStaleChunkReloadWhenReachable } from "../../app/stale-chunk-reload.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import { hasUnrestrictedModelCatalogSnapshot } from "../../lib/model-catalog-cache.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import {
   canonicalUiSessionKeyForPersistence,
   isUiSelectedGlobalSessionKey,
 } from "../../lib/sessions/session-key.ts";
+import { requestChatAbort } from "./chat-abort-request.ts";
 import { resolveAgentIdForSession } from "./chat-avatar.ts";
 import { CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT } from "./chat-history-events.ts";
+import { setChatError } from "./chat-history-state.ts";
+import { loadChatHistory } from "./chat-history.ts";
+import { getChatPendingInputs } from "./chat-pending-inputs.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import { attachChatRealtimeActions, createInitialChatRealtimeState } from "./chat-realtime.ts";
@@ -27,7 +35,6 @@ import {
   retryQueuedChatMessage,
   steerQueuedChatMessage,
 } from "./chat-send-actions.ts";
-import { setChatError } from "./chat-send-queue-state.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
 import { retireChatModelSelectionOwnership } from "./chat-session.ts";
@@ -38,7 +45,7 @@ import {
   openSessionWorkspacePreview,
   clearSessionWorkspacePreviews,
 } from "./components/chat-session-workspace-state.ts";
-import { resetTaskDetail } from "./components/chat-task-detail-state.ts";
+import { isIncognitoComposerScope } from "./composer-persistence-state.ts";
 import {
   handleChatDraftChange,
   handleChatInputHistoryKey,
@@ -67,11 +74,49 @@ import {
   closeSlot,
   fitSidebarLayout,
   normalizeSidebarLayout,
+  type SidebarLayout,
   openSlot,
   sidebarDashboardPresentation,
 } from "./sidebar-layout.ts";
 import type { RunOutputUsage } from "./tool-stream-contract.ts";
 import { resetToolStream } from "./tool-stream-state.ts";
+
+function cancelPendingQueuedChatInput(state: ChatPageHost, id: string): boolean {
+  const view = getChatPendingInputs(state);
+  const input = view?.queuedInputs.find(
+    (item) => `pending-input:${item.id}` === id && item.queued && item.state === "queued",
+  );
+  const client = state.client;
+  if (!view || !input?.runId) {
+    return false;
+  }
+  if (!client || !state.connected) {
+    return true;
+  }
+  const epoch = state.connectionEpoch;
+  const current = () =>
+    getChatPendingInputs(state) === view &&
+    state.client === client &&
+    state.connected &&
+    state.connectionEpoch === epoch;
+  void requestChatAbort(client, {
+    sessionKey: view.sessionKey,
+    agentId: view.agentId,
+    runId: input.runId,
+    ...(isIncognitoComposerScope(state, view) ? {} : { discardPendingInput: true }),
+  }).then(async (result) => {
+    if (!current()) {
+      return;
+    }
+    if (!result.ok) {
+      state.chatError = formatUiError(result.error);
+      state.requestUpdate?.();
+      return;
+    }
+    await loadChatHistory(state, { supersedeInFlight: true });
+  });
+  return true;
+}
 
 type ChatPageElement = {
   sessionKey?: string;
@@ -80,15 +125,11 @@ type ChatPageElement = {
   querySelector: (selectors: string) => Element | null;
 };
 
-function clearImageLightbox(state: ChatPageHost) {
+export function invalidateImageLightbox(state: ChatPageHost) {
+  state.imageLightboxRequestVersion += 1;
   const item = state.imageLightbox;
   state.imageLightbox = null;
   item?.release?.();
-}
-
-export function invalidateImageLightbox(state: ChatPageHost) {
-  state.imageLightboxRequestVersion += 1;
-  clearImageLightbox(state);
   return state.imageLightboxRequestVersion;
 }
 
@@ -153,6 +194,11 @@ export function createPageState(
   const identity = loadLocalUserIdentity();
   const appConfig = context.config.current;
   const state = {
+    uploadConfig: context.config,
+    captureComposerRecoveryReload: () => {
+      const options = createGatewayControlUiReloadOptions(context.gateway);
+      return () => retryStaleChunkReloadWhenReachable({ timeoutMs: 0, ...options });
+    },
     sessions: context.sessions,
     hasPendingInitialTurn: (sessionKey: string) =>
       context.placementStartup.hasPendingTurn(sessionKey),
@@ -224,6 +270,11 @@ export function createPageState(
     chatModelPickerOpenSessionKey: null,
     chatModelsLoading: false,
     chatModelCatalog: [],
+    chatModelCatalogInitialized: hasUnrestrictedModelCatalogSnapshot(
+      context.gateway.snapshot.client,
+    ),
+    chatModelSelectionPolicy: undefined,
+    chatModelCatalogRetired: false,
     chatModelCatalogError: null,
     chatAccountSelection: null,
     modelAuthStatusRequestVersion: 0,
@@ -286,11 +337,10 @@ export function createPageState(
         new CustomEvent(CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, { bubbles: true, composed: true }),
       ),
     sessionWorkspaceState: undefined,
-    backgroundTasksState: undefined,
     querySelector: page.querySelector.bind(page),
   } as unknown as ChatPageHost;
 
-  state.resetToolStream = () => resetToolStream(state as never);
+  state.resetToolStream = () => resetToolStream(state);
   state.resetChatInputHistoryNavigation = () => resetChatInputHistoryNavigation(state);
   state.resetChatScroll = () => resetChatScroll(state);
   state.scrollToBottom = (options) => {
@@ -338,6 +388,9 @@ export function createPageState(
     renderLifecycle.invalidate();
   };
   state.removeQueuedMessage = (id) => {
+    if (cancelPendingQueuedChatInput(state, id)) {
+      return;
+    }
     if (isQueuedMessageBeingEdited(state, id)) {
       setChatError(state, QUEUED_MESSAGE_REMOVAL_CONFLICT_ERROR);
       renderLifecycle.invalidate();
@@ -403,16 +456,43 @@ export function createPageState(
     }
     renderLifecycle.invalidate();
   };
+  const transientResources = new Set<"desktop" | "browser">();
+  let transientResourceScope = "";
   state.updateSidebarLayout = (layout, options) => {
+    const layoutKey = canonicalUiSessionKeyForPersistence(state, state.sessionKey);
+    const scope = JSON.stringify([state.settings.gatewayUrl, layoutKey]);
+    if (scope !== transientResourceScope) {
+      transientResources.clear();
+      transientResourceScope = scope;
+    }
     const normalized = normalizeSidebarLayout(layout);
+    const previous = state.sidebarLayout;
+    const includesResource = (value: SidebarLayout, slot: "desktop" | "browser") =>
+      value.columns.some((column) => column.panels.some((panel) => panel.slot === slot));
     if (
-      state.sidebarLayout.columns
-        .flatMap((column) => column.panels)
-        .find((panel) => panel.slot === "tasks")?.taskId !==
-      normalized.columns.flatMap((column) => column.panels).find((panel) => panel.slot === "tasks")
-        ?.taskId
+      options?.automaticResource &&
+      !includesResource(previous, options.automaticResource) &&
+      includesResource(normalized, options.automaticResource)
     ) {
-      resetTaskDetail(state);
+      transientResources.add(options.automaticResource);
+    }
+    for (const resource of transientResources) {
+      const panel = normalized.columns
+        .flatMap((column) => column.panels)
+        .find((entry) => entry.slot === resource);
+      // Explicit targets are saved choices, even when discovery first opened the tab.
+      if (!panel || (resource === "desktop" && panel.environmentId !== undefined)) {
+        transientResources.delete(resource);
+      }
+    }
+    if (
+      previous.resourceAutoOpenDismissed ||
+      (options?.persist !== false &&
+        ((previous.open && !normalized.open) ||
+          (includesResource(previous, "desktop") && !includesResource(normalized, "desktop")) ||
+          (includesResource(previous, "browser") && !includesResource(normalized, "browser"))))
+    ) {
+      normalized.resourceAutoOpenDismissed = true;
     }
     const presentation =
       options?.dashboardPresentation === "personal"
@@ -436,12 +516,17 @@ export function createPageState(
       renderLifecycle.invalidate();
       return;
     }
-    const layoutKey = canonicalUiSessionKeyForPersistence(state, state.sessionKey);
+    // Other layout edits cannot persist an automatically discovered target before
+    // ownership is checked again on reload. Dashboard restoration has its own policy.
+    let persisted = normalized;
+    for (const resource of transientResources) {
+      persisted = closeSlot(persisted, resource);
+    }
     state.settings = patchSettings({
       sidebarSessionLayouts: updateSidebarSessionLayout(
         loadSettings().sidebarSessionLayouts,
         layoutKey,
-        normalized,
+        persisted,
         {
           geometryOnly: options?.geometryOnly,
           dashboardPresentationOverride: presentation
@@ -461,6 +546,13 @@ export function createPageState(
     }
     state.sidebarFocusPanelId = normalizedPanelId;
     state.sidebarFocusVersion += 1;
+    const selected = state.sidebarLayout.columns
+      .flatMap((column) => column.panels)
+      .find((panel) => panel.id === normalizedPanelId)?.slot;
+    if ((selected === "desktop" || selected === "browser") && transientResources.has(selected)) {
+      renderLifecycle.invalidate();
+      return;
+    }
     state.settings = patchSettings({
       sidebarSessionActivePanels: updateSidebarSessionActivePanel(
         loadSettings().sidebarSessionActivePanels,

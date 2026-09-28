@@ -6,7 +6,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { addGatewayClientOptions } from "../gateway-rpc.js";
 import { formatHelpExamples } from "../help-format.js";
-import { parseStrictPositiveIntOption } from "./helpers.js";
+import { collectOption, parseStrictPositiveIntOption } from "./helpers.js";
 
 /** Register backup create/verify subcommands. */
 export function registerBackupCommand(program: Command) {
@@ -129,10 +129,6 @@ export function registerBackupCommand(program: Command) {
   registerBackupScheduleCommands(backup);
 }
 
-function collectAgent(value: string, previous: string[]): string[] {
-  return [...previous, value];
-}
-
 function registerBackupScheduleCommands(backup: Command): void {
   addGatewayClientOptions(
     backup
@@ -198,7 +194,7 @@ function registerBackupGitCommands(backup: Command): void {
     .requiredOption("--repository <path>", "Git backup repository directory")
     .option("--all", "Back up the shared database and every registered agent database", false)
     .option("--global", "Back up the shared OpenClaw state database", false)
-    .option("--agent <id>", "Back up an agent database (repeatable)", collectAgent, [])
+    .option("--agent <id>", "Back up an agent database (repeatable)", collectOption, [])
     .option("--push", "Push the current branch to origin", false)
     .option("--exclude-secrets", "Omit credential-bearing database tables", false)
     .option("--json", "Output JSON", false)

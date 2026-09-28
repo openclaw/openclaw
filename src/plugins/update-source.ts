@@ -9,12 +9,11 @@ import {
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { unscopedPackageName } from "../infra/install-safe-path.js";
 import type { NpmSpecResolution } from "../infra/install-source-utils.js";
-import { loadNpmPackageVersions, resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
+import { resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
 import {
   compareOpenClawReleaseVersions,
   isExactSemverVersion,
   isPrereleaseResolutionAllowed,
-  isPrereleaseSemverVersion,
   parseRegistryNpmSpec,
 } from "../infra/npm-registry-spec.js";
 import {
@@ -24,13 +23,13 @@ import {
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import type { PluginCapabilityConsentHandler } from "./capability-consent.js";
-import { isUnavailableClawHubTarget } from "./clawhub-error-codes.js";
 import type { ExternalizedBundledPluginBridge } from "./externalized-bundled-plugins.js";
 import {
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveDefaultNpmSpec,
   resolveNpmInstallSpecsForUpdateChannel,
 } from "./install-channel-specs.js";
+import { resolveTrustedOfficialPrereleaseResolution } from "./install-npm-metadata.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
 import type { OperatorManagedPluginUpdate } from "./installed-plugin-package-ownership.js";
 import { checkMinHostVersion } from "./min-host-version.js";
@@ -180,10 +179,7 @@ export function shouldSkipUnchangedNpmInstall(params: {
   };
   metadata: NpmSpecResolution;
 }): boolean {
-  if (!params.currentVersion || !params.metadata.version) {
-    return false;
-  }
-  if (params.currentVersion !== params.metadata.version) {
+  if (!params.currentVersion || params.currentVersion !== params.metadata.version) {
     return false;
   }
   if (
@@ -191,15 +187,6 @@ export function shouldSkipUnchangedNpmInstall(params: {
     !params.record.resolvedSpec ||
     !params.record.resolvedVersion
   ) {
-    return false;
-  }
-  if (!params.metadata.name || !params.metadata.resolvedSpec) {
-    return false;
-  }
-  if (params.metadata.integrity && !params.record.integrity) {
-    return false;
-  }
-  if (params.metadata.shasum && !params.record.shasum) {
     return false;
   }
   return (
@@ -373,39 +360,17 @@ export async function resolveTrustedOfficialPrereleaseFallbackMetadataForUpdate(
   ) {
     return undefined;
   }
-  const versions = await loadNpmPackageVersions({
-    packageName: parsedSpec.name,
+  const fallback = await resolveTrustedOfficialPrereleaseResolution({
+    spec: parsedSpec,
+    resolvedPrereleaseVersion: params.metadata.version,
     timeoutMs: params.timeoutMs,
   });
-  const stableVersion = versions
-    ?.filter((value) => !isPrereleaseSemverVersion(value))
-    .toSorted(comparePackageUpdateVersions)
-    .at(-1);
-  if (stableVersion) {
-    const stableMetadata = await resolveNpmSpecMetadata({
-      spec: `${parsedSpec.name}@${stableVersion}`,
-      timeoutMs: params.timeoutMs,
-    });
-    return stableMetadata.ok ? { kind: "stable", metadata: stableMetadata.metadata } : undefined;
-  }
-
-  const prereleaseVersion = versions
-    ?.filter(isPrereleaseSemverVersion)
-    .toSorted(comparePackageUpdateVersions)
-    .at(-1);
-  if (!prereleaseVersion || !versions?.every(isPrereleaseSemverVersion)) {
+  if (!fallback) {
     return undefined;
   }
-  if (prereleaseVersion === params.metadata.version) {
-    return { kind: "prerelease-only", metadata: params.metadata };
-  }
-  const prereleaseMetadata = await resolveNpmSpecMetadata({
-    spec: `${parsedSpec.name}@${prereleaseVersion}`,
-    timeoutMs: params.timeoutMs,
-  });
-  return prereleaseMetadata.ok
-    ? { kind: "prerelease-only", metadata: prereleaseMetadata.metadata }
-    : undefined;
+  return fallback.kind === "allow-prerelease-only"
+    ? { kind: "prerelease-only", metadata: params.metadata }
+    : { kind: fallback.kind, metadata: fallback.resolution };
 }
 
 export function isNpmMetadataCompatibleWithCurrentHost(
@@ -431,14 +396,6 @@ export function isNpmMetadataCompatibleWithCurrentHost(
     return true;
   }
   return satisfiesPluginApiRange(hostVersion, pluginApiRange);
-}
-
-export function isBundledVersionNewer(bundledVersion: string, installedVersion: string): boolean {
-  return comparePackageUpdateVersions(bundledVersion, installedVersion) > 0;
-}
-
-export function shouldFallbackBetaClawHubUpdate(result: { ok: false; code?: string }): boolean {
-  return isUnavailableClawHubTarget(result);
 }
 
 export function formatBetaChannelFallbackOutcomeSuffix(params: {
@@ -473,12 +430,6 @@ function normalizeExactSemverVersion(value: string | undefined): string | undefi
     return undefined;
   }
   return trimmed.startsWith("v") ? trimmed.slice(1) : trimmed;
-}
-
-export function resolveNpmResultVersion(result: {
-  npmResolution?: NpmSpecResolution;
-}): string | undefined {
-  return result.npmResolution?.version;
 }
 
 export function isTrustedSourceLinkedOfficialNpmUpdate(params: {

@@ -13,7 +13,7 @@ import {
   renderSettingsToggle,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { formatTimeMs } from "../../lib/format.ts";
+import { createMsFormatter } from "../../lib/format.ts";
 import type { LogEntry, LogLevel } from "./log-lines.ts";
 
 const LEVELS: LogLevel[] = ["trace", "debug", "info", "warn", "error", "fatal"];
@@ -37,7 +37,7 @@ type LogsProps = {
   onScroll: (event: Event) => void;
 };
 
-function formatLogTime(value?: string | null) {
+function formatLogTime(value: string | null | undefined, formatTime: (ms: number) => string) {
   if (!value) {
     return "";
   }
@@ -45,7 +45,7 @@ function formatLogTime(value?: string | null) {
   if (Number.isNaN(date.getTime())) {
     return value;
   }
-  return formatTimeMs(date.getTime(), undefined, value);
+  return formatTime(date.getTime());
 }
 
 function matchesFilter(entry: LogEntry, needle: string) {
@@ -59,6 +59,7 @@ function matchesFilter(entry: LogEntry, needle: string) {
 }
 
 export function renderLogs(props: LogsProps) {
+  const formatTime = createMsFormatter({ timeStyle: "short" });
   const needle = normalizeLowercaseStringOrEmpty(props.filterText);
   const levelFiltered = LEVELS.some((level) => !props.levelFilters[level]);
   const filtered = props.entries.filter((entry) => {
@@ -78,7 +79,7 @@ export function renderLogs(props: LogsProps) {
       : filtered.map(
           (entry) => html`
             <div class="log-row">
-              <div class="log-time mono">${formatLogTime(entry.time)}</div>
+              <div class="log-time mono">${formatLogTime(entry.time, formatTime)}</div>
               <div class="log-level ${entry.level ?? ""}">${entry.level ?? ""}</div>
               <div class="log-subsystem mono">${entry.subsystem ?? ""}</div>
               <div class="log-message mono">${entry.message ?? entry.raw}</div>

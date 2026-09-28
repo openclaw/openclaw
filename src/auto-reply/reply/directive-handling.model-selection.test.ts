@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { loadProviderScopedThinkingCatalog } from "../../agents/model-catalog.runtime.js";
+import { buildModelAliasIndex } from "../../agents/model-selection.js";
+import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
@@ -93,6 +97,60 @@ describe("mixed inline directives / model selection", () => {
   afterEach(() => {
     unsubscribeLifecycle();
     vi.restoreAllMocks();
+  });
+  it.each([
+    "/model fixture/blocked",
+    "/model blocked",
+    "please reply /model fixture/blocked /think off",
+    "please reply /model blocked /think off",
+  ])("rejects operator-denied directive %s without session or provider effects", async (body) => {
+    const cfg: OpenClawConfig = {
+      plugins: { enabled: false },
+      agents: {
+        defaults: {
+          model: { primary: "fixture/allowed", fallbacks: ["fixture/blocked"] },
+          modelPolicy: { allow: ["fixture/*"] },
+          models: { "fixture/blocked": { alias: "blocked" } },
+        },
+      },
+      models: {
+        providers: {
+          fixture: { api: "openai-completions", baseUrl: "https://fixture.invalid/v1", models: [] },
+        },
+      },
+    };
+    const operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "limited-operator",
+      scopes: ["operator.write"],
+      assertCurrent: () => {},
+      modelPolicy: prepareOperatorModelPolicy({ cfg, policy: { deny: ["fixture/blocked"] } }),
+    });
+    const sessionEntry = createSessionEntry();
+    const before = structuredClone(sessionEntry);
+    const { result } = await applyMixedDirectives({
+      body,
+      cfg,
+      sessionEntry,
+      operatorAuthority,
+      provider: "fixture",
+      model: "allowed",
+      aliasIndex: buildModelAliasIndex({ cfg, defaultProvider: "fixture" }),
+      allowedModels: ["allowed", "blocked"].map((id) => ({ provider: "fixture", id, name: id })),
+    });
+
+    expect(result).toMatchObject({
+      kind: "reply",
+      reply: {
+        isError: true,
+        text: expect.stringContaining("operator role cannot use this model"),
+      },
+    });
+    expect(sessionEntry).toEqual(before);
+    expect(persistenceMocks.persist).not.toHaveBeenCalled();
+    expect(persistStickyModelSelectionBestEffort).not.toHaveBeenCalled();
+    expect(loadProviderScopedThinkingCatalog).not.toHaveBeenCalled();
+    expect(refreshQueuedFollowupSession).not.toHaveBeenCalled();
+    expect(triggerSessionPatchHook).not.toHaveBeenCalled();
   });
   describe.each(["", "please reply "])("model scope with prefix %j", (prefix) => {
     it.each([

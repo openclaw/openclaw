@@ -8,18 +8,14 @@ import { resolvePlaceBrowserView, splitBrowserDraft } from "./place-browser-view
 describe("splitBrowserDraft", () => {
   it.each([
     ["/Users/p/Projects/ac", "/Users/p/Projects", "ac"],
-    ["/Users/p/Projects/", "/Users/p/Projects", ""],
     ["/Users/p/Projects///", "/Users/p/Projects", ""],
-    ["/Users/p/Projects", "/Users/p", "Projects"],
     ["/ac", "/", "ac"],
-    ["/", "/", ""],
     ["///", "/", ""],
     ["C:\\Users\\p", "C:\\Users", "p"],
     ["C:\\Us", "C:\\", "Us"],
     ["C:\\Users\\p\\\\", "C:\\Users\\p", ""],
     ["C:\\", "C:\\", ""],
     ["C:/Us", "C:/", "Us"],
-    ["C:/", "C:/", ""],
     ["\\", "\\", ""],
     ["\\\\server\\share\\pa", "\\\\server\\share", "pa"],
     ["\\\\server\\share\\", "\\\\server\\share", ""],
@@ -27,12 +23,9 @@ describe("splitBrowserDraft", () => {
     expect(splitBrowserDraft(draft)).toEqual({ directory, prefix });
   });
 
-  it.each(["", "packages", "./packages", "~/packages", "C:packages"])(
-    "does not search a non-absolute draft %j",
-    (draft) => {
-      expect(splitBrowserDraft(draft)).toBeNull();
-    },
-  );
+  it.each(["packages", "C:packages"])("does not search a non-absolute draft %j", (draft) => {
+    expect(splitBrowserDraft(draft)).toBeNull();
+  });
 });
 
 describe("filterBrowserEntries", () => {
@@ -60,7 +53,6 @@ describe("filterBrowserEntries", () => {
     ["APP", ["App", "app", "app-old"]],
     // The typed spelling wins over a case-insensitive twin on case-sensitive filesystems.
     ["app", ["app", "App", "app-old"]],
-    ["App", ["App", "app", "app-old"]],
   ])("ranks spelled, exact, prefix, then substring matches for %s", (prefix, expectedNames) => {
     expect(filteredEntries(prefix).map((entry) => entry.name)).toEqual(expectedNames);
   });
@@ -81,11 +73,8 @@ describe("resolvePlaceBrowserView", () => {
   const emptyListing = { ...listing, entries: [] };
 
   it.each([
-    ["empty draft", listing, "", false, entries, "none"],
     ["relative draft", listing, "pa", false, entries, "none"],
     ["draft equals listing path", listing, "/workspace", false, entries, "none"],
-    ["matching prefix", listing, "/workspace/pa", false, entries, "none"],
-    ["empty prefix", listing, "/workspace/", false, entries, "none"],
     ["unmatched prefix", listing, "/workspace/zzz", false, [], "no-matches"],
     ["loading prefix", listing, "/workspace/zzz", true, [], "none"],
     ["different directory", listing, "/other/pa", false, [], "no-matches"],

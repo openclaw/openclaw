@@ -1,6 +1,3 @@
-/**
- * Builds the system prompt inputs for a single embedded-agent attempt.
- */
 import {
   splitSystemPromptCacheBoundary,
   SYSTEM_PROMPT_CACHE_BOUNDARY,

@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 /** Tests cron before_agent_reply gating at the CLI runner entrypoint. */
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import {
@@ -13,6 +13,7 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import type { HookRunner } from "../plugins/hooks.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
 import {
   getOrCreateSessionMcpRuntime,
@@ -628,6 +629,7 @@ describe("runCliAgent before_agent_reply seam", () => {
       expect(hookContext?.trigger).toBe("cron");
       expect(hookContext?.chatId).toBeUndefined();
       expect(hookContext?.channel).toBeUndefined();
+      expect(prepareCliRunContextMock).not.toHaveBeenCalled();
       expect(executePreparedCliRunMock).not.toHaveBeenCalled();
       expect(result.payloads?.[0]?.text).toBe("dreaming claimed via cli runner");
       expect(result.meta.agentMeta?.sessionId).toBe("");
@@ -692,19 +694,6 @@ describe("runCliAgent before_agent_reply seam", () => {
 
     expect(result.meta.agentMeta?.sessionId).toBe("");
     expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
-    expect(prepareCliRunContextMock).not.toHaveBeenCalled();
-    expect(executePreparedCliRunMock).not.toHaveBeenCalled();
-  });
-
-  it("does not run prepareCliRunContext when the cron hook claims (no resource allocation, no leak)", async () => {
-    // Regression for PR #70950 review (greptile-apps, P1): the gate must fire
-    // before any backend resources are allocated, otherwise preparedBackend.cleanup
-    // is silently skipped on every claimed cron turn.
-    hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
-    runBeforeAgentReplyMock.mockResolvedValue({ handled: true });
-
-    await runCliAgent({ ...baseRunParams, trigger: "cron", jobId: "cron-job-123" });
-
     expect(prepareCliRunContextMock).not.toHaveBeenCalled();
     expect(executePreparedCliRunMock).not.toHaveBeenCalled();
   });
@@ -988,6 +977,10 @@ describe("runCliAgent before_agent_reply seam", () => {
   });
 
   it("does not retire a newer MCP runtime after its stable session key is rebound", async () => {
+    const { setSessionMcpRuntimeScheduler } = await import("./agent-bundle-mcp-manager-api.js");
+    const scheduler = createTestGatewayScheduler();
+    onTestFinished(() => scheduler.stop());
+    await setSessionMcpRuntimeScheduler(scheduler);
     const mcpTools = await vi.importActual<typeof import("./agent-bundle-mcp-tools.js")>(
       "./agent-bundle-mcp-tools.js",
     );

@@ -1,0 +1,74 @@
+name: Full Release Validation Nightly
+
+on:
+  schedule:
+    # Every 3 hours while main moves toward a release; one pinned main SHA per run.
+    - cron: "7 */3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One run at a time across scheduled and manual triggers: a new run queues behind
+# the watching job (GitHub keeps only the newest pending run) instead of overlapping.
+concurrency:
+  group: full-release-validation-nightly
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  validate:
+    if: github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main'
+    # The helper watches the parent for up to 720 minutes, like the parent's own
+    # release_decision waiter, so this job uses that job's runner and budget.
+    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404') }}
+    timeout-minutes: 720
+    permissions:
+      # Dispatch the parent and read its runs and evidence artifacts.
+      actions: write
+      # Create and delete the helper's immutable release-ci/* and validation/* refs.
+      contents: write
+    steps:
+      - name: Checkout scheduled main SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          install-bun: "false"
+
+      # Full Release Validation dispatches its children from its own workflow ref and
+      # refuses when that ref moved. Mutable main moves on a busy day, so the helper
+      # pins one scheduled main SHA as both Validation and Tooling SHA and dispatches
+      # from an immutable release-ci/<sha12>-<id> transport ref instead.
+      - name: Run Full Release Validation for the scheduled main SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VALIDATION_SHA: ${{ github.sha }}
+        run: |
+          pnpm ci:full-release \
+            --sha "$VALIDATION_SHA" \
+            --workflow-sha "$VALIDATION_SHA" \
+            -f validation_purpose=main-qualification \
+            -f release_profile=stable \
+            -f run_release_soak=true \
+            -f reuse_evidence=true \
+            -f rerun_group=all \
+            -f allow_unreleased_changelog=true \
+            -f fail_fast=false
+
+      - name: Upload dispatch request record
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: full-release-validation-nightly-request
+          path: .artifacts/full-release-validation/
+          if-no-files-found: ignore
+          retention-days: 30

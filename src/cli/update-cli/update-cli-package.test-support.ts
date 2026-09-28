@@ -3,6 +3,8 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi, type Mock } from "vitest";
 import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.ts";
+import { resolveGatewayTaskScriptPath } from "../../daemon/paths.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { runCommandWithTimeout as RunCommandWithTimeout } from "../../process/exec.js";
 import { createCommandResult as commandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { quoteCliArg } from "../quote-cli-arg.js";
@@ -67,6 +69,26 @@ export const writeOpenClawPackageFixture = async (
   }
   return entryPath;
 };
+
+export async function writeGitUpdateResultFixture(
+  params: Pick<UpdateRunResult, "before"> & {
+    root: string;
+    after: { sha: string; version: string };
+  },
+): Promise<UpdateRunResult> {
+  await writeOpenClawPackageFixture(params.root, params.after.version, {
+    builtSha: params.after.sha,
+  });
+  const { readGitRuntimeArtifactIdentity } = await import("../../infra/update-git-runtime.js");
+  return {
+    status: "ok",
+    mode: "git",
+    steps: [],
+    durationMs: 100,
+    ...params,
+    gitRuntime: await readGitRuntimeArtifactIdentity(params.root),
+  };
+}
 
 export const writeNpmPackageInstall = async (
   argv: string[],
@@ -314,6 +336,9 @@ export function createUpdateCliPackageFixtures({
   ) => {
     serviceReadCommand.mockResolvedValue({
       programArguments,
+      ...(process.platform === "win32"
+        ? { sourcePath: resolveGatewayTaskScriptPath(process.env) }
+        : {}),
       environment: {
         OPENCLAW_SERVICE_MARKER: "openclaw",
         OPENCLAW_SERVICE_KIND: "gateway",

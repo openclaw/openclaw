@@ -92,6 +92,16 @@ export function createPluginApiFactory(
     );
     // SAFETY: Every registrar retains its key and signature with only its leading record bound.
     const { registerChannel, ...bound } = boundRegistrars as BoundRegistrars;
+    const bindCapabilityRegistrar =
+      <T extends { id: string }>(register: (provider: T) => unknown) =>
+      (entry: Parameters<typeof resolveCapabilityProviderRegistration<T>>[0]): void => {
+        register(
+          resolveCapabilityProviderRegistration(
+            entry,
+            registryParams.resolveCapabilityCatalogContext,
+          ),
+        );
+      };
     return buildPluginApi({
       id: record.id,
       name: record.name,
@@ -116,27 +126,13 @@ export function createPluginApiFactory(
               ...bound,
               registerHook: (events, handler, opts) =>
                 bound.registerHook(events, handler, opts, params.config, params.pluginConfig),
-              registerSpeechProvider: (entry) => {
-                const provider = resolveCapabilityProviderRegistration(
-                  entry,
-                  registryParams.resolveCapabilityCatalogContext,
-                );
-                bound.registerSpeechProvider(provider);
-              },
-              registerRealtimeTranscriptionProvider: (entry) => {
-                const provider = resolveCapabilityProviderRegistration(
-                  entry,
-                  registryParams.resolveCapabilityCatalogContext,
-                );
-                bound.registerRealtimeTranscriptionProvider(provider);
-              },
-              registerRealtimeVoiceProvider: (entry) => {
-                const provider = resolveCapabilityProviderRegistration(
-                  entry,
-                  registryParams.resolveCapabilityCatalogContext,
-                );
-                bound.registerRealtimeVoiceProvider(provider);
-              },
+              registerSpeechProvider: bindCapabilityRegistrar(bound.registerSpeechProvider),
+              registerRealtimeTranscriptionProvider: bindCapabilityRegistrar(
+                bound.registerRealtimeTranscriptionProvider,
+              ),
+              registerRealtimeVoiceProvider: bindCapabilityRegistrar(
+                bound.registerRealtimeVoiceProvider,
+              ),
               registerNodeInvokePolicy: (policy) =>
                 bound.registerNodeInvokePolicy(policy, params.pluginConfig),
               onConversationBindingResolved: bound.registerConversationBindingResolvedHandler,

@@ -9,30 +9,17 @@ import {
   type AnthropicStreamEvent,
   type QaMockProviderFailure,
   countApproxTokens,
+  parseJsonObjectBody,
 } from "./mock-openai-contracts.js";
-
-// Anthropic Messages conversion preserves role and tool ordering while reusing
-// the shared Responses scenario dispatcher for provider parity.
 
 export function normalizeAnthropicSystemToString(
   system: AnthropicMessagesRequest["system"],
 ): string | undefined {
-  if (typeof system === "string") {
-    return system.trim() || undefined;
-  }
-  if (Array.isArray(system)) {
-    const joined = system
-      .map((block) => (block?.type === "text" ? block.text : ""))
-      .filter(Boolean)
-      .join("\n")
-      .trim();
-    return joined || undefined;
-  }
-  return undefined;
+  return stringifyToolResultContent(system).trim() || undefined;
 }
 
 function stringifyToolResultContent(
-  content: Extract<AnthropicMessageContentBlock, { type: "tool_result" }>["content"],
+  content: Extract<AnthropicMessageContentBlock, { type: "tool_result" }>["content"] | undefined,
 ): string {
   if (typeof content === "string") {
     return content;
@@ -74,15 +61,8 @@ export function convertAnthropicMessagesToResponsesInput(params: {
     if (!Array.isArray(content)) {
       continue;
     }
-    // Buffer each block type so we can push in OpenAI-Responses order instead
-    // of the order they appear in the Anthropic content array. The parent
-    // role message must precede any function_call_output items from the same
-    // turn, otherwise extractToolOutput() (which scans for
-    // function_call_output AFTER the last user-role index) will not see the
-    // output and the downstream scenario dispatcher will behave as if no
-    // tool output was returned. Similarly, assistant tool_use blocks become
-    // function_call items that must follow the assistant text message they
-    // narrate.
+    // Role messages must precede tool calls and results, or the current-turn
+    // extractor will fence out the result as belonging to an older turn.
     const textPieces: Array<{ type: "input_text" | "output_text"; text: string }> = [];
     const imagePieces: Array<{ type: "input_image"; image_url: string }> = [];
     const toolResultItems: ResponsesInputItem[] = [];
@@ -113,35 +93,20 @@ export function convertAnthropicMessagesToResponsesInput(params: {
         continue;
       }
       if (block.type === "tool_use") {
-        // Mirror OpenAI's function_call output_item shape so downstream
-        // prompt extraction still sees "the assistant just emitted a tool
-        // call". The scenario dispatcher looks for tool_output on the next
-        // user turn, not the assistant's prior tool_use, so a minimal
-        // placeholder is enough.
         toolUseItems.push({
           type: "function_call",
           name: block.name,
           arguments: JSON.stringify(block.input ?? {}),
           call_id: block.id,
         });
-        continue;
       }
     }
     if (textPieces.length > 0 || imagePieces.length > 0) {
-      const combinedContent: Array<Record<string, unknown>> = [...textPieces, ...imagePieces];
-      items.push({ role: message.role, content: combinedContent });
+      items.push({ role: message.role, content: [...textPieces, ...imagePieces] });
     }
-    // Emit tool_use (assistant prior calls) and tool_result (user-side
-    // returns) AFTER the parent role message so extractLastUserText and
-    // extractToolOutput walk the array in the order they expect. For a
-    // tool_result-only user turn with no text/image blocks, the parent
-    // message is intentionally omitted — the function_call_output itself
-    // represents the user's "return the tool output" turn.
-    for (const toolUse of toolUseItems) {
-      items.push(toolUse);
-    }
-    for (const toolResult of toolResultItems) {
-      items.push(toolResult);
+    // A tool-result-only turn has no user message: it continues the active turn.
+    for (const item of [...toolUseItems, ...toolResultItems]) {
+      items.push(item);
     }
   }
   return items;
@@ -215,30 +180,13 @@ export function extractAssistantOutputFromEvents(events: StreamEvent[]): Extract
     if (event.type !== "response.output_item.done") {
       continue;
     }
-    const item = event.item as {
-      type?: unknown;
-      name?: unknown;
-      call_id?: unknown;
-      id?: unknown;
-      arguments?: unknown;
-      content?: unknown;
-    };
+    const item = event.item;
     if (item.type === "function_call" && typeof item.name === "string") {
-      let input: Record<string, unknown> = {};
-      if (typeof item.arguments === "string" && item.arguments.trim()) {
-        try {
-          const parsed = JSON.parse(item.arguments) as unknown;
-          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-            input = parsed as Record<string, unknown>;
-          }
-        } catch {
-          // keep empty input on malformed args — mock dispatcher owns arg shape
-        }
-      }
       toolCalls.push({
         id: typeof item.call_id === "string" ? item.call_id : `toolu_mock_${toolCalls.length + 1}`,
         name: item.name,
-        input,
+        input:
+          typeof item.arguments === "string" ? (parseJsonObjectBody(item.arguments) ?? {}) : {},
       });
       continue;
     }

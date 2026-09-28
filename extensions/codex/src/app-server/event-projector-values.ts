@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import {
   asFiniteNumber,
   normalizeOptionalString,
@@ -73,7 +74,7 @@ export function readCodexProviderRefusal(
     : undefined;
 }
 
-export function codexProviderRefusalDetails(refusal: CodexProviderRefusal) {
+function codexProviderRefusalDetails(refusal: CodexProviderRefusal) {
   return {
     provider: "openai",
     category: refusal.category,
@@ -83,25 +84,23 @@ export function codexProviderRefusalDetails(refusal: CodexProviderRefusal) {
   };
 }
 
+export function codexProviderRefusalDiagnostics(
+  refusal: CodexProviderRefusal | undefined,
+  timestamp: number,
+): Pick<AssistantMessage, "diagnostics"> {
+  return refusal
+    ? {
+        diagnostics: [
+          { type: "provider_refusal", timestamp, details: codexProviderRefusalDetails(refusal) },
+        ],
+      }
+    : {};
+}
+
 export { normalizeOptionalString as normalizeNonEmptyString };
 
 export function readNonEmptyString(record: JsonObject, key: string): string | undefined {
   return normalizeOptionalString(record[key]);
-}
-
-export function readNonEmptyStringArray(record: JsonObject, key: string): string[] {
-  const value = record[key];
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const entries: string[] = [];
-  for (const entry of value) {
-    const normalized = normalizeOptionalString(entry);
-    if (normalized) {
-      entries.push(normalized);
-    }
-  }
-  return entries;
 }
 
 export function readNullableString(record: JsonObject, key: string): string | null | undefined {
@@ -162,11 +161,6 @@ export function extractRawAssistantText(item: JsonObject): string | undefined {
     return value === undefined ? [] : [value];
   });
   return parts.length > 0 ? parts.join("").trim() : undefined;
-}
-
-export function readItemString(item: CodexThreadItem, key: string): string | undefined {
-  const value = (item as Record<string, unknown>)[key];
-  return typeof value === "string" ? value : undefined;
 }
 
 export function readItem(value: JsonValue | undefined): CodexThreadItem | undefined {

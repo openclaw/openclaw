@@ -253,6 +253,48 @@ describe("diagnostics gateway methods", () => {
     }
   });
 
+  it("reports subagent totals with per-session capacity without exposing parent identities", async () => {
+    const before = await requestLaneDiagnostics();
+    const originalConcurrency = getCommandLaneSnapshot(CommandLane.Subagent).maxConcurrent;
+    const parentA = "subagent:agent:main:private-parent-a";
+    const parents = [parentA, "subagent:agent:main:private-parent-b"];
+    const gate = createDeferred();
+    setCommandLaneConcurrency(CommandLane.Subagent, 3);
+    const runs = parents.flatMap((lane) =>
+      Array.from({ length: 2 }, () => enqueueCommandInLane(lane, async () => await gate.promise)),
+    );
+    try {
+      let payload = await requestLaneDiagnostics();
+      expect(payload.lanes.find((lane) => lane.lane === "subagent")).toMatchObject({
+        activeCount: 4,
+        queuedCount: 0,
+        maxConcurrent: 3,
+        concurrencyScope: "session",
+        saturatedLaneCount: 0,
+        blockedBy: null,
+      });
+      runs.push(
+        enqueueCommandInLane(parentA, async () => await gate.promise),
+        enqueueCommandInLane(parentA, async () => await gate.promise),
+      );
+      payload = await requestLaneDiagnostics();
+      expect(payload.lanes.find((lane) => lane.lane === "subagent")).toMatchObject({
+        activeCount: 5,
+        queuedCount: 1,
+        maxConcurrent: 3,
+        concurrencyScope: "session",
+        saturatedLaneCount: 1,
+        blockedBy: "lane",
+      });
+      expect(payload.dynamic).toEqual(before.dynamic);
+      expect(JSON.stringify(payload)).not.toContain("private-parent");
+    } finally {
+      gate.resolve();
+      await Promise.all(runs);
+      setCommandLaneConcurrency(CommandLane.Subagent, originalConcurrency);
+    }
+  });
+
   it("aggregates saturated dynamic session lanes without exporting their names", async () => {
     const lane = `session:test-${Date.now()}`;
     const before = await requestLaneDiagnostics();

@@ -61,8 +61,8 @@ enum AudioInputDeviceSelectionResolver {
 final class AudioInputDeviceObserver: @unchecked Sendable {
     private let logger = Logger(subsystem: "ai.openclaw", category: "audio.devices")
     private var isActive = false
-    private var devicesListener: AudioObjectPropertyListenerBlock?
-    private var defaultInputListener: AudioObjectPropertyListenerBlock?
+    private var devicesObservation: AudioPropertyObservation?
+    private var defaultInputObservation: AudioPropertyObservation?
 
     static func defaultInputDeviceUID() -> String? {
         guard let deviceID = self.defaultInputDeviceID() else { return nil }
@@ -203,35 +203,24 @@ final class AudioInputDeviceObserver: @unchecked Sendable {
         self.isActive = true
 
         let systemObject = AudioObjectID(kAudioObjectSystemObject)
-        let queue = DispatchQueue.main
-
-        var devicesAddress = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDevices,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain)
-        let devicesListener: AudioObjectPropertyListenerBlock = { _, _ in
+        let devicesObservation = AudioPropertyObservation(
+            objectID: systemObject,
+            selector: kAudioHardwarePropertyDevices,
+            scope: kAudioObjectPropertyScopeGlobal)
+        { _, _ in
             self.logDefaultInputChange(reason: "devices")
             onChange()
         }
-        let devicesStatus = AudioObjectAddPropertyListenerBlock(
-            systemObject,
-            &devicesAddress,
-            queue,
-            devicesListener)
-
-        var defaultInputAddress = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultInputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain)
-        let defaultInputListener: AudioObjectPropertyListenerBlock = { _, _ in
+        let defaultInputObservation = AudioPropertyObservation(
+            objectID: systemObject,
+            selector: kAudioHardwarePropertyDefaultInputDevice,
+            scope: kAudioObjectPropertyScopeGlobal)
+        { _, _ in
             self.logDefaultInputChange(reason: "default")
             onChange()
         }
-        let defaultStatus = AudioObjectAddPropertyListenerBlock(
-            systemObject,
-            &defaultInputAddress,
-            queue,
-            defaultInputListener)
+        let devicesStatus = devicesObservation.status
+        let defaultStatus = defaultInputObservation.status
 
         if devicesStatus != noErr || defaultStatus != noErr {
             self.logger.error("audio device observer install failed devices=\(devicesStatus) default=\(defaultStatus)")
@@ -239,41 +228,17 @@ final class AudioInputDeviceObserver: @unchecked Sendable {
 
         self.logger.info("audio device observer started (\(Self.defaultInputDeviceSummary(), privacy: .public))")
 
-        self.devicesListener = devicesListener
-        self.defaultInputListener = defaultInputListener
+        self.devicesObservation = devicesObservation
+        self.defaultInputObservation = defaultInputObservation
     }
 
     func stop() {
         guard self.isActive else { return }
         self.isActive = false
-        let systemObject = AudioObjectID(kAudioObjectSystemObject)
-
-        if let devicesListener {
-            var devicesAddress = AudioObjectPropertyAddress(
-                mSelector: kAudioHardwarePropertyDevices,
-                mScope: kAudioObjectPropertyScopeGlobal,
-                mElement: kAudioObjectPropertyElementMain)
-            _ = AudioObjectRemovePropertyListenerBlock(
-                systemObject,
-                &devicesAddress,
-                DispatchQueue.main,
-                devicesListener)
-        }
-
-        if let defaultInputListener {
-            var defaultInputAddress = AudioObjectPropertyAddress(
-                mSelector: kAudioHardwarePropertyDefaultInputDevice,
-                mScope: kAudioObjectPropertyScopeGlobal,
-                mElement: kAudioObjectPropertyElementMain)
-            _ = AudioObjectRemovePropertyListenerBlock(
-                systemObject,
-                &defaultInputAddress,
-                DispatchQueue.main,
-                defaultInputListener)
-        }
-
-        self.devicesListener = nil
-        self.defaultInputListener = nil
+        self.devicesObservation?.stop()
+        self.defaultInputObservation?.stop()
+        self.devicesObservation = nil
+        self.defaultInputObservation = nil
     }
 
     private static func deviceUID(for deviceID: AudioObjectID) -> String? {
@@ -333,5 +298,41 @@ final class AudioInputDeviceObserver: @unchecked Sendable {
 
     private func logDefaultInputChange(reason: StaticString) {
         self.logger.info("audio input changed (\(reason)) (\(Self.defaultInputDeviceSummary(), privacy: .public))")
+    }
+}
+
+struct AudioPropertyObservation {
+    let objectID: AudioObjectID
+    let address: AudioObjectPropertyAddress
+    let listener: AudioObjectPropertyListenerBlock
+    let status: OSStatus
+
+    init(
+        objectID: AudioObjectID,
+        selector: AudioObjectPropertySelector,
+        scope: AudioObjectPropertyScope,
+        listener: @escaping AudioObjectPropertyListenerBlock)
+    {
+        var address = AudioObjectPropertyAddress(
+            mSelector: selector,
+            mScope: scope,
+            mElement: kAudioObjectPropertyElementMain)
+        self.status = AudioObjectAddPropertyListenerBlock(
+            objectID,
+            &address,
+            DispatchQueue.main,
+            listener)
+        self.objectID = objectID
+        self.address = address
+        self.listener = listener
+    }
+
+    func stop() {
+        var address = self.address
+        _ = AudioObjectRemovePropertyListenerBlock(
+            self.objectID,
+            &address,
+            DispatchQueue.main,
+            self.listener)
     }
 }

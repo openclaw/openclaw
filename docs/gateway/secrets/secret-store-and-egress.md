@@ -3,6 +3,7 @@ summary: "The shared secret store, the default-off secret egress proxy, and file
 read_when:
   - Storing team-wide secrets and environment values in the shared secret store
   - Enabling the destination-bound secret egress proxy or its traffic allowlist
+  - Running a Crabbox application with a configured model credential kept on the host
 title: "Shared secret store and egress proxy"
 ---
 
@@ -50,6 +51,8 @@ Store values are not encrypted at rest. They are stored unencrypted in the share
 ## Secret egress proxy
 
 The secret egress proxy lets Gateway-hosted agent subprocesses use shared-store `secret` entries without receiving their plaintext. OpenClaw puts the existing authenticated sentinel in the subprocess environment, then a Gateway-owned loopback proxy replaces it in request URLs, headers, and streamed bodies immediately before egress.
+
+The listener runs in a dedicated Gateway Worker that owns TLS, certificate preparation, substitution, and forwarding. Request and response bytes stay off the Gateway's main event loop. The Gateway exchanges process grants and certificate health with that Worker; revocation immediately fences the grant before its connections are closed. A failed Worker closes protected egress and requires a Gateway restart.
 
 Each secret must also name the exact HTTPS hosts where substitution is allowed. Hostnames are stored lowercase in ASCII/punycode form and matched exactly; wildcards, suffix matching, and ports are not supported. A secret with no allowed hosts is never substituted. Bind a host without replacing the stored value:
 
@@ -145,8 +148,109 @@ Current limits:
 - Identity-scoped secrets are not supported; only the team store participates.
 - Allowed-host policy is exact-hostname authorization only. It does not validate the resolved IP or prevent an allowed origin from reflecting credentials.
 - Plain HTTP is refused; it is not upgraded or substituted.
-- Secret egress applies only to Gateway-hosted exec. Sandbox and remote `node` exec receive neither proxy variables nor sentinels, so shared-store `secret` entries are unavailable there. Provider-native harness subprocesses also do not use this proxy.
+- Automatic shared-store secret egress applies only to Gateway-hosted exec. Sandbox and remote `node` exec receive neither proxy variables nor sentinels, so shared-store `secret` entries are unavailable there. Provider-native harness subprocesses also do not use this proxy. The explicit Crabbox command below grants a configured model credential separately.
 - Background subprocesses retain their original secret snapshot until they exit or are stopped. Changes to stored credentials or destination bindings require a new run and a new command; stop existing commands to revoke their older grants immediately.
+
+## Model credentials for Crabbox commands
+
+The Crabbox plugin lets a foreground application in a Linux lease call an
+OpenAI-compatible API using a credential kept on the host. Cloud agents already
+keep their own inference and provider authentication on the Gateway; this command
+is for API calls made by the application itself.
+
+### Requirements
+
+Run the command on the host that owns the configured credential, from the local
+project directory that owns the lease. Use an exclusively owned,
+coordinator-backed Linux lease with a configured Crabbox login and no active
+egress session. The Crabbox binary must support `egress run` with
+`--upstream-proxy-env`; the command checks support before reading the credential.
+Use `--binary <path>` to select another binary.
+
+The selected provider must use an API-key SecretRef in
+`models.providers.<provider>.apiKey`. File, environment, exec, and shared-store
+SecretRefs use the existing resolver without copying the credential into another
+store. The model must resolve to an `openai-responses` or `openai-completions`
+route with an HTTPS endpoint on port 443. Endpoint URLs cannot contain credentials,
+a query, or a fragment. Auth-profile and OAuth credentials, custom headers,
+request proxy/TLS overrides, disabled auth headers, and local-service
+configuration are unsupported.
+
+### Prepare and run
+
+Sync files, hydrate the workspace, and install dependencies through the normal
+Crabbox workflow first. The model command passes `--no-sync --no-hydrate`, so it
+uses the prepared workspace and cannot fetch dependencies through its
+model-host-only bridge. Keep the same local project directory for preparation
+and execution: `--id` selects a lease but does not override Crabbox's repository
+claim or workspace selection.
+
+For an existing lease and configured OpenAI SecretRef, this example checks that
+`curl` is available, then makes a Responses API request without reading the key:
+
+```bash
+cd ~/path/to/project
+crabbox run --id <lease-id> -- curl --version
+openclaw crabbox run --id <lease-id> --model openai/gpt-5.6-sol -- sh -c '
+  curl --fail-with-body --silent --show-error "${OPENAI_BASE_URL%/}/responses" \
+    -H "Authorization: Bearer $OPENAI_API_KEY" \
+    -H "Content-Type: application/json" \
+    --data "{\"model\":\"$OPENAI_MODEL\",\"input\":\"Reply with OK.\"}"
+'
+```
+
+Success returns the provider's response JSON. Replace `sh -c ...` with your
+application command, such as `node test-app.js`. Use the endpoint appropriate to
+the configured route; a Completions-only provider needs its matching API call.
+`--provider <backend>` selects a Crabbox backend, while `--model` selects the
+model provider. `--timeout <seconds>` bounds setup and execution together
+(1–86400 seconds, default 600). Cancellation and timeout revoke credential access
+immediately and give Crabbox 75 seconds for graceful cleanup.
+
+OpenClaw resolves the selected model's configured or provider-owned API endpoint
+and starts an isolated secret proxy. Crabbox's native `egress run` owns the
+foreground bridge, remote command, and session cleanup. OpenClaw supplies
+`OPENAI_API_KEY` as an opaque sentinel,
+`OPENAI_BASE_URL`, and `OPENAI_MODEL`, plus HTTP proxy settings and a temporary
+public CA bundle. The API key, upstream proxy authentication, and CA private key
+stay on the host. The bridge permits only the selected hostname; this does not
+block a program from opening direct sockets. Model selection sets the app's
+default environment, not a limit on the provider credential's API operations or
+models.
+
+The application's HTTP client must honor both proxy and CA settings. `curl` and
+Python's default `urllib.request` opener use the injected environment. For Node.js,
+use a runtime supporting `NODE_USE_ENV_PROXY` (for example Node.js 24+) with
+`NODE_EXTRA_CA_CERTS`. A custom Node dispatcher, Python opener, or SDK client may
+override these defaults; configure its proxy and trust explicitly if needed.
+Disabling certificate verification or ignoring the proxy does not establish
+protected model access.
+
+### Lifetime and recovery
+
+Cancellation and timeout revoke credential use immediately, before command
+cleanup settles. Completion closes the grant and bridge and stops the matching
+lease-side egress client. The lease and prepared workspace remain available.
+Keep the foreground command running for the entire app lifetime; detached apps
+lose model access when it exits. Ordinary remote `exec`, `background`, and
+sandbox commands do not acquire this grant.
+
+An old binary is refused with an update message. An active-egress error requires
+an idle lease or stopping an existing session you own. A repository-claim error
+means you must return to the lease's owning local project directory. Do not
+reclaim another job's lease to bypass either check.
+
+If cleanup cannot confirm settlement, the command fails. Inspect
+`crabbox egress status --id <lease-id>` and, when the failed command reported a
+session ID, retry `crabbox egress stop --id <lease-id> --session <egress-session-id>`
+for that session. Also confirm the remote workload has stopped before reusing
+the lease, or release the disposable lease through its normal owner. Revocation
+is not proof that an unreachable remote process has exited.
+
+This standalone command does not require `secrets.egressProxy.enabled`, change
+Gateway configuration, or restart the Gateway. After a completed or canceled
+command, start a new command to obtain a fresh grant; its old sentinel and CA
+files are not reusable credentials.
 
 ## File-backed API keys
 

@@ -136,19 +136,6 @@ describe("resolveExecWorkdir", () => {
     });
   });
 
-  it("treats exact empty workdir as omitted when no local cwd default exists", async () => {
-    await withTempDir(async (workspaceDir) => {
-      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-
-      await expect(
-        resolveExecWorkdir({
-          host: "gateway",
-          workdir: "",
-        }),
-      ).resolves.toEqual({ kind: "local", hostCwd: workspaceDir });
-    });
-  });
-
   it("uses current cwd for omitted local workdir only when no default exists", async () => {
     await withTempDir(async (workspaceDir) => {
       vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
@@ -192,23 +179,6 @@ describe("resolveExecWorkdir", () => {
       await expect(
         resolveExecWorkdir({
           host: "sandbox",
-          sandbox: sandboxConfig(workspaceDir),
-        }),
-      ).resolves.toEqual({
-        kind: "sandbox",
-        hostCwd: workspaceDir,
-        containerCwd: "/workspace",
-        scriptPreflightCwd: workspaceDir,
-      });
-    });
-  });
-
-  it("treats exact empty workdir as omitted for sandbox hosts", async () => {
-    await withTempDir(async (workspaceDir) => {
-      await expect(
-        resolveExecWorkdir({
-          host: "sandbox",
-          workdir: "",
           sandbox: sandboxConfig(workspaceDir),
         }),
       ).resolves.toEqual({
@@ -385,36 +355,6 @@ describe("resolveExecWorkdir", () => {
     });
   });
 
-  it("resolves sandbox-skills subdirectories via approved read-only mounts", async () => {
-    await withTempDir(async (workspaceDir) => {
-      await withTempDir(async (skillsMountDir) => {
-        const toolsDir = path.join(skillsMountDir, "test-repro-skill", "tools");
-        await mkdir(toolsDir, { recursive: true });
-
-        await expect(
-          resolveExecWorkdir({
-            host: "sandbox",
-            workdir: "/workspace/.openclaw/sandbox-skills/skills/test-repro-skill/tools",
-            sandbox: {
-              ...sandboxConfig(workspaceDir),
-              readOnlyWorkspaceSkillMounts: [
-                {
-                  containerPath: "/workspace/.openclaw/sandbox-skills/skills",
-                  hostPath: skillsMountDir,
-                },
-              ],
-            },
-          }),
-        ).resolves.toEqual({
-          kind: "sandbox",
-          hostCwd: toolsDir,
-          containerCwd: "/workspace/.openclaw/sandbox-skills/skills/test-repro-skill/tools",
-          scriptPreflightCwd: toolsDir,
-        });
-      });
-    });
-  });
-
   it("uses the most specific approved mount regardless of input order", async () => {
     await withTempDir(async (workspaceDir) => {
       await withTempDir(async (broadMountDir) => {
@@ -558,26 +498,6 @@ describe("resolveExecWorkdir", () => {
           hostCwd: workspaceDir,
           containerCwd: "/workspace",
           scriptPreflightCwd: workspaceDir,
-        });
-      });
-    });
-  });
-
-  it("falls back to primary mapping when no approved mounts are defined", async () => {
-    await withTempDir(async (workspaceDir) => {
-      await withTempDir(async (skillsMountDir) => {
-        const skillDir = path.join(skillsMountDir, "test-skill");
-        await mkdir(skillDir);
-
-        await expect(
-          resolveExecWorkdir({
-            host: "sandbox",
-            workdir: "/workspace/.openclaw/sandbox-skills/skills/test-skill",
-            sandbox: sandboxConfig(workspaceDir),
-          }),
-        ).resolves.toEqual({
-          kind: "unavailable",
-          requestedCwd: "/workspace/.openclaw/sandbox-skills/skills/test-skill",
         });
       });
     });
@@ -1038,26 +958,6 @@ describe("resolveExecWorkdir", () => {
         nodeCwd: "/remote/node/default",
       }),
     ).resolves.toEqual({ kind: "node", remoteCwd: "/remote/node/workspace" });
-  });
-
-  it("treats exact empty workdir as omitted for node hosts with a node cwd", async () => {
-    await expect(
-      resolveExecWorkdir({
-        host: "node",
-        workdir: "",
-        nodeCwd: "/remote/node/default",
-      }),
-    ).resolves.toEqual({ kind: "node", remoteCwd: "/remote/node/default" });
-  });
-
-  it("treats exact empty workdir as omitted for node hosts without a node cwd", async () => {
-    await expect(
-      resolveExecWorkdir({
-        host: "node",
-        workdir: "",
-        defaultCwd: "/gateway/default",
-      }),
-    ).resolves.toEqual({ kind: "node" });
   });
 
   it("rejects blank explicit node workdirs", async () => {

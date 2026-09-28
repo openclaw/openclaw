@@ -108,6 +108,16 @@ function dictationPointer(type: "pointerdown" | "pointerup", pointerId: number):
   return event as PointerEvent;
 }
 
+function mountComposer(overrides: Parameters<typeof props>[0]) {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const composerProps = props(overrides);
+  const draw = () => render(renderChatComposer(composerProps), container);
+  composerProps.onRequestUpdate = draw;
+  draw();
+  return { container };
+}
+
 beforeEach(() => {
   onTestFinished(installChatComposerPickerDismissal(document));
   // ESM imports remain live when the composer was cached by another test file.
@@ -256,7 +266,7 @@ describe("renderChatComposer controls", () => {
     },
   );
 
-  it("keeps composing enabled and explains the conversation outbox while offline", () => {
+  it("keeps offline composing quiet until the conversation has queued messages", () => {
     const { container } = renderComposer({
       offline: true,
       queuedOutboxCount: 3,
@@ -277,11 +287,9 @@ describe("renderChatComposer controls", () => {
     expect(button(container, t("chat.runControls.sendMessage")).disabled).toBe(false);
 
     const empty = renderComposer({ offline: true, queuedOutboxCount: 0 });
-    expect(
-      empty.container.querySelector(".agent-chat__composer-status-band")?.textContent?.trim(),
-    ).toBe(
-      "You can keep writing. Send when you’re ready to add a message to this conversation’s outbox.",
-    );
+    expect(empty.container.querySelector(".agent-chat__composer-status-band")).toBeNull();
+    expect(empty.container.querySelector(".chat-queue")).toBeNull();
+    expect(empty.container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(false);
 
     const online = renderComposer({ queuedOutboxCount: 3 });
     expect(online.container.querySelector(".agent-chat__composer-status-band")).toBeNull();
@@ -333,17 +341,6 @@ describe("renderChatComposer controls", () => {
     expect(onAbort).toHaveBeenCalledOnce();
   });
 
-  it("keeps the disabled composer mounted for a catalog read-only state", () => {
-    const { container } = renderComposer({
-      canSend: false,
-      disabledReason: "This catalog session is read-only.",
-    });
-
-    expect(container.querySelector(".agent-chat__disabled-banner")).toBeNull();
-    expect(container.querySelector(".agent-chat__input")).not.toBeNull();
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(true);
-  });
-
   it("shows the disabled reason even when draft text hides the placeholder", () => {
     const reason = "This session is read-only.";
     const { container } = renderComposer({
@@ -362,6 +359,8 @@ describe("renderChatComposer controls", () => {
     expect(container.querySelector(".agent-chat__composer-status-band")?.textContent).not.toContain(
       "outbox",
     );
+    expect(container.querySelector(".agent-chat__disabled-banner")).toBeNull();
+    expect(container.querySelector(".agent-chat__input")).not.toBeNull();
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(true);
   });
 
@@ -419,16 +418,11 @@ describe("renderChatComposer controls", () => {
       addEventListener: vi.fn(() => () => undefined),
       request,
     } as unknown as GatewayBrowserClient;
-    const container = document.createElement("div");
-    document.body.append(container);
-    const composerProps = props({
+    const { container } = mountComposer({
       draft: "Keep this text",
       gatewayClient,
       onToggleRealtimeTalk: vi.fn(),
     });
-    const draw = () => render(renderChatComposer(composerProps), container);
-    composerProps.onRequestUpdate = draw;
-    draw();
     await vi.waitFor(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
     await vi.waitFor(() =>
       expect(container.querySelector('[data-chat-talk-capability="dictation"]')).toBeNull(),
@@ -477,15 +471,10 @@ describe("renderChatComposer controls", () => {
       throw new Error(`unexpected request: ${method}`);
     });
     const onToggleRealtimeTalk = vi.fn();
-    const container = document.createElement("div");
-    document.body.append(container);
-    const composerProps = props({
+    const { container } = mountComposer({
       gatewayClient: { request } as unknown as GatewayBrowserClient,
       onToggleRealtimeTalk,
     });
-    const draw = () => render(renderChatComposer(composerProps), container);
-    composerProps.onRequestUpdate = draw;
-    draw();
     await vi.waitFor(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
     await vi.waitFor(() =>
       expect(
@@ -521,15 +510,10 @@ describe("renderChatComposer controls", () => {
       }
       throw new Error(`unexpected request: ${method}`);
     });
-    const container = document.createElement("div");
-    document.body.append(container);
-    const composerProps = props({
+    const { container } = mountComposer({
       gatewayClient: { request } as unknown as GatewayBrowserClient,
       onToggleRealtimeTalk: vi.fn(),
     });
-    const draw = () => render(renderChatComposer(composerProps), container);
-    composerProps.onRequestUpdate = draw;
-    draw();
     await vi.waitFor(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
 
     const microphone = button(container, t("chat.composer.startVoiceInput"));

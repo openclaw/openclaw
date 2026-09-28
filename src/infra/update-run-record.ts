@@ -1,9 +1,10 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { z } from "zod";
+import type { UpdateRunRecord as PublicUpdateRunRecord } from "../../packages/gateway-protocol/src/schema/update-runs.js";
 import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "./update-run-legacy-expiry.js";
 import type { UpdateRunRecoveryState } from "./update-run-recovery-state.js";
 import type { UpdateRunRecordSchema } from "./update-run-schema.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 export function updateStepDiagnostics(
   step: Pick<UpdateStepResult, "failureFacts" | "stdoutTail" | "stderrTail">,
@@ -38,12 +39,11 @@ export function updateStepDiagnostics(
     }
     return tail
       .split(/\r?\n/u)
-      .filter((line) => {
-        if (/^\[openclaw\] (?:The CLI command failed\.$|Debug: |Try: |Help: )/u.test(line)) {
-          return false;
-        }
-        return !messages.has(line.replace(/^\[openclaw\] Reason: /u, "").trim());
-      })
+      .filter(
+        (line) =>
+          !/^\[openclaw\] (?:The CLI command failed\.$|Debug: |Try: |Help: )/u.test(line) &&
+          !messages.has(line.replace(/^\[openclaw\] Reason: /u, "").trim()),
+      )
       .join("\n");
   });
   return { tails: filtered, reasonDetails };
@@ -94,6 +94,13 @@ export function summarizeUpdateStepFailure(
 }
 
 export type UpdateRunRecord = z.infer<typeof UpdateRunRecordSchema>;
+
+/** Operational capture receipts stay in the private ledger, not status or diagnostic exports. */
+export function toPublicUpdateRun(record: UpdateRunRecord): PublicUpdateRunRecord {
+  const origin = { ...record.origin };
+  delete origin.updateRecoveryCapture;
+  return { ...record, origin };
+}
 export type UpdateRunPhase = UpdateRunRecord["phase"];
 export type UpdateRunStep = UpdateRunRecord["steps"][number];
 

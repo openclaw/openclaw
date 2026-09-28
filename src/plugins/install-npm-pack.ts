@@ -11,7 +11,6 @@ import { resolveUserPath } from "../utils.js";
 import { resolveManagedNpmInstallPlan } from "./install-managed-npm-state.js";
 import { installPluginFromManagedNpmRoot } from "./install-managed-npm.js";
 import { resolveDefaultPluginNpmDir, safePluginInstallFileName } from "./install-paths.js";
-import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import {
   defaultLogger,
   emitSuccessfulPluginInstallSecurityEvent,
@@ -21,9 +20,8 @@ import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
 import {
   PLUGIN_INSTALL_ERROR_CODE,
   type InstallPluginResult,
-  type PluginInstallArtifactConsentHandler,
+  type PackageInstallCommonParams,
   type PluginInstallErrorCode,
-  type PluginInstallLogger,
   type PluginNpmIntegrityDriftParams,
 } from "./install-types.js";
 
@@ -81,21 +79,14 @@ async function stageNpmPackArchiveInManagedRoot(params: {
 }
 
 export async function installPluginFromNpmPackArchive(
-  params: InstallSafetyOverrides & {
+  params: Omit<
+    PackageInstallCommonParams,
+    "requirePluginManifest" | "allowSourceTypeScriptEntries" | "installPolicyRequest"
+  > & {
     archivePath: string;
-    extensionsDir?: string;
-    npmDir?: string;
-    timeoutMs?: number;
-    workTimeoutMs?: number | null;
     signal?: AbortSignal;
-    logger?: PluginInstallLogger;
-    mode?: "install" | "update";
-    dryRun?: boolean;
-    expectedPluginId?: string;
     expectedIntegrity?: string;
     onIntegrityDrift?: (params: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
-    onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
-    beforePersistentApply?: () => void;
   },
 ): Promise<InstallPluginResult & { npmTarballName?: string }> {
   const runtime = await loadPluginInstallRuntime();

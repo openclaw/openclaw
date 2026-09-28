@@ -264,7 +264,7 @@ export async function createPluginNpmPublicationReadback(options) {
         );
         // A prior parent may have published successfully and then failed before
         // final readback. A new plan's skip never proves registry visibility.
-        await verifyPublishedNpmRegistry({
+        const { supersededBy } = await verifyPublishedNpmRegistry({
           packageName,
           version: releaseVersion,
           publishTags: [releaseDistTag],
@@ -273,11 +273,14 @@ export async function createPluginNpmPublicationReadback(options) {
         evidence.push({
           packageName,
           verification: "published-registry",
+          supersededBy,
           childRunId: runId,
           planAttempt: planner.run_attempt,
           planArtifactId: planMetadata.id,
         });
-        return;
+        return supersededBy === null
+          ? undefined
+          : `${packageName}@${releaseVersion} superseded by ${supersededBy}; dist-tag ${releaseDistTag} stays.`;
       }
       const { value: receipt, metadata } = await readJobReceipt(
         job,
@@ -405,6 +408,7 @@ export async function createPluginNpmPublicationReadback(options) {
         artifactDigest: receipt.artifactDigest,
         tarballSha256: consumed.tarballSha256,
       });
+      return undefined;
     },
   };
 }

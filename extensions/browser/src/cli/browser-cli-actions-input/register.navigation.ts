@@ -1,6 +1,3 @@
-/**
- * Browser CLI navigation and viewport commands.
- */
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -9,13 +6,10 @@ import {
 } from "../browser-cli-resize.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
-  callBrowserRequest,
+  runBrowserCliRequest,
   type BrowserParentOpts,
 } from "../browser-cli-shared.js";
-import { danger, defaultRuntime } from "../core-api.js";
-import { resolveBrowserActionContext } from "./shared.js";
 
-/** Registers Browser navigate and resize commands. */
 export function registerBrowserNavigationCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -26,26 +20,13 @@ export function registerBrowserNavigationCommands(
     .argument("<url>", "URL to navigate to")
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (url: string, opts, cmd) => {
-      const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
-      try {
-        const result = await callBrowserRequest<{ url?: string }>(parent, {
-          method: "POST",
-          path: "/navigate",
-          query: profile ? { profile } : undefined,
-          body: {
-            url,
-            targetId: normalizeOptionalString(opts.targetId),
-          },
-        });
-        if (parent?.json) {
-          defaultRuntime.writeJson(result);
-          return;
-        }
-        defaultRuntime.log(`navigated to ${result.url ?? url}`);
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+      await runBrowserCliRequest<{ url?: string }>({
+        parent: parentOpts(cmd),
+        path: "/navigate",
+        body: { url, targetId: normalizeOptionalString(opts.targetId) },
+        errorPolicy: "inline",
+        successMessage: (result) => `navigated to ${result.url ?? url}`,
+      });
     });
 
   browser
@@ -60,19 +41,13 @@ export function registerBrowserNavigationCommands(
       if (normalizedWidth === undefined || normalizedHeight === undefined) {
         return;
       }
-      const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
-      try {
-        await runBrowserResizeWithOutput({
-          parent,
-          profile,
-          width: normalizedWidth,
-          height: normalizedHeight,
-          targetId: opts.targetId,
-          successMessage: `resized to ${normalizedWidth}x${normalizedHeight}`,
-        });
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+      await runBrowserResizeWithOutput({
+        parent: parentOpts(cmd),
+        width: normalizedWidth,
+        height: normalizedHeight,
+        targetId: opts.targetId,
+        successMessage: `resized to ${normalizedWidth}x${normalizedHeight}`,
+        errorPolicy: "inline",
+      });
     });
 }

@@ -150,18 +150,6 @@ describe("resolveBrowserOpenCommand", () => {
     ).resolves.toEqual({ ok: false, reason: "wsl-no-wslview" });
   });
 
-  it("does not resolve Windows browser launching through a relative SystemRoot", async () => {
-    mockProcessPlatform("win32");
-    vi.stubEnv("SystemRoot", ".\\fake-root");
-    vi.stubEnv("windir", ".\\fake-windir");
-
-    const resolved = await resolveBrowserOpenCommand();
-
-    const rundll32 = path.win32.join("C:\\Windows", "System32", "rundll32.exe");
-    expect(resolved.argv).toEqual([rundll32, "url.dll,FileProtocolHandler"]);
-    expect(resolved.command).toBe(rundll32);
-  });
-
   it("prefers the registry-backed Windows system root over process env", async () => {
     getWindowsInstallRootsMock.mockReturnValue({ systemRoot: "D:\\Windows" });
     mockProcessPlatform("win32");

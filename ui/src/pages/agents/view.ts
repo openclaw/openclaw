@@ -1,9 +1,8 @@
-// Control UI view renders agents screen content.
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
-import type { AgentIdentityResult, AgentsListResult, ModelCatalogEntry } from "../../api/types.ts";
+import type { AgentIdentityResult, AgentsListResult } from "../../api/types.ts";
+import type { ApplicationConfigCapability } from "../../app/config.ts";
 import { handleCopyButton } from "../../components/copy-button.ts";
-import type { DecisionModelEntry } from "../../components/decision-model-picker.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import {
@@ -12,10 +11,10 @@ import {
   renderSettingsSection,
 } from "../../components/settings-ui.ts";
 import type { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
-import { t } from "../../i18n/index.ts";
 import "../../styles/agents.css";
 import "../../styles/sidebar-markdown.css";
 import "./memory/memory-panel.ts";
+import { t } from "../../i18n/index.ts";
 import { buildAgentContext } from "../../lib/agents/display.ts";
 import type { AgentsPanel, AgentsState } from "../../lib/agents/index.ts";
 import type { ChannelsState } from "../../lib/channels/index.ts";
@@ -24,6 +23,7 @@ import {
   type RuntimeConfigState,
 } from "../../lib/config/config-state-model.ts";
 import type { CronState } from "../../lib/cron/types.ts";
+import type { ModelCatalogPresentation } from "../../lib/model-catalog-store.ts";
 import type { AgentFilesViewState } from "./files.ts";
 import { renderAgentFiles } from "./panels-files.ts";
 import type { AgentIdentityDraft, IdentityAvatarLoader } from "./panels-overview.ts";
@@ -78,6 +78,7 @@ type AgentsProps = {
   agentIdentityLoading: boolean;
   agentIdentityError: string | null;
   agentIdentityById: Record<string, AgentIdentityResult>;
+  applicationConfig?: ApplicationConfigCapability;
   identityDraft: AgentIdentityDraft;
   identityAvatarLoader: IdentityAvatarLoader;
   identitySaving: boolean;
@@ -99,8 +100,7 @@ type AgentsProps = {
   onOpenGitHubConnections: () => void;
   runtimeSessionKey: string;
   runtimeSessionMatchesSelectedAgent: boolean;
-  modelCatalog: ModelCatalogEntry[];
-  decisionModels: DecisionModelEntry[];
+  modelCatalog: ModelCatalogPresentation;
   modelCatalogStatus: PanelRefreshStatus;
   pinnedAgentIds: readonly string[];
   onTogglePinnedAgent: (agentId: string) => void;
@@ -282,6 +282,7 @@ export function renderAgents(props: AgentsProps) {
                       ? keyed(
                           selectedAgent.id,
                           renderAgentOverview({
+                            applicationConfig: props.applicationConfig,
                             agent: selectedAgent,
                             basePath: props.basePath,
                             defaultId,
@@ -299,8 +300,10 @@ export function renderAgents(props: AgentsProps) {
                             configLoading: props.config.configLoading,
                             configSaving: props.config.configSaving,
                             configDirty: props.config.configFormDirty,
-                            modelCatalog: props.modelCatalog,
-                            decisionModels: props.decisionModels,
+                            modelCatalog: props.modelCatalog.models,
+                            decisionModels: props.modelCatalog.decisionModels ?? [],
+                            modelSelectionPolicy: props.modelCatalog.modelSelectionPolicy,
+                            modelCatalogRetired: props.modelCatalog.retired,
                             modelCatalogStatus: props.modelCatalogStatus,
                             onConfigReload: props.onConfigReload,
                             onConfigSave: props.onConfigSave,

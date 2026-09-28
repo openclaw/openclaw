@@ -228,16 +228,16 @@ describe("renderUsage", () => {
 
   it("keeps pending sessions on their selected local or UTC activity day", () => {
     const localOffsetMs = -7 * 60 * 60 * 1000;
-    const localYear = vi
-      .spyOn(Date.prototype, "getFullYear")
-      .mockImplementation(function (this: Date) {
-        return new Date(this.getTime() + localOffsetMs).getUTCFullYear();
-      });
-    const localMonth = vi
-      .spyOn(Date.prototype, "getMonth")
-      .mockImplementation(function (this: Date) {
-        return new Date(this.getTime() + localOffsetMs).getUTCMonth();
-      });
+    const localYear = vi.spyOn(Date.prototype, "getFullYear").mockImplementation(function (
+      this: Date,
+    ) {
+      return new Date(this.getTime() + localOffsetMs).getUTCFullYear();
+    });
+    const localMonth = vi.spyOn(Date.prototype, "getMonth").mockImplementation(function (
+      this: Date,
+    ) {
+      return new Date(this.getTime() + localOffsetMs).getUTCMonth();
+    });
     const localDay = vi.spyOn(Date.prototype, "getDate").mockImplementation(function (this: Date) {
       return new Date(this.getTime() + localOffsetMs).getUTCDate();
     });
@@ -442,7 +442,6 @@ describe("renderUsage", () => {
         createUsageProps({
           data: {
             ...createUsageProps().data,
-            agents: ["main", "research"],
             sessions: [
               {
                 key: "agent:main:main",
@@ -558,7 +557,6 @@ describe("renderUsage", () => {
     expect(chartModeButton("Tokens")?.getAttribute("aria-pressed")).toBe("false");
     expect(chartModeButton("Cost")?.getAttribute("aria-pressed")).toBe("true");
     expect(values()).toEqual(["second", "first"]);
-    props.filters.agentId = "main";
     // The replacement report is already scoped by the Gateway.
     props.data.sessions = props.data.sessions.filter((session) => session.agentId === "main");
     render(renderUsage(props), container);
@@ -771,7 +769,6 @@ describe("renderUsage", () => {
           },
           filters: {
             ...base.filters,
-            agentId: "main",
             startDate: "2026-05-01",
             endDate: "2026-05-14",
           },

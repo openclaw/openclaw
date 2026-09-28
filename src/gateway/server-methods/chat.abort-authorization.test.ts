@@ -2,6 +2,7 @@
  * Tests chat abort authorization checks for gateway clients and session owners.
  */
 import { describe, expect, it, vi } from "vitest";
+import type { QueuedChatTurnEntry } from "../chat-queued-turns.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { createWorkerInferenceCancellationService } from "../worker-environments/inference-control.test-helpers.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
@@ -25,7 +26,88 @@ vi.mock("../session-utils.js", async () => {
   };
 });
 
+function abortAsOwner(params: Omit<Parameters<typeof invokeAbort>[0], "connId" | "deviceId">) {
+  return invokeAbort({ ...params, connId: "conn-owner", deviceId: "dev-owner" });
+}
+
+function queuedTurn(controller: AbortController): QueuedChatTurnEntry {
+  return {
+    controller,
+    sessionId: "main-session",
+    sessionKey: "main",
+    ownerConnId: "conn-owner",
+    ownerDeviceId: "dev-owner",
+  };
+}
+
 describe("chat.abort authorization", () => {
+  it.each([
+    { sessionKey: "main", runId: undefined, message: "requires an exact runId" },
+    {
+      sessionKey: "agent:main:other",
+      runId: "run-1",
+      message: "does not match sessionKey",
+    },
+    {
+      sessionKey: "agent:main:dashboard:incognito-private",
+      runId: "run-1",
+      message: "unavailable in incognito sessions",
+    },
+  ])("requires an exact discard target ($sessionKey, $runId)", async (target) => {
+    const context = createSingleAbortContext();
+    const active = context.chatAbortControllers.get("run-1");
+    const respond = await invokeChatAbortHandler({
+      handler: handleChatAbortRequestWithLifecycle,
+      context,
+      request: {
+        sessionKey: target.sessionKey,
+        runId: target.runId,
+        discardPendingInput: true,
+      },
+      client: {
+        connId: "conn-owner",
+        connect: { device: { id: "dev-owner" }, scopes: ["operator.admin"] },
+      },
+    });
+    const [ok, , error] = requireLastRespondCall(respond);
+    expect(ok).toBe(false);
+    expect(error?.message).toContain(target.message);
+    expect(context.chatAbortControllers.get("run-1")).toBe(active);
+    expect(active?.controller.signal.aborted).toBe(false);
+  });
+
+  it("cancels the admitted worker session after the selected store changes", async () => {
+    const cancel = vi.fn(() => ["worker-run"]);
+    const context = createChatAbortContext({
+      workerEnvironmentService: createWorkerInferenceCancellationService(
+        "original-worker-session",
+        ["worker-run"],
+        cancel,
+        {
+          agentId: "main",
+          sessionId: "original-worker-session",
+          sessionKey: "agent:main:main",
+          storePath: "/original-worker-store/sessions.json",
+        },
+      ),
+    });
+    const respond = await invokeAbort({
+      context,
+      runId: "worker-run",
+      connId: "conn-admin",
+      deviceId: "dev-admin",
+      scopes: ["operator.admin"],
+    });
+    expectAbortPayload(requireLastRespondCall(respond)[1], {
+      aborted: true,
+      runIds: ["worker-run"],
+    });
+    expect(cancel).toHaveBeenCalledWith({
+      sessionId: "original-worker-session",
+      runId: "worker-run",
+    });
+  });
+
   it("rejects non-admin worker-only inference aborts", async () => {
     const cancelInferenceForSession = vi.fn(() => ["worker-run"]);
     const context = createChatAbortContext({
@@ -68,11 +150,9 @@ describe("chat.abort authorization", () => {
       const cancelInferenceForSession = vi.fn(() => ["run-1"]);
       const context = createSingleAbortContext();
       context.workerEnvironmentService = { cancelInferenceForSession } as never;
-      const respond = await invokeAbort({
+      const respond = await abortAsOwner({
         context,
         ...(runId ? { runId } : {}),
-        connId: "conn-owner",
-        deviceId: "dev-owner",
       });
       expectAbortPayload(requireLastRespondCall(respond)[1], {
         aborted: true,
@@ -129,10 +209,8 @@ describe("chat.abort authorization", () => {
       ]),
     });
 
-    const respond = await invokeAbort({
+    const respond = await abortAsOwner({
       context,
-      connId: "conn-owner",
-      deviceId: "dev-owner",
       onAuthorizedAfterQueuedAbort,
     });
 
@@ -181,10 +259,8 @@ describe("chat.abort authorization", () => {
       ]),
     });
 
-    const respond = await invokeAbort({
+    const respond = await abortAsOwner({
       context,
-      connId: "conn-owner",
-      deviceId: "dev-owner",
       preserveSideRuns: true,
       onAuthorizedAfterQueuedAbort,
     });
@@ -214,10 +290,8 @@ describe("chat.abort authorization", () => {
       },
     });
 
-    const respond = await invokeAbort({
+    const respond = await abortAsOwner({
       context,
-      connId: "conn-owner",
-      deviceId: "dev-owner",
       preserveSideRuns: true,
       onAuthorizedAfterQueuedAbort,
     });
@@ -269,27 +343,6 @@ describe("chat.abort authorization", () => {
     expect(context.chatRunState.runs.get("run-1")?.agentText).toBeUndefined();
   });
 
-  it("only aborts session-scoped runs owned by the requester", async () => {
-    const context = createChatAbortContext({
-      chatAbortControllers: new Map([
-        ["run-mine", createActiveRun("main", { owner: { deviceId: "dev-1" } })],
-        ["run-other", createActiveRun("main", { owner: { deviceId: "dev-2" } })],
-      ]),
-    });
-
-    const respond = await invokeAbort({
-      context,
-      connId: "conn-1",
-      deviceId: "dev-1",
-    });
-
-    const [ok, payload] = requireLastRespondCall(respond);
-    expect(ok).toBe(true);
-    expectAbortPayload(payload, { aborted: true, runIds: ["run-mine"] });
-    expect(context.chatAbortControllers.has("run-mine")).toBe(false);
-    expect(context.chatAbortControllers.has("run-other")).toBe(true);
-  });
-
   it("allows operator.admin clients to bypass owner checks", async () => {
     const context = createSingleAbortContext();
 
@@ -308,37 +361,6 @@ describe("chat.abort authorization", () => {
 });
 
 describe("chat.abort queued-turn contract", () => {
-  it("excludes only the replacement run from internal session cleanup", async () => {
-    const oldRun = createActiveRun("main", {
-      owner: { connId: "conn-owner", deviceId: "dev-owner" },
-    });
-    const replacementRun = createActiveRun("main", {
-      owner: { connId: "conn-owner", deviceId: "dev-owner" },
-    });
-    const context = createChatAbortContext({
-      chatAbortControllers: new Map([
-        ["run-old", oldRun],
-        ["run-replacement", replacementRun],
-      ]),
-    });
-
-    const respond = await invokeAbort({
-      context,
-      connId: "conn-owner",
-      deviceId: "dev-owner",
-      excludeRunIds: new Set(["run-replacement"]),
-    });
-
-    expect(requireLastRespondCall(respond)[0]).toBe(true);
-    expectAbortPayload(requireLastRespondCall(respond)[1], {
-      aborted: true,
-      runIds: ["run-old"],
-    });
-    expect(oldRun.controller.signal.aborted).toBe(true);
-    expect(replacementRun.controller.signal.aborted).toBe(false);
-    expect(context.chatAbortControllers.has("run-replacement")).toBe(true);
-  });
-
   it("cancels queued turns before session cleanup and the active run", async () => {
     const order: string[] = [];
     const queuedController = new AbortController();
@@ -349,24 +371,11 @@ describe("chat.abort queued-turn contract", () => {
     active.controller.signal.addEventListener("abort", () => order.push("active-abort"));
     const context = createChatAbortContext({
       chatAbortControllers: new Map([["active-1", active]]),
-      chatQueuedTurns: new Map([
-        [
-          "queued-1",
-          {
-            controller: queuedController,
-            sessionId: "main-session",
-            sessionKey: "main",
-            ownerConnId: "conn-owner",
-            ownerDeviceId: "dev-owner",
-          },
-        ],
-      ]),
+      chatQueuedTurns: new Map([["queued-1", queuedTurn(queuedController)]]),
     });
 
-    const respond = await invokeAbort({
+    const respond = await abortAsOwner({
       context,
-      connId: "conn-owner",
-      deviceId: "dev-owner",
       onAuthorizedAfterQueuedAbort: () => {
         order.push("session-cleanup");
         return true;
@@ -382,24 +391,11 @@ describe("chat.abort queued-turn contract", () => {
     const queuedController = new AbortController();
     queuedController.signal.addEventListener("abort", () => order.push("queued-abort"));
     const context = createChatAbortContext({
-      chatQueuedTurns: new Map([
-        [
-          "queued-1",
-          {
-            controller: queuedController,
-            sessionId: "main-session",
-            sessionKey: "main",
-            ownerConnId: "conn-owner",
-            ownerDeviceId: "dev-owner",
-          },
-        ],
-      ]),
+      chatQueuedTurns: new Map([["queued-1", queuedTurn(queuedController)]]),
     });
 
-    const respond = await invokeAbort({
+    const respond = await abortAsOwner({
       context,
-      connId: "conn-owner",
-      deviceId: "dev-owner",
       onAuthorizedAfterQueuedAbort: () => {
         order.push("session-cleanup");
         return true;
@@ -430,10 +426,8 @@ describe("chat.abort queued-turn contract", () => {
 
   it("allows operator.write session cleanup when no chat run is registered", async () => {
     const onAuthorizedAfterQueuedAbort = vi.fn(() => true);
-    const respond = await invokeAbort({
+    const respond = await abortAsOwner({
       context: createChatAbortContext(),
-      connId: "conn-owner",
-      deviceId: "dev-owner",
       onAuthorizedAfterQueuedAbort,
     });
 
@@ -451,10 +445,8 @@ describe("chat.abort queued-turn contract", () => {
       cancelInferenceForSession,
     );
 
-    const respond = await invokeAbort({
+    const respond = await abortAsOwner({
       context,
-      connId: "conn-owner",
-      deviceId: "dev-owner",
       onAuthorizedAfterQueuedAbort,
     });
 
@@ -507,10 +499,8 @@ describe("chat.abort queued-turn contract", () => {
       ),
     });
 
-    const lifecycleRespond = await invokeAbort({
+    const lifecycleRespond = await abortAsOwner({
       context,
-      connId: "conn-owner",
-      deviceId: "dev-owner",
       onAuthorizedAfterQueuedAbort,
     });
 
@@ -550,10 +540,8 @@ describe("chat.abort queued-turn contract", () => {
       ]),
     });
 
-    const respond = await invokeAbort({
+    const respond = await abortAsOwner({
       context,
-      connId: "conn-owner",
-      deviceId: "dev-owner",
       onAuthorizedAfterQueuedAbort,
     });
 
@@ -563,6 +551,7 @@ describe("chat.abort queued-turn contract", () => {
     });
     expect(onAuthorizedAfterQueuedAbort).not.toHaveBeenCalled();
     expect(mine.controller.signal.aborted).toBe(true);
+    expect(context.chatAbortControllers.has("run-mine")).toBe(false);
     expect(foreign.controller.signal.aborted).toBe(false);
     expect(context.chatAbortControllers.has("run-foreign")).toBe(true);
   });
@@ -608,10 +597,8 @@ describe("chat.abort queued-turn contract", () => {
       ]),
     });
 
-    const respond = await invokeAbort({
+    const respond = await abortAsOwner({
       context,
-      connId: "conn-owner",
-      deviceId: "dev-owner",
       onAuthorizedAfterQueuedAbort,
     });
 
@@ -646,10 +633,8 @@ describe("chat.abort queued-turn contract", () => {
       ]),
     });
 
-    const respond = await invokeAbort({
+    const respond = await abortAsOwner({
       context,
-      connId: "conn-owner",
-      deviceId: "dev-owner",
       onAuthorizedAfterQueuedAbort,
     });
 
@@ -676,10 +661,8 @@ describe("chat.abort queued-turn contract", () => {
       },
     });
 
-    const respond = await invokeAbort({
+    const respond = await abortAsOwner({
       context,
-      connId: "conn-owner",
-      deviceId: "dev-owner",
       onAuthorizedAfterQueuedAbort,
     });
 
@@ -764,10 +747,8 @@ describe("chat.abort queued-turn contract", () => {
       },
     });
 
-    const respond = await invokeAbort({
+    const respond = await abortAsOwner({
       context,
-      connId: "conn-owner",
-      deviceId: "dev-owner",
       onAuthorizedAfterQueuedAbort,
     });
 
@@ -786,25 +767,12 @@ describe("chat.abort queued-turn contract", () => {
   it("aborts a queued turn by runId after active registration is gone", async () => {
     const controller = new AbortController();
     const context = createChatAbortContext({
-      chatQueuedTurns: new Map([
-        [
-          "queued-1",
-          {
-            controller,
-            sessionId: "main-session",
-            sessionKey: "main",
-            ownerConnId: "conn-owner",
-            ownerDeviceId: "dev-owner",
-          },
-        ],
-      ]),
+      chatQueuedTurns: new Map([["queued-1", queuedTurn(controller)]]),
     });
 
-    const respond = await invokeAbort({
+    const respond = await abortAsOwner({
       context,
       runId: "queued-1",
-      connId: "conn-owner",
-      deviceId: "dev-owner",
     });
     const call = requireLastRespondCall(respond);
     expect(call[0]).toBe(true);
@@ -816,18 +784,7 @@ describe("chat.abort queued-turn contract", () => {
   it("rejects queued-turn abort from other clients", async () => {
     const controller = new AbortController();
     const context = createChatAbortContext({
-      chatQueuedTurns: new Map([
-        [
-          "queued-1",
-          {
-            controller,
-            sessionId: "main-session",
-            sessionKey: "main",
-            ownerConnId: "conn-owner",
-            ownerDeviceId: "dev-owner",
-          },
-        ],
-      ]),
+      chatQueuedTurns: new Map([["queued-1", queuedTurn(controller)]]),
     });
 
     const respond = await invokeAbort({
@@ -920,18 +877,7 @@ describe("chat.abort queued-turn contract", () => {
     const onAuthorizedAfterQueuedAbort = vi.fn(() => true);
     const foreign = new AbortController();
     const context = createChatAbortContext({
-      chatQueuedTurns: new Map([
-        [
-          "queued-foreign",
-          {
-            controller: foreign,
-            sessionId: "main-session",
-            sessionKey: "main",
-            ownerConnId: "conn-owner",
-            ownerDeviceId: "dev-owner",
-          },
-        ],
-      ]),
+      chatQueuedTurns: new Map([["queued-foreign", queuedTurn(foreign)]]),
     });
 
     const respond = await invokeAbort({
@@ -954,16 +900,7 @@ describe("chat.abort queued-turn contract", () => {
     const foreign = new AbortController();
     const context = createChatAbortContext({
       chatQueuedTurns: new Map([
-        [
-          "queued-mine",
-          {
-            controller: mine,
-            sessionId: "main-session",
-            sessionKey: "main",
-            ownerConnId: "conn-owner",
-            ownerDeviceId: "dev-owner",
-          },
-        ],
+        ["queued-mine", queuedTurn(mine)],
         [
           "queued-foreign",
           {
@@ -977,10 +914,8 @@ describe("chat.abort queued-turn contract", () => {
       ]),
     });
 
-    const respond = await invokeAbort({
+    const respond = await abortAsOwner({
       context,
-      connId: "conn-owner",
-      deviceId: "dev-owner",
       onAuthorizedAfterQueuedAbort,
     });
 

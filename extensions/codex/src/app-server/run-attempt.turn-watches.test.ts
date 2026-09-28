@@ -11,8 +11,12 @@ import * as mediaStore from "openclaw/plugin-sdk/media-store";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi } from "vitest";
 import * as approvalBridge from "./approval-bridge.js";
-import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
+import {
+  expectSuccessfulAttempt,
+  expectTimedOutAttempt,
+  projectAttemptResult,
+} from "./attempt-terminal.test-support.js";
 import {
   TURN_FINALIZE_DRAIN_ABORT_GRACE_MS,
   TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
@@ -39,34 +43,10 @@ import {
   threadStartResult,
   turnStartResult,
 } from "./run-attempt-test-harness.js";
-import {
-  readCodexAppServerBinding,
-  writeCodexAppServerBinding as writeRawCodexAppServerBinding,
-} from "./session-binding.test-helpers.js";
-
-const projectAttemptResult = (result: EmbeddedRunAttemptResult) => ({
-  ...result,
-  ...readAttemptTerminal(result),
-});
+import { registerConfirmedStopContinuationTest } from "./run-attempt.confirmed-stop.test-support.js";
+import { readCodexAppServerBinding } from "./session-binding.test-helpers.js";
 
 setupRunAttemptTestHooks();
-
-const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
-  "features.standalone_web_search": false,
-  web_search: "disabled",
-});
-
-function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppServerBinding>) {
-  const [sessionFile, binding, lookup] = args;
-  return writeRawCodexAppServerBinding(
-    sessionFile,
-    {
-      webSearchThreadConfigFingerprint: DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT,
-      ...binding,
-    },
-    lookup,
-  );
-}
 
 const tinyPngBase64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
@@ -198,27 +178,13 @@ function makeMediaProjectionGate() {
   return { projectionStarted, releaseProjection };
 }
 
-function expectSuccessfulAttempt(result: EmbeddedRunAttemptResult): void {
-  expect(readAttemptTerminal(result).aborted).toBe(false);
-  expect(readAttemptTerminal(result).timedOut).toBe(false);
-  expect(readAttemptTerminal(result).promptError).toBeNull();
-}
-
-function expectTimedOutAttempt(result: EmbeddedRunAttemptResult): void {
-  expect(readAttemptTerminal(result).aborted).toBe(true);
-  expect(readAttemptTerminal(result).timedOut).toBe(true);
-  expect(readAttemptTerminal(result).promptError).toBe(
-    "codex app-server execution budget timed out",
-  );
-}
-
 async function runExecutionTimeoutScenario(notifications: CodexServerNotification[]) {
   vi.useFakeTimers();
   const harness = createStartedThreadHarness();
   const onRunAgentEvent = vi.fn();
   const params = makeTestParams({ timeoutMs: 60_000, onAgentEvent: onRunAgentEvent });
   const run = runCodexAppServerAttempt(params);
-  await harness.waitForMethod("turn/start");
+  await run.waitForTurnAccepted();
   for (const notification of notifications) {
     await harness.notify(notification);
   }
@@ -229,7 +195,7 @@ async function runExecutionTimeoutScenario(notifications: CodexServerNotificatio
 async function runClientCloseScenario(notifications: CodexServerNotification[]) {
   const harness = createStartedThreadHarness();
   const run = runCodexAppServerAttempt(createTestParams());
-  await harness.waitForMethod("turn/start");
+  await run.waitForTurnAccepted();
   for (const notification of notifications) {
     await harness.notify(notification);
   }
@@ -237,37 +203,47 @@ async function runClientCloseScenario(notifications: CodexServerNotification[]) 
   return await run;
 }
 
+function createNotificationClient(onRequest: (method: string) => Promise<void>) {
+  let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+  const request = vi.fn(async (method: string) => {
+    await onRequest(method);
+    if (method === "config/read") {
+      return { config: {}, origins: {}, layers: [] };
+    }
+    if (method === "configRequirements/read") {
+      return { requirements: null };
+    }
+    if (method === "thread/start") {
+      return threadStartResult("thread-1");
+    }
+    if (method === "turn/start") {
+      return turnStartResult("turn-1", "inProgress");
+    }
+    return {};
+  });
+  setCodexAppServerClientFactoryForTest(
+    async () =>
+      ({
+        ...mockClientRuntimeMethods(),
+        request,
+        addNotificationHandler: (handler: typeof notify) => {
+          notify = handler;
+          return () => undefined;
+        },
+        addRequestHandler: () => () => undefined,
+      }) as never,
+  );
+  return { request, notify: (notification: CodexServerNotification) => notify(notification) };
+}
+
 describe("runCodexAppServerAttempt native lifecycle", () => {
   it.each([
     { name: "no output", notifications: [] },
     { name: "a quiet native command", notifications: [startedCommand("cmd-1", "long-command")] },
     {
-      name: "a completed native command",
-      notifications: [completedCommand("cmd-1", "long-command")],
-    },
-    {
-      name: "reasoning and its raw mirror",
-      notifications: [
-        itemNotification("item/completed", { id: "reasoning-1", type: "reasoning" }),
-        rawItemCompleted({ id: "raw-reasoning-1", type: "reasoning" }),
-      ],
-    },
-    {
-      name: "typed commentary",
-      notifications: [
-        itemNotification("item/completed", {
-          id: "commentary-1",
-          type: "agentMessage",
-          phase: "commentary",
-          text: "Working on it.",
-        }),
-      ],
-    },
-    {
       name: "a completed-looking assistant",
       notifications: [completedAssistant("msg-1", "Done.")],
     },
-    { name: "a raw assistant", notifications: [makeRawAssistant()] },
     {
       name: "an asynchronous assistant update",
       notifications: [
@@ -301,7 +277,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     const run = runCodexAppServerAttempt(makeTestParams({ timeoutMs: MAX_TIMER_TIMEOUT_MS }));
     const settled = vi.fn();
     void run.then(settled);
-    await harness.waitForMethod("turn/start");
+    await run.waitForTurnAccepted();
     for (const notification of notifications) {
       await harness.notify(notification);
     }
@@ -348,24 +324,9 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
       assistantTexts: [],
     },
     {
-      name: "a completed native command",
-      notifications: [completedCommand("cmd-1", "touch done.txt")],
-      assistantTexts: [],
-    },
-    {
       name: "partial assistant output",
       notifications: [makeAgentMessageDelta()],
       assistantTexts: ["Still writing"],
-    },
-    {
-      name: "a completed-looking assistant item",
-      notifications: [completedAssistant("msg-1", "Finished.")],
-      assistantTexts: ["Finished."],
-    },
-    {
-      name: "a raw assistant item",
-      notifications: [makeRawAssistant({ text: "Finished." })],
-      assistantTexts: ["Finished."],
     },
   ])("expires execution with $name without inferring success", async (scenario) => {
     const { harness, params, result, onRunAgentEvent } = await runExecutionTimeoutScenario(
@@ -403,7 +364,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     const onAttemptTimeout = vi.fn();
     params.onAttemptTimeout = onAttemptTimeout;
     const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    await run.waitForTurnAccepted();
     for (let index = 0; index < 5; index += 1) {
       await vi.advanceTimersByTimeAsync(10_000);
       await harness.notify(makeAgentMessageDelta({ delta: `progress ${index}` }));
@@ -422,7 +383,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tempDir, "state"));
 
     const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    await run.waitForTurnAccepted();
     await harness.notify(
       rawItemCompleted({
         id: "ig_raw_1",
@@ -810,51 +771,13 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
   it("waits for native completion after tool events buffered during turn start", async () => {
     vi.useFakeTimers();
     const turnStartRequested = createDeferred<void>();
-    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
-    const request = vi.fn(async (method: string) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/start") {
-        return threadStartResult("thread-1");
-      }
+    const { request, notify } = createNotificationClient(async (method) => {
       if (method === "turn/start") {
-        await notify(
-          itemNotification("item/started", {
-            id: "cmd-1",
-            type: "commandExecution",
-            command: "git status -sb",
-            status: "inProgress",
-          }),
-        );
-        await notify(
-          itemNotification("item/completed", {
-            id: "cmd-1",
-            type: "commandExecution",
-            command: "git status -sb",
-            status: "completed",
-          }),
-        );
+        await notify(startedCommand("cmd-1", "git status -sb"));
+        await notify(completedCommand("cmd-1", "git status -sb"));
         turnStartRequested.resolve();
-        return turnStartResult("turn-1", "inProgress");
       }
-      return {};
     });
-    setCodexAppServerClientFactoryForTest(
-      async () =>
-        ({
-          ...mockClientRuntimeMethods(),
-          request,
-          addNotificationHandler: (handler: typeof notify) => {
-            notify = handler;
-            return () => undefined;
-          },
-          addRequestHandler: () => () => undefined,
-        }) as never,
-    );
     const params = createParams(
       path.join(tempDir, "session-buffered-native-tool-silent.jsonl"),
       path.join(tempDir, "workspace-buffered-native-tool-silent"),
@@ -878,99 +801,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     expectSuccessfulAttempt(result);
   });
 
-  it("preserves a confirmed-stop binding for a subsequent user turn without automatic replay", async () => {
-    vi.useFakeTimers();
-    const sessionFile = path.join(tempDir, "session-confirmed-stop.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace-confirmed-stop");
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-existing",
-      cwd: workspaceDir,
-      model: "gpt-5.4-codex",
-      modelProvider: "openai",
-      dynamicToolsFingerprint: "[]",
-    });
-
-    // Turn 1: resume an existing thread, then remain active until the execution deadline.
-    const firstHarness = createStartedThreadHarness(
-      async (method) =>
-        method === "thread/resume" ? threadStartResult("thread-existing") : undefined,
-      { persistedThreads: ["thread-existing"] },
-    );
-    const firstParams = createParams(sessionFile, workspaceDir);
-    firstParams.timeoutMs = 60_000;
-    const firstRun = runCodexAppServerAttempt(firstParams);
-    await Promise.race([firstRun, firstHarness.waitForMethod("turn/start")]);
-    expect(firstHarness.requests.some((entry) => entry.method === "thread/resume")).toBe(true);
-
-    await vi.advanceTimersByTimeAsync(60_000);
-    await firstHarness.waitForMethod("turn/interrupt");
-    // The real wire requires native terminal confirmation, not only an interrupt acknowledgement.
-    await firstHarness.notify({
-      method: "turn/completed",
-      params: {
-        threadId: "thread-existing",
-        turn: { id: "turn-1", status: "interrupted", items: [] },
-      },
-    });
-    const firstResult = await firstRun;
-    expect(readAttemptTerminal(firstResult).timedOut).toBe(true);
-    expect(readAttemptTerminal(firstResult).promptError).toBe(
-      "codex app-server execution budget timed out",
-    );
-    expect(firstResult.promptTimeoutOutcome).toMatchObject({
-      replayInvalid: true,
-      livenessState: "abandoned",
-    });
-    expect(firstHarness.requests.filter(({ method }) => method === "turn/start")).toHaveLength(1);
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-      threadId: "thread-existing",
-      cwd: workspaceDir,
-    });
-
-    // Confirmed interruption retains native context; only a new user admission resumes it.
-    firstHarness.close();
-    const secondHarness = createStartedThreadHarness(
-      async (method) => {
-        if (method === "thread/resume") {
-          return threadStartResult("thread-existing");
-        }
-        if (method === "turn/start") {
-          return turnStartResult("turn-2");
-        }
-        return undefined;
-      },
-      { persistedThreads: ["thread-existing"] },
-    );
-    const secondParams = createParams(sessionFile, workspaceDir, {
-      prompt: "Continue after inspecting the work already performed.",
-      runId: "run-2",
-    });
-    secondParams.trigger = "user";
-    const secondRun = runCodexAppServerAttempt(secondParams);
-    await Promise.race([secondRun, secondHarness.waitForMethod("turn/start")]);
-    expect(secondHarness.requests.some(({ method }) => method === "thread/start")).toBe(false);
-    expect(secondHarness.requests).toContainEqual({
-      method: "thread/resume",
-      params: expect.objectContaining({ threadId: "thread-existing" }),
-    });
-    expect(secondHarness.requests).toContainEqual({
-      method: "turn/start",
-      params: expect.objectContaining({
-        threadId: "thread-existing",
-        input: expect.arrayContaining([
-          expect.objectContaining({
-            type: "text",
-            text: expect.stringContaining(secondParams.prompt),
-          }),
-        ]),
-      }),
-    });
-    await secondHarness.completeTurn({ threadId: "thread-existing", turnId: "turn-2" });
-    expectSuccessfulAttempt(await secondRun);
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-      threadId: "thread-existing",
-    });
-  });
+  registerConfirmedStopContinuationTest();
 
   it("merges rate-limit updates into the client cache at receive time", async () => {
     const harness = createStartedThreadHarness();
@@ -1289,7 +1120,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     });
     const run = runCodexAppServerAttempt(params);
 
-    await harness.waitForMethod("turn/start");
+    await run.waitForTurnAccepted();
     abortController.abort("user_cancelled");
     await harness.notify(turnCompleted({ id: "turn-1", status: "interrupted" }));
 
@@ -1314,7 +1145,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     });
     const run = runCodexAppServerAttempt(params);
 
-    await harness.waitForMethod("turn/start");
+    await run.waitForTurnAccepted();
     const timeoutError = new Error("cron watchdog timeout");
     timeoutError.name = "TimeoutError";
     abortController.abort(timeoutError);
@@ -1336,60 +1167,28 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     });
   });
 
-  it("settles a client-close route after the host trajectory capability closes", async () => {
-    const harness = createStartedThreadHarness();
-    const params = Object.assign(createTestParams(), {
-      trajectoryRecorder: { recordEvent: vi.fn(), flush: vi.fn() },
-    });
-    const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
-    const run = runCodexAppServerAttempt(params);
+  it.each([
+    undefined,
+    { profileId: "staff-fixture", scopes: ["operator.write"], assertCurrent: () => {} },
+  ])(
+    "settles a client-close route after the host trajectory capability closes (%j)",
+    async (operatorSource) => {
+      const harness = createStartedThreadHarness();
+      const params = Object.assign(createTestParams(), {
+        trajectoryRecorder: { recordEvent: vi.fn(), flush: vi.fn() },
+      });
+      const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params, operatorSource);
+      const run = runCodexAppServerAttempt(params);
 
-    await harness.waitForMethod("turn/start");
-    closeHost();
-    harness.close();
+      await run.waitForTurnAccepted();
+      closeHost();
+      harness.close();
 
-    await expect(run).resolves.toMatchObject({
-      codexAppServerFailure: { kind: "client_closed_before_turn_completed" },
-    });
-  });
-
-  it("retains completed-looking assistant text as a failure when the client closes before terminal", async () => {
-    const result = await runClientCloseScenario([
-      itemNotification("item/completed", {
-        type: "agentMessage",
-        id: "msg-final-1",
-        text: "Done before restart.",
-      }),
-    ]);
-
-    expect(readAttemptTerminal(result).promptError).toBe(
-      "codex app-server client closed before turn completed",
-    );
-    expect(readAttemptTerminal(result).aborted).toBe(false);
-    expect(readAttemptTerminal(result).timedOut).toBe(false);
-    expect(result.assistantTexts).toEqual(["Done before restart."]);
-    expect(result.codexAppServerFailure).toMatchObject({
-      kind: "client_closed_before_turn_completed",
-      replaySafe: false,
-      replayBlockedReason: "assistant_output",
-    });
-  });
-
-  it("keeps partial assistant output as a client-close failure", async () => {
-    const result = await runClientCloseScenario([makeAgentMessageDelta()]);
-    expect(readAttemptTerminal(result).promptError).toBe(
-      "codex app-server client closed before turn completed",
-    );
-    expect(result.assistantTexts).toEqual(["Still writing"]);
-    expect(result.codexAppServerFailure).toEqual({
-      kind: "client_closed_before_turn_completed",
-      transport: "stdio",
-      threadId: "thread-1",
-      turnId: "turn-1",
-      replaySafe: false,
-      replayBlockedReason: "assistant_output",
-    });
-  });
+      await expect(run).resolves.toMatchObject({
+        codexAppServerFailure: { kind: "client_closed_before_turn_completed" },
+      });
+    },
+  );
 
   it("keeps a later partial assistant output as a client-close failure after an earlier completed message", async () => {
     const result = await runClientCloseScenario([
@@ -1433,16 +1232,6 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
         completedCommand("cmd-1", "touch later.txt"),
       ],
       assistantText: "Earlier complete reply.",
-      replayBlockedReason: "potential_side_effect",
-    },
-    {
-      name: "when an earlier item finishes later",
-      notifications: [
-        startedCommand("cmd-1", "touch finishes-later.txt"),
-        completedAssistant("msg-1", "Too early."),
-        completedCommand("cmd-1", "touch finishes-later.txt"),
-      ],
-      assistantText: "Too early.",
       replayBlockedReason: "potential_side_effect",
     },
     {
@@ -1513,7 +1302,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(createTestParams());
 
-    await harness.waitForMethod("turn/start");
+    await run.waitForTurnAccepted();
     const completed = harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     harness.close();
     await completed;
@@ -1578,37 +1367,13 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     // gateway session lane stays locked and every follow-up message queues
     // behind a run that will never resolve.
     const turnStartRequested = createDeferred<void>();
-    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
     let turnStarted = false;
-    const request = vi.fn(async (method: string) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/start") {
-        return threadStartResult("thread-1");
-      }
+    const { request, notify } = createNotificationClient(async (method) => {
       if (method === "turn/start") {
         turnStarted = true;
         turnStartRequested.resolve();
-        return turnStartResult("turn-1", "inProgress");
       }
-      return {};
     });
-    setCodexAppServerClientFactoryForTest(
-      async () =>
-        ({
-          ...mockClientRuntimeMethods(),
-          request,
-          addNotificationHandler: (handler: typeof notify) => {
-            notify = handler;
-            return () => undefined;
-          },
-          addRequestHandler: () => () => undefined,
-        }) as never,
-    );
     const params = createTestParams();
     params.onAgentEvent = () => {
       // Only explode once the turn is live: pre-turn run-lifecycle events

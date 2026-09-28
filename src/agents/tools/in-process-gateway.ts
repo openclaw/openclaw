@@ -7,6 +7,7 @@ import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-
 /** In-process Gateway calls for built-in agent tools. */
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { withInProcessAgentRuntimeIdentity } from "../../gateway/in-process-agent-runtime-identity.js";
+import { readInProcessSessionDeliveryGeneration } from "../../gateway/in-process-session-delivery.js";
 import {
   bindInProcessSubagentResume,
   readInProcessSubagentResume,
@@ -223,6 +224,9 @@ async function callAgentToolGatewayRequestBound<T>(
     ? bindInProcessGatewayContext(method, resolveGatewayContext)
     : undefined;
   if (forceTransport || !getInProcessGatewayRequestContext(boundGateway?.resolve)) {
+    if (readInProcessSessionDeliveryGeneration(request.params)) {
+      throw new Error("Session-bound delivery requires its admitted in-process Gateway.");
+    }
     if (getGatewayToolCallerIdentity()?.operatorAuthority) {
       throw new Error("operator run authority requires its admitted Gateway");
     }
@@ -461,6 +465,9 @@ export async function callInProcessGatewayToolWithCreation<T = Record<string, un
             ? { completionOwnerSessionKey: trustedCreation.completionOwnerSessionKey }
             : {}),
           inheritedToolPolicy: trustedCreation.inheritedToolPolicy,
+          ...(trustedCreation.inheritedPermissionMode
+            ? { inheritedPermissionMode: trustedCreation.inheritedPermissionMode }
+            : {}),
           ...(trustedCreation.resolvedModel
             ? { resolvedModel: trustedCreation.resolvedModel }
             : {}),

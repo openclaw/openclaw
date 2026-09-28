@@ -1,20 +1,20 @@
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { CloudWorkerProfileConfig } from "../../config/types.cloud-workers.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import { REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerPlacementIdleSweep } from "./placement-idle-sweep.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = createTempDirTracker();
 
 describe("worker placement idle suspension", () => {
   let nowMs: number;
@@ -28,7 +28,10 @@ describe("worker placement idle suspension", () => {
     placements = createWorkerSessionPlacementStore({ database, now: () => nowMs });
   });
 
-  afterEach(() => closeOpenClawStateDatabaseForTest());
+  afterEach(async () => {
+    await closeStateDatabaseForTest();
+    tempDirs.cleanup();
+  });
 
   function createIdleFixture(
     options: {
@@ -132,9 +135,9 @@ describe("worker placement idle suspension", () => {
     await harness.service.dispatch(REQUEST);
 
     nowMs += 50_000;
-    const claim = claimWorkerTurn("recent-turn");
+    const claim = await claimWorkerTurn("recent-turn");
     nowMs += 5_000;
-    placements.releaseTurn(claim);
+    await placements.releaseTurn(claim);
 
     nowMs += 59_999;
     await idleSweep.sweep();
@@ -206,7 +209,6 @@ describe("worker placement idle suspension", () => {
     { reason: "an active worker turn", kind: "worker-claim" },
     { reason: "an active local turn", kind: "local-claim" },
     { reason: "an admitted turn before its worker claim exists", kind: "admitted-turn" },
-    { reason: "queued session work before worker admission", kind: "queued-turn" },
     { reason: "a durable pending result after its claim was revoked", kind: "pending-result" },
     { reason: "a durable workspace reconciliation journal", kind: "reconciling-result" },
     { reason: "a profile without suspendAfter", kind: "no-suspend-after" },
@@ -214,24 +216,22 @@ describe("worker placement idle suspension", () => {
     { reason: "a placement already draining", kind: "draining" },
   ] as const)("does not suspend when blocked by $reason", async ({ kind }) => {
     const getSessionWorkAdmissionCheck =
-      kind === "admitted-turn" || kind === "queued-turn"
-        ? vi.fn(async () => () => true)
-        : undefined;
+      kind === "admitted-turn" ? vi.fn(async () => () => true) : undefined;
     const { harness, idleSweep, info, warn } = createIdleFixture({
       ...(kind === "no-suspend-after" ? { suspendAfter: null } : {}),
       ...(getSessionWorkAdmissionCheck ? { getSessionWorkAdmissionCheck } : {}),
     });
 
     if (kind === "provisioning") {
-      harness.placements.seedProvisioning();
+      await harness.placements.seedProvisioning();
     } else {
       const executionMode =
         kind === "local-claim" || kind === "pending-result" ? "remote-exec" : "worker-turn";
       const active = await harness.service.dispatch({ ...REQUEST, executionMode });
       if (kind === "worker-claim") {
-        claimWorkerTurn();
+        await claimWorkerTurn();
       } else if (kind === "local-claim" || kind === "pending-result") {
-        const claim = placements.claimTurn({
+        const claim = await placements.claimTurn({
           ...REQUEST,
           claimId: "busy-local-claim",
           runId: "busy-local-run",
@@ -316,54 +316,33 @@ describe("worker placement idle suspension", () => {
   });
 
   it.each(["activity", "disabled policy", "longer timeout"])(
-    "rechecks %s when automatic reclaim waited behind another dispatch",
+    "rechecks %s after delayed automatic reclaim preparation",
     async (change) => {
-      const dispatchStarted = createDeferredCore();
-      const releaseDispatch = createDeferredCore();
-      const reclaimQueued = createDeferredCore();
+      const reclaimStarted = createDeferredCore();
+      const releaseReclaim = createDeferredCore();
       const { harness, idleSweep, profile, info, warn } = createIdleFixture({
-        reclaim: (request, authorize, beforeDrain) => {
-          const pending = coordinated.reclaim(request, authorize, beforeDrain);
-          reclaimQueued.resolve();
-          return pending;
+        reclaim: async (request, authorize, beforeDrain) => {
+          reclaimStarted.resolve();
+          await releaseReclaim.promise;
+          return harness.service.reclaim(request, authorize, beforeDrain);
         },
-        isPlacementOperationInFlight: (sessionId) =>
-          coordinated.isPlacementOperationInFlight(sessionId),
         getSessionWorkAdmissionCheck: async () => () => false,
       });
       const active = await harness.service.dispatch(REQUEST);
-      const coordinated = coordinateWorkerPlacementDispatch(
-        {
-          ...harness.service,
-          dispatch: async () => {
-            dispatchStarted.resolve();
-            await releaseDispatch.promise;
-            return active;
-          },
-        },
-        (_request, run) => run(),
-      );
-      const unrelatedDispatch = coordinated.dispatch({
-        ...REQUEST,
-        sessionId: "another-session",
-        sessionKey: "agent:main:another-session",
-      });
-      let sweeping: Promise<void> | undefined;
+      nowMs += 60_000;
+      const sweeping = idleSweep.sweep();
       try {
-        await dispatchStarted.promise;
-        nowMs += 60_000;
-        sweeping = idleSweep.sweep();
-        await reclaimQueued.promise;
+        await reclaimStarted.promise;
 
         if (change === "activity") {
-          const claim = claimWorkerTurn("turn-during-idle-reclaim-wait");
+          const claim = await claimWorkerTurn("turn-during-idle-reclaim-wait");
           nowMs += 1_000;
-          placements.releaseTurn(claim);
+          await placements.releaseTurn(claim);
         } else {
           profile.suspendAfter = change === "disabled policy" ? undefined : "2m";
         }
-        releaseDispatch.resolve();
-        await Promise.all([unrelatedDispatch, sweeping]);
+        releaseReclaim.resolve();
+        await sweeping;
 
         expect(placements.get(REQUEST.sessionId)).toMatchObject({
           state: "active",
@@ -380,8 +359,8 @@ describe("worker placement idle suspension", () => {
         expect(placements.get(REQUEST.sessionId)?.state).toBe("reclaimed");
         expect(harness.environments.destroy).toHaveBeenCalledOnce();
       } finally {
-        releaseDispatch.resolve();
-        await Promise.allSettled([unrelatedDispatch, sweeping]);
+        releaseReclaim.resolve();
+        await Promise.allSettled([sweeping]);
       }
     },
   );

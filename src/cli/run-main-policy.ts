@@ -4,7 +4,11 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
+import {
+  consumeRootOptionToken,
+  FLAG_TERMINATOR,
+  getCommandPositionalsWithRootOptions,
+} from "../infra/cli-root-options.js";
 import type {
   PluginManifestCommandAliasRecord,
   PluginManifestToolOwnerRecord,
@@ -25,6 +29,14 @@ const BARE_PARENT_DEFAULT_HELP_COMMANDS = new Set([
   ...getCoreCliParentDefaultHelpCommands(),
   ...getSubCliParentDefaultHelpCommands(),
 ]);
+
+export function isRemoteAgentDispatchInvocation(argv: string[], primary: string | null): boolean {
+  return primary === "agent" && !argv.includes("--local");
+}
+
+export function isAgentExecInvocation(commandPath: string[]): boolean {
+  return commandPath[0] === "agent" && commandPath[1] === "exec";
+}
 
 function isBareParentDefaultHelpArgv(argv: string[]): boolean {
   const invocation = resolveCliArgvInvocation(argv);
@@ -105,8 +117,13 @@ export function shouldUseSetupOnboardConfigureHelpFastPath(
 }
 
 export function shouldHandleBareRoot(argv: string[]): boolean {
-  const invocation = resolveCliArgvInvocation(argv);
-  return invocation.commandPath.length === 0 && !invocation.hasHelpOrVersion;
+  return (
+    getCommandPositionalsWithRootOptions(argv, {
+      commandPath: [],
+      maxPositionals: 1,
+      mode: "command-path",
+    })?.length === 0
+  );
 }
 
 export function shouldStartProxyForCli(argv: string[]): boolean {

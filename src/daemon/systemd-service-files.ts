@@ -4,12 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import { isUnresolvedShellReference } from "../config/state-dir-dotenv.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { resolveGatewaySystemdServiceName } from "./constants.js";
+import {
+  resolveGatewaySystemdServiceName,
+  resolveGatewaySystemdServiceNameCandidates,
+} from "./constants.js";
 import { normalizeWindowsPathSeparators } from "./output.js";
 import { resolveDaemonHomeDir } from "./paths.js";
 import {
   ServiceDefinitionInspectionError,
-  ServiceOwnershipRefusalError,
   findServiceOwnershipRefusal,
 } from "./service-inspection-error.js";
 import type {
@@ -27,6 +29,7 @@ import type {
   SystemdEnvironmentFilesParams,
   SystemdEnvironmentFileSpec,
 } from "./systemd-service-files.types.js";
+import { assertSystemdServiceAccount } from "./systemd-service-identity.js";
 import {
   parseSystemdEnvAssignments,
   parseSystemdExecStart,
@@ -36,18 +39,6 @@ import {
 
 const SYSTEMD_GATEWAY_DOTENV_FILENAME = "gateway.systemd.env";
 const SYSTEMD_NODE_DOTENV_FILENAME = "node.systemd.env";
-
-export function assertSystemdServiceAccount(user: string) {
-  const account = os.userInfo();
-  if (
-    user !== account.username &&
-    user !== String(account.uid) &&
-    !(user === "" && account.uid === 0)
-  ) {
-    throw new ServiceOwnershipRefusalError("systemd-account-refused");
-  }
-  return account;
-}
 
 export function resolveSystemdUnitPathForName(env: GatewayServiceEnv, name: string): string {
   const home = normalizeWindowsPathSeparators(resolveDaemonHomeDir(env));
@@ -60,6 +51,21 @@ export function resolveSystemdServiceName(env: GatewayServiceEnv): string {
     return override.endsWith(".service") ? override.slice(0, -".service".length) : override;
   }
   return resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
+}
+
+/**
+ * Unit-base names to probe for an installed gateway (or node/custom) service.
+ *
+ * When OPENCLAW_SYSTEMD_UNIT is set, only that explicit identity is used so
+ * Node (`openclaw-node`) and operator-custom units keep working. Without an
+ * override, use gateway profile candidates (current + legacy openclaw-<profile>).
+ */
+export function resolveInstalledSystemdServiceNameCandidates(env: GatewayServiceEnv): string[] {
+  const override = env.OPENCLAW_SYSTEMD_UNIT?.trim();
+  if (override) {
+    return [override.endsWith(".service") ? override.slice(0, -".service".length) : override];
+  }
+  return resolveGatewaySystemdServiceNameCandidates(env.OPENCLAW_PROFILE);
 }
 
 export function resolveSystemdUnitPath(env: GatewayServiceEnv): string {
@@ -250,7 +256,9 @@ async function readSystemdManagerCommand(
 
     await binding?.verify();
     const managedDefinition =
-      !systemScope && sourcePath === resolveSystemdUnitPath(env) ? localDefinition : null;
+      !systemScope && sourcePath === (target?.unitPath ?? resolveSystemdUnitPath(env))
+        ? localDefinition
+        : null;
     const managedOverrides =
       !reloadPending && managedDefinition
         ? await readSystemdDropInOverrides(dropInPaths, managedUnsetEnvironment, env).catch(
@@ -396,7 +404,7 @@ export async function readSystemdServiceExecStart(
   try {
     const target =
       options?.systemdReadTarget ??
-      (await (await import("./systemd-scope.js")).findInstalledSystemdGatewayScope(env));
+      (await (await import("./systemd-scope.js")).findInstalledSystemdGatewayScope(env, options));
     const opts = target ? { ...options, systemdReadTarget: target } : options;
     const unitPath = target?.unitPath ?? resolveSystemdUnitPath(env);
     const content = await fs.readFile(unitPath, "utf8").catch((error: unknown) => {

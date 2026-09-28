@@ -24,6 +24,7 @@ export {
   parseSqliteSessionFileMarker,
   parseUsageCountedSessionIdFromFileName,
   readTranscriptStatsBatchReadOnlySync,
+  readSessionResetRecallCutoff,
   sessionPathForFile,
   sessionPathForSessionIdentity,
   statSessionEntrySync,

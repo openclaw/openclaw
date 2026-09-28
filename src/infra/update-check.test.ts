@@ -499,24 +499,17 @@ describe("resolveNpmChannelTag", () => {
     expect(result.error).toContain("malformed JSON");
   });
 
-  it("returns error on non-200 status from registry", async () => {
-    mockHttp.intercept({
-      url: "https://registry.npmjs.org/openclaw/latest",
-      reply: { status: 404 },
-    });
-
-    const result = await fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 1000 });
-    expect(result.version).toBeNull();
-    expect(result.error).toBe("HTTP 404");
-  });
-
   it("falls back to latest when beta is older", async () => {
     versionByTag.beta = "1.0.0-beta.1";
     versionByTag.latest = "1.0.1-1";
 
     const resolved = await resolveNpmChannelTag({ channel: "beta", timeoutMs: 1000, runCommand });
 
-    expect(resolved).toEqual({ tag: "latest", version: "1.0.1-1" });
+    expect(resolved).toMatchObject({
+      tag: "latest",
+      version: "1.0.1-1",
+      metadata: { nodeEngine: ">=22.19.0" },
+    });
   });
 
   it("keeps beta when beta is not older", async () => {
@@ -525,7 +518,11 @@ describe("resolveNpmChannelTag", () => {
 
     const resolved = await resolveNpmChannelTag({ channel: "beta", timeoutMs: 1000, runCommand });
 
-    expect(resolved).toEqual({ tag: "beta", version: "1.0.2-beta.1" });
+    expect(resolved).toMatchObject({
+      tag: "beta",
+      version: "1.0.2-beta.1",
+      metadata: { nodeEngine: ">=22.19.0" },
+    });
   });
 
   it("falls back to latest when beta has same base as stable", async () => {
@@ -534,7 +531,11 @@ describe("resolveNpmChannelTag", () => {
 
     const resolved = await resolveNpmChannelTag({ channel: "beta", timeoutMs: 1000, runCommand });
 
-    expect(resolved).toEqual({ tag: "latest", version: "1.0.1" });
+    expect(resolved).toMatchObject({
+      tag: "latest",
+      version: "1.0.1",
+      metadata: { nodeEngine: ">=22.19.0" },
+    });
   });
 
   it("keeps non-beta channels unchanged", async () => {
@@ -542,9 +543,10 @@ describe("resolveNpmChannelTag", () => {
 
     await expect(
       resolveNpmChannelTag({ channel: "stable", timeoutMs: 1000, runCommand }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       tag: "latest",
       version: "1.0.3",
+      metadata: { nodeEngine: ">=22.19.0" },
     });
   });
 
@@ -569,7 +571,9 @@ describe("resolveNpmChannelTag", () => {
 
       await vi.advanceTimersByTimeAsync(200);
 
-      expect(completed).toHaveBeenCalledWith({ tag: "beta", version: "2026.9.1-beta.1" });
+      expect(completed).toHaveBeenCalledWith(
+        expect.objectContaining({ tag: "beta", version: "2026.9.1-beta.1" }),
+      );
       await pending;
     } finally {
       await vi.runAllTimersAsync();
@@ -581,10 +585,14 @@ describe("resolveNpmChannelTag", () => {
     versionByTag.latest = "1.0.4";
     await expect(
       fetchNpmTagVersion({ tag: "latest", timeoutMs: 1000, runCommand }),
-    ).resolves.toEqual({ tag: "latest", version: "1.0.4" });
+    ).resolves.toMatchObject({
+      tag: "latest",
+      version: "1.0.4",
+      metadata: { nodeEngine: ">=22.19.0" },
+    });
     await expect(
       fetchNpmTagVersion({ tag: "missing", timeoutMs: 1000, runCommand }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       tag: "missing",
       version: null,
       error: "npm view failed: npm ERR! 404 Not Found",

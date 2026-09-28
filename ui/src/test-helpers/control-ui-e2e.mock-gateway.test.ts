@@ -1,10 +1,12 @@
 /* @vitest-environment jsdom */
 // Exercises the serialized mock gateway exactly as a page would: the init
 // script installs MockWebSocket on window, and requests flow over it.
-import { describe, expect } from "vitest";
+import { describe, expect, vi } from "vitest";
+import { setSharedControlUiE2eServerBaseUrl } from "./control-ui-e2e-shared-preview.ts";
 import {
   createControlUiMockGatewayInitScript,
   type ControlUiMockGateway,
+  type ControlUiMockGatewayScenario,
   type ControlUiMockRequestHandler,
 } from "./control-ui-e2e.ts";
 import { flushMockTimers, mockGatewayTest as it } from "./mock-gateway-page.test-support.ts";
@@ -16,11 +18,49 @@ type ResponseFrame = {
   payload?: Record<string, unknown>;
 };
 
-function waitForMockCycle(): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, 300);
-  });
-}
+it("advertises the leased build in hello while retaining scenario overrides and clearing stale identity", async ({
+  gatewayPage,
+}) => {
+  const buildInfo = { buildId: "prepared-ui-build", version: "2026.9.23" };
+  const defaultIdentity = { buildId: "e2e", version: "e2e" };
+  const expectHello = async (
+    id: string,
+    scenario: ControlUiMockGatewayScenario,
+    server: typeof buildInfo,
+  ) => {
+    gatewayPage.execute(createControlUiMockGatewayInitScript(scenario));
+    const { request } = gatewayPage.connect();
+    await flushMockTimers();
+    expect(await request(id, "connect", {})).toMatchObject({ server });
+  };
+
+  setSharedControlUiE2eServerBaseUrl(null);
+  try {
+    await expectHello("ordinary", {}, defaultIdentity);
+    setSharedControlUiE2eServerBaseUrl("http://prebuilt-ui/", buildInfo);
+    await expectHello("prepared", {}, buildInfo);
+    await expectHello(
+      "build-override",
+      { serverBuildId: " custom-build ", serverVersion: " " },
+      { ...buildInfo, buildId: "custom-build" },
+    );
+    await expectHello(
+      "version-override",
+      { serverBuildId: " ", serverVersion: " 2026.9.24 " },
+      { ...buildInfo, version: "2026.9.24" },
+    );
+
+    setSharedControlUiE2eServerBaseUrl("http://prebuilt-ui/", { ...buildInfo, version: null });
+    await expectHello("unknown-version", {}, { ...buildInfo, version: "e2e" });
+    setSharedControlUiE2eServerBaseUrl("http://ordinary-ui/");
+    await expectHello("replacement", {}, defaultIdentity);
+    setSharedControlUiE2eServerBaseUrl("http://prebuilt-ui/", buildInfo);
+    setSharedControlUiE2eServerBaseUrl(null);
+    await expectHello("reset", {}, defaultIdentity);
+  } finally {
+    setSharedControlUiE2eServerBaseUrl(null);
+  }
+});
 
 it("keeps handler responses and events on the requesting socket", async ({ gatewayPage }) => {
   const { window, execute } = gatewayPage;
@@ -542,112 +582,84 @@ describe("mock gateway stateful sessions", () => {
     },
   );
 
-  it("cycles subscription-scoped session events and stops after unsubscribe", async ({
+  it("keeps repeated events scoped after unsubscribe and reconnect without filtering roster messages", async ({
     gatewayPage,
   }) => {
-    const { execute } = gatewayPage;
+    vi.useFakeTimers();
+    const { execute, window } = gatewayPage;
     const sessionKey = "agent:main:sidebar-narration-demo";
-    const script = createControlUiMockGatewayInitScript({
-      methodResponses: {
-        "sessions.companion.ask": {
-          cases: [
-            {
-              match: { sessionKey },
-              response: {
-                answer: "It is rerunning the focused test to verify the latest fix.",
-                ts: 1_000,
+    const otherKey = "agent:main:other-session";
+    try {
+      execute(
+        createControlUiMockGatewayInitScript({
+          repeatingSessionEvents: {
+            intervalMs: 250,
+            events: [
+              {
+                event: "agent",
+                payload: {
+                  sessionKey,
+                  stream: "assistant",
+                  data: { text: "Working", replace: true },
+                },
               },
-            },
-          ],
-        },
-      },
-      repeatingSessionEvents: {
-        intervalMs: 250,
-        events: [
-          {
-            event: "agent",
-            payload: {
-              data: {
-                replace: true,
-                text: "Rebasing onto main and rerunning the sidebar suite.",
+              {
+                event: "session.tool",
+                payload: { sessionKey, stream: "tool", data: { name: "exec" } },
               },
-              sessionKey,
-              stream: "assistant",
-            },
+              { event: "session.observer", payload: { sessionKey, headline: "Verifying" } },
+            ],
           },
-          {
-            event: "session.tool",
-            payload: { data: { name: "exec" }, sessionKey, stream: "tool" },
-          },
-          {
-            event: "session.observer",
-            payload: {
-              headline: "Rerunning focused tests",
-              health: "grinding",
-              revision: 1,
-              runId: "mock-observer-run",
-              sessionKey,
-              updatedAt: 1_000,
-            },
-          },
-        ],
-      },
-    });
-    execute(script);
+        }),
+      );
+      const gateway = (window as Window & { openclawControlUiE2eGateway?: ControlUiMockGateway })
+        .openclawControlUiE2eGateway;
+      if (!gateway) {
+        throw new Error("Mock Gateway was not installed");
+      }
+      const { frames, send } = gatewayPage.connect();
+      await vi.advanceTimersByTimeAsync(0);
+      send("subscribe", "sessions.messages.subscribe", { key: sessionKey });
+      await vi.advanceTimersByTimeAsync(750);
+      const repeated = () =>
+        frames.filter((frame) => frame.type === "event" && frame.event !== "connect.challenge");
+      expect(repeated().map((frame) => frame.event)).toEqual([
+        "agent",
+        "session.tool",
+        "session.observer",
+        "agent",
+      ]);
+      expect(repeated().at(-1)?.payload).toMatchObject({
+        sessionKey,
+        data: { replace: true, text: "Working" },
+      });
 
-    const { frames, send } = gatewayPage.connect();
-    await flushMockTimers();
+      send("keep-timer", "sessions.messages.subscribe", { key: otherKey });
+      send("unsubscribe", "sessions.messages.unsubscribe", { key: sessionKey });
+      await vi.advanceTimersByTimeAsync(0);
+      const before = repeated().length;
+      await vi.advanceTimersByTimeAsync(750);
+      expect(repeated()).toHaveLength(before);
+      send("connect-scoped", "connect", { caps: ["session-scoped-events"] });
+      await vi.advanceTimersByTimeAsync(0);
+      gateway.emit("session.message", { sessionKey, messageId: "roster-message" });
+      expect(repeated().at(-1)).toMatchObject({
+        event: "session.message",
+        payload: { sessionKey, messageId: "roster-message" },
+      });
 
-    send("subscribe-1", "sessions.messages.subscribe", { key: sessionKey });
-    await flushMockTimers();
-    expect(frames.find((frame) => frame.id === "subscribe-1")?.payload).toEqual({
-      key: sessionKey,
-    });
-    send("companion-ask-1", "sessions.companion.ask", {
-      sessionKey,
-      question: "Why is it rerunning that test?",
-    });
-    await flushMockTimers();
-    expect(frames.find((frame) => frame.id === "companion-ask-1")?.payload).toEqual({
-      answer: "It is rerunning the focused test to verify the latest fix.",
-      ts: 1_000,
-    });
-    expect(frames.find((frame) => frame.event === "agent")?.payload).toMatchObject({
-      sessionKey,
-      stream: "assistant",
-      data: { text: "Rebasing onto main and rerunning the sidebar suite." },
-    });
-
-    await waitForMockCycle();
-    expect(frames.find((frame) => frame.event === "session.tool")?.payload).toMatchObject({
-      sessionKey,
-      stream: "tool",
-      data: { name: "exec" },
-    });
-
-    await waitForMockCycle();
-    expect(frames.find((frame) => frame.event === "session.observer")?.payload).toMatchObject({
-      headline: "Rerunning focused tests",
-      runId: "mock-observer-run",
-      sessionKey,
-    });
-
-    // Second assistant cycle must repeat: the replayed snapshot carries
-    // replace, so the narration controller re-renders instead of deduping.
-    await waitForMockCycle();
-    const assistantFrames = frames.filter((frame) => frame.event === "agent");
-    expect(assistantFrames.length).toBeGreaterThanOrEqual(2);
-    expect(assistantFrames.at(-1)?.payload).toMatchObject({
-      sessionKey,
-      stream: "assistant",
-      data: { replace: true, text: "Rebasing onto main and rerunning the sidebar suite." },
-    });
-
-    send("unsubscribe-1", "sessions.messages.unsubscribe", { key: sessionKey });
-    await flushMockTimers();
-    const eventCount = frames.filter((frame) => frame.type === "event").length;
-    await waitForMockCycle();
-    expect(frames.filter((frame) => frame.type === "event")).toHaveLength(eventCount);
+      gateway.closeLatest();
+      const replacement = gatewayPage.connect();
+      await vi.advanceTimersByTimeAsync(0);
+      replacement.send("replace-other", "sessions.messages.subscribe", { key: otherKey });
+      await vi.advanceTimersByTimeAsync(750);
+      expect(
+        replacement.frames.filter((frame) => frame.type === "event").map((frame) => frame.event),
+      ).toEqual(["connect.challenge"]);
+    } finally {
+      gatewayPage.close();
+      vi.useRealTimers();
+    }
   });
 
   it("keeps archive filtering opt-in for static session fixtures", async ({ gatewayPage }) => {

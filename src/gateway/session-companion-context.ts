@@ -1,10 +1,13 @@
+import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { extractStoredAssistantText } from "../agents/tools/chat-history-text.js";
 import { readSessionTranscriptBoundedMessageTailPage } from "../config/sessions/session-accessor.sqlite-active-events.js";
 import { redactToolPayloadText } from "../logging/redact.js";
-import type {
-  SessionCompanionContextMessage,
-  SessionCompanionPreparedContext,
+import {
+  selectSessionCompanionReferenceItems,
+  type SessionCompanionContextMessage,
+  type SessionCompanionPreparedContext,
 } from "./session-companion-state.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
@@ -37,10 +40,7 @@ function normalizeContextText(value: string): string {
 }
 
 function extractUserText(message: unknown): string | undefined {
-  if (!message || typeof message !== "object") {
-    return undefined;
-  }
-  const content = (message as { content?: unknown }).content;
+  const content = asOptionalObjectRecord(message)?.content;
   if (typeof content === "string") {
     return normalizeContextText(content) || undefined;
   }
@@ -49,10 +49,8 @@ function extractUserText(message: unknown): string | undefined {
   }
   const text = content
     .flatMap((block) => {
-      if (!block || typeof block !== "object" || (block as { type?: unknown }).type !== "text") {
-        return [];
-      }
-      const blockText = (block as { text?: unknown }).text;
+      const record = asOptionalObjectRecord(block);
+      const blockText = record?.type === "text" ? record.text : undefined;
       return typeof blockText === "string" ? [blockText] : [];
     })
     .join("\n");
@@ -60,11 +58,7 @@ function extractUserText(message: unknown): string | undefined {
 }
 
 function readMessageTimestamp(message: unknown): number {
-  if (!message || typeof message !== "object") {
-    return 0;
-  }
-  const value = (message as { timestamp?: unknown }).timestamp;
-  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+  return resolveNonNegativeIntegerOption(asOptionalObjectRecord(message)?.timestamp, 0);
 }
 
 function appendContextMessages(
@@ -77,15 +71,8 @@ function appendContextMessages(
     index >= 0 && messages.length < CONTEXT_MAX_MESSAGES;
     index--
   ) {
-    const event = events[index]?.event;
-    if (!event || typeof event !== "object") {
-      continue;
-    }
-    const message = (event as { message?: unknown }).message;
-    if (!message || typeof message !== "object") {
-      continue;
-    }
-    const role = (message as { role?: unknown }).role;
+    const message = asOptionalObjectRecord(asOptionalObjectRecord(events[index]?.event)?.message);
+    const role = message?.role;
     const text =
       role === "assistant"
         ? normalizeContextText(extractStoredAssistantText(message) ?? "")
@@ -96,20 +83,6 @@ function appendContextMessages(
       messages.push({ role, text, ts: readMessageTimestamp(message) });
     }
   }
-}
-
-function selectContextMessages(messages: SessionCompanionContextMessage[]) {
-  const selected: SessionCompanionContextMessage[] = [];
-  let bytes = 2;
-  for (const message of messages) {
-    const messageBytes = Buffer.byteLength(JSON.stringify(message), "utf8") + 1;
-    if (bytes + messageBytes > CONTEXT_MAX_BYTES) {
-      break;
-    }
-    selected.push(message);
-    bytes += messageBytes;
-  }
-  return selected.toReversed();
 }
 
 async function readSessionCompanionContext(params: {
@@ -225,7 +198,7 @@ async function readSessionCompanionContext(params: {
       kind: "ready",
       context: {
         empty: totalMessages === 0,
-        messages: selectContextMessages(contextMessages),
+        messages: selectSessionCompanionReferenceItems(contextMessages, CONTEXT_MAX_BYTES),
         sessionId,
       },
     };

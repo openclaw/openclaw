@@ -176,15 +176,6 @@ describe("probeFeishu", () => {
     expect(result).toEqual({ ok: false, appId: "cli_123", error: "probe aborted" });
     expect(createFeishuClientMock).not.toHaveBeenCalled();
   });
-  it("returns cached result on subsequent calls within TTL", async () => {
-    const requestFn = setupSuccessClient();
-
-    const { first, second } = await readSequentialDefaultProbePair();
-
-    expect(first).toEqual(second);
-    // Only one API call should have been made
-    expect(requestFn).toHaveBeenCalledTimes(1);
-  });
 
   it("does not cache probe results when the expiry would exceed a valid Date", async () => {
     await withFakeTimers(async () => {

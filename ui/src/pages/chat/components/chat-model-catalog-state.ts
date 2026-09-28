@@ -62,7 +62,11 @@ export function renderChatModelCatalogState(
           ? t("chat.modelControls.modelsRefreshFailed")
           : errorLabel
         : status === "ready" && !checking
-          ? t("chat.modelControls.noModelsAvailable")
+          ? t(
+              state.modelSelectionPolicy?.restricted
+                ? "chat.modelControls.noPermittedModels"
+                : "chat.modelControls.noModelsAvailable",
+            )
           : t("chat.modelControls.loadingModels");
   return html`
     <div

@@ -33,6 +33,16 @@ export function withMemoryWriteProvenance<T extends ProvenanceWriteOperations>(
   if (!observer) {
     return operations;
   }
+  const readContentBefore = (absolutePath: string) =>
+    operations
+      .readFile(absolutePath)
+      .then((value) => (Buffer.isBuffer(value) ? value.toString("utf8") : value))
+      .catch((error: unknown) => {
+        if (!isMissingPathError(error)) {
+          throw error;
+        }
+        return "";
+      });
   const remove = operations.remove;
   return {
     ...operations,
@@ -47,18 +57,9 @@ export function withMemoryWriteProvenance<T extends ProvenanceWriteOperations>(
         await commit();
         return;
       }
-      const contentBefore = await operations
-        .readFile(absolutePath)
-        .then((value) => (Buffer.isBuffer(value) ? value.toString("utf8") : value))
-        .catch((error: unknown) => {
-          if (!isMissingPathError(error)) {
-            throw error;
-          }
-          return "";
-        });
       await observer.write({
         absolutePath,
-        contentBefore,
+        contentBefore: await readContentBefore(absolutePath),
         contentAfter: content,
         commit,
       });
@@ -68,15 +69,7 @@ export function withMemoryWriteProvenance<T extends ProvenanceWriteOperations>(
           remove: async (absolutePath: string) => {
             const assertCurrent = captureAgentToolSourceExecutionGuard();
             const contentBefore = (await observer.classifies(absolutePath))
-              ? await operations
-                  .readFile(absolutePath)
-                  .then((value) => (Buffer.isBuffer(value) ? value.toString("utf8") : value))
-                  .catch((error: unknown) => {
-                    if (!isMissingPathError(error)) {
-                      throw error;
-                    }
-                    return "";
-                  })
+              ? await readContentBefore(absolutePath)
               : "";
             assertCurrent();
             await remove(absolutePath);

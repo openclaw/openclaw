@@ -166,16 +166,6 @@ export const ClaudePermissionRequestSchema = z.object({
 
 export { toText };
 
-/** Resolve the visible message id, including OpenClaw metadata attached to raw entries. */
-export function resolveMessageId(entry: Record<string, unknown>): string | undefined {
-  return (
-    toText(entry.id) ??
-    (entry["__openclaw"] && typeof entry["__openclaw"] === "object"
-      ? toText((entry["__openclaw"] as { id?: unknown }).id)
-      : undefined)
-  );
-}
-
 /** Build the text summary format expected by simple MCP tool results. */
 export function summarizeResult(
   label: string,
@@ -262,10 +252,4 @@ export function extractAttachmentsFromMessage(message: unknown): unknown[] {
       media: Object.fromEntries(Object.entries(media).filter(([, value]) => value !== undefined)),
     }));
   return [...contentAttachments, ...mediaAttachments];
-}
-
-/** Normalize approval identifiers before local tracking or resolution. */
-export function normalizeApprovalId(value: unknown): string | undefined {
-  const id = toText(value);
-  return id ? id.trim() : undefined;
 }

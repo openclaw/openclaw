@@ -111,34 +111,7 @@ func validateDocBodyFencedLiterals(source, translated string) error {
 	if sourceStructure.fenceCount != translatedStructure.fenceCount {
 		return fmt.Errorf("code fence mismatch: source=%d translated=%d", sourceStructure.fenceCount, translatedStructure.fenceCount)
 	}
-	if !slices.Equal(sourceStructure.listShapes, translatedStructure.listShapes) {
-		return fmt.Errorf("list structure mismatch: source=%v translated=%v", sourceStructure.listShapes, translatedStructure.listShapes)
-	}
-	if !slices.Equal(sourceStructure.listMarkerPrefixes, translatedStructure.listMarkerPrefixes) {
-		return fmt.Errorf("list marker structure mismatch: source=%q translated=%q", sourceStructure.listMarkerPrefixes, translatedStructure.listMarkerPrefixes)
-	}
-	if !sameStringMultiset(sourceStructure.inlineCodeSpans, translatedStructure.inlineCodeSpans) {
-		return fmt.Errorf("inline code mismatch: source=%d translated=%d", len(sourceStructure.inlineCodeSpans), len(translatedStructure.inlineCodeSpans))
-	}
-	if !slices.Equal(sourceStructure.fencedPlaceholders, translatedStructure.fencedPlaceholders) {
-		return fmt.Errorf("fenced placeholder mismatch: source=%d translated=%d", len(sourceStructure.fencedPlaceholders), len(translatedStructure.fencedPlaceholders))
-	}
-	if !slices.Equal(sourceStructure.fencedProtocolTokens, translatedStructure.fencedProtocolTokens) {
-		return fmt.Errorf("fenced protocol marker mismatch: source=%d translated=%d", len(sourceStructure.fencedProtocolTokens), len(translatedStructure.fencedProtocolTokens))
-	}
-	if !slices.Equal(sourceStructure.fencedDirectiveTokens, translatedStructure.fencedDirectiveTokens) {
-		return fmt.Errorf("fenced directive mismatch: source=%d translated=%d", len(sourceStructure.fencedDirectiveTokens), len(translatedStructure.fencedDirectiveTokens))
-	}
-	if !sameStringMultiset(sourceStructure.linkDestinations, translatedStructure.linkDestinations) {
-		return fmt.Errorf("link destination mismatch: source=%d translated=%d", len(sourceStructure.linkDestinations), len(translatedStructure.linkDestinations))
-	}
-	if !sameStringMultiset(sourceStructure.protectedLinkLabels, translatedStructure.protectedLinkLabels) {
-		return fmt.Errorf("protected link label mismatch: source=%d translated=%d", len(sourceStructure.protectedLinkLabels), len(translatedStructure.protectedLinkLabels))
-	}
-	if !sameStringMultiset(sourceStructure.numericValues, translatedStructure.numericValues) {
-		return fmt.Errorf("numeric value mismatch: source=%d translated=%d", len(sourceStructure.numericValues), len(translatedStructure.numericValues))
-	}
-	return nil
+	return validateDocChunkLiterals(sourceStructure, translatedStructure)
 }
 
 func translateDocBlockGroup(ctx context.Context, translator docsTranslator, chunkID string, blocks []string, protectedPlaceholders []string, listPlaceholders map[string]string, srcLang, tgtLang string) (string, error) {
@@ -161,14 +134,7 @@ func translateDocBlockGroup(ctx context.Context, translator docsTranslator, chun
 		log.Printf("docs-i18n: rejected raw chunk %s input=%q output=%q err=%v", chunkID, normalizedSource, translated, err)
 	}
 	if err == nil {
-		translated = sanitizeDocChunkProtocolWrappers(source, translated)
-		translated = preserveDocChunkBoundaryWhitespace(normalizedSource, translated)
-		translated = reapplyCommonIndent(translated, commonIndent)
-		translated = normalizeMaskedListMarkerPlaceholders(translated, listPlaceholders)
-		translated = normalizeMaskedListMarkerSpacing(source, translated, listPlaceholders)
-		translated = escapeUnexpectedListItemBodyMarkers(source, translated, listPlaceholders)
-		translated = escapeUnexpectedMarkdownListMarkers(translated, listPlaceholders)
-		translated = unwrapUnexpectedInlineCodeSpans(source, translated)
+		translated = normalizeDocChunkTranslation(source, normalizedSource, translated, commonIndent, listPlaceholders)
 		if validationErr := validateDocChunkTranslation(source, translated); validationErr == nil {
 			log.Printf("docs-i18n: chunk done %s out_bytes=%d", chunkID, len(translated))
 			return translated, nil
@@ -182,7 +148,7 @@ func translateDocBlockGroup(ctx context.Context, translator docsTranslator, chun
 		} else if os.Getenv("OPENCLAW_DOCS_I18N_LOG_REJECTED_BODY") == "1" {
 			log.Printf("docs-i18n: chunk leaf-fallback failed %s err=%v", chunkID, fallbackErr)
 		}
-		if plan, ok := planSingletonDocChunkRetry(source, docsI18nDocChunkMaxBytes(), docsI18nDocChunkPromptBudget()); ok {
+		if plan, ok := planSingletonDocChunkWithMode(source, docsI18nDocChunkMaxBytes(), docsI18nDocChunkPromptBudget(), true); ok {
 			logDocChunkPlanSplit(chunkID, plan, source)
 			return translatePlannedDocChunkGroups(ctx, translator, chunkID, source, plan.groups, protectedPlaceholders, listPlaceholders, srcLang, tgtLang)
 		}
@@ -192,7 +158,7 @@ func translateDocBlockGroup(ctx context.Context, translator docsTranslator, chun
 		logDocChunkSplit(chunkID, len(blocks), err)
 		return translatePlannedDocChunkGroups(ctx, translator, chunkID, source, plan.groups, protectedPlaceholders, listPlaceholders, srcLang, tgtLang)
 	}
-	if plan, ok := splitDocChunkBlocksMidpointSimple(blocks); ok {
+	if plan, ok := splitDocChunkBlocksMidpoint(blocks, "retry-midpoint"); ok {
 		logDocChunkSplit(chunkID, len(blocks), err)
 		return translatePlannedDocChunkGroups(ctx, translator, chunkID, source, plan.groups, protectedPlaceholders, listPlaceholders, srcLang, tgtLang)
 	}
@@ -217,6 +183,15 @@ func translateDocLeafBlock(ctx context.Context, translator docsTranslator, chunk
 	if err != nil {
 		return "", err
 	}
+	translated = normalizeDocChunkTranslation(source, normalizedSource, translated, commonIndent, listPlaceholders)
+	if validationErr := validateDocChunkTranslation(source, translated); validationErr != nil {
+		return "", validationErr
+	}
+	log.Printf("docs-i18n: chunk leaf-fallback done %s out_bytes=%d", chunkID, len(translated))
+	return translated, nil
+}
+
+func normalizeDocChunkTranslation(source, normalizedSource, translated, commonIndent string, listPlaceholders map[string]string) string {
 	translated = sanitizeDocChunkProtocolWrappers(source, translated)
 	translated = preserveDocChunkBoundaryWhitespace(normalizedSource, translated)
 	translated = reapplyCommonIndent(translated, commonIndent)
@@ -225,11 +200,7 @@ func translateDocLeafBlock(ctx context.Context, translator docsTranslator, chunk
 	translated = escapeUnexpectedListItemBodyMarkers(source, translated, listPlaceholders)
 	translated = escapeUnexpectedMarkdownListMarkers(translated, listPlaceholders)
 	translated = unwrapUnexpectedInlineCodeSpans(source, translated)
-	if validationErr := validateDocChunkTranslation(source, translated); validationErr != nil {
-		return "", validationErr
-	}
-	log.Printf("docs-i18n: chunk leaf-fallback done %s out_bytes=%d", chunkID, len(translated))
-	return translated, nil
+	return translated
 }
 
 func splitDocBodyIntoBlocks(body string) []string {
@@ -324,6 +295,21 @@ func validateDocChunkTranslation(source, translated string) error {
 	if !slices.Equal(sourceStructure.headingLevels, translatedStructure.headingLevels) {
 		return fmt.Errorf("heading structure mismatch: source=%v translated=%v", sourceStructure.headingLevels, translatedStructure.headingLevels)
 	}
+	if err := validateDocChunkLiterals(sourceStructure, translatedStructure); err != nil {
+		return err
+	}
+	if !slices.Equal(sortedKeys(sourceStructure.tagCounts), sortedKeys(translatedStructure.tagCounts)) {
+		return fmt.Errorf("component tag set mismatch")
+	}
+	for _, key := range sortedKeys(sourceStructure.tagCounts) {
+		if sourceStructure.tagCounts[key] != translatedStructure.tagCounts[key] {
+			return fmt.Errorf("component tag mismatch for %s: source=%d translated=%d", key, sourceStructure.tagCounts[key], translatedStructure.tagCounts[key])
+		}
+	}
+	return nil
+}
+
+func validateDocChunkLiterals(sourceStructure, translatedStructure docChunkStructure) error {
 	if !slices.Equal(sourceStructure.listShapes, translatedStructure.listShapes) {
 		return fmt.Errorf("list structure mismatch: source=%v translated=%v", sourceStructure.listShapes, translatedStructure.listShapes)
 	}
@@ -350,14 +336,6 @@ func validateDocChunkTranslation(source, translated string) error {
 	}
 	if !sameStringMultiset(sourceStructure.numericValues, translatedStructure.numericValues) {
 		return fmt.Errorf("numeric value mismatch: source=%d translated=%d", len(sourceStructure.numericValues), len(translatedStructure.numericValues))
-	}
-	if !slices.Equal(sortedKeys(sourceStructure.tagCounts), sortedKeys(translatedStructure.tagCounts)) {
-		return fmt.Errorf("component tag set mismatch")
-	}
-	for _, key := range sortedKeys(sourceStructure.tagCounts) {
-		if sourceStructure.tagCounts[key] != translatedStructure.tagCounts[key] {
-			return fmt.Errorf("component tag mismatch for %s: source=%d translated=%d", key, sourceStructure.tagCounts[key], translatedStructure.tagCounts[key])
-		}
 	}
 	return nil
 }
@@ -410,29 +388,9 @@ func sanitizeDocChunkProtocolWrappers(source, translated string) string {
 }
 
 func preserveDocChunkBoundaryWhitespace(source, translated string) string {
-	prefixEnd := 0
-	for prefixEnd < len(source) && isDocChunkBoundaryWhitespace(source[prefixEnd]) {
-		prefixEnd++
-	}
-	suffixStart := len(source)
-	for suffixStart > prefixEnd && isDocChunkBoundaryWhitespace(source[suffixStart-1]) {
-		suffixStart--
-	}
-
-	translatedStart := 0
-	for translatedStart < len(translated) && isDocChunkBoundaryWhitespace(translated[translatedStart]) {
-		translatedStart++
-	}
-	translatedEnd := len(translated)
-	for translatedEnd > translatedStart && isDocChunkBoundaryWhitespace(translated[translatedEnd-1]) {
-		translatedEnd--
-	}
-
-	return source[:prefixEnd] + translated[translatedStart:translatedEnd] + source[suffixStart:]
-}
-
-func isDocChunkBoundaryWhitespace(value byte) bool {
-	return value == ' ' || value == '\t' || value == '\r' || value == '\n'
+	prefix, _, suffix := splitWhitespace(source)
+	_, core, _ := splitWhitespace(translated)
+	return prefix + core + suffix
 }
 
 func stripBodyOnlyWrapper(source, text string) (string, bool) {
@@ -506,13 +464,14 @@ func logDocChunkPlanSplit(chunkID string, plan docChunkSplitPlan, source string)
 
 func summarizeDocChunkStructure(text string) docChunkStructure {
 	counts := map[string]int{}
+	fenceCount := 0
 	lines := strings.Split(text, "\n")
 	fenceDelimiter := ""
 	for _, line := range lines {
 		var toggled bool
 		fenceDelimiter, toggled = updateFenceDelimiter(fenceDelimiter, line)
 		if toggled {
-			counts["__fence_toggle__"]++
+			fenceCount++
 		}
 		for _, match := range docsComponentTagRE.FindAllStringSubmatch(line, -1) {
 			if len(match) < 3 {
@@ -532,8 +491,8 @@ func summarizeDocChunkStructure(text string) docChunkStructure {
 	}
 	fencedPlaceholders, fencedProtocolTokens, fencedDirectiveTokens := extractMarkdownFencedLiteralValues(text)
 	return docChunkStructure{
-		fenceCount:            counts["__fence_toggle__"],
-		tagCounts:             countsWithoutFence(counts),
+		fenceCount:            fenceCount,
+		tagCounts:             counts,
 		headingLevels:         extractMarkdownHeadingLevels(text),
 		listShapes:            extractMarkdownListShapes(text),
 		listMarkerPrefixes:    extractMarkdownListMarkerPrefixes(text),
@@ -673,17 +632,6 @@ func nonemptyPathParts(value string) []string {
 
 func parseDocsMarkdown(source []byte) ast.Node {
 	return goldmark.New(goldmark.WithExtensions(extension.GFM, extension.Footnote)).Parser().Parse(textpkg.NewReader(source))
-}
-
-func countsWithoutFence(counts map[string]int) map[string]int {
-	filtered := map[string]int{}
-	for key, value := range counts {
-		if key == "__fence_toggle__" {
-			continue
-		}
-		filtered[key] = value
-	}
-	return filtered
 }
 
 func sortedKeys(counts map[string]int) []string {
@@ -842,7 +790,7 @@ func planDocChunkSplit(blocks []string, maxBytes, promptBudget int) (docChunkSpl
 	normalizedSource, _ := stripCommonIndent(source)
 	estimatedPromptCost := estimateDocPromptCost(normalizedSource)
 	if len(blocks) > 1 && promptBudget > 0 && estimatedPromptCost > promptBudget {
-		return splitDocChunkBlocksMidpoint(blocks, estimatedPromptCost, promptBudget)
+		return splitDocChunkBlocksMidpoint(blocks, fmt.Sprintf("prompt-budget:%d>%d", estimatedPromptCost, promptBudget))
 	}
 	if len(blocks) == 1 {
 		return planSingletonDocChunk(blocks[0], maxBytes, promptBudget)
@@ -850,32 +798,12 @@ func planDocChunkSplit(blocks []string, maxBytes, promptBudget int) (docChunkSpl
 	return docChunkSplitPlan{}, false
 }
 
-func splitDocChunkBlocksMidpoint(blocks []string, estimatedPromptCost, promptBudget int) (docChunkSplitPlan, bool) {
+func splitDocChunkBlocksMidpoint(blocks []string, reason string) (docChunkSplitPlan, bool) {
 	if len(blocks) <= 1 {
 		return docChunkSplitPlan{}, false
 	}
 	mid := len(blocks) / 2
-	if mid <= 0 || mid >= len(blocks) {
-		return docChunkSplitPlan{}, false
-	}
-	return docChunkSplitPlan{
-		groups: [][]string{blocks[:mid], blocks[mid:]},
-		reason: fmt.Sprintf("prompt-budget:%d>%d", estimatedPromptCost, promptBudget),
-	}, true
-}
-
-func splitDocChunkBlocksMidpointSimple(blocks []string) (docChunkSplitPlan, bool) {
-	if len(blocks) <= 1 {
-		return docChunkSplitPlan{}, false
-	}
-	mid := len(blocks) / 2
-	if mid <= 0 || mid >= len(blocks) {
-		return docChunkSplitPlan{}, false
-	}
-	return docChunkSplitPlan{
-		groups: [][]string{blocks[:mid], blocks[mid:]},
-		reason: "retry-midpoint",
-	}, true
+	return docChunkSplitPlan{groups: [][]string{blocks[:mid], blocks[mid:]}, reason: reason}, true
 }
 
 func planSingletonDocChunk(block string, maxBytes, promptBudget int) (docChunkSplitPlan, bool) {
@@ -890,43 +818,31 @@ func planSingletonDocChunk(block string, maxBytes, promptBudget int) (docChunkSp
 	return planSingletonDocChunkWithMode(block, maxBytes, promptBudget, false)
 }
 
-func planSingletonDocChunkRetry(block string, maxBytes, promptBudget int) (docChunkSplitPlan, bool) {
-	return planSingletonDocChunkWithMode(block, maxBytes, promptBudget, true)
-}
-
 func planSingletonDocChunkWithMode(block string, maxBytes, promptBudget int, force bool) (docChunkSplitPlan, bool) {
+	prefix := "singleton-"
+	if force {
+		prefix = "singleton-retry-"
+	}
 	if sections := splitDocBlockSections(block); len(sections) > 1 {
 		if groups := wrapDocChunkSections(sections); len(groups) > 1 {
-			reason := "singleton-structural"
-			if force {
-				reason = "singleton-retry-structural"
-			}
 			return docChunkSplitPlan{
 				groups: groups,
-				reason: reason,
+				reason: prefix + "structural",
 			}, true
 		}
 	}
 
 	if groups, ok := splitPureFencedDocSectionWithMode(block, maxBytes, promptBudget, force); ok {
-		reason := "singleton-fence"
-		if force {
-			reason = "singleton-retry-fence"
-		}
 		return docChunkSplitPlan{
 			groups: groups,
-			reason: reason,
+			reason: prefix + "fence",
 		}, true
 	}
 
 	if groups, ok := splitPlainDocSectionWithMode(block, maxBytes, promptBudget, force); ok {
-		reason := "singleton-lines"
-		if force {
-			reason = "singleton-retry-lines"
-		}
 		return docChunkSplitPlan{
 			groups: groups,
-			reason: reason,
+			reason: prefix + "lines",
 		}, true
 	}
 
@@ -946,9 +862,6 @@ func wrapDocChunkSections(sections []string) [][]string {
 
 func splitDocBlockSections(block string) []string {
 	lines := strings.SplitAfter(block, "\n")
-	if len(lines) == 0 {
-		return nil
-	}
 	sections := make([]string, 0, len(lines))
 	var current strings.Builder
 	fenceDelimiter := ""
@@ -1051,9 +964,6 @@ func splitPlainDocSectionMidpoint(lines []string) ([][]string, bool) {
 		return nil, false
 	}
 	mid := len(lines) / 2
-	if mid <= 0 || mid >= len(lines) {
-		return nil, false
-	}
 	left := strings.Join(lines[:mid], "")
 	right := strings.Join(lines[mid:], "")
 	if strings.TrimSpace(left) == "" || strings.TrimSpace(right) == "" {
@@ -1126,7 +1036,7 @@ func stripCommonIndent(text string) (string, string) {
 		if strings.TrimSpace(trimmed) == "" {
 			continue
 		}
-		indent := leadingIndent(trimmed)
+		indent := leadingWhitespace(trimmed)
 		if common == "" {
 			common = indent
 		} else {
@@ -1173,22 +1083,8 @@ func reapplyCommonIndent(text, indent string) string {
 	return out.String()
 }
 
-func leadingIndent(line string) string {
-	index := 0
-	for index < len(line) {
-		if line[index] != ' ' && line[index] != '\t' {
-			break
-		}
-		index++
-	}
-	return line[:index]
-}
-
 func commonIndentPrefix(a, b string) string {
-	limit := len(a)
-	if len(b) < limit {
-		limit = len(b)
-	}
+	limit := min(len(a), len(b))
 	index := 0
 	for index < limit && a[index] == b[index] {
 		index++

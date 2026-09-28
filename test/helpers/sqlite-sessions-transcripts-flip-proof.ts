@@ -38,7 +38,10 @@ import {
 } from "../../src/state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../src/state/openclaw-state-db.js";
 import { sleep } from "../../src/utils.js";
-import { createOpenClawTestInstance } from "./openclaw-test-instance.js";
+import {
+  createOpenClawTestInstance,
+  GatewayStartupRefusedError,
+} from "./openclaw-test-instance.js";
 import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
 import { stopChildProcess } from "./stop-child-process.js";
 
@@ -858,15 +861,17 @@ async function requireLegacyStartupRefusal(inst: OpenClawTestInstance, context: 
   let message = "";
   for (const attempt of [1, 2]) {
     message = "";
+    let refusal: unknown;
     try {
       await inst.startGateway();
     } catch (error) {
+      refusal = error;
       message = error instanceof Error ? error.message : String(error);
     }
     if (
-      !message.startsWith("gateway exited before readiness (code=78 signal=null)") ||
-      !message.includes(`Legacy sessions store unreadable; left in place at ${legacyStorePath}`) ||
-      !message.includes('Run "openclaw doctor --fix"')
+      !(refusal instanceof GatewayStartupRefusedError) ||
+      refusal.reason !== "legacy-migration-required" ||
+      refusal.legacyStorePath !== legacyStorePath
     ) {
       throw new Error(
         `expected legacy session migration refusal on startup ${attempt}, got: ${message || "ready Gateway"}`,

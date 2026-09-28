@@ -10,7 +10,7 @@ import { runNodesCommand } from "./cli-utils.js";
 import {
   callNodesGatewayCli,
   nodesCallOpts,
-  parseOptionalNodePositiveInteger,
+  parseOptionalNodeInteger,
   resolveCliNodeId,
 } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
@@ -49,10 +49,7 @@ export function registerNodesInvokeCommands(nodes: Command) {
             );
           }
           const params = parseNodeInvokeParams(opts.params);
-          const timeoutMs = parseOptionalNodePositiveInteger(
-            opts.invokeTimeout,
-            "--invoke-timeout",
-          );
+          const timeoutMs = parseOptionalNodeInteger(opts.invokeTimeout, "--invoke-timeout");
           if (opts.idempotencyKey === "") {
             throw new Error("--idempotency-key must not be empty.");
           }

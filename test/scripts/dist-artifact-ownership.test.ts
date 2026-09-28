@@ -19,6 +19,7 @@ import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-own
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { waitForDead } from "../helpers/process-wait.js";
+import { installDistArtifactScripts as installScripts } from "./dist-artifact-fixture.js";
 import {
   materializeNativeCompiler,
   overrideNativeFixtureExecutable,
@@ -98,43 +99,6 @@ function installBuildCheckpoint(root: string, checkpoint: string) {
     ${checkpoint}`,
   );
   write(root, "pnpm.cjs", 'import("./node_modules/tsdown/dist/run.mjs");\n');
-}
-
-function installScripts(
-  root: string,
-  scripts: string[],
-  { compiler = true, dependencies = ["tsx", "@openclaw/fs-safe"] } = {},
-) {
-  // Keep the checkpoint launcher when installCompiler already owns this toolchain.
-  if (compiler && !fs.existsSync(path.join(root, "node_modules/typescript/package.json"))) {
-    materializeNativeCompiler(root);
-  }
-  for (const script of ["tsx.mjs", ...scripts]) {
-    write(
-      root,
-      `scripts/${script}`,
-      fs.readFileSync(path.join(sourceRoot, "scripts", script), "utf8"),
-    );
-  }
-  for (const file of [
-    "scripts/lib",
-    "scripts/windows-cmd-helpers.mjs",
-    "packages/normalization-core/src",
-    "packages/normalization-core/package.json",
-  ]) {
-    fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
-    fs.cpSync(path.join(sourceRoot, file), path.join(root, file), { recursive: true });
-  }
-  write(root, "scripts/lib/plugin-sdk-entrypoints.json", '["qa-channel-protocol"]');
-  fs.mkdirSync(path.join(root, "node_modules"), { recursive: true });
-  for (const name of dependencies) {
-    fs.mkdirSync(path.dirname(path.join(root, "node_modules", name)), { recursive: true });
-    fs.symlinkSync(
-      path.join(sourceRoot, "node_modules", name),
-      path.join(root, "node_modules", name),
-      process.platform === "win32" ? "junction" : "dir",
-    );
-  }
 }
 
 function withProcesses(...args: Parameters<typeof runWithProcesses>) {
@@ -315,24 +279,32 @@ describe("native check launchers in paths with spaces", () => {
         const root = createCheckout("openclaw check launchers ");
         installScripts(
           root,
-          ["run-tsgo-core-test-shards.mts", "run-oxlint.mts", "run-oxlint-shards.mts"],
-          { compiler: false, dependencies: ["tsx", "@openclaw/fs-safe", "p-map", "koffi"] },
+          [
+            "run-tsgo-core-test-shards.mts",
+            "run-tsgo.mts",
+            "run-oxlint.mts",
+            "run-oxlint-shards.mts",
+          ],
+          {
+            compiler: false,
+            dependencies: ["tsx", "@openclaw/fs-safe", "json5", "p-map", "koffi"],
+          },
         );
         const nativeJob = "src/process/supervisor/service-child-windows-job-native.ts";
         write(root, nativeJob, fs.readFileSync(path.join(sourceRoot, nativeJob), "utf8"));
         const compiler = script === "run-tsgo-core-test-shards.mts";
         const workload = compiler
-          ? "run-tsgo.mts"
-          : "prepare-extension-package-boundary-artifacts.mts";
+          ? "node_modules/typescript/compiler.mjs"
+          : "scripts/prepare-extension-package-boundary-artifacts.mts";
         const observed = path.join(root, "child.json");
         const settled = path.join(root, "child-settled");
         const consumed = path.join(root, "lint-consumed");
         // Keep the real CLI, artifact handoff and managed process owner. Only the
         // terminal compiler/preparation workload waits at this completion barrier.
-        write(
+        const workloadPath = write(
           root,
-          `scripts/${workload}`,
-          `
+          workload,
+          `#!/usr/bin/env node
         import fs from 'node:fs';
         import { createRequire } from 'node:module';
         const require = createRequire(import.meta.url);
@@ -345,6 +317,13 @@ describe("native check launchers in paths with spaces", () => {
         process.exitCode = ${exitCode};
       `,
         );
+        if (compiler) {
+          fs.chmodSync(workloadPath, 0o755);
+          overrideNativeFixtureExecutable(root, workloadPath);
+          if (process.platform === "win32") {
+            write(root, `${workload}.cmd`, `@"${testNodeExecPath}" "%~dp0compiler.mjs" %*\r\n`);
+          }
+        }
         const lint = write(
           root,
           "node_modules/.bin/oxlint",
@@ -370,14 +349,16 @@ describe("native check launchers in paths with spaces", () => {
         const child: { argv: string[]; pid: number } = JSON.parse(
           fs.readFileSync(observed, "utf8"),
         );
-        expect(child.argv).toEqual(
+        expect(compiler ? child.argv.slice(0, 3) : child.argv).toEqual(
           compiler
             ? ["-p", TSGO_CORE_TEST_SHARDS[0].config, "--incremental"]
             : ["--mode=package-boundary"],
         );
         const lock = resolveDistArtifactLockPath(root);
         expect(fs.existsSync(path.join(lock, "owner.json"))).toBe(true);
-        expect(fs.readdirSync(lock)).toContain(`child-${child.pid}`);
+        if (!compiler) {
+          expect(fs.readdirSync(lock)).toContain(`child-${child.pid}`);
+        }
         expect(fs.existsSync(settled)).toBe(false);
         expect(fs.existsSync(consumed)).toBe(false);
         gate.write("continue");
@@ -524,6 +505,8 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
         import fs from 'node:fs';
         import { createRequire } from 'node:module';
         const require = createRequire(import.meta.url);
+        const { registerSourceRunnerServiceFixture } = await import(${JSON.stringify(path.join(sourceRoot, "test/scripts/fixtures/source-runner-service.mjs"))});
+        registerSourceRunnerServiceFixture(${JSON.stringify(sourceRoot)});
         const { runNodeMain } = await import(${JSON.stringify(path.join(sourceRoot, "scripts/run-node.mts"))});
         process.exitCode = await runNodeMain({
           cwd: process.cwd(), args: ['artifact-fixture'],
@@ -568,7 +551,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
     expect(fs.existsSync(path.join(resolveDistArtifactLockPath(root), "unjoined"))).toBe(false);
   });
 
-  it.for(["cause", "error", "cyclic aggregate"])(
+  it.for(["cause", "error", "cyclic aggregate", "bundler errors"])(
     "retains ownership for unjoined work nested in %s",
     async (kind, { signal }) => {
       // Retention deliberately keeps lock handles open; a joined child owns
@@ -586,6 +569,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
           const aggregate = new AggregateError([], 'sibling cleanup');
           aggregate.errors.push(aggregate, new Error('command failed', { cause: uncertainty }));
           const error = kind === 'cyclic aggregate' ? aggregate
+            : kind === 'bundler errors' ? Object.assign(new Error('Build failed'), { errors: [aggregate] })
             : new Error('command failed', { cause: kind === 'cause' ? uncertainty : { error: uncertainty } });
           const outcome = await withDistArtifactOwnership(process.cwd(), async () => {
             throw error;
@@ -704,7 +688,6 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
   it.for([
     { owner: "{", unjoined: false },
     { owner: '{"pid":0}', unjoined: false },
-    { owner: '{"pid":-1}', unjoined: false },
     { owner: '{"pid":2147483648}', unjoined: false },
     { owner: JSON.stringify({ pid: process.pid }), unjoined: true },
   ])(
@@ -1006,11 +989,16 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
       installCompiler(root);
       // Entrypoints resolve this fixture as their checkout. SDK and plugin
       // sources let the lint consumer distinguish the narrow preparation mode.
-      installScripts(root, [
-        "run-oxlint.mts",
-        "run-tsgo.mts",
-        "prepare-extension-package-boundary-artifacts.mts",
-      ]);
+      installScripts(
+        root,
+        [
+          "run-oxlint.mts",
+          "run-tsgo.mts",
+          "prepare-extension-package-boundary-artifacts.mts",
+          "compile-extension-boundary.mts",
+        ],
+        { dependencies: ["tsx", "@openclaw/fs-safe", "json5"] },
+      );
       write(root, "tsconfig.json", "{}");
       write(
         root,

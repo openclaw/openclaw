@@ -139,6 +139,7 @@ export function projectWorkerSessionPlacement(
   identity?: WorkerPlacementIdentity,
   failedRecoveryAction?: "restart" | "stop-first",
   workspaceResultReconciling = false,
+  retryOnSend = false,
 ): SessionPlacement {
   const timing = {
     generation: record.generation,
@@ -155,9 +156,8 @@ export function projectWorkerSessionPlacement(
   };
   switch (record.state) {
     case "local":
-      return { state: "local", ...timing };
     case "requested":
-      return { state: "requested", ...timing };
+      return { state: record.state, ...timing };
     case "provisioning":
       return {
         state: "provisioning",
@@ -234,6 +234,7 @@ export function projectWorkerSessionPlacement(
             ...retained,
             recoveryError: record.recoveryError,
             ...(failedRecoveryAction ? { recoveryAction: failedRecoveryAction } : {}),
+            ...(retryOnSend ? { retryOnSend: true as const } : {}),
             ...terminal,
           }
         : { state: "reclaimed", ...retained, ...terminal };

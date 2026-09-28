@@ -16,7 +16,7 @@ import {
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import type { OperatorScope } from "../operator-scopes.js";
@@ -95,7 +95,7 @@ async function withHostedQuestion(
     context.resolveGatewayContext = () => context;
     const source = new AbortController();
     const captured = expectDefined(
-      captureGatewayOperatorRunAuthority({
+      await captureGatewayOperatorRunAuthority({
         client: browser,
         context,
         sourceAuthority: {
@@ -293,7 +293,7 @@ it("does not create a hosted question on another person's shared session", async
 it("does not register another hosted question after the original operator source closes", async () => {
   await withHostedQuestion(async (fixture) => {
     fixture.revoke();
-    await expect(fixture.ask()).rejects.toThrow("operator execution authority is no longer active");
+    await expect(fixture.ask()).rejects.toThrow("original question source revoked");
     expect(fixture.request).not.toHaveBeenCalled();
     expect(fixture.manager.list()).toEqual([]);
   });

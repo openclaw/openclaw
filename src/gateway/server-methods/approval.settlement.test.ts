@@ -11,6 +11,7 @@ import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { invalidateGatewayDeviceRevocation } from "../device-revocation.js";
 import { ApprovalMutationRefusedError } from "../exec-approval-authority.js";
@@ -137,10 +138,12 @@ it.each(["resolve", "deny"] as const)(
     const databaseOptions = { env: state.env };
     const persistence = { runtimeEpoch: "aggregate-refusal", databaseOptions };
     const exec = new ExecApprovalManager<ExecApprovalRequestPayload>({
+      scheduler: createTestGatewayScheduler(),
       persistence,
       resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
     });
     const plugin = new ExecApprovalManager<PluginApprovalRequestPayload>({
+      scheduler: createTestGatewayScheduler(),
       approvalKind: "plugin",
       persistence,
     });
@@ -171,18 +174,19 @@ it.each(["resolve", "deny"] as const)(
     });
     let transactions = 0;
     const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation((admit) =>
-      createAdmission((request, grant) => {
-        if (request.stage === "transaction") {
-          transactions += 1;
-          if (transactions === 1) {
-            connection.abort();
+    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
+      (admit, attachment) =>
+        createAdmission((request, grant) => {
+          if (request.stage === "transaction") {
+            transactions += 1;
+            if (transactions === 1) {
+              connection.abort();
+            }
+          } else if (request.stage === "commit" && transactions === 2) {
+            invalidateGatewayDeviceRevocation(invocation.context, "aggregate-reviewer", "operator");
           }
-        } else if (request.stage === "commit" && transactions === 2) {
-          invalidateGatewayDeviceRevocation(invocation.context, "aggregate-reviewer", "operator");
-        }
-        return admit(request, grant);
-      }),
+          return admit(request, grant);
+        }, attachment),
     );
     resultDelivery.wrapRefusal = true;
     try {
@@ -206,8 +210,9 @@ it.each([false, true])(
     const databaseOptions = { env: state.env };
     const databasePath = resolveOpenClawStateSqlitePath(state.env);
     const persistence = { runtimeEpoch: "missing-owner", databaseOptions };
-    const exec = new ExecApprovalManager({ persistence });
+    const exec = new ExecApprovalManager({ persistence, scheduler: createTestGatewayScheduler() });
     const plugin = new ExecApprovalManager<PluginApprovalRequestPayload>({
+      scheduler: createTestGatewayScheduler(),
       approvalKind: "plugin",
       persistence,
     });
@@ -268,6 +273,7 @@ it.each(["resolve", "deny", "cancel", "expire"] as const)(
     const databasePath = resolveOpenClawStateSqlitePath(state.env);
     const onLifecycle = vi.fn();
     const manager = new ExecApprovalManager({
+      scheduler: createTestGatewayScheduler(),
       persistence: { runtimeEpoch: "retry-owner", databaseOptions },
       onLifecycle,
     });
@@ -344,8 +350,13 @@ it.each(["worker", "native", "missing-receipt"] as const)(
     const databaseOptions = { env: state.env };
     const persistence = { runtimeEpoch: "receipt-custody", databaseOptions };
     const onLifecycle = vi.fn();
-    const manager = new ExecApprovalManager({ persistence, onLifecycle });
+    const manager = new ExecApprovalManager({
+      persistence,
+      onLifecycle,
+      scheduler: createTestGatewayScheduler(),
+    });
     const plugin = new ExecApprovalManager<PluginApprovalRequestPayload>({
+      scheduler: createTestGatewayScheduler(),
       approvalKind: "plugin",
       persistence,
     });
@@ -442,8 +453,13 @@ it.each([
   const databaseOptions = { env: state.env };
   const persistence = { runtimeEpoch: "competing-review-custody", databaseOptions };
   const onLifecycle = vi.fn();
-  const exec = new ExecApprovalManager({ persistence, onLifecycle });
+  const exec = new ExecApprovalManager({
+    persistence,
+    onLifecycle,
+    scheduler: createTestGatewayScheduler(),
+  });
   const plugin = new ExecApprovalManager<PluginApprovalRequestPayload>({
+    scheduler: createTestGatewayScheduler(),
     approvalKind: "plugin",
     persistence,
   });
@@ -518,6 +534,7 @@ it.each(["before-readback", "before-local-settlement"] as const)(
     const databasePath = resolveOpenClawStateSqlitePath(state.env);
     const onLifecycle = vi.fn();
     const manager = new ExecApprovalManager({
+      scheduler: createTestGatewayScheduler(),
       persistence: { runtimeEpoch: "replacement-custody", databaseOptions },
       onLifecycle,
     });
@@ -594,11 +611,13 @@ it.each(
     const persistence = { runtimeEpoch: "lost-reply-test", databaseOptions };
     const onLifecycle = vi.fn();
     const exec = new ExecApprovalManager<ExecApprovalRequestPayload>({
+      scheduler: createTestGatewayScheduler(),
       persistence,
       resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
       onLifecycle,
     });
     const plugin = new ExecApprovalManager<PluginApprovalRequestPayload>({
+      scheduler: createTestGatewayScheduler(),
       approvalKind: "plugin",
       persistence,
     });
@@ -687,11 +706,13 @@ it.each([
   };
   const onLifecycle = vi.fn();
   const exec = new ExecApprovalManager<ExecApprovalRequestPayload>({
+    scheduler: createTestGatewayScheduler(),
     persistence,
     resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
     onLifecycle,
   });
   const plugin = new ExecApprovalManager<PluginApprovalRequestPayload>({
+    scheduler: createTestGatewayScheduler(),
     approvalKind: "plugin",
     persistence,
   });
@@ -779,10 +800,12 @@ it.each([false, true])(
     const databaseOptions = { env: state.env };
     const persistence = { runtimeEpoch: "no-route-recovery", databaseOptions };
     const exec = new ExecApprovalManager<ExecApprovalRequestPayload>({
+      scheduler: createTestGatewayScheduler(),
       persistence,
       resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
     });
     const plugin = new ExecApprovalManager<PluginApprovalRequestPayload>({
+      scheduler: createTestGatewayScheduler(),
       approvalKind: "plugin",
       persistence,
     });

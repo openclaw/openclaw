@@ -1,4 +1,3 @@
-// Control UI chat module implements chat avatar behavior.
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import { isReservedSystemAgentId } from "../../../../src/system-agent/agent-id.js";
@@ -232,7 +231,7 @@ function readHelloDefaultAgentId(host: Pick<ChatAvatarHost, "hello">): string | 
 
 export function resolveAgentIdForSession(
   host: Pick<ChatAvatarHost, "sessionKey" | "assistantAgentId" | "agentsList" | "hello">,
-): string | null {
+): string {
   const parsed = parseAgentSessionKey(host.sessionKey);
   if (parsed?.agentId) {
     return parsed.agentId;
@@ -244,9 +243,8 @@ export function resolveAgentIdForSession(
 }
 
 function beginChatAvatarRequest(host: ChatAvatarHost): number {
-  const key = host as object;
-  const nextVersion = (chatAvatarRequestVersions.get(key) ?? 0) + 1;
-  chatAvatarRequestVersions.set(key, nextVersion);
+  const nextVersion = (chatAvatarRequestVersions.get(host) ?? 0) + 1;
+  chatAvatarRequestVersions.set(host, nextVersion);
   return nextVersion;
 }
 
@@ -254,10 +252,10 @@ function shouldApplyChatAvatarResult(
   host: ChatAvatarHost,
   version: number,
   sessionKey: string,
-  agentId: string | null,
+  agentId: string,
 ): boolean {
   return (
-    chatAvatarRequestVersions.get(host as object) === version &&
+    chatAvatarRequestVersions.get(host) === version &&
     host.sessionKey === sessionKey &&
     resolveAgentIdForSession(host) === agentId
   );
@@ -282,7 +280,7 @@ function applyChatAvatarSnapshot(
   host.chatAvatarStatus = snapshot.status;
   host.chatAvatarReason = snapshot.reason;
   host.chatAvatarUrl = snapshot.url;
-  chatAvatarDisplayedAgents.set(host as object, agentId);
+  chatAvatarDisplayedAgents.set(host, agentId);
 }
 
 function rememberChatAvatarReference(
@@ -461,10 +459,6 @@ export async function refreshChatAvatar(host: ChatAvatarHost) {
   const epoch = host.connectionEpoch;
   const requestVersion = beginChatAvatarRequest(host);
   const agentId = resolveAgentIdForSession(host);
-  if (!agentId) {
-    clearChatAvatarState(host);
-    return;
-  }
   const showingSameAgent = chatAvatarDisplayedAgents.get(host) === agentId;
   if (!showingSameAgent) {
     clearChatAvatarState(host);

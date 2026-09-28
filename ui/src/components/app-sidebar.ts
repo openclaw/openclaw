@@ -11,30 +11,28 @@ import { serializeSidebarEntry } from "../app-navigation.ts";
 import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { t } from "../i18n/index.ts";
+import { createIdleImport } from "../lib/idle-import.ts";
 import "./session-menu.ts";
 import "./sidebar-agent-card.ts";
 import "./sidebar-attention.ts";
-import { createIdleImport } from "../lib/idle-import.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
-import "./theme-mode-toggle.ts";
-import "./tooltip.ts";
 import {
   buildCatalogSessionKey,
   catalogSessionKeyFromSearch,
-  type CatalogSessionKey,
 } from "../lib/sessions/catalog-key.ts";
+import "./theme-mode-toggle.ts";
+import "./tooltip.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import { showToast } from "../lib/toast.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { SETTINGS_ROUTE_TARGETS } from "../pages/config/route-data.ts";
-import "../plugins/control-ui-contributions.ts";
 import { renderPluginSurface } from "../plugins/control-ui-view.ts";
+import { renderAppSidebarOnline } from "./app-sidebar-online.ts";
 import "../styles/app-sidebar.css";
 import {
   renderAppSidebarBrand,
   renderAppSidebarFooterBar,
   renderAppSidebarHomeRow,
-  renderAppSidebarOnline,
   renderAppSidebarPagesHead,
   renderAppSidebarZoneEntry,
 } from "./app-sidebar-render.ts";
@@ -80,6 +78,8 @@ import { SidebarPeopleController } from "./sidebar-people-controller.ts";
 
 class AppSidebar extends AppSidebarSessionNavigationElement implements SessionListHost {
   @state() teamOnlineExpanded = false;
+  @state() onlineRunningOnly = false;
+  @state() onlineSessionSort: "presence" | "open" | "running" = "presence";
   @state() override sidebarNarrationLines: ReadonlyMap<string, string> = new Map();
   @state() override sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest> = new Map();
 
@@ -142,7 +142,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   private projectedSessionCatalogs: SidebarSessionCatalog[] = [];
   private projectedSessionSections: SidebarVisibleSections = {
     sections: [],
-    expandedRows: [],
     visibleRows: [],
   };
   private readonly subscriptions = new SubscriptionsController(this)
@@ -389,16 +388,14 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     requestAnimationFrame(() => requestAnimationFrame(() => this.classList.add("sidebar-r")));
   }
 
-  startSessionDrag(session: SidebarRecentSession): void {
-    this.sessionOrganizer.startSessionDrag(session);
-  }
-
-  finishSessionDrag(): void {
-    this.sessionOrganizer.finishSessionDrag();
-  }
-
   toggleSessionPin(session: SidebarRecentSession): void {
-    void this.sessionOrganizer.patchSession(session, { pinned: !session.pinned });
+    void this.sessionOrganizer.patchSession(
+      session,
+      { pinned: !session.pinned },
+      {
+        sessionScope: true,
+      },
+    );
   }
 
   toggleSessionMenu(
@@ -412,7 +409,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
         return;
       }
       const rect = trigger.getBoundingClientRect();
-      this.openCatalogMenu(catalogMenu, rect.right, rect.bottom + 4, trigger);
+      this.sidebarMenus.catalogMenu.open(catalogMenu, rect.right, rect.bottom + 4, trigger);
       return;
     }
     if (this.sidebarMenus.sessionMenu?.session.key === session.key) {
@@ -423,43 +420,11 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     this.sidebarMenus.openSessionMenu(session, rect.right, rect.bottom + 4, trigger);
   }
 
-  startSidebarSectionDrag(sectionId: string): void {
-    this.sessionOrganizer.startSidebarSectionDrag(sectionId);
-  }
-
-  finishSidebarSectionDrag(): void {
-    this.sessionOrganizer.finishSidebarSectionDrag();
-  }
-
-  sectionDragOver(event: DragEvent, sectionId: string, group?: string): void {
-    this.sessionOrganizer.sectionDragOver(event, sectionId, group);
-  }
-
-  sectionDragLeave(event: DragEvent, sectionId: string, group?: string): void {
-    this.sessionOrganizer.sectionDragLeave(event, sectionId, group);
-  }
-
-  sectionDrop(event: DragEvent, sectionId: string, group?: string): void {
-    this.sessionOrganizer.sectionDrop(event, sectionId, group);
-  }
-
   toggleSection(sectionId: string): void {
     if (!this.collapsedSessionSections.has(sectionId)) {
       this.sessionProjection.resetMembership(sectionId);
     }
     this.sessionOrganizer.toggleSection(sectionId);
-  }
-
-  handleSessionListDragOver(event: DragEvent): void {
-    this.sessionOrganizer.handleSessionListDragOver(event);
-  }
-
-  handleSessionListDragLeave(event: DragEvent): void {
-    this.sessionOrganizer.handleSessionListDragLeave(event);
-  }
-
-  handleSessionListDrop(event: DragEvent): void {
-    this.sessionOrganizer.handleSessionListDrop(event);
   }
 
   setVisibleSessionLimit(sectionId: string, limit: number): void {
@@ -477,14 +442,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     } else {
       this.sessionData.setVisibleSessionLimit(sectionId, limit);
     }
-  }
-
-  loadMoreSidebarSessions(): Promise<void> {
-    return this.sessionData.loadMoreSidebarSessions();
-  }
-
-  dismissSessionMutationError(): void {
-    this.sessionData.dismissSessionMutationError();
   }
 
   preloadCatalogRenderer() {
@@ -528,19 +485,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       onAction: () => setStoredSessionCatalogHidden(catalogId, false),
       durationMs: 12_000,
     });
-  }
-
-  openCatalogMenu(
-    request: CatalogSessionMenuRequest,
-    x: number,
-    y: number,
-    trigger?: HTMLElement,
-  ): void {
-    this.sidebarMenus.catalogMenu.open(request, x, y, trigger);
-  }
-
-  retargetCatalogMenuTrigger(key: CatalogSessionKey, element: Element | undefined): void {
-    this.sidebarMenus.catalogMenu.retargetTrigger(key, element);
   }
 
   renderPinnedSidebarSession(session: SidebarRecentSession): TemplateResult {

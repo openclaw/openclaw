@@ -387,10 +387,10 @@ PROVIDER_CREDENTIAL_PATH_ENV_KEYS = {
 }
 DEFAULT_MODEL_BY_ENGINE = {
     "amp": "openai/gpt-5.6-sol",
-    "codex": "gpt-5.6-sol",
+    "codex": "gpt-6-sol",
     "claude": "claude-fable-5",
 }
-DEFAULT_CODEX_ACCESS_FALLBACK_MODEL = "gpt-5.6-terra"
+DEFAULT_CODEX_ACCESS_FALLBACK_MODEL = "gpt-6-luna"
 AMP_THINKING_VALUES = frozenset({"none", "low", "medium", "high", "xhigh", "max"})
 DEFAULT_THINKING_BY_ENGINE = {
     "amp": "high",
@@ -6575,9 +6575,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model",
         action="append",
-        help="Model override or engine=model. Repeatable. Defaults: codex=gpt-5.6-sol with an access-only gpt-5.6-terra retry, claude=claude-fable-5, amp=openai/gpt-5.6-sol.",
+        help="Model override or engine=model. Repeatable. Defaults: codex=gpt-6-sol with an access-only gpt-6-luna retry, claude=claude-fable-5, amp=openai/gpt-5.6-sol.",
     )
-    parser.add_argument("--thinking", action="append", help="Thinking/effort override or engine=level. Repeatable. Codex: none, minimal, low, medium, high, xhigh, max; gpt-6-astra requires low through max. Claude: low, medium, high, xhigh, max. Amp: none, low, medium, high, xhigh, max. Pi: off, minimal, low, medium, high, xhigh. Kimi: off, on.")
+    parser.add_argument("--thinking", action="append", help="Thinking/effort override or engine=level. Repeatable. Codex: none, minimal, low, medium, high, xhigh, max; gpt-6-sol and gpt-6-luna exclude minimal; gpt-6-astra requires low through max. Claude: low, medium, high, xhigh, max. Amp: none, low, medium, high, xhigh, max. Pi: off, minimal, low, medium, high, xhigh. Kimi: off, on.")
     parser.add_argument(
         "--fallback-model",
         action="append",
@@ -6719,13 +6719,13 @@ def reviewer_args(args: argparse.Namespace) -> list[argparse.Namespace]:
         raise SystemExit("--codex-config is only supported for codex; no codex reviewer selected")
     if getattr(args, "codex_speed", None) and engine != "codex":
         raise SystemExit("--codex-speed is only supported for codex; no codex reviewer selected")
-    model = (
+    model_override = (
         model_by_engine.get(engine)
         or global_model
         or env_model_by_engine.get(engine)
         or env_global_model
-        or DEFAULT_MODEL_BY_ENGINE.get(engine)
     )
+    model = model_override or DEFAULT_MODEL_BY_ENGINE.get(engine)
     thinking = (
         thinking_by_engine.get(engine)
         or global_thinking
@@ -6742,12 +6742,15 @@ def reviewer_args(args: argparse.Namespace) -> list[argparse.Namespace]:
         )
     elif engine == "codex" and model == DEFAULT_MODEL_BY_ENGINE["codex"]:
         fallback_model = DEFAULT_CODEX_ACCESS_FALLBACK_MODEL
+    elif engine == "codex" and model == "gpt-5.6-sol":
+        # Keep the shipped retry contract for explicitly selected GPT-5.6 Sol.
+        fallback_model = "gpt-5.6-terra"
     else:
         fallback_model = None
     thinking_levels = THINKING_LEVELS_BY_ENGINE[engine]
     thinking_target = engine
-    if engine == "codex" and model == "gpt-6-astra":
-        thinking_levels = thinking_levels - {"none", "minimal"}
+    if engine == "codex" and model in {"gpt-6-astra", "gpt-6-sol", "gpt-6-luna"}:
+        thinking_levels = thinking_levels - ({"none", "minimal"} if model == "gpt-6-astra" else {"minimal"})
         thinking_target = f"{engine} model {model}"
     if thinking and thinking not in thinking_levels:
         valid = ", ".join(sorted(thinking_levels)) or "none"

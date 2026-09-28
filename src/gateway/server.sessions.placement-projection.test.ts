@@ -1,4 +1,6 @@
-import { expect, test, vi } from "vitest";
+import { createHash } from "node:crypto";
+import path from "node:path";
+import { afterEach, expect, test, vi } from "vitest";
 import type { EnvironmentSummary } from "../../packages/gateway-protocol/src/index.js";
 import { i18n } from "../../ui/src/i18n/index.ts";
 import { projectDevicePlacements } from "../../ui/src/pages/new-session/device-placement.ts";
@@ -6,20 +8,46 @@ import { readDraftEnvironments } from "../../ui/src/pages/new-session/discovery.
 import { listRegisteredAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
 import { restoreRegisteredAgentHarnesses } from "../agents/harness/registry.test-support.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { updateNodeRunnerInventory } from "./node-registry-private.js";
 import { NodeRegistry, type NodeSessionConnectParams } from "./node-registry.js";
 import { createOperatorWsClient } from "./server/ws-connection/authenticated-request-dispatch.test-support.js";
+import {
+  disposeSessionReadContexts,
+  trackSessionReadProjection,
+} from "./session-read-contexts.test-support.js";
+import { bindSessionRowProjection } from "./session-row-projection-access.js";
+import { createSessionRowProjection } from "./session-row-projection.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 import { writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
+  getGatewayConfigModule,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 import type { WorkerPlacementMoveIntent } from "./worker-environments/placement-move-intent.js";
 import type { WorkerSessionPlacementReader } from "./worker-environments/placement-projector.js";
-import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-store.js";
+import { placementTurnOwner } from "./worker-environments/placement-record.js";
+import {
+  createWorkerSessionPlacementStore,
+  type WorkerSessionPlacementRecord,
+} from "./worker-environments/placement-store.js";
+import {
+  advancePlacementFixtureToActive,
+  writePlacementEnvironmentFixture,
+} from "./worker-environments/placement-test-fixtures.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
+
+afterEach(async () => {
+  await disposeSessionReadContexts();
+  await closeStateDatabaseForTest();
+});
 
 test.each([
   { state: "invocable", disabledReason: undefined },
@@ -185,19 +213,52 @@ async function seedSessionRows(): Promise<void> {
   });
 }
 
-test("sessions.list omits placement when the worker placement service is disabled", async () => {
-  await seedSessionRows();
+function placementContext(
+  placement: WorkerSessionPlacementRecord,
+  environment?: {
+    environmentId?: string;
+    providerId: string;
+    profileId: string;
+    ownerEpoch: number;
+    state: "provisioning" | "destroyed" | "failed";
+    leaseId?: string;
+  },
+) {
+  return {
+    workerSessionPlacementService: {
+      getMany: () => new Map([[placement.sessionId, placement]]),
+    },
+    workerEnvironmentService: {
+      get: () => environment,
+      readMachineShape: () => undefined,
+      machineShapeVersion: () => 0,
+      inventoryVersion: () => 0,
+    },
+  };
+}
 
-  const result = await directSessionReq<{ sessions: GatewaySessionRow[] }>("sessions.list", {});
-
-  expect(result.ok).toBe(true);
-  expect(result.payload?.sessions).toHaveLength(2);
-  expect(result.payload?.sessions.every((session) => session.placement === undefined)).toBe(true);
-});
+function placementMove(
+  placement: Extract<WorkerSessionPlacementRecord, { state: "active" }>,
+  lastError: string | null,
+): WorkerPlacementMoveIntent {
+  return {
+    operationId: "move:v1:opaque",
+    sessionId: placement.sessionId,
+    source: {
+      generation: placement.generation,
+      environmentId: placement.environmentId,
+      ownerEpoch: placement.activeOwnerEpoch,
+    },
+    target: { kind: "gateway" },
+    abandonSource: false,
+    lastError,
+    createdAtMs: 320,
+    updatedAtMs: 340,
+  };
+}
 
 test.each([
   { name: "matching owner epoch", ownerEpoch: 12, expectedIdentity: true },
-  { name: "missing environment", ownerEpoch: undefined, expectedIdentity: false },
   { name: "mismatched owner epoch", ownerEpoch: 13, expectedIdentity: false },
 ])(
   "sessions.list retains durable worker placement for resident rows: $name",
@@ -275,78 +336,40 @@ test.each([
   },
 );
 
-test.each(["provisioning", "syncing", "starting"] as const)(
-  "sessions.describe preserves pre-epoch identity during %s",
-  async (state) => {
-    await seedSessionRows();
-    const starting = {
-      ...activePlacementRecord(),
-      state: "starting" as const,
-      activeOwnerEpoch: null,
-      turnClaim: null,
-      lastTranscriptAckCursor: null,
-      lastLiveEventAckCursor: null,
-    } satisfies WorkerSessionPlacementRecord;
-    const syncing = {
-      ...starting,
-      state: "syncing" as const,
-      workspaceBaseManifestRef: null,
-      remoteWorkspaceDir: null,
-    } satisfies WorkerSessionPlacementRecord;
-    const placement: WorkerSessionPlacementRecord =
-      state === "starting"
-        ? starting
-        : state === "syncing"
-          ? syncing
-          : { ...syncing, state, workerBundleHash: null };
-    const result = await directSessionReq<{ session: GatewaySessionRow | null }>(
-      "sessions.describe",
-      { key: "main" },
-      {
-        context: {
-          workerSessionPlacementService: {
-            getMany: () => new Map([[placement.sessionId, placement]]),
-          },
-          workerEnvironmentService: {
-            get: () => ({
-              providerId: "machine0",
-              profileId: "team",
-              ownerEpoch: 0,
-              state: "provisioning",
-            }),
-            readMachineShape: () => undefined,
-            machineShapeVersion: () => 0,
-            inventoryVersion: () => 0,
-          },
-        },
-      },
-    );
-    expect(result.ok).toBe(true);
-    expect(result.payload?.session?.placement).toMatchObject({
-      state,
-      providerId: "machine0",
-      profileId: "team",
-    });
-  },
-);
+test("sessions.describe preserves pre-epoch identity while starting", async () => {
+  await seedSessionRows();
+  const placement = {
+    ...activePlacementRecord(),
+    state: "starting" as const,
+    activeOwnerEpoch: null,
+    turnClaim: null,
+    lastTranscriptAckCursor: null,
+    lastLiveEventAckCursor: null,
+  } satisfies WorkerSessionPlacementRecord;
+  const result = await directSessionReq<{ session: GatewaySessionRow | null }>(
+    "sessions.describe",
+    { key: "main" },
+    {
+      context: placementContext(placement, {
+        providerId: "machine0",
+        profileId: "team",
+        ownerEpoch: 0,
+        state: "provisioning",
+      }),
+    },
+  );
+  expect(result.ok).toBe(true);
+  expect(result.payload?.session?.placement).toMatchObject({
+    state: "starting",
+    providerId: "machine0",
+    profileId: "team",
+  });
+});
 
 test("sessions.list projects durable placement move progress", async () => {
   await seedSessionRows();
   const placement = activePlacementRecord();
-  const move: WorkerPlacementMoveIntent = {
-    operationId: "move:v1:opaque",
-    sessionId: placement.sessionId,
-    source: {
-      generation: placement.generation,
-      environmentId: placement.environmentId,
-      ownerEpoch: placement.activeOwnerEpoch,
-    },
-    target: { kind: "gateway" },
-    abandonSource: false,
-    lastError: "workspace reconciliation is waiting",
-    createdAtMs: 320,
-    updatedAtMs: 340,
-  };
+  const move = placementMove(placement, "workspace reconciliation is waiting");
   const getMany = vi.fn<WorkerSessionPlacementReader["getMany"]>(
     () => new Map([[placement.sessionId, placement]]),
   );
@@ -373,75 +396,6 @@ test("sessions.list projects durable placement move progress", async () => {
   ).toEqual(["sess-main", "sess-other"]);
 });
 
-test("sessions.describe projects durable worker placement", async () => {
-  await seedSessionRows();
-  const placement = activePlacementRecord();
-  const getMany = vi.fn<WorkerSessionPlacementReader["getMany"]>((sessionIds) => {
-    return new Map(
-      sessionIds.includes(placement.sessionId) ? [[placement.sessionId, placement]] : [],
-    );
-  });
-  const diskSpace = {
-    status: "critical" as const,
-    availableBytes: 50,
-    totalBytes: 1_000,
-    observedAtMs: 350,
-  };
-  const context = {
-    workerSessionPlacementService: { getMany },
-    workerPlacementDiskSpaceReader: { read: () => diskSpace, version: () => 1 },
-    workerPlacementRunnerAvailabilityReader: {
-      read: () => ({ kind: "device", status: "offline" }),
-      version: () => 1,
-    },
-  };
-
-  const result = await directSessionReq<{ session: GatewaySessionRow | null }>(
-    "sessions.describe",
-    { key: "main" },
-    { context },
-  );
-
-  expect(result.ok).toBe(true);
-  expect(result.payload?.session?.placement).toEqual({
-    state: "active",
-    environmentId: "env-placement",
-    generation: 7,
-    activeOwnerEpoch: 12,
-    workspaceBaseManifestRef: "manifest-base",
-    remoteWorkspaceDir: "/workspace/main",
-    workerBundleHash: ["a", "b"].join("").repeat(32),
-    lastTranscriptAckCursor: 23,
-    lastLiveEventAckCursor: 9,
-    createdAtMs: 100,
-    updatedAtMs: 300,
-    stateChangedAtMs: 200,
-    diskSpace,
-    runner: { kind: "device", status: "offline" },
-  });
-
-  // The list joins sibling hydration before we inspect all placement reads.
-  const listed = await directSessionReq<{ sessions: GatewaySessionRow[] }>(
-    "sessions.list",
-    {},
-    { context },
-  );
-  expect(listed.ok).toBe(true);
-  expect(listed.payload?.sessions.map((session) => session.sessionId).toSorted()).toEqual([
-    "sess-main",
-    "sess-other",
-  ]);
-  expect(getMany.mock.calls.flatMap(([ids]) => ids).toSorted((a, b) => a.localeCompare(b))).toEqual(
-    ["sess-main", "sess-other"],
-  );
-  expect(
-    listed.payload?.sessions.find((session) => session.sessionId === "sess-main")?.placement,
-  ).toEqual(result.payload?.session?.placement);
-  expect(
-    listed.payload?.sessions.find((session) => session.sessionId === "sess-other")?.placement,
-  ).toBeUndefined();
-});
-
 test.each([
   { name: "without an environment", ownerEpoch: undefined, activeOwnerEpoch: 12, identity: false },
   {
@@ -451,20 +405,22 @@ test.each([
     identity: true,
   },
   {
-    name: "without identity from a reused environment",
-    ownerEpoch: 13,
-    activeOwnerEpoch: 12,
-    identity: false,
-  },
-  {
     name: "without identity when no owner epoch was retained",
     ownerEpoch: 12,
     activeOwnerEpoch: null,
     identity: false,
   },
+  {
+    name: "while a move still owns recovery",
+    ownerEpoch: 13,
+    activeOwnerEpoch: 12,
+    identity: false,
+    retryBlock: "move",
+  },
 ])(
   "sessions.describe projects a durable terminal reason $name",
-  async ({ ownerEpoch, activeOwnerEpoch, identity }) => {
+  async ({ ownerEpoch, activeOwnerEpoch, identity, ...scenario }) => {
+    const retryBlock = "retryBlock" in scenario ? scenario.retryBlock : undefined;
     await seedSessionRows();
     const active = activePlacementRecord();
     const placement = {
@@ -476,8 +432,18 @@ test.each([
       terminalReason: "cloud worker disappeared: provider reported lease destroyed",
       terminalAtMs: 400,
     } satisfies WorkerSessionPlacementRecord;
-    const getMany = vi.fn<WorkerSessionPlacementReader["getMany"]>(
-      () => new Map([[placement.sessionId, placement]]),
+    const move = placementMove(active, null);
+    const context = placementContext(
+      placement,
+      ownerEpoch === undefined
+        ? undefined
+        : {
+            environmentId: active.environmentId,
+            providerId: "machine0",
+            profileId: "team",
+            ownerEpoch,
+            state: "destroyed",
+          },
     );
 
     const result = await directSessionReq<{ session: GatewaySessionRow | null }>(
@@ -485,20 +451,11 @@ test.each([
       { key: "main" },
       {
         context: {
-          workerSessionPlacementService: { getMany },
-          workerEnvironmentService: {
-            get: () =>
-              ownerEpoch === undefined
-                ? undefined
-                : {
-                    providerId: "machine0",
-                    profileId: "team",
-                    ownerEpoch,
-                    state: "destroyed",
-                  },
-            readMachineShape: () => undefined,
-            machineShapeVersion: () => 0,
-            inventoryVersion: () => 0,
+          ...context,
+          workerSessionPlacementService: {
+            ...context.workerSessionPlacementService,
+            getPlacementMoves: () =>
+              new Map(retryBlock === "move" ? [[placement.sessionId, move]] : []),
           },
         },
       },
@@ -513,12 +470,158 @@ test.each([
     });
     const projected = result.payload?.session?.placement;
     expect(projected).toBeDefined();
+    if (ownerEpoch !== undefined && activeOwnerEpoch !== null && !retryBlock) {
+      expect(projected).toHaveProperty("retryOnSend", true);
+    } else {
+      expect(projected).not.toHaveProperty("retryOnSend");
+    }
     if (identity) {
       expect(projected).toMatchObject({ providerId: "machine0", profileId: "team" });
     } else {
       expect(projected).not.toHaveProperty("providerId");
       expect(projected).not.toHaveProperty("profileId");
     }
+  },
+);
+
+function seedFailedPlacementWithRetainedResult(database: OpenClawStateDatabase, sessionId: string) {
+  // Older terminal rows can retain unaccepted results beyond the active generation.
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      db.prepare(`UPDATE worker_session_placements SET turn_claim_owner = NULL,
+        turn_claim_id = NULL, turn_claim_run_id = NULL, turn_claim_generation = NULL,
+        turn_claim_owner_epoch = NULL WHERE session_id = ?`).run(sessionId);
+      db.prepare(`UPDATE worker_session_placements SET state = 'failed',
+        transition_generation = transition_generation + 3,
+        recovery_error = 'previous worker failure', terminal_reason = 'previous worker failure',
+        terminal_at_ms = 1 WHERE session_id = ?`).run(sessionId);
+    },
+    { database },
+  );
+}
+
+test.each([
+  { recovery: "unstaged result", executionMode: "remote-exec" },
+  { recovery: "rollback journal", executionMode: "worker-turn" },
+] as const)(
+  "sessions.describe waits for retained $recovery before offering retry on send",
+  async ({ recovery, executionMode }) => {
+    const { dir } = await createSessionStoreDir();
+    const identity = {
+      sessionId: "sess-retained-recovery",
+      sessionKey: "agent:main:retained-recovery",
+      agentId: "main",
+    };
+    await writeSessionStore({
+      entries: { [identity.sessionKey]: { sessionId: identity.sessionId, updatedAt: 200 } },
+    });
+    const database = openOpenClawStateDatabase({ path: path.join(dir, "placements.sqlite") });
+    const placements = createWorkerSessionPlacementStore({ database });
+    const active = await advancePlacementFixtureToActive(
+      placements,
+      database,
+      identity,
+      executionMode,
+    );
+    const journalOwner = {
+      sessionId: identity.sessionId,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      placementGeneration: active.generation,
+    };
+    if (recovery === "unstaged result") {
+      const claim = await placements.claimTurn({
+        ...identity,
+        owner: placementTurnOwner(active),
+        claimId: "retained-claim",
+        runId: "retained-run",
+      });
+      placements.markWorkspaceResultPending(claim);
+    } else {
+      const basePack = Buffer.from("retained workspace rollback");
+      placements.beginWorkspaceReconciliation(journalOwner, {
+        version: 1,
+        temporaryNonce: "a".repeat(32),
+        baseManifestRef: active.workspaceBaseManifestRef,
+        currentManifestRef: `sha256:${"c".repeat(64)}`,
+        baseEntries: [],
+        appliedEntries: [],
+        baseTree: "f".repeat(40),
+        basePackSha256: createHash("sha256").update(basePack).digest("hex"),
+        basePack,
+      });
+    }
+    if (recovery === "unstaged result") {
+      seedFailedPlacementWithRetainedResult(database, identity.sessionId);
+    } else {
+      const draining = placements.startDrain({
+        sessionId: identity.sessionId,
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+        expectedGeneration: active.generation,
+      });
+      const reconciling = placements.startReconcile({
+        sessionId: identity.sessionId,
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+        expectedGeneration: draining.generation,
+      });
+      placements.fail({
+        sessionId: identity.sessionId,
+        expectedGeneration: reconciling.generation,
+        recoveryError: "previous worker failure",
+      });
+    }
+    writePlacementEnvironmentFixture(database, {
+      environmentId: active.environmentId,
+      state: "destroyed",
+      ownerEpoch: active.activeOwnerEpoch + 1,
+      attachedSessionIds: [],
+    });
+    const cfg = (await getGatewayConfigModule()).getRuntimeConfig();
+    const context = {
+      getRuntimeConfig: () => cfg,
+      workerSessionPlacementService: placements,
+      workerEnvironmentService: {
+        get: () => undefined,
+        readMachineShape: () => undefined,
+      },
+    };
+    const projection = await createSessionRowProjection({
+      cfg,
+      context,
+      placementFactsReader: placements,
+    });
+    trackSessionReadProjection(projection);
+    const options = { context: bindSessionRowProjection(context, () => projection) };
+    const describe = () =>
+      directSessionReq<{ session: GatewaySessionRow | null }>(
+        "sessions.describe",
+        { key: identity.sessionKey },
+        options,
+      );
+    const blocked = await describe();
+    expect(blocked.ok).toBe(true);
+    expect(blocked.payload?.session?.placement).toMatchObject({
+      state: "failed",
+      recoveryAction: "restart",
+    });
+    expect(blocked.payload?.session?.placement).not.toHaveProperty("retryOnSend");
+    expect(blocked.payload?.session?.placement).not.toHaveProperty("workspaceResultReconciling");
+
+    if (recovery === "unstaged result") {
+      const pending = placements.listPendingWorkspaceResults(identity.sessionId);
+      expect(pending).toHaveLength(1);
+      placements.abandonWorkspaceResult(pending[0]!);
+    } else {
+      placements.abortWorkspaceReconciliation(journalOwner, { force: true });
+    }
+    const ready = await describe();
+    expect(ready.ok).toBe(true);
+    expect(ready.payload?.session).toMatchObject({
+      sessionId: identity.sessionId,
+      placement: { ...blocked.payload?.session?.placement, retryOnSend: true },
+    });
   },
 );
 
@@ -538,23 +641,13 @@ test("sessions.describe requires worker teardown before failed-placement restart
     "sessions.describe",
     { key: "main" },
     {
-      context: {
-        workerSessionPlacementService: {
-          getMany: () => new Map([[placement.sessionId, placement]]),
-        },
-        workerEnvironmentService: {
-          get: () => ({
-            providerId: "machine0",
-            profileId: "team",
-            ownerEpoch: placement.activeOwnerEpoch,
-            state: "failed",
-            leaseId: "lease-live",
-          }),
-          readMachineShape: () => undefined,
-          machineShapeVersion: () => 0,
-          inventoryVersion: () => 0,
-        },
-      },
+      context: placementContext(placement, {
+        providerId: "machine0",
+        profileId: "team",
+        ownerEpoch: placement.activeOwnerEpoch,
+        state: "failed",
+        leaseId: "lease-live",
+      }),
     },
   );
 

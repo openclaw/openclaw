@@ -3,7 +3,7 @@ import { normalizeChromeMcpOptions } from "./chrome-mcp-options.js";
 
 describe("Chrome MCP profile options", () => {
   it.each([undefined, "npx"])(
-    "launches the packaged Chrome MCP with Node for HTTP endpoints with command %s",
+    "launches the packaged Chrome MCP on the current runtime for HTTP endpoints with command %s",
     (mcpCommand) => {
       const { command, args } = normalizeChromeMcpOptions({
         cdpUrl: "http://127.0.0.1:9222",

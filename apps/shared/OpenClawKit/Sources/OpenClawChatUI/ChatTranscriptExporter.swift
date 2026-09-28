@@ -96,14 +96,14 @@ public enum ChatTranscriptExporter {
         if !self.attachments(in: message).isEmpty {
             return true
         }
-        let text = self.visibleText(in: message)
+        let text = ChatMessageVisibleText.visibleText(in: message)
         guard !text.isEmpty else { return false }
         return role == "user" || AssistantTextParser.hasVisibleContent(in: text)
     }
 
     private static func body(for message: OpenClawChatMessage) -> String {
         var parts: [String] = []
-        let text = self.visibleText(in: message)
+        let text = ChatMessageVisibleText.visibleText(in: message)
         if !text.isEmpty {
             parts.append(text)
         }
@@ -124,10 +124,6 @@ public enum ChatTranscriptExporter {
         case .reset:
             return "[\(divider.label) — \(divider.description ?? "")]"
         }
-    }
-
-    private static func visibleText(in message: OpenClawChatMessage) -> String {
-        ChatMessageVisibleText.visibleText(in: message)
     }
 
     private static func attachments(in message: OpenClawChatMessage) -> [OpenClawChatMessageContent] {

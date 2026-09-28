@@ -56,16 +56,21 @@ function preparedTurnMessage(
   };
 }
 
+async function createSessionScope(sessionId: string, filename = "sessions.json") {
+  const dir = tempDirs.make("openclaw-session-manager-");
+  const target = {
+    agentId: "main",
+    sessionId,
+    sessionKey: `agent:main:${sessionId}`,
+    storePath: path.join(dir, filename),
+  };
+  await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
+  return { dir, target };
+}
+
 describe("SessionManager stale-parent rebase", () => {
   it("rebases a stale active append onto the out-of-band transcript tail", async () => {
-    const dir = tempDirs.make("openclaw-session-manager-");
-    const target = {
-      agentId: "main",
-      sessionId: "stale-active-parent",
-      sessionKey: "agent:main:stale-active-parent",
-      storePath: path.join(dir, "sessions.json"),
-    };
-    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const { dir, target } = await createSessionScope("stale-active-parent");
     const base = await appendTranscriptMessage(target, {
       eventId: "base",
       message: { role: "user", content: "base", timestamp: 1 },
@@ -108,14 +113,7 @@ describe("SessionManager stale-parent rebase", () => {
   });
 
   it("retries a stale control append with the refreshed transcript fence", async () => {
-    const dir = tempDirs.make("openclaw-session-manager-");
-    const target = {
-      agentId: "main",
-      sessionId: "stale-control-fence",
-      sessionKey: "agent:main:stale-control-fence",
-      storePath: path.join(dir, "sessions.json"),
-    };
-    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const { dir, target } = await createSessionScope("stale-control-fence");
     const base = await appendTranscriptMessage(target, {
       eventId: "base",
       message: { role: "user", content: "base", timestamp: 1 },
@@ -148,14 +146,7 @@ describe("SessionManager stale-parent rebase", () => {
   });
 
   it("reloads a stale control append after an unchanged-parent prefix rewrite", async () => {
-    const dir = tempDirs.make("openclaw-session-manager-");
-    const target = {
-      agentId: "main",
-      sessionId: "stale-control-prefix",
-      sessionKey: "agent:main:stale-control-prefix",
-      storePath: path.join(dir, "sessions.json"),
-    };
-    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const { dir, target } = await createSessionScope("stale-control-prefix");
     const base = await appendTranscriptMessage(target, {
       eventId: "base",
       message: { role: "user", content: "old", timestamp: 1 },
@@ -343,14 +334,7 @@ describe("SessionManager stale-parent rebase", () => {
   });
 
   it("fences a prepared assistant retry to the snapshot that passed validation", async () => {
-    const dir = tempDirs.make("openclaw-session-manager-");
-    const target = {
-      agentId: "main",
-      sessionId: "stale-assistant-validation-race",
-      sessionKey: "agent:main:stale-assistant-validation-race",
-      storePath: path.join(dir, "sessions.json"),
-    };
-    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const { dir, target } = await createSessionScope("stale-assistant-validation-race");
     const base = await appendTranscriptMessage(target, {
       eventId: "base-user",
       message: { role: "user", content: "base", timestamp: 1 },
@@ -448,14 +432,7 @@ describe("SessionManager stale-parent rebase", () => {
   );
 
   it("preserves a deliberate manager branch from an ancestor", async () => {
-    const dir = tempDirs.make("openclaw-session-manager-");
-    const target = {
-      agentId: "main",
-      sessionId: "deliberate-manager-branch",
-      sessionKey: "agent:main:deliberate-manager-branch",
-      storePath: path.join(dir, "sessions.json"),
-    };
-    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const { dir, target } = await createSessionScope("deliberate-manager-branch");
     const base = await appendTranscriptMessage(target, {
       eventId: "branch-base",
       message: { role: "user", content: "base", timestamp: 1 },
@@ -479,14 +456,7 @@ describe("SessionManager stale-parent rebase", () => {
   });
 
   it("preserves a stale manager branch when the concurrent tail is unrelated", async () => {
-    const dir = tempDirs.make("openclaw-session-manager-");
-    const target = {
-      agentId: "main",
-      sessionId: "stale-unrelated-parent",
-      sessionKey: "agent:main:stale-unrelated-parent",
-      storePath: path.join(dir, "sessions.json"),
-    };
-    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const { dir, target } = await createSessionScope("stale-unrelated-parent");
     const firstRoot = await appendTranscriptMessage(target, {
       eventId: "first-root",
       message: { role: "user", content: "first", timestamp: 1 },
@@ -520,14 +490,7 @@ describe("SessionManager stale-parent rebase", () => {
   });
 
   it("retries a stale side append against its unchanged explicit parent", async () => {
-    const dir = tempDirs.make("openclaw-session-manager-");
-    const target = {
-      agentId: "main",
-      sessionId: "stale-side-append",
-      sessionKey: "agent:main:stale-side-append",
-      storePath: path.join(dir, "sessions.json"),
-    };
-    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const { dir, target } = await createSessionScope("stale-side-append");
     const base = await appendTranscriptMessage(target, {
       eventId: "side-base",
       message: { role: "user", content: "base", timestamp: 1 },
@@ -567,14 +530,7 @@ describe("SessionManager stale-parent rebase", () => {
   });
 
   it("retries a stale deliberate branch against an unchanged explicit parent", async () => {
-    const dir = tempDirs.make("openclaw-session-manager-");
-    const target = {
-      agentId: "main",
-      sessionId: "stale-deliberate-branch",
-      sessionKey: "agent:main:stale-deliberate-branch",
-      storePath: path.join(dir, "sessions.json"),
-    };
-    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const { dir, target } = await createSessionScope("stale-deliberate-branch");
     const base = await appendTranscriptMessage(target, {
       eventId: "deliberate-base",
       message: { role: "user", content: "base", timestamp: 1 },
@@ -602,14 +558,7 @@ describe("SessionManager stale-parent rebase", () => {
   });
 
   it("honors an explicit active parent when the tail is not its descendant", async () => {
-    const dir = tempDirs.make("openclaw-session-manager-");
-    const target = {
-      agentId: "main",
-      sessionId: "unrelated-explicit-parent",
-      sessionKey: "agent:main:unrelated-explicit-parent",
-      storePath: path.join(dir, "sessions.json"),
-    };
-    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const { target } = await createSessionScope("unrelated-explicit-parent");
     const firstRoot = await appendTranscriptMessage(target, {
       eventId: "first-root",
       message: { role: "user", content: "first", timestamp: 1 },

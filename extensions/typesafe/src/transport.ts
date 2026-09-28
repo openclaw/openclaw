@@ -35,6 +35,11 @@ function httpError(response: Response): EvaluationError {
       retryAfterMs,
     );
   }
+  // 422 is documented request validation; 413 is HTTP Content Too Large.
+  // Neither establishes the exact tokenizer/context cause, and bodies may reflect secrets.
+  if (response.status === 413 || response.status === 422) {
+    return new EvaluationError("TypeSafe rejected the supplied input.", "unsupported-input");
+  }
   return new EvaluationError("TypeSafe service rejected the evaluation request.", "transport");
 }
 

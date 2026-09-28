@@ -1,5 +1,6 @@
 import { safeParseJson, stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 
 export const UPDATE_DEV_TARGET_REF_ENV = "OPENCLAW_UPDATE_DEV_TARGET_REF";
 const TRACKED_DEV_TARGET_PREFIX = "openclaw-dev-target:v1:";
@@ -21,10 +22,7 @@ function isValidTargetPart(value: unknown): value is string {
     typeof value === "string" &&
     value.length > 0 &&
     !/\s/u.test(value) &&
-    Array.from(value).every((char) => {
-      const code = char.charCodeAt(0);
-      return code >= 0x20 && code !== 0x7f;
-    })
+    !containsAsciiControlCharacter(value)
   );
 }
 

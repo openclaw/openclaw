@@ -159,9 +159,7 @@ export async function maybeApplyTtsToPayloadCore(
     );
   }
 
-  const cleanedText = directives.cleanedText;
-  const trimmedCleaned = cleanedText.trim();
-  const visibleText = trimmedCleaned.length > 0 ? trimmedCleaned : "";
+  const visibleText = directives.cleanedText.trim();
   const explicitTtsText = directives.ttsText?.trim() || "";
   const ttsText = explicitTtsText || visibleText;
 
@@ -185,18 +183,18 @@ export async function maybeApplyTtsToPayloadCore(
     return nextPayload;
   }
 
-  if (!ttsText.trim()) {
+  if (!ttsText) {
     return nextPayload;
   }
   if (reply.hasMedia || hasLegacyFinalMediaDirective(text)) {
     return nextPayload;
   }
-  if (!explicitTtsText && ttsText.trim().length < 10) {
+  if (!explicitTtsText && ttsText.length < 10) {
     return nextPayload;
   }
 
   const maxLength = getTtsMaxLength(prefsPath);
-  let textForAudio = ttsText.trim();
+  let textForAudio = ttsText;
   let wasSummarized = false;
 
   if (!explicitTtsText && isCodeHeavySpeechText(textForAudio)) {
@@ -272,13 +270,13 @@ export async function maybeApplyTtsToPayloadCore(
       latencyMs: result.latencyMs,
     };
 
-    const payloadWithAudio = {
+    const payloadWithAudio: ReplyPayload = {
       ...nextPayload,
       mediaUrl: result.audioPath,
       audioAsVoice: result.audioAsVoice || params.payload.audioAsVoice,
       spokenText: textForAudio,
       trustedLocalMedia: true,
-    } as ReplyPayload;
+    };
     return nextPayload.text?.trim()
       ? markReplyPayloadAsTtsSupplement(payloadWithAudio)
       : payloadWithAudio;

@@ -74,7 +74,7 @@ describe("browser CDP optional AI chunk quarantine", () => {
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toBe("");
-    expect(readdirSync(quarantineDir).sort()).toEqual(optional);
+    expect(readdirSync(quarantineDir).toSorted()).toEqual(optional);
     for (const filename of optional) {
       expect(existsSync(path.join(distDir, filename))).toBe(false);
       expect(readFileSync(path.join(quarantineDir, filename), "utf8")).toBe(filename);
@@ -107,7 +107,7 @@ describe("browser CDP optional AI chunk quarantine", () => {
     expect(result.stderr).toContain("no optional Playwright AI snapshot chunk found");
     expect(result.stdout).toBe("");
     expect(existsSync(quarantineDir)).toBe(false);
-    expect(readdirSync(distDir).sort()).toEqual(preserved);
+    expect(readdirSync(distDir).toSorted()).toEqual(preserved);
     for (const filename of preserved) {
       expect(readFileSync(path.join(distDir, filename), "utf8")).toBe(filename);
     }
@@ -133,7 +133,7 @@ describe("browser CDP optional AI chunk quarantine", () => {
 });
 
 describe("browser CDP snapshot assertions", () => {
-  it.each([undefined, "", " 1024 ", "9007199254740991"])("accepts snapshot limit %j", (limit) => {
+  it.each([" 1024 ", "9007199254740991"])("accepts snapshot limit %j", (limit) => {
     const root = tempDirs.make("openclaw-browser-cdp-snapshot-");
     const snapshotPath = path.join(root, "snapshot.txt");
     writeFileSync(

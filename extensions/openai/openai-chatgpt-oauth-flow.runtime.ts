@@ -1,10 +1,3 @@
-/**
- * OpenAI Codex (ChatGPT OAuth) flow
- *
- * NOTE: This module uses Node.js crypto and http for the OAuth callback.
- * It is only intended for CLI use, not browser environments.
- */
-
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveOpenAICodexAuthIdentity } from "openclaw/plugin-sdk/provider-auth";
 import {
@@ -207,21 +200,11 @@ function resolveOpenAICredentials(
   };
 }
 
-/**
- * Login with OpenAI Codex OAuth
- *
- * @param options.onAuth - Called with URL and instructions when auth starts
- * @param options.onPrompt - Called to prompt user for manual code paste (fallback if no onManualCodeInput)
- * @param options.onProgress - Optional progress messages
- * @param options.onManualCodeInput - Optional promise that resolves with user-pasted code.
- *                                    Races with browser callback - whichever completes first wins.
- *                                    Useful for showing paste input immediately alongside browser flow.
- * @param options.originator - OAuth originator parameter (defaults to "openclaw")
- */
 export async function loginOpenAICodex(options: {
   onAuth: (info: { url: string; instructions?: string }) => Promise<void> | void;
   onPrompt: (prompt: OAuthPrompt) => Promise<string>;
   onProgress?: (message: string) => void;
+  // Manual entry races the browser callback; either can complete the login.
   onManualCodeInput?: () => Promise<string>;
   originator?: string;
   signal?: AbortSignal;
@@ -252,7 +235,6 @@ export async function loginOpenAICodex(options: {
     throwIfOAuthLoginAborted(options.signal);
 
     if (options.onManualCodeInput) {
-      // Race between browser callback and manual input
       let manualCode: string | undefined;
       let manualError: Error | undefined;
       const manualPromise = options
@@ -307,7 +289,6 @@ export async function loginOpenAICodex(options: {
       }
     }
 
-    // Fallback to onPrompt if still no code
     if (!code) {
       code = await withOAuthLoginAbort(
         promptForAuthorizationCode(options.onPrompt, state),
@@ -331,9 +312,6 @@ export async function loginOpenAICodex(options: {
   }
 }
 
-/**
- * Refresh OpenAI Codex OAuth token
- */
 export async function refreshOpenAICodexToken(refreshToken: string): Promise<OAuthCredentials> {
   return resolveOpenAICredentials(await refreshOpenAIAccessToken(refreshToken));
 }

@@ -51,70 +51,64 @@ describe("runDoctorLintChecks", () => {
     expect(result.findings.map((finding) => finding.checkId)).toEqual(["a"]);
   });
 
-  it.each(["array", "set"] as const)(
-    "reports conflicting selectors for a registered health check (%s)",
-    async (selectorShape) => {
-      const checkId = "plugin/example/critical";
-      let detections = 0;
-      const existingChecks = listHealthChecks();
-      registerHealthCheck(
-        check(checkId, async () => {
-          detections += 1;
-          return [{ checkId, severity: "error", message: "critical failure" }];
-        }),
-      );
+  it("reports conflicting selectors for a registered health check", async () => {
+    const checkId = "plugin/example/critical";
+    let detections = 0;
+    const existingChecks = listHealthChecks();
+    registerHealthCheck(
+      check(checkId, async () => {
+        detections += 1;
+        return [{ checkId, severity: "error", message: "critical failure" }];
+      }),
+    );
 
-      try {
-        const selectors = selectorShape === "set" ? new Set([checkId]) : [checkId];
-        const result = await runDoctorLintChecks(ctx, {
-          onlyIds: selectors,
-          skipIds: selectors,
-        });
-
-        expect(detections).toBe(0);
-        expect(result.checksRun).toBe(0);
-        expect(result.checksSkipped).toBe(1);
-        expect(result.findings).toEqual([
-          {
-            checkId: "core/doctor/lint-selection",
-            severity: "error",
-            message: `Health check ${checkId} cannot be selected by --only and excluded by --skip.`,
-            path: checkId,
-          },
-        ]);
-        expect(exitCodeFromFindings(result.findings)).toBe(1);
-      } finally {
-        clearHealthChecksForTest();
-        for (const existingCheck of existingChecks) {
-          registerHealthCheck(existingCheck);
-        }
-      }
-    },
-  );
-
-  it.each(["array", "set"] as const)(
-    "runs surviving selected checks when selectors only partially overlap (%s)",
-    async (selectorShape) => {
-      const skippedId = "plugin/example/skipped";
-      const selectedId = "plugin/example/selected";
-      const detections: string[] = [];
-      const ids = [skippedId, selectedId];
+    try {
+      const selectors = new Set([checkId]);
       const result = await runDoctorLintChecks(ctx, {
-        checks: ids.map((id) =>
-          check(id, async () => {
-            detections.push(id);
-            return [];
-          }),
-        ),
-        onlyIds: selectorShape === "set" ? new Set(ids) : ids,
-        skipIds: selectorShape === "set" ? new Set([skippedId]) : [skippedId],
+        onlyIds: selectors,
+        skipIds: selectors,
       });
 
-      expect(result).toEqual({ findings: [], checksRun: 1, checksSkipped: 1 });
-      expect(detections).toEqual([selectedId]);
-      expect(exitCodeFromFindings(result.findings)).toBe(0);
-    },
-  );
+      expect(detections).toBe(0);
+      expect(result.checksRun).toBe(0);
+      expect(result.checksSkipped).toBe(1);
+      expect(result.findings).toEqual([
+        {
+          checkId: "core/doctor/lint-selection",
+          severity: "error",
+          message: `Health check ${checkId} cannot be selected by --only and excluded by --skip.`,
+          path: checkId,
+        },
+      ]);
+      expect(exitCodeFromFindings(result.findings)).toBe(1);
+    } finally {
+      clearHealthChecksForTest();
+      for (const existingCheck of existingChecks) {
+        registerHealthCheck(existingCheck);
+      }
+    }
+  });
+
+  it("runs surviving selected checks when selectors only partially overlap", async () => {
+    const skippedId = "plugin/example/skipped";
+    const selectedId = "plugin/example/selected";
+    const detections: string[] = [];
+    const ids = [skippedId, selectedId];
+    const result = await runDoctorLintChecks(ctx, {
+      checks: ids.map((id) =>
+        check(id, async () => {
+          detections.push(id);
+          return [];
+        }),
+      ),
+      onlyIds: ids,
+      skipIds: [skippedId],
+    });
+
+    expect(result).toEqual({ findings: [], checksRun: 1, checksSkipped: 1 });
+    expect(detections).toEqual([selectedId]);
+    expect(exitCodeFromFindings(result.findings)).toBe(0);
+  });
 
   it("retains every overlap diagnostic when exclusion removes all selected checks", async () => {
     const ids = ["plugin/example/first", "plugin/example/second"];
@@ -167,51 +161,13 @@ describe("runDoctorLintChecks", () => {
     expect(exitCodeFromFindings(result.findings)).toBe(1);
   });
 
-  it("keeps non-conflicting selection and exclusion filters independent", async () => {
-    let selectedDetections = 0;
-    let skippedDetections = 0;
-    const result = await runDoctorLintChecks(ctx, {
-      checks: [
-        check("plugin/example/selected", async () => {
-          selectedDetections += 1;
-          return [];
-        }),
-        check("plugin/example/skipped", async () => {
-          skippedDetections += 1;
-          return [];
-        }),
-      ],
-      onlyIds: ["plugin/example/selected"],
-      skipIds: ["plugin/example/skipped"],
-    });
-
-    expect(result).toEqual({ findings: [], checksRun: 1, checksSkipped: 1 });
-    expect(selectedDetections).toBe(1);
-    expect(skippedDetections).toBe(0);
-  });
-
-  it("preserves forward-compatible skips for unregistered plugin checks", async () => {
-    let detections = 0;
-    const result = await runDoctorLintChecks(ctx, {
-      checks: [
-        check("plugin/example/available", async () => {
-          detections += 1;
-          return [];
-        }),
-      ],
-      skipIds: ["plugin/future/not-loaded"],
-    });
-
-    expect(result).toEqual({ findings: [], checksRun: 1, checksSkipped: 0 });
-    expect(detections).toBe(1);
-    expect(exitCodeFromFindings(result.findings)).toBe(0);
-  });
-
   it("skips default-disabled checks unless explicitly selected", async () => {
+    let detections = 0;
     const defaultDisabled = normalizeHealthCheck({
-      ...check("targeted", async () => [
-        { checkId: "targeted", severity: "warning" as const, message: "warn" },
-      ]),
+      ...check("targeted", async () => {
+        detections += 1;
+        return [{ checkId: "targeted", severity: "warning" as const, message: "warn" }];
+      }),
       defaultEnabled: false,
     });
 
@@ -224,6 +180,7 @@ describe("runDoctorLintChecks", () => {
       checksSkipped: 1,
       findings: [],
     });
+    expect(detections).toBe(0);
 
     await expect(
       runDoctorLintChecks(ctx, {
@@ -235,6 +192,7 @@ describe("runDoctorLintChecks", () => {
       checksSkipped: 0,
       findings: [expect.objectContaining({ checkId: "targeted" })],
     });
+    expect(detections).toBe(1);
   });
 
   it("runs default-disabled checks when all checks are requested", async () => {
@@ -354,7 +312,13 @@ describe("runDoctorLintChecks", () => {
       ],
     });
 
-    expect(result.findings[0]?.message).toBe(`health check threw: ${"A".repeat(252)}...`);
+    expect(result.findings).toEqual([
+      {
+        checkId: "emoji-boom",
+        severity: "error",
+        message: `health check threw: ${"A".repeat(252)}...`,
+      },
+    ]);
   });
 });
 

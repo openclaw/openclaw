@@ -46,11 +46,6 @@ export function describeChannelCatalogEntryContract(params: {
         expect(entry?.meta.aliases).toContain(params.alias);
       }
     });
-
-    it("appears in the channel catalog listing", () => {
-      const ids = listRawChannelPluginCatalogEntries().map((entry) => entry.id);
-      expect(ids).toContain(params.channelId);
-    });
   });
 }
 

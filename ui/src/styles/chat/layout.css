@@ -641,6 +641,11 @@ openclaw-pending-session-create {
   width: 100%;
 }
 
+.chat-thread-inner--virtual {
+  /* The owner sets the height; isolate intrinsic row sizing without clipping paint. */
+  contain: size layout;
+}
+
 .chat-virtual-block {
   position: absolute;
   top: 0;
@@ -2154,7 +2159,8 @@ openclaw-chat-video-player {
   align-items: center;
   gap: 10px;
   min-width: 0;
-  padding: 4px 12px;
+  min-height: var(--chat-stack-header-height, 40px);
+  padding: 6px 12px;
   border: 1px solid var(--border);
   background: var(--panel);
   font-size: 13px;

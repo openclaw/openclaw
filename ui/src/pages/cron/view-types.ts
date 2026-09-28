@@ -21,8 +21,6 @@ import type {
 export type CronListTab = "tasks" | "activity";
 export type CronDetailTab = "settings" | "history";
 export type CronProps = {
-  basePath: string;
-  agentId: string;
   loading: boolean;
   /** True once a cron.list response has completed (initial load finished). */
   hasLoaded: boolean;
@@ -57,7 +55,6 @@ export type CronProps = {
   runs: CronRunLogEntry[];
   runsState: CronRunsViewState;
   highlightedRunId?: string | null;
-  runsTotal: number;
   runsHasMore: boolean;
   runsLoadingMore: boolean;
   runsStatuses: CronRunsStatusValue[];
@@ -69,6 +66,7 @@ export type CronProps = {
   thinkingSuggestions: string[];
   timezoneSuggestions: string[];
   deliveryToSuggestions: string[];
+  failureAlertToSuggestions: string[];
   accountSuggestions: string[];
   onListTabChange: (tab: CronListTab) => void;
   onDetailTabChange: (tab: CronDetailTab) => void;
@@ -101,5 +99,5 @@ export type CronProps = {
     cronRunsQuery?: string;
     cronRunsSortDir?: CronSortDir;
   }) => void | Promise<void>;
-  onViewRunTranscript?: (entry: CronRunLogEntry) => void;
+  onViewRunTranscript?: (entry: CronRunLogEntry, trigger: HTMLButtonElement) => void;
 };

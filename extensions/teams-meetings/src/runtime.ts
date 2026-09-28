@@ -1,14 +1,8 @@
 import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import type { TeamsMeetingsConfig, TeamsMeetingsMode, TeamsMeetingsTransport } from "./config.js";
-import { testTeamsMeetingListening, testTeamsMeetingSpeech } from "./runtime-probes.js";
+import { teamsMeetingsProbes } from "./runtime-probes.js";
 import { getTeamsMeetingsSetupStatus } from "./runtime-setup.js";
-import {
-  launchTeamsMeetingInChrome,
-  launchTeamsMeetingOnNode,
-  leaveTeamsMeetingInBrowser,
-  readTeamsMeetingTranscript,
-  recoverCurrentTeamsMeetingTab,
-} from "./transports/chrome.js";
+import { teamsMeetingsChrome } from "./transports/chrome.js";
 import { TEAMS_MEETINGS_PLATFORM_ADAPTER } from "./transports/teams-meetings-platform-adapter.js";
 import type { TeamsMeetingsChromeHealth } from "./transports/types.js";
 
@@ -19,22 +13,15 @@ export const TeamsMeetingsRuntime = MeetingPlatformAdapter.createRuntimeFacade<
   TeamsMeetingsChromeHealth,
   {
     setup: Awaited<ReturnType<typeof getTeamsMeetingsSetupStatus>>;
-    listening: Awaited<ReturnType<typeof testTeamsMeetingListening>>;
-    speech: Awaited<ReturnType<typeof testTeamsMeetingSpeech>>;
+    listening: Awaited<ReturnType<typeof teamsMeetingsProbes.testListening>>;
+    speech: Awaited<ReturnType<typeof teamsMeetingsProbes.testSpeech>>;
   }
 >({
   platform: TEAMS_MEETINGS_PLATFORM_ADAPTER,
-  transport: {
-    launchInChrome: launchTeamsMeetingInChrome,
-    launchOnNode: launchTeamsMeetingOnNode,
-    leaveInBrowser: leaveTeamsMeetingInBrowser,
-    readTranscript: readTeamsMeetingTranscript,
-    recoverCurrentTab: recoverCurrentTeamsMeetingTab,
-  },
+  transport: teamsMeetingsChrome,
   probes: {
     setupStatus: getTeamsMeetingsSetupStatus,
-    testListening: testTeamsMeetingListening,
-    testSpeech: testTeamsMeetingSpeech,
+    ...teamsMeetingsProbes,
   },
   messages: {
     durableTranscripts: { providerId: "teams", providerName: "Microsoft Teams" },

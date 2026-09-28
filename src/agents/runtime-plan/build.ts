@@ -200,6 +200,9 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
       model: asProviderRuntimeModel(overrides.model) ?? model,
       resolvedTransport: overrides.resolvedTransport ?? transport,
       providerRuntimeHandle: providerRuntimeHandleForPlugins,
+      auth: auth.selectedAuthMode
+        ? { mode: auth.selectedAuthMode, authFlow: auth.selectedAuthFlow }
+        : undefined,
     });
   let memoizedTranscriptPolicy: ReturnType<typeof resolveTranscriptRuntimePolicy> | undefined;
   let memoizedTransportExtraParams: ReturnType<typeof resolveTransportExtraParams> | undefined;

@@ -39,10 +39,11 @@ openclaw health --debug
 - An unconfigured or disabled preferred account does not hide probe results from other active accounts. Ordinary output still follows the default agent's account bindings. `--verbose` includes all accounts.
 - When the displayed account is disabled, health text shows `disabled` and `status --deep` marks it `OFF`, even if the account remains configured.
 - Unhealthy channel lines include the recorded startup error when available, so a stopped channel reports its failure cause alongside its state.
+- Human-readable output includes failures for plugins enabled explicitly, automatically, or by default, and warnings for configured plugins that are unavailable. It shows at most 20 plugin diagnostics plus an omitted count. These warnings also appear in `openclaw gateway health` and the Health table in `openclaw status --deep`. Plugin diagnostics are sanitized for single-line terminal output; JSON retains the snapshot values.
 - Once ready, `--json` returns the full snapshot: channels, per-account probes, plugin load state, context-engine quarantine state, model-pricing cache state, event-loop health, delivery-queue warnings, and per-agent session stores.
 - Session ages in text and JSON use the Gateway's clock.
 - Heartbeat intervals in text show the resolved cadence without rounding away milliseconds. Week units are retained for long intervals.
-- Top-level `ok: true` means the health RPC succeeded and the Gateway produced a snapshot. Queue warnings do not change it to `false`.
+- Top-level `ok: true` means the health RPC succeeded and the Gateway produced a snapshot. Queue and plugin warnings do not change it to `false`.
 - When outbound or session deliveries, or inbound channel events, are dead-lettered, text output reports their counts and oldest failure age. Inbound counts are grouped by channel account. Inspect or recover individual events with [`openclaw channels dead-letters`](/cli/channels#inbound-dead-letters).
 - Optional `deliveryQueues.ingressPressure` summarizes durable inbound lanes that may be blocking later events. It is grouped by channel account and never exposes event, lane, payload, error, owner, token, session, or target identifiers. See [Gateway health](/gateway/health#queue-warnings) for the exact qualification and counting semantics.
 

@@ -11,7 +11,7 @@ extension OpenClawChatComposer {
         }
         .buttonStyle(.plain)
         .controlSize(.small)
-        .help("Add Attachment")
+        .help("Add attachment")
         .accessibilityLabel("Attachments")
         .accessibilityIdentifier("chat-attachment-picker")
         .disabled(!self.isAttachmentInputEnabled)
@@ -55,7 +55,7 @@ extension OpenClawChatComposer {
             Button {
                 self.pickFilesMac()
             } label: {
-                Label("Add Attachment", systemImage: "paperclip")
+                Label("Attach…", systemImage: "paperclip")
             }
             .disabled(!self.isAttachmentInputEnabled)
             Divider()
@@ -127,9 +127,11 @@ extension OpenClawChatComposer {
                 Divider()
             }
             Group {
-                self.modelMenuOption(
-                    self.viewModel.defaultModelLabel,
-                    selectionID: OpenClawChatViewModel.defaultModelSelectionID)
+                if self.viewModel.canSelectDefaultModel {
+                    self.modelMenuOption(
+                        self.viewModel.defaultModelLabel,
+                        selectionID: OpenClawChatViewModel.defaultModelSelectionID)
+                }
                 if !sections.pinned.isEmpty {
                     Section("Pinned") {
                         self.cleanInlineModelOptions(sections.pinned)

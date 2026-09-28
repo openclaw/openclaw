@@ -8,11 +8,13 @@ import type { BrowserRouteContext } from "../server-context.js";
 import { registerBrowserAgentRoutes } from "./agent.js";
 import { registerBrowserBasicRoutes } from "./basic.js";
 import { registerBrowserPermissionRoutes } from "./permissions.js";
+import { withBrowserProfileCapabilities } from "./profile-capabilities.js";
 import { registerBrowserTabRoutes } from "./tabs.js";
 import type { BrowserRouteRegistrar } from "./types.js";
 
 /** Register every browser control route group. */
-export function registerBrowserRoutes(app: BrowserRouteRegistrar, ctx: BrowserRouteContext) {
+export function registerBrowserRoutes(registrar: BrowserRouteRegistrar, ctx: BrowserRouteContext) {
+  const app = withBrowserProfileCapabilities(registrar, ctx);
   registerBrowserBasicRoutes(app, ctx);
   registerBrowserTabRoutes(app, ctx);
   registerBrowserPermissionRoutes(app, ctx);
