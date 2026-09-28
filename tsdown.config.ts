@@ -520,6 +520,7 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
     "cli/run-main": "src/cli/run-main.ts",
     "commands/onboard-guided": "src/commands/onboard-guided.ts",
     "config/config": "src/config/config.ts",
+    "infra/gateway-scheduler": "src/infra/gateway-scheduler.ts",
     "infra/sqlite-audit-record-store": "src/infra/sqlite-audit-record-store.ts",
     "state/local-onboarding-state": "src/state/local-onboarding-state.ts",
     "system-agent/audit": "src/system-agent/audit.ts",

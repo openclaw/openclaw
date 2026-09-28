@@ -249,6 +249,7 @@ async function createWorkerSessionToolTestFixture(
         agentId: SOURCE.agentId,
         sessionKey: SOURCE.sessionKey,
         sessionTarget,
+        promptCacheContext: { boundaryCount: 0 },
         assertSourceCurrent,
         runtimeInstanceId: SOURCE.environmentId,
         placements,

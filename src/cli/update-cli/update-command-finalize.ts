@@ -138,8 +138,7 @@ export async function updateFinalizeCommand(
         recoveryRunIds === undefined ? "finalize" : "unknown",
       );
       lifecycle.root = root;
-      // A custom Bun executable may not be named "bun".
-      const nodeRunner = process.versions.bun ? process.execPath : resolveNodeRunner();
+      const nodeRunner = resolveNodeRunner();
       const target: UpdateTriageTarget = {
         root,
         nodeRunner,

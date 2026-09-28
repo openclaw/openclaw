@@ -1,5 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/channels/turn/durable-delivery.reload.test.ts",
   "test/e2e/qa-lab/runtime/gateway-loopback-lan-access.test.ts",
   "src/channels/message/durable-receive.test.ts",
   "src/channels/message/ingress-drain-lanes.test.ts",
@@ -296,7 +297,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/cli/update-cli.target-schema.test.ts",
   "src/cli/update-cli.test.ts",
   "src/cli/update-cli.windows-lifecycle.test.ts",
-  "src/cli/update-cli.windows-recovery.test.ts",
   "src/cli/update-cli/status.test.ts",
   "src/cli/update-cli/update-command-convergence-authority.test.ts",
   "src/cli/update-cli/update-command-doctor-authority-callers.test.ts",

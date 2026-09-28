@@ -1026,30 +1026,15 @@ it("accepts a successful completed publisher for finalization without a Linux ch
   expect(f.state().releases.some((release) => release.tag_name === channel)).toBe(false);
 });
 
-it.each([null, "move-tooling", "cancel-parent"] as const)(
-  "fences Tideclaw alpha finalization at the live write boundary: %s",
-  (change) => {
-    const f = fixture("tideclaw/alpha/2026-09-13-0400Z");
-    const alphaTag = "v2026.9.4-alpha.1";
-    f.addDraft(alphaTag, true);
-    if (change) {
-      f.update((state) => {
-        state.authorityAfterSourceRead = { tag: alphaTag, change };
-      });
-    }
-    const result = f.run("finalize-core", alphaTag, "false");
-    if (change) {
-      expect(result.status, result.stderr).toBe(1);
-      expect(f.state().calls.some((call) => call.action === change)).toBe(true);
-      expect(f.mutations()).toEqual([]);
-    } else {
-      expect(succeeded(result)).toMatchObject({ state: "finalized", madeLatest: false });
-      expect(f.mutations()).toEqual([
-        expect.objectContaining({ action: "PATCH", tag: alphaTag, makeLatest: false }),
-      ]);
-    }
-  },
-);
+it("rejects retired Tideclaw alpha finalization before writes", () => {
+  const f = fixture("tideclaw/alpha/2026-09-13-0400Z");
+  const tag = "v2026.9.4-alpha.1";
+  f.addDraft(tag, true);
+  const result = f.run("finalize-core", tag, "false");
+  expect(result.status, result.stderr).toBe(1);
+  expect(result.stderr).toContain("Alpha releases are retired;");
+  expect(f.mutations()).toEqual([]);
+});
 
 it.each([
   { ref: "unreviewed/branch", tag: "v2026.9.4-alpha.1", latest: "false" },
@@ -1573,7 +1558,6 @@ it.each([
   { releaseTag: nextTag, prerelease: false },
   { releaseTag: "v2026.6.33", prerelease: false },
   { releaseTag: "v2026.8.35", prerelease: false },
-  { releaseTag: "v2026.9.4-alpha.1", prerelease: true },
   { releaseTag: "v2026.9.4-beta.1", prerelease: true },
 ])("honors explicit non-latest finalization of $releaseTag", ({ releaseTag, prerelease }) => {
   const f = fixture();

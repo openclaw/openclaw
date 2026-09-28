@@ -1,6 +1,16 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { describe, expect, it, vi } from "vitest";
+import { resolveDoctorUpdateAdmission } from "../commands/doctor-maintenance-admission.js";
+import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
+import * as gatewayStateOwner from "../infra/gateway-state-owner.js";
+import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import {
   GATEWAY_OWNER,
   GATEWAY_PORT,
@@ -31,6 +41,7 @@ import {
   busyPortUsage,
   freePortUsage,
 } from "./schtasks.stop.test-support.js";
+import { withGatewayServiceUpdateAuthority } from "./service-update-authority.js";
 import {
   gatewayServiceProbeHostsMock,
   inspectPortUsageMock,
@@ -40,6 +51,119 @@ import {
 } from "./test-helpers/schtasks-fixtures.js";
 
 describe("Scheduled Task stop/restart cleanup", () => {
+  it.each([3, 4])(
+    "restores an ownerless task in state %s while revalidating Doctor's state admission",
+    async (taskState) => {
+      await withPreparedGatewayTask(async ({ env, stdout }) => {
+        env.OPENCLAW_STATE_DIR = path.join(
+          expectDefined(env.USERPROFILE, "fixture home"),
+          ".openclaw",
+        );
+        openOpenClawStateDatabase({ env });
+        closeOpenClawStateDatabaseForTest();
+        const admission = resolveDoctorUpdateAdmission(env);
+        vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+        let clock = 0;
+        vi.spyOn(Date, "now").mockImplementation(() => clock);
+        setTaskStateProbeResult(() => {
+          if (schtasksCalls.some(([action]) => action === "/Run")) {
+            return 4;
+          }
+          if (schtasksCalls.some(([action]) => action === "/End")) {
+            return 3;
+          }
+          clock += GATEWAY_SERVICE_STOP_TIMEOUT_MS / 4;
+          return taskState;
+        });
+        pushSuccessfulSchtasksResponses(4);
+
+        await expect(
+          withGatewayServiceUpdateAuthority(admission.assertCurrent, (assertCurrent) =>
+            restartScheduledTask({ env, stdout, assertCurrent, preserveDefinition: true }),
+          ),
+        ).resolves.toMatchObject({ outcome: "completed" });
+
+        expect(schtasksCalls).toContainEqual(["/Run", "/TN", "OpenClaw Gateway"]);
+        expect(schtasksCalls.filter(([action]) => action === "/End")).toHaveLength(
+          taskState === 4 ? 1 : 0,
+        );
+        expect(() => admission.assertCurrent()).not.toThrow();
+      });
+    },
+  );
+
+  it.each([
+    ["cleanup", false, true],
+    ["stop", true, false],
+    ["stop and cleanup", true, true],
+  ] as const)(
+    "preserves %s failures without activating the task",
+    async (_name, failStop, failClose) => {
+      await withPreparedGatewayTask(async ({ env, stdout }) => {
+        env.OPENCLAW_STATE_DIR = path.join(
+          expectDefined(env.USERPROFILE, "fixture home"),
+          ".openclaw",
+        );
+        openOpenClawStateDatabase({ env });
+        closeOpenClawStateDatabaseForTest();
+        const admission = resolveDoctorUpdateAdmission(env);
+        const acquire = gatewayStateOwner.tryAcquireGatewayStateOwner;
+        const captured: { exclusion: ReturnType<typeof acquire> } = { exclusion: null };
+        vi.spyOn(gatewayStateOwner, "tryAcquireGatewayStateOwner").mockImplementation(
+          (databasePath) => {
+            captured.exclusion = acquire(databasePath);
+            return captured.exclusion;
+          },
+        );
+        let resources: ReturnType<typeof getOpenClawDatabaseMaintenanceScope>;
+        let failCleanup = failClose;
+        const stopFailure = new Error("native stop authority refused");
+        const cleanupFailure = new Error("native state close failed");
+        const assertCurrent = () => {
+          admission.assertCurrent();
+          const currentScope = getOpenClawDatabaseMaintenanceScope();
+          if (currentScope && !resources) {
+            resources = currentScope;
+            resources.own({}, "shared-resources", () => {
+              if (failCleanup) {
+                throw cleanupFailure;
+              }
+            });
+          }
+          if (currentScope && failStop) {
+            throw stopFailure;
+          }
+        };
+        vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+        setTaskStateProbeResult(3);
+        pushSuccessfulSchtasksResponses(4);
+        try {
+          const failure = await withGatewayServiceUpdateAuthority(assertCurrent, (current) =>
+            restartScheduledTask({ env, stdout, assertCurrent: current, preserveDefinition: true }),
+          ).catch((error: unknown) => error);
+          const errors = collectNestedErrorCandidates(failure);
+          if (failStop) {
+            expect(errors).toContain(stopFailure);
+          }
+          if (failClose) {
+            expect(errors).toContain(cleanupFailure);
+          }
+          expect(schtasksCalls).not.toContainEqual(["/Run", "/TN", "OpenClaw Gateway"]);
+          if (failClose) {
+            expect(() => admission.assertCurrent()).toThrow("undergoing offline maintenance");
+          } else {
+            expect(() => admission.assertCurrent()).not.toThrow();
+          }
+        } finally {
+          // The test retains handles only to clean its fixture; production retires the CLI process.
+          failCleanup = false;
+          await resources?.close();
+          captured.exclusion?.release();
+        }
+      });
+    },
+  );
+
   it.each([
     { stdout: '"node.exe","4242","Console","1","1,024 K"', status: 0, result: "alive" },
     { stdout: "No tasks", status: 0, result: "missing" },

@@ -875,29 +875,13 @@ export function buildOpenAIProvider(): ProviderPlugin {
         }
         const auth = ctx.resolveProviderAuth(PROVIDER_ID);
         if (isSIWCAuthFlow(auth.authFlow)) {
-          // Token sharing authorizes Responses, not either model-discovery endpoint.
-          const sharing = auth.authFlow === TOKEN_SHARING_AUTH_FLOW;
-          const provider = buildOpenAIStaticPlatformProviderConfig(
-            undefined,
-            TOKEN_SHARING_RESOURCE,
-          );
-          return {
-            providers: {
-              [PROVIDER_ID]: {
-                ...provider,
-                models: sharing
-                  ? provider.models.filter((model) => model.api === "openai-responses")
-                  : [],
-              },
-            },
-            outcomes: [
-              {
-                provider: PROVIDER_ID,
-                profileId: auth.profileId,
-                status: sharing ? ("unavailable" as const) : ("auth-rejected" as const),
-              },
-            ],
-          };
+          const { buildTokenSharingCatalog } = await import("./token-sharing-catalog.js");
+          return await buildTokenSharingCatalog({
+            auth,
+            models: buildOpenAIStaticPlatformProviderConfig(undefined, TOKEN_SHARING_RESOURCE)
+              .models,
+            signal: ctx.signal,
+          });
         }
         if (auth.preparationFailed) {
           return null;

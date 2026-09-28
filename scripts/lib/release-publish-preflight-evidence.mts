@@ -675,6 +675,9 @@ export function verifyPublishSourceLineage(input: {
   releaseTag: string;
   runGh: PublishPreflightGh;
 }) {
+  if (input.releaseTag.includes("-alpha.") || input.workflowRef.includes("tideclaw/alpha/")) {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
   const branches = ["main"];
   for (const prefix of ["release/", "extended-stable/"]) {
     const refs = preflightApi(input.runGh, input.repo, `git/matching-refs/heads/${prefix}`);
@@ -686,9 +689,6 @@ export function verifyPublishSourceLineage(input: {
         String(requirePreflightRecord(ref, "branch ref").ref).replace(/^refs\/heads\//u, ""),
       ),
     );
-  }
-  if (input.releaseTag.includes("-alpha.") && input.workflowRef.startsWith("tideclaw/alpha/")) {
-    branches.push(input.workflowRef);
   }
   for (const branch of branches) {
     const comparison = requirePreflightRecord(
@@ -703,7 +703,5 @@ export function verifyPublishSourceLineage(input: {
       return branch;
     }
   }
-  throw new Error(
-    "Release source is not reachable from main, release/*, extended-stable/* or the matching Tideclaw branch.",
-  );
+  throw new Error("Release source is not reachable from main, release/*, or extended-stable/*.");
 }

@@ -1,5 +1,6 @@
 import type { AgentWaitResult } from "../../run-wait.types.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import type { captureRequesterFollowupAuthority } from "../requester-cron-authority.js";
 
 export type FollowupReply = AgentWaitResult & { replyText?: string };
 type FollowupCustody = {
@@ -16,6 +17,7 @@ export type FollowupRequest = {
   targetSessionKey: string;
   targetAgentId: string;
   custody: FollowupCustody;
+  requesterAuthority?: ReturnType<typeof captureRequesterFollowupAuthority>;
   completion?: FollowupCompletionOwner;
 };
 export type FollowupCohort = { entries: readonly SubagentRunRecord[]; generation: number };

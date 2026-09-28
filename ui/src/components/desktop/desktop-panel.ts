@@ -638,10 +638,7 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     }
     const notice = this.pictureInPicture.renderNotice(
       this.fullscreenMode.errorText ?? this.launcher.error ?? this.errorText,
-      this.noticeText ??
-        (this.controlling && this.source?.kind === "environment"
-          ? t("desktop.agentInputPaused")
-          : null),
+      this.noticeText,
       this.sessionSource.desktopAvailability,
     );
     return renderDesktopPresentation({

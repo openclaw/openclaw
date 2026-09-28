@@ -1,10 +1,6 @@
 import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import {
-  appendBoundedChildOutput,
-  emptyBoundedChildOutput,
-  formatBoundedChildOutput,
-} from "./bounded-child-output.js";
+import { formatBoundedChildOutput } from "./bounded-child-output.js";
 import type { VoiceCallStreamExposurePath } from "./config.js";
 import {
   cleanupTailscaleExposureRoute,
@@ -201,8 +197,7 @@ async function startNgrokTunnel(config: {
       const lines = (outputBuffer + chunk).split("\n");
       outputBuffer = lines.pop() || "";
       if (outputBuffer.length > NGROK_LOG_BUFFER_MAX_CHARS) {
-        // Same UTF-16 contract as appendBoundedChildOutput: do not leave a lone
-        // surrogate when an incomplete ngrok log line is trimmed to the ring cap.
+        // Keep incomplete ngrok log lines bounded without leaving a lone surrogate.
         outputBuffer = sliceUtf16Safe(outputBuffer, -NGROK_LOG_BUFFER_MAX_CHARS);
       }
 
@@ -215,12 +210,7 @@ async function startNgrokTunnel(config: {
     proc.stderr.on("data", (chunk: string) => {
       const combined = stderrTail + chunk;
       if (combined.includes(NGROK_ERROR_MARKER)) {
-        rejectIfPending(
-          `ngrok error: ${formatBoundedChildOutput(
-            appendBoundedChildOutput(emptyBoundedChildOutput(), combined),
-          )}`,
-          true,
-        );
+        rejectIfPending(`ngrok error: ${formatBoundedChildOutput(combined)}`, true);
       }
       stderrTail = sliceUtf16Safe(combined, -NGROK_STDERR_TAIL_MAX_CHARS);
     });

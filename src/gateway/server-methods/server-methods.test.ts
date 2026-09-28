@@ -30,6 +30,7 @@ import {
   resetContextEngineRuntimeQuarantineForTests,
 } from "../../context-engine/registry.test-support.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import * as childRuntime from "../../infra/child-runtime-viability.js";
 import {
   buildSystemRunApprovalBinding,
   buildSystemRunApprovalEnvBinding,
@@ -4138,6 +4139,8 @@ describe("gateway healthHandlers.health cache freshness", () => {
   let healthHandlers: typeof import("./health.js").healthHandlers;
   let restoreContextEngineRegistryState: () => void;
   const contextEngineTestOwner = "plugin:health-test";
+  const healthyChildRuntime = { execPath: "/test/node", available: true };
+  let restoreChildRuntime: () => void;
 
   function createHealthSnapshot<T extends Record<string, unknown>>(overrides: T) {
     return {
@@ -4235,12 +4238,17 @@ describe("gateway healthHandlers.health cache freshness", () => {
   });
 
   beforeEach(() => {
+    const runtimeSpy = vi
+      .spyOn(childRuntime, "readChildRuntimeViability")
+      .mockReturnValue(healthyChildRuntime);
+    restoreChildRuntime = () => runtimeSpy.mockRestore();
     restoreContextEngineRegistryState = captureContextEngineRegistryStateForTests();
     registerLegacyContextEngine();
     resetContextEngineRuntimeQuarantineForTests();
   });
 
   afterEach(() => {
+    restoreChildRuntime();
     vi.useRealTimers();
     restoreContextEngineRegistryState();
   });
@@ -4284,7 +4292,11 @@ describe("gateway healthHandlers.health cache freshness", () => {
     const { respond, refreshHealthSnapshot } = await requestHealthSnapshot({ cached, fresh });
 
     expect(refreshHealthSnapshot).toHaveBeenCalledOnce();
-    expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      { ...fresh, childRuntime: healthyChildRuntime },
+      undefined,
+    );
   });
 
   it("restarts request-driven health refreshes when the clock moves backward", async () => {
@@ -4316,7 +4328,11 @@ describe("gateway healthHandlers.health cache freshness", () => {
       probe: true,
       includeSensitive: true,
     });
-    expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      { ...fresh, childRuntime: healthyChildRuntime },
+      undefined,
+    );
   });
 
   it("maps health collection failures to UNAVAILABLE", async () => {
@@ -4378,7 +4394,11 @@ describe("gateway healthHandlers.health cache freshness", () => {
       probe: false,
       includeSensitive: false,
     });
-    expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      { ...fresh, childRuntime: healthyChildRuntime },
+      undefined,
+    );
   });
 
   it("refreshes cached health when runtime channel lifecycle has changed", async () => {
@@ -4412,7 +4432,11 @@ describe("gateway healthHandlers.health cache freshness", () => {
       probe: false,
       includeSensitive: false,
     });
-    expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      { ...fresh, childRuntime: healthyChildRuntime },
+      undefined,
+    );
   });
 
   it("refreshes cached health when recorded lifecycle changes without socket churn", async () => {
@@ -4738,7 +4762,11 @@ describe("gateway healthHandlers.health cache freshness", () => {
         probe: false,
         includeSensitive: false,
       });
-      expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        { ...fresh, childRuntime: healthyChildRuntime },
+        undefined,
+      );
     },
   );
 });
