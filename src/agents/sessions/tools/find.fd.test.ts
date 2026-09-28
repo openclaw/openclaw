@@ -58,7 +58,7 @@ it("rejects partial fd output when fd exits with an error", async () => {
   const tool = createFindToolDefinition("/workspace");
   const result = tool.execute("call-1", { pattern: "*.ts" }, undefined, undefined, {} as never);
   await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
-  child.stdout.end("/workspace/partial.ts\n");
+  child.stdout.end("/workspace/partial.ts\0");
   child.stderr.end("fd failed while reading subtree\n");
   child.emit("close", 2, null);
 
@@ -86,7 +86,7 @@ it.each([false, true])("preserves fd paths with trailing search separator=%s", a
     {} as never,
   );
   await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
-  child.stdout.end(`${paths.join("\n")}\n`);
+  child.stdout.end(`${paths.join("\0")}\0`);
   child.stderr.end();
   child.emit("close", 0, null);
   const result = await pending;
@@ -235,7 +235,7 @@ it.each([
     {} as never,
   );
   await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
-  child.stdout.end(`${paths.join("\n")}\n`);
+  child.stdout.end(`${paths.join("\0")}\0`);
   child.stderr.end();
   child.emit("close", 0, null);
 
@@ -244,4 +244,30 @@ it.each([
   expect(args).toEqual(expect.arrayContaining(["--max-results", "3"]));
   expect(textContent(result)).toBe(expectedText);
   expect(result.details?.resultLimitReached).toBe(expectedLimitReached);
+});
+
+it("preserves fd paths containing newlines", async () => {
+  const searchRoot = path.resolve(path.sep, "find-fixture");
+  const newlinePath = path.join(searchRoot, "line\nbreak.ts");
+  const child = createChild();
+  vi.mocked(spawnCommand).mockReturnValue(child as never);
+  vi.mocked(ensureTool).mockResolvedValue("fd");
+
+  const tool = createFindToolDefinition(searchRoot);
+  const resultPromise = tool.execute(
+    "call-newline-path",
+    { pattern: "*.ts", limit: 1 },
+    undefined,
+    undefined,
+    {} as never,
+  );
+  await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledOnce());
+  child.stdout.end(`${newlinePath}\0`);
+  child.stderr.end();
+  child.emit("close", 0, null);
+
+  const result = await resultPromise;
+  expect(textContent(result)).toBe("line\nbreak.ts");
+  expect(result.details?.resultLimitReached).toBeUndefined();
+  expect(vi.mocked(spawnCommand).mock.calls[0]?.[0]).toEqual(expect.arrayContaining(["--print0"]));
 });
