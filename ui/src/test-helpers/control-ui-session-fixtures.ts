@@ -325,6 +325,70 @@ export function createControlUiSessionFixtures(
     }
     return { ...response, aborted, runIds };
   };
+  // sessions.abort settles the session and its controlled descendants; the Gateway
+  // computes activity at read time, so every later describe/list/history read is idle.
+  const settleSessionAbort = (inputKey: string, aborted: boolean) => {
+    const key = canonicalKey(inputKey);
+    const value = records.get(key);
+    if (!value) {
+      return;
+    }
+    const activeRunIds = Array.isArray(value.row.activeRunIds)
+      ? value.row.activeRunIds.filter((id): id is string => typeof id === "string")
+      : [];
+    if (
+      activeRunIds.length === 0 &&
+      value.row.hasActiveRun !== true &&
+      value.row.hasActiveSubagentRun !== true
+    ) {
+      return;
+    }
+    const sequence = ++runEventSequence;
+    for (const id of activeRunIds) {
+      runsFor(key).set(id, { status: "killed", acknowledged: true, sequence });
+    }
+    const fields = {
+      activeRunIds: [],
+      hasActiveRun: false,
+      hasActiveSubagentRun: false,
+      status: aborted ? "killed" : value.row.status === "running" ? "done" : value.row.status,
+      ...(aborted ? { abortedLastRun: true, lastRunError: undefined } : {}),
+      updatedAt: Math.max(Date.now(), (value.row.updatedAt ?? 0) + 1),
+    };
+    value.lastRunEventSequence = sequence;
+    value.row = { ...value.row, ...fields };
+    for (const field of Object.keys(fields)) {
+      value.changed.add(field);
+    }
+  };
+  // Abort receipts are lifecycle writes; a returned receipt replaces the chat.abort reply.
+  const commitAbort = (method: string, params: unknown, response: unknown) => {
+    if (!isRecord(params) || !isRecord(response)) {
+      return undefined;
+    }
+    if (
+      method === "chat.abort" &&
+      typeof params.sessionKey === "string" &&
+      response.aborted === true
+    ) {
+      const runId = typeof params.runId === "string" ? params.runId : undefined;
+      return abortRuns(params.sessionKey, runId, response);
+    }
+    if (
+      method === "sessions.abort" &&
+      typeof params.key === "string" &&
+      (response.status === "aborted" || response.status === "no-active-run")
+    ) {
+      // Like the Gateway, a run-scoped Stop settles only that run; only a
+      // session-wide Stop cascades to every run and controlled descendant.
+      if (typeof params.runId !== "string") {
+        settleSessionAbort(params.key, response.status === "aborted");
+      } else if (response.status === "aborted") {
+        abortRuns(params.key, params.runId, {});
+      }
+    }
+    return undefined;
+  };
   const materialize = (key: string, fields: Partial<ControlUiSessionFixture>) => {
     const value = record(key);
     value.row = { ...value.row, ...fields, key: canonicalKey(key) };
@@ -524,7 +588,7 @@ export function createControlUiSessionFixtures(
       };
     },
     patch,
-    abortRuns,
+    commitAbort,
     trackRun,
     materialize,
     list,

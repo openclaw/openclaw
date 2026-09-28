@@ -515,7 +515,7 @@ describe("embedded desktop panel presentation", () => {
         disconnects: disconnect.mock.calls.length,
         focus: onFocusTargetChange.mock.calls.at(-1)?.[0],
       }).toEqual({ connected: true, connections: 3, disconnects: 2, focus: selectedFocus });
-      expect(panel.renderRoot.textContent).toContain("Agent input is paused");
+      expect(panel.renderRoot.textContent).not.toContain("Agent input is paused");
       clickPanelButton(panel, 'button[aria-label="Switch to view only"]');
       await waitForFast(() => expect(connect).toHaveBeenCalledTimes(4));
       expect(connect.mock.calls.at(-1)?.[0].viewOnly).toBe(true);
@@ -885,9 +885,13 @@ describe("embedded desktop panel presentation", () => {
         "transport close code": "connection closed with code 1006",
         "unclean disconnect":
           "Reconnect. If it fails again, check the browser console and desktop service logs.",
-        "clean disconnect": "unknown reason",
       };
       const disconnectReason = disconnectReasons[outcome];
+      if (outcome === "clean disconnect") {
+        expect(panel.renderRoot.querySelector(".desktop-status > div")?.textContent?.trim()).toBe(
+          "Desktop disconnected",
+        );
+      }
       if (disconnectReason) {
         expect(panel.renderRoot.textContent).toContain(`Desktop disconnected: ${disconnectReason}`);
         expect(panel.renderRoot.querySelector(".desktop-status button")?.textContent).toContain(

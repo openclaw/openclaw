@@ -6,7 +6,7 @@ import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { consumeRootCommandOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { readPackageName, readPackageVersion } from "../infra/package-json.js";
-import { resolveRuntimeScriptPosition } from "./runtime-binary.js";
+import { isBunRuntime, resolveRuntimeScriptPosition } from "./runtime-binary.js";
 import {
   hasGatewayServiceLauncherOverride,
   resolveManagedGatewayServiceProcessEnv,
@@ -46,6 +46,7 @@ export async function resolveGatewayServiceInstallationRefreshRoot(params: {
   if (
     !root ||
     !command ||
+    isBunRuntime(command.programArguments[0] ?? "") ||
     state.loadState.status === "unknown" ||
     (state.runtime?.status !== "running" && state.runtime?.status !== "stopped") ||
     (process.platform === "linux" &&
