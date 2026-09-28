@@ -451,9 +451,7 @@ src/commands/onboarding-plugin-install.ts
 src/commands/status.test.ts
 src/config/config-misc.test.ts
 src/config/config.plugin-validation.test.ts
-src/config/io.observe-recovery.test.ts
 src/config/io.write-config.test.ts
-src/config/io.write-prepare.test.ts
 src/config/io.write-prepare.ts
 src/config/mutate.test.ts
 src/config/mutate.ts
