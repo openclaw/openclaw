@@ -2116,6 +2116,7 @@ describe("runBtwSideQuestion", () => {
 
     expect(listSessionEntriesCoreMock).toHaveBeenCalledWith({
       agentId: "main",
+      projection: "list",
       storePath: markerStorePath,
     });
     expect(loadSessionEntryMock).toHaveBeenCalledWith({

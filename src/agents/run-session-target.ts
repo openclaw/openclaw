@@ -95,6 +95,8 @@ export async function resolveAgentRunSessionTarget(params: {
     legacyMarker && !hasCompleteTypedTarget
       ? listSessionEntriesReadOnly({
           agentId: legacyMarker.agentId,
+          // Marker matching reads sessionId/updatedAt only; never materialize saved prompts.
+          projection: "list",
           storePath: legacyMarker.storePath,
         })
       : [];
