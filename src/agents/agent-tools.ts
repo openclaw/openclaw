@@ -407,7 +407,6 @@ export function createOpenClawCodingToolsInternal(
   const shouldInheritEffectiveToolAllowlist =
     toolPolicyInheritanceSources.some(hasRestrictiveAllowPolicy);
   const cronCreatorToolAllowlist = options?.cronCreatorToolAllowlistRef ?? [];
-  const cronCreatorToolAllowlistCaptureRef = options?.cronCreatorToolAllowlistCaptureRef;
   const gatewayCaller = resolveScheduledToolCallerContext({
     scheduledToolPolicy: options?.scheduledToolPolicy,
     accountId: options?.agentAccountId,
@@ -570,7 +569,7 @@ export function createOpenClawCodingToolsInternal(
             runtimeToolAllowlist: options?.runtimeToolAllowlist,
             githubPublicationAvailable: options?.githubPublicationAvailable,
             cronCreatorToolAllowlist,
-            cronCreatorToolAllowlistCaptureRef,
+            cronCreatorToolAllowlistCaptureRef: options?.cronCreatorToolAllowlistCaptureRef,
             resolveCronCreatorToolAuthority: cronCreatorAuthorityResolver,
             cronCreatorAuthorityUnavailableReason: options?.cronCreatorAuthorityUnavailableReason,
             currentChatType: options?.chatType,
@@ -600,6 +599,7 @@ export function createOpenClawCodingToolsInternal(
             ...(cronSelfRemoveOnlyJobId ? { cronSelfRemoveOnlyJobId } : {}),
             inheritedToolAllowlist,
             inheritedToolDenylist,
+            onProgressCardPlanSaved: options?.onProgressCardPlanSaved,
             onYield: options?.onYield,
             claimYieldCompletion: options?.claimYieldCompletion,
             processScopeKey: scopeKey,
@@ -748,9 +748,9 @@ export function createOpenClawCodingToolsInternal(
   }).map(wrapGatewayCaller);
 }
 
-/** Build the SDK tool list without exposing core-only auxiliary read scope. */
+/** Build the SDK tool list without exposing core-only read scope or completion observations. */
 export function createOpenClawCodingTools(
-  options?: Omit<OpenClawCodingToolsOptions, "sessionReadScopeKey">,
+  options?: Omit<OpenClawCodingToolsOptions, "sessionReadScopeKey" | "onProgressCardPlanSaved">,
 ): AnyAgentTool[] {
   return createOpenClawCodingToolsInternal(options);
 }
