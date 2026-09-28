@@ -41,7 +41,6 @@ import {
   CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES,
 } from "../../../src/shared/device-bootstrap-profile.js";
 import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
-import { formatUiError } from "../lib/format-error.ts";
 import { isLoopbackHostname } from "../lib/gateway-locality.ts";
 import {
   clearDeviceAuthToken,
@@ -50,7 +49,12 @@ import {
   loadOrCreateDeviceIdentity,
 } from "../lib/nodes/index.ts";
 import { generateUUID } from "../lib/uuid.ts";
-import { createBrowserGatewaySocket, probeGatewayReachability } from "./gateway-browser-socket.ts";
+import {
+  BROWSER_WEBSOCKET_SECURITY_ERROR_CODE,
+  createBrowserGatewaySocket,
+  formatBrowserWebSocketConstructorError,
+  probeGatewayReachability,
+} from "./gateway-browser-socket.ts";
 import { GatewayChatEvents } from "./gateway-chat-events.ts";
 import { buildGatewayConnectDevice } from "./gateway-connect-device.ts";
 import {
@@ -175,59 +179,11 @@ type GatewayConnectTiming = Omit<GatewayProtocolTiming<ConnectPlan>, "plan" | "d
 const CONNECT_FAILED_CLOSE_CODE = 4008;
 const STARTUP_RETRY_CLOSE_CODE = 4013;
 const BROWSER_WEBSOCKET_CLOSE_CODE = 1006;
-const BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR_CODE = "BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR";
-const BROWSER_WEBSOCKET_SECURITY_ERROR_CODE = "BROWSER_WEBSOCKET_SECURITY_ERROR";
 const DEFAULT_GATEWAY_TICK_INTERVAL_MS = 30_000;
 const MIN_GATEWAY_TICK_WATCH_INTERVAL_MS = 1_000;
 function toGatewayErrorInfo(error: GatewayRequestError): ErrorShape {
   const { gatewayCode: code, message, details, retryable, retryAfterMs } = error;
   return { code, message, details, retryable, retryAfterMs };
-}
-
-function getErrorName(err: unknown): string | undefined {
-  const name =
-    err && typeof err === "object" && "name" in err ? (err as { name?: unknown }).name : undefined;
-  return typeof name === "string" && name.trim() ? name : undefined;
-}
-
-function isBrowserWebSocketSecurityError(err: unknown): boolean {
-  const name = getErrorName(err)?.toLowerCase();
-  const message = formatUiError(err).toLowerCase();
-  return (
-    name === "securityerror" ||
-    message.includes("security error") ||
-    message.includes("mixed content") ||
-    message.includes("insecure websocket")
-  );
-}
-
-function formatBrowserWebSocketConstructorError(err: unknown, url: string): ErrorShape {
-  const securityError = isBrowserWebSocketSecurityError(err);
-  const browserMessage = formatUiError(err);
-  const isPlaintextWs = url.trim().toLowerCase().startsWith("ws://");
-  const details = {
-    code: securityError
-      ? BROWSER_WEBSOCKET_SECURITY_ERROR_CODE
-      : BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR_CODE,
-    browserErrorName: getErrorName(err),
-    browserMessage,
-  };
-  if (securityError) {
-    return {
-      code: BROWSER_WEBSOCKET_SECURITY_ERROR_CODE,
-      message:
-        "Browser refused the Gateway WebSocket for security reasons." +
-        (isPlaintextWs
-          ? " Use wss:// when the Control UI is served over HTTPS/Tailscale Serve, or open the loopback dashboard at http://127.0.0.1:18789."
-          : " Check the Gateway WebSocket URL and browser security policy."),
-      details,
-    };
-  }
-  return {
-    code: BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR_CODE,
-    message: `Could not create the Gateway WebSocket: ${browserMessage}`,
-    details,
-  };
 }
 
 async function deriveLegacyV4RecoveryScope(material: string | undefined): Promise<string> {
