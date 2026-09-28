@@ -218,6 +218,7 @@ patchedDependencies:
   '@openclaw/proxyline@0.3.12': 9e0969d2dc0abb32610053fba342756afb56f4996c90adfdc34f21ad090fbb0f
   baileys@7.0.0-rc14: 03ae85550381d1bda7d014c9aa9f544ad421d35d745d1167fd5d33f7f715dafb
   chrome-devtools-mcp@1.9.0: 832ce1d2ff002b44edb93bae88858d6edd8bc833acc87dd0fe82454d8834e340
+  ghostty-web@0.4.0: eb0a0b91bbf843ba8dceeade968072a6c7a6be402fdd1e80d466e54241b62fa6
   matrix-js-sdk@42.4.0: 12d9bb9bdc53b7b96d8d887d0bea6b3072d1fef488b51102caec19fb651c8e92
   vitest@5.0.1: 90ba2969491e095cc2e92a4d38256dfcf64f85078ec29e1762b9429a00b35901
 
@@ -2888,7 +2889,7 @@ importers:
         version: 3.4.15
       ghostty-web:
         specifier: 0.4.0
-        version: 0.4.0
+        version: 0.4.0(patch_hash=eb0a0b91bbf843ba8dceeade968072a6c7a6be402fdd1e80d466e54241b62fa6)
       highlight.js:
         specifier: 11.12.0
         version: 11.12.0
@@ -12359,7 +12360,7 @@ snapshots:
 
   '@openclaw/libterminal@0.3.6':
     dependencies:
-      ghostty-web: 0.4.0
+      ghostty-web: 0.4.0(patch_hash=eb0a0b91bbf843ba8dceeade968072a6c7a6be402fdd1e80d466e54241b62fa6)
 
   '@openclaw/proxyline@0.3.12(patch_hash=9e0969d2dc0abb32610053fba342756afb56f4996c90adfdc34f21ad090fbb0f)(undici@8.10.2)':
     dependencies:
@@ -15186,7 +15187,7 @@ snapshots:
     dependencies:
       resolve-pkg-maps: 1.0.0
 
-  ghostty-web@0.4.0: {}
+  ghostty-web@0.4.0(patch_hash=eb0a0b91bbf843ba8dceeade968072a6c7a6be402fdd1e80d466e54241b62fa6): {}
 
   glob-parent@5.1.2:
     dependencies:

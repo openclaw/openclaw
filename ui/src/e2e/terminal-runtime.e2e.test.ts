@@ -13,6 +13,7 @@ const suite = createControlUiE2eSuite({
 
 type BrowserTerminalController = {
   terminal: {
+    getSelection: () => string;
     wasmTerm?: {
       getLine: (row: number) => Array<{ codepoint: number }> | null;
     };
@@ -32,7 +33,16 @@ async function loadRuntime(page: Page): Promise<void> {
   const moduleUrl = new URL("src/components/terminal/terminal-runtime.ts", suite.server.baseUrl)
     .href;
 
-  await page.goto(suite.server.baseUrl);
+  // This suite exercises the real terminal runtime in a private document. The
+  // application router and dev-client reloads do not own this document's lifetime.
+  const fixtureUrl = new URL("terminal-runtime-fixture", suite.server.baseUrl).href;
+  await page.route(fixtureUrl, (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      body: "<!doctype html><html><body></body></html>",
+    }),
+  );
+  await page.goto(fixtureUrl);
   // addScriptTag resolves before the module body runs, so the global is not
   // observable yet; wait for the assignment instead of racing page.evaluate.
   await page.addScriptTag({
@@ -164,4 +174,116 @@ suite.define(() => {
       expect(result.finalSecondLine).toContain("FRESH");
     });
   });
+
+  it("releases disposed terminal document listeners without breaking live selection", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page, context }) => {
+      await loadRuntime(page);
+      const cdp = await context.newCDPSession(page);
+      // Observe browser-owned roots without wrapping or retaining the callbacks.
+      const documentListeners = async () => {
+        try {
+          const { result } = await cdp.send("Runtime.evaluate", {
+            expression: "document",
+            objectGroup: "terminal-listeners",
+          });
+          const { listeners } = await cdp.send("DOMDebugger.getEventListeners", {
+            objectId: result.objectId!,
+          });
+          return listeners.map((listener) => listener.type).toSorted();
+        } finally {
+          await cdp.send("Runtime.releaseObjectGroup", { objectGroup: "terminal-listeners" });
+        }
+      };
+      const emptyDocumentListeners = await documentListeners();
+      let finalDocumentListeners: string[] = [];
+      try {
+        await page.evaluate(async () => {
+          const runtime = await (window as RuntimeWindow).openclawTerminalRuntimeModule;
+          const host = document.body.appendChild(document.createElement("div"));
+          host.style.cssText = "width:800px;height:400px";
+          const controller = await runtime.createIsolatedGhosttyTerminal({
+            parent: host,
+            autoFit: false,
+            readOnly: true,
+            size: { columns: 80, rows: 24 },
+          });
+          controller.write(new TextEncoder().encode("MEMORY_LIFETIME_SENTINEL"));
+          (window as RuntimeWindow).liveTerminal = { host, controller };
+        });
+        const liveDocumentListeners = await documentListeners();
+        expect(liveDocumentListeners.length).toBeGreaterThan(emptyDocumentListeners.length);
+        await page.evaluate(async () => {
+          const runtime = await (window as RuntimeWindow).openclawTerminalRuntimeModule;
+          for (let index = 0; index < 3; index++) {
+            const host = document.body.appendChild(document.createElement("div"));
+            const abort = new AbortController();
+            try {
+              const controller = await runtime.createIsolatedGhosttyTerminal({
+                parent: host,
+                autoFit: false,
+                readOnly: true,
+                signal: abort.signal,
+                size: { columns: 80, rows: 24 },
+              });
+              try {
+                controller.write(new TextEncoder().encode("DISPOSED_TERMINAL"));
+              } finally {
+                if (index === 1) {
+                  abort.abort();
+                }
+                controller.dispose();
+                controller.dispose();
+              }
+            } finally {
+              host.remove();
+            }
+          }
+          (window as RuntimeWindow).liveTerminal!.controller.write(
+            new TextEncoder().encode(" LIVE_STILL_WRITES"),
+          );
+        });
+        expect(await documentListeners()).toEqual(liveDocumentListeners);
+        const line = await page.evaluate(() =>
+          ((window as RuntimeWindow).liveTerminal!.controller.terminal.wasmTerm?.getLine(0) ?? [])
+            .map((cell) => String.fromCodePoint(cell.codepoint || 32))
+            .join(""),
+        );
+        expect(line).toContain("LIVE_STILL_WRITES");
+        const bounds = await page.locator("canvas").boundingBox();
+        if (!bounds) {
+          throw new Error("Live terminal canvas is not visible");
+        }
+        await page.mouse.move(bounds.x + 1, bounds.y + 4);
+        await page.mouse.down();
+        await page.mouse.move(bounds.x + (bounds.width / 80) * 6, bounds.y + 4);
+        await page.mouse.up();
+        const selection = () =>
+          page.evaluate(() =>
+            (window as RuntimeWindow).liveTerminal!.controller.terminal.getSelection(),
+          );
+        expect(await selection()).toContain("MEMORY");
+        await page.mouse.click(bounds.x + bounds.width + 10, bounds.y + 4);
+        expect(await selection()).toBe("");
+      } finally {
+        try {
+          await page.evaluate(() => {
+            const live = (window as RuntimeWindow).liveTerminal;
+            live?.controller.dispose();
+            live?.host.remove();
+            delete (window as RuntimeWindow).liveTerminal;
+          });
+          finalDocumentListeners = await documentListeners();
+        } finally {
+          await cdp.detach();
+        }
+      }
+      expect(finalDocumentListeners).toEqual(emptyDocumentListeners);
+    });
+  });
 });
+type RuntimeWindow = Window & {
+  openclawTerminalRuntimeModule: Promise<
+    typeof import("../components/terminal/terminal-runtime.ts")
+  >;
+  liveTerminal?: { host: HTMLElement; controller: BrowserTerminalController };
+};
