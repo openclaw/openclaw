@@ -19,6 +19,7 @@ import { admitAttachmentFiles } from "./chat-attachment-admission.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { renderAttachmentFileIcon } from "./chat-attachment-file-icon.ts";
 import { renderCompactAttachmentFile } from "./chat-attachment-file.ts";
+import { resizeChatAttachmentImage } from "./chat-attachment-image.ts";
 import { useSingleAttachmentPicker } from "./chat-attachment-picker-policy.ts";
 import {
   ChatAttachmentReadLifecycle,
@@ -131,7 +132,12 @@ function dataImageClipboardFile(
     return null;
   }
   try {
-    const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    // Avoid the string iterator and a callback per byte on multi-megabyte pastes.
+    for (let index = 0; index < binary.length; index++) {
+      bytes[index] = binary.charCodeAt(index);
+    }
     return {
       file: new File([bytes], `${baseName}.${mimeType.slice("image/".length)}`, { type: mimeType }),
       dataUrl: `data:${mimeType};base64,${base64}`,
@@ -181,6 +187,8 @@ function readAttachmentFile(
     return;
   }
   const reader = new FileReader();
+  let preparedFile = file;
+  const preparation = new AbortController();
   let settled = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const cancel = (outcome: "error" | "aborted") => {
@@ -196,6 +204,7 @@ function readAttachmentFile(
       return;
     }
     settled = true;
+    preparation.abort();
     clearTimeout(timer);
     timer = undefined;
     signal.removeEventListener("abort", abort);
@@ -204,7 +213,7 @@ function readAttachmentFile(
       const completedAttachment = registerChatAttachmentPayload({
         attachment: entry.attachment,
         dataUrl: reader.result,
-        file,
+        file: preparedFile,
       });
       const ready = [...entry.destination.getAttachments(), completedAttachment];
       const readyIds = new Set(ready.map(({ id }) => id));
@@ -225,6 +234,11 @@ function readAttachmentFile(
   };
   const abort = () => cancel("aborted");
   const onTimeout = () => cancel("error");
+  const setProcessing = (processing: boolean) => {
+    clearTimeout(timer);
+    timer =
+      processing && !settled ? setTimeout(onTimeout, CHAT_ATTACHMENT_READ_TIMEOUT_MS) : undefined;
+  };
   entry.cancel = abort;
   signal.addEventListener("abort", abort, { once: true });
   reader.addEventListener("error", () => finish("error"), { once: true });
@@ -234,17 +248,42 @@ function readAttachmentFile(
     if (!settled && event.lengthComputable && event.total > 0) {
       reads.updateProgress(entry, Math.min(1, Math.max(0, event.loaded / event.total)));
       if (timer !== undefined) {
-        clearTimeout(timer);
-        timer = setTimeout(onTimeout, CHAT_ATTACHMENT_READ_TIMEOUT_MS);
+        setProcessing(true);
       }
     }
   });
   entry.destination.onPendingReadsChange?.(1);
-  timer = setTimeout(onTimeout, CHAT_ATTACHMENT_READ_TIMEOUT_MS);
-  try {
-    reader.readAsDataURL(file);
-  } catch {
-    finish("error");
+  setProcessing(true);
+  const readPreparedFile = (prepared: File) => {
+    if (settled) {
+      return;
+    }
+    // Reapply strict admission to the encoded result before any base64 read.
+    if (admitAttachmentFiles([prepared], props.attachmentLimits).length === 0) {
+      finish("error");
+      return;
+    }
+    preparedFile = prepared;
+    entry.attachment = {
+      ...entry.attachment,
+      mimeType: prepared.type || "application/octet-stream",
+      sizeBytes: prepared.size,
+    };
+    setProcessing(true);
+    try {
+      reader.readAsDataURL(prepared);
+    } catch {
+      finish("error");
+    }
+  };
+  const imageLimit = props.attachmentLimits?.maxImageBytes;
+  if (imageLimit !== undefined && file.type.startsWith("image/") && file.size > imageLimit) {
+    void resizeChatAttachmentImage(file, imageLimit, preparation.signal, setProcessing).then(
+      readPreparedFile,
+      () => finish("error"),
+    );
+  } else {
+    readPreparedFile(file);
   }
 }
 
@@ -264,6 +303,7 @@ export function appendChatAttachmentFiles(
   const files = admitAttachmentFiles(
     candidates.filter((file) => !unsupported.includes(file)),
     props.attachmentLimits,
+    { resizeImages: true },
   );
   if (files.length === 0) {
     return 0;
@@ -300,7 +340,10 @@ export function handleChatAttachmentPaste(
     return;
   }
   e.preventDefault();
-  if (pasted) {
+  if (
+    pasted &&
+    (!props.attachmentLimits || pasted.file.size <= props.attachmentLimits.maxImageBytes)
+  ) {
     if (admitAttachmentFiles([pasted.file], props.attachmentLimits).length === 0) {
       return;
     }

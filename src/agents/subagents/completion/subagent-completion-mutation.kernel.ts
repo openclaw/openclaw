@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import {
   bindDeliveryQueueEntry,
+  loadDeliveryQueueEntryInDatabase,
   upsertBoundDeliveryQueueEntryInDatabase,
 } from "../../../infra/delivery-queue-sqlite-bound.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../../infra/kysely-sync.js";
@@ -21,7 +22,10 @@ import {
   markRequesterSettleWakePending,
 } from "../registry/subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
-import { bindSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
+import {
+  bindSubagentRunRecord,
+  rowToSubagentRunRecord,
+} from "../registry/subagent-registry.store.codec.js";
 import {
   deleteSubagentRunRowInDatabase,
   upsertSubagentRunRowInDatabase,
@@ -363,9 +367,51 @@ export function mutateSubagentCompletionInDatabase(
 ): SubagentCompletionMutationResult {
   switch (mutation.kind) {
     case "settle": {
-      const current = readSubagentRun(database, mutation.expected.runId);
+      const queued = loadDeliveryQueueEntryInDatabase(
+        database,
+        SESSION_DELIVERY_QUEUE_NAME,
+        mutation.queueId,
+        "pending",
+        // SAFETY: The session namespace stores only the canonical delivery payload.
+      ) as QueuedSessionDelivery | null;
+      const owner = queued?.kind === "agentTurn" ? queued.owner : undefined;
+      const row = executeSqliteQuerySync(
+        database.db,
+        query(database.db)
+          .selectFrom("subagent_runs")
+          .selectAll()
+          .where("run_id", "=", mutation.expected.runId),
+      ).rows[0];
+      const current = row && rowToSubagentRunRecord(row);
       if (
         !current ||
+        !queued ||
+        !owner ||
+        owner.kind !== "subagent_completion" ||
+        owner.runId !== current.runId ||
+        owner.generation !== current.delivery?.generation ||
+        owner.deadlineAt !== current.delivery.deadlineAt ||
+        (queued.settlementOutcome ??
+          (queued.acknowledgedAt !== undefined ? "recovered" : undefined)) !== "recovered" ||
+        compareSubagentRunGeneration(current, mutation.expected) !== 0 ||
+        current.childSessionKey !== mutation.expected.childSessionKey ||
+        current.requesterSessionKey !== mutation.expected.requesterSessionKey ||
+        current.requesterStorePath !== mutation.expected.requesterStorePath
+      ) {
+        throw new Error("Subagent completion recovery lost its queue or native owner");
+      }
+      if (current.delivery.status === "delivered" && current.delivery.queueId === undefined) {
+        // A marked queue retains producer cleanup after a committed write. Reconcile
+        // the current native row without replaying its write or terminal timestamps.
+        return {
+          applied: true,
+          records: [{ row, cleanupHandled: mutation.expected.cleanupHandled }],
+          retiredRunIds: [],
+          queueIds: [],
+        };
+      }
+      if (
+        current.delivery.queueId !== mutation.queueId ||
         bindSubagentRunRecord(current).payload_json !==
           bindSubagentRunRecord(mutation.expected).payload_json
       ) {

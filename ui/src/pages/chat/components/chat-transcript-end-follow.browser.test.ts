@@ -211,21 +211,30 @@ it("keeps a reader observed at the end pinned when a row grows without a follow"
 });
 
 it.each([
-  { deltaY: 120, follows: true },
-  { deltaY: -120, follows: false },
+  { deltaY: 120, follows: true, earlierGrowth: 0 },
+  { deltaY: -120, follows: false, earlierGrowth: 0 },
+  { deltaY: 120, follows: true, earlierGrowth: 11 },
+  { deltaY: -120, follows: false, earlierGrowth: 11 },
 ])(
-  "preserves wheel intent when content grows at the end ($deltaY)",
-  async ({ deltaY, follows }) => {
+  "preserves wheel intent through late growth ($deltaY, $earlierGrowth px above the viewport)",
+  async ({ deltaY, follows, earlierGrowth }) => {
     const { host, thread, extent, row, dock, distance } = await mountEndFollowFixture();
     host.transcript.scrollToEnd();
     await expect.poll(distance).toBe(0);
     await settleFrames();
 
-    await commitTask(host, () => {
-      thread.dispatchEvent(new WheelEvent("wheel", { deltaY }));
-      host.lastRowHeight += 200;
+    // Intrinsic growth must trigger its own measured-range commit. Growth above
+    // the viewport also queues compensation clamped by the still-old range.
+    await new Promise<void>((resolve) => {
+      setTimeout(() => {
+        thread.dispatchEvent(new WheelEvent("wheel", { deltaY }));
+        const earlier = host.querySelector<HTMLElement>('[data-virtual-row-key="earlier"] > div')!;
+        earlier.style.height = `${400 + earlierGrowth}px`;
+        (row.firstElementChild as HTMLElement).style.height = "1100px";
+        resolve();
+      }, 0);
     });
-    await expect.poll(() => extent.offsetHeight).toBe(1500);
+    await expect.poll(() => extent.offsetHeight).toBe(1500 + earlierGrowth);
     await settleFrames();
     expect(distance()).toBe(follows ? 0 : 200);
     if (follows) {

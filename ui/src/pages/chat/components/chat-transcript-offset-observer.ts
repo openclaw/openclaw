@@ -99,10 +99,15 @@ export function scrollTranscriptToEnd(
   instance: Virtualizer<HTMLDivElement, HTMLElement>,
   { source, behavior }: Required<ChatScrollToEndOptions>,
   cancelScroll: () => void,
+  measureSkippedRows: () => void,
 ): void {
   // Retargeting automatic follow must not insert an instant stop or lose manual ownership.
   if (source !== "auto" || state.scrollCommand?.target !== "end") {
     cancelScroll();
+  } else if (state.scrollCommand.behavior === "smooth" && behavior !== "smooth") {
+    // Retargeting bypasses cancellation, which normally replays the row sizes
+    // TanStack suppressed outside the outgoing smooth command’s target buffer.
+    measureSkippedRows();
   }
   const current = state.scrollCommand;
   state.scrollCommand = {
@@ -182,7 +187,15 @@ export function observeTranscriptOffset(
       maintenanceRevision += 1;
     }
   };
-  owner.state.recordProgrammaticScroll = recordProgrammaticScroll;
+  const recordVirtualizerScroll = (before: number, after: number, maintenance: boolean) => {
+    // Measurement retries can move the old end after the grown range commits.
+    // Layout/composer receipts already carry their anchor correction separately.
+    if (maintenance && before !== after) {
+      owner.endAnchor.recordLayoutCorrection(before, after);
+    }
+    recordProgrammaticScroll(before, after, maintenance);
+  };
+  owner.state.recordProgrammaticScroll = recordVirtualizerScroll;
   const stopCorrections = element
     ? subscribeTranscriptScroll(element, (observation) => {
         if (observation.type === "composer-input") {
@@ -405,7 +418,7 @@ export function observeTranscriptOffset(
     if (owner.state.syncNativeOffset === syncOffset) {
       owner.state.syncNativeOffset = null;
     }
-    if (owner.state.recordProgrammaticScroll === recordProgrammaticScroll) {
+    if (owner.state.recordProgrammaticScroll === recordVirtualizerScroll) {
       owner.state.recordProgrammaticScroll = null;
       owner.state.maintenanceScrollOffset = null;
     }

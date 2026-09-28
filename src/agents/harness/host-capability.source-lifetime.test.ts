@@ -165,7 +165,7 @@ it.each(["source assertion", "source signal", "lifecycle rotation"] as const)(
       }
       current = true;
       expect(() => retained.assertCurrent()).toThrow(
-        revocation === "source signal" ? revoked : "no longer active",
+        revocation === "lifecycle rotation" ? "no longer active" : revoked,
       );
     } finally {
       modelBinding?.release();

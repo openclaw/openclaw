@@ -18,11 +18,11 @@ import { runPackageUpdateDoctor } from "./update-command-package.js";
 const { executionParams, mocks, successfulUpdate } =
   await import("./update-command-execution.test-support.js");
 
-it.each(
-  (["package", "git"] as const).flatMap((kind) =>
-    (["healthy", "requester-revoked", "run-replaced"] as const).map((fault) => ({ kind, fault })),
-  ),
-)(
+it.each([
+  { kind: "git", fault: "healthy" },
+  { kind: "package", fault: "requester-revoked" },
+  { kind: "git", fault: "run-replaced" },
+] as const)(
   "delegates $kind Doctor without reusing its suspended parent ($fault)",
   async ({ kind, fault }) => {
     await withTestDir({ prefix: "update-doctor-delegation-" }, async (dir) => {

@@ -633,6 +633,8 @@ describe("runSetupWizard", () => {
   }
 
   beforeEach(() => {
+    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", undefined);
+    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", undefined);
     vi.clearAllMocks();
     committedConfigFiles.clear();
     promptAuthChoiceGrouped.mockReset();
@@ -899,6 +901,14 @@ describe("runSetupWizard", () => {
     expect(diskConfig.agents?.defaults?.workspace).toBe("/tmp/conflicting-onboarding-workspace");
   });
 
+  const configuredRemoteProbeArgs = {
+    originScopedDeviceAuth: true,
+    configuredRemote: true,
+    url: "wss://gateway.example.test",
+    config: expect.any(Object),
+    token: undefined,
+  };
+
   it.each([
     { name: "token", optionKey: "remoteToken", remoteKey: "token", hasStoredUrl: true },
     { name: "password", optionKey: "remotePassword", remoteKey: "password", hasStoredUrl: true },
@@ -949,9 +959,9 @@ describe("runSetupWizard", () => {
       }
 
       expect(probeGatewayReachable).toHaveBeenCalledWith({
-        originScopedDeviceAuth: true,
+        ...configuredRemoteProbeArgs,
+        configuredRemote: false,
         url: "wss://flag.example.com:18789",
-        config: expect.any(Object),
         token: remoteKey === "token" ? remoteCredential : undefined,
         ...(remoteKey === "password" ? { password: remoteCredential } : {}),
       });
@@ -999,10 +1009,7 @@ describe("runSetupWizard", () => {
     );
 
     expect(probeGatewayReachable).toHaveBeenCalledWith({
-      originScopedDeviceAuth: true,
-      url: "wss://gateway.example.test",
-      config: expect.any(Object),
-      token: undefined,
+      ...configuredRemoteProbeArgs,
       password: remotePassword,
     });
   });
@@ -1028,12 +1035,10 @@ describe("runSetupWizard", () => {
       );
 
       expect(probeGatewayReachable).toHaveBeenCalledWith({
-        originScopedDeviceAuth: true,
-        url: "wss://gateway.example.test",
+        ...configuredRemoteProbeArgs,
         config: expect.objectContaining({
           gateway: config.gateway,
         }),
-        token: undefined,
       });
     },
   );
@@ -1065,9 +1070,7 @@ describe("runSetupWizard", () => {
     }
 
     expect(probeGatewayReachable).toHaveBeenCalledWith({
-      originScopedDeviceAuth: true,
-      url: "wss://gateway.example.test",
-      config: expect.any(Object),
+      ...configuredRemoteProbeArgs,
       token: "resolved-remote-token",
     });
   });
@@ -1101,9 +1104,7 @@ describe("runSetupWizard", () => {
     }
 
     expect(probeGatewayReachable).toHaveBeenCalledWith({
-      originScopedDeviceAuth: true,
-      url: "wss://gateway.example.test",
-      config: expect.any(Object),
+      ...configuredRemoteProbeArgs,
       token: "ambient-token",
     });
   });
@@ -1140,7 +1141,8 @@ describe("runSetupWizard", () => {
     }
 
     expect(probeGatewayReachable).toHaveBeenCalledWith({
-      originScopedDeviceAuth: true,
+      ...configuredRemoteProbeArgs,
+      configuredRemote: false,
       url: "wss://flag.example.com:18789",
       config: expect.objectContaining({
         gateway: expect.objectContaining({
@@ -1151,7 +1153,6 @@ describe("runSetupWizard", () => {
           }),
         }),
       }),
-      token: undefined,
     });
     expect(promptRemoteGatewayConfig).toHaveBeenCalledWith(
       expect.objectContaining({

@@ -93,6 +93,7 @@ function fixture(
       "record-shared.mjs",
       "update-compat-contract.mjs",
       "openclaw-e2e-instance.sh",
+      "docker-e2e-watchdog.mjs",
       "direct-run.mjs",
     ]) {
       copyFileSync(join(repo, "scripts/lib", file), join(toolingRoot, "scripts/lib", file));
@@ -472,6 +473,7 @@ describe("frozen admission upgrade Docker aliases", () => {
     expect(record.contracts).toHaveLength(1);
     expect(record.contracts[0].modes).toEqual({
       OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE: "current",
+      OPENCLAW_FROZEN_UPGRADE_SURVIVOR_TOOL_SEARCH_RECIPE: "absent",
       releaseTrain: train,
     });
     expect(record.selectedSha).toBe(f.selected.sha);

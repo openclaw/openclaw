@@ -83,7 +83,10 @@ const shellOwners = {
   ],
   "upgrade-survivor": [
     "upgrade_survivor_capabilities",
-    ["OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE"],
+    [
+      "OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE",
+      "OPENCLAW_FROZEN_UPGRADE_SURVIVOR_TOOL_SEARCH_RECIPE",
+    ],
   ],
 };
 
@@ -1179,6 +1182,7 @@ async function preflightFrozenTargetContracts(input, workflow = false, verifiedT
     if (consumer === "update-corrupt-plugin") {
       required(sources.tooling, "scripts/lib/update-compat-contract.mjs");
       required(sources.tooling, "scripts/lib/openclaw-e2e-instance.sh");
+      required(sources.tooling, "scripts/lib/docker-e2e-watchdog.mjs");
       required(sources.tooling, "scripts/lib/direct-run.mjs");
     }
     if (consumer === "upgrade-survivor" && allow) {

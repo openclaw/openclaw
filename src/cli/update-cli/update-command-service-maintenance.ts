@@ -271,7 +271,10 @@ async function stopManagedServiceBeforeMutableUpdate(
   // Only a verified live handoff lease admits a helper that retains Gateway ancestry.
   // Inspection uses the inherited run ID; a missing run ID is refused.
   const resolveAncestryBlock = async (state: GatewayServiceState) => {
-    const block = gatewayMaintenanceBlock(state, params.root);
+    delete inspected.serviceMembershipSourceAbsent;
+    const block = gatewayMaintenanceBlock(state, params.root, "stop", () => {
+      inspected.serviceMembershipSourceAbsent = true;
+    });
     if (
       !block ||
       (await isCurrentManagedServiceUpdateHandoffProcess({
@@ -304,7 +307,14 @@ async function stopManagedServiceBeforeMutableUpdate(
       const retryTimeout = process.platform === "win32" && attempt === 0;
       try {
         serviceState = await withCommandProcessScope(() =>
-          readGatewayServiceStateForUpdate(inspectedService, serviceEnv, params.timeoutMs),
+          readGatewayServiceStateForUpdate(
+            inspectedService,
+            serviceEnv,
+            params.timeoutMs,
+            params.phase === "inspect"
+              ? undefined
+              : { managerUid: params.expectedService?.serviceManagerUid, assertCurrent },
+          ),
         );
       } catch (error) {
         if (
@@ -511,7 +521,10 @@ async function stopManagedServiceBeforeMutableUpdate(
     // Ownership inspection and native preparation await work. Recheck the exact
     // launcher before stopping so a replacement service cannot inherit authority.
     const readCurrentService = async (env: NodeJS.ProcessEnv) => {
-      const state = await readGatewayServiceStateForUpdate(service, env, params.timeoutMs);
+      const state = await readGatewayServiceStateForUpdate(service, env, params.timeoutMs, {
+        managerUid: inspected.serviceManagerUid,
+        assertCurrent,
+      });
       const verdict = await revalidateManagedGatewayServiceAfterUpdate({
         state,
         root: params.root,
@@ -591,6 +604,16 @@ async function stopManagedServiceBeforeMutableUpdate(
             undefined,
             undefined,
             "service-process-changed",
+          );
+        }
+        const membershipBlock = await resolveAncestryBlock(beforeStop);
+        if (membershipBlock) {
+          throw new UpdatePreMutationError(
+            "managed-service-preflight",
+            membershipBlock.blockMessage,
+            {
+              failureFacts: membershipBlock.blockFailureFacts,
+            },
           );
         }
       }

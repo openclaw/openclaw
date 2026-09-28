@@ -545,11 +545,12 @@ module.exports = { stateMigrations: [{
             legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
           });
 
-      expect(
-        result.stepReceipts.find(
-          (receipt) => receipt.id === (legacyRoot ? "state-dir" : "plugin-install-index"),
-        ),
-      ).toMatchObject({ outcome: "completed" });
+      const preludeReceipt = result.stepReceipts.find(
+        (receipt) => receipt.id === (legacyRoot ? "state-dir" : "plugin-install-index"),
+      );
+      expect(preludeReceipt, JSON.stringify(preludeReceipt)).toMatchObject({
+        outcome: "completed",
+      });
       expect(fs.realpathSync(legacyStateDir)).toBe(fs.realpathSync(stateDir));
       expect(result.warnings).toEqual([]);
       if (legacySchema) {

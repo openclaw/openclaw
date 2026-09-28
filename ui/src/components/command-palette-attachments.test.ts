@@ -264,10 +264,16 @@ describe("command palette paste-only images", () => {
         coldInput.value = "Keep every image";
         coldInput.dispatchEvent(new Event("input", { bubbles: true }));
       }
+      // PNGs enter asynchronous resize preparation; use a non-resizable image
+      // to exercise synchronous admission rejection and partial-batch custody.
+      const candidate =
+        outcome === "oversized" || outcome === "partial"
+          ? new File(["image"], "oversized.gif", { type: "image/gif" })
+          : image();
       const files =
         outcome === "partial"
-          ? [new File(["ok"], "small.png", { type: "image/png" }), image()]
-          : [image()];
+          ? [new File(["ok"], "small.png", { type: "image/png" }), candidate]
+          : [candidate];
       paste(coldInput, files);
       key(coldInput, { key: "Enter", metaKey: true });
       const take = state.captureHandoff();

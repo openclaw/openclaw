@@ -43,9 +43,13 @@ The operator terminal is enabled by default; set `gateway.terminal.enabled: fals
 
 When the terminal is disabled or your connection lacks admin access, the main terminal page shows an unavailable notice and a **New session** button to return to the composer.
 
-On Linux and macOS, a Gateway running on Bun uses a Node helper for terminal
-I/O. Keep Node available on the Gateway's `PATH`; an unavailable Node executable
-produces a startup error with installation guidance.
+On Linux and macOS, a Gateway running on Bun uses Bun's native PTY without a
+Node runtime only on builds providing `Bun.Terminal.pause()` and `resume()`,
+such as the OpenClaw Bun fork builds that also carry the macOS child-exit fix.
+Other Bun releases use a Node helper for terminal I/O. Keep Node available on
+the Gateway's `PATH`; OpenClaw skips Bun's `node` shim, and an unavailable Node
+executable produces a startup error with installation guidance. Windows keeps
+`node-pty`. See [Bun compatibility](/install/bun-compatibility#known-limitations).
 
 Enablement changes hot-apply without restarting the Gateway. Disabling closes
 attached, detached, and conversation-owned terminals and cancels pending opens.

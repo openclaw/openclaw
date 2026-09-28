@@ -125,6 +125,12 @@ export class OpenClawApp extends OpenClawLightDomElement {
       "openclaw-native-embed",
       embedHost !== null,
     );
+    this.toggleAttribute(
+      "data-native-titlebar",
+      embedHost?.platform === "macos" &&
+        embedHost.formFactor === "desktop" &&
+        embedHost.surface === "conversation",
+    );
     if (embedHost) {
       void import("../styles/native-embed.css");
     }

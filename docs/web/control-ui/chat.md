@@ -18,6 +18,10 @@ another agent's history. Select that pane, then choose **Home** or a conversatio
 in the sidebar. Home works even when you are already on its route; the other
 panes stay unchanged.
 
+When the macOS app embeds a single conversation beside its native sidebar, the
+chat header fills the window's titlebar row. Drag an empty area of the header to
+move the window; its buttons keep their normal actions.
+
 ## Collaborator drafts
 
 In a shared session, another person’s in-progress message stays visible when they pause typing. Draft previews update up to four times per second, keeping the latest text when input arrives faster. After 10 seconds without typing, its label changes from **is typing...** to **Draft** without removing the bubble or shifting the transcript. Typing again updates the same bubble. Sending, clearing the draft, leaving the composer, or leaving the session removes it. An idle preview fades out and smoothly closes its space during the final 300 milliseconds before its 30-second expiry, so an abandoned tab cannot leave it visible indefinitely. Typing again cancels the exit. With reduced motion enabled, the preview stays still and disappears at the same deadline without animation. Draft previews are temporary browser state, not saved messages; changing sessions or reconnecting clears them.
@@ -472,8 +476,9 @@ panes, top-level assistant tables stay at the reading width when their content f
 and use extra space only as needed, without widening the surrounding prose. Long
 cells wrap within the pane limit; genuinely dense tables still scroll horizontally.
 Short values such as byte counts stay intact beside long filenames or hashes, including on mobile.
-Wide desktop tables use compact icon-only controls above the header. Mobile and
-phone-landscape views retain larger touch controls and a visible **Expand table** label.
+Table controls appear below the table. Wide desktop tables use compact icon-only
+controls; mobile and phone-landscape views retain larger touch controls and a visible
+**Expand table** label.
 Ordinary inline tables grow vertically instead of adding a vertical scrollbar.
 **Copy table** copies tab-separated cells, and **Expand table** opens a larger view
 with a sticky header. If copying fails, the button clears any earlier success checkmark. In Chat, workspace

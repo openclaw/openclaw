@@ -297,19 +297,21 @@ describe("detectChangedScope", () => {
     }
   });
 
-  it("enables the iOS build lane for iOS build helper changes", () => {
+  it("enables iOS build and screenshot lanes for iOS build helper changes", () => {
     for (const helperPath of [
       "scripts/ios-team-id.sh",
       "scripts/ios-write-swift-filelist.mjs",
       "scripts/ios-write-swift-filelist.mts",
       "scripts/ios-version.ts",
       "scripts/lib/ios-version.ts",
+      "scripts/lib/mobile-version.ts",
       "scripts/lib/release-version.mjs",
       "scripts/lib/version-script-args.ts",
     ]) {
       expect(detectChangedScope([helperPath])).toEqual(
         expectedScope({ runNode: true, runIosBuild: true }),
       );
+      expect(shouldRunIosScreenshots([helperPath]), helperPath).toBe(true);
     }
   });
 
@@ -325,8 +327,10 @@ describe("detectChangedScope", () => {
     ["scripts/install-simslim.sh.bak", false],
     ["scripts/ios-simulator-prepare-extra.sh", false],
     ["scripts/lib/ios-simulator-prepare.sh", false],
+    ["scripts/lib/mobile-version.ts.bak", false],
+    ["scripts/mobile-version.ts", false],
     ["scripts/unrelated.sh", false],
-  ])("routes only exact simulator helper paths: %s", (helperPath, enabled) => {
+  ])("routes only exact native build helper paths: %s", (helperPath, enabled) => {
     expect(detectChangedScope([helperPath])).toMatchObject({
       runIosBuild: enabled,
       runMacos: false,

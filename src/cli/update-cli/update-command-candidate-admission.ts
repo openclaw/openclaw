@@ -252,6 +252,7 @@ export async function withUpdateCandidateAdmission<T>(
     return await execute(params.stagedPackage);
   }
   if (
+    target.packageAlreadyCurrent ||
     !usesCandidateUpdateAdmission(opts, prepared.installKind) ||
     target.updateInstallKind !== "package"
   ) {
