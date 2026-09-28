@@ -52,8 +52,9 @@ function fixtureDocument(direction: "ltr" | "rtl"): string {
 
 describeForcedColors("Control UI forced-colors indicators", () => {
   beforeAll(async () => {
-    if (canRunPlaywrightChromium(chromiumExecutablePath))
+    if (canRunPlaywrightChromium(chromiumExecutablePath)) {
       browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
+    }
   });
   afterAll(async () => {
     await browser?.close().catch(() => {});
@@ -92,12 +93,17 @@ describeForcedColors("Control UI forced-colors indicators", () => {
           const collapsed = document.querySelector(".chat-text details:not([open]) > summary");
           const expanded = document.querySelector(".chat-text details[open] > summary");
           const checkbox = document.querySelector(".task-list-item-checkbox");
-          const style = (element, pseudo) => getComputedStyle(element, pseudo);
-          const select = (element) => ({
+          const style = (element: Element | null, pseudo?: string) => {
+            if (!element) {
+              throw new Error("Missing indicator fixture element");
+            }
+            return getComputedStyle(element, pseudo);
+          };
+          const select = (element: Element | null) => ({
             appearance: style(element).appearance,
             backgroundImage: style(element).backgroundImage,
           });
-          const disclosure = (element) => {
+          const disclosure = (element: Element | null) => {
             const pseudo = style(element, "::before");
             return {
               end: pseudo.borderInlineEndStyle,
@@ -146,6 +152,9 @@ describeForcedColors("Control UI forced-colors indicators", () => {
           const field = document.querySelector(".field select:not([disabled])");
           const settings = document.querySelector(".settings-select:not([disabled])");
           const summary = document.querySelector(".chat-text details:not([open]) > summary");
+          if (!field || !settings || !summary) {
+            throw new Error("Missing normal-mode indicator fixture element");
+          }
           return {
             field: getComputedStyle(field).appearance,
             fieldImage: getComputedStyle(field).backgroundImage,
