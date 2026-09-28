@@ -17,6 +17,7 @@ export {
 } from "../infra/net/ssrf.js";
 export { formatErrorMessage } from "../infra/errors.js";
 export { fetchWithSsrFGuard, GuardedFetchRedirectError } from "../infra/net/fetch-guard.js";
+export { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 export {
   assertHttpUrlTargetsPrivateNetwork,
   buildHostnameAllowlistPolicyFromSuffixAllowlist,

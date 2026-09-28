@@ -283,6 +283,69 @@ describe("Google speech provider", () => {
     });
   });
 
+  it("sends Gemini 3.8 persona notes as speechMetadata instead of spoken text", async () => {
+    const requestMock = installGoogleTtsRequestMock();
+    const provider = buildGoogleSpeechProvider();
+    await provider.synthesize({
+      text: "The door is open.",
+      cfg: {},
+      providerConfig: {
+        apiKey: "***",
+        model: "gemini-3.8-flash-tts",
+        voiceName: "Kore",
+        audioProfile: "Speak professionally with a calm executive tone.",
+        personaPrompt: "Keep a close-mic feel.",
+      },
+      target: "audio-file",
+      timeoutMs: 8_000,
+    });
+    expectRecordFields(requireFirstRecordArg(requestMock, "Google 3.8 persona TTS request"), {
+      url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash-tts:generateContent",
+      body: {
+        contents: [
+          {
+            role: "user",
+            parts: [
+              {
+                text: "The door is open.",
+                speechMetadata: {
+                  style: "Speak professionally with a calm executive tone.\nKeep a close-mic feel.",
+                },
+              },
+            ],
+          },
+        ],
+        generationConfig: {
+          responseModalities: ["AUDIO"],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: {
+                voiceName: "Kore",
+              },
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("does not wrap Gemini 3.8 transcripts with persona direction", async () => {
+    const provider = buildGoogleSpeechProvider();
+    const prepared = await provider.prepareSynthesis?.({
+      text: "The door is open.",
+      cfg: {},
+      providerConfig: {
+        model: "gemini-3.8-flash-tts",
+        promptTemplate: "audio-profile-v1",
+        personaPrompt: "Keep a close-mic feel.",
+      },
+      persona: { id: "alfred", label: "Alfred" },
+      target: "audio-file",
+      timeoutMs: 1_000,
+    });
+    expect(prepared).toBeUndefined();
+  });
+
   it("bounds oversized Gemini TTS success JSON responses and cancels the stream", async () => {
     let cancelCount = 0;
     const release = vi.fn(async () => {});

@@ -163,40 +163,44 @@ async function googleVoicesFetchOnce(params: {
     ...(http.dispatcherPolicy ? { dispatcherPolicy: http.dispatcherPolicy } : {}),
   };
   const posted = params.method === "POST";
-  if (posted) {
-    params.assertCurrent?.();
-  }
-  const { response, release } = posted
-    ? await postJsonRequest({
-        url: params.url,
-        headers: http.headers,
-        body: params.body,
-        timeoutMs: params.timeoutMs,
-        fetchFn: fetch,
-        pinDns: false,
-        allowPrivateNetwork: http.allowPrivateNetwork,
-        dispatcherPolicy: http.dispatcherPolicy,
-      })
-    : await fetchWithTimeoutGuarded(
-        params.url,
-        { method: "GET", headers: http.headers },
-        params.timeoutMs,
-        fetch,
-        guarded,
-      );
-  try {
-    if (!response.ok) {
-      await assertOkOrThrowProviderError(response, "Google voices request failed");
+  const send = async () => {
+    const { response, release } = posted
+      ? await postJsonRequest({
+          url: params.url,
+          headers: http.headers,
+          body: params.body,
+          timeoutMs: params.timeoutMs,
+          fetchFn: fetch,
+          pinDns: false,
+          allowPrivateNetwork: http.allowPrivateNetwork,
+          dispatcherPolicy: http.dispatcherPolicy,
+        })
+      : await fetchWithTimeoutGuarded(
+          params.url,
+          { method: "GET", headers: http.headers },
+          params.timeoutMs,
+          fetch,
+          guarded,
+        );
+    try {
+      if (!response.ok) {
+        await assertOkOrThrowProviderError(response, "Google voices request failed");
+      }
+      const payload = await readProviderJsonResponse<unknown>(response, "Google voices response");
+      const record = asOptionalRecord(payload);
+      if (!record) {
+        throw new Error("Google voices response was not an object");
+      }
+      return record;
+    } finally {
+      await release();
     }
-    const payload = await readProviderJsonResponse<unknown>(response, "Google voices response");
-    const record = asOptionalRecord(payload);
-    if (!record) {
-      throw new Error("Google voices response was not an object");
-    }
-    return record;
-  } finally {
-    await release();
+  };
+  if (!posted) {
+    return await send();
   }
+  const { withGuardedFetchRequestAuthority } = await import("openclaw/plugin-sdk/ssrf-runtime");
+  return await withGuardedFetchRequestAuthority(params.assertCurrent, send);
 }
 
 async function googleVoicesFetch(params: {

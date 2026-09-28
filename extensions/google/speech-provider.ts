@@ -253,16 +253,30 @@ function composeGoogleTtsText(params: {
     .join("\n\n");
 }
 
+function googleTtsSpeechStyle(params: {
+  audioProfile?: string;
+  personaPrompt?: string;
+}): string | undefined {
+  const style = [
+    normalizeOptionalString(params.audioProfile),
+    normalizeOptionalString(params.personaPrompt),
+  ]
+    .filter((part): part is string => part !== undefined)
+    .join("\n");
+  return style || undefined;
+}
+
 function googleTtsContentPart(params: {
   text: string;
   model: string;
   audioProfile?: string;
   speakerName?: string;
+  personaPrompt?: string;
 }): Record<string, unknown> {
   if (!isGemini38TtsModel(params.model)) {
     return { text: composeGoogleTtsText(params) };
   }
-  const style = normalizeOptionalString(params.audioProfile);
+  const style = googleTtsSpeechStyle(params);
   const speaker = normalizeOptionalString(params.speakerName);
   return {
     text: params.text,
