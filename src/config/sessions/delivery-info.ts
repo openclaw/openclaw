@@ -177,7 +177,7 @@ export function extractDeliveryInfoBatch(
         return {
           storePath: read.storePath,
           sessionKeys: read.sessionKeys,
-          projection: "list",
+          projection: "delivery",
           onReadSource: (source) => {
             read.source = source;
           },

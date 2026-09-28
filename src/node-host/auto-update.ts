@@ -12,6 +12,7 @@ import {
   compareSemverStrings,
   resolveNpmChannelTag,
   resolveUpdateInstallKind,
+  resolveUpdateRegistryTarget,
 } from "../infra/update-check.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -155,6 +156,7 @@ export function startNodeHostAutoUpdate(params: {
       channel: policy.channel,
       env,
       signal,
+      ...(process.versions.bun ? resolveUpdateRegistryTarget({ env }) : {}),
       runCommand: process.versions.bun
         ? undefined
         : (argv, options) => runCommandWithTimeout(argv, { ...options, signal }),
