@@ -57,9 +57,9 @@ registerHooks({
       OPENCLAW_CI_RUNNER_PROFILE: "github",
       OPENCLAW_CI_RUN_NODE: "true",
       OPENCLAW_CI_RUN_WINDOWS: "true",
-      // A product test keeps the real import guard on precise planning; tooling
-      // owners select the full maintainer plan, whose packing is covered separately.
-      OPENCLAW_CI_CHANGED_PATHS_JSON: '["src/infra/retry.test.ts"]',
+      // An explicit Windows test exercises its native planner through the same
+      // selected-target projection as production preflight.
+      OPENCLAW_CI_CHANGED_PATHS_JSON: '["src/infra/windows-process-start.test.ts"]',
     },
   });
   return {

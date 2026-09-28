@@ -14,6 +14,7 @@ import {
   type PlacementRecoveryDeps,
 } from "./placement-dispatch-pending-results.js";
 import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
+import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
 import {
   projectWorkerSessionTurnClaim,
   serializeWorkerSessionTurnClaim,
@@ -90,17 +91,28 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
           ) {
             throw new Error("Interrupted worker owner changed while stopping");
           }
-          const released = await placements.releaseTurn(claim, () => {
+          await placements.retainInterruptedTurnWorkspace(claim, () => {
             const releaseEnvironment = environments.get(placement.environmentId);
             if (!isCurrentActiveWorkerEnvironment(placement, releaseEnvironment)) {
-              throw new Error("Interrupted worker owner changed before release");
+              throw new Error("Interrupted worker owner changed before workspace recovery");
             }
           });
-          if (released.state !== "active") {
-            throw new Error("Interrupted worker placement changed during recovery");
+          const pendingFacts = await placements.readProjection([placement.sessionId], {
+            current: true,
+          });
+          await recoverPendingWorkspaceResults(deps, pendingFacts, placement.environmentId);
+          const recovered = (
+            await placements.readProjection([placement.sessionId], { current: true })
+          ).placements.get(placement.sessionId);
+          if (
+            recovered?.state !== "active" ||
+            !matchesWorkerPlacementTarget(recovered, placement) ||
+            recovered.turnClaim
+          ) {
+            return;
           }
           interruptedClaims.delete(serializeWorkerSessionTurnClaim(claim));
-          placement = released;
+          placement = recovered;
           environment = environments.get(placement.environmentId);
         } catch (error) {
           log.warn(

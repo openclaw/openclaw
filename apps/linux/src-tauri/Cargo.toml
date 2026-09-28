@@ -28,7 +28,7 @@ sha2 = "0.11.0"
 # `WebviewWindowBuilder::transparent` behind it on macOS, and the feature must
 # stay in sync with `app.macOSPrivateApi` in tauri.conf.json or tauri-build
 # fails. It is inert on Linux and Windows.
-tauri = { version = "2.11.5", features = [
+tauri = { version = "2.11.6", features = [
   "image-png",
   "macos-private-api",
   "tray-icon",
@@ -40,7 +40,7 @@ tauri-plugin-dialog = "2.7.3"
 tauri-plugin-global-shortcut = "2.3.2"
 tauri-plugin-opener = "2.5.5"
 tauri-plugin-process = "2.3.1"
-tauri-plugin-single-instance = { version = "2.4.4", features = ["deep-link"] }
+tauri-plugin-single-instance = { version = "2.4.5", features = ["deep-link"] }
 # Defer Windows cleanup until the installer launches successfully.
 # Return to crates.io once an eligible release includes this fix.
 # Preserve 2.10.1's network features instead of enabling OS proxy discovery.

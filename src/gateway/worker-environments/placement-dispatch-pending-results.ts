@@ -50,8 +50,17 @@ import {
 
 export type PlacementRecoveryDeps = {
   placements: WorkerDispatchPlacementStore;
-  environments: WorkerDispatchEnvironmentService;
-  failure: PlacementFailureActions;
+  environments: Pick<
+    WorkerDispatchEnvironmentService,
+    | "get"
+    | "destroy"
+    | "startTunnel"
+    | "stopTunnel"
+    | "reconcileEnvironment"
+    | "reconcileOnce"
+    | "supportsProviderExecutionMode"
+  >;
+  failure: Omit<PlacementFailureActions, "cancelProvisioning">;
   workspaceOperations: WorkerWorkspaceOperationCoordinator;
   resolveWorkspace: (params: WorkerSessionPlacementIdentity) => Promise<WorkerSessionWorkspace>;
   withPreparedRecovery: WithPreparedWorkerWorkspaceRecovery;
@@ -103,9 +112,7 @@ async function prepareAcceptedPublication(
   deps: PlacementRecoveryDeps,
   claim: WorkerSessionTurnClaim,
 ): Promise<void> {
-  if (deps.prepareAcceptedWorkspacePublication) {
-    await deps.prepareAcceptedWorkspacePublication(claim).catch(() => undefined);
-  }
+  await deps.prepareAcceptedWorkspacePublication?.(claim).catch(() => undefined);
 }
 
 export async function recoverPendingWorkspaceResults(

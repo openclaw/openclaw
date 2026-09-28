@@ -65,8 +65,8 @@ vi.mock("../wizard/setup.shared.js", async (importOriginal) => ({
   writeWizardConfigFile: mocks.writeWizardConfigFile,
 }));
 
-vi.mock("../commands/onboard-channels.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../commands/onboard-channels.js")>()),
+vi.mock("../flows/channel-setup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../flows/channel-setup.js")>()),
   setupChannels: mocks.setupChannels,
 }));
 

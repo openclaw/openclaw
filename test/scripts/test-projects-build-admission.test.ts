@@ -1065,11 +1065,54 @@ describe("cache lease completion", () => {
     },
   );
 
-  it.each(["failure", "signal", "rejection"])(
-    "joins admitted work after %s without confusing failure with cleanup",
-    async (outcome) => {
+  it.each([
+    { outcome: "failure", scope: "local", expected: 3 },
+    { outcome: "signal", scope: "local", expected: 2 },
+    { outcome: "rejection", scope: "local", expected: 2 },
+    { outcome: "failure", scope: "ci-focused", expected: 2 },
+    { outcome: "failure", scope: "ci-continued", expected: process.platform === "win32" ? 2 : 3 },
+    { outcome: "failure", scope: "ci-full-suite", expected: 3 },
+  ])(
+    "joins admitted work after $outcome without confusing failure with cleanup ($scope)",
+    async ({ outcome, scope, expected }) => {
       const groupJoined = process.platform !== "win32";
+      const focused = scope === "ci-focused" || scope === "ci-continued";
+      const configs = [
+        "test/vitest/vitest.unit-fast.config.ts",
+        "test/vitest/vitest.unit-fast-fake-timers.config.ts",
+        "test/vitest/vitest.cli.config.ts",
+      ];
+      const databaseConfig = "test/vitest/vitest.extension-database-workers.config.ts";
+      const files = [
+        "extensions/telegram/src/polling-session.test.ts",
+        "extensions/telegram/src/telegram-ingress-drain.test.ts",
+        "extensions/telegram/src/webhook.test.ts",
+      ];
+      vi.stubEnv("CI", scope === "local" ? "" : "1");
+      vi.stubEnv("GITHUB_ACTIONS", "");
+      vi.stubEnv("OPENCLAW_VITEST_SHARD_NAME", scope === "local" ? "" : "selected-envelope");
       vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "2");
+      vi.stubEnv(
+        "OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE",
+        scope === "ci-continued" ? "1" : "",
+      );
+      if (focused) {
+        vi.stubEnv(
+          "OPENCLAW_VITEST_INCLUDE_FILE",
+          patternFiles.writePatternFile("focused-ci.json", files),
+        );
+      }
+      if (scope === "ci-full-suite") {
+        const planner = await import("../../scripts/test-projects.test-support.mts");
+        vi.spyOn(planner, "buildFullSuiteVitestRunPlans").mockReturnValue(
+          configs.map((config) => ({
+            config,
+            forwardedArgs: [],
+            includePatterns: null,
+            watchMode: false,
+          })),
+        );
+      }
       commands.prepare.mockResolvedValue(0);
       const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
       const first = createDeferred<{
@@ -1080,7 +1123,12 @@ describe("cache lease completion", () => {
       const second = createDeferred<{ code: number; signal: null; groupJoined: boolean }>();
       const admitted = createDeferred();
       const settled = { value: false };
-      commands.reader.mockImplementation(() => {
+      const selections: unknown[] = [];
+      commands.reader.mockImplementation(({ env, pnpmArgs }) => {
+        if (focused) {
+          expect(pnpmArgs[pnpmArgs.indexOf("--config") + 1]).toBe(databaseConfig);
+          selections.push(JSON.parse(fs.readFileSync(env.OPENCLAW_VITEST_INCLUDE_FILE, "utf8")));
+        }
         const index = commands.reader.mock.calls.length;
         if (index === 2) {
           admitted.resolve();
@@ -1095,11 +1143,10 @@ describe("cache lease completion", () => {
           getForwardedSignal: () => undefined,
         };
       });
-      const running = runTestProjects(async () => {}, [
-        "test/vitest/vitest.unit-fast.config.ts",
-        "test/vitest/vitest.unit-fast-fake-timers.config.ts",
-        "test/vitest/vitest.cli.config.ts",
-      ]).finally(() => {
+      const running = runTestProjects(
+        async () => {},
+        focused ? [databaseConfig] : scope === "ci-full-suite" ? [] : configs,
+      ).finally(() => {
         settled.value = true;
       });
       const checked = outcome === "rejection" ? expect(running).rejects.toThrow() : running;
@@ -1123,11 +1170,23 @@ describe("cache lease completion", () => {
           setImmediate(resolve);
         });
         expect(settled.value).toBe(false);
-        expect(commands.reader).toHaveBeenCalledTimes(outcome === "failure" ? 3 : 2);
+        expect(commands.reader).toHaveBeenCalledTimes(expected);
       } finally {
         first.resolve({ code: 0, signal: null, groupJoined });
         second.resolve({ code: 0, signal: null, groupJoined });
         await checked;
+      }
+      expect(commands.reader).toHaveBeenCalledTimes(expected);
+      if (focused) {
+        const selected = selections.flat();
+        expect(
+          selections.every((selection) => Array.isArray(selection) && selection.length === 1),
+        ).toBe(true);
+        expect(new Set(selected).size).toBe(expected);
+        expect(files).toEqual(expect.arrayContaining(selected));
+        if (expected === files.length) {
+          expect(selected).toEqual(expect.arrayContaining(files));
+        }
       }
       if (outcome !== "rejection") {
         expect(process.exitCode).toBe(outcome === "signal" ? 143 : 1);

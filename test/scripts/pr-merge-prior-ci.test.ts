@@ -361,6 +361,41 @@ describePosix("explicit prior-CI admin landing", () => {
     expect(f.state().mutations).toBe(0);
   });
 
+  it.each([
+    ["no applicable owner", null, 0, false, false, true],
+    ["required code owner", "REVIEW_REQUIRED", 0, false, false, false],
+    ["requested changes", "CHANGES_REQUESTED", 0, false, false, false],
+    ["required approval", null, 1, false, false, false],
+    ["last-push approval", null, 0, true, false, false],
+    ["unresolved thread", null, 0, false, true, false],
+    ["missing decision", undefined, 0, false, false, false],
+  ] as const)(
+    "honors applicable reviews under a code-owner rule: %s",
+    (_name, decision, count, lastPush, threads, accepted) => {
+      const f = preExistingCandidate();
+      const state = f.state();
+      Object.assign(state.priorCi, {
+        reviewDecision: decision,
+        reviewCount: count,
+        requireCodeOwners: true,
+        requireLastPush: lastPush,
+        requireThreads: threads,
+        resolved: !threads,
+      });
+      f.save(state);
+      const result = f.verifyPriorCi(f.path);
+      if (accepted) {
+        expect(result.status, result.output).toBe(0);
+      } else {
+        expect(result.status, result.output).not.toBe(0);
+        expect(result.output).toContain(
+          threads ? "required review threads" : "current enforced reviews",
+        );
+      }
+      expect(f.state().mutations).toBe(0);
+    },
+  );
+
   it.each(["failure", "cancelled"])(
     "lands an attributed %s attempt without claiming cancelled coverage passed",
     (conclusion) => {

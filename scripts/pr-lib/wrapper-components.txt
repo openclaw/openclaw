@@ -35,6 +35,9 @@ packages/gateway-protocol/src/theme.ts
 packages/gateway-protocol/src/update-run-vocabulary.ts
 packages/llm-core/package.json
 packages/llm-core/src/model-data.ts
+packages/media-core/src/constants.ts
+packages/media-core/src/file-name.ts
+packages/media-core/src/mime.ts
 packages/memory-host-sdk/package.json
 packages/memory-host-sdk/src/host/config-utils.ts
 packages/memory-host-sdk/src/host/embedding-vector.ts
@@ -233,6 +236,7 @@ src/agents/tools/automations-tool-name.ts
 src/agents/tools/sessions-send-tokens.ts
 src/agents/utility-model-setting.ts
 src/agents/utils/git.ts
+src/agents/workspace-access.ts
 src/agents/workspace-default-path.ts
 src/agents/workspace-default.ts
 src/agents/workspace-dirs.ts
@@ -581,6 +585,7 @@ src/gateway/worker-environments/workspace-result-git.ts
 src/gateway/worker-environments/workspace-result-inventory.runtime.ts
 src/gateway/worker-environments/workspace-result-inventory.ts
 src/gateway/worker-environments/workspace-result-preparation.runtime.ts
+src/gateway/workspace-file-limits.ts
 src/global-state.ts
 src/globals.ts
 src/infra/abort-signal.ts
@@ -832,12 +837,18 @@ src/infra/update-doctor-result.ts
 src/infra/update-failure-facts.ts
 src/infra/update-failure-public-identifiers.ts
 src/infra/update-managed-service-handoff-boot.ts
+src/infra/update-managed-service-handoff-cancellation.ts
 src/infra/update-managed-service-handoff-cleanup.ts
 src/infra/update-managed-service-handoff-database.ts
 src/infra/update-managed-service-handoff-lease.ts
 src/infra/update-managed-service-handoff-legacy-parent.ts
+src/infra/update-managed-service-handoff-mutation.ts
+src/infra/update-managed-service-handoff-original-acquisition.ts
+src/infra/update-managed-service-handoff-original-owner.ts
 src/infra/update-managed-service-handoff-process.ts
+src/infra/update-managed-service-handoff-reclamation.ts
 src/infra/update-managed-service-handoff-retained-custody.ts
+src/infra/update-managed-service-handoff-rows.ts
 src/infra/update-managed-service-handoff-schema.ts
 src/infra/update-managed-service-handoff-scope.ts
 src/infra/update-managed-service-handoff-source-inspection.ts
@@ -905,6 +916,7 @@ src/logging/state.ts
 src/logging/structured-authorization-code.ts
 src/logging/subsystem.ts
 src/logging/timestamps.ts
+src/media/media-facts.ts
 src/media/staged-inputs.ts
 src/memory-host-sdk/host/config-utils.ts
 src/memory/root-memory-files.ts
@@ -1166,6 +1178,7 @@ src/process/exec-termination.ts
 src/process/exec.ts
 src/process/kill-tree.ts
 src/process/output-drain.ts
+src/process/process-deadline.ts
 src/process/scoped-child-reaper.ts
 src/process/spawn-broker/child.ts
 src/process/spawn-broker/cleanup.ts
