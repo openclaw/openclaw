@@ -4463,6 +4463,29 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
+  it("keeps the opaque retention child owner beside additional fixture consumers", () => {
+    const helper = "src/plugins/runtime.retention.test-support.ts";
+    const owner = "src/plugins/runtime.retention.test.ts";
+    const direct = "src/other/direct.test.ts";
+    const indirect = "src/plugins/shared-consumer.test.ts";
+    withTinyGitRepo(
+      {
+        [helper]: "export const fixture = 1;\n",
+        [owner]: "export {};\n",
+        [direct]: 'import "../plugins/runtime.retention.test-support.js";\n',
+        "src/plugins/bridge.ts": 'export * from "./runtime.retention.test-support.js";\n',
+        [indirect]: 'import "./bridge.js";\n',
+        "src/plugins/unrelated.test.ts": "export {};\n",
+      },
+      (cwd) => {
+        const plan = resolveChangedTestTargetPlan([helper], { cwd, boundedOwners: true });
+        expect(plan.ownerTargets).toEqual([owner]);
+        expect(plan.targets.toSorted()).toEqual([owner, direct, indirect].toSorted());
+        expect(plan.ownerAreas).toEqual(["src/plugins"]);
+      },
+    );
+  });
+
   it("retains mapped helper owners beside direct importers in bounded changed mode", () => {
     withTinyGitRepo(
       {
