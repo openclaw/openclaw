@@ -10,6 +10,8 @@ minimumReleaseAgeStrict: true
 
 # Trusted Codex runtimes are outside the dependency cooldown.
 minimumReleaseAgeExclude:
+  # Maintainer-approved for Bun-only npm plugin installs; remove after 2026-09-29T21:29:31.258Z.
+  - npm@11.20.0
   # Reviewed ACPX release; remove after 2026-09-29T10:05:37.124Z.
   - acpx@0.19.1
   - "@openai/codex"
