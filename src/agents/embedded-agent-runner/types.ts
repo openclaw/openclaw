@@ -172,6 +172,11 @@ export type EmbeddedAgentRunMeta = {
    * Diagnostics never report that text as the model's final response.
    */
   finalAssistantRawTextIsFallback?: true;
+  /**
+   * Raw text of only the model's last message when finalAssistantRawText is
+   * cumulative across several results (CLI backends). Diagnostics prefer it.
+   */
+  finalAssistantMessageRawText?: string;
   replayInvalid?: boolean;
   livenessState?: EmbeddedRunLivenessState;
   timeoutPhase?: AgentRunTimeoutPhase;

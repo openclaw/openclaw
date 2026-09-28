@@ -54,7 +54,7 @@ import { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prep
 import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
-import { resolveFinalAssistantRawText } from "./helpers.js";
+import { resolveFinalMessageRawText } from "./helpers.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 import { measureEmbeddedAgentPreparation } from "./preparation-timing.js";
 import type {
@@ -453,7 +453,7 @@ async function runEmbeddedAttemptOwned(
       executionState.diagnosticFinalResponse = resolveDiagnosticModelContentCapturePolicy(
         getRuntimeConfig(),
       ).outputMessages
-        ? resolveFinalAssistantRawText(
+        ? resolveFinalMessageRawText(
             executionResult.currentAttemptCompletedAssistant ??
               executionResult.currentAttemptAssistant,
           )

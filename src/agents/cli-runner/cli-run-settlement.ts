@@ -488,6 +488,7 @@ export function buildCliRunResult(params: {
   const runParams = context.params;
   const text = output.text?.trim();
   const rawText = output.rawText?.trim();
+  const rawFinalText = output.rawFinalText?.trim();
   const sourceReplyMirror = resolveCliSourceReplyMirror({
     evidence: output,
     runParams,
@@ -611,6 +612,9 @@ export function buildCliRunResult(params: {
       ...(output.finalPromptText ? { finalPromptText: output.finalPromptText } : {}),
       ...(finalAssistantVisibleText ? { finalAssistantVisibleText } : {}),
       ...(rawText ? { finalAssistantRawText: rawText } : {}),
+      ...(rawFinalText && rawFinalText !== rawText
+        ? { finalAssistantMessageRawText: rawFinalText }
+        : {}),
       systemPromptReport: context.systemPromptReport,
       ...(terminalInterruption
         ? {
