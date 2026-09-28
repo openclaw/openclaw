@@ -517,50 +517,39 @@ describe("worker inference provider runtime", () => {
     expect(emitted.some((event) => event.type === "toolcall_end")).toBe(false);
   });
 
-  it("rejects a terminal tool call whose identity changed", async () => {
-    const runtime = setup();
-    runtime.stream.mockImplementation(() => {
-      const stream = createAssistantMessageEventStream();
-      const partial = finalMessage();
-      const terminal = finalMessage();
-      terminal.content = [...terminal.content.slice(0, -1), { ...TOOL_CALL, id: "call-2" }];
-      stream.push({ type: "toolcall_start", contentIndex: 1, partial });
-      stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial });
-      stream.push({ type: "done", reason: "toolUse", message: terminal });
-      return stream;
-    });
-    const emitted: Parameters<Execution["emit"]>[0][] = [];
-
-    await expect(
-      runtime.executor(params(request(), (event) => emitted.push(event))),
-    ).resolves.toMatchObject({ type: "error", reason: "provider-error" });
-    expect(emitted.some((event) => event.type === "toolcall_end")).toBe(false);
-  });
-
-  it("revalidates a normally ended tool call against the terminal message", async () => {
-    const runtime = setup();
-    runtime.stream.mockImplementation(() => {
-      const stream = createAssistantMessageEventStream();
-      const partial = finalMessage();
-      const terminal = finalMessage();
-      terminal.content = [...terminal.content.slice(0, -1), { ...TOOL_CALL, id: "call-2" }];
-      stream.push({ type: "toolcall_start", contentIndex: 1, partial });
-      stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial });
-      stream.push({
-        type: "toolcall_end",
-        contentIndex: 1,
-        toolCall: TOOL_CALL,
-        partial,
+  it.each([
+    { ended: false, omitted: false },
+    { ended: true, omitted: false },
+    { ended: true, omitted: true },
+  ])(
+    "rejects terminal tool identity mismatch (ended=$ended, omitted=$omitted)",
+    async ({ ended, omitted }) => {
+      const runtime = setup();
+      runtime.stream.mockImplementation(() => {
+        const stream = createAssistantMessageEventStream();
+        const partial = finalMessage();
+        const terminal = finalMessage();
+        terminal.content = omitted
+          ? terminal.content.slice(0, 1)
+          : [...terminal.content.slice(0, -1), { ...TOOL_CALL, id: "call-2" }];
+        stream.push({ type: "toolcall_start", contentIndex: 1, partial });
+        stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial });
+        if (ended) {
+          stream.push({ type: "toolcall_end", contentIndex: 1, toolCall: TOOL_CALL, partial });
+        }
+        stream.push({ type: "done", reason: omitted ? "stop" : "toolUse", message: terminal });
+        return stream;
       });
-      stream.push({ type: "done", reason: "toolUse", message: terminal });
-      return stream;
-    });
+      const emitted: Parameters<Execution["emit"]>[0][] = [];
 
-    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
-      type: "error",
-      reason: "provider-error",
-    });
-  });
+      await expect(
+        runtime.executor(params(request(), (event) => emitted.push(event))),
+      ).resolves.toMatchObject({ type: "error", reason: "provider-error" });
+      if (!ended) {
+        expect(emitted.some((event) => event.type === "toolcall_end")).toBe(false);
+      }
+    },
+  );
 
   it("rejects tool-call deltas after the end event", async () => {
     const runtime = setup();
@@ -587,31 +576,6 @@ describe("worker inference provider runtime", () => {
     expect(
       emitted.flatMap((event) => (event.type === "toolcall_delta" ? [event.delta] : [])),
     ).toEqual(["{}"]);
-  });
-
-  it("rejects a normally ended tool call omitted from the terminal message", async () => {
-    const runtime = setup();
-    runtime.stream.mockImplementation(() => {
-      const stream = createAssistantMessageEventStream();
-      const partial = finalMessage();
-      const terminal = finalMessage();
-      terminal.content = terminal.content.slice(0, 1);
-      stream.push({ type: "toolcall_start", contentIndex: 1, partial });
-      stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial });
-      stream.push({
-        type: "toolcall_end",
-        contentIndex: 1,
-        toolCall: TOOL_CALL,
-        partial,
-      });
-      stream.push({ type: "done", reason: "stop", message: terminal });
-      return stream;
-    });
-
-    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
-      type: "error",
-      reason: "provider-error",
-    });
   });
 
   it("rejects unresolved pre-identity tool deltas omitted from the terminal message", async () => {

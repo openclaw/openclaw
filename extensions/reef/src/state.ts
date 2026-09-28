@@ -267,10 +267,6 @@ export class ReefDeliveredStore {
     });
   }
 
-  async has(id: string): Promise<boolean> {
-    return (await this.#delivered.lookup(id))?.id === id;
-  }
-
   async status(id: string): Promise<"delivered" | undefined> {
     return (await this.#delivered.lookup(id))?.id === id ? "delivered" : undefined;
   }
@@ -280,10 +276,6 @@ export class ReefDeliveredStore {
     if (!inserted && (await this.#delivered.lookup(id))?.id !== id) {
       throw new Error("Failed persisting Reef delivered marker");
     }
-  }
-
-  async add(id: string): Promise<void> {
-    await this.confirm(id);
   }
 }
 
