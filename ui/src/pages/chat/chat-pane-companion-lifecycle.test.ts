@@ -36,8 +36,14 @@ describe("chat pane companion connection lifecycle", () => {
           };
         case "sessions.subscribe":
           return { subscribed: true, list: sessionsResult([], 1) };
+        case "sessions.messages.subscribe":
+          return { subscribed: true, key: "agent:main:current" };
+        case "sessions.messages.unsubscribe":
+          return { subscribed: false, key: "agent:main:current" };
         case "chat.startup":
           return { messages: [], sessionId: "session-current", hasMore: false, totalMessages: 0 };
+        case "models.authStatus":
+          return { ts: 1, providers: [] };
         case "models.list":
         case "chat.metadata":
           return { commands: [], models, swarmEnabled: false };
@@ -47,6 +53,7 @@ describe("chat pane companion connection lifecycle", () => {
     });
     const client = createGatewayBrowserClientFixture({ request });
     const { pane, state } = createTestChatPane({ client });
+    state.loadAssistantIdentity = vi.fn(async () => undefined);
     onTestFinished(() => {
       pane.applyGatewaySnapshot({
         ...pane.context.gateway.snapshot,
@@ -97,7 +104,6 @@ describe("chat pane companion connection lifecycle", () => {
       ],
     });
 
-    pane.connectedClient = client;
     pane.applyGatewaySnapshot({ ...pane.context.gateway.snapshot, phase: "connected" });
     expect(state.chatModelsLoading).toBe(true);
     expect(threads.view("agent:main:other", "main").draft).toBe("other draft");

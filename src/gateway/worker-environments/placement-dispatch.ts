@@ -8,7 +8,6 @@ import {
   type WorkerDispatchEnvironmentService,
   type WorkerDispatchPlacement,
 } from "./placement-dispatch-failure.js";
-import type { PlacementRecoveryDeps } from "./placement-dispatch-pending-results.js";
 import { createPlacementRecoveryActions } from "./placement-dispatch-recovery.js";
 import {
   createWorkerPlacementDispatchStartup,
@@ -32,6 +31,7 @@ import {
   type WorkerPlacementReclaimOptions,
 } from "./placement-reclaim.js";
 import { reportPlacementTransition } from "./placement-record.js";
+import type { PlacementRecoveryDeps } from "./placement-recovery-contract.js";
 import type {
   WorkerPlacementDispatchRequest,
   WorkerPlacementAuthorization,
@@ -474,6 +474,23 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
   return {
     dispatch,
     forceDestroyEnvironment: abandonment.forceDestroyEnvironment,
+    getEnvironmentAttachedSessionIds: (environmentId: string): readonly string[] =>
+      environments.get(environmentId)?.attachedSessionIds ?? [],
+    async readEnvironmentSessionIds(environmentId: string): Promise<string[]> {
+      const sessionIds = (await placements.readChangeSnapshot()).map(({ sessionId }) => sessionId);
+      const facts = await placements.readProjection(sessionIds, { current: true });
+      return [
+        ...new Set([
+          ...(environments.get(environmentId)?.attachedSessionIds ?? []),
+          ...[...facts.placements.values()]
+            .filter((placement) => placement.environmentId === environmentId)
+            .map(({ sessionId }) => sessionId),
+          ...[...facts.moves.values()]
+            .filter((move) => move.source.environmentId === environmentId)
+            .map(({ sessionId }) => sessionId),
+        ]),
+      ];
+    },
     move: moveService.move,
     reclaim,
     reconcile: recovery.reconcile,

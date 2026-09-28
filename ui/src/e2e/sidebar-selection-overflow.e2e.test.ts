@@ -3,6 +3,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { waitForSessionRosterHydration } from "./session-management.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI sidebar selection overflow",
@@ -49,6 +50,8 @@ suite.define(() => {
 
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        // The active row can render before roster admission; overflow needs the full roster.
+        await waitForSessionRosterHydration(page);
         // Exercise the authored classic scrollbar regardless of macOS overlay preferences.
         // Either non-auto standard property would override the existing WebKit styles.
         await page.addStyleTag({

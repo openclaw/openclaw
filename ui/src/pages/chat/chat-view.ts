@@ -13,6 +13,7 @@ import type {
 } from "../../../../src/gateway/control-ui-contract.js";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { renderExecApprovalCard } from "../../components/exec-approval-card.ts";
 import { icons } from "../../components/icons.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
@@ -21,7 +22,7 @@ import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
-} from "../../lib/keyboard-shortcut-catalog.ts";
+} from "../../lib/keyboard-shortcut-contract.ts";
 import {
   areUiSessionKeysEquivalent,
   scopedSessionArtifactKey,
@@ -568,7 +569,7 @@ export function renderChat(props: ChatProps) {
               .presented=${props.presented ?? true}
             ></openclaw-chat-comment-controller>`
       }
-      <div class="chat-workbench">
+      <div class="chat-workbench" ${shellLayoutTraits({ workbench: true })}>
         <div class="chat-workbench__main">
           <div class="chat-split-container">
             <div class="chat-main">

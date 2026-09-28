@@ -612,6 +612,7 @@ const BROAD_CHANGED_FALLBACK_PATTERNS = [
   /^test\/helpers\//u,
 ];
 const PRECISE_SOURCE_TEST_TARGETS = new Map<string, string[]>([
+  ["src/plugins/runtime.retention.test-support.ts", ["src/plugins/runtime.retention.test.ts"]],
   [
     "src/agents/bash-tools.process-liveness-child.test-support.ts",
     ["src/agents/bash-tools.process.liveness.test.ts"],
@@ -1512,18 +1513,19 @@ function expandExplicitSourceTestTargets(targetArgs: string[], cwd: string, watc
       // The full aggregate already includes the dedicated database-worker project.
       return [targetArg];
     }
-    const databaseWorkerTargets = databaseWorkerExtensionTestFiles.filter((file) =>
-      isGlobTarget(relative)
-        ? path.matchesGlob(file, relative)
-        : isExistingDirectoryTarget(targetArg, cwd) && isPathAtOrUnder(file, relative),
-    );
+    const glob = isGlobTarget(relative);
+    const directory = isExistingDirectoryTarget(targetArg, cwd);
+    // Target shape is invariant across the worker inventory; literal files need no expansion.
+    const databaseWorkerTargets =
+      glob || directory
+        ? databaseWorkerExtensionTestFiles.filter((file) =>
+            glob ? path.matchesGlob(file, relative) : isPathAtOrUnder(file, relative),
+          )
+        : [];
     if (databaseWorkerTargets.length > 0) {
       return [...databaseWorkerTargets, targetArg];
     }
-    if (
-      (isPathAtOrUnder(relative, "ui") || isPluginControlUiPath(relative)) &&
-      isGlobTarget(relative)
-    ) {
+    if ((isPathAtOrUnder(relative, "ui") || isPluginControlUiPath(relative)) && glob) {
       // Expand mixed browser globs before assigning files to their disjoint runners.
       const targets = listExplicitTestTargetFilesForCwd(cwd).filter(
         (file) => isTestFileTarget(file) && path.matchesGlob(file, relative),
@@ -1534,13 +1536,13 @@ function expandExplicitSourceTestTargets(targetArgs: string[], cwd: string, watc
     if (prefixTargets) {
       return prefixTargets;
     }
-    if (relative === "src/commands" && isExistingDirectoryTarget(targetArg, cwd)) {
+    if (relative === "src/commands" && directory) {
       return [COMMANDS_LIGHT_VITEST_CONFIG, COMMANDS_VITEST_CONFIG];
     }
     // Contract directory targets must fan out to the owning contract lanes; the
     // generic channels/plugins projects exclude contracts/**, so routing a
     // contracts directory there silently runs zero tests (passWithNoTests).
-    if (isExistingDirectoryTarget(targetArg, cwd)) {
+    if (directory) {
       if (isPathAtOrUnder(relative, "src/channels/plugins/contracts")) {
         return [
           CONTRACTS_CHANNEL_SURFACE_VITEST_CONFIG,
@@ -1749,6 +1751,7 @@ function resolveImportSpecifiers(
   extensions: readonly string[] = IMPORTABLE_FILE_EXTENSIONS,
   aliases: readonly ImportGraphAlias[] = [],
   aliasResolutions?: Map<string, string[]>,
+  runtimeOnly = false,
 ): string[] {
   if (!specifier.startsWith(".")) {
     if (aliasResolutions?.has(specifier)) {
@@ -1772,6 +1775,9 @@ function resolveImportSpecifiers(
           `./${target.replace("*", wildcard ?? "")}`,
           fileSet,
           extensions,
+          [],
+          undefined,
+          runtimeOnly,
         )) {
           resolved.add(file);
         }
@@ -1799,8 +1805,12 @@ function resolveImportSpecifiers(
     );
   }
 
-  const resolved = candidates.find((candidate) => fileSet.has(candidate));
-  return resolved ? [resolved] : [];
+  // A .js runtime sibling must not hide the TypeScript source selected by
+  // extension substitution. Combined graphs retain both kinds of consumers.
+  const resolved = [...new Set(candidates.filter((candidate) => fileSet.has(candidate)))];
+  return runtimeOnly || ![".js", ".jsx", ".mjs", ".cjs"].includes(ext)
+    ? resolved.slice(0, 1)
+    : resolved;
 }
 
 const cachedImportGraphs = new Map<string, { graph: ImportGraph; additionalPaths: string }>();
@@ -2041,22 +2051,22 @@ function readImportGraphEdges(
   const requests = files
     .map((file) => ({ file, parseImports: !cachedImportGraphEdges.has(cacheKey(file)) }))
     .filter(({ parseImports }) => parseImports || terms.length > 0);
-  return readTestSelectorSourceFacts(cwd, requests, terms, GIT_LS_FILES_MAX_BUFFER_BYTES).map(
-    ({ file, imports, typeOnlyImports, matches, references }) => {
-      const edges = cachedImportGraphEdges.get(cacheKey(file)) ?? {
-        file,
-        specifiers: imports,
-        typeOnlySpecifiers: new Set(typeOnlyImports),
-        imports: resolve(file, imports),
-        references: new Set<string>(),
-      };
-      for (const reference of references) {
-        edges.references.add(reference);
-      }
-      cachedImportGraphEdges.set(cacheKey(file), edges);
-      return { edges, matches };
-    },
-  );
+  return readTestSelectorSourceFacts(cwd, requests, terms, GIT_LS_FILES_MAX_BUFFER_BYTES, {
+    matchingOnly: terms.length > 0,
+  }).map(({ file, imports, typeOnlyImports, matches, references }) => {
+    const edges = cachedImportGraphEdges.get(cacheKey(file)) ?? {
+      file,
+      specifiers: imports,
+      typeOnlySpecifiers: new Set(typeOnlyImports),
+      imports: resolve(file, imports),
+      references: new Set<string>(),
+    };
+    for (const reference of references) {
+      edges.references.add(reference);
+    }
+    cachedImportGraphEdges.set(cacheKey(file), edges);
+    return { edges, matches };
+  });
 }
 
 function listImportGraphGrepMatches(
@@ -2092,22 +2102,39 @@ function listImportGraphGrepMatches(
     maxBuffer: GIT_LS_FILES_MAX_BUFFER_BYTES,
     stdio: ["pipe", "pipe", "pipe"],
   };
-  const result = spawnSync(
-    "git",
-    ["grep", "-l", "-z", "--fixed-strings", "-f", "-", "--", ...grepPaths],
-    spawnOptions,
-  );
+  // Git's fixed-string prefilter rescans for each term. Large frontiers use the
+  // source reader's single-pass multi-term matcher over the same inventory.
+  const result =
+    missing.length <= 64
+      ? spawnSync(
+          "git",
+          ["grep", "-l", "-z", "--fixed-strings", "-f", "-", "--", ...grepPaths],
+          spawnOptions,
+        )
+      : undefined;
   for (const term of missing) {
     matches.set(term, []);
   }
-  if (result.status !== 1) {
+  if (result?.status !== 1) {
     const trackedFiles = new Set(listImportGraphFilesForCwd(cwd, { tooling }));
     // Source archives use the same filesystem inventory and native reader as the full graph.
-    const candidates = (
-      result.status === 0
+    let candidates = (
+      result?.status === 0
         ? result.stdout.split("\0").filter((file) => trackedFiles.has(file))
         : [...trackedFiles].filter((file) => !testFilesOnly || isTestFileTarget(file))
     ).toSorted((left, right) => left.localeCompare(right));
+    if (result?.status !== 0) {
+      // Wide frontiers bypass Git's prefilter. Match before parsing imports, and
+      // leave nonmatches uncached so later full-graph queries can still read them.
+      candidates = readTestSelectorSourceFacts(
+        cwd,
+        candidates.map((file) => ({ file, parseImports: false })),
+        missing,
+        GIT_LS_FILES_MAX_BUFFER_BYTES,
+      )
+        .filter(({ matches: fileTerms }) => fileTerms.length > 0)
+        .map(({ file }) => file);
+    }
     // Per-term membership preserves the helper first-success rule.
     // Cached edges need only term facts; full-graph acquisition reuses their parsing.
     for (const { edges, matches: fileTerms } of readImportGraphEdges(
@@ -2163,6 +2190,8 @@ function findDirectImporters(
                 resolution.files,
                 extensions,
                 resolution.aliases,
+                undefined,
+                resolution.runtimeOnly,
               ).includes(importedFile),
           )
         : imports.has(importedFile);
@@ -2325,6 +2354,7 @@ function getImportGraph(
         extensions,
         aliases,
         aliasResolutions,
+        options.runtimeOnly,
       )) {
         const importers = reverseImports.get(imported) ?? [];
         importers.push(file);
@@ -2380,6 +2410,7 @@ export function hasImportGraphImpactOnTargets(
           extensions,
           aliases,
           aliasResolutions,
+          options.runtimeOnly,
         )) {
           if (changed.has(dependency)) {
             return true;
@@ -2459,6 +2490,26 @@ export function resolveAffectedTestsFromImportGraph(
     ...changedTests,
     ...walkAffectedTestsFromImportGraph(paths, getImportGraph(cwd, options, paths), options.direct),
   ]).toSorted((left, right) => left.localeCompare(right));
+}
+
+/** Complete transitive consumers, including erased type imports unless runtimeOnly is requested. */
+export function resolveImportGraphDependents(
+  changedPaths: readonly string[],
+  cwd = process.cwd(),
+  options: ImportGraphOptions = {},
+) {
+  const roots = new Set(changedPaths);
+  const { reverseImports } = getImportGraph(cwd, options, [...roots]);
+  const seen = new Set(roots);
+  // Set iteration visits newly admitted consumers once, including across cycles.
+  for (const current of seen) {
+    for (const importer of reverseImports.get(current) ?? []) {
+      seen.add(importer);
+    }
+  }
+  return [...seen]
+    .filter((file) => !roots.has(file))
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
 /** Changed resolved dependencies enter the same graph at their literal import consumers. */
@@ -2855,7 +2906,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   [".github/workflows/update-migration.yml", [packageAcceptance, workflowGuards]],
   [
     ".github/actions/setup-node-env/action.yml",
-    ["setup-node-env-bun", packageAcceptance, workflowGuards],
+    ["setup-node-env-bun", "setup-node-env-semantic-memory", packageAcceptance, workflowGuards],
   ],
   [
     ".github/actions/setup-node-env/dependency-fingerprint.mjs",
@@ -4943,11 +4994,12 @@ export function buildVitestRunPlans(
       groupedTargets.set("toolingDocker", current);
     }
   }
+  const activeIncludePatterns = activeTargetArgs.map((target) =>
+    toScopedIncludePattern(target, cwd),
+  );
   const impliedToolingIsolatedTargets = !watchMode
     ? toolingIsolatedTestFiles.filter((file) =>
-        classifiedTargets.some(({ targetArg }) =>
-          includePatternMatchesAnyFile(toScopedIncludePattern(targetArg, cwd), [file]),
-        ),
+        activeIncludePatterns.some((pattern) => includePatternMatchesAnyFile(pattern, [file])),
       )
     : [];
   if (impliedToolingIsolatedTargets.length > 0) {
@@ -4960,10 +5012,9 @@ export function buildVitestRunPlans(
     groupedTargets.set("toolingIsolated", current);
   }
   const uiTargets = groupedTargets.get("ui") ?? [];
+  const uiIncludePatterns = uiTargets.map((target) => toScopedIncludePattern(target, cwd));
   const impliedUiTimingTargets = uiTimingTestFiles.filter((file) =>
-    uiTargets.some((targetArg) =>
-      includePatternMatchesAnyFile(toScopedIncludePattern(targetArg, cwd), [file]),
-    ),
+    uiIncludePatterns.some((pattern) => includePatternMatchesAnyFile(pattern, [file])),
   );
   if (impliedUiTimingTargets.length > 0) {
     groupedTargets.set("uiTiming", [
@@ -4990,9 +5041,7 @@ export function buildVitestRunPlans(
     }
   }
   const impliedUiIsolatedTargets = uiIsolatedTestFiles.filter((file) =>
-    uiTargets.some((targetArg) =>
-      includePatternMatchesAnyFile(toScopedIncludePattern(targetArg, cwd), [file]),
-    ),
+    uiIncludePatterns.some((pattern) => includePatternMatchesAnyFile(pattern, [file])),
   );
   if (impliedUiIsolatedTargets.length > 0) {
     const current = groupedTargets.get("uiIsolated") ?? [];
@@ -5006,9 +5055,7 @@ export function buildVitestRunPlans(
   // Source-child ownership can cross shared suites (for example state tests).
   // Match every active target so broad selections cannot silently omit excluded children.
   const impliedCliProcessTargets = cliProcessTestFiles.filter((file) =>
-    activeTargetArgs.some((targetArg) =>
-      includePatternMatchesAnyFile(toScopedIncludePattern(targetArg, cwd), [file]),
-    ),
+    activeIncludePatterns.some((pattern) => includePatternMatchesAnyFile(pattern, [file])),
   );
   if (impliedCliProcessTargets.length > 0) {
     const current = groupedTargets.get("cliProcess") ?? [];

@@ -295,6 +295,8 @@ export async function readUpdateCandidateStateInventoryInProcess(
   const measure = async (
     sharedStateDatabasePath?: string,
   ): Promise<z.infer<typeof UpdateCandidateSnapshotInventorySchema>> => {
+    // Database discovery is complete; plugin failures must retain their own phase.
+    input.onProgress?.({ phase: "plugin inventory", path: input.stateDir });
     const plugins = await prepareUpdateCandidatePlugins({
       ...input,
       sharedStateDatabasePath,
@@ -725,9 +727,11 @@ export async function snapshotUpdateCandidateState(
       ...(contentVersion === undefined ? {} : { contentVersion }),
     });
   }
+  input.onProgress?.({ phase: "execution approvals snapshot", path: sourceRoot });
   await execApprovals.copySources();
   const versions = publishStateDatabaseVersions(files, inspected);
   const pluginCodeLinks: UpdateCandidatePluginCodeLink[] = [];
+  input.onProgress?.({ phase: "plugin snapshot", path: sourceRoot });
   const pluginPaths = await copyUpdateCandidatePlugins(plugins, {
     ...input,
     onCodeLink: (fact) => {

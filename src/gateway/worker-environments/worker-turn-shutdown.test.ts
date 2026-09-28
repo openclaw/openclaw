@@ -19,10 +19,7 @@ import * as fixture from "./worker-turn-launcher.test-support.js";
 import { captureWorkspaceSnapshot } from "./workspace-manifest-worker.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
-import {
-  applyStagedWorkerWorkspaceResult,
-  workerWorkspaceResultStaging,
-} from "./workspace-result-staging.js";
+import { workerWorkspaceResultStaging } from "./workspace-result-staging.js";
 
 const unexpected = (): never => {
   throw new Error("Unexpected shutdown recovery operation");
@@ -78,32 +75,33 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
     stop: unexpected,
     quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
     reconcileWorkspace: async ({ remoteWorkspaceDir, baseManifestRef, source }) => {
-      if (source.kind !== "local" || !source.stagedResult) {
+      if (source.kind !== "local") {
         throw new Error("Expected staged local result");
       }
       const current = await captureWorkspaceSnapshot({
         root: remoteWorkspaceDir,
         baseCommit: null,
       });
-      await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
-        root: source.path,
+      const staged = await workerWorkspaceResultStaging.prepareRequestedWorkerWorkspaceResult({
+        request: {
+          localPath: source.path,
+          remoteWorkspaceDir,
+          baseManifestRef,
+          journal: source.journal,
+          assertCurrent: source.assertCurrent,
+          stagedResult: source.stagedResult,
+        },
         stagingRoot: remoteWorkspaceDir,
-        stagedResultRef: source.stagedResult.ref,
-        baseManifestRef,
         currentManifestRef: current.manifestRef,
         baseManifestRaw: base.rawManifest,
         currentManifestRaw: current.rawManifest,
-        assertCurrent: source.assertCurrent,
       });
-      source.stagedResult.record(source.stagedResult.ref);
-      const applied = await applyStagedWorkerWorkspaceResult({
-        root: source.path,
-        stagedResultRef: source.stagedResult.ref,
-        expectedBaseManifestRef: baseManifestRef,
-        journal: source.journal,
-        assertCurrent: source.assertCurrent,
-      });
-      return { ...applied, verifyStable: async () => {}, getAppliedWorkspaceResult: () => applied };
+      return {
+        manifestRef: current.manifestRef,
+        changed: current.manifestRef !== baseManifestRef,
+        verifyStable: async () => {},
+        ...staged,
+      };
     },
   };
   const environments = {
@@ -168,6 +166,7 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
       placements: recovered,
       environments: {
         ...environments,
+        fenceWorkerTurnForRecovery: unexpected,
         reconcileEnvironment: async () => {},
         reconcileOnce: async () => {},
         supportsProviderExecutionMode: () => true,

@@ -9,12 +9,9 @@ import {
   releaseChatAttachmentPayloads,
 } from "../attachment-payload-store.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
+import { renderChatAttachmentInputs } from "./chat-attachment-inputs.ts";
 import { ChatAttachmentReadLifecycle } from "./chat-attachment-reads.ts";
-import {
-  createChatAttachmentDropHandlers,
-  handleChatAttachmentPaste,
-  renderChatAttachmentInputs,
-} from "./chat-attachments.ts";
+import { createChatAttachmentDropHandlers, handleChatAttachmentPaste } from "./chat-attachments.ts";
 
 const browserMode = "__vitest_browser__" in globalThis;
 

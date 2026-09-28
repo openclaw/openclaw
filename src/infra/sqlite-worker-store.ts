@@ -139,7 +139,9 @@ export function isSqliteWorkerStoreAvailable(store: object): boolean {
 }
 
 /** Internal identity for the existing canonical actor, never a transferable authority. */
-export function getSqliteWorkerActorIdentity(store: object): object {
+export function getSqliteWorkerActorIdentity(
+  store: object,
+): ReturnType<SqliteWorkerBroker["getActorIdentity"]> {
   return resolveSqliteWorkerBroker().getActorIdentity(store);
 }
 

@@ -73,6 +73,7 @@ import { changedServerUiPrefs } from "./server-prefs-intent.ts";
 import { isApplyingServerUiPrefs, pushServerUiPrefs } from "./server-prefs.ts";
 import { capturePlacementStartupConnection } from "./session-placement-startup.ts";
 import { setSettingsChangeListener } from "./settings.ts";
+import { ShellLayoutController } from "./shell-layout-traits.ts";
 import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
@@ -97,6 +98,8 @@ class OpenClawShell
   @property({ attribute: false }) onboarding = false;
 
   @state() navDrawerOpen = false;
+  @state() navResizing = false;
+  readonly shellLayout = new ShellLayoutController(this);
   @state() desktopNavigationExpanded = false;
   @state() activeSessionKey = "";
   @state() settingsSearchQuery = "";

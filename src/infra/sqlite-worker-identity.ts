@@ -80,6 +80,16 @@ export function readDatabasePathIdentitySync(databasePath: string): DatabasePath
   return identity;
 }
 
+/** Inspect retained aliases only while binding a newly observed database path. */
+export function findChangedDatabasePaths(
+  paths: Iterable<string>,
+  observed: DatabasePathIdentity,
+): string[] {
+  return [...paths].filter(
+    (pathname) => inspectDatabasePathIdentitySync(pathname)?.key !== observed.key,
+  );
+}
+
 export async function readDatabasePathIdentity(
   databasePath: string,
 ): Promise<DatabasePathIdentity> {

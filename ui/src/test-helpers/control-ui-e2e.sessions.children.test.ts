@@ -127,5 +127,5 @@ it("preserves metadata for an already scoped child page", async ({ connect }) =>
 
   expect(
     (await request("sessions.list", { spawnedBy: child.spawnedBy, limit: 1 })).payload,
-  ).toEqual(page);
+  ).toEqual({ ...page, sessions: [{ ...child, snapshotAt: expect.any(Number) }] });
 });

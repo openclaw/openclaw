@@ -192,7 +192,7 @@ describe("CLI runtime admission", () => {
 import { syncFixtureBuiltinExports } from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
 const spawn = cp.spawn;
 cp.spawn = (bin, args, options) => spawn(process.execPath, ['-e',
-  args.includes('scripts/run-node.mjs') ? 'process.exit(91)' : ''], options);
+  args.includes('scripts/prepare-vitest-runtime.mjs') ? 'process.exit(91)' : ''], options);
 syncFixtureBuiltinExports();\n`,
         );
         const configArgs =
@@ -339,7 +339,7 @@ import fs from 'node:fs';
 import { syncFixtureBuiltinExports } from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
 const spawn = cp.spawn;
 cp.spawn = (bin, args, options) => {
-  if (args.includes('scripts/run-node.mjs')) return spawn(process.execPath, [${JSON.stringify(builder)}], options);
+  if (args.includes('scripts/prepare-vitest-runtime.mjs')) return spawn(process.execPath, [${JSON.stringify(builder)}], options);
   if (args.some((arg) => arg === 'vitest' || arg.endsWith('/vitest.mjs'))) {
     fs.appendFileSync(${JSON.stringify(readersFile)}, 'reader\\n');
     return spawn(process.execPath, ['-e', ''], options);
@@ -583,6 +583,7 @@ describe("packed CI config continuation", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     vi.stubEnv("CI", "1");
     vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", "1");
+    vi.stubEnv("OPENCLAW_VITEST_SHARD_NAME", "serial-fixture");
     vi.stubEnv("OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT", "");
     vi.stubEnv("OPENCLAW_VITEST_FS_MODULE_CACHE_PATH", "");
     vi.stubEnv("OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE", scenario.enabled ? "1" : "");
@@ -613,6 +614,7 @@ describe("packed CI config continuation", () => {
     } else {
       await running;
     }
+    expect(console.error).toHaveBeenCalledWith("[test] inner parallelism 1");
     expect(selected).toEqual(configs.slice(0, scenario.expected));
     if (scenario.signaled) {
       expect(exit).toHaveBeenCalledWith("SIGTERM");
@@ -1178,6 +1180,7 @@ describe("cache lease completion", () => {
       }
       expect(commands.reader).toHaveBeenCalledTimes(expected);
       if (focused) {
+        expect(console.error).toHaveBeenCalledWith("[test] inner parallelism 2");
         const selected = selections.flat();
         expect(
           selections.every((selection) => Array.isArray(selection) && selection.length === 1),
@@ -1260,10 +1263,7 @@ describe("test-projects build admission", () => {
       expect(commands.prepare.mock.calls.map(([command]) => command.args)).toEqual(
         mixed
           ? [["scripts/ui.js", "build"]]
-          : [
-              ["scripts/run-node.mjs", "--version"],
-              ["scripts/ui.js", "build"],
-            ],
+          : [["scripts/prepare-vitest-runtime.mjs"], ["scripts/ui.js", "build"]],
       );
       expect(commands.uiAssets).toHaveBeenCalledTimes(2);
       expect(process.exitCode).toBe(0);
@@ -1285,7 +1285,7 @@ describe("test-projects build admission", () => {
       await terminal.promise;
       expect(commands.reader).not.toHaveBeenCalled();
       expect(commands.prepare.mock.calls.map(([command]) => command.args)).toEqual([
-        ["scripts/run-node.mjs", "--version"],
+        ["scripts/prepare-vitest-runtime.mjs"],
         ["scripts/ui.js", "build"],
       ]);
       expect(process.exitCode).toBe(outcome === "nonzero" ? 7 : 1);
@@ -1325,7 +1325,7 @@ describe("test-projects build admission", () => {
         await rejected;
       }
       expect(commands.prepare.mock.calls.map(([command]) => command.args)).toEqual(
-        mixed ? [] : [["scripts/run-node.mjs", "--version"]],
+        mixed ? [] : [["scripts/prepare-vitest-runtime.mjs"]],
       );
       expect(commands.uiAssets).not.toHaveBeenCalled();
       expect(commands.reader).not.toHaveBeenCalled();
@@ -1522,7 +1522,7 @@ describe("test-projects build admission", () => {
         expect(commands.reader).not.toHaveBeenCalled();
         expect(commands.prepare).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({
-            args: ["scripts/run-node.mjs", "--version"],
+            args: ["scripts/prepare-vitest-runtime.mjs"],
             env: expect.objectContaining({ OPENCLAW_BUILD_PRIVATE_QA: "1" }),
           }),
         );
@@ -1700,7 +1700,7 @@ describe("plugin batch build admission", () => {
         expect(reader).not.toHaveBeenCalled();
         expect(commands.prepare).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({
-            args: ["scripts/run-node.mjs", "--version"],
+            args: ["scripts/prepare-vitest-runtime.mjs"],
             env: expect.objectContaining({ OPENCLAW_BUILD_PRIVATE_QA: "1" }),
           }),
         );

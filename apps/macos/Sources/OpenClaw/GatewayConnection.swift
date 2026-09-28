@@ -12,6 +12,12 @@ private let gatewayConnectionLogger = Logger(subsystem: "ai.openclaw", category:
 /// Owns one Gateway websocket shared by its callers. The primary app runtime
 /// uses `.shared`; saved-profile windows use independent connections.
 actor GatewayConnection: Observable {
+    nonisolated let chatSendOwnership = OpenClawChatSendOwnership()
+    var nativeChatSubscriptionOwners: [UUID: OpenClawChatSessionTarget] = [:]
+    var nativeChatSubscribedScopes: Set<OpenClawChatSendOwnership.Scope> = []
+    var nativeChatSubscriptionLease: ServerLease?
+    var nativeChatSubscriptionTail: Task<Void, Error>?
+
     static let shared: GatewayConnection = {
         #if DEBUG
         // Rendered test views can request previews through the shared connection.
@@ -81,6 +87,27 @@ actor GatewayConnection: Observable {
         let deviceAuthGatewayID: String?
         let browserSession: GatewayBrowserSession?
         let activationOwnershipFingerprint: String?
+
+        fileprivate init(
+            endpoint: EndpointSnapshot,
+            generation: UInt64,
+            activationBindingKey: SymmetricKey?,
+            authBinding: GatewayAuthBinding? = nil)
+        {
+            self.generation = generation
+            self.authority = endpoint.routeAuthority
+            self.url = endpoint.config.url
+            self.token = endpoint.config.token
+            self.password = endpoint.config.password
+            self.tls = endpoint.tls
+            self.deviceAuthGatewayID = endpoint.deviceAuthGatewayID
+            self.browserSession = endpoint.browserSession
+            self.activationOwnershipFingerprint = GatewayConnection.activationOwnershipFingerprint(
+                config: endpoint.config,
+                browserSession: endpoint.browserSession,
+                authBinding: authBinding,
+                key: activationBindingKey)
+        }
 
         func matches(config: Config) -> Bool {
             self.url == config.url && self.token == config.token && self.password == config.password
@@ -254,18 +281,9 @@ actor GatewayConnection: Observable {
         let endpoint = connection.endpoint
         let lease = ServerLease(
             route: Route(
+                endpoint: endpoint,
                 generation: self.routeGeneration,
-                authority: endpoint.routeAuthority,
-                url: endpoint.config.url,
-                token: endpoint.config.token,
-                password: endpoint.config.password,
-                tls: endpoint.tls,
-                deviceAuthGatewayID: endpoint.deviceAuthGatewayID,
-                browserSession: endpoint.browserSession,
-                activationOwnershipFingerprint: Self.activationOwnershipFingerprint(
-                    config: endpoint.config,
-                    browserSession: endpoint.browserSession,
-                    key: connection.activationBindingKey)),
+                activationBindingKey: connection.activationBindingKey),
             socketGeneration: socketGeneration,
             endpointRevision: endpoint.revision,
             client: connection.client)
@@ -729,23 +747,13 @@ extension GatewayConnection {
     func captureRequiredRoute() async throws -> Route {
         let shutdownGeneration = shutdownGeneration
         let endpoint = try await currentEndpoint()
-        let cfg = endpoint.config
         _ = try await self.configure(
             endpoint: endpoint,
             shutdownGeneration: shutdownGeneration)
         return Route(
+            endpoint: endpoint,
             generation: self.routeGeneration,
-            authority: endpoint.routeAuthority,
-            url: cfg.url,
-            token: cfg.token,
-            password: cfg.password,
-            tls: endpoint.tls,
-            deviceAuthGatewayID: endpoint.deviceAuthGatewayID,
-            browserSession: endpoint.browserSession,
-            activationOwnershipFingerprint: Self.activationOwnershipFingerprint(
-                config: cfg,
-                browserSession: endpoint.browserSession,
-                key: self.configuredConnection?.activationBindingKey))
+            activationBindingKey: self.configuredConnection?.activationBindingKey)
     }
 
     /// Connect and bind subsequent work to the hello snapshot's physical
@@ -784,7 +792,6 @@ extension GatewayConnection {
             retryTransportFailures: retryTransportFailures)
         try self.requireCurrentShutdownGeneration(shutdownGeneration)
         let endpoint = try await currentEndpoint()
-        let cfg = endpoint.config
         guard let client = configuredClient(
             endpoint: endpoint,
             shutdownGeneration: shutdownGeneration)
@@ -801,19 +808,10 @@ extension GatewayConnection {
         }
         let lease = ServerLease(
             route: Route(
+                endpoint: endpoint,
                 generation: routeGeneration,
-                authority: endpoint.routeAuthority,
-                url: cfg.url,
-                token: cfg.token,
-                password: cfg.password,
-                tls: endpoint.tls,
-                deviceAuthGatewayID: endpoint.deviceAuthGatewayID,
-                browserSession: endpoint.browserSession,
-                activationOwnershipFingerprint: Self.activationOwnershipFingerprint(
-                    config: cfg,
-                    browserSession: endpoint.browserSession,
-                    authBinding: authBinding,
-                    key: self.configuredConnection?.activationBindingKey)),
+                activationBindingKey: self.configuredConnection?.activationBindingKey,
+                authBinding: authBinding),
             socketGeneration: socketGeneration,
             endpointRevision: endpoint.revision,
             client: client)
@@ -1654,6 +1652,16 @@ extension GatewayConnection {
         }
         let data = try await self.request(request)
         return try self.decoder.decode(OpenClawChatHistoryPayload.self, from: data)
+    }
+
+    func conversationOwnershipScope(sessionKey: String, agentID: String?) -> OpenClawChatSendOwnership.Scope {
+        let defaults = self.lastSnapshot?.snapshot.sessiondefaults
+        return OpenClawChatSendOwnership.Scope(
+            sessionKey: sessionKey,
+            agentID: agentID,
+            scope: defaults?["scope"]?.value as? String,
+            mainKey: defaults?["mainKey"]?.value as? String,
+            defaultAgentID: defaults?["defaultAgentId"]?.value as? String)
     }
 
     func chatSend(
