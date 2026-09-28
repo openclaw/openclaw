@@ -1,0 +1,29 @@
+{
+  "extends": "../../tsconfig.json",
+  // Retain source-wide module augmentations when narrowing this editor/lint graph.
+  "files": [
+    "../../config/sessions/session-entry.test-compat.d.ts",
+    "../../cli/program/openclaw-command.ts",
+    "../bash-tools.exec.resolve-env-hook.test.ts",
+    "../../plugin-sdk/channel-inbound.test.ts"
+  ],
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    "**/*.mts",
+    "**/*.cts",
+    "**/*.test-support.cjs",
+    "../../**/*.d.ts",
+    "../../**/*.d.mts",
+    "../../**/*.d.cts",
+    "../../../packages/**/*.d.ts",
+    "../../../packages/**/*.d.mts",
+    "../../../packages/**/*.d.cts",
+    "../../../ui/**/*.d.ts",
+    "../../../ui/**/*.d.mts",
+    "../../../ui/**/*.d.cts",
+    "../../../extensions/**/*.d.ts",
+    "../../../extensions/**/*.d.mts",
+    "../../../extensions/**/*.d.cts"
+  ]
+}
