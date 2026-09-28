@@ -18,6 +18,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   mockLoadConfig,
   startInboxMonitor,
+  waitForInboundWorkDrained,
   waitForMessageCalls,
   type InboxOnMessage,
 } from "./monitor-inbox.test-harness.js";
@@ -383,7 +384,12 @@ describe("web monitor inbox poll vote hook", () => {
       ],
     });
 
-    await waitForMessageCalls(onMessage, 1);
+    await waitForInboundWorkDrained();
+
+    expect(maybeEmitWhatsAppPollVoteReceivedHookMock).toHaveBeenCalledWith(
+      expect.objectContaining({ key: expect.objectContaining({ id: voteMessageId }) }),
+    );
+    expect(onMessage).toHaveBeenCalledTimes(1);
   });
 
   it("does not fire poll_vote_received twice for a redelivered vote-update upsert", async () => {
