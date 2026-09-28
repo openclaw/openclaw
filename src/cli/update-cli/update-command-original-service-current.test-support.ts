@@ -565,6 +565,7 @@ export function registerCurrentF3Controls(fixture: () => Fixture) {
               handoff() {},
               interrupted: () => false,
               beginMutation() {},
+              assertRecoveryCurrent() {},
               restore,
               complete: vi.fn(),
             },

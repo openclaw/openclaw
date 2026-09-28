@@ -604,7 +604,9 @@ a message from this pane resumes following your response; a send from another
 browser, including one signed in as you, does not count as a local send. Scroll
 back to the end or select **Latest** to resume following explicitly. Assistant
 text stays visible as it streams and becomes saved history, without a reply
-entry fade or slide.
+entry fade or slide. Submitted prompts slide upward once without fading out;
+the smooth send scroll starts after the composer and new rows have settled their
+layout. Reduced motion disables the prompt slide and smooth scrolling.
 
 Hover an external web link, or focus it with the keyboard, to see its page title,
 description, and social image when available. GitHub repository and public
