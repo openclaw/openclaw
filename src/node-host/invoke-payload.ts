@@ -4,18 +4,6 @@ import type { NodeInvokeRequestPayload } from "./invoke-types.js";
 
 const MAX_INVOKE_INPUT_BYTES = 16 * 1024;
 
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- CLI JSON params are typed by the invoked method.
-export function decodeNodeInvokeParams<T = unknown>(raw?: string | null): T {
-  if (!raw) {
-    throw new Error("INVALID_REQUEST: paramsJSON required");
-  }
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    throw new Error("INVALID_REQUEST: paramsJSON malformed JSON");
-  }
-}
-
 export function coerceNodeInvokePayload(payload: unknown): NodeInvokeRequestPayload | null {
   if (!payload || typeof payload !== "object") {
     return null;
@@ -68,9 +56,8 @@ export function coerceNodeInvokeInputPayload(
     !value ||
     typeof value.id !== "string" ||
     typeof value.nodeId !== "string" ||
-    typeof value.seq !== "number" ||
     !Number.isInteger(value.seq) ||
-    value.seq < 0 ||
+    (value.seq as number) < 0 ||
     typeof value.payloadJSON !== "string" ||
     Buffer.byteLength(value.payloadJSON, "utf8") > MAX_INVOKE_INPUT_BYTES
   ) {
@@ -79,7 +66,7 @@ export function coerceNodeInvokeInputPayload(
   return {
     invokeId: value.id,
     nodeId: value.nodeId,
-    seq: value.seq,
+    seq: value.seq as number,
     payloadJSON: value.payloadJSON,
   };
 }

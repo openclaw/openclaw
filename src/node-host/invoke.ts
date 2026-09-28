@@ -57,7 +57,6 @@ import {
 import { invokeDeviceApps } from "./invoke-device-apps.js";
 import { invokeNodeFileCommand } from "./invoke-file-commands.js";
 import { boundMcpToolResultPayload } from "./invoke-mcp-result.js";
-import { decodeNodeInvokeParams as decodeParams } from "./invoke-payload.js";
 import { withNodeHostPluginInvocation } from "./invoke-plugin-context.js";
 import { runCommand } from "./invoke-run-command.js";
 import { buildSystemRunPrepareCoverageEnv } from "./invoke-system-run-plan.js";
@@ -190,7 +189,12 @@ async function buildSystemRunAllowAlwaysCoverage(params: {
   });
 }
 
-type ExecApprovalsSnapshot = ReturnType<typeof redactExecApprovals>;
+type ExecApprovalsSnapshot = {
+  path: string;
+  exists: boolean;
+  hash: string;
+  file: ExecApprovalsFile;
+};
 
 export type { NodeInvokeRequestPayload, SkillBinsProvider } from "./invoke-types.js";
 
@@ -398,10 +402,18 @@ export async function handleInvoke(
     logWarn(
       `node host invoke failed (command=${frame.command ?? "unknown"}, id=${frame.id}): ${String(err)}`,
     );
-    await createNodeInvokeResponder(invocationClient, frame).error(
-      "UNAVAILABLE",
-      "node invocation failed",
-    );
+    try {
+      await createNodeInvokeResponder(invocationClient, frame).error(
+        "UNAVAILABLE",
+        "node invocation failed",
+      );
+    } catch (sendErr) {
+      // The caller intentionally detaches this promise. A failed result send is
+      // terminal for this request and must not surface as an unhandled rejection.
+      logWarn(
+        `node host invoke failure response could not be sent (id=${frame.id}): ${String(sendErr)}`,
+      );
+    }
   }
 }
 
@@ -479,7 +491,7 @@ async function dispatchInvoke(
     let includeResolvedDefaults = false;
     try {
       if (frame.paramsJSON != null) {
-        const params = decodeParams(frame.paramsJSON);
+        const params = decodeParams<unknown>(frame.paramsJSON);
         if (
           !isRecord(params) ||
           (params.includeResolvedDefaults !== undefined &&
@@ -754,7 +766,7 @@ async function dispatchInvoke(
 }
 
 function decodeMcpToolsCallParams(raw?: string | null): McpToolsCallParams {
-  const value = decodeParams(raw);
+  const value = decodeParams<unknown>(raw);
   if (!isRecord(value)) {
     throw new Error("INVALID_REQUEST: MCP tool params must be an object");
   }
@@ -806,6 +818,18 @@ async function handleMcpToolsCall(
       "MCP_TOOL_ERROR",
       truncateUtf16Safe(String(error), MCP_ERROR_MESSAGE_MAX_CHARS),
     );
+  }
+}
+
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- CLI JSON params are typed by the invoked method.
+function decodeParams<T>(raw?: string | null): T {
+  if (!raw) {
+    throw new Error("INVALID_REQUEST: paramsJSON required");
+  }
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    throw new Error("INVALID_REQUEST: paramsJSON malformed JSON");
   }
 }
 

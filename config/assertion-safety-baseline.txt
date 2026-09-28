@@ -2711,10 +2711,11 @@ src/model-catalog/bundled-catalog-stamp.ts	1
 src/model-catalog/remote-overlay.ts	1
 src/model-picker/apply-session-model-selection.ts	1
 src/node-host/config.ts	1
-src/node-host/invoke-agent-cli-claude-params.ts	1
+src/node-host/invoke-agent-cli-claude-params.ts	4
 src/node-host/invoke-agent-cli-claude.ts	1
-src/node-host/invoke-payload.ts	4
-src/node-host/invoke.ts	2
+src/node-host/invoke-file-commands.ts	1
+src/node-host/invoke-payload.ts	5
+src/node-host/invoke.ts	3
 src/node-host/mcp.ts	3
 src/node-host/node-worker-bundle-installer.ts	1
 src/node-host/node-worker-transfer-client.ts	1
