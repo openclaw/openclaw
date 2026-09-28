@@ -472,6 +472,11 @@ function runCheckShardFixture(options: {
   mkdirSync(fakeBin);
   if (typeCheck) {
     mkdirSync(path.join(root, "scripts"));
+    mkdirSync(path.join(root, ".ci-harness/scripts"), { recursive: true });
+    copyFileSync(
+      new URL("../../scripts/ci-static-step.sh", import.meta.url),
+      path.join(root, ".ci-harness/scripts/ci-static-step.sh"),
+    );
     writeFileSync(
       path.join(root, "scripts/run-tsgo-core-test-shards.mts"),
       options.types?.stripeSupport === false ? "// legacy runner\n" : "// --stripe\n",
