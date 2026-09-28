@@ -9,6 +9,11 @@ import {
   type ReplyOperation,
 } from "../auto-reply/reply/reply-run-registry.js";
 import { runGatewayLoop } from "../cli/gateway-cli/run-loop.js";
+import * as reclamationWorker from "../config/sessions/session-accessor.sqlite-reclamation-worker.js";
+import {
+  createSessionMaintenanceStatisticsOperation,
+  runSqliteSessionReclamation,
+} from "../config/sessions/session-accessor.sqlite-reclamation.js";
 import { writeGatewayRestartIntentSync } from "../infra/restart-intent.js";
 import type { SqliteIntegrityDiagnostics } from "../infra/sqlite-integrity.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
@@ -182,10 +187,18 @@ it.skipIf(process.platform !== "linux")(
             },
           }),
       );
+      const reclamationClose = vi.spyOn(
+        reclamationWorker.SqliteReclamationWorker.prototype,
+        "close",
+      );
+      await runSqliteSessionReclamation({
+        forceInProcess: false,
+        plan: createSessionMaintenanceStatisticsOperation({ ...options, path: agent.path }),
+      });
       const hostLeaseCount = shared
         .prepare("SELECT count(*) AS n FROM agent_database_leases WHERE path = ?")
         .get(agent.path)?.n;
-      expect(hostLeaseCount).toBe(2);
+      expect(hostLeaseCount).toBe(3);
       // External cleanup can outlive the stop budget; idle writers must not wait for it.
       const removeSidecar = kernel.registerConnectionDependentSidecars({
         async stop() {
@@ -226,6 +239,8 @@ it.skipIf(process.platform !== "linux")(
       ]);
       expect(isAgentRunRestartAbortReason(operation.abortSignal.reason)).toBe(true);
       await writerReleased.promise;
+      expect(reclamationClose).toHaveBeenCalledOnce();
+      await reclamationClose.mock.results[0]?.value;
       expect(
         shared
           .prepare("SELECT count(*) AS n FROM agent_database_leases WHERE path = ?")
