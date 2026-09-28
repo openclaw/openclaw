@@ -7,6 +7,7 @@ import "@awesome.me/webawesome/dist/components/radio-group/radio-group.js";
 import "@awesome.me/webawesome/dist/components/switch/switch.js";
 import { html, nothing, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
+import { shellLayoutTraits } from "../app/shell-layout-traits.ts";
 import { t } from "../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { icons } from "./icons.ts";
@@ -76,7 +77,12 @@ export function renderSettingsPage(
   ]
     .filter(Boolean)
     .join(" ");
-  return html`<div class=${className}>${children}</div>`;
+  return html`<div
+    class=${className}
+    ${shellLayoutTraits({ settingsPage: true, settingsWide: options.wide })}
+  >
+    ${children}
+  </div>`;
 }
 
 export function renderDocsLink(url: string, label: unknown): TemplateResult {
@@ -115,7 +121,10 @@ export function renderLearnMoreLink(url: string): TemplateResult {
 
 export function renderSettingsPageHeader(props: SettingsPageHeaderProps): TemplateResult {
   return html`
-    <section class="content-header content-header--settings">
+    <section
+      class="content-header content-header--settings"
+      ${shellLayoutTraits({ toolbarHeader: true })}
+    >
       <div>
         <h1 class="page-title">${props.title}</h1>
         ${props.subtitle ? html`<div class="page-subtitle">${props.subtitle}</div>` : nothing}

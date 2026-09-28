@@ -1,6 +1,6 @@
 /* Floating footer controls clear collapsed chrome and feed their resting width
    back into the first-row safe edge. */
-.shell--nav-collapsed:has(openclaw-sidebar-attention.sidebar-attention--floating) {
+div.shell--nav-collapsed.shell--floating-attention {
   --shell-attention-width: 40px;
 }
 
@@ -29,8 +29,7 @@ html.openclaw-native-macos openclaw-sidebar-attention.sidebar-attention--floatin
 
 /* The borderless Inbox badge extends 1px beyond its 32px control. Keep the
    existing 8px title clearance measured from the badge edge, not the button. */
-html.openclaw-native-web-chrome
-  .shell--nav-collapsed:has(openclaw-sidebar-attention.sidebar-attention--floating) {
+html.openclaw-native-web-chrome div.shell--nav-collapsed.shell--floating-attention {
   --shell-attention-width: 41px;
 }
 

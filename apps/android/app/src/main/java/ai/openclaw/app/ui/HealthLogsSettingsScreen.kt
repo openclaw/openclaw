@@ -23,7 +23,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -75,7 +74,7 @@ internal fun HealthLogsSettingsScreen(
   SettingsDetailFrame(
     title = nativeString("Health"),
     subtitle = nativeString("Gateway status, phone node readiness, and recent log stream."),
-    icon = Icons.Default.Settings,
+    icon = SettingsRoute.Health.icon,
     onBack = onBack,
   ) {
     SettingsMetricPanel(
@@ -146,7 +145,7 @@ private fun GatewayLogDetailSettingsScreen(
   SettingsDetailFrame(
     title = nativeString("Log Entry"),
     subtitle = nativeString("Readable gateway log detail."),
-    icon = Icons.Default.Settings,
+    icon = SettingsRoute.Health.icon,
     onBack = onBack,
   ) {
     SettingsMetricPanel(

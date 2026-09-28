@@ -35,6 +35,7 @@ import {
   normalizeCompatibilityConfig as normalizeTelegramCompatibilityConfig,
 } from "./doctor-contract.js";
 import { resolveTelegramPreviewStreamMode } from "./preview-streaming.js";
+import { telegramWebhookHost } from "./webhook-legacy.js";
 
 type TelegramAllowFromInvalidHit = { path: string; entry: string };
 type TelegramMalformedGroupsHit = { path: string; actualType: string };
@@ -621,6 +622,15 @@ export const telegramDoctor: ChannelDoctorAdapter = {
         continue;
       }
       const destination = `Gateway port ${resolveGatewayPort(cfg, env)}${path}`;
+      if (!telegramWebhookHost.getWebhookLegacyListener) {
+        // The shipped host collects warningNotes, but does not render infoNotes.
+        warningNotes.push(
+          legacyListener
+            ? `Telegram account "${accountId}": the 2026.9.6 compatibility listener ${legacyListener.host}:${legacyListener.port} serves this account directly. This host cannot share a legacy port across accounts; use distinct endpoints or move the reverse proxy for ${config.webhookUrl} to ${destination}, verify delivery, then set legacyWebhook: false.`
+            : `Telegram account "${accountId}": legacyWebhook: false disables the 2026.9.6 compatibility listener. Route ${config.webhookUrl} to ${destination}.`,
+        );
+        continue;
+      }
       infoNotes.push(
         legacyListener
           ? `Telegram account "${accountId}": legacy listener ${legacyListener.host}:${legacyListener.port} forwards to ${destination}. Move the reverse proxy for ${config.webhookUrl} to that Gateway route, verify delivery, then set legacyWebhook: false to disable legacy forwarding for this account.`

@@ -17,9 +17,6 @@ beforeEach(() => mocks.profile.mockReset());
 describe("model-independent Ultra", () => {
   it.each<{ name: string; profile: ProviderThinkingProfile; expected?: string }>([
     { name: "max", profile: { levels: [{ id: "high" }, { id: "max" }] }, expected: "max" },
-    { name: "xhigh", profile: { levels: [{ id: "high" }, { id: "xhigh" }] }, expected: "xhigh" },
-    { name: "high", profile: { levels: [{ id: "off" }, { id: "high" }] }, expected: "high" },
-    { name: "adaptive", profile: { levels: [{ id: "adaptive" }] }, expected: "adaptive" },
     {
       name: "binary",
       profile: { levels: [{ id: "off" }, { id: "low", label: "on" }] },

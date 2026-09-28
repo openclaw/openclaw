@@ -183,7 +183,7 @@ describe.skipIf(process.platform === "win32")("SimSlim workflow admission", () =
     );
     expect(
       commands.filter(({ tool, args }) => tool === "xcrun" && args[1] === "bootstatus"),
-    ).toHaveLength(2);
+    ).toHaveLength(3);
   });
 
   it.each(["missing-installer", "missing-prepare"])("keeps %s targets stock", (mode) => {

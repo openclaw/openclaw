@@ -174,6 +174,22 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   };
   await withEnvAsync(env, async () => {
     const siblingDir = writePackage("sibling");
+    const writeSiblingControlUi = (build: string) => {
+      const assetDir = `dist/control-ui/${build}`;
+      fs.mkdirSync(path.join(siblingDir, assetDir), { recursive: true });
+      fs.writeFileSync(path.join(siblingDir, assetDir, "index.js"), "export {};\n");
+      fs.writeFileSync(path.join(siblingDir, assetDir, "index.css"), ":root { color: blue; }\n");
+      const manifestPath = path.join(siblingDir, "openclaw.plugin.json");
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      fs.writeFileSync(
+        manifestPath,
+        JSON.stringify({
+          ...manifest,
+          controlUi: { entry: `${assetDir}/index.js`, styles: [`${assetDir}/index.css`] },
+        }),
+      );
+    };
+    writeSiblingControlUi("build-a");
     const bundledDir =
       settings === "empty" && !cleanupRetry
         ? writePackage(
@@ -427,6 +443,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     const releaseSiblingWork = siblingInstance.retainWork();
     let firstReceipt: Awaited<ReturnType<typeof reload>>;
     try {
+      writeSiblingControlUi("build-b");
       firstReceipt = await reload(
         validated.config,
         ["installed-probe"],
@@ -438,6 +455,12 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       releaseSiblingWork();
     }
     expect(firstReceipt.runtime.pluginIds).toEqual(["installed-probe"]);
+    expect(firstReceipt.runtime.warnings ?? []).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("retained work")]),
+    );
+    expect(runtime.pluginRuntime.registry.plugins.find((record) => record.id === "sibling")).toBe(
+      siblingRecord,
+    );
     expect(await probe("sibling")).toEqual(sibling);
     if (workspacePlugin) {
       expect(await probe("workspace-probe")).toEqual(workspacePlugin);

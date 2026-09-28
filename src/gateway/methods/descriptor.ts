@@ -44,6 +44,8 @@ export type GatewayMethodDescriptor = {
   sessionAccess?: GatewayMethodSessionAccess;
   since?: string;
   startup?: GatewayMethodStartupAvailability;
+  /** Observes another owner's result; cancelled on requester disconnect and restart drain. */
+  lifetime?: "observation";
   controlPlaneWrite?: boolean;
   advertise?: boolean;
   description?: string;
@@ -84,6 +86,7 @@ export type GatewayMethodRegistryView = {
   getScope: (name: string) => GatewayMethodScope | undefined;
   getSessionAccess?: (name: string) => GatewayMethodSessionAccess | undefined;
   isStartupUnavailable: (name: string) => boolean;
+  isObservation: (name: string) => boolean;
   isControlPlaneWrite: (name: string) => boolean;
   requiresAuthenticatedProfile: (name: string) => boolean;
   descriptors: () => readonly GatewayMethodDescriptor[];

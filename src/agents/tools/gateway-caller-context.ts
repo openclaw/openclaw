@@ -1,6 +1,8 @@
 // Ambient trusted caller context for model-mediated Gateway tool calls.
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
+import type { ReplyTurnParticipants } from "../../auto-reply/reply/reply-run-registry.contracts.js";
+import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
 import type { CronCreatorAuthorityGrant } from "../../gateway/cron-creator-authority-grant.types.js";
 import type {
   GatewayContextResolver,
@@ -13,7 +15,10 @@ import {
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
-import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
+import {
+  bindGatewayContextResolver,
+  getGatewayContextResolver,
+} from "../../plugins/runtime/gateway-request-scope.js";
 import {
   getAdmittedRunDelegatedAuthority,
   readAdmittedRunOperatorAuthority,
@@ -22,7 +27,10 @@ import {
   type OperationalRunInstanceRef,
 } from "../admitted-run-context.js";
 import { copyAgentToolMetadata } from "../agent-tool-metadata.js";
-import type { EmbeddedRunToolAuthorityBinding } from "../embedded-agent-runner/run-state.js";
+import {
+  captureActiveEmbeddedRunPersonalToolParticipants,
+  type EmbeddedRunToolAuthorityBinding,
+} from "../embedded-agent-runner/run-state.js";
 import {
   attachInternalToolExecutionPreparer,
   getInternalToolExecutionPreparer,
@@ -30,6 +38,8 @@ import {
 import type { AnyAgentTool } from "./common.js";
 
 type GatewayToolCallerIdentity = {
+  personalToolParticipants?: ReplyTurnParticipants;
+  personalToolUser?: string;
   agentId: string;
   sessionKey: string;
   gatewayUiCommandTarget?: GatewayUiCommandTarget;
@@ -110,13 +120,15 @@ function bindGatewayToolContextResolver(
   if (!admittedContext) {
     return () => undefined;
   }
-  return () => {
+  const resolveAdmittedContext = () => {
     try {
       return resolveGatewayContext() === admittedContext ? admittedContext : undefined;
     } catch {
       return undefined;
     }
   };
+  bindGatewayContextResolver(resolveAdmittedContext, admittedContext.resolveGatewayContext);
+  return resolveAdmittedContext;
 }
 
 type AdmittedGatewayToolCallerParams = {
@@ -199,6 +211,53 @@ export function createAdmittedGatewayToolCallerIdentity(
 
 export function getGatewayToolCallerIdentity(): GatewayToolCallerIdentity | undefined {
   return gatewayToolCallerStorage.getStore();
+}
+
+/** Selection is model input; only the turn's host-owned participants grant a target. */
+export async function withGatewayPersonalToolUser<T>(
+  user: string | undefined,
+  run: () => Promise<T> | T,
+): Promise<T> {
+  const caller = getGatewayToolCallerIdentity();
+  if (!caller) {
+    if (user !== undefined) {
+      throw new Error("Selecting user requires an active personal-tool turn.");
+    }
+    return await run();
+  }
+  return await gatewayToolCallerStorage.run({ ...caller, personalToolUser: user }, run);
+}
+
+export function resolveGatewayPersonalToolParticipant(
+  runtimeIdentity?: AgentRuntimeIdentity,
+  options?: { requireSingleParticipant?: boolean },
+) {
+  const caller = getGatewayToolCallerIdentity();
+  if (caller?.personalToolParticipants) {
+    return caller.personalToolParticipants.resolve(
+      options?.requireSingleParticipant ? undefined : caller.personalToolUser,
+    );
+  }
+  if (caller?.personalToolUser !== undefined) {
+    throw new Error("Selecting user requires an active personal-tool turn.");
+  }
+  if (!caller && runtimeIdentity) {
+    const registered = captureActiveEmbeddedRunPersonalToolParticipants(runtimeIdentity);
+    if (!registered) {
+      return undefined;
+    }
+    const participant = registered.participants?.resolve();
+    return (
+      participant && {
+        ...participant,
+        assertCurrent: () => {
+          registered.assertCurrent();
+          participant.assertCurrent();
+        },
+      }
+    );
+  }
+  return undefined;
 }
 
 /** Capture the admitted run and worker owner, independently of optional audit collection. */
@@ -331,6 +390,9 @@ export async function withGatewayToolCallerIdentity<T>(
     {
       agentId: inheritedOwner?.agentId ?? identity.agentId.trim(),
       sessionKey: inheritedOwner?.sessionKey ?? identity.sessionKey.trim(),
+      personalToolParticipants:
+        inheritedOwner?.personalToolParticipants ?? identity.personalToolParticipants,
+      personalToolUser: inheritedOwner?.personalToolUser ?? identity.personalToolUser,
       ...(fullPermission !== undefined ? { fullPermission } : {}),
       ...(operationalRunInstance ? { operationalRunInstance } : {}),
       ...(embeddedRunToolAuthorityBinding ? { embeddedRunToolAuthorityBinding } : {}),

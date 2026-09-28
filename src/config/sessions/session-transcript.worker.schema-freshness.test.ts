@@ -86,6 +86,11 @@ it.for([
       vi.useFakeTimers({ toFake: ["setImmediate"] });
       let pending: Promise<unknown> | undefined;
       try {
+        await expect(worker.read({ kind: "prewarm", database, env: state.env })).resolves.toEqual({
+          ok: true,
+          value: { kind: "prewarm" },
+        });
+        expect(countOpens()).toBe(1);
         pending = worker.read(request);
         await expect(racePromiseWithAbortSignal(pending, signal)).resolves.toMatchObject(expected);
         expect(countOpens()).toBe(1);

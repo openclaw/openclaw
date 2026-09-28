@@ -8,6 +8,7 @@ struct ChatToolActivityItem: Identifiable, Equatable {
         case finished
         case failed
         case blocked
+        case skipped
         case unavailable
 
         var title: LocalizedStringResource {
@@ -16,6 +17,7 @@ struct ChatToolActivityItem: Identifiable, Equatable {
             case .finished: "Finished"
             case .failed: "Failed"
             case .blocked: "Blocked"
+            case .skipped: "Skipped"
             case .unavailable: "No result"
             }
         }
@@ -42,6 +44,7 @@ struct ChatToolActivityItem: Identifiable, Equatable {
         case "completed": return .finished
         case "failed": return .failed
         case "blocked": return .blocked
+        case "skipped": return .skipped
         default: return .unavailable
         }
     }
@@ -462,53 +465,11 @@ private struct ChatToolActivityRowContent: View {
 
     private static func symbol(forToolName name: String?) -> String {
         let normalized = name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        let exact: [String: String] = [
-            "agent": "rectangle.stack",
-            "bash": "terminal",
-            "browser": "safari",
-            "canvas": "photo",
-            "clock": "clock",
-            "command": "terminal",
-            "cron": "clock",
-            "create_file": "square.and.pencil",
-            "edit": "pencil.line",
-            "edit_file": "pencil.line",
-            "exec": "terminal",
-            "fetch": "globe",
-            "find": "magnifyingglass",
-            "gateway": "server.rack",
-            "glob": "magnifyingglass",
-            "grep": "magnifyingglass",
-            "view_image": "photo",
-            "list": "magnifyingglass",
-            "ls": "magnifyingglass",
-            "memory": "brain",
-            "message": "bubble.left",
-            "multi_edit": "pencil.line",
-            "multiedit": "pencil.line",
-            "notebook_edit": "pencil.line",
-            "notebookedit": "pencil.line",
-            "node": "server.rack",
-            "apply_patch": "pencil.line",
-            "applypatch": "pencil.line",
-            "patch": "pencil.line",
-            "photo": "photo",
-            "read": "doc.text",
-            "reply": "bubble.left",
-            "schedule": "clock",
-            "screenshot": "photo",
-            "search": "magnifyingglass",
-            "send": "bubble.left",
-            "session": "rectangle.stack",
-            "shell": "terminal",
-            "terminal": "terminal",
-            "web": "globe",
-            "write": "square.and.pencil",
-            "write_file": "square.and.pencil",
-            "str_replace_based_edit_tool": "pencil.line",
-            "str_replace_editor": "pencil.line",
-        ]
-        if let symbol = exact[normalized] { return symbol }
+        switch normalized {
+        case "create_file": return "square.and.pencil"
+        case "ls": return "magnifyingglass"
+        default: break
+        }
 
         let fallbacks: [([String], String)] = [
             (["canvas", "image", "screenshot", "photo"], "photo"),

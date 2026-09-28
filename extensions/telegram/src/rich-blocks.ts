@@ -58,10 +58,6 @@ type StructuralSegment =
   | { kind: "list"; start: number; end: number; source: MarkdownRichListSource }
   | { kind: "table"; start: number; end: number; table: MarkdownTableMeta };
 
-function isTelegramRichLinkHref(href: string): boolean {
-  return TELEGRAM_RICH_LINK_HREF_RE.test(href);
-}
-
 function resolveHeadingSize(style: MarkdownStyle): 1 | 2 | 3 | 4 | 5 | 6 | undefined {
   switch (style) {
     case "heading_1":
@@ -82,13 +78,7 @@ function resolveHeadingSize(style: MarkdownStyle): 1 | 2 | 3 | 4 | 5 | 6 | undef
 }
 
 function isInlineStyle(style: MarkdownStyle): style is InlineStyleKind {
-  return (
-    style === "bold" ||
-    style === "italic" ||
-    style === "strikethrough" ||
-    style === "code" ||
-    style === "spoiler"
-  );
+  return Object.hasOwn(INLINE_STYLE_RANK, style);
 }
 
 type TelegramLinkAction =
@@ -115,7 +105,7 @@ function resolveTelegramLinkAction(
     // In-message fragments are RichTextAnchorLink, not RichTextUrl.
     return { kind: "anchor", name: href.slice(1) };
   }
-  if (!isTelegramRichLinkHref(href)) {
+  if (!TELEGRAM_RICH_LINK_HREF_RE.test(href)) {
     return null;
   }
   return { kind: "url", href };
@@ -319,12 +309,6 @@ function splitParagraphs(ir: MarkdownIR, start: number, end: number): InputRichB
   return paragraphs;
 }
 
-function renderAsciiTableGrid(table: MarkdownTableMeta): string {
-  return renderTelegramMonospaceGrid([table.headers, ...table.rows], {
-    headerSeparator: true,
-  });
-}
-
 function cellToRichText(cell: MarkdownTableCell | undefined): RichText | undefined {
   if (!cell?.text) {
     return undefined;
@@ -340,7 +324,12 @@ function renderTableBlock(table: MarkdownTableMeta): {
   const columnCount = Math.max(table.headers.length, ...table.rows.map((row) => row.length), 0);
   if (columnCount > TELEGRAM_RICH_TEXT_TABLE_COLUMN_LIMIT) {
     return {
-      block: { type: "pre", text: renderAsciiTableGrid(table) },
+      block: {
+        type: "pre",
+        text: renderTelegramMonospaceGrid([table.headers, ...table.rows], {
+          headerSeparator: true,
+        }),
+      },
       degradation: "table-ascii",
     };
   }

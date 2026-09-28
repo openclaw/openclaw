@@ -4,10 +4,7 @@ import {
   readStringParam,
   resolveReactionMessageId,
 } from "openclaw/plugin-sdk/channel-actions";
-import type {
-  ChannelMessageActionAdapter,
-  ChannelMessageActionName,
-} from "openclaw/plugin-sdk/channel-contract";
+import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { removeReactionSignal, sendReactionSignal } from "../reaction-runtime-api.js";
@@ -44,15 +41,10 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
       return null;
     }
 
-    const actions = new Set<ChannelMessageActionName>(["send"]);
     const reactionsEnabled = configuredAccounts.some((account) =>
       createActionGate(account.config.actions)("reactions"),
     );
-    if (reactionsEnabled) {
-      actions.add("react");
-    }
-
-    return { actions: Array.from(actions) };
+    return { actions: reactionsEnabled ? ["send", "react"] : ["send"] };
   },
   supportsAction: ({ action }) => action === "react",
   prepareSendPayload: ({ ctx, payload, replyToId, replyToIdSource }) => {

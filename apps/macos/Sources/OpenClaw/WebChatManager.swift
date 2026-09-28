@@ -175,49 +175,20 @@ final class WebChatManager {
         return try await (connection.mainSessionKey(ifCurrentServerLease: lease), lease)
     }
 
-    func show(
-        sessionKey: String,
-        ifCurrentRouteFrom lease: GatewayConnection.ServerLease,
-        onRejected: @escaping @MainActor () -> Void)
-    {
-        self.primaryOpenTask?.cancel()
-        let root = OpenClawConfigFile.loadDict()
-        guard self.primaryConnection.serverLeaseMatchesCurrentRoute(lease),
-              let owner = lease.route.deviceAuthGatewayID,
-              owner == GatewayDiscoveryPreferences.deviceAuthGatewayID(root: root),
-              let cacheID = MacChatTranscriptCache.gatewayID(root: root)
-        else {
-            onRejected()
-            return
-        }
-        self.preparePrimaryGateway(gatewayID: owner)
-        let generation = self.primaryGeneration
-        let connection = self.primaryConnection
-        // Resolve the complete route before presentation: its storage identity
-        // intentionally omits credential rotations and TLS pin changes.
-        self.primaryOpenTask = Task { @MainActor [weak self] in
-            guard !Task.isCancelled else { return }
-            let current = await connection.isCurrentRoute(lease.route)
-            guard !Task.isCancelled, let self, generation == self.primaryGeneration else { return }
-            guard current, connection.serverLeaseMatchesCurrentRoute(lease) else {
-                onRejected()
-                return
-            }
-            self.presentChat(sessionKey: sessionKey, agentID: nil, draft: nil, gatewayID: cacheID)
-        }
-    }
-
     private func presentChat(
         sessionKey: String,
         agentID: String?,
         draft: String?,
-        gatewayID: String? = nil,
         newWindow: Bool = false)
     {
         let route = WebChatRoute(sessionKey: sessionKey, agentID: agentID)
         if !newWindow,
            let instance = self.gatewayWindowOrder.reversed().lazy.compactMap({ self.gatewayWindows[$0] })
-               .first(where: { $0.target == .primary && $0.route == route })
+               .first(where: {
+                   $0.target == .primary && $0.route == route &&
+                       (draft?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false ||
+                           $0.controller.acceptsNativeDraft)
+               })
         {
             instance.controller.applyDraftIfEmpty(draft)
             instance.controller.show()
@@ -227,8 +198,7 @@ final class WebChatManager {
             sessionKey: route.sessionKey,
             agentID: route.agentID,
             initialDraft: draft,
-            connection: self.primaryConnection,
-            gatewayID: gatewayID)
+            connection: self.primaryConnection)
         self.install(controller, target: .primary, route: route, connection: self.primaryConnection)
     }
 
@@ -332,6 +302,7 @@ final class WebChatManager {
             agentID: route.agentID,
             connection: connection,
             gatewayID: chatStoreID,
+            gatewayTarget: target,
             windowTitle: "\(name) — OpenClaw",
             windowAutosaveName: "OpenClawChatWindow-\(autosaveID)")
         self.install(controller, target: target, route: route, connection: connection)

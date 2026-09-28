@@ -21,14 +21,10 @@ import type {
   SessionTranscriptReadScope,
 } from "./session-transcript-read-kernel.js";
 
-export const SILENT_CHAT_HISTORY_TAIL_SCAN_MAX_MESSAGES = 8_000;
+const SILENT_CHAT_HISTORY_TAIL_SCAN_MAX_MESSAGES = 8_000;
 const SILENT_CHAT_HISTORY_TAIL_SCAN_CHUNK_MESSAGES = 100;
 const SILENT_CHAT_HISTORY_TAIL_SCAN_MAX_CHUNK_MESSAGES = 400;
 const HISTORY_PAGE_MAX_BYTES = 1024 * 1024;
-
-export function resolveChatHistoryTailReadMaxBytes(maxBytes: number): number {
-  return Math.max(maxBytes * 2, 1024 * 1024);
-}
 
 export function readChatHistoryMessageId(message: unknown): string | undefined {
   const id = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.id;

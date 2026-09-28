@@ -8,7 +8,12 @@ import { assertFeishuApiSuccess } from "./api-response.js";
 import { resolveConfiguredHttpTimeoutMs } from "./client-timeout.js";
 import { createFeishuClient } from "./client.js";
 import { FeishuDocSchema, type FeishuDocParams } from "./doc-schema.js";
-import { BATCH_SIZE, insertBlocksInBatches } from "./docx-batch-insert.js";
+import {
+  BATCH_SIZE,
+  insertBlocksInBatches,
+  insertDocxDescendants,
+  type DocxDescendantCreateBlock,
+} from "./docx-batch-insert.js";
 import { updateColorText } from "./docx-color-text.js";
 import {
   createDocxMarkdownChunk,
@@ -94,12 +99,6 @@ type DocxChildrenCreatePayload = NonNullable<
 >;
 type DocxChildrenCreateChild = NonNullable<
   NonNullable<DocxChildrenCreatePayload["data"]>["children"]
->[number];
-type DocxDescendantCreatePayload = NonNullable<
-  Parameters<Lark.Client["docx"]["documentBlockDescendant"]["create"]>[0]
->;
-type DocxDescendantCreateBlock = NonNullable<
-  NonNullable<DocxDescendantCreatePayload["data"]>["descendants"]
 >[number];
 type DriveMediaUploadAllPayload = NonNullable<
   Parameters<Lark.Client["drive"]["media"]["uploadAll"]>[0]
@@ -267,41 +266,6 @@ async function chunkedConvertMarkdown(client: Lark.Client, chunks: readonly Docx
 
 type Logger = { info?: (msg: string) => void };
 
-/**
- * Insert blocks using the Descendant API (supports tables, nested lists, large docs).
- * Unlike the Children API, this supports block_type 31/32 (Table/TableCell).
- *
- * @param parentBlockId - Parent block to insert into (defaults to docToken = document root)
- * @param index - Position within parent's children (-1 = end, 0 = first)
- */
-async function insertBlocksWithDescendant(
-  client: Lark.Client,
-  docToken: string,
-  blocks: FeishuDocxBlock[],
-  firstLevelBlockIds: string[],
-  { parentBlockId = docToken, index = -1 }: { parentBlockId?: string; index?: number } = {},
-): Promise<{ children: FeishuDocxBlockChild[] }> {
-  const descendants = cleanBlocksForDescendant(blocks);
-  if (descendants.length === 0) {
-    return { children: [] };
-  }
-
-  const res = await client.docx.documentBlockDescendant.create({
-    path: { document_id: docToken, block_id: parentBlockId },
-    data: {
-      children_id: firstLevelBlockIds,
-      descendants: descendants as DocxDescendantCreateBlock[],
-      index,
-    },
-  });
-
-  if (res.code !== 0) {
-    throw new Error(`${res.msg} (code: ${res.code})`);
-  }
-
-  return { children: res.data?.children ?? [] };
-}
-
 async function deleteBlockChildren(
   client: Lark.Client,
   docToken: string,
@@ -448,18 +412,27 @@ async function editDoc(
   logger?.info?.(
     `feishu_doc: Converted to ${blocks.length} blocks, inserting${target ? ` at index ${target.index}` : ""}...`,
   );
-  const { children: inserted } =
+  const inserted =
     blocks.length > BATCH_SIZE
-      ? await insertBlocksInBatches(
+      ? (
+          await insertBlocksInBatches(
+            client,
+            docToken,
+            orderedBlocks,
+            rootIds,
+            logger,
+            target?.parentBlockId,
+            target?.index,
+          )
+        ).children
+      : await insertDocxDescendants(
           client,
           docToken,
-          orderedBlocks,
+          cleanBlocksForDescendant(orderedBlocks) as DocxDescendantCreateBlock[],
           rootIds,
-          logger,
           target?.parentBlockId,
           target?.index,
-        )
-      : await insertBlocksWithDescendant(client, docToken, orderedBlocks, rootIds, target);
+        );
   const imagesProcessed = await processImages(
     client,
     docToken,

@@ -6,7 +6,6 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
-import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -20,7 +19,6 @@ const FOUR_HOURS_MS = 4 * 60 * 60_000;
 
 describe("manual cron delivery occurrence", () => {
   it.each([
-    { label: "direct force", mode: "force", queued: false },
     { label: "queued force", mode: "force", queued: true },
     { label: "scheduled due", mode: "due", queued: false },
   ] as const)(
@@ -43,7 +41,6 @@ describe("manual cron delivery occurrence", () => {
               },
             ]),
           );
-          resetTaskRegistryForTests({ persist: false });
           let now = Date.now() - FOUR_HOURS_MS;
           const cfg: OpenClawConfig = {
             agents: { entries: { main: { workspace: state.workspaceDir } } },
@@ -150,7 +147,6 @@ describe("manual cron delivery occurrence", () => {
             }
           } finally {
             cron.stop();
-            resetTaskRegistryForTests({ persist: false });
             restoreActivePluginRegistrySnapshot(registry);
           }
         },

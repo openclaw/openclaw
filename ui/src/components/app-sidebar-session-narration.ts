@@ -6,24 +6,17 @@ import {
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Value } from "typebox/value";
 import {
+  SessionNarrationEventSchema,
   SessionObserverDigestSchema,
   type SessionObserverDigest,
 } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
-  stripInternalRuntimeContext,
 } from "../../../src/agents/internal-runtime-context.js";
-import {
-  isSuppressedControlReplyLeadFragment,
-  isSuppressedControlReplyText,
-  stripSuppressedControlReplyToken,
-} from "../../../src/gateway/control-reply-text.js";
 import { extractAssistantPhaseText } from "../../../src/shared/chat-message-content.js";
-import { stripInlineDirectiveTagsForDisplay } from "../../../src/utils/directive-tags.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
 import { t } from "../i18n/index.ts";
-import { stripHeartbeatTokenForDisplay } from "../lib/chat/heartbeat-display.ts";
 import { pickFreshestObserverDigest } from "../lib/observer-digest.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import {
@@ -72,6 +65,14 @@ type ThrottledLine = {
   timer: ReturnType<typeof globalThis.setTimeout> | null;
 };
 
+type NarrationStream = {
+  // Keep the full stream length even after visibleText trims its bounded buffer.
+  consumedLength: number;
+  internalDepth: number;
+  delimiterTail: string;
+  visibleText: string;
+};
+
 export type SidebarNarrationSyncInput = {
   enabled: boolean;
   connected: boolean;
@@ -81,26 +82,6 @@ export type SidebarNarrationSyncInput = {
   openSessionKey: string;
   agentId: string;
 };
-
-// TRANSITIONAL(marker-retirement): live narration strips inline markers because
-// streamed drafts still carry them mid-run; persisted data is already clean.
-// Drop the stripInlineDirectiveTagsForDisplay call when the visibleReplies
-// default flips to "message_tool".
-function normalizeSidebarNarrationText(text: string): string | null {
-  const displayText = stripSuppressedControlReplyToken(
-    stripInternalRuntimeContext(stripInlineDirectiveTagsForDisplay(text).text),
-  );
-  const heartbeat = stripHeartbeatTokenForDisplay(displayText);
-  if (
-    !displayText ||
-    isSuppressedControlReplyText(displayText) ||
-    isSuppressedControlReplyLeadFragment(displayText) ||
-    heartbeat.shouldSkip
-  ) {
-    return null;
-  }
-  return heartbeat.text;
-}
 
 function trailingInternalDelimiterPrefix(text: string): string {
   const tokens = [INTERNAL_RUNTIME_CONTEXT_BEGIN, INTERNAL_RUNTIME_CONTEXT_END];
@@ -147,14 +128,7 @@ export class SidebarSessionNarrationController {
   private subscriptions = new Map<string, NarrationSubscription>();
   private pendingReleases = new Map<NarrationSubscription, NarrationRetry>();
   private pendingSubscriptions = new Map<string, PendingSubscription>();
-  private internalRuntimeBlockDepth = new Map<string, number>();
-  private internalRuntimeDelimiterTails = new Map<string, string>();
-  // Chars of the FULL cumulative assistant stream consumed so far, per session.
-  // Length arithmetic (not stored text) keeps append detection O(delta) even
-  // after the visible buffer trims; storing the raw stream made long responses
-  // fail prefix checks post-trim and reparse the whole snapshot per delta.
-  private consumedStreamLength = new Map<string, number>();
-  private visibleText = new Map<string, string>();
+  private streams = new Map<string, NarrationStream>();
   private runIds = new Map<string, string>();
   private throttles = new Map<string, ThrottledLine>();
   private lines = new Map<string, string>();
@@ -252,6 +226,10 @@ export class SidebarSessionNarrationController {
       this.handleChatEvent(event.payload);
       return;
     }
+    if (event.event === "session.narration") {
+      this.handleNarrationEvent(event.payload);
+      return;
+    }
     if (event.event === "session.observer") {
       this.handleObserverEvent(event.payload);
       return;
@@ -295,6 +273,7 @@ export class SidebarSessionNarrationController {
     try {
       const subscription = await source.subscribeMessages(key, {
         agentId: pending.agentId ?? undefined,
+        mode: "narration",
       });
       const owned = { key, source, connectionIdentity, subscription };
       const current = this.pendingSubscriptions.get(key) === pending;
@@ -458,6 +437,8 @@ export class SidebarSessionNarrationController {
     if (this.observerDigests.has(key)) {
       return;
     }
+    const immediate =
+      record.state === "final" || record.state === "aborted" || record.state === "error";
     const message = record.message as Record<string, unknown> | undefined;
     if (message && typeof message.role === "string" && message.role !== "assistant") {
       return;
@@ -466,7 +447,7 @@ export class SidebarSessionNarrationController {
     const messageText = message
       ? stripThinkingTags(extractAssistantPhaseText(message) ?? "")
       : null;
-    const consumed = this.consumedStreamLength.get(key) ?? 0;
+    const consumed = this.streams.get(key)?.consumedLength ?? 0;
     // A newly subscribed sidebar can join mid-run. Within one run the server's
     // cumulative snapshot grows monotonically, so length arithmetic decides
     // append vs rejoin without storing the raw stream.
@@ -478,6 +459,7 @@ export class SidebarSessionNarrationController {
         streamLength: replacement.length,
         fragment: replacement,
         reset: true,
+        immediate,
       });
       return;
     }
@@ -488,12 +470,14 @@ export class SidebarSessionNarrationController {
           streamLength: messageText.length,
           fragment: appends ? deltaText : messageText,
           reset: !appends,
+          immediate,
         });
       } else if (consumed > 0) {
         this.publishText(key, {
           streamLength: consumed + deltaText.length,
           fragment: deltaText,
           reset: false,
+          immediate,
         });
       }
       // consumed === 0 with a bare delta: a mid-run join may sit INSIDE an
@@ -506,13 +490,37 @@ export class SidebarSessionNarrationController {
         streamLength: messageText.length,
         fragment: messageText,
         reset: true,
+        immediate,
       });
+    } else if (immediate) {
+      const pending = this.throttles.get(key)?.pending;
+      if (pending) {
+        this.publishImmediate(key, pending);
+      }
     }
+  }
+
+  private handleNarrationEvent(payload: unknown): void {
+    if (!Value.Check(SessionNarrationEventSchema, payload)) {
+      return;
+    }
+    const key = this.matchingDesiredKey(payload.sessionKey, payload.agentId);
+    if (!key) {
+      return;
+    }
+    this.observeRun(key, payload.runId);
+    if (this.observerDigests.has(key)) {
+      return;
+    }
+    // The Gateway bounds already-sanitized text and owns digest pacing. Retire
+    // any full-owner stream and pending tool line before publishing its snapshot.
+    this.streams.delete(key);
+    this.publishImmediate(key, { kind: "text", text: payload.text });
   }
 
   private publishText(
     key: string,
-    update: { streamLength: number; fragment: string; reset: boolean },
+    update: { streamLength: number; fragment: string; reset: boolean; immediate?: boolean },
   ): void {
     if (update.streamLength <= 0) {
       if (update.reset) {
@@ -522,11 +530,18 @@ export class SidebarSessionNarrationController {
       }
       return;
     }
-    this.consumedStreamLength.set(key, update.streamLength);
+    const stream = this.streams.get(key) ?? {
+      consumedLength: 0,
+      internalDepth: 0,
+      delimiterTail: "",
+      visibleText: "",
+    };
+    stream.consumedLength = update.streamLength;
+    this.streams.set(key, stream);
     if (update.reset) {
-      this.internalRuntimeBlockDepth.delete(key);
-      this.internalRuntimeDelimiterTails.delete(key);
-      this.visibleText.delete(key);
+      stream.internalDepth = 0;
+      stream.delimiterTail = "";
+      stream.visibleText = "";
       // A replacement supersedes anything still queued behind the throttle;
       // otherwise a pre-replacement draft could republish after retraction.
       const throttle = this.throttles.get(key);
@@ -534,28 +549,30 @@ export class SidebarSessionNarrationController {
         throttle.pending = null;
       }
     }
-    const visibleFragment = this.stripInternalRuntimeFragment(key, update.fragment);
-    const previousVisibleText = update.reset ? "" : (this.visibleText.get(key) ?? "");
-    const nextVisibleText = `${previousVisibleText}${visibleFragment}`;
+    const visibleFragment = this.stripInternalRuntimeFragment(stream, update.fragment);
+    const nextVisibleText = `${stream.visibleText}${visibleFragment}`;
     if (!nextVisibleText) {
       if (update.reset && this.lines.delete(key)) {
         this.onLinesChanged(new Map(this.lines));
       }
       return;
     }
-    const boundedVisibleText =
+    stream.visibleText =
       nextVisibleText.length > SIDEBAR_NARRATION_BUFFER_CHARS
         ? sliceUtf16Safe(nextVisibleText, -SIDEBAR_NARRATION_BUFFER_CHARS)
         : nextVisibleText;
-    this.visibleText.set(key, boundedVisibleText);
-    this.publishThrottled(key, { kind: "text", text: boundedVisibleText });
+    const activity: NarrationActivity = { kind: "text", text: stream.visibleText };
+    if (update.immediate) {
+      this.publishImmediate(key, activity);
+    } else {
+      this.publishThrottled(key, activity);
+    }
   }
 
-  private stripInternalRuntimeFragment(key: string, fragment: string): string {
-    const pendingDelimiter = this.internalRuntimeDelimiterTails.get(key) ?? "";
-    this.internalRuntimeDelimiterTails.delete(key);
-    const text = `${pendingDelimiter}${fragment}`;
-    let depth = this.internalRuntimeBlockDepth.get(key) ?? 0;
+  private stripInternalRuntimeFragment(stream: NarrationStream, fragment: string): string {
+    const text = `${stream.delimiterTail}${fragment}`;
+    stream.delimiterTail = "";
+    let depth = stream.internalDepth;
     let cursor = 0;
     let visible = "";
 
@@ -592,16 +609,12 @@ export class SidebarSessionNarrationController {
 
     const delimiterPrefix = trailingInternalDelimiterPrefix(text);
     if (delimiterPrefix) {
-      this.internalRuntimeDelimiterTails.set(key, delimiterPrefix);
+      stream.delimiterTail = delimiterPrefix;
       if (depth === 0 && visible.endsWith(delimiterPrefix)) {
         visible = visible.slice(0, -delimiterPrefix.length);
       }
     }
-    if (depth > 0) {
-      this.internalRuntimeBlockDepth.set(key, depth);
-    } else {
-      this.internalRuntimeBlockDepth.delete(key);
-    }
+    stream.internalDepth = depth;
     return visible;
   }
 
@@ -610,15 +623,12 @@ export class SidebarSessionNarrationController {
       return;
     }
     const record = payload as Record<string, unknown>;
-    if (record.stream !== "tool") {
-      return;
-    }
     const key = this.matchingDesiredKey(record.sessionKey, record.agentId);
     if (!key) {
       return;
     }
     this.observeRun(key, record.runId);
-    if (this.observerDigests.has(key)) {
+    if (record.stream !== "tool" || this.observerDigests.has(key)) {
       return;
     }
     const data = record.data as Record<string, unknown> | undefined;
@@ -671,11 +681,7 @@ export class SidebarSessionNarrationController {
     const now = Date.now();
     const throttle = this.throttles.get(key);
     if (!throttle || now - throttle.lastPublishedAt >= SIDEBAR_NARRATION_THROTTLE_MS) {
-      if (throttle?.timer) {
-        globalThis.clearTimeout(throttle.timer);
-      }
-      this.throttles.set(key, { lastPublishedAt: now, pending: null, timer: null });
-      this.publishActivity(key, activity);
+      this.publishImmediate(key, activity);
       return;
     }
     throttle.pending = activity;
@@ -697,15 +703,23 @@ export class SidebarSessionNarrationController {
     );
   }
 
+  private publishImmediate(key: string, activity: NarrationActivity): void {
+    const timer = this.throttles.get(key)?.timer;
+    if (timer) {
+      globalThis.clearTimeout(timer);
+    }
+    this.throttles.set(key, { lastPublishedAt: Date.now(), pending: null, timer: null });
+    this.publishActivity(key, activity);
+  }
+
   private publishActivity(key: string, activity: NarrationActivity): void {
-    const safeText = activity.kind === "text" ? normalizeSidebarNarrationText(activity.text) : null;
-    const line = safeText
-      ? deriveSidebarNarrationLine(safeText)
-      : activity.kind === "line"
-        ? activity.line
-        : "";
+    const line =
+      activity.kind === "text" ? deriveSidebarNarrationLine(activity.text) : activity.line;
     if (line) {
-      this.setLine(key, line);
+      if (this.lines.get(key) !== line) {
+        this.lines.set(key, line);
+        this.onLinesChanged(new Map(this.lines));
+      }
       return;
     }
     // The activity text is the full visible buffer: normalizing it to nothing
@@ -714,14 +728,6 @@ export class SidebarSessionNarrationController {
     if (activity.kind === "text" && this.lines.delete(key)) {
       this.onLinesChanged(new Map(this.lines));
     }
-  }
-
-  private setLine(key: string, line: string): void {
-    if (this.lines.get(key) === line) {
-      return;
-    }
-    this.lines.set(key, line);
-    this.onLinesChanged(new Map(this.lines));
   }
 
   private clearLine(key: string): void {
@@ -733,10 +739,7 @@ export class SidebarSessionNarrationController {
   }
 
   private clearNarration(key: string): void {
-    this.internalRuntimeBlockDepth.delete(key);
-    this.internalRuntimeDelimiterTails.delete(key);
-    this.consumedStreamLength.delete(key);
-    this.visibleText.delete(key);
+    this.streams.delete(key);
     const throttle = this.throttles.get(key);
     if (throttle?.timer) {
       globalThis.clearTimeout(throttle.timer);
@@ -753,10 +756,7 @@ export class SidebarSessionNarrationController {
         globalThis.clearTimeout(throttle.timer);
       }
     }
-    this.internalRuntimeBlockDepth.clear();
-    this.internalRuntimeDelimiterTails.clear();
-    this.consumedStreamLength.clear();
-    this.visibleText.clear();
+    this.streams.clear();
     this.runIds.clear();
     this.throttles.clear();
     if (this.lines.size > 0) {

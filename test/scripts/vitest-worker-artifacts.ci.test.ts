@@ -115,6 +115,9 @@ function createCiProbe(
 function ciEnv(probe: string, parallelism: number, repeatSpec = false): NodeJS.ProcessEnv {
   return {
     ...process.env,
+    // Nested groups own their cache slots; a parent cache leaf forces serial admission.
+    OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT: "",
+    OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "",
     OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: String(parallelism),
     OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: "[]",
     OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(

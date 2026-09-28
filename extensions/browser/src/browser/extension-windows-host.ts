@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveConfigPath, resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import type { NativeHostRegistrationStatus } from "./extension-install-context.js";
 import type { ChromeStoreInstallRequest } from "./extension-install-external.js";
 import type { ChromeProduct, ExtensionInstallDeps } from "./extension-install-layout.js";
 import {
@@ -117,15 +118,7 @@ async function executableFor(
   throw new WindowsManagementTransportError(false);
 }
 export type WindowsHostProjection = {
-  registrations: Array<{
-    product: ChromeProduct;
-    browser: string;
-    manifestPath: string;
-    extensionIds: string[];
-    state: WindowsManagementResponse["registration"];
-    issue?: string;
-    browserProfile?: string;
-  }>;
+  registrations: NativeHostRegistrationStatus[];
   storeInstallRequests: ChromeStoreInstallRequest[];
   issues: string[];
 };
@@ -147,6 +140,8 @@ function projection(
   issue?: string,
   browserProfile?: string,
 ): WindowsHostProjection {
+  const managementIssue =
+    issue ?? "Windows management reported " + (response?.code ?? "an unknown outcome");
   const nativeIssue =
     issue ??
     (!response?.ok &&
@@ -156,7 +151,7 @@ function projection(
       response.code === "foreign_registration" &&
       response.store === "foreign"
     )
-      ? "Windows management reported " + (response?.code ?? "an unknown outcome")
+      ? managementIssue
       : undefined);
   const result: WindowsHostProjection = {
     registrations: products.map(([product, browser]) => ({
@@ -173,12 +168,7 @@ function projection(
         browser: "Google Chrome",
         path: "Windows current-user Chrome Store request",
         state: response?.store ?? null,
-        ...(!response?.ok
-          ? {
-              issue:
-                issue ?? "Windows management reported " + (response?.code ?? "an unknown outcome"),
-            }
-          : {}),
+        ...(!response?.ok ? { issue: managementIssue } : {}),
       },
     ],
     issues: issue

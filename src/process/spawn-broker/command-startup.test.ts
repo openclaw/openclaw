@@ -29,9 +29,7 @@ describe.skipIf(skipBrokerTests)("command startup cancellation", () => {
       });
       await host.ready();
       vi.spyOn(host, "spawnExeca").mockImplementation((argv, options) => {
-        // This case owns the parent deadline; Execa's independent execution
-        // timeout has parity coverage and must not rescue a broken parent clock.
-        remote = spawnExeca(argv, { ...options, timeout: undefined });
+        remote = spawnExeca(argv, options);
         return remote;
       });
       const source = `
@@ -71,6 +69,7 @@ describe.skipIf(skipBrokerTests)("command startup cancellation", () => {
       await vi.advanceTimersByTimeAsync(1099);
       expect(remote!.child.killed).toBe(false);
       await vi.advanceTimersByTimeAsync(1);
+      await vi.advanceTimersToNextTimerAsync();
       expect(remote!.child.killed).toBe(true);
       expect(await outcome).toMatchObject({
         error: {

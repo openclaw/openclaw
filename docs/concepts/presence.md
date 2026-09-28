@@ -204,7 +204,7 @@ Accepted interactions, including typing, update the exact activity timestamp on
 every live connection for that person. Activity-only presence events are coalesced
 to at most one every 30 seconds per identity. The first observed activity and
 activity after that window schedule a publication; connection, disconnection,
-profile, and watched-session changes share a 50 ms publication window anchored to
+profile, and watched-session changes share a 200 ms publication window anchored to
 the first pending change. Later changes do not postpone it. Hello snapshots and
 `system-presence` replies read the current state immediately. The people card's
 activity age can therefore lag the latest interaction by less than 30 seconds.

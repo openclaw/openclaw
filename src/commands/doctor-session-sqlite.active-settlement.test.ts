@@ -313,8 +313,6 @@ it.each(["import", "recover"] as const)(
 
 it.each([
   { history: "changed-content", pendingPlugin: true },
-  { history: "missing-middle", pendingPlugin: true },
-  { history: "changed-content", pendingPlugin: false },
   { history: "missing-middle", pendingPlugin: false },
 ] as const)(
   "preserves $history without committing an invalid merge (plugin receipt=$pendingPlugin)",

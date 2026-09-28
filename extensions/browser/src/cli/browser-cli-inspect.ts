@@ -16,6 +16,7 @@ import {
   BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
   parseBrowserPositiveIntegerOption,
+  runBrowserCliCommand,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
 
@@ -92,7 +93,7 @@ export function registerBrowserInspectCommands(
       if (type === undefined) {
         return;
       }
-      try {
+      await runBrowserCliCommand(async () => {
         const request = resolveBrowserInspectTimeout(cmd, parent, opts.timeout);
         const result = await callBrowserRequest<{ path: string }>(request.parent, {
           method: "POST",
@@ -113,10 +114,7 @@ export function registerBrowserInspectCommands(
           return;
         }
         defaultRuntime.log(shortenHomePath(result.path));
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+      }, "inline");
     });
 
   browser
@@ -167,7 +165,7 @@ export function registerBrowserInspectCommands(
       ) {
         return;
       }
-      try {
+      await runBrowserCliCommand(async () => {
         const request = resolveBrowserInspectTimeout(cmd, parent, opts.timeout);
         const query: Record<string, string | number | boolean | undefined> = {
           format,
@@ -239,9 +237,6 @@ export function registerBrowserInspectCommands(
             })
             .join("\n"),
         );
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+      }, "inline");
     });
 }

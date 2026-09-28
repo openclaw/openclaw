@@ -23,6 +23,7 @@ import {
 import { formatErrorMessage } from "../infra/errors.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { logInfo } from "../logger.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { VERSION } from "../version.js";
 import { configureNodeHost, loadNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
 import { startNodeHostConnection } from "./connection.js";
@@ -166,6 +167,25 @@ function buildNodeHostLocalAuthConfig(config: OpenClawConfig): OpenClawConfig {
     nextConfig.gateway.remote.password = undefined;
   }
   return nextConfig;
+}
+
+/**
+ * The saved Gateway endpoint when a node credential exists to reconnect without a setup code.
+ * Node tokens are not bound to an endpoint, so callers must present the reconnect as conditional.
+ */
+export async function loadResumableNodeHostGateway(): Promise<NodeHostGatewayConfig | undefined> {
+  // A failed first enrollment saves the endpoint before any device token exists.
+  const gateway = (await loadNodeHostConfig())?.gateway;
+  const identity = gateway ? loadDeviceIdentityIfPresent() : null;
+  return gateway &&
+    identity &&
+    (await canReuseNodeHostDeviceToken({
+      savedGateway: gateway,
+      gatewayCandidates: [gateway],
+      deviceId: identity.deviceId,
+    }))
+    ? gateway
+    : undefined;
 }
 
 export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
@@ -484,10 +504,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   }
 
   let stopping = false;
-  let resolveStopped: (() => void) | undefined;
-  const stopped = new Promise<void>((resolve) => {
-    resolveStopped = resolve;
-  });
+  const { promise: stopped, resolve: resolveStopped } = createDeferredCore();
   // A pending Promise alone does not keep Node alive. Pairing pauses can close
   // the last socket, so retain a handle until a signal finishes the foreground host.
   const lifetimeInterval = setInterval(() => {}, 1_000_000);
@@ -540,7 +557,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     } finally {
       removeSignalHandlers();
       process.exitCode = finalExitCode;
-      resolveStopped?.();
+      resolveStopped();
     }
   };
   const onSigint = AsyncLocalStorage.bind(() => void finish(130));

@@ -1495,51 +1495,40 @@ describe("createBackupArchive", () => {
     });
   });
 
-  it("falls back when injected nowMs is outside Date range", async () => {
-    await withBackupState("openclaw-backup-invalid-now-", async (state) => {
-      const outputDir = state.path("backups");
-      await fs.mkdir(outputDir, { recursive: true });
-      const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 4, 30, 12, 0, 0));
-
-      try {
-        const result = await createBackupArchive({
-          output: outputDir,
-          dryRun: true,
-          includeWorkspace: false,
-          nowMs: 8_640_000_000_000_001,
-        });
-
-        expect(result.createdAt).toBe("2026-05-30T12:00:00.000Z");
-        expect(path.basename(result.archivePath)).toContain("openclaw-backup.tar.gz");
-        expect(path.basename(result.archivePath)).not.toContain("NaN");
-      } finally {
-        dateNowSpy.mockRestore();
-      }
-    });
-  });
-
-  it("falls back to epoch when injected nowMs and Date.now are outside Date range", async () => {
-    await withBackupState("openclaw-backup-invalid-fallback-now-", async (state) => {
-      const outputDir = state.path("backups");
-      await fs.mkdir(outputDir, { recursive: true });
-      const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
-
-      try {
-        const result = await createBackupArchive({
-          output: outputDir,
-          dryRun: true,
-          includeWorkspace: false,
-          nowMs: 8_640_000_000_000_001,
-        });
-
-        expect(result.createdAt).toBe("1970-01-01T00:00:00.000Z");
-        expect(path.basename(result.archivePath)).toContain("openclaw-backup.tar.gz");
-        expect(path.basename(result.archivePath)).not.toContain("NaN");
-      } finally {
-        dateNowSpy.mockRestore();
-      }
-    });
-  });
+  it.each([
+    {
+      fallback: "Date.now",
+      dateNow: Date.UTC(2026, 4, 30, 12, 0, 0),
+      createdAt: "2026-05-30T12:00:00.000Z",
+    },
+    {
+      fallback: "epoch when Date.now is also outside Date range",
+      dateNow: 8_640_000_000_000_001,
+      createdAt: "1970-01-01T00:00:00.000Z",
+    },
+  ])(
+    "falls back to $fallback when injected nowMs is outside Date range",
+    async ({ dateNow, createdAt }) => {
+      await withBackupState("openclaw-backup-invalid-now-", async (state) => {
+        const outputDir = state.path("backups");
+        await fs.mkdir(outputDir, { recursive: true });
+        const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(dateNow);
+        try {
+          const result = await createBackupArchive({
+            output: outputDir,
+            dryRun: true,
+            includeWorkspace: false,
+            nowMs: 8_640_000_000_000_001,
+          });
+          expect(result.createdAt).toBe(createdAt);
+          expect(path.basename(result.archivePath)).toContain("openclaw-backup.tar.gz");
+          expect(path.basename(result.archivePath)).not.toContain("NaN");
+        } finally {
+          dateNowSpy.mockRestore();
+        }
+      });
+    },
+  );
 
   it("skips current live volatile state files while preserving workspace locks", async () => {
     await withOpenClawTestState(
@@ -1774,7 +1763,13 @@ describe("createBackupArchive", () => {
 
       const sqlite = requireNodeSqlite();
       const database = new sqlite.DatabaseSync(resolveOpenClawStateSqlitePath(state.env));
+      let originalUserVersion: unknown;
+      let originalSchemaMetadata: unknown;
       try {
+        originalUserVersion = database.prepare("PRAGMA user_version").get();
+        originalSchemaMetadata = database
+          .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+          .get();
         database.exec("PRAGMA foreign_keys = OFF;");
         database
           .prepare("INSERT INTO task_delivery_state (task_id) VALUES (?)")
@@ -1805,6 +1800,12 @@ describe("createBackupArchive", () => {
           { task_id: "missing-task" },
         ]);
         expect(unchanged.prepare("PRAGMA foreign_key_check").all()).toHaveLength(1);
+        expect(unchanged.prepare("PRAGMA user_version").get()).toEqual(originalUserVersion);
+        expect(
+          unchanged
+            .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+            .get(),
+        ).toEqual(originalSchemaMetadata);
       } finally {
         unchanged.close();
       }

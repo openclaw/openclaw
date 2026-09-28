@@ -1,9 +1,3 @@
-/**
- * Browser config mutation helpers.
- *
- * Persists browser-control credentials and profile config changes through the
- * canonical config writer while preserving port allocation rules.
- */
 import { isDeepStrictEqual } from "node:util";
 import type { BrowserProfileConfig } from "openclaw/plugin-sdk/config-contracts";
 import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
@@ -22,15 +16,10 @@ import {
 } from "./errors.js";
 import { allocateCdpPort, getUsedPorts } from "./profiles.js";
 
-type BrowserControlCredential =
-  | {
-      kind: "token";
-      value: string;
-    }
-  | {
-      kind: "password";
-      value: string;
-    };
+type BrowserControlCredential = {
+  kind: "token" | "password";
+  value: string;
+};
 
 const cdpPortRange = (resolved: {
   controlPort: number;
@@ -41,10 +30,8 @@ const cdpPortRange = (resolved: {
   const end = resolved.cdpPortRangeEnd;
   if (
     typeof start === "number" &&
-    Number.isFinite(start) &&
     Number.isInteger(start) &&
     typeof end === "number" &&
-    Number.isFinite(end) &&
     Number.isInteger(end) &&
     start > 0 &&
     end >= start &&

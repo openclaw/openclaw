@@ -1,7 +1,3 @@
-/**
- * Extension runner - executes extensions and manages their lifecycle.
- */
-
 import type { KeyId } from "@earendil-works/pi-tui";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import type { ImageContent, Model } from "../../../llm/types.js";
@@ -276,7 +272,6 @@ export class ExtensionRunner {
     bindExtensionMetadataActions(this.sessionManager, this.runtime, actions);
     this.runtime.getThinkingLevel = actions.getThinkingLevel;
 
-    // Context actions (required)
     this.getModel = contextActions.getModel;
     this.isIdleFn = contextActions.isIdle;
     this.getSignalFn = contextActions.getSignal;

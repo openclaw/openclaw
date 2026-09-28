@@ -11,6 +11,7 @@ import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import { parseInboundMediaUri } from "../../media/media-reference.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { resolveChatAttachmentMaxBytes } from "../chat-attachment-policy.js";
 import {
   discardPreparedInboundMedia,
@@ -21,6 +22,7 @@ import {
   stripImageMediaMarkers,
   UnsupportedAttachmentError,
 } from "../chat-attachments.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveGatewayModelSupportsImages } from "../session-utils.js";
 import {
   explicitOriginTargetsAcpSession,
@@ -103,6 +105,7 @@ async function prestageMediaPathOffloads(params: {
       sessionKey: params.sessionKey,
       workspaceDir,
     });
+    params.assertWorkAdmissionCurrent();
     if (!sandbox) {
       return refsByManagedPath(mediaPathRefs);
     }
@@ -180,6 +183,7 @@ async function prestageMediaPathOffloads(params: {
   } catch (err) {
     if (
       (params.abortSignal.aborted && Object.is(err, params.abortSignal.reason)) ||
+      err instanceof SessionMutationAuthorizationChangedError ||
       err instanceof MediaOffloadError ||
       err instanceof UnsupportedAttachmentError
     ) {
@@ -210,6 +214,11 @@ export async function prepareChatSendAttachments(params: {
     finishAbortedChatSend,
     lifecycleGeneration,
   } = admission;
+  const assertInputCurrent = () => {
+    activeRunAbort.controller.signal.throwIfAborted();
+    admission.assertWorkAdmissionCurrent();
+    admission.assertClientUploadAllowed?.();
+  };
   let parsedMessage = inboundMessage;
   let parsedImages: Awaited<ReturnType<typeof parseMessageWithAttachments>>["images"] = [];
   let imageOrder: Awaited<ReturnType<typeof parseMessageWithAttachments>>["imageOrder"] = [];
@@ -246,7 +255,7 @@ export async function prepareChatSendAttachments(params: {
             supportsImages: imageSupport.value ?? resolveSupportsImages,
             acceptNonImage: true,
             signal: activeRunAbort.controller.signal,
-            assertCurrent: admission.assertWorkAdmissionCurrent,
+            assertCurrent: assertInputCurrent,
           });
           // The parser owns MIME classification. An unresolved capability means no image was seen,
           // so post-processing must not trigger catalog discovery for a non-image attachment.
@@ -264,7 +273,7 @@ export async function prepareChatSendAttachments(params: {
             sessionKey,
             agentId,
             abortSignal: activeRunAbort.controller.signal,
-            assertWorkAdmissionCurrent: admission.assertWorkAdmissionCurrent,
+            assertWorkAdmissionCurrent: assertInputCurrent,
           });
         },
         {
@@ -276,6 +285,7 @@ export async function prepareChatSendAttachments(params: {
           },
         },
       );
+      assertInputCurrent();
       // Pass-through media still needs awaited cleanup when preparation was cancelled.
       activeRunAbort.controller.signal.throwIfAborted();
       prepareAttachmentsMs = roundedChatSendTimingMs(
@@ -302,10 +312,14 @@ export async function prepareChatSendAttachments(params: {
       respond(
         false,
         undefined,
-        errorShape(
-          err instanceof MediaOffloadError ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
-          String(err),
-        ),
+        err instanceof SessionMutationAuthorizationChangedError
+          ? err.error
+          : errorShape(
+              err instanceof MediaOffloadError
+                ? ErrorCodes.UNAVAILABLE
+                : ErrorCodes.INVALID_REQUEST,
+              String(err),
+            ),
       );
       return { ok: false as const };
     }
@@ -328,3 +342,20 @@ export type PreparedChatSendAttachments = Extract<
   Awaited<ReturnType<typeof prepareChatSendAttachments>>,
   { ok: true }
 >["value"];
+
+/** Preparation owns cleanup until a transcript or pending input takes custody of its media. */
+export function bindChatSendPreparedMediaCustody(params: {
+  admission: Pick<AdmittedChatSend, "setDiscardAbandonedPreparedMedia">;
+  attachments: Pick<PreparedChatSendAttachments, "offloadedRefs">;
+}): (recorder: UserTurnTranscriptRecorder) => void {
+  let recorder: UserTurnTranscriptRecorder | undefined;
+  // Dispatch owns persistence after the ACK disarms this cleanup.
+  params.admission.setDiscardAbandonedPreparedMedia(() => {
+    if (!recorder?.hasPersisted() && !recorder?.getPendingInputMessage?.()) {
+      void discardPreparedInboundMedia(params.attachments.offloadedRefs);
+    }
+  });
+  return (inputRecorder) => {
+    recorder = inputRecorder;
+  };
+}

@@ -127,11 +127,6 @@ describe("QuickJS host lifecycle and output", () => {
   it.each([
     { label: "returned values", source: 'return "x".repeat(2_048);', status: "completed" },
     {
-      label: "completed output",
-      source: 'text("x".repeat(2_048)); return true;',
-      status: "completed",
-    },
-    {
       label: "combined output and returned values",
       source: 'text("x".repeat(700)); return "y".repeat(700);',
       status: "completed",

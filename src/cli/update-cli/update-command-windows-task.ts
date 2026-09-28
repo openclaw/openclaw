@@ -21,6 +21,7 @@ export class UpdateCommandAbort extends Error {
 export type WindowsTaskAutoStartRecovery = {
   suspended: Promise<boolean>;
   beginMutation: () => void;
+  assertRecoveryCurrent: () => void;
   restore: (
     restartSafe?: boolean,
     guard?: () => Promise<void>,
@@ -209,6 +210,13 @@ export function createWindowsTaskAutoStartRecovery(params: {
       });
   return {
     suspended: suspensionPromise,
+    assertRecoveryCurrent: () => {
+      params.assertCurrent?.();
+      // Interruption can still recover the original runtime; transferred or settled owners cannot.
+      if (closed || delegated) {
+        throw new Error("Windows task recovery authority has closed or transferred.");
+      }
+    },
     beginMutation: () => {
       params.assertCurrent?.();
       // Async preflight cannot admit mutation after interruption or settlement.

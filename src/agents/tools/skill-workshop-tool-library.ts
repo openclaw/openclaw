@@ -4,7 +4,7 @@ import { SkillLibraryWorkshopSchema } from "../../../packages/gateway-protocol/s
 import type { SkillLibraryAuthoringCapability } from "../../skills/library/authoring.js";
 import { decodeSkillLibraryFile, validateSkillLibraryPath } from "../../skills/library/bundle.js";
 import { ToolInputError, type AnyAgentTool } from "./common.js";
-import { textResult } from "./tool-results.js";
+import { jsonResult } from "./tool-results.js";
 
 const personalActions = SkillLibraryWorkshopSchema.properties.action.enum.join(" | ");
 const personalArguments = `Personal actions: ${personalActions}. List takes only action and target; read uses skill_id from list, not name. Update uses skill_id and expected_revision from read.`;
@@ -80,15 +80,12 @@ export function createLibrarySkillWorkshopTool(
             ownerProfileId,
             canEdit,
           }));
-        return textResult(
-          JSON.stringify({
-            entries,
-            omitted: Math.max(0, result.entries.length - entries.length),
-            nextAction:
-              "Use My skills for the complete library. Read a selected skill before editing.",
-          }),
-          {},
-        );
+        return jsonResult({
+          entries,
+          omitted: Math.max(0, result.entries.length - entries.length),
+          nextAction:
+            "Use My skills for the complete library. Read a selected skill before editing.",
+        });
       }
       if ("content" in result) {
         // Whole guidance or visible omission: supporting bytes never spill into model context.
@@ -107,30 +104,27 @@ export function createLibrarySkillWorkshopTool(
         const content = bytes.toString("utf8");
         const binary = bytes.includes(0) || !Buffer.from(content).equals(bytes);
         const included = !binary && content.length <= 16000;
-        return textResult(
-          JSON.stringify({
-            skillId: result.entry.skillId,
-            slug: result.entry.slug,
-            name: result.entry.name,
-            ownerProfileId: result.entry.ownerProfileId,
-            canEdit: result.entry.canEdit,
-            artifactPath,
-            revision: result.entry.revision,
-            content: included ? content : undefined,
-            omissionReason: included ? undefined : binary ? "binary" : "too-large",
-            contentIncluded: included,
-            supportFiles: result.files
-              .slice(0, 32)
-              .map(({ path, executable }) => ({ path, executable: executable === true })),
-            omittedFiles: Math.max(0, result.files.length - 32),
-            nextAction: !included
-              ? "Open My skills or use the CLI for the complete artifact. Do not overwrite unseen content."
-              : "Supply expected_revision when updating. Use files for named upserts and delete_files for intentional removals; unmentioned files are preserved.",
-          }),
-          {},
-        );
+        return jsonResult({
+          skillId: result.entry.skillId,
+          slug: result.entry.slug,
+          name: result.entry.name,
+          ownerProfileId: result.entry.ownerProfileId,
+          canEdit: result.entry.canEdit,
+          artifactPath,
+          revision: result.entry.revision,
+          content: included ? content : undefined,
+          omissionReason: included ? undefined : binary ? "binary" : "too-large",
+          contentIncluded: included,
+          supportFiles: result.files
+            .slice(0, 32)
+            .map(({ path, executable }) => ({ path, executable: executable === true })),
+          omittedFiles: Math.max(0, result.files.length - 32),
+          nextAction: !included
+            ? "Open My skills or use the CLI for the complete artifact. Do not overwrite unseen content."
+            : "Supply expected_revision when updating. Use files for named upserts and delete_files for intentional removals; unmentioned files are preserved.",
+        });
       }
-      return textResult(JSON.stringify(result), result);
+      return jsonResult(result);
     },
   };
 }

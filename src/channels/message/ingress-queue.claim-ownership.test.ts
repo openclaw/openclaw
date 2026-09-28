@@ -258,37 +258,6 @@ describe("channel ingress claim ownership", () => {
     });
   });
 
-  it("refreshes claimed rows only with the active claim token", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createTestIngressQueue(stateDir, { now: () => 10 });
-
-      await queue.enqueue("event-1", { text: "claimed" });
-      const claimed = await queue.claim("event-1", { ownerId: "worker" });
-      if (!claimed) {
-        throw new Error("Expected a claimed ingress event");
-      }
-
-      expect(await queue.refreshClaim?.(claimed, { refreshedAt: 20 })).toBe(true);
-      expect(
-        (await queue.listClaims()).map((claim) => ({
-          id: claim.id,
-          claimedAt: claim.claim.claimedAt,
-          updatedAt: claim.updatedAt,
-        })),
-      ).toEqual([{ id: "event-1", claimedAt: 20, updatedAt: 20 }]);
-
-      expect(
-        await queue.refreshClaim?.(
-          { id: "event-1", claim: { token: "wrong" } },
-          {
-            refreshedAt: 30,
-          },
-        ),
-      ).toBe(false);
-      expect((await queue.listClaims())[0]?.claim.claimedAt).toBe(20);
-    });
-  });
-
   it("does not let old claim tokens refresh recovered and reclaimed rows", async () => {
     await withTempState(async (stateDir) => {
       const queue = createTestIngressQueue(stateDir, { now: () => 10 });
@@ -305,11 +274,11 @@ describe("channel ingress claim ownership", () => {
       }
 
       expect(await queue.refreshClaim?.(oldClaim, { refreshedAt: 30 })).toBe(false);
+      expect((await queue.listClaims())[0]?.claim.claimedAt).toBe(10);
       expect(await queue.refreshClaim?.(newClaim, { refreshedAt: 40 })).toBe(true);
-      expect((await queue.listClaims())[0]?.claim).toMatchObject({
-        ownerId: "worker-2",
-        claimedAt: 40,
-      });
+      expect(await queue.listClaims()).toMatchObject([
+        { id: "event-1", updatedAt: 40, claim: { ownerId: "worker-2", claimedAt: 40 } },
+      ]);
     });
   });
 

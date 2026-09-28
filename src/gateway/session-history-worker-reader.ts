@@ -73,7 +73,7 @@ export async function readSessionHistoryRequest(
   if (request.kind === "transcript-binding") {
     return {
       kind: "transcript-binding",
-      binding: options.readers.readTranscriptBinding(request.params.run),
+      binding: options.readers.readTranscriptBinding(),
     };
   }
   if (request.kind === "message-by-id") {
@@ -119,9 +119,14 @@ export async function readSessionHistoryRequest(
   if (request.kind === "rpc") {
     const { readChatHistoryPageKernel } =
       await import("./server-methods/chat-history-page-kernel.js");
+    const { encodeChatHistoryResponsePage } =
+      await import("./server-methods/chat-history-response-page.js");
     return {
       kind: "rpc",
-      page: await readChatHistoryPageKernel(request.params, options),
+      page: encodeChatHistoryResponsePage(
+        await readChatHistoryPageKernel(request.params, options),
+        request.params,
+      ),
     };
   }
   const { readSessionHistorySnapshotKernel } = await import("./session-history-snapshot.js");

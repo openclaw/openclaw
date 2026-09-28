@@ -10,7 +10,7 @@ type Logger = { info?: (msg: string) => void };
 type DocxDescendantCreatePayload = NonNullable<
   Parameters<Lark.Client["docx"]["documentBlockDescendant"]["create"]>[0]
 >;
-type DocxDescendantCreateBlock = NonNullable<
+export type DocxDescendantCreateBlock = NonNullable<
   NonNullable<DocxDescendantCreatePayload["data"]>["descendants"]
 >[number];
 
@@ -65,16 +65,14 @@ function collectDescendants(
   return result;
 }
 
-async function insertBatch(
+export async function insertDocxDescendants(
   client: Lark.Client,
   docToken: string,
-  blocks: FeishuDocxBlock[],
+  descendants: DocxDescendantCreateBlock[],
   firstLevelBlockIds: string[],
   parentBlockId: string = docToken,
   index = -1,
 ): Promise<FeishuDocxBlockChild[]> {
-  const descendants = cleanBlocksForDescendant(blocks);
-
   if (descendants.length === 0) {
     return [];
   }
@@ -83,7 +81,7 @@ async function insertBatch(
     path: { document_id: docToken, block_id: parentBlockId },
     data: {
       children_id: firstLevelBlockIds,
-      descendants: descendants.map(toDescendantBlock),
+      descendants,
       index,
     },
   });
@@ -161,10 +159,10 @@ export async function insertBlocksInBatches(
       `feishu_doc: Inserting batch ${i + 1}/${batches.length} (${batch.blocks.length} blocks)...`,
     );
 
-    const children = await insertBatch(
+    const children = await insertDocxDescendants(
       client,
       docToken,
-      batch.blocks,
+      cleanBlocksForDescendant(batch.blocks).map(toDescendantBlock),
       batch.firstLevelIds,
       parentBlockId,
       currentIndex,

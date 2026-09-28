@@ -9,44 +9,33 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
-import { ensureTaskRegistryReady, getTaskById } from "../../../tasks/runtime-internal.js";
-import { captureTaskDeliveryWork } from "../../../tasks/task-registry-delivery.test-support.js";
-import { publishTaskRecordAfterAtomicStore } from "../../../tasks/task-registry.js";
-import { resetTaskRegistryForTests } from "../../../tasks/task-runtime.test-helpers.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
-import { SubagentLifecycleController } from "../registry/subagent-registry-lifecycle.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { settleSubagentRegistryPersistenceWork } from "../registry/subagent-registry.persistence.test-support.js";
 import {
   loadSubagentRegistryFromSqlite,
   saveSubagentRegistryToSqlite,
 } from "../registry/subagent-registry.store.sqlite.js";
-import { settleSubagentCompletionDelivery } from "./subagent-completion-admission.store.js";
-import { records, requesterWakeDriver } from "./subagent-completion-admission.test-helpers.js";
 import {
-  dismissSubagentCompletionDelivery,
-  retrySubagentCompletionDelivery,
-} from "./subagent-completion-delivery.js";
+  records,
+  requesterWakeDriver,
+  seedSubagentCompletionDelivery,
+} from "./subagent-completion-admission.test-helpers.js";
 
-const resumeSubagentRun = vi.hoisted(() => vi.fn());
-vi.mock("../registry/subagent-registry.js", () => ({ resumeSubagentRun }));
 const tempDirs = createTempDirTracker();
 
 describe("completed requester delivery replay fence", () => {
   const env = captureEnv(["OPENCLAW_STATE_DIR"]);
-  let deliveries: ReturnType<typeof captureTaskDeliveryWork> | undefined;
-  const settle = () => settleSubagentRegistryPersistenceWork(deliveries);
+  const settle = () => settleSubagentRegistryPersistenceWork();
   beforeEach(() => {
     // Failed resource cleanup retains the capture; retired directories only need removal retry.
-    if (deliveries) {
+    if (tempDirs.dirs.size > 0) {
       throw new Error("Previous completion replay fixture cleanup is incomplete");
     }
-    deliveries = captureTaskDeliveryWork();
     setTestEnvValue(
       "OPENCLAW_STATE_DIR",
       tempDirs.make("openclaw-completion-replay-", resolvePreferredOpenClawTmpDir()),
     );
-    resumeSubagentRun.mockClear();
   });
 
   afterEach(async () => {
@@ -64,7 +53,6 @@ describe("completed requester delivery replay fence", () => {
         }
         await closeOpenClawStateDatabaseAsync();
         subagentRuns.clear();
-        resetTaskRegistryForTests({ persist: false });
         closeOpenClawStateDatabaseForTest();
         // Keep failed removals tracked without retaining the retired fixture's environment.
         try {
@@ -73,8 +61,6 @@ describe("completed requester delivery replay fence", () => {
           failures.push(error);
         }
         env.restore();
-        deliveries?.[Symbol.dispose]();
-        deliveries = undefined;
       } catch (error) {
         failures.push(error);
       }
@@ -92,28 +78,20 @@ describe("completed requester delivery replay fence", () => {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     subagentRuns.clear();
-    resetTaskRegistryForTests({ persist: false });
     openOpenClawStateDatabase();
     for (const [runId, entry] of loadSubagentRegistryFromSqlite()) {
       subagentRuns.set(runId, entry);
     }
-    ensureTaskRegistryReady();
   }
 
   function runningOwner() {
     const input = records();
-    input.task.status = "running";
-    input.task.deliveryStatus = "pending";
-    delete input.task.terminalOutcome;
-    delete input.task.endedAt;
-    input.subagent.execution = { status: "running", startedAt: input.task.createdAt };
+    input.subagent.execution = { status: "running", startedAt: input.subagent.createdAt };
     input.subagent.completion = { required: true };
     input.subagent.delivery = { status: "pending", generation: 1 };
     input.subagent.retainAttachmentsOnKeep = true;
-    settleSubagentCompletionDelivery({ subagent: input.subagent, task: input.task });
+    seedSubagentCompletionDelivery({ subagent: input.subagent });
     subagentRuns.set(input.subagent.runId, input.subagent);
-    ensureTaskRegistryReady();
-    publishTaskRecordAfterAtomicStore(input.task);
     return input;
   }
 
@@ -131,6 +109,7 @@ describe("completed requester delivery replay fence", () => {
         reason: "message_tool_delivery_missing",
         disposition: "permanent_failure",
         error: "requester finished without required message tool delivery",
+        enqueuedAt: input.subagent.createdAt,
       });
       reported.resolve(undefined);
       await tail.promise;
@@ -157,13 +136,9 @@ describe("completed requester delivery replay fence", () => {
         status: "suspended",
         suspendedReason: "permanent_failure",
         lastDropReason: "message_tool_delivery_missing",
+        enqueuedAt: input.subagent.createdAt,
         generation: 1,
-        payload: { childRunId: input.subagent.runId, task: input.task.task },
-      });
-      expect(getTaskById(input.task.taskId)).toMatchObject({
-        status: "succeeded",
-        terminalOutcome: "blocked",
-        deliveryStatus: "failed",
+        payload: { childRunId: input.subagent.runId, task: input.subagent.task },
       });
       expect(stored.requesterSettleWake).toBeUndefined();
       expect(stored.suppressCompletionDelivery).not.toBe(true);
@@ -265,46 +240,4 @@ describe("completed requester delivery replay fence", () => {
       await settle();
     }
   });
-
-  it.each(["retry", "dismiss"] as const)(
-    "keeps explicit %s available after lifecycle suspension and reopen",
-    async (action) => {
-      const { input, driver, reported, tail } = await completeWithMissingReceipt();
-      try {
-        await reported.promise;
-      } finally {
-        tail.resolve(undefined);
-        driver.controller.clearScheduledResumeTimers();
-        await settle();
-      }
-      await reopenOwners();
-      const before = subagentRuns.get(input.subagent.runId)!;
-      const payload = structuredClone(before.delivery?.payload);
-      expect(before.delivery?.status).toBe("suspended");
-      if (action === "retry") {
-        expect(await retrySubagentCompletionDelivery(input.task.taskId)).toMatchObject({
-          ok: true,
-          duplicateRisk: true,
-        });
-        expect(resumeSubagentRun).toHaveBeenCalledExactlyOnceWith(input.subagent.runId);
-        await reopenOwners();
-        expect(subagentRuns.get(input.subagent.runId)?.delivery).toMatchObject({
-          status: "pending",
-          generation: 2,
-          payload,
-        });
-        expect(subagentRuns.get(input.subagent.runId)?.delivery?.lastDropReason).toBeUndefined();
-      } else {
-        expect(
-          await dismissSubagentCompletionDelivery(input.task.taskId, {
-            discardTerminalDelivery: SubagentLifecycleController.discardTerminalDelivery,
-          }),
-        ).toMatchObject({ ok: true });
-        await reopenOwners();
-        expect(subagentRuns.get(input.subagent.runId)?.delivery?.status).toBe("discarded");
-        expect(getTaskById(input.task.taskId)?.deliveryStatus).toBe("dismissed");
-        expect(resumeSubagentRun).not.toHaveBeenCalled();
-      }
-    },
-  );
 });

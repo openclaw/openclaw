@@ -3178,6 +3178,8 @@ describe("executePreparedCliRun supervisor output capture", () => {
       });
 
       await vi.advanceTimersByTimeAsync(context.params.timeoutMs);
+      // Deadline decisions wait one timer turn for pending child exit notifications.
+      await vi.advanceTimersToNextTimerAsync();
 
       expect(adapter.killMock).toHaveBeenCalledOnce();
       expect(managed.activity.resultSettled).toBe(false);

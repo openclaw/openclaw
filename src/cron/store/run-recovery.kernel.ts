@@ -1,12 +1,12 @@
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { recomputeJobNextRunAtMs } from "../service/jobs-scheduling.js";
+import { findCronRunRecoveryInDatabase } from "../service/run-history-recovery.js";
 import { resolveCronRunReceiptTerminalStatus } from "../service/run-receipts.js";
 import {
   markInterruptedStartupRun,
   restoreFinalizedStartupRun,
 } from "../service/startup-run-repair.js";
 import type { CronJobPolicyContext, DeferredCronNotifications } from "../service/state.js";
-import { findCronTaskRunRecoveryInDatabase } from "../service/task-runs.js";
 import type { CronJob } from "../types.js";
 import { deleteCronJobRowInDatabase, upsertCronJobRow } from "./row-codec.js";
 import {
@@ -15,6 +15,7 @@ import {
   exactCronRunReceiptMatches,
 } from "./run-receipt-store.js";
 import { isCronRunTriggerStateRetiredInDatabase } from "./run-receipt-trigger-state.js";
+import type { CronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
 import type { CronRunRecoveryProposal } from "./run-recovery-read.types.js";
 import type { CronRunRecoveryResult, InterruptedStartupRun } from "./run-recovery.types.js";
 import type { CronJobReadRow } from "./schema.js";
@@ -23,6 +24,7 @@ export function repairCronRunInDatabase(params: {
   state: CronJobPolicyContext;
   storeKey: string;
   database: OpenClawStateDatabase;
+  receiptSchema: CronRunReceiptWriteSchema;
   row: CronJobReadRow | undefined;
   job: CronJob | undefined;
   proposal: CronRunRecoveryProposal;
@@ -53,6 +55,7 @@ export function repairCronRunInDatabase(params: {
   if (!row || !job) {
     if (proposal.receipt && currentReceipt) {
       finishCronRunReceiptInDatabase({
+        receiptSchema: params.receiptSchema,
         database: database.db,
         handle: proposal.receipt,
         status: "interrupted",
@@ -75,6 +78,7 @@ export function repairCronRunInDatabase(params: {
     delete job.state.queuedAtMs;
     if (proposal.receipt && currentReceipt) {
       finishCronRunReceiptInDatabase({
+        receiptSchema: params.receiptSchema,
         database: database.db,
         handle: proposal.receipt,
         status: "interrupted",
@@ -91,6 +95,7 @@ export function repairCronRunInDatabase(params: {
     if (job.state.runningAtMs !== proposal.runningAtMs) {
       if (proposal.receipt && currentReceipt) {
         finishCronRunReceiptInDatabase({
+          receiptSchema: params.receiptSchema,
           database: database.db,
           handle: proposal.receipt,
           status: "interrupted",
@@ -101,7 +106,7 @@ export function repairCronRunInDatabase(params: {
       }
       return { kind: "superseded", ...(currentReceipt ? { receipt: currentReceipt } : {}) };
     }
-    const task = findCronTaskRunRecoveryInDatabase({
+    const task = findCronRunRecoveryInDatabase({
       database: database.db,
       jobId: proposal.jobId,
       startedAt: proposal.runningAtMs,
@@ -162,6 +167,7 @@ export function repairCronRunInDatabase(params: {
     }
     if (proposal.receipt) {
       finishCronRunReceiptInDatabase({
+        receiptSchema: params.receiptSchema,
         database: database.db,
         handle: proposal.receipt,
         status:
@@ -191,6 +197,7 @@ export function repairCronRunInDatabase(params: {
   if (!changed) {
     if (proposal.receipt && currentReceipt && params.proposedReceiptIsStale) {
       finishCronRunReceiptInDatabase({
+        receiptSchema: params.receiptSchema,
         database: database.db,
         handle: proposal.receipt,
         status: "interrupted",

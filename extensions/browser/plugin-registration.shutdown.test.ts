@@ -27,6 +27,7 @@ vi.mock("./src/browser/screencast/upgrade.js", () => ({
 
 vi.mock("./src/browser/session-tab-store.js", () => ({
   initializeBrowserSessionTabStore: vi.fn(),
+  drainBrowserSessionTabStore: vi.fn(async () => undefined),
 }));
 
 vi.mock("./src/browser/system-profile-import-state.js", () => ({

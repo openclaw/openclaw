@@ -392,12 +392,7 @@ async function deliverWebReplyInActivityScope(
         );
         return;
       }
-      const warning = "⚠️ Media failed.";
-      const fallbackTextParts = [caption ?? "", warning].filter(Boolean);
-      const fallbackText = fallbackTextParts.join("\n");
-      if (!fallbackText) {
-        return;
-      }
+      const fallbackText = [caption ?? "", "⚠️ Media failed."].filter(Boolean).join("\n");
       whatsappOutboundLog.warn(`Media skipped; sent text-only to ${conversationId}`);
       rememberSendResult(
         await sendWithRetry(

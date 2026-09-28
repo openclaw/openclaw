@@ -13,6 +13,7 @@ import {
 } from "../plugins/runtime.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { ChannelKind } from "./config-reload-plan.js";
 import { startGatewayConfigReloader } from "./config-reload.js";
@@ -114,6 +115,7 @@ it("the config watcher restarts a channel that can save provider settings after 
     };
     setActivePluginRegistry(createTestRegistry([{ pluginId: "telegram", plugin, source: "test" }]));
     const owner = createChannelManager({
+      scheduler: createTestGatewayScheduler(),
       getRuntimeConfig: () => initialConfig,
       getPluginRegistry: requireActivePluginChannelRegistry,
       channelLogs: {},
@@ -220,6 +222,7 @@ it("retries failed teardown before admitting a replacement", async () => {
   };
   setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", plugin, source: "test" }]));
   manager = createChannelManager({
+    scheduler: createTestGatewayScheduler(),
     getRuntimeConfig: () => ({}),
     getPluginRegistry: requireActivePluginChannelRegistry,
     channelLogs: {},
@@ -295,6 +298,7 @@ it.each(
     };
     setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", plugin, source: "test" }]));
     manager = createChannelManager({
+      scheduler: createTestGatewayScheduler(),
       getRuntimeConfig: () => ({}),
       getPluginRegistry: requireActivePluginChannelRegistry,
       channelLogs: {},
@@ -389,12 +393,14 @@ it("channel reload uses the attached registry while another Gateway is active", 
   const registryOwnerA = createPluginRegistryOwner(attached);
   const registryOwnerB = createPluginRegistryOwner(foreign);
   const ownerA = createChannelManager({
+    scheduler: createTestGatewayScheduler(),
     getRuntimeConfig: () => ({}),
     getPluginRegistry: () => attached,
     channelLogs: {},
     channelRuntimeEnvs: {},
   });
   const ownerB = createChannelManager({
+    scheduler: createTestGatewayScheduler(),
     getRuntimeConfig: () => ({}),
     getPluginRegistry: () => foreign,
     channelLogs: {},

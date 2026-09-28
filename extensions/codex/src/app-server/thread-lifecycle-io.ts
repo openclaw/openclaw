@@ -41,7 +41,11 @@ import {
   CodexThreadClientReplacementError,
   CodexThreadStartRequestError,
 } from "./thread-lifecycle-errors.js";
-import { resolveCodexThreadAgentDir } from "./thread-lifecycle-preflight.js";
+import {
+  buildCodexThreadBindingPolicy,
+  prepareCodexThreadFinalConfigPatch,
+  resolveCodexThreadAgentDir,
+} from "./thread-lifecycle-preflight.js";
 import type {
   CodexAppServerThreadLifecycleBinding,
   CodexStartOrResumeThreadParams,
@@ -66,15 +70,10 @@ export async function resumeExistingCodexThread(
     startModelProvider,
     userMcpServersConfigPatch,
     dynamicToolsFingerprint,
-    dynamicToolsContainDeferred,
     webSearchThreadConfigFingerprint,
-    nativeSkillIsolationFingerprint,
-    userMcpServersFingerprint,
     ringZeroConfigFingerprint,
     ringZeroClientInstanceId,
-    networkProxyConfigFingerprint,
     contextEngineBinding,
-    environmentSelectionFingerprint,
     hostSystemAgentActive,
     restrictedToolSurface,
     restrictedToolSurfaceInheritedMcpServerNames,
@@ -123,17 +122,13 @@ export async function resumeExistingCodexThread(
       resumeBinding.connectionScope === "supervision"
         ? undefined
         : (params.params.authProfileId ?? resumeBinding.authProfileId);
-    const finalConfigPatch = context.prebuiltFinalConfigPatch ??
-      (await params.buildFinalConfigPatch?.({
-        action: "resume",
-        binding: resumeBinding,
-        ...(context.nativeModelInputTools
-          ? { nativeModelInputTools: context.nativeModelInputTools }
-          : {}),
-      })) ?? {
-        configPatch: params.finalConfigPatch,
-        nativeHookRelayGeneration: params.nativeHookRelayGeneration,
-      };
+    const finalConfigPatch =
+      context.prebuiltFinalConfigPatch ??
+      (await prepareCodexThreadFinalConfigPatch(
+        params,
+        context.nativeModelInputTools,
+        resumeBinding,
+      ));
     // A cold thread has no scoped inventory yet. Build its complete config before
     // resume (including scheduled tool ceilings), then admit the loaded thread below.
     const pluginThreadConfig =
@@ -259,21 +254,15 @@ export async function resumeExistingCodexThread(
         authProfileId,
         response.modelProvider ?? requestModelProvider ?? startModelProvider,
       ),
-      dynamicToolsFingerprint,
-      dynamicToolsContainDeferred,
+      ...buildCodexThreadBindingPolicy(params, context),
       webSearchThreadConfigFingerprint,
-      nativeSkillIsolationFingerprint,
-      userMcpServersFingerprint,
       mcpServersFingerprint:
         params.mcpServersFingerprintEvaluated === true
           ? params.mcpServersFingerprint
           : resumeBinding.mcpServersFingerprint,
-      configuredMcpOwnershipVersion: params.configuredMcpOwnershipVersion,
       ringZeroConfigFingerprint,
       ringZeroClientInstanceId,
       nativeToolPolicyRestricted: restrictedToolSurface ? true : undefined,
-      networkProxyProfileName: params.appServer.networkProxy?.profileName,
-      networkProxyConfigFingerprint,
       nativeHookRelayGeneration:
         finalConfigPatch.nativeHookRelayGeneration ?? resumeBinding.nativeHookRelayGeneration,
       appServerRuntimeFingerprint:
@@ -285,8 +274,6 @@ export async function resumeExistingCodexThread(
         pluginThreadConfig?.inputFingerprint ?? resumeBinding.pluginAppsInputFingerprint,
       pluginAppPolicyContext:
         pluginThreadConfig?.policyContext ?? resumeBinding.pluginAppPolicyContext,
-      contextEngine: contextEngineBinding,
-      environmentSelectionFingerprint,
     } satisfies Partial<Omit<CodexAppServerThreadBinding, "threadId">>;
     const committed = await lifecycleTiming.measure("thread-resume-write-binding", () =>
       params.bindingStore.mutate(
@@ -439,15 +426,10 @@ export async function startFreshCodexThread(
     startModelProvider,
     userMcpServersConfigPatch,
     dynamicToolsFingerprint,
-    dynamicToolsContainDeferred,
     webSearchThreadConfigFingerprint,
-    nativeSkillIsolationFingerprint,
-    userMcpServersFingerprint,
     ringZeroConfigFingerprint,
     ringZeroClientInstanceId,
-    networkProxyConfigFingerprint,
     contextEngineBinding,
-    environmentSelectionFingerprint,
     hostSystemAgentActive,
     restrictedToolSurface,
     restrictedToolSurfaceInheritedMcpServerNames,
@@ -466,15 +448,10 @@ export async function startFreshCodexThread(
         params.pluginThreadConfig?.build(),
       )))
     : undefined;
-  const finalConfigPatch = (await params.buildFinalConfigPatch?.({
-    action: "start",
-    ...(context.nativeModelInputTools
-      ? { nativeModelInputTools: context.nativeModelInputTools }
-      : {}),
-  })) ?? {
-    configPatch: params.finalConfigPatch,
-    nativeHookRelayGeneration: params.nativeHookRelayGeneration,
-  };
+  const finalConfigPatch = await prepareCodexThreadFinalConfigPatch(
+    params,
+    context.nativeModelInputTools,
+  );
   const config = lifecycleTiming.measureSync("merge-thread-config", () =>
     applyCodexNativeSkillIsolation(
       mergeCodexThreadConfigs(
@@ -586,23 +563,15 @@ export async function startFreshCodexThread(
     agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
     model: response.model ?? startParams.model ?? params.params.modelId,
     modelProvider: bindingModelProvider,
-    dynamicToolsFingerprint,
-    dynamicToolsContainDeferred,
-    nativeSkillIsolationFingerprint,
-    userMcpServersFingerprint,
+    ...buildCodexThreadBindingPolicy(params, context),
     mcpServersFingerprint: nextMcpServersFingerprint,
-    configuredMcpOwnershipVersion: params.configuredMcpOwnershipVersion,
     ringZeroConfigFingerprint,
     ringZeroClientInstanceId,
-    networkProxyProfileName: params.appServer.networkProxy?.profileName,
-    networkProxyConfigFingerprint,
     nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
     appServerRuntimeFingerprint: params.appServerRuntimeFingerprint,
     pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
     pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
     pluginAppPolicyContext: pluginThreadConfig?.policyContext,
-    contextEngine: contextEngineBinding,
-    environmentSelectionFingerprint,
   };
   if (!preserveExistingBinding) {
     const nextBinding: CodexAppServerThreadBinding = {

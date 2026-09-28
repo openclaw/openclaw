@@ -34,7 +34,10 @@ import {
 import { listTerminalOperatorApprovalsInDatabase } from "../gateway/operator-approval-store.kernel.js";
 import { readSessionGroupCatalogSnapshot } from "../gateway/session-group-catalog.kernel.js";
 import { readSessionGroupMembership } from "../gateway/session-group-membership.read.js";
-import { readWorkerSessionPlacementProjectionInDatabase } from "../gateway/worker-environments/placement-read-projection.js";
+import {
+  readWorkerPlacementRecoveryCandidatesInDatabase,
+  readWorkerSessionPlacementProjectionInDatabase,
+} from "../gateway/worker-environments/placement-read-projection.js";
 import { readWorkerPlacementChangeSnapshotInDatabase } from "../gateway/worker-environments/placement-row-codec.js";
 import {
   readWorkerEnvironmentFacts,
@@ -61,12 +64,6 @@ import {
   selectSkillLibraryRevisionMetadataBatch,
   selectSkillLibraryRevisionManifestsBatch,
 } from "../skills/library/selection-read.kernel.js";
-import { captureTaskRetentionSource } from "../tasks/task-registry-retention-source.js";
-import {
-  readTaskRecord,
-  readTaskRegistryMutationSnapshotInDatabase,
-  readTaskRegistrySnapshot,
-} from "../tasks/task-registry.store.kernel.js";
 import { isTuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
 import { readTuiLastSessionCommand } from "../tui/tui-last-session.kernel.js";
 import {
@@ -320,22 +317,6 @@ serveOwnedWorkerTasks(
             ) {
               return executeDevicePairingRead(db, input.databasePath, command);
             }
-            if (command.type === "tasks.mutationSnapshot") {
-              return {
-                type: command.type,
-                snapshot:
-                  command.input === undefined
-                    ? readTaskRegistrySnapshot({ db, path: input.databasePath })
-                    : readTaskRegistryMutationSnapshotInDatabase(db, command.input),
-              };
-            }
-            if (command.type === "tasks.retentionSource") {
-              const task = readTaskRecord(db, command.taskId);
-              return {
-                type: command.type,
-                source: task ? captureTaskRetentionSource(task) : undefined,
-              };
-            }
             if (command.type === "subagents.forChildSession") {
               return {
                 type: command.type,
@@ -563,6 +544,12 @@ serveOwnedWorkerTasks(
               return {
                 type: command.type,
                 placements: readWorkerPlacementChangeSnapshotInDatabase(db, command.profileIds),
+              };
+            }
+            if (command.type === "workers.placementRecoveryCandidates") {
+              return {
+                type: command.type,
+                candidates: readWorkerPlacementRecoveryCandidatesInDatabase(db),
               };
             }
             if (command.type === "workers.placementProjection") {

@@ -196,10 +196,6 @@ export function countToolIdentifierMentions(text: string, identifier: string): n
   return countOccurrences(text, identifier, true);
 }
 
-function createCounts(needles: Record<string, string>): Record<string, number> {
-  return Object.fromEntries(Object.keys(needles).map((key) => [key, 0]));
-}
-
 function recordRole(record: unknown): string | undefined {
   const candidate = asOptionalObjectRecord(record);
   return (
@@ -213,16 +209,10 @@ function collectStringLeaves(value: unknown, output: string[]) {
     output.push(value);
     return;
   }
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      collectStringLeaves(item, output);
-    }
-    return;
-  }
   if (!value || typeof value !== "object") {
     return;
   }
-  for (const item of Object.values(value)) {
+  for (const item of Array.isArray(value) ? value : Object.values(value)) {
     collectStringLeaves(item, output);
   }
 }
@@ -284,7 +274,7 @@ export async function countSessionLogMentions(params: {
   sessionsDir: string;
   needles: Record<string, string>;
 }): Promise<Record<string, number>> {
-  const counts = createCounts(params.needles);
+  const counts = Object.fromEntries(Object.keys(params.needles).map((key) => [key, 0]));
   await visitSessionLogEvents(params.sessionsDir, (eventJson) => {
     const scanText = sessionLogScanText(eventJson);
     if (scanText === null) {

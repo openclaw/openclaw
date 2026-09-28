@@ -21,6 +21,7 @@ import {
   configureSqlitePreSchemaPragmas,
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
+import { getSqliteWorkerExistingDatabaseIdentity } from "../infra/sqlite-worker-state-context.js";
 import { withStateDatabaseSchemaMaintenance } from "../infra/state-database-maintenance.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
@@ -81,9 +82,17 @@ export function openUnpublishedStateDatabase(
   params: UnpublishedStateDatabaseOptions,
 ): OpenClawStateDatabase {
   const open = (schemaOwned: boolean): OpenClawStateDatabase => {
-    const original = params.existingSchema
-      ? statSync(params.pathname, { bigint: true })
-      : statSync(params.pathname, { bigint: true, throwIfNoEntry: false });
+    const existingIdentity = getSqliteWorkerExistingDatabaseIdentity(params.pathname);
+    const original =
+      params.existingSchema || existingIdentity
+        ? statSync(params.pathname, { bigint: true })
+        : statSync(params.pathname, { bigint: true, throwIfNoEntry: false });
+    if (
+      existingIdentity &&
+      (!original || `file:${original.dev}:${original.ino}` !== existingIdentity)
+    ) {
+      throw new Error("SQLite database file identity changed before existing-only open");
+    }
     if (!original && !schemaOwned) {
       return withStateDatabaseSchemaMaintenance(
         { databasePath: params.pathname, busyTimeoutMs: params.busyTimeoutMs },

@@ -1,4 +1,5 @@
 import type { CronJob } from "../cron/types.js";
+import type { GatewayScheduledJob, GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import type { ManagedRun, ProcessSupervisor } from "../process/supervisor/index.js";
 import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
@@ -68,12 +69,11 @@ function isWatchableExitJob(job: CronJob): job is OnExitCronJob {
 }
 
 export function createCronExitWatchers(
-  params: CronExitWatcherHandlers & {
-    shell?: { command: string; argsFor: (command: string) => string[] };
-    retryBackoffMs?: readonly number[];
-  },
+  initialHandlers: CronExitWatcherHandlers,
+  scheduler: GatewayScheduler,
+  options?: { retryBackoffMs?: readonly number[] },
 ): CronExitWatchers {
-  let handlers: CronExitWatcherHandlers = params;
+  let handlers = initialHandlers;
   const ownerSettlements = new Set<Promise<void>>();
   const settleOwnerCallback = async <T>(operation: Promise<T>): Promise<T> => {
     const settlement = operation.then(
@@ -87,10 +87,10 @@ export function createCronExitWatchers(
       ownerSettlements.delete(settlement);
     }
   };
-  const shell = params.shell ?? resolveExitWatchShell();
+  const shell = resolveExitWatchShell();
   const retryBackoffMs =
-    params.retryBackoffMs && params.retryBackoffMs.length > 0
-      ? params.retryBackoffMs
+    options?.retryBackoffMs && options.retryBackoffMs.length > 0
+      ? options.retryBackoffMs
       : ON_EXIT_WATCH_RETRY_BACKOFF_MS;
   // Reserving the slot before spawn lets cancel/replace retire an in-flight arm.
   // Async continuations publish only while this exact slot remains current.
@@ -106,7 +106,7 @@ export function createCronExitWatchers(
     command: string;
     cwd: string | undefined;
     consecutiveFailures: number;
-    retryTimer: NodeJS.Timeout | undefined;
+    retryJob: GatewayScheduledJob | undefined;
   };
   const active = new Map<string, WatcherSlot>();
   // A cancelled child can keep running until the supervisor observes exit.
@@ -130,10 +130,8 @@ export function createCronExitWatchers(
       if (!preserveReserved || !slot.fired) {
         slot.admission?.abort();
       }
-      if (slot.retryTimer) {
-        clearTimeout(slot.retryTimer);
-        slot.retryTimer = undefined;
-      }
+      slot.retryJob?.cancel();
+      slot.retryJob = undefined;
       if (!slot.lifecycleSettled) {
         settlingCancelledSlots.add(slot);
       }
@@ -150,7 +148,8 @@ export function createCronExitWatchers(
     }
   };
 
-  const arm = (job: OnExitCronJob, consecutiveFailures = 0) => {
+  const arm = (job: OnExitCronJob, consecutiveFailures = 0): Promise<void> => {
+    const armed = createDeferredCore();
     const command = job.schedule.command;
     const cwd = job.schedule.cwd;
     const predecessors = Array.from(settlingCancelledSlots)
@@ -170,7 +169,7 @@ export function createCronExitWatchers(
       command,
       cwd,
       consecutiveFailures,
-      retryTimer: undefined,
+      retryJob: undefined,
     };
     active.set(job.id, slot);
     const owns = () => active.get(job.id) === slot;
@@ -208,15 +207,18 @@ export function createCronExitWatchers(
       }
       const delayMs =
         retryBackoffMs[Math.min(slot.consecutiveFailures - 1, retryBackoffMs.length - 1)]!;
-      slot.retryTimer = setTimeout(() => {
-        slot.retryTimer = undefined;
-        if (!owns() || slot.cancelled) {
-          return;
-        }
-        active.delete(slot.job.id);
-        arm(slot.job, slot.consecutiveFailures);
-      }, delayMs);
-      slot.retryTimer.unref?.();
+      slot.retryJob = scheduler.schedule({
+        id: `${scopeKey(job.id)}:retry`,
+        delayMs,
+        run: () => {
+          slot.retryJob = undefined;
+          if (!owns() || slot.cancelled) {
+            return undefined;
+          }
+          active.delete(slot.job.id);
+          return arm(slot.job, slot.consecutiveFailures);
+        },
+      });
       handlers.logger.warn(
         { err: String(error), jobId: slot.job.id, retryInMs: delayMs },
         `cron-exit: watcher ${phase} failed; retry scheduled`,
@@ -264,6 +266,8 @@ export function createCronExitWatchers(
           { jobId: job.id, runId: run.runId, command },
           "cron-exit: watcher armed",
         );
+        // The watcher now owns the child through exit; the scheduled arm only joins startup.
+        armed.resolve();
         let exit: Awaited<ReturnType<ManagedRun["wait"]>>;
         try {
           exit = await run.wait();
@@ -335,6 +339,7 @@ export function createCronExitWatchers(
           }
         }
       })().finally(() => {
+        armed.resolve();
         slot.lifecycleSettled = true;
         settlingCancelledSlots.delete(slot);
         if (slot.cancelled && active.get(job.id) === slot) {
@@ -343,6 +348,7 @@ export function createCronExitWatchers(
         slot.settlement.resolve(undefined);
       }),
     );
+    return armed.promise;
   };
 
   const reconcile = (jobs: CronJob[]) => {
@@ -378,7 +384,7 @@ export function createCronExitWatchers(
         }
         cancel(jobId, slot.fired && slot.command === command && slot.cwd === cwd);
       }
-      arm(job);
+      void arm(job);
     }
   };
 

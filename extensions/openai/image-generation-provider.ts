@@ -11,7 +11,6 @@ import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import type { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
-import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-policy";
 import { filterStringRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -21,6 +20,7 @@ import {
   OPENAI_CODEX_RESPONSES_BASE_URL,
 } from "./base-url.js";
 import { OPENAI_DEFAULT_IMAGE_MODEL as DEFAULT_OPENAI_IMAGE_MODEL } from "./default-models.js";
+import { resolveModelAuthPolicy } from "./provider-policy-api.js";
 import { resolveConfiguredOpenAIBaseUrl } from "./shared.js";
 
 const DEFAULT_OPENAI_IMAGE_BASE_URL = "https://api.openai.com/v1";
@@ -359,12 +359,18 @@ function hasCodexResponseTransportProfileConfigured(
   if (!store) {
     return false;
   }
-  return modelAuth
-    .listProfilesForProvider(store, "openai")
-    .some(
-      (profileId) =>
-        store.profiles[profileId]?.type === "oauth" || store.profiles[profileId]?.type === "token",
+  return modelAuth.listProfilesForProvider(store, "openai").some((profileId) => {
+    const credential = store.profiles[profileId];
+    return (
+      (credential?.type === "oauth" || credential?.type === "token") &&
+      resolveModelAuthPolicy({
+        provider: "openai",
+        mode: credential.type,
+        authFlow: credential.type === "oauth" ? credential.authFlow : undefined,
+        capability: "image-generation",
+      })?.compatible === true
     );
+  });
 }
 
 function hasExplicitOpenAIImageApiKeyConfig(cfg: OpenClawConfig | undefined): boolean {
@@ -631,31 +637,17 @@ export function buildOpenAIImageGenerationProvider(
         backgrounds: [...OPENAI_BACKGROUNDS],
       },
     },
-    isConfigured: ({ cfg, agentDir }) => {
-      if (hasConfiguredSecretInput(cfg?.models?.providers?.openai?.apiKey)) {
-        return true;
-      }
-      const configuredBaseUrl = resolveConfiguredOpenAIBaseUrl(cfg);
-      const hasPublicOpenAIBaseUrl = isPublicOpenAIImageBaseUrl(configuredBaseUrl);
-      const hasChatGPTRouteConfig = hasChatGPTImageRouteConfig(cfg);
-      if (
-        modelAuth.isProviderApiKeyConfigured({
-          provider: "openai",
-          agentDir,
-        })
-      ) {
-        return (
-          hasPublicOpenAIBaseUrl ||
-          hasDirectOpenAIImageApiKeyAuth({ cfg, agentDir }, modelAuth) ||
-          (hasChatGPTRouteConfig &&
-            hasCodexResponseTransportProfileConfigured({ agentDir }, modelAuth))
-        );
-      }
-      if (!hasPublicOpenAIBaseUrl && !hasChatGPTRouteConfig) {
-        return false;
-      }
-      return hasCodexResponseTransportProfileConfigured({ agentDir }, modelAuth);
-    },
+    isConfigured: ({ cfg, agentDir }) =>
+      modelAuth.isProviderApiKeyConfigured({
+        provider: "openai",
+        agentDir,
+        cfg,
+        capability: "image-generation",
+      }) &&
+      (isPublicOpenAIImageBaseUrl(resolveConfiguredOpenAIBaseUrl(cfg)) ||
+        hasDirectOpenAIImageApiKeyAuth({ cfg, agentDir }, modelAuth) ||
+        (hasChatGPTImageRouteConfig(cfg) &&
+          hasCodexResponseTransportProfileConfigured({ agentDir }, modelAuth))),
     async generateImage(req) {
       const inputImages = req.inputImages ?? [];
       const isEdit = inputImages.length > 0;
@@ -678,6 +670,7 @@ export function buildOpenAIImageGenerationProvider(
       if (explicitOpenAIApiKeyConfig) {
         const directAuth = await resolveOptionalApiKeyForProvider({
           provider: "openai",
+          capability: "image-generation",
           cfg: forceOpenAIImageApiKeyAuth(req.cfg),
           agentDir: req.agentDir,
           store: req.authStore,
@@ -691,6 +684,7 @@ export function buildOpenAIImageGenerationProvider(
       if (useCodexResponseTransportRoute) {
         const codexAuth = await resolveOptionalApiKeyForProvider({
           provider: "openai",
+          capability: "image-generation",
           cfg: req.cfg,
           agentDir: req.agentDir,
           store: req.authStore,
@@ -715,6 +709,7 @@ export function buildOpenAIImageGenerationProvider(
           ? preResolvedImageAuth
           : await resolveOptionalApiKeyForProvider({
               provider: "openai",
+              capability: "image-generation",
               cfg: req.cfg,
               agentDir: req.agentDir,
               store: req.authStore,

@@ -1,4 +1,7 @@
-import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  resolveChannelDraftStreamingChunking,
+  resolveChannelStreamingBlockEnabled,
+} from "openclaw/plugin-sdk/channel-outbound";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import type { BlockReplyContext } from "openclaw/plugin-sdk/reply-runtime";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -11,16 +14,15 @@ import type {
   TelegramQueuedAnswerBlockRotation,
   TelegramSplitLaneSegmentsResult,
 } from "./bot-message-dispatch.types.js";
-import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 import type { TelegramDraftPreview } from "./draft-stream-message.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import type { DraftLaneState, LaneName } from "./lane-delivery-text-deliverer.js";
-import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import { splitTelegramReasoningText } from "./reasoning-lane-coordinator.js";
-import { buildTelegramRichMarkdown, TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
+import { buildTelegramRichMarkdownPlan, TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
 import { reportTelegramProviderDelivery } from "./send-outbound.js";
 import { recordSentMessage } from "./sent-message-cache.js";
+import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./text-chunk-limit.js";
 
 const draftLogger = createSubsystemLogger("telegram/draft-stream");
 const DRAFT_MIN_INITIAL_CHARS = 30;
@@ -49,10 +51,10 @@ function renderStreamText(
   return turn.richMessages
     ? {
         text,
-        richMessage: buildTelegramRichMarkdown(text, {
+        richMessage: buildTelegramRichMarkdownPlan(text, {
           tableMode: turn.tableMode,
           skipEntityDetection: turn.telegramCfg.linkPreview === false,
-        }),
+        }).richMessage,
       }
     : {
         text,
@@ -86,8 +88,12 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
   const draftMaxChars =
     params.streamMode === "block"
       ? Math.min(
-          resolveTelegramDraftStreamingChunking(params.cfg, params.context.route.accountId)
-            .maxChars,
+          resolveChannelDraftStreamingChunking(
+            params.cfg,
+            "telegram",
+            params.context.route.accountId,
+            { fallbackLimit: TELEGRAM_TEXT_CHUNK_LIMIT },
+          ).maxChars,
           params.textLimit,
         )
       : Math.min(

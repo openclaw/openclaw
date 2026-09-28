@@ -293,14 +293,28 @@ function resolvePluginElicitation(params: {
     }
   }
 
-  const metadataResolution = resolvePluginStableMetadataMatch({
-    meta,
-    requestParams,
-    entries: pluginEntries,
-    context,
-  });
-  if (metadataResolution.kind !== "not_plugin") {
-    return metadataResolution;
+  const pluginName =
+    readFirstString(meta, PLUGIN_NAME_META_KEYS) ??
+    readFirstString(requestParams, PLUGIN_NAME_META_KEYS);
+  const configKey =
+    readFirstString(meta, PLUGIN_CONFIG_KEY_META_KEYS) ??
+    readFirstString(requestParams, PLUGIN_CONFIG_KEY_META_KEYS);
+  const marketplaceName =
+    readFirstString(meta, PLUGIN_MARKETPLACE_NAME_META_KEYS) ??
+    readFirstString(requestParams, PLUGIN_MARKETPLACE_NAME_META_KEYS);
+  if (pluginName || configKey) {
+    if (!context) {
+      return { kind: "decline", reason: "missing_policy_context" };
+    }
+    return uniquePluginMatch(
+      pluginEntries.filter(
+        (entry) =>
+          (!marketplaceName || entry.marketplaceName === marketplaceName) &&
+          (!pluginName || entry.pluginName === pluginName) &&
+          (!configKey || entry.configKey === configKey),
+      ),
+      "metadata",
+    );
   }
 
   if (context && hasDisplayNameOnlyPluginMatch(meta, entries)) {
@@ -316,42 +330,6 @@ function isCodexConnectorApprovalElicitation(requestParams: JsonObject, meta: Js
     readNonBlankString(meta[MCP_TOOL_APPROVAL_KIND_KEY]) === MCP_TOOL_APPROVAL_KIND &&
     readNonBlankString(meta[MCP_TOOL_APPROVAL_SOURCE_KEY]) === MCP_TOOL_APPROVAL_CONNECTOR_SOURCE
   );
-}
-
-function resolvePluginStableMetadataMatch(params: {
-  meta: JsonObject;
-  requestParams: JsonObject;
-  entries: PluginAppPolicyContextEntry[];
-  context?: PluginAppPolicyContext;
-}): PluginElicitationResolution {
-  const pluginName =
-    readFirstString(params.meta, PLUGIN_NAME_META_KEYS) ??
-    readFirstString(params.requestParams, PLUGIN_NAME_META_KEYS);
-  const configKey =
-    readFirstString(params.meta, PLUGIN_CONFIG_KEY_META_KEYS) ??
-    readFirstString(params.requestParams, PLUGIN_CONFIG_KEY_META_KEYS);
-  const marketplaceName =
-    readFirstString(params.meta, PLUGIN_MARKETPLACE_NAME_META_KEYS) ??
-    readFirstString(params.requestParams, PLUGIN_MARKETPLACE_NAME_META_KEYS);
-  if (!pluginName && !configKey) {
-    return { kind: "not_plugin" };
-  }
-  if (!params.context) {
-    return { kind: "decline", reason: "missing_policy_context" };
-  }
-  const matches = params.entries.filter((entry) => {
-    if (marketplaceName && entry.marketplaceName !== marketplaceName) {
-      return false;
-    }
-    if (pluginName && entry.pluginName !== pluginName) {
-      return false;
-    }
-    if (configKey && entry.configKey !== configKey) {
-      return false;
-    }
-    return true;
-  });
-  return uniquePluginMatch(matches, "metadata");
 }
 
 function uniquePluginMatch(
@@ -431,26 +409,22 @@ async function buildPluginPolicyElicitationResponse(params: {
   if (mode === "allow") {
     return response;
   }
+  const allowedDecisions: ExecApprovalDecision[] = approvalPrompt.allowedDecisions ?? [
+    "allow-once",
+    "deny",
+  ];
   const outcome = await requestPluginApprovalOutcome({
     hostCapabilities: params.paramsForRun.hostCapabilities,
     title: approvalPrompt.title,
     description: approvalPrompt.description,
-    allowedDecisions: allowedPluginPolicyApprovalDecisions(mode, approvalPrompt),
+    allowedDecisions:
+      mode === "ask"
+        ? allowedDecisions.filter((decision) => decision !== "allow-always")
+        : allowedDecisions,
     toolName: "codex_mcp_tool_approval",
     signal: params.signal,
   });
   return buildElicitationResponse(approvalPrompt, outcome);
-}
-
-function allowedPluginPolicyApprovalDecisions(
-  mode: "allow" | "deny" | "auto" | "ask",
-  approvalPrompt: BridgeableApprovalElicitation,
-): ExecApprovalDecision[] {
-  const allowedDecisions = approvalPrompt.allowedDecisions ?? ["allow-once", "deny"];
-  if (mode !== "ask") {
-    return allowedDecisions;
-  }
-  return allowedDecisions.filter((decision) => decision !== "allow-always");
 }
 
 function readApprovalElicitation(

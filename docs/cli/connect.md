@@ -78,6 +78,31 @@ npx openclaw connect https://gateway.example/j/<shortcode> --session-host
 Foreground consent applies only to that process. It does not change
 `openclaw.json`, so the next normal node-host start remains non-hosting.
 
+## Reconnect a paired node
+
+Join URLs and setup codes are single-use, so rerunning the original
+`openclaw connect <join-url>` command after the node stops reports that the
+join code was not found or has expired. The node keeps its paired device token
+and Gateway endpoint in node-host state. Reconnect with
+[`openclaw node run`](/cli/node), repeating any process-scoped flags:
+
+```bash
+openclaw node run --session-host
+```
+
+Running `openclaw connect` without a target does not connect. When node-host
+state has a saved Gateway endpoint and a node device token, it exits with an
+error that prints the matching `openclaw node run` command for the flags you
+passed, to use if that pairing is still current, and the `openclaw connect`
+command to use with a new join URL otherwise. With `--service`, it prints
+`openclaw node install --force` instead, preceded by
+`openclaw config set nodeHost.workerRuns.enabled true` when you also passed
+`--session-host`. If the first enrollment never completed, it only points to
+a new join URL. The device token is not tied to one endpoint: after a failed
+enrollment with a different Gateway, the reconnect command can fail, so
+enroll again instead. To enroll the machine again, mint a new join URL with
+`openclaw devices join-code`.
+
 ## Environment-managed cloud nodes
 
 Worker providers use `--ephemeral` for disposable cloud machines:
@@ -171,7 +196,8 @@ A join code and a paired device have separate lifecycles:
 
 If the join URL reports that it is missing or expired, mint a new one with
 `openclaw devices join-code`. A used code intentionally returns the same result
-as an unknown code.
+as an unknown code. If this machine already redeemed it, reconnect with the
+saved pairing instead; see [Reconnect a paired node](#reconnect-a-paired-node).
 
 If an HTTPS join URL uses a certificate the local machine does not trust, use
 the direct `oc-pair://` or bare setup-code form that includes the TLS pin.

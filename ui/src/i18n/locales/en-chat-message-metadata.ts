@@ -65,6 +65,7 @@ const enChatMessageMetadata = {
       toolSender: en.chat.messages.toolSender,
       errorSender: en.chat.messages.errorSender,
       forwardedFrom: "From",
+      forwardedAutomation: "Automation",
       forwardedFromAgent: "Forwarded from {agentId}",
       forwardedMessage: "Forwarded message",
       fullContentLoadExhausted: "Could not load the full message.",

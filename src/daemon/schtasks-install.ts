@@ -3,7 +3,9 @@ import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { hasErrnoCode } from "../infra/errno.js";
+import { inspectPortUsage } from "../infra/ports-inspect.js";
 import { resolveGatewayServiceDescription } from "./constants.js";
+import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
 import { formatLine, writeFormattedLines } from "./output.js";
 import {
   readScheduledTaskDefinition,
@@ -18,7 +20,6 @@ import {
 } from "./schtasks-install-files.js";
 import {
   buildHiddenLauncherScript,
-  buildScheduledTaskXml,
   buildStartupLauncherScript,
   buildTaskScript,
   encodeWindowsLauncherScript,
@@ -30,10 +31,12 @@ import {
   resolveTaskScriptPath,
   shouldFallbackToStartupEntry,
   shouldUseHiddenWindowsTaskLauncher,
-  writeTaskXmlTempFile,
 } from "./schtasks-layout.js";
 import {
-  assertReplacementPortAvailableForTakeover,
+  findInstalledProcessPid,
+  readWindowsProcessSnapshot,
+  resolveScheduledTaskCommandPort,
+  shouldManageGatewayListenerPort,
   terminateGatewayProcessTree,
 } from "./schtasks-process.js";
 import {
@@ -47,6 +50,7 @@ import {
   waitForScheduledTaskRunningEvidence,
 } from "./schtasks-runtime.js";
 import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
+import { buildScheduledTaskXml, writeTaskXmlTempFile } from "./schtasks-xml.js";
 import { preserveServicePolicyXml } from "./service-policy-xml.js";
 import { resolveTaskUser } from "./service-process-env.js";
 import { publishServiceFile } from "./service-stage.js";
@@ -521,4 +525,65 @@ export async function uninstallScheduledTask({
     }
     stdout.write(`Task script not found at ${scriptPath}\n`);
   }
+}
+
+async function assertReplacementPortAvailableForTakeover(params: {
+  env: GatewayServiceEnv;
+  programArguments: string[];
+  environment?: GatewayServiceEnv;
+  fallbackPid?: number;
+}): Promise<void> {
+  if (!shouldManageGatewayListenerPort(params.env)) {
+    return;
+  }
+  const command = {
+    programArguments: params.programArguments,
+    environment: Object.fromEntries(
+      Object.entries(params.environment ?? {}).filter(
+        (entry): entry is [string, string] => typeof entry[1] === "string",
+      ),
+    ),
+  };
+  const port = resolveScheduledTaskCommandPort(params.env, command);
+  if (!port) {
+    throw new Error("Could not verify the replacement Windows Scheduled Task port.");
+  }
+  const probeHosts = await resolveGatewayServiceProbeHosts({ env: params.env, command });
+  const diagnostics = await inspectPortUsage(port, { probeHosts }).catch(() => null);
+  if (!diagnostics) {
+    throw new Error(`Could not inspect replacement gateway port ${port}.`);
+  }
+  if (diagnostics.status === "free") {
+    return;
+  }
+  if (diagnostics.status !== "busy") {
+    throw new Error(`Could not verify replacement gateway port ${port}.`);
+  }
+
+  const allowedPids = new Set<number>();
+  if (params.fallbackPid) {
+    allowedPids.add(params.fallbackPid);
+  }
+  if (process.platform === "win32") {
+    const snapshot = readWindowsProcessSnapshot();
+    if (snapshot) {
+      const replacementPid = findInstalledProcessPid(
+        snapshot,
+        port,
+        params.programArguments,
+        () => true,
+      );
+      if (replacementPid) {
+        allowedPids.add(replacementPid);
+      }
+    }
+  }
+  const listenerPids = diagnostics.listeners.map((listener) => listener.pid);
+  if (
+    listenerPids.length > 0 &&
+    listenerPids.every((pid) => typeof pid === "number" && pid > 0 && allowedPids.has(pid))
+  ) {
+    return;
+  }
+  throw new Error(`replacement gateway port ${port} is occupied by an unverified process`);
 }

@@ -85,6 +85,19 @@ describe("plugin-sdk channel lifecycle helpers", () => {
     expect(onAbort).toHaveBeenCalledOnce();
   });
 
+  it("rejects when an abort cleanup throws synchronously", async () => {
+    const abort = new AbortController();
+    const failure = new Error("abort cleanup failed");
+    const task = waitUntilAbort(abort.signal, () => {
+      throw failure;
+    });
+    const rejected = expect(task).rejects.toBe(failure);
+
+    abort.abort();
+
+    await rejected;
+  });
+
   it("keeps passive account lifecycle pending until abort, then stops once", async () => {
     const abort = new AbortController();
     const stop = vi.fn();
@@ -190,6 +203,34 @@ describe("plugin-sdk channel lifecycle helpers", () => {
     server.close();
     await expect(task).resolves.toBeUndefined();
   });
+
+  it.each(["success", "throw", "reject"] as const)(
+    "observes synchronous close during already-aborted cleanup: %s",
+    async (outcome) => {
+      const server = new EventEmitter();
+      const failure = new Error("server cleanup failed");
+      const task = keepHttpServerTaskAlive({
+        server,
+        abortSignal: AbortSignal.abort(),
+        onAbort: () => {
+          server.emit("close");
+          if (outcome === "throw") {
+            throw failure;
+          }
+          if (outcome === "reject") {
+            return Promise.reject(failure);
+          }
+          return undefined;
+        },
+      });
+
+      if (outcome === "success") {
+        await expect(task).resolves.toBeUndefined();
+      } else {
+        await expect(task).rejects.toBe(failure);
+      }
+    },
+  );
 
   it("triggers abort hook once and resolves after close", async () => {
     const server = createFakeServer();

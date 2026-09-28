@@ -17,6 +17,7 @@ import {
   invalidateComputerFrameIfMissing,
   type ComputerContextEpoch,
 } from "../agents/tools/computer-tool.js";
+import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
@@ -60,14 +61,7 @@ function emptyAssistantMessage(modelRef: WorkerInferenceModelRef): AssistantMess
     provider: modelRef.provider,
     model: modelRef.model,
     stopReason: "stop",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: makeZeroUsageSnapshot(),
     timestamp: Date.now(),
   };
 }

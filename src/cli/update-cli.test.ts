@@ -876,7 +876,6 @@ describe("update-cli", () => {
 
   it("ignores a malformed dev target for a stable package update", async () => {
     await mockPackageInstallAtCaseDir("openclaw-stable-update");
-    mockCurrentProcessFreshDoctor();
 
     await withEnvAsync(
       { OPENCLAW_UPDATE_DEV_TARGET_REF: "openclaw-dev-target:v1:not+base64url" },

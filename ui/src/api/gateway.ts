@@ -481,6 +481,7 @@ export class GatewayBrowserClient {
             "terminal-session-metadata",
             "terminal-upload-path-style",
             "tool-events",
+            "chat-only-assistant-text",
             "session-scoped-events",
             "inline-widgets",
             "model-selection-policy",

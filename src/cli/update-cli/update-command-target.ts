@@ -360,9 +360,10 @@ export async function resolveUpdateCommandTarget(
         if (!opts.json) {
           printManagedServicePackageUpdatePlan(servicePlan);
         }
-        packageUpdateNodeRunner = managedServiceRoot
-          ? resolveNodeRunner()
-          : managedServiceNodeRunner;
+        packageUpdateNodeRunner =
+          managedServiceRoot && !process.versions.bun
+            ? resolveNodeRunner()
+            : managedServiceNodeRunner;
       }
 
       // Read-only native/root admission is complete. Own interruption settlement
