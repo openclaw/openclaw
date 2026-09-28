@@ -216,9 +216,7 @@ export function createCliEventHandlers(params: {
         {
           args:
             executedArgs ??
-            (startedCall?.kind === "tool_use" &&
-            resolveCliToolSource(event.name, startedCall.kind) === "core" &&
-            stripOpenClawMcpToolPrefix(event.name) === event.name
+            (startedCall?.kind === "tool_use" && !event.name.startsWith("mcp_")
               ? startedArgs
               : undefined),
         },

@@ -136,9 +136,10 @@ describe("Claude CLI command progress", () => {
       expect(mcpEnd?.data).toMatchObject({ status: "completed", name: "exec" });
       expect(mcpEnd?.data.meta).toBeUndefined();
 
-      for (const [toolCallId, name] of [
-        ["mcp-generic-1", "mcp__openclaw__exec"],
-        ["mcp-gemini-1", "mcp_openclaw_exec"],
+      for (const [toolCallId, name, expectedName] of [
+        ["mcp-generic-1", "mcp__openclaw__exec", "exec"],
+        ["mcp-gemini-1", "mcp_openclaw_exec", "exec"],
+        ["mcp-third-party-1", "mcp_docs_exec", "mcp_docs_exec"],
       ] as const) {
         handlers.emitCliToolUseStart({
           toolCallId,
@@ -158,7 +159,7 @@ describe("Claude CLI command progress", () => {
             event.data.phase === "end" &&
             event.data.toolCallId === toolCallId,
         );
-        expect(mcpTerminal?.data).toMatchObject({ status: "completed", name: "exec" });
+        expect(mcpTerminal?.data).toMatchObject({ status: "completed", name: expectedName });
         expect(mcpTerminal?.data.meta).toBeUndefined();
       }
     } finally {
