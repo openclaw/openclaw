@@ -404,13 +404,28 @@ CLI process starts.
 
 ### Failure isolation
 
-OpenClaw isolates the selected plugin engine from the core reply path. If a
-non-legacy engine is missing, fails contract validation, throws during factory
-creation, or throws from a lifecycle method, OpenClaw quarantines that engine
-for the current Gateway process and downgrades context-engine work to the
-built-in `legacy` engine. The error is logged with the failed operation so the
-operator can repair, update, or disable the plugin without the agent going
-silent.
+OpenClaw isolates context-engine failures according to the operation owner:
+
+- **Agent turns** retry the configured engine on each new logical turn, even
+  when it has process quarantine. Selection can degrade to `legacy` before the
+  turn starts; a started engine operation is not replayed through another engine.
+- **Standalone compaction**, including queued `/compact` and CLI pre-turn
+  context-engine compaction, also retries the configured engine. It stays with that engine
+  through compaction and maintenance without clearing process quarantine. If
+  the engine is unavailable or fails, compaction reports failure rather than
+  compacting a different engine's frontier that the next turn might replace.
+  Repair the plugin or explicitly select `legacy` to use built-in compaction.
+  Native-harness-owned compaction and native no-ops do not require a separate
+  context-engine instance.
+- **Process-scoped lifecycle work**, such as subagent preparation and completion
+  cleanup, retains process quarantine and `legacy` fallback. Missing engines,
+  factory/contract failures, and lifecycle errors are logged with the failed
+  operation. A failed mutating `compact()` or `prepareSubagentSpawn()` is not
+  replayed through the fallback in the same call.
+
+Compaction selection diagnostics identify the registered engine and whether it
+is being retried after process quarantine; compaction does not silently fall
+back to another frontier.
 
 Host admission and resource-ownership failures before factory entry propagate
 without quarantining the engine. Factory rejections caused by cancellation of
@@ -492,7 +507,7 @@ The slot is exclusive at run time - only one registered context engine is resolv
 
 - Use `openclaw doctor` to verify your engine is loading correctly.
 - If switching engines, existing sessions continue with their current history. The new engine takes over for future runs.
-- Engine errors are logged and the selected plugin engine is quarantined for the current Gateway process. OpenClaw falls back to `legacy` for user turns so replies can continue, but you should still repair, update, disable, or uninstall the broken plugin.
+- Recovery is operation-specific: see [failure isolation](/concepts/context-engine#failure-isolation). Repair, update, disable, or uninstall a broken plugin. Standalone context-engine compaction does not silently switch frontiers; explicitly select `legacy` if you want built-in compaction.
 - For development, use `openclaw plugins install -l ./my-engine` to link a local plugin directory without copying.
 
 ## Related

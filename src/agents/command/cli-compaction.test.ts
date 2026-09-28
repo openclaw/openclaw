@@ -216,7 +216,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it.each(["context", "native", "fallback", "failure", "stale"] as const)(
+  it.each(["context", "fallback", "failure", "stale"] as const)(
     "retains one resolved engine through compaction and awaits its cleanup (%s)",
     async (mode) => {
       const registry = createEmptyPluginRegistry();
@@ -247,7 +247,7 @@ describe("runCliTurnCompactionLifecycle", () => {
         tmpDir,
         suffix: `owned-${mode}`,
         provider: "github-copilot",
-        sessionEntry: mode === "native" || mode === "fallback" ? { agentHarnessId: "copilot" } : {},
+        sessionEntry: mode === "fallback" ? { agentHarnessId: "copilot" } : {},
         maintenance: async () => {
           expect(retire).not.toHaveBeenCalled();
           if (mode === "failure") {
@@ -257,9 +257,10 @@ describe("runCliTurnCompactionLifecycle", () => {
         },
         deps: {
           ensureContextEnginesInitialized: vi.fn(),
-          resolveContextEngine: async (cfg) => {
+          resolveContextEngine: async (cfg, options) => {
+            expect(options?.purpose).toBe("compaction");
             engine = await withPluginRuntimeRegistryScope(registry, () =>
-              resolveContextEngineFromRegistry(cfg),
+              resolveContextEngineFromRegistry(cfg, options),
             );
             if (mode === "stale") {
               controller.abort(staleError);
@@ -299,7 +300,7 @@ describe("runCliTurnCompactionLifecycle", () => {
         } else {
           expect(error).toBe(mode === "stale" ? staleError : undefined);
         }
-        expect(compactCalls).toHaveLength(mode === "native" || mode === "stale" ? 0 : 1);
+        expect(compactCalls).toHaveLength(mode === "stale" ? 0 : 1);
         expect(await fs.readFile(cleanupFile, "utf8")).toBe("disposed");
         expect(retire).toHaveBeenCalledTimes(1);
       } finally {
@@ -343,9 +344,9 @@ describe("runCliTurnCompactionLifecycle", () => {
       suffix: "owned-abort-tail",
       deps: {
         ensureContextEnginesInitialized: vi.fn(),
-        resolveContextEngine: async (cfg) => {
+        resolveContextEngine: async (cfg, options) => {
           owned = await withPluginRuntimeRegistryScope(registry, () =>
-            resolveContextEngineFromRegistry(cfg),
+            resolveContextEngineFromRegistry(cfg, options),
           );
           return owned;
         },
@@ -723,8 +724,9 @@ describe("runCliTurnCompactionLifecycle", () => {
 
   it("routes OpenAI Codex harness CLI compaction through native harness compaction", async () => {
     const compactCalls: CompactParams[] = [];
-    const contextEngine = buildContextEngine({ compactCalls });
-    const resolveContextEngine = vi.fn(async () => contextEngine);
+    const resolveContextEngine = vi.fn(async () => {
+      throw new Error("configured context engine unavailable");
+    });
     const preparedRuntimeLease = createPreparedRuntimeLease({
       config: {},
       agentId: "main",
@@ -781,12 +783,8 @@ describe("runCliTurnCompactionLifecycle", () => {
     const { sessionId, sessionKey } = scenario;
     const updatedEntry = await scenario.run({ pluginGeneration });
 
-    expect(resolveContextEngine).toHaveBeenCalledTimes(1);
-    expect(applyAgentAutoCompactionGuard).toHaveBeenCalledWith(
-      expect.objectContaining({
-        contextEngineInfo: contextEngine.info,
-      }),
-    );
+    expect(resolveContextEngine).not.toHaveBeenCalled();
+    expect(applyAgentAutoCompactionGuard).not.toHaveBeenCalled();
     expect(ensureSelectedAgentHarnessPlugin).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "openai",
@@ -797,9 +795,6 @@ describe("runCliTurnCompactionLifecycle", () => {
       }),
     );
     expect(acquirePreparedModelRuntime).toHaveBeenCalledOnce();
-    expect(applyAgentAutoCompactionGuard.mock.invocationCallOrder[0] ?? 0).toBeLessThan(
-      compactAgentHarnessSession.mock.invocationCallOrder[0] ?? 0,
-    );
     expect(compactAgentHarnessSession).toHaveBeenCalledTimes(1);
     const compactAgentHarnessSessionCalls = compactAgentHarnessSession.mock
       .calls as unknown as Array<[Record<string, unknown>, { preparedModelRuntime?: unknown }]>;
@@ -811,18 +806,13 @@ describe("runCliTurnCompactionLifecycle", () => {
       model: "gpt-5.5",
       contextTokenBudget: 1_000,
       currentTokenCount: 950,
-      contextEngine,
       agentHarnessId: "codex",
       modelSelectionLocked: true,
       authProfileId: "github-copilot:work",
       trigger: "budget",
       force: true,
     });
-    expect(compactAgentHarnessSessionCalls[0]?.[0].contextEngineRuntimeContext).toMatchObject({
-      authProfileId: "github-copilot:work",
-      agentHarnessId: "codex",
-      modelSelectionLocked: true,
-    });
+    expect(compactAgentHarnessSessionCalls[0]?.[0].contextEngine).toBeUndefined();
     expect(compactAgentHarnessSessionCalls[0]?.[1]?.preparedModelRuntime).toBe(
       preparedRuntimeLease.snapshot,
     );
@@ -957,12 +947,6 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(lockedNativeCall).toMatchObject({
       agentHarnessId: "codex",
       modelSelectionLocked: true,
-      contextEngineRuntimeContext: expect.objectContaining({
-        agentHarnessId: "codex",
-        modelSelectionLocked: true,
-        provider: "codex",
-        model: "gpt-5.5",
-      }),
     });
     expect(lockedResult).toBe(lockedEntry);
   });
@@ -995,12 +979,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     } satisfies ContextEngine;
     const ensureSelectedAgentHarnessPlugin = vi.fn(async () => undefined);
     const compactAgentHarnessSession = vi.fn(async (compactParams) => {
-      expect(compactParams.contextEngine).toBe(contextEngine);
-      expect(compactParams.contextEngineRuntimeContext).toMatchObject({
-        currentTokenCount: 950,
-        tokenBudget: 1_000,
-        trigger: "cli_native_budget",
-      });
+      expect(compactParams.contextEngine).toBeUndefined();
       return {
         ok: true,
         compacted: true,

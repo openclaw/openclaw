@@ -355,18 +355,20 @@ async function compactEmbeddedAgentSessionImpl(
     const run = async () => {
       owner.captureContext();
       ensureContextEnginesInitialized();
-      const contextEngine = await owner.resolveEngine(() =>
-        resolveContextEngine(preparedParams.config, {
-          agentDir: preparedParams.agentDir,
-          workspaceDir: resolvedWorkspaceDir,
-        }),
-      );
+      const resolveCompactionEngine = () =>
+        owner.resolveEngine(() =>
+          resolveContextEngine(preparedParams.config, {
+            purpose: "compaction",
+            agentDir: preparedParams.agentDir,
+            workspaceDir: resolvedWorkspaceDir,
+          }),
+        );
       assertQueuedCompactionPreparationActive(params, host);
-      return await compactResolvedContextEngine(
+      return await compactPreparedSession(
         preparedParams,
         expectedEntry,
         host,
-        contextEngine,
+        resolveCompactionEngine,
         preparedParams.agentDir,
         resolvedWorkspaceDir,
         lease.snapshot,
@@ -380,11 +382,11 @@ async function compactEmbeddedAgentSessionImpl(
   });
 }
 
-async function compactResolvedContextEngine(
+async function compactPreparedSession(
   params: QueuedCompactionParams,
   expectedEntry: Parameters<typeof acceptCompactionSuccessor>[0]["expectedEntry"],
   host: QueuedCompactionHostOptions,
-  contextEngine: ContextEngine,
+  resolveCompactionEngine: () => Promise<ContextEngine>,
   agentDir: string,
   resolvedWorkspaceDir: string,
   preparedModelRuntime: PreparedModelRuntimeSnapshot,
@@ -539,6 +541,56 @@ async function compactResolvedContextEngine(
     agentId: runtimeTarget.agentId,
     requestedTokenBudget: params.contextTokenBudget,
   });
+  let requiredPreflightNativeCapabilityUsed = false;
+  const compactNative = (
+    contextEngine?: ContextEngine,
+    contextEngineRuntimeContext?: ContextEngineRuntimeContext,
+  ) =>
+    runPrimaryNativeCompactionInLanes(preparedParams, expectedEntry, host, async () => {
+      if (params.abortSignal?.aborted) {
+        return createQueuedCompactionAbortedResult();
+      }
+      return await maybeCompactAgentHarnessSession(
+        {
+          ...preparedParams,
+          runtimeModel: effectiveRuntimeModel,
+          contextEngine,
+          contextTokenBudget,
+          contextEngineRuntimeContext,
+        },
+        {
+          preparedModelRuntime,
+          sourceAuthority: host.sourceAuthority,
+          ...(preparedParams.preflightRequired === true
+            ? {
+                nativeCompactionRequest: "required_preflight",
+                onNativeCompactionCapabilityUsed: () => {
+                  requiredPreflightNativeCapabilityUsed = true;
+                },
+              }
+            : {}),
+        },
+      );
+    });
+  // A pinned native harness owns its frontier and can report an intentional no-op.
+  // Do not make that operation depend on constructing an unrelated context engine.
+  let harnessResult =
+    lockedNativeHarness && !transcriptBytePreflightAuthority ? await compactNative() : undefined;
+  // Only the private dispatched native capability may authorize required-preflight
+  // fallback for a locked harness; public result fields cannot escape the lock.
+  if (
+    lockedNativeHarness &&
+    !transcriptBytePreflightAuthority &&
+    !(
+      preparedParams.preflightRequired === true &&
+      requiredPreflightNativeCapabilityUsed &&
+      isRecoverableNativeHarnessBindingFailure(harnessResult)
+    )
+  ) {
+    return harnessResult ?? lockedCompactionRuntimeFailure(selectedHarnessRuntime);
+  }
+  const contextEngine = await resolveCompactionEngine();
+  assertQueuedCompactionPreparationActive(params, host);
   const contextEngineRuntimeContext = buildCompactionContextEngineRuntimeContext({
     params: preparedParams,
     agentDir,
@@ -557,50 +609,13 @@ async function compactResolvedContextEngine(
     promptTokenBudget: contextTokenBudget,
   });
   const contextEngineOwnsCompaction = contextEngine.info.ownsCompaction === true;
-  let requiredPreflightNativeCapabilityUsed = false;
-  const harnessResult =
+  if (
     attemptNativeHarnessCompaction &&
     !transcriptBytePreflightAuthority &&
-    (!contextEngineOwnsCompaction || lockedNativeHarness)
-      ? await runPrimaryNativeCompactionInLanes(preparedParams, expectedEntry, host, async () => {
-          if (params.abortSignal?.aborted) {
-            return createQueuedCompactionAbortedResult();
-          }
-          return await maybeCompactAgentHarnessSession(
-            {
-              ...preparedParams,
-              runtimeModel: effectiveRuntimeModel,
-              contextEngine,
-              contextTokenBudget,
-              contextEngineRuntimeContext,
-            },
-            {
-              preparedModelRuntime,
-              sourceAuthority: host.sourceAuthority,
-              ...(preparedParams.preflightRequired === true
-                ? {
-                    nativeCompactionRequest: "required_preflight",
-                    onNativeCompactionCapabilityUsed: () => {
-                      requiredPreflightNativeCapabilityUsed = true;
-                    },
-                  }
-                : {}),
-            },
-          );
-        })
-      : undefined;
-  // Only the private dispatched native capability may authorize required-preflight
-  // fallback for a locked harness; public result fields cannot escape the lock.
-  if (
-    lockedNativeHarness &&
-    !transcriptBytePreflightAuthority &&
-    !(
-      preparedParams.preflightRequired === true &&
-      requiredPreflightNativeCapabilityUsed &&
-      isRecoverableNativeHarnessBindingFailure(harnessResult)
-    )
+    !contextEngineOwnsCompaction &&
+    !lockedNativeHarness
   ) {
-    return harnessResult ?? lockedCompactionRuntimeFailure(selectedHarnessRuntime);
+    harnessResult = await compactNative(contextEngine, contextEngineRuntimeContext);
   }
   if (harnessResult) {
     if (!isRecoverableNativeHarnessBindingFailure(harnessResult)) {

@@ -247,6 +247,7 @@ it("uses the admitted config, storage, and persisted parent budget throughout qu
     derive({ config: admittedConfig, metadataSnapshot: snapshot.metadataSnapshot }),
   ).toMatchObject([{ provider: "openai", modelId: "admitted-model", agentId: "main" }]);
   expect(resolveContextEngineMock).toHaveBeenCalledWith(admittedConfig, {
+    purpose: "compaction",
     agentDir: admittedAgentDir,
     workspaceDir,
   });

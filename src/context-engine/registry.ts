@@ -1,6 +1,7 @@
 // Context-engine registry owns engine registration, resolution, compatibility, and quarantine.
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runPluginCleanup } from "../plugins/plugin-instance-scope.js";
 import type {
   ContextEngineFactory,
@@ -69,9 +70,11 @@ type ResolvedContextEngineMetadata = {
   sourceEngine?: ContextEngine;
   source?: ContextEngineFactoryResources;
   ownsSource?: boolean;
+  defaultEngineId?: string;
 };
 
 const resolvedEngineMetadata = new WeakMap<ContextEngine, ResolvedContextEngineMetadata>();
+const log = createSubsystemLogger("context-engine");
 
 function inheritCompactionWatchdogOwnership(
   property: PropertyKey,
@@ -92,7 +95,6 @@ function wrapResolvedContextEngine(
   rawEngine: ContextEngine,
   metadata: ResolvedContextEngineMetadata & {
     factory: ContextEngineFactory;
-    defaultEngineId?: string;
     factoryCtx?: ContextEngineFactoryContext;
   },
 ): ContextEngine {
@@ -435,9 +437,12 @@ export function resolveContextEngineOwnerPluginId(
   engine: ContextEngine | undefined | null,
 ): string | undefined {
   const metadata = engine ? resolvedEngineMetadata.get(engine) : undefined;
-  // Downgraded work belongs to its core-owned fallback, never the disabled plugin.
+  // Only process-guarded instances downgrade; pinned turn/compaction instances
+  // retain the configured plugin policy even while its registration is quarantined.
   const owner =
-    metadata && !getContextEngineQuarantine(metadata.engineId) ? metadata.owner : undefined;
+    metadata && (!metadata.defaultEngineId || !getContextEngineQuarantine(metadata.engineId))
+      ? metadata.owner
+      : undefined;
   return owner ? pluginIdFromContextEngineOwner(owner) : undefined;
 }
 
@@ -666,14 +671,20 @@ export async function resolveLogicalTurnContextEngines(
  * violation) are logged and silently replaced by the default engine.
  * Host admission/resource failures and owner cancellation propagate without quarantine.
  * Default-engine failures also propagate.
+ *
+ * Compaction is a fresh operation, like next-turn assembly: retry the configured
+ * engine without consulting or changing process quarantine. Never substitute a
+ * different frontier, even if construction fails before compact starts. The
+ * caller owns this pinned instance through maintenance and disposal.
  */
 export async function resolveContextEngine(
   config?: OpenClawConfig,
-  options?: ResolveContextEngineOptions,
+  options?: ResolveContextEngineOptions & { purpose?: "compaction" },
 ): Promise<ContextEngine> {
   const defaultEngineId = defaultSlotIdForKey("contextEngine");
   const engineId = resolveEffectiveContextEngineId(config, getContextEngines());
   const isDefaultEngine = engineId === defaultEngineId;
+  const processFallback = options?.purpose !== "compaction";
 
   const factoryCtx: ContextEngineFactoryContext = {
     config,
@@ -682,14 +693,14 @@ export async function resolveContextEngine(
   };
 
   const quarantine = !isDefaultEngine ? getContextEngineQuarantine(engineId) : undefined;
-  if (quarantine) {
+  if (quarantine && processFallback) {
     // Previously failed custom engines stay downgraded until explicit quarantine clear/restart.
     return resolveDefaultContextEngine(defaultEngineId, factoryCtx);
   }
 
   const entry = getContextEngines().get(engineId);
   if (!entry) {
-    if (isDefaultEngine) {
+    if (isDefaultEngine || !processFallback) {
       throw new Error(
         `Context engine "${engineId}" is not registered. ` +
           `Available engines: ${listContextEngineIds().join(", ") || "(none)"}`,
@@ -705,6 +716,9 @@ export async function resolveContextEngine(
   }
 
   if (!isDefaultEngine && entry.lifecycle === "readOnlyDiscovery") {
+    if (!processFallback) {
+      throw new Error(`Context engine "${engineId}" is available for discovery only`);
+    }
     console.warn(
       `[context-engine] Context engine "${engineId}" owner=${entry.owner} is registered for read-only discovery only; falling back to default engine "${defaultEngineId}" without quarantine until runtime activation registers it.`,
     );
@@ -714,7 +728,7 @@ export async function resolveContextEngine(
   const abortSignal = getAsyncWorkSignal();
   let operation: "factory" | "contract-validation" | undefined;
   try {
-    return await createContextEngineWithResources(
+    const engine = await createContextEngineWithResources(
       requireActivePluginRegistry(),
       entry,
       (source) => {
@@ -723,15 +737,32 @@ export async function resolveContextEngine(
         return createOwnedContextEngine(engineId, entry, factoryCtx, {
           source,
           ownsSource: true,
-          defaultEngineId,
+          defaultEngineId: processFallback ? defaultEngineId : undefined,
           onValidation: () => {
             operation = "contract-validation";
           },
         });
       },
     );
+    if (!processFallback) {
+      log.info("selected compaction engine", {
+        engineId,
+        selectionReason: isDefaultEngine
+          ? "default"
+          : quarantine
+            ? "retry-after-process-quarantine"
+            : "configured",
+        fallbackReason: "none: compaction preserves configured frontier",
+      });
+    }
+    return engine;
   } catch (error) {
-    if (isDefaultEngine || !operation || isContextEngineAbortRejection(error, abortSignal)) {
+    if (
+      !processFallback ||
+      isDefaultEngine ||
+      !operation ||
+      isContextEngineAbortRejection(error, abortSignal)
+    ) {
       throw error;
     }
     recordContextEngineQuarantine({

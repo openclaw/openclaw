@@ -253,6 +253,11 @@ describe("queued compaction successor ownership", () => {
       };
       try {
         replaceSessionEntrySync(target(), entry);
+        if (nativePinned) {
+          resolveContextEngineMock.mockRejectedValueOnce(
+            new Error("configured engine unavailable"),
+          );
+        }
         contextEngineCompactMock.mockResolvedValueOnce(completed(sessionId));
         const manualTarget = resolveManualCompactionCliTarget({
           provider: "openai",
@@ -279,6 +284,7 @@ describe("queued compaction successor ownership", () => {
             ? { ok: false, compacted: false, failure: { reason: "model_selection_locked" } }
             : { ok: true, compacted: true },
         );
+        expect(resolveContextEngineMock).toHaveBeenCalledTimes(nativePinned ? 0 : 1);
         expect(contextEngineCompactMock).toHaveBeenCalledTimes(nativePinned ? 0 : 1);
         expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(nativePinned ? 1 : 0);
         if (!nativePinned) {

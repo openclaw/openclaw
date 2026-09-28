@@ -1,6 +1,5 @@
 import { join } from "node:path";
 import { vi, type Mock } from "vitest";
-import type { ContextEngine } from "../../context-engine/types.js";
 import type { createOpenClawCodingToolsInternal } from "../agent-tools.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { clearAgentHarnesses } from "../harness/registry.js";
@@ -11,6 +10,11 @@ import {
   agentSessionAutomaticCompaction,
   agentSessionSetContextReplacementHook,
 } from "../sessions/agent-session-compaction.js";
+import {
+  contextEngineCompactMock,
+  resolveContextEngineMock,
+  mockCompactContextEngineRegistry,
+} from "./compact.context-engine.test-support.js";
 import {
   acquireCompactHooksPreparedModelRuntime,
   createCompactHooksResolvedModel,
@@ -27,6 +31,11 @@ import type { resolveModelAsync } from "./model.js";
 import type { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
 import type { buildEmbeddedSystemPrompt } from "./system-prompt.js";
 
+export {
+  contextEngineCompactMock,
+  resolveContextEngineMock,
+} from "./compact.context-engine.test-support.js";
+
 type MockMemorySearchManager = {
   manager: {
     sync: (params?: unknown) => Promise<void>;
@@ -36,23 +45,12 @@ type MockEmbeddedAgentStreamFn = Mock<
   (model?: unknown, context?: unknown, options?: unknown) => unknown
 >;
 
-export const contextEngineCompactMock: Mock<ContextEngine["compact"]> = vi.fn(async () => ({
-  ok: true as boolean,
-  compacted: true as boolean,
-  reason: undefined as string | undefined,
-  result: { summary: "engine-summary", tokensBefore: 120, tokensAfter: 50 },
-}));
-
 export const hookRunner = {
   hasHooks: vi.fn<(hookName?: string) => boolean>(),
   runBeforeCompaction: vi.fn(async () => undefined),
   runAfterCompaction: vi.fn(async () => undefined),
 };
 
-export const resolveContextEngineMock = vi.fn(async () => ({
-  info: { ownsCompaction: true as boolean },
-  compact: contextEngineCompactMock,
-}));
 export const resolveModelMock: Mock<
   (provider?: string, modelId?: string, agentDir?: string, cfg?: unknown) => MockResolvedModel
 > = vi.fn(createCompactHooksResolvedModel);
@@ -581,7 +579,9 @@ export function resetCompactHooksHarnessMocks(workspaceDir: string, sessionId = 
   });
 }
 
-export async function loadCompactHooksHarness(options: { durableSession?: boolean } = {}): Promise<{
+export async function loadCompactHooksHarness(
+  options: { durableSession?: boolean; realContextEngineRegistry?: boolean } = {},
+): Promise<{
   compactEmbeddedAgentSessionDirect: typeof import("./compact.js").compactEmbeddedAgentSessionDirect;
   compactEmbeddedAgentSession: CompactHooksQueuedCompaction;
   onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
@@ -757,15 +757,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     ensureContextEnginesInitialized: vi.fn(),
   }));
 
-  vi.doMock("../../context-engine/registry.js", () => ({
-    resolveContextEngine: resolveContextEngineMock,
-    resolveContextEngineOwnerPluginId: vi.fn(() => "lossless-claw"),
-    resolveLogicalTurnContextEngines: async () => {
-      const engine = await resolveContextEngineMock();
-      const ref = { engine, registeredId: "legacy" };
-      return { configured: ref, configuredId: "legacy", fallback: ref };
-    },
-  }));
+  mockCompactContextEngineRegistry(options.realContextEngineRegistry);
 
   vi.doMock("../../process/command-queue.js", () => ({
     enqueueCommandInLane: enqueueCommandInLaneMock,

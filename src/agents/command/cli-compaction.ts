@@ -78,7 +78,7 @@ type SettingsManagerLike = {
 type CliCompactionDeps = {
   openSessionManager: (target: SessionTranscriptRuntimeTarget) => SessionManagerLike;
   ensureContextEnginesInitialized: () => void;
-  resolveContextEngine: (cfg: OpenClawConfig) => Promise<ContextEngine>;
+  resolveContextEngine: typeof resolveContextEngineImpl;
   createPreparedEmbeddedAgentSettingsManager: (params: {
     cwd: string;
     agentDir: string;
@@ -328,7 +328,6 @@ async function compactNativeHarnessCliTranscript(
     sessionEntry: SessionEntry;
     contextTokenBudget: number;
     currentTokenCount: number;
-    contextEngine?: ContextEngine;
     pluginGeneration?: PreparedModelRuntimePluginGeneration;
     abortSignal?: AbortSignal;
     assertActive: () => void;
@@ -396,18 +395,6 @@ async function compactNativeHarnessCliTranscript(
           extraSystemPrompt: params.extraSystemPrompt,
           modelSelectionLocked,
           allowGatewaySubagentBinding: true,
-          ...(params.contextEngine
-            ? {
-                contextEngine: params.contextEngine,
-                contextEngineRuntimeContext: buildCliCompactionRuntimeContext({
-                  ...params,
-                  authProfileId,
-                  harnessRuntime: nativeHarnessId,
-                  modelSelectionLocked,
-                  trigger: "cli_native_budget",
-                }),
-              }
-            : {}),
           ...(nativeHarnessId ? { agentHarnessId: nativeHarnessId } : {}),
           abortSignal: params.abortSignal,
         },
@@ -578,21 +565,7 @@ export async function runCliTurnCompactionLifecycle(
     let nativeFallbackToContextEngine = false;
     let nativeFallbackNeedsBindingClear = false;
     let resolvedContextEngine: ContextEngine | undefined;
-    let autoCompactionGuardApplied = false;
     const authProfileId = params.sessionEntry?.authProfileOverride?.trim() || undefined;
-    const applyAutoCompactionGuard = async (contextEngine: ContextEngine): Promise<void> => {
-      if (autoCompactionGuardApplied) {
-        return;
-      }
-      autoCompactionGuardApplied = true;
-      // Apply once for the selected compaction path; settings are shared between
-      // native-harness and context-engine fallback attempts.
-      await cliCompactionDeps.applyAgentAutoCompactionGuard({
-        settingsManager,
-        contextEngineInfo: contextEngine.info,
-        compactionMode: resolveEffectiveCompactionMode(params.cfg),
-      });
-    };
 
     const work = new AsyncWorkScope();
     const trackCleanup = captureAsyncWorkTracker();
@@ -601,16 +574,12 @@ export async function runCliTurnCompactionLifecycle(
     try {
       result = await work.run(async () => {
         if (isNativeHarnessCompactionSession(params.sessionEntry, params.provider)) {
-          cliCompactionDeps.ensureContextEnginesInitialized();
-          resolvedContextEngine = await cliCompactionDeps.resolveContextEngine(params.cfg);
-          await applyAutoCompactionGuard(resolvedContextEngine);
           const nativeOutcome = await compactNativeHarnessCliTranscript({
             ...params,
             sessionFile,
             sessionEntry: params.sessionEntry,
             contextTokenBudget,
             currentTokenCount,
-            contextEngine: resolvedContextEngine,
             assertActive,
             sourceAuthority: { assertActive, operatorAuthority },
           });
@@ -635,10 +604,16 @@ export async function runCliTurnCompactionLifecycle(
           assertActive();
           if (!resolvedContextEngine) {
             cliCompactionDeps.ensureContextEnginesInitialized();
-            resolvedContextEngine = await cliCompactionDeps.resolveContextEngine(params.cfg);
+            resolvedContextEngine = await cliCompactionDeps.resolveContextEngine(params.cfg, {
+              purpose: "compaction",
+            });
           }
           const contextEngine = resolvedContextEngine;
-          await applyAutoCompactionGuard(contextEngine);
+          await cliCompactionDeps.applyAgentAutoCompactionGuard({
+            settingsManager,
+            contextEngineInfo: contextEngine.info,
+            compactionMode: resolveEffectiveCompactionMode(params.cfg),
+          });
 
           const contextOutcome = await compactCliTranscript({
             ...params,
