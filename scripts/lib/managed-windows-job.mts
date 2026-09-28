@@ -68,7 +68,6 @@ export function spawnWindowsJobChild(
   args: string[],
   options: SpawnOptions,
   admitCommand?: (launch: () => void) => void | Promise<void>,
-  memoryLimitBytes?: number,
 ): { child: ChildProcess; job: ManagedWindowsJob } | undefined {
   if (process.platform !== "win32") {
     return undefined;
@@ -201,20 +200,7 @@ export function spawnWindowsJobChild(
   }
   try {
     try {
-      // Each Job gets its own limits object; a later unbounded command must not
-      // inherit another owner's cap. Membership precedes workload/preload startup.
-      const limits =
-        memoryLimitBytes === undefined
-          ? api.extendedLimits
-          : {
-              ...api.extendedLimits,
-              BasicLimitInformation: {
-                ...api.extendedLimits.BasicLimitInformation,
-                LimitFlags: api.extendedLimits.BasicLimitInformation.LimitFlags | 0x0000_0200,
-              },
-              JobMemoryLimit: memoryLimitBytes,
-            };
-      if (!api.SetExtendedLimits(handle, 9, limits, api.extendedLimitsSize)) {
+      if (!api.SetExtendedLimits(handle, 9, api.extendedLimits, api.extendedLimitsSize)) {
         throw api.lastError("SetInformationJobObject(tooling)");
       }
     } catch (error) {

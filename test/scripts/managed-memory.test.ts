@@ -6,16 +6,111 @@ import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { runLinuxMemoryCommand } from "../../scripts/lib/managed-memory.mts";
 import { hasLinuxMemoryContainment } from "../../scripts/lib/process-memory.mts";
 
-const mocks = vi.hoisted(() => ({ control: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  control: vi.fn(),
+  uuid: vi.fn(() => "abcd"),
+  resourceOwner: vi.fn(),
+}));
 vi.mock("node:child_process", () => ({ spawnSync: mocks.control }));
-afterEach(() => vi.restoreAllMocks());
+vi.mock("node:crypto", () => ({ randomUUID: mocks.uuid }));
+vi.mock("../../scripts/lib/vitest-resource-ownership.mts", () => ({
+  findVitestResourceOwner: mocks.resourceOwner,
+}));
+afterEach(() => {
+  vi.restoreAllMocks();
+  mocks.resourceOwner.mockReset();
+});
 
 const command = {
   bin: "fixture",
   memoryLimitBytes: 256 * 1024 ** 2,
-  memoryScope: "openclaw-check-abcd.scope",
 };
+const memoryScope = "openclaw-check-abcd.scope";
 const response = (stdout: string) => ({ stdout, stderr: "", status: 0 });
+
+it("removes signal ownership even when resource receipt release fails", async () => {
+  const memory = await import("../../scripts/lib/managed-memory.mts");
+  vi.spyOn(memory, "runLinuxMemoryCommand").mockResolvedValue(0);
+  const error = new Error("receipt release failed");
+  mocks.resourceOwner.mockReturnValue({
+    claim: () => () => {
+      throw error;
+    },
+  });
+  const previousListeners = new Set(process.listeners("SIGTERM"));
+  await expect(runManagedCommand({ ...command, platform: "linux" })).rejects.toBe(error);
+  expect(new Set(process.listeners("SIGTERM"))).toEqual(previousListeners);
+});
+
+it.for([
+  { kind: "abort", uncertain: false },
+  { kind: "signal", uncertain: false },
+  { kind: "abort", uncertain: true },
+  { kind: "signal", uncertain: true },
+])(
+  "owns $kind cancellation until cgroup cleanup settles (uncertain=$uncertain)",
+  async (params) => {
+    const enteredCleanup = Promise.withResolvers<void>();
+    const cleanup = Promise.withResolvers<number>();
+    const memory = await import("../../scripts/lib/managed-memory.mts");
+    vi.spyOn(memory, "runLinuxMemoryCommand").mockImplementation(async () => {
+      enteredCleanup.resolve();
+      return await cleanup.promise;
+    });
+    const release = vi.fn();
+    mocks.resourceOwner.mockReturnValue({ claim: () => release });
+    const abort = new AbortController();
+    const previousListeners = new Set(process.listeners("SIGTERM"));
+    const onSignal = vi.fn();
+    const result = runManagedCommand({
+      ...command,
+      platform: "linux",
+      signal: abort.signal,
+      onSignal,
+    });
+    let settled = false;
+    void result.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await enteredCleanup.promise;
+    if (params.kind === "abort") {
+      abort.abort();
+    } else {
+      // Invoke only this command's listener; never signal the shared test process.
+      const handler = process
+        .listeners("SIGTERM")
+        .find((listener) => !previousListeners.has(listener));
+      expect(handler).toBeTypeOf("function");
+      handler!("SIGTERM");
+      expect(onSignal).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+    }
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(release).not.toHaveBeenCalled();
+    if (params.uncertain) {
+      const failure = Object.assign(new Error("scope still populated"), {
+        processTreeState: "live",
+      });
+      cleanup.reject(failure);
+      await expect(result).rejects.toBe(failure);
+      expect(release).not.toHaveBeenCalled();
+    } else {
+      cleanup.resolve(0);
+      if (params.kind === "abort") {
+        await expect(result).rejects.toMatchObject({ code: "ABORT_ERR" });
+      } else {
+        await expect(result).resolves.toBe(143);
+      }
+      expect(release).toHaveBeenCalledOnce();
+    }
+    expect(new Set(process.listeners("SIGTERM"))).toEqual(previousListeners);
+  },
+);
 
 it("snapshots Linux command inputs before loading containment", async () => {
   const memory = await import("../../scripts/lib/managed-memory.mts");
@@ -72,6 +167,45 @@ it.each([undefined, 1_001])(
     expect(
       run.mock.calls[0]?.[0]?.args?.filter((arg) => arg.startsWith("--property=RuntimeMaxSec=")),
     ).toEqual([]);
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ requireProcessTreeExit: true }));
+  },
+);
+
+it("generates separate cleanup identities for concurrent invocations", async () => {
+  mocks.control.mockReset().mockReturnValue(response("LoadState=not-found\n"));
+  mocks.uuid.mockReturnValueOnce("aaaa").mockReturnValueOnce("bbbb");
+  const scopes: string[] = [];
+  const run = vi.fn(async () => 0);
+  await Promise.all(
+    [0, 1].map(() =>
+      runLinuxMemoryCommand({ ...command, onMemoryScope: (unit) => scopes.push(unit) }, run),
+    ),
+  );
+  expect(scopes).toEqual(["openclaw-check-aaaa.scope", "openclaw-check-bbbb.scope"]);
+  expect(run.mock.calls).toHaveLength(2);
+  for (const unit of scopes) {
+    expect(mocks.control).toHaveBeenCalledWith(
+      "systemctl",
+      ["--user", "kill", "--kill-whom=all", "--signal=SIGKILL", unit],
+      expect.any(Object),
+    );
+  }
+});
+
+it("refuses an existing generated scope without launching or stopping it", async () => {
+  mocks.control.mockReset().mockReturnValue(response("LoadState=loaded\n"));
+  const run = vi.fn();
+  await expect(runLinuxMemoryCommand(command, run)).rejects.toThrow("user manager");
+  expect(run).not.toHaveBeenCalled();
+  expect(mocks.control).toHaveBeenCalledTimes(1);
+});
+
+it.each(["darwin", "win32"] as const)(
+  "refuses an unqualified %s cap before starting a workload",
+  async (platform) => {
+    mocks.control.mockClear();
+    await expect(runManagedCommand({ ...command, platform })).rejects.toThrow("not qualified");
+    expect(mocks.control).not.toHaveBeenCalled();
   },
 );
 
@@ -79,16 +213,16 @@ it("forces remaining scope members before waiting for systemd cleanup", async ()
   mocks.control.mockReset().mockReturnValue(response("LoadState=not-found\n"));
   await runLinuxMemoryCommand(command, async () => 0);
   expect(mocks.control.mock.calls.map((call) => call[1])).toEqual([
-    ["--user", "show", "--property=LoadState", command.memoryScope],
-    ["--user", "kill", "--kill-whom=all", "--signal=SIGKILL", command.memoryScope],
-    ["--user", "stop", command.memoryScope],
+    ["--user", "show", "--property=LoadState", memoryScope],
+    ["--user", "kill", "--kill-whom=all", "--signal=SIGKILL", memoryScope],
+    ["--user", "stop", memoryScope],
     [
       "--user",
       "show",
       "--property=LoadState",
       "--property=ActiveState",
       "--property=ControlGroup",
-      command.memoryScope,
+      memoryScope,
     ],
   ]);
 });
@@ -231,7 +365,7 @@ it.each([
             },
           },
         },
-        command.memoryScope,
+        memoryScope,
       ),
     ).toBe(expected);
   },

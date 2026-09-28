@@ -7,7 +7,6 @@ const require = createRequire(import.meta.url);
 
 /** Availability only; integration assertions still verify the actual kernel scope. */
 export function hasSemanticTestBackend(): boolean {
-  if (process.platform === "win32") return true;
   if (process.platform !== "linux") return false;
   try {
     return (

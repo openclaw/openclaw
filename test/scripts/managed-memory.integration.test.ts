@@ -1,5 +1,4 @@
 import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import { expect, it } from "vitest";
 import {
   hasUnjoinedWork,
@@ -13,7 +12,7 @@ const available = process.platform === "linux" && hasSemanticTestBackend();
 it.runIf(available)(
   "contains aggregate native allocations and joins the whole cgroup after OOM",
   async ({ signal }) => {
-    const memoryScope = "openclaw-check-" + randomUUID() + ".scope";
+    let memoryScope = "";
     const allocate =
       "const a=[];for(let i=0;i<16;i++)a.push(Buffer.alloc(8*1024**2,1));setInterval(()=>{},1000)";
     const code = await runManagedCommand({
@@ -29,7 +28,9 @@ it.runIf(available)(
         ].join("\n"),
       ],
       memoryLimitBytes: 256 * 1024 ** 2,
-      memoryScope,
+      onMemoryScope(unit) {
+        memoryScope = unit;
+      },
       timeoutMs: 15_000,
       requireProcessTreeExit: true,
       signal,
@@ -131,9 +132,9 @@ it.runIf(available)(
 );
 
 it.runIf(available)(
-  "joins a SIGTERM-resistant detached pipe holder before releasing the memory owner",
+  "joins a detached pipe holder with default cleanup options and no deadline",
   async ({ signal }) => {
-    const memoryScope = "openclaw-check-" + randomUUID() + ".scope";
+    let memoryScope = "";
     let failure: unknown;
     let status: number | undefined;
     try {
@@ -148,9 +149,9 @@ it.runIf(available)(
           ].join("\n"),
         ],
         memoryLimitBytes: 256 * 1024 ** 2,
-        memoryScope,
-        timeoutMs: 20_000,
-        requireProcessTreeExit: true,
+        onMemoryScope(unit) {
+          memoryScope = unit;
+        },
         signal,
       });
     } catch (error) {

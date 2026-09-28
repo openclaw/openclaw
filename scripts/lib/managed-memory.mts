@@ -12,14 +12,10 @@ export async function runLinuxMemoryCommand(
   options: RunManagedCommandOptions,
   run: (options: RunManagedCommandOptions) => Promise<number>,
 ) {
-  const {
-    memoryLimitBytes,
-    memoryScope: unit = "openclaw-check-" + randomUUID() + ".scope",
-    ...command
-  } = options;
-  if (!/^openclaw-check-[a-f0-9-]+\.scope$/u.test(unit)) {
-    throw new Error("Invalid managed memory scope");
-  }
+  const { memoryLimitBytes, onMemoryScope, ...command } = options;
+  // Scope names belong to this invocation. A caller-selected name can race
+  // creation and let a failed contender stop another command during cleanup.
+  const unit = "openclaw-check-" + randomUUID() + ".scope";
   options.signal?.throwIfAborted();
   const control = (args: string[]) =>
     spawnSync("systemctl", ["--user", ...args, unit], {
@@ -36,6 +32,8 @@ export async function runLinuxMemoryCommand(
       "[memory] A cgroup-v2 systemd user manager is required. Use a bounded Crabbox worker.",
     );
   }
+  onMemoryScope?.(unit);
+  options.signal?.throwIfAborted();
   const env = { ...(options.env ?? process.env) };
   // The trusted launcher verifies kernel limits before restoring workload preloads.
   env.OPENCLAW_MANAGED_NODE_OPTIONS = env.NODE_OPTIONS ?? "";
@@ -108,6 +106,9 @@ export async function runLinuxMemoryCommand(
   try {
     return await run({
       ...command,
+      // Cgroup ownership starts cleanup at launcher exit, even when a detached
+      // descendant still holds output open and the caller supplied no deadline.
+      requireProcessTreeExit: true,
       bin: "systemd-run",
       shell: false,
       env,

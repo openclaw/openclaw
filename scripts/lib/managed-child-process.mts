@@ -77,7 +77,7 @@ type ManagedCommandOptions = {
 
 export type RunManagedCommandOptions = ManagedCommandOptions & {
   memoryLimitBytes?: number;
-  memoryScope?: string;
+  onMemoryScope?: (unit: string) => void;
   timeoutMs?: number;
   timeoutKillGraceMs?: number;
   signalKillGraceMs?: number;
@@ -104,7 +104,7 @@ const windowsJobs = new WeakMap<object, ManagedWindowsJob>();
 const windowsTerminations = new WeakMap<object, ManagedChildTermination>();
 
 /** Resolve platform code before spawning so callers can attach listeners synchronously. */
-export function loadManagedChildSpawner(platform = process.platform, memoryLimitBytes?: number) {
+export function loadManagedChildSpawner(platform = process.platform) {
   if (platform !== "win32") {
     return spawn;
   }
@@ -124,11 +124,8 @@ export function loadManagedChildSpawner(platform = process.platform, memoryLimit
       args: string[],
       options: SpawnOptions,
     ): ChildProcess {
-      const owned = spawnWindowsJobChild(command, args, options, undefined, memoryLimitBytes);
+      const owned = spawnWindowsJobChild(command, args, options);
       if (!owned) {
-        if (memoryLimitBytes !== undefined) {
-          throw new Error("Required Windows Job memory containment is unavailable");
-        }
         return spawn(command, args, options);
       }
       windowsJobs.set(owned.child, owned.job);
@@ -488,24 +485,51 @@ export async function runManagedCommand(options: RunManagedCommandOptions): Prom
         env.TMPDIR || env.TMP || env.TEMP || tmpdir(),
       )?.claim();
       let joined = true;
+      let leafActive = false;
+      let receivedSignal: NodeJS.Signals | undefined;
+      // The leaf owns delivery and grace. Keep the outer owner alive after it
+      // exits, while the cgroup still joins detached members and releases claims.
+      const rememberSignal = (received: NodeJS.Signals) => {
+        receivedSignal ??= received;
+        if (!leafActive) {
+          command.onSignal?.(received);
+        }
+      };
+      installSignalHandlers();
+      managedChildren.add(rememberSignal);
       try {
-        return await runLinuxMemoryCommand(command, (scopedCommand) =>
-          runManagedCommandInner(scopedCommand, false),
-        );
+        const status = await runLinuxMemoryCommand(command, async (scopedCommand) => {
+          leafActive = true;
+          try {
+            return await runManagedCommandInner(scopedCommand, false);
+          } finally {
+            leafActive = false;
+          }
+        });
+        if (receivedSignal) {
+          return signalExitCode(receivedSignal);
+        }
+        if (command.signal?.aborted) {
+          throw Object.assign(new Error("Managed command aborted"), { code: "ABORT_ERR" });
+        }
+        return status;
       } catch (error) {
         joined = !hasUnjoinedWork(error);
         throw error;
       } finally {
-        if (joined) {
-          releaseClaim?.();
+        try {
+          if (joined) {
+            releaseClaim?.();
+          }
+        } finally {
+          managedChildren.delete(rememberSignal);
+          removeSignalHandlersIfIdle();
         }
       }
     }
-    if (platform !== "win32") {
-      throw new Error(
-        "Semantic checks require a kernel memory limit. Run this command through Crabbox or a memory-limited VM; native macOS cannot enforce a process-tree memory cap.",
-      );
-    }
+    throw new Error(
+      "Semantic checks require verified kernel memory containment. Run this command through Crabbox or a memory-limited Linux VM; native containment is not qualified on this platform.",
+    );
   }
   return await runManagedCommandInner(options);
 }
@@ -514,8 +538,8 @@ async function runManagedCommandInner(
   {
     stdio = "inherit",
     platform = process.platform,
-    memoryLimitBytes,
-    memoryScope: _memoryScope,
+    memoryLimitBytes: _memoryLimitBytes,
+    onMemoryScope: _onMemoryScope,
     timeoutMs,
     timeoutKillGraceMs,
     signalKillGraceMs,
@@ -568,7 +592,7 @@ async function runManagedCommandInner(
     stdio: managedStdio,
     platform,
   });
-  const loading = loadManagedChildSpawner(platform, memoryLimitBytes);
+  const loading = loadManagedChildSpawner(platform);
   const spawnManagedChild = typeof loading === "function" ? loading : await loading;
   signal?.throwIfAborted();
   let releaseClaim = claimResources

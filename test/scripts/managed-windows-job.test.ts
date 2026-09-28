@@ -2,7 +2,7 @@ import { ChildProcess } from "node:child_process";
 import { afterEach, expect, it, vi } from "vitest";
 import { spawnWindowsJobChild } from "../../scripts/lib/managed-windows-job.mts";
 
-const mocks = vi.hoisted(() => ({ spawn: vi.fn(), limits: vi.fn((..._args: unknown[]) => true) }));
+const mocks = vi.hoisted(() => ({ spawn: vi.fn() }));
 vi.mock("node:child_process", async (original) => ({
   ...(await original<typeof import("node:child_process")>()),
   spawn: mocks.spawn,
@@ -15,17 +15,11 @@ vi.mock("../../src/process/supervisor/service-child-windows-job-native.ts", () =
     assertLayouts: () => {},
     CreateJobObjectW: () => 1n,
     requireHandle: (value: bigint) => value,
-    SetExtendedLimits: mocks.limits,
-    extendedLimits: { BasicLimitInformation: { LimitFlags: 0x2000 }, JobMemoryLimit: 0 },
-    extendedLimitsSize: 144,
+    SetExtendedLimits: () => true,
     CloseHandle: () => true,
   }),
 }));
-afterEach(() => {
-  vi.restoreAllMocks();
-  mocks.spawn.mockClear();
-  mocks.limits.mockClear();
-});
+afterEach(() => vi.restoreAllMocks());
 
 it("snapshots command inputs before admission and excludes every NODE_OPTIONS casing from the launcher", () => {
   const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
@@ -60,31 +54,6 @@ it("snapshots command inputs before admission and excludes every NODE_OPTIONS ca
     );
     expect(mocks.spawn.mock.calls[0]?.[2].env).toEqual({ VALUE: "original" });
     owned?.job.close();
-  } finally {
-    Object.defineProperty(process, "platform", platform);
-  }
-});
-
-it("sets an aggregate Job memory limit before admission without contaminating later Jobs", () => {
-  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
-  mocks.spawn.mockImplementation(() => new ChildProcess());
-  try {
-    Object.defineProperty(process, "platform", { value: "win32" });
-    const bounded = spawnWindowsJobChild("fixture", [], {}, undefined, 256 * 1024 ** 2);
-    const unbounded = spawnWindowsJobChild("fixture", [], {});
-    expect(mocks.limits.mock.calls[0]?.[2]).toMatchObject({
-      BasicLimitInformation: { LimitFlags: 0x2200 },
-      JobMemoryLimit: 268435456,
-    });
-    expect(mocks.limits.mock.calls[1]?.[2]).toMatchObject({
-      BasicLimitInformation: { LimitFlags: 0x2000 },
-      JobMemoryLimit: 0,
-    });
-    expect(mocks.limits.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.spawn.mock.invocationCallOrder[0]!,
-    );
-    bounded?.job.close();
-    unbounded?.job.close();
   } finally {
     Object.defineProperty(process, "platform", platform);
   }
