@@ -22,7 +22,7 @@ import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
-} from "../../lib/keyboard-shortcut-catalog.ts";
+} from "../../lib/keyboard-shortcut-contract.ts";
 import {
   areUiSessionKeysEquivalent,
   scopedSessionArtifactKey,

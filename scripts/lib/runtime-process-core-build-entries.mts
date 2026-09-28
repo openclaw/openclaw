@@ -29,9 +29,6 @@ export const runtimeProcessCoreEntrypoints = [
   managedWindowsJobEntrypoint,
   managedMemoryEntrypoint,
 ];
-export const runtimeProcessCoreBuildEntries = createRuntimeProcessBuildEntries(
-  runtimeProcessCoreEntrypoints,
-);
 
 // Keep small helper processes out of the shared runtime bundle.
 export const standaloneRuntimeProcessBuildEntries = createRuntimeProcessBuildEntries([
@@ -42,6 +39,8 @@ export const standaloneRuntimeProcessBuildEntries = createRuntimeProcessBuildEnt
   runtimeProcessEntrypoints.nativeHookRelayClient,
   runtimeProcessEntrypoints.spawnBroker,
   runtimeProcessEntrypoints.stateLeaseHeartbeat,
+  runtimeProcessEntrypoints.serviceChildRelay,
+  runtimeProcessEntrypoints.serviceChildGroupAnchor,
 ]);
 
 export function shouldBundleRuntimeSqliteDependency(id: string): boolean {

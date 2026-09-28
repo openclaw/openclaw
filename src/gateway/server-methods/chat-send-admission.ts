@@ -278,7 +278,9 @@ export async function admitChatSend(
         ? replyRunRegistry.resolveCurrentInterruptTarget(activeRunScopeKey)
         : undefined;
     if (p.queueMode !== "steer" && expectedLeafEntryId !== undefined) {
-      assertExpectedLeafActive(latestSession, agentId, expectedLeafEntryId, requestedSessionId);
+      assertExpectedLeafActive(latestSession, agentId, expectedLeafEntryId, requestedSessionId, {
+        allowEmptyAncestor: true,
+      });
     }
     // Admission can queue behind reset. Never route a request captured
     // against the old session into the replacement transcript. Check the expected

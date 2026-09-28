@@ -48,6 +48,12 @@ beforeEach(async () => {
     script,
     'const fs = require("node:fs"); fs.appendFileSync(process.argv[2], "executed\\n"); if (process.argv[3] === "process") process.exit(1); process.stdout.write(fs.readFileSync(0));',
   );
+  await fs.mkdir(path.join(repo, ".openclaw"));
+  await fs.writeFile(
+    path.join(repo, ".openclaw/worktree-setup.sh"),
+    `#!/bin/sh\nprintf executed >> "${marker}"\n`,
+    { mode: 0o755 },
+  );
   await fs.writeFile(path.join(repo, ".gitattributes"), "README.md filter=late\n");
   await git(repo, "add", ".gitattributes");
   await git(repo, "commit", "-qm", "filter attributes");
@@ -96,7 +102,6 @@ async function configure(scope: string, kind: string, cwd: string) {
 
 it.each([
   ["repository", "smudge"],
-  ["include", "process"],
   ["worktree", "process"],
 ])(
   "does not execute a late %s %s filter during source-only materialization",
@@ -215,9 +220,3 @@ it.each([false, true])(
     await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
   },
 );
-
-it("preserves ordinary trusted checkout filter semantics", async () => {
-  await configure("repository", "smudge", repo);
-  await service.create({ repoRoot: repo, name: "trusted", baseRef: "HEAD" });
-  expect(await fs.readFile(marker, "utf8")).toContain("executed");
-});

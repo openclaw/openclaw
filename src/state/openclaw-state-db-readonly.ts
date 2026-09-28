@@ -449,7 +449,7 @@ function executeRetainedOpenClawStateRead(
       signal: readSignal,
       assertCurrent() {
         assertReadLifetime();
-        openClawStateDatabaseCache.assertOpenClawStateDatabaseOpenAllowed(pathname);
+        openClawStateDatabaseCache.assertOpenClawStateDatabaseOpenAllowed(pathname, "cached-read");
       },
     };
     const cleanup = (): Promise<void> => {
@@ -516,14 +516,14 @@ function executeRetainedOpenClawStateRead(
       assertReadLifetime();
       let nativeSource: OpenClawStateDatabase | undefined;
       if (snapshot) {
-        openClawStateDatabaseCache.assertOpenClawStateDatabaseOpenAllowed(pathname);
+        openClawStateDatabaseCache.assertOpenClawStateDatabaseOpenAllowed(pathname, "cached-read");
       } else if (preserveArtifacts) {
-        const native = borrowOpenClawStateDatabaseForAsyncRead(pathname);
+        const native = borrowOpenClawStateDatabaseForAsyncRead(pathname, "cached-read");
         borrowed = native;
         nativeSource = native?.database;
       } else {
         // The retainer checks database access before acquiring this read's native custody.
-        borrowed = retainOpenClawStateDatabaseForIndependentRead(pathname);
+        borrowed = retainOpenClawStateDatabaseForIndependentRead(pathname, "cached-read");
       }
       if (!snapshot && !borrowed && !existingPathOrUndefined(pathname)) {
         return undefined;

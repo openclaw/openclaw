@@ -489,7 +489,7 @@ export async function acquireGatewayLock(
             databasePath,
             payload,
             projectionPath: paths.stateLockPath,
-            retainProjection: () => projection?.retain(),
+            getProjection: () => projection,
           });
           try {
             if (previousOwner) {

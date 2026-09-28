@@ -622,6 +622,7 @@ export async function inspectDisabledDiscoveryTasks(params: {
 /** Native installed-peer build admission; no source-checkout compile or successful build claim. */
 export async function assertInstalledSiblingBuildRefusal(params: {
   toolingEntry: string;
+  startupEntry?: string;
   selected: InstalledTask;
   peer: InstalledTask;
   commands: CommandRecord[];
@@ -631,7 +632,7 @@ export async function assertInstalledSiblingBuildRefusal(params: {
 }) {
   const { toolingEntry, selected, peer, commands, signal, verifyContinuity, recordProgress } =
     params;
-  const phase = "task-sibling-refusal";
+  const phase = params.startupEntry ? "startup-alias-refusal" : "task-sibling-refusal";
   const buildRoot = await fs.realpath(packageRoot(peer.installRoot));
   const dist = path.join(buildRoot, "dist");
   assert.equal((await fs.lstat(dist)).isDirectory(), true);
@@ -649,7 +650,9 @@ export async function assertInstalledSiblingBuildRefusal(params: {
     {
       expectedStderr: [
         `Refusing to rebuild dist while a managed Gateway (profile ${peer.profile})`,
-        `openclaw gateway stop --profile ${peer.profile}`,
+        params.startupEntry
+          ? `stop the process launched by Startup entry ${JSON.stringify(params.startupEntry)}`
+          : `openclaw gateway stop --profile ${peer.profile}`,
       ],
     },
   );

@@ -157,10 +157,14 @@ merge_outcome_load_local() {
       def recovery:
         if has("recovery") then . as $record | .recovery |
           type == "object" and
-          (((keys - ["preDispatchRefusal"]) == ["actor","attempt","outcome","reason"]) or
-           ((keys - ["preDispatchRefusal"]) == ["actor","attempt","outcome","reason","replacementHead"] and
+          (((keys - ["preDispatchRefusal","providerRejection"]) == ["actor","attempt","outcome","reason"]) or
+           ((keys - ["preDispatchRefusal","providerRejection"]) == ["actor","attempt","outcome","reason","replacementHead"] and
             (.replacementHead | oid) and .replacementHead == $record.head)) and
           (if has("preDispatchRefusal") then (.preDispatchRefusal | type == "object") else true end) and
+          (if has("providerRejection") then (.providerRejection | type == "object") and
+            (has("preDispatchRefusal") | not) and (has("replacementHead") | not) and
+            $record.route == "admin" and $record.priorCiAdmin.dispatchTransport == "rest"
+           else true end) and
           (.outcome | oid) and (.attempt | attempt) and
           (.actor | type == "string" and length > 0) and .reason == "explicit-operator-recovery"
         else true end;
@@ -221,15 +225,29 @@ merge_outcome_load_local() {
       if ! GIT_NO_LAZY_FETCH=1 pr_git merge-base --is-ancestor "$retained" "$MERGE_OUTCOME_OID" ||
         ! GIT_NO_LAZY_FETCH=1 pr_git show "$retained:outcome.json" | jq -e --argjson next "$MERGE_OUTCOME_RECORD" '
           .phase == "intent" and
-          ((.accepted == false and (.route == "immediate" or
-             (.route == "auto" and $next.recovery.preDispatchRefusal != null))) or
-           (.route == "auto" and .cancellation.state == "confirmed")) and
+          (if $next.recovery.providerRejection != null then
+             .accepted == false and .route == "admin" and $next.route == "admin" and
+             .priorCiAdmin.dispatchTransport == "rest" and .head == $next.head
+           else
+             ((.accepted == false and (.route == "immediate" or
+                (.route == "auto" and $next.recovery.preDispatchRefusal != null))) or
+              (.route == "auto" and .cancellation.state == "confirmed")) and
+             $next.route == "immediate" and (.head == $next.head or $next.recovery.replacementHead == $next.head)
+           end) and
           .repo == $next.repo and .pr == $next.pr and .prId == $next.prId and
-          .base == $next.base and .method == $next.method and .attempt == $next.recovery.attempt and
-          $next.route == "immediate" and (.head == $next.head or $next.recovery.replacementHead == $next.head)
+          .base == $next.base and .method == $next.method and .attempt == $next.recovery.attempt
         ' >/dev/null; then
         merge_outcome_stop "invalid or unretained operator recovery provenance"; return 1
       fi
+    fi
+    if printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e '.recovery.providerRejection != null' >/dev/null; then
+      local provider_rejection original
+      retained=$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .recovery.outcome)
+      original=$(GIT_NO_LAZY_FETCH=1 pr_git show "$retained:outcome.json") || return 1
+      provider_rejection=$(node "${BASH_SOURCE[0]%/*}/merge-prior-ci.mjs" provider-rejection "$original" "git:$MERGE_OUTCOME_OID") || return 1
+      [ "$provider_rejection" = "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c '.recovery.providerRejection')" ] || {
+        merge_outcome_stop "invalid retained provider rejection qualification"; return 1;
+      }
     fi
     if printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e '.recovery.preDispatchRefusal != null' >/dev/null; then
       local qualified_refusal original
@@ -273,15 +291,40 @@ merge_outcome_write() {
   local capture_entries="" legacy_tree
   # Keep imported legacy proof in every successor tree; it is a factual refusal,
   # never a synthetic historical intent. Only the current CAS admits a dispatch.
-  for capture in "$@"; do
-    [ -f "$capture" ] && [ ! -L "$capture" ] || { merge_outcome_stop "cannot retain non-regular capture $capture"; return 1; }
-    blob=$(pr_git hash-object -w --no-filters -- "$capture") || return 1
-    if printf '%s\n' "$record" | jq -e 'has("legacyRefusal")' >/dev/null &&
-      [ "$blob" != "$(printf '%s\n' "$record" | jq -r --arg name "${capture##*/}" '.legacyRefusal.files[$name]')" ]; then
-      merge_outcome_stop "legacy evidence changed before retention"; return 1
-    fi
-    capture_entries+="$(printf '100644 blob %s\t%s' "$blob" "${capture##*/}")"$'\n'
-  done
+  if printf '%s\n' "$record" | jq -e '.recovery.providerRejection != null' >/dev/null; then
+    local name expected matched
+    [ "$#" -eq 0 ] || [ "$#" -eq "$(printf '%s\n' "$record" | jq '.recovery.providerRejection.files | length')" ] || return 1
+    while IFS=$'\t' read -r name expected; do
+      if [ "$#" -gt 0 ]; then
+        matched=""
+        for capture in "$@"; do
+          if [ "${capture##*/}" = "$name" ]; then
+            [ -z "$matched" ] || return 1
+            matched="$capture"
+          fi
+        done
+        [ -n "$matched" ] && [ -f "$matched" ] && [ ! -L "$matched" ] || return 1
+        blob=$(pr_git hash-object -w --no-filters -- "$matched") || return 1
+      else
+        # Later acceptance, receipt, and completion records retain the same bytes.
+        blob=$(GIT_NO_LAZY_FETCH=1 pr_git rev-parse "$MERGE_OUTCOME_OID:$name") || return 1
+      fi
+      [ "$blob" = "$expected" ] && [ "$(GIT_NO_LAZY_FETCH=1 pr_git cat-file -t "$blob")" = blob ] || {
+        merge_outcome_stop "provider rejection capture changed before retention"; return 1;
+      }
+      capture_entries+="$(printf '100644 blob %s\t%s' "$blob" "$name")"$'\n'
+    done < <(printf '%s\n' "$record" | jq -r '.recovery.providerRejection.files | to_entries[] | [.key,.value] | @tsv')
+  else
+    for capture in "$@"; do
+      [ -f "$capture" ] && [ ! -L "$capture" ] || { merge_outcome_stop "cannot retain non-regular capture $capture"; return 1; }
+      blob=$(pr_git hash-object -w --no-filters -- "$capture") || return 1
+      if printf '%s\n' "$record" | jq -e 'has("legacyRefusal")' >/dev/null &&
+        [ "$blob" != "$(printf '%s\n' "$record" | jq -r --arg name "${capture##*/}" '.legacyRefusal.files[$name]')" ]; then
+        merge_outcome_stop "legacy evidence changed before retention"; return 1
+      fi
+      capture_entries+="$(printf '100644 blob %s\t%s' "$blob" "${capture##*/}")"$'\n'
+    done
+  fi
   if printf '%s\n' "$record" | jq -e 'has("legacyRefusal")' >/dev/null; then
     if [ -n "$MERGE_OUTCOME_OID" ]; then
       legacy_tree=$(GIT_NO_LAZY_FETCH=1 pr_git rev-parse "$MERGE_OUTCOME_OID:legacy-refusal") || return 1
