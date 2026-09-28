@@ -44,6 +44,14 @@ session ID with the authoritative transcript's reset and compaction boundary cou
 The Gateway retains these facts with the admitted turn, rather than accepting a
 worker-provided cache key or deriving one from trimmed replay history.
 
+Delivered worker skills use stable session-scoped, content-addressed paths and a
+deterministic catalog order. Unchanged skills therefore keep the system prompt
+prefix stable between turns. Skill refreshes still deliver current verified bytes;
+a content change intentionally changes that skill's path. Worker and local prompts
+remain different in scope: workers load bounded workspace `AGENTS.md` and the
+Gateway's supplied instructions with their restricted tool set. Moving a session
+between runtimes or workspaces can still invalidate its cached prefix.
+
 ### `cacheRetention`
 
 Values: `"none" | "short" | "long"`. Configurable as a global default, per model, and per agent.
