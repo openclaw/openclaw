@@ -379,7 +379,7 @@ suite.define(() => {
         };
         app.runtime?.context?.agentSelection?.setScope?.("writer");
       });
-      await gateway.waitForRequest("sessions.describe");
+      await gateway.waitForRequest("sessions.describe", { match: { key: sessionKey } });
       // Reconcile the descriptor after the running roster and scope transition.
       await gateway.resolveDeferred("sessions.describe");
       await expect
@@ -535,8 +535,14 @@ suite.define(() => {
     const splitRosterSessionKey = "agent:main:progress:dashboard:split-roster";
     await suite.withPage(englishDesktopPageOptions, async ({ page }) => {
       const now = Date.now();
+      const targetRoster = sessionListResponse(splitRosterSessionKey, "Split roster dashboard", {
+        hasActiveRun: true,
+        startedAt: now - 30_000,
+        updatedAt: now,
+      });
       await installMockGateway(page, {
         sessionKey: splitRosterSessionKey,
+        sessions: targetRoster.sessions,
         controlUiWidgetKinds: [
           { pluginId: "session", kind: "session:progress", label: "Session progress" },
         ],
@@ -566,11 +572,7 @@ suite.define(() => {
               {
                 // The shared target roster still reports the live run.
                 match: {},
-                response: sessionListResponse(splitRosterSessionKey, "Split roster dashboard", {
-                  hasActiveRun: true,
-                  startedAt: now - 30_000,
-                  updatedAt: now,
-                }),
+                response: targetRoster,
               },
             ],
           },
@@ -610,9 +612,36 @@ suite.define(() => {
     const boardlessTargetKey = "agent:main:progress-boardless-target";
     await suite.withPage(englishDesktopPageOptions, async ({ page }) => {
       const now = Date.now();
+      const targetRoster = {
+        count: 2,
+        defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
+        path: "",
+        sessions: [
+          {
+            key: boardOwnerKey,
+            kind: "direct",
+            label: "Progress board owner",
+            status: "done",
+            hasActiveRun: false,
+            startedAt: 2,
+            endedAt: 3,
+            updatedAt: 3,
+          },
+          {
+            key: boardlessTargetKey,
+            kind: "direct",
+            label: "Board-less running target",
+            status: "running",
+            hasActiveRun: true,
+            startedAt: now - 30_000,
+            updatedAt: now,
+          },
+        ],
+        ts: now,
+      };
       await installMockGateway(page, {
         sessionKey: boardOwnerKey,
-        sessions: [{ key: boardOwnerKey }, { key: boardlessTargetKey }],
+        sessions: targetRoster.sessions,
         controlUiWidgetKinds: [
           { pluginId: "session", kind: "session:progress", label: "Session progress" },
         ],
@@ -645,33 +674,7 @@ suite.define(() => {
               },
               {
                 match: {},
-                response: {
-                  count: 2,
-                  defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
-                  path: "",
-                  sessions: [
-                    {
-                      key: boardOwnerKey,
-                      kind: "direct",
-                      label: "Progress board owner",
-                      status: "done",
-                      hasActiveRun: false,
-                      startedAt: 2,
-                      endedAt: 3,
-                      updatedAt: 3,
-                    },
-                    {
-                      key: boardlessTargetKey,
-                      kind: "direct",
-                      label: "Board-less running target",
-                      status: "running",
-                      hasActiveRun: true,
-                      startedAt: now - 30_000,
-                      updatedAt: now,
-                    },
-                  ],
-                  ts: now,
-                },
+                response: targetRoster,
               },
             ],
           },

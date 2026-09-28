@@ -34,7 +34,6 @@ import {
   applyStagedWorkerWorkspaceResult,
   cleanupWorkerWorkspaceResultRef,
   deleteStagedWorkerWorkspaceResult,
-  deleteWorkerWorkspaceResultCleanupRefs,
   hasWorkerWorkspaceResultRef,
   isWorkerWorkspaceResultCleanupRef,
   preparedWorkerWorkspaceResultRef,
@@ -666,37 +665,4 @@ export async function recoverPendingWorkspaceResults(
     }
   }
   return stagedResultOwners;
-}
-
-export async function cleanupPendingWorkspaceResultOrphans(
-  deps: PlacementRecoveryDeps,
-): Promise<void> {
-  const { placements } = deps;
-  const retainedRefs = () =>
-    new Set(
-      placements
-        .listPendingWorkspaceResults()
-        .flatMap((pending) =>
-          pending.stagedResultRef ? [cleanupWorkerWorkspaceResultRef(pending.stagedResultRef)] : [],
-        ),
-    );
-  const cleanedWorkspaceRoots = new Set<string>();
-  for (const placement of await placements.readChangeSnapshot()) {
-    try {
-      const workspace = await deps.resolveWorkspace(placement);
-      if (workspace.kind === "repository") {
-        continue;
-      }
-      const root = workspace.path;
-      if (!cleanedWorkspaceRoots.has(root)) {
-        cleanedWorkspaceRoots.add(root);
-        await deleteWorkerWorkspaceResultCleanupRefs({
-          root,
-          retainedRefs,
-        });
-      }
-    } catch {
-      // Cleanup refs are independently retryable after the next restart.
-    }
-  }
 }
