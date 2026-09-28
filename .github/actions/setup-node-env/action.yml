@@ -7,6 +7,10 @@ inputs:
     description: Node.js version to install.
     required: false
     default: "24.x"
+  semantic-checks:
+    description: Prepare Linux kernel memory containment for lint, compiler and tooling tests.
+    required: false
+    default: "false"
   install-bun:
     description: Whether to install Bun alongside Node.
     required: false
@@ -107,6 +111,11 @@ runs:
             exit 2
             ;;
         esac
+
+    - name: Prepare semantic check containment
+      if: runner.os == 'Linux' && inputs.semantic-checks == 'true'
+      shell: bash
+      run: bash "$GITHUB_ACTION_PATH/prepare-semantic-checks.sh"
 
     - name: Normalize container toolcache
       shell: bash

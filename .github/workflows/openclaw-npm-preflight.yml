@@ -167,6 +167,7 @@ jobs:
         id: setup-node-env
         uses: ./.github/actions/setup-node-env
         with:
+          semantic-checks: "true"
           cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
