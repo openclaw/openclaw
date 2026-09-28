@@ -1,7 +1,7 @@
 // Plugin Prerelease Test Plan tests cover plugin prerelease test plan script behavior.
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join, matchesGlob, resolve } from "node:path";
 import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
@@ -9,7 +9,10 @@ import { parse } from "yaml";
 import { listAvailableExtensionIds } from "../../scripts/lib/changed-extensions.mts";
 import { findLaneByName } from "../../scripts/lib/docker-e2e-plan.mts";
 import { BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS } from "../../scripts/lib/docker-e2e-scenarios.mts";
-import { resolveExtensionTestPlan } from "../../scripts/lib/extension-test-plan.mts";
+import {
+  resolveExtensionTestPlan,
+  resolveExtensionTestConfig,
+} from "../../scripts/lib/extension-test-plan.mts";
 import {
   assertPluginPrereleaseTestPlanComplete,
   createPluginPrereleaseTestPlan,
@@ -1185,6 +1188,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       task: string;
       extensions_csv: string;
       includePatterns?: string[];
+      exclusion_configs: { config: string; includePatterns: string[] }[];
       requires_bun?: boolean;
       test_runtime_policy?: string;
     }[] = JSON.parse(
@@ -1207,7 +1211,21 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       .filter((row) => row.task === "extension-file-shard")
       .flatMap((row) => row.includePatterns ?? []);
     expect(new Set(fileTargets).size).toBe(fileTargets.length);
-    expect(fileTargets).toContain("extensions/device-pair/doctor-contract-api.test.ts");
+    const sourceOnlyFile = "extensions/device-pair/doctor-contract-api.test.ts";
+    expect(fileTargets).not.toContain(sourceOnlyFile);
+    for (const file of [sourceOnlyFile, "extensions/plugin-entry.cli-laziness.test.ts"]) {
+      const config = resolveExtensionTestConfig(file);
+      expect(
+        rows.filter((row) =>
+          row.exclusion_configs.some(
+            (group) =>
+              group.config === config &&
+              group.includePatterns.some((pattern) => matchesGlob(file, pattern)),
+          ),
+        ),
+        file,
+      ).toHaveLength(1);
+    }
     expect(
       rows.filter((row) =>
         row.includePatterns?.includes("extensions/plugin-entry.cli-laziness.test.ts"),
