@@ -183,6 +183,14 @@ function createRootTestLintFixture() {
   ]) {
     writeRepoFile(dir, file, readFileSync(path.join(repoRoot, file), "utf8"));
   }
+  // This fixture supplies its own source/ambient graph. Full-repository E2E
+  // augmentations are covered by the root-partition inventory test.
+  const lintConfig = "test/tsconfig.json";
+  writeRepoFile(
+    dir,
+    lintConfig,
+    JSON.stringify({ ...JSON.parse(readFileSync(path.join(dir, lintConfig), "utf8")), files: [] }),
+  );
   for (const [file, source] of Object.entries({
     "src/plugin-sdk/discovery.ts":
       "export function work(): Promise<void> { return Promise.resolve(); }",
