@@ -13,7 +13,7 @@ import {
   type OpenClawTestInstance,
 } from "../../test/helpers/openclaw-test-instance.js";
 import { isProcessAlive, waitForPidFile } from "../../test/helpers/process-wait.js";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { reloadSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store-runtime.js";
@@ -48,6 +48,7 @@ import {
   createFreshSession,
   lastOutputIndexAfter,
   registerIdempotentCleanup,
+  startGatewayCaseControlClient,
   waitForOutputAfter,
 } from "./tui-pty-local-test-support.js";
 import { buildTuiProcessArgs } from "./tui-pty-process-test-support.js";
@@ -879,34 +880,12 @@ async function startGatewayModeTui(
     url: shared.gateway.url,
     token: shared.gateway.gatewayToken,
   });
-  let controlClientConnected = false;
-  controlClient.onConnected = () => {
-    controlClientConnected = true;
-  };
-  // A timed-out RPC drops its pending response while leaving the socket open.
-  // Case-local ownership prevents that late work from crossing into the next test.
-  const cleanup = registerIdempotentCleanup(registerCleanup, async () => {
-    shared.mockModel.releaseFirstResponse(scenario.modelId);
-    try {
-      if (controlClientConnected) {
-        await withTestTimeout(
-          controlClient.waitForReady(),
-          LOCAL_STARTUP_TIMEOUT_MS,
-          "Gateway case control client did not reconnect before cleanup",
-        );
-        for (const key of sessionKeys) {
-          await controlClient.abortChat({ sessionKey: key });
-        }
-      }
-    } finally {
-      await controlClient.stop();
-    }
-  });
-  controlClient.start();
-  await waitFor({
+  const cleanup = await startGatewayCaseControlClient({
+    client: controlClient,
+    sessionKeys,
+    registerCleanup,
+    releaseResponse: () => shared.mockModel.releaseFirstResponse(scenario.modelId),
     timeoutMs: LOCAL_STARTUP_TIMEOUT_MS,
-    read: () => (controlClientConnected ? true : null),
-    onTimeout: () => new Error("Gateway case control client did not connect"),
   });
   await controlClient.createSession({ key: sessionKey, agentId: scenario.agentId });
   await controlClient.patchSession({

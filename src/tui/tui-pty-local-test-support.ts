@@ -1,3 +1,5 @@
+import { withTestTimeout } from "../../test/helpers/promise.js";
+import type { GatewayChatClient } from "./gateway-chat.js";
 import { waitFor, type PtyRun } from "./tui-pty-test-support.js";
 
 const STARTUP_TIMEOUT_MS = 60_000;
@@ -18,6 +20,46 @@ export function registerIdempotentCleanup(
   const registeredCleanup = createIdempotentCleanup(cleanup);
   registerCleanup(registeredCleanup);
   return registeredCleanup;
+}
+
+export async function startGatewayCaseControlClient(params: {
+  client: GatewayChatClient;
+  sessionKeys: ReadonlySet<string>;
+  registerCleanup: CleanupRegistrar;
+  releaseResponse: () => void;
+  timeoutMs: number;
+}) {
+  const { client, sessionKeys, registerCleanup, releaseResponse, timeoutMs } = params;
+  let connected = false;
+  client.onConnected = () => {
+    connected = true;
+  };
+  // A timed-out RPC drops its pending response while leaving the socket open.
+  // Case-local ownership prevents that late work from crossing into the next test.
+  const cleanup = registerIdempotentCleanup(registerCleanup, async () => {
+    releaseResponse();
+    try {
+      if (connected) {
+        await withTestTimeout(
+          client.waitForReady(),
+          timeoutMs,
+          "Gateway case control client did not reconnect before cleanup",
+        );
+        for (const sessionKey of sessionKeys) {
+          await client.abortChat({ sessionKey });
+        }
+      }
+    } finally {
+      await client.stop();
+    }
+  });
+  client.start();
+  await waitFor({
+    timeoutMs,
+    read: () => (connected ? true : null),
+    onTimeout: () => new Error("Gateway case control client did not connect"),
+  });
+  return cleanup;
 }
 
 type ObservedChatTerminal = {
