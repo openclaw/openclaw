@@ -5,8 +5,13 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { zstdDecompressSync } from "node:zlib";
 import { withTimeout } from "@openclaw/fs-safe/advanced";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "openclaw/plugin-sdk/process-runtime";
 import { createFixtureLifetime, stopChildProcess } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it } from "vitest";
+import { identityRepeatedTurnEntrypoint } from "./agent-run-identity-runtime.test-support.js";
 import {
   appendQaChildOutputTail,
   createQaChildOutputTail,
@@ -63,19 +68,14 @@ it(
         ),
       });
       const sessionId = "identity-repeated-regression";
+      const childUrl = resolveRuntimeWorkerUrl(identityRepeatedTurnEntrypoint);
+      // Runtime transpilation must not consume the cold ingress execution deadline.
+      expect(childUrl.pathname.endsWith(".js")).toBe(true);
       // In-process test setup already binds MCP; only the maintained child exposes this omission.
       const { child } = await lifetime.acquire(async () => {
         const processChild = spawn(
           process.execPath,
-          [
-            "--import",
-            "tsx",
-            path.join(
-              repoRoot,
-              "test/e2e/qa-lab/runtime/agent-run-identity-repeated-turn-child.ts",
-            ),
-            sessionId,
-          ],
+          [...resolveRuntimeWorkerArgv(childUrl), sessionId],
           {
             cwd: repoRoot,
             env,
@@ -87,7 +87,11 @@ it(
       const output = createQaChildOutputTail(128 * 1024);
       child.stdout?.on("data", (chunk) => appendQaChildOutputTail(output, chunk));
       child.stderr?.on("data", (chunk) => appendQaChildOutputTail(output, chunk));
-      const exit = await withTimeout(once(child, "close"), 60_000);
+      const exit = await withTimeout(once(child, "close"), 60_000).catch((error: unknown) => {
+        throw new Error(`Repeated ingress child did not close: ${readQaChildOutputTail(output)}`, {
+          cause: error,
+        });
+      });
       const response = await fetch(`${mock.baseUrl}/debug/requests?after=0`);
       expect(response.ok).toBe(true);
       const requests: MockOpenAiRequestSnapshot[] = await response.json();
