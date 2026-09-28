@@ -10311,6 +10311,7 @@ public struct PluginCatalogEntry: Codable, Sendable {
     public let error: String?
     public let runtime: PluginRuntimeStatus?
     public let categories: [String]?
+    public let capabilitycategories: [String]?
     public let category: String?
     public let removable: Bool?
 
@@ -10338,6 +10339,7 @@ public struct PluginCatalogEntry: Codable, Sendable {
         error: String? = nil,
         runtime: PluginRuntimeStatus? = nil,
         categories: [String]? = nil,
+        capabilitycategories: [String]? = nil,
         category: String? = nil,
         removable: Bool? = nil)
     {
@@ -10364,6 +10366,7 @@ public struct PluginCatalogEntry: Codable, Sendable {
         self.error = error
         self.runtime = runtime
         self.categories = categories
+        self.capabilitycategories = capabilitycategories
         self.category = category
         self.removable = removable
     }
@@ -10392,6 +10395,7 @@ public struct PluginCatalogEntry: Codable, Sendable {
         case error
         case runtime
         case categories
+        case capabilitycategories = "capabilityCategories"
         case category
         case removable
     }

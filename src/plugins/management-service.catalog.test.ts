@@ -497,6 +497,43 @@ describe("managed plugin catalog", () => {
     expect(mocks.pluginVersionCategories).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { enabled: true, contracts: { videoGenerationProviders: ["video"] }, expected: ["media"] },
+    { enabled: true, contracts: { imageGenerationProviders: ["image"] }, expected: ["media"] },
+    { enabled: true, contracts: { musicGenerationProviders: ["music"] }, expected: ["media"] },
+    { enabled: false, contracts: { videoGenerationProviders: ["video"] }, expected: undefined },
+    { enabled: false, contracts: { imageGenerationProviders: ["image"] }, expected: undefined },
+    { enabled: false, contracts: { musicGenerationProviders: ["music"] }, expected: undefined },
+    { enabled: true, contracts: { videoGenerationProviders: [] }, expected: undefined },
+    { enabled: true, contracts: { speechProviders: ["speech"] }, expected: undefined },
+  ])(
+    "derives Media discovery only for enabled generation plugins (%j)",
+    async ({ enabled, contracts, expected }) => {
+      mocks.metadata.mockReturnValue(
+        metadataSnapshot({
+          enabled,
+          id: "model-provider",
+          categories: ["models"],
+          contracts,
+        }),
+      );
+      const catalog = await listManagedPlugins({
+        config: { plugins: { entries: { "model-provider": { enabled } } } },
+        env: {},
+        officialCatalog: { entries: [] },
+      });
+      const plugin = expectDefined(catalog.plugins[0], "managed model provider");
+      expect(plugin.categories).toEqual(["models"]);
+      expect(plugin.enabled).toBe(enabled);
+      if (expected) {
+        expect(plugin).toHaveProperty("capabilityCategories", expected);
+      } else {
+        expect(plugin).not.toHaveProperty("capabilityCategories");
+      }
+      expect(mocks.pluginVersionCategories).not.toHaveBeenCalled();
+    },
+  );
+
   it("batch-enriches missing categories from the exact installed ClawHub version", async () => {
     mocks.metadata.mockReturnValue(
       metadataSnapshot({

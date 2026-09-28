@@ -169,10 +169,11 @@ export function createCrabboxWorkerProvider(
   });
   const stopLease = async (context: LeaseCommandContext): Promise<void> => {
     await heartbeats.stop(context.id);
-    // Cleanup has its own deadline. Only confirmed stop releases allocation/image ownership.
+    // Cleanup has its own deadline. Confirmed stop or absence releases allocation/image ownership.
     await stopCrabboxLease({
       ...context,
       runCommand,
+      warn,
     });
     await warmImages.release(context);
   };

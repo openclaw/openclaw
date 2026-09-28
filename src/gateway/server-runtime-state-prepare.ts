@@ -484,6 +484,7 @@ export async function prepareGatewayKernelState(params: {
   );
   const transportBridge = createGatewayTransportBridge();
   const presencePublisher = createPresencePublisher({
+    scheduler,
     broadcast: connectionState.broadcast,
     incrementPresenceVersion,
     getHealthVersion,

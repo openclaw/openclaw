@@ -1,10 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { runBuildAllSteps } from "../../scripts/build-all.mts";
+import * as liveGatewayDistFence from "../../scripts/lib/live-gateway-dist-fence.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+beforeEach(() => {
+  // Keep host service discovery outside this installed-artifact ownership fixture.
+  const fence = vi
+    .spyOn(liveGatewayDistFence, "resolveLiveManagedGatewayDistFence")
+    .mockResolvedValue({ refuse: false });
+  onTestFinished(() => fence.mockRestore());
+});
 
 function installedCheckout() {
   const root = tempDirs.make("openclaw-installed-artifact-preflight-");
@@ -52,6 +61,7 @@ describe("published source updater candidate-build preflight", () => {
 
       await expect(fixture.run()).rejects.toThrow(`retained by PID ${pid}`);
 
+      expect(liveGatewayDistFence.resolveLiveManagedGatewayDistFence).not.toHaveBeenCalled();
       expect(fixture.runStep).not.toHaveBeenCalled();
       expect(fs.readFileSync(fixture.ownerPath, "utf8")).toBe(owner);
       expect(fs.readFileSync(fixture.serving, "utf8")).toBe("previous serving generation\n");

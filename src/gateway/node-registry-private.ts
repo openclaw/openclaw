@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import {
@@ -6,6 +7,7 @@ import {
   NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
   NODE_WORKER_PRIVATE_COMMANDS,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+  NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
   NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
 } from "../infra/node-commands.js";
 import {
@@ -33,7 +35,6 @@ import {
   resolveNodeRunnerInventoryIssue,
   resolveNodeWorkerSupervisorProof,
   sameBundleStatusObservation,
-  sameNodeWorkerHostDeclaration,
   type NodeRunnerInventoryRecord,
   type NodeRunnerRegistrySession,
   type NodeRunnerStateChange,
@@ -191,7 +192,7 @@ function updateWorkerRunnerInventory(
     !previous ||
     previous.pairingGeneration !== next.pairingGeneration ||
     !sameWorkerProtocolFeatures(previous.protocolFeatures, next.protocolFeatures) ||
-    !sameNodeWorkerHostDeclaration(previous.workerHost, next.workerHost) ||
+    !isDeepStrictEqual(previous.workerHost, next.workerHost) ||
     statusCleared;
   if (changed) {
     state.runnerInventoryByConn.set(node.connId, next);
@@ -525,6 +526,11 @@ export function registerNodeRegistryPrivateRuntime(
                 params.command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
               preparedWorkspace: params.command === NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
               capturedExecPolicy: params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+              statusWait:
+                params.command === NODE_WORKER_SUPERVISOR_STATUS_COMMAND &&
+                typeof params.params === "object" &&
+                params.params !== null &&
+                "waitMs" in params.params,
             },
           );
         if (!isProofCurrent()) {

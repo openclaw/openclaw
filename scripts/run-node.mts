@@ -1577,6 +1577,14 @@ function createRunNodeDeps(params: RunNodeMainParams) {
   };
 }
 
+/** Read-only build admission shared by explicit test preparation and the source runner. */
+export function resolveRunNodePreparation(cwd: string, env: NodeJS.ProcessEnv) {
+  const deps = createRunNodeDeps({ cwd, env, args: [] });
+  const build = resolveBuildRequirement(deps).shouldBuild;
+  const runtime = !build && resolveRuntimePostBuildRequirement(deps).shouldSync;
+  return { build, runtime, immutable: (build || runtime) && isImmutableGitDeployment(deps) };
+}
+
 /** Runs the dev build/watch loop and keeps the child CLI in sync with changes. */
 export async function runNodeMain(params: RunNodeMainParams = {}): Promise<RunNodeExit> {
   const deps = createRunNodeDeps(params);

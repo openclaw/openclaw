@@ -17,11 +17,13 @@ import {
 import { handleWorkerBootstrapArtifactTransferHttpRequest } from "./worker-bootstrap-artifact-transfer-http.js";
 import { createWorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
 
+type ResponseOptions = { writeError?: Error; afterWrite?: () => void };
+
 // Exercise real HTTP response/stream completion without binding a listener.
 class ResponseSocket extends Socket {
   readonly chunks: Buffer[] = [];
 
-  constructor(private readonly writeError?: Error) {
+  constructor(private readonly options: ResponseOptions = {}) {
     super();
   }
 
@@ -31,17 +33,19 @@ class ResponseSocket extends Socket {
 
   override _write(chunk: Buffer, _encoding: BufferEncoding, callback: (error?: Error) => void) {
     this.chunks.push(Buffer.from(chunk));
-    callback(this.writeError);
+    this.options.afterWrite?.();
+    callback(this.options.writeError);
   }
 
   override _writev(writes: Array<{ chunk: Buffer }>, callback: (error?: Error) => void) {
     this.chunks.push(...writes.map(({ chunk }) => Buffer.from(chunk)));
-    callback(this.writeError);
+    this.options.afterWrite?.();
+    callback(this.options.writeError);
   }
 }
 
-function createResponse(writeError?: Error) {
-  const socket = new ResponseSocket(writeError);
+function createResponse(options?: ResponseOptions) {
+  const socket = new ResponseSocket(options);
   const socketErrors = vi.fn<(error: Error) => void>();
   socket.on("error", socketErrors);
   const req = new IncomingMessage(socket);
@@ -68,18 +72,22 @@ describe("artifact transfer response settlement", () => {
     authorized = true;
     owner = new AbortController();
     service = createWorkerBootstrapArtifactTransferService({ now: () => now });
+    await prepareArtifact(contents);
+  });
+
+  async function prepareArtifact(bytes: string | Buffer) {
     artifact = {
       tarballPath: path.join(tempDirs.make("openclaw-artifact-response-"), "runtime.tgz"),
-      tarballSha256: createHash("sha256").update(contents).digest("hex"),
-      tarballBytes: Buffer.byteLength(contents),
+      tarballSha256: createHash("sha256").update(bytes).digest("hex"),
+      tarballBytes: Buffer.byteLength(bytes),
     };
-    await fs.writeFile(artifact.tarballPath, contents);
+    await fs.writeFile(artifact.tarballPath, bytes);
     ({ token, expiresAtMs } = service.prepare({
       artifact,
       isAuthorized: () => authorized,
       signal: owner.signal,
     }));
-  });
+  }
 
   afterEach(() => {
     service.closeAll();
@@ -89,11 +97,14 @@ describe("artifact transfer response settlement", () => {
     vi.useRealTimers();
   });
 
-  async function serve(writeError?: Error, artifactKey = artifact.tarballSha256) {
-    const { socket, req, res } = createResponse(writeError);
+  async function serve(options: ResponseOptions & { artifactKey?: string; range?: string } = {}) {
+    const { socket, req, res } = createResponse(options);
     req.method = "GET";
-    req.url = `/__openclaw__/worker-bootstrap/artifacts/${artifactKey}`;
+    req.url = `/__openclaw__/worker-bootstrap/artifacts/${options.artifactKey ?? artifact.tarballSha256}`;
     req.headers.authorization = `Bearer ${token}`;
+    if (options.range !== undefined) {
+      req.headers.range = options.range;
+    }
     try {
       await handleWorkerBootstrapArtifactTransferHttpRequest({
         req,
@@ -102,11 +113,59 @@ describe("artifact transfer response settlement", () => {
         callback: createArtifactTransferHttpCallback(service),
         rateLimiter,
       });
-      return { res, wire: Buffer.concat(socket.chunks).toString("utf8") };
+      const wire = Buffer.concat(socket.chunks).toString("utf8");
+      return { res, wire, body: wire.slice(wire.indexOf("\r\n\r\n") + 4) };
     } finally {
       socket.destroy();
     }
   }
+
+  it.each([0, 4, contents.length - 1])(
+    "serves exactly the bytes from offset %i",
+    async (offset) => {
+      const { res, body } = await serve({ range: `bytes=${offset}-` });
+      expect(res.statusCode).toBe(206);
+      expect(res.getHeader("content-range")).toBe(
+        `bytes ${offset}-${artifact.tarballBytes - 1}/${artifact.tarballBytes}`,
+      );
+      expect(res.getHeader("content-length")).toBe(String(artifact.tarballBytes - offset));
+      expect(res.getHeader("x-openclaw-content-sha256")).toBe(artifact.tarballSha256);
+      expect(res.getHeader("accept-ranges")).toBe("bytes");
+      expect(body).toBe(contents.slice(offset));
+    },
+  );
+
+  it.each([
+    "bytes=0-,4-",
+    "bytes=-4",
+    "bytes=0-4",
+    "bytes=-1-",
+    "bytes=1.5-",
+    "bytes=9007199254740992-",
+    `bytes=${contents.length}-`,
+    `bytes=${contents.length + 1}-`,
+    "items=0-",
+    "",
+  ])("rejects unsupported or unsatisfiable range %j", async (range) => {
+    const { res, body } = await serve({ range });
+    expect(res.statusCode).toBe(416);
+    expect(res.getHeader("content-range")).toBe(`bytes */${artifact.tarballBytes}`);
+    expect(JSON.parse(body)).toEqual({ error: "range_not_satisfiable" });
+  });
+
+  it("terminates a ranged response when its capability is revoked mid-stream", async () => {
+    await prepareArtifact(Buffer.alloc(256 * 1024, "x"));
+    const offset = 1024;
+    const { res, body } = await serve({
+      range: `bytes=${offset}-`,
+      afterWrite: () => service.revoke(token),
+    });
+    expect(res.statusCode).toBe(206);
+    expect(res.writableFinished).toBe(false);
+    expect(body.length).toBeGreaterThan(0);
+    expect(body.length).toBeLessThan(artifact.tarballBytes - offset);
+    expect((await serve({ range: `bytes=${offset + body.length}-` })).res.statusCode).toBe(404);
+  });
 
   it("counts interrupted serves and keeps retries exclusive through descriptor settlement", async () => {
     rateLimiter = createGatewayAuthRateLimiter(
@@ -129,22 +188,22 @@ describe("artifact transfer response settlement", () => {
       });
       return file;
     });
-    const interrupted = serve(new Error("synthetic connection reset"));
+    const interrupted = serve({ writeError: new Error("synthetic connection reset") });
     try {
       await closing.promise;
-      expect((await serve()).res.statusCode).toBe(503);
+      expect((await serve({ range: "bytes=4-" })).res.statusCode).toBe(503);
     } finally {
       release.resolve();
       await interrupted;
     }
     expect((await interrupted).res.writableFinished).toBe(false);
     for (let attempt = 2; attempt <= 3; attempt++) {
-      const completed = await serve();
-      expect(completed.res.statusCode).toBe(200);
+      const completed = await serve({ range: "bytes=4-" });
+      expect(completed.res.statusCode).toBe(206);
       expect(completed.res.writableFinished).toBe(true);
-      expect(completed.wire.endsWith(contents)).toBe(true);
+      expect(completed.body).toBe(contents.slice(4));
     }
-    expect((await serve()).res.statusCode).toBe(404);
+    expect((await serve({ range: "bytes=4-" })).res.statusCode).toBe(404);
   });
 
   it("allows three completed serves for buffering proxies, then rejects the token", async () => {
@@ -182,7 +241,7 @@ describe("artifact transfer response settlement", () => {
     "keeps busy artifact identity opaque and rejects %s closure",
     async (closure) => {
       service.authorize({ token, artifactKey: artifact.tarballSha256 });
-      expect((await serve(undefined, "0".repeat(64))).res.statusCode).toBe(404);
+      expect((await serve({ artifactKey: "0".repeat(64) })).res.statusCode).toBe(404);
       expect((await serve()).res.statusCode).toBe(503);
       if (closure === "owner") {
         authorized = false;
@@ -316,12 +375,15 @@ describe("artifact transfer interruption observations", () => {
       expire: () => {
         now = prepared.expiresAtMs;
       },
-      async run() {
+      async run(range?: string) {
         if (response.res.destroyed || response.res.writableFinished) {
           response = createResponse();
           sockets.push(response.socket);
         }
         const { req, res } = response;
+        if (range !== undefined) {
+          req.headers.range = range;
+        }
         const admission = await callback({ req, res, artifactKey, bearer: prepared.token });
         if (admission.kind !== "authorized") {
           throw new Error("fixture artifact was not authorized");
@@ -413,6 +475,15 @@ describe("artifact transfer interruption observations", () => {
     expect(h.res.writableFinished).toBe(true);
     expect(h.interrupted).not.toHaveBeenCalled();
     expect(h.socketErrors).not.toHaveBeenCalled();
+  });
+
+  it("reports a completed ranged serve by its delivered position", async () => {
+    const h = await prepare();
+    await h.run("bytes=2-");
+    expect(h.res.statusCode).toBe(206);
+    expect(h.res.writableFinished).toBe(true);
+    expect(h.progress.mock.calls.flat()).toEqual([4, 6]);
+    expect(h.interrupted).not.toHaveBeenCalled();
   });
 
   it("retains observers across interrupted and completed retries with per-serve byte counts", async () => {

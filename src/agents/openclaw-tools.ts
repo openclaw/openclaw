@@ -354,6 +354,7 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     ? createProgressCardTool({
         agentSessionKey: sessionKey,
         agentId: sessionAgentId,
+        onPlanSaved: options?.onProgressCardPlanSaved,
       })
     : null;
   const transcriptsTool = resolveTranscriptsTool(resolvedConfig, sessionAgentId, options);
