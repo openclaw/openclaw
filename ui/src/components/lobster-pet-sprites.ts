@@ -199,6 +199,23 @@ const TAYLOR_PINCH_SPARKLES = svg`
   </g>
 `;
 
+const CLAWTOO_DEETOO_PANELS = svg`
+  <g class="lob-clawtoodeetoo">
+    <path d="M27 26 C35 14 45 8 60 8 C75 8 85 14 93 26 Q60 19 27 26 Z" fill="#b8c3cf" />
+    <g fill="#2d5cbd">
+      <path d="M37 17 L46 12 L46 22 L34 24 Z M54 9 H66 L67 21 H53 Z M74 12 L84 17 L86 24 L74 22 Z" />
+      <path d="M20 46 Q60 42 100 46 L101 53 Q60 49 19 53 Z" />
+      <rect x="53" y="58" width="14" height="9" rx="1.5" />
+      <rect x="53" y="71" width="14" height="9" rx="1.5" />
+    </g>
+    <g fill="none" stroke="#9ba8b7" stroke-width="1.5">
+      <rect x="32" y="59" width="13" height="25" rx="2" /><rect x="75" y="59" width="13" height="25" rx="2" />
+      <path d="M54 86 H66 M54 90 H66" stroke-linecap="round" />
+    </g>
+    <circle cx="87" cy="49" r="2.5" fill="#ef5261" />
+  </g>
+`;
+
 const MECHA_PLATES = svg`
   <g class="lob-mecha">
     <g fill="none" stroke="#5f6a75" stroke-width="1.5">
@@ -282,6 +299,7 @@ export const PATTERNED_PALETTES: ReadonlySet<LobsterPetPaletteId> = new Set([
   "clawdia",
   "clawiestardust",
   "taylorpinch",
+  "clawtoodeetoo",
   "clawtron",
   "selene",
   "pixel",
@@ -400,6 +418,7 @@ export const PALETTE_OVERLAYS: Partial<Record<LobsterPetPaletteId, TemplateResul
   clawdia: CLAWDIA_SKY,
   clawiestardust: CLAWIE_STARDUST_BOLT,
   taylorpinch: TAYLOR_PINCH_SPARKLES,
+  clawtoodeetoo: CLAWTOO_DEETOO_PANELS,
   clawtron: MECHA_PLATES,
   banana: BANANA_MARKS,
   bee: BEE_PARTS,
