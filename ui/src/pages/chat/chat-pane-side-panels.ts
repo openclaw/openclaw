@@ -9,7 +9,6 @@ import { sendSessionObserverVisibility } from "./chat-observer.ts";
 import { ChatPaneBase } from "./chat-pane-base.ts";
 import {
   ChatSessionCompanionThreads,
-  companionSelectionContext,
   type ChatSessionCompanionTurn,
   requestSessionCompanionAnswer,
   requestSessionCompanionState,
@@ -17,6 +16,7 @@ import {
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
+import { formatChatSelectionAnnotation } from "./components/chat-selection-attachment.ts";
 import type { SidebarLayout } from "./sidebar-layout-types.ts";
 import {
   closeSlot,
@@ -209,16 +209,21 @@ export abstract class ChatPaneSidePanels extends ChatPaneBase {
     const agentId = resolveChatAgentId(state);
     const thread = this.sessionCompanionThreads.view(sourceSessionKey, agentId);
     const nextAttachments = [...(thread.attachments ?? []), attachment];
+    // Only an oversized passage gets the old quote-only path; comments stay correctable.
     if (
-      (companionSelectionContext(nextAttachments)?.length ?? 0) >
+      formatChatSelectionAnnotation({ ...attachment.selectionAnnotation, comment: "" }).length >
       SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS
     ) {
       showToast({
-        message: t("chat.attachments.tooLarge", { names: "selection-comment.txt", more: "" }),
+        message: t(
+          thread.draft.trim() ? "chat.rail.selectionTooLong" : "chat.rail.selectionQuoteOnly",
+        ),
       });
+    } else if (
+      !this.sessionCompanionThreads.setAttachments(sourceSessionKey, nextAttachments, agentId)
+    ) {
       return false;
     }
-    this.sessionCompanionThreads.setAttachments(sourceSessionKey, nextAttachments, agentId);
     if (!thread.draft.trim()) {
       this.sessionCompanionThreads.setDraft(
         sourceSessionKey,

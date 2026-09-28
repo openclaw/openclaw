@@ -3762,6 +3762,10 @@ export const en: TranslationMap & {
       askLabel: "Ask in side chat",
       askPlaceholder: "Ask a question",
       askImageQuestion: "What does this image show?",
+      selectionTooLong:
+        "These comments are too long for Side chat. Use a shorter selection or comment.",
+      selectionQuoteOnly:
+        "The selection is too long to attach. A short quote is ready in Side chat.",
       askSubmit: "Ask",
       askPending: "Answering from this session…",
       askBusy: "Side chat is already answering a question.",

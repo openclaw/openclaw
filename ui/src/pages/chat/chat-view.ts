@@ -202,7 +202,7 @@ export function renderChat(props: ChatProps) {
     anchorRect: DOMRect,
     stage: (attachment: ChatAttachment) => boolean,
     onCancel?: () => void,
-    requiresUploads = true,
+    selectionContextOnly = false,
   ) => {
     showChatAnnotationEditor({
       paneId: props.paneId,
@@ -217,13 +217,14 @@ export function renderChat(props: ChatProps) {
         if (props.readSignal?.aborted) {
           return true;
         }
-        if (requiresUploads && !uploadsEnabled(props.uploadConfig)) {
+        if (!selectionContextOnly && !uploadsEnabled(props.uploadConfig)) {
           showToast({ message: uploadsDisabledMessage() });
           return false;
         }
         const attachment = createChatSelectionAttachment(
           { ...selection, comment, sessionKey: props.sessionKey },
-          props.attachmentLimits,
+          { attachmentLimits: props.attachmentLimits, selectionContextOnly },
+          stagedAttachmentBytes(props),
         );
         if (!attachment) {
           return false;
@@ -316,7 +317,7 @@ export function renderChat(props: ChatProps) {
                   (attachment) =>
                     props.onCompanionStageAttachment?.(attachment, props.sessionKey) ?? false,
                   undefined,
-                  false,
+                  true,
                 )
             : undefined,
         commentAttachments: props.suggestionComposer ? undefined : props.attachments,

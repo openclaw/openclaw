@@ -30,6 +30,104 @@ async function selectText(text: Locator) {
 }
 
 suite.define(() => {
+  it.each(["oversized selection", "low media limit", "oversized edit", "empty question"])(
+    "keeps side-chat selection drafts usable with %s",
+    async (scenario) => {
+      await suite.withPage(
+        {
+          viewport: viewports[0],
+          locale: "en-US",
+          reducedMotion: "reduce",
+          recordVideo: { dir: suite.artifactDir, size: { width: 1440, height: 900 } },
+        },
+        async ({ page }) => {
+          const passage = scenario === "oversized selection" ? "x".repeat(16_001) : selectedText;
+          const gateway = await installMockGateway(page, {
+            historyMessages: [{ role: "assistant", content: passage }],
+            ...(scenario === "low media limit" ? { attachmentMaxBytes: 1 } : {}),
+            methodResponses: {
+              "sessions.companion.ask": { answer: "Review the rollback steps.", ts: 1 },
+              "sessions.companion.state": { exchanges: [] },
+            },
+          });
+          await page.goto(`${suite.server.baseUrl}chat`);
+          const composer = page.locator(".agent-chat__composer-shell textarea");
+          await composer.fill(draft);
+          await selectText(page.locator(".chat-bubble .chat-text p").filter({ hasText: passage }));
+          await page.getByRole("button", { name: "Ask in side chat", exact: true }).click();
+          const editor = page.getByRole("dialog", { name: "Comment", exact: true });
+          if (scenario === "oversized edit") {
+            await editor.getByRole("textbox").fill("x".repeat(16_001));
+            await editor.getByRole("button", { name: "Save comment", exact: true }).click();
+            expect(await editor.isVisible()).toBe(true);
+          }
+          await editor.getByRole("textbox").fill("Check the rollback steps.");
+          await editor.getByRole("button", { name: "Save comment", exact: true }).click();
+          const side = page.locator("openclaw-chat-session-rail");
+          const sideComposer = side.locator(".chat-session-rail__input");
+          await sideComposer.waitFor({ state: "visible" });
+          const quotedDraft = await sideComposer.inputValue();
+          expect(quotedDraft).toContain(passage.slice(0, 300));
+          expect(quotedDraft.length).toBeLessThan(400);
+          const chip = side.locator(".chat-selection-annotations__chip");
+          expect(await chip.count()).toBe(scenario === "oversized selection" ? 0 : 1);
+          if (scenario === "oversized edit" || scenario === "low media limit") {
+            await chip.click();
+            await side.getByRole("button", { name: "Edit comment 1", exact: true }).click();
+            if (scenario === "oversized edit") {
+              await editor.getByRole("textbox").fill("x".repeat(16_001));
+              await editor.getByRole("button", { name: "Save", exact: true }).click();
+              expect(await editor.isVisible()).toBe(true);
+              expect(await editor.getByRole("textbox").inputValue()).toHaveLength(16_001);
+              expect(await sideComposer.inputValue()).toBe(quotedDraft);
+              expect(await gateway.getRequests("sessions.companion.ask")).toHaveLength(0);
+              await page.screenshot({ path: `${suite.artifactDir}/side-comment-too-long.png` });
+            }
+            await editor.getByRole("textbox").fill("Corrected comment.");
+            await editor.getByRole("button", { name: "Save", exact: true }).click();
+            await editor.waitFor({ state: "detached" });
+          }
+          const send = side.locator(".chat-session-rail__composer button[type=submit]");
+          if (scenario === "empty question") {
+            await sideComposer.fill("");
+            expect(await send.isDisabled()).toBe(true);
+            await sideComposer.press("Enter");
+            expect(await gateway.getRequests("sessions.companion.ask")).toHaveLength(0);
+            expect(await chip.count()).toBe(1);
+            await page.screenshot({ path: `${suite.artifactDir}/side-comment-empty-question.png` });
+            await sideComposer.fill("Explain the selected text.");
+          }
+          await page.screenshot({
+            path: `${suite.artifactDir}/side-comment-${scenario.replaceAll(" ", "-")}-ready.png`,
+          });
+          await send.click();
+          const request = await gateway.waitForRequest("sessions.companion.ask");
+          const params = request.params as {
+            question: string;
+            selectionContext?: string;
+            attachments?: unknown[];
+          };
+          expect(params.question).toBe(
+            scenario === "empty question" ? "Explain the selected text." : quotedDraft.trim(),
+          );
+          expect(params.attachments).toBeUndefined();
+          if (scenario === "oversized selection") {
+            expect(params.selectionContext).toBeUndefined();
+          } else {
+            expect(params.selectionContext).toContain(`Selected text:\n${passage}`);
+            expect(params.selectionContext).toContain(
+              scenario === "oversized edit" || scenario === "low media limit"
+                ? "Corrected comment."
+                : "Check the rollback steps.",
+            );
+          }
+          expect(await composer.inputValue()).toBe(draft);
+          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        },
+      );
+    },
+  );
+
   it("reveals draft and sent comments by touch before and after reload", async () => {
     await suite.withPage(
       { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, locale: "en-US" },

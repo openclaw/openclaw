@@ -23,22 +23,25 @@ export function formatChatSelectionAnnotation(annotation: ChatSelectionAnnotatio
 
 export function createChatSelectionAttachment(
   annotation: ChatSelectionAnnotation,
-  limits: ChatAttachmentControlsProps["attachmentLimits"],
+  options: Pick<ChatAttachmentControlsProps, "attachmentLimits" | "selectionContextOnly"> = {},
   stagedBytes: number,
 ): ChatAttachment | null {
+  const attachment = {
+    id: generateAttachmentId(),
+    mimeType: "text/plain",
+    fileName: "selection-comment.txt",
+    selectionAnnotation: { ...annotation },
+  };
+  if (options.selectionContextOnly) {
+    return attachment;
+  }
   const text = formatChatSelectionAnnotation(annotation);
-  const file = new File([text], "selection-comment.txt", { type: "text/plain" });
-  if (admitAttachmentFiles([file], limits, stagedBytes).length === 0) {
+  const file = new File([text], attachment.fileName, { type: attachment.mimeType });
+  if (admitAttachmentFiles([file], options.attachmentLimits, stagedBytes).length === 0) {
     return null;
   }
   return registerChatAttachmentPayload({
-    attachment: {
-      id: generateAttachmentId(),
-      mimeType: file.type,
-      fileName: file.name,
-      sizeBytes: file.size,
-      selectionAnnotation: { ...annotation },
-    },
+    attachment: { ...attachment, sizeBytes: file.size },
     dataUrl: encodeTextAsDataUrl(text),
     file,
   });

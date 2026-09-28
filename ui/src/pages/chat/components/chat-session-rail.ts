@@ -14,7 +14,6 @@ import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-sk
 import "../../../components/tooltip.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
-import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { formatTimeAgo, formatTimeMs } from "../../../lib/format.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
@@ -33,6 +32,7 @@ import { createChatAttachmentDropHandlers } from "./chat-attachments.ts";
 import { renderMessageMarkdown } from "./chat-message-text.ts";
 import {
   createSessionRailComposer,
+  sessionRailQuestion,
   renderSessionRailComposer,
 } from "./chat-session-rail-composer.ts";
 
@@ -218,7 +218,8 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
   @property({ attribute: false }) onCommandConsumed?: (generation: number) => void;
   @property({ attribute: false }) onSubmit?: (question: string | ChatSessionCompanionTurn) => void;
   @property({ attribute: false }) onDraftChange?: (draft: string) => void;
-  @property({ attribute: false }) onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
+  @property({ attribute: false })
+  onAttachmentsChange?: ChatAttachmentControlsProps["onAttachmentsChange"];
   @property({ attribute: false })
   attachmentLimits?: ChatAttachmentControlsProps["attachmentLimits"];
   @property({ attribute: false })
@@ -362,9 +363,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
   }
 
   private submit() {
-    const question =
-      this.companion.draft.trim() ||
-      (this.companion.attachments?.length ? t("chat.rail.askImageQuestion") : "");
+    const question = sessionRailQuestion(this.companion);
     if (
       question &&
       this.connected &&
@@ -553,6 +552,7 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
       attachmentReads: reads,
       readSignal,
       attachmentLimits: this.attachmentLimits,
+      selectionContextOnly: true,
       imagesOnly: true,
       disabled: !this.connected,
       onAttachmentsChange: this.onAttachmentsChange,

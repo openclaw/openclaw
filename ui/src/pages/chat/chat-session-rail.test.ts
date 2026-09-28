@@ -482,6 +482,44 @@ describe("ChatSessionRailElement", () => {
     expect(element.querySelector(".chat-session-rail__timestamp")?.textContent).toContain("as of");
   });
 
+  it.each([false, true])(
+    "uses an empty-question fallback only for images (image: %s)",
+    async (image) => {
+      const onSubmit = vi.fn();
+      const element = await mount({
+        onSubmit,
+        companion: {
+          turns: [],
+          loading: false,
+          draft: "",
+          attachments: [
+            image
+              ? { id: "image", mimeType: "image/png" }
+              : {
+                  id: "comment",
+                  mimeType: "text/plain",
+                  selectionAnnotation: {
+                    text: "Selected text",
+                    comment: "Explain this",
+                    sessionKey: "agent:main:run",
+                    start: 0,
+                    end: 13,
+                  },
+                },
+          ],
+        },
+      });
+      expect(element.querySelector<HTMLButtonElement>(".chat-send-btn")?.disabled).toBe(!image);
+      element.querySelector("form")!.dispatchEvent(new SubmitEvent("submit", { bubbles: true }));
+      element
+        .querySelector("textarea")!
+        .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      expect(onSubmit.mock.calls).toEqual(
+        image ? [["What does this image show?"], ["What does this image show?"]] : [],
+      );
+    },
+  );
+
   it("explains unsupported image input and retries the retained image only on user action", async () => {
     const threads = new ChatSessionCompanionThreads(() => {
       element.companion = { ...threads.view("one") };

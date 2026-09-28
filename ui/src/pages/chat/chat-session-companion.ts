@@ -11,6 +11,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { showToast } from "../../lib/toast.ts";
 import { assertUploadsEnabled } from "../../lib/uploads.ts";
 import { buildChatApiAttachments } from "./attachment-api.ts";
 import {
@@ -156,10 +157,23 @@ export class ChatSessionCompanionThreads {
     this.notify();
   }
 
-  setAttachments(sessionKey: string, attachments: ChatAttachment[], agentId?: string | null): void {
+  setAttachments(
+    sessionKey: string,
+    attachments: ChatAttachment[],
+    agentId?: string | null,
+  ): boolean {
+    // Reject edits before replacing the correctable draft or releasing its payloads.
+    if (
+      (companionSelectionContext(attachments)?.length ?? 0) >
+      SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS
+    ) {
+      showToast({ message: t("chat.rail.selectionTooLong") });
+      return false;
+    }
     const thread = this.get(sessionKey, agentId);
     thread.attachments = attachments;
     this.notify();
+    return true;
   }
 
   async hydrate(
@@ -413,9 +427,7 @@ export class ChatSessionCompanionThreads {
   }
 }
 
-export function companionSelectionContext(
-  attachments: readonly ChatAttachment[],
-): string | undefined {
+function companionSelectionContext(attachments: readonly ChatAttachment[]): string | undefined {
   const selections = attachments.flatMap((attachment) =>
     attachment.selectionAnnotation
       ? [formatChatSelectionAnnotation(attachment.selectionAnnotation)]
@@ -433,9 +445,6 @@ export function requestSessionCompanionAnswer(
   uploadConfig?: ApplicationConfigCapability,
 ): Promise<SessionsCompanionAskResult> {
   const selectionContext = companionSelectionContext(attachments ?? []);
-  if (selectionContext && selectionContext.length > SESSION_COMPANION_SELECTION_CONTEXT_MAX_CHARS) {
-    throw new Error(t("chat.attachments.tooLarge", { names: "selection-comment.txt", more: "" }));
-  }
   const media = attachments?.filter((attachment) => !attachment.selectionAnnotation);
   if (media?.length) {
     assertUploadsEnabled(uploadConfig);

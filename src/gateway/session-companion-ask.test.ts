@@ -157,9 +157,15 @@ describe("session companion embedded invocation", () => {
           images: undefined,
         }),
       );
+      expect(runEmbeddedAgent.mock.calls[0]?.[0].prompt).toContain("User comment:\nCheck this.");
       expect(
         companion.state({ sessionKey: question.sessionKey, agentId: "main" }).exchanges,
-      ).toEqual([expect.objectContaining({ question: "What changed?" })]);
+      ).toEqual([
+        { question: "What changed?", answer: expect.any(String), ts: expect.any(Number) },
+      ]);
+      await companion.ask({ ...question, question: "What next?" });
+      expect(runEmbeddedAgent.mock.calls[1]?.[0].prompt).toBe("What next?");
+      expect(JSON.stringify(appendMessage.mock.calls)).not.toContain("Check this.");
     } finally {
       companion.dispose();
     }
