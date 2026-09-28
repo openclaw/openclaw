@@ -379,6 +379,56 @@ describe("OpenAI Codex OAuth flow", () => {
     }
   });
 
+  it("restarts browser login while a cancelled token exchange still releases its transport", async () => {
+    const releasing = createDeferred<void>();
+    const released = createDeferred<void>();
+    const firstController = new AbortController();
+    const nextController = new AbortController();
+    const agent = new Agent();
+    const token = (accountId: string) => ({
+      access_token: fakeJwt({ "https://api.openai.com/auth": { chatgpt_account_id: accountId } }),
+      refresh_token: "test-refresh-token",
+      expires_in: 3600,
+    });
+    ssrfMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: new Response(JSON.stringify(token("old-account"))),
+      release: async () => {
+        releasing.resolve();
+        await released.promise;
+      },
+    });
+    mockTokenResponse(token("new-account"));
+    const onAuth = async ({ url }: { url: string }) => {
+      const authorization = new URL(url);
+      const callback = new URL(authorization.searchParams.get("redirect_uri")!);
+      callback.searchParams.set("state", authorization.searchParams.get("state")!);
+      callback.searchParams.set("code", "callback-code");
+      const response = await requestCallback(callback.toString(), agent);
+      expect(response.body).toContain("OpenAI authentication completed");
+    };
+    const onPrompt = vi.fn(async () => {
+      throw new Error("Browser login must not fall back to manual input");
+    });
+    const first = loginOpenAICodex({ onAuth, onPrompt, signal: firstController.signal }).catch(
+      () => undefined,
+    );
+    try {
+      await releasing.promise;
+      firstController.abort();
+      await expect(
+        loginOpenAICodex({ onAuth, onPrompt, signal: nextController.signal }),
+      ).resolves.toMatchObject({ accountId: "new-account" });
+      expect(onPrompt).not.toHaveBeenCalled();
+      expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
+    } finally {
+      firstController.abort();
+      nextController.abort();
+      released.resolve();
+      await first;
+      agent.destroy();
+    }
+  });
+
   it("waits for Node OAuth runtime before creating an authorization flow", async () => {
     const callbackHost = resolveOpenAICallbackHost();
     const flow = await createOpenAIAuthorizationFlow(

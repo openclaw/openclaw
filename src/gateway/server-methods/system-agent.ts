@@ -205,6 +205,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     const { sessionId, ...activation } = params;
     await startSetupActivationWizard({
       sessionId,
+      ownerKey: resolveSystemAgentSessionOwnerKey({ client }),
       activation: { ...activation, kind: "provider-auth" },
       timeoutMs: PROVIDER_AUTH_SESSION_TIMEOUT_MS,
       context,

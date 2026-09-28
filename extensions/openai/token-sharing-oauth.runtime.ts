@@ -370,7 +370,15 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
       rejectCode(error instanceof Error ? error : new Error("ChatGPT authorization failed."));
     }
   });
+  const closeCancelledListener = () => {
+    server.close();
+    server.closeAllConnections();
+  };
+  // Setup can retire before an aborted token request finishes HTTP cleanup.
+  // Release the callback port on abort so the next sign-in can bind immediately.
+  owner.signal.addEventListener("abort", closeCancelledListener, { once: true });
   try {
+    owner.signal.throwIfAborted();
     await withOAuthLoginAbort(
       new Promise<void>((resolve, reject) => {
         server.once("error", reject);
@@ -484,6 +492,7 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
       .end(oauthErrorHtml("Sign-in did not complete. Return to OpenClaw for details and retry."));
     throw error;
   } finally {
+    owner.signal.removeEventListener("abort", closeCancelledListener);
     server.close();
     if (browserResponse && !browserResponse.writableFinished) {
       browserResponse.once("finish", () => server.closeAllConnections());

@@ -218,6 +218,9 @@ export async function loginOpenAICodex(options: {
   );
   const server = await startLocalOAuthServer(state, options.assertCurrent);
 
+  // Token transport cleanup can outlive cancellation; release the callback port
+  // immediately so a replacement browser login does not fall back to manual input.
+  options.signal?.addEventListener("abort", server.close, { once: true });
   let code: string | undefined;
   try {
     options.assertCurrent?.();
@@ -308,6 +311,7 @@ export async function loginOpenAICodex(options: {
       }),
     );
   } finally {
+    options.signal?.removeEventListener("abort", server.close);
     server.close();
   }
 }
