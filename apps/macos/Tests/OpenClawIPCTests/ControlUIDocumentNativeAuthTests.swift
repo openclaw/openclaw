@@ -89,11 +89,17 @@ struct ControlUIDocumentNativeAuthTests {
                     profileEndpointProvider: { _ in endpoint })
                 defer { manager.close() }
                 let ready = ConversationAuthDocumentReady()
-                let document = try await manager.conversationDocument(for: .profile("conversation-fixture")) {
-                    controller, _ in controller.add(ready, name: "fixtureReady")
+                let handler = NativeConversationMessageHandler()
+                let document = try await manager.conversationDocument(
+                    for: .profile("conversation-fixture"))
+                { controller, _ in
+                    controller.add(ready, name: "fixtureReady")
+                    controller.addScriptMessageHandler(
+                        handler, contentWorld: .page, name: NativeConversationContract.handlerName)
                 }
                 try Self.scopeNativeIdentity(document, stateDirectory: stateDir)
                 let bridge = NativeConversationBridge(document: document)
+                handler.owner = bridge
                 hostedBridge = bridge
                 bridge.load(server.url("/control/chat/main"))
                 try await AsyncTimeout.withTimeout(
