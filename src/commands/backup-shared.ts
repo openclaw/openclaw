@@ -41,7 +41,7 @@ import {
   type BackupResourcePlan,
 } from "./backup-resource-inventory.js";
 import { buildCleanupPlan } from "./cleanup-utils.js";
-import { resolveStartupConfigSnapshot } from "./doctor/shared/automatic-startup-config-repair.js";
+import { resolveLegacyConfigSnapshotForBackup } from "./doctor/shared/automatic-config-repair.js";
 
 // DEFLATE can legitimately encode zero-filled sparse ranges just over 1000:1.
 // Keep bounded headroom without disabling node-tar's decompression bomb guard.
@@ -110,23 +110,14 @@ type BackupAssetCandidate = {
   exists: boolean;
 };
 
-function backupAssetPriority(kind: BackupAssetKind): number {
-  switch (kind) {
-    case "state":
-      return 0;
-    case "config":
-      return 1;
-    case "credentials":
-      return 2;
-    case "workspace":
-      return 3;
-    case "agent":
-      return 4;
-    case "managed skill":
-      return 5;
-  }
-  throw new Error("Unsupported backup asset kind");
-}
+const BACKUP_ASSET_PRIORITY = {
+  state: 0,
+  config: 1,
+  credentials: 2,
+  workspace: 3,
+  agent: 4,
+  "managed skill": 5,
+} satisfies Record<BackupAssetKind, number>;
 
 /** Format a filesystem-safe local timestamp with explicit UTC offset for backup names. */
 function formatBackupArchiveTimestamp(
@@ -462,7 +453,7 @@ function compareCandidates(left: BackupAssetCandidate, right: BackupAssetCandida
   if (depthDelta !== 0) {
     return depthDelta;
   }
-  const priorityDelta = backupAssetPriority(left.kind) - backupAssetPriority(right.kind);
+  const priorityDelta = BACKUP_ASSET_PRIORITY[left.kind] - BACKUP_ASSET_PRIORITY[right.kind];
   if (priorityDelta !== 0) {
     return priorityDelta;
   }
@@ -626,7 +617,7 @@ async function resolveBackupPlanFromState(params: {
   // Backup discovery must not initialize or migrate the state DB before snapshot validation.
   const configRead = await createConfigIO({ observe: false }).readConfigFileSnapshotForWrite();
   const configSnapshot = configRead.snapshot;
-  const discoverySnapshot = resolveStartupConfigSnapshot(configSnapshot) ?? configSnapshot;
+  const discoverySnapshot = resolveLegacyConfigSnapshotForBackup(configSnapshot) ?? configSnapshot;
   const configCapture = await resolveBackupConfigCapture(configRead);
   if (discoverySnapshot.exists && !discoverySnapshot.valid) {
     throw new Error(

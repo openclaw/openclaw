@@ -31,6 +31,7 @@ import {
   resolveDefaultPluginExtensionsDir,
   resolveDefaultPluginNpmDir,
   resolvePluginInstallDir,
+  resolvePluginNpmPackageDir,
 } from "../../../plugins/install-paths.js";
 import {
   copyPluginInstallTransactionRequest,
@@ -43,25 +44,14 @@ import {
   resolveNpmInstallRecordSpec,
 } from "../../../plugins/installs.js";
 import { ManagedPluginLifecycleError } from "../../../plugins/management-lifecycle-error.js";
-import { isClawHubTrustSkippedOutcome } from "../../../plugins/update.js";
 import { resolveUserPath } from "../../../utils.js";
 import { resolveCompatibilityHostVersion } from "../../../version.js";
 import type { DownloadableInstallCandidate } from "./missing-configured-plugin-install.candidates.js";
-import {
-  resolveLegacyNpmPackageInstallPath,
-  resolveNpmPackageInstallPath,
-} from "./missing-configured-plugin-install.records.js";
+import { resolveLegacyNpmPackageInstallPath } from "./missing-configured-plugin-install.records.js";
 import {
   resolveRecordedInstallCandidate,
   type InstallCandidateRepairReason,
 } from "./missing-configured-plugin-install.targets.js";
-
-export function isActionableClawHubSkippedOutcome(outcome: {
-  status: string;
-  code?: string;
-}): boolean {
-  return isClawHubTrustSkippedOutcome(outcome);
-}
 
 export function isClawHubReviewNotice(message: string): boolean {
   const audit = stripAnsi(message);
@@ -382,9 +372,9 @@ function resolveExistingCandidateNpmPackagePath(params: {
   if (!npmName) {
     return null;
   }
-  const packagePath = resolveNpmPackageInstallPath({
+  const packagePath = resolvePluginNpmPackageDir({
     packageName: npmName,
-    npmRoot: params.npmDir,
+    npmDir: params.npmDir,
   });
   if (existsSync(packagePath)) {
     return packagePath;

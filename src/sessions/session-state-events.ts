@@ -430,6 +430,7 @@ type AsyncSessionStateEventOptions = Pick<OpenClawStateDatabaseOptions, "path" |
   assertCurrent?: () => void;
   onlyIfWatched?: boolean;
   expectedUpstream?: SessionUpstreamLink;
+  acpControl?: import("../acp/runtime/session-meta-control.types.js").AcpSessionControlConstraint;
 };
 
 /** Async producers settle the existing worker's event, notices, and bounded maintenance together. */
@@ -447,12 +448,13 @@ export async function recordSessionStateEventAsync(
         captureSessionWatcherStorePaths(input.watcherSessionKeys, options.env),
     });
     const expectedUpstream = options.expectedUpstream && structuredClone(options.expectedUpstream);
+    const acpControl = options.acpControl && structuredClone(options.acpControl);
     return await runOpenClawStateWorkerOperation(
       context,
       async (scope) => {
         const recorded = await scope.execute({
           type: "sessionState.record",
-          input: { event, now, onlyIfWatched: options.onlyIfWatched, expectedUpstream },
+          input: { event, now, onlyIfWatched: options.onlyIfWatched, expectedUpstream, acpControl },
         });
         for (const notice of recorded.notices) {
           enqueueSessionStateNotice(notice);
@@ -725,38 +727,6 @@ export function recordSubagentSpawned(params: {
     runId: params.childRunId,
     dedupeKey: `child-spawned:${params.childRunId}`,
     summary: "child session spawned",
-    watcherSessionKeys: [params.requesterSessionKey],
-  });
-}
-
-type SubagentTerminalStatus = "ok" | "error" | "timeout" | "cancelled";
-
-const SUBAGENT_TERMINAL_SUMMARY: Record<SubagentTerminalStatus, string> = {
-  ok: "child run completed",
-  error: "child run failed",
-  timeout: "child run timed out",
-  cancelled: "child run cancelled",
-};
-
-/** Project an already-normalized subagent terminal outcome into the signal log. */
-export function recordSubagentTerminalState(params: {
-  childSessionKey: string;
-  runId: string;
-  requesterSessionKey: string;
-  outcomeStatus: SubagentTerminalStatus;
-}): void {
-  // Non-ok statuses share kind run_failed: the closed kind union mirrors the sibling
-  // SubagentRunOutcome status projection, which also folds cancel/timeout into error
-  // status. The precise outcome survives in payload for changesSince consumers.
-  recordSessionStateEvent({
-    sessionKey: params.childSessionKey,
-    agentId: resolveAgentIdFromSessionKey(params.childSessionKey),
-    kind: params.outcomeStatus === "ok" ? "run_completed" : "run_failed",
-    actorType: "system",
-    runId: params.runId,
-    dedupeKey: `run-terminal:${params.runId}`,
-    summary: SUBAGENT_TERMINAL_SUMMARY[params.outcomeStatus],
-    ...(params.outcomeStatus === "ok" ? {} : { payload: { outcome: params.outcomeStatus } }),
     watcherSessionKeys: [params.requesterSessionKey],
   });
 }

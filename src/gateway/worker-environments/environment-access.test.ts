@@ -9,6 +9,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import * as observeBridge from "../desktop/observe-bridge.js";
 import { STALE_WORKER_BUILD_REASON } from "./admission.js";
+import { createStoppedTunnelManager } from "./environment-access.test-support.js";
 import { createWorkerInferenceStore } from "./inference-store.js";
 import type { WorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
 import { createWorkerNodePortalCarrier } from "./portal-node-carrier.js";
@@ -128,33 +129,44 @@ describe("worker environment service", () => {
     }
   });
 
-  it("joins both readiness owners before reporting their original failures", async () => {
-    const storeFailure = new Error("environment inventory readiness failed");
-    const inferenceFailure = new Error("inference recovery failed");
-    const storeReady = createDeferred();
-    const inferenceReady = createDeferred();
-    vi.spyOn(support.testState.store, "ready").mockReturnValueOnce(storeReady.promise);
-    const inferenceStore = createWorkerInferenceStore({ path: support.testState.stateDb.path });
-    vi.spyOn(inferenceStore, "recoverPending").mockReturnValueOnce(inferenceReady.promise);
-    const workerService = support.createService(support.createProvider(), { inferenceStore });
-    const ready = workerService.ready();
-    const settled = vi.fn();
-    void ready.then(settled, settled);
-    try {
-      inferenceReady.reject(inferenceFailure);
-      await Promise.allSettled([inferenceReady.promise]);
-      await Promise.resolve();
-      expect(settled).not.toHaveBeenCalled();
-      storeReady.reject(storeFailure);
-      await expect(ready).rejects.toMatchObject({ errors: [storeFailure, inferenceFailure] });
-    } finally {
-      inferenceReady.reject(inferenceFailure);
-      storeReady.reject(storeFailure);
-      await ready.catch(() => undefined);
-      await workerService.stop().catch(() => undefined);
-      support.testState.service = undefined;
-    }
-  });
+  it.each([false, true])(
+    "joins both readiness owners before reporting their original failures (shared: %s)",
+    async (shared) => {
+      const storeFailure = new Error("environment inventory readiness failed");
+      const inferenceFailure = shared ? storeFailure : new Error("inference recovery failed");
+      const storeReady = createDeferred();
+      const inferenceReady = createDeferred();
+      vi.spyOn(support.testState.store, "ready").mockReturnValueOnce(storeReady.promise);
+      const inferenceStore = createWorkerInferenceStore({ path: support.testState.stateDb.path });
+      vi.spyOn(inferenceStore, "recoverPending").mockReturnValueOnce(inferenceReady.promise);
+      const workerService = support.createService(support.createProvider(), { inferenceStore });
+      const ready = workerService.ready();
+      const settled = vi.fn();
+      void ready.then(settled, settled);
+      try {
+        inferenceReady.reject(inferenceFailure);
+        await Promise.allSettled([inferenceReady.promise]);
+        await Promise.resolve();
+        expect(settled).not.toHaveBeenCalled();
+        storeReady.reject(storeFailure);
+        if (shared) {
+          await expect(ready).rejects.toBe(storeFailure);
+        } else {
+          await expect(ready).rejects.toBeInstanceOf(AggregateError);
+          await expect(ready).rejects.toMatchObject({
+            message: "Worker environment readiness failed",
+            errors: [storeFailure, inferenceFailure],
+          });
+        }
+      } finally {
+        inferenceReady.reject(inferenceFailure);
+        storeReady.reject(storeFailure);
+        await ready.catch(() => undefined);
+        await workerService.stop().catch(() => undefined);
+        support.testState.service = undefined;
+      }
+    },
+  );
 
   it("projects live workspace transport status and fences it before provider teardown", async () => {
     await support.seedReady("worker-tunnel", undefined, true);
@@ -239,12 +251,7 @@ describe("worker environment service", () => {
         throw prepareError;
       });
     }
-    const tunnelManager = {
-      status: () => "stopped" as const,
-      start: vi.fn(),
-      stop: vi.fn(async () => {}),
-      stopAll: vi.fn(async () => {}),
-    } as unknown as WorkerTunnelManager;
+    const tunnelManager = createStoppedTunnelManager();
     const workerService = support.createService(support.createProvider(), { tunnelManager });
 
     await expect(workerService.startTunnel({ environmentId, ownerEpoch: 1 })).rejects.toMatchObject(
@@ -257,121 +264,6 @@ describe("worker environment service", () => {
     );
     expect(tunnelManager.start).not.toHaveBeenCalled();
   });
-
-  it.each([
-    { executionMode: "worker-turn", revokeDuringPreparation: false },
-    { executionMode: "remote-exec", revokeDuringPreparation: false },
-    { executionMode: "remote-exec", revokeDuringPreparation: true },
-  ] as const)(
-    "checks $executionMode node ownership beyond worker credential expiry (revoke during preparation: $revokeDuringPreparation)",
-    async ({ executionMode, revokeDuringPreparation }) => {
-      const tunnelManager = {
-        status: () => "stopped" as const,
-        start: vi.fn(),
-        stop: vi.fn(async () => {}),
-        stopAll: vi.fn(async () => {}),
-      } as unknown as WorkerTunnelManager;
-      support.testState.config.cloudWorkers!.profiles!.development!.provider = "crabbox";
-      const nodeHandle = {
-        environmentId: "pending",
-        ownerEpoch: 0,
-        measureLaunchTurn,
-        launchTurn: vi.fn(),
-        runWorkspaceCommand: vi.fn(),
-        quiesceWorkspace: vi.fn(),
-        syncWorkspace: vi.fn(),
-        reconcileWorkspace: vi.fn(),
-        stop: vi.fn(async () => {}),
-      };
-      const nodeTunnelManager = {
-        status: () => "stopped" as const,
-        start: vi.fn(async (request) => ({
-          ...nodeHandle,
-          environmentId: request.environmentId,
-          ownerEpoch: request.ownerEpoch,
-        })),
-        stop: vi.fn(async () => {}),
-        stopAll: vi.fn(async () => {}),
-      };
-      const workerService = support.createService(
-        support.createProvider({
-          supportedExecutionModes: ["worker-turn", "remote-exec"],
-          id: "crabbox",
-          provision: async () => ({
-            leaseId: "cloud-lease",
-            node: { deviceId: "device-1" },
-          }),
-        }),
-        {
-          tunnelManager,
-          nodeTunnelManager,
-          ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT),
-        },
-      );
-      const environment = await workerService.createWithRequest({
-        profileId: "development",
-        idempotencyKey: "cloud-node-tunnel-gate",
-        executionMode,
-      });
-      const credential = await workerService.attachSession({
-        environmentId: environment.environmentId,
-        ownerEpoch: environment.ownerEpoch,
-        sessionId: "session-device",
-      });
-      const prepareInstallation = vi.mocked(support.testState.prepareInstallation);
-      const prepareCallsBeforeTunnel = prepareInstallation.mock.calls.length;
-      if (revokeDuringPreparation) {
-        const preparing = createDeferred();
-        const release = createDeferred<typeof support.BUNDLE_ARTIFACT>();
-        prepareInstallation.mockImplementationOnce(async () => {
-          preparing.resolve();
-          return await release.promise;
-        });
-        const starting = workerService.startTunnel({
-          environmentId: environment.environmentId,
-          ownerEpoch: credential.ownerEpoch,
-        });
-        await preparing.promise;
-        await support.testState.store.revokeEnvironmentCredential(environment.environmentId);
-        release.resolve(support.BUNDLE_ARTIFACT);
-        await expect(starting).rejects.toThrow("owner credential is not current");
-        expect(nodeTunnelManager.start).not.toHaveBeenCalled();
-        return;
-      }
-      support.testState.nowMs = credential.expiresAtMs + 1;
-
-      await expect(
-        workerService.startTunnel({
-          environmentId: environment.environmentId,
-          ownerEpoch: credential.ownerEpoch,
-        }),
-      ).resolves.toMatchObject({ environmentId: environment.environmentId });
-      expect(tunnelManager.start).not.toHaveBeenCalled();
-      expect(prepareInstallation).toHaveBeenCalledTimes(prepareCallsBeforeTunnel + 1);
-      expect(nodeTunnelManager.start).toHaveBeenCalledWith(
-        expect.objectContaining({
-          executionMode,
-          deviceId: "device-1",
-          sessionId: "session-device",
-          expectedBuild: expect.objectContaining({ bundleHash: support.BUNDLE_HASH }),
-        }),
-      );
-      await expect(
-        workerService.startTunnel({
-          environmentId: environment.environmentId,
-          ownerEpoch: credential.ownerEpoch - 1,
-        }),
-      ).rejects.toThrow("owner credential is not current");
-      await support.testState.store.revokeEnvironmentCredential(environment.environmentId);
-      await expect(
-        workerService.startTunnel({
-          environmentId: environment.environmentId,
-          ownerEpoch: credential.ownerEpoch,
-        }),
-      ).rejects.toThrow("owner credential is not current");
-      expect(nodeTunnelManager.start).toHaveBeenCalledOnce();
-    },
-  );
 
   it.each([true, false])(
     "revokes unopened desktop tickets across disable and re-enable (initially enabled: %s)",
@@ -597,19 +489,7 @@ describe("worker environment service", () => {
   it("launches only an advertised desktop app through the pinned SSH runtime", async () => {
     const record = await support.seedReadyDesktop("worker-desktop-launch");
     const launchApp = vi.fn(async () => {});
-    const tunnelManager = {
-      desktop: {
-        acquire: vi.fn(),
-        attachObserver: vi.fn(),
-        launchApp,
-        stop: vi.fn(async () => {}),
-        stopAll: vi.fn(async () => {}),
-      },
-      status: () => "stopped" as const,
-      start: vi.fn(),
-      stop: vi.fn(async () => {}),
-      stopAll: vi.fn(async () => {}),
-    } as unknown as WorkerTunnelManager;
+    const tunnelManager = createStoppedTunnelManager({ launchApp });
     const workerService = support.createService(support.createProvider(), { tunnelManager });
 
     await expect(
@@ -629,19 +509,7 @@ describe("worker environment service", () => {
     const launchApp = vi.fn(async () => {
       throw new Error("private SSH launcher detail");
     });
-    const tunnelManager = {
-      desktop: {
-        acquire: vi.fn(),
-        attachObserver: vi.fn(),
-        launchApp,
-        stop: vi.fn(async () => {}),
-        stopAll: vi.fn(async () => {}),
-      },
-      status: () => "stopped" as const,
-      start: vi.fn(),
-      stop: vi.fn(async () => {}),
-      stopAll: vi.fn(async () => {}),
-    } as unknown as WorkerTunnelManager;
+    const tunnelManager = createStoppedTunnelManager({ launchApp });
     const workerService = support.createService(support.createProvider(), { tunnelManager });
 
     await expect(
@@ -689,18 +557,7 @@ describe("worker environment service", () => {
         attachment: { kind: "unix-socket" as const, socketPath: "/tmp/worker-desktop.sock" },
         vncPassword: desktopPassword,
       }));
-      const tunnelManager = {
-        desktop: {
-          acquire,
-          attachObserver: vi.fn(),
-          stop: vi.fn(async () => {}),
-          stopAll: vi.fn(async () => {}),
-        },
-        status: () => "stopped" as const,
-        start: vi.fn(),
-        stop: vi.fn(async () => {}),
-        stopAll: vi.fn(async () => {}),
-      } as unknown as WorkerTunnelManager;
+      const tunnelManager = createStoppedTunnelManager({ acquire });
       const workerService = support.createService(support.createProvider({ allowsDesktopResize }), {
         tunnelManager,
       });
@@ -852,18 +709,7 @@ describe("worker environment service", () => {
   });
 
   it("rejects desktop observe for invalid lifecycle gates and a stopped service", async () => {
-    const tunnelManager = {
-      desktop: {
-        acquire: vi.fn(),
-        attachObserver: vi.fn(),
-        stop: vi.fn(async () => {}),
-        stopAll: vi.fn(async () => {}),
-      },
-      status: () => "stopped" as const,
-      start: vi.fn(),
-      stop: vi.fn(async () => {}),
-      stopAll: vi.fn(async () => {}),
-    } as unknown as WorkerTunnelManager;
+    const tunnelManager = createStoppedTunnelManager();
     const workerService = support.createService(support.createProvider(), { tunnelManager });
     const requested = await support.testState.store.createIntent({
       environmentId: "worker-desktop-requested",

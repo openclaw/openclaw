@@ -1,4 +1,3 @@
-// Openrouter plugin module implements video model catalog behavior.
 import type {
   UnifiedModelCatalogEntry,
   UnifiedModelCatalogProviderContext,

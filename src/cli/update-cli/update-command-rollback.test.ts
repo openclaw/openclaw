@@ -24,7 +24,6 @@ import * as processRunner from "../../process/exec.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import type { UpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import { inspectManagedGatewayServiceBeforeUpdate } from "./update-command-service-plan.js";
-import type { PreManagedServiceStop } from "./update-command-service.js";
 import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
 
 const mocks = vi.hoisted(() => ({
@@ -47,11 +46,6 @@ vi.mock("./update-command-service-maintenance.js", async (importOriginal) => ({
 vi.mock("./update-command-service.js", () => ({
   maybeStopManagedServiceBeforeMutableUpdate: mocks.stop,
   maybeRestartService: mocks.restart,
-  maybeResumeWindowsTaskAutoStartAfterPackageUpdate: async (
-    stopped: PreManagedServiceStop | undefined,
-    safe: boolean,
-    guard?: () => Promise<void>,
-  ) => stopped?.windowsTaskAutoStartRecovery?.restore(safe, guard),
   resolveUpdatedGatewayRestartPort: async () => 19101,
 }));
 import * as updateShared from "./shared.js";
@@ -918,6 +912,7 @@ describe("verified package rollback", () => {
         suspended: Promise.resolve(true),
         handoff: () => {},
         beginMutation: () => {},
+        assertRecoveryCurrent: () => {},
         restore: vi.fn(async () => {}),
         complete,
         interrupted: () => false,

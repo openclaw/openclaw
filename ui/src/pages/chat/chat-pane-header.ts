@@ -13,7 +13,6 @@ import { personActivityRouting } from "../../components/person-activity-link.ts"
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
-import { registerBackgroundTasksEnglish } from "../../i18n/locales/en-background-tasks.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   projectPresenceViewers,
@@ -37,8 +36,6 @@ import { ChatPaneDiscussion } from "./chat-pane-discussion.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { resolveChatPaneDesktopTarget, resolveChatPanePlacement } from "./chat-pane-placement.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
-import { renderBackgroundTasksToggle } from "./components/chat-background-tasks-render.ts";
-import type { BackgroundTasksProps } from "./components/chat-background-tasks.types.ts";
 import { isChatRunWorking } from "./components/chat-composer.ts";
 import "./components/chat-header-session-menu.ts";
 import type {
@@ -71,8 +68,6 @@ import {
   sidebarMainPanel,
   type SidebarLayout,
 } from "./sidebar-layout.ts";
-
-registerBackgroundTasksEnglish();
 
 export abstract class ChatPaneHeader extends ChatPaneDiscussion {
   private resolveWorkspaceIcon(sessionKey: string | undefined) {
@@ -197,7 +192,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
 
   protected renderPaneHeader(
     sessionWorkspace: SessionWorkspaceProps,
-    backgroundTasks: BackgroundTasksProps,
     row: GatewaySessionRow | undefined,
     catalog: boolean,
     agentWorkspace: string | undefined,
@@ -363,7 +357,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
           </button>
         </openclaw-tooltip>`
       : nothing;
-    const backgroundTasksAction = catalog ? nothing : renderBackgroundTasksToggle(backgroundTasks);
     const sessionRailMode = this.selectedSessionRailMode(this.state?.sessionKey ?? "");
     const toggleSessionRail = () => this.requestSessionRail("toggle");
     const panelMenuActions: HeaderMenuQuickAction[] = [];
@@ -406,18 +399,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         label: t("chat.sessionDiff.show"),
         icon: icons.diff,
         onActivate: sessionWorkspace.onOpenDiff,
-      });
-    }
-    if (backgroundTasks) {
-      panelMenuActions.push({
-        id: "background-tasks",
-        label: t(
-          backgroundTasks.collapsed ? "chat.backgroundTasks.show" : "chat.backgroundTasks.collapse",
-        ),
-        icon: icons.listChecks,
-        active: !backgroundTasks.collapsed,
-        badge: backgroundTasks.activeCount,
-        onActivate: backgroundTasks.onToggleCollapsed,
       });
     }
     panelMenuActions.push({
@@ -536,6 +517,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               void this.setSessionMember(row, identityId, member),
           }
         : null;
+    const parentSession = this.observedParentSessionRow();
     const header = renderChatPaneHeader({
       paneId: this.paneId,
       narrow: this.narrow,
@@ -555,7 +537,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       workspaceRoot: workspace.root,
       workspaceLabel: workspace.label,
       workspaceIcon: this.resolveWorkspaceIcon(workspace.root ? row?.key : undefined),
-      parentSession: resolveChatPaneParentSession(row, this.state?.sessionsResult?.sessions ?? []),
+      parentSession: resolveChatPaneParentSession(row, parentSession ? [parentSession] : []),
       branch,
       branches: this.state ? displayedChatSessionBranches(this.state) : [],
       branchSwitchDisabledReason,
@@ -564,14 +546,13 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       copiedAction: this.headerCopiedAction,
       renameDisabledReason,
       actionsDisabled: this.state?.connected !== true,
-      panelActions: html`${browserPanelAction}${backgroundTasksAction}`,
+      panelActions: browserPanelAction,
       panelLayoutActions: html`${this.renderPanelLayoutActions(
         currentLayout,
         panelDefinitions,
       )}${sidePanelAction}`,
       discussionAction: nothing,
       diffAction: nothing,
-      backgroundTasksAction: nothing,
       sessionRailAction: nothing,
       workspaceAction: nothing,
       presence: viewers?.length

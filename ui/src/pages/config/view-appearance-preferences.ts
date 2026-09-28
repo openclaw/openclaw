@@ -302,6 +302,17 @@ export function renderChatPreferencesSection(
           ],
           onChange: (value) => props.setCatalogOpenTarget(normalizeCatalogOpenTarget(value)),
         })}
+        ${
+          props.setOpenLinksExternally
+            ? renderSettingsToggleRow({
+                title: t("configView.chatPrefs.openLinksExternally"),
+                description: html`${t("configView.chatPrefs.openLinksExternallyHint")}<br />
+                  ${t("configView.chatPrefs.openLinksExternallyStorage")}`,
+                checked: props.openLinksExternally === true,
+                onChange: props.setOpenLinksExternally,
+              })
+            : nothing
+        }
         ${renderSettingsMicrophoneField(props)} ${renderSettingsCameraField(props)}
         ${
           props.setComposerHoldToRecord

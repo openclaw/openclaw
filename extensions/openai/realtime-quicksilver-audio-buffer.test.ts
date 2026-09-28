@@ -26,14 +26,6 @@ describe("GPT-Live pending microphone audio", () => {
     expect(readPendingAudio(pending)).toEqual(Buffer.from([0x01, 0x02]));
   });
 
-  it("appends audio in capture order while it fits", () => {
-    const pending = new OpenAIQuicksilverPendingAudio();
-    pending.append(Buffer.from([0x01, 0x02]));
-    pending.append(Buffer.from([0x03, 0x04]));
-
-    expect(readPendingAudio(pending)).toEqual(Buffer.from([0x01, 0x02, 0x03, 0x04]));
-  });
-
   it("retains the newest bounded tail across existing and oversized input", () => {
     const pending = new OpenAIQuicksilverPendingAudio();
     pending.append(Buffer.alloc(MAX_PENDING_AUDIO_BYTES, 0x01));

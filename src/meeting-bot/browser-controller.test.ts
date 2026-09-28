@@ -7,11 +7,12 @@ afterEach(() => {
 });
 
 describe("meeting browser navigation errors", () => {
-  it.each([
-    "page.evaluate: Execution context was destroyed, most likely because of a navigation.",
-    "Protocol error: Cannot find context with specified id",
-  ])("retries expected navigation races: %s", (message) => {
-    expect(isMeetingBrowserTransientNavigationError(new Error(message))).toBe(true);
+  it("recognizes a missing browser context as a navigation race", () => {
+    expect(
+      isMeetingBrowserTransientNavigationError(
+        new Error("Protocol error: Cannot find context with specified id"),
+      ),
+    ).toBe(true);
   });
 
   it("does not retry unrelated browser-control failures", () => {

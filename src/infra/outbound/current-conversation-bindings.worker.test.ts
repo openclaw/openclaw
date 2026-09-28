@@ -265,13 +265,14 @@ it.each(["transaction", "commit"] as const)(
       const before = row.get(current.bindingId);
       let active = true;
       const createAdmission = admission.createSqliteWorkerOperationAdmission;
-      vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation((admit) =>
-        createAdmission((request, grant) => {
-          if (request.stage === stage) {
-            active = false;
-          }
-          admit(request, grant);
-        }),
+      vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
+        (admit, attachment) =>
+          createAdmission((request, grant) => {
+            if (request.stage === stage) {
+              active = false;
+            }
+            admit(request, grant);
+          }, attachment),
       );
       await expect(
         touchCurrentConversationBindingRecordAsync(
@@ -384,18 +385,19 @@ it.each(
           expect(before).toBeDefined();
           let retirements = 0;
           const createAdmission = admission.createSqliteWorkerOperationAdmission;
-          vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation((admit) =>
-            createAdmission((request, grant) => {
-              if (request.stage === stage) {
-                retirements += 1;
-                if (manager) {
-                  manager.stop();
-                } else {
-                  setActivePluginRegistry(createTestRegistry([]));
+          vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
+            (admit, attachment) =>
+              createAdmission((request, grant) => {
+                if (request.stage === stage) {
+                  retirements += 1;
+                  if (manager) {
+                    manager.stop();
+                  } else {
+                    setActivePluginRegistry(createTestRegistry([]));
+                  }
                 }
-              }
-              admit(request, grant);
-            }),
+                admit(request, grant);
+              }, attachment),
           );
           await expect(
             createBoundDeliveryRouter().resolveDestination({

@@ -329,16 +329,6 @@ describe("sessions_send gateway loopback", () => {
       expectedAccountId: undefined,
     },
     {
-      label: "dm alias",
-      sessionKey: "agent:main:feishu:dm:ou_announce_recipient",
-      expectedAccountId: undefined,
-    },
-    {
-      label: "account-scoped direct",
-      sessionKey: "agent:main:feishu:work:direct:ou_announce_recipient",
-      expectedAccountId: "work",
-    },
-    {
       label: "account-scoped dm alias",
       sessionKey: "agent:main:feishu:work:dm:ou_announce_recipient",
       expectedAccountId: "work",

@@ -5,10 +5,6 @@ const JSON_ARTIFACT_MAX_BYTES_ENV = "OPENCLAW_DOCKER_E2E_JSON_ARTIFACT_MAX_BYTES
 const DEFAULT_JSON_ARTIFACT_MAX_BYTES = 16 * 1024 * 1024;
 
 export function readDockerE2eJsonArtifact(file: string): unknown {
-  return JSON.parse(readDockerE2eJsonArtifactText(file));
-}
-
-function readDockerE2eJsonArtifactText(file: string): string {
   const maxBytes = parsePositiveInt(
     process.env[JSON_ARTIFACT_MAX_BYTES_ENV] || String(DEFAULT_JSON_ARTIFACT_MAX_BYTES),
     JSON_ARTIFACT_MAX_BYTES_ENV,
@@ -25,5 +21,5 @@ function readDockerE2eJsonArtifactText(file: string): string {
   if (bytes > maxBytes) {
     throw new Error(`JSON artifact exceeded ${maxBytes} bytes: ${file} (${bytes} bytes)`);
   }
-  return text;
+  return JSON.parse(text);
 }

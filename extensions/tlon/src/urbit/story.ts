@@ -6,7 +6,6 @@
 
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 
-// Inline content types
 type StoryInline =
   | string
   | { imageBlock: { src: string; alt: string } }
@@ -24,7 +23,6 @@ type StoryInline =
 
 type StoryListType = "ordered" | "unordered" | "tasklist";
 
-// Block content types
 type StoryBlock =
   | { header: { tag: "h1" | "h2" | "h3" | "h4" | "h5" | "h6"; content: StoryInline[] } }
   | { code: { code: string; lang: string } }
@@ -42,146 +40,94 @@ type StoryListing =
     }
   | { item: StoryInline[] };
 
-// A verse is either a block or inline content
 type StoryVerse = { block: StoryBlock } | { inline: StoryInline[] };
 
-// A story is a list of verses
 export type Story = StoryVerse[];
 
-/**
- * Parse inline markdown formatting (bold, italic, code, links, mentions)
- */
+const INLINE_MARKDOWN_RULES: ReadonlyArray<{
+  pattern: RegExp;
+  render: (match: RegExpMatchArray) => StoryInline;
+}> = [
+  {
+    pattern: /^(~[a-z][-a-z0-9]*)/,
+    render: (match) => ({ ship: expectDefined(match[1], "ship mention capture") }),
+  },
+  {
+    pattern: /^\*\*(.+?)\*\*|^__(.+?)__/,
+    render: (match) => ({
+      bold: parseInlineMarkdown(expectDefined(match[1] ?? match[2], "bold body capture")),
+    }),
+  },
+  {
+    pattern: /^\*([^*]+?)\*|^_([^_]+?)_(?![a-zA-Z0-9])/,
+    render: (match) => ({
+      italics: parseInlineMarkdown(expectDefined(match[1] ?? match[2], "italic body capture")),
+    }),
+  },
+  {
+    pattern: /^~~(.+?)~~/,
+    render: (match) => ({
+      strike: parseInlineMarkdown(expectDefined(match[1], "strikethrough body capture")),
+    }),
+  },
+  {
+    pattern: /^`([^`]+)`/,
+    render: (match) => ({ "inline-code": expectDefined(match[1], "inline code capture") }),
+  },
+  {
+    pattern: /^\[([^\]]+)\]\(([^)]+)\)/,
+    render: (match) => ({
+      link: {
+        href: expectDefined(match[2], "link URL capture"),
+        content: expectDefined(match[1], "link text capture"),
+      },
+    }),
+  },
+  {
+    pattern: /^!\[([^\]]*)\]\(([^)]+)\)/,
+    render: (match) => ({
+      imageBlock: {
+        src: expectDefined(match[2], "image URL capture"),
+        alt: expectDefined(match[1], "image alt capture"),
+      },
+    }),
+  },
+  {
+    pattern: /^(https?:\/\/[^\s<>"\]]+)/,
+    render: (match) => {
+      const url = expectDefined(match[1], "plain URL capture");
+      return { link: { href: url, content: url } };
+    },
+  },
+  {
+    // Stop before special characters and URL separators so earlier rules get priority.
+    pattern: /^[^*_`~[#\n:/]+/,
+    render: (match) => expectDefined(match[0], "plain text match"),
+  },
+];
+
 function parseInlineMarkdown(text: string): StoryInline[] {
   const result: StoryInline[] = [];
   let remaining = text;
-
   while (remaining.length > 0) {
-    // Ship mentions: ~sampel-palnet
-    const shipMatch = remaining.match(/^(~[a-z][-a-z0-9]*)/);
-    if (shipMatch) {
-      result.push({ ship: expectDefined(shipMatch[1], "ship mention capture") });
-      remaining = remaining.slice(shipMatch[0].length);
-      continue;
+    let consumed = 1;
+    let inline: StoryInline = remaining.charAt(0);
+    for (const rule of INLINE_MARKDOWN_RULES) {
+      const match = remaining.match(rule.pattern);
+      if (match) {
+        inline = rule.render(match);
+        consumed = match[0].length;
+        break;
+      }
     }
-
-    // Bold: **text** or __text__
-    const boldMatch = remaining.match(/^\*\*(.+?)\*\*|^__(.+?)__/);
-    if (boldMatch) {
-      const content = expectDefined(boldMatch[1] ?? boldMatch[2], "bold body capture");
-      result.push({ bold: parseInlineMarkdown(content) });
-      remaining = remaining.slice(boldMatch[0].length);
-      continue;
-    }
-
-    // Italics: *text* or _text_ (but not inside words for _)
-    const italicsMatch = remaining.match(/^\*([^*]+?)\*|^_([^_]+?)_(?![a-zA-Z0-9])/);
-    if (italicsMatch) {
-      const content = expectDefined(italicsMatch[1] ?? italicsMatch[2], "italic body capture");
-      result.push({ italics: parseInlineMarkdown(content) });
-      remaining = remaining.slice(italicsMatch[0].length);
-      continue;
-    }
-
-    // Strikethrough: ~~text~~
-    const strikeMatch = remaining.match(/^~~(.+?)~~/);
-    if (strikeMatch) {
-      result.push({
-        strike: parseInlineMarkdown(expectDefined(strikeMatch[1], "strikethrough body capture")),
-      });
-      remaining = remaining.slice(strikeMatch[0].length);
-      continue;
-    }
-
-    // Inline code: `code`
-    const codeMatch = remaining.match(/^`([^`]+)`/);
-    if (codeMatch) {
-      result.push({ "inline-code": expectDefined(codeMatch[1], "inline code capture") });
-      remaining = remaining.slice(codeMatch[0].length);
-      continue;
-    }
-
-    // Links: [text](url)
-    const linkMatch = remaining.match(/^\[([^\]]+)\]\(([^)]+)\)/);
-    if (linkMatch) {
-      result.push({
-        link: {
-          href: expectDefined(linkMatch[2], "link URL capture"),
-          content: expectDefined(linkMatch[1], "link text capture"),
-        },
-      });
-      remaining = remaining.slice(linkMatch[0].length);
-      continue;
-    }
-
-    // Markdown images: ![alt](url)
-    const imageMatch = remaining.match(/^!\[([^\]]*)\]\(([^)]+)\)/);
-    if (imageMatch) {
-      // Return a special marker that will be hoisted to a block
-      result.push({
-        imageBlock: {
-          src: expectDefined(imageMatch[2], "image URL capture"),
-          alt: expectDefined(imageMatch[1], "image alt capture"),
-        },
-      });
-      remaining = remaining.slice(imageMatch[0].length);
-      continue;
-    }
-
-    // Plain URL detection
-    const urlMatch = remaining.match(/^(https?:\/\/[^\s<>"\]]+)/);
-    if (urlMatch) {
-      const url = expectDefined(urlMatch[1], "plain URL capture");
-      result.push({ link: { href: url, content: url } });
-      remaining = remaining.slice(urlMatch[0].length);
-      continue;
-    }
-
-    // Hashtags: #tag - disabled, chat UI doesn't render them
-    // const tagMatch = remaining.match(/^#([a-zA-Z][a-zA-Z0-9_-]*)/);
-    // if (tagMatch) {
-    //   result.push({ tag: tagMatch[1] });
-    //   remaining = remaining.slice(tagMatch[0].length);
-    //   continue;
-    // }
-
-    // Plain text: consume until next special character or URL start
-    // Exclude : and / to allow URL detection to work (stops before https://)
-    const plainMatch = remaining.match(/^[^*_`~[#\n:/]+/);
-    if (plainMatch) {
-      result.push(expectDefined(plainMatch[0], "plain text match"));
-      remaining = remaining.slice(plainMatch[0].length);
-      continue;
-    }
-
-    // Single special char that didn't match a pattern
-    result.push(remaining.charAt(0));
-    remaining = remaining.slice(1);
+    result.push(inline);
+    remaining = remaining.slice(consumed);
   }
-
-  // Merge adjacent strings
   return mergeAdjacentStrings(result);
 }
 
-function headingTag(marker: string): "h1" | "h2" | "h3" | "h4" | "h5" | "h6" {
-  switch (marker.length) {
-    case 1:
-      return "h1";
-    case 2:
-      return "h2";
-    case 3:
-      return "h3";
-    case 4:
-      return "h4";
-    case 5:
-      return "h5";
-    default:
-      return "h6";
-  }
-}
+const HEADING_TAGS = ["h1", "h2", "h3", "h4", "h5", "h6"] as const;
 
-/**
- * Merge adjacent string elements in an inline array
- */
 function mergeAdjacentStrings(inlines: StoryInline[]): StoryInline[] {
   const result: StoryInline[] = [];
   for (const item of inlines) {
@@ -195,9 +141,6 @@ function mergeAdjacentStrings(inlines: StoryInline[]): StoryInline[] {
   return result;
 }
 
-/**
- * Create an image block
- */
 export function createImageBlock(src: string, alt = "", height = 0, width = 0): StoryVerse {
   return {
     block: {
@@ -206,9 +149,6 @@ export function createImageBlock(src: string, alt = "", height = 0, width = 0): 
   };
 }
 
-/**
- * Check if URL looks like an image
- */
 export function isImageUrl(url: string): boolean {
   const imageExtensions = /\.(jpg|jpeg|png|gif|webp|svg|bmp|ico)$/i;
   let path = url.split(/[?#]/, 1)[0] ?? url;
@@ -534,9 +474,6 @@ function parseListingBlock(
   };
 }
 
-/**
- * Convert markdown text to Tlon story format
- */
 export function markdownToStory(markdown: string): Story {
   const story: Story = [];
   const lines = markdown.split("\n");
@@ -584,7 +521,8 @@ export function markdownToStory(markdown: string): Story {
     // Headers: # H1, ## H2, etc.
     const headerMatch = line.match(/^(#{1,6})\s+(.+)$/);
     if (headerMatch) {
-      const tag = headingTag(expectDefined(headerMatch[1], "header marker capture"));
+      const tag =
+        HEADING_TAGS[expectDefined(headerMatch[1], "header marker capture").length - 1] ?? "h6";
       story.push({
         block: {
           header: {
@@ -622,7 +560,6 @@ export function markdownToStory(markdown: string): Story {
       continue;
     }
 
-    // Empty line - skip
     if (line.trim() === "") {
       i++;
       continue;

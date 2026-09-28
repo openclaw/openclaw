@@ -66,6 +66,79 @@ describe("committed browser origin policy", () => {
 });
 
 describe("committed authentication policy", () => {
+  it.each([
+    { change: "another identity added", revoked: false },
+    { change: "another identity removed", revoked: false },
+    { change: "unchanged snapshot", revoked: false },
+    { change: "same scopes reordered", revoked: false },
+    { change: "identity removed", revoked: true },
+    { change: "identity downgraded", revoked: true },
+    { change: "identity upgraded", revoked: true },
+    { change: "exact match shadows normalized grant", revoked: true },
+  ])("reconciles only the authenticated identity for $change", ({ change, revoked }) => {
+    const identity = "retained@example.test";
+    const initial: OpenClawConfig = {
+      gateway: {
+        auth: {
+          identityScopes: {
+            "Retained@example.test": ["operator.write", "operator.read"],
+            "other@example.test": ["operator.admin"],
+          },
+        },
+      },
+    };
+    const client = {
+      authenticatedUserId: identity,
+      authPolicyGeneration: resolveGatewayAuthPolicyGeneration(initial, identity),
+      socket: { close: vi.fn() },
+      invalidated: false,
+    };
+    const next = structuredClone(initial);
+    const scopes = next.gateway!.auth!.identityScopes!;
+    if (change === "another identity added") {
+      scopes["new@example.test"] = ["operator.admin"];
+    }
+    if (change === "another identity removed") {
+      delete scopes["other@example.test"];
+    }
+    if (change === "same scopes reordered") {
+      scopes["Retained@example.test"] = ["operator.read", "operator.write", "operator.read"];
+    }
+    if (change === "identity removed") {
+      delete scopes["Retained@example.test"];
+    }
+    if (change === "identity downgraded") {
+      scopes["Retained@example.test"] = ["operator.read"];
+    }
+    if (change === "identity upgraded") {
+      scopes["Retained@example.test"] = ["operator.admin"];
+    }
+    if (change === "exact match shadows normalized grant") {
+      scopes[identity] = [];
+    }
+    disconnectDisallowedGatewayPolicyClients([client], next);
+    expect(client.invalidated).toBe(revoked);
+    expect(client.socket.close).toHaveBeenCalledTimes(revoked ? 1 : 0);
+  });
+
+  it.each(["retained@example.test", "other@example.test"])(
+    "latches an added then removed grant only for its source: %s",
+    (changedIdentity) => {
+      const identity = "retained@example.test";
+      const client = {
+        authenticatedUserId: identity,
+        authPolicyGeneration: resolveGatewayAuthPolicyGeneration({}, identity),
+        socket: { close: vi.fn() },
+        invalidated: false,
+      };
+      disconnectDisallowedGatewayPolicyClients([client], {
+        gateway: { auth: { identityScopes: { [changedIdentity]: ["operator.admin"] } } },
+      });
+      disconnectDisallowedGatewayPolicyClients([client], {});
+      expect(client.invalidated).toBe(changedIdentity === identity);
+    },
+  );
+
   it.each(["requiredHeaders", "allowUsers"] as const)(
     "keeps clients connected when trusted-proxy %s are reordered",
     (field) => {

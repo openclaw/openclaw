@@ -18,10 +18,7 @@ type GatewayCronListPage = Partial<CronListPageResult> & {
   deliveryPreviews?: Record<string, CronDeliveryPreview>;
 };
 
-type GatewayCronJobInventory = GatewayCronListPage & {
-  jobs: CronJob[];
-  deliveryPreviews?: Record<string, CronDeliveryPreview>;
-};
+type GatewayCronJobInventory = GatewayCronListPage & { jobs: CronJob[] };
 
 /** Recognize the explicit protocol-v4 capability boundary, not transport failures. */
 export function isUnknownCronGetMethodError(error: unknown): error is Error {

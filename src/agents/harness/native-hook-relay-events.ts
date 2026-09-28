@@ -138,13 +138,9 @@ export async function processNativeHookRelayInvocation(params: {
   return runNativeHookRelayPermissionRequest(params);
 }
 
-async function runNativeHookRelayPreToolUse(params: {
-  registration: NativeHookRelayRegistration;
-  invocation: NativeHookRelayInvocation;
-  adapter: NativeHookRelayProviderAdapter;
-  executionAdmission?: NativeHookRelayExecutionAdmission;
-  assertExecutionAdmissionCurrent: () => void;
-}): Promise<NativeHookRelayProcessResponse> {
+async function runNativeHookRelayPreToolUse(
+  params: Parameters<typeof processNativeHookRelayInvocation>[0],
+): Promise<NativeHookRelayProcessResponse> {
   const toolName = normalizeNativeHookToolName(params.invocation.toolName);
   const toolInput = params.adapter.readToolInput(params.invocation.rawPayload);
   const originalToolInputFingerprint = stableStringify(toolInput);
@@ -243,16 +239,13 @@ async function runNativeHookRelayPreToolUse(params: {
         "Plugin approval required but Codex tool id unavailable.",
       );
     }
-    return params.adapter.renderNoopResponse(params.invocation.event);
   }
   return params.adapter.renderNoopResponse(params.invocation.event);
 }
 
-async function runNativeHookRelayPostToolUse(params: {
-  registration: NativeHookRelayRegistration;
-  invocation: NativeHookRelayInvocation;
-  adapter: NativeHookRelayProviderAdapter;
-}): Promise<NativeHookRelayProcessResponse> {
+async function runNativeHookRelayPostToolUse(
+  params: Parameters<typeof processNativeHookRelayInvocation>[0],
+): Promise<NativeHookRelayProcessResponse> {
   const toolName = normalizeNativeHookToolName(params.invocation.toolName);
   const toolCallId =
     params.invocation.toolUseId ?? `${params.invocation.event}:${params.invocation.receivedAt}`;
@@ -292,11 +285,9 @@ async function runNativeHookRelayPostToolUse(params: {
   return params.adapter.renderNoopResponse(params.invocation.event);
 }
 
-async function runNativeHookRelayBeforeAgentFinalize(params: {
-  registration: NativeHookRelayRegistration;
-  invocation: NativeHookRelayInvocation;
-  adapter: NativeHookRelayProviderAdapter;
-}): Promise<NativeHookRelayProcessResponse> {
+async function runNativeHookRelayBeforeAgentFinalize(
+  params: Parameters<typeof processNativeHookRelayInvocation>[0],
+): Promise<NativeHookRelayProcessResponse> {
   const outcome = await runAgentHarnessBeforeAgentFinalizeHook({
     event: {
       runId: params.registration.runId,

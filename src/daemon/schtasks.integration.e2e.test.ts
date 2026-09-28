@@ -9,6 +9,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { findVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { nativeSchtasksIntegrationEnabled } from "../../scripts/lib/vitest-worker-declarations.mts";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { resolveDoctorUpdateAdmission } from "../commands/doctor-maintenance-admission.js";
+import { readGatewayOwnerLease } from "../infra/gateway-owner-lease.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -20,8 +22,10 @@ import { readWindowsProcessSnapshot } from "./schtasks-process.js";
 import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
 import {
   assertInteractiveLeastPrivilegeTask,
+  canBindLoopbackPort,
   DIAGNOSTIC_TEXT_LIMIT,
   readRelatedProcessDiagnostics,
+  readTaskDefinitionSnapshot,
   readTaskPrincipal,
   readTaskXml,
   resolveDiagnosticReplacements,
@@ -79,8 +83,6 @@ type FailureDiagnosticSnapshot = {
   };
 };
 
-type TaskDefinitionSnapshot = { exists: false; taskXml: null } | { exists: true; taskXml: string };
-
 async function sleep(delayMs = WAIT_INTERVAL_MS): Promise<void> {
   await new Promise((resolve) => {
     setTimeout(resolve, delayMs);
@@ -105,16 +107,6 @@ async function reserveLoopbackPort(): Promise<number> {
   return port;
 }
 
-async function canBindLoopbackPort(port: number): Promise<boolean> {
-  const server = createServer();
-  return new Promise<boolean>((resolve) => {
-    server.once("error", () => resolve(false));
-    server.listen(port, "127.0.0.1", () => {
-      server.close(() => resolve(true));
-    });
-  });
-}
-
 async function waitForLoopbackPortRelease(port: number): Promise<void> {
   const deadline = Date.now() + WAIT_TIMEOUT_MS;
   while (Date.now() < deadline) {
@@ -124,21 +116,6 @@ async function waitForLoopbackPortRelease(port: number): Promise<void> {
     await sleep();
   }
   throw new Error(`Timed out waiting for Scheduled Task loopback port ${port} to be reusable`);
-}
-
-async function readTaskDefinitionSnapshot(taskName: string): Promise<TaskDefinitionSnapshot> {
-  const exists = probeScheduledTaskExists(taskName);
-  if (exists === null) {
-    throw new Error(`Could not determine whether Scheduled Task ${taskName} exists`);
-  }
-  if (!exists) {
-    return { exists: false, taskXml: null };
-  }
-  const taskXml = await readTaskXml(taskName);
-  if (!taskXml) {
-    throw new Error(`Could not export Scheduled Task XML for ${taskName}`);
-  }
-  return { exists: true, taskXml };
 }
 
 async function clearActivePid(activePidPath: string, pid: number): Promise<void> {
@@ -382,10 +359,6 @@ async function cleanupNativeTask(params: {
   }
 }
 
-function expectProbeProcessAlive(pid: number): void {
-  expect(isProcessAlive(pid), `Scheduled Task probe ${pid} did not remain alive`).toBe(true);
-}
-
 function resolveTestId(): string {
   const configured = process.env.CI_WINDOWS_SCHTASKS_TEST_ID?.trim();
   if (!configured) {
@@ -488,6 +461,11 @@ describe("schtasks Windows integration principal assertion", () => {
 const nativeEntrypoints = nativeSchtasksIntegrationEnabled
   ? (await import("./schtasks-native-entrypoints.test-support.js")).schtasksNativeEntrypoints
   : undefined;
+const installedInput = process.env.CI_WINDOWS_SCHTASKS_INSTALLED_INPUT?.trim();
+const installedCell = process.env.CI_WINDOWS_SCHTASKS_INSTALLED_CELL;
+const installedFixture = installedInput
+  ? await import("./schtasks.installed-package.test-support.js")
+  : undefined;
 
 describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration", () => {
   let nativeLifetime: ReturnType<typeof createFixtureLifetime> | undefined;
@@ -578,6 +556,24 @@ describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration",
         const defaultTaskBefore = await readTaskDefinitionSnapshot("OpenClaw Gateway");
         const service = resolveGatewayService();
         const readRuntime = () => service.readRuntime(env);
+        const expectRunningProbe = (
+          run: { pid: number; ppid: number },
+          processes: { childPid: number; supervisorPid: number },
+        ) => {
+          for (const pid of [run.pid, processes.childPid]) {
+            expect(isProcessAlive(pid), `Scheduled Task probe ${pid} did not remain alive`).toBe(
+              true,
+            );
+          }
+          expectGatewayTaskSupervisorProcessAlive(processes.supervisorPid, probe.probePath);
+          expectScheduledTaskProbeOrigin({
+            eventsPath,
+            probePath: probe.probePath,
+            run,
+            scriptPath,
+            readRelatedProcessDiagnostics,
+          });
+        };
 
         expect((await execSchtasks(["/Query", "/TN", taskName])).code).not.toBe(0);
         expect(path.relative(stateDir, scriptPath)).not.toMatch(/^\.\.(?:[\\/]|$)/u);
@@ -648,16 +644,7 @@ describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration",
             externalProcesses = nextProcesses;
             lifecyclePids.push(nextRun.pid);
           }
-          expectProbeProcessAlive(externalRun.pid);
-          expectProbeProcessAlive(externalProcesses.childPid);
-          expectGatewayTaskSupervisorProcessAlive(externalProcesses.supervisorPid, probe.probePath);
-          expectScheduledTaskProbeOrigin({
-            eventsPath,
-            probePath: probe.probePath,
-            run: externalRun,
-            scriptPath,
-            readRelatedProcessDiagnostics,
-          });
+          expectRunningProbe(externalRun, externalProcesses);
           expect(await canBindLoopbackPort(gatewayPort)).toBe(false);
           await waitForRuntimeStatus(readRuntime, "running", externalRun.pid);
           expect(readTaskPrincipal(taskName).taskState).toBe(TASK_STATE_RUNNING);
@@ -707,26 +694,32 @@ describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration",
           });
         }
 
+        const ownerlessState = readGatewayOwnerLease({ env, current: true })?.state ?? "absent";
+        expect(["absent", "dead"]).toContain(ownerlessState);
+        const doctorAdmission = resolveDoctorUpdateAdmission(env);
+        const ownerlessStopMutations: string[] = [];
+        // Doctor's SQLite admission must remain usable while a Ready Task holds state exclusion.
+        await service.stop({
+          env,
+          stdout,
+          assertCurrent: doctorAdmission.assertCurrent,
+          onMutation: (mutation) => ownerlessStopMutations.push(mutation.mode),
+        });
+        expect(ownerlessStopMutations).toEqual([]);
+        doctorAdmission.assertCurrent();
+
         const startMutations: string[] = [];
         await service.start({
           env,
           stdout,
+          assertCurrent: doctorAdmission.assertCurrent,
           onMutation: (mutation) => startMutations.push(mutation.mode),
         });
         expect(startMutations).toEqual(["schtasks-start"]);
         const startedRun = await proof.waitForExactProbeRun(eventsPath, 3);
         const startedPid = startedRun.pid;
         const startedProcesses = await waitForGatewayTaskSupervisorProcesses({ probe });
-        expectProbeProcessAlive(startedPid);
-        expectProbeProcessAlive(startedProcesses.childPid);
-        expectGatewayTaskSupervisorProcessAlive(startedProcesses.supervisorPid, probe.probePath);
-        expectScheduledTaskProbeOrigin({
-          eventsPath,
-          probePath: probe.probePath,
-          run: startedRun,
-          scriptPath,
-          readRelatedProcessDiagnostics,
-        });
+        expectRunningProbe(startedRun, startedProcesses);
         expect(await canBindLoopbackPort(gatewayPort)).toBe(false);
         await waitForRuntimeStatus(readRuntime, "running", startedPid);
         expect(readTaskPrincipal(taskName).taskState).toBe(TASK_STATE_RUNNING);
@@ -739,22 +732,21 @@ describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration",
           stdout,
           onMutation: (mutation) => restartMutations.push(mutation.mode),
         });
-        expect(restartResult).toEqual({ outcome: "completed" });
+        expect(restartResult).toMatchObject({
+          outcome: "completed",
+          taskSettlement: {
+            status: "settled",
+            taskName,
+            lastRunResult: expect.stringMatching(/^-?\d+$/u),
+            ended: expect.any(Boolean),
+          },
+        });
         expect(restartMutations).toEqual(["schtasks-end", "schtasks-restart"]);
         const restartedRun = await proof.waitForExactProbeRun(eventsPath, 4);
         const restartedPid = restartedRun.pid;
         const restartedProcesses = await waitForGatewayTaskSupervisorProcesses({ probe });
         lifecyclePids.push(startedPid, restartedPid);
-        expectProbeProcessAlive(restartedPid);
-        expectProbeProcessAlive(restartedProcesses.childPid);
-        expectGatewayTaskSupervisorProcessAlive(restartedProcesses.supervisorPid, probe.probePath);
-        expectScheduledTaskProbeOrigin({
-          eventsPath,
-          probePath: probe.probePath,
-          run: restartedRun,
-          scriptPath,
-          readRelatedProcessDiagnostics,
-        });
+        expectRunningProbe(restartedRun, restartedProcesses);
         await waitForProcessExit(startedPid);
         await waitForGatewayTaskSupervisorExit(startedProcesses);
         await clearActivePid(activePidPath, startedPid);
@@ -926,6 +918,7 @@ describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration",
                   "schtasks-end",
                   "external-stop-recovery-start",
                   "powershell-stop-scheduled-task",
+                  "doctor-admission-ownerless-stop",
                   "start",
                   "restart",
                   "hosted-restart",
@@ -940,6 +933,12 @@ describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration",
                 },
                 pids: lifecyclePids,
                 externalStops,
+                doctorAdmissionSettlement: {
+                  ownerState: ownerlessState,
+                  taskState: TASK_STATE_READY,
+                  stopMutations: ownerlessStopMutations,
+                  gatewayPid: startedPid,
+                },
                 gatewayPort,
                 portReleaseRebind: true,
                 startupFallback: false,
@@ -1000,26 +999,49 @@ describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration",
     }
   }
 
-  it("isolates and completes the native Scheduled Task lifecycle", () => {
-    if (!nativeEntrypoints) {
-      throw new Error("Native Scheduled Task integration requires compiled subprocess entrypoints");
-    }
-    const moduleUrls = {
-      taskSupervisor: resolveRuntimeWorkerUrl(nativeEntrypoints.taskSupervisor),
-      hostedStop: resolveRuntimeWorkerUrl(nativeEntrypoints.hostedStop),
-      startupFallback: resolveRuntimeWorkerUrl(nativeEntrypoints.startupFallback),
-    };
-    if (Object.values(moduleUrls).some((url) => !url.pathname.endsWith(".js"))) {
-      throw new Error("Run native Scheduled Task integration through scripts/run-vitest.mjs");
-    }
-    const generationOwner = findVitestResourceOwner(
-      fileURLToPath(new URL(".", moduleUrls.taskSupervisor)),
-    );
-    if (!generationOwner) {
-      throw new Error("Native Scheduled Task compiled generation has no resource owner");
-    }
-    const lifetime = createFixtureLifetime(generationOwner.root);
-    nativeLifetime = lifetime;
-    return lifetime.run(() => runNativeLifecycle(moduleUrls, lifetime));
-  }, 240_000);
+  it(
+    "isolates and completes the native Scheduled Task lifecycle",
+    ({ signal }) => {
+      if (!nativeEntrypoints) {
+        throw new Error(
+          "Native Scheduled Task integration requires compiled subprocess entrypoints",
+        );
+      }
+      const moduleUrls = {
+        taskSupervisor: resolveRuntimeWorkerUrl(nativeEntrypoints.taskSupervisor),
+        hostedStop: resolveRuntimeWorkerUrl(nativeEntrypoints.hostedStop),
+        startupFallback: resolveRuntimeWorkerUrl(nativeEntrypoints.startupFallback),
+      };
+      if (Object.values(moduleUrls).some((url) => !url.pathname.endsWith(".js"))) {
+        throw new Error("Run native Scheduled Task integration through scripts/run-vitest.mjs");
+      }
+      const generationOwner = findVitestResourceOwner(
+        fileURLToPath(new URL(".", moduleUrls.taskSupervisor)),
+      );
+      if (!generationOwner) {
+        throw new Error("Native Scheduled Task compiled generation has no resource owner");
+      }
+      const lifetime = createFixtureLifetime(generationOwner.root);
+      nativeLifetime = lifetime;
+      return lifetime.run(async () =>
+        installedInput
+          ? (
+              await import("./schtasks.installed.integration.test-support.js")
+            ).runInstalledLifecycle(
+              installedInput,
+              lifetime,
+              {
+                cleanupNativeTask,
+                reserveLoopbackPort,
+                readTaskDefinitionSnapshot,
+                waitForLoopbackPortRelease,
+                canBindLoopbackPort,
+              },
+              signal,
+            )
+          : runNativeLifecycle(moduleUrls, lifetime),
+      );
+    },
+    installedFixture?.resolveInstalledCellBodyTimeoutMs(installedCell) ?? 240_000,
+  );
 });

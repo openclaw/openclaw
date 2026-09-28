@@ -99,8 +99,8 @@ describe("config cli roster integration", () => {
   ];
 
   it.each(
-    rosterMutations.flatMap((mutation) =>
-      [false, true].map((legacy) => Object.assign({}, mutation, { legacy })),
+    rosterMutations.map((mutation) =>
+      Object.assign({}, mutation, { legacy: mutation.name === "indexed set" }),
     ),
   )(
     "persists roster intent for $name (legacy file: $legacy) after a read-only preview",

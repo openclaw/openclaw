@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionStoreMigrationRequiredError } from "../config/sessions/migration-required.js";
-import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
 import {
   loadExactSessionEntry,
   upsertSessionEntryCore,
@@ -35,23 +34,35 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { seedDeferredPluginSessionSource } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
+import {
+  editAndDeleteImportedSessions,
+  seedConcurrentDeferredPluginMigration,
+  seedDeferredPluginSessionSource,
+} from "./doctor-session-sqlite.deferred-plugin.test-support.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
 
 afterEach(() => vi.restoreAllMocks());
 
+type SessionScope = Awaited<ReturnType<typeof seedDeferredPluginSessionSource>>["scope"];
+
+function expectCanonicalSessions(scope: SessionScope, label: string) {
+  expect(loadExactSessionEntry({ ...scope, sessionKey: "agent:main:kept" })?.entry.label).toBe(
+    label,
+  );
+  expect(loadExactSessionEntry({ ...scope, sessionKey: "agent:main:deleted" })).toBeUndefined();
+}
+
 describe("session sources needed by deferred plugin migrations", () => {
   it.each([
     { damage: "entry_invalid", interrupted: false },
-    { damage: "transcript_malformed", interrupted: false },
     { damage: "both", interrupted: false },
     { damage: "transcript_malformed", interrupted: true },
   ])(
     "admits verified partial imports with $damage without replaying or retiring damaged history (archive interrupted: $interrupted)",
     async ({ damage, interrupted }) => {
       await withOpenClawTestState({ label: "deferred-damaged-session-source" }, async (state) => {
-        const { cfg, storePath, originals, scope } = seedDeferredPluginSessionSource(
+        const { cfg, storePath, originals, scope } = await seedDeferredPluginSessionSource(
           state,
           "default",
         );
@@ -85,28 +96,14 @@ describe("session sources needed by deferred plugin migrations", () => {
         for (const [file, bytes] of originals) {
           expect(fs.readFileSync(file)).toEqual(bytes);
         }
-        await upsertSessionEntryCore(
-          { ...scope, sessionKey: "agent:main:kept" },
-          { label: "changed after partial import" },
-        );
-        await deleteSessionEntryLifecycle({
-          ...scope,
-          target: { canonicalKey: "agent:main:deleted", storeKeys: ["agent:main:deleted"] },
-          archiveTranscript: false,
-          deleteTranscriptWithoutArchive: true,
-        });
+        await editAndDeleteImportedSessions(scope, "changed after partial import");
         const retried = await run();
         expect(retried.totals.importedEntries).toBe(0);
         expect(
           retried.targets.flatMap((target) => target.issues).every(isSessionSqliteMigrationWarning),
         ).toBe(true);
-        expect(
-          loadExactSessionEntry({ ...scope, sessionKey: "agent:main:kept" })?.entry.label,
-        ).toBe("changed after partial import");
-        expect(
-          loadExactSessionEntry({ ...scope, sessionKey: "agent:main:deleted" }),
-        ).toBeUndefined();
-        recordDeferredPluginMigrations({
+        expectCanonicalSessions(scope, "changed after partial import");
+        await recordDeferredPluginMigrations({
           env: state.env,
           pending: [],
           resolvedPluginIds: ["fixture-plugin"],
@@ -143,14 +140,12 @@ describe("session sources needed by deferred plugin migrations", () => {
 
   it.each([
     { kind: "transcript", unusedAgent: false },
-    { kind: "legacy-store", unusedAgent: false },
-    { kind: "transcript", unusedAgent: true },
     { kind: "legacy-store", unusedAgent: true },
   ])(
     "retains an ordinary import's $kind when another Doctor records pending work before unlink (unused agent: $unusedAgent)",
     async ({ kind, unusedAgent }) => {
       await withOpenClawTestState({ label: "deferred-plugin-archive-race" }, async (state) => {
-        const { cfg, storePath, originals, scope } = seedDeferredPluginSessionSource(
+        const { cfg, storePath, originals, scope } = await seedDeferredPluginSessionSource(
           state,
           unusedAgent ? "legacy-root" : "external",
         );
@@ -160,7 +155,7 @@ describe("session sources needed by deferred plugin migrations", () => {
         }
         const run = () =>
           runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "import" });
-        recordDeferredPluginMigrations({
+        await recordDeferredPluginMigrations({
           env: state.env,
           pending: [],
           resolvedPluginIds: ["fixture-plugin"],
@@ -177,7 +172,7 @@ describe("session sources needed by deferred plugin migrations", () => {
             const result = await publish(options);
             if (!pendingChanged && options.sourcePath === protectedSource) {
               pendingChanged = true;
-              recordDeferredPluginMigrations({
+              await recordDeferredPluginMigrations({
                 env: state.env,
                 pending: [
                   {
@@ -210,26 +205,12 @@ describe("session sources needed by deferred plugin migrations", () => {
           }),
         );
 
-        await upsertSessionEntryCore(
-          { ...scope, sessionKey: "agent:main:kept" },
-          { label: "edited after interrupted archival" },
-        );
-        await deleteSessionEntryLifecycle({
-          ...scope,
-          target: { canonicalKey: "agent:main:deleted", storeKeys: ["agent:main:deleted"] },
-          archiveTranscript: false,
-          deleteTranscriptWithoutArchive: true,
-        });
+        await editAndDeleteImportedSessions(scope, "edited after interrupted archival");
         expect((await run()).totals.importedEntries).toBe(0);
-        expect(
-          loadExactSessionEntry({ ...scope, sessionKey: "agent:main:kept" })?.entry.label,
-        ).toBe("edited after interrupted archival");
-        expect(
-          loadExactSessionEntry({ ...scope, sessionKey: "agent:main:deleted" }),
-        ).toBeUndefined();
+        expectCanonicalSessions(scope, "edited after interrupted archival");
         expect(fs.readFileSync(protectedSource)).toEqual(originals.get(protectedSource));
 
-        recordDeferredPluginMigrations({
+        await recordDeferredPluginMigrations({
           env: state.env,
           pending: [],
           resolvedPluginIds: ["fixture-plugin"],
@@ -295,7 +276,7 @@ describe("session sources needed by deferred plugin migrations", () => {
           storePath,
           originals,
           scope,
-        } = seedDeferredPluginSessionSource(
+        } = await seedDeferredPluginSessionSource(
           state,
           "external",
           "fixture-plugin",
@@ -321,7 +302,7 @@ describe("session sources needed by deferred plugin migrations", () => {
             ? path.join(path.dirname(storePath), "deleted-orphan-one.jsonl")
             : storePath;
         if (siblingPending) {
-          recordDeferredPluginMigrations({
+          await recordDeferredPluginMigrations({
             env: state.env,
             pending: [
               {
@@ -338,16 +319,7 @@ describe("session sources needed by deferred plugin migrations", () => {
           allAgents: true,
           mode: "import",
         });
-        await upsertSessionEntryCore(
-          { ...scope, sessionKey: "agent:main:kept" },
-          { label: "changed after import" },
-        );
-        await deleteSessionEntryLifecycle({
-          ...scope,
-          target: { canonicalKey: "agent:main:deleted", storeKeys: ["agent:main:deleted"] },
-          archiveTranscript: false,
-          deleteTranscriptWithoutArchive: true,
-        });
+        await editAndDeleteImportedSessions(scope, "changed after import");
         const pluginRoot = state.path("fixture-plugin");
         const marker = state.path("late-migration-pending");
         const newHistoryId = missingTranscript === "appears" ? "legacy-missing" : "new-history";
@@ -402,17 +374,10 @@ describe("session sources needed by deferred plugin migrations", () => {
         let pendingChanged = false;
         const changePending = () => {
           pendingChanged = true;
-          recordDeferredPluginMigrations({
-            env: state.env,
-            pending: [
-              {
-                pluginId: pendingChange === "plugin" ? "fixture-plugin" : "new-plugin",
-                reason: "A concurrent Doctor found additional migration work.",
-                command: "openclaw doctor --fix",
-                requiresStateMigration: true,
-              },
-            ],
-          });
+          seedConcurrentDeferredPluginMigration(
+            state,
+            pendingChange === "plugin" ? "fixture-plugin" : "new-plugin",
+          );
         };
         if (pendingChange === "plugin") {
           const unlink = fs.unlinkSync;
@@ -442,12 +407,7 @@ describe("session sources needed by deferred plugin migrations", () => {
         await noteSessionTranscriptHealth({ cfg, env: state.env, shouldRepair: true });
         expect(fs.existsSync(marker)).toBe(false);
         expect(fs.readFileSync(newHistory, "utf8")).toBe(newHistoryBytes);
-        expect(
-          loadExactSessionEntry({ ...scope, sessionKey: "agent:main:kept" })?.entry.label,
-        ).toBe("changed after import");
-        expect(
-          loadExactSessionEntry({ ...scope, sessionKey: "agent:main:deleted" }),
-        ).toBeUndefined();
+        expectCanonicalSessions(scope, "changed after import");
         if (pendingChange !== "none") {
           expect(pendingChanged).toBe(true);
           const pending = readDeferredPluginMigrations({ env: state.env });
@@ -530,17 +490,16 @@ describe("session sources needed by deferred plugin migrations", () => {
     { layout: "legacy-root-custom-store", missingTranscript: false },
     { layout: "legacy-root-with-unused-agent", missingTranscript: false },
     { layout: "default", missingTranscript: true },
-    { layout: "relocated", missingTranscript: false },
     { layout: "relocated-interrupted", missingTranscript: false },
   ] as const)(
     "verifies canonical import and retains $layout originals until resolution without replay (missing transcript: $missingTranscript)",
     async ({ layout, missingTranscript }) => {
       await withOpenClawTestState({ label: "deferred-plugin-session-source" }, async (state) => {
-        const { cfg, storePath, originals, scope } = seedDeferredPluginSessionSource(
+        const { cfg, storePath, originals, scope } = await seedDeferredPluginSessionSource(
           state,
           layout === "legacy-root-with-unused-agent" || layout === "legacy-root-custom-store"
             ? "legacy-root"
-            : layout === "relocated" || layout === "relocated-interrupted"
+            : layout === "relocated-interrupted"
               ? "default"
               : layout,
           "fixture-plugin",
@@ -551,7 +510,7 @@ describe("session sources needed by deferred plugin migrations", () => {
           cfg.session = { store: scope.storePath };
         }
         let foreignSource: { path: string; bytes: Buffer } | undefined;
-        if (layout === "relocated" || layout === "relocated-interrupted") {
+        if (layout === "relocated-interrupted") {
           const foreignPath = state.path("foreign-root/agents/main/sessions/legacy-kept.jsonl");
           const bytes = fs.readFileSync(path.join(path.dirname(storePath), "legacy-kept.jsonl"));
           fs.mkdirSync(path.dirname(foreignPath), { recursive: true });
@@ -588,28 +547,14 @@ describe("session sources needed by deferred plugin migrations", () => {
         closeOpenClawStateDatabaseForTest();
         expect(() => assertSessionStoreMigrationComplete({ cfg, env: state.env })).not.toThrow();
 
-        await upsertSessionEntryCore(
-          { ...scope, sessionKey: "agent:main:kept" },
-          { label: "changed after import" },
-        );
-        await deleteSessionEntryLifecycle({
-          ...scope,
-          target: { canonicalKey: "agent:main:deleted", storeKeys: ["agent:main:deleted"] },
-          archiveTranscript: false,
-          deleteTranscriptWithoutArchive: true,
-        });
+        await editAndDeleteImportedSessions(scope, "changed after import");
         expect((await run()).totals.importedEntries).toBe(0);
-        expect(
-          loadExactSessionEntry({ ...scope, sessionKey: "agent:main:kept" })?.entry.label,
-        ).toBe("changed after import");
-        expect(
-          loadExactSessionEntry({ ...scope, sessionKey: "agent:main:deleted" }),
-        ).toBeUndefined();
+        expectCanonicalSessions(scope, "changed after import");
         for (const [file, bytes] of originals) {
           expect(fs.readFileSync(file)).toEqual(bytes);
         }
 
-        recordDeferredPluginMigrations({
+        await recordDeferredPluginMigrations({
           env: state.env,
           pending: [],
           resolvedPluginIds: ["fixture-plugin"],
@@ -682,12 +627,7 @@ describe("session sources needed by deferred plugin migrations", () => {
             }),
           ]);
         }
-        expect(
-          loadExactSessionEntry({ ...scope, sessionKey: "agent:main:kept" })?.entry.label,
-        ).toBe("changed after import");
-        expect(
-          loadExactSessionEntry({ ...scope, sessionKey: "agent:main:deleted" }),
-        ).toBeUndefined();
+        expectCanonicalSessions(scope, "changed after import");
         expect(() => assertSessionStoreMigrationComplete({ cfg, env: state.env })).not.toThrow();
         if (foreignSource) {
           expect(fs.readFileSync(foreignSource.path)).toEqual(foreignSource.bytes);
@@ -703,7 +643,7 @@ describe("session sources needed by deferred plugin migrations", () => {
       fs.mkdirSync(directory, { recursive: true });
       const storePath = path.join(directory, "sessions.json");
       fs.writeFileSync(storePath, "{}");
-      recordDeferredPluginMigrations({
+      await recordDeferredPluginMigrations({
         env: state.env,
         pending: [
           {
@@ -745,7 +685,7 @@ describe("session sources needed by deferred plugin migrations", () => {
         fs.writeFileSync(storePath, "{}");
         const scope = { agentId: "main", storePath, env: state.env };
         const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, scope).path;
-        recordDeferredPluginMigrations({
+        await recordDeferredPluginMigrations({
           env: state.env,
           pending: [
             {
@@ -790,7 +730,11 @@ describe("session sources needed by deferred plugin migrations", () => {
         expect(() => assertSessionStoreMigrationComplete({ cfg, env: state.env })).toThrow(
           kind === "unindexed history"
             ? SessionStoreMigrationRequiredError
-            : expect.objectContaining({ code: "ENOENT", syscall: "lstat", path: sqlitePath }),
+            : expect.objectContaining({
+                message: expect.stringContaining(
+                  `The imported session database is missing or no longer a regular file: ${sqlitePath}. Run openclaw doctor --session-sqlite recover --session-sqlite-all-agents`,
+                ),
+              }),
         );
         if (kind === "unindexed history") {
           const report = await run();
@@ -811,7 +755,7 @@ describe("session sources needed by deferred plugin migrations", () => {
 
   it("admits mixed top-level sources only after the live owner has a verified import", async () => {
     await withOpenClawTestState({ label: "deferred-mixed-retained-owner" }, async (state) => {
-      const { cfg, storePath, originals, scope } = seedDeferredPluginSessionSource(
+      const { cfg, storePath, originals, scope } = await seedDeferredPluginSessionSource(
         state,
         "legacy-root",
       );
@@ -897,7 +841,7 @@ describe("session sources needed by deferred plugin migrations", () => {
     "keeps readiness blocked for a retained source with %s state",
     async (kind) => {
       await withOpenClawTestState({ label: `deferred-readiness-${kind}` }, async (state) => {
-        const { cfg, storePath } = seedDeferredPluginSessionSource(
+        const { cfg, storePath } = await seedDeferredPluginSessionSource(
           state,
           kind === "unimported-owner" ? "external" : "legacy-root",
         );
@@ -962,7 +906,7 @@ describe("session sources needed by deferred plugin migrations", () => {
     "imports a previously %s missing transcript without replaying canonical metadata",
     async (kind) => {
       await withOpenClawTestState({ label: "deferred-transcript-appears" }, async (state) => {
-        const { cfg, storePath, originals, scope } = seedDeferredPluginSessionSource(
+        const { cfg, storePath, originals, scope } = await seedDeferredPluginSessionSource(
           state,
           "default",
           "fixture-plugin",

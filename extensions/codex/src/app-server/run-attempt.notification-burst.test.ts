@@ -1,12 +1,10 @@
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { itemNotification } from "./protocol.test-helpers.js";
 import {
-  createParams,
+  createTestParams,
   createStartedThreadHarness,
   runCodexAppServerAttempt,
   setupRunAttemptTestHooks,
-  tempDir,
 } from "./run-attempt-test-harness.js";
 
 setupRunAttemptTestHooks();
@@ -14,23 +12,26 @@ setupRunAttemptTestHooks();
 describe("Codex app-server notification bursts", () => {
   it("drains bound command output without one macrotask per notification", async () => {
     const harness = createStartedThreadHarness();
-    const params = createParams(
-      path.join(tempDir, "session-notification-burst.jsonl"),
-      path.join(tempDir, "workspace-notification-burst"),
-    );
+    const params = createTestParams();
+    const command = {
+      id: "cmd-burst",
+      type: "commandExecution",
+      command: "generate realistic output burst",
+      cwd: params.workspaceDir,
+      processId: null,
+      source: "agent",
+      status: "completed",
+      commandActions: [],
+      aggregatedOutput: null,
+      exitCode: 0,
+      durationMs: 20,
+    };
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
     await harness.notify(
       itemNotification("item/started", {
-        type: "commandExecution",
-        id: "cmd-burst",
-        command: "generate realistic output burst",
-        cwd: params.workspaceDir,
-        processId: null,
-        source: "agent",
+        ...command,
         status: "inProgress",
-        commandActions: [],
-        aggregatedOutput: null,
         exitCode: null,
         durationMs: null,
       }),
@@ -63,16 +64,8 @@ describe("Codex app-server notification bursts", () => {
 
     await harness.notify(
       itemNotification("item/completed", {
-        type: "commandExecution",
-        id: "cmd-burst",
-        command: "generate realistic output burst",
-        cwd: params.workspaceDir,
+        ...command,
         processId: 42,
-        source: "agent",
-        status: "completed",
-        commandActions: [],
-        aggregatedOutput: null,
-        exitCode: 0,
         durationMs: 20,
       }),
     );

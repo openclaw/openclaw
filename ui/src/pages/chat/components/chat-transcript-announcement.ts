@@ -67,6 +67,7 @@ export function latestTranscriptAnnouncement(
     if (!item) {
       continue;
     }
+    let messageText = assistantMessageAnnouncementText;
     if (item.kind === "agent-run-frame") {
       if (item.outcome.kind === "completed") {
         const owner = item.outcome.actionOwner;
@@ -74,60 +75,35 @@ export function latestTranscriptAnnouncement(
         if (owner && text) {
           return announcement(owner.key, text);
         }
-        for (const part of item.parts.toReversed()) {
-          if (part.kind === "stream-run") {
-            continue;
-          }
-          const groups = part.kind === "group" ? [part] : part.groups.toReversed();
-          for (const group of groups) {
-            const source = assistantGroupAnnouncementSource(
-              group,
-              assistantMessageAttachmentFailureText,
-            );
-            if (source) {
-              return announcement(source.key, source.text);
-            }
-          }
-        }
-        continue;
+        messageText = assistantMessageAttachmentFailureText;
       }
       if (item.outcome.kind === "failed") {
         continue;
       }
-      for (let partIndex = item.parts.length - 1; partIndex >= 0; partIndex -= 1) {
-        const part = item.parts[partIndex];
-        if (!part) {
-          continue;
-        }
-        if (part.kind === "stream-run") {
+    }
+    for (const part of item.kind === "agent-run-frame" ? item.parts.toReversed() : [item]) {
+      if (part.kind === "stream-run") {
+        if (item.kind === "agent-run-frame" && item.outcome.kind !== "completed") {
           const text = part.parts.findLast(
             (streamPart) => streamPart.kind === "stream" && streamPart.text.trim(),
           );
           if (text?.kind === "stream") {
             return announcement(text.key, text.text.trim());
           }
-          continue;
         }
-        const groups = part.kind === "group" ? [part] : part.groups.toReversed();
-        for (const group of groups) {
-          const source = assistantGroupAnnouncementSource(group);
-          if (source) {
-            return announcement(source.key, source.text);
-          }
-        }
+        continue;
       }
-      continue;
-    }
-    const groups =
-      item.kind === "group"
-        ? [item]
-        : item.kind === "work-group" || item.kind === "activity-run"
-          ? item.groups.toReversed()
-          : [];
-    for (const group of groups) {
-      const source = assistantGroupAnnouncementSource(group);
-      if (source) {
-        return announcement(source.key, source.text);
+      const groups =
+        part.kind === "group"
+          ? [part]
+          : part.kind === "work-group" || part.kind === "activity-run"
+            ? part.groups.toReversed()
+            : [];
+      for (const group of groups) {
+        const source = assistantGroupAnnouncementSource(group, messageText);
+        if (source) {
+          return announcement(source.key, source.text);
+        }
       }
     }
   }

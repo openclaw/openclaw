@@ -166,14 +166,13 @@ export function planManifestModelCatalogRows(params: {
     rows.push(row);
   }
 
+  rows.sort(
+    (left, right) => left.provider.localeCompare(right.provider) || left.id.localeCompare(right.id),
+  );
   return {
     entries,
     conflicts: [...conflicts.values()],
-    // oxlint-disable-next-line unicorn/no-array-sort -- Selection owns this array until publication.
-    rows: rows.sort(
-      (left, right) =>
-        left.provider.localeCompare(right.provider) || left.id.localeCompare(right.id),
-    ),
+    rows,
   };
 }
 
@@ -374,13 +373,11 @@ export function planManifestModelCatalogSuppressions(params: {
       });
     }
   }
-  return {
-    // oxlint-disable-next-line unicorn/no-array-sort -- This plan owns the newly collected array.
-    suppressions: suppressions.sort(
-      (left, right) =>
-        left.provider.localeCompare(right.provider) ||
-        left.model.localeCompare(right.model) ||
-        left.pluginId.localeCompare(right.pluginId),
-    ),
-  };
+  suppressions.sort(
+    (left, right) =>
+      left.provider.localeCompare(right.provider) ||
+      left.model.localeCompare(right.model) ||
+      left.pluginId.localeCompare(right.pluginId),
+  );
+  return { suppressions };
 }

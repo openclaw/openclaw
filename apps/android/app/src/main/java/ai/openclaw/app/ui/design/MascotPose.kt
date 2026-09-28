@@ -69,61 +69,57 @@ data class MascotPose(
     bodyStretch = bodyStretch.coerceIn(0.86, 1.05)
     return this
   }
-
-  companion object {
-    /** Motionless mood expression used when Android animations are disabled. */
-    fun staticPose(mood: MascotMood): MascotPose =
-      MascotPose().apply {
-        when (mood) {
-          MascotMood.Idle,
-          MascotMood.Curious,
-          MascotMood.Attentive,
-          -> {}
-
-          MascotMood.Thinking -> {
-            gaze = MascotGaze(x = 0.3, y = -0.5)
-          }
-
-          MascotMood.Working -> {
-            hardHat = 1.0
-            rightClawDegrees = -28.0
-            gaze = MascotGaze(x = 0.4, y = 0.35)
-            mouthCurve = 0.15
-            bodyTilt = 2.0
-          }
-
-          MascotMood.Happy -> {
-            mouthCurve = 0.6
-            happyEyes = 0.4
-          }
-
-          MascotMood.Celebrating -> {
-            mouthCurve = 0.9
-            mouthOpen = 0.4
-            happyEyes = 0.8
-            leftClawDegrees = 30.0
-            rightClawDegrees = -30.0
-          }
-
-          MascotMood.Sad -> {
-            antennaDroop = 0.75
-            mouthCurve = -0.55
-            eyeGlowAlpha = 0.6
-            gaze = MascotGaze(x = 0.0, y = 0.5)
-          }
-
-          MascotMood.Sleepy -> {
-            leftEyeOpenness = 0.25
-            rightEyeOpenness = 0.25
-            eyeGlowAlpha = 0.5
-            antennaDroop = 0.35
-          }
-        }
-      }
-  }
 }
 
-fun staticPose(mood: MascotMood): MascotPose = MascotPose.staticPose(mood)
+/** Motionless mood expression used when Android animations are disabled. */
+fun staticPose(mood: MascotMood): MascotPose =
+  MascotPose().apply {
+    when (mood) {
+      MascotMood.Idle,
+      MascotMood.Curious,
+      MascotMood.Attentive,
+      -> {}
+
+      MascotMood.Thinking -> {
+        gaze = MascotGaze(x = 0.3, y = -0.5)
+      }
+
+      MascotMood.Working -> {
+        hardHat = 1.0
+        rightClawDegrees = -28.0
+        gaze = MascotGaze(x = 0.4, y = 0.35)
+        mouthCurve = 0.15
+        bodyTilt = 2.0
+      }
+
+      MascotMood.Happy -> {
+        mouthCurve = 0.6
+        happyEyes = 0.4
+      }
+
+      MascotMood.Celebrating -> {
+        mouthCurve = 0.9
+        mouthOpen = 0.4
+        happyEyes = 0.8
+        leftClawDegrees = 30.0
+        rightClawDegrees = -30.0
+      }
+
+      MascotMood.Sad -> {
+        antennaDroop = 0.75
+        mouthCurve = -0.55
+        eyeGlowAlpha = 0.6
+        gaze = MascotGaze(x = 0.0, y = 0.5)
+      }
+
+      MascotMood.Sleepy -> {
+        leftEyeOpenness = 0.25
+        rightEyeOpenness = 0.25
+        eyeGlowAlpha = 0.5
+        antennaDroop = 0.35
+      }
+    }
+  }
 
 /**
  * Tinted silhouettes stay on the ambient idle loop: mood faces cannot read in

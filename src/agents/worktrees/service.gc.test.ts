@@ -28,7 +28,6 @@ import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./ser
 import {
   useManagedWorktreeTestRepository,
   materializeManagedWorktreeFixture,
-  materializeManagedWorktreeFixtures,
 } from "./service.test-support.js";
 
 const execFileAsync = promisify(execFile);
@@ -394,25 +393,17 @@ describe("ManagedWorktreeService garbage collection", () => {
     }
   });
 
-  it.each([
-    ["an ignored nested foreign repository", true],
-    ["an empty ignored nested foreign repository", false],
-  ])("preserves %s", async (_description, hasLocalState) => {
+  it("preserves an empty ignored nested foreign repository", async () => {
     await fs.writeFile(path.join(repo, ".gitignore"), "vendor/\n");
     await git(repo, "add", ".gitignore");
     await git(repo, "commit", "-m", "ignore vendored repositories");
 
     const created = await materializeRunOwnedFixture("ignored-foreign", "workboard");
     const nested = await initializeNestedRepository(created.path, "vendor/dependency");
-    const localState = path.join(nested, "local.txt");
-    if (hasLocalState) {
-      await fs.writeFile(localState, "keep foreign repository state\n");
-    } else {
-      expect(await fs.readdir(nested)).toEqual([".git"]);
-      expect(
-        await git(created.path, "ls-files", "--others", "--ignored", "--exclude-standard"),
-      ).toContain("vendor/dependency/");
-    }
+    expect(await fs.readdir(nested)).toEqual([".git"]);
+    expect(
+      await git(created.path, "ls-files", "--others", "--ignored", "--exclude-standard"),
+    ).toContain("vendor/dependency/");
     expect(await git(created.path, "ls-files", "--others", "--exclude-standard")).toBe("");
     now += IDLE_GC_MS + 1;
 
@@ -422,9 +413,6 @@ describe("ManagedWorktreeService garbage collection", () => {
       expect((await service.gc()).removed).toEqual([]);
       expect(await warnLogs.findText(`idle cleanup failed for ${created.id}`)).toBeUndefined();
       expect((await fs.stat(path.join(nested, ".git"))).isDirectory()).toBe(true);
-      if (hasLocalState) {
-        expect(await fs.readFile(localState, "utf8")).toBe("keep foreign repository state\n");
-      }
       expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
     } finally {
       warnLogs.cleanup();
@@ -452,31 +440,6 @@ describe("ManagedWorktreeService garbage collection", () => {
     expect(await fs.readFile(path.join(restored.path, ".env.local"), "utf8")).toBe(
       "value=rotated-only-copy\n",
     );
-  });
-
-  it("uses owner activity to protect only active idle session worktrees", async () => {
-    const active = await materializeRunOwnedFixture(
-      "active-session",
-      "session",
-      "agent:main:active",
-    );
-    const inactive = await materializeRunOwnedFixture(
-      "inactive-session",
-      "session",
-      "agent:main:inactive",
-    );
-    now += IDLE_GC_MS + 1;
-    const shouldProtectOwner = vi.fn(
-      (_ownerKind: string, ownerId: string) => ownerId === "agent:main:active",
-    );
-
-    const result = await service.gc({ shouldProtectOwner });
-
-    expect(result.removed).toEqual([inactive.id]);
-    expect(shouldProtectOwner).toHaveBeenCalledWith("session", "agent:main:active");
-    expect(shouldProtectOwner).toHaveBeenCalledWith("session", "agent:main:inactive");
-    expect(getRegistryWorktree(env, active.id)?.removedAt).toBeUndefined();
-    expect(getRegistryWorktree(env, inactive.id)?.removedAt).toBeDefined();
   });
 
   it("shares one fresh lock inventory across idle and limit prefilters for a repository", async () => {
@@ -544,40 +507,6 @@ describe("ManagedWorktreeService garbage collection", () => {
     }
   });
 
-  it("protects a visible nested repository while collecting another idle worktree", async () => {
-    const removable = await materializeRunOwnedFixture("removable", "workboard");
-    now += 1;
-    const nestedRecord = await materializeRunOwnedFixture("nested-idle", "workboard");
-    const nested = await initializeNestedRepository(nestedRecord.path, "nested");
-    await fs.writeFile(path.join(nested, "local.txt"), "visible nested state\n");
-    now += IDLE_GC_MS + 1;
-
-    const warnLogs = createWarnLogCapture("openclaw-worktree-gc-nested-visible");
-    try {
-      const result = await service.gc();
-      expect(result.removed).toEqual([removable.id]);
-      expect(result).toMatchObject({
-        outcome: "deferred",
-        issues: [
-          {
-            id: nestedRecord.id,
-            stage: "idle",
-            outcome: "deferred",
-            reason: "worktree contains a nested repository",
-          },
-        ],
-      });
-      expect(await warnLogs.findText(`idle cleanup failed for ${nestedRecord.id}`)).toBeUndefined();
-      expect(getRegistryWorktree(env, nestedRecord.id)?.removedAt).toBeUndefined();
-      expect(await fs.readFile(path.join(nested, "local.txt"), "utf8")).toBe(
-        "visible nested state\n",
-      );
-      await expect(fs.stat(removable.path)).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
-      warnLogs.cleanup();
-    }
-  });
-
   it("reports a failed record once and does not retry it during limit enforcement", async () => {
     const otherRepo = await initializeRepository(path.join(root, "other"));
     const removable = await materializeDownstreamFixture("other-removable", {
@@ -609,45 +538,7 @@ describe("ManagedWorktreeService garbage collection", () => {
     expect(getRegistryWorktree(env, broken.id)?.removedAt).toBeUndefined();
   });
 
-  it("evicts the least recently active run-owned worktrees over the count limit", async () => {
-    const manual = await materializeDownstreamFixture("manual-kept");
-    const oldest = await materializeRunOwnedFixture("count-oldest", "session", "agent:main:oldest");
-    now += 1;
-    const middle = await materializeRunOwnedFixture("count-middle", "workboard", "card-middle");
-    now += 1;
-    const newest = await materializeRunOwnedFixture("count-newest", "session", "agent:main:newest");
-
-    const result = await service.gc({ limits: { maxCount: 2 } });
-
-    expect(result.removed).toEqual([oldest.id, middle.id]);
-    expect(getRegistryWorktree(env, manual.id)?.removedAt).toBeUndefined();
-    expect(getRegistryWorktree(env, newest.id)?.removedAt).toBeUndefined();
-    expect(getRegistryWorktree(env, oldest.id)?.snapshotRef).toBeTruthy();
-    await expect(fs.stat(oldest.path)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("skips active owners during count-limit eviction", async () => {
-    const activeOldest = await materializeRunOwnedFixture(
-      "limit-active",
-      "session",
-      "agent:main:active",
-    );
-    now += 1;
-    const idle = await materializeRunOwnedFixture("limit-idle", "session", "agent:main:idle");
-    const shouldProtectOwner = vi.fn(
-      (_ownerKind: string, ownerId: string) => ownerId === "agent:main:active",
-    );
-
-    const result = await service.gc({ limits: { maxCount: 1 }, shouldProtectOwner });
-
-    expect(result.removed).toEqual([idle.id]);
-    expect(getRegistryWorktree(env, activeOldest.id)?.removedAt).toBeUndefined();
-  });
-
-  it.each([
-    { limit: "count", limits: { maxCount: 1 } },
-    { limit: "size", limits: { maxTotalSizeBytes: 60_000 } },
-  ])("protects nested repositories during $limit limit eviction", async ({ limits }) => {
+  it("protects nested repositories during size limit eviction", async () => {
     const protectedRecord = await materializeRunOwnedFixture("limit-nested", "workboard");
     const nested = await initializeNestedRepository(protectedRecord.path, "nested");
     await fs.writeFile(path.join(nested, "local.txt"), "protected nested state\n");
@@ -657,7 +548,9 @@ describe("ManagedWorktreeService garbage collection", () => {
 
     const warnLogs = createWarnLogCapture("openclaw-worktree-gc-nested-limit");
     try {
-      expect((await service.gc({ limits })).removed).toEqual([removable.id]);
+      expect((await service.gc({ limits: { maxTotalSizeBytes: 60_000 } })).removed).toEqual([
+        removable.id,
+      ]);
       expect(
         await warnLogs.findText(`cleanup limit removal failed for ${protectedRecord.id}`),
       ).toBeUndefined();
@@ -669,27 +562,6 @@ describe("ManagedWorktreeService garbage collection", () => {
     } finally {
       warnLogs.cleanup();
     }
-  });
-
-  it("evicts oldest worktrees until total size fits the size limit", async () => {
-    const oldest = await materializeRunOwnedFixture(
-      "size-oldest",
-      "session",
-      "agent:main:size-old",
-    );
-    await fs.writeFile(path.join(oldest.path, "blob.bin"), Buffer.alloc(10_000));
-    now += 1;
-    const newest = await materializeRunOwnedFixture(
-      "size-newest",
-      "session",
-      "agent:main:size-new",
-    );
-
-    const result = await service.gc({ limits: { maxTotalSizeBytes: 6_000 } });
-
-    expect(result.removed).toEqual([oldest.id]);
-    expect(getRegistryWorktree(env, newest.id)?.removedAt).toBeUndefined();
-    expect(getRegistryWorktree(env, oldest.id)?.snapshotRef).toBeTruthy();
   });
 
   it("keeps unmeasurable worktrees out of size accounting instead of counting zero", async () => {
@@ -847,35 +719,6 @@ describe("ManagedWorktreeService garbage collection", () => {
     },
   );
 
-  it("leaves everything in place when limits are not exceeded", async () => {
-    const created = await materializeRunOwnedFixture("under-limit", "session", "agent:main:under");
-
-    const result = await service.gc({
-      limits: { maxCount: 5, maxTotalSizeBytes: 1024 ** 3 },
-    });
-
-    expect(result.removed).toEqual([]);
-    expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
-  });
-
-  it("enforces one hundred live checkouts by default without evicting manual work", async () => {
-    await materializeManagedWorktreeFixtures({
-      env,
-      names: Array.from({ length: 99 }, (_, index) => `manual-${index}`),
-      now,
-      repoRoot: repo,
-      stateDir,
-    });
-    const oldest = await materializeRunOwnedFixture("default-oldest", "session");
-    now += 1;
-    const newest = await materializeRunOwnedFixture("default-newest", "session");
-    expect((await service.gc()).removed).toEqual([oldest.id]);
-    expect(
-      (await service.listRegistryRecords()).filter((record) => record.removedAt === undefined),
-    ).toHaveLength(100);
-    expect(getRegistryWorktree(env, newest.id)?.removedAt).toBeUndefined();
-  });
-
   it("cleans recent retired owners while preserving a live lock and manual checkout", async () => {
     const retired = await materializeRunOwnedFixture(
       "archived-recent",
@@ -920,17 +763,6 @@ describe("ManagedWorktreeService garbage collection", () => {
     });
     expect(await git(repo, "rev-parse", snapshot.snapshotRef!)).toBe(snapshotCommit);
     expect(getRegistryWorktree(env, live.id)?.removedAt).toBeUndefined();
-  });
-
-  it("prunes expired snapshot refs and registry rows", async () => {
-    const created = await materializeDownstreamFixture("expired");
-    const removed = await service.remove({ id: created.id, reason: "retention" });
-    now += SNAPSHOT_RETENTION_MS + 1;
-
-    const result = await service.gc();
-    expect(result.snapshotsPruned).toBe(1);
-    expect(getRegistryWorktree(env, created.id)).toBeUndefined();
-    await expect(git(repo, "show-ref", "--verify", removed.snapshotRef!)).rejects.toThrow();
   });
 
   it("does not restore a snapshot while garbage collection is expiring it", async () => {

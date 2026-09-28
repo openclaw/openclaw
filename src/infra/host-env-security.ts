@@ -7,25 +7,7 @@ import { markOpenClawExecEnv, SUBAGENT_EXEC_ENV_VAR } from "./openclaw-exec-env.
 const PORTABLE_ENV_VAR_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const WINDOWS_COMPAT_OVERRIDE_ENV_VAR_KEY = /^[A-Za-z_][A-Za-z0-9_()]*$/;
 
-const HOST_DANGEROUS_ENV_KEY_VALUES: readonly string[] = Object.freeze([
-  ...HOST_ENV_SECURITY_POLICY.blockedKeys,
-]);
-const HOST_DANGEROUS_ENV_PREFIXES: readonly string[] = Object.freeze([
-  ...HOST_ENV_SECURITY_POLICY.blockedPrefixes,
-]);
-const HOST_DANGEROUS_INHERITED_ENV_KEY_VALUES: readonly string[] = Object.freeze([
-  ...HOST_ENV_SECURITY_POLICY.blockedInheritedKeys,
-]);
-const HOST_DANGEROUS_INHERITED_ENV_PREFIXES: readonly string[] = Object.freeze([
-  ...HOST_ENV_SECURITY_POLICY.blockedInheritedPrefixes,
-]);
-const HOST_DANGEROUS_OVERRIDE_ENV_KEY_VALUES: readonly string[] = Object.freeze([
-  ...HOST_ENV_SECURITY_POLICY.blockedOverrideKeys,
-]);
-const HOST_DANGEROUS_OVERRIDE_ENV_PREFIXES: readonly string[] = Object.freeze([
-  ...HOST_ENV_SECURITY_POLICY.blockedOverridePrefixes,
-]);
-const HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEY_VALUES: readonly string[] = Object.freeze([
+const HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEYS = new Set([
   "TERM",
   "LANG",
   "LC_ALL",
@@ -36,15 +18,9 @@ const HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEY_VALUES: readonly string[] = Ob
   "FORCE_COLOR",
   SUBAGENT_EXEC_ENV_VAR,
 ]);
-const HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_PREFIX_VALUES: readonly string[] = Object.freeze([
-  "LC_",
-]);
-const HOST_DANGEROUS_ENV_KEYS = new Set<string>(HOST_DANGEROUS_ENV_KEY_VALUES);
-const HOST_DANGEROUS_INHERITED_ENV_KEYS = new Set<string>(HOST_DANGEROUS_INHERITED_ENV_KEY_VALUES);
-const HOST_DANGEROUS_OVERRIDE_ENV_KEYS = new Set<string>(HOST_DANGEROUS_OVERRIDE_ENV_KEY_VALUES);
-const HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEYS = new Set<string>(
-  HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEY_VALUES,
-);
+const HOST_DANGEROUS_ENV_KEYS = new Set(HOST_ENV_SECURITY_POLICY.blockedKeys);
+const HOST_DANGEROUS_INHERITED_ENV_KEYS = new Set(HOST_ENV_SECURITY_POLICY.blockedInheritedKeys);
+const HOST_DANGEROUS_OVERRIDE_ENV_KEYS = new Set(HOST_ENV_SECURITY_POLICY.blockedOverrideKeys);
 const CARGO_TARGET_EXECUTABLE_OVERRIDE_ENV_KEY = /^CARGO_TARGET_[A-Z0-9_]+_(?:LINKER|RUNNER)$/;
 const GIT_ALLOW_PROTOCOL_ENV_KEY = "GIT_ALLOW_PROTOCOL";
 const GIT_PROTOCOL_FROM_USER_ENV_KEY = "GIT_PROTOCOL_FROM_USER";
@@ -85,9 +61,7 @@ function isShellWrapperAllowedOverrideEnvVarName(rawKey: string): boolean {
   if (HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEYS.has(upper)) {
     return true;
   }
-  return HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_PREFIX_VALUES.some((prefix) =>
-    upper.startsWith(prefix),
-  );
+  return upper.startsWith("LC_");
 }
 
 type HostExecEnvSanitizationResult = {
@@ -135,7 +109,7 @@ export function isDangerousHostEnvVarName(rawKey: string): boolean {
   if (HOST_DANGEROUS_ENV_KEYS.has(upper)) {
     return true;
   }
-  return HOST_DANGEROUS_ENV_PREFIXES.some((prefix) => upper.startsWith(prefix));
+  return HOST_ENV_SECURITY_POLICY.blockedPrefixes.some((prefix) => upper.startsWith(prefix));
 }
 
 export function isDangerousHostInheritedEnvVarName(rawKey: string): boolean {
@@ -147,7 +121,9 @@ export function isDangerousHostInheritedEnvVarName(rawKey: string): boolean {
   if (HOST_DANGEROUS_INHERITED_ENV_KEYS.has(upper)) {
     return true;
   }
-  return HOST_DANGEROUS_INHERITED_ENV_PREFIXES.some((prefix) => upper.startsWith(prefix));
+  return HOST_ENV_SECURITY_POLICY.blockedInheritedPrefixes.some((prefix) =>
+    upper.startsWith(prefix),
+  );
 }
 
 export function isDangerousHostEnvOverrideVarName(rawKey: string): boolean {
@@ -162,7 +138,9 @@ export function isDangerousHostEnvOverrideVarName(rawKey: string): boolean {
   if (CARGO_TARGET_EXECUTABLE_OVERRIDE_ENV_KEY.test(upper)) {
     return true;
   }
-  return HOST_DANGEROUS_OVERRIDE_ENV_PREFIXES.some((prefix) => upper.startsWith(prefix));
+  return HOST_ENV_SECURITY_POLICY.blockedOverridePrefixes.some((prefix) =>
+    upper.startsWith(prefix),
+  );
 }
 
 function listNormalizedEnvEntries(

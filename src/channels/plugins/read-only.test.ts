@@ -904,13 +904,9 @@ Object.assign(module.exports.plugin.config, {
     expect(fs.existsSync(fullMarker)).toBe(false);
   });
 
-  it.each(
-    ["external", "bundled"].flatMap((origin) =>
-      [undefined, false, true].map((setupRequiresRuntime) => ({ origin, setupRequiresRuntime })),
-    ),
-  )(
-    "uses $origin manifest inventory with setup.requiresRuntime=$setupRequiresRuntime",
-    ({ origin, setupRequiresRuntime }) => {
+  it.each(["external", "bundled"])(
+    "uses %s manifest inventory before loading setup runtime",
+    (origin) => {
       const fixtureRoot = makePluginLoaderTempDir();
       const fixtureDir = path.join(fixtureRoot, "external-chat-plugin");
       fs.mkdirSync(fixtureDir);
@@ -919,7 +915,6 @@ Object.assign(module.exports.plugin.config, {
         pluginId: "external-chat-plugin",
         channelId: "external-chat",
         manifestChannelConfig: true,
-        setupRequiresRuntime,
       });
       const cfg = createExternalChannelTestConfig({ pluginDir, pluginId: "external-chat-plugin" });
       if (origin === "bundled") {

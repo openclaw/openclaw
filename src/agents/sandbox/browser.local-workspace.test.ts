@@ -5,13 +5,18 @@ describe("managed browser workspace custody", () => {
   const harness = createSandboxBrowserTestHarness();
   const { dockerMocks, registryMocks, buildConfig, ensureTestSandboxBrowser } = harness;
 
+  const browserParams = () => ({
+    scopeKey: "session:managed",
+    workspaceDir: harness.testWorkspaceDir,
+    agentWorkspaceDir: harness.testWorkspaceDir,
+    cfg: buildConfig(false),
+  });
+
   it("does not restart a browser after authority closes during container inspection", async () => {
     let current = true;
     await ensureTestSandboxBrowser({
+      ...browserParams(),
       scopeKey: "session:revoked-browser",
-      workspaceDir: harness.testWorkspaceDir,
-      agentWorkspaceDir: harness.testWorkspaceDir,
-      cfg: buildConfig(false),
       withWorkspace: async (run) => await run(),
       assertCurrent: () => {
         if (!current) {
@@ -48,10 +53,7 @@ describe("managed browser workspace custody", () => {
       }
     };
     const result = await ensureTestSandboxBrowser({
-      scopeKey: "session:managed",
-      workspaceDir: harness.testWorkspaceDir,
-      agentWorkspaceDir: harness.testWorkspaceDir,
-      cfg: buildConfig(false),
+      ...browserParams(),
       withWorkspace,
     });
     expect(result).not.toBeNull();
@@ -74,12 +76,7 @@ describe("managed browser workspace custody", () => {
       baseUrl: "http://127.0.0.1:19000",
       state: { server: null, port: 19000, resolved: params.resolved, profiles: new Map() },
     }));
-    const input = {
-      scopeKey: "session:managed",
-      workspaceDir: harness.testWorkspaceDir,
-      agentWorkspaceDir: harness.testWorkspaceDir,
-      cfg: buildConfig(false),
-    };
+    const input = browserParams();
     let firstCurrent = true;
     await ensureTestSandboxBrowser({
       ...input,
@@ -116,10 +113,7 @@ describe("managed browser workspace custody", () => {
     };
     await expect(
       ensureTestSandboxBrowser({
-        scopeKey: "session:managed",
-        workspaceDir: harness.testWorkspaceDir,
-        agentWorkspaceDir: harness.testWorkspaceDir,
-        cfg: buildConfig(false),
+        ...browserParams(),
         withWorkspace,
       }),
     ).rejects.toThrow("port mapping");

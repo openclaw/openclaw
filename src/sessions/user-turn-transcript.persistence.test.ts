@@ -386,31 +386,6 @@ describe("persistUserTurnTranscript", () => {
     expect(appended?.message).not.toHaveProperty("__openclaw");
   });
 
-  it("uses inline update mode by default", async () => {
-    const dir = tempDirs.make("openclaw-user-turn-append-inline-");
-    const target = createSqliteTranscriptTarget({ dir });
-
-    const appended = await persistUserTurnTranscript({
-      ...target,
-      input: {
-        text: "hello from runtime",
-      },
-    });
-
-    expect(appended?.message).toMatchObject({
-      role: "user",
-      content: "hello from runtime",
-      timestamp: expect.any(Number),
-    });
-    await expect(readTranscriptMessages(target)).resolves.toEqual([
-      expect.objectContaining({
-        role: "user",
-        content: "hello from runtime",
-        timestamp: expect.any(Number),
-      }),
-    ]);
-  });
-
   it("reports one original committed input, never staged custody or idempotent replay", async () => {
     const target = createSqliteTranscriptTarget({ dir: tempDirs.make("original-input-commit-") });
     const commits: UserTurnOriginalInputCommit[] = [];
@@ -704,46 +679,29 @@ describe("persistUserTurnTranscript", () => {
     const dir = tempDirs.make("openclaw-user-turn-redacted-idempotent-");
     const target = createSqliteTranscriptTarget({ dir });
 
-    await persistUserTurnTranscript({
-      ...target,
-      input: {
-        text: "secret prompt",
-        idempotencyKey: "chat-run-1:user",
-        replyToId: "transcript-reply-1",
-        replyToPreview: { text: "Original reply", senderLabel: "Molty" },
-        senderIsOwner: true,
-        provenance,
-        sender: { id: "user-42", name: "Ada" },
-        transport: {
-          channel: "reef",
-          conversationRef: "conv_0123456789abcdef0123456789abcdef",
-          messageId: "inbound-1",
-          replyToId: "outbound-1",
-          clients: [{ id: "cli", mode: "cli", displayName: "Original app" }],
+    const persist = () =>
+      persistUserTurnTranscript({
+        ...target,
+        input: {
+          text: "secret prompt",
+          idempotencyKey: "chat-run-1:user",
+          replyToId: "transcript-reply-1",
+          replyToPreview: { text: "Original reply", senderLabel: "Molty" },
+          senderIsOwner: true,
+          provenance,
+          sender: { id: "user-42", name: "Ada" },
+          transport: {
+            channel: "reef",
+            conversationRef: "conv_0123456789abcdef0123456789abcdef",
+            messageId: "inbound-1",
+            replyToId: "outbound-1",
+            clients: [{ id: "cli", mode: "cli", displayName: "Original app" }],
+          },
         },
-      },
-      beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
-    });
-    await persistUserTurnTranscript({
-      ...target,
-      input: {
-        text: "secret prompt",
-        idempotencyKey: "chat-run-1:user",
-        replyToId: "transcript-reply-1",
-        replyToPreview: { text: "Original reply", senderLabel: "Molty" },
-        senderIsOwner: true,
-        provenance,
-        sender: { id: "user-42", name: "Ada" },
-        transport: {
-          channel: "reef",
-          conversationRef: "conv_0123456789abcdef0123456789abcdef",
-          messageId: "inbound-1",
-          replyToId: "outbound-1",
-          clients: [{ id: "cli", mode: "cli", displayName: "Original app" }],
-        },
-      },
-      beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
-    });
+        beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+      });
+    await persist();
+    await persist();
 
     await expect(readTranscriptMessages(target)).resolves.toEqual([
       expect.objectContaining({

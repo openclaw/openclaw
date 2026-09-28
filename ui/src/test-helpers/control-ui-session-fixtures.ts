@@ -129,6 +129,11 @@ export function createControlUiSessionFixtures(
     listed.add(key);
   }
   const read = (key: string) => ({ ...record(key).row });
+  // Match Gateway projection clocks so a cached descriptor cannot outrank a fresh list.
+  const sample = <T extends Record<string, unknown>>(row: T, now: number) => ({
+    ...row,
+    snapshotAt: row.snapshotAt ?? now,
+  });
   const patch = (key: string, fields: Record<string, unknown>) => {
     const value = record(key);
     const next = { ...value.row };
@@ -370,6 +375,7 @@ export function createControlUiSessionFixtures(
         : isRecord(params) && params.archived === true
           ? "archived"
           : "active";
+    const now = Date.now();
     const projectedSessions = list(response.sessions).map((row) => {
       if (!isRecord(row)) {
         return row;
@@ -388,7 +394,7 @@ export function createControlUiSessionFixtures(
       } else {
         next.category = category;
       }
-      return next;
+      return sample(next, now);
     });
     const spawnedBy =
       isRecord(params) && typeof params.spawnedBy === "string" ? params.spawnedBy.trim() : "";
@@ -486,12 +492,37 @@ export function createControlUiSessionFixtures(
       ? { ok: true, ...only }
       : { ok: false, ...(matches.length ? { candidates: matches.slice(0, 10) } : {}) };
   };
+  // History publishes a full row replacement. An unseeded wire-only fixture
+  // has no canonical metadata to publish until its caller declares the row.
+  const sessionInfo = (key: string) =>
+    listed.has(canonicalKey(key)) ? sample(read(key), Date.now()) : undefined;
   return {
     read,
     resolve,
-    // History publishes a full row replacement. An unseeded wire-only fixture
-    // has no canonical metadata to publish until its caller declares the row.
-    sessionInfo: (key: string) => (listed.has(canonicalKey(key)) ? read(key) : undefined),
+    sessionInfo,
+    readResponse(
+      method: "sessions.resolve" | "sessions.describe" | "session.members.listEvidence",
+      params: unknown,
+      scenario: { sessionKey: string; allowedSessionVisibilities: readonly string[] },
+    ) {
+      if (method === "sessions.resolve") {
+        return resolve(isRecord(params) ? params : {});
+      }
+      const field = method === "sessions.describe" ? "key" : "sessionKey";
+      const requestedKey = isRecord(params) ? params[field] : undefined;
+      const key = typeof requestedKey === "string" ? requestedKey : scenario.sessionKey;
+      if (method === "sessions.describe") {
+        return { session: sessionInfo(key) ?? null };
+      }
+      const row = read(key);
+      return {
+        sessionKey: row.key,
+        members: [],
+        identities: [],
+        role: row.sharingRole ?? "admin",
+        allowedVisibilities: scenario.allowedSessionVisibilities,
+      };
+    },
     patch,
     abortRuns,
     trackRun,

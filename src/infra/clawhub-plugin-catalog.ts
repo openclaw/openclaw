@@ -10,7 +10,7 @@ import {
   readRequiredClawHubNumberField,
   readRequiredClawHubStringField,
   resolveClawHubImageUrl,
-  type ClawHubFetch,
+  type ClawHubRequestParams,
 } from "./clawhub-client.js";
 import {
   parseClawHubPackageSecurityResponse,
@@ -99,6 +99,7 @@ export type ClawHubPluginCategory = {
   description: string;
   icon: string;
   order: number;
+  pinnedPackages?: string[];
 };
 
 export type ClawHubPluginVersionCategories = {
@@ -107,13 +108,10 @@ export type ClawHubPluginVersionCategories = {
   categories: string[] | null;
 };
 
-type ClawHubReadOptions = {
-  baseUrl?: string;
-  token?: string;
-  skipAuth?: boolean;
-  timeoutMs?: number;
-  fetchImpl?: ClawHubFetch;
-};
+type ClawHubReadOptions = Pick<
+  ClawHubRequestParams,
+  "baseUrl" | "token" | "skipAuth" | "timeoutMs" | "fetchImpl"
+>;
 
 const BARE_ICON_KEY = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u;
 const PLUGIN_CATEGORY_ICON_KEYS = new Set([
@@ -127,6 +125,7 @@ const PLUGIN_CATEGORY_ICON_KEYS = new Set([
   "message-circle",
   "message-square",
   "mic",
+  "monitor",
   "package",
   "palette",
   "shield",
@@ -258,6 +257,20 @@ function parsePluginCategories(value: unknown): ClawHubPluginCategory[] {
     if (!Number.isInteger(order) || order < 0 || seenSlugs.has(slug) || seenOrders.has(order)) {
       throw new Error(`Malformed ClawHub plugin category ${slug}: duplicate or invalid ordering.`);
     }
+    const pinnedPackages = readClawHubStringArrayField(
+      entry,
+      "pinnedPackages",
+      `plugin category ${slug}`,
+    );
+    if (
+      pinnedPackages &&
+      (new Set(pinnedPackages).size !== pinnedPackages.length ||
+        pinnedPackages.some((name) => !name.trim() || name !== name.trim()))
+    ) {
+      throw new Error(
+        `Malformed ClawHub plugin category ${slug}: duplicate or invalid pinned package.`,
+      );
+    }
     seenSlugs.add(slug);
     seenOrders.add(order);
     return {
@@ -266,6 +279,7 @@ function parsePluginCategories(value: unknown): ClawHubPluginCategory[] {
       description: readRequiredClawHubStringField(entry, "description", `plugin category ${slug}`),
       icon: PLUGIN_CATEGORY_ICON_KEYS.has(icon) ? icon : "package",
       order,
+      ...(pinnedPackages ? { pinnedPackages } : {}),
     };
   });
   return categories.toSorted((left, right) => left.order - right.order);
@@ -281,6 +295,7 @@ function parseCatalogList(value: unknown, baseUrl?: string) {
       parseCatalogPackage(item, `plugin catalog item ${index}`, baseUrl),
     ),
     ...(nextCursor ? { nextCursor } : {}),
+    ...(value.categories !== undefined ? { categories: parsePluginCategories(value) } : {}),
   };
 }
 
@@ -443,7 +458,11 @@ export async function fetchClawHubPluginCatalog(
     cursor?: string;
     limit?: number;
   },
-): Promise<{ items: ClawHubPluginCatalogEntry[]; nextCursor?: string }> {
+): Promise<{
+  items: ClawHubPluginCatalogEntry[];
+  categories?: ClawHubPluginCategory[];
+  nextCursor?: string;
+}> {
   const query = params.query?.trim();
   const shared = {
     baseUrl: params.baseUrl,
@@ -476,8 +495,7 @@ export async function fetchClawHubPluginCatalog(
       cursor: params.cursor,
       featured: params.intent === "featured" ? "true" : undefined,
       isOfficial: params.intent === "official" ? "true" : undefined,
-      officialFirst:
-        params.intent === "featured" || params.intent === "trending" ? undefined : "true",
+      curated: (params.intent ?? "all") === "all" && params.category ? "true" : undefined,
       sort:
         params.intent === "featured"
           ? undefined

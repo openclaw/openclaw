@@ -198,19 +198,19 @@ struct DashboardGatewaysBridgeTests {
         defer { controller.closeDashboard() }
 
         #expect(controller._testTLSParams == params)
-        #expect(DashboardWindowController.isExpectedTLSAuthority(
+        #expect(ControlUIDocumentHost.isExpectedTLSAuthority(
             host: "gateway.example",
             port: 0,
             dashboardURL: url))
-        #expect(DashboardWindowController.isExpectedTLSAuthority(
+        #expect(ControlUIDocumentHost.isExpectedTLSAuthority(
             host: "gateway.example",
             port: 443,
             dashboardURL: url))
-        #expect(!DashboardWindowController.isExpectedTLSAuthority(
+        #expect(!ControlUIDocumentHost.isExpectedTLSAuthority(
             host: "gateway.example",
             port: 8443,
             dashboardURL: url))
-        #expect(!DashboardWindowController.isExpectedTLSAuthority(
+        #expect(!ControlUIDocumentHost.isExpectedTLSAuthority(
             host: "other.example",
             port: 443,
             dashboardURL: url))
@@ -218,17 +218,17 @@ struct DashboardGatewaysBridgeTests {
 
     @Test func `media capture trust requires the dashboard origin`() throws {
         let url = try #require(URL(string: "https://gateway.example/control/"))
-        #expect(DashboardWindowController.isTrustedMediaCaptureOrigin(
+        #expect(ControlUIDocumentHost.isTrustedMediaCaptureOrigin(
             protocol: "https",
             host: "gateway.example",
             port: 443,
             dashboardURL: url))
-        #expect(!DashboardWindowController.isTrustedMediaCaptureOrigin(
+        #expect(!ControlUIDocumentHost.isTrustedMediaCaptureOrigin(
             protocol: "https",
             host: "other.example",
             port: 443,
             dashboardURL: url))
-        #expect(!DashboardWindowController.isTrustedMediaCaptureOrigin(
+        #expect(!ControlUIDocumentHost.isTrustedMediaCaptureOrigin(
             protocol: "http",
             host: "gateway.example",
             port: 80,

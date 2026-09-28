@@ -49,6 +49,7 @@ export async function resolveOutboundAttachmentFromBuffer(
   options?: {
     contentType?: string;
     filename?: string;
+    assertCommitAllowed?: () => void;
   },
 ): Promise<{ path: string; contentType?: string }> {
   const saved = await saveMediaBuffer(
@@ -57,6 +58,8 @@ export async function resolveOutboundAttachmentFromBuffer(
     "outbound",
     maxBytes,
     options?.filename,
+    undefined,
+    options?.assertCommitAllowed ? { assertCommitAllowed: options.assertCommitAllowed } : undefined,
   );
   return { path: saved.path, contentType: saved.contentType };
 }

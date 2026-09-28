@@ -9,13 +9,11 @@ import { registerCodeBlocksEnglish } from "../../../i18n/locales/en-code-blocks.
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import type { EditorId } from "../../../lib/editor-links.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
-import type { SidebarContent } from "./chat-sidebar-content-types.ts";
+import type { FileSidebarContent } from "./chat-sidebar-content-types.ts";
 import { renderChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.ts";
 
 registerCodeBlocksEnglish();
 registerFilePreviewEnglish();
-
-type FileSidebarContent = Extract<SidebarContent, { kind: "file" }>;
 
 const FILE_WRAP_PREFERENCE_KEY = "openclaw.control.fileView.wrap.v1";
 
@@ -96,18 +94,32 @@ export type FileViewControls = {
   onToggleWrap: () => void;
 };
 
-function renderFileWrapButton(controls: FileViewControls) {
-  const label = t(controls.wrap ? "chat.codeBlock.disableWrap" : "chat.codeBlock.enableWrap");
+function renderFileAction({
+  label,
+  icon,
+  onClick,
+  className = "",
+  pressed,
+  disabled = false,
+}: {
+  label: string;
+  icon: TemplateResult;
+  onClick: () => void;
+  className?: string;
+  pressed?: boolean;
+  disabled?: boolean;
+}) {
   return html`
     <openclaw-tooltip .content=${label}>
       <button
-        class="btn btn--sm sidebar-file-view__action sidebar-file-view__wrap"
+        class="btn btn--sm sidebar-file-view__action ${className}"
         type="button"
         aria-label=${label}
-        aria-pressed=${String(controls.wrap)}
-        @click=${controls.onToggleWrap}
+        aria-pressed=${pressed === undefined ? nothing : String(pressed)}
+        ?disabled=${disabled}
+        @click=${onClick}
       >
-        ${icons.wrapText}
+        ${icon}
       </button>
     </openclaw-tooltip>
   `;
@@ -124,18 +136,12 @@ function renderFileCopyButton(action: FileCopyAction, controls?: FileViewControl
           ? "chat.detailPanel.copyPath"
           : "chat.detailPanel.copyContents",
   );
-  return html`
-    <openclaw-tooltip .content=${label}>
-      <button
-        class="btn btn--sm sidebar-file-view__action ${feedback === "copied" ? "copied" : ""}"
-        type="button"
-        aria-label=${label}
-        @click=${() => controls?.onCopy(action)}
-      >
-        ${feedback === "copied" ? icons.check : icons.copy}
-      </button>
-    </openclaw-tooltip>
-  `;
+  return renderFileAction({
+    label,
+    icon: feedback === "copied" ? icons.check : icons.copy,
+    onClick: () => controls?.onCopy(action),
+    className: feedback === "copied" ? "copied" : "",
+  });
 }
 
 export function renderSidebarFile(
@@ -156,7 +162,21 @@ export function renderSidebarFile(
           controls
             ? html`
                 <div class="sidebar-file-view__actions">
-                  ${!controls.htmlPreview || controls.htmlPreview.source ? renderFileWrapButton(controls) : nothing}
+                  ${
+                    !controls.htmlPreview || controls.htmlPreview.source
+                      ? renderFileAction({
+                          label: t(
+                            controls.wrap
+                              ? "chat.codeBlock.disableWrap"
+                              : "chat.codeBlock.enableWrap",
+                          ),
+                          icon: icons.wrapText,
+                          onClick: controls.onToggleWrap,
+                          className: "sidebar-file-view__wrap",
+                          pressed: controls.wrap,
+                        })
+                      : nothing
+                  }
                   ${
                     controls.htmlPreview
                       ? html`<button
@@ -192,46 +212,28 @@ export function renderSidebarFile(
                       : html`
                           ${
                             content.edit
-                              ? html`
-                                  <openclaw-tooltip .content=${t("chat.detailPanel.editFile")}>
-                                    <button
-                                      class="btn btn--sm sidebar-file-view__action"
-                                      type="button"
-                                      aria-label=${t("chat.detailPanel.editFile")}
-                                      ?disabled=${controls.loadingEditor}
-                                      @click=${controls.onEdit}
-                                    >
-                                      ${icons.edit}
-                                    </button>
-                                  </openclaw-tooltip>
-                                `
+                              ? renderFileAction({
+                                  label: t("chat.detailPanel.editFile"),
+                                  icon: icons.edit,
+                                  onClick: controls.onEdit,
+                                  disabled: controls.loadingEditor,
+                                })
                               : nothing
                           }
-                          <openclaw-tooltip .content=${t("chat.detailPanel.searchInFile")}>
-                            <button
-                              class="btn btn--sm sidebar-file-view__action sidebar-file-view__search-toggle"
-                              type="button"
-                              aria-label=${t("chat.detailPanel.searchInFile")}
-                              aria-pressed=${String(controls.searchOpen)}
-                              @click=${controls.onToggleSearch}
-                            >
-                              ${icons.search}
-                            </button>
-                          </openclaw-tooltip>
+                          ${renderFileAction({
+                            label: t("chat.detailPanel.searchInFile"),
+                            icon: icons.search,
+                            onClick: controls.onToggleSearch,
+                            className: "sidebar-file-view__search-toggle",
+                            pressed: controls.searchOpen,
+                          })}
                           ${
                             controls.onReveal
-                              ? html`
-                                  <openclaw-tooltip .content=${t("chat.detailPanel.showInFiles")}>
-                                    <button
-                                      class="btn btn--sm sidebar-file-view__action"
-                                      type="button"
-                                      aria-label=${t("chat.detailPanel.showInFiles")}
-                                      @click=${() => controls.onReveal?.(content.path)}
-                                    >
-                                      ${icons.folder}
-                                    </button>
-                                  </openclaw-tooltip>
-                                `
+                              ? renderFileAction({
+                                  label: t("chat.detailPanel.showInFiles"),
+                                  icon: icons.folder,
+                                  onClick: () => controls.onReveal?.(content.path),
+                                })
                               : nothing
                           }
                           ${renderChatSidebarEditorMenu({
@@ -268,24 +270,26 @@ export function renderSidebarFile(
                 <span class="file-view__search-counter" role="status"
                   >${matchNumber}/${controls.matches.length}</span
                 >
-                <button
-                  class="btn btn--sm file-view__search-action file-view__search-action--previous"
-                  type="button"
-                  aria-label=${t("chat.detailPanel.previousMatch")}
-                  ?disabled=${controls.matches.length === 0}
-                  @click=${controls.onPreviousMatch}
-                >
-                  ${icons.chevronDown}
-                </button>
-                <button
-                  class="btn btn--sm file-view__search-action"
-                  type="button"
-                  aria-label=${t("chat.detailPanel.nextMatch")}
-                  ?disabled=${controls.matches.length === 0}
-                  @click=${controls.onNextMatch}
-                >
-                  ${icons.chevronDown}
-                </button>
+                ${(
+                  [
+                    [
+                      "chat.detailPanel.previousMatch",
+                      controls.onPreviousMatch,
+                      " file-view__search-action--previous",
+                    ],
+                    ["chat.detailPanel.nextMatch", controls.onNextMatch, ""],
+                  ] as const
+                ).map(
+                  ([label, onClick, className]) => html`<button
+                    class="btn btn--sm file-view__search-action${className}"
+                    type="button"
+                    aria-label=${t(label)}
+                    ?disabled=${controls.matches.length === 0}
+                    @click=${onClick}
+                  >
+                    ${icons.chevronDown}
+                  </button>`,
+                )}
               </div>
             `
           : nothing

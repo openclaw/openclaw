@@ -15,10 +15,7 @@ import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js
 import { normalizeGitHubLogin } from "../utils/github-login.js";
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
-import {
-  openOpenClawStateDatabase,
-  type OpenClawStateDatabaseOptions,
-} from "./openclaw-state-db.js";
+import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import type { OpenClawStateReadCommand } from "./openclaw-state-read.types.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { deleteUserPreference, selectUserPreferenceValues } from "./user-preferences.store.js";
@@ -28,11 +25,12 @@ import {
 } from "./user-profile-events.js";
 import type { UserProfileMutationContext } from "./user-profile-mutation.js";
 import {
+  selectUserProfileEmailAlias,
   selectResolvedUserProfileMetadataById,
   setUserProfileEmailBinding,
   userProfilesDb,
 } from "./user-profiles-internal.js";
-import { ensureUserProfilesSchema, UserProfileOwnerError } from "./user-profiles-schema.js";
+import { UserProfileOwnerError } from "./user-profiles-schema.js";
 import type {
   CachedGitHubIdentity,
   StoredGitHubIdentity,
@@ -162,13 +160,7 @@ function resolveCachedGitHubIdentityInDatabase(
   ) {
     return undefined;
   }
-  const alias = executeSqliteQueryTakeFirstSync(
-    db,
-    userProfilesDb(db)
-      .selectFrom("user_profile_emails")
-      .select("profile_id")
-      .where("email", "=", email),
-  );
+  const alias = selectUserProfileEmailAlias(db, email);
   const profile = alias ? selectResolvedUserProfileMetadataById(db, alias.profile_id) : undefined;
   if (!profile) {
     return undefined;
@@ -177,20 +169,6 @@ function resolveCachedGitHubIdentityInDatabase(
   return identity?.accounts.some((account) => account.accountId === params.accountId)
     ? { profileId: profile.id, updatedAt: profile.updated_at }
     : undefined;
-}
-
-/** All verified handles are searchable; the primary controls only public credit/projection. */
-export function listUserProfileGitHubLogins(
-  options: OpenClawStateDatabaseOptions = {},
-): Map<string, string[]> {
-  const database = openOpenClawStateDatabase(options);
-  ensureUserProfilesSchema(options, database);
-  return new Map(
-    [...selectStoredGitHubIdentities(database.db)].map(([id, profile]) => [
-      id,
-      profile.accounts.map((account) => account.login),
-    ]),
-  );
 }
 
 export function githubAuthenticationSubject(login: string): string {
@@ -388,13 +366,7 @@ export function applyVerifiedGitHubIdentity(params: {
   );
   const aliasIdentity =
     params.alias.kind === "email"
-      ? executeSqliteQueryTakeFirstSync(
-          db,
-          kysely
-            .selectFrom("user_profile_emails")
-            .select("profile_id")
-            .where("email", "=", params.alias.email),
-        )
+      ? selectUserProfileEmailAlias(db, params.alias.email)
       : executeSqliteQueryTakeFirstSync(
           db,
           kysely
@@ -444,14 +416,14 @@ export function applyVerifiedGitHubIdentity(params: {
   ) {
     throw new UserProfileOwnerError("merge");
   }
-  params.mutation?.before(
-    db,
+  const affectedProfileIds = [
     currentProfileId,
     targetProfileId,
     ...(aliasIdentity ? [aliasIdentity.profile_id] : []),
     ...(aliasProfileId ? [aliasProfileId] : []),
     ...(existing ? [existing.profile_id] : []),
-  );
+  ];
+  params.mutation?.before(db, ...affectedProfileIds);
   const currentIdentity =
     currentProfileId === aliasProfileId
       ? aliasGitHubIdentity
@@ -482,10 +454,7 @@ export function applyVerifiedGitHubIdentity(params: {
     existing.canonical_login !== login ||
     aliasIdentity?.profile_id !== targetProfileId;
   if (
-    currentProfileId === targetProfileId &&
-    existing?.profile_id === targetProfileId &&
-    existing.canonical_login === login &&
-    aliasIdentity?.profile_id === targetProfileId &&
+    !authorityChanged &&
     (primaryAccountId === undefined || existing.primary_github_account_id === primaryAccountId)
   ) {
     return { profileId: targetProfileId, changed: false };
@@ -501,62 +470,30 @@ export function applyVerifiedGitHubIdentity(params: {
         .where("id", "=", targetProfileId),
     );
   }
-  executeSqliteQuerySync(
-    db,
-    kysely
-      .insertInto("user_profile_identities")
-      .values({
-        provider: GITHUB_PROVIDER,
-        subject,
-        profile_id: targetProfileId,
-        canonical_login: login,
-        created_at: now,
-      })
-      .onConflict((conflict) =>
-        conflict.columns(["provider", "subject"]).doUpdateSet({
-          profile_id: targetProfileId,
-          canonical_login: login,
-        }),
-      ),
-  );
-  if (params.alias.kind === "email") {
-    setUserProfileEmailBinding(db, params.alias.email, targetProfileId, now);
-  } else {
+  const writeIdentity = (identitySubject: string, canonicalLogin: string | null) => {
+    const binding = { profile_id: targetProfileId, canonical_login: canonicalLogin };
     executeSqliteQuerySync(
       db,
       kysely
         .insertInto("user_profile_identities")
         .values({
           provider: GITHUB_PROVIDER,
-          subject: params.alias.subject,
-          profile_id: targetProfileId,
-          canonical_login: null,
+          subject: identitySubject,
+          ...binding,
           created_at: now,
         })
-        .onConflict((conflict) =>
-          conflict.columns(["provider", "subject"]).doUpdateSet({
-            profile_id: targetProfileId,
-            canonical_login: null,
-          }),
-        ),
+        .onConflict((conflict) => conflict.columns(["provider", "subject"]).doUpdateSet(binding)),
     );
+  };
+  writeIdentity(subject, login);
+  if (params.alias.kind === "email") {
+    setUserProfileEmailBinding(db, params.alias.email, targetProfileId, now);
+  } else {
+    writeIdentity(params.alias.subject, null);
   }
   if (authorityChanged) {
-    params.mutation?.authority(
-      currentProfileId,
-      targetProfileId,
-      ...(aliasIdentity ? [aliasIdentity.profile_id] : []),
-      ...(aliasProfileId ? [aliasProfileId] : []),
-      ...(existing ? [existing.profile_id] : []),
-    );
-    publishUserProfileAuthorityChange(
-      db,
-      currentProfileId,
-      targetProfileId,
-      ...(aliasIdentity ? [aliasIdentity.profile_id] : []),
-      ...(aliasProfileId ? [aliasProfileId] : []),
-      ...(existing ? [existing.profile_id] : []),
-    );
+    params.mutation?.authority(...affectedProfileIds);
+    publishUserProfileAuthorityChange(db, ...affectedProfileIds);
   }
   return { profileId: targetProfileId, changed: true };
 }

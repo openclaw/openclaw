@@ -38,6 +38,7 @@ import {
 } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { resolveThinkingProfile, resolveZaiReasoningEffort } from "./provider-policy-api.js";
+import { buildZaiVideoGenerationProvider } from "./video-generation-provider.js";
 
 const PROVIDER_ID = "zai";
 const GLM5_TEMPLATE_MODEL_ID = "glm-4.7";
@@ -312,7 +313,7 @@ export default defineSingleProviderPluginEntry({
       }),
     ],
     catalog: { allowExplicitBaseUrl: true, liveModelDiscovery: true, discoveryMode: "strict" },
-    resolveDynamicModel: (ctx) => resolveGlm5ForwardCompatModel(ctx),
+    resolveDynamicModel: resolveGlm5ForwardCompatModel,
     matchesContextOverflowError: ({ errorMessage }) =>
       /\b(?:tokens? in request more than max tokens? allowed|prompt exceeds max(?:imum)? length)\b/i.test(
         errorMessage,
@@ -322,16 +323,11 @@ export default defineSingleProviderPluginEntry({
       dropReasoningFromHistory: false,
     }),
     prepareExtraParams: (ctx) => defaultToolStreamExtraParams(ctx.extraParams),
-    wrapStreamFn: (ctx) => wrapZaiStreamFn(ctx),
+    wrapStreamFn: wrapZaiStreamFn,
     resolveThinkingProfile,
     isModernModelRef: ({ modelId }) => {
       const lower = normalizeLowercaseStringOrEmpty(modelId);
-      return (
-        lower.startsWith("glm-5") ||
-        lower.startsWith("glm-4.7") ||
-        lower.startsWith("glm-4.7-flash") ||
-        lower.startsWith("glm-4.7-flashx")
-      );
+      return lower.startsWith("glm-5") || lower.startsWith("glm-4.7");
     },
     resolveUsageAuth: async (ctx) => {
       const apiKey = ctx.resolveApiKeyFromConfigAndStore({
@@ -349,5 +345,6 @@ export default defineSingleProviderPluginEntry({
   },
   register(api) {
     api.registerMediaUnderstandingProvider(zaiMediaUnderstandingProvider);
+    api.registerVideoGenerationProvider(buildZaiVideoGenerationProvider());
   },
 });

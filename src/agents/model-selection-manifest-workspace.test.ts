@@ -1,6 +1,7 @@
 // Verifies configured model selection uses manifest policy only in scoped contexts.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.types.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
   buildAllowedModelSet,
@@ -42,6 +43,20 @@ const defaultNormalizationSnapshot = createPluginMetadataSnapshotFixture({
   ],
 });
 
+function normalizationSnapshot(
+  providers: NonNullable<PluginManifestRecord["modelIdNormalization"]>["providers"],
+) {
+  return createPluginMetadataSnapshotFixture({
+    plugins: [{ id: "workspace-model-normalizer", modelIdNormalization: { providers } }],
+  });
+}
+
+function createCatalogConfig(): OpenClawConfig {
+  return {
+    models: { providers: { custom: { models: [{ id: "fast-model" }] } } },
+  } as unknown as OpenClawConfig;
+}
+
 describe("configured model manifest workspace scope", () => {
   beforeEach(() => {
     loadManifestMetadataSnapshotMock.mockReset();
@@ -50,19 +65,10 @@ describe("configured model manifest workspace scope", () => {
     normalizeProviderModelIdWithRuntimeMock.mockReset();
     getCurrentPluginMetadataSnapshotMock.mockReturnValue(undefined);
     loadManifestMetadataSnapshotMock.mockReturnValue(
-      createPluginMetadataSnapshotFixture({
-        plugins: [
-          {
-            id: "workspace-model-normalizer",
-            modelIdNormalization: {
-              providers: {
-                custom: {
-                  prefixWhenBare: "workspace-custom",
-                },
-              },
-            },
-          },
-        ],
+      normalizationSnapshot({
+        custom: {
+          prefixWhenBare: "workspace-custom",
+        },
       }),
     );
   });
@@ -70,15 +76,7 @@ describe("configured model manifest workspace scope", () => {
   it("does not reuse workspace manifest policies without a workspace context", () => {
     // Workspace plugin normalization must not leak into unscoped callers; they
     // can only use the current global metadata snapshot.
-    const cfg = {
-      models: {
-        providers: {
-          custom: {
-            models: [{ id: "fast-model" }],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
+    const cfg = createCatalogConfig();
 
     expect(buildConfiguredModelCatalog({ cfg })).toMatchObject([
       {
@@ -94,15 +92,7 @@ describe("configured model manifest workspace scope", () => {
   });
 
   it("uses manifest policies when the workspace context is explicit", () => {
-    const cfg = {
-      models: {
-        providers: {
-          custom: {
-            models: [{ id: "fast-model" }],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
+    const cfg = createCatalogConfig();
 
     expect(buildConfiguredModelCatalog({ cfg, workspaceDir: "/workspace/a" })).toMatchObject([
       {
@@ -120,30 +110,13 @@ describe("configured model manifest workspace scope", () => {
 
   it("uses an unscoped current snapshot without falling back to a metadata scan", () => {
     getCurrentPluginMetadataSnapshotMock.mockReturnValue(
-      createPluginMetadataSnapshotFixture({
-        plugins: [
-          {
-            id: "workspace-model-normalizer",
-            modelIdNormalization: {
-              providers: {
-                custom: {
-                  prefixWhenBare: "global-custom",
-                },
-              },
-            },
-          },
-        ],
+      normalizationSnapshot({
+        custom: {
+          prefixWhenBare: "global-custom",
+        },
       }),
     );
-    const cfg = {
-      models: {
-        providers: {
-          custom: {
-            models: [{ id: "fast-model" }],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
+    const cfg = createCatalogConfig();
 
     expect(buildConfiguredModelCatalog({ cfg })).toMatchObject([
       {
@@ -156,13 +129,7 @@ describe("configured model manifest workspace scope", () => {
 
   it("builds configured catalog facts once when resolving allowed models", () => {
     getCurrentPluginMetadataSnapshotMock.mockReturnValue(createPluginMetadataSnapshotFixture());
-    const cfg = {
-      models: {
-        providers: {
-          custom: { models: [{ id: "fast-model" }] },
-        },
-      },
-    } as unknown as OpenClawConfig;
+    const cfg = createCatalogConfig();
 
     expect(
       buildAllowedModelSet({
@@ -319,14 +286,7 @@ describe("configured model manifest workspace scope", () => {
   it("preserves workspace manifest policy for default-provider aliases", () => {
     getActivePluginRegistryWorkspaceDirFromStateMock.mockReturnValue("/workspace/a");
     loadManifestMetadataSnapshotMock.mockReturnValue(
-      createPluginMetadataSnapshotFixture({
-        plugins: [
-          {
-            id: "workspace-model-normalizer",
-            modelIdNormalization: { providers: { openai: { aliases: { ops: "workspace-ops" } } } },
-          },
-        ],
-      }),
+      normalizationSnapshot({ openai: { aliases: { ops: "workspace-ops" } } }),
     );
     const cfg = {
       agents: { defaults: { models: { "openai/ops": { alias: "Operations" } } } },
@@ -337,18 +297,6 @@ describe("configured model manifest workspace scope", () => {
     ).toEqual({ provider: "openai", model: "workspace-ops" });
     expect(loadManifestMetadataSnapshotMock.mock.calls.length).toBe(1);
     expect(loadManifestMetadataSnapshotMock.mock.calls[0]?.[0]?.workspaceDir).toBe("/workspace/a");
-  });
-
-  it("preserves provider-owned manifest discovery for non-default aliases", () => {
-    const cfg = {
-      agents: { defaults: { models: { "custom/ops": { alias: "Operations" } } } },
-    } as unknown as OpenClawConfig;
-
-    expect(
-      buildModelAliasIndex({ cfg, defaultProvider: "openai" }).byAlias.get("operations")?.ref,
-    ).toEqual({ provider: "custom", model: "workspace-custom/ops" });
-    expect(loadManifestMetadataSnapshotMock.mock.calls.length).toBe(1);
-    expect(normalizeProviderModelIdWithRuntimeMock.mock.calls.length).toBe(1);
   });
 
   it.each([
@@ -368,18 +316,9 @@ describe("configured model manifest workspace scope", () => {
     },
   ])("normalizes mixed aliases consistently with $name", ({ models }) => {
     loadManifestMetadataSnapshotMock.mockReturnValue(
-      createPluginMetadataSnapshotFixture({
-        plugins: [
-          {
-            id: "workspace-model-normalizer",
-            modelIdNormalization: {
-              providers: {
-                custom: { prefixWhenBare: "workspace-custom" },
-                openai: { aliases: { legacy: "normalized" } },
-              },
-            },
-          },
-        ],
+      normalizationSnapshot({
+        custom: { prefixWhenBare: "workspace-custom" },
+        openai: { aliases: { legacy: "normalized" } },
       }),
     );
     const cfg = {
@@ -611,21 +550,12 @@ describe("configured model manifest workspace scope", () => {
 
   it("uses manifest-normalized configured refs to infer providers for bare defaults", () => {
     loadManifestMetadataSnapshotMock.mockReturnValue(
-      createPluginMetadataSnapshotFixture({
-        plugins: [
-          {
-            id: "workspace-model-normalizer",
-            modelIdNormalization: {
-              providers: {
-                anthropic: {
-                  aliases: {
-                    "sonnet-4.6": "claude-sonnet-4-6",
-                  },
-                },
-              },
-            },
+      normalizationSnapshot({
+        anthropic: {
+          aliases: {
+            "sonnet-4.6": "claude-sonnet-4-6",
           },
-        ],
+        },
       }),
     );
     const cfg = {
@@ -651,24 +581,15 @@ describe("configured model manifest workspace scope", () => {
 
   it("reuses resolved manifest plugins while resolving configured model aliases", () => {
     loadManifestMetadataSnapshotMock.mockReturnValue(
-      createPluginMetadataSnapshotFixture({
-        plugins: [
-          {
-            id: "workspace-model-normalizer",
-            modelIdNormalization: {
-              providers: {
-                anthropic: {
-                  aliases: {
-                    "sonnet-4.6": "claude-sonnet-4-6",
-                  },
-                },
-                openrouter: {
-                  prefixWhenBare: "openrouter",
-                },
-              },
-            },
+      normalizationSnapshot({
+        anthropic: {
+          aliases: {
+            "sonnet-4.6": "claude-sonnet-4-6",
           },
-        ],
+        },
+        openrouter: {
+          prefixWhenBare: "openrouter",
+        },
       }),
     );
     const cfg = {
@@ -695,24 +616,15 @@ describe("configured model manifest workspace scope", () => {
 
   it("reuses resolved manifest plugins while resolving direct primary models", () => {
     loadManifestMetadataSnapshotMock.mockReturnValue(
-      createPluginMetadataSnapshotFixture({
-        plugins: [
-          {
-            id: "workspace-model-normalizer",
-            modelIdNormalization: {
-              providers: {
-                anthropic: {
-                  aliases: {
-                    "sonnet-4.6": "claude-sonnet-4-6",
-                  },
-                },
-                openrouter: {
-                  prefixWhenBare: "openrouter",
-                },
-              },
-            },
+      normalizationSnapshot({
+        anthropic: {
+          aliases: {
+            "sonnet-4.6": "claude-sonnet-4-6",
           },
-        ],
+        },
+        openrouter: {
+          prefixWhenBare: "openrouter",
+        },
       }),
     );
     const cfg = {

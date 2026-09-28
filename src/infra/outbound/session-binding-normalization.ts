@@ -5,16 +5,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAccountId } from "../../routing/session-key.js";
-
-/**
- * Minimal conversation shape normalized before binding lookup or storage.
- */
-type ConversationRefShape = {
-  channel: string;
-  accountId: string;
-  conversationId: string;
-  parentConversationId?: string;
-};
+import type { ConversationRef } from "./session-binding.types.js";
 
 type ConversationTargetRefShape = {
   conversationId: string;
@@ -40,13 +31,24 @@ export function normalizeConversationTargetRef<T extends ConversationTargetRefSh
 /**
  * Normalizes a full conversation reference for stable binding keys.
  */
-export function normalizeConversationRef<T extends ConversationRefShape>(ref: T): T {
+export function normalizeConversationRef<T extends ConversationRef>(ref: T): T {
   const normalizedTarget = normalizeConversationTargetRef(ref);
   return {
     ...normalizedTarget,
     channel: normalizeLowercaseStringOrEmpty(ref.channel),
     accountId: normalizeAccountId(ref.accountId),
   };
+}
+
+/** Capture only canonical identity fields; caller context must not cross IPC. */
+export function captureConversationRef(ref: ConversationRef): ConversationRef {
+  const { channel, accountId, conversationId, parentConversationId } = ref;
+  return normalizeConversationRef({
+    channel,
+    accountId,
+    conversationId,
+    ...(parentConversationId !== undefined ? { parentConversationId } : {}),
+  });
 }
 
 /**
@@ -61,12 +63,12 @@ export function buildChannelAccountKey(params: { channel: string; accountId: str
 const INSPECTED_CONVERSATION = Symbol.for("openclaw.sessionBinding.inspectedConversation");
 type ScopedBindingInspection = {
   status: "available" | "unavailable";
-  [INSPECTED_CONVERSATION]?: Readonly<ConversationRefShape>;
+  [INSPECTED_CONVERSATION]?: Readonly<ConversationRef>;
 };
 
 export function withSessionBindingInspectionConversation<T extends ScopedBindingInspection>(
   inspection: T,
-  conversation: ConversationRefShape,
+  conversation: ConversationRef,
 ): T {
   return Object.assign(inspection, {
     [INSPECTED_CONVERSATION]: Object.freeze({ ...conversation }),

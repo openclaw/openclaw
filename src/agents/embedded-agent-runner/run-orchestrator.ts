@@ -1,6 +1,3 @@
-/**
- * Embedded-agent run orchestration implementation.
- */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {

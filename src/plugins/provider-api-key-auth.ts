@@ -120,14 +120,6 @@ export async function persistProviderApiKey(
   return true;
 }
 
-function resolveStringOption(opts: Record<string, unknown> | undefined, optionKey: string) {
-  return normalizeOptionalSecretInput(opts?.[optionKey]);
-}
-
-function resolveProfileId(params: { providerId: string; profileId?: string }) {
-  return normalizeOptionalString(params.profileId) || `${params.providerId}:default`;
-}
-
 function resolveProfileIds(params: {
   providerId: string;
   profileId?: string;
@@ -137,7 +129,7 @@ function resolveProfileIds(params: {
   if (explicit.length > 0) {
     return explicit;
   }
-  return [resolveProfileId(params)];
+  return [normalizeOptionalString(params.profileId) || `${params.providerId}:default`];
 }
 
 async function resolveDefaultModel(
@@ -196,10 +188,9 @@ export function createProviderApiKeyAuthMethod(
   const resolveNonInteractiveCredential = async (
     ctx: ProviderAuthMethodNonInteractiveValidationContext,
   ) => {
-    const opts = ctx.opts as Record<string, unknown> | undefined;
     return await ctx.resolveApiKey({
       provider: params.providerId,
-      flagValue: resolveStringOption(opts, params.optionKey),
+      flagValue: normalizeOptionalSecretInput(ctx.opts?.[params.optionKey]),
       flagName: params.flagName,
       envVar: params.envVar,
       ...(params.allowProfile === false ? { allowProfile: false } : {}),
@@ -213,8 +204,7 @@ export function createProviderApiKeyAuthMethod(
     starterModel: params.defaultModel,
     wizard: params.wizard,
     run: async (ctx) => {
-      const opts = ctx.opts as Record<string, unknown> | undefined;
-      const flagValue = resolveStringOption(opts, params.optionKey);
+      const flagValue = normalizeOptionalSecretInput(ctx.opts?.[params.optionKey]);
       const { buildApiKeyCredential } = await loadProviderApiKeyAuthRuntime();
       const { apiKey, input, mode } = await captureProviderApiKey(ctx, {
         token: flagValue ?? normalizeOptionalSecretInput(ctx.opts?.token),

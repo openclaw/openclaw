@@ -168,7 +168,7 @@ class ChatScreenTest {
       resolveChatComposerPrimaryAction(talkActive = false, runActive = true, hasContent = false),
     )
     assertEquals(
-      ChatComposerPrimaryAction.None,
+      ChatComposerPrimaryAction.Talk,
       resolveChatComposerPrimaryAction(talkActive = false, runActive = false, hasContent = false),
     )
   }

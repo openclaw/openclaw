@@ -115,7 +115,7 @@ The dispatch loop:
 3. Selects a small batch of unclaimed ready cards.
 4. Claims each selected card for the dispatcher or assigned agent.
 5. Starts a subagent worker run with bounded card context and the card claim token.
-6. Stores the worker run id, session key, task linkage when the Gateway task ledger reports it, execution status, and worker log on the card.
+6. Stores the worker run id, session key, execution status, and worker log on the card.
 
 Idle scans leave ready-card history unchanged. Existing dispatch counters and
 timestamps remain as historical values; new launches use the card's launch,

@@ -13,6 +13,7 @@ import {
   resolveCodexAppServerRuntimeOptions,
   type CodexPluginConfig,
 } from "./src/app-server/config.js";
+import { joinPresentSections } from "./src/app-server/developer-instruction-sections.js";
 import { filterCodexDynamicTools } from "./src/app-server/dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./src/app-server/dynamic-tools.js";
 import {
@@ -125,10 +126,6 @@ export function buildCodexHarnessPromptSnapshot(params: {
       ),
     }),
   };
-}
-
-function joinPresentSections(...sections: Array<string | undefined>): string {
-  return sections.filter((section): section is string => Boolean(section?.trim())).join("\n\n");
 }
 
 /** Converts harness tools into Codex dynamic-tool specs for prompt snapshot tests. */

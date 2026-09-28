@@ -35,7 +35,7 @@ async function observeWebSocket() {
     typeof import("../../packages/gateway-client/src/websocket.js")
   >("../../packages/gateway-client/src/websocket.js");
   class ObservedWebSocket extends actual.WebSocket {
-    constructor(...args: ConstructorParameters<typeof WebSocket>) {
+    constructor(...args: ConstructorParameters<typeof actual.WebSocket>) {
       super(...args);
       acquisitionFixture.observeClient?.(this);
     }

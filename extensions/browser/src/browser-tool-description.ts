@@ -1,7 +1,71 @@
-import type { BrowserToolCapabilities } from "./browser-tool.schema.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { parseBrowserTabToolBinding } from "./browser-tool-binding.js";
+import {
+  BrowserToolOutputSchema,
+  createBrowserToolSchema,
+  resolveBrowserToolCapabilities,
+  type BrowserToolCapabilities,
+} from "./browser-tool.schema.js";
+import { resolveBrowserConfig, resolveProfile } from "./browser/config.js";
+import { getBrowserProfileCapabilities } from "./browser/profile-capabilities.js";
+
+/** Lazy registration and execution expose exactly the same configured tool. */
+export function createBrowserToolDefinition(
+  opts:
+    | {
+        runToolBinding?: unknown;
+        toolCapabilities?: BrowserToolCapabilities;
+        sandboxBridgeUrl?: string;
+        allowHostControl?: boolean;
+      }
+    | undefined,
+  getConfig: () => OpenClawConfig | undefined,
+) {
+  const parsed =
+    opts?.runToolBinding === undefined
+      ? undefined
+      : parseBrowserTabToolBinding(opts.runToolBinding);
+  if (parsed && !parsed.ok) {
+    throw new Error(`invalid browser run binding: ${parsed.error}`);
+  }
+  const binding = parsed?.binding;
+  const capabilities =
+    opts?.toolCapabilities ??
+    (() => {
+      const config = getConfig();
+      const profile =
+        binding?.target === "host"
+          ? resolveProfile(resolveBrowserConfig(config?.browser, config), binding.profile)
+          : undefined;
+      return resolveBrowserToolCapabilities({
+        tabBound: Boolean(binding),
+        evaluateEnabled: config?.browser?.evaluateEnabled !== false,
+        ...(profile ? { profileCapabilities: getBrowserProfileCapabilities(profile) } : {}),
+      });
+    })();
+  return {
+    binding,
+    capabilities,
+    metadata: {
+      label: "Browser",
+      name: "browser",
+      resultContentSource: "network" as const,
+      description: describeBrowserTool({
+        targetDefault: opts?.sandboxBridgeUrl ? "sandbox" : "host",
+        hostHint:
+          opts?.allowHostControl === false
+            ? "Host target blocked by policy."
+            : "Host target allowed.",
+        capabilities,
+      }),
+      parameters: createBrowserToolSchema(capabilities),
+      outputSchema: BrowserToolOutputSchema,
+    },
+  };
+}
 
 /** Build the Browser tool guidance shared by lazy registration and runtime execution. */
-export function describeBrowserTool(opts: {
+function describeBrowserTool(opts: {
   targetDefault: "sandbox" | "host";
   hostHint: string;
   capabilities: BrowserToolCapabilities;

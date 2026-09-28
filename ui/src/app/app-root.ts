@@ -20,6 +20,7 @@ import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import { applicationContext, type ApplicationContext } from "./context.ts";
 import {
   APPROVAL_PAGE_ELEMENT,
+  BROWSER_DOCUMENT_ELEMENT,
   DASHBOARD_DOCUMENT_ELEMENT,
   DESKTOP_PANEL_ELEMENT,
   isOptionalElementDefined,
@@ -34,6 +35,7 @@ import { nativeEmbedHost, isNativeWebChromeHost } from "./native-web-chrome.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
 import { isDesktopPanelAvailable } from "./panel-availability.ts";
 import { resolveGatewayCredentialsForUrlEdit } from "./settings.ts";
+import { connectShellViewport } from "./shell-viewport.ts";
 
 type FocusDashboardRouteState =
   | { kind: "loading" }
@@ -63,6 +65,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
   @state() private focusDashboardRoute: FocusDashboardRouteState = { kind: "loading" };
 
   private runtime: ApplicationRuntime | undefined;
+  private disconnectViewport: (() => void) | undefined;
   private readonly contextProvider = new ContextProvider(this, {
     context: applicationContext,
   });
@@ -117,10 +120,18 @@ export class OpenClawApp extends OpenClawLightDomElement {
 
   override connectedCallback() {
     super.connectedCallback();
+    this.disconnectViewport?.();
+    this.disconnectViewport = connectShellViewport();
     const embedHost = nativeEmbedHost();
     this.ownerDocument.documentElement.classList.toggle(
       "openclaw-native-embed",
       embedHost !== null,
+    );
+    this.toggleAttribute(
+      "data-native-titlebar",
+      embedHost?.platform === "macos" &&
+        embedHost.formFactor === "desktop" &&
+        embedHost.surface === "conversation",
     );
     if (embedHost) {
       void import("../styles/native-embed.css");
@@ -134,6 +145,9 @@ export class OpenClawApp extends OpenClawLightDomElement {
     }
     if (focusTarget?.kind === "desktop") {
       this.requestLazyDocument(DESKTOP_PANEL_ELEMENT);
+    }
+    if (focusTarget?.kind === "browser") {
+      this.requestLazyDocument(BROWSER_DOCUMENT_ELEMENT);
     }
     if (focusTarget?.kind === "dashboard") {
       this.requestLazyDocument(DASHBOARD_DOCUMENT_ELEMENT);
@@ -164,6 +178,8 @@ export class OpenClawApp extends OpenClawLightDomElement {
   override disconnectedCallback() {
     // Stop reactive subscriptions before disposing their application sources.
     this.subscriptions.clear();
+    this.disconnectViewport?.();
+    this.disconnectViewport = undefined;
     this.focusDashboardAbort?.abort();
     this.focusDashboardAbort = null;
     this.lazyCustomElements.abandon();
@@ -428,6 +444,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
     return html`
       <openclaw-board-document
         .gatewaySnapshot=${gatewaySnapshot}
+        .sessions=${this.context?.sessions}
         .sessionKey=${route.data.sessionKey}
         .preparedSession=${
           route.data.agentId
@@ -491,6 +508,18 @@ export class OpenClawApp extends OpenClawLightDomElement {
       </main>`;
     }
     const focusTarget = this.focusTarget;
+    if (focusTarget?.kind === "browser") {
+      return html`
+        <openclaw-browser-document
+          .props=${{
+            context,
+            target: focusTarget,
+            renderEscape: (label: string) => this.renderFocusEscape(label),
+          }}
+        ></openclaw-browser-document>
+        ${this.renderLazyDocumentState(BROWSER_DOCUMENT_ELEMENT)}
+      `;
+    }
     // Focused terminals own the whole document. Keep the generic login gate
     // out of this path or a connecting native session exposes Web UI chrome.
     if (focusTarget?.kind === "terminal") {
@@ -538,6 +567,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
       return html`
         <openclaw-desktop-panel
           .client=${gatewayConnected ? gatewaySnapshot.client : null}
+          .sessions=${context.sessions}
           .available=${desktopAvailable}
           .documentMode=${true}
           .requestedSource=${source}

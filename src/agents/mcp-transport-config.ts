@@ -3,7 +3,6 @@
  */
 import { redactSensitiveUrl } from "@openclaw/net-policy/redact-sensitive-url";
 import {
-  asPositiveFiniteNumber,
   clampPositiveTimerTimeoutMs,
   resolvePositiveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
@@ -80,27 +79,21 @@ function warnDroppedStdioEnvOnce(serverName: string, key: string): void {
   );
 }
 
-function getPositiveNumber(rawServer: unknown, key: string): number | undefined {
-  return asPositiveFiniteNumber(asOptionalObjectRecord(rawServer)?.[key]);
-}
-
 function getConnectionTimeoutMs(rawServer: unknown): number {
-  const milliseconds = getPositiveNumber(rawServer, "connectionTimeoutMs");
-  if (milliseconds) {
-    return clampPositiveTimerTimeoutMs(milliseconds) ?? DEFAULT_CONNECTION_TIMEOUT_MS;
-  }
-  return DEFAULT_CONNECTION_TIMEOUT_MS;
+  return resolvePositiveTimerTimeoutMs(
+    asOptionalObjectRecord(rawServer)?.connectionTimeoutMs,
+    DEFAULT_CONNECTION_TIMEOUT_MS,
+  );
 }
 
 export function resolveMcpRequestTimeoutMs(
   rawServer: unknown,
   fallbackMs = DEFAULT_REQUEST_TIMEOUT_MS,
 ): number {
-  const milliseconds = getPositiveNumber(rawServer, "requestTimeoutMs");
-  if (milliseconds) {
-    return clampPositiveTimerTimeoutMs(milliseconds) ?? DEFAULT_REQUEST_TIMEOUT_MS;
-  }
-  return resolvePositiveTimerTimeoutMs(fallbackMs, DEFAULT_REQUEST_TIMEOUT_MS);
+  return (
+    clampPositiveTimerTimeoutMs(asOptionalObjectRecord(rawServer)?.requestTimeoutMs) ??
+    resolvePositiveTimerTimeoutMs(fallbackMs, DEFAULT_REQUEST_TIMEOUT_MS)
+  );
 }
 
 function getBooleanField(rawServer: unknown, key: string): boolean | undefined {

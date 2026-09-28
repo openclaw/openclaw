@@ -114,13 +114,9 @@ describe("iMessage send SQLite receipt recovery", () => {
     { kind: "handle", target: "+1 (555) 000-1111", timeout: true },
   ])(
     "recovers $kind through the default resolver off the caller thread",
-    async ({ kind, target, timeout }) => {
+    async ({ target, timeout }) => {
       const close = vi.spyOn(DatabaseSync.prototype, "close");
-      const exec = vi.spyOn(DatabaseSync.prototype, "exec");
       const get = vi.spyOn(StatementSync.prototype, "get");
-      const all = vi.spyOn(StatementSync.prototype, "all");
-      const iterate = vi.spyOn(StatementSync.prototype, "iterate");
-      const run = vi.spyOn(StatementSync.prototype, "run");
       const prepareCalls = vi.spyOn(DatabaseSync.prototype, "prepare");
       const countMessageSelects = () =>
         prepareCalls.mock.calls.filter(([sql]) =>
@@ -158,7 +154,6 @@ describe("iMessage send SQLite receipt recovery", () => {
       } else {
         request.mockResolvedValue({ message_id: 6 });
       }
-      const before = performance.now();
       const result = await sendMessageIMessage(target, "synthetic receipt", {
         config: { channels: { imessage: {} } },
         client,
@@ -173,22 +168,6 @@ describe("iMessage send SQLite receipt recovery", () => {
             }
           : {}),
       });
-      console.info(
-        JSON.stringify({
-          kind,
-          elapsedMs: performance.now() - before,
-          parentMessageSelects: countMessageSelects(),
-          parentSendNativeCalls: {
-            prepare: prepareCalls.mock.calls.length,
-            exec: exec.mock.calls.length,
-            close: close.mock.calls.length,
-            get: get.mock.calls.length,
-            all: all.mock.calls.length,
-            iterate: iterate.mock.calls.length,
-            run: run.mock.calls.length,
-          },
-        }),
-      );
       expect(result.guid).toBe("recovered-guid");
       expect(result.messageId).toBe(timeout ? "recovered-guid" : "6");
       expect(result.receipt.platformMessageIds).toEqual([timeout ? "recovered-guid" : "6"]);

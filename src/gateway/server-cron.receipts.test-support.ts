@@ -7,9 +7,14 @@ import { CronService } from "../cron/service.js";
 import type { CronServiceState } from "../cron/service/state.js";
 import { findActiveCronRunReceiptInDatabase } from "../cron/store/run-receipt-store.js";
 import type { CronJobCreate } from "../cron/types.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
 import type { RunExit } from "../process/supervisor/types.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import type { buildGatewayCronService } from "./server-cron.js";
 
 type CronFixture = ReturnType<typeof buildGatewayCronService>;
@@ -26,7 +31,10 @@ type GatewayCronReceiptTestHarness = {
     spawn: Mock<() => Promise<WatchedRun & { runId: string }>>;
   };
   createCronConfig: (name: string) => OpenClawConfig;
-  loadCronService: (cfg: OpenClawConfig) => CronFixture;
+  loadCronService: (
+    cfg: OpenClawConfig,
+    overrides?: { scheduler: GatewayScheduler },
+  ) => CronFixture;
   getCronDeps: (service: CronFixture) => Pick<CronServiceState["deps"], "runCommandJob">;
   getConcreteCron: (service: CronFixture) => CronService;
   addCronJob: (
@@ -70,7 +78,18 @@ export function registerGatewayCronReceiptTests({
       const cleanupGuardRegistered = createDeferred();
       const receiptRecheckRegistered = createDeferred();
       const { spawn } = mockCronSupervisor(...watched);
-      const state = loadCronService(createCronConfig("server-cron-on-exit-receipt"));
+      const clock = createGatewaySchedulerClock(Date.now());
+      const scheduler = createTestGatewayScheduler({
+        ...clock.clock,
+        arm: (run, delayMs) => {
+          const cancel = clock.clock.arm(run, delayMs);
+          if (delayMs === 2_000) {
+            receiptRecheckRegistered.resolve();
+          }
+          return cancel;
+        },
+      });
+      const state = loadCronService(createCronConfig("server-cron-on-exit-receipt"), { scheduler });
       const runCommandJob = vi.fn<NonNullable<CronServiceState["deps"]["runCommandJob"]>>(
         async () => ({ status: "ok", summary: "next payload" }),
       );
@@ -111,8 +130,6 @@ export function registerGatewayCronReceiptTests({
           const timer = schedule(callback, delay, ...args);
           if (delay === 20_000) {
             cleanupGuardRegistered.resolve();
-          } else if (delay === 2_000) {
-            receiptRecheckRegistered.resolve();
           }
           return timer;
         });
@@ -187,6 +204,7 @@ export function registerGatewayCronReceiptTests({
         if (action === "run" || action === "replace") {
           // The registered receipt owner rechecks active fences every two seconds.
           await vi.advanceTimersByTimeAsync(2_000);
+          await clock.advanceBy(2_000);
           await vi.waitFor(() => expect(runCommandJob).toHaveBeenCalledTimes(2), {
             timeout: 5_000,
           });

@@ -15,9 +15,41 @@ vi.mock("../plugin-sdk/facade-loader.js", () => ({
 
 import { createWorkerBrowserToolRuntime } from "./browser-runtime.js";
 
+const options = {
+  descriptor: {
+    cdpUrl: "http://127.0.0.1:9222",
+    launcherPath: "/usr/local/bin/openclaw-worker-browser",
+  },
+  sessionKey: "worker:session-1",
+  stateDir: "/tmp/worker-state",
+  workspaceDir: "/tmp/workspace",
+};
+const dispose = vi.fn().mockResolvedValue(undefined);
+const createAttachedBrowserToolRuntime = vi.fn();
+
+function completeLaunch(error: Error | null) {
+  mocks.execFile.mockImplementation(
+    (_file: string, _args: string[], _options: object, callback: (error: Error | null) => void) => {
+      callback(error);
+      return {};
+    },
+  );
+}
+
+function ensureAttachTarget() {
+  const attach = createAttachedBrowserToolRuntime.mock.calls[0]?.[0]
+    .ensureAttachTarget as () => Promise<void>;
+  return attach();
+}
+
 describe("worker Browser runtime", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    createAttachedBrowserToolRuntime.mockResolvedValue({ tool: { name: "browser" }, dispose });
+    mocks.loadBundledPluginPublicSurfaceModuleSyncCore.mockReturnValue({
+      createAttachedBrowserToolRuntime,
+    });
+    completeLaunch(null);
   });
 
   it.each([
@@ -26,35 +58,9 @@ describe("worker Browser runtime", () => {
   ])(
     "launches the provider executable with fixed args $launcherArgs without a shell",
     async ({ launcherArgs }) => {
-      const dispose = vi.fn().mockResolvedValue(undefined);
-      const createAttachedBrowserToolRuntime = vi.fn().mockResolvedValue({
-        tool: { name: "browser" },
-        dispose,
-      });
-      mocks.loadBundledPluginPublicSurfaceModuleSyncCore.mockReturnValue({
-        createAttachedBrowserToolRuntime,
-      });
-      mocks.execFile.mockImplementation(
-        (
-          _file: string,
-          _args: string[],
-          _options: object,
-          callback: (error: Error | null) => void,
-        ) => {
-          callback(null);
-          return {};
-        },
-      );
-
       const runtime = await createWorkerBrowserToolRuntime({
-        descriptor: {
-          cdpUrl: "http://127.0.0.1:9222",
-          launcherPath: "/usr/local/bin/openclaw-worker-browser",
-          ...(launcherArgs ? { launcherArgs } : {}),
-        },
-        sessionKey: "worker:session-1",
-        stateDir: "/tmp/worker-state",
-        workspaceDir: "/tmp/workspace",
+        ...options,
+        descriptor: { ...options.descriptor, ...(launcherArgs ? { launcherArgs } : {}) },
       });
 
       expect(mocks.loadBundledPluginPublicSurfaceModuleSyncCore).toHaveBeenCalledWith({
@@ -70,8 +76,6 @@ describe("worker Browser runtime", () => {
         workspaceDir: "/tmp/workspace",
       });
 
-      const ensureAttachTarget = createAttachedBrowserToolRuntime.mock.calls[0]?.[0]
-        .ensureAttachTarget as () => Promise<void>;
       await ensureAttachTarget();
       expect(mocks.execFile).toHaveBeenCalledWith(
         "/usr/local/bin/openclaw-worker-browser",
@@ -91,19 +95,8 @@ describe("worker Browser runtime", () => {
   );
 
   it("uses the build-composed Browser runtime without filesystem discovery", async () => {
-    const createAttachedBrowserToolRuntime = vi.fn().mockResolvedValue({
-      tool: { name: "browser" },
-      dispose: vi.fn().mockResolvedValue(undefined),
-    });
-
     await createWorkerBrowserToolRuntime({
-      descriptor: {
-        cdpUrl: "http://127.0.0.1:9222",
-        launcherPath: "/usr/local/bin/openclaw-worker-browser",
-      },
-      sessionKey: "worker:session-1",
-      stateDir: "/tmp/worker-state",
-      workspaceDir: "/tmp/workspace",
+      ...options,
       runtime: { createAttachedBrowserToolRuntime },
     });
 
@@ -112,36 +105,8 @@ describe("worker Browser runtime", () => {
   });
 
   it("surfaces launcher failure without loading another browser route", async () => {
-    const createAttachedBrowserToolRuntime = vi.fn().mockResolvedValue({
-      tool: { name: "browser" },
-      dispose: vi.fn().mockResolvedValue(undefined),
-    });
-    mocks.loadBundledPluginPublicSurfaceModuleSyncCore.mockReturnValue({
-      createAttachedBrowserToolRuntime,
-    });
-    mocks.execFile.mockImplementation(
-      (
-        _file: string,
-        _args: string[],
-        _options: object,
-        callback: (error: Error | null) => void,
-      ) => {
-        callback(new Error("launcher timed out"));
-        return {};
-      },
-    );
-
-    await createWorkerBrowserToolRuntime({
-      descriptor: {
-        cdpUrl: "http://127.0.0.1:9222",
-        launcherPath: "/usr/local/bin/openclaw-worker-browser",
-      },
-      sessionKey: "worker:session-1",
-      stateDir: "/tmp/worker-state",
-      workspaceDir: "/tmp/workspace",
-    });
-    const ensureAttachTarget = createAttachedBrowserToolRuntime.mock.calls[0]?.[0]
-      .ensureAttachTarget as () => Promise<void>;
+    completeLaunch(new Error("launcher timed out"));
+    await createWorkerBrowserToolRuntime(options);
 
     await expect(ensureAttachTarget()).rejects.toThrow(
       "Worker Browser launcher failed: launcher timed out",

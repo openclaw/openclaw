@@ -68,26 +68,10 @@ export function materializeControlUiLocaleCatalog(
   sourceFlat: ReadonlyMap<string, string>,
   memory: ReadonlyMap<string, TranslationMemoryEntry>,
 ): TranslationMap {
-  const translations = new Map<string, string>();
-
-  for (const entry of memory.values()) {
-    for (const key of [entry.segment_id, ...(entry.segment_ids ?? [])]) {
-      const source = sourceFlat.get(key);
-      if (source === undefined || entry.text_hash !== hashControlUiTranslationText(source)) {
-        continue;
-      }
-      translations.set(key, entry.translated);
-    }
-  }
-
-  const catalog: TranslationMap = {};
-  for (const key of sourceFlat.keys()) {
-    const translated = translations.get(key);
-    if (translated !== undefined) {
-      setControlUiCatalogValue(catalog, key, translated);
-    }
-  }
-  return catalog;
+  return materializePreparedControlUiLocaleCatalog(
+    prepareControlUiCatalogSource(sourceFlat),
+    memory,
+  );
 }
 
 export type PreparedControlUiCatalogSource = {

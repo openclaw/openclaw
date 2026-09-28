@@ -23,13 +23,11 @@ import { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.j
 
 const {
   handleGatewayRequestMock,
-  incrementPresenceVersionMock,
   resolveRuntimeServiceBuildIdMock,
   setLastFrameMetaMock,
   upsertPresenceMock,
 } = vi.hoisted(() => ({
   handleGatewayRequestMock: vi.fn(),
-  incrementPresenceVersionMock: vi.fn(() => 2),
   resolveRuntimeServiceBuildIdMock: vi.fn<() => string | null>(() => "gateway-build"),
   setLastFrameMetaMock: vi.fn(),
   upsertPresenceMock: vi.fn(),
@@ -48,6 +46,7 @@ vi.mock("../../../config/config.js", () => ({
 }));
 vi.mock("../../../config/io.js", () => ({ getRuntimeConfig: () => gatewayConfig }));
 vi.mock("../../../infra/system-presence.js", () => ({
+  commitPresence: vi.fn(),
   upsertPresence: upsertPresenceMock,
   listSystemPresence: vi.fn(() => []),
 }));
@@ -245,8 +244,7 @@ describe("Control UI build admission over WebSocket", () => {
         buildRequestContext: () =>
           ({
             broadcast: vi.fn(),
-            incrementPresenceVersion: incrementPresenceVersionMock,
-            getHealthVersion: () => 1,
+            publishPresence: vi.fn(),
           }) as unknown as GatewayRequestContext,
         nodeLifecycleDispatch: new GatewayNodeLifecycleDispatchTracker(),
         refreshHealthSnapshot: vi.fn(),

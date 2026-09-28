@@ -201,13 +201,18 @@ export async function gatherDispatchRequest(
     });
     messageAuditTerminal?.note(outcome, opts);
     if (diagnosticsEnabled) {
-      replyHotPathTiming.logIfSlow({
-        channel,
-        messageId,
-        sessionKey,
-        outcome,
-        reason: opts?.reason,
-      });
+      replyHotPathTiming.logIfSlow(
+        {
+          channel,
+          messageId,
+          runId: params.replyOptions?.runId,
+          sessionId: lifecycleSessionId,
+          sessionKey,
+          outcome,
+          reason: opts?.reason,
+        },
+        { beforeReplyResolver: agentDispatchStartedAt === 0 },
+      );
     }
     messageLifecycle.markProcessed(outcome, opts);
   };
@@ -230,7 +235,13 @@ export async function gatherDispatchRequest(
       return;
     }
     agentDispatchStartedAt = Date.now();
-    replyHotPathTiming.logPreparationIfSlow({ channel, messageId, sessionKey });
+    replyHotPathTiming.logPreparationIfSlow({
+      channel,
+      messageId,
+      runId: params.replyOptions?.runId,
+      sessionId: lifecycleSessionId,
+      sessionKey,
+    });
     logMessageDispatchStarted({
       channel,
       sessionKey: acpDispatchSessionKey,
@@ -257,14 +268,6 @@ export async function gatherDispatchRequest(
       reason: opts?.reason,
       error: opts?.error,
     });
-  };
-
-  const markProcessing = () => {
-    messageLifecycle.markProcessing();
-  };
-
-  const markIdle = (reason: string) => {
-    messageLifecycle.markIdle(reason);
   };
 
   const markInboundDedupeReplayUnsafe = () => {
@@ -550,8 +553,8 @@ export async function gatherDispatchRequest(
     recordProcessed,
     recordAgentDispatchStarted,
     recordAgentDispatchCompleted,
-    markProcessing,
-    markIdle,
+    markProcessing: () => messageLifecycle.markProcessing(),
+    markIdle: (reason: string) => messageLifecycle.markIdle(reason),
     markInboundDedupeReplayUnsafe,
     acpDispatchSessionKey,
     dispatchKind,

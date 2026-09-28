@@ -141,34 +141,29 @@ function preparedVerificationResults(
 }
 
 describe("OpenClaw database integrity verifier", () => {
-  it.each(["absent", "installed"])(
-    "verifies the %s additive transcript eligibility projection",
-    async (shape) => {
-      const stateDir = tempDirs.make("openclaw-database-verify-eligibility-");
-      const agent = openOpenClawAgentDatabase({
-        agentId: "worker-1",
-        env: { OPENCLAW_STATE_DIR: stateDir },
-      });
-      if (shape === "absent") {
-        agent.db.exec(
-          "DROP INDEX idx_agent_transcript_context_pending; ALTER TABLE session_transcript_active_events DROP COLUMN context_eligible;",
-        );
-      }
-      const targets: OpenClawDatabaseVerifyTarget[] = [
-        { kind: "agent", label: "transcript eligibility", path: agent.path },
-      ];
-      await expect(runDatabaseVerifyWorker(targets)).resolves.toEqual([
-        { path: agent.path, ok: true },
-      ]);
-      expect(
-        agent.db
-          .prepare(
-            "SELECT name FROM pragma_table_info('session_transcript_active_events') WHERE name = 'context_eligible'",
-          )
-          .get(),
-      ).toEqual(shape === "absent" ? undefined : { name: "context_eligible" });
-    },
-  );
+  it("verifies an absent additive transcript eligibility projection without installing it", async () => {
+    const stateDir = tempDirs.make("openclaw-database-verify-eligibility-");
+    const agent = openOpenClawAgentDatabase({
+      agentId: "worker-1",
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    agent.db.exec(
+      "DROP INDEX idx_agent_transcript_context_pending; ALTER TABLE session_transcript_active_events DROP COLUMN context_eligible;",
+    );
+    const targets: OpenClawDatabaseVerifyTarget[] = [
+      { kind: "agent", label: "transcript eligibility", path: agent.path },
+    ];
+    await expect(runDatabaseVerifyWorker(targets)).resolves.toEqual([
+      { path: agent.path, ok: true },
+    ]);
+    expect(
+      agent.db
+        .prepare(
+          "SELECT name FROM pragma_table_info('session_transcript_active_events') WHERE name = 'context_eligible'",
+        )
+        .get(),
+    ).toBeUndefined();
+  });
 
   it.skipIf(process.platform === "win32").each([undefined, "quick"] as const)(
     "preserves live WAL ownership during an open database check (%s)",

@@ -58,8 +58,8 @@ function fixture(
 
 describe("plugin state data-only comparison", () => {
   it("observes and applies through the real worker without parent SQL", async () => {
-    const { store, env } = fixture("cold");
-    const observation = observeHostDataSql(env);
+    const { store } = fixture("cold");
+    const observation = observeHostDataSql();
     const calls = observation.calls;
     try {
       const observed = await store.observe("counter");

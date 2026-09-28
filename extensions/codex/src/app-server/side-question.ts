@@ -65,6 +65,7 @@ import {
   handleDynamicToolCallWithTimeout,
   resolveCodexToolAbortTerminalReason,
   resolveDynamicToolCallTimeoutMs,
+  toCodexDynamicToolProtocolResponse,
 } from "./dynamic-tool-execution.js";
 import { resolveCodexDynamicToolsLoading } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
@@ -75,11 +76,10 @@ import { CodexNativeToolLifecycleProjector } from "./event-projector-native-tool
 import {
   buildCodexNativeHookRelayConfig,
   buildCodexNativeHookRelayDisabledConfig,
-  emitCodexNativePreToolUseFailureDiagnostic,
   resolveCodexNativeHookRelayEvents,
   resolveCodexNativeHookRelayTtlMs,
-  type CodexNativePreToolUseFailure,
 } from "./native-hook-relay.js";
+import { createCodexNativePreToolUseFailureBuffer } from "./native-pre-tool-use-failures.js";
 import {
   mergeCodexThreadConfigs,
   refreshCodexPluginAppApprovalPolicy,
@@ -379,41 +379,14 @@ export async function runCodexAppServerSideQuestion(
   let collector: CodexEphemeralTurn | undefined;
   const runAbortController = new AbortController();
   let nativeToolLifecycleProjector: CodexNativeToolLifecycleProjector | undefined;
-  const pendingNativePreToolUseFailures: CodexNativePreToolUseFailure[] = [];
-  let nativePreToolUseFailureFallbackActive = false;
   let nativeToolRunWasAbortedBeforeCleanup: boolean | undefined;
-  let nativePreToolUseFailureFallbackTerminalReason:
-    | CodexNativePreToolUseFailure["disposition"]
-    | undefined;
-  const emitNativePreToolUseFailure = (failure: CodexNativePreToolUseFailure) => {
-    emitCodexNativePreToolUseFailureDiagnostic({
-      agentId: sessionAgentId,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      runId: sideRunParams.runId,
-      signal: runAbortController.signal,
-      failure,
-      ...(nativePreToolUseFailureFallbackActive
-        ? {
-            terminalReason: nativePreToolUseFailureFallbackTerminalReason ?? failure.disposition,
-          }
-        : {}),
-    });
-  };
-  const flushPendingNativePreToolUseFailures = () => {
-    for (const failure of pendingNativePreToolUseFailures.splice(0)) {
-      emitNativePreToolUseFailure(failure);
-    }
-  };
-  const activateNativePreToolUseFailureFallback = () => {
-    if (!nativePreToolUseFailureFallbackActive) {
-      nativePreToolUseFailureFallbackTerminalReason = nativeToolRunWasAbortedBeforeCleanup
-        ? resolveCodexToolAbortTerminalReason(runAbortController.signal)
-        : undefined;
-      nativePreToolUseFailureFallbackActive = true;
-    }
-    flushPendingNativePreToolUseFailures();
-  };
+  const nativePreToolUseFailures = createCodexNativePreToolUseFailureBuffer({
+    agentId: sessionAgentId,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    runId: sideRunParams.runId,
+    signal: runAbortController.signal,
+  });
   const abortFromUpstream = () =>
     runAbortController.abort(params.opts?.abortSignal?.reason ?? "codex_side_question_abort");
   if (params.opts?.abortSignal?.aborted) {
@@ -600,10 +573,7 @@ export async function runCodexAppServerSideQuestion(
           response,
           durationMs: Math.max(0, Date.now() - toolStartedAt),
         });
-        return {
-          contentItems: response.contentItems,
-          success: response.success,
-        } as JsonValue;
+        return toCodexDynamicToolProtocolResponse(response) as JsonValue;
       } catch (error) {
         emitDynamicToolErrorDiagnostic({
           ...diagnosticContext,
@@ -650,15 +620,13 @@ export async function runCodexAppServerSideQuestion(
         runBeforeToolCall: sideRunParams.hostCapabilities.runBeforeToolCall,
         assertActive: assertCurrent,
         onPreToolUseFailure: (failure) => {
-          if (nativePreToolUseFailureFallbackActive) {
-            emitNativePreToolUseFailure(failure);
-          } else if (nativeToolLifecycleProjector) {
+          if (!nativePreToolUseFailures.active && nativeToolLifecycleProjector) {
             nativeToolLifecycleProjector.recordPreToolUseFailure(
               failure,
               nativeToolRunWasAbortedBeforeCleanup,
             );
           } else {
-            pendingNativePreToolUseFailures.push(failure);
+            nativePreToolUseFailures.record(failure);
           }
         },
         command: { timeoutMs: options.nativeHookRelay.gatewayTimeoutMs },
@@ -907,10 +875,10 @@ export async function runCodexAppServerSideQuestion(
         runAbortSignal: runAbortController.signal,
       },
     );
-    for (const failure of pendingNativePreToolUseFailures) {
+    for (const failure of nativePreToolUseFailures.pending) {
       nativeToolLifecycleProjector.recordPreToolUseFailure(failure);
     }
-    pendingNativePreToolUseFailures.length = 0;
+    nativePreToolUseFailures.pending.length = 0;
     if (!collector) {
       throw new Error("Codex side thread route was not reserved");
     }
@@ -978,8 +946,9 @@ export async function runCodexAppServerSideQuestion(
         },
         () => collector?.route.release(),
         () => nativeToolLifecycleProjector?.finalizeActive(nativeToolRunWasAbortedBeforeCleanup),
-        activateNativePreToolUseFailureFallback,
-        flushPendingNativePreToolUseFailures,
+        () =>
+          nativePreToolUseFailures.activateFallback(nativeToolRunWasAbortedBeforeCleanup === true),
+        nativePreToolUseFailures.flush,
         releaseSandboxEnvironment,
         () => releaseCodexAppServerClientLease(clientLease),
         () => nativeHookRelay?.unregister(),

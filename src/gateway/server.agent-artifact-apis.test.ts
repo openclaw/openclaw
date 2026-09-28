@@ -16,7 +16,6 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
-import { createTaskRecord, deleteTaskRecordById } from "../tasks/task-registry.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   attachManagedOutgoingMediaToMessage,
@@ -354,23 +353,6 @@ describe("Gateway agent and artifact APIs", () => {
     const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
     const scope = { agentId: "main", sessionId, sessionKey, storePath };
     await upsertSessionEntryCore(scope, { sessionId, updatedAt: Date.now() });
-    const task = createTaskRecord({
-      runtime: "cli",
-      requesterSessionKey: sessionKey,
-      ownerKey: sessionKey,
-      agentId: "main",
-      requesterAgentId: "main",
-      task: "produce a managed artifact",
-      status: "succeeded",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
-    });
-    if (!task) {
-      throw new Error("expected task record");
-    }
-    cleanup.push(() => {
-      deleteTaskRecordById(task.taskId);
-    });
     const documentFixtures = [
       {
         name: "artifact.json",
@@ -413,12 +395,11 @@ describe("Gateway agent and artifact APIs", () => {
         __openclaw: {
           id: messageId,
           seq: 1,
-          messageTaskId: task.taskId,
         },
       } as never,
     });
     expect(
-      attachManagedOutgoingMediaToMessage({ messageId, blocks: managedBlocks, stateDir }),
+      await attachManagedOutgoingMediaToMessage({ messageId, blocks: managedBlocks, stateDir }),
     ).toBe(true);
 
     await disconnectGatewayClient(client);
@@ -433,7 +414,6 @@ describe("Gateway agent and artifact APIs", () => {
       artifacts: Array<{
         id: string;
         sessionKey: string;
-        taskId?: string;
         type: string;
         title: string;
         mimeType?: string;
@@ -441,7 +421,7 @@ describe("Gateway agent and artifact APIs", () => {
       }>;
     };
     const reloadedArtifactList = await client.request<ArtifactList>("artifacts.list", {
-      taskId: task.taskId,
+      sessionKey,
     });
     expect(reloadedArtifactList.artifacts.map((artifact) => artifact.title)).toEqual([
       "artifact.json",
@@ -453,14 +433,13 @@ describe("Gateway agent and artifact APIs", () => {
     await restartGateway("gateway artifact APIs after document restart");
     expect(await listManagedImageRecordEntries({ stateDir, sessionKey })).toHaveLength(2);
     const artifactList = await client.request<ArtifactList>("artifacts.list", {
-      taskId: task.taskId,
+      sessionKey,
     });
     expect(artifactList.artifacts).toHaveLength(2);
     for (const fixture of documentFixtures) {
       const artifact = artifactList.artifacts.find((entry) => entry.title === fixture.name);
       expect(artifact).toMatchObject({
         sessionKey,
-        taskId: task.taskId,
         type: "file",
         title: fixture.name,
         mimeType: fixture.mimeType,
@@ -468,10 +447,10 @@ describe("Gateway agent and artifact APIs", () => {
       });
       await expect(
         client.request("artifacts.get", {
-          taskId: task.taskId,
+          sessionKey,
           artifactId: artifact?.id,
         }),
-      ).resolves.toMatchObject({ artifact: { id: artifact?.id, taskId: task.taskId } });
+      ).resolves.toMatchObject({ artifact: { id: artifact?.id, sessionKey } });
 
       const download = await client.request<{ url: string; expiresAt: string }>(
         "artifacts.download",
@@ -504,11 +483,11 @@ describe("Gateway agent and artifact APIs", () => {
     ).rejects.toThrow(/artifact not found/i);
     await expect(
       client.request("artifacts.get", {
-        taskId: task.taskId,
-        agentId: "other",
+        sessionKey,
+        agentId: createdAgent.agentId,
         artifactId: artifact.id,
       }),
-    ).rejects.toThrow(/artifact not found/i);
+    ).rejects.toThrow('agent "artifact-agent" does not match session key agent "main"');
 
     await expect(
       client.request("agents.delete", {

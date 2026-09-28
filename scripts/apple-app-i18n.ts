@@ -138,7 +138,6 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
     "struct OpenClawNoticeBanner: View {\n    let icon: String\n    let title: OpenClawTextValue\n    let message: OpenClawTextValue",
     "struct OpenClawAdaptiveHeaderRow<Leading: View, Accessory: View>: View {\n    let title: OpenClawTextValue\n    let subtitle: OpenClawTextValue?",
     "struct OpenClawStatusBadge: View {\n    @Environment(\\.colorScheme) private var colorScheme\n    let label: OpenClawTextValue",
-    "struct ProStatusRow: View {\n    let icon: String\n    let title: OpenClawTextValue\n    let detail: OpenClawTextValue",
   ],
   "apps/ios/Sources/Design/SettingsProTabSupport.swift": [
     "struct SettingsDetailRow: View {\n    let label: LocalizedStringKey\n    let value: OpenClawTextValue",

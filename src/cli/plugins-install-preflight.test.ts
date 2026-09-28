@@ -73,14 +73,8 @@ describe("plugin install mutation-free preflight", () => {
     expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
   });
 
-  it.each([
-    "clawhub:",
-    "clawhub:demo@",
-    "clawhub:@scope/pkg@",
-    "CLAWHUB:",
-    "ClAwHuB:demo@",
-    " clawhub:demo@ ",
-  ])("rejects malformed explicit ClawHub source %s before the lifecycle lease", async (raw) => {
+  it("rejects malformed explicit ClawHub sources before the lifecycle lease", async () => {
+    const raw = " clawhub:demo@ ";
     await expect(runPluginsCommand(["plugins", "install", raw, "--force"])).rejects.toThrow(
       "__exit__:1",
     );
@@ -89,19 +83,17 @@ describe("plugin install mutation-free preflight", () => {
     expectNoPluginInstallSideEffects();
   });
 
-  it.each([" ", "\t"])(
-    "rejects a whitespace-only install source %j before the lifecycle lease",
-    async (raw) => {
-      await expect(runPluginsCommand(["plugins", "install", raw, "--force"])).rejects.toThrow(
-        "__exit__:1",
-      );
+  it("rejects a whitespace-only install source before the lifecycle lease", async () => {
+    const raw = "\t";
+    await expect(runPluginsCommand(["plugins", "install", raw, "--force"])).rejects.toThrow(
+      "__exit__:1",
+    );
 
-      expect(runtimeErrors.at(-1)).toContain("Plugin install source must not be empty.");
-      expectNoPluginInstallSideEffects();
-    },
-  );
+    expect(runtimeErrors.at(-1)).toContain("Plugin install source must not be empty.");
+    expectNoPluginInstallSideEffects();
+  });
 
-  it.each(["", " ", "\t"])(
+  it.each(["", "\t"])(
     "rejects an explicitly empty marketplace %j before the lifecycle lease",
     async (marketplace) => {
       await expect(

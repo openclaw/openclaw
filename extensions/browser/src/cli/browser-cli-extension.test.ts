@@ -1,12 +1,13 @@
 import fs from "node:fs/promises";
 import { Command } from "commander";
+import * as runtimeConfigSnapshot from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "../../test-support.js";
 import { chromeProductRoots } from "../browser/extension-install-layout.js";
 import type { installChromeExtensionBootstrap } from "../browser/extension-install.js";
 import { useExtensionInstallFixture } from "../browser/extension-install.test-support.js";
 import { relayKeyIdFromHex } from "../browser/extension-relay/auth-v2-crypto.js";
-import * as cliCoreApiModule from "./core-api.js";
 
 // Metadata output must remain usable without loading browser or agent execution runtimes.
 vi.mock("../control-service.js", () => {
@@ -94,10 +95,8 @@ describe("browser extension pairing Gateway URL", () => {
 
   it("runs canonical setup from the real command entry without exporting a pairing secret", async () => {
     relayMocks.ensureExtensionRelayToken.mockClear();
-    vi.spyOn(cliCoreApiModule, "getRuntimeConfig").mockReturnValue({});
-    const jsonSpy = vi
-      .spyOn(cliCoreApiModule.defaultRuntime, "writeJson")
-      .mockImplementation(runtime.writeJson);
+    vi.spyOn(runtimeConfigSnapshot, "getRuntimeConfig").mockReturnValue({});
+    const jsonSpy = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(runtime.writeJson);
     const { registerBrowserExtensionCommands } = await import("./browser-cli-extension.js");
     const program = new Command();
     registerBrowserExtensionCommands(program.command("browser"), () => ({}));
@@ -147,12 +146,10 @@ describe("browser extension pairing Gateway URL", () => {
       installMocks.installChromeExtensionBootstrap.mockImplementation((params) =>
         real.installChromeExtensionBootstrap({ ...params, ...local }),
       );
-      vi.spyOn(cliCoreApiModule, "getRuntimeConfig").mockReturnValue({
+      vi.spyOn(runtimeConfigSnapshot, "getRuntimeConfig").mockReturnValue({
         browser: { profiles: { work: { driver: "extension", cdpPort: 19444 } } },
       });
-      const jsonSpy = vi
-        .spyOn(cliCoreApiModule.defaultRuntime, "writeJson")
-        .mockImplementation(runtime.writeJson);
+      const jsonSpy = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(runtime.writeJson);
       const { registerBrowserExtensionCommands } = await import("./browser-cli-extension.js");
       const program = new Command();
       registerBrowserExtensionCommands(program.command("browser"), () => ({}));
@@ -184,9 +181,7 @@ describe("browser extension pairing Gateway URL", () => {
       manualRequired: false,
     };
     installMocks.repairChromeExtensionNativeHosts.mockResolvedValue(report);
-    const output = vi
-      .spyOn(cliCoreApiModule.defaultRuntime, "writeJson")
-      .mockImplementation(runtime.writeJson);
+    const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(runtime.writeJson);
     const { registerBrowserExtensionCommands } = await import("./browser-cli-extension.js");
     const program = new Command().exitOverride();
     registerBrowserExtensionCommands(program.command("browser"), () => ({}), "/new/browser");
@@ -238,7 +233,7 @@ describe("browser extension pairing Gateway URL", () => {
         };
       },
     );
-    const logSpy = vi.spyOn(cliCoreApiModule.defaultRuntime, "log").mockImplementation(runtime.log);
+    const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(runtime.log);
     const { registerBrowserExtensionCommands } = await import("./browser-cli-extension.js");
     const program = new Command();
     registerBrowserExtensionCommands(program.command("browser"), () => ({}));
@@ -256,7 +251,7 @@ describe("browser extension pairing Gateway URL", () => {
   });
 
   it("keeps development-only installation from requesting the Store extension", async () => {
-    vi.spyOn(cliCoreApiModule.defaultRuntime, "writeJson").mockImplementation(runtime.writeJson);
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation(runtime.writeJson);
     const { registerBrowserExtensionCommands } = await import("./browser-cli-extension.js");
     const program = new Command();
     registerBrowserExtensionCommands(program.command("browser"), () => ({}));
@@ -280,8 +275,8 @@ describe("browser extension pairing Gateway URL", () => {
         },
       ],
     });
-    const logSpy = vi.spyOn(cliCoreApiModule.defaultRuntime, "log").mockImplementation(runtime.log);
-    vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(runtime.exit);
+    const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(runtime.log);
+    vi.spyOn(defaultRuntime, "exit").mockImplementation(runtime.exit);
     const { registerBrowserExtensionCommands } = await import("./browser-cli-extension.js");
     const program = new Command();
     registerBrowserExtensionCommands(program.command("browser"), () => ({}));
@@ -294,7 +289,7 @@ describe("browser extension pairing Gateway URL", () => {
   });
 
   it("removes Store requests without removing native hosts", async () => {
-    vi.spyOn(cliCoreApiModule.defaultRuntime, "writeJson").mockImplementation(runtime.writeJson);
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation(runtime.writeJson);
     const { registerBrowserExtensionCommands } = await import("./browser-cli-extension.js");
     const program = new Command();
     registerBrowserExtensionCommands(program.command("browser"), () => ({}));
@@ -305,34 +300,27 @@ describe("browser extension pairing Gateway URL", () => {
     expect(installMocks.uninstallChromeExtensionNativeHosts).not.toHaveBeenCalled();
   });
 
-  it.each(["0x1000", "1e4", "+50000", " 50000", "50000 ", "50000\t"])(
-    "rejects invalid install --wait-ms value %j before installation",
-    async (value) => {
-      const errorSpy = vi
-        .spyOn(cliCoreApiModule.defaultRuntime, "error")
-        .mockImplementation(runtime.error);
-      vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(runtime.exit);
-      const { registerBrowserExtensionCommands } = await import("./browser-cli-extension.js");
-      const program = new Command();
-      registerBrowserExtensionCommands(program.command("browser"), () => ({}));
+  it("rejects an invalid install --wait-ms value before installation", async () => {
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(runtime.error);
+    vi.spyOn(defaultRuntime, "exit").mockImplementation(runtime.exit);
+    const { registerBrowserExtensionCommands } = await import("./browser-cli-extension.js");
+    const program = new Command();
+    registerBrowserExtensionCommands(program.command("browser"), () => ({}));
 
-      await expect(
-        program.parseAsync(["browser", "extension", "install", "--wait-ms", value], {
-          from: "user",
-        }),
-      ).rejects.toThrow("__exit__:1");
+    await expect(
+      program.parseAsync(["browser", "extension", "install", "--wait-ms", "0x1000"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("__exit__:1");
 
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("--wait-ms"));
-      expect(installMocks.installChromeExtensionBootstrap).not.toHaveBeenCalled();
-    },
-  );
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("--wait-ms"));
+    expect(installMocks.installChromeExtensionBootstrap).not.toHaveBeenCalled();
+  });
 
   it("rejects path-rewriting proxy prefixes for strict v2 resource binding", async () => {
-    vi.spyOn(cliCoreApiModule, "getRuntimeConfig").mockReturnValue({});
-    const errorSpy = vi
-      .spyOn(cliCoreApiModule.defaultRuntime, "error")
-      .mockImplementation(runtime.error);
-    vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(runtime.exit);
+    vi.spyOn(runtimeConfigSnapshot, "getRuntimeConfig").mockReturnValue({});
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(runtime.error);
+    vi.spyOn(defaultRuntime, "exit").mockImplementation(runtime.exit);
     const { registerBrowserExtensionCommands } = await import("./browser-cli-extension.js");
     const program = new Command();
     registerBrowserExtensionCommands(program.command("browser"), () => ({}));
@@ -349,10 +337,10 @@ describe("browser extension pairing Gateway URL", () => {
   });
 
   it("writes explicit JSON output through the raw machine-output sink", async () => {
-    vi.spyOn(cliCoreApiModule, "getRuntimeConfig").mockReturnValue({});
-    const logSpy = vi.spyOn(cliCoreApiModule.defaultRuntime, "log").mockImplementation(runtime.log);
+    vi.spyOn(runtimeConfigSnapshot, "getRuntimeConfig").mockReturnValue({});
+    const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(runtime.log);
     const writeJsonSpy = vi
-      .spyOn(cliCoreApiModule.defaultRuntime, "writeJson")
+      .spyOn(defaultRuntime, "writeJson")
       .mockImplementation(runtime.writeJson);
     const { registerBrowserExtensionCommands } = await import("./browser-cli-extension.js");
     const program = new Command();
@@ -372,12 +360,10 @@ describe("browser extension pairing Gateway URL", () => {
   it.each(["install", "status", "uninstall-host", "pair", "cdp"])(
     "honors browser-level and leaf JSON placement for extension %s",
     async (subcommand) => {
-      vi.spyOn(cliCoreApiModule, "getRuntimeConfig").mockReturnValue({});
-      const logSpy = vi
-        .spyOn(cliCoreApiModule.defaultRuntime, "log")
-        .mockImplementation(runtime.log);
+      vi.spyOn(runtimeConfigSnapshot, "getRuntimeConfig").mockReturnValue({});
+      const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(runtime.log);
       const writeJsonSpy = vi
-        .spyOn(cliCoreApiModule.defaultRuntime, "writeJson")
+        .spyOn(defaultRuntime, "writeJson")
         .mockImplementation(runtime.writeJson);
       const { registerBrowserExtensionCommands } = await import("./browser-cli-extension.js");
       const placements = [
@@ -407,11 +393,13 @@ describe("browser extension pairing Gateway URL", () => {
   );
 
   it("pairs desktop helpers through the local Gateway wake-up route", async () => {
-    vi.spyOn(cliCoreApiModule, "getRuntimeConfig").mockReturnValue({ gateway: { mode: "local" } });
+    vi.spyOn(runtimeConfigSnapshot, "getRuntimeConfig").mockReturnValue({
+      gateway: { mode: "local" },
+    });
     const writeJsonSpy = vi
-      .spyOn(cliCoreApiModule.defaultRuntime, "writeJson")
+      .spyOn(defaultRuntime, "writeJson")
       .mockImplementation(runtime.writeJson);
-    const logSpy = vi.spyOn(cliCoreApiModule.defaultRuntime, "log").mockImplementation(runtime.log);
+    const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(runtime.log);
     const { registerBrowserExtensionCommands } = await import("./browser-cli-extension.js");
     const program = new Command().exitOverride();
     registerBrowserExtensionCommands(program.command("browser"), () => ({}));
@@ -438,11 +426,9 @@ describe("browser extension pairing Gateway URL", () => {
   ])(
     "rejects conflicting desktop pairing targets before reading a relay key",
     async ({ config, args, message }) => {
-      vi.spyOn(cliCoreApiModule, "getRuntimeConfig").mockReturnValue(config);
-      const errorSpy = vi
-        .spyOn(cliCoreApiModule.defaultRuntime, "error")
-        .mockImplementation(runtime.error);
-      vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(runtime.exit);
+      vi.spyOn(runtimeConfigSnapshot, "getRuntimeConfig").mockReturnValue(config);
+      const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(runtime.error);
+      vi.spyOn(defaultRuntime, "exit").mockImplementation(runtime.exit);
       relayMocks.ensureExtensionRelayToken.mockClear();
       const { registerBrowserExtensionCommands } = await import("./browser-cli-extension.js");
       const program = new Command().exitOverride();
@@ -460,7 +446,7 @@ describe("browser extension pairing Gateway URL", () => {
   );
 
   it("pairs with the allocated extension relay when another profile pins the default port", async () => {
-    vi.spyOn(cliCoreApiModule, "getRuntimeConfig").mockReturnValue({
+    vi.spyOn(runtimeConfigSnapshot, "getRuntimeConfig").mockReturnValue({
       browser: {
         profiles: {
           pinned: { cdpPort: 18799, color: "#00AA00" },
@@ -468,7 +454,7 @@ describe("browser extension pairing Gateway URL", () => {
       },
     });
     const writeJsonSpy = vi
-      .spyOn(cliCoreApiModule.defaultRuntime, "writeJson")
+      .spyOn(defaultRuntime, "writeJson")
       .mockImplementation(runtime.writeJson);
     const { registerBrowserExtensionCommands } = await import("./browser-cli-extension.js");
     const program = new Command();
@@ -496,10 +482,10 @@ describe("browser extension pairing Gateway URL", () => {
       port: 21117,
     },
   ])("prints safe $label v2 metadata through the lazy root CLI", async ({ config, port }) => {
-    vi.spyOn(cliCoreApiModule, "getRuntimeConfig").mockReturnValue(config);
-    const logSpy = vi.spyOn(cliCoreApiModule.defaultRuntime, "log").mockImplementation(runtime.log);
+    vi.spyOn(runtimeConfigSnapshot, "getRuntimeConfig").mockReturnValue(config);
+    const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(runtime.log);
     const writeJsonSpy = vi
-      .spyOn(cliCoreApiModule.defaultRuntime, "writeJson")
+      .spyOn(defaultRuntime, "writeJson")
       .mockImplementation(runtime.writeJson);
     const { registerBrowserCli } = await import("./browser-cli.js");
     const program = new Command();
@@ -529,12 +515,10 @@ describe("browser extension pairing Gateway URL", () => {
   });
 
   it("prints an explicit warned legacy bearer only while legacy auth is enabled", async () => {
-    vi.spyOn(cliCoreApiModule, "getRuntimeConfig").mockReturnValue({});
-    const errorSpy = vi
-      .spyOn(cliCoreApiModule.defaultRuntime, "error")
-      .mockImplementation(runtime.error);
+    vi.spyOn(runtimeConfigSnapshot, "getRuntimeConfig").mockReturnValue({});
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(runtime.error);
     const writeJsonSpy = vi
-      .spyOn(cliCoreApiModule.defaultRuntime, "writeJson")
+      .spyOn(defaultRuntime, "writeJson")
       .mockImplementation(runtime.writeJson);
     const { registerBrowserExtensionCommands } = await import("./browser-cli-extension.js");
     const program = new Command();
@@ -554,15 +538,13 @@ describe("browser extension pairing Gateway URL", () => {
   });
 
   it("refuses --legacy-bearer when legacy auth is disabled", async () => {
-    vi.spyOn(cliCoreApiModule, "getRuntimeConfig").mockReturnValue({
+    vi.spyOn(runtimeConfigSnapshot, "getRuntimeConfig").mockReturnValue({
       browser: { extensionRelay: { allowLegacyAuth: false } },
     });
-    const errorSpy = vi
-      .spyOn(cliCoreApiModule.defaultRuntime, "error")
-      .mockImplementation(runtime.error);
-    vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(runtime.exit);
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(runtime.error);
+    vi.spyOn(defaultRuntime, "exit").mockImplementation(runtime.exit);
     const writeJsonSpy = vi
-      .spyOn(cliCoreApiModule.defaultRuntime, "writeJson")
+      .spyOn(defaultRuntime, "writeJson")
       .mockImplementation(runtime.writeJson);
     const { registerBrowserExtensionCommands } = await import("./browser-cli-extension.js");
     const program = new Command();

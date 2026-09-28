@@ -1,4 +1,5 @@
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
+import { requestSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type {
   OpenClawStateDatabase,
   OpenClawStateDatabaseOptions,
@@ -57,13 +58,15 @@ export function executeSkillUploadCommand(
   command: SqliteWorkerCommand<SkillUploadWorkerOperations>,
   options: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase },
 ): SkillUploadWorkerOperations[keyof SkillUploadWorkerOperations]["output"] {
+  const admit = (stage: "transaction" | "commit") =>
+    requestSqliteWorkerOperationAdmission({ stage, facts: undefined });
   switch (command.type) {
     case "skillUploads.begin":
-      return beginSkillUploadInDatabase(command.input, options);
+      return beginSkillUploadInDatabase(command.input, options, admit);
     case "skillUploads.chunk":
-      return appendSkillUploadChunkInDatabase(command.input, options);
+      return appendSkillUploadChunkInDatabase(command.input, options, admit);
     case "skillUploads.commit":
-      return commitSkillUploadInDatabase(command.input, options);
+      return commitSkillUploadInDatabase(command.input, options, admit);
     case "skillUploads.expired":
       return listExpiredSkillUploadsInDatabase(command.input, options);
     case "skillUploads.deleteExpired":

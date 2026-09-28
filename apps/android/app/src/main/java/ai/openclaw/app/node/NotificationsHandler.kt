@@ -1,12 +1,11 @@
 package ai.openclaw.app.node
 
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.nonBlankString
 import android.content.Context
 import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 
 /**
@@ -37,19 +36,16 @@ private object SystemNotificationsStateProvider : NotificationsStateProvider {
     return DeviceNotificationListenerService.snapshot(context, enabled = true)
   }
 
-  /** Requests a platform listener rebind after access has been granted. */
   override fun requestServiceRebind(context: Context) {
     DeviceNotificationListenerService.requestServiceRebind(context)
   }
 
-  /** Delegates actions to the active listener service instance. */
   override fun executeAction(
     context: Context,
     request: NotificationActionRequest,
   ): NotificationActionResult = DeviceNotificationListenerService.executeAction(context, request)
 }
 
-/** Handles notification listing and actions via the Android listener service. */
 class NotificationsHandler internal constructor(
   private val appContext: Context,
   private val stateProvider: NotificationsStateProvider = SystemNotificationsStateProvider,
@@ -60,7 +56,6 @@ class NotificationsHandler internal constructor(
     return GatewaySession.InvokeResult.ok(snapshotPayloadJson(snapshot))
   }
 
-  /** Executes an action against a notification key from the current listener snapshot. */
   suspend fun handleNotificationsActions(paramsJson: String?): GatewaySession.InvokeResult {
     readSnapshotWithRebind()
 
@@ -71,13 +66,13 @@ class NotificationsHandler internal constructor(
           message = "INVALID_REQUEST: expected JSON object",
         )
     val key =
-      readString(params, "key")
+      params.nonBlankString("key")
         ?: return GatewaySession.InvokeResult.error(
           code = "INVALID_REQUEST",
           message = "INVALID_REQUEST: key required",
         )
     val actionRaw =
-      readString(params, "action")?.lowercase()
+      params.nonBlankString("action")?.lowercase()
         ?: return GatewaySession.InvokeResult.error(
           code = "INVALID_REQUEST",
           message = "INVALID_REQUEST: action required (open|dismiss|reply)",
@@ -105,7 +100,7 @@ class NotificationsHandler internal constructor(
           )
         }
       }
-    val replyText = readString(params, "replyText")
+    val replyText = params.nonBlankString("replyText")
     if (action == NotificationActionKind.Reply && replyText.isNullOrBlank()) {
       return GatewaySession.InvokeResult.error(
         code = "INVALID_REQUEST",
@@ -159,13 +154,4 @@ class NotificationsHandler internal constructor(
         ),
       )
     }.toString()
-
-  private fun readString(
-    params: JsonObject,
-    key: String,
-  ): String? =
-    (params[key] as? JsonPrimitive)
-      ?.contentOrNull
-      ?.trim()
-      ?.takeIf { it.isNotEmpty() }
 }

@@ -32,6 +32,7 @@ const { appendFileSync } = require("node:fs");
 const { registerComputerUseProvider } = require("openclaw/plugin-sdk/computer-use");
 const record = (event) => appendFileSync(${JSON.stringify(lifecycleFile)}, event + "\\n");
 process.once("exit", (code) => record("exit:" + code));
+record("runtime:" + process.execPath);
 module.exports = {
   id: ${JSON.stringify(pluginId)},
   register(api) {
@@ -83,7 +84,7 @@ module.exports = {
     const sdkHost = createCompiledSdkHost([computerUseSdkEntrypoint], (prefix) =>
       tempDirs.make(prefix),
     );
-    // A non-Node `node` earlier on PATH must not become the host worker runtime.
+    // A `node` earlier on PATH must not become the host worker runtime.
     const shimDir = path.join(home, "shim");
     fs.mkdirSync(shimDir);
     const shimName = process.platform === "win32" ? "node.cmd" : "node";
@@ -145,6 +146,7 @@ module.exports = {
     }
     expect(child.isCurrent()).toBe(false);
     expect(fs.readFileSync(lifecycleFile, "utf8").trim().split("\n")).toEqual([
+      `runtime:${process.execPath}`,
       `open:${executionId}`,
       "close:completion",
       "watch-stop:start",

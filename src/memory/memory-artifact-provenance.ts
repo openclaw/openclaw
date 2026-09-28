@@ -211,9 +211,16 @@ export async function listMemoryArtifactProvenance(params: {
   workspaceDir: string;
 }): Promise<Array<{ relativePath: string; provenance: MemoryArtifactProvenance }>> {
   const workspaceKey = sha256(normalizeWorkspaceKey(params.workspaceDir));
-  const prefix = `${workspaceKey}:`;
-  return (await openStore().entries())
-    .filter((entry) => entry.key.startsWith(prefix))
+  // The adjacent ASCII separators bound exactly this workspace's key prefix.
+  const entries = await openStore().entriesInKeyRange({
+    keyStartInclusive: `${workspaceKey}:`,
+    keyEndExclusive: `${workspaceKey};`,
+    limit: Number.MAX_SAFE_INTEGER,
+    order: "asc",
+  });
+  // Stable sorting preserves the store's key order when creation times tie.
+  return entries
+    .toSorted((left, right) => left.createdAt - right.createdAt)
     .flatMap((entry) => {
       const address = {
         workspaceKey,

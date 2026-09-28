@@ -52,6 +52,8 @@ no CI variable needs broker configuration, not another login. Ask the user for
 authentication only when no existing launcher can authenticate and the broker
 pair is unavailable. Do not install or log in on the user's behalf. A timeout or
 network failure is not evidence that credentials are missing.
+Bun's `--no-install` missing-binary error means that launcher is unavailable;
+discovery continues to the next installed launcher.
 
 On shared hosts, select two unused ports and pass them explicitly; the runner
 does not read port environment variables:

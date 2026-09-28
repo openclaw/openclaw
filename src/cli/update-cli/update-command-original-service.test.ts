@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, aroundEach, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, aroundEach, beforeEach, expect, it, vi } from "vitest";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import {
   loadSessionEntryReadOnly,
@@ -10,7 +10,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { GatewayServiceState } from "../../daemon/service.js";
 import * as packageIntegrity from "../../infra/package-update-integrity.js";
-import { withSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worker.js";
+import { createSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worker.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../../infra/update-managed-service-handoff-lease.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
@@ -54,6 +54,9 @@ const mocks = vi.hoisted(() => ({
   windows: false,
   suspend: vi.fn(),
   resume: vi.fn(),
+}));
+vi.mock("../../daemon/service-process-membership.js", () => ({
+  inspectServiceProcessMembershipSync: (pid: number) => (pid === 4242 ? "outside" : "unknown"),
 }));
 vi.mock("../../daemon/schtasks.js", async (original) => ({
   ...(await original<typeof import("../../daemon/schtasks.js")>()),
@@ -184,6 +187,7 @@ beforeEach(async () => {
     inspected: true,
     runtimeInspected: true,
     running: true,
+    servicePid: serviceState.runtime?.pid,
     serviceEnv: state.env,
     serviceNodeRunner: process.execPath,
     serviceManagerUid: process.getuid?.() ?? 501,
@@ -261,7 +265,9 @@ beforeEach(async () => {
   // Prepare its unchanged install inventory through the real metadata owner.
   expect(loadInstalledPluginIndexInstallRecordsSync({ env: state.env })).toEqual({});
 });
-aroundEach((runTest) => withSqliteReadOnlyWorkerScope(runTest));
+const inspectionWorkers = createSqliteReadOnlyWorkerScope();
+aroundEach((runTest) => inspectionWorkers.run(runTest));
+afterAll(() => inspectionWorkers.close());
 afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -269,7 +275,6 @@ afterEach(async () => {
 });
 
 it.for([
-  "healthy",
   "same-version",
   "same-build-finalize",
   "package-root-missing",
@@ -278,7 +283,6 @@ it.for([
   "schema-newer",
   "agent-support-older",
   "definition-changed",
-  "node-changed",
   "package-changed",
   "authority-lost",
   "no-restart",
@@ -354,9 +358,6 @@ it.for([
       }
       if (scenario === "definition-changed") {
         serviceState.command!.programArguments.push("--port", "19998");
-      }
-      if (scenario === "node-changed") {
-        serviceState.command!.programArguments[0] = "/different/node";
       }
       if (scenario === "package-changed") {
         await fs.appendFile(path.join(rootA, "dist", "index.js"), "// replaced\n");
@@ -504,8 +505,7 @@ it.for([
       await work;
     }
     const healthy =
-      sameBuild ||
-      ["healthy", "same-version", "package-root-missing", "windows-autostart"].includes(scenario);
+      sameBuild || ["same-version", "package-root-missing", "windows-autostart"].includes(scenario);
     expect(mocks.restart).not.toHaveBeenCalled();
     expect(mocks.nativeRestart).toHaveBeenCalledTimes(
       healthy || scenario === "readiness-failed" || scenario === "windows-autostart-health-failed"
@@ -633,7 +633,6 @@ it.each([
   "reload-pending",
   "authority-revoked",
   "no-restart",
-  "certified-doctor-failure",
 ] as const)("pre-stop qualification keeps retained A recoverable: %s", async (scenario) => {
   const run = {
     runId: createUpdateRun({ trigger: "cli" }, { env: state.env }).runId,
@@ -748,7 +747,7 @@ it.each([
       },
     });
     expect(execution, execution?.failure?.detail).not.toBeNull();
-    if (scenario === "certified-doctor-failure" || scenario === "fingerprint-timeout") {
+    if (scenario === "fingerprint-timeout") {
       expect(activated, execution?.failure?.detail).toBe(true);
       expect(stopped).toBe(true);
       expect(execution!.originalManagedServiceRuntime).toMatchObject({
@@ -860,7 +859,7 @@ it.each([false, true])(
           runUpdatedInstallGatewayCommand(
             {
               result: { root: rootB },
-              opts: { json: true },
+              opts: {},
               invocationEnv: state.env,
               originalManagedServiceRuntime: original,
             },

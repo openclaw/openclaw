@@ -1,9 +1,4 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-/**
- * Configured binding target lifecycle helpers.
- *
- * Ensures or resets stateful binding targets through registered target drivers.
- */
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ConfiguredBindingResolution } from "./binding-types.js";
 import {
@@ -63,14 +58,14 @@ export async function resetConfiguredBindingTargetInPlace(params: {
   reason: "new" | "reset";
   commandSource?: string;
 }): Promise<StatefulBindingTargetResetResult> {
-  let resolved = resolveStatefulBindingTargetBySessionKey({
+  let resolved = await resolveStatefulBindingTargetBySessionKey({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
   });
   if (!resolved) {
     await ensureStatefulTargetBuiltinsRegistered();
-    resolved = resolveStatefulBindingTargetBySessionKey({
+    resolved = await resolveStatefulBindingTargetBySessionKey({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
       agentId: params.agentId,

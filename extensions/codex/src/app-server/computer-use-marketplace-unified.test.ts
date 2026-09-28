@@ -1,13 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { formatComputerUseStatus } from "../command-formatters.js";
 import { ensureCodexManagedBundledMarketplace } from "./computer-use-marketplace.js";
 import {
   hasLegacyCodexComputerUseMcpPolicy,
   resolveManagedCodexComputerUseConfig,
 } from "./computer-use-unified.js";
-import { ensureCodexComputerUse } from "./computer-use.js";
-import { createComputerUseRequest } from "./computer-use.test-support.js";
+import {
+  ensureCodexComputerUse,
+  installCodexComputerUse,
+  readCodexComputerUseStatus,
+} from "./computer-use.js";
+import { createComputerUseRequest, expectSetupErrorStatus } from "./computer-use.test-support.js";
 import { resolveCodexComputerUseConfig } from "./config.js";
 import type { MacOSDesktopCodexAppPathCandidate } from "./desktop-app-paths.js";
 import { createClientHarness, useAutoCleanupTempDirTracker } from "./test-support.js";
@@ -15,67 +20,33 @@ import { createClientHarness, useAutoCleanupTempDirTracker } from "./test-suppor
 describe("managed unified Computer Use marketplace", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  it("materializes the official desktop runtime for each isolated home before native installation", async () => {
-    const root = tempDirs.make("openclaw-unified-computer-use-");
-    const candidate = await writeUnifiedCandidate(root);
-    const sourcePlugin = path.join(
-      candidate.bundledMarketplacePath,
-      "plugins",
-      "unified-computer-use",
-    );
-    const original = await fs.readFile(path.join(sourcePlugin, ".mcp.json"), "utf8");
-    const homes = ["first", "second"].map((name) => path.join(root, name, "codex-home"));
-
-    for (const codexHome of homes) {
-      const target = await ensureCodexManagedBundledMarketplace({
+  it.each(["stale", "current", "disabled"])(
+    "reconciles an installed unified cache during automatic readiness (%s)",
+    async (cacheState) => {
+      const root = tempDirs.make("openclaw-unified-populated-cache-");
+      const candidate = await writeUnifiedCandidate(root);
+      const agentDir = path.join(root, "agent");
+      const codexHome = path.join(agentDir, "codex-home");
+      const marketplace = await ensureCodexManagedBundledMarketplace({
         codexHome,
-        ownershipRoot: path.dirname(codexHome),
+        ownershipRoot: agentDir,
         candidates: [candidate],
-        appServerCommand: candidate.appServerCommandPath,
       });
-      if (!target) {
-        throw new Error("Expected the managed marketplace fixture to be published");
+      if (!marketplace) {
+        throw new Error("Expected a managed marketplace");
       }
-      const pluginRoot = path.join(target, "plugins", "unified-computer-use");
-      const materialized = JSON.parse(
-        await fs.readFile(path.join(pluginRoot, ".mcp.json"), "utf8"),
-      );
-      const runtimeRoot = path.join(path.dirname(candidate.appServerCommandPath), "cua_node");
-      expect(materialized.mcpServers.cua_repl).toMatchObject({
-        enabled: true,
-        command: path.join(runtimeRoot, "bin", "node"),
-        args: [
-          path.join(runtimeRoot, "lib", "node_modules", "@oai", "cua-repl", "bin", "cua-repl.mjs"),
-        ],
-        enabled_tools: ["js", "js_reset", "turn_ended"],
-        env: {
-          CODEX_HOME: codexHome,
-          CUA_REPL_NODE_REPL_PATH: path.join(runtimeRoot, "bin", "node_repl"),
-          CUA_REPL_ENABLED_SURFACES: "computer",
-          SKY_CUA_SERVICE_PATH: path.join(codexHome, "computer-use", "Codex Computer Use.app"),
-          NODE_REPL_TRUSTED_SERVICES: JSON.stringify({ sky: "@oai/sky/service" }),
-        },
-      });
-      expect(materialized.mcpServers.cua_repl.env).not.toHaveProperty(
-        "BROWSER_USE_AVAILABLE_BACKENDS",
-      );
-      expect(await fs.realpath(path.join(target, "plugins", "browser-use"))).toBe(
-        path.join(candidate.bundledMarketplacePath, "plugins", "browser-use"),
-      );
-      // Native plugin/install copies this source; a reinstall must retain the same launch contract.
-      const installed = path.join(codexHome, "installed-plugin");
-      await fs.cp(pluginRoot, installed, { recursive: true });
-      expect(JSON.parse(await fs.readFile(path.join(installed, ".mcp.json"), "utf8"))).toEqual(
-        materialized,
-      );
-      await expect(
-        ensureCodexManagedBundledMarketplace({
-          codexHome,
-          ownershipRoot: path.dirname(codexHome),
-          candidates: [candidate],
-        }),
-      ).resolves.toBe(target);
-
+      const source = path.join(marketplace, "plugins", "unified-computer-use");
+      const cache = path.join(codexHome, "plugins/cache/openai-bundled/unified-computer-use/2.0.0");
+      await fs.cp(source, cache, { recursive: true });
+      const currentMcp = await fs.readFile(path.join(source, ".mcp.json"), "utf8");
+      if (cacheState !== "current") {
+        const stale = JSON.parse(currentMcp);
+        stale.mcpServers.cua_repl.command = "/previous-desktop/cua_node/bin/node";
+        stale.mcpServers.cua_repl.env.SKY_CUA_SERVICE_PATH = "/previous-home/service.app";
+        await fs.writeFile(path.join(cache, ".mcp.json"), JSON.stringify(stale));
+      }
+      const before = await fs.lstat(cache);
+      const beforeMcp = await fs.readFile(path.join(cache, ".mcp.json"), "utf8");
       const { client } = createClientHarness();
       vi.spyOn(client, "getRuntimeIdentity").mockReturnValue({
         serverVersion: "0.155.0",
@@ -87,48 +58,296 @@ describe("managed unified Computer Use marketplace", () => {
         mcpServerName: "cua_repl",
         mcpTools: ["js"],
       });
-      const nativeRequest = vi.mocked(request).getMockImplementation();
-      if (!nativeRequest) {
-        throw new Error("Expected a native request fixture implementation");
+      const native = vi.mocked(request).getMockImplementation();
+      if (!native) {
+        throw new Error("Expected a native request fixture");
       }
-      vi.mocked(request).mockImplementation(async (method, requestParams, options) =>
+      vi.mocked(request).mockImplementation(async (method, params, options) =>
         method === "config/read"
-          ? { config: {}, origins: {}, layers: null }
-          : await nativeRequest(method, requestParams, options),
+          ? {
+              config: {
+                plugins: { "computer-use@openai-bundled": { enabled: cacheState !== "disabled" } },
+              },
+              origins: {},
+              layers: null,
+            }
+          : await native(method, params, options),
       );
+      const params = {
+        client,
+        request,
+        agentDir,
+        pluginConfig: {
+          computerUse: {
+            enabled: true,
+            autoInstall: true,
+            pluginCacheMode: "shared",
+            strictReadiness: false,
+          },
+        },
+      };
       try {
-        await expect(
-          ensureCodexComputerUse({
-            client,
-            request,
-            agentDir: path.dirname(codexHome),
-            pluginConfig: { computerUse: { enabled: true, pluginName: "computer-use" } },
-          }),
-        ).resolves.toMatchObject({
-          ready: true,
-          pluginName: "unified-computer-use",
-          mcpServerName: "cua_repl",
-          tools: ["js"],
-        });
+        if (cacheState === "disabled") {
+          await expectSetupErrorStatus(ensureCodexComputerUse(params), {
+            reason: "plugin_disabled",
+          });
+        } else {
+          await expect(ensureCodexComputerUse(params)).resolves.toMatchObject({ ready: true });
+        }
+        const after = await fs.lstat(cache);
+        expect(after.isDirectory()).toBe(true);
+        expect(after.isSymbolicLink()).toBe(false);
+        expect(await fs.readFile(path.join(cache, ".mcp.json"), "utf8")).toBe(
+          cacheState === "disabled" ? beforeMcp : currentMcp,
+        );
+        if (cacheState === "stale") {
+          expect(after.ino).not.toBe(before.ino);
+          await expect(ensureCodexComputerUse(params)).resolves.toMatchObject({ ready: true });
+        }
+        expect((await fs.lstat(cache)).ino).toBe(cacheState === "stale" ? after.ino : before.ino);
+        expect(vi.mocked(request).mock.calls.map(([method]) => method)).not.toContain(
+          "plugin/install",
+        );
       } finally {
         client.close();
       }
+    },
+  );
 
-      for (const override of [
-        { pluginName: "custom-computer" },
-        { mcpServerName: "custom-server" },
-        { marketplaceName: "custom-marketplace" },
-        { marketplacePath: "/operator/marketplace" },
-        { marketplaceSource: "operator-source" },
-      ]) {
-        const config = resolveCodexComputerUseConfig({
-          pluginConfig: { computerUse: { enabled: true, ...override } },
+  it.each(["codex", "codex-cli/CodexCLI.app/Contents/MacOS/codex"])(
+    "materializes read-only desktop templates for %s before native installation",
+    async (commandRelative) => {
+      const root = tempDirs.make("openclaw-unified-computer-use-");
+      const candidate = await writeUnifiedCandidate(root, commandRelative);
+      const sourcePlugin = path.join(
+        candidate.bundledMarketplacePath,
+        "plugins",
+        "unified-computer-use",
+      );
+      const original = await fs.readFile(path.join(sourcePlugin, ".mcp.json"), "utf8");
+      const homes = ["first", "second"].map((name) => path.join(root, name, "codex-home"));
+
+      for (const codexHome of homes) {
+        const target = await ensureCodexManagedBundledMarketplace({
+          codexHome,
+          ownershipRoot: path.dirname(codexHome),
+          candidates: [candidate],
+          appServerCommand: candidate.appServerCommandPath,
         });
-        expect(await resolveManagedCodexComputerUseConfig(config, target)).toBe(config);
+        if (!target) {
+          throw new Error("Expected the managed marketplace fixture to be published");
+        }
+        const pluginRoot = path.join(target, "plugins", "unified-computer-use");
+        const materialized = JSON.parse(
+          await fs.readFile(path.join(pluginRoot, ".mcp.json"), "utf8"),
+        );
+        const runtimeRoot = path.join(candidate.appBundlePath, "Contents", "Resources", "cua_node");
+        expect((await fs.stat(path.join(pluginRoot, ".mcp.json"))).mode & 0o200).toBe(0o200);
+        expect(materialized.mcpServers.cua_repl).toMatchObject({
+          enabled: true,
+          command: path.join(runtimeRoot, "bin", "node"),
+          args: [
+            path.join(
+              runtimeRoot,
+              "lib",
+              "node_modules",
+              "@oai",
+              "cua-repl",
+              "bin",
+              "cua-repl.mjs",
+            ),
+          ],
+          enabled_tools: ["js", "js_reset", "turn_ended"],
+          env: {
+            CODEX_HOME: codexHome,
+            CUA_REPL_NODE_REPL_PATH: path.join(runtimeRoot, "bin", "node_repl"),
+            CUA_REPL_ENABLED_SURFACES: "computer",
+            SKY_CUA_SERVICE_PATH: path.join(codexHome, "computer-use", "Codex Computer Use.app"),
+            NODE_REPL_TRUSTED_SERVICES: JSON.stringify({ sky: "@oai/sky/service" }),
+          },
+        });
+        expect(materialized.mcpServers.cua_repl.env).not.toHaveProperty(
+          "BROWSER_USE_AVAILABLE_BACKENDS",
+        );
+        expect(await fs.realpath(path.join(target, "plugins", "browser-use"))).toBe(
+          path.join(candidate.bundledMarketplacePath, "plugins", "browser-use"),
+        );
+        await expect(
+          ensureCodexManagedBundledMarketplace({
+            codexHome,
+            ownershipRoot: path.dirname(codexHome),
+            candidates: [candidate],
+          }),
+        ).resolves.toBe(target);
+
+        const { client } = createClientHarness();
+        vi.spyOn(client, "getRuntimeIdentity").mockReturnValue({
+          serverVersion: "0.155.0",
+          codexHome,
+        });
+        const request = createComputerUseRequest({
+          installed: true,
+          pluginName: "unified-computer-use",
+          mcpServerName: "cua_repl",
+          mcpTools: ["js"],
+        });
+        const nativeRequest = vi.mocked(request).getMockImplementation();
+        if (!nativeRequest) {
+          throw new Error("Expected a native request fixture implementation");
+        }
+        vi.mocked(request).mockImplementation(async (method, requestParams, options) =>
+          method === "config/read"
+            ? { config: {}, origins: {}, layers: null }
+            : await nativeRequest(method, requestParams, options),
+        );
+        try {
+          await expect(
+            ensureCodexComputerUse({
+              client,
+              request,
+              agentDir: path.dirname(codexHome),
+              pluginConfig: { computerUse: { enabled: true, pluginName: "computer-use" } },
+            }),
+          ).resolves.toMatchObject({
+            ready: true,
+            pluginName: "unified-computer-use",
+            mcpServerName: "cua_repl",
+            tools: ["js"],
+          });
+        } finally {
+          client.close();
+        }
+
+        for (const override of [
+          { pluginName: "custom-computer" },
+          { mcpServerName: "custom-server" },
+          { marketplaceName: "custom-marketplace" },
+          { marketplacePath: "/operator/marketplace" },
+          { marketplaceSource: "operator-source" },
+        ]) {
+          const config = resolveCodexComputerUseConfig({
+            pluginConfig: { computerUse: { enabled: true, ...override } },
+          });
+          expect(await resolveManagedCodexComputerUseConfig(config, target)).toBe(config);
+        }
       }
-    }
-    expect(await fs.readFile(path.join(sourcePlugin, ".mcp.json"), "utf8")).toBe(original);
-  });
+      expect(await fs.readFile(path.join(sourcePlugin, ".mcp.json"), "utf8")).toBe(original);
+      expect((await fs.stat(path.join(sourcePlugin, ".mcp.json"))).mode & 0o222).toBe(0);
+    },
+  );
+
+  it.each([
+    { action: "ensure", autoInstall: false, disableAt: "initial", installed: false },
+    { action: "ensure", autoInstall: true, disableAt: "initial", installed: false },
+    { action: "status", autoInstall: false, disableAt: "initial", installed: true },
+    { action: "install", autoInstall: false, disableAt: "initial", installed: false },
+    { action: "install", autoInstall: true, disableAt: "initial", installed: false },
+    { action: "ensure", autoInstall: true, disableAt: "plugin/list", installed: false },
+    { action: "ensure", autoInstall: true, disableAt: "plugin/read", installed: false },
+    { action: "ensure", autoInstall: true, disableAt: "never", installed: false },
+    { action: "ensure", autoInstall: true, disableAt: "plugin/list", installed: true },
+    { action: "ensure", autoInstall: true, disableAt: "plugin/read", installed: true },
+  ] as const)(
+    "$action with autoInstall=$autoInstall and native disable at $disableAt (installed=$installed)",
+    async ({ action, autoInstall, disableAt, installed }) => {
+      const root = tempDirs.make("openclaw-unified-native-veto-");
+      const candidate = await writeUnifiedCandidate(root);
+      const agentDir = path.join(root, "agent");
+      const codexHome = path.join(agentDir, "codex-home");
+      await ensureCodexManagedBundledMarketplace({
+        codexHome,
+        ownershipRoot: agentDir,
+        candidates: [candidate],
+      });
+      const { client } = createClientHarness();
+      vi.spyOn(client, "getRuntimeIdentity").mockReturnValue({
+        serverVersion: "0.155.0",
+        codexHome,
+      });
+      const request = createComputerUseRequest({
+        installed,
+        pluginName: "unified-computer-use",
+        mcpServerName: "cua_repl",
+        mcpTools: ["js"],
+      });
+      const native = vi.mocked(request).getMockImplementation();
+      if (!native) {
+        throw new Error("missing request fixture");
+      }
+      let nativeDisabled = disableAt === "initial";
+      let installing = false;
+      vi.mocked(request).mockImplementation(async (method, params, options) => {
+        if (method === "config/read") {
+          return {
+            config: { plugins: { "computer-use@openai-bundled": { enabled: !nativeDisabled } } },
+            origins: {},
+            layers: null,
+          };
+        }
+        if (method === "experimentalFeature/enablement/set") {
+          installing = true;
+        }
+        const result = await native(method, params, options);
+        // Apply revocation while discovery or inspection is in flight, after the first policy read.
+        if ((installing || installed) && method === disableAt) {
+          nativeDisabled = true;
+        }
+        return result;
+      });
+      try {
+        const params = {
+          client,
+          request,
+          agentDir,
+          pluginConfig: { computerUse: { enabled: true, autoInstall } },
+        };
+        if (action === "install" || disableAt === "never") {
+          await expect(
+            action === "install" ? installCodexComputerUse(params) : ensureCodexComputerUse(params),
+          ).resolves.toMatchObject({
+            ready: true,
+            installed: true,
+            pluginEnabled: true,
+            pluginName: "unified-computer-use",
+            tools: ["js"],
+          });
+          expect(vi.mocked(request).mock.calls.map(([method]) => method)).toContain(
+            "plugin/install",
+          );
+          return;
+        }
+        const disabledStatus = {
+          ready: false,
+          reason: "plugin_disabled" as const,
+          installed: null,
+          pluginName: "computer-use",
+          mcpServerName: "computer-use",
+        };
+        if (action === "status") {
+          const result = await readCodexComputerUseStatus(params);
+          expect(result).toMatchObject({
+            ...disabledStatus,
+            installation: { status: "unchecked", ok: false },
+          });
+          const display = formatComputerUseStatus(result);
+          expect(display).toContain("Plugin: computer-use (installation unchecked)");
+          expect(display).toContain("Installation: unchecked");
+          expect(display).toContain("/codex computer-use install");
+          expect(display).not.toContain("not installed");
+        } else {
+          await expectSetupErrorStatus(ensureCodexComputerUse(params), disabledStatus);
+        }
+        const methods = vi.mocked(request).mock.calls.map(([method]) => method);
+        expect(methods).not.toContain("plugin/install");
+        expect(methods).not.toContain("mcpServerStatus/list");
+        if (disableAt === "initial") {
+          expect(methods).not.toContain("experimentalFeature/enablement/set");
+        }
+      } finally {
+        client.close();
+      }
+    },
+  );
 
   it("refreshes same-version official plugin content in the native installation source", async () => {
     const root = tempDirs.make("openclaw-unified-computer-use-refresh-");
@@ -286,7 +505,10 @@ describe("managed unified Computer Use marketplace", () => {
   });
 });
 
-async function writeUnifiedCandidate(root: string): Promise<MacOSDesktopCodexAppPathCandidate> {
+async function writeUnifiedCandidate(
+  root: string,
+  commandRelative = "codex",
+): Promise<MacOSDesktopCodexAppPathCandidate> {
   const appBundlePath = path.join(root, "ChatGPT.app");
   const resources = path.join(appBundlePath, "Contents", "Resources");
   const bundledMarketplacePath = path.join(resources, "plugins", "openai-bundled");
@@ -327,6 +549,7 @@ async function writeUnifiedCandidate(root: string): Promise<MacOSDesktopCodexApp
         },
       },
     }),
+    { mode: 0o444 },
   );
   for (const relative of [
     "bin/node",
@@ -346,7 +569,7 @@ async function writeUnifiedCandidate(root: string): Promise<MacOSDesktopCodexApp
   return {
     appName: "ChatGPT.app",
     appBundlePath,
-    appServerCommandPath: path.join(resources, "codex"),
+    appServerCommandPath: path.join(resources, commandRelative),
     bundledMarketplacePath,
     computerUseServiceAppPaths: [],
   };

@@ -143,7 +143,7 @@ on:
 concurrency:
   # Keep independent parent coverage independent through child admission too.
   group: openclaw-release-checks-${{ inputs.expected_sha || inputs.ref }}-${{ github.sha }}-${{ inputs.rerun_group }}-${{ inputs.phase }}-${{ inputs.release_profile == 'minimum' && 'beta' || inputs.release_profile }}-${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}
-  cancel-in-progress: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
+  cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -205,15 +205,12 @@ jobs:
           WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
-          tideclaw_alpha_check=false
-          if [[ "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
-            workflow_branch="${WORKFLOW_REF#refs/heads/}"
-            if [[ "${RELEASE_REF}" == *"-alpha."* || "${RELEASE_REF}" =~ ^[0-9a-fA-F]{40}$ || "${RELEASE_REF}" == "${workflow_branch}" || "${RELEASE_REF}" == "refs/heads/${workflow_branch}" ]]; then
-              tideclaw_alpha_check=true
-            fi
+          if [[ "${WORKFLOW_REF}" == *tideclaw/alpha/* || "${RELEASE_REF}" == *tideclaw/alpha/* ]]; then
+            echo "Alpha releases are retired; use a beta prerelease." >&2
+            exit 1
           fi
-          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release-ci/[0-9a-f]{12}-[0-9]+$ ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/extended-stable/[0-9]{4}\.([1-9]|1[0-2])\.33$ ]] && [[ "${tideclaw_alpha_check}" != "true" ]]; then
-            echo "Release checks must be dispatched from main, release/YYYY.M.PATCH, extended-stable/YYYY.M.33, a Full Release Validation release-ci/<sha>-<timestamp> ref, or a Tideclaw alpha branch for alpha prereleases." >&2
+          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release-ci/[0-9a-f]{12}-[0-9]+$ ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/extended-stable/[0-9]{4}\.([1-9]|1[0-2])\.33$ ]]; then
+            echo "Release checks must be dispatched from main, release/YYYY.M.PATCH, extended-stable/YYYY.M.33, a Full Release Validation release-ci/<sha>-<timestamp> ref." >&2
             exit 1
           fi
 
@@ -376,35 +373,6 @@ jobs:
           fi
           echo "sha=${normalized_selected_sha}" >> "$GITHUB_OUTPUT"
 
-      - name: Validate Tideclaw alpha target matches workflow branch
-        if: startsWith(github.ref, 'refs/heads/tideclaw/alpha/')
-        working-directory: workflow
-        env:
-          SELECTED_SHA: ${{ steps.ref.outputs.sha }}
-          WORKFLOW_REF: ${{ github.ref }}
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          if [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
-            echo "Tideclaw alpha release checks must run from tideclaw/alpha/YYYY-MM-DD-HHMMZ." >&2
-            exit 1
-          fi
-          alpha_branch="${WORKFLOW_REF#refs/heads/}"
-          git_fetch_with_checkout_auth() {
-            local -a git_args=(git)
-            if ! git config --get-all http.https://github.com/.extraheader >/dev/null; then
-              local auth_header
-              auth_header="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
-              git_args+=(-c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}")
-            fi
-            timeout --signal=TERM --kill-after=10s 120s "${git_args[@]}" fetch "$@"
-          }
-          git_fetch_with_checkout_auth --no-tags origin "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
-          if ! git merge-base --is-ancestor "${SELECTED_SHA}" "refs/remotes/origin/${alpha_branch}"; then
-            echo "Alpha release target ${SELECTED_SHA} must be reachable from ${alpha_branch}." >&2
-            exit 1
-          fi
-
       - name: Read Telegram waiver target manifest
         if: inputs.telegram_waiver != ''
         env:
@@ -539,7 +507,7 @@ jobs:
             allow_unreleased_changelog=true
           elif [[ "$allow_unreleased_changelog" == "true" || "$allow_unreleased_changelog" == "1" || "$allow_unreleased_changelog" == "yes" ]]; then
             allow_unreleased_changelog=true
-          elif [[ "$RELEASE_REF_INPUT" =~ ^(refs/heads/)?(release/[0-9]{4}\.[0-9]+\.[0-9]+|extended-stable/[0-9]{4}\.[0-9]+\.33|tideclaw/alpha/) ]] || [[ "$RELEASE_REF_INPUT" =~ ^(refs/tags/)?v[0-9]{4}\.[0-9]+\.[0-9]+ ]]; then
+          elif [[ "$RELEASE_REF_INPUT" =~ ^(refs/heads/)?(release/[0-9]{4}\.[0-9]+\.[0-9]+|extended-stable/[0-9]{4}\.[0-9]+\.33) ]] || [[ "$RELEASE_REF_INPUT" =~ ^(refs/tags/)?v[0-9]{4}\.[0-9]+\.[0-9]+ ]]; then
             allow_unreleased_changelog=false
           else
             allow_unreleased_changelog=false
@@ -1384,6 +1352,7 @@ jobs:
       allow_unreleased_changelog: ${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}
       ref: ${{ needs.resolve_target.outputs.revision }}
       run_bun_global_install_smoke: true
+      run_bun_only_runtime_smoke: true
       update_baseline_version: ${{ needs.resolve_target.outputs.source_upgrade_baseline }}
 
   cross_os_release_checks:

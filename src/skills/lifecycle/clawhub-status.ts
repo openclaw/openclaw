@@ -263,10 +263,6 @@ export function readLocalSkillCardContentSync(skillDir: string): string | undefi
   return readLocalSkillCardSync(skillDir, true)?.content;
 }
 
-function normalizeOptionalSelector(value: string | undefined): string | undefined {
-  return value?.trim() || undefined;
-}
-
 export async function searchSkillsFromClawHub(params: {
   query?: string;
   limit?: number;
@@ -291,8 +287,8 @@ export async function resolveClawHubSkillVerificationTarget(
         baseUrl: resolveClawHubBaseUrl(params.baseUrl),
       });
     }
-    const version = normalizeOptionalSelector(params.version);
-    const tag = normalizeOptionalSelector(params.tag);
+    const version = normalizeOptionalStringValue(params.version);
+    const tag = normalizeOptionalStringValue(params.tag);
     if (version && tag) {
       return { ok: false, error: "Use either --version or --tag." };
     }

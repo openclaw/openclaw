@@ -196,7 +196,8 @@ vi.mock("./onboard-skills.js", () => ({
   setupSkills: vi.fn(),
 }));
 
-vi.mock("./onboard-channels.js", () => ({
+vi.mock("../flows/channel-setup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../flows/channel-setup.js")>()),
   setupChannels: wizardTestMocks.setupChannels,
 }));
 

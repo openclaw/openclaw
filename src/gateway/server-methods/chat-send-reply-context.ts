@@ -72,15 +72,15 @@ function extractReplyTargetText(message: unknown): string | undefined {
   return parts.length > 0 ? parts.join("\n") : undefined;
 }
 
-function resolveReplyTargetSenderLabel(params: {
+async function resolveReplyTargetSenderLabel(params: {
   message: unknown;
   cfg: OpenClawConfig;
   agentId?: string;
   userSenderLabel?: string;
-}): string {
+}): Promise<string> {
   const role = asOptionalRecord(params.message)?.role;
   if (role === "assistant") {
-    return resolveAssistantIdentity({ cfg: params.cfg, agentId: params.agentId }).name;
+    return (await resolveAssistantIdentity({ cfg: params.cfg, agentId: params.agentId })).name;
   }
   const userLabel = params.userSenderLabel?.trim();
   return userLabel || "User";
@@ -152,7 +152,7 @@ export async function resolveChatSendReplyContext(
       return fields;
     }
     fields.ReplyToBody = truncateUtf16Safe(body, REPLY_CONTEXT_BODY_MAX_CHARS);
-    fields.ReplyToSender = resolveReplyTargetSenderLabel({
+    fields.ReplyToSender = await resolveReplyTargetSenderLabel({
       message: displayMessage,
       cfg: params.cfg,
       agentId: params.agentId,

@@ -7,6 +7,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseCodeModeScriptSyntax } from "../../../agents/code-mode-script-syntax.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { readCronRunHistoryPageForTests } from "../../../cron/run-history.test-support.js";
 import {
   loadCronJobsStoreWithConfigJobs,
   loadCronQuarantinedJobs,
@@ -15,7 +16,6 @@ import {
   saveCronStore,
 } from "../../../cron/store.js";
 import { cronStoreKey } from "../../../cron/store/key.js";
-import { readCronTaskRunHistoryPage } from "../../../cron/task-run-history.js";
 import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { withRestoredMocks } from "../../../test-utils/vitest-spies.js";
@@ -1900,7 +1900,7 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter: makePrompter(true),
     });
 
-    const entries = readCronTaskRunHistoryPage({
+    const entries = readCronRunHistoryPageForTests({
       storeKey: cronStoreKey(storePath),
       jobId: "sqlite-job",
     }).entries;

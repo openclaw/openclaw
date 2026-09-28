@@ -71,6 +71,12 @@ describe("CommandPalette plugin icons", () => {
         "blob:workboard",
       );
     });
+    const icon = findPaletteOption(palette, "Workboard")?.querySelector(
+      ".cmd-palette__plugin-icon",
+    );
+    expect(icon?.classList.contains("skeleton")).toBe(true);
+    icon?.querySelector("img")?.dispatchEvent(new Event("load"));
+    expect(icon?.classList.contains("skeleton")).toBe(false);
     expect(fetchIcon).toHaveBeenCalledWith(
       expect.stringContaining("/__openclaw__/plugin-icon/workboard"),
       expect.objectContaining({ method: "GET" }),

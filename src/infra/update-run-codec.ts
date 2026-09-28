@@ -15,11 +15,23 @@ import { UpdateRunRecordSchema } from "./update-run-schema.js";
 const JSON_BYTES = 16 * 1024;
 const RETAINED_STEP_NAMES = [
   ...UPDATE_RUN_PHASES,
+  "candidate-admission",
+  // Keep named admission/lifecycle receipts, not the unbounded warning:* namespace.
+  "warning:update-admission-unsupported-target",
+  "warning:update-admission-fallback",
+  "warning:managed-service-membership",
+  "warning:finalize:plugins:deadline",
+  "global update",
+  "global update (omit optional)",
+  "candidate-doctor-lint",
   "notice:ack",
   "notice:activating",
   "notice:verifying",
   "previous generation restoration",
   "post-update verification",
+  "diagnostic:database snapshot",
+  "diagnostic:database migration writes",
+  "diagnostic:database rollback",
   "task-delivery-recovery",
   "driver:adopted",
   "driver:identity-unavailable",
@@ -80,6 +92,9 @@ function boundedJson(
         const compacted = value.map((item) =>
           isRecord(item) &&
           item.step !== "task-delivery-recovery" &&
+          item.step !== "diagnostic:database snapshot" &&
+          item.step !== "diagnostic:database migration writes" &&
+          item.step !== "diagnostic:database rollback" &&
           !(typeof item.step === "string" && item.step.startsWith("finalize:doctor-lint:"))
             ? { ...item, detail: undefined, failureFacts: undefined }
             : item,

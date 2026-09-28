@@ -197,6 +197,32 @@ openclaw gateway --verbose --ws-log compact
 openclaw gateway --verbose --ws-log full
 ```
 
+### Steering and input cancellation
+
+When retained reply-delivery state prevents steering, the Gateway logs
+`chat steering rejected; falling back to follow-up dispatch`. Its structured
+fields distinguish the incoming input's `runId` from `activeRunId` and record
+the session, active source turn, recovery claim, and exact `reason`:
+
+- `terminal-pending` or `delivered-terminal`: a final-reply receipt is present.
+- `unresolved-terminal-tool` or `delivery-ambiguous`: a final-reply delivery is unresolved.
+- `already-delivered`: the active source turn is recorded as completed.
+- `unknown-source-with-terminal-history`: the active source is unknown and
+  completed source turns are retained.
+- `stale-claim`: the recovery claim does not authorize the active source turn.
+- `session-entry-unavailable`: the Gateway could not read the current session state.
+
+These checks also run during ordinary conversations; the warning does not mean
+a Gateway restart is in progress. Rejection falls back to follow-up dispatch;
+it does not itself cancel the input.
+
+`chat pending input aborted` records an accepted input that was aborted before
+consumption, including inputs waiting in the follow-up queue. The message includes
+the cause and whether the saved input became `cancelled` or `interrupted`.
+Structured fields include its run, session, and agent IDs. Causes distinguish
+`rpc`, `stop`, `timeout`, `restart`, `archive`, `delete`, `authority-revoked`, and `superseded`;
+unclassified aborts use `aborted`. These records omit message text and attachments.
+
 ## Configuring logging
 
 All logging configuration lives under `logging` in `~/.openclaw/openclaw.json`.
@@ -851,6 +877,13 @@ flags, they warn at 10 seconds elapsed or 5 seconds in one preparation stage. Co
 logs each completed slow stage immediately, including failures, and emits a
 `native-turn-handoff` summary before submitting the native turn. Timing records
 contain stage names and identifiers, not prompts or tool arguments.
+
+Dispatch preparation separates `reply.wait_admission_ticket` from
+`reply.admit_pre_dispatch`, `reply.admit_dispatch`, and
+`reply.admit_command_resolution`. These spans distinguish waiting behind an
+earlier input from waiting for the session's execution owner. A cancelled or
+failed request that never reaches the reply resolver still reports slow
+preparation under the same thresholds.
 
 Embedded-run startup, prep, core-plugin-tool and auth stage summaries include
 `pid`, `threadId` and `isMainThread` in the message to distinguish emitters sharing
