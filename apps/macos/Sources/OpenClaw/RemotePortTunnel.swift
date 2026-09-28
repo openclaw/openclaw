@@ -327,7 +327,7 @@ final class RemotePortTunnel: @unchecked Sendable {
         return port
     }
 
-    private static func sshOptions(
+    static func sshOptions(
         localPort: UInt16,
         remotePort: Int,
         hostKeyPolicy: CommandResolver.SSHHostKeyPolicy) -> [String]
@@ -388,7 +388,7 @@ final class RemotePortTunnel: @unchecked Sendable {
         }
     }
 
-    private static func portIsFree(_ port: UInt16) -> Bool {
+    static func portIsFree(_ port: UInt16) -> Bool {
         #if canImport(Darwin)
         // NWListener can succeed even when only one address family is held. Mirror what ssh needs by checking
         // both 127.0.0.1 and ::1 for availability.
@@ -452,20 +452,5 @@ final class RemotePortTunnel: @unchecked Sendable {
         }
         return result == 0
     }
-    #endif
-
-    #if SWIFT_PACKAGE
-    static func _testPortIsFree(_ port: UInt16) -> Bool {
-        self.portIsFree(port)
-    }
-
-    static func _testSSHOptions(
-        localPort: UInt16,
-        remotePort: Int,
-        hostKeyPolicy: CommandResolver.SSHHostKeyPolicy = .strict) -> [String]
-    {
-        self.sshOptions(localPort: localPort, remotePort: remotePort, hostKeyPolicy: hostKeyPolicy)
-    }
-
     #endif
 }

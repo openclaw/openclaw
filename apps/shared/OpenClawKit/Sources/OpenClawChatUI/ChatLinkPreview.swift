@@ -718,6 +718,8 @@ final class ChatLinkPreviewModel {
     private(set) var imageResult: ChatLinkPreviewImageResult?
     private let metadataFetch: MetadataFetch
     private let imageFetch: ImageFetch
+    private var sourceURL: URL?
+    private var loadGeneration: UInt64 = 0
 
     init(metadataFetch: @escaping MetadataFetch, imageFetch: @escaping ImageFetch) {
         self.metadataFetch = metadataFetch
@@ -730,8 +732,17 @@ final class ChatLinkPreviewModel {
     }
 
     func loadMetadata(_ url: URL) async {
+        if self.sourceURL != url {
+            self.sourceURL = url
+            self.loadGeneration &+= 1
+            self.result = nil
+            self.imageResult = nil
+        }
         guard self.expanded, self.result == nil else { return }
-        self.result = await self.metadataFetch(url)
+        let generation = self.loadGeneration
+        let result = await self.metadataFetch(url)
+        guard !Task.isCancelled, self.loadGeneration == generation else { return }
+        self.result = result
     }
 
     func loadImage() async {
@@ -739,8 +750,9 @@ final class ChatLinkPreviewModel {
               self.imageResult == nil,
               let imageURL = self.imageURL
         else { return }
+        let generation = self.loadGeneration
         let result = await self.imageFetch(imageURL)
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled, self.loadGeneration == generation else { return }
         self.imageResult = result
     }
 }

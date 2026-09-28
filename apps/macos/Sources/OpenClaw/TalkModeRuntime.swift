@@ -715,12 +715,8 @@ extension TalkModeRuntime {
                 try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds) * 1_000_000_000)
                 return nil
             }
-            guard let result = await group.next() else {
-                group.cancelAll()
-                return nil
-            }
-            group.cancelAll()
-            return result
+            defer { group.cancelAll() }
+            return await group.next() ?? nil
         }
     }
 
