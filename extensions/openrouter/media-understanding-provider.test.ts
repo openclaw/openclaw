@@ -49,16 +49,18 @@ describe("openrouter media understanding provider", () => {
     resolveProviderHttpRequestConfigMock.mockClear();
   });
 
-  it("declares image and audio capabilities with defaults", () => {
+  it("declares image, audio and video capabilities with defaults", () => {
     expect(openrouterMediaUnderstandingProvider).toEqual({
       id: "openrouter",
-      capabilities: ["image", "audio"],
+      capabilities: ["image", "audio", "video"],
       defaultModels: {
         image: "auto",
         audio: "openai/whisper-large-v3-turbo",
+        video: "google/gemini-3.8-flash",
       },
-      autoPriority: { audio: 35 },
+      autoPriority: { audio: 35, video: 30 },
       transcribeAudio: transcribeOpenRouterAudio,
+      describeVideo: openrouterMediaUnderstandingProvider.describeVideo,
     });
   });
 

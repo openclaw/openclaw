@@ -268,6 +268,34 @@ OpenClaw sends OpenRouter STT requests as JSON with base64 audio under
 `input_audio` (OpenRouter's STT contract), not as multipart OpenAI form
 uploads.
 
+## Video understanding (inbound video)
+
+OpenRouter can describe inbound video attachments through the shared
+`tools.media.video` path and `openclaw infer video describe`, using a
+video-capable chat model. OpenClaw sends the video as a base64 data URL in an
+OpenAI-compatible `video_url` content part to `/chat/completions`. The default
+model is `google/gemini-3.8-flash`; any OpenRouter model whose input modalities
+include video works.
+
+```json5
+{
+  tools: {
+    media: {
+      models: [
+        {
+          provider: "openrouter",
+          model: "google/gemini-3.8-flash",
+          capabilities: ["video"],
+        },
+      ],
+      video: { enabled: true },
+    },
+  },
+}
+```
+
+Auto-detection tries OpenRouter for video after Google, Qwen, and Moonshot.
+
 ## Fusion router
 
 OpenRouter Fusion sends one OpenClaw model ref to several OpenRouter models in
