@@ -224,8 +224,9 @@ export class ChannelWizardController {
     this.channel = null;
     this.setState({ phase: "idle" });
     if (client && sessionId) {
+      // Replacement starts await this settlement, so it needs the same ceiling as wizard.start.
       const completion = Promise.resolve()
-        .then(() => client.request("wizard.cancel", { sessionId, closeInput: true }))
+        .then(() => requestWithTimeout(client, "wizard.cancel", { sessionId, closeInput: true }))
         .catch(() => {
           // Session may already be finished/purged; closing the modal wins.
         });
