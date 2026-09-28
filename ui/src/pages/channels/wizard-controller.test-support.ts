@@ -21,13 +21,6 @@ export function createWizardTestController(handler: RequestHandler) {
   return { controller, request, onChange };
 }
 
-export const selectStep = {
-  id: "step-select",
-  type: "select" as const,
-  message: "Which channel?",
-  options: [{ value: "telegram", label: "Telegram" }],
-};
-
 export const tokenStep = {
   id: "step-token",
   type: "text" as const,

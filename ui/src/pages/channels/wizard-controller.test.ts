@@ -5,10 +5,16 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import {
   createWizardTestController as createController,
-  selectStep,
   tokenStep,
 } from "./wizard-controller.test-support.ts";
 import { ChannelWizardController } from "./wizard-controller.ts";
+
+const selectStep = {
+  id: "step-select",
+  type: "select" as const,
+  message: "Which channel?",
+  options: [{ value: "telegram", label: "Telegram" }],
+};
 
 describe("ChannelWizardController", () => {
   it("walks start → step → answer → done", async () => {
