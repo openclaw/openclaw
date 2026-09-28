@@ -362,6 +362,35 @@ describe("llama-server setup", () => {
     ).resolves.toBeNull();
   });
 
+  it("validates the server URL before discovery and accepts a corrected host shorthand", async () => {
+    discoverMock.mockResolvedValue(successfulDiscovery());
+    const text: ProviderAuthContext["prompter"]["text"] = vi.fn(async (prompt) => {
+      for (const invalid of [
+        "not a valid URL",
+        "ftp://localhost:8080",
+        "http://user:password@localhost:8080",
+      ]) {
+        expect(prompt.validate?.(invalid)).toMatch(/HTTP.*URL/i);
+      }
+      expect(discoverMock).not.toHaveBeenCalled();
+      expect(prompt.validate?.("localhost:8080/v1/")).toBeUndefined();
+      return "localhost:8080/v1/";
+    });
+
+    const result = await runLlamaServerSetup(
+      interactiveContext({
+        config: {},
+        env: {},
+        prompter: { text, confirm: vi.fn(async () => false) },
+      }),
+    );
+
+    expect(result.configPatch?.models?.providers?.[LLAMA_CPP_PROVIDER_ID]?.baseUrl).toBe(
+      "http://localhost:8080/v1",
+    );
+    expect(result.defaultModel).toBe("llama-cpp/qwen/model:Q4_K_M");
+  });
+
   it("configures an unauthenticated server without persisting a fake key", async () => {
     discoverMock.mockResolvedValue(successfulDiscovery());
     runtimeApiKeyMock.mockResolvedValue("stored-profile-key");
