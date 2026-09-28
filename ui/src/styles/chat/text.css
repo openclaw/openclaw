@@ -552,7 +552,12 @@
   inset-inline-start: 0;
   inline-size: var(--space-4);
   block-size: var(--space-4);
-  background: var(--select-chevron) center / var(--space-4) no-repeat;
+  background-image: var(--select-chevron);
+  background-position:
+    3px center,
+    7px center;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
   transform: rotate(-90deg);
   transition: transform var(--duration-normal) var(--ease-out);
 }
@@ -576,9 +581,17 @@
 }
 
 :is(.chat-text, .chat-thinking) :where(.task-list-item-checkbox:checked) {
-  border-color: color-mix(in srgb, var(--accent) 72%, var(--border));
-  background: color-mix(in srgb, var(--accent) 72%, var(--bg))
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m3 8 3 3 7-7'/%3E%3C/svg%3E")
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+:is(.chat-text, .chat-thinking) :where(.task-list-item-checkbox:checked)::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: currentColor;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m3 8 3 3 7-7'/%3E%3C/svg%3E")
     center / 13px no-repeat;
 }
 

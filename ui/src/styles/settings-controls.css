@@ -277,7 +277,10 @@ select.settings-select:not([multiple]) {
   padding-right: 36px;
   background-image: var(--select-chevron);
   background-repeat: no-repeat;
-  background-position: right 10px center;
+  background-position:
+    right 18px center,
+    right 14px center;
+  background-size: 5px 5px;
 }
 
 .settings-input::placeholder {

@@ -33,7 +33,7 @@
   --muted: #8b8b94;
   --muted-strong: #898990;
   --muted-foreground: #8b8b94;
-  --file-icon-glyph: #a3a3a3;
+  --file-icon-glyph: var(--muted);
 
   /* Border - Whisper-thin, barely there */
   --border: #1e2028;
@@ -84,7 +84,7 @@
   --accent-hover: #ff7070;
   --accent-muted: #ff5c5c;
   --accent-subtle: rgba(255, 92, 92, 0.1);
-  --accent-foreground: #fafafa;
+  --accent-foreground: #0e1015;
   --accent-glow: rgba(255, 92, 92, 0.2);
   --inbox-attention: #e5243b;
   --inbox-attention-hover: color-mix(in srgb, var(--inbox-attention) 88%, black);
@@ -110,7 +110,9 @@
   --selection-bg: #005fcc;
   --selection-fg: #ffffff;
   --primary: #d13c3c;
-  --primary-hover: #c22e2e;
+  /* Imported palettes supply a fill/ink pair, not a hover pair. Keep their
+     contrast intact; built-in palettes override with audited hover colors. */
+  --primary-hover: var(--primary);
   --primary-foreground: #ffffff;
 
   /* Secondary */
@@ -189,6 +191,7 @@
   --ok-muted: rgba(34, 197, 94, 0.75);
   --ok-subtle: rgba(34, 197, 94, 0.08);
   --destructive: #ef4444;
+  --destructive-hover: var(--destructive);
   --destructive-foreground: #fafafa;
   --warn: #f59e0b;
   --warn-muted: rgba(245, 158, 11, 0.75);
@@ -198,9 +201,6 @@
   --danger-subtle: rgba(248, 113, 113, 0.08);
   --info: #60a5fa;
   --info-subtle: rgba(96, 165, 250, 0.08);
-  --warn-bright: #f59e0b;
-  --warn-strong: #d97706;
-  --danger-solid-hover: #dc2626;
   --pr-merged: #a78bfa;
 
   /* Focus */
@@ -341,9 +341,10 @@
   --z-dropdown: 100;
   --z-toast: 2000;
 
-  /* Custom select chevron. Data URIs cannot read var(--muted), so the stroke
-     color is baked per theme mode; light mode overrides the whole image. */
-  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23a1a1aa' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  /* Two gradient strokes keep native select chevrons on the live muted ink. */
+  --select-chevron:
+    linear-gradient(45deg, transparent 40%, var(--muted) 40% 60%, transparent 60%),
+    linear-gradient(-45deg, transparent 40%, var(--muted) 40% 60%, transparent 60%);
 
   color-scheme: dark;
 }
@@ -506,16 +507,15 @@
   }
 }
 
-/* Named palette overrides win even when their stylesheet loads before the app. */
-:root:where([data-theme]) {
-  --primary-hover: var(--accent-hover);
-}
-
 /* The claw family deepens text-bearing primary and destructive fills. */
 :root[data-theme="dark"] {
   --primary-hover: #c22e2e;
   --destructive: #d32f2f;
   --destructive-hover: #bc2a2a;
+}
+
+:root[data-theme="light"] {
+  --primary-hover: var(--accent-hover);
 }
 
 /* Light theme tokens apply to every light-mode family. */
@@ -560,7 +560,6 @@
   --muted: #6e6960;
   --muted-strong: #56524a;
   --muted-foreground: #6e6960;
-  --file-icon-glyph: #737373;
 
   --border: #e8e4dc;
   --border-strong: #d6d0c5;
@@ -661,8 +660,6 @@
   --shadow-glow: 0 0 20px var(--accent-glow);
   --overlay-border: color-mix(in srgb, var(--border-strong) 64%, transparent);
   --overlay-shadow: 0 1px 2px rgb(60 42 24 / 0.035), 0 8px 24px rgb(60 42 24 / 0.065);
-
-  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23444' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
 
   color-scheme: light;
 }
