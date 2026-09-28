@@ -1,5 +1,6 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { roleScopesAllow } from "../../../../src/shared/operator-scope-compat.ts";
+import type { GatewayEventListener } from "../../api/gateway.ts";
 import type {
   ChannelAccountSnapshot,
   ChannelsPairingApproveResult,
@@ -33,6 +34,7 @@ type ChannelGatewaySnapshot = {
 type ChannelGateway = {
   readonly snapshot: ChannelGatewaySnapshot;
   subscribe: (listener: (snapshot: ChannelGatewaySnapshot) => void) => () => void;
+  subscribeEvents: (listener: GatewayEventListener) => () => void;
 };
 
 export type ChannelsState = {
@@ -479,6 +481,7 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
   let currentPairingAuthSignature = resolveChannelPairingAuthSignature(gateway.snapshot);
   let currentWhatsAppAdminAccess = channelSnapshotAllowsScope(gateway.snapshot, "operator.admin");
   let disposed = false;
+  let channelsInvalidated = false;
 
   const publish = () => {
     if (disposed) {
@@ -500,10 +503,31 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
       publish();
     }
   };
+  const refreshChannels = (probe = false): Promise<void> =>
+    run(async () => {
+      const previousRefreshSeq = state.channelsRefreshSeq;
+      const pending = loadChannels(state, probe);
+      const refreshSeq = state.channelsRefreshSeq;
+      if (refreshSeq === previousRefreshSeq) {
+        return pending;
+      }
+      const client = state.client;
+      channelsInvalidated = false;
+      await pending;
+      if (
+        channelsInvalidated &&
+        !disposed &&
+        state.connected &&
+        state.client === client &&
+        state.channelsRefreshSeq === refreshSeq
+      ) {
+        await refreshChannels();
+      }
+    });
   const runWhatsApp = (task: () => Promise<boolean>) =>
     run(async () => {
       if (await task()) {
-        await loadChannels(state, true);
+        await refreshChannels(true);
       }
     });
   const stopGateway = gateway.subscribe((snapshot) => {
@@ -522,6 +546,7 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
     state.client = snapshot.client;
     state.connected = connected;
     if (clientChanged || connectionChanged || channelReadAccessChanged) {
+      channelsInvalidated = false;
       state.channelsLoading = false;
       state.channelsLoadingProbe = null;
       state.channelsRefreshSeq = (state.channelsRefreshSeq ?? 0) + 1;
@@ -552,12 +577,24 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
     }
     publish();
   });
+  const stopEvents = gateway.subscribeEvents((event) => {
+    if (
+      event.event !== "config.changed" ||
+      !state.connected ||
+      !currentChannelReadAccess ||
+      (!state.channelsSnapshot && !state.channelsLoading && listeners.size === 0)
+    ) {
+      return;
+    }
+    channelsInvalidated = true;
+    void refreshChannels();
+  });
 
   return {
     get state() {
       return state;
     },
-    refresh: (probe) => run(() => loadChannels(state, probe ?? false)),
+    refresh: refreshChannels,
     refreshPairing: () => run(() => loadChannelPairing(state)),
     approvePairing: async (params) => {
       const mutation = await run(() =>
@@ -587,12 +624,15 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
         return;
       }
       disposed = true;
+      channelsInvalidated = false;
+      state.channelsRefreshSeq = (state.channelsRefreshSeq ?? 0) + 1;
       lifecycle.whatsappEpoch += 1;
       lifecycle.pairingEpoch += 1;
       state.pairingRefreshSeq += 1;
       state.pairingBusyRequestId = null;
       state.whatsappBusy = false;
       stopGateway();
+      stopEvents();
       listeners.clear();
     },
   };
