@@ -127,7 +127,10 @@ export function runWithOperatorToolGatewayCleanupContext<T>(run: () => T): T {
 }
 
 /** Captured while live; its accepting owner, not the original invocation, releases it. */
-export function captureOperatorToolGatewayContinuationContext() {
+export function captureOperatorToolGatewayContinuationContext(target?: {
+  sessionKey: string;
+  agentId?: string;
+}) {
   const scope = getPluginRuntimeGatewayRequestScope();
   const caller = getGatewayToolCallerIdentity();
   const resolveGatewayContext = caller?.gatewayContextResolver ?? scope?.resolveGatewayContext;
@@ -137,7 +140,7 @@ export function captureOperatorToolGatewayContinuationContext() {
   // Use the normal dispatch owner to intersect scopes and validate the live caller
   // before transferring its source. A cleanup scope alone retains request lifetime.
   const assertCallerCurrent = captureGatewayToolCallerAssertion();
-  const resolved = resolveInProcessGatewayDispatch("agent", undefined, {
+  const resolved = resolveInProcessGatewayDispatch("agent", target, {
     forceSyntheticClient: true,
     operatorRoleActor: { kind: "system" },
     resolveGatewayContext,
@@ -244,10 +247,22 @@ export function resolveInProcessGatewayDispatch(
   const selection = caller?.personalToolIdentityScoped
     ? resolveGatewayToolOperatorSelection()
     : undefined;
-  const runtimeParticipant = resolveRuntimeSessionParticipant(
+  // Resolve the instance before capturing a target policy that must survive awaits.
+  const resolveGatewayContext = options?.resolveGatewayContext ?? scope?.resolveGatewayContext;
+  const context = getInProcessGatewayRequestContext(resolveGatewayContext);
+  if (!context) {
+    throw new Error(
+      `In-process gateway dispatch requires a gateway request scope or instance binding (method: ${method}).`,
+    );
+  }
+  const runtimeParticipant = resolveRuntimeSessionParticipant({
     method,
-    readInProcessAgentRuntimeIdentity(options) ?? scope?.client?.internal?.agentRuntimeIdentity,
-  );
+    requestParams: params,
+    runtimeIdentity:
+      readInProcessAgentRuntimeIdentity(options) ?? scope?.client?.internal?.agentRuntimeIdentity,
+    context,
+    connId: scope?.client?.connId,
+  });
   const operatorRunAuthority =
     selection?.operatorAuthority ??
     caller?.operatorAuthority ??
@@ -328,15 +343,7 @@ export function resolveInProcessGatewayDispatch(
               ? undefined
               : (explicitSystemActor ?? { kind: "system" })))
       : (scopedRoleActor ?? explicitSystemActor));
-  // The router installs a nested scope; retain the admitted resolver for later commit checks.
-  const resolveGatewayContext = options?.resolveGatewayContext ?? scope?.resolveGatewayContext;
-  const context = getInProcessGatewayRequestContext(resolveGatewayContext);
   const isWebchatConnect = scope?.isWebchatConnect ?? (() => false);
-  if (!context) {
-    throw new Error(
-      `In-process gateway dispatch requires a gateway request scope or instance binding (method: ${method}).`,
-    );
-  }
   if (options?.requireScopedClient === true && !scope?.client) {
     throw new Error(
       `In-process gateway dispatch requires an authenticated plugin request scope (method: ${method}).`,

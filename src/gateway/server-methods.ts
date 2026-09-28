@@ -678,6 +678,11 @@ export async function handleGatewayRequest(
         }
       },
     });
+  } catch (error) {
+    if (!(error instanceof SessionMutationAuthorizationChangedError)) {
+      throw error;
+    }
+    respond(false, undefined, error.error);
   } finally {
     sessionAccessAuthority?.release();
     releaseForegroundWork();

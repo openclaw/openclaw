@@ -63,13 +63,16 @@ export function createReplyTurnParticipants(
   if (owner) {
     add(owner);
   }
-  function resolve(user?: string): ReplyTurnParticipant | undefined {
+  function resolve(
+    user?: string,
+    options?: { allowTurnOwner?: () => boolean },
+  ): ReplyTurnParticipant | undefined {
     if (closed) {
       throw new Error("This turn has ended; ask again in a new turn.");
     }
     const people = [...participants.values()];
     const choices = people.map((person) => `${person.name} (user: ${person.profileId})`).join(", ");
-    if (user === undefined && people.length > 1) {
+    if (user === undefined && people.length > 1 && !options?.allowTurnOwner?.()) {
       throw new Error(
         `Several people have steered this turn: ${choices}. Pass the requester's requester_profile.id as user, or ask them if unclear.`,
       );
@@ -88,7 +91,7 @@ export function createReplyTurnParticipants(
           assertCurrent: () => {
             // A steer can be accepted while a personal read or write awaits preparation.
             if (user === undefined && participants.size > 1) {
-              resolve(user);
+              resolve(user, options);
             }
             person.assertCurrent();
           },

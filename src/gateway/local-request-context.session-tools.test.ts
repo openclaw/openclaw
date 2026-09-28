@@ -1,6 +1,8 @@
 // Exercises built-in session tools through the real in-process router and SQLite store.
 import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SessionsCreateResult } from "../../packages/gateway-protocol/src/index.js";
+import { captureAgentHarnessCompletionCustody } from "../agents/agent-harness-completion-custody.js";
+import { createAgentHarnessCompletionScope } from "../agents/agent-harness-completion-scope.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import * as modelRuntimeChoice from "../agents/model-runtime-choice.js";
 import "../agents/subagents/spawn/subagent-spawn-model.mocks.shared.js";
@@ -23,8 +25,6 @@ import { createSessionsListTool } from "../agents/tools/sessions-list-tool.js";
 import { createSessionsSendTool } from "../agents/tools/sessions-send-tool.js";
 import { maybeSpawnVisibleSession } from "../agents/tools/sessions-spawn-visible.js";
 import { createSessionsTool } from "../agents/tools/sessions-tool.js";
-import { withPersonalToolTurn } from "../auto-reply/reply/personal-tool-turn.test-support.js";
-import type { CliDeps } from "../cli/deps.types.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   appendTranscriptMessage,
@@ -33,9 +33,7 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { drainSystemEvents } from "../infra/system-events.js";
-import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
@@ -43,133 +41,40 @@ import {
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { ensureGatewayOwnerProfile } from "../state/user-profiles.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "./chat-abort.js";
 import {
   captureGatewayDeviceRevocation,
   invalidateGatewayDeviceRevocation,
   readGatewayDeviceSourceAuthority,
 } from "./device-revocation.js";
-import { withLocalGatewayRequestScope } from "./local-request-context.js";
 import { mockSessionStatusModelDependencies } from "./local-request-context.session-status.test-support.js";
-import { handleGatewayRequest } from "./server-methods.js";
+import {
+  REQUESTER,
+  TARGET,
+  TARGET_ID,
+  INCOGNITO,
+  PARTICIPANT_SHARED,
+  PARTICIPANT_DRAFT,
+  PARTICIPANT_DRAFT_ID,
+  withSessionToolsFixture,
+  withParticipantSessionToolsFixture,
+  drainSessionToolsFixture,
+} from "./local-request-context.session-tools.test-support.js";
+import { createGatewayInstanceRuntime } from "./server-instance-runtime.js";
+import { createRequestGatewayMethodRegistry, handleGatewayRequest } from "./server-methods.js";
 import type { GatewayRequestOptions } from "./server-methods/types.js";
 import {
   runWithOperatorToolGatewayCleanupContext,
   withOperatorToolGatewayAuthority,
 } from "./server-plugin-in-process-dispatch.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugins.js";
-import { roleClient, rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
+import { roleClient, sharingPolicyClient } from "./session-sharing.test-utils.js";
 
 // This authority fixture creates no browser tabs; lifecycle cleanup and tab
 // ownership have dedicated coverage without cold-loading Browser's source graph here.
 vi.mock("../browser-lifecycle-cleanup.js", () => ({
   cleanupBrowserSessionsForLifecycleEnd: async () => {},
 }));
-
-const REQUESTER = "agent:main:dashboard:session-tools-requester";
-const TARGET = "agent:main:dashboard:session-tools-target";
-const TARGET_ID = "session-tools-target-id";
-const INCOGNITO = "agent:main:dashboard:incognito-session-tools";
-const PARTICIPANT_SHARED = "agent:main:dashboard:participant-shared";
-const PARTICIPANT_DRAFT = "agent:main:dashboard:participant-draft";
-const PARTICIPANT_DRAFT_ID = "participant-draft-id";
-let fixtureRun: Promise<void> | undefined;
-
-function withSessionToolsFixture(run: (cfg: OpenClawConfig) => Promise<void>) {
-  return (fixtureRun = withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const cfg: OpenClawConfig = {
-      ...rolePolicyConfig(),
-      agents: {
-        ownership: "explicit",
-        defaults: { systemAgent: { agentId: "main" } },
-        entries: {
-          main: { workspace: state.workspaceDir },
-          other: { workspace: state.path("other-workspace") },
-        },
-      },
-      tools: { sessions: { visibility: "all" } },
-    };
-    await state.writeConfig(cfg);
-    for (const [agentId, sessionKey, sessionId] of [
-      ["main", REQUESTER, "session-tools-requester-id"],
-      ["main", TARGET, TARGET_ID],
-      ["main", INCOGNITO, "session-tools-incognito-id"],
-      ["other", "agent:other:dashboard:session-tools-other", "session-tools-other-id"],
-    ] as const) {
-      await upsertSessionEntryCore(
-        { agentId, sessionKey },
-        {
-          sessionId,
-          updatedAt: 1,
-          visibility: "shared",
-          createdVia: "operator",
-          createdActor: { type: "human", source: "profile", id: "other-person" },
-        },
-      );
-    }
-    const resources = new LegacyPluginSdkResourceHost();
-    try {
-      await resources.run(() =>
-        withLocalGatewayRequestScope({ deps: {} as CliDeps, getRuntimeConfig: () => cfg }, () =>
-          run(cfg),
-        ),
-      );
-    } finally {
-      await resources.close();
-    }
-  }));
-}
-
-function withParticipantSessionToolsFixture(
-  run: (fixture: {
-    cfg: OpenClawConfig;
-    turn: Parameters<Parameters<typeof withPersonalToolTurn>[1]>[0];
-    alice: Parameters<typeof withPersonalToolTurn>[0]["owner"];
-    bob: Parameters<typeof withPersonalToolTurn>[0]["owner"];
-  }) => Promise<void>,
-) {
-  return withSessionToolsFixture(async (cfg) => {
-    const person = (name: string) => {
-      const client = roleClient("write", `${name.toLowerCase()}-participant`);
-      const profileId = client.authenticatedUserProfile?.profileId;
-      if (!profileId) {
-        throw new Error("expected participant profile");
-      }
-      return {
-        profileId,
-        senderId: `${name.toLowerCase()}-sender`,
-        name,
-        readCurrentRoleAssignment: () => "write",
-      };
-    };
-    const alice = person("Alice");
-    const bob = person("Bob");
-    for (const [sessionKey, sessionId, visibility, marker] of [
-      [PARTICIPANT_DRAFT, PARTICIPANT_DRAFT_ID, "draft", "Alice's distinctive draft marker"],
-      [PARTICIPANT_SHARED, "participant-shared-id", "shared", "Shared participant marker"],
-    ] as const) {
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        {
-          sessionId,
-          updatedAt: 1,
-          visibility,
-          createdVia: "operator",
-          createdActor: { type: "human", source: "profile", id: alice.profileId },
-        },
-      );
-      await appendTranscriptMessage(
-        { agentId: "main", sessionKey, sessionId },
-        { message: { role: "user", content: marker } },
-      );
-    }
-    await withPersonalToolTurn(
-      { owner: alice, sessionKey: REQUESTER, sessionId: "session-tools-requester-id" },
-      (turn) => run({ cfg, turn, alice, bob }),
-    );
-  });
-}
 
 describe("built-in session tool role authority", () => {
   let runtimeSetup: Promise<unknown>[] = [];
@@ -190,12 +95,7 @@ describe("built-in session tool role authority", () => {
     await Promise.allSettled(runtimeSetup);
   });
 
-  afterEach(async () => {
-    // Vitest timeouts do not cancel the callback. Join its state cleanup before
-    // global resets or the next fixture can replace this process's environment.
-    await fixtureRun?.catch(() => {});
-    fixtureRun = undefined;
-  });
+  afterEach(drainSessionToolsFixture);
 
   it("uses the named participant's current identity for session reads and writes", async () => {
     await withParticipantSessionToolsFixture(async ({ cfg, turn, alice, bob }) => {
@@ -298,44 +198,133 @@ describe("built-in session tool role authority", () => {
     });
   });
 
-  it("rejects an unnamed history read when another participant steers during the read", async () => {
-    await withParticipantSessionToolsFixture(async ({ cfg, turn, alice, bob }) => {
+  it.each(["selected history", "unselected history", "unselected wake"] as const)(
+    "rejects %s when another participant steers during preparation",
+    async (surface) => {
+      await withParticipantSessionToolsFixture(async ({ cfg, turn, alice, bob }) => {
+        const context = getPluginRuntimeGatewayRequestScope()?.context;
+        if (!context) {
+          throw new Error("expected local Gateway context");
+        }
+        const steer = vi
+          .fn(async () => undefined)
+          .mockImplementationOnce(async () => {
+            expect(await turn.steer(bob)).toMatchObject({ status: "accepted" });
+            return undefined;
+          });
+        const wake = vi.fn(() => ({ ok: true as const }));
+        if (surface === "unselected wake") {
+          context.cron = { ...context.cron, prepareWake: steer, wake };
+        } else {
+          context.readChatStartupProjection = steer;
+        }
+        const history = createSessionsHistoryTool({
+          config: cfg,
+          agentSessionKey: REQUESTER,
+        });
+        await expect(
+          surface === "unselected wake"
+            ? dispatchGatewayMethodInProcess("wake", {
+                sessionKey: PARTICIPANT_DRAFT,
+                mode: "now",
+                text: "Wake the draft",
+              })
+            : surface === "unselected history"
+              ? dispatchGatewayMethodInProcess("chat.history", { sessionKey: PARTICIPANT_DRAFT })
+              : history.execute("racing-history", { sessionKey: PARTICIPANT_DRAFT }),
+        ).rejects.toThrow(
+          `Several people have steered this turn: Alice (user: ${alice.profileId}), Bob (user: ${bob.profileId}). Pass the requester's requester_profile.id as user, or ask them if unclear.`,
+        );
+        if (surface === "unselected wake") {
+          expect(wake).not.toHaveBeenCalled();
+        }
+        expect(
+          (
+            await history.execute("selected-history", {
+              sessionKey: PARTICIPANT_DRAFT,
+              user: alice.profileId,
+            })
+          ).details,
+        ).toMatchObject({
+          messages: [expect.objectContaining({ content: "Alice's distinctive draft marker" })],
+        });
+      });
+    },
+  );
+
+  it("limits unselected in-process session calls to the turn's own session after steering", async () => {
+    await withParticipantSessionToolsFixture(async ({ turn, bob }) => {
+      const read = (sessionKey: string) =>
+        dispatchGatewayMethodInProcess("chat.history", { sessionKey, agentId: "main" });
+      await expect(read(PARTICIPANT_DRAFT)).resolves.toMatchObject({
+        messages: [expect.objectContaining({ content: "Alice's distinctive draft marker" })],
+      });
+      expect(await turn.steer(bob)).toMatchObject({ status: "accepted" });
+      await expect(read(REQUESTER)).resolves.toMatchObject({ sessionKey: REQUESTER });
+      await expect(read(REQUESTER.replace("agent:main:", ""))).resolves.toMatchObject({
+        messages: [],
+      });
+      await expect(read(PARTICIPANT_DRAFT)).rejects.toThrow(
+        "Use a session tool with the requester's requester_profile.id as user.",
+      );
+      await expect(dispatchGatewayMethodInProcess("sessions.list", {})).rejects.toThrow(
+        /Several people have steered this turn/,
+      );
+      await expect(
+        dispatchGatewayMethodInProcess("agent.wait", {
+          runId: turn.runtimeIdentity.operationalRunInstance.runId,
+          timeoutMs: 0,
+        }),
+      ).resolves.toMatchObject({ status: "timeout" });
+      await expect(
+        dispatchGatewayMethodInProcess("agent.wait", { runId: "unknown-run", timeoutMs: 0 }),
+      ).rejects.toThrow(/Several people have steered this turn/);
+      await expect(
+        dispatchGatewayMethodInProcess("chat.abort", { sessionKey: PARTICIPANT_DRAFT }),
+      ).rejects.toThrow(/Several people have steered this turn/);
+      await expect(
+        dispatchGatewayMethodInProcess("agent", {
+          sessionKey: REQUESTER,
+          sessionId: PARTICIPANT_DRAFT_ID,
+          message: "unselected transcript override",
+          idempotencyKey: "unselected-transcript-override",
+        }),
+      ).rejects.toThrow(/Several people have steered this turn/);
       const context = getPluginRuntimeGatewayRequestScope()?.context;
       if (!context) {
         throw new Error("expected local Gateway context");
       }
-      // This hook runs after the real history handler has authorized the draft
-      // and read its transcript. The final publication must recheck selection.
-      context.readChatStartupProjection = vi
-        .fn(async () => undefined)
-        .mockImplementationOnce(async () => {
-          expect(await turn.steer(bob)).toMatchObject({ status: "accepted" });
-          return undefined;
-        });
-      const history = createSessionsHistoryTool({
-        config: cfg,
-        agentSessionKey: REQUESTER,
-      });
-      await expect(
-        history.execute("racing-history", { sessionKey: PARTICIPANT_DRAFT }),
-      ).rejects.toThrow(
-        `Several people have steered this turn: Alice (user: ${alice.profileId}), Bob (user: ${bob.profileId}). Pass the requester's requester_profile.id as user, or ask them if unclear.`,
+      const custody = await captureAgentHarnessCompletionCustody(
+        createAgentHarnessCompletionScope({ requesterSessionKey: REQUESTER }),
       );
-      expect(context.readChatStartupProjection).toHaveBeenCalledOnce();
-      expect(
-        (
-          await history.execute("selected-history", {
-            sessionKey: PARTICIPANT_DRAFT,
-            user: alice.profileId,
-          })
-        ).details,
-      ).toMatchObject({
-        messages: [expect.objectContaining({ content: "Alice's distinctive draft marker" })],
+      const runtime = createGatewayInstanceRuntime({
+        getContext: () => context,
+        getMethodRegistry: createRequestGatewayMethodRegistry,
+        isDispatchAvailable: () => true,
       });
+      try {
+        expect(custody?.isCurrent()).toBe(true);
+        // The closed recovery principal owns accepted cross-session delivery independently.
+        await expect(
+          runtime.recovery.dispatchSessionMethod("chat.history", {
+            sessionKey: PARTICIPANT_DRAFT,
+          }),
+        ).resolves.toMatchObject({
+          messages: [expect.objectContaining({ content: "Alice's distinctive draft marker" })],
+        });
+        context.readChatStartupProjection = async () => {
+          turn.complete();
+          return undefined;
+        };
+        await expect(read(REQUESTER)).rejects.toThrow(/turn has ended|no longer active/);
+      } finally {
+        runtime.close();
+        custody?.release();
+      }
     });
   });
 
-  it("rejects identity-only session reads after another participant steers", async () => {
+  it("limits runtime-identity-only session reads to the turn's own session after steering", async () => {
     await withParticipantSessionToolsFixture(async ({ turn, alice, bob }) => {
       const context = getPluginRuntimeGatewayRequestScope()?.context;
       const operatorRunAuthority = getGatewayToolCallerIdentity()?.operatorAuthority;
@@ -351,14 +340,14 @@ describe("built-in session tool role authority", () => {
         operatorRoleActor: { kind: "operator", profileId: alice.profileId },
       };
       const respond = vi.fn<GatewayRequestOptions["respond"]>();
-      const read = () =>
+      const read = (sessionKey = PARTICIPANT_DRAFT) =>
         withoutGatewayToolCallerIdentity(() =>
           handleGatewayRequest({
             req: {
               type: "req",
               id: "runtime-participant-history",
               method: "chat.history",
-              params: { sessionKey: PARTICIPANT_DRAFT, agentId: "main" },
+              params: { sessionKey, agentId: "main" },
             },
             context,
             client,
@@ -375,6 +364,9 @@ describe("built-in session tool role authority", () => {
       ]);
       expect(await turn.steer(bob)).toMatchObject({ status: "accepted" });
       respond.mockClear();
+      await expect(read(REQUESTER)).resolves.toBeUndefined();
+      expect(respond.mock.calls).toMatchObject([[true, { sessionKey: REQUESTER }]]);
+      respond.mockClear();
       await expect(read()).resolves.toBeUndefined();
       expect(respond.mock.calls).toMatchObject([
         [
@@ -383,8 +375,24 @@ describe("built-in session tool role authority", () => {
           {
             code: "INVALID_REQUEST",
             message: expect.stringContaining(
-              `Several people have steered this turn: Alice (user: ${alice.profileId}), Bob (user: ${bob.profileId}). Pass the requester's requester_profile.id as user, or ask them if unclear.`,
+              "Use a session tool with the requester's requester_profile.id as user.",
             ),
+          },
+        ],
+      ]);
+      respond.mockClear();
+      context.readChatStartupProjection = async () => {
+        turn.complete();
+        return undefined;
+      };
+      await expect(read(REQUESTER)).resolves.toBeUndefined();
+      expect(respond.mock.calls).toMatchObject([
+        [
+          false,
+          undefined,
+          {
+            code: "INVALID_REQUEST",
+            message: expect.stringMatching(/turn has ended|no longer active/),
           },
         ],
       ]);

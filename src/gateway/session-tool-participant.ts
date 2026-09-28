@@ -5,36 +5,78 @@ import {
 } from "../agents/tools/gateway-caller-context.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
-import type { GatewayRequestOptions } from "./server-methods/types.js";
+import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
+import { isSessionTargetMethod } from "./session-method-policy.js";
+import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
+import { resolveSessionRequestTargets } from "./session-sharing-target-input.js";
+import { resolveSessionStoreIdentity } from "./session-store-key.js";
 
-/** Runtime tokens identify a turn, but cannot transport a named-person selection. */
-export function resolveRuntimeSessionParticipant(
-  method: string,
-  runtimeIdentity: AgentRuntimeIdentity | undefined,
-) {
-  if (
-    getGatewayToolCallerIdentity() ||
-    !(
-      method.startsWith("sessions.") ||
-      method === "chat.history" ||
-      method === "agent" ||
-      method === "agent.wait"
-    )
-  ) {
+/** Unselected calls can retain the owner only for the shared turn's own session. */
+export function resolveRuntimeSessionParticipant(params: {
+  method: string;
+  requestParams: unknown;
+  runtimeIdentity: AgentRuntimeIdentity | undefined;
+  context: GatewayRequestContext;
+  connId?: string;
+}) {
+  const caller = getGatewayToolCallerIdentity();
+  const { method, runtimeIdentity, context } = params;
+  if (caller?.personalToolIdentityScoped || !isSessionTargetMethod(method)) {
     return undefined;
   }
-  return resolveGatewayPersonalToolParticipant(runtimeIdentity);
+  const turn = caller ?? runtimeIdentity;
+  const allowTurnOwner = () => {
+    if (!turn) {
+      return false;
+    }
+    try {
+      const targets = resolveSessionRequestTargets(params);
+      const cfg = context.getRuntimeConfig();
+      const own = resolveSessionStoreIdentity({ cfg, ...turn });
+      return Boolean(
+        targets?.length &&
+        targets.every((target) => {
+          const resolved = resolveSessionStoreIdentity({ cfg, ...target });
+          return resolved.agentId === own.agentId && resolved.canonicalKey === own.canonicalKey;
+        }),
+      );
+    } catch {
+      return false;
+    }
+  };
+  const checked = <T>(run: () => T): T => {
+    try {
+      return run();
+    } catch (error) {
+      throw new SessionMutationAuthorizationChangedError(
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `${formatErrorMessage(error)} Use a session tool with the requester's requester_profile.id as user.`,
+        ),
+      );
+    }
+  };
+  const participant = checked(() =>
+    resolveGatewayPersonalToolParticipant(runtimeIdentity, {
+      requireSingleParticipant: true,
+      allowTurnOwner,
+    }),
+  );
+  return participant && { assertCurrent: () => checked(participant.assertCurrent) };
 }
 
 /** Expected participant refusals are request policy outcomes, not handler failures. */
 export function resolveRuntimeSessionParticipantRequest(
-  options: Pick<GatewayRequestOptions, "req" | "client" | "respond">,
+  options: Pick<GatewayRequestOptions, "req" | "client" | "respond" | "context">,
 ): ReturnType<typeof resolveRuntimeSessionParticipant> | null {
   try {
-    return resolveRuntimeSessionParticipant(
-      options.req.method,
-      options.client?.internal?.agentRuntimeIdentity,
-    );
+    return resolveRuntimeSessionParticipant({
+      method: options.req.method,
+      requestParams: options.req.params,
+      runtimeIdentity: options.client?.internal?.agentRuntimeIdentity,
+      context: options.context,
+      connId: options.client?.connId,
+    });
   } catch (error) {
     options.respond(
       false,

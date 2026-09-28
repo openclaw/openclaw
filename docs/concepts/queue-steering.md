@@ -90,6 +90,7 @@ Session tools and `sessions_spawn` also use the requester's verified
 `requester_profile.id` as `user` when several people have steered the turn. Session
 access and spawned-child authority use that person's permissions. Steered turns,
 like later turns in the session, use the session's selected model account.
+Unselected session calls in a multi-person turn may use the owner's authority only for that turn's own session; other targets and session-wide discovery require a session tool with the requester's `requester_profile.id` as `user`.
 Personal instructions and other personal settings without a `user` selector
 cannot be read or changed from a turn several people have steered. The person
 should ask in their own turn with a new Control UI message. For Crabbox open-and-show requests in a

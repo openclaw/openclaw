@@ -135,7 +135,11 @@ export type ReplyTurnParticipant = Readonly<{
 
 export type ReplyTurnParticipants = {
   accept(participant: ReplyTurnParticipantInput): void;
-  resolve(this: void, user?: string): ReplyTurnParticipant | undefined;
+  resolve(
+    this: void,
+    user?: string,
+    options?: { allowTurnOwner?: () => boolean },
+  ): ReplyTurnParticipant | undefined;
   close(): void;
 };
 
