@@ -55,6 +55,7 @@ describe("node worker bundle installer", () => {
     cleanupPrewarming = undefined;
     await cleanup?.();
     vi.restoreAllMocks();
+    vi.useRealTimers();
     await new Promise<void>((resolve) => {
       if (!server) {
         resolve();
@@ -134,12 +135,21 @@ describe("node worker bundle installer", () => {
     };
   }
 
-  async function serve(archive: Buffer, token: string, declaredBytes = archive.byteLength) {
+  async function serve(
+    archive: Buffer,
+    token: string,
+    declaredBytes = archive.byteLength,
+    respond?: (req: http.IncomingMessage, res: http.ServerResponse, attempt: number) => void,
+  ) {
     const requests = vi.fn();
     server = http.createServer((req, res) => {
       requests(req.url, req.headers);
       if (req.headers.authorization !== `Bearer ${token}`) {
         res.writeHead(404).end();
+        return;
+      }
+      if (respond) {
+        respond(req, res, requests.mock.calls.length);
         return;
       }
       res.writeHead(200, {
@@ -717,6 +727,110 @@ describe("node worker bundle installer", () => {
       ),
     ).rejects.toThrow();
   });
+
+  it.for(["resume", "ignored range", "wrong range", "corrupt suffix", "spent token"] as const)(
+    "recovers a partial HTTP bundle safely: %s",
+    async (reply, { signal }) => {
+      const fixture = await bundleFixture();
+      const offset = Math.floor(fixture.archive.length * 0.4);
+      let interruptedResponse: http.ServerResponse | undefined;
+      const served = await serve(
+        fixture.archive,
+        fixture.input.archive.token,
+        fixture.archive.length,
+        (_req, res, attempt) => {
+          if (attempt === 1) {
+            interruptedResponse = res;
+            res.writeHead(200, {
+              "content-length": String(fixture.archive.length),
+              connection: "close",
+            });
+            res.write(fixture.archive.subarray(0, offset));
+            return;
+          }
+          if (reply === "spent token") {
+            res.writeHead(404).end();
+            return;
+          }
+          if (reply === "ignored range" || attempt === 3) {
+            res.writeHead(200, { "content-length": String(fixture.archive.length) });
+            res.end(fixture.archive);
+            return;
+          }
+          const suffix = Buffer.from(fixture.archive.subarray(offset));
+          if (reply === "corrupt suffix") {
+            suffix[0] = suffix[0]! ^ 1;
+          }
+          res.writeHead(206, {
+            "content-length": String(suffix.length),
+            "content-range": `bytes ${reply === "wrong range" ? offset + 1 : offset}-${fixture.archive.length - 1}/${fixture.archive.length}`,
+          });
+          res.end(suffix);
+        },
+      );
+      const open = fs.open.bind(fs);
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        if (path.basename(String(args[0])) === "bundle.tgz" && args[1] === "wx") {
+          const write = handle.writeFile.bind(handle);
+          vi.spyOn(handle, "writeFile").mockImplementation(async (...writeArgs) => {
+            await write(...writeArgs);
+            // Cut the transport after the prefix reaches disk, not before the reader starts.
+            interruptedResponse?.destroy();
+            interruptedResponse = undefined;
+          });
+        }
+        return handle;
+      });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      let retryReady = createDeferredCore();
+      const schedule = globalThis.setTimeout;
+      vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, ms, ...args) => {
+        const timer = schedule(callback, ms, ...args);
+        if (ms === 250 || ms === 500) {
+          retryReady.resolve();
+        }
+        return timer;
+      });
+      const installer = new NodeWorkerBundleInstaller({ root });
+      const installation = installer.ensure({
+        input: fixture.input,
+        gatewayUrl: served.gatewayUrl,
+        signal,
+      });
+      const endedBeforeRetry = installation.then(
+        () => {
+          throw new Error("installation completed before resuming its partial download");
+        },
+        (error: unknown) => {
+          throw error;
+        },
+      );
+      // Observe failure now even when the pre-fix implementation never schedules a retry.
+      void endedBeforeRetry.catch(() => {});
+      for (let retry = 0; retry < (reply === "wrong range" ? 2 : 1); retry++) {
+        await Promise.race([retryReady.promise, endedBeforeRetry]);
+        retryReady = createDeferredCore();
+        await vi.runOnlyPendingTimersAsync();
+      }
+      const failure = reply === "corrupt suffix" || reply === "spent token";
+      if (failure) {
+        await expect(installation).rejects.toThrow(
+          reply === "corrupt suffix" ? "failed integrity validation" : "gateway returned 404",
+        );
+      } else {
+        await expect(installation).resolves.toEqual(fixture.input.build);
+      }
+      expect(served.requests.mock.calls.map(([, headers]) => headers.range)).toEqual(
+        reply === "wrong range"
+          ? [undefined, `bytes=${offset}-`, undefined]
+          : [undefined, `bytes=${offset}-`],
+      );
+      await expect(
+        fs.readdir(path.join(root, fixture.input.gatewayNamespace, "bundles")),
+      ).resolves.toEqual(failure ? [] : [fixture.input.build.bundleHash]);
+    },
+  );
 
   it("rejects an unexpected content length before publication", async () => {
     const fixture = await bundleFixture();

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import type { Dirent } from "node:fs";
+import { createReadStream, type Dirent } from "node:fs";
 import fsp from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
@@ -12,10 +12,12 @@ import {
   type WorkerAdmissionHandshake,
 } from "../../packages/gateway-protocol/src/index.js";
 import { resolveStateDir } from "../config/paths.js";
-import { hasErrnoCode } from "../infra/errors.js";
+import { sleepWithAbort } from "../infra/backoff.js";
+import { extractErrorCode, hasErrnoCode } from "../infra/errors.js";
 import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { retryAsync } from "../infra/retry.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import {
@@ -49,6 +51,21 @@ const PREVIOUS_PATTERN = /^[a-f0-9]{64}\.previous-/u;
 const BUNDLE_DELETE_BATCH = 16;
 const WORKER_PREWARM_TIMEOUT_MS = 10 * 60_000;
 const execFileAsync = promisify(execFile);
+const TRANSIENT_DOWNLOAD_CODES = new Set([
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ECONNABORTED",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "ENETDOWN",
+  "EPIPE",
+  "ERR_STREAM_PREMATURE_CLOSE",
+  "ETIMEDOUT",
+  "ESOCKETTIMEDOUT",
+  "EAI_AGAIN",
+]);
+
+class BundleDownloadRangeError extends Error {}
 
 async function responseBody(response: IncomingMessage, maxBytes = 64 * 1024): Promise<string> {
   const chunks: Buffer[] = [];
@@ -70,10 +87,10 @@ async function writeBundleArchive(params: {
   archive: NodeWorkerBundleInstallInput["archive"];
   destination: string;
   signal?: AbortSignal;
+  offset?: number;
 }): Promise<void> {
-  const output = await fsp.open(params.destination, "wx", 0o600);
-  const hash = createHash("sha256");
-  let bytes = 0;
+  const output = await fsp.open(params.destination, params.offset ? "a" : "wx", 0o600);
+  let bytes = params.offset ?? 0;
   try {
     params.signal?.throwIfAborted();
     for await (const chunk of params.source) {
@@ -82,15 +99,37 @@ async function writeBundleArchive(params: {
       if (bytes > params.archive.bytes || bytes > MAX_WORKER_BUNDLE_ARCHIVE_BYTES) {
         throw new Error("worker bundle archive exceeded its byte limit");
       }
-      hash.update(chunk);
       await output.writeFile(chunk);
     }
     params.signal?.throwIfAborted();
-    if (bytes !== params.archive.bytes || hash.digest("hex") !== params.archive.sha256) {
+    if (bytes !== params.archive.bytes) {
       throw new Error("worker bundle archive failed integrity validation");
     }
   } finally {
     await output.close();
+  }
+  await verifyBundleArchive(params);
+}
+
+async function verifyBundleArchive(params: {
+  destination: string;
+  archive: NodeWorkerBundleInstallInput["archive"];
+  signal?: AbortSignal;
+}): Promise<void> {
+  const hash = createHash("sha256");
+  let bytes = 0;
+  params.signal?.throwIfAborted();
+  for await (const chunk of createReadStream(params.destination)) {
+    params.signal?.throwIfAborted();
+    bytes += chunk.byteLength;
+    if (bytes > params.archive.bytes || bytes > MAX_WORKER_BUNDLE_ARCHIVE_BYTES) {
+      throw new Error("worker bundle archive exceeded its byte limit");
+    }
+    hash.update(chunk);
+  }
+  params.signal?.throwIfAborted();
+  if (bytes !== params.archive.bytes || hash.digest("hex") !== params.archive.sha256) {
+    throw new Error("worker bundle archive failed integrity validation");
   }
 }
 
@@ -135,27 +174,72 @@ async function acquireBundle(params: {
       return;
     }
   }
-  params.signal?.throwIfAborted();
-  await withNodeWorkerTransferHttpRequest(
-    {
-      gatewayUrl: params.gatewayUrl,
-      tlsFingerprint: params.gatewayTlsFingerprint,
-      cloudflareAccess: params.gatewayCloudflareAccess,
-      routePath: nodeWorkerBundleTransferPath(params.input.build.bundleHash),
-      method: "GET",
-      token: params.input.archive.token,
-      signal: params.signal,
+  const archive = params.input.archive;
+  await retryAsync(
+    async () => {
+      params.signal?.throwIfAborted();
+      let offset = await fsp.stat(params.destination).then(
+        (stat) => stat.size,
+        (error: unknown) => {
+          if (!hasErrnoCode(error, "ENOENT")) {
+            throw error;
+          }
+          return 0;
+        },
+      );
+      // A transport can fail after delivering every byte; verify before requesting bytes=size.
+      if (offset === archive.bytes) {
+        await verifyBundleArchive({ ...params, archive });
+        return;
+      }
+      await withNodeWorkerTransferHttpRequest(
+        {
+          gatewayUrl: params.gatewayUrl,
+          tlsFingerprint: params.gatewayTlsFingerprint,
+          cloudflareAccess: params.gatewayCloudflareAccess,
+          routePath: nodeWorkerBundleTransferPath(params.input.build.bundleHash),
+          method: "GET",
+          token: archive.token,
+          headers: offset > 0 ? { range: `bytes=${offset}-` } : undefined,
+          signal: params.signal,
+        },
+        async (response) => {
+          const contentLength = Number(response.headers["content-length"]);
+          if (response.statusCode === 206 || (response.statusCode === 416 && offset > 0)) {
+            if (
+              response.statusCode !== 206 ||
+              response.headers["content-range"] !==
+                `bytes ${offset}-${archive.bytes - 1}/${archive.bytes}` ||
+              contentLength !== archive.bytes - offset
+            ) {
+              await fsp.rm(params.destination, { force: true });
+              throw new BundleDownloadRangeError(
+                "gateway returned an unexpected worker bundle range",
+              );
+            }
+          } else if (response.statusCode === 200) {
+            await fsp.rm(params.destination, { force: true });
+            offset = 0;
+            if (contentLength !== archive.bytes) {
+              throw new Error("gateway returned an unexpected worker bundle length");
+            }
+          } else {
+            await responseBody(response);
+            throw new Error(`gateway returned ${response.statusCode ?? 0}`);
+          }
+          await writeBundleArchive({ ...params, source: response, archive, offset });
+        },
+      );
     },
-    async (response) => {
-      if (response.statusCode !== 200) {
-        await responseBody(response);
-        throw new Error(`gateway returned ${response.statusCode ?? 0}`);
-      }
-      const contentLength = Number(response.headers["content-length"]);
-      if (contentLength !== params.input.archive.bytes) {
-        throw new Error("gateway returned an unexpected worker bundle length");
-      }
-      await writeBundleArchive({ ...params, source: response, archive: params.input.archive });
+    {
+      attempts: 3,
+      minDelayMs: 250,
+      maxDelayMs: 1_000,
+      shouldRetry: (error) =>
+        !params.signal?.aborted &&
+        (error instanceof BundleDownloadRangeError ||
+          TRANSIENT_DOWNLOAD_CODES.has(extractErrorCode(error) ?? "")),
+      sleep: (ms) => sleepWithAbort(ms, params.signal),
     },
   );
 }
