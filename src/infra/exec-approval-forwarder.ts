@@ -319,7 +319,6 @@ async function deliverToTargets(params: {
     payload: ReplyPayload,
   ) => Promise<boolean | void> | boolean | void;
   assertPlatformSend?: (target: ForwardTarget) => void;
-  skipSlackQueue?: boolean;
   shouldSend?: () => boolean;
 }) {
   const deliveries = params.targets.map(async (target) => {
@@ -343,7 +342,6 @@ async function deliverToTargets(params: {
         accountId: target.accountId,
         threadId: target.threadId,
         payloads: [payload],
-        ...(params.skipSlackQueue && channel === "slack" ? { skipQueue: true } : {}),
         ...(assertPlatformSend
           ? {
               onPlatformSendDispatch: async () => assertPlatformSend(target),
@@ -522,7 +520,6 @@ function createApprovalHandlers<
       targets,
       beforeDeliver: guard?.canSend,
       assertPlatformSend: guard?.assertSend,
-      skipSlackQueue: Boolean(guard),
       buildPayload: (target) =>
         params.strategy.buildResolvedPayload({
           cfg,
@@ -573,7 +570,6 @@ function createApprovalHandlers<
             targets: expired.value.targets,
             beforeDeliver: guard?.canSend,
             assertPlatformSend: guard?.assertSend,
-            skipSlackQueue: Boolean(guard),
             buildPayload: () => ({ text: buildExpiredText(request) }),
             deliver: params.deliver,
           }),
@@ -615,9 +611,6 @@ function createApprovalHandlers<
           return guard?.canSend(target);
         },
         assertPlatformSend: guard?.assertSend,
-        // A recovered Slack row cannot reconstruct this approval's live
-        // reviewer policy, so a stale card must never outlive the Gateway.
-        skipSlackQueue: Boolean(guard),
         deliver: params.deliver,
         shouldSend: () => pending.isCurrent(pendingEntry),
       }).then(() => pending.completeDelivery(pendingEntry, pendingEntry.value)),

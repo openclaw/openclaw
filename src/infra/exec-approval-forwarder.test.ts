@@ -506,6 +506,7 @@ describe("exec approval forwarder", () => {
     );
 
     it("passes the plugin request to native fallback suppression", async () => {
+      vi.useFakeTimers();
       const shouldSuppressForwardingFallback = vi.fn(
         ({ request }: { request: ApprovalRequestInput }) => !("title" in request.request),
       );
@@ -552,6 +553,13 @@ describe("exec approval forwarder", () => {
         expect.objectContaining({ approvalKind: "plugin", request }),
       );
       expect(deliver).toHaveBeenCalledTimes(1);
+      expect(requireFirstCallArg(deliver, "unscoped plugin pending delivery")).not.toHaveProperty(
+        "skipQueue",
+      );
+
+      await vi.advanceTimersByTimeAsync(request.expiresAtMs - request.createdAtMs);
+      expect(deliver).toHaveBeenCalledTimes(2);
+      expect(deliver.mock.calls[1]?.[0]).not.toHaveProperty("skipQueue");
 
       const replay = createForwarder({
         cfg,
@@ -570,6 +578,9 @@ describe("exec approval forwarder", () => {
         }),
       );
       expect(replay.deliver).toHaveBeenCalledTimes(1);
+      expect(
+        requireFirstCallArg(replay.deliver, "unscoped plugin resolved delivery"),
+      ).not.toHaveProperty("skipQueue");
     });
 
     it("blocks a selected reviewer policy even without a running native handler", async () => {
@@ -628,6 +639,9 @@ describe("exec approval forwarder", () => {
       ).resolves.toBe(true);
       await flushPendingDelivery();
       expect(deliver).toHaveBeenCalledTimes(1);
+      expect(requireFirstCallArg(deliver, "unmatched plugin fallback delivery")).not.toHaveProperty(
+        "skipQueue",
+      );
     });
 
     it("drops queued generic plugin cards and terminal notices after reviewer policy changes", async () => {
@@ -756,10 +770,10 @@ describe("exec approval forwarder", () => {
 
       expect(deliver).toHaveBeenCalledOnce();
       expect(requireFirstCallArg(deliver, "delivery params")).toMatchObject({
-        skipQueue: true,
         onPlatformSendDispatch: expect.any(Function),
         assertDirectAdapterHandoff: expect.any(Function),
       });
+      expect(requireFirstCallArg(deliver, "delivery params")).not.toHaveProperty("skipQueue");
       expect(rejection).toMatchObject({
         message: "plugin approval forwarding is no longer authorized",
       });
