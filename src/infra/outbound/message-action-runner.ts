@@ -45,7 +45,12 @@ import {
   type ResolvedActionContext,
 } from "./message-action-contracts.js";
 import { MessageActionDeniedError } from "./message-action-denial.js";
-import { executeMessagePlugin, executeMessagePoll } from "./message-action-execution.js";
+import {
+  assertMessageDeliveryCurrent,
+  beforeMessageDeliveryAttempt,
+  executeMessagePlugin,
+  executeMessagePoll,
+} from "./message-action-execution.js";
 import {
   collectActionMediaSourceHints,
   hydrateAttachmentParamsForAction,
@@ -91,23 +96,6 @@ function withMessageTargetPreparation<T>(
     assertOutboundHandoffCurrent(assertCurrent);
     throw error;
   });
-}
-
-function assertMessageDeliveryCurrent(input: MessageActionInput): void {
-  throwIfAborted(input.abortSignal);
-  input.assertDirectAdapterHandoff?.();
-  input.messageActionAuthorization?.scheduled?.assertCurrent();
-  input.messageActionAuthorization?.deliveryAttempt?.assertCurrent();
-}
-
-async function beforeMessageDeliveryAttempt(input: MessageActionInput): Promise<void> {
-  const deliveryAttempt = input.messageActionAuthorization?.deliveryAttempt;
-  if (!deliveryAttempt) {
-    return;
-  }
-  assertMessageDeliveryCurrent(input);
-  await deliveryAttempt.beforeAttempt();
-  assertMessageDeliveryCurrent(input);
 }
 
 async function handleBroadcastAction(

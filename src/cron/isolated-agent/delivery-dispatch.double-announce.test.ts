@@ -223,7 +223,6 @@ type ResolvedOutboundSessionRoute = NonNullable<
   Awaited<ReturnType<typeof resolveOutboundSessionRoute>>
 >;
 
-
 const requireRecord = createRequireRecord("object", "expected-label");
 
 function outboundDeliveryCall(callIndex = 0) {

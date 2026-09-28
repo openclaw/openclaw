@@ -8,7 +8,10 @@ import { start, stop } from "../service/ops-lifecycle.js";
 import { makeCronRecoveryState } from "../service/run-recovery.test-support.js";
 import { runCronRuntimeMutation } from "../service/runtime-mutation.js";
 import { loadCronStore } from "../store.js";
-import { finishCronRunReceipt, releaseLocalCronRunReceiptOwnership } from "./run-receipt-store.js";
+import {
+  finishCronRunReceiptAsync,
+  releaseLocalCronRunReceiptOwnership,
+} from "./run-receipt-store.js";
 import {
   claimCronRunReceiptForTest,
   makeCronReceiptJob,
@@ -99,7 +102,11 @@ it.each(["commit", "retired", "reply-lost", "evidence-lost"] as const)(
     } finally {
       await reply?.close();
       lostEvidence?.mockRestore();
-      finishCronRunReceipt({ handle: receipt, status: "interrupted", finishedAtMs: Date.now() });
+      await finishCronRunReceiptAsync({
+        handle: receipt,
+        status: "interrupted",
+        finishedAtMs: Date.now(),
+      });
     }
   },
 );
@@ -121,7 +128,7 @@ it.each(["legacy-running", "legacy-terminal", "started-terminal", "receiptless"]
         .db.prepare("UPDATE cron_run_receipts SET delivery_attempt_state = ? WHERE receipt_id = ?")
         .run(kind === "started-terminal" ? "started" : "unknown", receipt.receiptId);
       if (kind !== "legacy-running") {
-        finishCronRunReceipt({
+        await finishCronRunReceiptAsync({
           handle: receipt,
           status: "interrupted",
           finishedAtMs: startedAtMs + 1,

@@ -246,7 +246,7 @@ describe("CronService restart catch-up", () => {
         expect(recovered).toMatchObject({
           enabled: false,
           deleteAfterRun: true,
-          schedule: { kind: "at", at: "2025-12-13T16:00:00Z" },
+          schedule: { kind: "at", at: "2025-12-13T16:00:00.000Z" },
           state: {
             lastRunAtMs: runningAtMs,
             lastRunStatus: "error",
