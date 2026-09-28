@@ -631,7 +631,7 @@ describe("plugin management Gateway handlers", () => {
     expect(item?.catalog).not.toHaveProperty("publishedToClawHub");
   });
 
-  it("keeps known Media capability membership through browse pages and registry failure", async () => {
+  it("keeps enabled Media membership through browse pages and registry failure", async () => {
     const provider = {
       id: "novita",
       name: "Novita",
@@ -639,8 +639,8 @@ describe("plugin management Gateway handlers", () => {
       clawhubPackage: "@openclaw/novita",
       origin: "bundled",
       installed: true,
-      enabled: false,
-      state: "disabled",
+      enabled: true,
+      state: "enabled",
       categories: ["models"],
       capabilityCategories: ["media"],
     };
@@ -653,7 +653,7 @@ describe("plugin management Gateway handlers", () => {
     const first = await callHandler("plugins.catalog.browse", { category: "media" });
     const expectedItem = {
       catalog: { categories: ["models", "media"] },
-      local: { pluginId: "novita", enabled: false, action: "manage" },
+      local: { pluginId: "novita", enabled: true, action: "manage" },
     };
     expect(first).toMatchObject({
       ok: true,
@@ -701,6 +701,24 @@ describe("plugin management Gateway handlers", () => {
         items: [expectedItem],
         remoteError:
           "ClawHub is unavailable: service unavailable. Installed plugins remain available.",
+      },
+    });
+    managementMocks.list.mockResolvedValue({
+      plugins: [
+        { ...provider, enabled: false, state: "disabled", capabilityCategories: undefined },
+      ],
+      diagnostics: [],
+      mutationAllowed: true,
+    });
+    catalogMocks.browse.mockResolvedValueOnce({ items: [] });
+    const disabledMedia = await callHandler("plugins.catalog.browse", { category: "media" });
+    expect(disabledMedia).toMatchObject({ ok: true, response: { items: [] } });
+    catalogMocks.browse.mockResolvedValueOnce({ items: [] });
+    const disabledModels = await callHandler("plugins.catalog.browse", { category: "models" });
+    expect(disabledModels).toMatchObject({
+      ok: true,
+      response: {
+        items: [{ catalog: { categories: ["models"] }, local: { enabled: false } }],
       },
     });
     expect(managementMocks.inspect).not.toHaveBeenCalled();
