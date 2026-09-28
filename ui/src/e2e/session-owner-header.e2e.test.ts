@@ -12,14 +12,14 @@ const suite = createControlUiE2eSuite({
 });
 const phase = process.env.OPENCLAW_OWNER_ASSIGNMENT_PROOF_PHASE;
 const sessionKey = "agent:main:dashboard:assigned-owner";
-const person = (label: string) => ({
+const createPerson = (label: string) => ({
   type: "human" as const,
   id: label.toLowerCase(),
   identity: { type: "profile" as const, id: label.toLowerCase() },
   label,
   avatarUrl: `/api/users/${label.toLowerCase()}/avatar?v=1`,
 });
-const people = [person("Patrick"), person("Vyctor")] as const;
+const people = [createPerson("Patrick"), createPerson("Vyctor")] as const;
 const [creator, assignee] = people;
 
 suite.define(() => {
@@ -102,8 +102,11 @@ suite.define(() => {
           await gateway.deferNext("sessions.assignOwner");
           await page.getByRole("button", { name: "Actions for Test", exact: true }).click();
           const assignTo = page.getByRole("menuitem", { name: "Assign to…", exact: true });
-          if (width < 560) await assignTo.click();
-          else await assignTo.hover();
+          if (width < 560) {
+            await assignTo.click();
+          } else {
+            await assignTo.hover();
+          }
           await page.getByRole("menuitemradio", { name: "Vyctor", exact: true }).click();
           const request = await gateway.waitForRequest("sessions.assignOwner");
           expect(request.params).toMatchObject({
@@ -121,11 +124,12 @@ suite.define(() => {
           await expectBrowser(
             header.locator('.chat-pane__participants .viewer-avatar[aria-label="Patrick"]'),
           ).toBeVisible();
-          if (phase)
+          if (phase) {
             await page.screenshot({
               path: path.join(suite.artifactDir, `owner-${width}-${phase}.png`),
               animations: "disabled",
             });
+          }
           await expectBrowser(header.locator(".session-owner-chip--header")).toHaveCount(1);
           await expectBrowser(header.getByRole("img", { name: /Owned by Vyctor/ })).toBeVisible();
           if (width < 560) {
@@ -140,11 +144,12 @@ suite.define(() => {
           ]);
           await expectBrowser(header.getByRole("img", { name: /Owned by Vyctor/ })).toBeVisible();
           await expectBrowser(page.locator(".chat-pane__sharing-owner")).toHaveCount(0);
-          if (phase)
+          if (phase) {
             await page.screenshot({
               path: path.join(suite.artifactDir, `sharing-${width}-${phase}.png`),
               animations: "disabled",
             });
+          }
         },
       );
     },
