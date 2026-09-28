@@ -364,7 +364,12 @@ export async function prepareAgentRunDispatch(
     params.restoredCronContinuation === undefined
       ? consumeSubagentCompletionToolHandoff({
           handoffId: params.client?.internal?.delegatedToolPolicyHandoffId,
-          sourceSessionKey: completionEvent?.childSessionKey,
+          sourceTool: params.inputProvenance?.sourceTool,
+          sourceSessionKey:
+            params.inputProvenance?.kind === "inter_session" &&
+            params.inputProvenance.sourceTool === "subagent_settle"
+              ? params.inputProvenance.sourceSessionKey
+              : completionEvent?.childSessionKey,
           sourceSessionId: completionEvent?.childSessionId,
           targetSessionKey: params.resolvedSessionKey,
           targetSessionId: params.getAdmittedSessionId(),
