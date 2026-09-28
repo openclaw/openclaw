@@ -174,6 +174,21 @@ function expectedIdentity(input: NodeWorkerLaunchInput): NodeWorkerSupervisorIde
   };
 }
 
+function receiptMatchesIdentity(
+  receipt: NodeWorkerSupervisorReceipt,
+  expected: NodeWorkerSupervisorIdentity,
+): boolean {
+  return (
+    receipt.launchId === expected.launchId &&
+    receipt.planHash === expected.planHash &&
+    receipt.environmentId === expected.environmentId &&
+    receipt.sessionId === expected.sessionId &&
+    receipt.ownerEpoch === expected.ownerEpoch &&
+    receipt.placementGeneration === expected.placementGeneration &&
+    receipt.runId === expected.runId
+  );
+}
+
 function parseInvokeReceipt(
   payloadJSON: string | null | undefined,
 ): NodeWorkerSupervisorReceipt | null {
@@ -376,15 +391,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     receipt: NodeWorkerSupervisorReceipt,
     expected: NodeWorkerSupervisorIdentity,
   ): NodeWorkerSupervisorReceipt => {
-    if (
-      receipt.launchId !== expected.launchId ||
-      receipt.planHash !== expected.planHash ||
-      receipt.environmentId !== expected.environmentId ||
-      receipt.sessionId !== expected.sessionId ||
-      receipt.ownerEpoch !== expected.ownerEpoch ||
-      receipt.placementGeneration !== expected.placementGeneration ||
-      receipt.runId !== expected.runId
-    ) {
+    if (!receiptMatchesIdentity(receipt, expected)) {
       throw new Error("node worker supervisor receipt identity mismatch");
     }
     return receipt;
