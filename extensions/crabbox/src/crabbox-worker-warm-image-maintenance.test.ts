@@ -1,11 +1,11 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
+import { openWarmImageStore } from "./crabbox-state.test-support.js";
+import { commandResult } from "./crabbox-worker-provider.test-support.js";
 import type { WarmProfileRecord } from "./crabbox-worker-warm-image-store.js";
 import {
-  commandResult,
   createWarmProvider,
   managedBinary,
-  openWarmImageStore,
   provisionWarmProfile,
   PROFILE,
 } from "./crabbox-worker-warm-image.test-support.js";
