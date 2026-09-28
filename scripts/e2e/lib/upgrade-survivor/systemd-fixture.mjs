@@ -144,7 +144,7 @@ function parseUnit(content) {
     ? Infinity
     : /^\d+$/.test(stopSeconds)
       ? Number(stopSeconds) * 1_000
-      : NaN;
+      : Number.NaN;
   if (
     !unlimitedStop &&
     (!Number.isSafeInteger(stopTimeoutMs) || stopTimeoutMs <= 0 || stopTimeoutMs > 2_147_483_647)
@@ -468,8 +468,12 @@ function run() {
   }
   if (operation === "check-stopped" && !args.length) {
     const runtime = nativeRuntime();
-    if (!runtime.settled) fail("Survivor service processes have not settled.");
-    if (runtime.stopFailed) fail("Survivor stop policy read failed; process cleanup completed.");
+    if (!runtime.settled) {
+      fail("Survivor service processes have not settled.");
+    }
+    if (runtime.stopFailed) {
+      fail("Survivor stop policy read failed; process cleanup completed.");
+    }
     return;
   }
   if (operation === "is-active" && !args.length) {
@@ -522,7 +526,9 @@ function run() {
         );
       }
     } else {
-      if (!unit) fail("Cannot stop an absent fixture unit.");
+      if (!unit) {
+        fail("Cannot stop an absent fixture unit.");
+      }
       console.log(unit.stopTimeoutMs);
     }
     return;

@@ -34,16 +34,18 @@ function fixture() {
 }
 
 function waitForFixtureState(directory: string, settled: () => boolean) {
-  return new Promise<void>((resolve, reject) => {
+  return new Promise<void>((complete, reject) => {
     const inspect = () => {
       try {
-        if (!settled()) return;
+        if (!settled()) {
+          return;
+        }
       } catch {
         return;
       }
       watcher.close();
       clearTimeout(deadline);
-      resolve();
+      complete();
     };
     const watcher = watch(directory, inspect);
     const deadline = setTimeout(() => {
@@ -178,8 +180,12 @@ describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () 
           kill: (pid: number, signal: string | number) => {
             expect(pid).toBe(-42);
             if (signal === 0) {
-              if (!alive) throw Object.assign(new Error("gone"), { code: "ESRCH" });
-            } else signals.push(signal);
+              if (!alive) {
+                throw Object.assign(new Error("gone"), { code: "ESRCH" });
+              }
+            } else {
+              signals.push(signal);
+            }
           },
         },
         setTimeout: (callback: () => void, delay: number) => {
@@ -191,8 +197,10 @@ describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () 
       });
       const advance = (until: number) => {
         while (true) {
-          const next = [...timers].sort((a, b) => a[1].at - b[1].at)[0];
-          if (!next || next[1].at > until) break;
+          const next = [...timers].toSorted((a, b) => a[1].at - b[1].at)[0];
+          if (!next || next[1].at > until) {
+            break;
+          }
           now = next[1].at;
           timers.delete(next[0]);
           next[1].callback();
@@ -301,8 +309,12 @@ describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () 
           kill: (pid: number, signal: string | number) => {
             expect(pid).toBe(-42);
             if (signal === 0) {
-              if (!alive) throw Object.assign(new Error("gone"), { code: "ESRCH" });
-            } else signals.push(signal);
+              if (!alive) {
+                throw Object.assign(new Error("gone"), { code: "ESRCH" });
+              }
+            } else {
+              signals.push(signal);
+            }
           },
         },
         setTimeout: (callback: () => void) => {
@@ -389,7 +401,9 @@ describe.skipIf(process.platform === "win32")("survivor loaded stop policy", () 
           stopFailed: removed,
         });
         expect(() => process.kill(-pid, 0)).toThrow();
-        if (removed) expect(stopped.stderr).toContain("stop policy read failed");
+        if (removed) {
+          expect(stopped.stderr).toContain("stop policy read failed");
+        }
       } finally {
         if (existsSync(runtimeFile)) {
           const owned = runtime();
