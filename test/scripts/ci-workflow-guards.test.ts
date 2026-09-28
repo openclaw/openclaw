@@ -4883,6 +4883,40 @@ setImmediate(() => {
     }
   });
 
+  it("uses the workflow Node 24 pin for hosted default requests", () => {
+    const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
+    const setup: WorkflowStep = expectDefined(
+      action.runs.steps.find((step: WorkflowStep) => step.id === "setup-node"),
+      "Node setup",
+    );
+    const expression = String(
+      expectDefined(setup.env?.REQUESTED_NODE_VERSION, "requested Node version"),
+    )
+      .replace(/^\$\{\{\s*|\s*\}\}$/gu, "")
+      .replaceAll("inputs.node-version", 'inputs["node-version"]');
+    for (const [environment, requested, pin, expected] of [
+      ["github-hosted", "24.x", "24.21.0", "24.21.0"],
+      ["github-hosted", "24.x", undefined, "24.x"],
+      ["github-hosted", "24.x", "", "24.x"],
+      ["github-hosted", "24.x", "26.1.0", "24.x"],
+      ["github-hosted", "24.16.0", "24.21.0", "24.16.0"],
+      ["github-hosted", "26.x", "24.21.0", "26.x"],
+      ["self-hosted", "24.x", "24.21.0", "24.x"],
+      ["", "24.x", "24.21.0", "24.x"],
+    ] as const) {
+      expect(
+        runInNewContext(expression, {
+          runner: { environment },
+          inputs: { "node-version": requested },
+          env: pin === undefined ? {} : { NODE_VERSION: pin },
+          startsWith: (value: unknown, prefix: string) =>
+            typeof value === "string" && value.startsWith(prefix),
+        }),
+        `${environment}/${requested}/${pin ?? "unset"}`,
+      ).toBe(expected);
+    }
+  });
+
   it("owns one exact immutable semantic dependency cache", () => {
     const actionSource = readFileSync(".github/actions/setup-node-env/action.yml", "utf8");
     const ciSource = readFileSync(".github/workflows/ci.yml", "utf8");
@@ -9208,6 +9242,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       releaseGate = false,
       runAttempt = 1,
       stripe = 1,
+      stripeCount = 6,
     }: {
       capability: boolean;
       cpuCount?: number;
@@ -9222,6 +9257,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       releaseGate?: boolean;
       runAttempt?: number;
       stripe?: number;
+      stripeCount?: number;
     }) => {
       const root = tempDirs.make("openclaw-hosted-lint-owner-");
       const binDir = path.join(root, "bin");
@@ -9242,7 +9278,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           ...(failStripe === undefined
             ? []
             : [
-                `if [[ " $* " == *" --core-stripe=${failStripe}/5 "* || " $* " == *" --extension-stripe=${failStripe}/6 "* ]]; then exit 23; fi`,
+                `if [[ " $* " == *" --core-stripe=${failStripe}/5 "* || " $* " == *" --extension-stripe=${failStripe}/${stripeCount} "* ]]; then exit 23; fi`,
               ]),
         ]);
       }
@@ -9253,7 +9289,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       const expressionContext = {
         eventName,
         frozenTarget,
-        matrix: { stripe },
+        matrix: { stripe, stripe_count: stripeCount },
         releaseGate,
         repository: "openclaw/openclaw",
         runnerProfile: profile,
@@ -9282,6 +9318,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           FORMAT_CHECK: "false",
           CORE_STRIPE: String(stripe),
           EXTENSION_STRIPE: String(stripe),
+          EXTENSION_STRIPE_COUNT: String(
+            evaluateWorkflowExpression(
+              extensionLintStep.env.EXTENSION_STRIPE_COUNT,
+              expressionContext,
+            ),
+          ),
           FROZEN_TARGET: frozenTarget ? "true" : "false",
           HISTORICAL_TARGET: capability ? "false" : "true",
           HOSTED_RUNNER_STRIPES: profile === "blacksmith" ? "false" : "true",
@@ -9418,12 +9460,20 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     ]);
     expect(hostedExtensionLint.strategy["fail-fast"]).toBe(false);
     expect(hostedExtensionLint.strategy["max-parallel"]).toBe(6);
-    for (const stripe of [1, 2, 3, 4, 5, 6]) {
-      expect(
-        runLintOwner({ capability: true, lane: "extensions", profile: "hybrid", stripe }),
-      ).toEqual([
-        `node --import tsx scripts/run-oxlint-shards.mts --only=extensions --extension-stripe=${stripe}/6 --threads=1`,
-      ]);
+    for (const stripeCount of [3, 6]) {
+      for (let stripe = 1; stripe <= stripeCount; stripe++) {
+        expect(
+          runLintOwner({
+            capability: true,
+            lane: "extensions",
+            profile: "hybrid",
+            stripe,
+            stripeCount,
+          }),
+        ).toEqual([
+          `node --import tsx scripts/run-oxlint-shards.mts --only=extensions --extension-stripe=${stripe}/${stripeCount} --threads=1`,
+        ]);
+      }
     }
     runLintOwner({
       capability: true,
@@ -9775,6 +9825,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
                 expect(includeFile).toBeTruthy();
                 const included = JSON.parse(readFileSync(includeFile!, "utf8"));
                 const nodeFiles = [
+                  "ui/src/pages/chat/chat-pane-retained-presentation.test.ts",
                   "ui/src/pages/chat/chat-thread.test.ts",
                   "ui/src/pages/usage/usage-page-details.test.ts",
                 ];

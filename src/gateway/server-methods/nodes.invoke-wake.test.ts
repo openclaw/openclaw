@@ -21,6 +21,15 @@ import {
 } from "../node-wake-state.test-support.js";
 import { expectRecordFields, requireGatewayRecord } from "../test-helpers.assertions.js";
 import {
+  createNodeInvokeTestHarness,
+  createOperatorClient,
+  firstRespondCall,
+  mockArg,
+  registerNodeInvokeUploadTests,
+  type RespondCall,
+  type TestNodeSession,
+} from "./nodes.invoke.test-support.js";
+import {
   maybeSendNodeWakeNudge,
   maybeWakeNodeWithApns,
   nodeHandlers,
@@ -120,59 +129,17 @@ vi.mock("../../infra/device-pairing-node.js", async () => {
   };
 });
 
-type RespondCall = [
-  boolean,
-  unknown?,
-  {
-    code?: number;
-    message?: string;
-    details?: unknown;
-  }?,
-];
-
-type MockCallSource = {
-  mock: {
-    calls: ArrayLike<ReadonlyArray<unknown>>;
-  };
-};
-
-type TestNodeSession = {
-  nodeId: string;
-  connId?: string;
-  pairingGeneration?: string;
-  commands: string[];
-  declaredCommands?: string[];
-  platform?: string;
-  client?: { invalidated?: boolean };
-};
-
 function requireString(value: unknown, label: string): string {
   expect(typeof value, `${label} must be a string`).toBe("string");
   return value as string;
 }
 
-function mockCall(source: MockCallSource, callIndex = 0): ReadonlyArray<unknown> {
-  const call = source.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`expected mock call ${callIndex}`);
-  }
-  return call;
-}
-
-function firstRespondCall(source: MockCallSource): RespondCall {
-  return mockCall(source) as RespondCall;
-}
-
-function expectInvokeTimeout(respond: MockCallSource) {
+function expectInvokeTimeout(respond: Parameters<typeof firstRespondCall>[0]) {
   expect(firstRespondCall(respond)).toMatchObject([
     false,
     undefined,
     { message: "TIMEOUT: node invoke timed out", details: { nodeError: { code: "TIMEOUT" } } },
   ]);
-}
-
-function mockArg(source: MockCallSource, callIndex: number, argIndex: number) {
-  return mockCall(source, callIndex)[argIndex];
 }
 
 function requireRespondPayload(call: RespondCall | undefined, label: string) {
@@ -325,104 +292,10 @@ function mockRelayWakeConfig(nodeId: string, overrides: WakeResultOverrides = {}
   });
 }
 
-function makeNodeInvokeParams(overrides?: Partial<Record<string, unknown>>) {
-  return {
-    nodeId: "ios-node-1",
-    command: "camera.capture",
-    params: { quality: "high" },
-    timeoutMs: 5000,
-    idempotencyKey: "idem-node-invoke",
-    ...overrides,
-  };
-}
-
-async function invokeNode(params: {
-  nodeRegistry: {
-    get: (nodeId: string) => TestNodeSession | undefined;
-    getForPairingGeneration?: (
-      nodeId: string,
-      pairingGeneration: string,
-    ) => TestNodeSession | undefined;
-    invoke: (payload: {
-      nodeId: string;
-      command: string;
-      params?: unknown;
-      timeoutMs?: number;
-      signal?: AbortSignal;
-      idempotencyKey?: string;
-      expectedPairingGeneration?: string;
-    }) => Promise<{
-      ok: boolean;
-      payload?: unknown;
-      payloadJSON?: string | null;
-      error?: { code?: string; message?: string } | null;
-    }>;
-  };
-  client?: unknown;
-  signal?: AbortSignal;
-  requestParams?: Partial<Record<string, unknown>>;
-  validateAgentRuntimeApprovalAuthority?: () => boolean;
-  execApprovalManager?: {
-    projectDecisionIfActive: (id: string, decision: string) => string | null;
-    retainForHandoff?: (id: string) => (() => void) | null;
-  };
-}) {
-  const respond = vi.fn();
-  const logGateway = {
-    info: vi.fn(),
-    warn: vi.fn(),
-  };
-  const nodeRegistry = {
-    ...params.nodeRegistry,
-    getForPairingGeneration:
-      params.nodeRegistry.getForPairingGeneration ??
-      ((nodeId: string, _pairingGeneration: string) => params.nodeRegistry.get(nodeId)),
-  };
-  const execApprovalManager = params.execApprovalManager
-    ? {
-        retainForHandoff: () => () => {},
-        ...params.execApprovalManager,
-      }
-    : undefined;
-  await expectDefined(
-    nodeHandlers["node.invoke"],
-    'nodeHandlers["node.invoke"] test invariant',
-  )({
-    params: makeNodeInvokeParams(params.requestParams),
-    respond: respond as never,
-    context: {
-      nodeRegistry,
-      execApprovalManager,
-      logGateway,
-      getRuntimeConfig: () => mocks.getRuntimeConfig(),
-      validateAgentRuntimeApprovalAuthority: params.validateAgentRuntimeApprovalAuthority,
-    } as never,
-    client: (params.client ?? null) as never,
-    signal: params.signal,
-    req: { type: "req", id: "req-node-invoke", method: "node.invoke" },
-    isWebchatConnect: () => false,
-  });
-  return respond;
-}
-
-function createOperatorClient(params?: { scopes?: string[]; pluginRuntimeOwnerId?: string }) {
-  return {
-    connect: {
-      role: "operator" as const,
-      scopes: params?.scopes ?? ["operator.write"],
-      client: {
-        id: "operator-test",
-        mode: "backend" as const,
-        name: "operator-test",
-        platform: "node",
-        version: "test",
-      },
-    },
-    internal: params?.pluginRuntimeOwnerId
-      ? { pluginRuntimeOwnerId: params.pluginRuntimeOwnerId }
-      : {},
-  };
-}
+const invokeNode = createNodeInvokeTestHarness({
+  getRuntimeConfig: () => mocks.getRuntimeConfig(),
+  nodeHandlers,
+});
 
 function createNodeClient(nodeId: string, commands?: string[]) {
   return {
@@ -1169,6 +1042,8 @@ describe("node.invoke APNs wake path", () => {
       expect(nodeRegistry.invoke).not.toHaveBeenCalled();
     },
   );
+
+  registerNodeInvokeUploadTests({ mocks, invokeNode });
 
   it("allows an enabled computer.act command for write-scoped operators", async () => {
     mocks.getRuntimeConfig.mockReturnValue({});

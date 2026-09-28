@@ -7,6 +7,7 @@ import {
   createTestSessionCapability,
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
+import { activateSessionMenuValue } from "../test-helpers/app-sidebar-menu.ts";
 import "../test-helpers/app-sidebar-suite.ts";
 import { createGateway, createGatewayHarness, mountSidebar } from "../test-helpers/app-sidebar.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
@@ -396,14 +397,7 @@ describe("sidebar routed-lineage freshness", () => {
       let lineage: Promise<void> | undefined;
       let children: Promise<void> | undefined;
       try {
-        sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort")!.click();
-        await sidebar.updateComplete;
-        sidebar.querySelector(".sidebar-session-sort-menu")!.dispatchEvent(
-          new CustomEvent("wa-select", {
-            bubbles: true,
-            detail: { item: { value: "owner:ada" } },
-          }),
-        );
+        await activateSessionMenuValue(sidebar, "owner:ada");
         await waitForFast(() => {
           expect(sidebar.sessionOwnerFilterId).toBe(owner.id);
           expect(sidebar.sessionData.sessionsResult?.sessions.some((row) => row.key === key)).toBe(
@@ -578,14 +572,7 @@ describe("sidebar routed-lineage freshness", () => {
       try {
         await sessions.refresh({ agentId: "main", force: true });
         const { sidebar } = await mountSidebar(gateway, sessions);
-        sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort")!.click();
-        await sidebar.updateComplete;
-        sidebar.querySelector(".sidebar-session-sort-menu")!.dispatchEvent(
-          new CustomEvent("wa-select", {
-            bubbles: true,
-            detail: { item: { value: "owner:ada" } },
-          }),
-        );
+        await activateSessionMenuValue(sidebar, "owner:ada");
         await waitForFast(() => {
           expect(sidebar.sessionOwnerFilterId).toBe(owner.id);
           expect(sidebar.sessionData.sessionsLoading).toBe(false);

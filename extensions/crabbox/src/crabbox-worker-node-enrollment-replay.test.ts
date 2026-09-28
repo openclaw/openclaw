@@ -252,6 +252,7 @@ async function replay(
     .split("CRABBOX_NODE_ENROLLMENT_SCRIPT'\n")[1]!
     .split("\nCRABBOX_NODE_ENROLLMENT_SCRIPT")[0]!;
   await runInNewContext(script, {
+    AbortController,
     require: (name: string) =>
       name === "node:fs"
         ? fs
@@ -265,7 +266,7 @@ async function replay(
   });
   if (launch) {
     const logPath = path.join(stateDir, "node.log");
-    expect(spawn).toHaveBeenCalledExactlyOnceWith(
+    expect(spawn, output.join("\n")).toHaveBeenCalledExactlyOnceWith(
       "/bin/bash",
       [
         "-c",

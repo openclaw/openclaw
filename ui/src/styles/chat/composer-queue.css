@@ -1,5 +1,6 @@
 .agent-chat__composer-shell {
   --chat-queue-divider: color-mix(in srgb, var(--text-strong) 6%, transparent);
+  --chat-stack-header-height: 40px;
   --chat-stack-icon-size: 14px;
   --chat-stack-leading-inset: 13px;
   --chat-stack-trailing-control-size: 24px;

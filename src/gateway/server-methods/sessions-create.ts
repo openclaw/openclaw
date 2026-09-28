@@ -38,6 +38,7 @@ import {
   validateSessionWorktreeSelection,
 } from "../session-worktree-preparation.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
+import { gatewayClientUploadPolicyError } from "../upload-policy.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import { scheduleCreatedDashboardSessionTitle } from "./chat-send-background.js";
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
@@ -85,6 +86,16 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       hasCurrentClientAuthority,
     } = options;
     if (!assertValidParams(params, validateSessionsCreateParams, "sessions.create", respond)) {
+      return;
+    }
+    const uploadError = gatewayClientUploadPolicyError({
+      method: "sessions.create",
+      requestParams: params,
+      client,
+      context,
+    });
+    if (uploadError) {
+      respond(false, undefined, uploadError);
       return;
     }
     const p = structuredClone(params);

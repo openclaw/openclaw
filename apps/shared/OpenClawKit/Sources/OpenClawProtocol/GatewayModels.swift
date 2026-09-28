@@ -19339,19 +19339,22 @@ public struct SkillsLibrarySaveParams: Codable, Sendable {
     public let slug: String
     public let content: String
     public let files: [[String: AnyCodable]]?
+    public let retainfiles: [String]?
 
     public init(
         skillid: String? = nil,
         expectedrevision: AnyCodable,
         slug: String,
         content: String,
-        files: [[String: AnyCodable]]? = nil)
+        files: [[String: AnyCodable]]? = nil,
+        retainfiles: [String]? = nil)
     {
         self.skillid = skillid
         self.expectedrevision = expectedrevision
         self.slug = slug
         self.content = content
         self.files = files
+        self.retainfiles = retainfiles
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -19360,6 +19363,7 @@ public struct SkillsLibrarySaveParams: Codable, Sendable {
         case slug
         case content
         case files
+        case retainfiles = "retainFiles"
     }
 }
 

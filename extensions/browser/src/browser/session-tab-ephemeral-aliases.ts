@@ -30,31 +30,17 @@ function interactionKey(identity: AliasIdentity): string {
   return `${identity.sessionKey}\u0000${route}\u0000${identity.profile ?? ""}\u0000${identity.targetId}`;
 }
 
-function normalizedTargetIds(
-  identity: AliasIdentity,
+function normalizedAliases<T extends string | undefined>(
+  primary: T,
   aliases: Array<string | undefined>,
-): Set<string> {
+): Set<T | string> {
   return new Set([
-    identity.targetId,
+    primary,
     ...aliases.flatMap((alias) => {
-      const targetId = alias?.trim();
-      return targetId ? [targetId] : [];
+      const value = alias?.trim();
+      return value ? [value] : [];
     }),
   ]);
-}
-
-function normalizedProfiles(
-  identity: AliasIdentity,
-  aliases: Array<string | undefined>,
-): Set<string | undefined> {
-  const profiles = new Set<string | undefined>([identity.profile]);
-  for (const alias of aliases) {
-    const profile = alias?.trim();
-    if (profile) {
-      profiles.add(profile);
-    }
-  }
-  return profiles;
 }
 
 function durableKeysByInteraction(): Map<string, Set<string>> {
@@ -96,12 +82,12 @@ export function rememberDurableTabAliases(
   clearDurableTabAliases(storageKey);
   const mappings = durableKeysByInteraction();
   const exactMappings = durableExactKeysByInteraction();
-  for (const profile of normalizedProfiles(identity, profileAliases)) {
+  for (const profile of normalizedAliases(identity.profile, profileAliases)) {
     const exactKey = interactionKey({ ...identity, profile });
     const exactStorageKeys = exactMappings.get(exactKey) ?? new Set<string>();
     exactStorageKeys.add(storageKey);
     exactMappings.set(exactKey, exactStorageKeys);
-    for (const targetId of normalizedTargetIds(identity, aliases)) {
+    for (const targetId of normalizedAliases(identity.targetId, aliases)) {
       const key = interactionKey({ ...identity, profile, targetId });
       const storageKeys = mappings.get(key) ?? new Set<string>();
       storageKeys.add(storageKey);
@@ -156,12 +142,12 @@ export function rememberVolatileTabAliases(
   const target = { sessionKey: identity.sessionKey, tabKey };
   const mappings = volatileAliasesByInteraction();
   const exactMappings = volatileExactTargetsByInteraction();
-  for (const profile of normalizedProfiles(identity, profileAliases)) {
+  for (const profile of normalizedAliases(identity.profile, profileAliases)) {
     const exactKey = interactionKey({ ...identity, profile });
     const exactTargets = exactMappings.get(exactKey) ?? new Map<string, VolatileAliasTarget>();
     exactTargets.set(volatileAliasTargetKey(target), target);
     exactMappings.set(exactKey, exactTargets);
-    for (const targetId of normalizedTargetIds(identity, aliases)) {
+    for (const targetId of normalizedAliases(identity.targetId, aliases)) {
       const key = interactionKey({ ...identity, profile, targetId });
       const targets = mappings.get(key) ?? new Map<string, VolatileAliasTarget>();
       targets.set(volatileAliasTargetKey(target), target);
