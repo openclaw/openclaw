@@ -70,6 +70,34 @@ const DEFAULT_REDACT_MODE: RedactSensitiveMode = "tools";
 const DEFAULT_REDACT_MIN_LENGTH = 18;
 const DEFAULT_REDACT_KEEP_START = 6;
 const DEFAULT_REDACT_KEEP_END = 4;
+// Model-visible redaction replaces masked spans with a self-describing marker so a user or model
+// can tell a redacted span from real content instead of mistaking `***` / `proces…OKEN` for a value.
+// Diagnostic log surfaces keep the compact `***` marker.
+const MODEL_VISIBLE_REDACT_MARKER = "⟦redacted⟧";
+// Appended to model-visible tool content when redaction changed it, so the tool call itself carries
+// the notification (a user reading the transcript or the model reading the result both see it).
+const MODEL_VISIBLE_REDACTION_NOTICE =
+  "\n\n[openclaw] Note: sensitive value(s) in this content were redacted by the secret redactor before it reached the model.";
+
+// The active mask replacement is scoped to a synchronous redaction call. A module-level value keeps
+// the low-level mask helpers (maskToken, maskSecretValue, literal placeholders) in sync without
+// threading an option through every call site. Defaults to the compact "***" marker.
+let activeRedactMarker: string | undefined;
+function maskReplacement(): string {
+  return activeRedactMarker ?? "***";
+}
+function withRedactMarker<T>(marker: string | undefined, fn: () => T): T {
+  if (marker === undefined) {
+    return fn();
+  }
+  const previous = activeRedactMarker;
+  activeRedactMarker = marker;
+  try {
+    return fn();
+  } finally {
+    activeRedactMarker = previous;
+  }
+}
 const shellReferencePreservingPatterns = new WeakSet<ResolvedRedactPattern>();
 // Patterns whose left-context assertions or complete token can cross a chunk boundary must run
 // against the full string; chunking can invent a `^` boundary or split the secret itself.
@@ -178,12 +206,15 @@ type RedactOptions = {
   sensitiveFieldPatterns?: readonly RedactPattern[];
   /** Candidate secret values matching any of these patterns are exempt from masking. */
   allowPatterns?: readonly RedactPattern[];
+  /** When set, masked spans are replaced with this self-describing marker instead of `***`. */
+  maskMarker?: string;
 };
 
 type ResolvedRedactOptions = {
   mode: RedactSensitiveMode;
   patterns: ResolvedRedactPattern[];
   allowPatterns: ResolvedRedactPattern[];
+  maskMarker?: string;
 };
 
 function normalizeMode(value?: string): RedactSensitiveMode {
@@ -279,8 +310,11 @@ function matchesAnyRedactPattern(
 }
 
 function maskToken(token: string): string {
-  if (token === "***") {
+  if (token === "***" || token === activeRedactMarker) {
     return token;
+  }
+  if (activeRedactMarker !== undefined) {
+    return activeRedactMarker;
   }
   if (token.length < DEFAULT_REDACT_MIN_LENGTH) {
     return "***";
@@ -336,6 +370,9 @@ function splitFormAwareCredentialValue(token: string): { secret: string; suffix:
 
 function maskSecretValue(token: string, options?: { hinted?: boolean }): string {
   const { maskable, suffix } = splitSecretValueForMask(token);
+  if (activeRedactMarker !== undefined) {
+    return `${activeRedactMarker}${suffix}`;
+  }
   return `${options?.hinted ? maskToken(maskable) : "***"}${suffix}`;
 }
 
@@ -434,12 +471,13 @@ function redactAssignmentValues(
   text: string,
   kind: SensitiveAssignmentKind,
   onEdits?: PreparationEditSink,
+  maskMarker?: string,
 ): string {
   const parts: string[] = [];
   const edits: RedactionEdit[] = [];
   let cursor = 0;
   visitSensitiveAssignments(text, kind, (start, end, maskable) => {
-    const replacement = kind === "url" ? maskToken(maskable) : "***";
+    const replacement = maskMarker ?? (kind === "url" ? maskToken(maskable) : maskReplacement());
     parts.push(text.slice(cursor, start), replacement);
     if (onEdits) {
       edits.push({ start, end, replacement });
@@ -606,9 +644,9 @@ function isShellReferenceToKey(key: string, value: string): boolean {
 function maskSecretFieldValue(key: string, value: string): string {
   const expansion = value.match(/^\$\{([A-Z_][A-Z0-9_]*):[-=?+][^{}]+\}(?![\s\S])/);
   if (expansion && expansion[1] === key) {
-    return `${value.slice(0, value.indexOf(":") + 2)}***}`;
+    return `${value.slice(0, value.indexOf(":") + 2)}${maskReplacement()}}`;
   }
-  return "***";
+  return maskReplacement();
 }
 
 function readEnvAssignmentKey(match: string): string | undefined {
@@ -652,6 +690,7 @@ function prepareRedactionCapture(
   pattern: ResolvedRedactPattern,
   preserveSourceAssignment?: (text: string, offset: number) => boolean,
   allowPatterns?: readonly ResolvedRedactPattern[],
+  maskMarker?: string,
 ): RedactionCapture | undefined {
   if (match.includes("PRIVATE KEY-----")) {
     return {
@@ -662,12 +701,12 @@ function prepareRedactionCapture(
         start: target.start,
         end: target.end,
         value: target.value,
-        replacement: policyReplacement ?? redactPemBlock(target.value, "…redacted…"),
+        replacement: maskMarker ?? policyReplacement ?? redactPemBlock(target.value, "…redacted…"),
       }),
     };
   }
   const selected = selectSecretCapture(match, groups);
-  if (selected.value === "***") {
+  if (selected.value === maskReplacement() || (maskMarker !== undefined && selected.value === maskMarker)) {
     return undefined;
   }
   const tokenIndex =
@@ -703,8 +742,12 @@ function prepareRedactionCapture(
         ? splitFormAwareCredentialValue(token)
         : { secret: token, suffix: "" };
       // An earlier pass (form-body or quoted-assignment masking) may already have replaced this
-      // value with ***; re-masking would strip its quote wrapper around the placeholder.
-      if (splitSecretValueForMask(formAwareValue.secret).maskable === "***") {
+      // value with the mask marker; re-masking would strip its quote wrapper around the placeholder.
+      const alreadyMasked = splitSecretValueForMask(formAwareValue.secret).maskable;
+      if (
+        alreadyMasked === maskReplacement() ||
+        (maskMarker !== undefined && alreadyMasked === maskMarker)
+      ) {
         return undefined;
       }
       const isShellReferencePattern = shellReferencePreservingPatterns.has(pattern);
@@ -724,6 +767,7 @@ function prepareRedactionCapture(
       // Source goes through both the guard and SQLite. Full assignment masks keep
       // those copies identical; diagnostic hints otherwise shrink on the second pass.
       const masked =
+        maskMarker ??
         policyReplacement ??
         (preserveSourceAssignment && sourceAssignmentPatterns.has(pattern)
           ? maskSecretValue(token)
@@ -740,8 +784,15 @@ function redactMatch(
   pattern: ResolvedRedactPattern,
   preserveSourceAssignment?: (text: string, offset: number) => boolean,
   allowPatterns?: readonly ResolvedRedactPattern[],
+  maskMarker?: string,
 ): string {
-  const capture = prepareRedactionCapture(match, pattern, preserveSourceAssignment, allowPatterns);
+  const capture = prepareRedactionCapture(
+    match,
+    pattern,
+    preserveSourceAssignment,
+    allowPatterns,
+    maskMarker,
+  );
   const edit = capture?.redact(capture);
   return edit
     ? match.match.slice(0, edit.start - match.offset) +
@@ -757,17 +808,29 @@ export function redactText(
     fullContext?: boolean;
     preserveSourceAssignment?: (text: string, offset: number) => boolean;
     allowPatterns?: readonly ResolvedRedactPattern[];
+    maskMarker?: string;
   },
 ): string {
   const finishMeasurement = startRedactionMeasurement("text");
   let outcome: "ok" | "error" = "error";
   try {
     let next = redactFormBody(
-      redactAssignmentValues(redactStructuredAuthHeaders(text, "***"), "url"),
+      redactAssignmentValues(
+        redactStructuredAuthHeaders(text, options?.maskMarker ?? maskReplacement()),
+        "url",
+        undefined,
+        options?.maskMarker,
+      ),
     );
     let pattern: ResolvedRedactPattern;
     const replace = (match: RedactMatch) =>
-      redactMatch(match, pattern, options?.preserveSourceAssignment, options?.allowPatterns);
+      redactMatch(
+        match,
+        pattern,
+        options?.preserveSourceAssignment,
+        options?.allowPatterns,
+        options?.maskMarker,
+      );
     const replaceRegex = (...args: unknown[]) => replace(readRedactMatch(args));
     // Each replacement finishes synchronously before this invocation advances its pattern.
     for (pattern of patterns) {
@@ -881,6 +944,7 @@ export function resolveRedactOptions(options?: RedactOptions): ResolvedRedactOpt
     mode,
     patterns: mode === "off" ? [] : resolvePatterns(resolved.patterns),
     allowPatterns: mode === "off" ? [] : resolveAllowPatterns(resolved.allowPatterns),
+    maskMarker: resolved.maskMarker,
   };
 }
 
@@ -925,7 +989,10 @@ function redactSensitiveTextWithOptions(
     return exactRedacted;
   }
   const resolved = resolveRedactOptions(resolvedOptions);
-  return redactText(exactRedacted, resolved.patterns, { allowPatterns: resolved.allowPatterns });
+  return redactText(exactRedacted, resolved.patterns, {
+    allowPatterns: resolved.allowPatterns,
+    maskMarker: resolved.maskMarker,
+  });
 }
 
 export function redactToolDetail(detail: string): string {
@@ -957,6 +1024,7 @@ function resolveModelVisibleToolPayloadRedaction(
       ? [...userPatterns, ...DEFAULT_REDACT_PATTERNS]
       : DEFAULT_REDACT_PATTERNS,
     allowPatterns: loggingConfig?.redactAllowPatterns,
+    maskMarker: MODEL_VISIBLE_REDACT_MARKER,
   };
 }
 
@@ -982,6 +1050,7 @@ function redactToolPayloadTextWithPolicy(
   return redactText(redactRegisteredSecretValues(text, maskToken), resolved.patterns, {
     fullContext: true,
     allowPatterns: resolved.allowPatterns,
+    maskMarker: resolved.maskMarker,
   });
 }
 
@@ -1030,7 +1099,12 @@ export function prepareModelVisibleToolTextBlock<T extends { type: "text"; text:
   }
   const prepared = {
     ...block,
-    text: redactModelVisibleSensitiveFieldValueWithConfig("text", block.text, loggingConfig),
+    text: appendModelVisibleRedactionNotice(
+      block.text,
+      withRedactMarker(MODEL_VISIBLE_REDACT_MARKER, () =>
+        redactModelVisibleSensitiveFieldValueWithConfig("text", block.text, loggingConfig),
+      ),
+    ),
   };
   modelVisibleToolTextRedactionState.record(prepared, prepared.text, loggingConfig);
   return prepared;
@@ -1040,11 +1114,22 @@ export function redactModelVisibleToolPayloadTextWithConfig(
   text: string,
   loggingConfig?: LoggingConfig,
 ): string {
-  return redactToolPayloadTextWithPolicy(
+  return appendModelVisibleRedactionNotice(
     text,
-    loggingConfig,
-    resolveModelVisibleToolPayloadRedaction(loggingConfig),
+    withRedactMarker(MODEL_VISIBLE_REDACT_MARKER, () =>
+      redactToolPayloadTextWithPolicy(
+        text,
+        loggingConfig,
+        resolveModelVisibleToolPayloadRedaction(loggingConfig),
+      ),
+    ),
   );
+}
+
+// The tool call carries the notification: when model-visible redaction changed the content, append a
+// compact note so a user reading the transcript and the model reading the result both see it.
+function appendModelVisibleRedactionNotice(original: string, redacted: string): string {
+  return redacted === original ? redacted : `${redacted}${MODEL_VISIBLE_REDACTION_NOTICE}`;
 }
 
 export function isSensitiveFieldKey(key: string): boolean {
@@ -1091,7 +1176,10 @@ function redactSensitiveFieldValueWithOptions(
   const redacted =
     !usesBuiltInRedactPatterns(fieldOptions.patterns) ||
     couldMatchDefaultRedactPatterns(exactRedacted)
-      ? redactText(exactRedacted, resolved.patterns, { allowPatterns: resolved.allowPatterns })
+      ? redactText(exactRedacted, resolved.patterns, {
+          allowPatterns: resolved.allowPatterns,
+          maskMarker: resolved.maskMarker,
+        })
       : exactRedacted;
   const shouldRedactAppPassword = redacted !== value || STRUCTURED_APP_PASSWORD_FIELD_RE.test(key);
   if (shouldRedactAppPassword) {
@@ -1104,7 +1192,7 @@ function redactSensitiveFieldValueWithOptions(
     return redacted;
   }
   return shouldRedactStructuredStringField(key, exactRedacted, path, objectPath)
-    ? maskToken(exactRedacted)
+    ? (options.maskMarker ?? maskToken(exactRedacted))
     : exactRedacted;
 }
 
@@ -1169,7 +1257,7 @@ function redactStructuredSecretValue(
     return value;
   }
   if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-    return shouldRedactStructuredPrimitiveField(key, path) ? "***" : value;
+    return shouldRedactStructuredPrimitiveField(key, path) ? maskReplacement() : value;
   }
   if (Array.isArray(value)) {
     if (seen.has(value)) {
@@ -1285,7 +1373,7 @@ function getTextRecordEdits(
     return [];
   }
   if (fileFields && field.origin.primitiveMask) {
-    return [{ start: 0, end: value.length, replacement: "***" }];
+    return [{ start: 0, end: value.length, replacement: maskReplacement() }];
   }
   if (!field.string) {
     return [];
@@ -1313,7 +1401,7 @@ function getTextRecordEdits(
   const headers = findStructuredAuthParamRanges(registered).map(({ start, end }) => ({
     start,
     end,
-    replacement: "***",
+    replacement: maskReplacement(),
   }));
   receive(headers);
   const url = redactAssignmentValues(applyRedactionEdits(registered, headers), "url", receive);
@@ -1391,7 +1479,7 @@ const preparationPatterns: ResolvedRedactPattern[] = [
           groups: [],
           input,
           offset: start,
-          replacement: "***",
+          replacement: maskReplacement(),
         };
       }
     },
@@ -1455,7 +1543,7 @@ function prepareFileToJsonReceivers(
       return decode &&
         ["number", "boolean", "bigint"].includes(typeof value) &&
         classifyLogFieldProtection(key, path, objectPath, undefined)
-        ? "***"
+        ? maskReplacement()
         : value;
     }
     if (!Array.isArray(value) && !isPlainRedactableObject(value)) {
