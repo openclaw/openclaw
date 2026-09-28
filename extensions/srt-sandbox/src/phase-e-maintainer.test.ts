@@ -117,4 +117,15 @@ describe("Phase E maintainer policy", () => {
     expect(source).toContain('\\"state\\":\\"free\\"');
     expect(source).toContain("LeaseCrc(1,sidFacts)");
   });
+  it("uses deterministic SID-keyed FWPM objects and refuses unowned removal", async () => {
+    const source = await import("node:fs/promises").then((fs) =>
+      fs.readFile(new URL("../native/phase-e-maintainer.cc", import.meta.url), "utf8"),
+    );
+    expect(source).toContain("FWPM_CONDITION_ALE_USER_ID");
+    expect(source).toContain("conditionValue.type=FWP_SID");
+    expect(source).toContain("FwpmFilterGetByKey0");
+    expect(source).toContain("VerifyOwnedFilter");
+    expect(source).toContain("RemoveOwnedFwpm(accounts)");
+    expect(source).not.toMatch(/FwpmFilter(?:Create|Enum)|FwpmSubLayer(?:Create|Enum)/);
+  });
 });
