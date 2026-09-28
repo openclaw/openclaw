@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   BROWSER_PROXY_UPLOAD_ENVELOPE,
   type BrowserProxyUploadV1,
@@ -346,6 +346,101 @@ describe("browser proxy upload transport", () => {
     );
     if (fulfilled) {
       await discardStagedBrowserProxyUpload(fulfilled.value);
+    }
+  });
+
+  it("keeps staging admission serialized after a queued request is cancelled", async () => {
+    const root = await createTempRoot("openclaw-browser-proxy-cancelled-queue-");
+    const uploadDir = path.join(root, "uploads");
+    const stagingRoot = path.join(uploadDir, ".proxy-uploads");
+    const request: Parameters<typeof stageBrowserProxyUploadRequest>[0] = {
+      method: "POST",
+      path: "/hooks/file-chooser",
+      body: {},
+      uploadDir,
+      maxRetainedDirectories: 1,
+      upload: {
+        envelope: BROWSER_PROXY_UPLOAD_ENVELOPE,
+        files: [{ name: "report.txt", contentBase64: "ZGF0YQ==" }],
+      },
+    };
+    const firstAdmitted = Promise.withResolvers<void>();
+    const releaseFirst = Promise.withResolvers<void>();
+    const mkdtemp = fs.mkdtemp;
+    const allocation = vi.spyOn(fs, "mkdtemp").mockImplementationOnce(async (...args) => {
+      firstAdmitted.resolve();
+      await releaseFirst.promise;
+      return await mkdtemp(...args);
+    });
+    const queueObservers: Array<{ mockRestore(): void }> = [];
+    const observeQueue = (signal: AbortSignal) => {
+      const queued = Promise.withResolvers<void>();
+      const addEventListener = signal.addEventListener.bind(signal);
+      queueObservers.push(
+        vi.spyOn(signal, "addEventListener").mockImplementation((...args) => {
+          addEventListener(...args);
+          if (args[0] === "abort") {
+            queued.resolve();
+          }
+        }),
+      );
+      return queued.promise;
+    };
+    const pending = [stageBrowserProxyUploadRequest(request)];
+    let admissionRead: { mockRestore(): void } | undefined;
+    try {
+      await firstAdmitted.promise;
+      const cancelled = new AbortController();
+      const cancelledQueued = observeQueue(cancelled.signal);
+      const cancellation = stageBrowserProxyUploadRequest({ ...request, signal: cancelled.signal });
+      const rejected = expect(cancellation).rejects.toThrow("cancel queued upload");
+      await cancelledQueued;
+      cancelled.abort(new Error("cancel queued upload"));
+      await rejected;
+
+      let thirdAdmissionStarted = false;
+      const thirdAdmissionRead = Promise.withResolvers<void>();
+      const readdir = fs.readdir;
+      admissionRead = vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
+        if (args[0] === stagingRoot) {
+          thirdAdmissionStarted = true;
+        }
+        const entries = await readdir(...args);
+        if (args[0] === stagingRoot) {
+          thirdAdmissionRead.resolve();
+        }
+        return entries;
+      });
+      const third = new AbortController();
+      const thirdQueued = observeQueue(third.signal);
+      pending.push(stageBrowserProxyUploadRequest({ ...request, signal: third.signal }));
+      const settled = Promise.allSettled(pending);
+      await thirdQueued;
+      // Drain ready promise continuations without advancing time or polling the filesystem.
+      await new Promise<void>((resolve) => process.nextTick(resolve));
+      if (thirdAdmissionStarted) {
+        await thirdAdmissionRead.promise;
+      }
+      releaseFirst.resolve();
+      const results = await settled;
+      expect(results.map((result) => result.status)).toEqual(["fulfilled", "rejected"]);
+      expect(results[1]).toMatchObject({
+        reason: expect.objectContaining({
+          message: "RESOURCE_EXHAUSTED: browser proxy upload staging limit reached",
+        }),
+      });
+    } finally {
+      releaseFirst.resolve();
+      for (const result of await Promise.allSettled(pending)) {
+        if (result.status === "fulfilled") {
+          await discardStagedBrowserProxyUpload(result.value);
+        }
+      }
+      admissionRead?.mockRestore();
+      allocation.mockRestore();
+      for (const observer of queueObservers) {
+        observer.mockRestore();
+      }
     }
   });
 

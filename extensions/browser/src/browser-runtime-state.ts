@@ -7,6 +7,7 @@ import type {
   BrowserDashboardDefinition,
   SessionBrowserDashboard,
 } from "./browser-dashboard.types.js";
+import type { BrowserSessionTabAuthority } from "./browser/session-tab-store.js";
 
 export type BrowserDashboardOperation = {
   promise: Promise<unknown>;
@@ -45,6 +46,15 @@ const {
 });
 
 export { getBrowserStateRuntime, getOptionalBrowserStateRuntime, setBrowserStateRuntime };
+
+export function captureBrowserSessionTabAuthority(
+  authority: BrowserSessionTabAuthority = {},
+): BrowserSessionTabAuthority {
+  return {
+    ...authority,
+    runtime: authority.runtime ?? getOptionalBrowserStateRuntime() ?? undefined,
+  };
+}
 
 export function isBrowserStateRuntimeCurrent(
   runtime: BrowserStateRuntime | undefined,

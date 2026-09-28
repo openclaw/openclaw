@@ -15,7 +15,7 @@ import { closePlaywrightBrowserConnection } from "../pw-session.js";
 import * as pageCdp from "../pw-session.page-cdp.js";
 import { createBrowserRouteContext, type BrowserServerState } from "../server-context.js";
 import { getFreePort } from "../test-port.js";
-import { registerBrowserAgentRoutes } from "./agent.js";
+import { registerBrowserRoutes } from "./index.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
@@ -180,7 +180,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SCOPED_REFS_E2E === "1")(
         }),
       };
       routes = createBrowserRouteApp();
-      registerBrowserAgentRoutes(routes.app, createBrowserRouteContext({ getState: () => state }));
+      registerBrowserRoutes(routes.app, createBrowserRouteContext({ getState: () => state }));
     }, 30_000);
 
     afterAll(async () => {
@@ -577,7 +577,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SCOPED_REFS_E2E === "1")(
           profiles: { clear: { cdpUrl: proxyUrl, color: "#123456", attachOnly: true } },
         }),
       };
-      registerBrowserAgentRoutes(routes.app, createBrowserRouteContext({ getState: () => state }));
+      registerBrowserRoutes(routes.app, createBrowserRouteContext({ getState: () => state }));
       let older: ReturnType<typeof call> | undefined;
       try {
         const seeded = await call("get", "/snapshot", { format: "ai", selector: "#b" });

@@ -17,6 +17,16 @@ import type { LegacyMemorySidecarSource } from "./doctor-memory-sidecar-import.j
 
 const LEGACY_MEMORY_SIDECAR_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
 
+async function existingLegacySidecarPaths(basePath: string): Promise<string[]> {
+  const paths = await Promise.all(
+    LEGACY_MEMORY_SIDECAR_SUFFIXES.map(async (suffix) => {
+      const filePath = `${basePath}${suffix}`;
+      return (await legacyStateFileExists(filePath)) ? filePath : null;
+    }),
+  );
+  return paths.filter((filePath) => filePath !== null);
+}
+
 function formatLegacyVectorRows(count: number | undefined): string {
   return count === undefined ? "legacy vector rows" : `${count} vector row(s)`;
 }
@@ -235,14 +245,7 @@ async function archiveLegacyMemorySidecar(params: {
   changes: string[];
   warnings: string[];
 }): Promise<void> {
-  const existingSources = (
-    await Promise.all(
-      LEGACY_MEMORY_SIDECAR_SUFFIXES.map(async (suffix) => {
-        const filePath = `${params.source.legacyPath}${suffix}`;
-        return (await legacyStateFileExists(filePath)) ? filePath : null;
-      }),
-    )
-  ).filter((filePath): filePath is string => filePath !== null);
+  const existingSources = await existingLegacySidecarPaths(params.source.legacyPath);
   if (existingSources.length === 0) {
     return;
   }
@@ -311,14 +314,7 @@ async function preserveLegacyMemorySidecarRetryPath(params: {
   ) {
     return;
   }
-  const existingTargets = (
-    await Promise.all(
-      LEGACY_MEMORY_SIDECAR_SUFFIXES.map(async (suffix) => {
-        const targetPath = `${retryPath}${suffix}`;
-        return (await legacyStateFileExists(targetPath)) ? targetPath : null;
-      }),
-    )
-  ).filter((targetPath): targetPath is string => targetPath !== null);
+  const existingTargets = await existingLegacySidecarPaths(retryPath);
   const targetBasePath =
     existingTargets.length === 0
       ? retryPath
@@ -334,16 +330,12 @@ async function preserveLegacyMemorySidecarRetryPath(params: {
   if (await legacyStateFileExists(targetBasePath)) {
     return;
   }
-  const existingSources = (
-    await Promise.all(
-      LEGACY_MEMORY_SIDECAR_SUFFIXES.map(async (suffix) => {
-        const sourcePath = `${params.source.legacyPath}${suffix}`;
-        return (await legacyStateFileExists(sourcePath))
-          ? { sourcePath, targetPath: `${targetBasePath}${suffix}` }
-          : null;
-      }),
-    )
-  ).filter((entry): entry is { sourcePath: string; targetPath: string } => entry !== null);
+  const existingSources = (await existingLegacySidecarPaths(params.source.legacyPath)).map(
+    (sourcePath) => ({
+      sourcePath,
+      targetPath: `${targetBasePath}${sourcePath.slice(params.source.legacyPath.length)}`,
+    }),
+  );
   if (existingSources.length === 0) {
     return;
   }
@@ -518,18 +510,6 @@ async function migrateLegacyMemorySidecarSource(params: {
   }
 }
 
-function groupLegacyMemorySidecarSourcesByPath(
-  sources: LegacyMemorySidecarSource[],
-): LegacyMemorySidecarSource[][] {
-  const groups = new Map<string, LegacyMemorySidecarSource[]>();
-  for (const source of sources) {
-    const group = groups.get(source.legacyPath) ?? [];
-    group.push(source);
-    groups.set(source.legacyPath, group);
-  }
-  return [...groups.values()];
-}
-
 export const memorySidecarStateMigration: PluginDoctorStateMigration = {
   id: "memory-core-legacy-sidecar-index-to-agent-sqlite",
   label: "Memory Core legacy memory index sidecar",
@@ -552,14 +532,15 @@ export const memorySidecarStateMigration: PluginDoctorStateMigration = {
   async migrateLegacyState(params) {
     const changes: string[] = [];
     const warnings: string[] = [];
-    const groups = groupLegacyMemorySidecarSourcesByPath(
+    const groups = Map.groupBy(
       await collectLegacyMemorySidecarSources({
         config: params.config,
         env: params.env,
         stateDir: params.stateDir,
       }),
+      (source) => source.legacyPath,
     );
-    for (const sources of groups) {
+    for (const sources of groups.values()) {
       let archiveReady = true;
       for (const source of sources) {
         try {
