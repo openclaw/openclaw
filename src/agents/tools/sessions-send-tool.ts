@@ -44,6 +44,7 @@ import { registerSessionStateWatch } from "../../sessions/session-state-events.j
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { listAgentIds, resolveSessionAgentId } from "../agent-scope.js";
+import { bindRequesterYieldCronAuthority } from "../cron-creator-authority-context.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import { isTerminalAgentWaitTimeout, waitForAgentRunReply } from "../run-wait.js";
 import { isSubagentSessionFromEntry } from "../subagents/spawn/subagent-depth-policy.js";
@@ -54,12 +55,7 @@ import {
 import { ToolInputError } from "../tool-input-error.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNonNegativeIntegerParam, readToolStringParam } from "./common.js";
-import {
-  callAgentToolGatewayRequest,
-  callInProcessGatewayToolWithCreation,
-  hasInProcessGatewayToolContext,
-  type AgentToolGatewayRequestCaller as GatewayCaller,
-} from "./in-process-gateway.js";
+import { callAgentToolGatewayRequest } from "./in-process-gateway.js";
 import { runWithScopedSessionAccess } from "./scoped-session-access.js";
 import {
   createSessionVisibilityRowChecker,
@@ -80,6 +76,7 @@ import { buildAgentToAgentMessageContext } from "./sessions-send-helpers.js";
 import { startSessionsSendReplyFlow } from "./sessions-send-reply-flow.js";
 import { captureSessionsSendResumeCaller, resumeSessionsSendTask } from "./sessions-send-resume.js";
 import { normalizeSessionsSendArguments } from "./sessions-send-tool.arguments.js";
+import { createConfiguredAgentMainSession } from "./sessions-send-tool.delivery.js";
 import { SessionsSendToolSchema, SessionsSendOutputSchema } from "./sessions-send-tool.schema.js";
 import type { SessionsSendToolOptions } from "./sessions-send-tool.types.js";
 
@@ -135,47 +132,9 @@ function isConfiguredAgentMainSessionKey(params: {
     : false;
 }
 
-async function createConfiguredAgentMainSession(params: {
-  cfg: OpenClawConfig;
-  callGateway: GatewayCaller;
-  agentId?: string;
-  sessionKey: string;
-  requesterSessionKey?: string;
-  useTrustedInProcessCreation: boolean;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
-  const targetAgentId =
-    params.agentId ?? resolveSessionAgentId({ config: params.cfg, sessionKey: params.sessionKey });
-  try {
-    const createParams = {
-      key: params.sessionKey,
-      agentId: targetAgentId,
-    };
-    if (
-      params.useTrustedInProcessCreation &&
-      params.requesterSessionKey &&
-      hasInProcessGatewayToolContext()
-    ) {
-      // sessions.create serializes keyed creation and adopts an existing row,
-      // so concurrent first sends can safely race after the missing resolution.
-      await callInProcessGatewayToolWithCreation("sessions.create", createParams, {
-        via: "internal",
-        actor: { type: "agent", id: params.requesterSessionKey },
-      });
-    } else {
-      await params.callGateway({
-        method: "sessions.create",
-        params: createParams,
-        timeoutMs: 10_000,
-      });
-    }
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: formatErrorMessage(err) };
-  }
-}
-
 export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgentTool {
   const requesterOrigin = normalizeDeliveryContext(opts?.requesterOrigin);
+  const withRequesterAuthority = bindRequesterYieldCronAuthority(opts?.requesterTurnRunId);
   return {
     label: "Session Send",
     name: "sessions_send",
@@ -826,6 +785,8 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
             replyRequesterSessionKey === effectiveRequesterKey &&
             replyRequesterSessionKey
               ? await prepareSessionsSendFollowup({
+                  withRequesterAuthority,
+                  requesterTurnRunId: opts?.requesterTurnRunId,
                   runId,
                   requesterAgentId,
                   requesterSessionKey: replyRequesterSessionKey,

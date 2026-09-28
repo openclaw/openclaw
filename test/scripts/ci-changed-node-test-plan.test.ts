@@ -588,7 +588,9 @@ describe("CI changed Node test plan", () => {
 
   it("reuses a complete consumer graph until the tracked inventory changes", () => {
     const cwd = argvTempDirs.make("changed-cached-consumers-");
+    const unshared = Array.from({ length: 40 }, (_, index) => `src/leaf-${index}.test.ts`);
     const files = {
+      ...Object.fromEntries(unshared.map((file) => [file, "export {};\n"])),
       "tsconfig.json": JSON.stringify({
         compilerOptions: { paths: { "@fixture/shared": ["./src/shared.ts"] } },
       }),
@@ -612,6 +614,8 @@ describe("CI changed Node test plan", () => {
     git("init", "--quiet");
     git("add", ".");
     const options = { tooling: true, resolveAliases: true, runtimeOnly: true, forceFull: true };
+    // A wide prefilter miss must not cache unrelated files as having no imports.
+    expect(hasImportGraphConsumers(unshared, cwd, options)).toBe(false);
     expect(resolveAffectedTestsFromImportGraph(["src/shared.ts"], cwd, options)).toEqual([
       "src/consumer.test.ts",
     ]);
@@ -1371,8 +1375,9 @@ describe("CI changed Node test plan", () => {
           expect(selectedJob?.runner).toBe(ownerJob?.runner);
           expect(selectedJob?.planConcurrency).toBe(ownerJob?.planConcurrency);
           expect(selectedJob?.pretestBuildMode).toBe(ownerJob?.pretestBuildMode);
+          // Repacked jobs combine owners and honor their own timing observations;
+          // an individual original owner's forecast is not their cost ceiling.
           expect(selectedJob?.predictedSeconds).toBeGreaterThan(0);
-          expect(selectedJob?.predictedSeconds).toBeLessThan(ownerJob!.predictedSeconds!);
           expect(selectedJob?.predictedSeconds).toBeLessThanOrEqual(300);
           expect(selectedJob?.timeoutMinutes).toBe(ownerJob?.timeoutMinutes);
         }

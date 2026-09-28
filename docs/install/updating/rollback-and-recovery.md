@@ -106,16 +106,25 @@ openclaw update cleanup --dry-run
 
 ### Full-state recovery requires a backup
 
-Package updates retain pre-migration SQLite snapshots alongside the package
-backup. If the Gateway was confirmed stopped during capture, a failed candidate
+Package updates keep pre-migration SQLite snapshots alongside the package
+backup until verified successful activation removes them with that backup.
+Rollback, failed or unverified completion, and refused restoration retain them.
+If cleanup cannot finish, the update reports a maintenance warning with the
+retained path. Older snapshot directories are not automatically removed: their
+ownership and successful outcome cannot be proven from existing receipts.
+Doctor reports older npm snapshot directories with their size and removal command.
+Confirm no update is in progress and inspect the corresponding update report and
+recovery state before manual cleanup.
+If the Gateway was confirmed stopped during capture, a failed candidate
 that was never allowed to start can restore those databases before package
 rollback when Doctor's recorded write fingerprints still match. A change between
 capture and Doctor admission, or after Doctor finishes, preserves the current
 databases and reports `state-migrated-no-rollback` with the snapshot location and
 Doctor recovery guidance. Without Doctor write evidence, rollback requires the
 last verified database generations to remain unchanged.
-Snapshots taken while a Gateway may still be writing are retained for
-manual recovery only, even if it exits later. Migrated files are kept as
+Snapshots taken while a Gateway may still be writing are available for
+manual recovery only until verified successful activation, even if it exits later.
+Migrated files are kept as
 `<database>.migrated-<runId>` for inspection, and the report names the snapshots
 and displaced files. See [Recovery limits](/cli/update/how-updates-run#recovery-limits)
 for disk requirements and the lifecycle checks.
