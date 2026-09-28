@@ -1,5 +1,10 @@
 {
   "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    // Explicit source augmentations span the repository; native TSGo otherwise
+    // infers this leaf directory and rejects those roots before linting.
+    "rootDir": "../../.."
+  },
   // Retain source-wide module augmentations when narrowing this editor/lint graph.
   "files": [
     "../../config/sessions/session-entry.test-compat.d.ts",
