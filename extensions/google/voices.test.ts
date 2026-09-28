@@ -5,7 +5,8 @@ import {
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { fetchWithTimeoutMock, postJsonRequestMock } = getProviderHttpMocks();
+const { fetchWithTimeoutMock, fetchWithTimeoutGuardedMock, postJsonRequestMock } =
+  getProviderHttpMocks();
 
 let buildGoogleSpeechProvider: typeof import("./speech-provider.js").buildGoogleSpeechProvider;
 
@@ -279,36 +280,40 @@ describe("Google project voices", () => {
     const sourceAudio = Buffer.from("source-wav");
     const consentAudio = Buffer.from("consent-wav");
     const fetchImpl = vi.fn(async () => new Response("should-not-send"));
-    let allowed = true;
-    postJsonRequestMock.mockImplementation(async () => {
-      const { fetchWithSsrFGuard } = await import("openclaw/plugin-sdk/ssrf-runtime");
-      return await fetchWithSsrFGuard({
-        url: "https://public.example/resource",
-        fetchImpl,
-        lookupFn: async () => {
-          allowed = false;
-          return [{ address: "93.184.216.34", family: 4 }];
-        },
-        init: { method: "POST" },
-      });
-    });
+    const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-http")>(
+      "openclaw/plugin-sdk/provider-http",
+    );
+    postJsonRequestMock.mockImplementation((params) => actual.postJsonRequest(params as never));
+    fetchWithTimeoutGuardedMock.mockImplementation((...args) =>
+      actual.fetchWithTimeoutGuarded(
+        ...(args as Parameters<typeof actual.fetchWithTimeoutGuarded>),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchImpl);
+    let checks = 0;
     const provider = buildGoogleSpeechProvider();
-    await expect(
-      provider.replicateVoice?.({
-        providerConfig: { apiKey: "***" },
-        displayName: "Bobby",
-        sourceAudio,
-        consentAudio,
-        timeoutMs: 5_000,
-        assertCurrent: () => {
-          if (!allowed) {
-            throw Object.assign(new Error("TTS voice-store caller is no longer authorized."), {
-              name: "SessionMutationAuthorizationChangedError",
-            });
-          }
-        },
-      }),
-    ).rejects.toMatchObject({ name: "SessionMutationAuthorizationChangedError" });
-    expect(fetchImpl).not.toHaveBeenCalled();
+    try {
+      await expect(
+        provider.replicateVoice?.({
+          providerConfig: { apiKey: "***" },
+          displayName: "Bobby",
+          sourceAudio,
+          consentAudio,
+          timeoutMs: 5_000,
+          assertCurrent: () => {
+            checks += 1;
+            if (checks > 1) {
+              throw Object.assign(new Error("TTS voice-store caller is no longer authorized."), {
+                name: "SessionMutationAuthorizationChangedError",
+              });
+            }
+          },
+        }),
+      ).rejects.toMatchObject({ name: "SessionMutationAuthorizationChangedError" });
+      expect(fetchImpl).not.toHaveBeenCalled();
+      expect(checks).toBeGreaterThan(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

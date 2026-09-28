@@ -183,7 +183,7 @@ describe("Google speech provider", () => {
       timeoutMs: 8_000,
     });
     expectRecordFields(requireFirstRecordArg(requestMock, "Google stored TTS request"), {
-      url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent",
+      url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash-tts:generateContent",
       body: {
         contents: [
           {
@@ -203,7 +203,7 @@ describe("Google speech provider", () => {
     });
   });
 
-  it("keeps an explicit Gemini 3.1 model for a stored voice_ id", async () => {
+  it("does not send a stored voice_ id to the Gemini 3.1 default", async () => {
     const requestMock = installGoogleTtsRequestMock();
     const provider = buildGoogleSpeechProvider();
     await provider.synthesize({
@@ -218,7 +218,42 @@ describe("Google speech provider", () => {
       timeoutMs: 8_000,
     });
     expectRecordFields(requireFirstRecordArg(requestMock, "Google stored TTS request"), {
-      url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent",
+      url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash-tts:generateContent",
+      body: {
+        contents: [
+          {
+            role: "user",
+            parts: [{ text: "Hello from the stored clone." }],
+          },
+        ],
+        generationConfig: {
+          responseModalities: ["AUDIO"],
+          speechConfig: {
+            voiceConfig: {
+              voice: "voice_semeno8vont3",
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("keeps an explicit Gemini 3.8 Flash-Lite model for a stored voice_ id", async () => {
+    const requestMock = installGoogleTtsRequestMock();
+    const provider = buildGoogleSpeechProvider();
+    await provider.synthesize({
+      text: "Hello from the stored clone.",
+      cfg: {},
+      providerConfig: {
+        apiKey: "***",
+        model: "gemini-3.8-flash-lite-tts",
+        voiceName: "voice_semeno8vont3",
+      },
+      target: "audio-file",
+      timeoutMs: 8_000,
+    });
+    expectRecordFields(requireFirstRecordArg(requestMock, "Google stored TTS request"), {
+      url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash-lite-tts:generateContent",
       body: {
         contents: [
           {
@@ -329,6 +364,24 @@ describe("Google speech provider", () => {
     });
   });
 
+  it("does not wrap a stored voice_ id transcript onto Gemini 3.1", async () => {
+    const provider = buildGoogleSpeechProvider();
+    const prepared = await provider.prepareSynthesis?.({
+      text: "The door is open.",
+      cfg: {},
+      providerConfig: {
+        model: "gemini-3.1-flash-tts-preview",
+        voiceName: "voice_semeno8vont3",
+        promptTemplate: "audio-profile-v1",
+        personaPrompt: "Keep a close-mic feel.",
+      },
+      persona: { id: "alfred", label: "Alfred" },
+      target: "audio-file",
+      timeoutMs: 1_000,
+    });
+    expect(prepared).toBeUndefined();
+  });
+
   it("does not wrap Gemini 3.8 transcripts with persona direction", async () => {
     const provider = buildGoogleSpeechProvider();
     const prepared = await provider.prepareSynthesis?.({
@@ -415,6 +468,8 @@ describe("Google speech provider", () => {
       "gemini-3.1-flash-tts-preview",
       "gemini-2.5-flash-preview-tts",
       "gemini-2.5-pro-preview-tts",
+      "gemini-3.8-flash-tts",
+      "gemini-3.8-flash-lite-tts",
     ]);
   });
 

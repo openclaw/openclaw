@@ -20,6 +20,7 @@ import { createGoogleSpeechVoiceMethods } from "./voices.js";
 
 // Implicit default stays on the generateContent path; Gemini 3.8 is an explicit opt-in.
 const DEFAULT_GOOGLE_TTS_MODEL = "gemini-3.1-flash-tts-preview";
+const GOOGLE_STORED_TTS_MODEL = "gemini-3.8-flash-tts";
 const DEFAULT_GOOGLE_TTS_VOICE = "Kore";
 const GOOGLE_TTS_SAMPLE_RATE = 24_000;
 const GOOGLE_TTS_CHANNELS = 1;
@@ -35,6 +36,8 @@ const GOOGLE_TTS_GENERATE_CONTENT_MODELS = [
   "gemini-3.1-flash-tts-preview",
   "gemini-2.5-flash-preview-tts",
   "gemini-2.5-pro-preview-tts",
+  "gemini-3.8-flash-tts",
+  "gemini-3.8-flash-lite-tts",
 ] as const;
 
 const GOOGLE_TTS_MODELS = [
@@ -140,6 +143,13 @@ function isStoredGoogleTtsVoice(voiceName: string): boolean {
 
 function isGemini38TtsModel(model: string): boolean {
   return model.includes("gemini-3.8");
+}
+
+function resolveGoogleTtsSynthesisModel(model: string, voiceName: string): string {
+  if (!isStoredGoogleTtsVoice(voiceName) || isGemini38TtsModel(model)) {
+    return model;
+  }
+  return GOOGLE_STORED_TTS_MODEL;
 }
 
 function googleTtsSpeechVoiceConfig(voiceName: string): Record<string, unknown> {
@@ -648,7 +658,10 @@ async function synthesizeConfiguredGoogleTts(req: GoogleTtsSynthesisRequest): Pr
     baseUrl: resolveGoogleTtsBaseUrl({ cfg: req.cfg, providerConfig: config }),
     request: sanitizeConfiguredModelProviderRequest(req.cfg?.models?.providers?.google?.request),
     voiceName: normalizeGoogleTtsVoiceName(overrides.voiceName ?? config.voiceName),
-    model: normalizeGoogleTtsModel(overrides.model ?? config.model),
+    model: resolveGoogleTtsSynthesisModel(
+      normalizeGoogleTtsModel(overrides.model ?? config.model),
+      normalizeGoogleTtsVoiceName(overrides.voiceName ?? config.voiceName),
+    ),
     audioProfile: overrides.audioProfile ?? config.audioProfile,
     speakerName: overrides.speakerName ?? config.speakerName,
     personaPrompt: config.personaPrompt,
