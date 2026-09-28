@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { createTelegramRuntimeEnvironment, telegramPythonArgs } from "./telegram-runtime.mjs";
 
-const uv = spawnSync("which", ["uv"], { encoding: "utf8" }).stdout.trim();
+const uv = spawnSync("which", ["uv"], { encoding: "utf8" }).stdout?.trim();
 const python = spawnSync(
   "uv",
   ["python", "find", "--no-project", "--no-config", "--no-python-downloads", "3.12"],
