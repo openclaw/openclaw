@@ -147,89 +147,38 @@ describe("plugin management Gateway handlers", () => {
     ).toBeUndefined();
   });
 
-  it.each([
-    {
-      label: "bundled installed plugin",
-      inspection: {
-        ok: true,
-        reviewToken,
-        plugin: {
-          id: "workboard",
-          name: "Workboard",
-          origin: "bundled",
-          installed: true,
-          enabled: true,
-        },
-        source: { kind: "bundled" },
-        grants: {
-          hooks: {
-            allowPromptInjection: { effective: true },
-            allowConversationAccess: { effective: true },
-          },
+  it("returns the complete plugin consent snapshot including grants, integrity, and trust", async () => {
+    const inspection = {
+      ok: true,
+      reviewToken,
+      plugin: {
+        id: "community-plugin",
+        name: "Community Plugin",
+        origin: "global",
+        installed: true,
+        enabled: false,
+      },
+      source: {
+        kind: "clawhub",
+        packageName: "community/plugin",
+        integrity: "sha512-pinned",
+        integrityKind: "ssri",
+      },
+      grants: {
+        hooks: {
+          allowPromptInjection: { effective: false, configured: false },
+          allowConversationAccess: { effective: true, configured: true },
         },
       },
-    },
-    {
-      label: "external plugin with explicit grants, integrity, and trust",
-      inspection: {
-        ok: true,
-        reviewToken,
-        plugin: {
-          id: "community-plugin",
-          name: "Community Plugin",
-          origin: "global",
-          installed: true,
-          enabled: false,
-        },
-        source: {
-          kind: "clawhub",
-          packageName: "community/plugin",
-          integrity: "sha512-pinned",
-          integrityKind: "ssri",
-        },
-        grants: {
-          hooks: {
-            allowPromptInjection: { effective: false, configured: false },
-            allowConversationAccess: { effective: true, configured: true },
-          },
-        },
-        trust: {
-          disposition: "review-required",
-          reasons: ["Install script"],
-          checkedAt: "2026-08-25T00:00:00.000Z",
-          acknowledgedAt: "2026-08-25T01:00:00.000Z",
-          pending: false,
-          stale: true,
-        },
+      trust: {
+        disposition: "review-required",
+        reasons: ["Install script"],
+        checkedAt: "2026-08-25T00:00:00.000Z",
+        acknowledgedAt: "2026-08-25T01:00:00.000Z",
+        pending: false,
+        stale: true,
       },
-    },
-    {
-      label: "not-installed official catalog plugin",
-      inspection: {
-        ok: true,
-        reviewToken,
-        plugin: {
-          id: "diffs",
-          name: "Diffs",
-          origin: "official",
-          installed: false,
-          enabled: false,
-        },
-        source: {
-          kind: "official-catalog",
-          packageName: "@openclaw/diffs",
-          integrity: "sha256-catalog-pin",
-          integrityKind: "sha256",
-        },
-        grants: {
-          hooks: {
-            allowPromptInjection: { effective: true },
-            allowConversationAccess: { effective: false },
-          },
-        },
-      },
-    },
-  ])("returns the complete consent snapshot for a $label", async ({ inspection }) => {
+    };
     managementMocks.inspect.mockResolvedValue(inspection);
     const config = { plugins: { entries: {} } };
 
@@ -483,6 +432,7 @@ describe("plugin management Gateway handlers", () => {
           description: "Long-term memory.",
           icon: "database",
           order: 0,
+          pinnedPackages: ["@openclaw/bundled-memory", "memory-plus"],
         },
       ],
       items: [
@@ -500,7 +450,18 @@ describe("plugin management Gateway handlers", () => {
       ],
     });
     managementMocks.list.mockResolvedValue({
-      plugins: [],
+      plugins: [
+        {
+          id: "bundled-memory",
+          name: "Bundled Memory",
+          origin: "bundled",
+          packageName: "@openclaw/bundled-memory",
+          categories: ["memory"],
+          installed: false,
+          enabled: false,
+          state: "not-installed",
+        },
+      ],
       diagnostics: [],
       mutationAllowed: true,
     });
@@ -512,12 +473,16 @@ describe("plugin management Gateway handlers", () => {
     expect(catalogMocks.browse).not.toHaveBeenCalled();
     expect(result.response).toMatchObject({
       items: [
+        expect.objectContaining({
+          catalog: expect.objectContaining({ categoryRanks: { memory: 0 } }),
+        }),
         {
           catalog: {
             featured: true,
             featuredRank: 1,
             trending: true,
             trendingRank: 0,
+            categoryRanks: { memory: 1 },
           },
         },
       ],

@@ -21,6 +21,7 @@ import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.
 import { safeFileSignature, safeHashFile } from "./installed-plugin-index-hash.js";
 import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
+import { preservePluginSourceAdmissions } from "./installed-plugin-index-source-admissions.js";
 import {
   readPersistedInstalledPluginIndexSync,
   type InstalledPluginIndexStoreOptions,
@@ -580,6 +581,7 @@ function loadPluginRegistrySnapshotWithPreparedValidation(
     });
   }
 
+  preservePluginSourceAdmissions(persistedIndex, derived.index);
   return {
     snapshot: derived.index,
     source: "derived",

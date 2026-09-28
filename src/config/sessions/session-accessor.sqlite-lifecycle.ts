@@ -244,56 +244,49 @@ export async function resetSessionEntryLifecycle(
             ...(current ? { previousEntry: cloneSessionEntry(current.entry) } : {}),
             ...(current?.entry.sessionId ? { previousSessionId: current.entry.sessionId } : {}),
           };
-          const databaseIdentity = runOpenClawAgentWriteTransaction((transactionDb) => {
-            params.commitGuard?.();
-            assertLifecycleTargetUnchanged(transactionDb, params.target, current?.entry, "reset");
-            if (shouldAppendResetBoundary && current?.entry.sessionId && params.resetBoundary) {
-              const boundaryScope = {
-                ...resolved,
-                sessionId: current.entry.sessionId,
-                sessionKey: current.sessionKey,
-              };
-              appendSessionResetBoundary(
-                transactionDb,
-                boundaryScope,
-                current.entry,
-                params.resetBoundary,
-              );
-            }
-            writeSessionEntry(transactionDb, params.target.canonicalKey, nextEntry, {
-              previousEntry: current?.entry ?? null,
-            });
-            recordCommit(transactionDb);
-            // Reset only advances the live entry and route. Historical rows stay searchable;
-            // disk-budget cleanup owns durable extraction before reclaiming them.
-            return readOpenClawAgentDatabaseIdentity(transactionDb).identity;
-          }, toDatabaseOptions(resolved));
-          if (current) {
-            emitSessionIdentityMutation({
-              agentId: resolved.agentId,
-              databaseIdentity,
-              kind: "reset",
-              previous: {
-                ...(current.entry.sessionId ? { sessionId: current.entry.sessionId } : {}),
-                sessionKeys: targetSnapshot.map((row) => row.sessionKey),
-              },
-              current: {
-                ...(nextEntry.sessionId ? { sessionId: nextEntry.sessionId } : {}),
-                sessionKeys: [params.target.canonicalKey],
-              },
-            });
-          } else {
-            emitSessionIdentityMutation({
-              agentId: resolved.agentId,
-              databaseIdentity,
-              kind: "create",
-              previous: { sessionKeys: [] },
-              current: {
-                ...(nextEntry.sessionId ? { sessionId: nextEntry.sessionId } : {}),
-                sessionKeys: [params.target.canonicalKey],
-              },
-            });
-          }
+          const databaseIdentity = runOpenClawAgentWriteTransaction(
+            (transactionDb) => {
+              params.commitGuard?.();
+              assertLifecycleTargetUnchanged(transactionDb, params.target, current?.entry, "reset");
+              if (shouldAppendResetBoundary && current?.entry.sessionId && params.resetBoundary) {
+                const boundaryScope = {
+                  ...resolved,
+                  sessionId: current.entry.sessionId,
+                  sessionKey: current.sessionKey,
+                };
+                appendSessionResetBoundary(
+                  transactionDb,
+                  boundaryScope,
+                  current.entry,
+                  params.resetBoundary,
+                );
+              }
+              writeSessionEntry(transactionDb, params.target.canonicalKey, nextEntry, {
+                previousEntry: current?.entry ?? null,
+              });
+              recordCommit(transactionDb);
+              // Reset only advances the live entry and route. Historical rows stay searchable;
+              // disk-budget cleanup owns durable extraction before reclaiming them.
+              return readOpenClawAgentDatabaseIdentity(transactionDb).identity;
+            },
+            toDatabaseOptions(resolved),
+            { operationLabel: "session.lifecycle.reset" },
+          );
+          emitSessionIdentityMutation({
+            agentId: resolved.agentId,
+            databaseIdentity,
+            kind: current ? "reset" : "create",
+            previous: current
+              ? {
+                  ...(current.entry.sessionId ? { sessionId: current.entry.sessionId } : {}),
+                  sessionKeys: targetSnapshot.map((row) => row.sessionKey),
+                }
+              : { sessionKeys: [] },
+            current: {
+              ...(nextEntry.sessionId ? { sessionId: nextEntry.sessionId } : {}),
+              sessionKeys: [params.target.canonicalKey],
+            },
+          });
           await params.afterEntryMutation?.(mutation);
           return {
             ...mutation,

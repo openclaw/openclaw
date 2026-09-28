@@ -112,6 +112,7 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
 
   async function start(request: WorkerTunnelStartRequest): Promise<WorkerTunnelHandle> {
     validateStartRequest(request);
+    request.authorize?.();
     const claimedEpoch = claimedOwnerEpochs.get(request.environmentId);
     if (claimedEpoch !== undefined && request.ownerEpoch < claimedEpoch) {
       throw new Error("Worker tunnel owner epoch is stale");
@@ -119,7 +120,10 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
     claimedOwnerEpochs.set(request.environmentId, request.ownerEpoch);
     const current = entries.get(request.environmentId);
     if (current?.ownerEpoch === request.ownerEpoch) {
-      return await current.initialization;
+      const handle = await current.initialization;
+      // A joining caller cannot retire a tunnel owned by another operation.
+      request.authorize?.();
+      return handle;
     }
 
     const previous = [...owners].filter((owner) => owner.environmentId === request.environmentId);
@@ -141,6 +145,7 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
     void (async () => {
       await Promise.all(previous.map(stopEntry));
       const assertCurrent = () => {
+        request.authorize?.();
         if (!isCurrent(entry)) {
           throw new WorkerTunnelOwnerDisconnectedError();
         }

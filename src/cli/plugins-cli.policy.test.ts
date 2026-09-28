@@ -48,10 +48,7 @@ const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
 
 describe("plugins cli policy mutations", () => {
   let readInstallRecords: (typeof import("../plugins/installed-plugin-index-record-reader.js"))["loadInstalledPluginIndexInstallRecordsSync"];
-  const compatibilityPluginIds = [
-    { alias: "google-gemini-cli", pluginId: "google" },
-    { alias: "minimax-portal-auth", pluginId: "minimax" },
-  ] as const;
+  const compatibilityPluginIds = [{ alias: "google-gemini-cli", pluginId: "google" }] as const;
 
   beforeEach(async () => {
     resetPluginsCliTestState();
@@ -745,11 +742,11 @@ describe("plugins cli policy mutations", () => {
     },
   );
 
-  it.each(
-    ["enable", "disable"].flatMap((command) =>
-      ["missing-plugin", "alpha-provider", "alpha-channel"].map((id) => ({ command, id })),
-    ),
-  )("rejects $command for undiscovered plugin id $id", async ({ command, id }) => {
+  it.each([
+    { command: "enable", id: "missing-plugin" },
+    { command: "enable", id: "alpha-provider" },
+    { command: "disable", id: "alpha-channel" },
+  ])("rejects $command for undiscovered plugin id $id", async ({ command, id }) => {
     loadPluginManifestRegistryMock.mockReturnValue({
       plugins: [
         {

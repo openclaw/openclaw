@@ -1,4 +1,5 @@
-import { join } from "node:path";
+import { symlink } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -493,8 +494,14 @@ describe("manual Codex transcript byte compaction", () => {
   async function createCodexFixture(
     maxActiveTranscriptBytes: number | string,
     selection: "pinned" | "configured" = "pinned",
+    store: "direct" | "alias" = "direct",
   ) {
     const fixture = await createFixture("summary");
+    if (store === "alias") {
+      const alias = join(workspaceDir, "linked");
+      await symlink(dirname(fixture.target.storePath), alias, "junction");
+      fixture.target.storePath = join(alias, "openclaw-agent.sqlite");
+    }
     const policy = await import("../harness/policy.js");
     const actualPolicy =
       await vi.importActual<typeof import("../harness/policy.js")>("../harness/policy.js");
@@ -592,15 +599,16 @@ describe("manual Codex transcript byte compaction", () => {
   }
 
   it.each([
-    { selection: "pinned", nativeOutcome: "completed" },
-    { selection: "pinned", nativeOutcome: "failed" },
-    { selection: "configured", nativeOutcome: "completed" },
-    { selection: "configured", nativeOutcome: "failed" },
+    { selection: "pinned", nativeOutcome: "completed", store: "direct" },
+    { selection: "pinned", nativeOutcome: "failed", store: "direct" },
+    { selection: "configured", nativeOutcome: "completed", store: "direct" },
+    { selection: "configured", nativeOutcome: "failed", store: "direct" },
+    { selection: "pinned", nativeOutcome: "completed", store: "alias" },
   ] as const)(
-    "commits the host boundary and accounting before one $nativeOutcome native request ($selection)",
-    async ({ selection, nativeOutcome }) => {
+    "commits the host boundary and accounting before one $nativeOutcome native request ($selection, $store store)",
+    async ({ selection, nativeOutcome, store }) => {
       const { params, target, hostCompact, publicCompact, privateNativeCompaction } =
-        await createCodexFixture(1, selection);
+        await createCodexFixture(1, selection, store);
       publicCompact.mockImplementation(async () => {
         expect(
           sessions.SessionManager.open(target)

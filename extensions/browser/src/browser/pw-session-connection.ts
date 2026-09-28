@@ -324,11 +324,6 @@ export function retirePlaywrightBrowserConnectionExact(opts: {
   };
 }
 
-/** Retire a scoped adapter immediately; its CDP disconnect may settle later. */
-export function retirePlaywrightBrowserConnection(opts: { cdpUrl: string }): boolean {
-  return retirePlaywrightBrowserConnectionExact(opts).retired;
-}
-
 export function evictStalePlaywrightBrowserConnection(
   cdpUrl: string,
   expectedBrowser?: Browser,

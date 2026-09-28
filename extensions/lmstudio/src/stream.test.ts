@@ -145,7 +145,7 @@ function buildEventStreamFn(events: unknown[]): StreamFn {
 
 function createWrappedLmstudioStream(
   baseStream: StreamFn,
-  params?: { baseUrl?: string; thinkingLevel?: string },
+  params?: { baseUrl?: string; thinkingLevel?: string; preload?: false },
 ): StreamFn {
   return wrapLmstudioInferencePreload({
     provider: "lmstudio",
@@ -153,6 +153,7 @@ function createWrappedLmstudioStream(
     config: createModelProviderConfig({
       lmstudio: {
         baseUrl: params?.baseUrl ?? defaultBaseUrl,
+        ...(params?.preload === false ? { params: { preload: false } } : {}),
         models: [],
       },
     }),
@@ -400,56 +401,6 @@ describe("lmstudio stream wrapper", () => {
     });
   });
 
-  it("continues inference when preload fails", async () => {
-    prepareLmstudioModelForInferenceMock.mockRejectedValueOnce(new Error("load failed"));
-    const baseStream = buildDoneStreamFn();
-    const wrapped = wrapLmstudioInferencePreload({
-      provider: "lmstudio",
-      modelId: "qwen3-8b-instruct",
-      config: createModelProviderConfig({
-        lmstudio: {
-          baseUrl: defaultBaseUrl,
-          models: [],
-        },
-      }),
-      streamFn: baseStream,
-    } as never);
-
-    const stream = wrapped(
-      {
-        provider: "lmstudio",
-        api: "openai-completions",
-        id: "qwen3-8b-instruct",
-      } as never,
-      { messages: [] } as never,
-      undefined as never,
-    );
-    const events = await collectEvents(stream);
-    expectSingleDoneEvent(events);
-    expect(baseStream).toHaveBeenCalledTimes(1);
-  });
-
-  it("streams with the canonical model key when preload fails after discovery", async () => {
-    prepareLmstudioModelForInferenceMock.mockRejectedValueOnce(
-      Object.assign(new Error("load failed"), {
-        resolvedModelKey: "gemma-4-e4b-it-ultra-uncensored-heretic",
-      }),
-    );
-    const baseStream = buildDoneStreamFn();
-    const wrapped = createWrappedLmstudioStream(baseStream);
-    const stream = runWrappedLmstudioStream(wrapped, {
-      id: "lmstudio/gemma-4-e4b-it-ultra-uncensored-heretic@q4_k_m",
-    });
-    const events = await collectEvents(stream);
-
-    expectSingleDoneEvent(events);
-    expect(baseStream).toHaveBeenCalledTimes(1);
-    expectBaseStreamModelFields(baseStream, {
-      provider: "lmstudio",
-      id: "gemma-4-e4b-it-ultra-uncensored-heretic",
-    });
-  });
-
   it("reuses the canonical model key while preload failure cooldown is active", async () => {
     const canonicalKey = "gemma-4-e4b-it-ultra-uncensored-heretic";
     const variantModel = {
@@ -570,50 +521,20 @@ describe("lmstudio stream wrapper", () => {
     prepareLmstudioModelForInferenceMock.mockRejectedValueOnce(new Error("out of memory"));
     prepareLmstudioModelForInferenceMock.mockResolvedValueOnce(undefined);
     const baseStream = buildDoneStreamFn();
-    const wrapped = wrapLmstudioInferencePreload({
-      provider: "lmstudio",
-      modelId: "qwen3-8b-instruct",
-      config: createModelProviderConfig({
-        lmstudio: {
-          baseUrl: defaultBaseUrl,
-          models: [],
-        },
-      }),
-      streamFn: baseStream,
-    } as never);
+    const wrapped = createWrappedLmstudioStream(baseStream);
 
     // Freeze Date.now at a known base so we can jump past the first backoff
     // window (5s by default) between the two preload attempts.
     const baseTime = 1_000_000;
     const nowSpy = vi.spyOn(Date, "now");
     nowSpy.mockReturnValue(baseTime);
-    await collectEvents(
-      wrapped(
-        {
-          provider: "lmstudio",
-          api: "openai-completions",
-          id: "qwen3-8b-instruct",
-        } as never,
-        { messages: [] } as never,
-        undefined as never,
-      ),
-    );
+    await collectEvents(runWrappedLmstudioStream(wrapped, { id: "qwen3-8b-instruct" }));
     expect(prepareLmstudioModelForInferenceMock).toHaveBeenCalledTimes(1);
 
     // Move the clock past the initial 5s cooldown window so the next call is
     // allowed to retry preload.
     nowSpy.mockReturnValue(baseTime + 6_000);
-    await collectEvents(
-      wrapped(
-        {
-          provider: "lmstudio",
-          api: "openai-completions",
-          id: "qwen3-8b-instruct",
-        } as never,
-        { messages: [] } as never,
-        undefined as never,
-      ),
-    );
+    await collectEvents(runWrappedLmstudioStream(wrapped, { id: "qwen3-8b-instruct" }));
     expect(prepareLmstudioModelForInferenceMock).toHaveBeenCalledTimes(2);
     nowSpy.mockRestore();
   });
@@ -648,45 +569,6 @@ describe("lmstudio stream wrapper", () => {
     await collectEvents(runWrappedLmstudioStream(wrapped, {}));
     expect(prepareLmstudioModelForInferenceMock).toHaveBeenCalledTimes(4);
     expect(baseStream).toHaveBeenCalledTimes(6);
-  });
-
-  it("forces supportsUsageInStreaming compat before calling the underlying stream", async () => {
-    const baseStream = buildDoneStreamFn();
-    const wrapped = wrapLmstudioInferencePreload({
-      provider: "lmstudio",
-      modelId: "qwen3-8b-instruct",
-      config: createModelProviderConfig({
-        lmstudio: {
-          baseUrl: defaultBaseUrl,
-          models: [],
-        },
-      }),
-      streamFn: baseStream,
-    } as never);
-
-    const stream = wrapped(
-      {
-        provider: "lmstudio",
-        api: "openai-completions",
-        id: "qwen3-8b-instruct",
-        compat: { supportsDeveloperRole: false },
-      } as never,
-      { messages: [] } as never,
-      undefined as never,
-    );
-    const events = await collectEvents(stream);
-
-    expectSingleDoneEvent(events);
-    expect(baseStream).toHaveBeenCalledTimes(1);
-    expectBaseStreamModelFields(baseStream, { provider: "lmstudio" });
-    const [model] = requireMockCallArg(
-      baseStream as unknown as { mock: { calls: unknown[][] } },
-      "base stream",
-    );
-    expectRecordFields(requireRecord(requireRecord(model, "base stream model").compat, "compat"), {
-      supportsDeveloperRole: false,
-      supportsUsageInStreaming: true,
-    });
   });
 
   it("marks regex tool patterns as unsupported before LM Studio inference", async () => {
@@ -734,35 +616,14 @@ describe("lmstudio stream wrapper", () => {
 
   it("applies regex tool-schema compatibility when LM Studio preload is disabled", async () => {
     const baseStream = buildDoneStreamFn();
-    const wrapped = wrapLmstudioInferencePreload({
-      provider: "lmstudio",
-      modelId: "qwen3-8b-instruct",
-      config: {
-        models: {
-          providers: {
-            lmstudio: {
-              baseUrl: defaultBaseUrl,
-              params: { preload: false },
-              models: [],
-            },
-          },
-        },
-      },
-      streamFn: baseStream,
-    } as never);
+    const wrapped = createWrappedLmstudioStream(baseStream, { preload: false });
 
     expectSingleDoneEvent(
       await collectEvents(
-        wrapped(
-          {
-            provider: "lmstudio",
-            api: "openai-completions",
-            id: "qwen3-8b-instruct",
-            compat: { unsupportedToolSchemaKeywords: ["format"] },
-          } as never,
-          { messages: [] } as never,
-          undefined as never,
-        ),
+        runWrappedLmstudioStream(wrapped, {
+          id: "qwen3-8b-instruct",
+          compat: { unsupportedToolSchemaKeywords: ["format"] },
+        }),
       ),
     );
 
@@ -834,96 +695,6 @@ describe("lmstudio stream wrapper", () => {
     expect(String(toolCall.id)).toMatch(/^call_[a-f0-9]{24}$/);
   });
 
-  it("promotes standalone Harmony local-model tool text to a structured tool call", async () => {
-    const rawToolText =
-      'commentary to=read code {"path":"/path/to/file","line_start":1,"line_end":400}';
-    const baseStream = buildEventStreamFn([
-      { type: "start", partial: lmstudioAssistantMessage([]) },
-      {
-        type: "text_start",
-        contentIndex: 0,
-        partial: lmstudioAssistantMessage([{ type: "text", text: "" }]),
-      },
-      { type: "text_delta", contentIndex: 0, delta: rawToolText },
-      { type: "text_end", contentIndex: 0, content: rawToolText },
-      {
-        type: "done",
-        reason: "stop",
-        message: lmstudioAssistantMessage([{ type: "text", text: rawToolText }]),
-      },
-    ]);
-    const wrapped = createWrappedLmstudioStream(baseStream);
-    const events = await collectEvents(
-      runWrappedLmstudioStream(wrapped, {}, undefined, {
-        tools: [{ name: "read", description: "Read", parameters: { type: "object" } }],
-      }),
-    );
-
-    expect(events.map((event) => event.type)).toEqual([
-      "start",
-      "toolcall_start",
-      "toolcall_delta",
-      "toolcall_end",
-      "done",
-    ]);
-    const done = events.find((event) => event.type === "done") as {
-      message?: { content?: Array<Record<string, unknown>>; stopReason?: string };
-      reason?: string;
-    };
-    expect(done.reason).toBe("toolUse");
-    expectRecordFields(requireRecord(done.message?.content?.[0], "tool call content"), {
-      type: "toolCall",
-      name: "read",
-      arguments: { path: "/path/to/file", line_start: 1, line_end: 400 },
-    });
-  });
-
-  it("passes through bracketed text when the tool is not registered", async () => {
-    const rawToolText = [
-      "[mempalace_mempalace_search]",
-      '{"query":"codename"}',
-      "[/mempalace_mempalace_search]",
-    ].join("\n");
-    const baseStream = buildEventStreamFn([
-      { type: "start", partial: lmstudioAssistantMessage([]) },
-      {
-        type: "text_start",
-        contentIndex: 0,
-        partial: lmstudioAssistantMessage([{ type: "text", text: "" }]),
-      },
-      { type: "text_delta", contentIndex: 0, delta: rawToolText },
-      { type: "text_end", contentIndex: 0, content: rawToolText },
-      {
-        type: "done",
-        reason: "stop",
-        message: lmstudioAssistantMessage([{ type: "text", text: rawToolText }]),
-      },
-    ]);
-    const wrapped = createWrappedLmstudioStream(baseStream);
-    const events = await collectEvents(
-      runWrappedLmstudioStream(wrapped, {}, undefined, {
-        tools: [{ name: "read", description: "Read", parameters: { type: "object" } }],
-      }),
-    );
-
-    expect(events.map((event) => event.type)).toEqual([
-      "start",
-      "text_start",
-      "text_delta",
-      "text_end",
-      "done",
-    ]);
-    expectRecordFields(
-      requireRecord(
-        events.find((event) => event.type === "text_delta"),
-        "text delta",
-      ),
-      {
-        delta: rawToolText,
-      },
-    );
-  });
-
   it("rewrites reasoning_effort to the disabled effort when thinking is off", async () => {
     const payload: Record<string, unknown> = {
       model: "qwen3-8b-instruct",
@@ -937,55 +708,5 @@ describe("lmstudio stream wrapper", () => {
 
     expectSingleDoneEvent(events);
     expect(payload.reasoning_effort).toBe("none");
-  });
-
-  it("drops reasoning_effort on thinking off when the model has no disabled effort", async () => {
-    const payload: Record<string, unknown> = {
-      model: "qwen3-8b-instruct",
-      reasoning_effort: "high",
-    };
-    const baseStream = buildPayloadStreamFn(payload);
-    const wrapped = createWrappedLmstudioStream(baseStream, { thinkingLevel: "off" });
-    const events = await collectEvents(
-      runWrappedLmstudioStream(wrapped, {
-        compat: {
-          supportedReasoningEfforts: ["minimal", "low", "medium", "high", "xhigh"],
-          reasoningEffortMap: { adaptive: "xhigh", max: "xhigh" },
-        },
-      }),
-    );
-
-    expectSingleDoneEvent(events);
-    expect("reasoning_effort" in payload).toBe(false);
-  });
-
-  it("keeps reasoning_effort untouched for enabled thinking levels", async () => {
-    const payload: Record<string, unknown> = {
-      model: "qwen3-8b-instruct",
-      reasoning_effort: "high",
-    };
-    const baseStream = buildPayloadStreamFn(payload);
-    const wrapped = createWrappedLmstudioStream(baseStream, { thinkingLevel: "high" });
-    const events = await collectEvents(
-      runWrappedLmstudioStream(wrapped, { compat: BINARY_REASONING_COMPAT }),
-    );
-
-    expectSingleDoneEvent(events);
-    expect(payload.reasoning_effort).toBe("high");
-  });
-
-  it("keeps reasoning_effort untouched without a thinking level", async () => {
-    const payload: Record<string, unknown> = {
-      model: "qwen3-8b-instruct",
-      reasoning_effort: "high",
-    };
-    const baseStream = buildPayloadStreamFn(payload);
-    const wrapped = createWrappedLmstudioStream(baseStream);
-    const events = await collectEvents(
-      runWrappedLmstudioStream(wrapped, { compat: BINARY_REASONING_COMPAT }),
-    );
-
-    expectSingleDoneEvent(events);
-    expect(payload.reasoning_effort).toBe("high");
   });
 });

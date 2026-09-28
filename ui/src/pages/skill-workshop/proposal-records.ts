@@ -12,18 +12,19 @@ export function parseDateMs(value: string | undefined): number {
   return parseDateStringTimestampMs(value) ?? Date.now();
 }
 
-function startOfLocalDay(ms: number): number {
+function startOfLocalDay(ms: number, daysAgo = 0): number {
   const date = new Date(ms);
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() - daysAgo).getTime();
 }
 
 function recencyGroup(ms: number): SkillWorkshopProposal["recencyGroup"] {
-  const today = startOfLocalDay(Date.now());
+  const now = Date.now();
+  const today = startOfLocalDay(now);
   const day = startOfLocalDay(ms);
   if (day === today) {
     return "today";
   }
-  if (day === today - 24 * 60 * 60 * 1000) {
+  if (day === startOfLocalDay(now, 1)) {
     return "yesterday";
   }
   return "earlier";

@@ -100,19 +100,11 @@ enum TailscaleServeGatewayDiscovery {
         var seen = Set<String>()
 
         for node in status.peer.values {
-            if node.online == false {
-                continue
-            }
-            guard let dnsName = normalizeDnsName(node.dnsName) else {
-                continue
-            }
-            if dnsName == selfDns {
-                continue
-            }
-            if seen.contains(dnsName) {
-                continue
-            }
-            seen.insert(dnsName)
+            guard node.online != false,
+                  let dnsName = normalizeDnsName(node.dnsName),
+                  dnsName != selfDns,
+                  seen.insert(dnsName).inserted
+            else { continue }
 
             out.append(Candidate(
                 dnsName: dnsName,

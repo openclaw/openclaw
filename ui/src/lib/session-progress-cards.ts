@@ -82,16 +82,13 @@ export type SessionProgressCardStore = {
 
 const stores = new WeakMap<ApplicationGateway, SessionProgressCardStore>();
 
-function parseProgressCardStep(value: unknown): ProgressCardStep | null {
-  if (!isRecord(value) || typeof value.step !== "string") {
-    return null;
-  }
+function parseProgressCardStep(value: unknown): ProgressCardStep {
   if (
-    value.status !== "pending" &&
-    value.status !== "in_progress" &&
-    value.status !== "completed"
+    !isRecord(value) ||
+    typeof value.step !== "string" ||
+    (value.status !== "pending" && value.status !== "in_progress" && value.status !== "completed")
   ) {
-    return null;
+    throw new Error("Progress card response contained invalid steps");
   }
   return { status: value.status, step: value.step };
 }
@@ -124,11 +121,7 @@ function parseProgressCard(value: unknown, sessionKey: string): ProgressCard | n
     throw new Error("Progress card response did not match the requested session");
   }
   const steps = Array.isArray(rawSteps) ? rawSteps.map(parseProgressCardStep) : undefined;
-  if (steps?.some((step) => step === null)) {
-    throw new Error("Progress card response contained invalid steps");
-  }
-  const parsedSteps = steps?.filter((step) => step !== null);
-  if (markdown === undefined && (!parsedSteps || parsedSteps.length === 0)) {
+  if (markdown === undefined && (!steps || steps.length === 0)) {
     throw new Error("Progress card response contained no content");
   }
   return {
@@ -136,7 +129,7 @@ function parseProgressCard(value: unknown, sessionKey: string): ProgressCard | n
     revision,
     updatedAt,
     ...(markdown !== undefined ? { markdown } : {}),
-    ...(parsedSteps && parsedSteps.length > 0 ? { steps: parsedSteps } : {}),
+    ...(steps && steps.length > 0 ? { steps } : {}),
   };
 }
 
@@ -419,34 +412,24 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
       if (!changed) {
         return;
       }
+      const matchesTarget = (target: ProgressCardGetParams) =>
+        uiSessionEventMatches(
+          {
+            hello: gateway.snapshot.hello,
+            assistantAgentId: target.agentId,
+            sessionKey: target.sessionKey,
+          },
+          changed.key,
+          changed.agentId,
+        );
       for (const [key, { target }] of lifetimes) {
-        if (
-          uiSessionEventMatches(
-            {
-              hello: gateway.snapshot.hello,
-              assistantAgentId: target.agentId,
-              sessionKey: target.sessionKey,
-            },
-            changed.key,
-            changed.agentId,
-          )
-        ) {
+        if (matchesTarget(target)) {
           lifetimes.delete(key);
         }
       }
       let removed = false;
       for (const [key, entry] of entries) {
-        if (
-          uiSessionEventMatches(
-            {
-              hello: gateway.snapshot.hello,
-              assistantAgentId: entry.target.agentId,
-              sessionKey: entry.target.sessionKey,
-            },
-            changed.key,
-            changed.agentId,
-          )
-        ) {
+        if (matchesTarget(entry.target)) {
           retireRefresh(entry);
           entries.delete(key);
           removed = true;

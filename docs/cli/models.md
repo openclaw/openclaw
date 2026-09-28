@@ -191,6 +191,7 @@ Notes:
 - `Input` and `Ctx` use the selected physical route plus explicit configured logical overrides. Unresolved route metadata stays unknown instead of borrowing another route's capabilities.
 - Configured model IDs retain case. For example, `Reader` and `reader` remain distinct. Provider-owned aliases still apply, and configured aliases remain in the table tags and JSON output.
 - `--provider` takes a provider ID, such as `moonshot`, rather than a picker label such as `Moonshot AI`.
+- Unknown provider IDs fail with a non-zero exit and name the rejected provider. Run `openclaw models list --all` to list models and their provider IDs.
 - Model refs split on the first `/`. Include the provider prefix when the model ID contains `/`, for example `openrouter/moonshotai/kimi-k2`.
 
 Provider discovery through `models list --refresh` is separate from the hosted
@@ -372,7 +373,7 @@ Use either `openclaw models auth --agent <id> <subcommand>` or `openclaw models 
 For OpenAI models, `--provider openai` defaults to ChatGPT/Codex account login. Use `--method api-key` only when you want to add an OpenAI API-key profile, usually as a backup for Codex subscription limits. Run `openclaw doctor --fix` to migrate older legacy OpenAI Codex prefix auth/profile state to `openai`.
 
 See [OpenAI authentication](/providers/openai/authentication) to compare Codex
-OAuth, device code, API keys, and Sign in with ChatGPT (`--method siwc`),
+OAuth, device code, API keys, and Sign in with ChatGPT (Beta) (`--method siwc`),
 including model access, hosted plugins, and shared versus personal setup.
 
 Examples:

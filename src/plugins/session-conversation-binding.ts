@@ -34,14 +34,9 @@ export async function bindPluginSessionConversation(params: {
   );
 }
 
-async function bindPluginSessionConversationExclusive(params: {
-  pluginId: string;
-  pluginName?: string;
-  pluginRoot: string;
-  sessionKey: string;
-  binding: PluginConversationBindingRequestParams;
-  afterBind?: () => Promise<void>;
-}): Promise<PluginConversationBinding> {
+async function bindPluginSessionConversationExclusive(
+  params: Parameters<typeof bindPluginSessionConversation>[0],
+): Promise<PluginConversationBinding> {
   const sessionKey = params.sessionKey;
   const conversation = {
     channel: INTERNAL_MESSAGE_CHANNEL,

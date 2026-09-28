@@ -20,9 +20,11 @@ import {
 import {
   assertCodexThreadForkResponse,
   assertCodexThreadStartResponse,
+  assertExactSupervisionModelSelection,
   readSupervisionResponseThreadId,
 } from "./protocol-validators.js";
 import type { CodexDynamicToolSpec, CodexThread, CodexThreadForkParams } from "./protocol.js";
+import { matchesPendingSupervisionBranch } from "./session-binding-record.js";
 import type {
   CodexAppServerBindingIdentity,
   CodexAppServerBindingStore,
@@ -216,25 +218,9 @@ export async function materializePendingSupervisionBranch(
 
     const nativeAttempt = { ...params.attempt, modelId: nativeModel };
     const startParams = buildThreadStartParams(nativeAttempt, {
-      cwd: params.cwd,
-      dynamicTools: params.dynamicTools,
-      appServer: params.appServer,
-      developerInstructions: params.developerInstructions,
-      skillsInstructions: params.skillsInstructions,
-      config: params.config,
-      nativeCodeModeEnabled: params.nativeCodeModeEnabled,
-      nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
-      nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
-      webSearchAllowed: params.webSearchAllowed,
-      environmentSelection: params.environmentSelection,
+      ...params,
       model: nativeModel,
       modelProvider: nativeModelProvider,
-      hostSystemAgentActive: params.hostSystemAgentActive,
-      restrictedToolSurfaceInheritedMcpServerNames:
-        params.restrictedToolSurfaceInheritedMcpServerNames,
-      shellEnvironment: params.shellEnvironment,
-      shellPathPrepend: params.shellPathPrepend,
-      disableLoginShell: params.disableLoginShell,
     });
     assertExactSupervisionModelSelection(startParams, {
       model: nativeModel,
@@ -459,19 +445,7 @@ function buildPendingSupervisionProbeForkParams(
   params: PendingSupervisionMaterializationParams,
   pending: CodexAppServerPendingSupervisionBranch,
 ): CodexThreadForkParams {
-  const runtimeConfig = buildCodexRuntimeThreadConfigForRun(params.attempt, params.config, {
-    nativeCodeModeEnabled: params.nativeCodeModeEnabled,
-    nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
-    nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
-    webSearchAllowed: params.webSearchAllowed,
-    appServer: params.appServer,
-    hostSystemAgentActive: params.hostSystemAgentActive,
-    restrictedToolSurfaceInheritedMcpServerNames:
-      params.restrictedToolSurfaceInheritedMcpServerNames,
-    shellEnvironment: params.shellEnvironment,
-    shellPathPrepend: params.shellPathPrepend,
-    disableLoginShell: params.disableLoginShell,
-  });
+  const runtimeConfig = buildCodexRuntimeThreadConfigForRun(params.attempt, params.config, params);
   return {
     threadId: pending.sourceThreadId,
     ...(pending.lastTurnId ? { lastTurnId: pending.lastTurnId } : {}),
@@ -530,34 +504,14 @@ function requireNativeSupervisionModelProvider(params: {
   return responseProvider;
 }
 
-function assertExactSupervisionModelSelection(
-  value: { model?: string | null; modelProvider?: string | null },
-  expected: { model: string; modelProvider: string; operation: string },
-): void {
-  if (value.model !== expected.model || value.modelProvider !== expected.modelProvider) {
-    throw new Error(
-      `Codex supervision ${expected.operation} changed native model selection: ` +
-        `${value.modelProvider ?? "unknown"}/${value.model ?? "unknown"}`,
-    );
-  }
-}
-
 function matchesPendingSupervisionState(
   binding: CodexAppServerThreadBinding | undefined,
   expected: CodexAppServerPendingSupervisionBranch,
 ): boolean {
-  const pending = binding?.pendingSupervisionBranch;
-  const cleanupThreadIds = pending?.cleanupThreadIds ?? [];
-  const expectedCleanupThreadIds = expected.cleanupThreadIds ?? [];
   return (
-    binding?.threadId === expected.sourceThreadId &&
-    binding.connectionScope === "supervision" &&
+    binding?.connectionScope === "supervision" &&
     binding.supervisionSourceThreadId === expected.sourceThreadId &&
-    pending?.sourceThreadId === expected.sourceThreadId &&
-    pending.connectionFingerprint === expected.connectionFingerprint &&
-    pending.lastTurnId === expected.lastTurnId &&
-    cleanupThreadIds.length === expectedCleanupThreadIds.length &&
-    cleanupThreadIds.every((threadId, index) => threadId === expectedCleanupThreadIds[index])
+    matchesPendingSupervisionBranch(binding, expected)
   );
 }
 

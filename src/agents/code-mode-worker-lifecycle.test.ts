@@ -5,7 +5,6 @@ import { createCodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import { resolveCodeModeConfig, toToolSearchConfig } from "./code-mode-runtime.js";
 import {
   activeRuns,
-  createCodeModeBridgeDispatchState,
   createCodeModeRunOwner,
   disposeAllCodeModeRuns,
   reserveActiveRunSlot,
@@ -59,7 +58,7 @@ async function parkExpiringRun(method: "callValue" | "agentWait") {
     catalogProjection: createCodeModeCatalogProjection([]),
     namespaceRuntime: createCodeModeNamespaceRuntime(),
     output: new CodeModeOutputState(config.maxOutputBytes),
-    bridgeDispatch: createCodeModeBridgeDispatchState(),
+    bridgeDispatch: { started: false },
   });
   return { cancel, runId: owner.runId };
 }

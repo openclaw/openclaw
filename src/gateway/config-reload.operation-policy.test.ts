@@ -38,6 +38,7 @@ describe("Gateway operation policy reload", () => {
     "gateway.tools.allow",
     "gateway.tools.deny",
     "gateway.cliAgents.enabled",
+    "gateway.uploads.enabled",
     "gateway.controlUi.enabled",
     "gateway.controlUi.environment.label",
     "gateway.controlUi.communityInvite",

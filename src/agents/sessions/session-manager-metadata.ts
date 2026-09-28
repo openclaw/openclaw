@@ -7,7 +7,6 @@ import {
   type SessionMetadataCommit,
 } from "../../config/sessions/transcript-write-context.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { isIndexedSessionEntry } from "./session-manager-codec.js";
 import { SessionManagerCompaction } from "./session-manager-compaction.js";
 import { generateSessionEntryId } from "./session-manager-id.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
@@ -33,13 +32,7 @@ export class SessionManagerMetadata extends SessionManagerCompaction {
           publication.publish,
         );
       }
-      const canonical: unknown = canonicalizeSessionEntry(entry);
-      if (
-        !isIndexedSessionEntry(canonical) ||
-        (canonical.type !== "model_change" && canonical.type !== "thinking_level_change")
-      ) {
-        throw new Error(`Invalid session transcript entry: ${entry.type}`);
-      }
+      const canonical = canonicalizeSessionEntry(entry);
       const appendIntent =
         !this.pendingDeliberateAppend && this.appendMode !== "side" ? "active-branch" : undefined;
       const admittedUserId = this.persistenceTarget

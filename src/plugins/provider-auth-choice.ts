@@ -101,24 +101,17 @@ function restoreConfiguredPrimaryModel(
   if (!nextDefaults) {
     return nextConfig;
   }
-  if (originalModel !== undefined) {
-    return {
-      ...nextConfig,
-      agents: {
-        ...nextAgents,
-        defaults: {
-          ...nextDefaults,
-          model: originalModel,
-        },
-      },
-    };
+  const defaults = { ...nextDefaults };
+  if (originalModel === undefined) {
+    delete defaults.model;
+  } else {
+    defaults.model = originalModel;
   }
-  const { model: _model, ...restDefaults } = nextDefaults;
   return {
     ...nextConfig,
     agents: {
       ...nextAgents,
-      defaults: restDefaults,
+      defaults,
     },
   };
 }
@@ -231,12 +224,6 @@ async function applyDefaultModelFromAuthChoice(params: {
   return nextConfig;
 }
 
-type ProviderAuthChoiceRuntime = typeof import("./provider-auth-choice.runtime.js");
-
-async function loadPluginProviderRuntime(): Promise<ProviderAuthChoiceRuntime> {
-  return await import("./provider-auth-choice.runtime.js");
-}
-
 function resolveManifestAuthChoiceScope(params: {
   authChoice: string;
   config: OpenClawConfig;
@@ -271,7 +258,7 @@ export function applyProviderPluginAuthMethodResultConfig(params: {
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: profile.profileId,
       provider: profile.credential.provider,
-      mode: profile.credential.type === "token" ? "token" : profile.credential.type,
+      mode: profile.credential.type,
       ...("email" in profile.credential && profile.credential.email
         ? { email: profile.credential.email }
         : {}),
@@ -402,7 +389,7 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
     resolvePluginSetupProvider,
     resolveProviderPluginChoice,
     runProviderModelSelectedHook,
-  } = await loadPluginProviderRuntime();
+  } = await import("./provider-auth-choice.runtime.js");
   // Import the reviewed generation while locked; authentication may outlive the lease.
   const prepared = await withPluginLifecycleLease({ env: params.env }, async () =>
     withPluginCache(initialCache, async () => {
@@ -597,27 +584,31 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
       opts: params.opts,
     });
 
+    const consumeAuthenticated = (result: ApplyProviderAuthChoiceResult) =>
+      consume(
+        {
+          ...result,
+          ...(prepared.pendingPluginInstalls
+            ? { pendingPluginInstalls: prepared.pendingPluginInstalls }
+            : {}),
+          authProfiles: applied.authProfiles,
+          persistAuthProfiles: applied.persistAuthProfiles,
+        },
+        resolved.provider,
+      );
     nextConfig = applied.config;
     let agentModelOverride: string | undefined;
     if (applied.defaultModel) {
       const selectedModel = applied.defaultModel;
       if (resolved.wizard?.modelTarget === "utility") {
-        return await consume(
-          {
-            config: materializeUtilityModelSeparation(
-              restoreConfiguredPrimaryModel(nextConfig, params.config),
-              params.config,
-            ).config,
-            modelTarget: "utility",
-            utilityModelOverride: selectedModel,
-            ...(prepared.pendingPluginInstalls
-              ? { pendingPluginInstalls: prepared.pendingPluginInstalls }
-              : {}),
-            authProfiles: applied.authProfiles,
-            persistAuthProfiles: applied.persistAuthProfiles,
-          },
-          resolved.provider,
-        );
+        return await consumeAuthenticated({
+          config: materializeUtilityModelSeparation(
+            restoreConfiguredPrimaryModel(nextConfig, params.config),
+            params.config,
+          ).config,
+          modelTarget: "utility",
+          utilityModelOverride: selectedModel,
+        });
       }
       const selectedModelDisplay = formatModelRefForDisplay(selectedModel, resolved.provider);
       if (params.setDefaultModel) {
@@ -652,34 +643,16 @@ export async function prepareAuthChoiceLoadedPluginProvider<T>(
           );
         }
         nextConfig = defaultModelConfig;
-        return await consume(
-          {
-            config: nextConfig,
-            ...(prepared.pendingPluginInstalls
-              ? { pendingPluginInstalls: prepared.pendingPluginInstalls }
-              : {}),
-            authProfiles: applied.authProfiles,
-            persistAuthProfiles: applied.persistAuthProfiles,
-          },
-          resolved.provider,
-        );
+        return await consumeAuthenticated({ config: nextConfig });
       }
       nextConfig = restoreConfiguredPrimaryModel(nextConfig, params.config);
       agentModelOverride = selectedModel;
     }
 
-    return await consume(
-      {
-        config: nextConfig,
-        agentModelOverride,
-        ...(prepared.pendingPluginInstalls
-          ? { pendingPluginInstalls: prepared.pendingPluginInstalls }
-          : {}),
-        authProfiles: applied.authProfiles,
-        persistAuthProfiles: applied.persistAuthProfiles,
-      },
-      resolved.provider,
-    );
+    return await consumeAuthenticated({
+      config: nextConfig,
+      agentModelOverride,
+    });
   });
 }
 

@@ -19,6 +19,7 @@ type GatewayServiceSystemdRuntime = {
   unit?: string;
   /** Native D-Bus credential of the observed manager, not the service account or CLI UID. */
   managerUid?: number;
+  controlGroup?: string;
   killMode?: string;
   tasksCurrent?: number;
   memoryCurrent?: number;
@@ -67,7 +68,9 @@ const SERVICE_RUNTIME_INSPECTION_FAILED_DETAIL = "service runtime inspection fai
 export function createServiceRuntimeInspectionFailure(
   error: unknown,
   timeoutMs?: number,
-): GatewayServiceRuntime {
+): GatewayServiceRuntime & {
+  inspectionFailure: NonNullable<GatewayServiceRuntime["inspectionFailure"]>;
+} {
   if (hasCommandProcessCleanupError(error)) {
     throw error;
   }

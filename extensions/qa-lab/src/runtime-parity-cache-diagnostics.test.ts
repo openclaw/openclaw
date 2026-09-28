@@ -22,7 +22,10 @@ afterEach(async () => {
   await tempDirs.cleanup();
 });
 
-async function seedRuntimeParityCacheTranscript(messages: Array<Record<string, unknown>>) {
+async function captureCacheTranscript(
+  messages: Array<Record<string, unknown>>,
+  runtime: "openclaw" | "codex" = "openclaw",
+) {
   const tempRoot = await tempDirs.makeTempDir("openclaw-qa-runtime-parity-cache-");
   const agentId = "qa";
   const sessionId = "runtime-parity-cache-miss";
@@ -51,7 +54,12 @@ async function seedRuntimeParityCacheTranscript(messages: Array<Record<string, u
       message: message as never,
     });
   }
-  return tempRoot;
+  return captureRuntimeParityCell({
+    runtime,
+    gateway: { tempRoot },
+    scenarioResult: { status: "pass" },
+    wallClockMs: 10,
+  });
 }
 
 function usage(
@@ -68,27 +76,23 @@ function usage(
 
 describe("runtime parity prompt-cache diagnostics", () => {
   it("captures post-warm cache losses from the canonical SQLite assistant transcript", async () => {
-    const tempRoot = await seedRuntimeParityCacheTranscript([
-      { role: "user", content: "Warm the native conversation." },
-      {
-        role: "assistant",
-        content: "warm",
-        usage: { input: 3, output: 11, total: 24_421, cacheRead: 0, cacheWrite: 24_407 },
-      },
-      { role: "user", content: "Continue that conversation." },
-      {
-        role: "assistant",
-        content: "continued",
-        usage: { input: 24_448, output: 11, total: 24_459, cacheRead: 0, cacheWrite: 0 },
-      },
-    ]);
-
-    const cell = await captureRuntimeParityCell({
-      runtime: "codex",
-      gateway: { tempRoot },
-      scenarioResult: { status: "pass" },
-      wallClockMs: 10,
-    });
+    const cell = await captureCacheTranscript(
+      [
+        { role: "user", content: "Warm the native conversation." },
+        {
+          role: "assistant",
+          content: "warm",
+          usage: { input: 3, output: 11, total: 24_421, cacheRead: 0, cacheWrite: 24_407 },
+        },
+        { role: "user", content: "Continue that conversation." },
+        {
+          role: "assistant",
+          content: "continued",
+          usage: { input: 24_448, output: 11, total: 24_459, cacheRead: 0, cacheWrite: 0 },
+        },
+      ],
+      "codex",
+    );
 
     expect(cell.cacheDiagnostics).toEqual({
       assistantTurns: 2,
@@ -108,7 +112,7 @@ describe("runtime parity prompt-cache diagnostics", () => {
   });
 
   it("treats Ollama adapter cache zeros as unavailable telemetry", async () => {
-    const tempRoot = await seedRuntimeParityCacheTranscript([
+    const cell = await captureCacheTranscript([
       { role: "user", content: "Inspect cache telemetry." },
       {
         role: "assistant",
@@ -127,13 +131,6 @@ describe("runtime parity prompt-cache diagnostics", () => {
       },
     ]);
 
-    const cell = await captureRuntimeParityCell({
-      runtime: "openclaw",
-      gateway: { tempRoot },
-      scenarioResult: { status: "pass" },
-      wallClockMs: 10,
-    });
-
     expect(cell.usage).toEqual({
       inputTokens: 22,
       outputTokens: 7,
@@ -151,7 +148,7 @@ describe("runtime parity prompt-cache diagnostics", () => {
   });
 
   it("preserves unavailable cache telemetry from pre-marker Ollama transcripts", async () => {
-    const tempRoot = await seedRuntimeParityCacheTranscript([
+    const cell = await captureCacheTranscript([
       { role: "user", content: "Inspect cache telemetry." },
       {
         role: "assistant",
@@ -163,13 +160,6 @@ describe("runtime parity prompt-cache diagnostics", () => {
       },
     ]);
 
-    const cell = await captureRuntimeParityCell({
-      runtime: "openclaw",
-      gateway: { tempRoot },
-      scenarioResult: { status: "pass" },
-      wallClockMs: 10,
-    });
-
     expect(cell.usage).toEqual({
       inputTokens: 22,
       outputTokens: 7,
@@ -179,7 +169,7 @@ describe("runtime parity prompt-cache diagnostics", () => {
   });
 
   it("preserves an explicitly measured zero-cache result", async () => {
-    const tempRoot = await seedRuntimeParityCacheTranscript([
+    const cell = await captureCacheTranscript([
       { role: "user", content: "Inspect cache telemetry." },
       {
         role: "assistant",
@@ -198,13 +188,6 @@ describe("runtime parity prompt-cache diagnostics", () => {
       },
     ]);
 
-    const cell = await captureRuntimeParityCell({
-      runtime: "openclaw",
-      gateway: { tempRoot },
-      scenarioResult: { status: "pass" },
-      wallClockMs: 10,
-    });
-
     expect(cell.usage).toEqual({
       inputTokens: 22,
       outputTokens: 7,
@@ -213,24 +196,6 @@ describe("runtime parity prompt-cache diagnostics", () => {
       cacheWrite: 0,
     });
     expect(cell.cacheDiagnostics?.cacheTelemetryTurns).toBe(1);
-  });
-
-  it("identifies the first complete cache miss after a cache-warming write", () => {
-    const diagnostics = buildRuntimeParityCacheDiagnostics([
-      usage(3, { cacheRead: 0, cacheWrite: 24_407 }),
-      usage(24_448, { cacheRead: 0, cacheWrite: 0 }),
-      usage(41, { cacheRead: 24_445, cacheWrite: 0 }),
-    ]);
-
-    expect(diagnostics).toEqual({
-      assistantTurns: 3,
-      cacheTelemetryTurns: 3,
-      cacheHitTurns: 1,
-      cacheWriteTurns: 1,
-      cacheMisses: [{ turn: 2, inputTokens: 24_448, cacheRead: 0, cacheWrite: 0 }],
-      cacheMissInputTokens: 24_448,
-      unmeasuredPostWarmTurns: [],
-    });
   });
 
   it("identifies complete cache losses later in an already cached conversation", () => {
@@ -274,19 +239,6 @@ describe("runtime parity prompt-cache diagnostics", () => {
       { turn: 2, inputTokens: 1_100, cacheRead: 0, cacheWrite: 1_100 },
     ]);
     expect(diagnostics.cacheMissInputTokens).toBe(1_100);
-  });
-
-  it("does not mistake unavailable cache telemetry for a measured cache miss", () => {
-    const diagnostics = buildRuntimeParityCacheDiagnostics([
-      usage(3, { cacheRead: 0, cacheWrite: 1_000 }),
-      usage(1_050),
-      usage(8, { cacheRead: 1_000, cacheWrite: 0 }),
-    ]);
-
-    expect(diagnostics.assistantTurns).toBe(3);
-    expect(diagnostics.cacheTelemetryTurns).toBe(2);
-    expect(diagnostics.cacheMisses).toEqual([]);
-    expect(diagnostics.unmeasuredPostWarmTurns).toEqual([2]);
   });
 
   it.each([

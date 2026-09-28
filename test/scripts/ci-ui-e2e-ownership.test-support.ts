@@ -133,7 +133,6 @@ export function assertControlUiE2eOwnership(
     "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
     "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
     "ui/src/e2e/session-management.delete.e2e.test.ts",
-    "ui/src/e2e/session-mention-involvement.e2e.test.ts",
     "ui/src/e2e/session-roster-request-rate.real-gateway.e2e.test.ts",
     "ui/src/e2e/sidebar-account-footer.e2e.test.ts",
     "ui/src/e2e/sidebar-cached-list-stability.e2e.test.ts",

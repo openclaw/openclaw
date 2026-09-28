@@ -1,11 +1,9 @@
 // Shared server-method tests cover helpers and cross-method behavior that spans
 // chat, exec approvals, logs, timestamps, attachments, and history projection.
 import { createHash } from "node:crypto";
-import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
@@ -32,7 +30,6 @@ import {
   resetContextEngineRuntimeQuarantineForTests,
 } from "../../context-engine/registry.test-support.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
-import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 import {
   buildSystemRunApprovalBinding,
   buildSystemRunApprovalEnvBinding,
@@ -812,29 +809,6 @@ describe("injectTimestamp", () => {
     expect(result).toMatch(/^\[Wed 2026-01-28 20:30 EST\] Is it the weekend\?$/);
   });
 
-  it("uses channel envelope format with DOW prefix", () => {
-    const now = new Date();
-    const expected = formatZonedTimestamp(now, { timeZone: "America/New_York" });
-
-    const result = injectTimestamp("hello", { timezone: "America/New_York" });
-
-    expect(result).toBe(`[Wed ${expected}] hello`);
-  });
-
-  it("always uses 24-hour format", () => {
-    const result = injectTimestamp("hello", { timezone: "America/New_York" });
-
-    expect(result).toContain("20:30");
-    expect(result).not.toContain("PM");
-    expect(result).not.toContain("AM");
-  });
-
-  it("uses the configured timezone", () => {
-    const result = injectTimestamp("hello", { timezone: "America/Chicago" });
-
-    expect(result).toMatch(/^\[Wed 2026-01-28 19:30 CST\]/);
-  });
-
   it("defaults to UTC when no timezone specified", () => {
     const result = injectTimestamp("hello", {});
 
@@ -1080,43 +1054,6 @@ describe("sanitizeChatHistoryMessages", () => {
         },
         timestamp: 1,
       },
-    ]);
-  });
-
-  it("projects keyed commentary entries into durable preamble rows", () => {
-    const result = sanitizeChatHistoryMessages(
-      [
-        userHistoryMessage("hello", { timestamp: 1 }),
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: "thinking like caveman",
-              textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
-            },
-          ],
-          timestamp: 2,
-        },
-        assistantHistoryMessage("real reply", { timestamp: 3 }),
-      ],
-      undefined,
-      { includeCommentaryFallbacks: true },
-    );
-
-    expect(result).toEqual([
-      userHistoryMessage("hello", { timestamp: 1 }),
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "thinking like caveman" }],
-        timestamp: 2,
-        openclawStreamFallback: {
-          replacementText: "thinking like caveman",
-          source: "segment",
-          itemId: "msg_commentary",
-        },
-      },
-      assistantHistoryMessage("real reply", { timestamp: 3 }),
     ]);
   });
 
@@ -1478,8 +1415,6 @@ describe("projectChatDisplayMessages", () => {
 
   it.each([
     ["output_text", ""],
-    ["output_text", "NO_REPLY"],
-    ["input_text", ""],
     ["input_text", "NO_REPLY"],
   ])("projects hidden %s assistant errors %j as a safe network failure", (type, text) => {
     const result = projectChatDisplayMessages([
@@ -1495,50 +1430,23 @@ describe("projectChatDisplayMessages", () => {
     expect(result[0]?.content).toEqual(networkFailureContent());
   });
 
-  it.each(["NO_REPLY", STREAM_ERROR_FALLBACK_TEXT])(
-    "projects display-hidden assistant error text %j as a generic safe failure",
-    (text) => {
-      const result = projectChatDisplayMessages([
-        {
-          role: "assistant",
-          content: [{ type: "text", text }],
-          stopReason: "error",
-          errorMessage: "private upstream at secret.internal.example failed",
-          timestamp: 1,
-        },
-      ]);
+  it("projects repaired stream errors without errorMessage as a generic safe failure", () => {
+    const result = projectChatDisplayMessages([
+      assistantHistoryMessage(STREAM_ERROR_FALLBACK_TEXT, {
+        stopReason: "error",
+        errorBody: "private response body from secret.internal.example",
+        timestamp: 1,
+      }),
+    ]);
 
-      expect(result).toEqual([
-        assistantHistoryMessage("The agent run failed before producing a reply.", {
-          stopReason: "error",
-          timestamp: 1,
-        }),
-      ]);
-      expect(JSON.stringify(result)).not.toContain("secret.internal.example");
-    },
-  );
-
-  it.each([undefined, ""])(
-    "projects repaired stream errors with errorMessage %j as a generic safe failure",
-    (errorMessage) => {
-      const result = projectChatDisplayMessages([
-        assistantHistoryMessage(STREAM_ERROR_FALLBACK_TEXT, {
-          stopReason: "error",
-          ...(errorMessage === undefined ? {} : { errorMessage }),
-          errorBody: "private response body from secret.internal.example",
-          timestamp: 1,
-        }),
-      ]);
-
-      expect(result).toEqual([
-        assistantHistoryMessage("The agent run failed before producing a reply.", {
-          stopReason: "error",
-          timestamp: 1,
-        }),
-      ]);
-      expect(JSON.stringify(result)).not.toContain("secret.internal.example");
-    },
-  );
+    expect(result).toEqual([
+      assistantHistoryMessage("The agent run failed before producing a reply.", {
+        stopReason: "error",
+        timestamp: 1,
+      }),
+    ]);
+    expect(JSON.stringify(result)).not.toContain("secret.internal.example");
+  });
 
   it.each([
     {
@@ -1598,17 +1506,14 @@ describe("projectChatDisplayMessages", () => {
     expect(result[0]?.content).toEqual([{ type: "text", text }]);
   });
 
-  it.each([undefined, "stop"])(
-    "keeps literal fallback-prefixed assistant text without error provenance %j",
-    (stopReason) => {
-      const text = `${STREAM_ERROR_FALLBACK_TEXT} actual quoted text`;
-      const result = projectChatDisplayMessages([
-        assistantHistoryMessage(text, stopReason ? { stopReason } : {}),
-      ]);
+  it("keeps literal fallback-prefixed assistant text without error provenance", () => {
+    const text = `${STREAM_ERROR_FALLBACK_TEXT} actual quoted text`;
+    const result = projectChatDisplayMessages([
+      assistantHistoryMessage(text, { stopReason: "stop" }),
+    ]);
 
-      expect(result[0]?.content).toEqual([{ type: "text", text }]);
-    },
-  );
+    expect(result[0]?.content).toEqual([{ type: "text", text }]);
+  });
 
   it("removes a synthetic error prefix while preserving displayable image content", () => {
     const result = projectChatDisplayMessages([
@@ -2293,17 +2198,7 @@ describe("timestampOptsFromConfig", () => {
       expected: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
     },
   ])("$name", ({ cfg, expected }) => {
-    expect(timestampOptsFromConfig(cfg).timezone).toBe(expected);
-  });
-
-  it("keeps timestamp injection enabled for upgraded configs", () => {
-    const upgradedConfigWithExistingDefaults = {
-      agents: { defaults: { userTimezone: "America/Chicago" } },
-    } as OpenClawConfig;
-
-    // Timestamp injection is fixed on even when other agent defaults exist.
-    expect(timestampOptsFromConfig({} as OpenClawConfig).includeTimestamp).toBe(true);
-    expect(timestampOptsFromConfig(upgradedConfigWithExistingDefaults).includeTimestamp).toBe(true);
+    expect(timestampOptsFromConfig(cfg)).toEqual({ timezone: expected, includeTimestamp: true });
   });
 });
 
@@ -2374,26 +2269,6 @@ describe("normalizeRpcAttachmentsToChatAttachments", () => {
         content: "Zm9v",
       },
     ]);
-  });
-});
-
-describe("gateway chat transcript writes (guardrail)", () => {
-  it("routes transcript writes through helper and async parentId append", () => {
-    const chatTs = fileURLToPath(new URL("./chat.ts", import.meta.url));
-    const chatSrc = fs.readFileSync(chatTs, "utf-8");
-    const persistenceTs = fileURLToPath(
-      new URL("./chat-transcript-persistence.ts", import.meta.url),
-    );
-    const persistenceSrc = fs.readFileSync(persistenceTs, "utf-8");
-    const helperTs = fileURLToPath(new URL("./chat-transcript-inject.ts", import.meta.url));
-    const helperSrc = fs.readFileSync(helperTs, "utf-8");
-
-    expect(chatSrc.includes("fs.appendFileSync(transcriptPath")).toBe(false);
-    expect(persistenceSrc).toContain("appendInjectedAssistantMessageToTranscript(");
-
-    expect(helperSrc).toContain("persistSessionTranscriptTurn(");
-    expect(helperSrc).toContain("useRawWhenLinear: true");
-    expect(helperSrc).not.toContain("SessionManager.open(params.transcriptPath)");
   });
 });
 

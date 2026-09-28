@@ -3155,7 +3155,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(textareaRect.height).toBeLessThanOrEqual(layout.viewportHeight * 0.25 + 1);
       expect(textareaMetrics.scrollHeight).toBeGreaterThan(textareaMetrics.clientHeight);
       expect(input.y - (thread.y + thread.height)).toBeCloseTo(0, 0);
-      expect(shell.x).toBeCloseTo(16, 0);
+      expect(shell.x).toBeCloseTo(20, 0);
       expect(layout.viewportWidth - (shell.x + shell.width)).toBeCloseTo(shell.x, 0);
       expect(attach.x - input.x).toBeLessThanOrEqual(10);
       expect(model.x).toBeGreaterThanOrEqual(context.x + context.width - 1);
@@ -3578,53 +3578,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       });
     },
   );
-
-  it("keeps crowded task sections independently scrollable in the side rail", async () => {
-    await withBrowserPage(openBrowserPage(1000, 700), async (page) => {
-      const taskRows = Array.from(
-        { length: 10 },
-        (_, index) => `<div class="chat-tasks-rail__task">Task ${index + 1}</div>`,
-      ).join("");
-      await page.setContent(
-        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-          <div style="width: 360px; height: 320px; display: flex;">
-              <aside class="chat-tasks-rail" style="width: 100%; height: 100%;">
-                <div class="chat-tasks-rail__scroll">
-                  <section class="chat-tasks-rail__section">
-                    <div class="chat-tasks-rail__section-title">Running</div>
-                    <div class="chat-tasks-rail__list">${taskRows}</div>
-                  </section>
-                  <section class="chat-tasks-rail__section">
-                    <div class="chat-tasks-rail__section-title">Finished</div>
-                    <div class="chat-tasks-rail__list">${taskRows}</div>
-                  </section>
-                </div>
-              </aside>
-          </div>
-        </body></html>`,
-      );
-
-      const sections = await page.$$eval(".chat-tasks-rail__section", (nodes) =>
-        nodes.map((node) => {
-          const section = node as HTMLElement;
-          section.scrollTop = 100;
-          return {
-            clientHeight: section.clientHeight,
-            overflowY: getComputedStyle(section).overflowY,
-            scrollHeight: section.scrollHeight,
-            scrollTop: section.scrollTop,
-          };
-        }),
-      );
-
-      expect(sections).toHaveLength(2);
-      for (const section of sections) {
-        expect(section.overflowY).toBe("auto");
-        expect(section.scrollHeight).toBeGreaterThan(section.clientHeight);
-        expect(section.scrollTop).toBeGreaterThan(0);
-      }
-    });
-  });
 
   it("keeps short-landscape composer adjunct rows scroll-reachable", async () => {
     await withBrowserPage(
@@ -4400,7 +4353,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   it("renders the terminal turn recap as plain transcript text", async () => {
     await withBrowserPage(openBrowserPage(820, 640), async (page) => {
       await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-        <div class="chat-tasks-status chat-turn-recap">Done in 7 seconds · 58 tokens</div>
+        <div class="chat-turn-recap">Done in 7 seconds · 58 tokens</div>
       </body></html>`);
       const style = await page.locator(".chat-turn-recap").evaluate((element) => {
         const computed = getComputedStyle(element);

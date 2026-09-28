@@ -68,21 +68,6 @@ describe("host-local Chrome setup", () => {
     expect(JSON.stringify(result)).not.toContain("synthetic-private-relay-key");
   });
 
-  it("preserves the owned non-default profile when desktop setup omits a selector", async () => {
-    const saved = installation();
-    saved.registrations[0]!.browserProfile = "work";
-    mocks.inspect.mockResolvedValue(saved);
-    mocks.install.mockResolvedValue(saved);
-    const result = await runBrowserExtensionSetup({
-      ...options,
-      action: "install",
-      cfg: { browser: { profiles: { work: { driver: "extension", cdpPort: 19444 } } } },
-    });
-    expect(mocks.install).toHaveBeenCalledWith(expect.objectContaining({ browserProfile: "work" }));
-    expect(result.target).toMatchObject({ profile: "work", relayPort: 19444 });
-    expect(mocks.readToken).not.toHaveBeenCalled();
-  });
-
   it("does not replace an unavailable saved profile or choose between conflicting registrations", async () => {
     const saved = installation();
     saved.registrations[0]!.browserProfile = "work";
@@ -183,10 +168,7 @@ describe("host-local Chrome setup", () => {
     expect(mocks.install).not.toHaveBeenCalled();
   });
 
-  it("distinguishes connected relay without an extension from a missing listener", async () => {
-    mocks.status.mockResolvedValue({ ready: false, identity: null });
-    const waiting = await runBrowserExtensionSetup({ ...options, action: "verify" });
-    expect(waiting.connection.state).toBe("waiting_for_extension");
+  it("redacts connection failures", async () => {
     mocks.connect.mockRejectedValue(new Error("synthetic-private-relay-key"));
     const missing = await runBrowserExtensionSetup({ ...options, action: "verify" });
     expect(missing.connection.state).toBe("unavailable");

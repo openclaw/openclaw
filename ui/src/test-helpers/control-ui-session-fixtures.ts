@@ -129,6 +129,11 @@ export function createControlUiSessionFixtures(
     listed.add(key);
   }
   const read = (key: string) => ({ ...record(key).row });
+  // Match Gateway projection clocks so a cached descriptor cannot outrank a fresh list.
+  const sample = <T extends Record<string, unknown>>(row: T, now: number) => ({
+    ...row,
+    snapshotAt: row.snapshotAt ?? now,
+  });
   const patch = (key: string, fields: Record<string, unknown>) => {
     const value = record(key);
     const next = { ...value.row };
@@ -370,6 +375,7 @@ export function createControlUiSessionFixtures(
         : isRecord(params) && params.archived === true
           ? "archived"
           : "active";
+    const now = Date.now();
     const projectedSessions = list(response.sessions).map((row) => {
       if (!isRecord(row)) {
         return row;
@@ -388,7 +394,7 @@ export function createControlUiSessionFixtures(
       } else {
         next.category = category;
       }
-      return next;
+      return sample(next, now);
     });
     const spawnedBy =
       isRecord(params) && typeof params.spawnedBy === "string" ? params.spawnedBy.trim() : "";
@@ -491,7 +497,8 @@ export function createControlUiSessionFixtures(
     resolve,
     // History publishes a full row replacement. An unseeded wire-only fixture
     // has no canonical metadata to publish until its caller declares the row.
-    sessionInfo: (key: string) => (listed.has(canonicalKey(key)) ? read(key) : undefined),
+    sessionInfo: (key: string) =>
+      listed.has(canonicalKey(key)) ? sample(read(key), Date.now()) : undefined,
     patch,
     abortRuns,
     trackRun,

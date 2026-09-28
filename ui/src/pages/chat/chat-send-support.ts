@@ -5,7 +5,8 @@ import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
-import { chatOutboxDeliveryKey, type StoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
+import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
+import { chatOutboxDeliveryKey } from "../../lib/chat/outbox-store.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";

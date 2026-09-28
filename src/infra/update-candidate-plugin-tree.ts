@@ -2,7 +2,6 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { z } from "zod";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { root as openRoot } from "./fs-safe.js";
@@ -17,6 +16,10 @@ import {
   resolveUpdateCandidatePluginTreeTargets,
   verifyUpdateCandidatePluginTree,
 } from "./update-candidate-plugin-tree-links.js";
+import type {
+  UpdateCandidatePluginEntry,
+  UpdateCandidatePluginTreePlan,
+} from "./update-candidate-plugin-tree-schema.js";
 import { createRuntimePathLookup } from "./update-runtime-path-index.js";
 import {
   readRuntimeModulesManifest,
@@ -25,46 +28,14 @@ import {
 } from "./update-runtime-relocation.js";
 import { isGitRuntimeStagingName } from "./update-runtime-staging.js";
 
-const entryFields = {
-  path: z.string(),
-  size: z.number().int().nonnegative(),
-  mode: z.number().int().nonnegative(),
-  dev: z.string(),
-  ino: z.string(),
-};
-const UpdateCandidatePluginEntrySchema = z.discriminatedUnion("kind", [
-  z.object({ ...entryFields, kind: z.literal("directory") }),
-  z.object({
-    ...entryFields,
-    kind: z.literal("file"),
-    birthtimeNs: z.string(),
-    mtimeNs: z.string(),
-    ctimeNs: z.string(),
-  }),
-  z.object({
-    ...entryFields,
-    kind: z.literal("symlink"),
-    link: z.string(),
-    linkType: z.enum(["file", "junction"]),
-  }),
-]);
-type UpdateCandidatePluginEntry = z.infer<typeof UpdateCandidatePluginEntrySchema>;
+export { UpdateCandidatePluginTreePlanSchema } from "./update-candidate-plugin-tree-schema.js";
+export type { UpdateCandidatePluginTreePlan } from "./update-candidate-plugin-tree-schema.js";
 
-export const UpdateCandidatePluginTreePlanSchema = z.object({
-  bytes: z.number().int().nonnegative(),
-  privateRoot: z.string(),
-  candidateRoot: z.string(),
-  copies: z.array(z.tuple([z.string(), z.string()])),
-  entries: z.array(UpdateCandidatePluginEntrySchema),
-  hostLinks: z.array(z.string()),
-  relocations: z.array(z.object({ sourceRoot: z.string(), destinationRoot: z.string() })),
-  aliases: z.array(z.tuple([z.string(), z.string()])),
-  moduleBindings: z.array(z.tuple([z.string(), z.string()])),
-  edges: z.array(z.object({ source: z.string(), target: z.string(), real: z.string() })),
-});
-export type UpdateCandidatePluginTreePlan = z.infer<typeof UpdateCandidatePluginTreePlanSchema>;
-
-async function dependencyOwner(target: string, withinRetainedHost = false): Promise<string> {
+async function dependencyOwner(
+  target: string,
+  withinRetainedHost = false,
+  retainedHost?: { root: string; moduleOnlyRoots: Set<string> },
+): Promise<string> {
   // A pnpm package resolves dependencies beside its package directory. Preserve
   // that Node lookup ancestry, including scoped packages and nested installs.
   const parts = target.split(path.sep);
@@ -76,9 +47,24 @@ async function dependencyOwner(target: string, withinRetainedHost = false): Prom
   if (modules >= 0 && !withinRetainedHost) {
     return parts.slice(0, modules + 1).join(path.sep);
   }
-  let directory = (await fs.stat(target)).isDirectory() ? target : path.dirname(target);
+  const stat = await fs.stat(target);
+  let directory = stat.isDirectory() ? target : path.dirname(target);
   const fallback = target;
   for (;;) {
+    if (directory === retainedHost?.root) {
+      // A retired workspace can leave only ignored modules behind. Other host
+      // contents still belong to the host and must reach the inferred-root refusal.
+      const entries = stat.isDirectory() ? await fs.readdir(target) : [];
+      if (
+        entries.length === 1 &&
+        entries[0] === "node_modules" &&
+        (await fs.lstat(path.join(target, "node_modules"))).isDirectory()
+      ) {
+        retainedHost.moduleOnlyRoots.add(target);
+        return target;
+      }
+      return directory;
+    }
     if (
       await fs.stat(path.join(directory, "package.json")).then(
         () => true,
@@ -129,6 +115,9 @@ export async function prepareUpdateCandidatePluginTrees(params: {
   const moduleAliases = new Map<string, string>();
   const moduleOwners = new Set<string>();
   const retainedHostRoot = params.retainedHostRoot;
+  const retainedHost = retainedHostRoot
+    ? { root: retainedHostRoot, moduleOnlyRoots: new Set<string>() }
+    : undefined;
   const isOwnedHostEdge = (file: string) =>
     path.basename(file) === "openclaw" && moduleOwners.has(path.dirname(file));
   const lookupRoots = (values: Iterable<string>) =>
@@ -455,7 +444,11 @@ export async function prepareUpdateCandidatePluginTrees(params: {
       const retainedDependency = insideHost(real) && isRetainedDependency(real);
       const owner =
         (!retainedDependency ? store : undefined) ??
-        (await dependencyOwner(real, retainedDependency).catch((cause: unknown) => {
+        (await dependencyOwner(
+          real,
+          retainedDependency,
+          isRetainedDependency(real) ? retainedHost : undefined,
+        ).catch((cause: unknown) => {
           throw new Error(`Cannot privately copy plugin dependency ${file} -> ${real}`, { cause });
         }));
       if (excludesInferredRoot(owner)) {
@@ -511,9 +504,23 @@ export async function prepareUpdateCandidatePluginTrees(params: {
   const hostLinks = new Set(
     [...hosts].filter((root) => root !== params.retainedHostRoot).map(projected),
   );
-  const entries = [...footprints.values()].filter(
-    (entry) => !insideHost(entry.path) && copyOwner(entry.path) !== undefined,
-  );
+  const entries = [...footprints.values()].filter((entry) => {
+    if (insideHost(entry.path) || copyOwner(entry.path) === undefined) {
+      return false;
+    }
+    // Owner selection precedes scanning; bind its exception to the actual inventory.
+    const moduleOnlyRoots = retainedHost?.moduleOnlyRoots;
+    if (
+      (moduleOnlyRoots?.has(entry.path) &&
+        (entry.kind !== "directory" ||
+          footprints.get(path.join(entry.path, "node_modules"))?.kind !== "directory")) ||
+      (moduleOnlyRoots?.has(path.dirname(entry.path)) &&
+        (path.basename(entry.path) !== "node_modules" || entry.kind !== "directory"))
+    ) {
+      throw new Error(`Retired workspace changed during runtime retention: ${entry.path}`);
+    }
+    return true;
+  });
   // Full lengths and entry metadata bound copies even when sources have sparse extents.
   const bytes = entries.reduce(
     (total, entry) => total + Math.max(4096, Math.ceil(entry.size / 4096) * 4096),
@@ -594,8 +601,11 @@ export async function copyUpdateCandidatePluginTrees(
         // native binding. Recheck the inventory before its private stage is published.
         await destinationRoot.copyIn(path.relative(privateRoot, destination), entry.path, {
           overwrite: false,
+          // Every destination parent is prepared before copies are admitted.
+          mkdir: false,
           // Rehearsal payloads are disposable and never serve as recovery backups.
           durable: false,
+          clone: "auto",
           maxBytes: entry.size,
           mode: entry.mode | 0o600,
           sourceHardlinks: "allow",

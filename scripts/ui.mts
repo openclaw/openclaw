@@ -9,16 +9,14 @@ import { isPidDefinitelyDead } from "../src/shared/pid-alive.ts";
 import { normalizeControlUiBuildInfo } from "../ui/src/build-info-normalizers.ts";
 import { resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
-import { resolvePnpmRunner } from "./pnpm-runner.mts";
+import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mts";
 import { resolveNodePackageBin } from "./run-node-package-bin.mts";
-import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
 const uiDir = path.join(repoRoot, "ui");
 const requireFromUi = createRequire(path.join(uiDir, "package.json"));
 
-const WINDOWS_CMD_EXE_EXTENSIONS = new Set([".cmd", ".bat"]);
 const FORWARDED_SIGNAL_KILL_GRACE_MS = 250;
 
 type UiBuildEnvironmentSources = {
@@ -93,17 +91,7 @@ export function resolveUiBuildEnvironment(
   };
 }
 
-type UiSpawnCall = {
-  args: string[];
-  command: string;
-  options: {
-    cwd: string;
-    env: NodeJS.ProcessEnv;
-    shell: boolean;
-    stdio: "inherit";
-    windowsVerbatimArguments?: boolean;
-  };
-};
+type UiSpawnCall = ReturnType<typeof createPnpmRunnerSpawnSpec>;
 
 type UiSpawnParams = {
   comSpec?: string;
@@ -121,48 +109,20 @@ function usage(): void {
   process.stderr.write("Usage: node scripts/ui.js <install|dev|build|test> [...args]\n");
 }
 
-/**
- * Returns whether Windows needs cmd.exe for a command shim.
- */
-export function shouldUseCmdExeForCommand(
-  cmd: string,
-  platform: NodeJS.Platform = process.platform,
-): boolean {
-  if (platform !== "win32") {
-    return false;
-  }
-  const extension = path.extname(cmd).toLowerCase();
-  return WINDOWS_CMD_EXE_EXTENSIONS.has(extension);
-}
-
-/**
- * Builds the spawn call for a UI command, including Windows cmd.exe wrapping.
- */
-export function resolveSpawnCall(
+function resolveSpawnCall(
   cmd: string,
   args: string[],
   envOverride?: NodeJS.ProcessEnv,
   params: UiSpawnParams = {},
 ): UiSpawnCall {
-  const platform = params.platform ?? process.platform;
   const options: UiSpawnCall["options"] = {
     cwd: params.cwd ?? uiDir,
     stdio: "inherit",
     env: envOverride ?? process.env,
     shell: false,
+    detached: undefined,
+    windowsVerbatimArguments: undefined,
   };
-
-  if (shouldUseCmdExeForCommand(cmd, platform)) {
-    const comSpec = params.comSpec ?? resolveWindowsCmdExePath(options.env);
-    return {
-      command: comSpec,
-      args: ["/d", "/s", "/c", buildCmdExeCommandLine(cmd, args)],
-      options: {
-        ...options,
-        windowsVerbatimArguments: true,
-      },
-    };
-  }
 
   return {
     command: cmd,
@@ -171,37 +131,18 @@ export function resolveSpawnCall(
   };
 }
 
-/**
- * Builds the pnpm-backed spawn call for UI package scripts.
- */
 export function resolvePnpmSpawnCall(
   pnpmArgs: string[],
   envOverride?: NodeJS.ProcessEnv,
   params: UiSpawnParams = {},
 ): UiSpawnCall {
-  const env = envOverride ?? process.env;
-  const platform = params.platform ?? process.platform;
-  const cwd = params.cwd ?? uiDir;
-  const runner = resolvePnpmRunner({
-    cwd,
-    env,
+  return createPnpmRunnerSpawnSpec({
+    ...params,
+    cwd: params.cwd ?? uiDir,
+    env: envOverride ?? process.env,
     pnpmArgs,
-    nodeExecPath: params.nodeExecPath ?? process.execPath,
-    npmExecPath: params.npmExecPath ?? env.npm_execpath,
-    comSpec: params.comSpec,
-    platform,
+    stdio: "inherit",
   });
-  return {
-    command: runner.command,
-    args: runner.args,
-    options: {
-      cwd,
-      stdio: "inherit",
-      env,
-      shell: runner.shell,
-      windowsVerbatimArguments: runner.windowsVerbatimArguments,
-    },
-  };
 }
 
 function runSpawnCall(spawnCall: UiSpawnCall, label: string): void {

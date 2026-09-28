@@ -390,8 +390,7 @@ async function withMessageSendContext<T>(
   };
 
   try {
-    const result = await run(ctx);
-    return result;
+    return await run(ctx);
   } catch (error: unknown) {
     await ctx.fail(error);
     throw error;

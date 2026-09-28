@@ -1,13 +1,112 @@
+import fs from "node:fs";
 import nodePath from "node:path";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import { runGit } from "../agents/worktrees/git.js";
 import type { GitReadOperations } from "../infra/git-read-operations.js";
+import { readGitHead, readGitRefs, resolveGitRefsBase } from "../infra/git-root.js";
+import { canReadGitFilesystemRefs } from "../infra/git-worker-context.js";
 import {
   gitOutput,
   readCheckoutHead,
   resolveBranchLanding,
 } from "./control-ui-session-prs-landing.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
+
+/** File-backed Git metadata is checked in the worker, never by spawning Git. */
+export function readCheckoutGitRevision({
+  root,
+  includeIndex,
+}: GitReadOperations["checkout.revision"]["input"]): string | null {
+  if (!canReadGitFilesystemRefs()) {
+    return null;
+  }
+  try {
+    const head = readGitHead(root, { maxDepth: 1 });
+    if (!head) {
+      return null;
+    }
+    const gitDir = nodePath.dirname(head.headPath);
+    const common = resolveGitRefsBase(head.headPath);
+    if (fs.existsSync(nodePath.join(common, "reftable"))) {
+      return null;
+    }
+    const paths = [
+      nodePath.join(root, ".git"),
+      head.headPath,
+      nodePath.join(gitDir, "commondir"),
+      nodePath.join(common, "config"),
+      nodePath.join(gitDir, "config.worktree"),
+      nodePath.join(common, "packed-refs"),
+    ];
+    if (includeIndex) {
+      paths.push(nodePath.join(gitDir, "index"));
+    }
+    const refs = nodePath.join(common, "refs");
+    if (fs.existsSync(refs)) {
+      paths.push(
+        ...fs
+          .readdirSync(refs, { recursive: true, encoding: "utf8" })
+          .map((name) => nodePath.join(refs, name)),
+      );
+    }
+    return JSON.stringify(
+      paths.toSorted().map((file) => {
+        const stat = fs.lstatSync(file, { throwIfNoEntry: false });
+        if (stat?.isSymbolicLink()) {
+          throw new Error("Symbolic Git metadata requires Git discovery");
+        }
+        return [file, stat?.ino, stat?.size, stat?.mtimeMs, stat?.ctimeMs];
+      }),
+    );
+  } catch {
+    return null;
+  }
+}
+
+function readDefaultRef(head: ReturnType<typeof readCheckoutHead>): string | null | undefined {
+  if (!head) {
+    return undefined;
+  }
+  try {
+    const ref = "refs/remotes/origin/HEAD";
+    if (
+      fs.lstatSync(nodePath.join(head.refsBase, ref), { throwIfNoEntry: false })?.isSymbolicLink()
+    ) {
+      return undefined;
+    }
+    const raw = readGitRefs(head.refsBase, [ref]).get(ref);
+    if (raw === null) {
+      return null;
+    }
+    const match = /^ref:\s+(refs\/remotes\/(origin\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*))$/u.exec(
+      raw ?? "",
+    );
+    if (!match) {
+      return undefined;
+    }
+    const target = match[1]!;
+    const short = match[2]!;
+    const aliases = [
+      `refs/${short}`,
+      `refs/tags/${short}`,
+      `refs/heads/${short}`,
+      `refs/remotes/${short}/HEAD`,
+    ];
+    const values = readGitRefs(head.refsBase, [target, ...aliases]);
+    const value = values.get(target);
+    // Symbolic chains and ambiguous names retain Git's resolution/shortening semantics.
+    return (value === null || /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/iu.test(value ?? "")) &&
+      !fs
+        .lstatSync(nodePath.join(head.refsBase, target), { throwIfNoEntry: false })
+        ?.isSymbolicLink() &&
+      !fs.existsSync(nodePath.join(head.refsBase, short)) &&
+      aliases.every((alias) => values.get(alias) === null)
+      ? short
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export async function readCheckoutGitContext(
   root: string,
@@ -25,7 +124,11 @@ export async function readCheckoutGitContext(
   if (!remote) {
     return null;
   }
-  const defaultRef = await gitOutput(root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]);
+  const preparedDefaultRef = readDefaultRef(head);
+  const defaultRef =
+    preparedDefaultRef === undefined
+      ? await gitOutput(root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+      : preparedDefaultRef;
   const defaultBranch = defaultRef?.replace(/^origin\//, "");
   return {
     ...remote,
@@ -93,7 +196,10 @@ async function diffStatsAgainst(
   try {
     // Checkout-configurable diff drivers must never execute in the Gateway
     // process (same guard as sessions-diff).
+    // A read must not refresh index stat data and invalidate its own revision.
     const result = await runGit(root, [
+      "-c",
+      "diff.autoRefreshIndex=false",
       "diff",
       "--shortstat",
       "--no-ext-diff",
@@ -143,9 +249,11 @@ export async function readPullRequestBranchFacts(
   input: GitReadOperations["pull-request.branch-facts"]["input"],
 ): Promise<GitReadOperations["pull-request.branch-facts"]["output"]> {
   const landing = await resolveBranchLanding(input.root, input);
-  // A matching stats base proves Git resolved the common tip. Equal recorded
-  // IDs alone can name missing objects and must retain the error fallback.
+  const stats = landing.statsBase ? await diffStatsAgainst(input.root, landing.statsBase) : null;
+  // The diff validates equal recorded tips without a separate ancestry probe.
+  // Missing objects must still retain the unknown-comparison fallback.
   const noPushedChanges =
+    stats !== null &&
     landing.defaultSha !== null &&
     landing.defaultSha === landing.pushedSha &&
     landing.statsBase === landing.defaultSha;
@@ -158,6 +266,5 @@ export async function readPullRequestBranchFacts(
       landing.pushedSha,
       input.defaultBranch,
     ));
-  const stats = landing.statsBase ? await diffStatsAgainst(input.root, landing.statsBase) : null;
   return !creatable && !(stats && stats.changedFiles > 0) ? undefined : { creatable, stats };
 }

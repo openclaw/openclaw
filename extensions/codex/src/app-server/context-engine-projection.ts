@@ -516,9 +516,9 @@ function renderMessageBody(
 ): string {
   // Canonical summaries carry `summary`, not `content`; keep them in the quoted history.
   if (message.role === "compactionSummary" || message.role === "branchSummary") {
-    return truncateText(message.summary.trim(), options.maxTextPartChars);
+    return message.summary.trim();
   }
-  if (!hasMessageContent(message)) {
+  if (!("content" in message)) {
     return "";
   }
   const toolResult = message.role === "toolResult";
@@ -527,9 +527,10 @@ function renderMessageBody(
   if (toolResult && options.toolPayloadMode === "elide") {
     return `${toolResultLabel} [content omitted]`;
   }
+  // The history window bounds conversation text; per-part caps apply only to payloads.
   const body =
     typeof message.content === "string"
-      ? truncateText(message.content.trim(), options.maxTextPartChars)
+      ? message.content.trim()
       : Array.isArray(message.content)
         ? message.content
             .map((part: unknown) => renderMessagePart(part, options, toolResult))
@@ -559,9 +560,8 @@ function renderMessagePart(
   const record = part as Record<string, unknown>;
   const type = typeof record.type === "string" ? record.type : undefined;
   if (type === "text") {
-    return typeof record.text === "string"
-      ? truncateText(record.text.trim(), options.maxTextPartChars)
-      : "";
+    const text = typeof record.text === "string" ? record.text.trim() : "";
+    return toolResultBody ? truncateText(text, options.maxTextPartChars) : text;
   }
   if (type === "image") {
     return options.mediaPrepared ? "" : "[image omitted]";
@@ -594,7 +594,7 @@ function renderToolCallPayload(record: Record<string, unknown>): Record<string, 
   const payload: Record<string, unknown> = pickToolPayloadMetadata(record);
   const input = record.input ?? record.arguments;
   if (input !== undefined) {
-    payload.inputShape = summarizeToolInputShape(input);
+    payload.inputShape = projectToolPayloadValue(input, "shape");
   }
   return payload;
 }
@@ -605,7 +605,7 @@ function renderToolResultPayload(record: Record<string, unknown>): Record<string
     if (TOOL_PAYLOAD_METADATA_KEYS.has(key)) {
       continue;
     }
-    payload[key] = redactPreservedToolValue(key, value);
+    payload[key] = projectToolPayloadValue(value, "content", key);
   }
   return payload;
 }
@@ -630,63 +630,36 @@ function pickToolPayloadMetadata(record: Record<string, unknown>): Record<string
   return payload;
 }
 
-// Tool-call inputs can contain shell commands and credentials. For bootstrap
-// continuity, retain object structure and primitive types instead of values.
-function summarizeToolInputShape(value: unknown, seen = new WeakSet<object>()): unknown {
-  if (value === null) {
-    return null;
-  }
-  if (Array.isArray(value)) {
-    if (seen.has(value)) {
-      return "[Circular]";
-    }
-    seen.add(value);
-    return value.map((entry) => summarizeToolInputShape(entry, seen));
-  }
-  if (value && typeof value === "object") {
-    if (seen.has(value)) {
-      return "[Circular]";
-    }
-    seen.add(value);
-    const out: Record<string, unknown> = {};
-    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-      out[key] = summarizeToolInputShape(child, seen);
-    }
-    return out;
-  }
-  return `[${typeof value}]`;
-}
-
-// Tool results are the useful carried context for a fresh Codex thread, so keep
-// their content while applying the same text/field redaction used for tool logs.
-function redactPreservedToolValue(
-  key: string,
+// Inputs retain shape only; results retain useful content with log redaction.
+// Both projections preserve the same object order and repeated-reference marker.
+function projectToolPayloadValue(
   value: unknown,
+  mode: "shape" | "content",
+  key = "",
   seen = new WeakSet<object>(),
 ): unknown {
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+  if (
+    mode === "content" &&
+    (typeof value === "string" || typeof value === "number" || typeof value === "boolean")
+  ) {
     const text = String(value);
     const redacted = redactSensitiveFieldValue(key, redactToolPayloadText(text));
     return redacted === text ? value : redacted;
   }
-  if (value === null || value === undefined) {
+  if (value === null || (mode === "content" && value === undefined)) {
     return value;
-  }
-  if (Array.isArray(value)) {
-    if (seen.has(value)) {
-      return "[Circular]";
-    }
-    seen.add(value);
-    return value.map((entry) => redactPreservedToolValue(key, entry, seen));
   }
   if (value && typeof value === "object") {
     if (seen.has(value)) {
       return "[Circular]";
     }
     seen.add(value);
+    if (Array.isArray(value)) {
+      return value.map((entry) => projectToolPayloadValue(entry, mode, key, seen));
+    }
     const out: Record<string, unknown> = {};
-    for (const [childKey, child] of Object.entries(value as Record<string, unknown>)) {
-      out[childKey] = redactPreservedToolValue(childKey, child, seen);
+    for (const [childKey, child] of Object.entries(value)) {
+      out[childKey] = projectToolPayloadValue(child, mode, childKey, seen);
     }
     return out;
   }
@@ -699,10 +672,6 @@ function stableJson(value: unknown): string {
   } catch {
     return "[unserializable payload omitted]";
   }
-}
-
-function hasMessageContent(message: AgentMessage): message is AgentMessage & { content: unknown } {
-  return "content" in message;
 }
 
 function normalizeRenderedContextMaxChars(value: unknown): number {

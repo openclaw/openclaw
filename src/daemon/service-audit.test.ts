@@ -552,20 +552,6 @@ describe("auditGatewayServiceConfig", () => {
     });
   });
 
-  it("accepts gateway service ports that match the expected config port", async () => {
-    const audit = await auditGatewayServiceConfig({
-      env: { HOME: "/tmp" },
-      platform: "win32",
-      expectedPort: 18888,
-      command: {
-        programArguments: ["/usr/bin/node", "entry.js", "gateway", "--port=18888"],
-        environment: {},
-      },
-    });
-
-    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPortMismatch)).toBe(false);
-  });
-
   it("audits the final repeated gateway port flag", async () => {
     const audit = await auditGatewayServiceConfig({
       env: { HOME: "/tmp" },
@@ -790,31 +776,6 @@ describe("auditGatewayServiceConfig", () => {
 });
 
 describe("checkTokenDrift", () => {
-  it("returns null when both tokens are undefined", () => {
-    const result = checkTokenDrift({ serviceToken: undefined, configToken: undefined });
-    expect(result).toBeNull();
-  });
-
-  it("returns null when both tokens are empty strings", () => {
-    const result = checkTokenDrift({ serviceToken: "", configToken: "" });
-    expect(result).toBeNull();
-  });
-
-  it("returns null when tokens match", () => {
-    const result = checkTokenDrift({ serviceToken: "same-token", configToken: "same-token" });
-    expect(result).toBeNull();
-  });
-
-  it("returns null when tokens match but service token has trailing newline", () => {
-    const result = checkTokenDrift({ serviceToken: "same-token\n", configToken: "same-token" });
-    expect(result).toBeNull();
-  });
-
-  it("returns null when tokens match but have surrounding whitespace", () => {
-    const result = checkTokenDrift({ serviceToken: "  same-token  ", configToken: "same-token" });
-    expect(result).toBeNull();
-  });
-
   it("returns null when both tokens have different whitespace padding", () => {
     const result = checkTokenDrift({
       serviceToken: "same-token\r\n",

@@ -63,10 +63,6 @@ function isApprovalOptionReaction(
   );
 }
 
-function hasObservedApprovalOptionReaction(params: MatrixQaApprovalOptionReactionParams) {
-  return params.context.observedEvents.some((event) => isApprovalOptionReaction(event, params));
-}
-
 function assertApprovalMetadata(params: {
   event: Pick<MatrixQaObservedEvent, "approval" | "eventId">;
   expectedKind: ChannelApprovalKind;
@@ -134,27 +130,18 @@ async function waitForApprovalEvent(params: {
   const observedMatch = params.context.observedEvents.find((event) =>
     isExpectedApprovalEvent(event, params),
   );
-  if (observedMatch) {
-    assertApprovalMetadata({
-      event: observedMatch,
-      expectedKind: params.expectedKind,
-    });
-    return {
-      event: observedMatch,
-      since: params.since,
-    };
-  }
-  const client = createMatrixQaScenarioClient({
-    accessToken: params.context.driverAccessToken,
-    baseUrl: params.context.baseUrl,
-  });
-  const matched = await client.waitForRoomEvent({
-    observedEvents: params.context.observedEvents,
-    predicate: (event) => isExpectedApprovalEvent(event, params),
-    roomId: params.roomId,
-    since: params.since,
-    timeoutMs: params.context.timeoutMs,
-  });
+  const matched = observedMatch
+    ? { event: observedMatch, since: params.since }
+    : await createMatrixQaScenarioClient({
+        accessToken: params.context.driverAccessToken,
+        baseUrl: params.context.baseUrl,
+      }).waitForRoomEvent({
+        observedEvents: params.context.observedEvents,
+        predicate: (event) => isExpectedApprovalEvent(event, params),
+        roomId: params.roomId,
+        since: params.since,
+        timeoutMs: params.context.timeoutMs,
+      });
   assertApprovalMetadata({
     event: matched.event,
     expectedKind: params.expectedKind,
@@ -244,23 +231,12 @@ async function reactToApproval(params: {
     params.decision === "allow-once"
       ? MATRIX_QA_APPROVAL_ALLOW_ONCE_REACTION
       : MATRIX_QA_APPROVAL_DENY_REACTION;
-  if (
-    !hasObservedApprovalOptionReaction({
-      context: params.context,
-      emoji,
-      roomId: params.roomId,
-      targetEventId: params.targetEventId,
-    })
-  ) {
+  const isOptionReaction = (event: MatrixQaObservedEvent) =>
+    isApprovalOptionReaction(event, { ...params, emoji });
+  if (!params.context.observedEvents.some(isOptionReaction)) {
     await client.waitForRoomEvent({
       observedEvents: params.context.observedEvents,
-      predicate: (event) =>
-        isApprovalOptionReaction(event, {
-          context: params.context,
-          emoji,
-          roomId: params.roomId,
-          targetEventId: params.targetEventId,
-        }),
+      predicate: isOptionReaction,
       roomId: params.roomId,
       timeoutMs: params.context.timeoutMs,
     });
@@ -317,27 +293,21 @@ function assertApprovalDecisionResult(params: {
   }
 }
 
-async function requestExecApproval(params: {
-  context: MatrixQaScenarioContext;
-  command: string;
-  id?: string;
-  threadRootEventId?: string;
-}) {
-  const gatewayCall = requireMatrixQaGatewayCall(params.context);
+async function requestApproval(
+  context: MatrixQaScenarioContext,
+  kind: ChannelApprovalKind,
+  request: Record<string, unknown>,
+) {
+  const gatewayCall = requireMatrixQaGatewayCall(context);
   return await gatewayCall(
-    "exec.approval.request",
+    `${kind}.approval.request`,
     {
-      ...(params.id ? { id: params.id } : {}),
-      ask: "always",
-      command: params.command,
-      host: "gateway",
-      security: "full",
+      ...request,
       timeoutMs: MATRIX_QA_APPROVAL_DECISION_TIMEOUT_MS,
       twoPhase: true,
-      turnSourceAccountId: params.context.sutAccountId,
+      turnSourceAccountId: context.sutAccountId,
       turnSourceChannel: "matrix",
-      turnSourceTo: `room:${params.context.roomId}`,
-      ...(params.threadRootEventId ? { turnSourceThreadId: params.threadRootEventId } : {}),
+      turnSourceTo: `room:${context.roomId}`,
     },
     {
       expectFinal: false,
@@ -346,28 +316,20 @@ async function requestExecApproval(params: {
   );
 }
 
-async function requestPluginApproval(params: { context: MatrixQaScenarioContext; token: string }) {
-  const gatewayCall = requireMatrixQaGatewayCall(params.context);
-  return await gatewayCall(
-    "plugin.approval.request",
-    {
-      agentId: "qa",
-      description: `Matrix plugin approval QA request ${params.token}`,
-      pluginId: "matrix-qa-plugin",
-      severity: "warning",
-      timeoutMs: MATRIX_QA_APPROVAL_DECISION_TIMEOUT_MS,
-      title: "Matrix plugin approval QA",
-      toolName: "matrix_qa_tool",
-      twoPhase: true,
-      turnSourceAccountId: params.context.sutAccountId,
-      turnSourceChannel: "matrix",
-      turnSourceTo: `room:${params.context.roomId}`,
-    },
-    {
-      expectFinal: false,
-      timeoutMs: MATRIX_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
-    },
-  );
+function requestExecApproval(params: {
+  context: MatrixQaScenarioContext;
+  command: string;
+  id?: string;
+  threadRootEventId?: string;
+}) {
+  return requestApproval(params.context, "exec", {
+    ...(params.id ? { id: params.id } : {}),
+    ask: "always",
+    command: params.command,
+    host: "gateway",
+    security: "full",
+    ...(params.threadRootEventId ? { turnSourceThreadId: params.threadRootEventId } : {}),
+  });
 }
 
 async function waitForApprovalDecision(params: {
@@ -584,7 +546,14 @@ export async function runApprovalPluginMetadataSingleEventScenario(
 ) {
   const { startSince } = await primeMatrixQaDriverScenarioClient(context);
   const token = buildMatrixQaToken("MATRIX_QA_PLUGIN_APPROVAL");
-  const accepted = await requestPluginApproval({ context, token });
+  const accepted = await requestApproval(context, "plugin", {
+    agentId: "qa",
+    description: `Matrix plugin approval QA request ${token}`,
+    pluginId: "matrix-qa-plugin",
+    severity: "warning",
+    title: "Matrix plugin approval QA",
+    toolName: "matrix_qa_tool",
+  });
   const approvalId = readAcceptedApprovalRequestId(accepted);
   const approval = await waitForApprovalEvent({
     context,

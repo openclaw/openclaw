@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import {
   createAgentRunRestartAbortError,
@@ -62,11 +63,11 @@ import {
   type PreparedChatSendSession,
 } from "./chat-send-session.js";
 import {
+  admitChatSendUploads,
   assertChatSendExclusiveAdmission,
   createChatSendWorkAdmission,
   releaseChatSendCallerAuthority,
 } from "./chat-send-work-admission.js";
-import { normalizeOptionalChatText, normalizeUnknownChatText } from "./chat-text-normalization.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 /** Reserve the session lifecycle and register the abortable run before attachment work. */
@@ -151,6 +152,10 @@ export async function admitChatSend(
   if (!request.goalOperation && respondChatSendRetry(params)) {
     return { ok: false as const };
   }
+  const uploadAdmission = admitChatSendUploads({ params: p, client, context, respond });
+  if (!uploadAdmission.ok) {
+    return uploadAdmission;
+  }
   // Keep the run abortable while lifecycle mutation owns the session. Admission
   // must reject an expired/missing reservation instead of reviving evicted work.
   params.assertCurrent?.();
@@ -166,8 +171,8 @@ export async function admitChatSend(
       ...(backingSessionId ? { sessionId: backingSessionId } : {}),
       ...(rawSessionKey === sessionKey ? {} : { sessionKeyAliases: [rawSessionKey] }),
       ...(selectedAgent.agentId ? { agentId: selectedAgent.agentId } : {}),
-      ownerConnId: normalizeOptionalChatText(client?.connId),
-      ownerDeviceId: normalizeOptionalChatText(client?.connect?.device?.id),
+      ownerConnId: normalizeOptionalString(client?.connId),
+      ownerDeviceId: normalizeOptionalString(client?.connect?.device?.id),
       expiresAtMs: resolveChatRunExpiresAtMs({ now, timeoutMs }),
       turnKind,
       ...(request.goalOperation
@@ -179,7 +184,7 @@ export async function admitChatSend(
     const pending = readPendingReservation();
     if (
       pending?.runId === clientRunId &&
-      normalizeUnknownChatText(pending.payload.attemptId) === pendingAttemptId
+      normalizeOptionalString(pending.payload.attemptId) === pendingAttemptId
     ) {
       context.dedupe.delete(pendingChatSendKey);
     }
@@ -208,7 +213,7 @@ export async function admitChatSend(
     const pendingReservation = readPendingReservation();
     if (
       pendingReservation &&
-      normalizeUnknownChatText(pendingReservation.payload.attemptId) !== pendingAttemptId
+      normalizeOptionalString(pendingReservation.payload.attemptId) !== pendingAttemptId
     ) {
       reservationSuperseded = true;
       return;
@@ -353,8 +358,8 @@ export async function admitChatSend(
       agentId: selectedAgent.agentId,
       timeoutMs,
       now,
-      ownerConnId: normalizeOptionalChatText(client?.connId),
-      ownerDeviceId: normalizeOptionalChatText(client?.connect?.device?.id),
+      ownerConnId: normalizeOptionalString(client?.connId),
+      ownerDeviceId: normalizeOptionalString(client?.connect?.device?.id),
       providerId: resolvedSessionModel.provider,
       authProviderId: resolvedSessionAuthProvider,
       isAbortable: (active) => isReplyRunAbortableForSignal(active.controller.signal),
@@ -683,6 +688,7 @@ export async function admitChatSend(
       rejectSessionRoutingChanged,
       retainGatewayWorkAdmission: retainedWork.retain,
       setPendingInputCleanup: retainedWork.setPendingInputCleanup,
+      assertClientUploadAllowed: uploadAdmission.assertClientUploadAllowed,
       assertWorkAdmissionCurrent: () => {
         const queued = context.chatQueuedTurns.get(clientRunId);
         // Collect retires source cancellation while retaining the original

@@ -287,7 +287,7 @@ describe("embedded attempt phase lifecycle state", () => {
           afterEntryId: null,
           startOrder: 0,
           parentToolCallId: "outer-exec",
-          toolCallId: "tool_search_code:outer-exec:read:1",
+          toolCallId: "tool_call:outer-exec:read:1",
           toolName: "read",
           input: { path: "missing.txt" },
           result: {

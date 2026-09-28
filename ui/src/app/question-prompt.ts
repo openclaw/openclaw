@@ -156,14 +156,8 @@ function parseQuestionRecord(payload: unknown): QuestionRecord | null {
   if (payload.status === "pending") {
     return { ...base, status: "pending" };
   }
-  if (payload.status === "answered") {
-    const answers = parseQuestionAnswers(payload.answers);
-    return answers ? { ...base, status: "answered", answers } : null;
-  }
-  if (payload.status === "cancelled" || payload.status === "expired") {
-    return { ...base, status: payload.status };
-  }
-  return null;
+  const resolved = parseQuestionResolvedEvent(payload);
+  return resolved ? { ...base, ...resolved } : null;
 }
 
 function parseQuestionRequestedEvent(payload: unknown): QuestionRecord | null {

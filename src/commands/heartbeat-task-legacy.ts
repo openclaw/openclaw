@@ -153,19 +153,14 @@ export function analyzeLegacyHeartbeatTasks(content: string): LegacyHeartbeatTas
     }
 
     const isIndented = line.visible.startsWith(" ") || line.visible.startsWith("\t");
-    if (isIndented && trimmed.startsWith("interval:")) {
+    const field = trimmed.startsWith("interval:")
+      ? "interval"
+      : trimmed.startsWith("prompt:")
+        ? "prompt"
+        : undefined;
+    if (isIndented && field) {
       if (currentTask) {
-        currentTask.interval = unquoteTaskValue(trimmed.slice("interval:".length));
-      } else if (!orphanEntryOpen) {
-        taskEntryCount += 1;
-        orphanEntryOpen = true;
-      }
-      removedLineIndexes.add(index);
-      continue;
-    }
-    if (isIndented && trimmed.startsWith("prompt:")) {
-      if (currentTask) {
-        currentTask.prompt = unquoteTaskValue(trimmed.slice("prompt:".length));
+        currentTask[field] = unquoteTaskValue(trimmed.slice(field.length + 1));
       } else if (!orphanEntryOpen) {
         taskEntryCount += 1;
         orphanEntryOpen = true;

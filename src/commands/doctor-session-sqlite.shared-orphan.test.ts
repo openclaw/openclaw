@@ -26,7 +26,7 @@ it.each([false, true])(
   "settles every receipt sharing one orphan archive (interrupted index publication: %s)",
   async (interrupt) => {
     await withOpenClawTestState({ label: "shared-orphan-settlement" }, async (state) => {
-      const { cfg, storePath } = seedDeferredPluginSessionSource(state, "legacy-root");
+      const { cfg, storePath } = await seedDeferredPluginSessionSource(state, "legacy-root");
       cfg.agents = { ...cfg.agents, entries: { ...cfg.agents?.entries, ops: {} } };
       const entries: Record<string, unknown> = JSON.parse(fs.readFileSync(storePath, "utf8"));
       entries["agent:ops:kept"] = {
@@ -124,7 +124,7 @@ it.each([false, true])(
             expect(target.archivedLegacyStoreFiles).toHaveLength(1);
           }
           expect(report.totals.archivedLegacyStoreFiles).toBe(1);
-          recordDeferredPluginMigrations({
+          await recordDeferredPluginMigrations({
             env: state.env,
             pending: [],
             resolvedPluginIds: ["fixture-plugin"],

@@ -6,6 +6,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { embeddedRunMock, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -110,7 +111,7 @@ function placementReader(current: () => WorkerSessionPlacementRecord | undefined
 }
 
 test.each([false, true])(
-  "sessions.patch archives past queued maintenance and explains concurrent requests (cleanup fails=%s)",
+  "sessions.patch archives during unrelated dispatch and explains concurrent requests (cleanup fails=%s)",
   async (cleanupFails) => {
     const { dir, storePath } = await createSessionStoreDir();
     const sessionKey = "agent:main:archive-already-stopping";
@@ -131,6 +132,7 @@ test.each([false, true])(
       throw new Error("Archive fixture must not start provider or inference work");
     };
     const environments = createWorkerEnvironmentService({
+      scheduler: createTestGatewayScheduler(),
       store: environmentStore,
       getConfig: () => ({}),
       resolveProvider: () => undefined,
@@ -218,7 +220,7 @@ test.each([false, true])(
         expect(reclaim).toHaveBeenCalledTimes(2);
       }
       expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toEqual(expect.any(Number));
-      expect(reconcile).not.toHaveBeenCalled();
+      expect(reconcile).toHaveBeenCalledOnce();
     } finally {
       releaseReclaim.resolve();
       releaseDispatch.resolve();

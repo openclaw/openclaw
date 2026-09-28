@@ -328,7 +328,13 @@ async function runCatalogRequest(
       env: value.input.env,
       workspaceDir: value.input.workspaceDir,
       pluginMetadataSnapshot,
-      providerDiscoveryProviderIds: exactAgentFacts.providerIds,
+      providerDiscoveryProviderIds: [
+        ...new Set([
+          ...value.providerIds,
+          ...Object.keys(credentials),
+          ...exactAgentFacts.providerIds,
+        ]),
+      ],
     });
     const discoveryPluginIds = [...(discoveryScope?.keys() ?? [])];
     const discoveryPlan = await withPluginRuntimeGenerationScope(pluginGenerationScope, () =>
@@ -546,8 +552,12 @@ function isWorkerRequest(value: unknown): value is PreparedModelWorkerRequest {
 
 if (parentPort) {
   const data = workerData as PreparedModelCatalogWorkerData;
-  // Agent/auth requests share registrations only when the complete plugin context matches.
-  let current: { fingerprint: string; prepared: WorkerGeneration } | undefined;
+  // Evicting another workspace recaptures native ESM graphs that Node cannot unload.
+  // Keep each workspace's current context within this inventory-owned worker lifetime.
+  const contexts = new Map<
+    string | undefined,
+    { fingerprint: string; prepared: WorkerGeneration }
+  >();
   serveWorkerTasks(async (input) => {
     // SAFETY: The typed catalog host is the sole producer of this private task envelope.
     const { value, request } = input as PreparedModelCatalogWorkerTask;
@@ -557,7 +567,8 @@ if (parentPort) {
     return withPluginSourceCaptureDirectory(
       data.sourceCaptureDirectory,
       async () => {
-        let previous = current;
+        const workspaceDir = value.pluginMetadataSnapshot.workspaceDir ?? value.input.workspaceDir;
+        let previous = contexts.get(workspaceDir);
         const fingerprint = fingerprintPreparedModelCatalogPluginContext(value);
         let attempted: WorkerGeneration | undefined;
         try {
@@ -575,7 +586,7 @@ if (parentPort) {
               ),
           );
           if (attempted && result.status === "ok") {
-            current = { fingerprint, prepared: attempted };
+            contexts.set(workspaceDir, { fingerprint, prepared: attempted });
             attempted = undefined;
             // Acquire the replacement before releasing shared source registrations.
             await previous?.prepared.release();

@@ -150,12 +150,12 @@ export function createDoctorPluginMigrationPreparation(params: {
     reported.set(plugin.pluginId, receipt);
     params.recordReceipt(receipt);
   };
-  const persistPending = (
+  const persistPending = async (
     pending: readonly DeferredPluginMigration[],
     resolvedPluginIds?: readonly string[],
   ) => {
     try {
-      const committed = recordDeferredPluginMigrations({
+      const committed = await recordDeferredPluginMigrations({
         env: params.env(),
         pending,
         ...(resolvedPluginIds ? { resolvedPluginIds } : {}),
@@ -213,7 +213,7 @@ export function createDoctorPluginMigrationPreparation(params: {
         ),
       );
     },
-    converged(
+    async converged(
       pending: readonly DeferredPluginMigration[],
       snapshot: ConfigFileSnapshot,
       metadata: PluginMetadataSnapshot | undefined,
@@ -235,7 +235,7 @@ export function createDoctorPluginMigrationPreparation(params: {
         ),
       );
       remember();
-      if (!persistPending([...previousById.values()])) {
+      if (!(await persistPending([...previousById.values()]))) {
         return;
       }
       for (const plugin of deferred) {
@@ -256,7 +256,7 @@ export function createDoctorPluginMigrationPreparation(params: {
         completedIds.add(pluginId);
       }
     },
-    complete() {
+    async complete() {
       if (!params.enabled) {
         return false;
       }
@@ -303,7 +303,7 @@ export function createDoctorPluginMigrationPreparation(params: {
       if (resolvedPluginIds.length === 0 && pending.length === 0) {
         return refreshSnapshot;
       }
-      if (!persistPending(pending, resolvedPluginIds)) {
+      if (!(await persistPending(pending, resolvedPluginIds))) {
         return true;
       }
       for (const pluginId of resolvedPluginIds) {

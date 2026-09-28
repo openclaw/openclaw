@@ -1,6 +1,7 @@
 /** Private JSONL worker exposing the CLI node-host runtime to the macOS app. */
 import { createInterface } from "node:readline";
 import { requestExitAfterOneShotOutput } from "../cli/one-shot-exit.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { VERSION } from "../version.js";
 import type { NodeHostClient } from "./client.js";
 import { loadNodeHostConfig } from "./config.js";
@@ -36,10 +37,7 @@ export async function runNodeHostWorker(
   });
   const client = new NodeHostWorkerBridgeClient(writeMessage);
   let stopping = false;
-  let resolveStopped: (() => void) | undefined;
-  const stopped = new Promise<void>((resolve) => {
-    resolveStopped = resolve;
-  });
+  const { promise: stopped, resolve: resolveStopped } = createDeferredCore();
 
   const stop = async (exitCode: number) => {
     if (stopping) {
@@ -51,7 +49,7 @@ export async function runNodeHostWorker(
       await runtime.close();
       process.exitCode = exitCode;
     } finally {
-      resolveStopped?.();
+      resolveStopped();
     }
   };
 

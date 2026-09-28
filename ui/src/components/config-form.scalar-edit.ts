@@ -76,10 +76,14 @@ const scalarInputState = new WeakMap<
   }
 >();
 
-export function setControlValidity(target: HTMLInputElement, message: string): boolean {
+export function setControlValidity(
+  target: HTMLInputElement | HTMLTextAreaElement,
+  message: string,
+  errorContainer = ".settings-row",
+): boolean {
   target.setCustomValidity(message);
   target.setAttribute("aria-invalid", String(Boolean(message)));
-  const error = target.closest(".settings-row")?.querySelector<HTMLElement>(".cfg-field__error");
+  const error = target.closest(errorContainer)?.querySelector<HTMLElement>(".cfg-field__error");
   if (error) {
     error.hidden = !message;
     error.textContent = message;

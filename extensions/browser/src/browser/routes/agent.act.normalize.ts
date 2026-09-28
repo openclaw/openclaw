@@ -1,9 +1,3 @@
-/**
- * Browser action request normalization.
- *
- * Converts loosely typed route bodies into the closed BrowserActRequest union
- * used by Playwright and Chrome MCP action executors.
- */
 import { filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   ACT_MAX_BATCH_ACTIONS,
@@ -129,7 +123,6 @@ function definedAction<T extends BrowserActRequest>(action: T): T {
   return action;
 }
 
-/** Normalize one model/client action payload into a BrowserActRequest. */
 export function normalizeActRequest(
   body: Record<string, unknown>,
   options?: { source?: "request" | "batch"; depth?: number },

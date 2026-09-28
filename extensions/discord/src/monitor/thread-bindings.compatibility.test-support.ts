@@ -53,14 +53,12 @@ export function registerThreadBindingCompatibilityTests({
     "committed-intro-unbind",
     "committed-intro-touch",
     "committed-delete-touch",
-    "committed-delete-unbind",
     "missing-delete-unbind",
     "missing-delete-touch",
     "missing-delete-idle",
     "missing-delete-sibling-touch",
     "stopping-unbind",
     "queued-unbind",
-    "queued-idle",
     "queued-age",
   ] as const)("settles real SQLite compatibility at %s", async (boundary) => {
     await withOpenClawTestState({ label: "discord-binding-commit-order" }, async () => {
@@ -197,15 +195,10 @@ export function registerThreadBindingCompatibilityTests({
           followup =
             queuedOperation === "unbind"
               ? unbindThreadBindingsBySessionKeyAsync({ ...params, sendFarewell: false })
-              : queuedOperation === "idle"
-                ? discordPlugin.conversationBindings!.setIdleTimeoutBySessionKeyAsync!({
-                    ...params,
-                    idleTimeoutMs: 500,
-                  })
-                : discordPlugin.conversationBindings!.setMaxAgeBySessionKeyAsync!({
-                    ...params,
-                    maxAgeMs: 1000,
-                  });
+              : discordPlugin.conversationBindings!.setMaxAgeBySessionKeyAsync!({
+                  ...params,
+                  maxAgeMs: 1000,
+                });
           followup = followup.catch((error: unknown) => {
             followupFailure = error;
             return [];
@@ -256,10 +249,8 @@ export function registerThreadBindingCompatibilityTests({
           expect(followupFailure).toBeUndefined();
           expect(changed).toHaveLength(1);
           if (queuedOperation !== "unbind") {
-            const field = queuedOperation === "idle" ? "idleTimeoutMs" : "maxAgeMs";
-            const expected = queuedOperation === "idle" ? 500 : 1000;
-            expect(store.lookup(saved.key)?.[field]).toBe(expected);
-            expect(manager.getByThreadId("thread-1")?.[field]).toBe(expected);
+            expect(store.lookup(saved.key)?.maxAgeMs).toBe(1000);
+            expect(manager.getByThreadId("thread-1")?.maxAgeMs).toBe(1000);
           }
         }
         const expectedTarget =

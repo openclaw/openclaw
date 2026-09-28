@@ -101,6 +101,55 @@ It leaves unverified service definitions unchanged and skips their automatic
 restart. Restart the Gateway you launched manually after the update, or use its
 actual supervisor. Doctor still checks for active state writers before migrations.
 
+Service membership uses the running Gateway's process ancestry and native supervisor
+facts. An external terminal that inherited service environment markers can still update after native
+membership is verified as external. Reparented children remain inside when they
+share the Gateway's macOS process group or launchd job, or its systemd unit cgroup.
+An already-current core update never refuses for service membership. When membership
+cannot be verified as external, it completes with `already-current` and a warning
+that plugin, runtime, and service maintenance was deferred, before that maintenance
+can change files or stop the Gateway. An explicit channel change is also left
+unapplied and named in the warning so it can be retried. Real updates retain the containment checks.
+Present but unreadable native membership refuses with `service-membership-unverified`;
+confirmed native membership uses `inside-gateway-service`. Windows currently uses
+verified ancestry and the inherited-marker fallback because job-object membership
+is not available to the runtime. A genuine Gateway descendant must use the managed
+update handoff or an independent terminal.
+
+Linux supports both cgroup v2 and the named systemd v1 hierarchy. When readable
+native observations establish that this host has no service containment tree or
+launchd job, a complete external ancestry walk and a distinct process group allow
+the updater to stop, update, and start the managed service itself. The service
+definition must still belong to this installation. The report and
+`openclaw update status --json` record a warning: `Service membership unverifiable
+on this host; using managed stop/update/start.`
+
+Permission failures, conflicting, incomplete or malformed observations, and known service
+members do not use this fallback. Reparented callers in the Gateway's process
+group remain inside even when there is no native unit tree. When native facts
+exist but cannot be read, run this sequence from an interactive external shell
+not started by the Gateway service, under the installation's owning account:
+
+```bash
+openclaw gateway stop && openclaw update --yes && openclaw gateway start
+```
+
+Stopping the Gateway removes the live containment ambiguity. Keep the same account,
+profile, and state/configuration paths throughout, and repeat any requested `--channel`
+or `--tag` on the update command. If the update reports an error,
+follow its recovery guidance before starting the Gateway. With native helper support,
+`openclaw gateway call update.run --params '{}'`, the Gateway tool's `update.run`
+action, and `/update` can instead perform a managed handoff. Linux transient user
+handoffs require `systemd-run`; an emulated manager without it cannot use that route.
+See [Automation and SSH](/cli/update#automation-and-ssh).
+
+Managed-service refusals retain a specific code, such as
+`inside-gateway-process-tree` or `service-definition-changed`, in the failure
+report and `openclaw update status --json`. Shared reports preserve that code and
+recovery guidance while removing private paths and process IDs. These checks run
+in the installed updater: a new candidate cannot repair an older driver's refusal
+before package replacement, or recover detail an older report already discarded.
+
 Control UI updates use a verified helper to stop and restart the managed Gateway.
 On macOS, the helper carries its live update ownership into LaunchAgent activation;
 ordinary commands inside the Gateway still cannot stop their own service. If an
@@ -225,6 +274,18 @@ downtime through convergence and final verification, plus verification
 results. See
 [Validation and activation](/cli/update#validation-and-activation) for the checks.
 
+Source updates also admit build-artifact ownership and runtime staging access in
+the installed checkout before stopping the Gateway. A retained
+`.artifacts/dist-artifacts.lock` refuses the update with the recorded owner,
+timestamp, and exact recovery command while the serving Gateway stays running.
+Verify that all associated build/check processes, including detached descendants,
+have stopped before releasing that lock; a dead owner PID alone is insufficient.
+The updater keeps that ownership until its work has settled and carries the
+prepared runtime result into completion. Already-current repairs reuse the admitted
+ownership; promoted runtime outputs do not need regeneration. Published updaters
+that pass the source build-cache location, including 2026.9.6, also receive the
+installed-checkout check during candidate builds.
+
 The canary uses a temporary loopback Gateway port and suppresses background
 listeners, including the MCP Apps sandbox, browser control, and channel services.
 This lets validation run while the serving Gateway keeps its configured ports.
@@ -279,6 +340,45 @@ payload where possible. Follow the reported `openclaw plugins update <id>` comma
 failed install or update, or `openclaw doctor --fix` for a load problem. Invalid
 configuration or state, ownership errors, and failed core startup or readiness
 checks still prevent completion.
+
+### Package-publication recovery
+
+Supported POSIX npm updates print an external-Node recovery command before
+transferring the staged package into recovery custody. Keep the printed commands;
+each names one operation with required `--anchor` and `--operation` arguments.
+The initial journal and helper are published together in a private control
+directory only after both are complete. A later update first prints a temporary
+staging command, then the stable command after the helper has moved. The staging
+command is valid only before that move; an earlier operation's command cannot
+select a later operation. The helper verifies its own recorded path, identity
+and content before using that journal. It is outside the live package and disposable recovery
+directory. `status` reads the operation, `repair` resumes only its recorded
+package publication, and `retire` removes only its recorded obsolete objects.
+These commands do not replace post-update plugin, migration or service recovery.
+Keep other package managers stopped while recovering the operation.
+
+Retirement records removal of the disposable directory before recording the
+helper's final unlink intent. The helper is then removed. The bounded last
+receipt remains in the control directory and is readable through
+`openclaw update status --json` as `packageActivation`, even after helper removal.
+A completed receipt is replaced only when the next update is admitted through
+the same original executor store; it is not authority to mutate an installation.
+
+Missing, legacy or identity-mismatched recovery artifacts block the next mutable
+update. They are not silently migrated or deleted. Preserve them and use their
+original recovery owner; do not recreate the journal or remove them to bypass
+the refusal.
+
+For older in-directory activation journals, `openclaw update status --json`
+reports the recorded phase and the original helper's `status` command. The
+current updater only inspects these journals; use their original helper to
+recover or retire the operation before starting another update.
+
+Package recovery does not replay a full-state checkpoint or reverse database
+migrations. Automatic rollback keeps compatible databases in place, preserving
+newer writes. If the previous runtime cannot read the current databases, the
+updater retains the candidate and recovery artifacts and reports why rollback
+was refused.
 
 Switch channels or target a specific version:
 
@@ -482,11 +582,9 @@ not execute them in the shell of the Gateway hosting its session. A missing
 owner permission requires owner setup, and an externally supervised installation
 uses its deployment owner's update workflow.
 
-Chat, CLI, Control UI, and automatic updates share a durable run ID. Use
-`openclaw update status` to read the active or latest report, including after a
-restart; `--json` exposes the `activeRun` and `lastRun` records. See
-[Run history and reports](/cli/update#run-history-and-reports) for Gateway history
-queries.
+For installations updated by OpenClaw itself, chat, CLI, Control UI, and automatic updates share a durable run ID.
+Use `openclaw update status` to read the active or latest report, including after a restart; `--json` exposes the `activeRun` and `lastRun` records.
+See [Run history and reports](/cli/update#run-history-and-reports) for Gateway history queries.
 
 The sender must be in [`commands.ownerAllowFrom`](/tools/slash-commands#configuration)
 or have a [verified channel link to a current Gateway administrator](/concepts/user-model#channel-identity-links).

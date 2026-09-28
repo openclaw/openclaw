@@ -7,7 +7,10 @@ import { createManagedWorktreeOwnerPolicy } from "../agents/worktrees/owner-prot
 import { getRegistryWorktree } from "../agents/worktrees/registry.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
 import {
   directSessionReq,
@@ -83,7 +86,8 @@ test("failed worker cleanup does not block archive, reopen, or Undo, and retains
     );
   expect(await patch(true)).toMatchObject({ ok: true });
   await disposeSessionReadContexts();
-  closeOpenClawAgentDatabasesForTest();
+  await closeOpenClawAgentDatabasesAsync(path.dirname(storePath));
+  closeOpenClawAgentDatabasesForTest(path.dirname(storePath));
   // Reopening uses a fresh projection binding while retaining the same worker services.
   context = { ...context };
   expect(loadSessionEntry(scope)).toMatchObject({

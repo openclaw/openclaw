@@ -61,13 +61,9 @@ export class QaEvidenceGalleryError extends Error {
   }
 }
 
-function sanitizeGalleryText(
-  value: string,
-  params: {
-    extraRoots?: readonly string[];
-    repoRoot: string;
-  },
-) {
+type GalleryRoots = { extraRoots?: readonly string[]; repoRoot: string };
+
+function sanitizeGalleryText(value: string, params: GalleryRoots) {
   const localRoots = [...new Set([params.repoRoot, ...(params.extraRoots ?? [])])];
   const roots = [
     ...localRoots.flatMap((root) => [
@@ -82,13 +78,7 @@ function sanitizeGalleryText(
     .reduce((text, entry) => text.replaceAll(entry.from, entry.to), value);
 }
 
-function displayGalleryPath(
-  value: string,
-  params: {
-    extraRoots?: readonly string[];
-    repoRoot: string;
-  },
-) {
+function displayGalleryPath(value: string, params: GalleryRoots) {
   if (path.isAbsolute(value)) {
     const absolute = path.resolve(value);
     for (const root of [params.repoRoot, ...(params.extraRoots ?? [])]) {
@@ -101,23 +91,11 @@ function displayGalleryPath(
   return sanitizeGalleryText(value, params);
 }
 
-function sanitizeGalleryPreview(
-  value: string | null,
-  params: {
-    extraRoots?: readonly string[];
-    repoRoot: string;
-  },
-) {
+function sanitizeGalleryPreview(value: string | null, params: GalleryRoots) {
   return value === null ? null : sanitizeGalleryText(value, params);
 }
 
-function sanitizeGalleryStringArray(
-  values: Iterable<unknown>,
-  params: {
-    extraRoots?: readonly string[];
-    repoRoot: string;
-  },
-) {
+function sanitizeGalleryStringArray(values: Iterable<unknown>, params: GalleryRoots) {
   return readOrderedStringArray(
     Array.from(values)
       .filter((value): value is string => typeof value === "string")
@@ -589,35 +567,30 @@ async function buildArtifactView(params: {
   const displayPath =
     (realFileRepoPath ? sanitizeGalleryText(realFileRepoPath, params) : null) ??
     sanitizeGalleryText(params.artifact.path, params);
-  if (!realFile || !params.allowedArtifactFiles.has(realFile)) {
-    return {
-      exists: false,
-      error: realFile
+  const exists = realFile !== null && params.allowedArtifactFiles.has(realFile);
+  return {
+    exists,
+    error: exists
+      ? null
+      : realFile
         ? "Evidence artifact is not declared by this evidence summary."
         : "Evidence artifact not found.",
-      href: null,
-      kind: sanitizeGalleryText(params.artifact.kind, params),
-      mediaKind,
-      path: displayPath,
-      preview: null,
-      source: sanitizeGalleryText(params.artifact.source, params),
-    };
-  }
-  return {
-    exists: true,
-    error: null,
-    href: artifactHref(params.hrefEvidencePath, {
-      artifactIndex: params.artifactIndex,
-      entryIndex: params.entryIndex,
-    }),
+    href: exists
+      ? artifactHref(params.hrefEvidencePath, {
+          artifactIndex: params.artifactIndex,
+          entryIndex: params.entryIndex,
+        })
+      : null,
     kind: sanitizeGalleryText(params.artifact.kind, params),
     mediaKind,
     path: displayPath,
-    preview: await readPreview(realFile, mediaKind)
-      .then((preview) => sanitizeGalleryPreview(preview, params))
-      .catch((error: unknown) =>
-        sanitizeGalleryText(`Preview unavailable: ${formatErrorMessage(error)}`, params),
-      ),
+    preview: exists
+      ? await readPreview(realFile, mediaKind)
+          .then((preview) => sanitizeGalleryPreview(preview, params))
+          .catch((error: unknown) =>
+            sanitizeGalleryText(`Preview unavailable: ${formatErrorMessage(error)}`, params),
+          )
+      : null,
     source: sanitizeGalleryText(params.artifact.source, params),
   };
 }

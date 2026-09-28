@@ -32,7 +32,7 @@ const qaCoverageEvidenceRoleSchema = z.enum(["primary", "secondary"]);
 export const qaScorecardEvidenceModeSchema = z.enum(["full", "slim"]);
 export const qaScorecardChannelDriverSchema = z.enum(["qa-channel", "crabline", "live"]);
 
-const qaProofClassSchema = z.enum([
+export const qaProofClassSchema = z.enum([
   "fixture-only",
   "real-plugin/local-protocol",
   "native-host",
@@ -286,65 +286,57 @@ const qaMaturityTaxonomySchema = z
     surfaces: z.array(qaMaturitySurfaceSchema).default([]),
   })
   .superRefine((taxonomy, ctx) => {
+    const issue = (issuePath: (string | number)[], message: string) =>
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: issuePath, message });
     const seenProfileIds = new Set<string>();
     for (const [profileIndex, profile] of taxonomy.profiles.entries()) {
       if (seenProfileIds.has(profile.id)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["profiles", profileIndex, "id"],
-          message: `duplicate scorecard profile id: ${profile.id}`,
-        });
+        issue(["profiles", profileIndex, "id"], `duplicate scorecard profile id: ${profile.id}`);
       }
       seenProfileIds.add(profile.id);
 
       if (profile.includeAllCategories && profile.categoryIds.length > 0) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["profiles", profileIndex, "categoryIds"],
-          message: `profile ${profile.id} cannot set categoryIds when includeAllCategories is true`,
-        });
+        issue(
+          ["profiles", profileIndex, "categoryIds"],
+          `profile ${profile.id} cannot set categoryIds when includeAllCategories is true`,
+        );
       }
       if (profile.includeAllCategories && profile.coverageIds.length > 0) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["profiles", profileIndex, "coverageIds"],
-          message: `profile ${profile.id} cannot set coverageIds when includeAllCategories is true`,
-        });
+        issue(
+          ["profiles", profileIndex, "coverageIds"],
+          `profile ${profile.id} cannot set coverageIds when includeAllCategories is true`,
+        );
       }
       if (profile.categoryIds.length > 0 && profile.coverageIds.length > 0) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["profiles", profileIndex, "coverageIds"],
-          message: `profile ${profile.id} must select categories or coverage IDs, not both`,
-        });
+        issue(
+          ["profiles", profileIndex, "coverageIds"],
+          `profile ${profile.id} must select categories or coverage IDs, not both`,
+        );
       }
       if (profile.channelDriver === "crabline" && profile.includeAllCategories) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["profiles", profileIndex, "includeAllCategories"],
-          message: `profile ${profile.id} cannot set includeAllCategories when channelDriver is crabline`,
-        });
+        issue(
+          ["profiles", profileIndex, "includeAllCategories"],
+          `profile ${profile.id} cannot set includeAllCategories when channelDriver is crabline`,
+        );
       }
       if (
         profile.channelDriver === "crabline" &&
         !profile.categoryIds.length &&
         !profile.coverageIds.length
       ) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["profiles", profileIndex],
-          message: `profile ${profile.id} requires categoryIds or coverageIds when channelDriver is crabline`,
-        });
+        issue(
+          ["profiles", profileIndex],
+          `profile ${profile.id} requires categoryIds or coverageIds when channelDriver is crabline`,
+        );
       }
 
       const seenProfileCategoryIds = new Set<string>();
       for (const [categoryIndex, categoryId] of profile.categoryIds.entries()) {
         if (seenProfileCategoryIds.has(categoryId)) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ["profiles", profileIndex, "categoryIds", categoryIndex],
-            message: `duplicate category id in profile ${profile.id}: ${categoryId}`,
-          });
+          issue(
+            ["profiles", profileIndex, "categoryIds", categoryIndex],
+            `duplicate category id in profile ${profile.id}: ${categoryId}`,
+          );
         }
         seenProfileCategoryIds.add(categoryId);
       }
@@ -352,11 +344,10 @@ const qaMaturityTaxonomySchema = z
       const seenProfileCoverageIds = new Set<string>();
       for (const [coverageIndex, coverageId] of profile.coverageIds.entries()) {
         if (seenProfileCoverageIds.has(coverageId)) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ["profiles", profileIndex, "coverageIds", coverageIndex],
-            message: `duplicate coverage ID in profile ${profile.id}: ${coverageId}`,
-          });
+          issue(
+            ["profiles", profileIndex, "coverageIds", coverageIndex],
+            `duplicate coverage ID in profile ${profile.id}: ${coverageId}`,
+          );
         }
         seenProfileCoverageIds.add(coverageId);
       }
@@ -370,29 +361,23 @@ const qaMaturityTaxonomySchema = z
         surface.level_decision &&
         !taxonomy.levels.some((level) => level.id === surface.level_decision?.value)
       ) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["surfaces", surfaceIndex, "level_decision", "value"],
-          message: "decision value must be a declared maturity level ID",
-        });
+        issue(
+          ["surfaces", surfaceIndex, "level_decision", "value"],
+          "decision value must be a declared maturity level ID",
+        );
       }
       if (surfaceIds.has(surface.id)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["surfaces", surfaceIndex, "id"],
-          message: `duplicate surface id: ${surface.id}`,
-        });
+        issue(["surfaces", surfaceIndex, "id"], `duplicate surface id: ${surface.id}`);
       }
       surfaceIds.add(surface.id);
 
       const localCategoryIds = new Set<string>();
       for (const [categoryIndex, category] of surface.categories.entries()) {
         if (localCategoryIds.has(category.id)) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ["surfaces", surfaceIndex, "categories", categoryIndex, "id"],
-            message: `duplicate category id in surface ${surface.id}: ${category.id}`,
-          });
+          issue(
+            ["surfaces", surfaceIndex, "categories", categoryIndex, "id"],
+            `duplicate category id in surface ${surface.id}: ${category.id}`,
+          );
         }
         localCategoryIds.add(category.id);
         categoryIds.add(`${surface.id}.${category.id}`);
@@ -404,9 +389,8 @@ const qaMaturityTaxonomySchema = z
           };
           for (const [coverageIdIndex, coverageId] of feature.coverageIds.entries()) {
             if (!coverageId.startsWith(`${surface.id}.`)) {
-              ctx.addIssue({
-                code: z.ZodIssueCode.custom,
-                path: [
+              issue(
+                [
                   "surfaces",
                   surfaceIndex,
                   "categories",
@@ -416,14 +400,13 @@ const qaMaturityTaxonomySchema = z
                   "coverageIds",
                   coverageIdIndex,
                 ],
-                message: `coverage ID ${coverageId} must belong to surface ${surface.id}`,
-              });
+                `coverage ID ${coverageId} must belong to surface ${surface.id}`,
+              );
             }
             const existingOwner = coverageIdOwners.get(coverageId);
             if (existingOwner && existingOwner.key !== featureOwner.key) {
-              ctx.addIssue({
-                code: z.ZodIssueCode.custom,
-                path: [
+              issue(
+                [
                   "surfaces",
                   surfaceIndex,
                   "categories",
@@ -433,8 +416,8 @@ const qaMaturityTaxonomySchema = z
                   "coverageIds",
                   coverageIdIndex,
                 ],
-                message: `coverage ID ${coverageId} already belongs to ${existingOwner.label}; coverage IDs must identify exactly one taxonomy feature`,
-              });
+                `coverage ID ${coverageId} already belongs to ${existingOwner.label}; coverage IDs must identify exactly one taxonomy feature`,
+              );
               continue;
             }
             coverageIdOwners.set(coverageId, featureOwner);
@@ -446,20 +429,18 @@ const qaMaturityTaxonomySchema = z
     for (const [profileIndex, profile] of taxonomy.profiles.entries()) {
       for (const [categoryIndex, categoryId] of profile.categoryIds.entries()) {
         if (!categoryIds.has(categoryId)) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ["profiles", profileIndex, "categoryIds", categoryIndex],
-            message: `profile ${profile.id} references missing category ${categoryId}`,
-          });
+          issue(
+            ["profiles", profileIndex, "categoryIds", categoryIndex],
+            `profile ${profile.id} references missing category ${categoryId}`,
+          );
         }
       }
       for (const [coverageIndex, coverageId] of profile.coverageIds.entries()) {
         if (!coverageIdOwners.has(coverageId)) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: ["profiles", profileIndex, "coverageIds", coverageIndex],
-            message: `profile ${profile.id} references missing coverage ID ${coverageId}`,
-          });
+          issue(
+            ["profiles", profileIndex, "coverageIds", coverageIndex],
+            `profile ${profile.id} references missing coverage ID ${coverageId}`,
+          );
         }
       }
     }
@@ -583,12 +564,7 @@ type MaturityCategoryRef = {
   id: string;
   surfaceId: string;
   categoryName: string;
-  features: MaturityFeatureRef[];
-  coverageIds: string[];
-};
-
-type MaturityFeatureRef = {
-  name: string;
+  features: QaScorecardCategoryFeatureCoverageReport[];
   coverageIds: string[];
 };
 
@@ -685,14 +661,6 @@ type ScenarioInventoryRef = {
   path: string | null;
 };
 
-function scenarioInventoryKind(scenario: QaSeedScenarioWithSource): QaScorecardEvidenceKind {
-  return scenario.execution.kind === "flow" ? "qa-scenario" : scenario.execution.kind;
-}
-
-function scenarioInventoryPath(scenario: QaSeedScenarioWithSource) {
-  return scenario.execution.kind === "flow" ? null : scenario.execution.path;
-}
-
 function collectScenarioInventoryByCoverageId(params: {
   scenarios: readonly QaSeedScenarioWithSource[];
   role: QaCoverageEvidenceRole;
@@ -704,8 +672,8 @@ function collectScenarioInventoryByCoverageId(params: {
       const refs = refsByCoverageId.get(coverageId) ?? [];
       refs.push({
         sourcePath: scenario.sourcePath,
-        kind: scenarioInventoryKind(scenario),
-        path: scenarioInventoryPath(scenario),
+        kind: scenario.execution.kind === "flow" ? "qa-scenario" : scenario.execution.kind,
+        path: scenario.execution.kind === "flow" ? null : scenario.execution.path,
       });
       refsByCoverageId.set(coverageId, refs);
     }

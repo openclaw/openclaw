@@ -5,7 +5,7 @@ connecting address can show a place instead of only a number.
 
 ## How it works
 
-The plugin exposes one authenticated route:
+The plugin exposes an authenticated HTTP route:
 
 ```
 GET /plugins/geolocation/lookup?ip=<address>
@@ -15,6 +15,13 @@ It answers `{ found, city?, region?, country?, countryCode?, attribution }`. A
 database that is missing or still downloading returns `503`, never
 `found: false` — "we cannot answer" and "this address has no place" are
 different answers and callers must be able to tell them apart.
+
+The `geolocation.lookup` Gateway method shares the same lookup owner and
+database. It requires `operator.read` and accepts `{ ips: string[] }` with at
+most 200 addresses. It returns `{ results: [{ ip, status, ...place, attribution }] }`,
+where `status` is `found`, `not-found`, or `unavailable`. Core presence requests
+use it only when location details are requested; disabling the plugin keeps
+presence available and reports location as unavailable.
 
 The database is downloaded on first lookup into
 `<state-dir>/geolocation/`, kept until it ages past `refreshDays`, and reused

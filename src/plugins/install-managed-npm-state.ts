@@ -3,7 +3,7 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { NpmSpecResolution } from "../infra/install-source-utils.js";
-import { parseRegistryNpmSpec, validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { isNotFoundPathError } from "../infra/path-guards.js";
 import {
   resolvePluginNpmGenerationProjectDir,
@@ -351,9 +351,8 @@ export function resolveRequiredPlatformPackageNames(
           "package.json openclaw.install.requiredPlatformPackages must contain only npm package names",
       };
     }
-    const specError = validateRegistryNpmSpec(value);
     const parsed = parseRegistryNpmSpec(value);
-    if (specError || !parsed || parsed.selectorKind !== "none") {
+    if (!parsed || parsed.selectorKind !== "none") {
       return {
         ok: false,
         error: `package.json openclaw.install.requiredPlatformPackages contains invalid package name: ${value}`,

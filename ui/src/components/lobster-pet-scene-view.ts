@@ -31,7 +31,7 @@ import {
   themeCritterBaseStyle,
 } from "./theme-flair-sprites.ts";
 
-const PASSER_RENDERERS: Partial<Record<string, () => TemplateResult>> = {
+const PASSER_SPRITES_BY_KIND: Partial<Record<string, TemplateResult>> = {
   ...PASSER_SPRITES,
   ...THEME_CRITTER_SPRITES,
 };
@@ -284,9 +284,9 @@ export function renderLobsterPetScene(args: {
   const passerStyle = args.passer
     ? `${passerBaseStyle(args.passer.kind, args.passer.direction, passerLook, Boolean(passerArtwork))};--lob-cross:${args.passer.crossMs}ms;--lob-cross-from:${fromX}px;--lob-cross-to:${toX}px;--lob-y:${passerLane?.y ?? 0}px`
     : "";
-  const passerRenderer =
-    args.passer && Object.hasOwn(PASSER_RENDERERS, args.passer.kind)
-      ? PASSER_RENDERERS[args.passer.kind]
+  const passerSprite =
+    args.passer && Object.hasOwn(PASSER_SPRITES_BY_KIND, args.passer.kind)
+      ? PASSER_SPRITES_BY_KIND[args.passer.kind]
       : undefined;
   const passerTitle =
     args.passer && Object.hasOwn(PASSER_LABELS, args.passer.kind)
@@ -339,7 +339,7 @@ export function renderLobsterPetScene(args: {
                     ? renderPluginThemeArtwork(passerArtwork.url, "lobster-pet__svg")
                     : stranger
                       ? renderLobsterSvg(passerLook, { standalone: true })
-                      : (passerRenderer?.() ?? nothing)
+                      : (passerSprite ?? nothing)
                 }
               </div>
             </div>

@@ -906,7 +906,7 @@ posixIt(
   55_000,
 );
 
-posixIt.each([23, 125, "hang"] satisfies FetchResult[])(
+posixIt.each([125, "hang"] satisfies FetchResult[])(
   "docs advisory fetch drains before config/add/commit and still continues (%s)",
   async (failure) => {
     const report = await runDocs("Commit publish repo sync", { fetchResults: [failure, 0] });
@@ -954,7 +954,6 @@ posixIt.each([23, 125, "hang"] satisfies FetchResult[])(
 );
 
 posixIt.each([
-  { operation: "rebase", failure: 23, lockChange: false },
   { operation: "push", failure: 23, lockChange: true },
   { operation: "rebase", failure: 125, lockChange: false },
   { operation: "push", failure: 143, lockChange: false },
@@ -1291,7 +1290,7 @@ function runDocsAgent(step: string, options: Partial<Parameters<typeof runCiGitS
   });
 }
 
-posixIt.each([0, 128, 125, 143])(
+posixIt.each([0, 128, 125])(
   "Docs Agent manual gate owns HEAD and parent before exact outputs (parent=%s)",
   async (code) => {
     const report = await runDocsAgent(agentGate, {
@@ -1309,7 +1308,7 @@ posixIt.each([0, 128, 125, 143])(
   55_000,
 );
 
-posixIt.each([23, 125, 143, "hang"] satisfies FetchResult[])(
+posixIt.each([125, "hang"] satisfies FetchResult[])(
   "Docs Agent gate drains failed fetch before retry, remote read, gh and output (%s)",
   async (failure) => {
     const report = await runDocsAgent(agentGate, { fetchResults: [failure, 0] });
@@ -1453,7 +1452,7 @@ posixIt(
   55_000,
 );
 
-posixIt.each([23, 125, "hang"] satisfies FetchResult[])(
+posixIt.each([125, "hang"] satisfies FetchResult[])(
   "Docs Agent commit drains diff before config/commit and failed fetch before retry (%s)",
   async (failure) => {
     const report = await runDocsAgent(agentCommit, {

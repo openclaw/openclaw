@@ -21,6 +21,7 @@ import type { AgentDatabaseExecutionFileIdentity } from "../../state/openclaw-ag
 import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
 import type { SessionTranscriptBoundedActiveContext } from "./session-accessor.sqlite-active-context.js";
 import type { readSessionTranscriptActiveStats } from "./session-accessor.sqlite-active-events.js";
+import type { TranscriptArchivePresenceRead } from "./session-accessor.sqlite-archive-types.js";
 import type {
   SessionBranchSummaryReadRequest,
   SessionBranchSummaryReadResult,
@@ -37,6 +38,7 @@ import type {
   readSessionTranscriptModelContext,
   SessionModelContextLimits,
 } from "./session-accessor.sqlite-model-context.js";
+import type { listSessionPendingInputReceipts } from "./session-accessor.sqlite-pending-input-receipts.js";
 import type { loadTranscriptReadSnapshotSync } from "./session-accessor.sqlite-read.js";
 import type {
   SessionEntryReplacementSelection,
@@ -284,6 +286,16 @@ type SessionProgressCardWorkerInput = {
   env: NodeJS.ProcessEnv;
 };
 
+type SessionPendingInputReceiptsWorkerInput = {
+  kind: "session-pending-input-receipts";
+  database: { agentId: string; path: string };
+  agentId: string;
+  sessionKey: string;
+  sessionId: string;
+  runIds: readonly string[];
+  env: NodeJS.ProcessEnv;
+};
+
 type SessionUsageCacheWorkerInput = {
   kind: "usage-cache";
   database: { agentId: string; path: string };
@@ -339,6 +351,7 @@ export type SessionExactEntriesWorkerInput = {
   includeParticipantRecords?: boolean;
   includeAuthorization?: boolean;
   replacementSelection?: SessionEntryReplacementSelection;
+  creationLabel?: string;
   continuation?: CanonicalSessionReaderContinuation;
 };
 
@@ -425,6 +438,10 @@ type SessionPendingArchivesWorkerInput = {
   env: NodeJS.ProcessEnv;
 };
 
+type SessionArchivePresenceWorkerInput = TranscriptArchivePresenceRead & {
+  kind: "session-archive-presence";
+};
+
 export type SessionArchivePruningWorkerInput = {
   kind: "session-archive-pruning";
   database: { agentId: string; path: string };
@@ -441,9 +458,11 @@ type SessionHistoricalEvictionCandidatesWorkerInput = {
 };
 
 export type SessionHistoryWorkerInput =
+  | { kind: "prewarm"; database: { agentId: string; path: string }; env: NodeJS.ProcessEnv }
   | SessionHistoricalEvictionCandidatesWorkerInput
   | SessionArchivePruningWorkerInput
   | SessionPendingArchivesWorkerInput
+  | SessionArchivePresenceWorkerInput
   | SessionColdMetadataWorkerInput
   | SessionTranscriptHydrationWorkerInput
   | SessionTranscriptActiveStatsWorkerInput
@@ -457,6 +476,7 @@ export type SessionHistoryWorkerInput =
   | SessionMembersWorkerInput
   | SessionMembershipFactsWorkerInput
   | SessionProgressCardWorkerInput
+  | SessionPendingInputReceiptsWorkerInput
   | SessionEntryListWorkerInput
   | SessionEntryReadWorkerInput
   | SessionDiagnosticTextWorkerInput
@@ -484,7 +504,9 @@ export type SessionHistoryWorkerPreparedInput = {
 }[SessionHistoryDatabaseWorkerInput["kind"]];
 
 export type SessionTranscriptWorkerValues = {
+  prewarm: { kind: "prewarm" };
   "session-pending-archives": { kind: "session-pending-archives"; pending: boolean };
+  "session-archive-presence": { kind: "session-archive-presence"; registered: boolean };
   "historical-eviction-candidates": {
     kind: "historical-eviction-candidates";
     sessionIds: string[];
@@ -513,6 +535,10 @@ export type SessionTranscriptWorkerValues = {
   "session-members": SessionMember[];
   "session-membership-facts": SessionMembershipFacts;
   "session-progress-card": { kind: "session-progress-card"; card: ProgressCard | null };
+  "session-pending-input-receipts": {
+    kind: "session-pending-input-receipts";
+    receipts: ReturnType<typeof listSessionPendingInputReceipts>;
+  };
   "session-entry-list": SessionEntryListWorkerResult;
   "session-entry-read": SessionEntryReadWorkerResult;
   "session-diagnostic-text": {
@@ -545,18 +571,24 @@ type SessionTranscriptWorkerError =
   | SessionTranscriptWorkerReadError
   | { kind: "delta-visibility"; partial: SessionHistoryDelta };
 
+export type SessionTranscriptWorkerSuccess<Value> = {
+  ok: true;
+  value: Value;
+  closedHistoryDatabase?: SessionTranscriptHistoryWorkerInput["database"];
+};
+
 export type SessionTranscriptWorkerReply<Kind extends keyof SessionTranscriptWorkerValues> =
-  | {
-      ok: true;
-      value: SessionTranscriptWorkerValues[Kind];
-      closedHistoryDatabase?: SessionTranscriptHistoryWorkerInput["database"];
-    }
+  | SessionTranscriptWorkerSuccess<SessionTranscriptWorkerValues[Kind]>
   | {
       ok: false;
       error: SessionTranscriptWorkerError;
     };
 
 export type SessionHistoryWorkerDatabase = {
+  prewarm: (input: { env: NodeJS.ProcessEnv }) => Promise<void>;
+  readArchivePresence: (
+    input: Omit<SessionArchivePresenceWorkerInput, "kind" | "database">,
+  ) => Promise<boolean>;
   readPendingArchives: (
     input: Omit<SessionPendingArchivesWorkerInput, "kind" | "database">,
     signal?: AbortSignal,
@@ -641,6 +673,9 @@ export type SessionHistoryWorkerDatabase = {
   readProgressCard: (
     input: Omit<SessionProgressCardWorkerInput, "kind" | "database">,
   ) => Promise<ProgressCard | null>;
+  readPendingInputReceipts: (
+    input: Omit<SessionPendingInputReceiptsWorkerInput, "kind" | "database">,
+  ) => Promise<ReturnType<typeof listSessionPendingInputReceipts>>;
   readUsageCache: (
     input: Omit<SessionUsageCacheWorkerInput, "kind" | "database">,
   ) => Promise<SessionCostUsageCacheReadResult>;

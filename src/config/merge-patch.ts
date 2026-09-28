@@ -204,8 +204,7 @@ export function applyMergePatch(
       }
     }
     if (isPlainObject(value)) {
-      const baseValue = result[key];
-      result[key] = applyMergePatch(isPlainObject(baseValue) ? baseValue : {}, value, {
+      result[key] = applyMergePatch(result[key], value, {
         ...options,
         path,
       });

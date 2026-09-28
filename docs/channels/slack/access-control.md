@@ -10,6 +10,31 @@ sidebarTitle: "Access control"
 
 Who may reach OpenClaw through Slack, and which Slack actions it may take.
 
+## Linked requester identity
+
+Direct Socket Mode events and HTTP Request URLs that pass Slack signing-secret
+verification carry verified native Slack user IDs, including the
+`team:<team-id>:user:<user-id>` form. Relay events remain asserted because the
+Gateway authenticates the relay peer rather than the Slack sender. Display names
+never establish identity, and sender IDs derived from app-controlled message
+metadata remain asserted.
+
+For ordinary messages and app mentions from a verified Slack sender linked to an
+active user profile, OpenClaw includes that profile's canonical ID and current
+display name in host-generated, per-turn conversation info. A linked profile with `operator.admin` authority can ask
+"Assign this session to me"; the agent uses that profile ID with the `sessions`
+tool's `assign_owner` action for sessions visible to that administrator, including
+sessions the agent spawned. The turn carries the linked administrator's existing
+operator authority and checks the original link, role, and channel lifecycle before
+each privileged action. Unlinking, removing administrator access, or restarting the
+channel invalidates that turn; send a new request after access is restored.
+
+The tool remains owner-only: linking an ordinary member identifies the requester
+without granting assignment access. Unlinked or asserted senders receive no
+requester profile or operator authority. Configured command owners without a linked
+administrator profile keep their existing command access. See
+[Channel identity links](/concepts/user-model#channel-identity-links).
+
 ## Actions and gates
 
 Slack actions are controlled by `channels.slack.actions.*`.
@@ -176,6 +201,7 @@ restart the Slack monitor. The Gateway remains running.
     Per-channel controls (`channels.slack.channels.<id>`; names only via startup resolution or `dangerouslyAllowNameMatching`):
 
     - `requireMention`
+    - `requireMentionInBotThreads`
     - `ignoreOtherMentions`
     - `replyToMode` (`off|first|all|batched`; overrides account/chat-type reply mode for this channel)
     - `users` (allowlist)
@@ -185,6 +211,31 @@ restart the Slack monitor. The Gateway remains running.
     - `tools`, `toolsBySender`
     - `toolsBySender` key format: `channel:`, `id:`, `e164:`, `username:`, `name:`, or `"*"` wildcard
       (legacy unprefixed keys still map to `id:` only)
+
+    <a id="bot-created-threads" />
+    `requireMentionInBotThreads` overrides mention gating only in threads whose root message was sent by this bot. Set it to `false` to allow unmentioned replies there while keeping `requireMention: true` for the rest of the channel. Set it to `true` to require a mention in those threads even when implicit reply or thread-participation mentions are enabled. Authorized text commands keep their existing bypass.
+
+    Add the setting to an existing allowed channel entry:
+
+    ```json5
+    {
+      channels: {
+        slack: {
+          channels: {
+            C12345678: {
+              enabled: true,
+              requireMention: true,
+              requireMentionInBotThreads: false,
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    The setting resolves from the channel entry, then the `"*"` entry, then the account, then `channels.slack.requireMentionInBotThreads`. Omit it to preserve existing behavior, including `implicitMentions.replyToBot` and `implicitMentions.threadParticipation`. Slack's native parent author identifies the root; when that field is absent, OpenClaw uses accessible thread history. Unknown ownership retains the normal mention policy. Channel and sender access, bot-message restrictions, and `ignoreOtherMentions` still apply.
+
+    Invite the app to the channel and subscribe to `message.channels` for public channels or `message.groups` for private channels, with the matching history scope. Subscribing only to `app_mention` cannot deliver unmentioned follow-ups. Both setup manifests include these subscriptions; see [Manifest and scope checklist](/channels/slack/manifest-and-scopes#manifest-and-scope-checklist). To verify, have the bot post a new top-level message, then reply in that message's thread without mentioning it. Replies to a human-created root keep their existing implicit-mention policy even if the bot participates later.
 
     `ignoreOtherMentions` (default `false`) drops channel messages that mention another user or user group but not this bot. DMs and group DMs (MPIMs) are unaffected. The filter requires a resolved bot user ID from `auth.test`; if that identity is unavailable (for example a user-token-only identity), the gate fails open and messages pass through unchanged.
 

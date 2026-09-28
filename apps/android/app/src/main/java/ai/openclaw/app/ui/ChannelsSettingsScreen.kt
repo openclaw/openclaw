@@ -14,8 +14,6 @@ import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.design.badgeInitials
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -41,7 +39,7 @@ internal fun ChannelsSettingsScreen(
   SettingsDetailFrame(
     title = nativeString("Channels"),
     subtitle = nativeString("Messaging surfaces connected to this gateway."),
-    icon = Icons.Default.Notifications,
+    icon = SettingsRoute.Channels.icon,
     onBack = onBack,
   ) {
     SettingsRefreshControls(isConnected, state.refreshing, state.errorText, viewModel::refreshChannels)

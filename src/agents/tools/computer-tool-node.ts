@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { imageMimeFromFormat } from "@openclaw/media-core/mime";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
@@ -87,7 +88,7 @@ function computerActIdempotencyKey(params: {
   if (params.purpose) {
     parts.push(params.purpose);
   }
-  const digest = crypto.createHash("sha256").update(JSON.stringify(parts)).digest("hex");
+  const digest = sha256Hex(JSON.stringify(parts));
   // The automatic read shares a tool-call id with input, but must never replay its result.
   if (params.purpose) {
     return `computer.observation:v1:${digest}`;
@@ -149,7 +150,7 @@ export class ComputerToolSession {
   private computerState: ComputerState = { kind: "unbound" };
   private heldButtonTarget: ComputerTarget | undefined;
   private readonly executionTargets = new Map<string, ComputerBinding>();
-  private readonly retiredGatewayBindings = new Set<ComputerBinding>();
+  private readonly cleanupBindings = new Set<ComputerBinding>();
   private disposePromise: Promise<void> | undefined;
 
   constructor(
@@ -330,19 +331,15 @@ export class ComputerToolSession {
     ) {
       throw new Error("Computer control is bound to this session's desktop");
     }
-    const explicitScreenIndex = (() => {
-      if (params.input.screenIndex === undefined) {
-        return undefined;
-      }
-      if (
-        typeof params.input.screenIndex !== "number" ||
-        !Number.isInteger(params.input.screenIndex) ||
-        params.input.screenIndex < 0
-      ) {
-        throw new Error("screenIndex must be a non-negative integer");
-      }
-      return params.input.screenIndex;
-    })();
+    const explicitScreenIndex = params.input.screenIndex;
+    if (
+      explicitScreenIndex !== undefined &&
+      (typeof explicitScreenIndex !== "number" ||
+        !Number.isInteger(explicitScreenIndex) ||
+        explicitScreenIndex < 0)
+    ) {
+      throw new Error("screenIndex must be a non-negative integer");
+    }
     const needsFrame = computerActionNeedsFrame(params.action, params.input);
     const priorTarget =
       this.computerState.kind === "unbound" ? undefined : this.computerState.target;
@@ -377,6 +374,11 @@ export class ComputerToolSession {
           gatewayOpts: selectionGatewayOpts,
           signal: params.signal,
         });
+    // Each attached preparation owns resources even when selection reuses an
+    // earlier binding. Retain it before selection or validation can reject it.
+    if (resolvedBinding.host.host === "node" && resolvedBinding.host.environmentId !== undefined) {
+      this.cleanupBindings.add(resolvedBinding);
+    }
     const targetKey = computerHostKey(resolvedBinding.host);
     const existingBinding = this.executionTargets.get(targetKey);
     const refreshNode =
@@ -514,7 +516,7 @@ export class ComputerToolSession {
           gatewayOpts: binding.gatewayOpts,
           signal,
         });
-        this.retiredGatewayBindings.add(binding);
+        this.cleanupBindings.add(binding);
         this.executionTargets.set(targetKey, refreshed);
         this.assertOpen();
         signal?.throwIfAborted();
@@ -634,17 +636,12 @@ export class ComputerToolSession {
       .getOperationQueue()
       .catch(() => {})
       .then(async () => {
-        const targets = [
-          ...this.executionTargets.entries(),
-          ...[...this.retiredGatewayBindings].map((binding): [string, ComputerBinding] => [
-            computerHostKey(binding.host),
-            binding,
-          ]),
-        ];
+        // Distinct preparations can share a host; only identical bindings share cleanup.
+        const targets = [...new Set([...this.executionTargets.values(), ...this.cleanupBindings])];
         this.executionTargets.clear();
-        this.retiredGatewayBindings.clear();
+        this.cleanupBindings.clear();
         const results = await Promise.allSettled(
-          targets.map(async ([targetKey, binding]) => {
+          targets.map(async (binding) => {
             await binding.invoke({
               command: COMPUTER_ACT_COMMAND,
               commandParams: {
@@ -652,7 +649,7 @@ export class ComputerToolSession {
                 executionId: this.options.executionId,
                 reason,
               },
-              idempotencyKey: `computer.close:${this.options.executionId}:${targetKey}`,
+              idempotencyKey: `computer.close:${this.options.executionId}:${computerHostKey(binding.host)}`,
             });
           }),
         );
@@ -662,13 +659,11 @@ export class ComputerToolSession {
           this.options.transport ||
           binding?.host.host === "gateway" ||
           (binding?.host.host === "node" && binding.host.environmentId !== undefined);
-        if (targets.some(([, binding]) => ownsCleanup(binding))) {
-          const failures = results.flatMap((result, index) =>
-            result.status === "rejected" && ownsCleanup(targets[index]?.[1]) ? [result.reason] : [],
-          );
-          if (failures.length > 0) {
-            throw new AggregateError(failures, "computer: session desktop cleanup failed");
-          }
+        const failures = results.flatMap((result, index) =>
+          result.status === "rejected" && ownsCleanup(targets[index]) ? [result.reason] : [],
+        );
+        if (failures.length > 0) {
+          throw new AggregateError(failures, "computer: session desktop cleanup failed");
         }
       });
     return await this.disposePromise;

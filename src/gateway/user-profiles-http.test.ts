@@ -37,13 +37,6 @@ vi.mock("./http-auth-utils.js", async (importOriginal) => ({
   authorizeControlUiReadRequestOrReply,
 }));
 vi.mock("../config/io.js", () => ({ getRuntimeConfig }));
-vi.mock("../state/user-profiles.js", async () => ({
-  formatUserProfileAvatarEtag: (sha256: string, mime: string) =>
-    `"${sha256}-${mime.slice("image/".length)}"`,
-  UserProfileNotFoundError: (await import("../state/user-profiles-schema.js"))
-    .UserProfileNotFoundError,
-}));
-
 vi.mock("../state/user-profiles-avatar.js", () => ({ createProfileAvatarReader }));
 
 function emailHash(email: string): string {

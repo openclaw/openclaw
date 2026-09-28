@@ -116,7 +116,7 @@ export function resolveInitialDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:auth-profiles",
       label: "Auth profiles",
-      updateWork: { kind: "inspection", scope: "agent" },
+      updateWork: { kind: "inspection", scope: "agent", repairs: true },
       healthChecks: {
         description: "Auth profile cooldown, expiry, missing credential, and legacy override state",
         defaultEnabled: false,
@@ -162,7 +162,7 @@ export function resolveInitialDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:structured-health-repairs",
       label: "Plugin health inspection and repair",
-      updateWork: { kind: "inspection", scope: "agent" },
+      updateWork: { kind: "inspection", scope: "agent", repairs: true },
       run: params.runStructuredHealthRepairs,
     }),
     createDoctorHealthContribution({
@@ -323,6 +323,20 @@ export function resolveInitialDoctorHealthContributions(params: {
       label: "Updater runtimes",
       updateWork: { kind: "startup" },
       run: runRetainedUpdateRuntimesHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:update-snapshots",
+      label: "Retained update database snapshots",
+      updateWork: { kind: "standalone" },
+      healthChecks: {
+        description: "Retained npm update database snapshots need operator review before removal.",
+        defaultEnabled: true,
+        async detect(ctx) {
+          const { collectUpdateSnapshotHealthFindings } =
+            await import("../commands/doctor-update-snapshots.js");
+          return collectUpdateSnapshotHealthFindings(ctx.env);
+        },
+      },
     }),
     createDoctorHealthContribution({
       id: "doctor:ui-protocol-freshness",

@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { isIndexedSessionEntry } from "../agents/sessions/session-manager-codec.js";
@@ -162,17 +163,6 @@ function readHeaderRepairContext(
   return { sessionKey: window.session_key, ...(spawnedCwd ? { spawnedCwd } : {}) };
 }
 
-function formatHeaderTimestamp(createdAt: number): string | undefined {
-  if (!Number.isFinite(createdAt)) {
-    return undefined;
-  }
-  try {
-    return new Date(createdAt).toISOString();
-  } catch {
-    return undefined;
-  }
-}
-
 function assertRepairPreservedEvents(params: {
   before: readonly SqliteTranscriptStorageRow[];
   database: OpenClawAgentDatabase;
@@ -240,7 +230,7 @@ export async function noteSessionTranscriptHeaderHealth(params: {
         if (!snapshot.sessionKey || !parser.hasIndexedEntries() || snapshot.rows.length === 0) {
           continue;
         }
-        const headerTimestamp = formatHeaderTimestamp(snapshot.rows[0]?.createdAt ?? Number.NaN);
+        const headerTimestamp = timestampMsToIsoString(snapshot.rows[0]?.createdAt ?? Number.NaN);
         if (!headerTimestamp) {
           note(
             `- Failed to repair transcript ${sessionId} (${target.agentId}): invalid first-row timestamp`,

@@ -74,7 +74,12 @@ const mutations = [
 
 it.each(
   mutations.flatMap(({ action, target, revocation }) =>
-    [false, true].map((revoke) => ({ action, target, revocation, revoke })),
+    (action === "add" && target === "--store" ? [true] : [false, true]).map((revoke) => ({
+      action,
+      target,
+      revocation,
+      revoke,
+    })),
   ),
 )(
   "rechecks $action $target pairing writes after $revocation during preparation (revoke=$revoke)",

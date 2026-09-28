@@ -15,7 +15,11 @@ import {
   type ConfigPreflightSnapshotRead,
 } from "./config-preflight-snapshot.js";
 import { refreshStartupPluginQuarantine } from "./doctor-config-preflight-plugin-verification.js";
-import { throwStartupMigrationGuardRejected } from "./doctor-startup-migration-refusal.js";
+import {
+  rethrowStartupConfigFailure,
+  throwStartupMigrationGuardRejected,
+} from "./doctor-startup-migration-refusal.js";
+import { cleanupStartupPluginSourceCaptures } from "./startup-plugin-source-captures.js";
 
 export type StartupConfigPreflightOptions = {
   gateway: boolean;
@@ -36,7 +40,14 @@ export async function runStartupConfigPreflight(
   options: StartupConfigPreflightOptions,
 ): Promise<StartupConfigPreflightResult> {
   const { withSqliteReadOnlyWorkerScope } = await import("../infra/sqlite-readonly-worker.js");
-  return await withSqliteReadOnlyWorkerScope(() => prepareStartupConfig(options));
+  try {
+    return await withSqliteReadOnlyWorkerScope(() => prepareStartupConfig(options));
+  } catch (error) {
+    if (options.gateway) {
+      rethrowStartupConfigFailure(error);
+    }
+    throw error;
+  }
 }
 
 async function prepareStartupConfig(
@@ -62,6 +73,9 @@ async function prepareStartupConfig(
   if (!options.gateway) {
     const read = await readSnapshot();
     await beforeStatePreparation(read.snapshot);
+    if (read.snapshot.valid && options.observe !== false) {
+      await cleanupStartupPluginSourceCaptures(env);
+    }
     return result(read);
   }
 
@@ -77,13 +91,19 @@ async function prepareStartupConfig(
   if (!read.snapshot.valid) {
     return result(read);
   }
+  if (options.observe !== false) {
+    await cleanupStartupPluginSourceCaptures(env);
+  }
   let lease: StartupMigrationLease | undefined;
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   let heartbeatError: Error | undefined;
-  const assertLeaseCurrent = () => {
+  const assertHeartbeatCurrent = () => {
     if (heartbeatError) {
       throw heartbeatError;
     }
+  };
+  const assertLeaseCurrent = () => {
+    assertHeartbeatCurrent();
     lease?.heartbeat();
   };
   try {
@@ -121,6 +141,7 @@ async function prepareStartupConfig(
           measure,
           readPersistedSnapshot: readSnapshot,
           snapshotRead: read,
+          assertCurrent: assertHeartbeatCurrent,
         });
         read = persisted.snapshotRead;
       }

@@ -73,17 +73,6 @@ describe("state database permission hardening without chmod support", () => {
     });
   });
 
-  it("opens the state database when chmodSync throws ENOTSUP", () => {
-    const stateDir = tempDirs.make("openclaw-state-chmod-");
-    chmodFailHook.error = enotsupError();
-
-    const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
-
-    expect(database.db.isOpen).toBe(true);
-    // Hardening ran and failed; the failure must stay non-fatal.
-    expect(chmodFailHook.calls).toBeGreaterThan(0);
-  });
-
   it("rethrows EPERM when existing permissions are too broad", () => {
     const stateDir = tempDirs.make("openclaw-state-chmod-");
     // The shared database owner hardens state/, not the outer profile directory.
@@ -214,5 +203,6 @@ describe("state database permission hardening without chmod support", () => {
     }, options);
 
     expect(result).toBe("committed");
+    expect(chmodFailHook.calls).toBeGreaterThan(0);
   });
 });

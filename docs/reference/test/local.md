@@ -196,9 +196,11 @@ plugin's KNN child, session transcript archive and reconciliation workers, and
 managed GitHub credential resolution. The same generation also compiles the fake-backend TUI
 fixture's four runtime roots together: the real TUI, embedded reply producer,
 reply metadata reader, and outbound normalizer. Shared chunks preserve their
-module and WeakMap identity. Generated TUI fixtures remain `.mts` files: Node
-launches them with `--import tsx` for their own syntax, while Bun handles that
-syntax natively without the Node loader. Only their runtime imports change.
+module and WeakMap identity. Prepared TUI fixtures are compiled to `.mjs` and run
+as JavaScript without a TypeScript loader. Direct source fixtures
+remain `.mts`: Node launches them with `--import tsx`, while Bun handles their
+syntax natively. The session-identity PTY tests load real provider policies, so
+their runtime prerequisite prepares the built host SDK before Vitest workers start.
 Existing package build entry paths and Vitest source parents stay unchanged. The
 CLI fork-recovery regression also compiles the real CLI entry and its concurrent
 rebind's session accessor and binding helper together. Both processes use the same
@@ -207,6 +209,9 @@ Doctor process output tests with bundled plugins disabled reuse that compiled CL
 inside one lazily created package fixture per test run, keeping real UI checks on
 fixture-owned assets and each scenario’s state separate. Standalone and watch runs
 use live source inside the same fixture.
+
+Broadcast output coverage prepares its message helper and exit finalizer together,
+preserving command substitution and joining its process tree before fixture cleanup.
 
 Isolated Doctor config scripts also share the prepared config-flow, health-writer,
 and install-index modules. Each case still starts a fresh process with separate

@@ -1,8 +1,3 @@
-/**
- * Subagent spawn planning helpers.
- *
- * Resolves model, thinking, and timeout choices before the sessions_spawn executor launches work.
- */
 import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { formatThinkingLevels } from "../../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -24,10 +19,7 @@ import { prepareModelChoice } from "./subagent-spawn.runtime.js";
 
 /** Splits a provider/model ref while preserving model-only refs. */
 export function splitModelRef(ref?: string) {
-  if (!ref) {
-    return { provider: undefined, model: undefined };
-  }
-  const trimmed = ref.trim();
+  const trimmed = ref?.trim();
   if (!trimmed) {
     return { provider: undefined, model: undefined };
   }

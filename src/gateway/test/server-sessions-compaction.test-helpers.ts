@@ -29,7 +29,18 @@ type HeldCompactionResult = {
   };
 };
 
-export function holdCompaction(result: HeldCompactionResult) {
+export function holdCompaction(
+  result: HeldCompactionResult = {
+    ok: true,
+    compacted: true,
+    result: {
+      summary: "summary",
+      firstKeptEntryId: "entry-1",
+      tokensBefore: 120,
+      tokensAfter: 80,
+    },
+  },
+) {
   const entered = createDeferred();
   const terminal = createDeferred<HeldCompactionResult>();
   embeddedRunMock.compactEmbeddedAgentSession.mockImplementationOnce(() => {
@@ -107,26 +118,6 @@ export async function createCompactedSessionFixture(dir: string) {
   };
 }
 
-function buildSessionTranscriptLines(sessionId: string, totalLines: number): string[] {
-  const header = JSON.stringify({
-    type: "session",
-    version: 3,
-    id: sessionId,
-    timestamp: "2026-06-19T12:00:00.000Z",
-    cwd: "/tmp",
-  });
-  const entries = Array.from({ length: Math.max(0, totalLines - 1) }, (_, index) =>
-    JSON.stringify({
-      type: "message",
-      id: `entry-${index}`,
-      parentId: index === 0 ? null : `entry-${index - 1}`,
-      timestamp: `2026-06-19T12:00:${String(index % 60).padStart(2, "0")}.000Z`,
-      message: { role: "user", content: `line-${index}`, timestamp: index },
-    }),
-  );
-  return [header, ...entries];
-}
-
 export async function seedTranscriptRows(params: {
   agentId?: string;
   sessionId: string;
@@ -143,8 +134,13 @@ export async function seedTranscriptRows(params: {
   if (params.totalLines <= 0) {
     return;
   }
-  const header = JSON.parse(buildSessionTranscriptLines(params.sessionId, 1)[0] ?? "{}");
-  await appendTranscriptEvent(scope, header);
+  await appendTranscriptEvent(scope, {
+    type: "session",
+    version: 3,
+    id: params.sessionId,
+    timestamp: "2026-06-19T12:00:00.000Z",
+    cwd: "/tmp",
+  });
   for (let index = 0; index < params.totalLines - 1; index += 1) {
     await appendTranscriptMessage(scope, {
       cwd: "/tmp",

@@ -360,9 +360,10 @@ export async function resolveUpdateCommandTarget(
         if (!opts.json) {
           printManagedServicePackageUpdatePlan(servicePlan);
         }
-        packageUpdateNodeRunner = managedServiceRoot
-          ? resolveNodeRunner()
-          : managedServiceNodeRunner;
+        packageUpdateNodeRunner =
+          managedServiceRoot && !process.versions.bun
+            ? resolveNodeRunner()
+            : managedServiceNodeRunner;
       }
 
       // Read-only native/root admission is complete. Own interruption settlement
@@ -483,6 +484,7 @@ export async function resolveUpdateCommandTarget(
             tag: targetTag,
             env: packageInstallEnv,
           });
+        let targetMetadata: Awaited<ReturnType<typeof fetchNpmPackageTargetStatus>> | undefined;
         if (channel === "extended-stable") {
           const extendedStable = await resolveExtendedStablePackage({
             installKind: updateInstallKind,
@@ -497,10 +499,12 @@ export async function resolveUpdateCommandTarget(
           tag = extendedStable.version;
           packageInstallSpec = extendedStable.packageSpec;
         } else if (explicitTag) {
-          targetVersion = await resolveTargetVersion(tag, timeoutMs, {
+          const resolved = await resolveTargetVersion(tag, timeoutMs, {
             spec: packageSpec(tag),
             ...npmMetadataOptions,
           });
+          targetVersion = resolved.version;
+          targetMetadata = resolved.metadata;
         } else {
           const resolved = await resolveNpmChannelTag({
             channel,
@@ -510,6 +514,7 @@ export async function resolveUpdateCommandTarget(
           tag = resolved.tag;
           fallbackToLatest = channel === "beta" && resolved.tag === "latest";
           targetVersion = resolved.version;
+          targetMetadata = resolved.metadata;
         }
         const cmp =
           currentVersion && targetVersion
@@ -531,7 +536,11 @@ export async function resolveUpdateCommandTarget(
           currentVersion != null &&
           (targetVersion == null ? tag !== "latest" : cmp != null && cmp > 0);
         if (targetVersion) {
-          const targetMetadata = await fetchNpmPackageTargetStatus({
+          // A package-spec override may select a different artifact or a mutable tag.
+          if (packageSpec(targetVersion) !== `${DEFAULT_PACKAGE_NAME}@${targetVersion}`) {
+            targetMetadata = undefined;
+          }
+          targetMetadata ??= await fetchNpmPackageTargetStatus({
             target: targetVersion,
             timeoutMs,
             spec: packageSpec(targetVersion),
@@ -546,8 +555,7 @@ export async function resolveUpdateCommandTarget(
             return undefined;
           }
           packageTargetSchemaVersions = targetMetadata.schemaVersions;
-          // Runtime and schema checks must use the same exact package that will be
-          // installed; rereading a mutable dist-tag can inspect a different release.
+          // Keep the selected version and its metadata together when a dist-tag moves.
           packageRuntimeTarget = { version: targetVersion, nodeEngine: targetMetadata.nodeEngine };
           // Always install the exact inspected version: a dist-tag can move between
           // this lookup and the install, and an uninspected version would bypass

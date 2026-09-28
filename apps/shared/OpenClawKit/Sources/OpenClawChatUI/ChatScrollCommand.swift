@@ -38,7 +38,7 @@ struct ChatScrollCommand {
     }
 
     mutating func take(_ request: Request, sessionTarget: OpenClawChatSessionTarget) -> Request? {
-        guard self.pending == request else { return nil }
+        guard self.pending?.id == request.id else { return nil }
         self.pending = nil
         guard request.sessionTarget == sessionTarget else { return nil }
         return request

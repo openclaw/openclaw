@@ -116,10 +116,6 @@ const MAX_CODEX_DYNAMIC_TOOL_VALIDATION_ERRORS = 4;
 const MAX_CODEX_DYNAMIC_TOOL_VALIDATION_ERROR_CHARS = 160;
 const CODEX_DYNAMIC_TOOL_VALIDATION_TRUNCATED_SUFFIX = " [detail truncated]";
 
-function shouldValidateCodexDynamicToolInput(tool: AnyAgentTool): boolean {
-  return getPluginToolMeta(tool)?.mcp?.operation !== "tool";
-}
-
 function assertCodexDynamicToolInputMatchesSchema(params: {
   toolName: string;
   schema: JsonSchemaObject;
@@ -388,13 +384,9 @@ export function createCodexDynamicToolBridge(params: {
         const message = registeredToolNames.has(call.tool)
           ? `OpenClaw tool is not available for this turn: ${call.tool}`
           : `Unknown OpenClaw tool: ${call.tool}`;
-        presentTerminal(call.tool, failedToolResult(message), true);
-        notifyAgentToolResult(
-          options?.onAgentToolResult,
-          call.tool,
-          failedToolResult(message),
-          true,
-        );
+        const result = failedToolResult(message);
+        presentTerminal(call.tool, result, true);
+        notifyAgentToolResult(options?.onAgentToolResult, call.tool, result, true);
         return createFailedDynamicToolResponse(message, {
           executedArguments,
           executionStarted: false,
@@ -466,7 +458,7 @@ export function createCodexDynamicToolBridge(params: {
               : undefined,
           };
         },
-        shouldValidateArguments: () => shouldValidateCodexDynamicToolInput(tool),
+        shouldValidateArguments: () => getPluginToolMeta(tool)?.mcp?.operation !== "tool",
         validateArguments: (value) =>
           assertCodexDynamicToolInputMatchesSchema({
             toolName,
@@ -903,11 +895,6 @@ function isAsyncStartedToolResult(result: AgentToolResult<unknown>): boolean {
   const details = result.details;
   return isRecord(details) && details.async === true && details.status === "started";
 }
-function normalizeToolResultMaxChars(maxChars: number): number {
-  return typeof maxChars === "number" && Number.isFinite(maxChars) && maxChars > 0
-    ? Math.floor(maxChars)
-    : DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
-}
 function sanitizeToolTextRuns(
   rawContent: Array<TextContent | ImageContent>,
 ): Array<TextContent | ImageContent> {
@@ -949,13 +936,12 @@ function sanitizeToolTextRuns(
 }
 function convertToolContents(
   rawContent: Array<TextContent | ImageContent>,
-  toolResultMaxChars = DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
+  maxChars: number,
 ): CodexDynamicToolCallOutputContentItem[] {
   // Adjacent text items form one model-visible stream, so sanitize each full run before
   // repartitioning and budgeting. Image blocks keep their bytes; the storage-oriented
   // whole-result branch of sanitizeToolResult would drop them.
   const content = sanitizeToolTextRuns(rawContent);
-  const maxChars = normalizeToolResultMaxChars(toolResultMaxChars);
   const totalTextChars = content.reduce(
     (total, item) => total + (item.type === "text" ? item.text.length : 0),
     0,

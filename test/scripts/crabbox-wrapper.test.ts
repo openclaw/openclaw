@@ -5031,6 +5031,7 @@ process.on("exit", () => {
           ...env,
           CI: "true",
           PATH: [path.dirname(process.execPath), env.PATH].join(path.delimiter),
+          COREPACK_HOME: path.join(dependencyRoot, "corepack"),
           PNPM_CONFIG_STORE_DIR: path.join(dependencyRoot, "store"),
           PNPM_CONFIG_CACHE_DIR: path.join(dependencyRoot, "cache"),
         };
@@ -5168,7 +5169,7 @@ process.on("exit", () => {
           frozen.remoteCommand,
           frozen.bundle,
           origin,
-          dependencyEnv,
+          { ...dependencyEnv, COREPACK_ENABLE_NETWORK: "0" },
           true,
           [],
           (receiver) => {

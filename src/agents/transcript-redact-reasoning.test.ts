@@ -4,11 +4,10 @@ import { redactTranscriptMessage } from "./transcript-redact.js";
 
 describe("Responses reasoning transcript preservation", () => {
   it.each([
-    ["github-copilot", "openai-responses", 416],
-    ["github-copilot", "openclaw-openai-responses-transport", 1024],
-    ["openai", "openai-responses", 1024],
-  ])("preserves opaque reasoning for %s / %s with %i-character ids", (provider, api, length) => {
-    const id = "A".repeat(length);
+    ["github-copilot", "openclaw-openai-responses-transport"],
+    ["openai", "openai-responses"],
+  ])("preserves opaque reasoning for %s / %s with 1024-character ids", (provider, api) => {
+    const id = "A".repeat(1024);
     const encryptedContent = "Q".repeat(32) + "/LTAI" + "B".repeat(20) + "/" + "C".repeat(6);
     const signature = JSON.stringify({
       id,

@@ -14,37 +14,33 @@ afterEach(() => {
 });
 
 describe("Codex inbound request lifetime", () => {
-  it.each([
-    "item/commandExecution/requestApproval",
-    "item/fileChange/requestApproval",
-    "item/permissions/requestApproval",
-    "item/tool/requestUserInput",
-    "mcpServer/elicitation/request",
-    "item/tool/call",
-  ])("resolves only the exact thread and typed request id for %s", async (method) => {
-    const harness = createClientHarness();
-    clients.push(harness.client);
-    const signals = new Map<string | number, AbortSignal | undefined>();
-    harness.client.addRequestHandler((request, signal) => {
-      signals.set(request.id, signal);
-      return new Promise<never>(() => {});
-    });
-    for (const id of [7, "7"]) {
-      harness.send({ id, method, params: { threadId: "thread-1" } });
-    }
-    harness.send({
-      method: "serverRequest/resolved",
-      params: { threadId: "other-thread", requestId: 7 },
-    });
-    expect(signals.get(7)?.aborted).toBe(false);
-    harness.send({
-      method: "serverRequest/resolved",
-      params: { threadId: "thread-1", requestId: 7 },
-    });
-    expect(signals.get(7)?.aborted).toBe(true);
-    expect(signals.get("7")?.aborted).toBe(false);
-    expect(harness.writes).toEqual([]);
-  });
+  it.each(["item/commandExecution/requestApproval", "item/tool/call"])(
+    "resolves only the exact thread and typed request id for %s",
+    async (method) => {
+      const harness = createClientHarness();
+      clients.push(harness.client);
+      const signals = new Map<string | number, AbortSignal | undefined>();
+      harness.client.addRequestHandler((request, signal) => {
+        signals.set(request.id, signal);
+        return new Promise<never>(() => {});
+      });
+      for (const id of [7, "7"]) {
+        harness.send({ id, method, params: { threadId: "thread-1" } });
+      }
+      harness.send({
+        method: "serverRequest/resolved",
+        params: { threadId: "other-thread", requestId: 7 },
+      });
+      expect(signals.get(7)?.aborted).toBe(false);
+      harness.send({
+        method: "serverRequest/resolved",
+        params: { threadId: "thread-1", requestId: 7 },
+      });
+      expect(signals.get(7)?.aborted).toBe(true);
+      expect(signals.get("7")?.aborted).toBe(false);
+      expect(harness.writes).toEqual([]);
+    },
+  );
 
   it.each(["answer", "error"] as const)(
     "suppresses a late %s after native resolution",

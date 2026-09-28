@@ -1,12 +1,13 @@
 import fs from "node:fs/promises";
+import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "../../infra/sqlite-files.js";
-import { acquireGatewayLifecycleCoordinator } from "../../infra/state-database-coordinator.js";
 import type { UpdateCandidateAdmissionResult } from "../../infra/update-candidate-admission.js";
 import { compareSemverStrings } from "../../infra/update-check.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { isFailedUpdateStep } from "../../infra/update-run-step.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership.js";
 import {
@@ -136,12 +137,26 @@ export function acquireLegacyUpdateInitializationFence(params: {
 }) {
   const databasePath = resolveOpenClawStateSqlitePath(params.env);
   const comparison = compareSemverStrings(params.targetVersion, "2026.7.1");
-  // Released schema-1 writers through 2026.7.1 predate the external schema
-  // coordinator. Hold its existing Gateway fence so a modern process cannot
-  // create/migrate this profile while that legacy child initializes it.
-  return params.targetSchemas.state === 1 && comparison !== null && comparison <= 0
-    ? acquireGatewayLifecycleCoordinator({ databasePath, busyTimeoutMs: 0 })
-    : undefined;
+  // Released schema-1 writers through 2026.7.1 do not acquire the current process
+  // owner. The parent retains it so modern startup/schema work cannot race the
+  // legacy child while that child initializes its own profile.
+  if (params.targetSchemas.state !== 1 || comparison === null || comparison > 0) {
+    return undefined;
+  }
+  const owner = acquireGatewayStateOwner({ databasePath });
+  const maintenance = createOpenClawDatabaseMaintenanceScope({
+    schemaMaintenance: true,
+    assertOwnerCurrent: owner.assertCurrent,
+    assertDatabaseAccess: owner.assertDatabaseAccess,
+  });
+  return {
+    assertCurrent: owner.assertCurrent,
+    run: <T>(operation: () => T) => maintenance.run(operation),
+    async release() {
+      await maintenance.close();
+      owner.release();
+    },
+  };
 }
 
 /** The selected release owns bootstrap; the parent may only inspect its result. */

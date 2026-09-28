@@ -10,6 +10,7 @@ import {
   CODEX_APP_SERVER_BINDING_NAMESPACE,
 } from "./session-binding-meta.js";
 import {
+  readCurrentNativePendingAssignments,
   readCurrentCodexAppServerBinding,
   readCurrentCodexAppServerBindings,
   readCurrentCodexNativeSubagentSubmissions,
@@ -49,6 +50,8 @@ export function createLazyCodexAppServerBindingStore(
             readCurrentCodexAppServerBindings(state, identities)
         : undefined;
     },
+    readNativeSubagentAssignments: (identity, owner) =>
+      readCurrentNativePendingAssignments(state, identity, owner),
     readNativeSubagentSubmissions: (identity, owner) =>
       readCurrentCodexNativeSubagentSubmissions(state, identity, owner),
     hasOtherThreadOwner: async (threadId, currentIdentity) =>

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import {
   asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
@@ -45,14 +46,8 @@ export function normalizeRecallQuery(
   maxChars: number = DEFAULT_RECALL_MAX_CHARS,
 ): string {
   const normalized = text.replace(/\s+/g, " ").trim();
-  const limit = normalizeMaxChars(maxChars, DEFAULT_RECALL_MAX_CHARS);
+  const limit = resolveNonNegativeIntegerOption(maxChars, DEFAULT_RECALL_MAX_CHARS);
   return normalized.length > limit ? truncateUtf16Safe(normalized, limit).trimEnd() : normalized;
-}
-
-function normalizeMaxChars(value: number | undefined, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value)
-    ? Math.max(0, Math.floor(value))
-    : fallback;
 }
 
 export type AutoCaptureMessageProgress = {
@@ -150,8 +145,6 @@ export function prepareAutoCaptureMessages(
   return progress;
 }
 
-// LanceDB Provider
-
 const DUPLICATE_SEARCH_LIMIT = 5;
 
 const MEMORY_TRIGGERS = [
@@ -227,7 +220,7 @@ export function formatRecalledMemoryForModel(
   text: string,
   maxChars: number = DEFAULT_RECALL_MAX_CHARS,
 ): string {
-  const limit = normalizeMaxChars(maxChars, DEFAULT_RECALL_MAX_CHARS);
+  const limit = resolveNonNegativeIntegerOption(maxChars, DEFAULT_RECALL_MAX_CHARS);
   return truncateUtf16Safe(escapeMemoryForPrompt(text), limit);
 }
 
@@ -263,7 +256,7 @@ export function shouldCapture(
   if (looksLikeEnvelopeSludge(text)) {
     return false;
   }
-  const maxChars = normalizeMaxChars(options?.maxChars, DEFAULT_CAPTURE_MAX_CHARS);
+  const maxChars = resolveNonNegativeIntegerOption(options?.maxChars, DEFAULT_CAPTURE_MAX_CHARS);
   if (text.length > maxChars) {
     return false;
   }

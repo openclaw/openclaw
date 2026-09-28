@@ -241,18 +241,13 @@ describe("Agents API output attachment publication", () => {
       host.hostCapabilities.prepareReplyMedia,
     );
 
-    expect(output.toolMediaUrls).toHaveLength(2);
-    expect(output.hostOwnedToolMediaUrls).toEqual(output.toolMediaUrls);
-    expect(output.toolTrustedLocalMedia).toBe(true);
-    expect(await Promise.all(output.toolMediaUrls.map((file) => fs.readFile(file)))).toEqual([
-      binary,
-      text,
-    ]);
-    for (const file of output.toolMediaUrls) {
+    expect(output).toHaveLength(2);
+    expect(await Promise.all(output.map((file) => fs.readFile(file)))).toEqual([binary, text]);
+    for (const file of output) {
       expect(path.dirname(file)).toBe(path.join(stateDir, "media", "outbound"));
     }
     expect((await fs.readdir(path.join(stateDir, "media", "outbound"))).toSorted()).toEqual(
-      output.toolMediaUrls.map((file) => path.basename(file)).toSorted(),
+      output.map((file) => path.basename(file)).toSorted(),
     );
   });
 

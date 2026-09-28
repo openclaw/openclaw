@@ -24,9 +24,12 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { buildFullReleaseCandidateBinding } from "../../scripts/full-release-candidate-contract.mjs";
 import { FULL_RELEASE_WAIT_TIMEOUT_MINUTES } from "../../scripts/full-release-validation-at-sha.mts";
+import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { listRecordedFirstHopSourceVersions } from "../../scripts/lib/update-first-hop-lanes.mjs";
 import { parseUpgradeSurvivorScenarios } from "../../scripts/lib/upgrade-survivor-policy.mjs";
 import { createReleaseWorkflowMatrixPlan } from "../../scripts/plan-release-workflow-matrix.mjs";
+import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
+import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import {
   fullReleaseCandidateArtifact,
   fullReleaseCandidateManifestFixture,
@@ -2219,6 +2222,7 @@ describe("frozen admission workflow barriers", () => {
     "acquires selected upgrade metadata before expanded %s admission",
     (lane) => {
       const path = "src/gateway/node-command-policy.ts";
+      const membershipOwner = "src/cli/update-cli/update-command-terminal-publication.ts";
       const scenarioCatalog = "scripts/lib/upgrade-survivor-scenarios.json";
       const inputs = {
         docker_lanes: lane,
@@ -2236,12 +2240,14 @@ describe("frozen admission workflow barriers", () => {
         {
           "package.json": '{"type":"module","version":"2026.9.2"}',
           [path]: readFileSync(path, "utf8"),
+          [membershipOwner]: readFileSync(membershipOwner, "utf8"),
           ...currentSurvivorScenarioFiles(),
         },
         { ADMISSION_BASELINES_RESOLVED: "true" },
       );
       const planned = fixture.selection();
       expect(planned.sourcePaths).toContain(path);
+      expect(planned.sourcePaths).toContain(membershipOwner);
       expect(planned.sourcePaths).toContain(scenarioCatalog);
       const origin = join(fixture.root, "origin.git");
       fixture.git("clone", "--bare", "--no-hardlinks", fixture.target, origin);
@@ -2251,6 +2257,10 @@ describe("frozen admission workflow barriers", () => {
       fixture.git("config", "remote.origin.partialclonefilter", "blob:none");
       const oid = fixture.git("rev-parse", `${fixture.sha}:${path}`);
       const scenarioCatalogOid = fixture.git("rev-parse", `${fixture.sha}:${scenarioCatalog}`);
+      const membershipOid = fixture.git("rev-parse", `${fixture.sha}:${membershipOwner}`);
+      unlinkSync(
+        join(fixture.target, ".git", "objects", membershipOid.slice(0, 2), membershipOid.slice(2)),
+      );
       unlinkSync(join(fixture.target, ".git", "objects", oid.slice(0, 2), oid.slice(2)));
       unlinkSync(
         join(
@@ -2280,7 +2290,10 @@ describe("frozen admission workflow barriers", () => {
       });
       expect(acquired.status, acquired.stderr).toBe(0);
       expect(readFileSync(requested, "utf8").trim().split("\n")).toEqual(
-        expect.arrayContaining([oid, scenarioCatalogOid]),
+        expect.arrayContaining([oid, scenarioCatalogOid, membershipOid]),
+      );
+      expect(fixture.git("cat-file", "blob", membershipOid)).toBe(
+        readFileSync(membershipOwner, "utf8").trim(),
       );
       const admitted = fixture.admit();
       expect(admitted.status, admitted.stderr).toBe(0);
@@ -2317,6 +2330,59 @@ describe("frozen admission workflow barriers", () => {
       }
     },
   );
+
+  it("acquires the sparse selected first-hop inventory before admission", () => {
+    const inventory = "scripts/lib/update-compat-inventory.json";
+    const postbuild = "scripts/runtime-postbuild.mts";
+    const lane = "update-first-hop-compat-2026.9.6";
+    const f = frozenWorkflowFixture(
+      LIVE_E2E_WORKFLOW,
+      "validate_selected_ref",
+      {
+        docker_lanes: lane,
+        include_release_path_suites: false,
+        include_live_suites: false,
+        allow_frozen_target_scenario_omissions: true,
+      },
+      {
+        [inventory]: JSON.stringify({ releases: [{ version: "2026.9.6" }] }),
+        [postbuild]: readFileSync(postbuild, "utf8"),
+      },
+    );
+    f.selection();
+    const origin = join(f.root, "origin.git");
+    f.git("clone", "--bare", "--no-hardlinks", f.target, origin);
+    f.git("-C", origin, "config", "uploadpack.allowFilter", "true");
+    f.git("remote", "add", "origin", pathToFileURL(origin).href);
+    f.git("config", "remote.origin.promisor", "true");
+    f.git("config", "remote.origin.partialclonefilter", "blob:none");
+    const oid = f.git("rev-parse", f.sha + ":" + inventory);
+    unlinkSync(join(f.target, ".git/objects", oid.slice(0, 2), oid.slice(2)));
+
+    const unavailable = f.admit();
+    expect(unavailable.status).not.toBe(0);
+    expect(unavailable.stderr).toContain("unable to read selected source");
+    const bin = join(f.root, "acquisition-bin");
+    const requested = join(f.root, "requested-blobs");
+    mkdirSync(bin);
+    const gitPath = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+    writeFileSync(
+      join(bin, "git"),
+      `#!/bin/sh\nif [ "$#" = 5 ] && [ "$3" = cat-file ] && [ "$4" = blob ]; then printf '%s\\n' "$5" >> '${requested}'; fi\nexec '${gitPath}' "$@"\n`,
+      { mode: 0o755 },
+    );
+    const acquired = f.run("Acquire selected contract objects", {
+      PATH: `${bin}:${process.env.PATH}`,
+    });
+    expect(acquired.status, acquired.stderr).toBe(0);
+    // A local promisor fetch may incidentally return other missing blobs too.
+    expect(readFileSync(requested, "utf8").trim().split("\n")).toContain(oid);
+    const admitted = f.admit();
+    expect(admitted.status, admitted.stderr).toBe(0);
+    const record = JSON.parse(readFileSync(join(f.root, "frozen-admission.json"), "utf8"));
+    expect(record.evaluations[0].docker.lanes).toEqual([lane]);
+    expect(record.sources.selected).toContainEqual({ path: inventory, oid });
+  });
 
   it("acquires a sparse selected typed-onboarding assertion helper before admission", () => {
     const helper = "scripts/e2e/lib/release-assertion-files.mjs";
@@ -3989,10 +4055,12 @@ function runNpmTelegramInputValidation(overrides: Record<string, string>) {
 }
 
 function runNpmTelegramArtifactValidation(params: {
+  currentRunAttempt?: string;
   currentRunId: string;
+  producerJobConclusion?: "failure" | "success";
   producerRunId: string;
   producerStatus: "completed" | "in_progress" | "pending" | "queued" | "requested" | "waiting";
-  producerConclusion: "success" | null;
+  producerConclusion: "failure" | "success" | null;
 }) {
   const job = workflowJob(NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e");
   const script = workflowStep(job, "Validate package artifact identity").run;
@@ -4006,6 +4074,7 @@ function runNpmTelegramArtifactValidation(params: {
     `#!/bin/sh
 case "$*" in
   *actions/artifacts*) printf '%s\\n' "$MOCK_ARTIFACT_JSON" ;;
+  *actions/runs*/jobs*) printf '%s\\n' "$MOCK_JOBS_JSON" ;;
   *actions/runs*) printf '%s\\n' "$MOCK_ATTEMPT_JSON" ;;
   *) exit 2 ;;
 esac
@@ -4025,6 +4094,7 @@ esac
       ARTIFACT_RUN_ATTEMPT: attempt,
       ARTIFACT_RUN_ID: params.producerRunId,
       GITHUB_REPOSITORY: "openclaw/openclaw",
+      GITHUB_RUN_ATTEMPT: params.currentRunAttempt ?? attempt,
       GITHUB_RUN_ID: params.currentRunId,
       MOCK_ARTIFACT_JSON: JSON.stringify({
         created_at: "2026-07-15T08:49:20Z",
@@ -4041,6 +4111,20 @@ esac
         run_started_at: "2026-07-15T08:39:00Z",
         status: params.producerStatus,
         updated_at: "2026-07-15T08:49:30Z",
+      }),
+      MOCK_JOBS_JSON: JSON.stringify({
+        jobs: [
+          {
+            completed_at: "2026-07-15T08:49:30Z",
+            conclusion: params.producerJobConclusion ?? "success",
+            id: 654,
+            name: "Run package acceptance / Resolve package candidate",
+            run_attempt: Number(attempt),
+            run_id: Number(params.producerRunId),
+            started_at: "2026-07-15T08:39:00Z",
+            status: "completed",
+          },
+        ],
       }),
       PATH: `${binDir}:${process.env.PATH}`,
     },
@@ -4896,6 +4980,19 @@ function runReleaseChecksSummary(params: {
 }
 
 describe("package acceptance workflow", () => {
+  it("keeps manual frozen-target adaptation explicit and forwards the reusable contract", () => {
+    const workflow = readWorkflow(PACKAGE_ACCEPTANCE_WORKFLOW);
+    const name = "allow_frozen_target_scenario_omissions";
+    const input = workflow.on?.workflow_dispatch?.inputs?.[name];
+    expect(input).toEqual(workflow.on?.workflow_call?.inputs?.[name]);
+    expect(input).toMatchObject({ required: false, default: false, type: "boolean" });
+    for (const job of ["docker_acceptance", "docker_acceptance_registry", "package_telegram"]) {
+      expect(workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, job).with?.[name]).toBe(
+        "${{ inputs.allow_frozen_target_scenario_omissions || false }}",
+      );
+    }
+  });
+
   it("forwards sealed publication inputs through the canonical publish dispatch", () => {
     const workflow = readWorkflow(RELEASE_PUBLISH_WORKFLOW);
     const input = workflow.on?.workflow_dispatch?.inputs?.plugin_sdk_api_acknowledgement;
@@ -6734,7 +6831,7 @@ wait_for_run "$WORKFLOW" 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPROVE_ENVIRONMEN
     if (tag.includes("alpha") || tag.includes("beta") || native) {
       return;
     }
-    const note = `- Android APK: skipped — apps/android/version.json is ${pin}, release train is 2026.9.1; run the shared mobile cutter (scripts/mobile-release-version.ts --prepare) before the next tag.`;
+    const note = `- Android APK: skipped — apps/android/version.json is ${pin}, release train is 2026.9.1; run pnpm android:version:pin -- --from-gateway before the next tag.`;
     expect(readFileSync(summaryPath, "utf8")).toContain(note);
     expect(outputs.android_release_note).toBe(note);
     const publishJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
@@ -6893,7 +6990,7 @@ printf 'native_failed=%s\\n' "$native_failed"
     },
   );
 
-  it.each([
+  it.for([
     "success",
     "rerun-before-approval",
     "rerun-at-dispatch",
@@ -6905,40 +7002,50 @@ printf 'native_failed=%s\\n' "$native_failed"
     "other-workflow",
     "other-repository",
     "other-tooling",
-  ])("binds native qualification through Android approval and dispatch: %s", (mode) => {
-    const root = tempDirs.make("android-native-qualification-");
-    const bin = join(root, "bin");
-    mkdirSync(bin);
-    mkdirSync(join(root, ".release-harness"));
-    symlinkSync(resolve("scripts"), join(root, ".release-harness/scripts"), "dir");
-    const targetSha = "a".repeat(40);
-    const workflowSha = "d".repeat(40);
-    const workflowRef = `release-publish/${workflowSha.slice(0, 12)}-123`;
-    const dispatchId = `release-native-android-123-2-${targetSha}`;
-    const run = {
-      id: 91,
-      run_attempt: mode === "rerun" ? 2 : 1,
-      event: "workflow_dispatch",
-      path: mode === "other-workflow" ? ".github/workflows/other.yml" : ".github/workflows/ci.yml",
-      display_title: `CI ${mode === "other-source" ? dispatchId.replace(targetSha, "b".repeat(40)) : dispatchId}`,
-      head_branch: mode === "other-ref" ? "main" : workflowRef,
-      head_sha: mode === "other-tooling" ? "c".repeat(40) : workflowSha,
-      repository: {
-        full_name: mode === "other-repository" ? "example/other" : "openclaw/openclaw",
-      },
-      actor: { login: "github-actions[bot]" },
-      triggering_actor: { login: "github-actions[bot]" },
-      status: "completed",
-      conclusion: mode === "failed" ? "failure" : "success",
-    };
-    const dispatchPath = join(root, "dispatch.json");
-    const androidDispatchPath = join(root, "android-dispatch.json");
-    const nativeRunPath = join(root, "native-run.json");
-    writeFileSync(nativeRunPath, JSON.stringify(run));
-    const gh = join(bin, "gh");
-    writeFileSync(
-      gh,
-      `#!${process.execPath}
+  ])(
+    "binds native qualification through Android approval and dispatch: %s",
+    (mode, { signal, onTestFinished }) => {
+      const lifetime = createFixtureLifetime();
+      const finished = new AbortController();
+      onTestFinished(async () => {
+        finished.abort();
+        await lifetime.cleanup();
+      });
+      return lifetime.run(async () => {
+        const root = lifetime.createTempDir("android-native-qualification-");
+        const bin = join(root, "bin");
+        mkdirSync(bin);
+        mkdirSync(join(root, ".release-harness"));
+        symlinkSync(resolve("scripts"), join(root, ".release-harness/scripts"), "dir");
+        const targetSha = "a".repeat(40);
+        const workflowSha = "d".repeat(40);
+        const workflowRef = `release-publish/${workflowSha.slice(0, 12)}-123`;
+        const dispatchId = `release-native-android-123-2-${targetSha}`;
+        const run = {
+          id: 91,
+          run_attempt: mode === "rerun" ? 2 : 1,
+          event: "workflow_dispatch",
+          path:
+            mode === "other-workflow" ? ".github/workflows/other.yml" : ".github/workflows/ci.yml",
+          display_title: `CI ${mode === "other-source" ? dispatchId.replace(targetSha, "b".repeat(40)) : dispatchId}`,
+          head_branch: mode === "other-ref" ? "main" : workflowRef,
+          head_sha: mode === "other-tooling" ? "c".repeat(40) : workflowSha,
+          repository: {
+            full_name: mode === "other-repository" ? "example/other" : "openclaw/openclaw",
+          },
+          actor: { login: "github-actions[bot]" },
+          triggering_actor: { login: "github-actions[bot]" },
+          status: "completed",
+          conclusion: mode === "failed" ? "failure" : "success",
+        };
+        const dispatchPath = join(root, "dispatch.json");
+        const androidDispatchPath = join(root, "android-dispatch.json");
+        const nativeRunPath = join(root, "native-run.json");
+        writeFileSync(nativeRunPath, JSON.stringify(run));
+        const gh = join(bin, "gh");
+        writeFileSync(
+          gh,
+          `#!${process.execPath}
 import { readFileSync, writeFileSync } from 'node:fs';
 const args = process.argv.slice(2);
 if (args[0] === 'api' && args.some(arg => arg.endsWith('/workflows/ci.yml/dispatches'))) {
@@ -6971,25 +7078,27 @@ if (args[0] === 'api' && args.some(arg => arg.endsWith('/workflows/ci.yml/dispat
   }));
 } else throw new Error('Unexpected GitHub operation: ' + JSON.stringify(args));
 `,
-    );
-    chmodSync(gh, 0o755);
-    const nativeJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "qualify_android_native");
-    const approvalJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish_android");
-    const dispatch = workflowStep(nativeJob, "Dispatch and await exact-source native CI");
-    const proof = workflowStep(nativeJob, "Verify exact native CI qualification");
-    const approval = workflowStep(approvalJob, "Write Android release approval");
-    expect(nativeJob.outputs).toMatchObject({
-      workflow_ref: "${{ steps.dispatch.outputs.workflow_ref }}",
-    });
-    expect(proof.env?.NATIVE_CI_WORKFLOW_REF).toBe("${{ steps.dispatch.outputs.workflow_ref }}");
-    expect(approval.env?.NATIVE_CI_WORKFLOW_REF).toBe(
-      "${{ needs.qualify_android_native.outputs.workflow_ref }}",
-    );
-    const outputPath = join(root, "output");
-    writeFileSync(outputPath, "");
-    const rerunBeforeApproval =
-      mode === "rerun-before-approval"
-        ? `
+        );
+        chmodSync(gh, 0o755);
+        const nativeJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "qualify_android_native");
+        const approvalJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish_android");
+        const dispatch = workflowStep(nativeJob, "Dispatch and await exact-source native CI");
+        const proof = workflowStep(nativeJob, "Verify exact native CI qualification");
+        const approval = workflowStep(approvalJob, "Write Android release approval");
+        expect(nativeJob.outputs).toMatchObject({
+          workflow_ref: "${{ steps.dispatch.outputs.workflow_ref }}",
+        });
+        expect(proof.env?.NATIVE_CI_WORKFLOW_REF).toBe(
+          "${{ steps.dispatch.outputs.workflow_ref }}",
+        );
+        expect(approval.env?.NATIVE_CI_WORKFLOW_REF).toBe(
+          "${{ needs.qualify_android_native.outputs.workflow_ref }}",
+        );
+        const outputPath = join(root, "output");
+        writeFileSync(outputPath, "");
+        const rerunBeforeApproval =
+          mode === "rerun-before-approval"
+            ? `
 node --input-type=module <<'NODE'
 import { readFileSync, writeFileSync } from 'node:fs';
 const path = ${JSON.stringify(nativeRunPath)};
@@ -6997,96 +7106,128 @@ const run = JSON.parse(readFileSync(path, 'utf8'));
 writeFileSync(path, JSON.stringify({ ...run, run_attempt: 2, status: 'queued', conclusion: null }));
 NODE
 `
-        : "";
-    const result = spawnSync(
-      "bash",
-      [
-        "-c",
-        [
-          dispatch.run,
-          proof.run,
-          rerunBeforeApproval,
-          approval.run,
-          'dispatch_workflow_at_ref "$RELEASE_TAG" "$TARGET_SHA" android-release.yml -f tag="$RELEASE_TAG"',
-        ].join("\n"),
-      ],
-      {
-        cwd: root,
-        encoding: "utf8",
-        timeout: 10_000,
-        env: {
-          PATH: `${bin}:${process.env.PATH}`,
-          GITHUB_WORKSPACE: root,
-          RUNNER_TEMP: root,
-          GITHUB_OUTPUT: outputPath,
-          GITHUB_STEP_SUMMARY: join(root, "summary"),
-          GITHUB_REPOSITORY: "openclaw/openclaw",
-          GITHUB_RUN_ID: "123",
-          GITHUB_RUN_ATTEMPT: "2",
-          GITHUB_REF: `refs/tags/${workflowRef}`,
-          WORKFLOW_FULL_REF: `refs/tags/${workflowRef}`,
-          PARENT_WORKFLOW_SHA: workflowSha,
-          TARGET_SHA: targetSha,
-          RELEASE_TAG: "v2026.8.1",
-          RELEASE_COVERAGE_POLICY: "npm-stable-v1",
-          NATIVE_CI_RUN_ID: "91",
-          NATIVE_CI_WORKFLOW_REF: workflowRef,
-          NATIVE_CI_WORKFLOW_SHA: workflowSha,
-          RELEASE_PUBLISH_BRANCH: "main",
-          RELEASE_PUBLISH_FULL_REF: "refs/heads/main",
-          RELEASE_PUBLISH_WORKFLOW_SHA: workflowSha,
-          RELEASE_PUBLISH_RUN_ATTEMPT: "2",
-          RELEASE_PUBLISH_RUN_ID: "123",
-        },
-      },
-    );
-    if (mode === "moved-protected-tag") {
-      expect(existsSync(dispatchPath)).toBe(false);
-      expect(result.stderr).toContain("refusing dispatch");
-    } else {
-      expect(JSON.parse(readFileSync(dispatchPath, "utf8"))).toEqual({
-        ref: workflowRef,
-        inputs: {
-          target_ref: targetSha,
-          historical_target_tag: "v2026.8.1",
-          include_android: "true",
-          release_scope: "full",
-          dispatch_id: dispatchId,
-        },
+            : "";
+        const maxBuffer = 1024 * 1024;
+        const stdout = createBoundedChildOutput(maxBuffer);
+        const stderr = createBoundedChildOutput(maxBuffer);
+        const overflow = new AbortController();
+        let outputBytes = 0;
+        let childStatus: number;
+        try {
+          childStatus = await lifetime.track(
+            runManagedCommand({
+              bin: "bash",
+              args: [
+                "-c",
+                [
+                  dispatch.run,
+                  proof.run,
+                  rerunBeforeApproval,
+                  approval.run,
+                  'dispatch_workflow_at_ref "$RELEASE_TAG" "$TARGET_SHA" android-release.yml -f tag="$RELEASE_TAG"',
+                ].join("\n"),
+              ],
+              cwd: root,
+              env: {
+                PATH: `${bin}:${process.env.PATH}`,
+                GITHUB_WORKSPACE: root,
+                RUNNER_TEMP: root,
+                GITHUB_OUTPUT: outputPath,
+                GITHUB_STEP_SUMMARY: join(root, "summary"),
+                GITHUB_REPOSITORY: "openclaw/openclaw",
+                GITHUB_RUN_ID: "123",
+                GITHUB_RUN_ATTEMPT: "2",
+                GITHUB_REF: `refs/tags/${workflowRef}`,
+                WORKFLOW_FULL_REF: `refs/tags/${workflowRef}`,
+                PARENT_WORKFLOW_SHA: workflowSha,
+                TARGET_SHA: targetSha,
+                RELEASE_TAG: "v2026.8.1",
+                RELEASE_COVERAGE_POLICY: "npm-stable-v1",
+                NATIVE_CI_RUN_ID: "91",
+                NATIVE_CI_WORKFLOW_REF: workflowRef,
+                NATIVE_CI_WORKFLOW_SHA: workflowSha,
+                RELEASE_PUBLISH_BRANCH: "main",
+                RELEASE_PUBLISH_FULL_REF: "refs/heads/main",
+                RELEASE_PUBLISH_WORKFLOW_SHA: workflowSha,
+                RELEASE_PUBLISH_RUN_ATTEMPT: "2",
+                RELEASE_PUBLISH_RUN_ID: "123",
+              },
+              shell: false,
+              stdio: ["ignore", "pipe", "pipe"],
+              signal: AbortSignal.any([signal, finished.signal, overflow.signal]),
+              requireProcessTreeExit: process.platform !== "win32",
+              onReady(spawnedChild) {
+                for (const [pipe, output] of [
+                  [spawnedChild.stdout!, stdout],
+                  [spawnedChild.stderr!, stderr],
+                ] as const) {
+                  pipe.on("data", (chunk: Buffer) => {
+                    output.append(chunk);
+                    outputBytes += chunk.byteLength;
+                    if (outputBytes > maxBuffer) {
+                      overflow.abort();
+                    }
+                  });
+                }
+              },
+            }),
+          );
+        } catch (cause) {
+          if (overflow.signal.aborted) {
+            throw new Error("Android qualification output exceeded maxBuffer", { cause });
+          }
+          throw cause;
+        }
+        const result = { status: childStatus, stdout: stdout.text(), stderr: stderr.text() };
+        if (mode === "moved-protected-tag") {
+          expect(existsSync(dispatchPath)).toBe(false);
+          expect(result.stderr).toContain("refusing dispatch");
+        } else {
+          expect(JSON.parse(readFileSync(dispatchPath, "utf8"))).toEqual({
+            ref: workflowRef,
+            inputs: {
+              target_ref: targetSha,
+              historical_target_tag: "v2026.8.1",
+              include_android: "true",
+              release_scope: "full",
+              dispatch_id: dispatchId,
+            },
+          });
+          if (mode === "other-tooling") {
+            expect(readFileSync(outputPath, "utf8")).toBe("");
+            expect(result.stderr).toContain("used workflow SHA");
+          } else {
+            expect(readFileSync(outputPath, "utf8")).toContain(`workflow_ref=${workflowRef}`);
+          }
+        }
+        const approvalPath = join(root, "android-release-approval/approval.json");
+        const approved = mode === "success" || mode === "rerun-at-dispatch";
+        const qualified = approved || mode === "rerun-before-approval";
+        expect(existsSync(approvalPath)).toBe(approved);
+        if (approved) {
+          expect(JSON.parse(readFileSync(approvalPath, "utf8"))).toEqual({
+            version: 3,
+            repository: "openclaw/openclaw",
+            workflow: "OpenClaw Release Publish",
+            parentRunId: "123",
+            parentRunAttempt: 2,
+            workflowBranch: "main",
+            workflowFullRef: "refs/heads/main",
+            parentWorkflowSha: workflowSha,
+            releaseTag: "v2026.8.1",
+            targetSha,
+            nativeCi: { runId: "91", runAttempt: 1, workflowRef },
+          });
+        }
+        expect(existsSync(androidDispatchPath)).toBe(mode === "success");
+        expect(readFileSync(outputPath, "utf8").includes("qualified=true")).toBe(qualified);
+        expect(result.status === 0, result.stderr).toBe(mode === "success");
+        if (mode === "rerun-before-approval" || mode === "rerun-at-dispatch") {
+          expect(result.stderr).toContain("exact completed successful native CI attempt");
+        }
       });
-      if (mode === "other-tooling") {
-        expect(readFileSync(outputPath, "utf8")).toBe("");
-        expect(result.stderr).toContain("used workflow SHA");
-      } else {
-        expect(readFileSync(outputPath, "utf8")).toContain(`workflow_ref=${workflowRef}`);
-      }
-    }
-    const approvalPath = join(root, "android-release-approval/approval.json");
-    const approved = mode === "success" || mode === "rerun-at-dispatch";
-    const qualified = approved || mode === "rerun-before-approval";
-    expect(existsSync(approvalPath)).toBe(approved);
-    if (approved) {
-      expect(JSON.parse(readFileSync(approvalPath, "utf8"))).toEqual({
-        version: 3,
-        repository: "openclaw/openclaw",
-        workflow: "OpenClaw Release Publish",
-        parentRunId: "123",
-        parentRunAttempt: 2,
-        workflowBranch: "main",
-        workflowFullRef: "refs/heads/main",
-        parentWorkflowSha: workflowSha,
-        releaseTag: "v2026.8.1",
-        targetSha,
-        nativeCi: { runId: "91", runAttempt: 1, workflowRef },
-      });
-    }
-    expect(existsSync(androidDispatchPath)).toBe(mode === "success");
-    expect(readFileSync(outputPath, "utf8").includes("qualified=true")).toBe(qualified);
-    expect(result.status === 0, result.stderr).toBe(mode === "success");
-    if (mode === "rerun-before-approval" || mode === "rerun-at-dispatch") {
-      expect(result.stderr).toContain("exact completed successful native CI attempt");
-    }
-  });
+    },
+  );
 
   it("requires native-bound approval support only for Android qualification", () => {
     const job = workflowJob(RELEASE_PUBLISH_WORKFLOW, "qualify_android_native");
@@ -7994,7 +8135,7 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(dispatchInputs?.advisory).toBeUndefined();
     expect(callInputs?.advisory).toBeUndefined();
     expect(callInputs?.telegram_advisory).toBeUndefined();
-    expect(Object.keys(dispatchInputs ?? {})).toHaveLength(24);
+    expect(Object.keys(dispatchInputs ?? {})).toHaveLength(25);
     expect(parsedWorkflow.on?.workflow_dispatch?.inputs?.telegram_advisory).toBeUndefined();
     expect(parsedWorkflow.on?.workflow_call?.inputs?.suite_profile).toMatchObject({
       default: "package",
@@ -10199,8 +10340,29 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("suite_id: native-live-extensions-media-music-minimax");
     expect(workflow).toContain("suite_id: native-live-extensions-media-video");
     expect(workflow).toContain("suite_group: native-live-extensions-media-video");
-    expect(workflow).toContain("OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=google,minimax");
-    expect(workflow).toContain("OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=openai,openrouter,xai");
+    for (const suffix of ["a", "b", "c", "d"]) {
+      const shard = workflowMatrixEntry(
+        LIVE_E2E_WORKFLOW,
+        "validate_live_media_provider_suites",
+        `native-live-extensions-media-video-${suffix}`,
+      );
+      const providers = shard.command?.match(
+        /OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=(\S+)/u,
+      )?.[1];
+      if (!providers) {
+        throw new Error(`Missing video providers for shard ${suffix}`);
+      }
+      expect(providers.split(",")).toHaveLength(4);
+      expect(shard.command).toContain("OPENCLAW_LIVE_VIDEO_GENERATION_TIMEOUT_MS=600000");
+      // Four serial ten-minute operations plus test overhead leave eight minutes for setup.
+      expect(shard.timeout_minutes).toBeGreaterThanOrEqual(4 * 10.5 + 8);
+    }
+    expect(workflow).toContain(
+      "OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=google,kie,minimax,pixverse OPENCLAW_LIVE_VIDEO_GENERATION_TIMEOUT_MS=600000",
+    );
+    expect(workflow).toContain(
+      "OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=novita,openrouter,xai,zai",
+    );
     expect(workflow).toContain(
       "inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic'",
     );
@@ -13123,6 +13285,10 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "artifact_created_at > attempt_completed_at",
       "Package Telegram artifact creation time is outside the declared producer run attempt.",
       "Package Telegram artifact producer run attempt does not match the requested tuple.",
+      "actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}/jobs?per_page=100",
+      "Resolve package candidate",
+      "Prior-attempt Package Telegram artifact lacks one exact successful producer job.",
+      "Package Telegram artifact creation time is outside the successful producer job.",
     ]);
     expect(runStep.env).toMatchObject({
       PACKAGE_FILE_NAME: "${{ inputs.package_file_name || '' }}",
@@ -13180,6 +13346,34 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     });
 
     expect(result.status, result.stderr).toBe(0);
+  });
+
+  it("accepts a prior-attempt artifact from the exact successful package producer", () => {
+    const result = runNpmTelegramArtifactValidation({
+      currentRunAttempt: "3",
+      currentRunId: "123",
+      producerConclusion: "failure",
+      producerRunId: "123",
+      producerStatus: "completed",
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it("rejects a prior-attempt artifact when the package producer failed", () => {
+    const result = runNpmTelegramArtifactValidation({
+      currentRunAttempt: "3",
+      currentRunId: "123",
+      producerConclusion: "failure",
+      producerJobConclusion: "failure",
+      producerRunId: "123",
+      producerStatus: "completed",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "Prior-attempt Package Telegram artifact lacks one exact successful producer job.",
+    );
   });
 
   it("rejects queued artifacts after GitHub assigns a conclusion", () => {
@@ -14750,7 +14944,7 @@ promote_windows_release_assets
     });
     expect(authorization.env).toMatchObject({
       APPROVAL_PATH: "${{ runner.temp }}/clawhub-bootstrap-approval/approval.json",
-      CHILD_WORKFLOW_SHA: "${{ github.sha }}",
+      CHILD_WORKFLOW_SHA: "${{ inputs.bootstrap_workflow_sha }}",
       EXPECTED_RUN_ATTEMPT: "${{ inputs.release_publish_run_attempt }}",
       EXPECTED_WORKFLOW_BRANCH: "${{ inputs.release_publish_branch }}",
       RELEASE_PUBLISH_RUN_ID: "${{ inputs.release_publish_run_id }}",

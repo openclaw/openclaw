@@ -1,6 +1,8 @@
 /** Shared native service-state inspection with one caller-owned deadline and binding. */
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { resolveGatewayProfileSuffix } from "./constants.js";
+import { readScheduledTaskCommand } from "./schtasks-layout.js";
+import { readStartupEntryState } from "./schtasks-runtime.js";
 import { mergeGatewayServiceEnv } from "./service-env-merge.js";
 import {
   ServiceInspectionError,
@@ -13,26 +15,14 @@ import { createServiceRuntimeInspectionFailure } from "./service-runtime.js";
 import type {
   GatewayService,
   GatewayServiceCommandInspection,
-  GatewayServiceEnv,
-  GatewayServiceEnvArgs,
   GatewayServiceLoadState,
-  GatewayServiceReadOptions,
+  ReadGatewayServiceStateArgs,
   GatewayServiceState,
 } from "./service-types.js";
 import { getGatewayServiceUpdateNativeCommand } from "./service-update-authority.js";
 import { admitSystemdServiceReadBinding } from "./systemd-peer.js";
 import { findSystemdGatewayInstallation } from "./systemd-scope.js";
 import { readSystemdServiceExecStart } from "./systemd.js";
-
-type ReadGatewayServiceStateArgs = GatewayServiceEnvArgs & {
-  systemdReadTarget?: GatewayServiceReadOptions["systemdReadTarget"];
-  systemdInstallation?: GatewayServiceState["systemdInstallation"];
-  requireEffective?: boolean;
-  requireLoadedCommand?: boolean;
-  loadForInspection?: GatewayServiceReadOptions["loadForInspection"];
-  systemdReadBinding?: GatewayServiceReadOptions["systemdReadBinding"];
-  validateEnvBeforeStatusRead?: (env: GatewayServiceEnv) => void;
-};
 
 class ServiceInspectionDeadlineError extends Error {
   constructor() {
@@ -65,22 +55,35 @@ export async function readGatewayServiceState(
   service: GatewayService,
   input: ReadGatewayServiceStateArgs = {},
 ): Promise<GatewayServiceState> {
+  if (input.windowsStartupEntry !== undefined) {
+    if (service.readCommand !== readScheduledTaskCommand) {
+      throw new Error("Startup file inspection requires the Windows service adapter.");
+    }
+    return readStartupEntryState(input.windowsStartupEntry, input);
+  }
   const timeoutMs =
     input.timeoutMs ?? (service.readCommand === readSystemdServiceExecStart ? 5000 : undefined);
   const inspectionDeadline = timeoutMs === undefined ? undefined : performance.now() + timeoutMs;
   let args = { ...input, timeoutMs };
   const baseEnv = args.env ?? process.env;
+  const supplied = args.systemdInstallation;
+  const selected = supplied?.kind === "system" || supplied?.kind === "user" ? supplied : undefined;
   try {
-    if (service.readCommand === readSystemdServiceExecStart && !args.systemdReadTarget) {
+    if (
+      !args.systemdReadTarget &&
+      (selected || service.readCommand === readSystemdServiceExecStart)
+    ) {
       if (inspectionDeadline !== undefined && performance.now() >= inspectionDeadline) {
         throw new ServiceInspectionDeadlineError();
       }
-      const installation = await findSystemdGatewayInstallation(baseEnv, {
-        requireLoaded: args.requireLoadedCommand,
-        loadForInspection: args.loadForInspection,
-        timeoutMs:
-          inspectionDeadline === undefined ? undefined : inspectionDeadline - performance.now(),
-      });
+      const installation =
+        selected ??
+        (await findSystemdGatewayInstallation(baseEnv, {
+          requireLoaded: args.requireLoadedCommand,
+          loadForInspection: args.loadForInspection,
+          timeoutMs:
+            inspectionDeadline === undefined ? undefined : inspectionDeadline - performance.now(),
+        }));
       if (installation.kind === "dueling" && args.requireEffective && args.requireLoadedCommand) {
         throw new ServiceOwnershipRefusalError("systemd-competing-managers");
       }
@@ -224,12 +227,16 @@ async function readGatewayServiceStateWithBinding(
             }
             return null;
           });
-  const env = mergeGatewayServiceEnv(
+  const mergedEnv = mergeGatewayServiceEnv(
     systemdReadTarget?.scope === "system" && !resolveGatewayProfileSuffix(baseEnv.OPENCLAW_PROFILE)
       ? { ...baseEnv, OPENCLAW_SYSTEMD_UNIT: systemdReadTarget.unitName }
       : baseEnv,
     command,
   );
+  const env =
+    process.platform === "win32" && args.requireLoadedCommand && command?.sourcePath
+      ? { ...mergedEnv, OPENCLAW_TASK_SCRIPT: command.sourcePath }
+      : mergedEnv;
   // Reject persisted selector drift before invoking the native service manager.
   args.validateEnvBeforeStatusRead?.(env);
   // Strict user-unit absence still needs the platform owner's system-scope proof.

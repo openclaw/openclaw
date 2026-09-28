@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { NodeWorkerPreparedWorkspaceStore } from "../node-host/node-worker-prepared-workspace-store.js";
 import { writeConfigMachineState } from "./config-machine-state-write.js";
 import { readConfigMachineState } from "./config-machine-state.js";
@@ -198,6 +199,11 @@ describe("existing shared-state schema admission", () => {
       sql: "UPDATE schema_meta SET role = 'agent', agent_id = 'main' WHERE meta_key = 'primary';",
     },
     {
+      name: "missing metadata role column",
+      sql: "ALTER TABLE schema_meta RENAME COLUMN role TO retired_role;",
+      expectedError: SqliteSchemaMismatchError,
+    },
+    {
       name: "missing startup column",
       sql: "ALTER TABLE worker_environments DROP COLUMN preparation_purpose;",
     },
@@ -230,14 +236,17 @@ describe("existing shared-state schema admission", () => {
               (session_id, seq, at, session_key, run_id, update_json, estimated_bytes)
               VALUES ('missing-session', 1, 10, 'session', NULL, '{}', 0);`,
     },
-  ])("refuses $name without migrating or repairing the file", ({ sql }) => {
-    const { options } = createExistingState((db) => db.exec(sql));
-    const before = readPersistedSchema(options.path);
-    expect(() =>
-      withExistingOpenClawStateSchema(options, () => openOpenClawStateDatabase(options)),
-    ).toThrow(/schema|foreign_key_check/i);
-    expect(readPersistedSchema(options.path)).toEqual(before);
-  });
+  ])(
+    "refuses $name without migrating or repairing the file",
+    ({ sql, expectedError = /schema|foreign_key_check/i }) => {
+      const { options } = createExistingState((db) => db.exec(sql));
+      const before = readPersistedSchema(options.path);
+      expect(() =>
+        withExistingOpenClawStateSchema(options, () => openOpenClawStateDatabase(options)),
+      ).toThrow(expectedError);
+      expect(readPersistedSchema(options.path)).toEqual(before);
+    },
+  );
 
   it("refuses global repair and startup-checkpoint entry points inside the node scope", async () => {
     const { options, before } = createExistingState();

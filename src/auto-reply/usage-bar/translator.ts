@@ -202,7 +202,7 @@ function renderSegment(seg: Segment, ctx: unknown, vocab: Vocab): string | null 
   }
   if ("map" in seg) {
     const v = getPath(ctx, String(seg.map));
-    const key = typeof v === "boolean" ? String(v) : String(v);
+    const key = String(v);
     const cases = isObject(seg.cases) ? seg.cases : {};
     const hit = Object.hasOwn(cases, key) ? cases[key] : cases["_default"];
     return typeof hit === "string" ? hit : null;

@@ -216,14 +216,10 @@ export function readSessionEntryCache(
 ): SessionEntryCacheSnapshot {
   return runSqliteReadOperationSync(database.db, () => {
     const projection = options.retainFullEntry ? "full" : options.projection;
-    const prepared = assertCanonicalSqliteSessionKeysCurrent(
-      database,
-      projection !== "full" && !options.fullEntryKeys,
-    );
+    const prepared = assertCanonicalSqliteSessionKeysCurrent(database, projection !== "full");
     if (
       !options.cache ||
       options.deferParticipants ||
-      options.fullEntryKeys ||
       options.retainFullEntry ||
       options.latest ||
       projection === "full" ||
@@ -234,7 +230,6 @@ export function readSessionEntryCache(
         database,
         projection,
         prepared,
-        options.fullEntryKeys ? new Set(options.fullEntryKeys) : undefined,
         options.retainFullEntry,
         options.deferParticipants,
       );
@@ -335,7 +330,12 @@ function publishSqliteSessionEntryCacheUpsert(
 
 export function publishSessionEntryCacheInvalidation(
   database: SessionEntryCacheDatabase & { path: string },
-  update: { sessionKey: string; entry?: SessionEntry; facts?: SessionRowFacts },
+  update: {
+    sessionKey: string;
+    entry?: SessionEntry;
+    previousEntry?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
+    facts?: SessionRowFacts;
+  },
   writeGeneration?: SqliteSessionEntryCacheWriteGeneration,
 ): void {
   let facts = update.facts;

@@ -391,6 +391,8 @@ export class SessionManagerEntries extends SessionManagerSuffixPersistence {
       if (!prepared) {
         throw new Error("Session message append requires prepared storage bytes");
       }
+      // Reuse the prepared message so worker serialization does not copy its payload twice.
+      canonical.message = prepared.persistedMessage;
       const target = this.getSessionTarget();
       const sessionId = this.getSessionId();
       const admittedUserId = target

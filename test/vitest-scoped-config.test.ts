@@ -76,7 +76,6 @@ import { createScopedVitestConfig } from "./vitest/vitest.scoped-config.ts";
 import { createSecretsVitestConfig } from "./vitest/vitest.secrets.config.ts";
 import { createSharedCoreVitestConfig } from "./vitest/vitest.shared-core.config.ts";
 import { sharedVitestConfig } from "./vitest/vitest.shared.config.ts";
-import { createTasksVitestConfig } from "./vitest/vitest.tasks.config.ts";
 import {
   createToolingDockerVitestConfig,
   toolingDockerTestFiles,
@@ -516,8 +515,20 @@ describe("createScopedVitestConfig", () => {
     }
   });
 
-  it("keeps combined media and UI include files inside their owning projects", () => {
+  it("keeps combined runtime include files inside their owning projects", () => {
     const projects = [
+      [createAcpVitestConfig, "src/acp/client.test.ts", "client.test.ts"],
+      [
+        createSharedCoreVitestConfig,
+        "src/shared/freebsd-process-identity.test.ts",
+        "shared/freebsd-process-identity.test.ts",
+      ],
+      [
+        createCronVitestConfig,
+        "src/cron/run-continuation-cleanup.test.ts",
+        "cron/run-continuation-cleanup.test.ts",
+      ],
+      [createUtilsVitestConfig, "src/utils/queue-helpers.test.ts", "utils/queue-helpers.test.ts"],
       [createMediaVitestConfig, "src/media/web-media.test.ts", "media/web-media.test.ts"],
       [
         createMediaUnderstandingVitestConfig,
@@ -625,7 +636,6 @@ describe("scoped vitest configs", () => {
   const defaultMediaConfig = createMediaVitestConfig({});
   const defaultMediaUnderstandingConfig = createMediaUnderstandingVitestConfig({});
   const defaultSharedCoreConfig = createSharedCoreVitestConfig({});
-  const defaultTasksConfig = createTasksVitestConfig({});
   const defaultCommandsLightConfig = createCommandsLightVitestConfig({});
   const defaultCommandsConfig = createCommandsVitestConfig({});
   const defaultAutoReplyConfig = createAutoReplyVitestConfig({});
@@ -1281,12 +1291,6 @@ describe("scoped vitest configs", () => {
     const testConfig = requireTestConfig(defaultProcessConfig);
     expect(testConfig.dir).toBe(path.join(process.cwd(), "src"));
     expect(testConfig.include).toEqual(["process/**/*.test.ts"]);
-  });
-
-  it("normalizes tasks include patterns relative to the scoped dir", () => {
-    const testConfig = requireTestConfig(defaultTasksConfig);
-    expect(testConfig.dir).toBe(path.join(process.cwd(), "src"));
-    expect(testConfig.include).toEqual(["tasks/**/*.test.ts"]);
   });
 
   it("normalizes wizard include patterns relative to the scoped dir", () => {

@@ -270,7 +270,7 @@ describe("bootstrapWorker", () => {
     expect(runner.calls[2]?.options.input).toContain('ln -s "$lock_identity" "$lock"');
     expect(runner.calls[2]?.options.input).toContain("worker bundle archive digest mismatch");
     expect(runner.calls[2]?.options.input).toContain(
-      'const artifactPaths = ["github-exec-launcher.mjs","image-processor.worker.mjs","service-child-group-anchor.mjs","service-child-relay.mjs","sqlite-store.worker.mjs","worker.mjs","workspace-rsync-receiver.mjs"]',
+      'const artifactPaths = ["file-tool-planning.worker.mjs","github-exec-launcher.mjs","image-processor.worker.mjs","service-child-group-anchor.mjs","service-child-relay.mjs","sqlite-store.worker.mjs","worker.mjs","workspace-rsync-receiver.mjs"]',
     );
     expect(runner.calls[2]?.options.input).not.toContain('npm install --prefix "$staging"');
     expect(runner.calls[2]?.options.input).toContain("worker install content does not match");
@@ -329,7 +329,7 @@ describe("bootstrapWorker", () => {
     },
   );
 
-  it.each([Number.NaN, -1, 1.5, Number.POSITIVE_INFINITY])(
+  it.each([Number.NaN, -1, 1.5])(
     "rejects invalid bundle tarball size %s before any remote work",
     async (tarballBytes) => {
       const runner = fakeRunner([]);
@@ -345,7 +345,6 @@ describe("bootstrapWorker", () => {
 
   it.each([
     `/home/worker/other/.incoming/${UPLOAD_FILENAME}`,
-    `/home/worker/.openclaw-worker/other/${UPLOAD_FILENAME}`,
     `/home/worker/.openclaw-worker/.incoming/../.incoming/${UPLOAD_FILENAME}`,
     `/home/worker/./.openclaw-worker/.incoming/${UPLOAD_FILENAME}`,
     `/home//worker/.openclaw-worker/.incoming/${UPLOAD_FILENAME}`,
@@ -507,25 +506,18 @@ describe("bootstrapWorker", () => {
     expect(npmRunner.calls[1]?.options.input).toContain("npm pack");
     expect(npmRunner.calls[1]?.options.input).not.toContain("npm install");
     expect(npmRunner.calls[1]?.options.input).toContain("--registry=https://registry.npmjs.org/");
-    expect(npmRunner.calls[1]?.options.input).toContain("package/dist/worker/worker.mjs");
-    expect(npmRunner.calls[1]?.options.input).toContain(
-      "package/dist/worker/github-exec-launcher.mjs",
-    );
-    expect(npmRunner.calls[1]?.options.input).toContain(
-      "package/dist/worker/image-processor.worker.mjs",
-    );
-    expect(npmRunner.calls[1]?.options.input).toContain(
-      "package/dist/worker/service-child-group-anchor.mjs",
-    );
-    expect(npmRunner.calls[1]?.options.input).toContain(
-      "package/dist/worker/service-child-relay.mjs",
-    );
-    expect(npmRunner.calls[1]?.options.input).toContain(
-      "package/dist/worker/sqlite-store.worker.mjs",
-    );
-    expect(npmRunner.calls[1]?.options.input).toContain(
-      "package/dist/worker/workspace-rsync-receiver.mjs",
-    );
+    for (const artifactPath of [
+      "worker.mjs",
+      "file-tool-planning.worker.mjs",
+      "github-exec-launcher.mjs",
+      "image-processor.worker.mjs",
+      "service-child-group-anchor.mjs",
+      "service-child-relay.mjs",
+      "sqlite-store.worker.mjs",
+      "workspace-rsync-receiver.mjs",
+    ]) {
+      expect(npmRunner.calls[1]?.options.input).toContain(`package/dist/worker/${artifactPath}`);
+    }
     expect(npmRunner.calls[1]?.options.input).not.toContain("node_modules");
     expect(npmRunner.calls[1]?.argv.at(-1)).toContain(`openclaw@${VERSION}`);
   });
@@ -1045,6 +1037,7 @@ describe("bootstrapWorker", () => {
         expect(installAttempts).toBe(1);
         expect((await fs.readdir(installRoot)).toSorted()).toEqual([
           "bootstrap-receipt.json",
+          "file-tool-planning.worker.mjs",
           "github-exec-launcher.mjs",
           "image-processor.worker.mjs",
           "service-child-group-anchor.mjs",

@@ -4,7 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { collectPluginSourceEntries } from "../scripts/lib/bundled-plugin-build-entries.mjs";
-import { createManagedHandoffBuildConfig } from "../scripts/lib/managed-handoff-build-config.mts";
+import { createManagedHandoffBuildConfigs } from "../scripts/lib/managed-handoff-build-config.mts";
 import { runtimeProcessBuildEntries } from "../scripts/lib/runtime-process-build-entries.mts";
 import { buildPackageDistEntriesFromExports } from "../scripts/lib/workspace-package-entries.mts";
 import { controlUiSource } from "../src/plugins/package-manifest.js";
@@ -26,10 +26,10 @@ const repositoryScriptEntries = [
   "src/node-host/mac-worker-entry.ts!",
   // CI imports this selector from its trusted harness inside an inline Node script.
   ".github/actions/git-owner/test-prerequisites.mjs!",
+  // The frozen Node compatibility action invokes this exact-candidate repair by path.
+  ".github/actions/frozen-node-test-compat/apply.mjs!",
   // The compiler below exposes this workflow's inline and generated-config imports.
   ".github/workflows/plugin-prerelease.yml!",
-  // mobile-release-authority invokes this helper from composite-action YAML.
-  ".github/actions/mobile-release-authority/authority.mjs!",
   // setup-node-env invokes this helper from composite-action YAML.
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
   ".github/actions/setup-node-env/seed-bun-from-image.mjs!",
@@ -47,6 +47,8 @@ const repositoryScriptEntries = [
   "scripts/check-live-cache.ts!",
   "scripts/check-package-dist-imports.mjs!",
   "scripts/check-plugin-sdk-exports.mts!",
+  // Declaration preparation and boundary checks launch this compiler worker by path.
+  "scripts/compile-extension-boundary.mts!",
   // openclaw-performance.yml invokes the paired benchmark CLI by path.
   "scripts/vitest-pair-benchmark.mts!",
   // Cloudflare deployment template: wrangler bundles the Worker from this entry.
@@ -60,6 +62,8 @@ const repositoryScriptEntries = [
   "scripts/doctor-config-upgrade-replay.mjs!",
   // Reusable Docker workflows invoke this from the downloaded .release-harness tree.
   "scripts/docker-e2e.mts!",
+  // Its inline Node bootstrap imports the shared watchdog by a shell-computed path.
+  "scripts/lib/docker-e2e-container.sh!",
   // Docker and package-install harnesses invoke this verifier by path.
   "scripts/docker/verify-fs-safe-native.mjs!",
   // Reusable Docker workflows invoke this selector from a trusted sparse checkout.
@@ -68,6 +72,9 @@ const repositoryScriptEntries = [
   "scripts/e2e/anthropic-cache-live.mts!",
   "scripts/e2e/lib/browser-cdp-snapshot/assert-snapshot.mjs!",
   "scripts/e2e/lib/browser-cdp-snapshot/fixture-server.mjs!",
+  // The Bun-only smoke runs this harness by path and loads the preload through BUN_OPTIONS.
+  "scripts/e2e/lib/bun-only-runtime/harness.mjs!",
+  "scripts/e2e/lib/bun-only-runtime/spawn-trace-preload.mjs!",
   "scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs!",
   "scripts/e2e/lib/clawhub-fixture-server.cjs!",
   "scripts/e2e/lib/codex-media-path/client.mjs!",
@@ -132,6 +139,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/formerly-bundled-plugin-doctor.mjs!",
   "scripts/e2e/lib/upgrade-survivor/legacy-operator-restored-index.mjs!",
   "scripts/e2e/lib/upgrade-survivor/missing-configured-plugin-migration.mjs!",
+  // run.sh starts this persistent native peer as a separate process.
+  "scripts/e2e/lib/upgrade-survivor/native-assignment-app-server.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs!",
   "scripts/e2e/lib/upgrade-survivor/projects-doctor.mjs!",
@@ -142,7 +151,6 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/schema-expectation.mjs!",
   // update-restart-auth.sh installs this manager/launch adapter into the fixture bin directory.
   "scripts/e2e/lib/upgrade-survivor/systemd-fixture.mjs!",
-  "scripts/e2e/lib/upgrade-survivor/taskflow-restoration.mjs!",
   // The first-hop shell executes the packaged admission entry probe by path.
   "scripts/e2e/lib/upgrade-survivor/update-admission-entry-probe.mjs!",
   "scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs!",
@@ -154,10 +162,14 @@ const repositoryScriptEntries = [
   "scripts/fixtures/packed-plugin-sdk-type-smoke.ts!",
   // Generates the native browser page scripts from their UI source modules.
   "scripts/generate-browser-inspect-script-swift.mts!",
+  // The diagnostics guide invokes this offline snapshot comparison CLI by path.
+  "scripts/heap-snapshot-diff.mjs!",
   // CI executes screenshot evidence from the workflow-owned harness copy.
   "scripts/ios-screenshot-evidence.mjs!",
   "scripts/ios-release-cut.ts!",
   "scripts/ios-release-plan.ts!",
+  // Android Fastlane invokes this planner and its pre-upload validation by path.
+  "scripts/android-release-plan.ts!",
   "scripts/ios-release-signing.mts!",
   "scripts/lib/docker-plugin-selection.mjs!",
   // The frozen compatibility shell invokes the source CLI and imports trusted tooling.
@@ -202,6 +214,8 @@ const repositoryScriptEntries = [
   "scripts/pr-lib/merge-legacy-refusal.mjs!",
   // merge.sh and merge-outcome.sh execute refusal qualification by path.
   "scripts/pr-lib/merge-pre-dispatch-refusal.mjs!",
+  // merge.sh verifies prior exact-head CI evidence through this CLI by path.
+  "scripts/pr-lib/merge-prior-ci.mjs!",
   // merge-outcome.sh launches the REST adapter as a standalone Node CLI.
   "scripts/pr-lib/merge-rest.mjs!",
   "scripts/pr-lib/review-artifacts.mjs!",
@@ -296,6 +310,15 @@ function compileFrvWorkflowConsumers(source: string, filePath: string): string {
 }
 
 function compileShellConsumers(source: string, filePath: string): string {
+  if (path.resolve(filePath) === path.resolve("scripts/lib/docker-e2e-container.sh")) {
+    const helper = source.match(
+      /local helper_source="\$DOCKER_E2E_CONTAINER_LIB_DIR\/([^"\r\n]+\.mjs)"/u,
+    )?.[1];
+    const names = source.match(
+      /\bconst\s*\{([^}]+)\}\s*=\s*await\s+import\(pathToFileURL\(\\?"\$helper_source\\?"\)\.href\)/u,
+    )?.[1];
+    return helper && names ? `import {${names}} from ${JSON.stringify(`./${helper}`)};` : "";
+  }
   if (path.resolve(filePath) === path.resolve("scripts/lib/frozen-target-compat.sh")) {
     // These URLs resolve beside this shell file; keep the export edges tied to its actual imports.
     return [
@@ -328,10 +351,10 @@ const rootEntries = [
   ...repositoryScriptEntries,
   ...listScriptShimEntries(),
   // Runtime launchers resolve these by URL rather than a static import edge.
-  ...Object.values({
-    ...runtimeProcessBuildEntries,
-    ...createManagedHandoffBuildConfig().entry,
-  }).map((source) => `${path.relative(".", source).replaceAll("\\", "/")}!`),
+  ...[
+    ...Object.values(runtimeProcessBuildEntries),
+    ...createManagedHandoffBuildConfigs().flatMap(({ entry }) => Object.values(entry)),
+  ].map((source) => `${path.relative(".", source).replaceAll("\\", "/")}!`),
   // Knip loads these audit configurations directly by command-line path.
   "config/knip.config.ts!",
   "config/knip.all-exports.config.ts!",
@@ -350,6 +373,7 @@ const rootEntries = [
   "src/docker-healthcheck.ts!",
   // Deployed in the worker archive and launched by path, without a static host import.
   "src/worker/worker-deploy-entry.ts!",
+  "src/worker/worker-deploy-file-tool-planning.ts!",
   "src/worker/worker-deploy-image-processor.ts!",
   "src/worker/worker-deploy-sqlite-store.ts!",
   "src/worker/workspace-rsync-receiver.ts!",
@@ -371,8 +395,6 @@ const rootEntries = [
   "scripts/release-verify-publish.ts!",
   // Spawned by the agent concurrency benchmark; no static import edge exists.
   "scripts/bench-agent-concurrency-worker.ts!",
-  // Spawned by the durable task registry churn benchmark in a fresh GC-enabled process.
-  "scripts/bench-task-registry-sqlite-worker.ts!",
   "scripts/bench-sqlite-reliability.ts!",
   "scripts/bench-cron-session-reaper.ts!",
   "scripts/bench-codex-catalog-pages.ts!",
@@ -390,8 +412,6 @@ const rootEntries = [
   "src/agents/subagents/registry/subagent-registry.runtime.ts!",
   // Loaded lazily by the sweeper only when a receipt-bearing or interrupted row is found.
   "src/agents/subagents/registry/subagent-registry-restart-recovery.ts!",
-  // Task cancellation loads this control facade by string path to avoid a registry cycle.
-  "src/tasks/task-registry-control.runtime.ts!",
   // Reply dispatch and Gateway startup consume this namespace through loadGetReplyFromConfigRuntime.
   "src/auto-reply/reply/get-reply-from-config.runtime.ts!",
   // Command attempts consume this namespace through runtime-loaders.ts's Promise.all preload.
@@ -503,7 +523,6 @@ const bundledPluginIgnoredRuntimeDependencies = [
 const rootBundledPluginRuntimeDependencies = [
   "@anthropic-ai/sdk",
   "@google/genai",
-  "@grammyjs/runner",
   "@grammyjs/transformer-throttler",
   "@homebridge/ciao",
   "@mozilla/readability",

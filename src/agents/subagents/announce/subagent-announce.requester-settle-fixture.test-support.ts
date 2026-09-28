@@ -40,12 +40,6 @@ const { registryRuntimeMock, findTranscriptEventMock } = vi.hoisted(() => ({
 
 vi.mock("../registry/subagent-registry-read.js", () => registryRuntimeMock);
 
-vi.mock(import("../../../tasks/task-progress-requester.js"), async (importOriginal) => ({
-  ...(await importOriginal()),
-  withTaskProgressRequesterContinuation: (async (_params, run) =>
-    await run()) satisfies typeof import("../../../tasks/task-progress-requester.js").withTaskProgressRequesterContinuation,
-}));
-
 vi.mock("../../../config/sessions/session-accessor.js", () => ({
   findTranscriptEvent: findTranscriptEventMock,
   loadSessionEntryReadOnly: ({ sessionKey }: { sessionKey: string }) => sessionStore[sessionKey],

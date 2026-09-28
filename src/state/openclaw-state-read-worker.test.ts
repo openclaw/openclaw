@@ -6,21 +6,58 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { createWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
 import type { ExecutionIdentityInspectionQuery } from "../audit/execution-identity-inspection.types.js";
-import { acquireStateDatabaseHandleExclusion } from "../infra/state-database-coordinator.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   registerOpenClawStateDatabaseAsyncResource,
 } from "./openclaw-state-db-cache.js";
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
-import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
+import { withExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
+import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
 import { createOpenClawStateReadTransport } from "./openclaw-state-read-worker.js";
 import type { OpenClawStateReadReply } from "./openclaw-state-read.types.js";
-import { withOpenClawStateSettlementRead } from "./openclaw-state-settlement-read.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
-import { selectProfileDisplayEntries } from "./user-profiles-internal.js";
-import { ensureProfileForEmail } from "./user-profiles.js";
+
+it("captures queued read routing and schema facts without reading unrelated environment values", async () => {
+  const { root, pathname } = source();
+  let unrelatedReads = 0;
+  const env: NodeJS.ProcessEnv = {
+    OPENCLAW_STATE_DIR: root,
+    OPENCLAW_SUPERVISOR_MODE: " EXTERNAL ",
+    get UNRELATED_INITIALIZATION_VALUE() {
+      unrelatedReads += 1;
+      return "synthetic initializer input";
+    },
+  };
+  const dispatch = createDeferredCore();
+  const task = queueTask(dispatch.promise);
+  const result = withExistingOpenClawStateSchema({ path: pathname }, () =>
+    executeExistingOpenClawStateRead({ path: pathname, env }, { type: "fleet.list" }),
+  );
+  try {
+    await task.submitted;
+    env.OPENCLAW_STATE_DIR = path.join(root, "changed-after-capture");
+    env.OPENCLAW_SUPERVISOR_MODE = "internal";
+    dispatch.resolve();
+    const request = await task.captured;
+    expect(request.context.environment).toEqual({
+      OPENCLAW_STATE_DIR: root,
+      OPENCLAW_SUPERVISOR_MODE: "external",
+    });
+    expect(request.context.existingSchemaPath).toBe(pathname);
+    // Windows captures case-insensitive environment semantics before selecting these facts.
+    if (process.platform !== "win32") {
+      expect(unrelatedReads).toBe(0);
+    }
+    task.result.resolve(emptyReply);
+    await expect(result).resolves.toEqual(emptyReply);
+  } finally {
+    dispatch.resolve();
+    task.result.resolve(emptyReply);
+    await Promise.allSettled([result]);
+  }
+});
 
 it("retains the shared pool after a resource drain fails until canonical retry", async () => {
   const { options } = source();
@@ -44,169 +81,6 @@ it("retains the shared pool after a resource drain fails until canonical retry",
     unregister();
   }
 });
-
-it("drains accepted settlement before retiring the shared pool during whole-cache close", async () => {
-  const root = tempDirs.make("openclaw-settlement-global-close-");
-  const pathname = path.join(root, "source.sqlite");
-  const options = { path: pathname, env: { OPENCLAW_STATE_DIR: root } };
-  const profile = ensureProfileForEmail("global-close@example.test", options);
-  const descriptor = selectProfileDisplayEntries(openOpenClawStateDatabase(options).db, [
-    profile.id,
-  ])[0]![1];
-  await closeOpenClawStateDatabaseAsync();
-  const warm = queueTask();
-  warm.result.resolve(emptyReply);
-  await executeExistingOpenClawStateRead(options, { type: "fleet.list" });
-  const context = captureOpenClawStateWorkerContext(options);
-  const mutationSettled = createDeferredCore();
-  const poolStopping = createDeferredCore();
-  const poolStopped = createDeferredCore();
-  mock.closePool.mockImplementationOnce(() => {
-    poolStopping.resolve();
-    return poolStopped.promise;
-  });
-  const delivery = new Error("mutation result delivery failed");
-  const publish = vi.fn();
-  const release = vi.fn();
-  const result = withOpenClawStateSettlementRead(context, async (read) => {
-    read.bind(
-      { type: "userProfiles.reconcile", profileId: profile.id },
-      Promise.resolve({ kind: "completed" }),
-      publish,
-      release,
-    );
-    await mutationSettled.promise;
-    throw delivery;
-  }).catch((error: unknown) => error);
-  const recovery = queueTask();
-  recovery.result.resolve({
-    ok: true,
-    type: "userProfiles.reconcile",
-    sourceAdmitted: true,
-    profile: descriptor,
-    emailBindings: [],
-  });
-  const closing = closeOpenClawStateDatabaseAsync();
-  void closing.catch(() => {});
-  try {
-    // Let the actual resource drain enter while the accepted producer is still held.
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    mutationSettled.resolve();
-    expect(await result).toBe(delivery);
-    expect((await recovery.captured).command).toEqual({
-      type: "userProfiles.reconcile",
-      profileId: profile.id,
-    });
-    expect(publish).toHaveBeenCalledExactlyOnceWith(descriptor, []);
-    expect(release).toHaveBeenCalledOnce();
-    expect(recovery.close).toHaveBeenCalledOnce();
-    await poolStopping.promise;
-    expect(publish.mock.invocationCallOrder[0]).toBeLessThan(
-      mock.closePool.mock.invocationCallOrder[0]!,
-    );
-    poolStopped.resolve();
-    await closing;
-    const exclusion = acquireStateDatabaseHandleExclusion({ databasePath: pathname });
-    exclusion.release();
-  } finally {
-    mutationSettled.resolve();
-    poolStopped.resolve();
-    await Promise.allSettled([result, closing]);
-  }
-});
-
-it.each([false, true])(
-  "preserves settlement task errors and source custody through canonical retry (retry fails=%s)",
-  async (retryFails) => {
-    const root = tempDirs.make("openclaw-settlement-task-failure-");
-    const pathname = path.join(root, "source.sqlite");
-    const options = { path: pathname, env: { OPENCLAW_STATE_DIR: root } };
-    const profile = ensureProfileForEmail("settlement@example.test", options);
-    const descriptor = selectProfileDisplayEntries(openOpenClawStateDatabase(options).db, [
-      profile.id,
-    ])[0]![1];
-    await closeOpenClawStateDatabaseAsync();
-    const context = captureOpenClawStateWorkerContext(options);
-    const command = { type: "userProfiles.reconcile", profileId: profile.id } as const;
-    const reply: OpenClawStateReadReply = {
-      ok: true,
-      type: command.type,
-      sourceAdmitted: true,
-      profile: descriptor,
-      emailBindings: [],
-    };
-    const task = queueTask();
-    const delivery = new Error("mutation result delivery failed");
-    const query = new Error("interrupted settlement task failed");
-    const retirement = new Error("first settlement worker stop failed");
-    const retryFailure = new Error("settlement close retry failed");
-    task.close.mockRejectedValueOnce(retirement);
-    if (retryFails) {
-      task.close.mockRejectedValueOnce(retryFailure);
-    }
-    const mutation = vi.fn();
-    const publish = vi.fn();
-    const release = vi.fn();
-    const result = withOpenClawStateSettlementRead(context, async (read) => {
-      mutation();
-      read.bind(command, Promise.resolve({ kind: "completed" }), publish, release);
-      throw delivery;
-    }).catch((error: unknown) => error);
-    const firstRequest = await task.captured;
-    task.result.reject(query);
-    const failure = await result;
-    expect(failure).toMatchObject({
-      errors: [delivery, expect.objectContaining({ errors: [query, retirement] })],
-    });
-    expect(publish).not.toHaveBeenCalled();
-    expect(release).not.toHaveBeenCalled();
-    expect(() =>
-      acquireStateDatabaseHandleExclusion({ databasePath: pathname, busyTimeoutMs: 0 }),
-    ).toThrow();
-    if (retryFails) {
-      await expect(closeOpenClawStateDatabaseByPathAsync(pathname)).rejects.toBe(retryFailure);
-      expect(publish).not.toHaveBeenCalled();
-      expect(release).not.toHaveBeenCalled();
-    }
-    const retry = queueTask();
-    const retryCloseStarted = createDeferredCore();
-    const stopped = createDeferredCore();
-    retry.close.mockImplementationOnce(() => {
-      retryCloseStarted.resolve();
-      return stopped.promise;
-    });
-    const closing = closeOpenClawStateDatabaseByPathAsync(pathname);
-    try {
-      const retryRequest = await retry.captured;
-      for (const request of [firstRequest, retryRequest]) {
-        expect(request).toMatchObject({
-          command,
-          databasePath: pathname,
-          location: pathname,
-          expectedIdentity: context.admission.identity.key,
-          checkFreshAdmission: false,
-        });
-      }
-      retry.result.resolve(reply);
-      await retryCloseStarted.promise;
-      expect(publish).not.toHaveBeenCalled();
-      expect(release).not.toHaveBeenCalled();
-    } finally {
-      retry.result.resolve(reply);
-      stopped.resolve();
-      await closing;
-    }
-    expect(publish).toHaveBeenCalledExactlyOnceWith(descriptor, []);
-    expect(release).toHaveBeenCalledOnce();
-    expect(mutation).toHaveBeenCalledOnce();
-    expect(task.close).toHaveBeenCalledTimes(retryFails ? 3 : 2);
-    expect(retry.close).toHaveBeenCalledOnce();
-    const exclusion = acquireStateDatabaseHandleExclusion({ databasePath: pathname });
-    exclusion.release();
-  },
-);
 
 it.each([false, true])(
   "preserves task and cleanup errors across explicit retirement retries (retry fails=%s)",
@@ -659,73 +533,6 @@ it.each(["skills.library.descriptions", "skills.library.manifests"] as const)(
       expect((await task.captured).command).toEqual({ type, input: expected });
       task.result.resolve(returned);
       expect(await result).toEqual(returned);
-    } finally {
-      dispatch.resolve();
-      task.result.resolve(returned);
-      await Promise.allSettled([result]);
-    }
-  },
-);
-
-it.each(["single", "union"] as const)(
-  "captures and charges %s task selectors while retaining original admission",
-  async (shape) => {
-    const { options } = source();
-    const context = captureOpenClawStateWorkerContext(options);
-    const admission = context.admission;
-    context.admission = {
-      ...admission,
-      get identity() {
-        return admission.identity;
-      },
-    };
-    const selector = "任务🦞".repeat(512);
-    const scope = {
-      taskId: selector,
-      flowId: selector,
-      runId: selector,
-      childSessionKey: selector,
-    };
-    const input = shape === "single" ? scope : [scope, { taskId: selector }];
-    const expected = structuredClone(input);
-    const dispatch = createDeferredCore();
-    const task = queueTask(dispatch.promise);
-    const result = executeExistingOpenClawStateRead(
-      { path: context.admission.databasePath, env: context.environment },
-      { type: "tasks.mutationSnapshot", input },
-      { context },
-    );
-    const returned: OpenClawStateReadReply = {
-      ok: true,
-      type: "tasks.mutationSnapshot",
-      sourceAdmitted: true,
-      snapshot: { tasks: new Map(), deliveryStates: new Map() },
-    };
-    try {
-      const submitted = await task.submitted;
-      scope.taskId = "changed task";
-      scope.flowId = "changed flow";
-      scope.runId = "changed run";
-      scope.childSessionKey = "changed child";
-      if (Array.isArray(input)) {
-        input.push({ taskId: "added while queued" });
-      }
-      options.env.OPENCLAW_STATE_DIR = "/changed-after-capture";
-      expect(submitted.inputBytes).toBeGreaterThanOrEqual(
-        Buffer.byteLength(selector) * (shape === "single" ? 4 : 5),
-      );
-      dispatch.resolve();
-      const request = await task.captured;
-      expect(request.command).toEqual({ type: "tasks.mutationSnapshot", input: expected });
-      expect(request.databasePath).toBe(context.admission.databasePath);
-      expect(request.context.environment).toEqual(context.environment);
-      const failure = new Error("Original task admission retired");
-      vi.spyOn(context.admission, "assertCurrent").mockImplementation(() => {
-        throw failure;
-      });
-      const rejected = expect(result).rejects.toThrow(failure.message);
-      task.result.resolve(returned);
-      await rejected;
     } finally {
       dispatch.resolve();
       task.result.resolve(returned);

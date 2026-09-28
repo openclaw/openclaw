@@ -668,9 +668,39 @@ if (process.argv[2] === 'update') {
     expect(report.omissions["session migration failure report"]).toBe(reason);
   });
 
-  it.each(["available", "unavailable", "absent", "invalid"])(
-    "publishes %s baseline companion coverage in successful receipts",
-    async (availability) => {
+  it.each([
+    { name: "available companion", availability: "available", missingLoadPath: null },
+    { name: "unavailable companion", availability: "unavailable", missingLoadPath: null },
+    { name: "absent companion", availability: "absent", missingLoadPath: null },
+    { name: "invalid companion", availability: "invalid", missingLoadPath: null },
+    {
+      name: "supported missing path",
+      availability: "absent",
+      missingLoadPath: { applicability: "supported", reason: null },
+    },
+    {
+      name: "unsupported missing path",
+      availability: "absent",
+      missingLoadPath: {
+        applicability: "unsupported-driver",
+        reason: "published-cli-rejects-invalid-config-before-staging",
+      },
+    },
+    {
+      name: "invalid missing-path applicability",
+      availability: "absent",
+      missingLoadPath: { applicability: "private-invalid-value", reason: null },
+      invalid: true,
+    },
+    {
+      name: "invalid missing-path reason",
+      availability: "absent",
+      missingLoadPath: { applicability: "unsupported-driver", reason: "private-invalid-value" },
+      invalid: true,
+    },
+  ])(
+    "publishes $name coverage in successful receipts",
+    async ({ availability, missingLoadPath, invalid }) => {
       const root = realpathSync(tempDirs.make("survivor-companion-receipt-"));
       const baselineCompanion =
         availability === "absent"
@@ -697,6 +727,7 @@ if (process.argv[2] === 'update') {
           updateOutcome: "success",
           phases: [],
           baselineCompanion,
+          missingLoadPath,
         }),
       );
       const { publishDiagnostics } = await import(observer);
@@ -708,15 +739,15 @@ if (process.argv[2] === 'update') {
           (text: string) => text.replaceAll("E404", "redacted"),
           "passed",
         );
-      if (availability === "invalid") {
+      if (availability === "invalid" || invalid) {
         expect(publish).toThrow();
         expect(existsSync(join(published, "summary.json"))).toBe(false);
         return;
       }
       publish();
-      expect(
-        JSON.parse(readFileSync(join(published, "summary.json"), "utf8")).baselineCompanion,
-      ).toEqual(
+      const receipt = JSON.parse(readFileSync(join(published, "summary.json"), "utf8"));
+      expect(receipt.missingLoadPath).toEqual(missingLoadPath);
+      expect(receipt.baselineCompanion).toEqual(
         baselineCompanion
           ? {
               ...baselineCompanion,

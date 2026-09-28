@@ -26,6 +26,7 @@ type LoginFailureKind =
   | "auth-rate-limited"
   | "profile-unavailable"
   | "verified-user-required"
+  | "access-denied"
   | "pairing-required"
   | "insecure-context"
   | "origin-not-allowed"
@@ -151,6 +152,25 @@ export function resolveLoginFailureFeedback(
         "login.failure.verifiedUserRequired.stepSharedSecret",
       ],
       docsHref: "https://docs.openclaw.ai/gateway/operator-scopes",
+    });
+  }
+
+  if (lastErrorCode === ConnectErrorDetailCodes.OPERATOR_ACCESS_DENIED) {
+    return buildFeedback({
+      kind: "access-denied",
+      tone: "warn",
+      rawError,
+      titleKey: "login.failure.accessDenied.title",
+      summaryKey: "login.failure.accessDenied.summary",
+      stepKeys: [
+        "login.failure.accessDenied.stepAdmin",
+        {
+          key: "login.failure.accessDenied.stepFindProfile",
+          commands: ["openclaw users list --json"],
+        },
+        "login.failure.accessDenied.stepReconnect",
+      ],
+      docsHref: "https://docs.openclaw.ai/gateway/operator-scopes#named-operator-roles",
     });
   }
 

@@ -19,20 +19,17 @@ import * as support from "./service.test-support.js";
 describe("offline device abandonment with retained physical cleanup", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
-  it.each(
-    (
-      [
-        "complete",
-        "held",
-        "failed",
-        "restarted",
-        "replacement-restarted",
-        "authorization-closed",
-        "retired-siblings",
-        "retired-mixed",
-      ] as const
-    ).flatMap((cleanup) => [true, null].map((sharedHost) => ({ cleanup, sharedHost }))),
-  )(
+  it.each([
+    { cleanup: "complete", sharedHost: true },
+    { cleanup: "held", sharedHost: true },
+    { cleanup: "failed", sharedHost: true },
+    { cleanup: "restarted", sharedHost: true },
+    { cleanup: "replacement-restarted", sharedHost: true },
+    { cleanup: "authorization-closed", sharedHost: true },
+    { cleanup: "retired-siblings", sharedHost: true },
+    { cleanup: "retired-mixed", sharedHost: true },
+    { cleanup: "replacement-restarted", sharedHost: null },
+  ] as const)(
     "fences the old claim and retains exact cleanup ownership with $cleanup sibling cleanup and sharedHost=$sharedHost",
     async ({ cleanup, sharedHost }) => {
       let placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });

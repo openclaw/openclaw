@@ -1,8 +1,6 @@
+import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { TerminalPanelToggleDetail } from "../panel-toggle-contract.ts";
-import type {
-  TerminalPanelAction,
-  TerminalPanelCatalogReference,
-} from "./terminal-panel-session-types.ts";
+import type { TerminalPanelAction } from "./terminal-panel-session-types.ts";
 import {
   loadPersistedTerminalActions,
   persistTerminalActions,
@@ -15,7 +13,7 @@ export type TerminalIntentHost = {
   canRun: () => boolean;
   attach: (sessionId: string, agentOwned: boolean, cancelIntent: () => void) => Promise<boolean>;
   open: (
-    catalog: TerminalPanelCatalogReference | undefined,
+    catalog: CatalogSessionKey | undefined,
     agentId: string | null,
     cancelIntent: () => void,
   ) => Promise<boolean>;

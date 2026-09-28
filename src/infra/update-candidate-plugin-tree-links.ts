@@ -8,31 +8,13 @@ import {
   captureUpdateCandidatePluginCodeLink,
   type UpdateCandidatePluginCodeLink,
 } from "./update-candidate-plugin-code-links.js";
+import type { UpdateCandidatePluginTreePlan } from "./update-candidate-plugin-tree-schema.js";
 import { createRuntimePathLookup } from "./update-runtime-path-index.js";
 import { prepareRuntimeRelocations, relocateRuntimePath } from "./update-runtime-relocation.js";
 
-export type UpdateCandidatePluginTreeEntry = {
-  path: string;
-  size: number;
-  mode: number;
-  dev: string;
-  ino: string;
-} & (
-  | { kind: "directory" }
-  | { kind: "file"; birthtimeNs: string; mtimeNs: string; ctimeNs: string }
-  | { kind: "symlink"; link: string; linkType: "file" | "junction" }
-);
+export type UpdateCandidatePluginTreeEntry = UpdateCandidatePluginTreePlan["entries"][number];
 
-type MaterializablePlan = {
-  privateRoot: string;
-  candidateRoot: string;
-  copies: Array<[string, string]>;
-  hostLinks: string[];
-  relocations: Array<{ sourceRoot: string; destinationRoot: string }>;
-  aliases: Array<[string, string]>;
-  moduleBindings: Array<[string, string]>;
-  edges: Array<{ source: string; target: string; real: string }>;
-};
+type MaterializablePlan = Omit<UpdateCandidatePluginTreePlan, "bytes" | "entries">;
 
 export const isUpdateCandidateHostLauncher = (file: string) =>
   path.basename(path.dirname(file)) === ".bin" &&
@@ -147,6 +129,7 @@ export async function publishUpdateCandidatePluginTreeLinks(params: {
   candidateRoot: string;
   hostLinks: Set<string>;
   aliases: Array<[string, string]>;
+  assertBeforeMutation?: () => void;
 }): Promise<string[]> {
   const { privateRoot, candidateRoot } = params;
   // Projection owns these private links. Installer peer-link policy expects a
@@ -155,6 +138,7 @@ export async function publishUpdateCandidatePluginTreeLinks(params: {
     if (!isPathInside(privateRoot, resolvePathViaExistingAncestorSync(path.dirname(link)))) {
       throw new Error("Plugin host link escapes update state");
     }
+    params.assertBeforeMutation?.();
     await fs.mkdir(path.dirname(link), { recursive: true });
     const existing = await fs.lstat(link).catch((error: unknown) => {
       if (hasNodeErrorCode(error, "ENOENT")) {
@@ -170,6 +154,7 @@ export async function publishUpdateCandidatePluginTreeLinks(params: {
         throw new Error("Plugin host link conflicts with its update owner");
       }
     } else {
+      params.assertBeforeMutation?.();
       await fs.symlink(candidateRoot, link, process.platform === "win32" ? "junction" : "dir");
     }
   }
@@ -189,7 +174,9 @@ export async function publishUpdateCandidatePluginTreeLinks(params: {
         throw new Error("Plugin module alias conflicts with its private owner");
       }
     } else {
+      params.assertBeforeMutation?.();
       await fs.mkdir(path.dirname(alias), { recursive: true });
+      params.assertBeforeMutation?.();
       await fs.symlink(target, alias, process.platform === "win32" ? "junction" : "dir");
     }
     privateAliases.push(alias);

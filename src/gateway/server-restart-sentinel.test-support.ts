@@ -2,6 +2,41 @@ import { expect } from "vitest";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { deliverQueuedSessionDelivery } from "./server-restart-sentinel.js";
 
+export async function appendRestartSentinelTranscriptReceipt(
+  params: Parameters<
+    typeof import("../config/sessions/transcript.js").appendAssistantMessageToSessionTranscript
+  >[0],
+): ReturnType<
+  typeof import("../config/sessions/transcript.js").appendAssistantMessageToSessionTranscript
+> {
+  const { completeSessionTranscriptCommit } =
+    await import("../config/sessions/session-transcript-commit-completion.js");
+  await completeSessionTranscriptCommit(
+    [
+      {
+        appended: true,
+        messageId: "generated-media-transcript",
+        message: {
+          role: "assistant",
+          content: params.content ?? [],
+          openclawDisplayContent: params.displayContent,
+        },
+      },
+    ],
+    params.onMessageCommitted,
+  );
+  return {
+    ok: true,
+    target: {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionId: "main",
+      storePath: "/tmp/sessions.json",
+    },
+    messageId: "generated-media-transcript",
+  };
+}
+
 type GeneratedMediaDeliveryEntry = Extract<
   Parameters<typeof deliverQueuedSessionDelivery>[0]["entry"],
   { kind: "agentTurn" }

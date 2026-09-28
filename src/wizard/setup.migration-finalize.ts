@@ -180,10 +180,7 @@ export async function finalizeSetupMigrationPromotion(params: {
 
   const configRuntime = await createPromotionConfigRuntime(params.config);
   let deferredResult = continuation.deferredResult;
-  if (
-    hasDeferredMigrationItems(continuation.plan) &&
-    hasPendingDeferredMigrationItems(continuation.plan, deferredResult)
-  ) {
+  if (hasPendingDeferredMigrationItems(continuation.plan, deferredResult)) {
     const previousDeferredResult = deferredResult;
     const deferredPlan = buildPendingDeferredMigrationPlan(
       continuation.plan,
@@ -224,8 +221,7 @@ export async function finalizeSetupMigrationPromotion(params: {
         next: deferredMigrationFailure(deferredPlan, error),
       });
     } finally {
-      const disposable = preparation as { dispose?: () => void | Promise<void> } | undefined;
-      await disposable?.dispose?.();
+      await preparation?.dispose?.();
     }
     deferredResult = retryResult;
     await params.resume.saveDeferredResult(deferredResult);

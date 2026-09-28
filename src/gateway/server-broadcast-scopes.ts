@@ -82,6 +82,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "plugins.controlUi.changed": [READ_SCOPE],
   "session.approval": [APPROVALS_SCOPE],
   "session.message": [SESSION_READ_SCOPE],
+  "session.narration": [SESSION_READ_SCOPE],
   "session.observer": [SESSION_READ_SCOPE],
   "session.operation": [READ_SCOPE],
   "session.sharing": [READ_SCOPE],

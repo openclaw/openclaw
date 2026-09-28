@@ -138,28 +138,18 @@ func runDocsI18N(ctx context.Context, cfg runConfig, files []string, newTranslat
 	log.Printf("docs-i18n: mode=%s total=%d pending=%d pre_skipped=%d overwrite=%t thinking=%s parallel=%d", cfg.mode, totalFiles, len(ordered), preSkipped, cfg.overwrite, cfg.thinking, parallel)
 	switch cfg.mode {
 	case "doc":
+		var outputs []string
 		if parallel > 1 {
-			proc, skip, outputs, err := runDocParallel(ctx, ordered, resolvedDocsRoot, cfg.sourceLang, cfg.targetLang, cfg.overwrite, cfg.allowPartial, parallel, glossary, cfg.thinking, newTranslator)
-			processed += proc
-			skipped += skip
-			localizedFiles = append(localizedFiles, outputs...)
-			if err != nil {
-				translationErr = err
-			}
+			processed, skipped, outputs, translationErr = runDocParallel(ctx, ordered, resolvedDocsRoot, cfg.sourceLang, cfg.targetLang, cfg.overwrite, cfg.allowPartial, parallel, glossary, cfg.thinking, newTranslator)
 		} else {
 			translator, err := newTranslator(cfg.sourceLang, cfg.targetLang, glossary, cfg.thinking)
 			if err != nil {
 				return err
 			}
 			defer translator.Close()
-			proc, skip, outputs, err := runDocSequential(ctx, ordered, translator, resolvedDocsRoot, cfg.sourceLang, cfg.targetLang, cfg.overwrite, cfg.allowPartial)
-			processed += proc
-			skipped += skip
-			localizedFiles = append(localizedFiles, outputs...)
-			if err != nil {
-				translationErr = err
-			}
+			processed, skipped, outputs, translationErr = runDocSequential(ctx, ordered, translator, resolvedDocsRoot, cfg.sourceLang, cfg.targetLang, cfg.overwrite, cfg.allowPartial)
 		}
+		localizedFiles = append(localizedFiles, outputs...)
 	case "segment":
 		if parallel > 1 {
 			return fmt.Errorf("parallel processing is only supported in doc mode")
@@ -305,7 +295,7 @@ func runDocParallel(ctx context.Context, ordered []string, docsRoot, srcLang, tg
 			log.Printf("docs-i18n: [w* %d/%d] skipped %s (%s)", result.index, len(ordered), result.rel, result.duration.Round(time.Millisecond))
 		} else if result.err != nil {
 			log.Printf("docs-i18n: [w* %d/%d] failed %s (%s): %v", result.index, len(ordered), result.rel, result.duration.Round(time.Millisecond), result.err)
-		} else if result.err == nil {
+		} else {
 			processed++
 			outputs = append(outputs, result.output)
 			log.Printf("docs-i18n: [w* %d/%d] done %s (%s)", result.index, len(ordered), result.rel, result.duration.Round(time.Millisecond))

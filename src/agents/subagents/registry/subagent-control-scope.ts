@@ -1,5 +1,4 @@
 /** Controller identity, authorization, and controlled-run read scope. */
-import type { TaskSummary } from "../../../../packages/gateway-protocol/src/schema/tasks.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isSystemEventStoreCurrent } from "../../../infra/system-event-ownership.js";
 import {
@@ -7,9 +6,6 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../../routing/session-key.js";
-import { readTaskBackingInstance } from "../../../tasks/task-backing-records.js";
-import { getTaskExecutionObservation } from "../../../tasks/task-execution-observation.js";
-import { findTaskByRunId } from "../../../tasks/task-registry-query.js";
 import { resolveSessionAgentId } from "../../agent-scope.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import {
@@ -30,7 +26,10 @@ import {
   listSubagentRunsForRequester,
 } from "./subagent-registry-read.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
-import { withSubagentRunReadSnapshot } from "./subagent-registry-state.js";
+import {
+  getSubagentSessionListRunsSnapshotForRead,
+  withSubagentRunReadSnapshot,
+} from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isRequesterSettleWakeForRun } from "./subagent-requester-settle-identity.js";
 
@@ -157,7 +156,7 @@ export function isSubagentRunVisibleToSession(
 export type ControlledSubagentRunsReadContext = {
   runs: SubagentRunRecord[];
   list: SubagentListReadContext;
-  getExecutionObservation(entry: SubagentRunRecord): NonNullable<TaskSummary["execution"]>;
+  getExecutionObservation(entry: SubagentRunRecord): ReturnType<typeof observeSubagentExecution>;
 };
 
 /** Builds one stable snapshot for controlled-run listing and descendant status reads. */
@@ -199,13 +198,7 @@ export async function buildControlledSubagentRunsReadContext(
     };
   };
   return withSubagentRunReadSnapshot(subagentRuns, select, (selection, snapshot) =>
-    buildControlledReadContext(
-      snapshot,
-      selection.index,
-      new Set(selection.runIds),
-      cfg,
-      recentMinutes,
-    ),
+    buildControlledReadContext(snapshot, selection.index, new Set(selection.runIds), recentMinutes),
   );
 }
 
@@ -213,7 +206,6 @@ function buildControlledReadContext(
   snapshot: ReadonlyMap<string, SubagentRunRecord>,
   readIndex: SubagentRunReadIndex<SubagentRunReadRecord>,
   visibleIds: ReadonlySet<string>,
-  cfg?: OpenClawConfig,
   recentMinutes = DEFAULT_RECENT_MINUTES,
 ): ControlledSubagentRunsReadContext {
   const runs = [...snapshot.values()].filter((entry) => visibleIds.has(entry.runId));
@@ -221,33 +213,26 @@ function buildControlledReadContext(
   return {
     runs: list.view.latest,
     list,
-    getExecutionObservation: (entry) => {
-      const taskRunId = entry.taskRunId ?? entry.runId;
-      const task = findTaskByRunId(taskRunId);
-      const backing = readTaskBackingInstance(task?.detail);
-      const requesterAgentId = resolveRunRequesterAgentId(entry, cfg);
-      // Child sessions and logical tasks survive successor runs; only the selected
-      // backing generation may contribute activity to this snapshot's detail row.
-      if (
-        task?.runtime === "subagent" &&
-        task.runId === taskRunId &&
-        task.childSessionKey === entry.childSessionKey &&
-        task.requesterSessionKey === entry.requesterSessionKey &&
-        requesterAgentId !== undefined &&
-        task.requesterAgentId === requesterAgentId &&
-        task.agentId ===
-          (parseAgentSessionKey(entry.childSessionKey)?.agentId ?? requesterAgentId) &&
-        backing?.runtime === "subagent" &&
-        backing.generation === entry.generation
-      ) {
-        return getTaskExecutionObservation(task);
-      }
-      return observeSubagentExecution(
-        entry,
-        getSubagentRunsForRequesterSession(entry.childSessionKey),
-      );
-    },
+    getExecutionObservation: (entry) =>
+      observeSubagentExecution(entry, getSubagentRunsForRequesterSession(entry.childSessionKey)),
   };
+}
+
+/** Cancellation consumes current ownership facts without hydrating retained result payloads. */
+export function listControlledSubagentRunFacts(
+  controllerSessionKey: string,
+  controllerAgentId: string | undefined,
+  cfg: OpenClawConfig,
+): SubagentRunReadRecord[] {
+  if (!controllerAgentId) {
+    return [];
+  }
+  const index = buildSubagentRunReadIndexFromRuns({
+    runs: getSubagentSessionListRunsSnapshotForRead(subagentRuns),
+  });
+  return [...index.latestRunsByChildSessionKey.values()].filter((entry) =>
+    isSubagentRunVisibleToSession(entry, controllerSessionKey, controllerAgentId, cfg),
+  );
 }
 
 export function ensureSubagentControllerOwnsRun(params: {

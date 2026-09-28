@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayClient } from "../gateway/client.js";
 import type { ChannelApprovalKind } from "../infra/approval-types.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { VERSION } from "../version.js";
 import type {
   ApprovalDecision,
@@ -29,12 +30,6 @@ import type {
 } from "./channel-shared.js";
 import { matchEventFilter, toConversation, toText } from "./channel-shared.js";
 
-/**
- * Runtime bridge between MCP tools and the OpenClaw Gateway channel APIs.
- *
- * The bridge owns readiness, event cursoring, pending approval state, and the
- * narrow request methods that channel MCP tools expose to external clients.
- */
 type PendingWaiter = {
   filter: WaitFilter;
   settle: (event: QueueEvent | null) => void;
@@ -78,10 +73,7 @@ export class OpenClawChannelBridge {
   private ready = false;
   private started = false;
   private retryingInitialConnect = false;
-  private readonly readyPromise: Promise<void>;
-  private resolveReady!: () => void;
-  private rejectReady!: (error: Error) => void;
-  private readySettled = false;
+  private readonly readiness = createDeferredCore();
 
   constructor(
     private readonly cfg: OpenClawConfig,
@@ -95,10 +87,6 @@ export class OpenClawChannelBridge {
   ) {
     this.verbose = params.verbose;
     this.claudeChannelMode = params.claudeChannelMode;
-    this.readyPromise = new Promise<void>((resolve, reject) => {
-      this.resolveReady = resolve;
-      this.rejectReady = reject;
-    });
   }
 
   /** Attach the MCP server used for outbound protocol notifications. */
@@ -109,7 +97,7 @@ export class OpenClawChannelBridge {
   /** Start the Gateway connection and resolve only after session subscription succeeds. */
   async start(): Promise<void> {
     if (this.started) {
-      await this.readyPromise;
+      await this.readiness.promise;
       return;
     }
     this.started = true;
@@ -136,12 +124,14 @@ export class OpenClawChannelBridge {
       env: process.env,
     });
     if (this.closed) {
-      this.resolveReadyOnce();
+      this.readiness.resolve();
       return;
     }
 
     this.gateway = new GatewayClientCtor({
       url: bootstrap.url,
+      deviceAuthScope: bootstrap.deviceAuthScope,
+      ...(bootstrap.sshTunnel ? { sshTunnel: bootstrap.sshTunnel } : {}),
       token: bootstrap.auth.token,
       password: bootstrap.auth.password,
       preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
@@ -166,11 +156,11 @@ export class OpenClawChannelBridge {
           this.retryingInitialConnect = true;
           return;
         }
-        this.rejectReadyOnce(normalizedError);
+        this.readiness.reject(normalizedError);
       },
       onClose: (code, reason) => {
         if (!this.ready && !this.closed && !this.retryingInitialConnect) {
-          this.rejectReadyOnce(new Error(`gateway closed before ready (${code}): ${reason}`));
+          this.readiness.reject(new Error(`gateway closed before ready (${code}): ${reason}`));
         }
         this.retryingInitialConnect = false;
       },
@@ -179,14 +169,14 @@ export class OpenClawChannelBridge {
       clientOptions: { preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs },
     });
     if (!readiness.ready) {
-      this.rejectReadyOnce(new Error("gateway event loop readiness timeout"));
+      this.readiness.reject(new Error("gateway event loop readiness timeout"));
     }
-    await this.readyPromise;
+    await this.readiness.promise;
   }
 
   /** Wait until the bridge has subscribed to Gateway session events. */
   async waitUntilReady(): Promise<void> {
-    await this.readyPromise;
+    await this.readiness.promise;
   }
 
   /** Stop Gateway IO and release waiters so MCP shutdown cannot hang on pending polls. */
@@ -195,7 +185,7 @@ export class OpenClawChannelBridge {
       return;
     }
     this.closed = true;
-    this.resolveReadyOnce();
+    this.readiness.resolve();
     if (this.pendingSweepInterval) {
       clearInterval(this.pendingSweepInterval);
       this.pendingSweepInterval = null;
@@ -303,9 +293,7 @@ export class OpenClawChannelBridge {
     this.sweepPendingExpired();
     return [...this.pendingApprovals.values()]
       .map((entry) => entry.approval)
-      .toSorted((a, b) => {
-        return (a.createdAtMs ?? 0) - (b.createdAtMs ?? 0);
-      });
+      .toSorted((a, b) => (a.createdAtMs ?? 0) - (b.createdAtMs ?? 0));
   }
 
   /** Forward an MCP approval decision to the matching Gateway approval resolver. */
@@ -314,16 +302,13 @@ export class OpenClawChannelBridge {
     id: string;
     decision: ApprovalDecision;
   }): Promise<Record<string, unknown>> {
-    if (params.kind === "exec") {
-      return await this.requestGateway("exec.approval.resolve", {
+    return await this.requestGateway(
+      params.kind === "exec" ? "exec.approval.resolve" : "plugin.approval.resolve",
+      {
         id: params.id,
         decision: params.decision,
-      });
-    }
-    return await this.requestGateway("plugin.approval.resolve", {
-      id: params.id,
-      decision: params.decision,
-    });
+      },
+    );
   }
 
   /** Poll queued events after a cursor without consuming them. */
@@ -446,26 +431,10 @@ export class OpenClawChannelBridge {
     try {
       await this.requestGateway("sessions.subscribe", {});
       this.ready = true;
-      this.resolveReadyOnce();
+      this.readiness.resolve();
     } catch (error) {
-      this.rejectReadyOnce(error instanceof Error ? error : new Error(String(error)));
+      this.readiness.reject(error instanceof Error ? error : new Error(String(error)));
     }
-  }
-
-  private resolveReadyOnce(): void {
-    if (this.readySettled) {
-      return;
-    }
-    this.readySettled = true;
-    this.resolveReady();
-  }
-
-  private rejectReadyOnce(error: Error): void {
-    if (this.readySettled) {
-      return;
-    }
-    this.readySettled = true;
-    this.rejectReady(error);
   }
 
   private nextCursor(): number {
@@ -583,42 +552,28 @@ export class OpenClawChannelBridge {
       case "session.message":
         await this.handleSessionMessageEvent(event.payload as SessionMessagePayload);
         return;
-      case "exec.approval.requested": {
-        const raw = (event.payload ?? {}) as Record<string, unknown>;
-        this.trackApproval("exec", raw);
-        this.enqueue({
-          cursor: this.nextCursor(),
-          type: "exec_approval_requested",
-          raw,
-        });
-        return;
-      }
-      case "exec.approval.resolved": {
-        const raw = (event.payload ?? {}) as Record<string, unknown>;
-        this.resolveTrackedApproval(raw);
-        this.enqueue({
-          cursor: this.nextCursor(),
-          type: "exec_approval_resolved",
-          raw,
-        });
-        return;
-      }
+      case "exec.approval.requested":
       case "plugin.approval.requested": {
         const raw = (event.payload ?? {}) as Record<string, unknown>;
-        this.trackApproval("plugin", raw);
+        const kind = event.event === "exec.approval.requested" ? "exec" : "plugin";
+        this.trackApproval(kind, raw);
         this.enqueue({
           cursor: this.nextCursor(),
-          type: "plugin_approval_requested",
+          type: kind === "exec" ? "exec_approval_requested" : "plugin_approval_requested",
           raw,
         });
         return;
       }
+      case "exec.approval.resolved":
       case "plugin.approval.resolved": {
         const raw = (event.payload ?? {}) as Record<string, unknown>;
         this.resolveTrackedApproval(raw);
         this.enqueue({
           cursor: this.nextCursor(),
-          type: "plugin_approval_resolved",
+          type:
+            event.event === "exec.approval.resolved"
+              ? "exec_approval_resolved"
+              : "plugin_approval_resolved",
           raw,
         });
       }
@@ -674,7 +629,7 @@ export class OpenClawChannelBridge {
       raw: payload,
     });
 
-    if (!this.shouldEmitClaudeChannel(role, conversation)) {
+    if (this.claudeChannelMode === "off" || role !== "user" || !conversation) {
       return;
     }
     await this.sendNotification({
@@ -691,19 +646,6 @@ export class OpenClawChannelBridge {
         },
       },
     });
-  }
-
-  private shouldEmitClaudeChannel(
-    role: string | undefined,
-    conversation: ConversationDescriptor | undefined,
-  ): boolean {
-    if (this.claudeChannelMode === "off") {
-      return false;
-    }
-    if (role !== "user") {
-      return false;
-    }
-    return Boolean(conversation);
   }
 }
 

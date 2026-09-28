@@ -1,4 +1,5 @@
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   GatewayClient,
   startGatewayClientWhenEventLoopReady,
@@ -29,15 +30,10 @@ type QaGatewayConnectionGate = {
 const QA_GATEWAY_RPC_TIMEOUT_MS = 20_000;
 
 function createQaGatewayConnectionGate(): QaGatewayConnectionGate {
-  let resolvePromise!: () => void;
-  let rejectPromise!: (error: Error) => void;
-  const promise = new Promise<void>((resolve, reject) => {
-    resolvePromise = resolve;
-    rejectPromise = reject;
-  });
+  const { promise, resolve, reject } = createDeferred<void>();
   // A terminal reconnect error can arrive without an active request waiter.
   void promise.catch(() => {});
-  return { connected: false, promise, reject: rejectPromise, resolve: resolvePromise };
+  return { connected: false, promise, reject, resolve };
 }
 
 function formatQaGatewayRpcError(error: unknown, logs: () => string) {

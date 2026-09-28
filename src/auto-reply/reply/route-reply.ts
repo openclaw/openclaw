@@ -54,10 +54,6 @@ const BLOCK_REPLY_COMPLETION_RETENTION = {
   maxEntries: 2_000,
 } as const;
 
-function loadDeliverRuntime() {
-  return messageRuntimeLoader.load();
-}
-
 function replyDeliverySourceMatchesRoute(params: {
   source: NonNullable<
     NonNullable<ReturnType<typeof getReplyPayloadMetadata>>["replyDeliverySource"]
@@ -240,7 +236,6 @@ async function routeReplyOperation(
     fallbackAgentId: params.agentId,
   });
 
-  // Debug: `pnpm test src/auto-reply/reply/route-reply.test.ts`
   const responsePrefix = resolveEffectiveMessagesConfig(cfg, resolvedAgentId, {
     channel: normalizedChannel,
     accountId,
@@ -364,7 +359,7 @@ async function routeReplyOperation(
       durableMessageBatchMayHaveReachedRecipient,
       sendDurableMessageBatchCore,
       sendStructuredDurableMessageBatchCore,
-    } = await loadDeliverRuntime();
+    } = await messageRuntimeLoader.load();
     const outboundSession = buildOutboundSessionContext({
       cfg,
       agentId: resolvedAgentId,

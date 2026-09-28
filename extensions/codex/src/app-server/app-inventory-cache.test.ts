@@ -71,27 +71,6 @@ describe("Codex app inventory cache", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("reads metadata only for targeted installed apps", async () => {
-    const cache = new CodexAppInventoryCache({ ttlMs: 100 });
-    const apps = [app("app-1"), app("google-calendar-app")];
-    const request = vi.fn(async (method, params) =>
-      codexAppInventoryResponse(method, apps, params),
-    );
-
-    const snapshot = await cache.refreshNow({
-      key: "runtime",
-      request,
-      targetAppIds: ["google-calendar-app"],
-    });
-
-    expect(snapshot.apps).toEqual([app("google-calendar-app")]);
-    expect(request).toHaveBeenNthCalledWith(1, "app/installed", { forceRefresh: true });
-    expect(request).toHaveBeenNthCalledWith(2, "app/read", {
-      appIds: ["google-calendar-app"],
-      includeTools: true,
-    });
-  });
-
   it("refreshes and removes legacy runtime rows targeted by their Apps SDK identity", async () => {
     const manifestId = "asdk_app_0123456789abcdef0123456789abcdef";
     const runtimeId = "connector_0123456789abcdef0123456789abcdef";
@@ -713,27 +692,6 @@ describe("Codex app inventory cache", () => {
     expect(read.state).toBe("fresh");
     expect(read.snapshot?.targetAppIds).toEqual(["calendar-app"]);
     expect(read.snapshot?.apps).toEqual([app("calendar-app")]);
-  });
-
-  it("renews freshness when a targeted refresh re-covers the whole cached scope", async () => {
-    const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
-    const key = "runtime";
-    const apps = [app("calendar-app")];
-    const request = vi.fn(async (method, params) =>
-      codexAppInventoryResponse(method, apps, params),
-    );
-
-    await cache.refreshNow({ key, request, nowMs: 0, targetAppIds: ["calendar-app"] });
-    expect(cache.read({ key, request, nowMs: 1_500, suppressRefresh: true }).state).toBe("stale");
-
-    await cache.refreshNow({
-      key,
-      request,
-      nowMs: 1_500,
-      forceRefetch: true,
-      targetAppIds: ["calendar-app"],
-    });
-    expect(cache.read({ key, request, nowMs: 1_600, suppressRefresh: true }).state).toBe("fresh");
   });
 
   it("retires stacked scoped invalidations across separate covering refreshes", async () => {

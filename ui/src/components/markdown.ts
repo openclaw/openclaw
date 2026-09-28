@@ -108,7 +108,7 @@ const progressSanitizeOptions = {
   ALLOWED_ATTR: [...allowedAttrs, "value", "max"],
 };
 
-let hooksInstalled = false;
+const sanitizers = new Map<typeof sanitizeOptions, ReturnType<typeof DOMPurify>>();
 const MARKDOWN_CHAR_LIMIT = 140_000;
 // Covers several message-heavy sessions during rapid switching. Only inputs
 // up to 50k characters enter this 500-entry LRU, keeping memory bounded.
@@ -493,13 +493,17 @@ function hasMarkdownContentName(node: Node): boolean {
   return [...node.childNodes].some(hasMarkdownContentName);
 }
 
-function installHooks() {
-  if (hooksInstalled) {
-    return;
+function markdownSanitizer(options = sanitizeOptions) {
+  const cached = sanitizers.get(options);
+  if (cached) {
+    return cached;
   }
-  hooksInstalled = true;
+  // Persistent configs ignore per-call options; each allowlist owns its instance
+  // so progress markup cannot widen ordinary Markdown or other sanitizer users.
+  const sanitizer = DOMPurify(window);
+  sanitizer.setConfig(options);
 
-  DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+  sanitizer.addHook("afterSanitizeAttributes", (node) => {
     if (!(node instanceof HTMLAnchorElement)) {
       return;
     }
@@ -551,6 +555,8 @@ function installHooks() {
     node.setAttribute("rel", "noreferrer noopener");
     node.setAttribute("target", "_blank");
   });
+  sanitizers.set(options, sanitizer);
+  return sanitizer;
 }
 
 function appendMarkdownTruncationNotice(truncated: {
@@ -572,11 +578,14 @@ const markdownParser = createMarkdownParser();
 // Uncached render core shared by the static and streaming paths. The streaming
 // tail changes on every delta, so routing it through here (instead of the cached
 // wrapper) keeps per-message churn out of the LRU cache.
-function renderSanitizedMarkdown(renderInput: string, renderOptions: MarkdownRenderEnv): string {
-  installHooks();
-  const activeSanitizeOptions = renderOptions.progressBars
-    ? progressSanitizeOptions
-    : sanitizeOptions;
+function renderSanitizedMarkdown(
+  renderInput: string,
+  renderOptions: MarkdownRenderEnv,
+  blockArt?: boolean,
+): string {
+  const sanitizer = markdownSanitizer(
+    renderOptions.progressBars ? progressSanitizeOptions : sanitizeOptions,
+  );
   const documentMode = renderOptions.mode === "document";
   const truncated = documentMode
     ? { text: renderInput, truncated: false, total: renderInput.length }
@@ -584,17 +593,16 @@ function renderSanitizedMarkdown(renderInput: string, renderOptions: MarkdownRen
   const input = renderOptions.progressBars
     ? stripProgressCardRawContentBlocks(appendMarkdownTruncationNotice(truncated))
     : appendMarkdownTruncationNotice(truncated);
-  if (isMarkdownBlockArtText(truncated.text)) {
-    return DOMPurify.sanitize(
+  if (blockArt ?? isMarkdownBlockArtText(truncated.text)) {
+    return sanitizer.sanitize(
       renderMarkdownCodeBlock(input, "", renderOptions, { blockArt: true }),
-      activeSanitizeOptions,
     );
   }
   if (!documentMode && truncated.text.length > MARKDOWN_PARSE_LIMIT) {
     // Large plain-text replies should stay readable without inheriting the
     // capped code-block chrome, while still preserving whitespace for logs
     // and other structured text that commonly trips the parse guard.
-    return DOMPurify.sanitize(toPlainTextElement(input, renderOptions), activeSanitizeOptions);
+    return sanitizer.sanitize(toPlainTextElement(input, renderOptions));
   }
   let rendered: string | HTMLDivElement;
   try {
@@ -604,21 +612,21 @@ function renderSanitizedMarkdown(renderInput: string, renderOptions: MarkdownRen
     console.warn("[markdown] md.render failed, falling back to plain text:", err);
     rendered = toPlainTextElement(input, renderOptions);
   }
-  return DOMPurify.sanitize(rendered, activeSanitizeOptions);
+  return sanitizer.sanitize(rendered);
 }
 
 // Bare JSON bypasses Markdown normalization, which can alter literal Unicode separators.
 // Both inputs still use the same code-block renderer and sanitizer boundary.
 export function toSanitizedJsonHtml(json: MarkdownJson, options: MarkdownRenderOptions): string {
-  installHooks();
-  return DOMPurify.sanitize(
-    // HTML parsing normalizes literal CRs; character references survive both
-    // sanitizer parsing and the final unsafeHTML commit without changing Raw.
-    renderMarkdownCodeBlock(json.text, "json", normalizeMarkdownRenderOptions(options), {
-      json,
-    }).replaceAll("\r", "&#13;"),
-    sanitizeOptions,
-  ).replaceAll("\r", "&#13;");
+  return markdownSanitizer()
+    .sanitize(
+      // HTML parsing normalizes literal CRs; character references survive both
+      // sanitizer parsing and the final unsafeHTML commit without changing Raw.
+      renderMarkdownCodeBlock(json.text, "json", normalizeMarkdownRenderOptions(options), {
+        json,
+      }).replaceAll("\r", "&#13;"),
+    )
+    .replaceAll("\r", "&#13;");
 }
 
 export function toSanitizedMarkdownHtml(
@@ -662,7 +670,6 @@ function toPlainTextElement(value: string, options: MarkdownRenderEnv): HTMLDivE
   return createAssistantTranscriptPlainTextFallback(
     restoreMarkdownHumanMentions(normalizeMarkdownLineBreaks(value), options.humanMentionTokens),
     options.assistantTranscriptRoleHeaders,
-    () => t("sessionsView.assistant"),
   );
 }
 
@@ -705,7 +712,7 @@ export function toStreamingMarkdownParts(
     (previous.markdown === stableMarkdown ||
       (previous.markdown.endsWith("\n") &&
         !/^(?: {4}| {0,3}[\t>])/mu.test(stableMarkdown) &&
-        !/^ {0,3}(?:[-+*]|\d{1,9}[.)])(?:[ \t]|$)/mu.test(stableMarkdown) &&
+        !/^ {0,3}(?:[-+*]|\d{1,9}[.)])$/mu.test(stableMarkdown) &&
         !stableMarkdown.includes("<") &&
         !isMarkdownBlockArtText(stableMarkdown) &&
         !previous.html.includes('class="markdown-block-art"') &&
@@ -729,12 +736,18 @@ export function toStreamingMarkdownParts(
   if (!streamingTail.trim()) {
     return [stableHtml, ""];
   }
+  // The whole input was classified above; an isolated tail is not block art.
   const tailHtml =
     tailRepairStart === null
-      ? renderSanitizedMarkdown(streamingTail, { ...renderOptions, streamingOpenFence: true })
+      ? renderSanitizedMarkdown(
+          streamingTail,
+          { ...renderOptions, streamingOpenFence: true },
+          false,
+        )
       : renderSanitizedMarkdown(
           repairStreamingMarkdownTail(streamingTail, tailRepairStart - boundary),
           renderOptions,
+          false,
         );
   return [stableHtml, tailHtml];
 }

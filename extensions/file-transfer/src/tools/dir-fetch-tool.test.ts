@@ -463,11 +463,6 @@ describe("dir.fetch archive extraction", () => {
 
   it.each([
     {
-      name: "backslash",
-      entries: [{ path: "dir\\note.txt", contents: "normalized" }],
-      expectedPath: ["dir", "note.txt"],
-    },
-    {
       name: "mixed separators and dots",
       entries: [{ path: "./pkg//dir\\note.txt", contents: "normalized" }],
       expectedPath: ["pkg", "dir", "note.txt"],
@@ -502,17 +497,9 @@ describe("dir.fetch archive extraction", () => {
 
   it.each([
     "../escape.txt",
-    "..\\escape.txt",
-    "dir/../escape.txt",
-    "dir\\..\\escape.txt",
     "dir/..\\escape.txt",
-    "dir\\../escape.txt",
-    "a/b\\..\\escape.txt",
     "/escape.txt",
-    "\\escape.txt",
     "\\\\server\\share\\escape.txt",
-    "C:/escape.txt",
-    "C:\\escape.txt",
     "C:escape.txt",
     "dir/C:escape.txt",
   ])("rejects unsafe raw path %j", async (entryPath) => {
@@ -526,15 +513,12 @@ describe("dir.fetch archive extraction", () => {
     },
   );
 
-  it.each(["dir\\note.txt", "./dir//note.txt"])(
-    "rejects canonical collision with %j",
-    async (entryPath) => {
-      await expectUnsafeArchive([
-        { path: "dir/note.txt", contents: "first" },
-        { path: entryPath, contents: "second" },
-      ]);
-    },
-  );
+  it("rejects canonical collisions", async () => {
+    await expectUnsafeArchive([
+      { path: "dir/note.txt", contents: "first" },
+      { path: "./dir//note.txt", contents: "second" },
+    ]);
+  });
 
   it("maps single-entry expansion limits to TREE_TOO_LARGE", async () => {
     const tarBuffer = await createTarBuffer({

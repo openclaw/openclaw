@@ -10,9 +10,8 @@ import { prepareSessionMutationFacts } from "../../gateway/session-sharing-prepa
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { prepareUserProfileRoleAuthority } from "../../state/user-channel-identity-operations.js";
-import { getRegisteredDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime-state.js";
-import { withFollowupRequest } from "../../tasks/task-followup-completion.js";
-import type { FollowupRequest } from "../../tasks/task-followup-completion.types.js";
+import { withFollowupRequest } from "../subagents/completion/session-followup-completion.js";
+import type { FollowupRequest } from "../subagents/completion/session-followup-completion.types.js";
 import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
@@ -42,11 +41,6 @@ export async function prepareSessionsSendFollowup(params: {
     caller.sessionKey !== params.requesterSessionKey
   ) {
     throw new Error("Followup result requester differs from its admitted tool caller.");
-  }
-  // Registered runtimes keep their shipped run-scoped followup contract. Select
-  // that path before preparing core custody; an admitted core request never downgrades.
-  if (getRegisteredDetachedTaskLifecycleRuntime()) {
-    return undefined;
   }
   const captured = await captureOperatorToolGatewayContinuationContext();
   if (!captured) {

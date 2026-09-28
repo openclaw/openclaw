@@ -1,13 +1,11 @@
 import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import {
   placementTurnOwner,
   type WorkerSessionPlacementIdentity,
@@ -18,7 +16,7 @@ import {
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
 import { completeReclaimedWorkspaceTeardown } from "./placement-teardown.js";
-import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
+import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 
 const SESSION: WorkerSessionPlacementIdentity = {
   sessionId: "session-placement-terminal",
@@ -27,69 +25,30 @@ const SESSION: WorkerSessionPlacementIdentity = {
 };
 
 describe("worker placement terminal persistence", () => {
+  const tempDirs = useStateDatabaseTempDirs();
   let root: string;
   let database: OpenClawStateDatabase;
   let store: WorkerSessionPlacementStore;
   let nowMs: number;
 
-  beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-terminal-"));
+  beforeEach(() => {
+    root = tempDirs.make("openclaw-terminal-");
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     nowMs = 1_000;
     store = createWorkerSessionPlacementStore({ database, now: () => nowMs });
   });
 
-  afterEach(async () => {
-    await closeStateDatabaseForTest();
-    await fs.rm(root, { recursive: true, force: true });
-  });
-
-  async function advanceToActive(
+  function advanceToActive(
     identity: WorkerSessionPlacementIdentity = SESSION,
     environmentId = `environment-${identity.sessionId}`,
     executionMode: "worker-turn" | "remote-exec" = "worker-turn",
   ) {
-    let placement = await store.startDispatch({ ...identity, executionMode });
-    placement = store.transition({
-      sessionId: identity.sessionId,
-      from: "requested",
-      to: "provisioning",
-      expectedGeneration: placement.generation,
-      patch: { environmentId },
-    });
-    placement = store.transition({
-      sessionId: identity.sessionId,
-      from: "provisioning",
-      to: "syncing",
-      expectedGeneration: placement.generation,
-      patch: { workerBundleHash: "a".repeat(64) },
-    });
-    placement = store.transition({
-      sessionId: identity.sessionId,
-      from: "syncing",
-      to: "starting",
-      expectedGeneration: placement.generation,
-      patch: {
-        workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
-        remoteWorkspaceDir: `/workspace/${identity.sessionId}`,
-      },
-    });
-    seedAttachedPlacementEnvironment(database, {
-      environmentId,
-      sessionId: identity.sessionId,
-      ownerEpoch: 7,
-    });
-    const active = store.transition({
-      sessionId: identity.sessionId,
-      from: "starting",
-      to: "active",
-      expectedGeneration: placement.generation,
-      patch: { activeOwnerEpoch: 7 },
-    });
-    if (active.state !== "active") {
-      throw new Error("expected active worker placement");
-    }
-    return active;
+    return advancePlacementFixtureToActive(
+      store,
+      database,
+      { ...identity, executionMode },
+      { environmentId, remoteWorkspaceDir: `/workspace/${identity.sessionId}` },
+    );
   }
 
   async function pendingResult(identity = SESSION) {

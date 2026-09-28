@@ -17,14 +17,9 @@ import {
 import { WorkerTaskError } from "openclaw/plugin-sdk/process-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  mergeHybridResults,
-  selectHybridSearchResults,
-  type HybridSearchResult,
-} from "./hybrid.js";
+import { mergeHybridResults, selectHybridSearchResults } from "./hybrid.js";
 import { applyImportanceMultiplier } from "./importance.js";
 import { runMemoryVectorFallback } from "./manager-cpu-worker-runtime.js";
-import { projectHybridCandidates } from "./manager-hybrid-candidates.js";
 import { acquireMemoryIndexReadGeneration } from "./manager-index-generation-lease.js";
 import {
   MemoryKeywordRetrieval,
@@ -35,6 +30,7 @@ import type { MemoryIndexIdentityState } from "./manager-reindex-state.js";
 import type { MemoryRetrievalIndexState } from "./manager-retrieval-read.js";
 import { runVectorKnnInSubprocess } from "./manager-search-knn-subprocess.js";
 import { searchVector } from "./manager-search-vector.js";
+import { prepareExactPathMatcher } from "./manager-search.js";
 import type { MemoryKeywordWorkerResult } from "./manager-search.worker.js";
 import { applyProjectRanking, prepareActiveProjectKeys } from "./project-ranking.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
@@ -520,7 +516,11 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
             } finally {
               releaseFallbackProvider();
             }
-          } else if (!this.provider && this.fts.enabled && this.fts.available) {
+          } else if (
+            (!this.provider || this.providerRequirement.mode !== "required") &&
+            this.fts.enabled &&
+            this.fts.available
+          ) {
             this.assertRequiredProviderAvailable("search");
             log.warn(
               `memory search: embeddings unavailable; using keyword-only results: ${message}`,
@@ -574,15 +574,28 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           .slice(0, maxResults);
       }
 
-      const merged = await this.mergeHybridResults({
-        query: normalizedQuery,
-        vector: vectorResults,
-        keyword: keywordResults,
+      const matchExactPath = prepareExactPathMatcher(normalizedQuery);
+      const merged = await mergeHybridResults({
+        vector: vectorResults.map((entry) => ({
+          ...entry,
+          vectorScore: entry.score,
+          exactPathSpecificity: matchExactPath(entry.path),
+        })),
+        keyword: keywordResults.map((entry) => ({ ...entry, rankingScore: entry.score })),
         vectorWeight: hybrid.vectorWeight,
         textWeight: hybrid.textWeight,
+        isNonTextMediaPath: (path) =>
+          classifyMemoryMultimodalPath(path, this.settings.multimodal) !== null,
         mmr: hybrid.mmr,
         temporalDecay: hybrid.temporalDecay,
         activeProjectKeys: opts?.activeProjectKeys,
+        workspaceDir: this.workspaceDir,
+        // Vector enrichment runs last, so its facts win for paths in both sets.
+        sessionSourceMtimes: this.loadSourceMtimes("sessions", [
+          ...keywordResults,
+          ...vectorResults,
+        ]),
+        memorySourceMtimes: this.loadSourceMtimes("memory", [...keywordResults, ...vectorResults]),
       });
       return selectHybridSearchResults({
         merged,
@@ -672,31 +685,5 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       sourceFilterVec: this.buildSourceFilter("c", sourceFilterList),
     });
     return this.attachRecallMetadata(results, signal, sourceFilterList);
-  }
-
-  private mergeHybridResults(params: {
-    query: string;
-    vector: Array<MemoryRetrievalResult & { id: string }>;
-    keyword: KeywordSearchHit[];
-    vectorWeight: number;
-    textWeight: number;
-    mmr?: { enabled: boolean; lambda: number };
-    temporalDecay?: { enabled: boolean; halfLifeDays: number };
-    activeProjectKeys?: readonly string[];
-  }): Promise<HybridSearchResult<MemorySource>[]> {
-    return mergeHybridResults({
-      ...projectHybridCandidates(params.query, params.vector, params.keyword),
-      vectorWeight: params.vectorWeight,
-      textWeight: params.textWeight,
-      isNonTextMediaPath: (path) =>
-        classifyMemoryMultimodalPath(path, this.settings.multimodal) !== null,
-      mmr: params.mmr,
-      temporalDecay: params.temporalDecay,
-      activeProjectKeys: params.activeProjectKeys,
-      workspaceDir: this.workspaceDir,
-      // Vector enrichment runs last, so its facts win when a path occurs in both sets.
-      sessionSourceMtimes: this.loadSourceMtimes("sessions", [...params.keyword, ...params.vector]),
-      memorySourceMtimes: this.loadSourceMtimes("memory", [...params.keyword, ...params.vector]),
-    });
   }
 }

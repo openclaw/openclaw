@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { asNullableRecord, asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
@@ -41,10 +42,6 @@ export function resolveLegacyVoiceWakeRoutingPath(stateDir: string): string {
   return path.join(stateDir, "settings", "voicewake-routing.json");
 }
 
-function readLegacyJsonObject(sourcePath: string): unknown {
-  return JSON.parse(fs.readFileSync(sourcePath, "utf8")) as unknown;
-}
-
 type LegacyJsonImportOutcome = {
   changes: string[];
   notices?: string[];
@@ -69,7 +66,7 @@ export function migrateLegacyJsonState<Value>(params: {
 
   let value: Value;
   try {
-    value = params.normalize(readLegacyJsonObject(params.sourcePath));
+    value = params.normalize(JSON.parse(fs.readFileSync(params.sourcePath, "utf8")) as unknown);
   } catch (err) {
     const advisory = params.recoverableReadFailure?.(err);
     if (advisory) {
@@ -110,7 +107,7 @@ export function migrateLegacyJsonState<Value>(params: {
 }
 
 function normalizeLegacyVoiceWakeTriggers(input: unknown): string[] {
-  const rec = input && typeof input === "object" ? (input as { triggers?: unknown }) : {};
+  const rec = asRecord(input);
   const triggers = Array.isArray(rec.triggers)
     ? rec.triggers
         .flatMap((entry) => (typeof entry === "string" ? [entry.trim()] : []))
@@ -152,7 +149,6 @@ export function migrateLegacyVoiceWakeSettings(params: {
     stateDir: params.stateDir,
     label: "voice wake triggers",
     normalize: normalizeLegacyVoiceWakeTriggers,
-    shouldMigrate: (triggers) => triggers.length > 0,
     migrate(db, triggers) {
       const imported = importLegacyVoiceWakeMachineState(
         db,
@@ -184,7 +180,6 @@ export function migrateLegacyVoiceWakeSettings(params: {
     stateDir: params.stateDir,
     label: "voice wake routing",
     normalize: normalizeVoiceWakeRoutingConfig,
-    shouldMigrate: Boolean,
     migrate(db, routingConfig) {
       const imported = importLegacyVoiceWakeMachineState(db, VOICEWAKE_ROUTING_STATE_KEY, {
         ...routingConfig,
@@ -220,10 +215,6 @@ export function migrateLegacyVoiceWakeSettings(params: {
   return notices.length > 0 ? { changes, warnings, notices } : { changes, warnings };
 }
 
-type LegacyConfigHealthFile = {
-  entries?: unknown;
-};
-
 type LegacyConfigHealthEntry = {
   configPath: string;
   lastKnownGoodJson: string | null;
@@ -239,14 +230,10 @@ function normalizeLegacyConfigHealthEntry(
   configPath: string,
   input: unknown,
 ): LegacyConfigHealthEntry | null {
-  if (!configPath.trim() || !input || typeof input !== "object" || Array.isArray(input)) {
+  const entry = asNullableRecord(input);
+  if (!configPath.trim() || !entry) {
     return null;
   }
-  const entry = input as {
-    lastKnownGood?: unknown;
-    lastPromotedGood?: unknown;
-    lastObservedSuspiciousSignature?: unknown;
-  };
   const lastKnownGoodJson =
     entry.lastKnownGood && typeof entry.lastKnownGood === "object"
       ? JSON.stringify(entry.lastKnownGood)
@@ -271,9 +258,8 @@ function normalizeLegacyConfigHealthEntry(
 }
 
 function normalizeLegacyConfigHealthFile(input: unknown): LegacyConfigHealthEntry[] {
-  const file = input && typeof input === "object" ? (input as LegacyConfigHealthFile) : {};
-  const entries = file.entries;
-  if (!entries || typeof entries !== "object" || Array.isArray(entries)) {
+  const entries = asNullableRecord(asRecord(input).entries);
+  if (!entries) {
     return [];
   }
   return Object.entries(entries)
@@ -284,13 +270,7 @@ function normalizeLegacyConfigHealthFile(input: unknown): LegacyConfigHealthEntr
     .toSorted((a, b) => a.configPath.localeCompare(b.configPath));
 }
 
-function configHealthRow(entry: LegacyConfigHealthEntry): {
-  config_path: string;
-  last_known_good_json: string | null;
-  last_promoted_good_json: string | null;
-  last_observed_suspicious_signature: string | null;
-  updated_at_ms: number;
-} {
+function configHealthRow(entry: LegacyConfigHealthEntry) {
   return {
     config_path: entry.configPath,
     last_known_good_json: entry.lastKnownGoodJson,
@@ -403,11 +383,6 @@ export function migrateLegacyConfigHealth(params: {
   });
 }
 
-type LegacyPluginBindingApprovalsFile = {
-  version?: unknown;
-  approvals?: unknown;
-};
-
 type LegacyPluginBindingApprovalEntry = {
   pluginRoot: string;
   pluginId: string;
@@ -441,8 +416,7 @@ function pluginBindingApprovalScopeKey(entry: {
 function normalizeLegacyPluginBindingApprovalEntry(
   input: unknown,
 ): LegacyPluginBindingApprovalEntry | null {
-  const entry =
-    input && typeof input === "object" ? (input as Partial<LegacyPluginBindingApprovalEntry>) : {};
+  const entry = asRecord(input);
   const pluginRoot = typeof entry.pluginRoot === "string" ? entry.pluginRoot.trim() : "";
   const pluginId = typeof entry.pluginId === "string" ? entry.pluginId.trim() : "";
   const channel =
@@ -470,8 +444,7 @@ function normalizeLegacyPluginBindingApprovalEntry(
 function normalizeLegacyPluginBindingApprovalsFile(
   input: unknown,
 ): LegacyPluginBindingApprovalEntry[] {
-  const file =
-    input && typeof input === "object" ? (input as LegacyPluginBindingApprovalsFile) : {};
+  const file = asRecord(input);
   if (file.version !== 1 || !Array.isArray(file.approvals)) {
     return [];
   }
@@ -488,14 +461,7 @@ function normalizeLegacyPluginBindingApprovalsFile(
   );
 }
 
-function pluginBindingApprovalRow(entry: LegacyPluginBindingApprovalEntry): {
-  plugin_root: string;
-  channel: string;
-  account_id: string;
-  plugin_id: string;
-  plugin_name: string | null;
-  approved_at: number;
-} {
+function pluginBindingApprovalRow(entry: LegacyPluginBindingApprovalEntry) {
   return {
     plugin_root: entry.pluginRoot,
     channel: entry.channel,
@@ -504,10 +470,6 @@ function pluginBindingApprovalRow(entry: LegacyPluginBindingApprovalEntry): {
     plugin_name: entry.pluginName ?? null,
     approved_at: entry.approvedAt,
   };
-}
-
-function pluginBindingApprovalComparable(entry: LegacyPluginBindingApprovalEntry): string {
-  return JSON.stringify(pluginBindingApprovalRow(entry));
 }
 
 export function migrateLegacyPluginBindingApprovals(params: {
@@ -558,7 +520,7 @@ export function migrateLegacyPluginBindingApprovals(params: {
         const existingApprovalJson = existingByKey.get(pluginBindingApprovalScopeKey(approval));
         if (existingApprovalJson === undefined) {
           approvalsToInsert.push(approval);
-        } else if (existingApprovalJson !== pluginBindingApprovalComparable(approval)) {
+        } else if (existingApprovalJson !== JSON.stringify(pluginBindingApprovalRow(approval))) {
           conflictCount += 1;
         }
       }
@@ -588,11 +550,6 @@ export function migrateLegacyPluginBindingApprovals(params: {
     },
   });
 }
-
-type LegacyCurrentConversationBindingsFile = {
-  version?: unknown;
-  bindings?: unknown;
-};
 
 export function resolveLegacyCurrentConversationBindingsPath(stateDir: string): string {
   return path.join(stateDir, "bindings", "current-conversations.json");
@@ -646,8 +603,7 @@ function normalizeLegacyCurrentConversationBindingRecord(
 }
 
 function normalizeLegacyCurrentConversationBindingFile(input: unknown): SessionBindingRecord[] {
-  const file =
-    input && typeof input === "object" ? (input as LegacyCurrentConversationBindingsFile) : {};
+  const file = asRecord(input);
   if (file.version !== 1 || !Array.isArray(file.bindings)) {
     return [];
   }

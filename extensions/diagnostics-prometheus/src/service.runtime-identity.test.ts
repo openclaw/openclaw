@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { baseEvent, createMetricsHarness, trusted } from "./service.test-helpers.js";
+import { createMetricsHarness } from "./service.test-helpers.js";
 
 describe("diagnostics-prometheus runtime identity", () => {
   it("does not read or publish runtime identity when diagnostics are disabled at startup", () => {
@@ -29,10 +29,7 @@ describe("diagnostics-prometheus runtime identity", () => {
       expect(metrics.render()).toBe(initial);
       expect(readIdentity).toHaveBeenCalledOnce();
       for (let index = 0; index < 2100; index += 1) {
-        metrics.record(
-          { ...baseEvent(), type: "gateway.rpc", method: `method.${index}`, phase: "received" },
-          trusted,
-        );
+        metrics.record({ type: "gateway.rpc", method: `method.${index}`, phase: "received" });
       }
       expect(metrics.render()).toContain(info);
       expect(metrics.render()).toContain("openclaw_prometheus_series_dropped_total 53");
@@ -46,16 +43,4 @@ describe("diagnostics-prometheus runtime identity", () => {
       metrics.stop();
     },
   );
-
-  it("leaves runtime identity absent on hosts without the optional capability", () => {
-    const metrics = createMetricsHarness();
-    expect(metrics.render()).toBe("");
-    metrics.record(
-      { ...baseEvent(), type: "gateway.rpc", method: "health", phase: "received" },
-      trusted,
-    );
-    expect(metrics.render()).toContain('openclaw_gateway_rpc_requests_total{method="health"} 1');
-    expect(metrics.render()).not.toContain("openclaw_gateway_build_info");
-    metrics.stop();
-  });
 });

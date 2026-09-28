@@ -132,20 +132,14 @@ export function extractMSTeamsPollVote(
     return null;
   }
 
-  const directSelections = extractSelections(value.choices);
-  const nestedSelections = extractSelections(readNestedValue(value, ["choices"]));
-  const dataSelections = extractSelections(readNestedValue(value, ["data", "choices"]));
-  const actionDataSelections = extractSelections(
-    readNestedValue(value, ["action", "data", "choices"]),
-  );
   const selections =
-    directSelections.length > 0
-      ? directSelections
-      : nestedSelections.length > 0
-        ? nestedSelections
-        : dataSelections.length > 0
-          ? dataSelections
-          : actionDataSelections;
+    [
+      value.choices,
+      readNestedValue(value, ["data", "choices"]),
+      readNestedValue(value, ["action", "data", "choices"]),
+    ]
+      .map(extractSelections)
+      .find((choices) => choices.length > 0) ?? [];
 
   if (selections.length === 0) {
     return null;
@@ -255,15 +249,10 @@ function createPollVoteBucketStateStore(params?: MSTeamsPollStoreStateOptions) {
   });
 }
 
-function pruneExpired<T extends { createdAt: string; updatedAt?: string }>(
-  polls: Record<string, T>,
-) {
+function isPollExpired(poll: StoredMSTeamsPoll): boolean {
   const cutoff = Date.now() - MSTEAMS_POLL_TTL_MS;
-  const entries = Object.entries(polls).filter(([, poll]) => {
-    const ts = parseDateStringTimestampMs(poll.updatedAt ?? poll.createdAt) ?? 0;
-    return ts >= cutoff;
-  });
-  return Object.fromEntries(entries);
+  const timestamp = parseDateStringTimestampMs(poll.updatedAt ?? poll.createdAt) ?? 0;
+  return !(timestamp >= cutoff);
 }
 
 function normalizeMSTeamsPollSelections(poll: MSTeamsPoll, selections: string[]) {
@@ -275,14 +264,6 @@ function normalizeMSTeamsPollSelections(poll: MSTeamsPoll, selections: string[])
     .map((value) => String(value));
   // Deduplicate first so repeats do not consume selection slots.
   return uniqueStrings(mapped).slice(0, maxSelections);
-}
-
-function splitMSTeamsPoll(poll: MSTeamsPoll): {
-  metadata: StoredMSTeamsPoll;
-  votes: MSTeamsPoll["votes"];
-} {
-  const { votes, ...metadata } = poll;
-  return { metadata, votes };
 }
 
 function hashMSTeamsPollVote(pollId: string, voterId: string): string {
@@ -299,7 +280,7 @@ function selectMSTeamsPollVoteBucket(pollId: string, voterId: string): string {
 }
 
 function buildMSTeamsPollVoteBucketKey(pollId: string, bucket: string): string {
-  const pollDigest = crypto.createHash("sha256").update(pollId).digest("hex");
+  const pollDigest = buildMSTeamsPollStateKey(pollId);
   return `${pollDigest}:${bucket}`;
 }
 
@@ -391,7 +372,7 @@ export function createMSTeamsPollStoreState(
     };
     const rows = [];
     for (const row of await pollStore.entries()) {
-      if (!pruneExpired({ [row.key]: row.value })[row.key]) {
+      if (isPollExpired(row.value)) {
         await pollStore.delete(row.key);
         await deletePrunedPollVotes(row.value.id);
         continue;
@@ -414,7 +395,7 @@ export function createMSTeamsPollStoreState(
 
   const createPoll = async (poll: MSTeamsPoll) => {
     await withMSTeamsSqliteMutationLock(params, MSTEAMS_POLLS_NAMESPACE, async () => {
-      const { metadata, votes } = splitMSTeamsPoll(poll);
+      const { votes, ...metadata } = poll;
       await pollStore.register(buildMSTeamsPollStateKey(poll.id), toPluginJsonValue(metadata));
       await deletePollVotes(poll.id);
       await registerPollVotes(poll.id, votes, poll.updatedAt ?? poll.createdAt);
@@ -427,7 +408,7 @@ export function createMSTeamsPollStoreState(
     if (!poll) {
       return null;
     }
-    if (!pruneExpired({ [pollId]: poll })[pollId]) {
+    if (isPollExpired(poll)) {
       return null;
     }
     return await reconstructPoll(poll);
@@ -440,7 +421,7 @@ export function createMSTeamsPollStoreState(
       if (!poll) {
         return null;
       }
-      if (!pruneExpired({ [vote.pollId]: poll })[vote.pollId]) {
+      if (isPollExpired(poll)) {
         await pollStore.delete(pollKey);
         await deletePollVotes(vote.pollId);
         return null;

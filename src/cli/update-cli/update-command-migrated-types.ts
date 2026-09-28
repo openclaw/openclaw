@@ -8,8 +8,17 @@ import type { UpdateRunStep } from "../../infra/update-run-record.js";
 import type { UpdateRecoveryHandoff } from "../../infra/update-run-recovery.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateTimeoutHandoff } from "../../infra/update-timeout-provenance.js";
+import type { UpdateCommandOptions } from "./shared.js";
 import type { UpdateCommandChildGrant } from "./update-command-executor.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
+
+export type UpdatePostCoreInput = {
+  executor: UpdateCommandChildGrant;
+  runId: string;
+  root: string;
+  requester?: UpdateRequester;
+  opts: Pick<UpdateCommandOptions, "json" | "restart" | "yes" | "acceptCapabilities" | "timeout">;
+};
 
 export type UpdateDoctorInput = {
   executor: UpdateCommandChildGrant;
@@ -32,7 +41,7 @@ export type MigratedUpdateFinalizationInput = Partial<UpdateTimeoutHandoff> & {
     opts: Omit<FinishUpdateParams["opts"], "run" | "recovery"> & {
       run?: Omit<
         NonNullable<FinishUpdateParams["opts"]["run"]>,
-        "requesterAuthority" | "executorFence"
+        "requesterAuthority" | "executorFence" | "sourceArtifactLock"
       > & {
         requesterAuthority?: Pick<UpdateRequesterAuthority, "requester">;
       };

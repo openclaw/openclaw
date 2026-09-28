@@ -55,9 +55,10 @@ import type { SessionEntry } from "./types.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("sessions cleanup applied summary", () => {
-  afterEach(() => {
+  afterEach(async () => {
     cleanupRace.afterPreview = undefined;
     cleanupRace.postCommitFailureStorePath = undefined;
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
   });
 

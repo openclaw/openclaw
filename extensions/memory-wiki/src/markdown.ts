@@ -1,4 +1,3 @@
-// Memory Wiki plugin module implements markdown behavior.
 import { createHash } from "node:crypto";
 import path from "node:path";
 import {
@@ -14,10 +13,16 @@ import { extractWikiLinks } from "./markdown-links.js";
 
 export { WIKI_RELATED_END_MARKER, WIKI_RELATED_START_MARKER } from "./markdown-links.js";
 
-const WIKI_PAGE_KINDS = ["entity", "concept", "source", "synthesis", "report"] as const;
+export const WIKI_PAGE_GROUPS = [
+  { kind: "source", dir: "sources", heading: "Sources" },
+  { kind: "entity", dir: "entities", heading: "Entities" },
+  { kind: "concept", dir: "concepts", heading: "Concepts" },
+  { kind: "synthesis", dir: "syntheses", heading: "Syntheses" },
+  { kind: "report", dir: "reports", heading: "Reports" },
+] as const;
 export const WIKI_RAW_SOURCE_MARKER = "<!-- openclaw:wiki:raw-source -->";
 
-export type WikiPageKind = (typeof WIKI_PAGE_KINDS)[number];
+export type WikiPageKind = (typeof WIKI_PAGE_GROUPS)[number]["kind"];
 type GeneratedSourceBody = "bridge" | "unsafe-local" | "local-file" | "chatgpt-export";
 
 type ParsedWikiMarkdown = {
@@ -182,10 +187,7 @@ export function parseWikiMarkdown(content: string): ParsedWikiMarkdown {
   if (!match) {
     return { hasFrontmatter: false, frontmatter: {}, body: content };
   }
-  const frontmatter = match[1];
-  if (frontmatter === undefined) {
-    return { hasFrontmatter: false, frontmatter: {}, body: content };
-  }
+  const frontmatter = match[1]!;
   const parsed = asNullableRecord(YAML.parse(frontmatter) as unknown);
   if (!parsed) {
     // Every writer spreads this value back into YAML. Reject non-mapping roots
@@ -210,10 +212,6 @@ export function renderWikiMarkdown(params: {
 function extractTitleFromMarkdown(body: string): string | undefined {
   const match = body.match(/^#\s+(.+?)\s*$/m);
   return normalizeOptionalString(match?.[1]);
-}
-
-export function normalizeSourceIds(value: unknown): string[] {
-  return normalizeSingleOrTrimmedStringList(value);
 }
 
 function normalizeOptionalStringFields<K extends string>(
@@ -266,16 +264,14 @@ export function normalizeWikiClaims(value: unknown): WikiClaim[] {
         })
       : [];
     const confidence = asFiniteNumber(record.confidence);
-    const status = normalizeOptionalString(record.status);
-    const updatedAt = normalizeOptionalString(record.updatedAt);
     return [
       {
-        ...(normalizeOptionalString(record.id) ? { id: normalizeOptionalString(record.id) } : {}),
+        ...normalizeOptionalStringFields(record, ["id"]),
         text,
-        ...(status ? { status } : {}),
+        ...normalizeOptionalStringFields(record, ["status"]),
         ...(confidence !== undefined ? { confidence } : {}),
         evidence,
-        ...(updatedAt ? { updatedAt } : {}),
+        ...normalizeOptionalStringFields(record, ["updatedAt"]),
       },
     ];
   });
@@ -286,38 +282,23 @@ function normalizeWikiPersonCard(value: unknown): WikiPersonCard | undefined {
   if (!record) {
     return undefined;
   }
-  const canonicalId = normalizeOptionalString(record.canonicalId);
-  const timezone = normalizeOptionalString(record.timezone);
   const confidence = asFiniteNumber(record.confidence);
-  const privacyTier = normalizeOptionalString(record.privacyTier);
-  const lastRefreshedAt = normalizeOptionalString(record.lastRefreshedAt);
   const card: WikiPersonCard = {
-    ...(canonicalId ? { canonicalId } : {}),
+    ...normalizeOptionalStringFields(record, ["canonicalId"]),
     handles: normalizeSingleOrTrimmedStringList(record.handles),
     socials: normalizeSingleOrTrimmedStringList(record.socials),
     emails: normalizeSingleOrTrimmedStringList(record.emails ?? record.email),
-    ...(timezone ? { timezone } : {}),
-    ...(normalizeOptionalString(record.lane) ? { lane: normalizeOptionalString(record.lane) } : {}),
+    ...normalizeOptionalStringFields(record, ["timezone", "lane"]),
     askFor: normalizeSingleOrTrimmedStringList(record.askFor),
     avoidAskingFor: normalizeSingleOrTrimmedStringList(record.avoidAskingFor),
     bestUsedFor: normalizeSingleOrTrimmedStringList(record.bestUsedFor),
     notEnoughFor: normalizeSingleOrTrimmedStringList(record.notEnoughFor),
     ...(confidence !== undefined ? { confidence } : {}),
-    ...(privacyTier ? { privacyTier } : {}),
-    ...(lastRefreshedAt ? { lastRefreshedAt } : {}),
+    ...normalizeOptionalStringFields(record, ["privacyTier", "lastRefreshedAt"]),
   };
-  const hasAnyValue =
-    Boolean(
-      card.canonicalId || card.timezone || card.lane || card.privacyTier || card.lastRefreshedAt,
-    ) ||
-    typeof card.confidence === "number" ||
-    card.handles.length > 0 ||
-    card.socials.length > 0 ||
-    card.emails.length > 0 ||
-    card.askFor.length > 0 ||
-    card.avoidAskingFor.length > 0 ||
-    card.bestUsedFor.length > 0 ||
-    card.notEnoughFor.length > 0;
+  const hasAnyValue = Object.values(card).some((field) =>
+    Array.isArray(field) ? field.length > 0 : field !== undefined,
+  );
   return hasAnyValue ? card : undefined;
 }
 
@@ -343,8 +324,7 @@ function normalizeWikiRelationships(value: unknown): WikiRelationship[] {
         "updatedAt",
       ]),
     };
-    const hasAnyValue = Object.keys(relationship).length > 0;
-    return hasAnyValue ? [relationship] : [];
+    return Object.keys(relationship).length > 0 ? [relationship] : [];
   });
 }
 
@@ -537,22 +517,7 @@ export function renderMarkdownFence(content: string, infoString = "text"): strin
 
 function inferWikiPageKind(relativePath: string): WikiPageKind | null {
   const normalized = relativePath.split(path.sep).join("/");
-  if (normalized.startsWith("entities/")) {
-    return "entity";
-  }
-  if (normalized.startsWith("concepts/")) {
-    return "concept";
-  }
-  if (normalized.startsWith("sources/")) {
-    return "source";
-  }
-  if (normalized.startsWith("syntheses/")) {
-    return "synthesis";
-  }
-  if (normalized.startsWith("reports/")) {
-    return "report";
-  }
-  return null;
+  return WIKI_PAGE_GROUPS.find((group) => normalized.startsWith(`${group.dir}/`))?.kind ?? null;
 }
 
 export function scanWikiPageSummary(params: {
@@ -608,7 +573,7 @@ export function scanWikiPageSummary(params: {
       entityType: normalizeOptionalString(parsed.frontmatter.entityType),
       canonicalId: normalizeOptionalString(parsed.frontmatter.canonicalId),
       aliases: normalizeSingleOrTrimmedStringList(parsed.frontmatter.aliases),
-      sourceIds: normalizeSourceIds(parsed.frontmatter.sourceIds),
+      sourceIds: normalizeSingleOrTrimmedStringList(parsed.frontmatter.sourceIds),
       linkTargets:
         params.includeLinks === false
           ? []

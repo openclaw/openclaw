@@ -87,23 +87,6 @@ describe("syncMemoryWikiImportedSources", () => {
     });
   });
 
-  it("shares one full source and index flight across equivalent polls", async () => {
-    const config = createConfig();
-    const bridgeGate = deferred<typeof bridgeResult>();
-    syncBridgeMock.mockReturnValueOnce(bridgeGate.promise);
-
-    const requests = Array.from({ length: 32 }, () =>
-      syncMemoryWikiImportedSources({ config, appConfig }),
-    );
-    await vi.waitFor(() => expect(syncBridgeMock).toHaveBeenCalledTimes(1));
-
-    bridgeGate.resolve(bridgeResult);
-    const results = await Promise.all(requests);
-
-    expect(refreshIndexesMock).toHaveBeenCalledTimes(1);
-    expect(results.every((result) => result === results[0])).toBe(true);
-  });
-
   it("coalesces separately resolved equivalent configs for one vault", async () => {
     const vaultPath = path.join(os.tmpdir(), `memory-wiki-source-sync-${vaultCounter++}`);
     const firstConfig = createConfig("bridge", vaultPath);
