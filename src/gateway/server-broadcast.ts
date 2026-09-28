@@ -53,6 +53,8 @@ const SESSION_SUBSCRIPTION_EVENTS = new Set([
   // session subscribers; omitting it here would hand scoped clients the
   // exact payload the registry gate suppresses on the `agent` event.
   "session.tool",
+  // Model-visible redaction notice; carries no secret material, only the session scope.
+  "session.redaction",
 ]);
 
 type MessageStringEncoding = {
@@ -326,7 +328,9 @@ export function createGatewayBroadcaster(params: {
         !params.clients.has(c) ||
         (retained && c.socket !== retained.socket) ||
         c.invalidated === true ||
-        c.socket.readyState !== WEBSOCKET_OPEN_READY_STATE
+        c.socket.readyState !== WEBSOCKET_OPEN_READY_STATE ||
+        (opts?.excludeClientCapability &&
+          hasGatewayClientCap(c.connect.caps, opts.excludeClientCapability))
       ) {
         continue;
       }
