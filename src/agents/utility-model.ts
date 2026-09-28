@@ -127,64 +127,7 @@ export function resolveUtilityModelRefForAgent(params: {
   });
 }
 
-/**
- * Whether `modelId` is the small model automatic routing derives for the
- * primary's provider (manifest `defaultUtilityModel`).
- *
- * The derived ref is built as `<provider>/<modelId>`, and a model id may itself
- * contain slashes, so the provider prefix is removed positionally rather than
- * by splitting on every separator.
- */
-function isAutomaticUtilityModelId(params: {
-  cfg: OpenClawConfig;
-  primaryProvider: string;
-  modelId: string;
-  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
-}): boolean {
-  const derivedRef = resolveAutomaticUtilityModelRef({
-    cfg: params.cfg,
-    primaryProvider: params.primaryProvider,
-    ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
-  });
-  if (!derivedRef) {
-    return false;
-  }
-  const separator = derivedRef.indexOf("/");
-  if (separator < 0) {
-    return false;
-  }
-  const derivedModelId = derivedRef.slice(separator + 1);
-  return derivedModelId.trim().toLowerCase() === params.modelId.trim().toLowerCase();
-}
-
-/**
- * The agent runtime an automatically derived utility model would inherit from
- * its primary, or undefined when it already resolves its own.
- *
- * This answers the configuration question only. Whether that runtime is actually
- * used is the caller's decision: `prepareUtilityCompletionForAgent` applies it
- * just to a derived model with no usable provider credential, so an installation
- * holding both an API key and a CLI-backed primary keeps its HTTP route.
- *
- * Automatic routing derives a small model from the primary's provider, so the
- * derived ref matches no configured model entry of its own. A runtime pinned on
- * the primary model entry (`agents.defaults.models["<provider>/<model>"].
- * agentRuntime`) therefore does not carry, and the derived ref silently falls
- * back to the default runtime and its HTTP auth path. For a CLI-backed primary
- * such as `claude-cli` that provider holds no API key on purpose, so the
- * completion fails with "No API key found" even though the primary works.
- *
- * Only a runtime pinned on the primary's own model entry fails to carry, so
- * inheritance is limited to `runtimeSource === "model"`. A provider-level
- * `agentRuntime` already applies to every model of that provider, and an
- * implicit runtime is resolved per concrete route, so neither needs to be
- * copied onto the derived ref.
- *
- * Inheritance is also limited to the provider-declared automatic utility model.
- * A caller that passes its own `modelRef` reaches this helper with that ref, so
- * provider equality alone would let an explicitly selected same-provider model
- * move off its own route and onto the primary's CLI quota.
- */
+/** Candidate runtime for an automatic utility model; preparation checks auth availability. */
 export function resolveAutomaticUtilityRuntimeOverride(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -202,19 +145,15 @@ export function resolveAutomaticUtilityRuntimeOverride(params: {
   if (!primary.provider || !primary.model || primary.provider.toLowerCase() !== utilityProvider) {
     return undefined;
   }
-  // Selection prefers a caller-supplied modelRef over automatic derivation, so
-  // an unset utilityModel does not prove the ref in hand was derived. Inherit
-  // only for the provider-declared automatic utility model; any other
-  // explicitly selected same-provider model keeps whatever route it already
-  // resolves, including the HTTP default.
-  if (
-    !isAutomaticUtilityModelId({
-      cfg: params.cfg,
-      primaryProvider: primary.provider,
-      modelId: params.utilityModelId,
-      ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
-    })
-  ) {
+  // The observer passes its derived ref back as modelRef. Match that exact model
+  // so other same-provider selections keep their own runtime and billing route.
+  const automaticRef = resolveAutomaticUtilityModelRef({
+    cfg: params.cfg,
+    primaryProvider: primary.provider,
+    metadataSnapshot: params.metadataSnapshot,
+  });
+  const utilityRef = `${utilityProvider}/${params.utilityModelId.trim().toLowerCase()}`;
+  if (automaticRef?.toLowerCase() !== utilityRef) {
     return undefined;
   }
   const derived = resolveAgentHarnessPolicy({
@@ -232,6 +171,8 @@ export function resolveAutomaticUtilityRuntimeOverride(params: {
     config: params.cfg,
     agentId: params.agentId,
   });
+  // Provider-wide policy already covers the derived model; implicit policy is
+  // resolved per route and must not be copied from a different model.
   if (primaryPolicy.runtimeSource !== "model") {
     return undefined;
   }

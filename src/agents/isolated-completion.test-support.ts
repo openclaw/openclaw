@@ -24,6 +24,7 @@ const isolatedCompletionMocks = vi.hoisted(() => ({
   resolveAgentHarnessSelectionDecision:
     vi.fn<(params: AgentHarnessSelectionDecisionParams) => AgentHarnessSelectionDecision>(),
   ensureAuthProfileStore: vi.fn(),
+  hasAvailableAuthForProvider: vi.fn(async () => false),
   isCliRuntimeAliasForProvider: vi.fn<(params: { runtime?: string; provider?: string }) => boolean>(
     () => false,
   ),
@@ -72,6 +73,7 @@ vi.mock("./model-runtime-aliases.js", () => ({
 }));
 vi.mock("./model-auth.js", () => ({
   ensureAuthProfileStore: isolatedCompletionMocks.ensureAuthProfileStore,
+  hasAvailableAuthForProvider: isolatedCompletionMocks.hasAvailableAuthForProvider,
 }));
 vi.mock("./prepared-model-runtime.js", () => ({
   acquireAgentRunPreparedModelRuntime: isolatedCompletionMocks.acquireAgentRunPreparedModelRuntime,
@@ -171,6 +173,7 @@ export const nativeAuthPlan = {
 
 export function resetIsolatedCompletionTestState(): void {
   vi.clearAllMocks();
+  isolatedCompletionMocks.hasAvailableAuthForProvider.mockResolvedValue(false);
   preparedModelRuntime = {
     config: {},
     agentDir: "/tmp/agent",
