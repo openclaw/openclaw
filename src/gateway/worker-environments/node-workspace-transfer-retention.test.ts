@@ -462,6 +462,7 @@ it("restores node reconciliation after Gateway bootstrap changes without replaci
             pending = undefined;
           },
         },
+        stagedResult: { ref: workerWorkspaceResultRef("restored-workspace"), record: () => {} },
       },
     };
     const quiescence = await restored.quiesceWorkspace(remote);
