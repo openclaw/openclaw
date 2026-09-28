@@ -73,6 +73,19 @@ the updated installation in place. Reporting failures do not trigger package
 rollback. The command still exits nonzero when required finalization cannot
 complete; follow its recovery guidance after the owning updater exits.
 
+Activation Doctor rechecks the chat requester's authority inside its own live
+maintenance scope. This lets it read authorization policy while the state database
+is offline for repair, without granting access to unrelated operations. The
+candidate supplies this repair even when an older updater launches Doctor.
+
+Git updaters with database rollback support snapshot the stopped installation's
+databases before activation Doctor. If Doctor fails, verified snapshots restore
+the pre-migration state before the previous source, runtime, configuration, and
+managed Gateway are restored. Independent writes or lost ownership still prevent
+destructive restoration and retain the recovery artifacts. This rollback support
+belongs to the installed updater; a new candidate cannot add it to an older
+updater already running.
+
 Dry runs and commands rejected by the initial argument, external-supervisor,
 state-store ownership, handoff identity, or immutable-config checks do not
 collect diagnostics or start an agent. Once those checks pass, failed metadata,
