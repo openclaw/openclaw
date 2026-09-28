@@ -601,6 +601,7 @@ merge_run() {
   local MERGE_REFUSAL_DIRECTORY=""
   local MERGE_ADMIN_EVIDENCE="${9:-}" confirmed_admin="${10:-false}" MERGE_PRIOR_CI_PROOF=""
   local MERGE_USE_PRIOR_CI_ADMIN=false
+  local MERGE_PRIOR_CI_REST_OBSERVATION=false
   if [ -n "$MERGE_ADMIN_EVIDENCE" ] || [ "$confirmed_admin" = true ]; then
     [ -n "$MERGE_ADMIN_EVIDENCE" ] && [ "$confirmed_admin" = true ] && [ "$auto_merge_requested" = false ] &&
       [ -z "$legacy_directory$refusal_directory" ] && [ "$cancel_auto" = false ] &&
@@ -830,7 +831,7 @@ merge_run() {
   # Pin PR/policy facts and each projection as soon as it becomes known.
   for admission_attempt in 1 2 3; do
     merge_outcome_observe "$pr" || return 1
-    if [ "$MERGE_TRANSPORT" = rest ] &&
+    if [ "$MERGE_TRANSPORT" = rest ] && [ "$MERGE_PRIOR_CI_REST_OBSERVATION" = false ] &&
       { [ "$merge_method" != squash ] || [ "$auto_merge_requested" = true ] || [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = true ] || [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; }; then
       merge_outcome_stop "REST fallback supports ordinary immediate squash only; auto, queue, and admin routes require GraphQL"
       return 1
@@ -883,18 +884,23 @@ merge_run() {
       merge_outcome_stop "mergeability remained UNKNOWN after 3 observations; stopped before intent/dispatch"
       return 1
     fi
+    if [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ] && [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = false ] &&
+      [ "$MERGE_TRANSPORT" = graphql ]; then
+      # Pin the alternate reader; the next whole observation must preserve every known fact.
+      MERGE_PRIOR_CI_REST_OBSERVATION=true
+    fi
     if [ "$admission_attempt" -eq 1 ]; then
       echo "Waiting for GitHub mergeability to settle (up to 3 observations, waiting 1 then 2 seconds for UNKNOWN samples)."
     fi
     previous_observation="$MERGE_OBSERVATION"
     sleep "$admission_attempt"
   done
-  if [ "$MERGE_TRANSPORT" = rest ] &&
+  if [ "$MERGE_TRANSPORT" = rest ] && [ "$MERGE_PRIOR_CI_REST_OBSERVATION" = false ] &&
     [ "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .pr.mergeStateStatus)" != CLEAN ]; then
     merge_outcome_stop "REST fallback requires a CLEAN merge projection without bypass"
     return 1
   fi
-  if [ "$MERGE_TRANSPORT" = rest ]; then
+  if [ "$MERGE_TRANSPORT" = rest ] && [ "$MERGE_PRIOR_CI_REST_OBSERVATION" = false ]; then
     # Quota can expire after the first preview. Compose source credit through
     # the same owner before selecting a REST mutation or retaining its intent.
     if [ "$MERGE_BODY_TRANSPORT" != rest ]; then
@@ -990,14 +996,18 @@ merge_run() {
   # A final stability read can exhaust GraphQL after route/body selection.
   # Revalidate the selected route before retaining any REST mutation intent.
   if [ "$MERGE_TRANSPORT" = rest ]; then
-    if [ "$merge_method" != squash ] || [ "$route" != immediate ] ||
+    if [ "$MERGE_PRIOR_CI_REST_OBSERVATION" = true ]; then
+      [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ] && [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = false ] &&
+        [ "$route" = admin ] && [ "$merge_method" = squash ] && [ "$auto_merge_requested" = false ] || return 1
+    elif [ "$merge_method" != squash ] || [ "$route" != immediate ] ||
       [ "$auto_merge_requested" = true ] || [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = true ] || [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
       merge_outcome_stop "REST fallback supports ordinary immediate squash only; auto, queue, and admin routes require GraphQL"
       return 1
     fi
-    if [ -z "$merge_body_snapshot" ] || ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e '
+    if [ "$MERGE_PRIOR_CI_REST_OBSERVATION" = false ] &&
+      { [ -z "$merge_body_snapshot" ] || ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e '
       .pr.mergeable == "MERGEABLE" and .pr.mergeStateStatus == "CLEAN"
-    ' >/dev/null; then
+    ' >/dev/null; }; then
       merge_outcome_stop "REST fallback requires a CLEAN merge projection and verified squash body"
       return 1
     fi
@@ -1023,6 +1033,10 @@ merge_run() {
     verify_prior_ci_admin "$pr" "$PREP_HEAD_SHA" || return 1
     # A later main may reuse local objects, never start another lazy/explicit fetch.
     GIT_NO_LAZY_FETCH=1 merge_outcome_stable "$pr" true || return 1
+    if [ "$MERGE_PRIOR_CI_REST_OBSERVATION" = true ]; then
+      # Complete REST snapshots read policy/checks too; revalidate live authority after that work.
+      verify_prior_ci_admin "$pr" "$PREP_HEAD_SHA" || return 1
+    fi
     # No awaited operation may replace the operator's bytes after validation.
     node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" unchanged \
       "$MERGE_ADMIN_EVIDENCE" "$(printf '%s\n' "$MERGE_PRIOR_CI_PROOF" | jq -r .evidenceSha256)" >/dev/null || return 1

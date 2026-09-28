@@ -5,6 +5,7 @@ import {
   asOptionalRecord,
   normalizeOptionalString as trimToUndefined,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { XAI_BASE_URL } from "./model-definitions.js";
 import {
   isValidXaiTtsVoice,
@@ -382,24 +383,14 @@ export async function xaiTTSStream(params: XaiTtsRequest): Promise<{
 
       try {
         for (let offset = 0; offset < text.length;) {
-          let end = Math.min(offset + XAI_TTS_STREAM_TEXT_DELTA_MAX_CHARS, text.length);
-          // Keep a surrogate pair in the same frame, even if that frame is one unit shorter.
-          if (
-            end < text.length &&
-            text.charCodeAt(end - 1) >= 0xd800 &&
-            text.charCodeAt(end - 1) <= 0xdbff &&
-            text.charCodeAt(end) >= 0xdc00 &&
-            text.charCodeAt(end) <= 0xdfff
-          ) {
-            end -= 1;
-          }
+          const delta = sliceUtf16Safe(text, offset, offset + XAI_TTS_STREAM_TEXT_DELTA_MAX_CHARS);
           ws?.send(
             JSON.stringify({
               type: "text.delta",
-              delta: text.slice(offset, end),
+              delta,
             }),
           );
-          offset = end;
+          offset += delta.length;
         }
         ws?.send(JSON.stringify({ type: "text.done" }));
       } catch (error) {

@@ -248,7 +248,10 @@ continues with the existing plugin-failure warning behavior.
 The existing installed-index SQLite payload records directory membership, device,
 inode, mode, size, mtime, and ctime identities, SHA-256 digests, and the initial
 generation receipt. Unchanged warm startup reuses those facts. Added, removed, or
-changed companions require admission again; ctime-only uncertainty is resolved
+changed companions require admission again. If a recorded capture directory is
+missing, fresh admission reads the installed package without promoting the missing
+capture's identities. This also applies to post-update Doctor with older updaters.
+Ctime-only uncertainty is resolved
 with a bounded rehash, including ordinary companion files whose inodes another
 capture retains or releases. Legacy reload receipts keep their framed raw-byte value,
 so a changed receipt still requires streaming its native payloads.

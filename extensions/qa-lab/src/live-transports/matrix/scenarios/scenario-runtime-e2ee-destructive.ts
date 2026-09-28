@@ -13,6 +13,10 @@ import {
   readMatrixQaGatewayMatrixAccount,
   replaceMatrixQaGatewayMatrixAccount,
 } from "./scenario-runtime-config.js";
+import type {
+  MatrixQaCliBackupRestoreStatus,
+  MatrixQaCliVerificationStatus,
+} from "./scenario-runtime-e2ee-cli-shared.js";
 import {
   assertMatrixQaCliBackupRestoreFailed,
   assertMatrixQaCliBackupRestoreSucceeded,
@@ -23,11 +27,9 @@ import {
   requireMatrixQaGatewayConfigPath,
   requireMatrixQaE2eeOutputDir,
   runMatrixQaCliJson,
-  type MatrixQaCliBackupStatus,
   type MatrixQaCliRuntime,
-  type MatrixQaCliVerificationStatus,
 } from "./scenario-runtime-e2ee-destructive-recovery.js";
-import { createMatrixQaE2eeDriverClient } from "./scenario-runtime-e2ee-shared.js";
+import { createMatrixQaE2eeActorClient } from "./scenario-runtime-e2ee-shared.js";
 import {
   corruptMatrixQaCliIdbSnapshot,
   deleteMatrixQaServerRoomKeyBackup,
@@ -48,17 +50,7 @@ import {
   waitForMatrixSyncStoreWithCursor,
 } from "./scenario-runtime-state-files.js";
 import type { MatrixQaScenarioExecution } from "./scenario-types.js";
-type MatrixQaDestructiveSetup = {
-  backupVersion: string;
-  encodedRecoveryKey: string;
-  owner: MatrixQaE2eeScenarioClient;
-  ownerAccessToken: string;
-  ownerPassword: string;
-  ownerUserId: string;
-  recoveryKeyId: string | null;
-  roomId: string;
-  seededEventId: string;
-};
+type MatrixQaDestructiveSetup = Awaited<ReturnType<typeof prepareMatrixQaDestructiveSetup>>;
 
 async function cleanupMatrixQaTempDevices(
   client: MatrixQaE2eeScenarioClient,
@@ -180,7 +172,7 @@ function isMatrixQaRepairableBackupBootstrapError(error: string | undefined) {
 async function prepareMatrixQaDestructiveSetup(
   context: MatrixQaScenarioContext,
   scenarioId: MatrixQaE2eeScenarioId,
-): Promise<MatrixQaDestructiveSetup> {
+) {
   const account = await registerMatrixQaDestructiveOwner(context, scenarioId);
   const setupClient = createMatrixQaClient({
     accessToken: account.accessToken,
@@ -223,7 +215,7 @@ function restoreMatrixQaCliBackup(params: {
   runtime: MatrixQaCliRuntime;
   timeoutMs: number;
 }) {
-  return runMatrixQaCliJson<MatrixQaCliBackupStatus>({
+  return runMatrixQaCliJson<MatrixQaCliBackupRestoreStatus>({
     ...(params.allowNonZero === undefined ? {} : { allowNonZero: params.allowNonZero }),
     args: [
       "matrix",
@@ -587,7 +579,7 @@ async function waitForMatrixQaNonEmptyCliBackupRestore(params: {
   timeoutMs: number;
 }) {
   const startedAt = Date.now();
-  let last: Awaited<ReturnType<typeof runMatrixQaCliJson<MatrixQaCliBackupStatus>>> | null = null;
+  let last: Awaited<ReturnType<typeof restoreMatrixQaCliBackup>> | null = null;
   while (Date.now() - startedAt < params.timeoutMs) {
     const remainingMs = params.timeoutMs - (Date.now() - startedAt);
     const restored = await restoreMatrixQaCliBackup({
@@ -1016,9 +1008,10 @@ export async function runMatrixQaE2eeSyncStateLossCryptoIntactScenario(
       timeoutMs: context.timeoutMs,
     });
     requireMatrixQaE2eeOutputDir(context);
-    driver = await createMatrixQaE2eeDriverClient(
+    driver = await createMatrixQaE2eeActorClient(
       context,
       "matrix-e2ee-sync-state-loss-crypto-intact",
+      "driver",
     );
     // Cached client readiness does not imply that this newly created room has synced.
     await driver.waitForJoinedMember({

@@ -12,14 +12,19 @@ import * as hostStats from "./host-stats.js";
 const stats = { cpuCount: 8, memoryTotalBytes: 100, memoryFreeBytes: 50 };
 const gateway = { url: "wss://gateway.example.test", protocol: 4, capabilities: [] };
 
-it("negotiates captured exec policy per connection without widening older inventory", async () => {
+it("negotiates optional worker capabilities per connection without widening older inventory", async () => {
   const { connection, request, start, prepared } = startConnectionFixture(true);
   try {
     start.mock.calls[0]![0].onRunnerCapacityChanged?.({ total: 2, available: 2 });
     for (const supported of [false, true, false]) {
       connection.connect({
         ...gateway,
-        capabilities: supported ? [GATEWAY_SERVER_CAPS.NODE_WORKER_CAPTURED_EXEC_POLICY] : [],
+        capabilities: supported
+          ? [
+              GATEWAY_SERVER_CAPS.NODE_WORKER_CAPTURED_EXEC_POLICY,
+              GATEWAY_SERVER_CAPS.NODE_WORKER_STATUS_WAIT,
+            ]
+          : [],
       });
       await vi.advanceTimersByTimeAsync(0);
       const declaration = request.mock.calls.findLast(
@@ -31,7 +36,7 @@ it("negotiates captured exec policy per connection without widening older invent
           enabled: true,
           capacity: { total: 2, available: 2 },
           bundlePrewarm: 1,
-          ...(supported ? { capturedExecPolicy: true } : {}),
+          ...(supported ? { capturedExecPolicy: true, statusWait: 1 } : {}),
         },
       });
       expect(parseNodeRunnerInventoryDeclaration(declaration)).toEqual(declaration);

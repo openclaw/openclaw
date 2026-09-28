@@ -228,6 +228,8 @@ const repositoryScriptEntries = [
   "scripts/print-live-docker-plugin-selection.mjs!",
   "scripts/qa-coverage-report.ts!",
   "scripts/qa-parity-report.ts!",
+  // qa/README.md delegates campaign Git execution to this guarded CLI by path.
+  "scripts/qa/repository-checkpoint-admission.ts!",
   // Docker/release workflows launch the warning relay from copied harness roots.
   "scripts/relay-build-limit-warnings.mts",
   "scripts/resolve-frozen-codex-live-suite.mjs!",

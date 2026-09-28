@@ -104,6 +104,7 @@ function createGatewayInstallPlanFixture(): Awaited<
   ReturnType<typeof import("./daemon-install-helpers.js").buildGatewayInstallPlan>
 > {
   return {
+    runtime: "node",
     programArguments: gatewayProgramArguments,
     workingDirectory: "/tmp",
     environment: {},

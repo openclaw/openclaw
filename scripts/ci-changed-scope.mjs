@@ -146,6 +146,8 @@ const WINDOWS_AGENT_HOME_PATH_SCOPE_RE =
   /^src\/(?:infra\/home-dir(?:\.test)?|agents\/(?:agent-tools\.read(?:\.host-operations|\.windows)?\.test|agent-tools\.read|sessions\/tools\/path-utils(?:\.test)?))\.ts$/;
 const WINDOWS_MEMORY_EXTRA_FILE_SCOPE_RE =
   /^(?:packages\/memory-host-sdk\/src\/host\/(?:(?:internal|read-file)(?:\.test)?|explicit-extra-markdown)|extensions\/memory-core\/src\/(?:cli-runtime-common|memory-extra-file-path\.windows\.test))\.ts$/;
+const WINDOWS_BROWSER_VERSION_PROBE_SCOPE_RE =
+  /^extensions\/browser\/src\/browser\/chrome\.executable-probe\.ts$/;
 const WINDOWS_WORKSPACE_QUIESCENCE_SCOPE_RE =
   /^src\/gateway\/worker-environments\/workspace-quiescence(?:-scripts|(?:\.windows)?\.test)?\.ts$/;
 const WINDOWS_WORKER_BUNDLE_SCOPE_RE =
@@ -306,6 +308,7 @@ export function detectChangedScope(changedPaths) {
       WINDOWS_TEST_INSTANCE_SCOPE_RE.test(path) ||
       WINDOWS_NODE_HOST_EXECUTABLE_SCOPE_RE.test(path) ||
       WINDOWS_MEMORY_EXTRA_FILE_SCOPE_RE.test(path) ||
+      WINDOWS_BROWSER_VERSION_PROBE_SCOPE_RE.test(path) ||
       WINDOWS_WORKSPACE_QUIESCENCE_SCOPE_RE.test(path) ||
       WINDOWS_WORKER_BUNDLE_SCOPE_RE.test(path) ||
       WINDOWS_WORKER_WORKSPACE_SCOPE_RE.test(path) ||

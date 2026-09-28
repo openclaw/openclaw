@@ -116,7 +116,10 @@ suite.define(() => {
             blockedSidebarRequests += 1;
             await route.abort("failed");
           });
-          const gateway = await installMockGateway(page);
+          const gateway = await installMockGateway(page, {
+            // The sidebar module is deliberately unavailable, so no roster can render.
+            awaitInitialRoster: false,
+          });
           await page.goto(`${suite.server.baseUrl}new`);
           await waitForControlUiGatewayReady(page);
           await page.locator(".new-session-page__message").waitFor({ state: "visible" });

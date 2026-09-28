@@ -11,7 +11,6 @@ export {
   hasDescendantRunAwaitingSettle,
   isSubagentRunLive,
   isSubagentSessionRunActive,
-  listDescendantRunsForRequester,
   listSubagentRunsForController,
   listSubagentRunsForRequester,
   resolveRequesterForChildSession,

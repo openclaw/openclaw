@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { expect, it, vi, type MockInstance } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { recordInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
@@ -476,6 +476,84 @@ it.each(["npm", "clawhub"] as const)(
         expectNoNativeIo(runtime.io);
       } finally {
         observer.restore();
+        for (const artifact of artifacts) {
+          await artifact.disposeAsync();
+        }
+        for (const cache of caches) {
+          await retirePluginCache(cache);
+        }
+      }
+    });
+  },
+);
+
+it.each([false, true])(
+  "admits native source with an unavailable persisted capture (unrelated=%s)",
+  async (unrelated) => {
+    await withOpenClawTestState({ label: "native-admission-missing-capture" }, async (state) => {
+      const fixture = createFixture(state.path("installed"), true);
+      const companion = path.join(fixture.root, "README.md");
+      fs.writeFileSync(companion, "unchanged native companion");
+      const modifiedAt = new Date(1_000);
+      fs.utimesSync(companion, modifiedAt, modifiedAt);
+      await writePersistedInstalledPluginIndex(fixture.index, { stateDir: state.stateDir });
+      const caches = [createPluginCache(), createPluginCache()];
+      const artifacts: ReturnType<typeof capturePluginGenerationArtifact>[] = [];
+      const statSync = fs.statSync;
+      let fault: MockInstance<typeof fs.statSync> | undefined;
+      try {
+        preparePluginNativeAdmissions(fixture.index, caches[0]!);
+        const first = withPluginCache(caches[0]!, () =>
+          capturePluginGenerationArtifact(fixture.root),
+        );
+        artifacts.push(first);
+        await settlePluginNativeAdmissions(caches[0]!);
+        await first.disposeAsync();
+        await retirePluginCache(caches[0]!);
+        const persisted = await readPersistedInstalledPluginIndex({ stateDir: state.stateDir });
+        const receipts = Object.values(persisted!.plugins[0]!.sourceAdmissions ?? {});
+        expect(receipts).toHaveLength(1);
+        const namespaces = Object.values(receipts[0]!.nativeNamespaces);
+        const candidate = unrelated ? createFixture(state.path("unrelated"), false) : fixture;
+        const candidateCompanion = path.join(candidate.root, "README.md");
+        if (unrelated) {
+          fs.writeFileSync(candidateCompanion, "unchanged native companion");
+          fs.utimesSync(candidateCompanion, modifiedAt, modifiedAt);
+          fault = vi.spyOn(fs, "statSync").mockImplementation((...args) => {
+            if (
+              namespaces.some(
+                (namespace) => args[0] === path.join(namespace.capturedRoot, "content"),
+              )
+            ) {
+              throw Object.assign(new Error("Unrelated capture is inaccessible"), {
+                code: "EACCES",
+              });
+            }
+            return Reflect.apply(statSync, fs, args);
+          });
+        } else {
+          for (const namespace of namespaces) {
+            fs.rmSync(namespace.capturedRoot, { recursive: true });
+          }
+        }
+
+        preparePluginNativeAdmissions(persisted!, caches[1]!);
+        const replacement = withPluginCache(caches[1]!, () =>
+          capturePluginGenerationArtifact(candidate.root),
+        );
+        artifacts.push(replacement);
+        expect(replacement.assertSourceCurrent).not.toThrow();
+        expect(
+          fs.readFileSync(replacement.resolve(candidate.filename)).equals(candidate.bytes),
+        ).toBe(true);
+        expect(fs.readFileSync(replacement.resolve(candidateCompanion), "utf8")).toBe(
+          "unchanged native companion",
+        );
+        fs.writeFileSync(candidateCompanion, "different native companion");
+        fs.utimesSync(candidateCompanion, modifiedAt, modifiedAt);
+        expect(replacement.assertSourceCurrent).toThrow("Plugin source changed");
+      } finally {
+        fault?.mockRestore();
         for (const artifact of artifacts) {
           await artifact.disposeAsync();
         }

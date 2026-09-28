@@ -561,14 +561,14 @@ footer.sidebar-issues-panel__mentions-note {
 }
 
 .sidebar-update-card__review--primary {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--accent-foreground);
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--primary-foreground);
 }
 
 .sidebar-update-card__review--primary:hover {
-  background: var(--accent-hover);
-  color: var(--accent-foreground);
+  background: var(--primary-hover);
+  color: var(--primary-foreground);
 }
 
 .sidebar-issues-panel__notification-meta .sidebar-issues-panel__state {

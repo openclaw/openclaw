@@ -1501,6 +1501,21 @@ function resolveExplicitSourceTestTargets(
   ].toSorted((left, right) => left.localeCompare(right));
 }
 
+function listPackageDirectoryTestTargets(directory: string, cwd: string): string[] {
+  if (isSharedVitestExcludedPath(directory) || isSharedVitestExcludedPath(`${directory}/`)) {
+    return [];
+  }
+  return fs.readdirSync(path.join(cwd, directory), { withFileTypes: true }).flatMap((entry) => {
+    const relative = path.posix.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      return listPackageDirectoryTestTargets(relative, cwd);
+    }
+    return entry.isFile() && relative.endsWith(".test.ts") && !isSharedVitestExcludedPath(relative)
+      ? [relative]
+      : [];
+  });
+}
+
 function expandExplicitSourceTestTargets(targetArgs: string[], cwd: string, watchMode: boolean) {
   const sourceTargetCount = targetArgs.filter((targetArg) => {
     const relative = toRepoRelativeTarget(targetArg, cwd);
@@ -1515,6 +1530,12 @@ function expandExplicitSourceTestTargets(targetArgs: string[], cwd: string, watc
     }
     const glob = isGlobTarget(relative);
     const directory = isExistingDirectoryTarget(targetArg, cwd);
+    if (!watchMode && !glob && directory && isPathAtOrUnder(relative, "packages")) {
+      const targets = listPackageDirectoryTestTargets(relative, cwd).toSorted((left, right) =>
+        left.localeCompare(right),
+      );
+      return targets.length > 0 ? targets : [targetArg];
+    }
     // Target shape is invariant across the worker inventory; literal files need no expansion.
     const databaseWorkerTargets =
       glob || directory
