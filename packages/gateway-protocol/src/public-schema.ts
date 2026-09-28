@@ -212,6 +212,7 @@ export {
   SESSION_OBSERVER_HEALTH_VALUES,
   SessionCompanionExchangeSchema,
   SessionObserverDigestSchema,
+  SessionNarrationEventSchema,
   SessionObserverHealthSchema,
   SessionObserverPlanProgressSchema,
   SessionMemberAddParamsSchema,

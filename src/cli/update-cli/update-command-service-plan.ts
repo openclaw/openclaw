@@ -426,6 +426,10 @@ export async function resolvePackageRuntimePreflight(params: {
     if (!target) {
       return ok(unchanged());
     }
+    // The current Bun already passed its startup guard; Node engines do not apply.
+    if (!nodeRunner && process.versions.bun) {
+      return ok({ ...unchanged(), targetVersion: target.version });
+    }
     const runtime = await resolvePackageRuntimeForPreflight({
       nodeRunner,
       timeoutMs: params.timeoutMs,
@@ -445,6 +449,7 @@ export async function resolvePackageRuntimePreflight(params: {
     const fallbackNodeRunner =
       params.fallbackNodeRunner ??
       (params.shouldRestart &&
+      !process.versions.bun &&
       nodeRunner &&
       (params.alreadyCurrent
         ? canRefreshCurrentService

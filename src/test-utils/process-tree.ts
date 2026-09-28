@@ -5,7 +5,9 @@ import { isPidAlive } from "../shared/pid-alive.js";
 export async function writeForkingNoOutputScript(dir: string): Promise<string> {
   const scriptPath = path.join(dir, "fork-no-output.sh");
   // The descendant publishes its PID after installing its keepalive, so callers
-  // can trigger the idle deadline only after a live process tree is ready.
+  // can trigger the idle deadline only after a live process tree is ready. It
+  // stays silent: later output refreshes the idle timer and cancels a deadline
+  // the caller already fired.
   await fs.writeFile(
     scriptPath,
     [
