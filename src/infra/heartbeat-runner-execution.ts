@@ -586,6 +586,7 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     runSessionKey,
     outboundPolicySessionKey,
     internalProjection,
+    useHeartbeatResponseTool: useHeartbeatResponseToolPrompt,
     ...heartbeatRunPrompt,
   } as const;
 }
