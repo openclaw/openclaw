@@ -138,8 +138,12 @@ actor TalkModeRuntime {
         lastInteractionAt: Date,
         idleTimeout: TimeInterval,
         lastSpeechEnergyAt: Date?,
-        speechRecognitionGrace: TimeInterval) -> Bool
+        speechRecognitionGrace: TimeInterval,
+        pendingTranscript: String = "") -> Bool
     {
+        guard pendingTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return false
+        }
         guard idleTimeout > 0 else { return false }
         let deadline = lastInteractionAt.addingTimeInterval(idleTimeout)
         guard now >= deadline else { return false }
@@ -543,7 +547,8 @@ actor TalkModeRuntime {
             lastInteractionAt: anchor,
             idleTimeout: idleTimeout,
             lastSpeechEnergyAt: self.lastSpeechEnergyAt,
-            speechRecognitionGrace: Self.idleSpeechRecognitionGrace)
+            speechRecognitionGrace: Self.idleSpeechRecognitionGrace,
+            pendingTranscript: self.lastTranscript)
         else { return }
         let elapsed = now.timeIntervalSince(anchor)
         self.logger.info("talk idle timeout expired after \(elapsed, privacy: .public)s")

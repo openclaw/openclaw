@@ -71,4 +71,15 @@ struct TalkModeRuntimeIdleTimeoutTests {
             lastSpeechEnergyAt: nil,
             speechRecognitionGrace: grace) == false)
     }
+
+    @Test func `does not expire while recognized speech is waiting for the silence window`() {
+        let anchor = now.addingTimeInterval(-31)
+        #expect(TalkModeRuntime.shouldExpireIdleTimeout(
+            now: now,
+            lastInteractionAt: anchor,
+            idleTimeout: idleTimeout,
+            lastSpeechEnergyAt: nil,
+            speechRecognitionGrace: grace,
+            pendingTranscript: "hello") == false)
+    }
 }

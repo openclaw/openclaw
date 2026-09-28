@@ -183,7 +183,7 @@ export function normalizeTalkSection(value: TalkConfig | undefined): TalkConfig 
   if (silenceTimeoutMs !== undefined) {
     normalized.silenceTimeoutMs = silenceTimeoutMs;
   }
-  const idleTimeoutS = normalizePositiveInteger(source.idleTimeoutS);
+  const idleTimeoutS = normalizeInteger(source.idleTimeoutS, 1);
   if (idleTimeoutS !== undefined) {
     normalized.idleTimeoutS = idleTimeoutS;
   }
