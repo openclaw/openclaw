@@ -5,10 +5,10 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaParitySuiteSummary } from "./agentic-parity-report.js";
 import { escapeTableCell } from "./report.js";
+import type { RuntimeId } from "./runtime-id.js";
 import {
   runtimeParityCellStatus,
   normalizeRuntimePair,
-  type RuntimeId,
   type RuntimeParityDrift,
   type RuntimeParityResult,
 } from "./runtime-parity.js";

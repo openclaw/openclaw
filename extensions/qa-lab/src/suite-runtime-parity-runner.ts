@@ -6,11 +6,8 @@ import type { QaEvidenceSummaryV3Json } from "./evidence-summary.js";
 import type { QaLabLatestReport } from "./lab-server.types.js";
 import { remapModelRefForForcedRuntime } from "./model-selection.js";
 import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
-import {
-  runRuntimeParityScenario,
-  type RuntimeId,
-  type RuntimeParityCell,
-} from "./runtime-parity.js";
+import type { RuntimeId } from "./runtime-id.js";
+import { runRuntimeParityScenario, type RuntimeParityCell } from "./runtime-parity.js";
 import { writeQaSuiteArtifacts } from "./suite-artifacts.js";
 import { createQaSuiteEvidenceInvocation, rebaseQaSuiteEvidence } from "./suite-evidence.js";
 import {

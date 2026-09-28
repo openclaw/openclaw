@@ -4,7 +4,7 @@ import {
   type QaProviderMode,
   type QaProviderModeInput,
 } from "./providers/index.js";
-import type { RuntimeId } from "./runtime-parity.js";
+import type { RuntimeId } from "./runtime-id.js";
 
 export type { QaProviderMode, QaProviderModeInput } from "./providers/index.js";
 

@@ -1,9 +1,9 @@
 // Qa Lab tests cover token efficiency report plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { QaParitySuiteSummary } from "./agentic-parity-report.js";
+import type { RuntimeId } from "./runtime-id.js";
 import { buildRuntimeParityCacheDiagnostics } from "./runtime-parity-cache-diagnostics.js";
 import type {
-  RuntimeId,
   RuntimeParityCell,
   RuntimeParityResult,
   RuntimeParityToolCall,

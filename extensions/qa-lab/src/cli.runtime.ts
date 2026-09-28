@@ -79,11 +79,11 @@ import {
   type QaProviderMode,
   type QaProviderModeInput,
 } from "./run-config.js";
+import type { RuntimeId } from "./runtime-id.js";
 import {
   resolveQaRuntimePairLaneScenarioIds,
   resolveQaRuntimePairScenarioSupport,
 } from "./runtime-pair-lane-selection.js";
-import type { RuntimeId } from "./runtime-parity.js";
 import {
   QA_RUNTIME_PAIR_LANES,
   readQaScenarioPack,
