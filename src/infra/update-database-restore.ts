@@ -9,7 +9,11 @@ import { drainAgentDatabaseResources } from "../state/openclaw-agent-db-resource
 import { prepareOpenClawStateDatabaseRemoval } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
-import { publishFileExclusive, sha256File } from "./directory-durability.js";
+import {
+  getPublishFileExclusiveFailureDetails,
+  publishFileExclusive,
+  sha256File,
+} from "./directory-durability.js";
 import { hasErrnoCode } from "./errno.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
@@ -237,13 +241,20 @@ export async function restoreUpdateDatabaseBackup(params: {
         }
         for (const move of moves) {
           assertOwned();
+          try {
+            await publishFileExclusive({
+              sourcePath: move.source,
+              targetPath: move.target,
+              expectedSourceIdentity: move.identity,
+              strategy: "rename-noreplace",
+            });
+          } catch (error) {
+            // The publisher marks every failure after rename; an unmarked refusal leaves the source in place.
+            retainPreparedCopy ||=
+              getPublishFileExclusiveFailureDetails(error)?.targetCreated === true;
+            throw error;
+          }
           retainPreparedCopy = true;
-          await publishFileExclusive({
-            sourcePath: move.source,
-            targetPath: move.target,
-            expectedSourceIdentity: move.identity,
-            strategy: "rename-noreplace",
-          });
           displaced.push(move.target);
           assertOwned();
         }

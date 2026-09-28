@@ -3,6 +3,7 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { expect, it, vi } from "vitest";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { recordBackupRunOutcome } from "../state/backup-run-records.js";
@@ -271,6 +272,64 @@ it.each(["a changed snapshot", "missing current update history"] as const)(
       );
       await assertUnchanged();
       expect((await fs.readdir(fixture.backup.directory)).toSorted()).toEqual(backupEntries);
+    });
+  },
+);
+
+it.each(["collision", "after-rename"] as const)(
+  "retains prepared recovery bytes only after the first move takes effect (%s)",
+  async (failure) => {
+    await withFixture(async (fixture) => {
+      await fixture.close();
+      const backupEntries = (await fs.readdir(fixture.backup.directory)).toSorted();
+      const sources = await Promise.all(
+        fixture.backup.databases.map(async (entry) => ({
+          path: entry.path,
+          bytes: await fs.readFile(entry.path),
+        })),
+      );
+      const publish = durability.publishFileExclusive;
+      let attempted: { sourcePath: string; targetPath: string } | undefined;
+      const publication = vi
+        .spyOn(durability, "publishFileExclusive")
+        .mockImplementationOnce(async (params) => {
+          attempted = params;
+          if (failure === "collision") {
+            await fs.writeFile(params.targetPath, "foreign recovery file", { flag: "wx" });
+          } else {
+            __setFsSafeTestHooksForTest({
+              afterPublishTargetCreated: (_method, targetPath) => {
+                if (targetPath === params.targetPath) {
+                  throw new Error("First move completed before publication failed");
+                }
+              },
+            });
+          }
+          return await publish(params);
+        });
+      try {
+        await expect(fixture.restore()).rejects.toThrow();
+      } finally {
+        __setFsSafeTestHooksForTest(undefined);
+        publication.mockRestore();
+      }
+      expect(attempted).toBeDefined();
+      for (const source of sources) {
+        const moved = failure === "after-rename" && source.path === attempted!.sourcePath;
+        expect(await fs.readFile(moved ? attempted!.targetPath : source.path)).toEqual(
+          source.bytes,
+        );
+        if (moved) {
+          await expect(fs.stat(source.path)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+      }
+      const retained = (await fs.readdir(fixture.backup.directory)).toSorted();
+      if (failure === "collision") {
+        expect(await fs.readFile(attempted!.targetPath, "utf8")).toBe("foreign recovery file");
+        expect(retained).toEqual(backupEntries);
+      } else {
+        expect(retained).toHaveLength(backupEntries.length + 1);
+      }
     });
   },
 );
