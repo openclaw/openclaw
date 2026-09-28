@@ -70,6 +70,7 @@ export function createFirstRunContext(refreshError?: string, beforeRefresh?: () 
     connectionRevision: 0,
     eventLog: [],
     eventLogRevision: 0,
+    loadSelfProfile: async () => null,
     connect: () => undefined,
     setSessionKey: () => undefined,
     start: () => undefined,

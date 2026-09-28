@@ -25,13 +25,14 @@ first environment-sensitive command is ready, reuse the returned `tbx_...` id
 for later remote commands, sync the current checkout on every run, and stop it
 before handoff.
 
-After the first successful reuse, the wrapper records the lease's base,
-dependency, and Testbox workflow fingerprint under `.crabbox/testbox-leases/`.
-Source-only edits keep reusing the warmed box. A changed merge base, lockfile,
-package-manager input, wrapper, or Testbox workflow fails closed and requires a
-fresh lease. Every run still syncs the current checkout.
-`OPENCLAW_TESTBOX_ALLOW_STALE=1` is only for intentional diagnostics, not
-release proof.
+At allocation, the wrapper records the caller task, physical checkout, HEAD,
+base, dependency inputs, and Testbox preparation fingerprint under
+`.crabbox/testbox-leases/`. Reuse requires those inputs to match, including
+immediately before delegation. Source-only edits can reuse the box while HEAD
+and preparation inputs remain unchanged; every run syncs the checkout.
+Older or missing receipts require stopping the owned lease and allocating a
+fresh one through the wrapper. `OPENCLAW_TESTBOX_ALLOW_STALE` cannot bypass
+these checks. All providers require Crabbox 0.67.0 or newer.
 
 The Testbox workflow registers a separate disposable checkout for native sync.
 The hydrated execution workspace stays at its original absolute path, so native
@@ -160,10 +161,18 @@ node scripts/crabbox-wrapper.mjs run --timing-json -- \
   pnpm test <path-or-filter>
 ```
 
-For several commands, warm once with
-`node scripts/crabbox-wrapper.mjs warmup --keep --timing-json`, save the returned
-lease ID, and reuse it with `run --id <tbx_id>`. Stop the owned lease with
-`node scripts/crabbox-wrapper.mjs stop --id <tbx_id>`; stop has no `--timing-json`.
+For several commands, use a unique task label and retain the first allocation:
+
+```bash
+node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox --keep --label <task-name> -- <first-command>
+node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox --id <tbx_id> --label <task-name> -- <next-command>
+node scripts/crabbox-wrapper.mjs stop --provider blacksmith-testbox <tbx_id>
+```
+
+Use the returned lease ID and the same label throughout the task. Codex, Claude
+Code, and GitHub Actions also bind reuse to their session or run identity.
+Session-owned `warmup --timing-json` can allocate without a label; human shells
+use the labeled `run --keep` flow above. Stop has no `--timing-json`.
 
 - Warm from the task checkout. Claims belong to checkout paths; `--reclaim`
   deliberately transfers that ownership and never changes repository identity.

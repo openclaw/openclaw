@@ -158,7 +158,7 @@ const mocks = vi.hoisted(() => ({
   getTtsProvider: vi.fn(() => "openai"),
   listSpeechProviders: vi.fn(() => []),
   setTtsPersona: vi.fn(),
-  resolveTtsConfig: vi.fn(() => ({})),
+  resolveTtsConfig: vi.fn(() => ({ providerConfigs: {} })),
   resolveExplicitTtsOverrides: vi.fn(
     ({
       provider,
@@ -607,7 +607,7 @@ describe("capability cli", () => {
       .mockReset()
       .mockReturnValue({ rows: [], entries: [], conflicts: [] });
     mocks.resolveAgentDir.mockClear();
-    mocks.resolveTtsConfig.mockReset().mockReturnValue({});
+    mocks.resolveTtsConfig.mockReset().mockReturnValue({ providerConfigs: {} });
     mocks.getRuntimeConfigSourceSnapshot.mockReset().mockReturnValue(null);
     mocks.setRuntimeConfigSnapshot.mockClear();
     mocks.updateAuthProfileStoreWithLock

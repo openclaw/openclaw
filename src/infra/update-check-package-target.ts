@@ -201,11 +201,13 @@ export async function fetchNpmPackageTargetStatus(params: {
         error: formatNpmViewError(res),
       };
     }
-    const { version, nodeEngine, schemaVersions } = parseNpmPackageTargetMetadata(
-      res.stdout,
-      spec === "openclaw" || /^openclaw@[^:/]+$/.test(spec) ? "openclaw" : "",
-    );
-    return { target, version, nodeEngine, ...(schemaVersions ? { schemaVersions } : {}) };
+    return {
+      target,
+      ...parseNpmPackageTargetMetadata(
+        res.stdout,
+        spec === "openclaw" || /^openclaw@[^:/]+$/.test(spec) ? "openclaw" : "",
+      ),
+    };
   } catch (err) {
     return { target, version: null, nodeEngine: null, error: String(err) };
   }

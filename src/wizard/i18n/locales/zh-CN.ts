@@ -1153,6 +1153,7 @@ export const zh_CN = {
         "Onboarding 完成，但网关健康检查失败。请先解决上面的问题，然后用 {command} 验证。",
       outroSeeded: "Onboarding 完成。Web UI 已在后台初始化，可随时用上面的 dashboard 链接打开。",
       quickstartNodeRuntime: "QuickStart 使用 Node 运行 Gateway 服务（稳定且受支持）。",
+      quickstartBunRuntime: "QuickStart 使用 Bun 运行 Gateway 服务。",
       reinstall: "重新安装",
       rerunInstallDaemon: "或重新运行：{command}",
       restart: "重启",

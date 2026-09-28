@@ -1,11 +1,11 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
+import { openWarmImageStore } from "./crabbox-state.test-support.js";
+import { commandResult } from "./crabbox-worker-provider.test-support.js";
 import type { WarmProfileRecord } from "./crabbox-worker-warm-image-store.js";
 import {
-  commandResult,
   createWarmProvider,
   managedBinary,
-  openWarmImageStore,
   provisionWarmProfile,
   PROFILE,
 } from "./crabbox-worker-warm-image.test-support.js";
@@ -46,7 +46,7 @@ describe("Crabbox idle image maintenance", () => {
       if (params?.binary === "/opt/b/crabbox") {
         throw new Error("fixture binary acquisition unavailable");
       }
-      return { binary: params?.binary ?? "crabbox", version: "0.55.0" };
+      return { binary: params?.binary ?? "crabbox", version: "999.0.0" };
     });
     const store = openWarmImageStore();
     store.register("expired", expiredImage("chk_expired"));

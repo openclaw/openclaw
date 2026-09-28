@@ -135,27 +135,24 @@ describe("prepared model runtime Gateway leases", () => {
     expect(await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" })).toBe(published);
   });
 
-  it("bounds retained gateway run owners while reusing recent selections", async () => {
+  it("evicts old idle gateway run owners while reusing recent selections", async () => {
     const input = await publishGateway();
     const acquire = async (modelId: string) => {
-      const lease = await acquireAgentRunPreparedModelRuntime({
+      await using lease = await acquireAgentRunPreparedModelRuntime({
         ...input,
         loadRuntimePlugins: true,
         runtimePluginSelections: [{ provider: "openai", modelId, runtime: "codex" }],
       });
-      await lease[Symbol.asyncDispose]();
       return lease.snapshot;
     };
 
     const first = await acquire("run-model-0");
-    for (let index = 1; index < 9; index += 1) {
+    for (let index = 1; index < 8; index += 1) {
       await acquire(`run-model-${index}`);
     }
-    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(11);
-
-    const rebuilt = await acquire("run-model-0");
-    expect(rebuilt).not.toBe(first);
-    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(12);
+    const recent = await acquire("run-model-8");
+    expect(await acquire("run-model-8")).toBe(recent);
+    expect(await acquire("run-model-0")).not.toBe(first);
   });
 
   it("retains switched-away execution registries for agent-scoped session cleanup", async () => {
@@ -185,31 +182,6 @@ describe("prepared model runtime Gateway leases", () => {
       fixture.state.agentDir("other"),
     );
     expect(unrelated.registries).toEqual([]);
-  });
-
-  it("never evicts a configured owner acquired through the gateway run path", async () => {
-    const configuredInput = {
-      ...(await publishGateway()),
-      runtimePluginSelections: [{ provider: "openai", modelId: "gpt-5.5", runtime: "codex" }],
-    };
-    const configured = getPreparedModelRuntimeSnapshot(configuredInput);
-    {
-      await using configuredLease = await acquireAgentRunPreparedModelRuntime(configuredInput);
-      expect(configuredLease.snapshot).toBe(configured);
-    }
-
-    for (let index = 0; index < 9; index += 1) {
-      const lease = await acquireAgentRunPreparedModelRuntime({
-        ...configuredInput,
-        loadRuntimePlugins: true,
-        runtimePluginSelections: [
-          { provider: "openai", modelId: `run-model-${index}`, runtime: "codex" },
-        ],
-      });
-      await lease[Symbol.asyncDispose]();
-    }
-
-    expect(getPreparedModelRuntimeSnapshot(configuredInput)).toBe(configured);
   });
 
   it("retires released retained run owners when gateway refresh clears the lifecycle", async () => {

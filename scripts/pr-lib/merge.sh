@@ -597,13 +597,14 @@ merge_run() {
   local legacy_directory="${6:-}" legacy_refusal="" legacy_captures=()
   local cancel_auto="${7:-false}"
   local refusal_directory="${8:-}" refusal="" qualified_refusal=false
-  local provider_rejection="" qualified_pending_recovery=false
+  local provider_rejection="" qualified_pending_recovery=false retired_auto_admin=false
   local MERGE_REFUSAL_DIRECTORY=""
   local MERGE_ADMIN_EVIDENCE="${9:-}" confirmed_admin="${10:-false}" MERGE_PRIOR_CI_PROOF=""
   local MERGE_USE_PRIOR_CI_ADMIN=false
+  local MERGE_PRIOR_CI_REST_OBSERVATION=false
   if [ -n "$MERGE_ADMIN_EVIDENCE" ] || [ "$confirmed_admin" = true ]; then
     [ -n "$MERGE_ADMIN_EVIDENCE" ] && [ "$confirmed_admin" = true ] && [ "$auto_merge_requested" = false ] &&
-      [ -z "$replacement_head$legacy_directory$refusal_directory" ] && [ "$cancel_auto" = false ] &&
+      [ -z "$legacy_directory$refusal_directory" ] && [ "$cancel_auto" = false ] &&
       [ "${OPENCLAW_PR_MERGE_METHOD:-squash}" = squash ] || return 2
     MERGE_ADMIN_EVIDENCE=$(node -e 'process.stdout.write(require("node:path").resolve(process.argv[1]))' -- "$MERGE_ADMIN_EVIDENCE") || return 1
     MERGE_USE_PRIOR_CI_ADMIN=true
@@ -629,15 +630,16 @@ merge_run() {
     }
   elif [ -n "$recovery_oid" ]; then
     if [ "$recovery_oid" != "$MERGE_OUTCOME_OID" ] ||
-      ! printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e --arg refusal "$refusal_directory" --argjson admin "$MERGE_USE_PRIOR_CI_ADMIN" '
+      ! printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e --arg refusal "$refusal_directory" --arg replacement "$replacement_head" --argjson admin "$MERGE_USE_PRIOR_CI_ADMIN" '
         .phase == "intent" and
-        (if $admin then .accepted == false and .route == "admin" and .method == "squash" and
-          .priorCiAdmin.dispatchTransport == "rest"
+        (if $admin then .method == "squash" and
+          (if $replacement != "" then .route == "auto" and .cancellation.state == "confirmed" and .head != $replacement
+           else .accepted == false and .route == "admin" and .priorCiAdmin.dispatchTransport == "rest" end)
          else (.accepted == false and (.route == "immediate" or ($refusal != "" and .route == "auto" and .method == "squash"))) or
           (.route == "auto" and .cancellation.state == "confirmed") end)
       ' >/dev/null; then
       if [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
-        merge_outcome_stop "operator recovery requires the exact unaccepted prior-CI REST admin squash intent; no attempt was authorized"
+        merge_outcome_stop "operator admin recovery requires an exact rejected prior-CI intent or a confirmed auto cancellation with an explicit different replacement; no attempt was authorized"
       else
         merge_outcome_stop "operator recovery requires the exact unaccepted immediate intent or confirmed auto cancellation; no attempt was authorized"
       fi
@@ -684,8 +686,14 @@ merge_run() {
   fi
 
   if [ -n "$recovery_oid" ] && [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
-    provider_rejection=$(node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" provider-rejection "$recovery_record" .local) || return 1
-    recovery_artifact_head=$(printf '%s\n' "$recovery_record" | jq -er .head) || return 1
+    if [ -n "$replacement_head" ]; then
+      # The retained cancellation qualified this transition; current-head evidence
+      # still passes both live admin checks before the successor intent is written.
+      retired_auto_admin=true
+    else
+      provider_rejection=$(node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" provider-rejection "$recovery_record" .local) || return 1
+      recovery_artifact_head=$(printf '%s\n' "$recovery_record" | jq -er .head) || return 1
+    fi
     qualified_pending_recovery=true
   fi
 
@@ -823,7 +831,7 @@ merge_run() {
   # Pin PR/policy facts and each projection as soon as it becomes known.
   for admission_attempt in 1 2 3; do
     merge_outcome_observe "$pr" || return 1
-    if [ "$MERGE_TRANSPORT" = rest ] &&
+    if [ "$MERGE_TRANSPORT" = rest ] && [ "$MERGE_PRIOR_CI_REST_OBSERVATION" = false ] &&
       { [ "$merge_method" != squash ] || [ "$auto_merge_requested" = true ] || [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = true ] || [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; }; then
       merge_outcome_stop "REST fallback supports ordinary immediate squash only; auto, queue, and admin routes require GraphQL"
       return 1
@@ -876,18 +884,23 @@ merge_run() {
       merge_outcome_stop "mergeability remained UNKNOWN after 3 observations; stopped before intent/dispatch"
       return 1
     fi
+    if [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ] && [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = false ] &&
+      [ "$MERGE_TRANSPORT" = graphql ]; then
+      # Pin the alternate reader; the next whole observation must preserve every known fact.
+      MERGE_PRIOR_CI_REST_OBSERVATION=true
+    fi
     if [ "$admission_attempt" -eq 1 ]; then
       echo "Waiting for GitHub mergeability to settle (up to 3 observations, waiting 1 then 2 seconds for UNKNOWN samples)."
     fi
     previous_observation="$MERGE_OBSERVATION"
     sleep "$admission_attempt"
   done
-  if [ "$MERGE_TRANSPORT" = rest ] &&
+  if [ "$MERGE_TRANSPORT" = rest ] && [ "$MERGE_PRIOR_CI_REST_OBSERVATION" = false ] &&
     [ "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .pr.mergeStateStatus)" != CLEAN ]; then
     merge_outcome_stop "REST fallback requires a CLEAN merge projection without bypass"
     return 1
   fi
-  if [ "$MERGE_TRANSPORT" = rest ]; then
+  if [ "$MERGE_TRANSPORT" = rest ] && [ "$MERGE_PRIOR_CI_REST_OBSERVATION" = false ]; then
     # Quota can expire after the first preview. Compose source credit through
     # the same owner before selecting a REST mutation or retaining its intent.
     if [ "$MERGE_BODY_TRANSPORT" != rest ]; then
@@ -921,7 +934,7 @@ merge_run() {
     return 1
   fi
   if [ -n "$recovery_oid" ] && [ "$route" != immediate ] &&
-    { [ "$route" != admin ] || [ -z "$provider_rejection" ]; }; then
+    { [ "$route" != admin ] || { [ -z "$provider_rejection" ] && [ "$retired_auto_admin" != true ]; }; }; then
     merge_outcome_stop "operator recovery requires current immediate admission without admin, auto, or queue routing"
     return 1
   fi
@@ -983,14 +996,18 @@ merge_run() {
   # A final stability read can exhaust GraphQL after route/body selection.
   # Revalidate the selected route before retaining any REST mutation intent.
   if [ "$MERGE_TRANSPORT" = rest ]; then
-    if [ "$merge_method" != squash ] || [ "$route" != immediate ] ||
+    if [ "$MERGE_PRIOR_CI_REST_OBSERVATION" = true ]; then
+      [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ] && [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = false ] &&
+        [ "$route" = admin ] && [ "$merge_method" = squash ] && [ "$auto_merge_requested" = false ] || return 1
+    elif [ "$merge_method" != squash ] || [ "$route" != immediate ] ||
       [ "$auto_merge_requested" = true ] || [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = true ] || [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
       merge_outcome_stop "REST fallback supports ordinary immediate squash only; auto, queue, and admin routes require GraphQL"
       return 1
     fi
-    if [ -z "$merge_body_snapshot" ] || ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e '
+    if [ "$MERGE_PRIOR_CI_REST_OBSERVATION" = false ] &&
+      { [ -z "$merge_body_snapshot" ] || ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e '
       .pr.mergeable == "MERGEABLE" and .pr.mergeStateStatus == "CLEAN"
-    ' >/dev/null; then
+    ' >/dev/null; }; then
       merge_outcome_stop "REST fallback requires a CLEAN merge projection and verified squash body"
       return 1
     fi
@@ -1016,6 +1033,10 @@ merge_run() {
     verify_prior_ci_admin "$pr" "$PREP_HEAD_SHA" || return 1
     # A later main may reuse local objects, never start another lazy/explicit fetch.
     GIT_NO_LAZY_FETCH=1 merge_outcome_stable "$pr" true || return 1
+    if [ "$MERGE_PRIOR_CI_REST_OBSERVATION" = true ]; then
+      # Complete REST snapshots read policy/checks too; revalidate live authority after that work.
+      verify_prior_ci_admin "$pr" "$PREP_HEAD_SHA" || return 1
+    fi
     # No awaited operation may replace the operator's bytes after validation.
     node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" unchanged \
       "$MERGE_ADMIN_EVIDENCE" "$(printf '%s\n' "$MERGE_PRIOR_CI_PROOF" | jq -r .evidenceSha256)" >/dev/null || return 1

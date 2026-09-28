@@ -610,7 +610,7 @@ describe("waitForAgentRunsToDrain", () => {
       try {
         const result = await waitForAgentRunsToDrain({
           timeoutMs: 200,
-          getPendingRunIds: () => activeRunIds,
+          getPendingRunIds: async () => activeRunIds,
         });
 
         expect(result.timedOut).toBe(false);
@@ -628,7 +628,7 @@ describe("waitForAgentRunsToDrain", () => {
 
     const result = await waitForAgentRunsToDrain({
       deadlineAtMs,
-      getPendingRunIds: () => ["run-1"],
+      getPendingRunIds: async () => ["run-1"],
     });
 
     expect(result).toEqual({ timedOut: true, pendingRunIds: ["run-1"], deadlineAtMs });
@@ -653,7 +653,7 @@ describe("waitForAgentRunsToDrain", () => {
 
     const result = await waitForAgentRunsToDrain({
       timeoutMs: 1_000,
-      getPendingRunIds: () => activeRunIds,
+      getPendingRunIds: async () => activeRunIds,
     });
 
     expect(result.timedOut).toBe(false);
@@ -672,7 +672,7 @@ describe("waitForAgentRunsToDrain", () => {
 
     const result = await waitForAgentRunsToDrain({
       timeoutMs: 1_000,
-      getPendingRunIds: () => {
+      getPendingRunIds: async () => {
         const current = activeRunIds;
         activeRunIds = [];
         return current;
@@ -690,7 +690,7 @@ describe("waitForAgentRunsToDrain", () => {
     const result = await waitForAgentRunsToDrain({
       timeoutMs: 1_000,
       initialPendingRunIds: ["run-1"],
-      getPendingRunIds: () => {
+      getPendingRunIds: async () => {
         const current = activeRunIds;
         activeRunIds = [];
         return current;
@@ -713,7 +713,7 @@ describe("waitForAgentRunsToDrain", () => {
     try {
       const result = await waitForAgentRunsToDrain({
         timeoutMs: Number.NaN,
-        getPendingRunIds: () => {
+        getPendingRunIds: async () => {
           const current = activeRunIds;
           activeRunIds = [];
           return current;
@@ -734,7 +734,7 @@ describe("waitForAgentRunsToDrain", () => {
     try {
       const result = await waitForAgentRunsToDrain({
         timeoutMs: 1,
-        getPendingRunIds: () => ["run-1"],
+        getPendingRunIds: async () => ["run-1"],
       });
 
       expect(result).toEqual({
@@ -754,7 +754,7 @@ describe("waitForAgentRunsToDrain", () => {
     try {
       const result = await waitForAgentRunsToDrain({
         deadlineAtMs: Number.POSITIVE_INFINITY,
-        getPendingRunIds: () => ["run-1"],
+        getPendingRunIds: async () => ["run-1"],
       });
 
       expect(result.timedOut).toBe(true);

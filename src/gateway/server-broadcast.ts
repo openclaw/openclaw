@@ -20,6 +20,7 @@ import {
   type LiveTextPublication,
   type PendingLiveText,
 } from "./server-broadcast-live-text.js";
+import { createGatewayNarrationDelivery } from "./server-broadcast-narration.js";
 import {
   hasEventScope,
   isSessionReadInvalidation,
@@ -49,6 +50,7 @@ const SESSION_SUBSCRIPTION_EVENTS = new Set([
   "chat",
   "chat.side_result",
   "session.observer",
+  "session.narration",
   // Mirrors the raw agent tool event (full args/result snapshots) onto
   // session subscribers; omitting it here would hand scoped clients the
   // exact payload the registry gate suppresses on the `agent` event.
@@ -215,6 +217,10 @@ export function createGatewayBroadcaster(params: {
   const clientSeq = new WeakMap<GatewayWsClient, number>();
   const reportedSlowPayloadClients = new WeakSet<GatewayWsClient>();
   const delivery = createGatewayLiveTextDelivery(params);
+  const narration = createGatewayNarrationDelivery({
+    ...params,
+    send: (event, payload, connIds, opts) => broadcastInternal(event, payload, opts, connIds),
+  });
   const isCurrent = (predicate?: () => boolean) => {
     try {
       return predicate?.() !== false;
@@ -396,6 +402,18 @@ export function createGatewayBroadcaster(params: {
       }
       // Retirement releases progress without suppressing its captured abort terminal.
       if ((retained && !isCurrent(live?.isCurrent)) || (live?.coalesce && live.group.aborted)) {
+        continue;
+      }
+      // Narration consumes producer snapshots before the per-socket wire
+      // projection below removes cumulative text from foreground appends.
+      if (
+        (event === "session.narration" && !narration.isNarration(c.connId, sessionKeys)) ||
+        ((event === "chat" ||
+          event === "agent" ||
+          event === "session.tool" ||
+          event === "session.observer") &&
+          narration.consume(c, event, payload, sessionKeys, opts))
+      ) {
         continue;
       }
       if (!outboundEventLogged) {

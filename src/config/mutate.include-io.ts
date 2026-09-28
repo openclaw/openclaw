@@ -3,11 +3,13 @@ import fsNode from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  withDeferredPluginConfigRollback,
   withDeferredPluginMigrationsCurrent,
   type DeferredPluginMigration,
 } from "../infra/deferred-plugin-migrations.js";
 import { formatErrorMessage, isMissingPathError } from "../infra/errors.js";
 import { root as createFsRoot, type Root as FsSafeRoot } from "../infra/fs-safe.js";
+import { recordUpdateDoctorConfigFileWrite } from "../infra/update-doctor-result.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { prepareConfigFileWrite } from "./backup-rotation.js";
 import {
@@ -22,6 +24,7 @@ import {
   captureConfigFileWritePathProof,
   createConfigFileWriteGuard,
   rollbackConfigFileWriteIfUnchanged,
+  type ConfigFileRollbackPublication,
   type ConfigFileWriteRollbackProof,
 } from "./io.write-safety.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
@@ -160,6 +163,7 @@ export async function assertIncludeGraphStillMatchesSnapshot(params: {
 
 type IncludePublicationProof = ReturnType<typeof captureConfigFileWritePathProof> & {
   captureRollbackProof: () => ConfigFileWriteRollbackProof;
+  withPublication?: ConfigFileRollbackPublication;
 };
 
 export async function rollbackJsonFileWriteIfUnchanged(params: {
@@ -168,7 +172,7 @@ export async function rollbackJsonFileWriteIfUnchanged(params: {
   committedRaw: string | null;
   pathProof: IncludePublicationProof;
 }): Promise<boolean> {
-  return await rollbackConfigFileWriteIfUnchanged({
+  const restored = await rollbackConfigFileWriteIfUnchanged({
     configPath: params.target.absolutePath,
     previousSnapshot: {
       path: params.target.absolutePath,
@@ -181,7 +185,16 @@ export async function rollbackJsonFileWriteIfUnchanged(params: {
     preserveDirectoryMode: true,
     durable: true,
     destinationHardlinks: "reject",
+    withPublication: params.pathProof.withPublication,
   });
+  if (restored) {
+    recordUpdateDoctorConfigFileWrite(
+      params.target.absolutePath,
+      hashConfigRaw(params.committedRaw),
+      hashConfigRaw(params.previousRaw),
+    );
+  }
+  return restored;
 }
 
 export async function writeRootBoundJsonFile(params: {
@@ -263,6 +276,16 @@ export async function writeRootBoundJsonFile(params: {
       writeGuard.assertPublishedIdentity();
     },
     captureRollbackProof: () => writeGuard.captureRollbackProof(params.assertOwnerForRollback),
+    withPublication: (publish, didMutate) =>
+      withDeferredPluginConfigRollback(
+        {
+          configPath: params.configPath,
+          env: params.env,
+          assertCurrent: params.assertOwnerForRollback,
+        },
+        publish,
+        didMutate,
+      ),
   };
   try {
     await using preparedFile = await prepareConfigFileWrite({
@@ -279,10 +302,19 @@ export async function writeRootBoundJsonFile(params: {
     await params.beforeCommit?.();
     writeGuard.assertCurrent();
     withDeferredPluginMigrationsCurrent(
-      { env: params.env, expectedPending: params.deferredPluginMigrations },
+      {
+        env: params.env,
+        configPath: params.configPath,
+        expectedPending: params.deferredPluginMigrations,
+      },
       () => {
         preparedFile.publish();
         publication.phase = "published";
+        recordUpdateDoctorConfigFileWrite(
+          targetAtCommit.absolutePath,
+          hashConfigRaw(currentRaw),
+          hashConfigRaw(content),
+        );
       },
     );
     await params.assertIncludeGraphForWrite(hashConfigIncludeRaw(content));

@@ -29,6 +29,12 @@ After gateway auth succeeds, connecting from a new browser or device usually req
 
 Keep the page open while approval is pending. It retries automatically and connects on its own once the request is approved; **Check now** lets you retry immediately.
 
+If the login screen says **Pairing link is no longer valid**, the one-time dashboard
+link may have expired or already been used. Run `openclaw dashboard` on the Gateway
+host and open the fresh link it opens or copies. Without browser or clipboard access
+on that host, run `openclaw dashboard --json` and open its `browserUrl` within ten
+minutes. This error does not mean the shared Gateway token or password needs changing.
+
 If the browser retries pairing with changed auth details (role/scopes/public key), the previous pending request is superseded and a new `requestId` is created; re-run `openclaw devices list` before approving.
 
 Switching an already-paired browser from read access to write/admin access through ordinary stored or shared credentials is treated as an approval upgrade, not a silent reconnect: OpenClaw keeps the old approval active, blocks the broader reconnect, and asks you to approve the new scope set explicitly. The narrow exception is a fresh owner handoff issued on the Gateway host by `openclaw dashboard` or graphical onboarding; it can upgrade only the same signed browser that redeems that one-time handoff.
@@ -76,6 +82,8 @@ Local and data-URL agent avatars use [authenticated avatar URLs](/web/control-ui
 ## PWA install and web push
 
 The Control UI ships a `manifest.webmanifest` and a service worker, so modern browsers can install it as a standalone PWA. Web Push lets the Gateway wake the installed PWA with notifications even when the tab or browser window is not open.
+
+On phones, Chat and New Session share ordinary side gutters inside the device's safe areas. The installed app uses a full standalone canvas; browser tabs follow the dynamic viewport. When the browser reports a keyboard-sized visual viewport reduction, the shell keeps the composer above it and restores the bottom safe area when the keyboard closes, even if the editor still has focus. Pinch zoom remains browser-controlled. Browsers without VisualViewport retain the CSS layout.
 
 Inside the macOS app, the Notifications settings page shows the app's native notification permission instead of browser push because the app delivers notifications natively.
 

@@ -36,7 +36,7 @@
   );
   --shell-focus-duration: 200ms;
   --shell-focus-ease: var(--ease-out);
-  height: 100vh;
+  height: var(--shell-content-height);
   display: grid;
   grid-template-columns: var(--shell-nav-width) minmax(0, 1fr);
   grid-template-rows: var(--shell-topbar-height) 1fr;
@@ -88,12 +88,6 @@
 
 .shell-skip-link:focus {
   transform: translate(-50%, 0);
-}
-
-@supports (height: 100dvh) {
-  .shell {
-    height: 100dvh;
-  }
 }
 
 .shell--chat {
@@ -3264,8 +3258,8 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   padding: 0 8px;
   border: 0;
   border-radius: var(--menu-item-radius);
-  background: var(--accent);
-  color: var(--accent-foreground);
+  background: var(--primary);
+  color: var(--primary-foreground);
   cursor: var(--cursor-action);
   font: inherit;
   font-size: calc(12px * var(--control-ui-text-scale));
