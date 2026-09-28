@@ -2,6 +2,7 @@
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
 import { defaultRuntime, ExitError } from "../runtime.js";
+import { captureEnv } from "../test-utils/env.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { registerDnsCli } from "./dns-cli.js";
 import {
@@ -85,18 +86,14 @@ describe("runCommandWithRuntime", () => {
         },
       );
 
-    const originalDebug = process.env.OPENCLAW_DEBUG;
+    const originalEnv = captureEnv(["OPENCLAW_DEBUG"]);
     delete process.env.OPENCLAW_DEBUG;
     try {
       await run();
       process.env.OPENCLAW_DEBUG = "1";
       await run();
     } finally {
-      if (originalDebug === undefined) {
-        delete process.env.OPENCLAW_DEBUG;
-      } else {
-        process.env.OPENCLAW_DEBUG = originalDebug;
-      }
+      originalEnv.restore();
     }
 
     expect(messages).toEqual([

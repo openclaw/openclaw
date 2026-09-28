@@ -10,6 +10,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { installedPluginRoot } from "../plugin-sdk/test-helpers/bundled-plugin-paths.js";
 import { recordInstalledPluginIndexInstallOwner } from "../plugins/installed-plugin-index-install-owner.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { captureEnv } from "../test-utils/env.js";
 import {
   applyPluginUninstallDirectoryRemovalMock,
   buildPluginDiagnosticsReportMock,
@@ -38,7 +39,7 @@ import {
 const CLI_STATE_ROOT = resolveStateDir();
 let alphaInstallPath: string;
 let readInstallRecords: (typeof import("../plugins/installed-plugin-index-record-reader.js"))["loadInstalledPluginIndexInstallRecordsSync"];
-const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
+const originalEnv = captureEnv(["OPENCLAW_NIX_MODE"]);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function expectRuntimeLogIncludes(fragment: string) {
@@ -98,26 +99,18 @@ describe("plugins cli uninstall", () => {
 
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
-    if (ORIGINAL_OPENCLAW_NIX_MODE === undefined) {
-      delete process.env.OPENCLAW_NIX_MODE;
-    } else {
-      process.env.OPENCLAW_NIX_MODE = ORIGINAL_OPENCLAW_NIX_MODE;
-    }
+    originalEnv.restore();
   });
 
   it("refuses plugin uninstalls in Nix mode before planning file removal", async () => {
-    const previous = process.env.OPENCLAW_NIX_MODE;
+    const previousEnv = captureEnv(["OPENCLAW_NIX_MODE"]);
     process.env.OPENCLAW_NIX_MODE = "1";
     try {
       await expect(runPluginsCommand(["plugins", "uninstall", "alpha", "--force"])).rejects.toThrow(
         "OPENCLAW_NIX_MODE=1",
       );
     } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_NIX_MODE;
-      } else {
-        process.env.OPENCLAW_NIX_MODE = previous;
-      }
+      previousEnv.restore();
     }
 
     expect(applyPluginUninstallDirectoryRemovalMock).not.toHaveBeenCalled();
@@ -345,7 +338,7 @@ describe("plugins cli uninstall", () => {
   });
 
   it("warns for a versionless scoped ClawHub spec and proceeds", async () => {
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const previousEnv = captureEnv(["OPENCLAW_STATE_DIR"]);
     process.env.OPENCLAW_STATE_DIR = tempDirs.make("openclaw-claw-plugin-ref-");
     closeOpenClawStateDatabaseForTest();
     try {
@@ -392,11 +385,7 @@ describe("plugins cli uninstall", () => {
         { plugins: { entries: { alpha: { enabled: false } } } },
       );
     } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
+      previousEnv.restore();
       closeOpenClawStateDatabaseForTest();
     }
   });

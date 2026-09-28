@@ -7,6 +7,7 @@ import {
   WINDOWS_TASK_SUPERVISOR_RESTART_EXIT_CODE_MIN,
 } from "../../daemon/windows-task-supervisor-contract.js";
 import type { SpawnInput } from "../../process/supervisor/types.js";
+import { captureEnv } from "../../test-utils/env.js";
 
 const { spawn, log, flushLogger, bindWindowsTaskLauncher } = vi.hoisted(() => ({
   spawn: vi.fn(),
@@ -49,7 +50,7 @@ describe("Windows Gateway task supervisor", () => {
   const argv = [...process.argv];
   const execArgv = [...process.execArgv];
   const exitCode = process.exitCode;
-  const launcherMarker = process.env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER;
+  const originalEnv = captureEnv(["OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER"]);
 
   beforeEach(() => {
     process.argv = [
@@ -68,11 +69,7 @@ describe("Windows Gateway task supervisor", () => {
     process.argv = [...argv];
     process.execArgv = [...execArgv];
     process.exitCode = exitCode;
-    if (launcherMarker === undefined) {
-      delete process.env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER;
-    } else {
-      process.env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER = launcherMarker;
-    }
+    originalEnv.restore();
     vi.restoreAllMocks();
     vi.clearAllMocks();
     spawn.mockReset();

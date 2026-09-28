@@ -23,7 +23,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { withEnvAsync } from "../../test-utils/env.js";
+import { captureEnv, withEnvAsync } from "../../test-utils/env.js";
 import { manualTranscriptSourceProvider } from "../../transcripts/manual-source.js";
 import type { TranscriptSessionDescriptor } from "../../transcripts/provider-types.js";
 import { TranscriptsStore } from "../../transcripts/store.js";
@@ -33,7 +33,7 @@ import { testApi as configGuardTestApi } from "./config-guard.js";
 import { registerPreActionHooks } from "./preaction.js";
 import { registerTranscriptsCli } from "./register.transcripts.js";
 
-const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+const originalEnv = captureEnv(["OPENCLAW_STATE_DIR"]);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function storeFor(stateDir: string): TranscriptsStore {
@@ -101,11 +101,7 @@ describe("transcripts CLI", () => {
   afterEach(async () => {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
-    if (originalStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = originalStateDir;
-    }
+    originalEnv.restore();
   });
 
   it.each(["list", "show", "path"] as const)(

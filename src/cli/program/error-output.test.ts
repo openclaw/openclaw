@@ -1,6 +1,7 @@
 // Error output tests cover program-level error display and exit messaging.
 import { CommanderError, InvalidArgumentError, type Command } from "commander";
 import { describe, expect, it } from "vitest";
+import { captureEnv } from "../../test-utils/env.js";
 import { isConfigMachineOutput } from "../config-output-mode.js";
 import { createCronOutputCommand, isCronMachineOutput } from "../cron-cli/output-mode.js";
 import { isDevicesMachineOutput } from "../devices-output-mode.js";
@@ -668,7 +669,7 @@ describe("formatCliParseErrorOutput", () => {
   });
 
   it("preserves active profile context in command suggestions", () => {
-    const originalProfile = process.env.OPENCLAW_PROFILE;
+    const originalEnv = captureEnv(["OPENCLAW_PROFILE"]);
     process.env.OPENCLAW_PROFILE = "work";
     try {
       const output = formatCliParseErrorOutput("error: unknown command 'doctr'\n", {
@@ -677,11 +678,7 @@ describe("formatCliParseErrorOutput", () => {
 
       expect(output).toContain("Did you mean this?\n  openclaw --profile work doctor\n");
     } finally {
-      if (originalProfile === undefined) {
-        delete process.env.OPENCLAW_PROFILE;
-      } else {
-        process.env.OPENCLAW_PROFILE = originalProfile;
-      }
+      originalEnv.restore();
     }
   });
 

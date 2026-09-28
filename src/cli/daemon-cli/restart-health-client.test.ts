@@ -27,6 +27,7 @@ import {
   storeDeviceAuthToken,
 } from "../../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity } from "../../infra/device-identity.js";
+import { captureEnv } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withGatewayMaintenanceDrain } from "../update-cli/update-command-service-drain.js";
 import { waitForGatewayHealthyRestart } from "./restart-health.js";
@@ -240,7 +241,7 @@ describe("restart verifier local control identity", () => {
             readRuntime: async () => ({ status: "running", pid: process.pid }),
           });
           const before = await fs.readdir(state.stateDir, { recursive: true });
-          const callerStateDir = process.env.OPENCLAW_STATE_DIR;
+          const callerEnv = captureEnv(["OPENCLAW_STATE_DIR"]);
           if (paired) {
             process.env.OPENCLAW_STATE_DIR = state.path("unrelated-caller");
           }
@@ -325,11 +326,7 @@ describe("restart verifier local control identity", () => {
             expect(connections[0]?.scopes).toEqual(["operator.read"]);
             expect(await fs.readdir(state.stateDir, { recursive: true })).toEqual(before);
           } finally {
-            if (callerStateDir === undefined) {
-              delete process.env.OPENCLAW_STATE_DIR;
-            } else {
-              process.env.OPENCLAW_STATE_DIR = callerStateDir;
-            }
+            callerEnv.restore();
             await closeMinimalGatewayServer(gateway);
           }
         },

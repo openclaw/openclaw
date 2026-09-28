@@ -3,7 +3,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { withEnvAsync } from "../../test-utils/env.js";
+import { captureEnv, withEnvAsync } from "../../test-utils/env.js";
 import { registerSubCliByName, registerSubCliCommands } from "./register.subclis.js";
 import * as subCliDescriptors from "./subcli-descriptors.js";
 
@@ -121,8 +121,8 @@ vi.mock("./private-qa-cli.js", async () => {
 
 describe("registerSubCliCommands", () => {
   const originalArgv = process.argv;
-  const originalDisableLazySubcommands = process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS;
-  const originalEnablePrivateQaCli = process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
+  const originalLazyEnv = captureEnv(["OPENCLAW_DISABLE_LAZY_SUBCOMMANDS"]);
+  const originalPrivateQaEnv = captureEnv(["OPENCLAW_ENABLE_PRIVATE_QA_CLI"]);
 
   const createRegisteredProgram = (argv: string[], name?: string) => {
     process.argv = argv;
@@ -135,11 +135,7 @@ describe("registerSubCliCommands", () => {
   };
 
   beforeEach(() => {
-    if (originalDisableLazySubcommands === undefined) {
-      delete process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS;
-    } else {
-      process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS = originalDisableLazySubcommands;
-    }
+    originalLazyEnv.restore();
     process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
     registerAcpCli.mockClear();
     acpAction.mockClear();
@@ -165,16 +161,8 @@ describe("registerSubCliCommands", () => {
 
   afterEach(() => {
     process.argv = originalArgv;
-    if (originalDisableLazySubcommands === undefined) {
-      delete process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS;
-    } else {
-      process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS = originalDisableLazySubcommands;
-    }
-    if (originalEnablePrivateQaCli === undefined) {
-      delete process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
-    } else {
-      process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = originalEnablePrivateQaCli;
-    }
+    originalLazyEnv.restore();
+    originalPrivateQaEnv.restore();
   });
 
   it("registers the primary placeholder plus completion and dispatches", async () => {

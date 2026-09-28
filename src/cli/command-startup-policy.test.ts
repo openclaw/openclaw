@@ -1,6 +1,7 @@
 // Command startup policy tests cover which CLI commands require startup side effects.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import { cliCommandCatalog } from "./command-catalog.js";
 import { resolveCliStartupPolicy } from "./command-startup-policy.js";
 
@@ -251,7 +252,7 @@ describe("command-startup-policy", () => {
   });
 
   it("uses process env banner suppression when startup env is omitted", () => {
-    const originalHideBanner = process.env.OPENCLAW_HIDE_BANNER;
+    const originalEnv = captureEnv(["OPENCLAW_HIDE_BANNER"]);
     try {
       process.env.OPENCLAW_HIDE_BANNER = "1";
 
@@ -269,11 +270,7 @@ describe("command-startup-policy", () => {
         }).hideBanner,
       ).toBe(false);
     } finally {
-      if (originalHideBanner === undefined) {
-        delete process.env.OPENCLAW_HIDE_BANNER;
-      } else {
-        process.env.OPENCLAW_HIDE_BANNER = originalHideBanner;
-      }
+      originalEnv.restore();
     }
   });
 

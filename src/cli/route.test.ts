@@ -1,5 +1,6 @@
 // Route CLI tests cover route command registration, channel routing, and output.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 
 const emitCliBannerMock = vi.hoisted(() => vi.fn());
 const ensureConfigReadyMock = vi.hoisted(() =>
@@ -48,9 +49,7 @@ describe("tryRouteCli", () => {
   let tryRouteCli: typeof import("./route.js").tryRouteCli;
   // Capture the same loggingState reference that route.js uses.
   let loggingState: typeof import("../logging/state.js").loggingState;
-  let originalDisableRouteFirst: string | undefined;
-  let originalHideBanner: string | undefined;
-  let originalLogLevel: string | undefined;
+  let originalEnv: ReturnType<typeof captureEnv>;
   let originalForceStderr: boolean;
 
   beforeAll(async () => {
@@ -60,9 +59,11 @@ describe("tryRouteCli", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    originalDisableRouteFirst = process.env.OPENCLAW_DISABLE_ROUTE_FIRST;
-    originalHideBanner = process.env.OPENCLAW_HIDE_BANNER;
-    originalLogLevel = process.env.OPENCLAW_LOG_LEVEL;
+    originalEnv = captureEnv([
+      "OPENCLAW_DISABLE_ROUTE_FIRST",
+      "OPENCLAW_HIDE_BANNER",
+      "OPENCLAW_LOG_LEVEL",
+    ]);
     delete process.env.OPENCLAW_DISABLE_ROUTE_FIRST;
     delete process.env.OPENCLAW_HIDE_BANNER;
     delete process.env.OPENCLAW_LOG_LEVEL;
@@ -74,21 +75,7 @@ describe("tryRouteCli", () => {
     if (loggingState) {
       loggingState.forceConsoleToStderr = originalForceStderr;
     }
-    if (originalDisableRouteFirst === undefined) {
-      delete process.env.OPENCLAW_DISABLE_ROUTE_FIRST;
-    } else {
-      process.env.OPENCLAW_DISABLE_ROUTE_FIRST = originalDisableRouteFirst;
-    }
-    if (originalHideBanner === undefined) {
-      delete process.env.OPENCLAW_HIDE_BANNER;
-    } else {
-      process.env.OPENCLAW_HIDE_BANNER = originalHideBanner;
-    }
-    if (originalLogLevel === undefined) {
-      delete process.env.OPENCLAW_LOG_LEVEL;
-    } else {
-      process.env.OPENCLAW_LOG_LEVEL = originalLogLevel;
-    }
+    originalEnv.restore();
   });
 
   it.each([

@@ -3,21 +3,18 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { captureEnv } from "../../test-utils/env.js";
 import { loadPrivateQaCliModule } from "./private-qa-cli.js";
 
 describe("private-qa-cli", () => {
   const tempDirs: string[] = [];
-  const originalPrivateQaCli = process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
+  const originalEnv = captureEnv(["OPENCLAW_ENABLE_PRIVATE_QA_CLI"]);
 
   afterEach(() => {
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
-    if (originalPrivateQaCli === undefined) {
-      delete process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
-    } else {
-      process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = originalPrivateQaCli;
-    }
+    originalEnv.restore();
   });
 
   it("loads the private QA CLI from a source checkout path", async () => {
