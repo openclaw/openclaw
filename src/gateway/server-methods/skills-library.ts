@@ -37,6 +37,7 @@ import {
   resolveSessionSharingTarget,
   SessionMutationAuthorizationChangedError,
 } from "../session-sharing.js";
+import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -45,13 +46,18 @@ export type SkillLibraryRequestOwner = Pick<
   "client" | "context" | "sessionMutationCommitGuard" | "sessionMutationAuthorization"
 >;
 
-export function libraryAuthority(options: SkillLibraryRequestOwner): SkillLibraryAuthority {
+export function libraryAuthority(
+  options: SkillLibraryRequestOwner,
+  assertFileMutationAllowed?: () => void,
+): SkillLibraryAuthority {
   const { client, context } = options;
   return {
     profileId: client?.authenticatedUserProfile?.profileId,
     scopes: client?.connect.scopes ?? [],
     getConfig: context.getRuntimeConfig,
+    assertFileMutationAllowed,
     assertCurrent: () => {
+      assertFileMutationAllowed?.();
       options.sessionMutationCommitGuard?.();
       options.sessionMutationAuthorization?.assertCurrent();
       // Synthetic agents must carry host-bound operator authority; identityless agents cannot publish.
@@ -211,7 +217,19 @@ function libraryHandler<P>(
     try {
       options.respond(
         true,
-        await run(libraryAuthority(options), options.params, options),
+        await run(
+          libraryAuthority(
+            options,
+            captureGatewayClientUploadCommitGuard({
+              method: name,
+              requestParams: options.params,
+              client: options.client,
+              context: options.context,
+            }),
+          ),
+          options.params,
+          options,
+        ),
         undefined,
       );
     } catch (error) {
@@ -317,7 +335,36 @@ export const skillsLibraryHandlers: GatewayRequestHandlers = {
   "skills.library.save": libraryHandler(
     "skills.library.save",
     validateSkillsLibrarySaveParams,
-    (authority, params) => saveSkillLibrary(authority, params),
+    async (authority, { retainFiles, ...params }) => {
+      if (!retainFiles?.length) {
+        return saveSkillLibrary(authority, params);
+      }
+      if (!params.skillId || !params.expectedRevision) {
+        throw new SkillLibraryError(
+          "INVALID_BUNDLE",
+          "Retaining skill files requires skillId and expectedRevision.",
+        );
+      }
+      const existing = await readSkillLibrary(authority, params.skillId, params.expectedRevision);
+      const filesByPath = new Map(existing.files.map((file) => [file.path, file]));
+      const selected = new Set<string>();
+      const retained = retainFiles.map((path) => {
+        const file = filesByPath.get(path);
+        if (!file || selected.has(path)) {
+          throw new SkillLibraryError(
+            "INVALID_BUNDLE",
+            "Retained skill files must name distinct support files in expectedRevision.",
+          );
+        }
+        selected.add(path);
+        return file;
+      });
+      // The save owner rechecks write authority, CAS, and the complete merged bundle.
+      return saveSkillLibrary(authority, {
+        ...params,
+        files: [...retained, ...(params.files ?? [])],
+      });
+    },
   ),
   "skills.library.mutate": libraryHandler(
     "skills.library.mutate",

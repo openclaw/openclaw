@@ -52,6 +52,7 @@ describe("config.get diagnostic revisions", () => {
       revisionProjector: {
         projectRawHash: (value) => `raw:${value}`,
         projectResolvedHash: (value) => `resolved:${value}`,
+        hashResponseSessionBearer: () => "unused-test-scope",
       },
     });
 

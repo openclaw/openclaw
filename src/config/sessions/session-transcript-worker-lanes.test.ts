@@ -1,15 +1,19 @@
 import assert from "node:assert/strict";
 import { channel } from "node:diagnostics_channel";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
+import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
 import type { WorkerTaskOptions } from "../../infra/worker-task-pool.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   historyLane,
   maintenanceLane,
   projectionLane,
+  rotateDatabaseWorkers,
   withSessionHistoryWorkerReadCandidates,
 } from "./session-transcript-worker-resources.js";
 import {
+  isSessionHistoryWorkerCold,
+  prewarmSessionHistoryWorker,
   retainSessionHistoryWorkerDatabase,
   withSessionHistoryWorkerDatabase,
 } from "./session-transcript-worker-runtime.js";
@@ -17,9 +21,12 @@ import type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.t
 
 type Resource = { close: () => Promise<void>; agentId?: string; revoke: () => void };
 const observed = vi.hoisted(() => ({
+  setTimeout: vi.spyOn(globalThis, "setTimeout"),
+  clearTimeout: vi.spyOn(globalThis, "clearTimeout"),
   run: vi.fn<(input: unknown, options: WorkerTaskOptions<unknown>) => Promise<unknown>>(),
-  rotate: vi.fn<() => Promise<void>>(),
-  closeResources: vi.fn<(key?: string) => Promise<void>>(),
+  // Import-time pools are drained even when a name filter skips every test.
+  rotate: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+  closeResources: vi.fn<(key?: string) => Promise<void>>().mockResolvedValue(undefined),
   unregister: vi.fn<() => void>(),
   resources: [] as Resource[],
 }));
@@ -78,6 +85,9 @@ function input() {
 }
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  observed.setTimeout.mockImplementation(globalThis.setTimeout);
+  observed.clearTimeout.mockImplementation(globalThis.clearTimeout);
   observed.run.mockReset();
   observed.rotate.mockReset().mockResolvedValue(undefined);
   observed.closeResources.mockReset().mockResolvedValue(undefined);
@@ -87,6 +97,62 @@ afterEach(async () => {
   observed.rotate.mockResolvedValue(undefined);
   observed.closeResources.mockResolvedValue(undefined);
   await Promise.all(observed.resources.splice(0).map((resource) => resource.close()));
+});
+afterAll(() => {
+  vi.useRealTimers();
+  observed.setTimeout.mockRestore();
+  observed.clearTimeout.mockRestore();
+});
+
+it("dedupes prewarm through history custody without extending idle retirement", async () => {
+  await rotateDatabaseWorkers(historyLane);
+  observed.rotate.mockClear();
+  const request = input();
+  const reply = createDeferredCore<unknown>();
+  observed.run.mockReturnValueOnce(reply.promise);
+  expect(isSessionHistoryWorkerCold()).toBe(true);
+  const first = prewarmSessionHistoryWorker(request.database);
+  const second = prewarmSessionHistoryWorker(request.database);
+  expect(observed.run).toHaveBeenCalledOnce();
+  expect(historyLane.pending).toBe(1);
+  expect(isSessionHistoryWorkerCold()).toBe(false);
+  reply.resolve({ ok: true, value: { kind: "prewarm" } });
+  await Promise.all([first, second]);
+  expect(historyLane.pending).toBe(0);
+  expect(observed.unregister).not.toHaveBeenCalled();
+
+  await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS - 1);
+  await prewarmSessionHistoryWorker(request.database);
+  expect(observed.run).toHaveBeenCalledOnce();
+  await vi.advanceTimersByTimeAsync(1);
+  expect(observed.rotate).toHaveBeenCalledOnce();
+  expect(observed.unregister).toHaveBeenCalledOnce();
+  expect(isSessionHistoryWorkerCold()).toBe(true);
+
+  observed.run.mockResolvedValue({ ok: true, value: { kind: "prewarm" } });
+  await prewarmSessionHistoryWorker(request.database);
+  expect(observed.run).toHaveBeenCalledTimes(2);
+});
+
+it("settles failed and revoked prewarms without rejecting callers", async () => {
+  const request = input();
+  observed.run.mockRejectedValueOnce(new Error("worker unavailable"));
+  await expect(prewarmSessionHistoryWorker(request.database)).resolves.toBeUndefined();
+  expect(historyLane.pending).toBe(0);
+  expect(observed.rotate).toHaveBeenCalledOnce();
+
+  const reply = createDeferredCore<unknown>();
+  observed.run.mockReturnValueOnce(reply.promise);
+  const pending = prewarmSessionHistoryWorker(request.database);
+  const resource = observed.resources.at(-1)!;
+  resource.revoke();
+  reply.resolve({ ok: true, value: { kind: "prewarm" } });
+  await expect(pending).resolves.toBeUndefined();
+  await resource.close();
+  expect(historyLane.pending).toBe(0);
+  observed.run.mockResolvedValue({ ok: true, value: { kind: "prewarm" } });
+  await prewarmSessionHistoryWorker(request.database);
+  expect(observed.run).toHaveBeenCalledTimes(3);
 });
 
 it.runIf(!process.versions.bun)(

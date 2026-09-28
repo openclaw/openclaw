@@ -69,7 +69,7 @@ type GatewayRestartCoordinatorOptions = {
   restartRecoveryAvailable: boolean;
 } & Pick<
   ReturnType<typeof createGatewayActiveWorkTracker>,
-  "getActiveCounts" | "formatActiveDetails" | "formatDeferredWorkStatus" | "formatTaskBlockers"
+  "getActiveCounts" | "formatActiveDetails" | "formatDeferredWorkStatus"
 >;
 
 class GatewayRestartTransaction {
@@ -413,12 +413,6 @@ class GatewayRestartTransaction {
         params.logReload.warn(
           `config change requires gateway restart (${reasons}) — deferring until ${initialDetails.join(", ")} complete`,
         );
-        const taskBlockers = this.options.formatTaskBlockers();
-        if (taskBlockers) {
-          params.logReload.warn(
-            `restart blocked by active background task run(s): ${taskBlockers}`,
-          );
-        }
       } else {
         params.logReload.warn(`config change requires gateway restart (${reasons}) — preparing`);
       }

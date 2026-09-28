@@ -433,20 +433,23 @@ function executeRetainedOpenClawStateRead(
     let prepared: AsyncPreparedSqliteReadOnlyLocation | undefined;
     let expectedIdentity: string | undefined;
     let releasePreparedSource: (() => void) | undefined;
+    const assertReadLifetime = () => {
+      readSignal.throwIfAborted();
+      context.maintenanceScope?.assertAdmission();
+      context.admission.assertCurrent();
+      borrowed?.assertCurrent();
+      if (expectedIdentity !== undefined) {
+        assertExistingDatabaseIdentity(pathname, expectedIdentity);
+      }
+      if (scopes.some((scope) => !scope.active)) {
+        throw new Error("Shared-state read scope is closed");
+      }
+    };
     const authority: OpenClawStateReadAuthority = {
       signal: readSignal,
       assertCurrent() {
-        readSignal.throwIfAborted();
-        context.maintenanceScope?.assertAdmission();
-        context.admission.assertCurrent();
-        borrowed?.assertCurrent();
-        if (expectedIdentity !== undefined) {
-          assertExistingDatabaseIdentity(pathname, expectedIdentity);
-        }
-        if (scopes.some((scope) => !scope.active)) {
-          throw new Error("Shared-state read scope is closed");
-        }
-        openClawStateDatabaseCache.assertOpenClawStateDatabaseOpenAllowed(pathname);
+        assertReadLifetime();
+        openClawStateDatabaseCache.assertOpenClawStateDatabaseOpenAllowed(pathname, "cached-read");
       },
     };
     const cleanup = (): Promise<void> => {
@@ -510,16 +513,17 @@ function executeRetainedOpenClawStateRead(
       scope.resources.add(resource);
     }
     const read = async () => {
-      authority.assertCurrent();
+      assertReadLifetime();
       let nativeSource: OpenClawStateDatabase | undefined;
-      if (!snapshot) {
-        if (preserveArtifacts) {
-          const native = borrowOpenClawStateDatabaseForAsyncRead(pathname);
-          borrowed = native;
-          nativeSource = native?.database;
-        } else {
-          borrowed = retainOpenClawStateDatabaseForIndependentRead(pathname);
-        }
+      if (snapshot) {
+        openClawStateDatabaseCache.assertOpenClawStateDatabaseOpenAllowed(pathname, "cached-read");
+      } else if (preserveArtifacts) {
+        const native = borrowOpenClawStateDatabaseForAsyncRead(pathname, "cached-read");
+        borrowed = native;
+        nativeSource = native?.database;
+      } else {
+        // The retainer checks database access before acquiring this read's native custody.
+        borrowed = retainOpenClawStateDatabaseForIndependentRead(pathname, "cached-read");
       }
       if (!snapshot && !borrowed && !existingPathOrUndefined(pathname)) {
         return undefined;
@@ -547,11 +551,12 @@ function executeRetainedOpenClawStateRead(
         expectedIdentity = context.admission.identity.key;
       }
       if (prepared) {
+        authority.assertCurrent();
         releasePreparedSource = retainSnapshotTempDirectory(
           prepared.cleanupRoot ?? path.dirname(prepared.location),
         );
       }
-      authority.assertCurrent();
+      // The transport checks current authority at dispatch, including after a queue wait.
       receipt.phase = "unobserved";
       const outcome = await transport.read(
         {

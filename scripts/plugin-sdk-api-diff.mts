@@ -326,7 +326,12 @@ async function main(): Promise<void> {
         addedWorktrees.push(worktree);
         git(worktree, ["sparse-checkout", "set", "src", "packages", "patches", "scripts"]);
         git(worktree, ["checkout", "--detach", commit]);
+        const installStartedAt = performance.now();
+        console.error(`[plugin-sdk-api-diff] ${commit} install started`);
         await installRevisionDependencies(worktree, abortController.signal);
+        console.error(
+          `[plugin-sdk-api-diff] ${commit} install completed in ${Math.round(performance.now() - installStartedAt)}ms`,
+        );
         return worktree;
       }),
     });
@@ -347,7 +352,12 @@ async function main(): Promise<void> {
           throw new Error(`Plugin SDK API worktree is missing for ${commit}`);
         }
         const renderPath = path.join(temporaryRoot, `${commit}.json`);
+        const renderStartedAt = performance.now();
+        console.error(`[plugin-sdk-api-diff] ${commit} render started`);
         await renderRevision(repoRoot, worktree, renderPath, abortController.signal);
+        console.error(
+          `[plugin-sdk-api-diff] ${commit} render completed in ${Math.round(performance.now() - renderStartedAt)}ms`,
+        );
         surfaces.set(commit, parsePluginSdkApiDiffSurface(await fs.readFile(renderPath, "utf8")));
       }),
     });

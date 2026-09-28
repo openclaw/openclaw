@@ -62,14 +62,14 @@ warnings, workspace status, gateway auth and health, and supervisors.
   <Accordion title="10. systemd linger (Linux)">
     If running as a systemd user service, doctor ensures lingering is enabled so the gateway stays alive after logout.
   </Accordion>
-  <Accordion title="11. Workspace status (skills, plugins, and TaskFlows)">
+  <a id="11-workspace-status-skills-plugins-and-taskflows" />
+  <Accordion title="11. Workspace status (skills and plugins)">
     Doctor prints problems and actions for the default agent, not healthy-state inventory:
 
     - **Skills**: lists allowed but unusable skill names; use `openclaw skills check` for requirement details and full counts.
     - **Plugins**: reports only errored plugin IDs; use `openclaw plugins list` for loaded, imported, disabled, and bundle-plugin inventory.
     - **Plugin compatibility warnings**: flags plugins that have compatibility issues with the current runtime.
     - **Plugin diagnostics**: surfaces any load-time warnings or errors emitted by the plugin registry.
-    - **TaskFlow recovery**: surfaces suspicious managed TaskFlows that need manual inspection or cancellation.
     - **Claude CLI**: reports only binary, authentication, profile, workspace, or project-directory problems; healthy probe details are omitted.
 
   </Accordion>
@@ -187,7 +187,7 @@ warnings, workspace status, gateway auth and health, and supervisors.
 
   </Accordion>
   <Accordion title="13. Gateway health check + restart">
-    Guided Doctor runs a health check and can offer recovery for a local Gateway, subject to service ownership and confirmation. A failed remote health check does not trigger local service recovery, even when the remote URL is a loopback SSH tunnel. Check the remote connection and recover the Gateway on its host. Explicit repair maintenance only resumes the matching service it stopped. A loaded, enabled macOS job between respawns is not treated as an intentionally stopped service.
+    Guided Doctor runs a health check and can offer recovery for a local Gateway, subject to service ownership and confirmation. A failed remote health check does not trigger local service recovery, even when the remote URL is a loopback SSH tunnel. Check the remote connection and recover the Gateway on its host. Explicit repair maintenance resumes the matching service it stopped. After successful standalone `openclaw doctor --fix`, it also starts and verifies an already-stopped managed Gateway whose service targets the current installation. Update-time Doctor leaves activation with the updater. A loaded, enabled macOS job between respawns is not treated as an intentionally stopped service.
   </Accordion>
   <Accordion title="13b. Memory search readiness">
     Doctor checks whether the configured memory search embedding provider is ready for the default agent. The behavior depends on the configured provider:
@@ -242,7 +242,7 @@ warnings, workspace status, gateway auth and health, and supervisors.
     Doctor inspects the service runtime (PID, last exit status) and warns when the service is installed but not actually running. It also checks for port collisions on the gateway port (default `18789`) and reports likely causes (gateway already running, SSH tunnel).
   </Accordion>
   <Accordion title="17. Gateway runtime best practices">
-    Doctor accepts Bun 1.4+ runtimes that provide WAL-reset-safe `node:sqlite` and warns when the gateway service runs on an older or unsafe Bun or a version-managed Node path (`nvm`, `fnm`, `volta`, `asdf`, etc.). Repairs migrate unsupported Bun services to Node. Version-manager paths can break after upgrades because the service does not load your shell init. Doctor offers to migrate to a system Node install when available (Homebrew/apt/choco).
+    Doctor accepts Bun 1.4+ runtimes that provide WAL-reset-safe `node:sqlite` and warns when the gateway service runs on an older or unsafe Bun or a version-managed Node path (`nvm`, `fnm`, `volta`, `asdf`, etc.). Supported Bun services, whether recorded or pinned, are retained. A pinned runtime is never migrated. Only an unpinned, unsupported Bun is offered migration to a supported system Node, with interactive approval. Update-driven Doctor runs never migrate the runtime. If no supported Node is available, the service stays on Bun and Doctor warns. Version-manager paths can break after upgrades because the service does not load your shell init. Doctor can offer to migrate an unpinned version-managed Node to a supported system Node install (Homebrew/apt/choco).
 
     Explicit runtime-path pins are retained during service repair.
     Doctor still checks their runtime capabilities, but does not migrate a valid

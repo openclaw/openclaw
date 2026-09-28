@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "How `openclaw update` switches channels, checks the new version, hands off the restart, and updates a Git checkout"
 read_when:
   - You want to know what an update does before you run one
@@ -181,9 +182,9 @@ Path aliases that resolve to a running package's bundled plugin use the staged
 bundled plugin with the same ID when
 available, preserving bundled trust. External path installs keep their existing
 classification. The live plugin files and host links stay unchanged. Channels,
-cron, automatic updates, background task maintenance, and other side services are
-suppressed in this canary. Copied task records remain available for startup
-validation without recovery or pruning.
+cron, automatic updates, and other side services are suppressed in this canary.
+The copied databases undergo the same schema checks and migrations without
+reviving the removed Tasks registry.
 The canary also defers session catalog hydration, worker recovery, and startup
 maintenance until activation, recording a warning. Required configuration,
 database ownership, schema, and migration checks still run before readiness;
@@ -524,6 +525,15 @@ largest family and 64 MiB for restoration while migrated originals remain.
 Hard-linked database or journal files refuse before migration because restoring
 one pathname cannot safely restore every alias.
 
+Settled, verified successful activation removes the current update's database
+snapshots, together with the old package backup. Rollback, failed or unverified
+completion, and restore refusal keep them. Cleanup failures produce a maintenance warning with
+the retained path. Older snapshot directories remain untouched because their
+ownership and successful outcome cannot be proven from existing receipts;
+Doctor reports older npm snapshot directories with their size and removal command.
+Confirm no update is in progress and inspect their update reports and recovery
+state before removing them manually.
+
 If the Gateway was confirmed stopped during capture and the update fails before
 the candidate is allowed to start, restoration also requires matching database
 write evidence. Doctor checks the captured file generations before migrations
@@ -552,7 +562,8 @@ provided by this check.
 If Doctor cannot provide write evidence, rollback requires the last verified
 database generations to remain unchanged.
 Snapshots taken while a Gateway may still be writing, including with
-`--no-restart`, remain available for manual recovery with a warning. They never
+`--no-restart`, remain available for manual recovery with a warning until verified
+successful activation. They never
 become eligible for automatic restoration just because that Gateway later exits.
 
 This protection belongs to the updater already running. Installing it does not

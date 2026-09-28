@@ -12,6 +12,14 @@ import type { ManagedGatewayConfigReloaderParams } from "./server-reload-contrac
 type ConfigWriteListener = (event: ConfigWriteNotification) => void;
 type ConfigWriteListenerRef = { current: ConfigWriteListener | null };
 
+export function createTestConfigRevisionProjector(): ManagedGatewayConfigReloaderParams["configRevisionProjector"] {
+  return {
+    projectRawHash: (hash) => hash,
+    projectResolvedHash: (hash) => hash,
+    hashResponseSessionBearer: () => "unused-test-scope",
+  };
+}
+
 export function createCronRestartPlan(): GatewayReloadPlan {
   return createHotTailPlan({
     changedPaths: ["cron"],

@@ -5,6 +5,7 @@ import {
 import type { BrowserTabOwnership } from "./browser/client.types.js";
 import type * as sessionTabRegistry from "./browser/session-tab-registry.js";
 import type { BrowserSessionTabRoute } from "./browser/session-tab-route.js";
+import type { BrowserSessionTabAuthority } from "./browser/session-tab-store.js";
 
 type SessionTabRegistry = Pick<
   typeof sessionTabRegistry,
@@ -54,6 +55,7 @@ async function trackOpenedBrowserTab(params: {
   fallbackProfile?: string;
   route: BrowserSessionTabRoute;
   track: SessionTabRegistry["trackSessionBrowserTab"];
+  authority?: BrowserSessionTabAuthority;
   closeTab: (targetId: string, profile?: string) => Promise<void>;
 }): Promise<void> {
   const opened = readOpenedTab(params.result);
@@ -74,6 +76,7 @@ async function trackOpenedBrowserTab(params: {
           ? undefined
           : opened.ownership,
       aliases: opened.aliases,
+      ...(params.authority ? { authority: params.authority } : {}),
     });
   } catch (trackingError) {
     if (!opened.targetId) {
@@ -105,6 +108,7 @@ export function createBrowserToolSessionTabs(params: {
   routeProfile?: () => string | undefined;
   isHostFallbackActive?: () => boolean;
   registry: SessionTabRegistry;
+  authority?: BrowserSessionTabAuthority;
 }) {
   const trackedRoute = (): BrowserSessionTabRoute =>
     params.nodeRoute && !params.isHostFallbackActive?.()
@@ -123,6 +127,7 @@ export function createBrowserToolSessionTabs(params: {
       targetId,
       route,
       profile: trackedProfile(route),
+      ...(params.authority ? { authority: params.authority } : {}),
     };
   };
   return {
@@ -148,6 +153,7 @@ export function createBrowserToolSessionTabs(params: {
         fallbackProfile: profile,
         route,
         track: params.registry.trackSessionBrowserTab,
+        authority: params.authority,
         closeTab,
       });
     },

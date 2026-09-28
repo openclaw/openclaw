@@ -150,17 +150,6 @@ function inspectOwnershipThroughConnection(
   }
 }
 
-function inspectJournalAwarePublicOwnership(
-  databasePath: string,
-): OpenClawExternalStateOwnership | null {
-  const prepared = prepareSqliteReadOnlyLocationSync(databasePath);
-  try {
-    return inspectOwnershipThroughConnection(prepared.location, databasePath);
-  } finally {
-    prepared.cleanup();
-  }
-}
-
 /** Inspect one resolved state database path without mutating its state tree. */
 export function inspectOpenClawStateOwnershipAtPath(
   databasePath: string,
@@ -169,7 +158,12 @@ export function inspectOpenClawStateOwnershipAtPath(
   if (!existsSync(resolvedPath)) {
     return null;
   }
-  return inspectJournalAwarePublicOwnership(resolvedPath);
+  const prepared = prepareSqliteReadOnlyLocationSync(resolvedPath);
+  try {
+    return inspectOwnershipThroughConnection(prepared.location, resolvedPath);
+  } finally {
+    prepared.cleanup();
+  }
 }
 
 function assertOwnershipAllowsWrite(

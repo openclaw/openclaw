@@ -19,6 +19,8 @@ import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isStateDatabaseReadAdmissionInvalidatedError } from "./openclaw-state-db-async-lifecycle.js";
 import {
+  captureOpenClawStateDatabaseReadAdmission,
+  openClawStateDatabaseCache,
   publishOpenClawStateDatabaseWorkerAdmission,
   registerOpenClawStateDatabaseAsyncResource,
   registerOpenClawStateDatabaseLifecycleListener,
@@ -33,6 +35,7 @@ import type {
   OpenClawStateWorkerOperationOptions as OperationOptions,
 } from "./openclaw-state-worker-contract.js";
 import {
+  assertOpenClawStateWorkerActorPath,
   captureOpenClawStateWorkerOpeningGuard,
   runWithCapturedWorkerContext,
 } from "./openclaw-state-worker-operation.js";
@@ -304,6 +307,66 @@ function createSharedStateWorkerOwner() {
     }
     await attempt.pending;
   };
+  const inspectInvalidEntry = (
+    entry: Entry,
+  ): { kind: "actor" | "client"; error: unknown } | undefined => {
+    const actor = entry.actor;
+    let kind: "actor" | "client" = "actor";
+    try {
+      if (entry.bound && actor) {
+        assertOpenClawStateWorkerActorPath(actor);
+        if (entry.store && isSqliteWorkerStoreAvailable(entry.store)) {
+          kind = "client";
+        }
+      }
+      entry.databaseAdmission.assertCurrent();
+    } catch (error) {
+      if (!isStateDatabaseReadAdmissionInvalidatedError(error)) {
+        throw error;
+      }
+      // An intact path's invalidation affects the actor's whole physical generation.
+      if (
+        kind === "client" &&
+        openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity(
+          entry.context.admission.databasePath,
+        )?.key === actor?.key
+      ) {
+        kind = "actor";
+      }
+      return { kind, error };
+    }
+    return undefined;
+  };
+  const retireInvalidEntry = (entry: Entry): { pending: Promise<void> | undefined } | undefined => {
+    const invalid = inspectInvalidEntry(entry);
+    if (!invalid) {
+      return undefined;
+    }
+    if (invalid.kind === "actor") {
+      if (hasActiveActorOperations(entry)) {
+        throw invalid.error;
+      }
+      return {
+        pending: entry.opening.then(
+          () => {
+            if (hasActiveActorOperations(entry)) {
+              throw invalid.error;
+            }
+            return entry.actor
+              ? retireActor(entry.actor, entry.context.admission.identity)
+              : retire(entry);
+          },
+          () => retire(entry),
+        ),
+      };
+    }
+    if (!stores.has(entry)) {
+      return undefined;
+    }
+    const closing = retire(entry);
+    // The retirement owner joins this client after its callback can finish using healthy peers.
+    return { pending: entry.activeOperations === 0 ? closing : undefined };
+  };
   async function close(identity?: DatabasePathIdentity): Promise<void> {
     for (const entry of stores.values()) {
       if (matches(entry, identity)) {
@@ -383,28 +446,21 @@ function createSharedStateWorkerOwner() {
       }
       let entry: Entry | undefined;
       for (;;) {
-        for (const candidate of stores) {
+        for (const candidate of new Set([...stores, ...retiring.keys()])) {
           if (!matches(candidate, admission.identity)) {
             continue;
           }
-          try {
-            // Other scopes can share this actor; an inode match cannot renew its original admission.
-            candidate.context.admission.assertCurrent();
-          } catch (error) {
-            if (
-              !isStateDatabaseReadAdmissionInvalidatedError(error) ||
-              hasActiveActorOperations(candidate)
-            ) {
-              throw error;
+          const retirement = retireInvalidEntry(candidate);
+          if (retirement) {
+            if (retirement.pending) {
+              await retirement.pending;
             }
-            await (candidate.actor
-              ? retireActor(candidate.actor, candidate.context.admission.identity)
-              : retire(candidate));
             return this.open(context, options);
           }
           if (
-            candidate.context.existingSchemaPath !== context.existingSchemaPath ||
-            candidate.source.moduleUrl.href !== source.moduleUrl.href
+            stores.has(candidate) &&
+            (candidate.context.existingSchemaPath !== context.existingSchemaPath ||
+              candidate.source.moduleUrl.href !== source.moduleUrl.href)
           ) {
             await retire(candidate);
             assertAdmission();
@@ -421,6 +477,9 @@ function createSharedStateWorkerOwner() {
             matches(retiringEntry, admission.identity) &&
             retiringEntry.context.maintenanceScope === context.maintenanceScope
           ) {
+            if (inspectInvalidEntry(retiringEntry)?.kind === "client") {
+              continue;
+            }
             if (!attempt.pending) {
               // Another retained owner may have completed the failed admission's cleanup.
               if (!hasPendingCleanup(retiringEntry)) {
@@ -468,6 +527,11 @@ function createSharedStateWorkerOwner() {
         }
       }
       if (!entry) {
+        assertAdmission();
+        // Retain the database generation separately from the caller's lexical
+        // schema scope, which may end while this actor remains reusable.
+        const databaseAdmission = captureOpenClawStateDatabaseReadAdmission(admission.databasePath);
+        assertAdmission();
         const openingGuard = captureOpenClawStateWorkerOpeningGuard(context, assertCurrent);
         const open = async () => {
           try {
@@ -494,6 +558,7 @@ function createSharedStateWorkerOwner() {
         const admitted: Entry = {
           source,
           context,
+          databaseAdmission,
           openingAdmission: openingGuard.admission,
           existingOnly,
           activeOperations: 0,
@@ -577,6 +642,13 @@ function createSharedStateWorkerOwner() {
           );
         }
         throw error;
+      }
+      const retirement = retireInvalidEntry(entry);
+      if (retirement) {
+        if (retirement.pending) {
+          await retirement.pending;
+        }
+        return this.open(context, options);
       }
       stores.delete(entry);
       stores.add(entry);

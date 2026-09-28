@@ -26,6 +26,7 @@ import type {
   PendingBridgeRequest,
   SettledBridgeRequest,
 } from "./code-mode-runtime.js";
+import { recordCodeModeToolOutcome } from "./code-mode-tool-outcome.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolSearchRuntime } from "./tool-search-runtime.js";
@@ -623,7 +624,7 @@ export function storeSuspendedRun(
   // A result that cannot expose its continuation must not leave an unreachable parked cell.
   activeRuns.set(runId, state);
   scheduleActiveRunExpiry();
-  return result;
+  return recordCodeModeToolOutcome(result, result, params.pending);
 }
 
 export function codeModeAbortedResult(params: {

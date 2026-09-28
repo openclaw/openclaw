@@ -5,6 +5,10 @@ import {
   SUBAGENT_PRIVATE_COMPLETION_INSTRUCTION,
 } from "../completion/subagent-completion-instructions.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import {
+  buildSubagentRestartRecoveryRoster,
+  SUBAGENT_RESTART_RECOVERY_INSTRUCTION,
+} from "../subagent-restart-recovery-prompt.js";
 
 const REQUESTER_SETTLE_WAKE_ROUTE_NOTICE_MAX_CHARS = 1_024;
 const ROUTE_NOTICE_TRUNCATION = "\n[model-route changes truncated]";
@@ -13,7 +17,8 @@ export function buildRequesterSettleWakeMessage(params: {
   findings?: string;
   requireVisibleReply: boolean;
   parentOnly?: boolean;
-  children: readonly Pick<SubagentRunRecord, "completion">[];
+  children: readonly SubagentRunRecord[];
+  recoveryChildren: readonly SubagentRunRecord[];
   preserveModelRouteNotice: boolean;
 }): string {
   // The scheduling row need not be the rerouted child. Keep every current
@@ -34,11 +39,15 @@ export function buildRequesterSettleWakeMessage(params: {
     routeNotices.length > REQUESTER_SETTLE_WAKE_ROUTE_NOTICE_MAX_CHARS
       ? `${truncateUtf16Safe(routeNotices, REQUESTER_SETTLE_WAKE_ROUTE_NOTICE_MAX_CHARS - ROUTE_NOTICE_TRUNCATION.length)}${ROUTE_NOTICE_TRUNCATION}`
       : routeNotices;
+  const recoveryRoster = buildSubagentRestartRecoveryRoster(params.recoveryChildren);
   return [
     "[Subagent Context] Every subagent in this batch has now settled, including its descendants.",
     "[Subagent Context] Do not keep waiting or call sessions_yield again for this batch; no further completion events will arrive for it. Other batches may still be running.",
     // Private completion guidance already includes the shared outcome policy.
     ...(params.parentOnly ? [] : [`[Subagent Context] ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION}`]),
+    ...(recoveryRoster
+      ? [`[Subagent Context] ${SUBAGENT_RESTART_RECOVERY_INSTRUCTION}`, recoveryRoster]
+      : []),
     params.parentOnly
       ? `[Subagent Context] ${SUBAGENT_PRIVATE_COMPLETION_INSTRUCTION}`
       : params.requireVisibleReply

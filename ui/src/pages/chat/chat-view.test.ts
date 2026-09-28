@@ -655,12 +655,10 @@ describe("chat typing status", () => {
 
     expect(indicator?.closest('[data-virtual-row-key="presence:typing"]')).not.toBeNull();
     expect(indicator?.closest(".agent-chat__composer-shell")).toBeNull();
-    expect(
-      indicator?.querySelectorAll(
-        ".chat-message-avatar-anchor > :is(.chat-avatar, .chat-avatar-slot), .chat-group-footer .chat-author-avatar",
-      ),
-    ).toHaveLength(expectedAvatars);
-    expect(indicator?.querySelectorAll(".agent-chat__typing-state")).toHaveLength(actors.length);
+    expect(indicator?.querySelectorAll("[role=img]")).toHaveLength(expectedAvatars);
+    expect(indicator?.querySelectorAll(".agent-chat__typing-state")).toHaveLength(
+      Math.min(2, actors.length),
+    );
     expect(
       indicator?.querySelector(".agent-chat__typing-bubble")?.getAttribute("aria-hidden"),
     ).toBe("true");
@@ -705,38 +703,6 @@ describe("chat typing status", () => {
     expect(container.querySelector(".agent-chat__typing-indicator--outside")).not.toBeNull();
   });
 });
-
-function createBackgroundTasks(
-  overrides: Partial<NonNullable<ChatProps["backgroundTasks"]>> = {},
-): NonNullable<ChatProps["backgroundTasks"]> {
-  return {
-    sessionKey: "agent:main:main",
-    statusRowId: "chat-tasks-status-test",
-    collapsed: false,
-    narrowLayout: false,
-    connected: true,
-    canCancel: false,
-    loading: false,
-    error: null,
-    tasks: [],
-    activeCount: 0,
-    subagentActivity: {
-      rows: [],
-      overflowCount: 0,
-      taskIds: new Set<string>(),
-    },
-    cancellingTaskIds: new Set<string>(),
-    finishedCollapsed: false,
-    taskDetails: new Map(),
-    taskDetailErrors: new Map(),
-    taskDetailLoadingIds: new Set<string>(),
-    onToggleCollapsed: () => undefined,
-    onToggleFinished: () => undefined,
-    onRefresh: () => undefined,
-    onCancel: () => undefined,
-    ...overrides,
-  };
-}
 
 describe("chat run error", () => {
   it.each(["run", "request"])(
@@ -2210,34 +2176,6 @@ describe("chat composer workbench", () => {
     fallbackTrigger.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(openSpy).toHaveBeenCalledWith(src, "_blank", "noopener,noreferrer");
     openSpy.mockRestore();
-  });
-
-  it("shows the running-tasks status row after the turn settles, not while working", () => {
-    const backgroundTasks = createBackgroundTasks({
-      collapsed: true,
-      tasks: [
-        {
-          id: "task-1",
-          taskId: "task-1",
-          status: "running" as const,
-          agentId: "main",
-          createdAt: 1_000,
-          startedAt: 1_500,
-        },
-      ],
-    });
-    const messages = [{ role: "assistant", content: "done", timestamp: 1 }];
-
-    const settled = renderChatView({ messages, backgroundTasks });
-    const row = settled.querySelector(".chat-tasks-status");
-    expect(row).not.toBeNull();
-    expect(row?.querySelector(".chat-tasks-status__link")?.textContent?.trim()).toBe(
-      "1 running task",
-    );
-
-    // The working claw owns the signal while the run is live.
-    const working = renderChatView({ messages, backgroundTasks, canAbort: true, runActive: true });
-    expect(working.querySelector(".chat-tasks-status")).toBeNull();
   });
 });
 
@@ -5168,26 +5106,23 @@ describe("chat attachment picker", () => {
     expect(clickInput).toHaveBeenCalledTimes(1);
   });
 
-  it("opens the camera input from the attachment menu and attaches the captured photo", async () => {
+  it("opens the scoped camera dialog instead of a file picker and attaches its photo", async () => {
     const onAttachmentsChange = vi.fn();
     const container = renderChatView({ onAttachmentsChange });
-    const input = requireAttachmentInput(
-      container,
-      ".agent-chat__camera-input",
-      "camera capture input",
-    );
+    const camera = container.querySelector("openclaw-chat-camera-capture");
+    if (!camera) {
+      throw new Error("Missing camera capture dialog");
+    }
     const cameraButton = getAttachmentMenuOption(container, t("chat.composer.takePhoto"));
-    const clickInput = vi.spyOn(input, "click").mockImplementation(() => undefined);
-
-    expect(input.accept).toBe("image/*");
-    expect(input.getAttribute("capture")).toBe("environment");
-    expect(cameraButton).toBeInstanceOf(HTMLElement);
-    expect(container.querySelector(".agent-chat__camera-btn")).toBeNull();
+    const show = vi.spyOn(camera, "show").mockImplementation(() => undefined);
+    const fileClick = vi.spyOn(HTMLInputElement.prototype, "click");
+    expect(container.querySelector(".agent-chat__camera-input")).not.toBeNull();
     selectAttachmentMenuOption(cameraButton);
-    expect(clickInput).toHaveBeenCalledTimes(1);
+    expect(show).toHaveBeenCalledOnce();
+    expect(fileClick).not.toHaveBeenCalled();
 
     const photo = new File(["photo"], "camera.jpg", { type: "image/jpeg" });
-    selectFile(input, photo);
+    camera.onCapture?.(photo);
 
     await waitForFast(() => {
       const attachments = requireFirstAttachmentsChange(onAttachmentsChange);
@@ -6792,7 +6727,7 @@ describe("chat model controls", () => {
           '[data-chat-model-provider-group="anthropic"] [data-chat-model-provider-toggle]',
         )!
         .click();
-      details!.dispatchEvent(new KeyboardEvent("keydown", { key: "1", bubbles: true }));
+      details!.dispatchEvent(new KeyboardEvent("keydown", { key: "3", bubbles: true }));
       expect(onModelSelect).toHaveBeenCalledExactlyOnceWith(
         "anthropic/claude-sonnet-4-6",
         "main",

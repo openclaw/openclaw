@@ -40,6 +40,8 @@ const mocks = vi.hoisted(() => {
     startSshPortForward: vi.fn(async (_opts?: unknown) => ({
       localPort: 18789,
       pid: 123,
+      closed: new Promise<void>(() => {}),
+      isActive: () => true,
       stop: sshStop,
     })),
     inspectGatewayTlsCertificate: vi.fn(
@@ -262,18 +264,7 @@ function asRuntimeEnv(runtime: ReturnType<typeof createRuntimeCapture>["runtime"
   return runtime as unknown as RuntimeEnv;
 }
 
-type ProbeGatewayCall = {
-  auth?: {
-    password?: string;
-    token?: string;
-  };
-  preauthHandshakeTimeoutMs?: number;
-  originScopedDeviceAuth?: boolean;
-  suppressStoredDeviceAuth?: boolean;
-  timeoutMs?: number;
-  tlsFingerprint?: string;
-  url?: string;
-};
+type ProbeGatewayCall = Parameters<typeof import("../gateway/probe.js").probeGateway>[0];
 
 function readProbeCalls(): ProbeGatewayCall[] {
   return probeGateway.mock.calls.map(([call]) => call as ProbeGatewayCall);
@@ -928,19 +919,9 @@ describe("gateway-status command", () => {
 
     expect(startSshPortForward).toHaveBeenCalledTimes(1);
     expect(probeGateway).toHaveBeenCalled();
-    const tunnelCall = probeGateway.mock.calls.find(
-      (call) => typeof call?.[0]?.url === "string" && call[0].url.startsWith("ws://127.0.0.1:"),
-    )?.[0] as
-      | {
-          auth?: { token?: string };
-          originScopedDeviceAuth?: boolean;
-          signal?: AbortSignal;
-          suppressStoredDeviceAuth?: boolean;
-        }
-      | undefined;
+    const tunnelCall = readProbeCalls().find((call) => call.url.startsWith("ws://127.0.0.1:"));
     expect(tunnelCall?.auth?.token).toBe("rtok");
-    expect(tunnelCall?.originScopedDeviceAuth).toBeUndefined();
-    expect(tunnelCall?.suppressStoredDeviceAuth).toBe(true);
+    expect(tunnelCall?.sshTunnel).toMatchObject({ target: "me@studio", remotePort: 18789 });
     const tunnelSignal = requireSshForwardCall().signal;
     expect(tunnelSignal).toBeInstanceOf(AbortSignal);
     expect(tunnelCall?.signal).toBe(tunnelSignal);

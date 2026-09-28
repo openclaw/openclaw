@@ -200,8 +200,10 @@ For nonpublish work, explicitly select
 publication selection; profile and filters still select the actual coverage.
 
 GitHub workflow dispatch refs must be branches or tags, not raw commit SHAs. The
-helper pushes a temporary `release-ci/<sha>-...` branch at a trusted Tooling
-SHA, passes the requested Validation SHA through `ref` and `expected_sha`, reuses
+helper first proves GitHub serves the exact Validation SHA by bare-SHA fetch in a
+fresh temporary repository, including in dry runs. It then pushes one immutable
+`release-ci/*` workflow ref at the trusted Tooling SHA, passes the exact Validation
+SHA through `ref` and `expected_sha`, reuses
 strict exact-target evidence when available, and verifies every child workflow
 `headSha` matches the Tooling SHA. Record that Tooling SHA once and never refresh
 it from moving `main`. Regular release branches accept only their final package

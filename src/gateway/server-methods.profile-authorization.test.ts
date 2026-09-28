@@ -540,7 +540,6 @@ describe("Gateway pending-profile authorization", () => {
       "skills.library.import",
       "skills.library.upload",
       "taskSuggestions.list",
-      "tasks.list",
       "users.github.status",
       "users.github.authorize.start",
       "users.github.authorize.poll",

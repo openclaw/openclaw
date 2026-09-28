@@ -14,6 +14,7 @@ import {
   isSessionRouteId,
   pathForAgentPanel,
   pathForRoute,
+  locationForRoute,
   pluginSlugCandidate,
   pluginTabSlugFromPath,
   routeIdFromPath,
@@ -162,12 +163,16 @@ export function createApplicationRouter(): ApplicationRouter {
   return {
     ...router,
     navigate: (routeId, context, options, location) =>
-      router.navigate(
-        routeId,
-        context,
-        options,
-        location ? canonicalRouteLocation(routeId, location, context.basePath) : undefined,
-      ),
+      context.nativeConversation?.interceptNavigation(
+        location ?? locationForRoute(routeId, context.basePath),
+      )
+        ? Promise.resolve()
+        : router.navigate(
+            routeId,
+            context,
+            options,
+            location ? canonicalRouteLocation(routeId, location, context.basePath) : undefined,
+          ),
     routeIdFromPath,
   };
 }
@@ -423,6 +428,13 @@ export async function startApplicationRouter(
         });
       });
       const stopHistory = history.listen((next) => {
+        if (context.nativeConversation?.interceptNavigation(next)) {
+          const current = router.getState().location;
+          if (current) {
+            history.replace(current);
+          }
+          return;
+        }
         const canonical = canonicalRouteLocation(
           routeIdFromPath(next.pathname, basePath),
           next,

@@ -341,27 +341,19 @@ function createStreamFnWithExtraParams(
     streamParams.cachedContent = cachedContent.trim();
   }
 
-  // Resolve sampling / repetition params and add to streamParams
-  // so transport layers can filter by API type (e.g. openai-responses skips penalty params).
-  // Resolve aliased params: camelCase (runtime/request) checked first so
-  // per-request gateway overrides take priority over configured snake_case values.
-  const resolvedFrequencyPenalty = resolveAliasedParamValue(
-    [extraParams],
+  // Camel-case request overrides win over configured snake-case penalties.
+  // Transports still decide which API accepts each sampling parameter.
+  for (const keys of [
     ["frequencyPenalty", "frequency_penalty"],
-  );
-  const resolvedPresencePenalty = resolveAliasedParamValue(
-    [extraParams],
     ["presencePenalty", "presence_penalty"],
-  );
-  const resolvedSeed = extraParams.seed;
-  if (typeof resolvedFrequencyPenalty === "number") {
-    streamParams.frequencyPenalty = resolvedFrequencyPenalty;
+  ] as const) {
+    const value = resolveAliasedParamValue([extraParams], keys);
+    if (typeof value === "number") {
+      streamParams[keys[0]] = value;
+    }
   }
-  if (typeof resolvedPresencePenalty === "number") {
-    streamParams.presencePenalty = resolvedPresencePenalty;
-  }
-  if (typeof resolvedSeed === "number") {
-    streamParams.seed = resolvedSeed;
+  if (typeof extraParams.seed === "number") {
+    streamParams.seed = extraParams.seed;
   }
   const resolvedStop = normalizeStopSequences(extraParams.stop);
   if (resolvedStop) {
@@ -387,7 +379,7 @@ function createStreamFnWithExtraParams(
   }
 
   const underlying = requireBaseStreamFn(baseStreamFn);
-  const wrappedStreamFn: StreamFn = (callModel, context, options) => {
+  return (callModel, context, options) => {
     const cacheRetention = resolveCacheRetention(
       extraParams,
       provider,
@@ -407,8 +399,6 @@ function createStreamFnWithExtraParams(
       ...(effectiveCacheRetention ? { cacheRetention: effectiveCacheRetention } : {}),
     });
   };
-
-  return wrappedStreamFn;
 }
 
 function canonicalizeExtraParamAlias(

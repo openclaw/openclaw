@@ -477,6 +477,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 
 .login-gate__body {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 20px;
 }
 
@@ -536,6 +537,7 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 .login-gate__lede,
 .login-gate__failure-summary {
   margin: 0;
+  overflow-wrap: anywhere;
   font-size: 14px;
   line-height: 1.5;
   color: var(--muted);
@@ -858,13 +860,10 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   font-size: 12px;
 }
 
-/* Phones (matches the layout.mobile.css breakpoint). The gate renders outside
-   the shell, so it needs its own safe-area padding for notch/home-bar overlap
-   with viewport-fit=cover. */
+/* The outer app owns safe areas for the login gate as well as the shell. */
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .login-gate {
-    padding: max(16px, var(--safe-area-top)) max(12px, var(--safe-area-right))
-      max(16px, var(--safe-area-bottom)) max(12px, var(--safe-area-left));
+    padding: 16px var(--chat-mobile-edge-inset);
   }
 
   .login-gate__card {
@@ -903,15 +902,6 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 
   .login-gate__connection-cred {
     display: none;
-  }
-}
-
-/* The standalone body already owns safe-area insets. Reusing them inside the
-   gate would double notch/home-bar spacing and shrink its scroll viewport. */
-@media (display-mode: standalone) and (max-width: 768px),
-  (display-mode: standalone) and (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  .login-gate {
-    padding: 16px 12px;
   }
 }
 
@@ -1332,7 +1322,7 @@ openclaw-toast-host[data-toast-placement="shell"]
  * Keep this opt-in so anchored notices and the shell's top placement stay intact. */
 .app-toast--bottom {
   top: auto;
-  bottom: calc(20px + var(--safe-area-bottom));
+  bottom: calc(100% - var(--shell-canvas-height) + 20px + var(--shell-safe-area-bottom));
   transition:
     opacity 180ms ease-out,
     translate 180ms ease-out;

@@ -1,3 +1,34 @@
+// Schema-bearing containers shared by the draft-07 through 2020-12 walkers.
+export const SCHEMA_MAP_KEYS = new Set([
+  "$defs",
+  "definitions",
+  "dependentSchemas",
+  // Draft-07 dependencies mix schemas with property-name arrays. Stripping
+  // leaves the string entries in those arrays unchanged.
+  "dependencies",
+  "patternProperties",
+  "properties",
+]);
+
+/** Containers whose value is a single nested schema. */
+export const SCHEMA_OBJECT_KEYS = new Set([
+  "additionalItems",
+  "additionalProperties",
+  "contains",
+  "contentSchema",
+  "else",
+  "if",
+  "items",
+  "not",
+  "propertyNames",
+  "then",
+  "unevaluatedItems",
+  "unevaluatedProperties",
+]);
+
+/** Containers whose value is a list of nested schemas. */
+export const SCHEMA_ARRAY_KEYS = new Set(["allOf", "anyOf", "items", "oneOf", "prefixItems"]);
+
 export type SchemaWalk = Generator<SchemaWalk, unknown, unknown>;
 
 /** Resume child schema walks on a heap stack, never through recursive yield delegation. */

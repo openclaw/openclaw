@@ -87,6 +87,18 @@ vi.mock("openclaw/plugin-sdk/proxy-capture", async (importOriginal) => ({
   },
 }));
 
+const fetchHost = vi.hoisted(() => ({ directFactoryAvailable: true }));
+
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
+  const sdk = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
+  return {
+    ...sdk,
+    get createHttp1Agent() {
+      return fetchHost.directFactoryAvailable ? sdk.createHttp1Agent : undefined;
+    },
+  };
+});
+
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 
 vi.mock("undici", async (importOriginal) => ({
@@ -177,6 +189,7 @@ describe("resolveDiscordRestFetch", () => {
       vi.stubEnv(key, undefined);
     }
     captureHost.available = true;
+    fetchHost.directFactoryAvailable = true;
     captureHost.capture.mockReset().mockResolvedValue(undefined);
     undiciFetchMock.mockReset();
     agentSpy.mockReset();
@@ -287,34 +300,46 @@ describe("resolveDiscordRestFetch", () => {
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
-  it("uses a runtime-compatible Agent with IPv4-first lookup without a proxy", async () => {
-    const runtime = createRuntimeSpies();
-    undiciFetchMock.mockImplementation(async (_input, init) => {
-      dispatchRequest(init?.dispatcher, "https://discord.com");
-      return new Response("ok", { status: 200 });
-    });
+  it.each([true, false])(
+    "uses a runtime-compatible direct dispatcher (direct factory: %s)",
+    async (directFactoryAvailable) => {
+      fetchHost.directFactoryAvailable = directFactoryAvailable;
+      const runtime = createRuntimeSpies();
+      undiciFetchMock.mockImplementation(async (_input, init) => {
+        dispatchRequest(init?.dispatcher, "https://discord.com");
+        return new Response("ok", { status: 200 });
+      });
 
-    const fetcher = resolveDiscordRestFetch(undefined, runtime);
-    await fetcher("https://discord.com/api/v10/oauth2/applications/@me");
+      const fetcher = resolveDiscordRestFetch(undefined, runtime);
+      await fetcher("https://discord.com/api/v10/oauth2/applications/@me");
 
-    const agentOptions = objectArgAt(agentSpy, 0, 0);
-    expect(agentOptions.allowH2).toBe(false);
-    expect(typeof recordField(agentOptions.connect, "connect").lookup).toBe("function");
-    expect(argAt(undiciFetchMock, 0, 0)).toBe(
-      "https://discord.com/api/v10/oauth2/applications/@me",
-    );
-    const fetchOptions = objectArgAt(undiciFetchMock, 0, 1);
-    expect(dispatchSpy).toHaveBeenCalledTimes(1);
-    const dispatcherOptions = recordField(
-      recordField(fetchOptions.dispatcher, "dispatcher").options,
-      "dispatcher.options",
-    );
-    expect(dispatcherOptions.allowH2).toBe(false);
-    expect(typeof recordField(dispatcherOptions.connect, "dispatcher.options.connect").lookup).toBe(
-      "function",
-    );
-    expect(runtime.log).not.toHaveBeenCalled();
-  });
+      const agentOptions = objectArgAt(
+        directFactoryAvailable ? agentSpy : envHttpProxyAgentSpy,
+        0,
+        0,
+      );
+      if (!directFactoryAvailable) {
+        expect(agentSpy).not.toHaveBeenCalled();
+        expect(agentOptions).toMatchObject({ httpProxy: "", httpsProxy: "", noProxy: "*" });
+      }
+      expect(agentOptions.allowH2).toBe(false);
+      expect(typeof recordField(agentOptions.connect, "connect").lookup).toBe("function");
+      expect(argAt(undiciFetchMock, 0, 0)).toBe(
+        "https://discord.com/api/v10/oauth2/applications/@me",
+      );
+      const fetchOptions = objectArgAt(undiciFetchMock, 0, 1);
+      expect(dispatchSpy).toHaveBeenCalledTimes(1);
+      const dispatcherOptions = recordField(
+        recordField(fetchOptions.dispatcher, "dispatcher").options,
+        "dispatcher.options",
+      );
+      expect(dispatcherOptions.allowH2).toBe(false);
+      expect(
+        typeof recordField(dispatcherOptions.connect, "dispatcher.options.connect").lookup,
+      ).toBe("function");
+      expect(runtime.log).not.toHaveBeenCalled();
+    },
+  );
 
   it("uses managed env proxy CA trust when no discord proxy URL is configured", async () => {
     const caFile = writeTempCa("discord-rest-managed-proxy-ca");
@@ -358,30 +383,38 @@ describe("resolveDiscordRestFetch", () => {
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
-  it("falls back to direct REST fetch when env proxy options are invalid", async () => {
-    vi.stubEnv("https_proxy", "bad-proxy");
-    const runtime = createRuntimeSpies();
-    undiciFetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
+  it.each([true, false])(
+    "falls back to direct REST fetch for invalid env proxy (direct factory: %s)",
+    async (directFactoryAvailable) => {
+      fetchHost.directFactoryAvailable = directFactoryAvailable;
+      vi.stubEnv("https_proxy", "bad-proxy");
+      const runtime = createRuntimeSpies();
+      undiciFetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
 
-    const fetcher = resolveDiscordRestFetch(undefined, runtime);
-    await fetcher("https://discord.com/api/v10/oauth2/applications/@me");
+      const fetcher = resolveDiscordRestFetch(undefined, runtime);
+      await fetcher("https://discord.com/api/v10/oauth2/applications/@me");
 
-    expect(envHttpProxyAgentSpy).not.toHaveBeenCalled();
-    expect(agentSpy).toHaveBeenCalledTimes(1);
-    const agentOptions = objectArgAt(agentSpy, 0, 0);
-    expect(agentOptions.allowH2).toBe(false);
-    expect(typeof recordField(agentOptions.connect, "connect").lookup).toBe("function");
-    const fetchOptions = objectArgAt(undiciFetchMock, 0, 1);
-    dispatchRequest(fetchOptions.dispatcher, "https://discord.com");
-    expect(dispatchSpy).toHaveBeenCalledTimes(1);
-    const direct = recordField(dispatchSpy.mock.contexts[0], "fallback dispatcher");
-    expect(direct).toBe(fetchOptions.dispatcher);
-    expect(direct.options).toBe(agentOptions);
-    expect(String(argAt(runtime.error, 0, 0))).toContain(
-      "discord: env proxy unavailable for REST fetch; using direct dispatcher: bad proxy",
-    );
-    expect(runtime.log).not.toHaveBeenCalled();
-  });
+      expect(directFactoryAvailable ? envHttpProxyAgentSpy : agentSpy).not.toHaveBeenCalled();
+      const directSpy = directFactoryAvailable ? agentSpy : envHttpProxyAgentSpy;
+      expect(directSpy).toHaveBeenCalledTimes(1);
+      const agentOptions = objectArgAt(directSpy, 0, 0);
+      if (!directFactoryAvailable) {
+        expect(agentOptions).toMatchObject({ httpProxy: "", httpsProxy: "", noProxy: "*" });
+      }
+      expect(agentOptions.allowH2).toBe(false);
+      expect(typeof recordField(agentOptions.connect, "connect").lookup).toBe("function");
+      const fetchOptions = objectArgAt(undiciFetchMock, 0, 1);
+      dispatchRequest(fetchOptions.dispatcher, "https://discord.com");
+      expect(dispatchSpy).toHaveBeenCalledTimes(1);
+      const direct = recordField(dispatchSpy.mock.contexts[0], "fallback dispatcher");
+      expect(direct).toBe(fetchOptions.dispatcher);
+      expect(direct.options).toBe(agentOptions);
+      expect(String(argAt(runtime.error, 0, 0))).toContain(
+        "discord: env proxy unavailable for REST fetch; using direct dispatcher: bad proxy",
+      );
+      expect(runtime.log).not.toHaveBeenCalled();
+    },
+  );
 
   it("uses debug proxy env when no discord proxy URL is configured", async () => {
     vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "1");

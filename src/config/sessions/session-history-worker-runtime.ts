@@ -15,7 +15,10 @@ import {
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import {
+  createOpenClawAgentDatabasePathMatcher,
+  resolveOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { getRuntimeConfig } from "../config.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.js";
@@ -172,7 +175,6 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
         kind: request.kind,
         params: {
           target: capturedTarget,
-          run: request.params.run ? { ...request.params.run } : undefined,
         },
       };
     }
@@ -220,6 +222,7 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
     return {
       kind: "rpc",
       params: {
+        encodeResponse: params.encodeResponse,
         entry: capturedEntry,
         provider: params.provider,
         sessionId: params.sessionId,
@@ -362,17 +365,28 @@ export async function readSessionHistoryPageInWorker(
     };
     const preparedTarget = resolved;
     const acquired = await withSessionHistoryWorkerDatabase(databaseOptions, async (owner) => {
-      const sourceReads = await prepareGatewaySessionStoreReadSourcesAsync({
-        cfg,
-        currentSource,
-        env,
-        registryPath: stateContext.admission.databasePath,
-      });
+      // Only display-history projections resolve subagent lineage across stores.
+      const sourceReads =
+        capturedRequest.kind === "rpc" ||
+        capturedRequest.kind === "http" ||
+        capturedRequest.kind === "delta"
+          ? await prepareGatewaySessionStoreReadSourcesAsync({
+              cfg,
+              currentSource,
+              env,
+              registryPath: stateContext.admission.databasePath,
+            })
+          : undefined;
+      const primaryPath = sourceReads ? undefined : createOpenClawAgentDatabasePathMatcher();
+      primaryPath?.(currentSource.path, currentSource.path);
       const assertStateCurrent = () => {
         signal?.throwIfAborted();
         stateContext.maintenanceScope?.assertAdmission();
         stateContext.admission.assertCurrent();
-        sourceReads.assertSourceCurrent();
+        sourceReads?.assertSourceCurrent();
+        if (primaryPath && !primaryPath.isCurrent()) {
+          throw new Error("Session store changed while preparing its metadata. Retry the request.");
+        }
       };
       assertStateCurrent();
       const target: Omit<PreparedSessionHistoryReadTarget, "database"> = {
@@ -387,7 +401,7 @@ export async function readSessionHistoryPageInWorker(
           path: stateContext.admission.databasePath,
           environment: stateContext.environment,
         },
-        ...(sourceReads.request
+        ...(sourceReads?.request
           ? { sourceDiscovery: sourceReads.request }
           : { sourceDatabases: {} }),
         ...(entryValidationKey ? { entryValidationKey } : {}),
@@ -522,7 +536,7 @@ export async function readSessionHistoryPageInWorker(
           throw error;
         }
       }
-      await sourceReads.revalidate(() => {
+      await sourceReads?.revalidate(() => {
         owner.assertCurrent();
         assertStateCurrent();
       });
@@ -531,7 +545,7 @@ export async function readSessionHistoryPageInWorker(
         assertCurrent: () => {
           owner.assertCurrent();
           assertStateCurrent();
-          sourceReads.assertCurrent();
+          sourceReads?.assertCurrent();
         },
       };
     });

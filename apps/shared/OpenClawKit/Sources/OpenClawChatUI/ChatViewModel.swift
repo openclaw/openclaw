@@ -27,6 +27,8 @@ public final class OpenClawChatViewModel {
     }
 
     public internal(set) var replyTarget: OpenClawChatReplyTarget?
+    public let webConversation: OpenClawWebConversation?
+    var isApplyingWebSession = false
     @ObservationIgnored
     var inputHistoriesBySession: [String: ChatInputHistory] = [:]
     /// Native attachments, including images restored by rewind/fork, stay in memory only.
@@ -81,7 +83,7 @@ public final class OpenClawChatViewModel {
         let sessionRoutingContract: String?
     }
 
-    public private(set) var isLoading = false
+    public internal(set) var isLoading = false
     public internal(set) var isSending = false
     public internal(set) var isSendingAttachmentDraft = false
     public internal(set) var isSubmittingDraft = false
@@ -149,8 +151,6 @@ public final class OpenClawChatViewModel {
     public private(set) var streamingAssistantText: String?
 
     public private(set) var toolActivities: [OpenClawChatPendingToolCall] = []
-    var subagentActivities: [ChatSubagentActivity] = []
-    var hiddenWorkingSubagentCount = 0
     private(set) var timelineRevision: UInt64 = 0
     public internal(set) var sessions: [OpenClawChatSessionEntry] = [] {
         didSet {
@@ -271,7 +271,7 @@ public final class OpenClawChatViewModel {
     private nonisolated(unsafe) var eventTask: Task<Void, Never>?
     private(set) var isTransportDetached = false
     @ObservationIgnored
-    private nonisolated(unsafe) var bootstrapTask: Task<Void, Never>?
+    nonisolated(unsafe) var bootstrapTask: Task<Void, Never>?
     @ObservationIgnored
     var historyInvalidationRefresh: (requestID: UInt64, task: Task<Void, Never>)?
     var runOwnershipGeneration: UInt64 = 0
@@ -503,16 +503,12 @@ public final class OpenClawChatViewModel {
         }
     }
 
-    @ObservationIgnored
-    var subagentActivityState = ChatSubagentActivityState()
-    @ObservationIgnored
-    var subagentActivityCleanupTask: Task<Void, Never>?
-
     var lastHealthPollAt: Date?
 
     public init(
         sessionKey: String,
         transport: any OpenClawChatTransport,
+        webConversation: OpenClawWebConversation? = nil,
         activeAgentId: String? = nil,
         sessionRoutingContract: String? = nil,
         attachmentOwnerIsActive: @escaping @MainActor () -> Bool = { false },
@@ -531,6 +527,7 @@ public final class OpenClawChatViewModel {
         diagnosticsLog: (@MainActor @Sendable (String) -> Void)? = nil)
     {
         self.sessionKey = sessionKey
+        self.webConversation = webConversation
         self.defaultTransport = transport
         self.haptics = haptics
         self.transcriptCache = transcriptCache
@@ -605,6 +602,8 @@ public final class OpenClawChatViewModel {
         self.cancelHistoryInvalidationRefresh()
         self.retireQuestionAuthority()
         self.isTransportDetached = true
+        let transport = self.transport
+        Task { await transport.releaseActiveSessionSubscription() }
         self.invalidateSourceContext()
         self.endPendingToolActivities()
         self.eventTask?.cancel()
@@ -617,7 +616,6 @@ public final class OpenClawChatViewModel {
         }
         self.outboxChangesTask?.cancel()
         self.activeSessionRunIndicatorTimeoutTask?.cancel()
-        self.subagentActivityCleanupTask?.cancel()
         for task in self.pendingRunOwnerTasks.values {
             task.cancel()
         }
@@ -631,15 +629,12 @@ public final class OpenClawChatViewModel {
         startBootstrap()
     }
 
-    public func refresh() {
-        startBootstrap()
-    }
-
     public func resumeFromForeground() {
         Task { await self.refreshRunStateAfterForeground() }
     }
 
     public func abort() {
+        guard !self.usesWebConversation else { return }
         Task { await self.performAbort() }
     }
 
@@ -870,6 +865,10 @@ extension OpenClawChatViewModel {
         sessionKey requestedSessionKey: String? = nil,
         paintCachedTranscript: Bool = true)
     {
+        if self.usesWebConversation {
+            self.loadWebConversationChrome()
+            return
+        }
         let sessionKey = requestedSessionKey ?? self.sessionKey
         guard !self.isTransportDetached, sessionKey == self.sessionKey else { return }
         if self.swarmSessionKey != sessionKey {
@@ -934,7 +933,6 @@ extension OpenClawChatViewModel {
 
             Task { [weak self] in await self?.refreshQuestions() }
             Task { [weak self] in await self?.refreshSwarmCapability(sessionSnapshot: context.session) }
-            Task { [weak self] in await self?.refreshSubagentActivities(sessionSnapshot: context.session) }
 
             let payload = try await transport.requestHistory(sessionKey: context.session.key)
             guard self.isCurrentBootstrap(context) else { return }
@@ -972,22 +970,10 @@ extension OpenClawChatViewModel {
         }
     }
 
-    private func syncActiveSessionSubscription(startingWith sessionKey: String) async {
-        guard sessionKey == self.sessionKey else { return }
-        var target = self.currentSessionSnapshot()
-        var transport = self.transport
-        while true {
-            // Subscribe requests are gateway side effects. If a stale request finishes
-            // after a newer switch, immediately reassert the latest visible session.
-            try? await transport.setActiveSessionKey(target.key)
-            let current = self.currentSessionSnapshot()
-            guard current.key != target.key || current.deliveryAgentID != target.deliveryAgentID else { return }
-            target = current
-            transport = self.transport
-        }
-    }
-
     private func refreshRunStateAfterForeground() async {
+        if self.usesWebConversation { self.loadWebConversationChrome()
+            return
+        }
         let context = self.beginHistoryRequest()
         self.logDiagnostic(
             "chat.ui foreground refresh sessionKey=\(context.session.key) "
@@ -1219,6 +1205,9 @@ extension OpenClawChatViewModel {
         if intent == .userInitiated {
             self.onSessionChanged?(next)
         }
+        if !self.isApplyingWebSession, let context = self.webConversationContext {
+            self.webConversation?.navigate?(context, intent == .userInitiated ? .user : .synchronization)
+        }
         self.startBootstrap(sessionKey: next)
     }
 
@@ -1247,6 +1236,7 @@ extension OpenClawChatViewModel {
         self.sessionKey = next
         self.restoreComposerAfterSessionSwitch()
         self.onSessionChanged?(next)
+        if let context = self.webConversationContext { self.webConversation?.navigate?(context, .user) }
         self.errorText = nil
         self.startBootstrap()
     }
@@ -1269,7 +1259,6 @@ extension OpenClawChatViewModel {
         resetOutboxPresentationForSessionSwitch()
         self.sessionId = nil
         self.turnToolCallsById = [:]
-        self.clearSubagentActivities()
         self.updateStreamingAssistantText(nil)
         self.clearProgressCard()
         self.updateActiveSessionRunWithoutChatSnapshot(false)

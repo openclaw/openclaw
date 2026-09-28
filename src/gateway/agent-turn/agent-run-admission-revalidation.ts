@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { registerChatAbortController } from "../chat-abort.js";
 import { errorShapeFromError } from "../error-shape.js";
 import type { readInProcessSubagentResume } from "../in-process-subagent-resume.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { assertParentSubagentResumeCurrent } from "../session-subagent-resume.js";
 import { setAbortedAgentDedupeEntries } from "./agent-dedupe.js";
 import {
@@ -10,6 +11,16 @@ import {
   type PreparedAgentRunUserTurn,
 } from "./agent-run-user-turn.js";
 import type { AgentTurnContext, AgentTurnPrincipal } from "./types.js";
+
+/** Keep owner-provided policy failures intact across every preaccept preparation phase. */
+export function resolveAgentRunAdmissionError(
+  code: Parameters<typeof errorShapeFromError>[0],
+  error: unknown,
+): ErrorShape {
+  return error instanceof SessionMutationAuthorizationChangedError
+    ? error.error
+    : errorShapeFromError(code, error);
+}
 
 /** Revalidate the same prepared admission after each asynchronous preparation step. */
 export function createAgentRunAdmissionRevalidator(options: {
@@ -61,7 +72,7 @@ export function createAgentRunAdmissionRevalidator(options: {
         });
       }
     } catch (err) {
-      return rejectPreaccept(errorShapeFromError(ErrorCodes.INVALID_REQUEST, err));
+      return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.INVALID_REQUEST, err));
     }
     if (!params.respondToGatewayAdmissionOutcome()) {
       return true;

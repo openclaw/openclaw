@@ -35,6 +35,7 @@ import {
   rememberSqliteTestAgentOwner,
   retainSqliteTestCustody,
   retireSqliteTestSingleton,
+  settleSqliteTestAgentCloses,
   sqliteTestSingletonPublications,
 } from "./sqlite-test-lifecycle.ts";
 
@@ -73,7 +74,6 @@ const DIAGNOSTIC_EVENT_LISTENER_PRESENCE = Symbol.for(
 );
 const SESSION_SUSPENSION_TEST_API = Symbol.for("openclaw.sessionSuspensionTestApi");
 const SECRET_REDACTION_TEST_API = Symbol.for("openclaw.secretRedactionRegistryTestApi");
-const TASK_REGISTRY_TEST_API = Symbol.for("openclaw.taskRegistryTestApi");
 // Shared-worker scoped: the registry lives on the worker global, not in the module graph.
 const CUSTOM_ELEMENT_TRACKING = Symbol.for("openclaw.nonIsolatedCustomElementTracking");
 const nativeConsoleMethods = {
@@ -302,10 +302,6 @@ type SecretRedactionTestApi = {
   resetSecretRedactionRegistryForTest?: () => void;
 };
 
-type TaskRegistryTestApi = {
-  resetTaskRegistryForTests?: () => void;
-};
-
 function runCleanupActions(actions: CleanupAction[]): unknown {
   let firstError: unknown;
   for (const action of actions) {
@@ -414,12 +410,6 @@ function resetOpenClawSecretRedactionState(): void {
   api?.resetSecretRedactionRegistryForTest?.();
 }
 
-function resetOpenClawTaskRegistryState(): void {
-  const globalStore = globalThis as Record<PropertyKey, unknown>;
-  const api = globalStore[TASK_REGISTRY_TEST_API] as TaskRegistryTestApi | undefined;
-  api?.resetTaskRegistryForTests?.();
-}
-
 // Join the native owner's latest pass, including imports queued while cleanup waits.
 async function drainMockerResolveMocks(mocker: ModuleMocker | undefined): Promise<void> {
   if (!mocker) {
@@ -450,6 +440,8 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
   override async onBeforeRunTask(test: RunnerTask) {
     restoreRealTimers();
     restoreNativeTimerGlobals();
+    // aroundEach setup and its fixtures run before the first attempt's try hook.
+    await settleSqliteTestAgentCloses();
     await super.onBeforeRunTask(test);
     this.rememberSqliteAgentOwner();
   }
@@ -469,9 +461,15 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     );
   }
 
-  override onBeforeTryTask(test: RunnerTask, options: TestTryOptions) {
+  // Teardown may only schedule agent database closes (the synchronous test closer does).
+  // Wait for that Worker retirement before each test (onBeforeRunTask) and retry attempt
+  // so a lease release never overlaps later work. Like the file drain, this waits
+  // without a deadline; the no-output watchdog owns real hangs.
+  // oxlint-disable-next-line typescript/no-misused-promises -- Vitest awaits this hook; its concrete TestRunner declaration narrows the return to void.
+  override async onBeforeTryTask(test: RunnerTask, options: TestTryOptions) {
     restoreRealTimers();
     restoreNativeTimerGlobals();
+    await settleSqliteTestAgentCloses();
     super.onBeforeTryTask(test, options);
   }
 
@@ -521,6 +519,8 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     };
     clean("Vitest file completion", () => super.onAfterRunFiles(files));
     await drain("mock resolution", () => drainMockerResolveMocks(internals.moduleRunner?.mocker));
+    // The last test's scheduled closes must finish before cleanup restores shared state.
+    await settleSqliteTestAgentCloses();
 
     // Mirror the missing cleanup from Vitest isolate mode so shared workers do
     // not carry file-scoped timers, stubs, spies, or stale module state
@@ -572,7 +572,6 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     if (!(await drain("singleton lifecycle", () => drainSqliteTestSingletons(recordFailure)))) {
       retainSqliteTestCustody();
     }
-    clean("task registry", resetOpenClawTaskRegistryState);
     clean("secret redaction", resetOpenClawSecretRedactionState);
     if (!this.config.isolate) {
       for (const [phase, run] of [

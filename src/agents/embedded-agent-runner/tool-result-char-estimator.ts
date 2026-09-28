@@ -1,6 +1,3 @@
-/**
- * Estimates message and tool-result character costs for context guards.
- */
 import { collectTextContentBlocks } from "../content-blocks.js";
 import type { AgentMessage } from "../runtime/index.js";
 import {
@@ -73,6 +70,14 @@ function estimateContentBlockChars(content: unknown[], toolResult = false): numb
   return chars;
 }
 
+function estimateMessageContentChars(content: unknown): number {
+  return typeof content === "string"
+    ? content.length
+    : Array.isArray(content)
+      ? estimateContentBlockChars(content)
+      : 0;
+}
+
 export function getToolResultText(msg: AgentMessage): string {
   return collectTextContentBlocks(getToolResultContent(msg)).join("\n");
 }
@@ -87,14 +92,7 @@ export function estimateMessageChars(msg: AgentMessage, contentOverride?: unknow
   }
 
   if (msg.role === "user") {
-    const content = contentOverride ?? msg.content;
-    if (typeof content === "string") {
-      return content.length;
-    }
-    if (Array.isArray(content)) {
-      return estimateContentBlockChars(content);
-    }
-    return 0;
+    return estimateMessageContentChars(contentOverride ?? msg.content);
   }
 
   if (msg.role === "assistant") {
@@ -141,27 +139,16 @@ export function estimateMessageChars(msg: AgentMessage, contentOverride?: unknow
     return bashExecutionToText(msg as Parameters<typeof bashExecutionToText>[0]).length;
   }
 
-  if (role === "branchSummary") {
+  if (role === "branchSummary" || role === "compactionSummary") {
     const rawSummary = Reflect.get(msg, "summary");
     const summary = typeof rawSummary === "string" ? rawSummary : "";
-    return (BRANCH_SUMMARY_PREFIX + summary + BRANCH_SUMMARY_SUFFIX).length;
-  }
-
-  if (role === "compactionSummary") {
-    const rawSummary = Reflect.get(msg, "summary");
-    const summary = typeof rawSummary === "string" ? rawSummary : "";
-    return (COMPACTION_SUMMARY_PREFIX + summary + COMPACTION_SUMMARY_SUFFIX).length;
+    return role === "branchSummary"
+      ? (BRANCH_SUMMARY_PREFIX + summary + BRANCH_SUMMARY_SUFFIX).length
+      : (COMPACTION_SUMMARY_PREFIX + summary + COMPACTION_SUMMARY_SUFFIX).length;
   }
 
   if (role === "custom") {
-    const content = contentOverride ?? Reflect.get(msg, "content");
-    if (typeof content === "string") {
-      return content.length;
-    }
-    if (Array.isArray(content)) {
-      return estimateContentBlockChars(content);
-    }
-    return 0;
+    return estimateMessageContentChars(contentOverride ?? Reflect.get(msg, "content"));
   }
 
   return 256;

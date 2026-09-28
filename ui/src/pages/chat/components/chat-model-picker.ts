@@ -395,7 +395,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                         type="button"
                                         data-chat-model-group-toggle
                                         data-chat-model-provider-toggle
-                                        aria-expanded="false"
+                                        aria-expanded=${String(provider === activeModelOption?.provider)}
                                         aria-label=${`${t("chat.modelControls.providerModels", {
                                           provider: providerDisplayLabel(provider),
                                         })} (${options.length})`}

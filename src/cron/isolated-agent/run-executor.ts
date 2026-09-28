@@ -16,6 +16,10 @@ import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-en
 import { createDeferredEmbeddedRunLifecycleManager } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
+import {
+  getGeneratedMediaTaskIdsForSessionKey,
+  hasNewGeneratedMediaTaskForSessionKey,
+} from "../../agents/media-generation-activity.js";
 import { findModelInCatalog, modelSupportsInput } from "../../agents/model-catalog-lookup.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
 import { rootedAgentRunParams } from "../../agents/rooted-run-params.js";
@@ -36,10 +40,6 @@ import {
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import {
-  getGeneratedMediaTaskIdsForSessionKey,
-  hasNewGeneratedMediaTaskForSessionKey,
-} from "../../tasks/task-status-access.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { assertCronExecutionRootRuntime } from "../execution-root-runtime.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";

@@ -3,11 +3,13 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
+import { isValidBase64 } from "@openclaw/media-core/base64";
 import { DEFAULT_MAX_ARCHIVE_BYTES_ZIP } from "../../infra/archive.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createAsyncLock } from "../../infra/json-files.js";
 import type { SqliteWorkerStore } from "../../infra/sqlite-worker-contract.js";
+import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -162,22 +164,8 @@ function decodeBase64Chunk(dataBase64: string): Buffer {
   if (normalized.length > MAX_SKILL_UPLOAD_BASE64_LENGTH) {
     throw new SkillUploadRequestError("upload chunk exceeds maximum size");
   }
-  if (!normalized || normalized.length % 4 !== 0) {
+  if (!isValidBase64(normalized)) {
     throw new SkillUploadRequestError("invalid dataBase64");
-  }
-  const paddingLength = normalized.endsWith("==") ? 2 : normalized.endsWith("=") ? 1 : 0;
-  const contentLength = normalized.length - paddingLength;
-  for (let index = 0; index < contentLength; index += 1) {
-    const code = normalized.charCodeAt(index);
-    const isBase64Character =
-      (code >= 0x41 && code <= 0x5a) ||
-      (code >= 0x61 && code <= 0x7a) ||
-      (code >= 0x30 && code <= 0x39) ||
-      code === 0x2b ||
-      code === 0x2f;
-    if (!isBase64Character) {
-      throw new SkillUploadRequestError("invalid dataBase64");
-    }
   }
   const decoded = Buffer.from(normalized, "base64");
   if (decoded.length < 1) {
@@ -239,41 +227,45 @@ function createSkillUploadStore(options?: SkillUploadStoreOptions) {
   );
 
   return {
-    async begin(params: BeginParams) {
+    async begin(params: BeginParams, assertCommitAllowed?: () => void) {
       const request = { ...params };
       const context = captureOpenClawStateWorkerContext(stateOptions);
       const root = context.admission.databasePath;
       return await withLock(`${root}:begin`, async () => {
         const { runOpenClawStateWorkerOperation } =
           await import("../../state/openclaw-state-worker-store.js");
-        return runOpenClawStateWorkerOperation(context, async (scope) => {
-          await cleanupExpiredUploads(scope, root);
-          if (request.kind !== "skill-archive") {
-            throw new SkillUploadRequestError("unsupported upload kind");
-          }
-          const slug = validateUploadSlug(request.slug);
-          const sizeBytes = validateSizeBytes(request.sizeBytes);
-          const sha256 = normalizeSkillUploadSha256(request.sha256);
-          const force = request.force === true;
-          const idempotencyKey = validateIdempotencyKey(request.idempotencyKey);
-          const keyHash = idempotencyKey ? sha256Hex(idempotencyKey) : undefined;
-          return scope.execute({
-            type: "skillUploads.begin",
-            input: {
-              kind: request.kind,
-              slug,
-              sizeBytes,
-              sha256,
-              force,
-              keyHash,
-              ttlMs,
-            },
-          });
-        });
+        return runOpenClawStateWorkerOperation(
+          context,
+          async (scope) => {
+            await cleanupExpiredUploads(scope, root);
+            if (request.kind !== "skill-archive") {
+              throw new SkillUploadRequestError("unsupported upload kind");
+            }
+            const slug = validateUploadSlug(request.slug);
+            const sizeBytes = validateSizeBytes(request.sizeBytes);
+            const sha256 = normalizeSkillUploadSha256(request.sha256);
+            const force = request.force === true;
+            const idempotencyKey = validateIdempotencyKey(request.idempotencyKey);
+            const keyHash = idempotencyKey ? sha256Hex(idempotencyKey) : undefined;
+            return scope.execute({
+              type: "skillUploads.begin",
+              input: {
+                kind: request.kind,
+                slug,
+                sizeBytes,
+                sha256,
+                force,
+                keyHash,
+                ttlMs,
+              },
+            });
+          },
+          uploadWriteAdmission(context, assertCommitAllowed),
+        );
       });
     },
 
-    async chunk(params: ChunkParams) {
+    async chunk(params: ChunkParams, assertCommitAllowed?: () => void) {
       const uploadId = validateUploadId(params.uploadId);
       const offset = validateOffset(params.offset);
       const decoded = decodeBase64Chunk(params.dataBase64);
@@ -281,28 +273,39 @@ function createSkillUploadStore(options?: SkillUploadStoreOptions) {
       const root = context.admission.databasePath;
       const { runOpenClawStateWorkerOperation } =
         await import("../../state/openclaw-state-worker-store.js");
-      return runOpenClawStateWorkerOperation(context, async (scope) => {
-        await cleanupExpiredUploads(scope, root, uploadId);
-        return withLock(`${root}:upload:${uploadId}`, () =>
-          scope.execute({
-            type: "skillUploads.chunk",
-            input: { uploadId, offset, decoded },
-          }),
-        );
-      });
+      return runOpenClawStateWorkerOperation(
+        context,
+        async (scope) => {
+          await cleanupExpiredUploads(scope, root, uploadId);
+          return withLock(`${root}:upload:${uploadId}`, () =>
+            scope.execute({
+              type: "skillUploads.chunk",
+              input: { uploadId, offset, decoded },
+            }),
+          );
+        },
+        uploadWriteAdmission(context, assertCommitAllowed),
+      );
     },
 
-    async commit(params: CommitParams) {
+    async commit(params: CommitParams, assertCommitAllowed?: () => void) {
       const uploadId = validateUploadId(params.uploadId);
       const requestedSha = normalizeSkillUploadSha256(params.sha256);
       const context = captureOpenClawStateWorkerContext(stateOptions);
       return await withLock(`${context.admission.databasePath}:upload:${uploadId}`, async () => {
-        const { executeOpenClawStateWorker } =
+        const { runOpenClawStateWorkerOperation } =
           await import("../../state/openclaw-state-worker-store.js");
-        return executeOpenClawStateWorker(context, {
-          type: "skillUploads.commit",
-          input: { uploadId, requestedSha },
-        });
+        const result = await runOpenClawStateWorkerOperation(
+          context,
+          (scope) =>
+            scope.execute({
+              type: "skillUploads.commit",
+              input: { uploadId, requestedSha },
+            }),
+          uploadWriteAdmission(context, assertCommitAllowed),
+        );
+        context.admission.assertCurrent();
+        return result;
       });
     },
 
@@ -397,6 +400,24 @@ function createSkillUploadStore(options?: SkillUploadStoreOptions) {
         );
       });
     },
+  };
+}
+
+/** The callback is pure host policy; worker transactions recheck it before effects and COMMIT. */
+function uploadWriteAdmission(
+  context: ReturnType<typeof captureOpenClawStateWorkerContext>,
+  assertCommitAllowed?: () => void,
+) {
+  const assertCurrent = () => {
+    assertCommitAllowed?.();
+    context.admission.assertCurrent();
+    context.maintenanceScope?.assertAdmission();
+  };
+  return {
+    assertCurrent,
+    createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
+      context.admission.databasePath,
+    ]),
   };
 }
 

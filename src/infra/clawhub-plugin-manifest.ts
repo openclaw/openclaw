@@ -3,6 +3,7 @@ import {
   validatePluginUiCapabilities,
   type PluginUiCapability,
 } from "../../packages/gateway-protocol/src/plugin-ui-capabilities.js";
+import type { ExternalPluginCompatibility } from "../../packages/plugin-package-contract/src/index.js";
 import { readClawHubStringArrayField, readClawHubStringField } from "./clawhub-client.js";
 
 export type ClawHubPluginCapabilities = {
@@ -51,12 +52,7 @@ export function parseClawHubPluginCapabilities(
   return result;
 }
 
-export type ClawHubPluginCompatibility = {
-  pluginApiRange?: string;
-  builtWithOpenClawVersion?: string;
-  pluginSdkVersion?: string;
-  minGatewayVersion?: string;
-};
+export type ClawHubPluginCompatibility = ExternalPluginCompatibility;
 
 export function parseClawHubPluginCompatibility(
   value: Record<string, unknown> | undefined,

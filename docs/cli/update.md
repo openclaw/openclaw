@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "CLI reference for `openclaw update` (updates, repair, and recovery cleanup)"
 read_when:
   - You want to update a source checkout safely
@@ -205,6 +206,12 @@ update execution authority. A missing custom `plugins.load.paths` entry can
 therefore produce an admission warning while preserving the configured path
 and plugin configuration bytes. Admission does not promise to repair that path.
 
+Legacy plugin configuration, such as Discord's nested `dm.policy` and
+`dm.allowFrom`, is admitted with a warning when the candidate's Doctor planner
+produces a fully valid configuration. Admission checks the projected database
+targets while preserving the original config and state bytes. The normal
+update-time Doctor still owns saving the repair, backups, and rollback.
+
 A valid `admit` verdict replaces only the candidate-owned checks it reports.
 Installed Node preflight always runs for package updates, including selection or
 private provisioning of a compatible runtime after an informational Node warning.
@@ -316,6 +323,13 @@ still apply; older or unrecognized handoffs retain their existing finite-deadlin
 behavior. Probes, ownership admission, readiness, recovery, and cleanup retain
 their own bounds. An explicit `--timeout <seconds>` limits each finalization phase
 and its child commands. Admission and config phases scale with shared SQLite state.
+
+After activation or rollback is verified, obsolete package and launcher backup
+trees share a five-minute cleanup budget. Expiry retains the remaining backups
+and records their paths as a warning without undoing the verified installation.
+Cleanup checks this budget between filesystem operations and waits for operations
+already in flight to settle, so stalled storage can extend the cleanup wait.
+Ownership and path-identity failures remain distinct from cleanup expiry.
 
 Post-plugin config validation and readiness checks use the measured shared and
 agent database sizes after Doctor finishes, including WAL files. Post-core plugin

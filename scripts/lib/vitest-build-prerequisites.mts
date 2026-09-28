@@ -35,6 +35,12 @@ const runtimeConsumers = [
     dir: "src",
   },
   {
+    file: "src/tui/tui-session-identity-pty.e2e.test.ts",
+    configs: ["test/vitest/vitest.tui-pty.config.ts"],
+    mode: "runtime",
+    dir: "src",
+  },
+  {
     file: "src/gateway/server-methods/agent.visitor-access.test.ts",
     configs: [
       "test/vitest/vitest.gateway-methods-isolated.config.ts",
@@ -260,6 +266,12 @@ const runtimeConsumers = [
     mode: "runtime" as const,
     dir: "src/commands",
   })),
+  {
+    file: "src/commands/doctor-config-preflight.legacy-driver.live.test.ts",
+    configs: ["test/vitest/vitest.live.config.ts"],
+    mode: "runtime",
+    dir: "src/commands",
+  },
   {
     file: "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts",
     configs: ["test/vitest/vitest.tooling.config.ts"],

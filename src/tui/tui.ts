@@ -1,13 +1,6 @@
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
-import {
-  Container,
-  Loader,
-  matchesKey,
-  ProcessTerminal,
-  Text,
-  TuiMainScreen,
-} from "@earendil-works/pi-tui";
+import { Container, Loader, matchesKey, Text, TuiMainScreen } from "@earendil-works/pi-tui";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { classifyGatewayConnectFailure } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js";
@@ -72,6 +65,7 @@ import { createTuiLocalCliRunner } from "./tui-local-cli.js";
 import { createLocalShellRunner } from "./tui-local-shell.js";
 import { createOverlayHandlers } from "./tui-overlays.js";
 import { createTuiPluginApprovalController } from "./tui-plugin-approvals.js";
+import { TuiProcessTerminal } from "./tui-process-terminal.js";
 import { createTuiQuestionController } from "./tui-questions.js";
 import { createSessionActions } from "./tui-session-actions.js";
 import { createTuiRunIdTracker } from "./tui-session-run-coordinator.js";
@@ -85,6 +79,7 @@ import {
 import { createTuiTaskSuggestionController } from "./tui-task-suggestions.js";
 import type {
   SessionScope,
+  TuiBoundGateway,
   TuiHistoryRunOutcome,
   TuiOptions,
   TuiResult,
@@ -107,12 +102,7 @@ type RunTuiOptions = TuiOptions & {
   ctrlCExitWindowMs?: number;
   onSubmitBurstCaptured?: (value: string) => void;
   /** Exact pre-probed remote target for an in-process setup handoff. */
-  boundGateway?: {
-    url: string;
-    token?: string;
-    password?: string;
-    tlsFingerprint?: string;
-  };
+  boundGateway?: TuiBoundGateway;
   config?: OpenClawConfig;
   title?: string;
 };
@@ -799,7 +789,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     setConsoleSubsystemFilter(["__openclaw_tui_quiet__"]);
   }
 
-  const tui = new TuiMainScreen(new ProcessTerminal());
+  const tui = new TuiMainScreen(new TuiProcessTerminal());
   const dedupeBackspace = createBackspaceDeduper();
   tui.addInputListener((data) => {
     const next = dedupeBackspace(data);

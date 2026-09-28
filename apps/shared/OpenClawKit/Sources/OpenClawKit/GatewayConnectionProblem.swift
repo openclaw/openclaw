@@ -412,8 +412,8 @@ public enum GatewayConnectionProblemMapper {
             AuthProblemDefaults(
                 kind: .bootstrapTokenInvalid,
                 owner: .iphone,
-                title: "Setup code expired",
-                message: "The setup QR or bootstrap token is no longer valid.",
+                title: "Setup code no longer valid",
+                message: "Get a fresh setup code from the Gateway owner, then scan or enter it again.",
                 actionLabel: "Scan QR again",
                 actionCommand: nil,
                 docsURLString: "https://docs.openclaw.ai/platforms/ios",

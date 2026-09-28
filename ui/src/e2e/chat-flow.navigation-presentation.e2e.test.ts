@@ -16,6 +16,7 @@ import {
 import { watchNavigationFollowIntent } from "./chat-navigation-follow.test-support.ts";
 import { dockChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import { chooseSidebarMenuOption, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const rosterMatch = { includeGlobal: true };
@@ -783,16 +784,18 @@ suite.define(() => {
 
       const filterAndSort = page.getByRole("button", { name: "Filter & sort" });
       await filterAndSort.click();
-      await page.getByRole("menuitemradio", { name: "Last updated" }).click();
+      await chooseSidebarMenuOption(page, "Sort by", "Last updated");
+      await closeSidebarMenu(page);
       await expect.poll(() => sidebarSessionOrder(page)).toEqual(updatedOrder);
 
       await filterAndSort.click();
-      await page.getByRole("menuitemradio", { name: "Created" }).click();
+      await chooseSidebarMenuOption(page, "Sort by", "Created");
+      await closeSidebarMenu(page);
       await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder);
 
       await filterAndSort.click();
       await page.getByRole("main").click();
-      await expect.poll(() => page.getByRole("menuitemradio", { name: "Created" }).count()).toBe(0);
+      await expect.poll(() => page.locator(".sidebar-session-sort-menu").count()).toBe(0);
     } finally {
       await suite.closeBrowserContext(context);
     }

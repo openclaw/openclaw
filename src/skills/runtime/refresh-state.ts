@@ -4,7 +4,6 @@ import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snaps
 import type { Skill } from "../loading/skill-contract.js";
 import { normalizeWorkspaceSkillRoots } from "../loading/workspace-skill-roots.js";
 
-// Skill refresh state types describe change notifications emitted by runtime reloads.
 type SkillsChangeEvent = {
   workspaceDir?: string;
   reason:

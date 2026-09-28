@@ -34,7 +34,7 @@ import { prepareControlUiSessionPrRead } from "./control-ui-session-pr-read.js";
 import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
 import { retireDeviceTokenClients } from "./device-token-client-lifecycle.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-method-policy.js";
-import { disposeNodeConnectionNotifications } from "./node-connection-notifications.js";
+import { startNodeConnectionNotifications } from "./node-connection-notifications.js";
 import { waitForNodeWorkerSupervisor } from "./node-registry-private.js";
 import { clearNodeWakeState } from "./node-wake-state.js";
 import { createLazyGatewayCronState } from "./server-cron-lazy.js";
@@ -98,7 +98,6 @@ export async function prepareGatewayLifecycle(params: {
     sessionEventSubscribers,
     watchNodeRequestHandler,
     defaultWorkspaceDir,
-    activeTaskCount,
     desktopSessionRegistry,
     nodeDesktopStreamBroker,
     bindDeviceNodeControl,
@@ -135,7 +134,11 @@ export async function prepareGatewayLifecycle(params: {
       void nodeDesktopServiceRef.current?.stopNode(nodeId);
     },
   });
-  const { nodeRegistry, nodePresenceTimers, nodeSendToSession, nodeUnsubscribeAll } = nodeRuntime;
+  const { nodeRegistry, nodeSendToSession, nodeUnsubscribeAll } = nodeRuntime;
+  const stopNodeConnectionNotifications = startNodeConnectionNotifications(
+    nodeRegistry,
+    runtime.scheduler,
+  );
   const nodeDesktopService = (await import("./desktop/node-source.js")).createNodeDesktopService({
     getConfig: getRuntimeConfig,
     nodeRegistry,
@@ -253,10 +256,8 @@ export async function prepareGatewayLifecycle(params: {
       runtimeState.gatewayMethods.splice(0, runtimeState.gatewayMethods.length, ...methods);
     },
     setEarlyRuntimeHandles: (handles: {
-      getActiveTaskCount: () => number;
       skillsChangeUnsub: typeof runtimeState.skillsChangeUnsub;
     }) => {
-      activeTaskCount.get = handles.getActiveTaskCount;
       runtimeState.skillsChangeUnsub = handles.skillsChangeUnsub;
     },
     swapDiscovery: (next: typeof runtimeState.discovery) => {
@@ -429,17 +430,10 @@ export async function prepareGatewayLifecycle(params: {
   };
   const runClosePrelude = async () => {
     await beginClosePrelude();
-    disposeNodeConnectionNotifications(nodeRegistry);
+    stopNodeConnectionNotifications();
     watchNodeHttpRuntime.close();
     await shutdownRuntime.runGatewayClosePrelude({
       stopDiagnostics: stopGatewayDiagnosticHeartbeat,
-      clearSkillsRefreshTimer: () => {
-        if (!runtimeState?.skillsRefreshTimer) {
-          return;
-        }
-        clearTimeout(runtimeState.skillsRefreshTimer);
-        runtimeState.skillsRefreshTimer = null;
-      },
       skillsChangeUnsub: runtimeState.skillsChangeUnsub,
       disposeAuthRateLimiter: () => {
         authRateLimiter.dispose();
@@ -563,16 +557,14 @@ export async function prepareGatewayLifecycle(params: {
               stopChannel,
               pluginServices: runtimeState.pluginServices,
               cron: runtimeState.cronState.cron,
+              stopCronMaintenance: shutdownRuntime.stopCronMaintenance,
               heartbeatRunner: runtimeState.heartbeatRunner,
-              stopTaskRegistryMaintenance: shutdownRuntime.stopTaskRegistryMaintenance,
-              nodePresenceTimers,
               maintenance: runtimeState.maintenance,
               stopMediaCleanup: stopMediaCleanupForClose,
               agentUnsub: runtimeState.agentUnsub,
               heartbeatUnsub: runtimeState.heartbeatUnsub,
               transcriptUnsub: runtimeState.transcriptUnsub,
               lifecycleUnsub: runtimeState.lifecycleUnsub,
-              taskUnsub: runtimeState.taskUnsub,
               chatRunState,
               clients,
               finishRequestEntries: () => requestEntryLifetime.sealAndJoin(),

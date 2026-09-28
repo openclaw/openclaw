@@ -5,6 +5,7 @@ import { property } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
 import { icons } from "../../../components/icons.ts";
+import { renderKeyboardShortcut } from "../../../components/kbd.ts";
 import { renderPanelEmptyState } from "../../../components/panel-empty-state.ts";
 import {
   PANEL_HOSTED_TABS_CHANGE_EVENT,
@@ -64,9 +65,10 @@ function renderPanelTypeOption(type: SidebarPanelDefinition, slotted = false) {
     <span class="side-panel-type-option__label">${type.label}</span>
     ${
       type.shortcut
-        ? html`<kbd slot=${slotted ? "details" : nothing} class="side-panel-type-option__shortcut"
-            >${type.shortcut}</kbd
-          >`
+        ? renderKeyboardShortcut(type.shortcut, {
+            slot: slotted ? "details" : undefined,
+            className: "side-panel-type-option__shortcut",
+          })
         : nothing
     }
   `;

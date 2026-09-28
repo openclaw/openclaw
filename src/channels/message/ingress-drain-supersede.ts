@@ -63,9 +63,7 @@ export async function supersedeActiveStatesIfNeeded<TPayload, TMetadata>(
     params.clearStallTimer(pending);
     pending.abortController.abort(new Error("ingress-superseded"));
     try {
-      await pending.settleOnce(async () => {
-        await params.completeClaim(pending.claim);
-      });
+      await pending.settleOnce(() => params.completeClaim(pending.claim));
     } catch (error) {
       params.log(
         `ingress drain: failed to tombstone superseded event ${pending.eventId}: ${params.formatError(error)}`,

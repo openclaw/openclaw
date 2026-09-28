@@ -11,7 +11,7 @@ import { clampThinkingLevel } from "../model-utils.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 import { googleFlashSupportsMinimalThinking } from "../transports/google-thinking-level.js";
 import {
-  assignTransportErrorDetails,
+  failTransportStream,
   notifyProviderStreamOpened,
   transportAbortError,
 } from "../transports/transport-stream-shared.js";
@@ -132,13 +132,7 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
       }
     }
     const failure = options?.signal?.aborted ? transportAbortError(options.signal) : error;
-    assignTransportErrorDetails(output, failure, options?.signal);
-    stream.push({
-      type: "error",
-      reason: output.stopReason === "aborted" ? "aborted" : "error",
-      error: output,
-    });
-    stream.end();
+    failTransportStream({ stream, output, error: failure, signal: options?.signal });
   }
 }
 
@@ -149,19 +143,10 @@ export function buildGoogleGenerateContentParams<T extends GoogleApiType>(
 ): Omit<GenerateContentParameters, "contents"> & { contents: Content[] } {
   const contents = convertMessages(model, context);
 
-  const generationConfig: GenerateContentConfig = {};
-  if (options.temperature !== undefined) {
-    generationConfig.temperature = options.temperature;
-  }
-  if (options.maxTokens !== undefined) {
-    generationConfig.maxOutputTokens = options.maxTokens;
-  }
-  if (options.stop !== undefined && options.stop.length > 0) {
-    generationConfig.stopSequences = options.stop;
-  }
-
   const config: GenerateContentConfig = {
-    ...(Object.keys(generationConfig).length > 0 && generationConfig),
+    ...(options.temperature !== undefined && { temperature: options.temperature }),
+    ...(options.maxTokens !== undefined && { maxOutputTokens: options.maxTokens }),
+    ...(options.stop !== undefined && options.stop.length > 0 && { stopSequences: options.stop }),
     ...(context.systemPrompt && {
       systemInstruction: sanitizeSurrogates(stripSystemPromptCacheBoundary(context.systemPrompt)),
     }),

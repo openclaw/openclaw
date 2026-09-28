@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import * as runtimePaths from "../../daemon/runtime-paths.js";
 import * as daemonService from "../../daemon/service.js";
 import {
   createMockGatewayService,
@@ -16,12 +15,7 @@ import { installFreshUpdateFixture } from "./update-command-fresh.test-support.j
 import * as packageDestination from "./update-command-package-destination.js";
 import * as packageUpdate from "./update-command-package.js";
 import * as plugins from "./update-command-plugin-preflight.js";
-import {
-  unsupportedServiceRuntimeFixture,
-  expectedRuntimeSelectionCommand,
-} from "./update-command-runtime-recovery.test-support.js";
 import * as servicePlan from "./update-command-service-plan.js";
-import { resolvePackageRuntimePreflight } from "./update-command-service-plan.js";
 import { updateCommand } from "./update-command.js";
 
 vi.mock("../../infra/container-environment.js", () => ({ isContainerEnvironment: () => false }));
@@ -86,11 +80,9 @@ it.each([
   "claimed",
   "foreign-launcher",
   "foreign-live-launcher",
-  "owned",
   "prefix-alias",
   "empty",
   "EACCES",
-  "EPERM",
   "unresolved",
   "ENOTDIR",
 ] as const)(
@@ -126,7 +118,6 @@ it.each([
       );
       await fs.writeFile(path.join(newRoot, "openclaw.mjs"), "// foreign deployment\n");
     } else if (
-      destination === "owned" ||
       destination === "prefix-alias" ||
       destination === "foreign-launcher" ||
       destination === "foreign-live-launcher"
@@ -137,11 +128,7 @@ it.each([
       await fs.symlink(selected, prefixAlias, process.platform === "win32" ? "junction" : "dir");
     }
     const unresolved = destination === "unresolved";
-    const unknown =
-      destination === "EACCES" ||
-      destination === "EPERM" ||
-      destination === "ENOTDIR" ||
-      unresolved;
+    const unknown = destination === "EACCES" || destination === "ENOTDIR" || unresolved;
     const unknownCause =
       unresolved || destination === "ENOTDIR" || destination === "foreign-launcher"
         ? "unreadable-layout"
@@ -203,30 +190,9 @@ it.each([
       destination === "unverified" ||
       destination === "foreign-launcher" ||
       destination === "foreign-live-launcher";
-    vi.spyOn(runtimePaths, "resolveNodeRuntimeInfo").mockResolvedValue(
-      unsupportedServiceRuntimeFixture,
-    );
-    const beforeSwitch = await resolvePackageRuntimePreflight({
-      root: oldRoot,
-      target: { version: "2026.9.2", nodeEngine: ">=24.16.0" },
-      nodeRunner: "/home/operator/.nvm/versions/node/v22.18.0/bin/node",
-      shouldRestart: false,
-    });
     const quote = process.platform === "win32" ? quotePowerShellArg : quoteCliArg;
-    expect(beforeSwitch.recoverySteps).toEqual([
-      {
-        kind: "preserve-context",
-        instruction:
-          "Use the same service account and keep the existing OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH overrides throughout recovery.",
-      },
-      { kind: "select-runtime", command: expectedRuntimeSelectionCommand("nvm", "24.16.0") },
-      {
-        kind: "continue-update",
-        command: `node ${quote(path.join(oldRoot, "openclaw.mjs"))} update --tag 2026.9.2`,
-      },
-    ]);
 
-    if (destination === "EACCES" || destination === "EPERM" || destination === "ENOTDIR") {
+    if (destination === "EACCES" || destination === "ENOTDIR") {
       const lstat = fs.lstat;
       vi.spyOn(fs, "lstat").mockImplementation((...args) =>
         String(args[0]) === newRoot

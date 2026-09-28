@@ -192,7 +192,8 @@ export function buildQaGatewayConfig(params: {
   const gatewayModels: ReturnType<typeof provider.buildGatewayModels> =
     usesCodexMockAppServer && codexMockOpenAiCatalog
       ? {
-          mode: "merge" as const,
+          // Synthetic credentials must not enter live provider catalog discovery.
+          mode: "replace" as const,
           providers: {
             openai: {
               ...codexMockOpenAiCatalog,

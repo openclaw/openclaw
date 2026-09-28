@@ -339,10 +339,7 @@ function targetCodexMarketplaceDiscoveryTimeoutMs(env: NodeJS.ProcessEnv = proce
   const configured = parseStrictNonNegativeInteger(
     env[TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_ENV],
   );
-  if (configured !== undefined) {
-    return configured;
-  }
-  return TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_MS;
+  return configured ?? TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_MS;
 }
 
 function isCodexPluginLoadWarningItem(item: MigrationItem): boolean {
@@ -385,14 +382,14 @@ async function applyCodexPluginConfigItem(
   item: MigrationItem,
   appliedItems: readonly MigrationItem[],
 ): Promise<MigrationItem> {
-  const incompletePluginItems = appliedItems.filter(
+  const hasIncompletePlugin = appliedItems.some(
     (candidate) =>
       candidate.kind === "plugin" &&
       candidate.action === "install" &&
       readCodexPluginPolicy(candidate) !== undefined &&
       !isCodexPluginConfigTerminal(candidate),
   );
-  if (incompletePluginItems.length > 0) {
+  if (hasIncompletePlugin) {
     return {
       ...item,
       status: "warning",

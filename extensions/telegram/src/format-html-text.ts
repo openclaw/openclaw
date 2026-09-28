@@ -2,8 +2,7 @@ import { FILE_REF_EXTENSIONS_WITH_TLD, tokenizeHtmlTags } from "openclaw/plugin-
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { escapeTelegramHtml } from "./format-html.js";
 
-let fileReferencePattern: RegExp | undefined;
-let orphanedTldPattern: RegExp | undefined;
+let fileReferencePatterns: { standalone: RegExp; orphanedTld: RegExp } | undefined;
 
 export function transformUnprotectedTelegramHtmlText(
   html: string,
@@ -27,32 +26,24 @@ export function transformUnprotectedTelegramHtmlText(
   return result + transform(html.slice(lastIndex));
 }
 
-function getFileReferencePattern(): RegExp {
-  if (fileReferencePattern) {
-    return fileReferencePattern;
+function getFileReferencePatterns() {
+  if (fileReferencePatterns) {
+    return fileReferencePatterns;
   }
   const fileExtensionsPattern = Array.from(FILE_REF_EXTENSIONS_WITH_TLD)
     .map(escapeRegExp)
     .join("|");
-  fileReferencePattern = new RegExp(
-    `(^|[^a-zA-Z0-9_\\-/])([a-zA-Z0-9_.\\-./]+\\.(?:${fileExtensionsPattern}))(?=$|[^a-zA-Z0-9_\\-/])`,
-    "gi",
-  );
-  return fileReferencePattern;
-}
-
-function getOrphanedTldPattern(): RegExp {
-  if (orphanedTldPattern) {
-    return orphanedTldPattern;
-  }
-  const fileExtensionsPattern = Array.from(FILE_REF_EXTENSIONS_WITH_TLD)
-    .map(escapeRegExp)
-    .join("|");
-  orphanedTldPattern = new RegExp(
-    `([^a-zA-Z0-9]|^)([A-Za-z]\\.(?:${fileExtensionsPattern}))(?=[^a-zA-Z0-9/]|$)`,
-    "g",
-  );
-  return orphanedTldPattern;
+  fileReferencePatterns = {
+    standalone: new RegExp(
+      `(^|[^a-zA-Z0-9_\\-/])([a-zA-Z0-9_.\\-./]+\\.(?:${fileExtensionsPattern}))(?=$|[^a-zA-Z0-9_\\-/])`,
+      "gi",
+    ),
+    orphanedTld: new RegExp(
+      `([^a-zA-Z0-9]|^)([A-Za-z]\\.(?:${fileExtensionsPattern}))(?=[^a-zA-Z0-9/]|$)`,
+      "g",
+    ),
+  };
+  return fileReferencePatterns;
 }
 
 function wrapStandaloneFileRef(match: string, prefix: string, filename: string): string {
@@ -69,8 +60,9 @@ function wrapSegmentFileRefs(text: string): string {
   if (!text.includes(".")) {
     return text;
   }
-  const wrappedStandalone = text.replace(getFileReferencePattern(), wrapStandaloneFileRef);
-  return wrappedStandalone.replace(getOrphanedTldPattern(), (match, prefix: string, tld: string) =>
+  const patterns = getFileReferencePatterns();
+  const wrappedStandalone = text.replace(patterns.standalone, wrapStandaloneFileRef);
+  return wrappedStandalone.replace(patterns.orphanedTld, (match, prefix: string, tld: string) =>
     prefix === ">" ? match : `${prefix}<code>${escapeTelegramHtml(tld)}</code>`,
   );
 }

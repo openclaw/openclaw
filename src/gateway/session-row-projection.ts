@@ -636,7 +636,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
         : row;
     },
     findBySessionId(query: Parameters<typeof findSessionRowById>[0]) {
-      return findSessionRowById(query, { disposed, lookup, matching });
+      return findSessionRowById(query, { disposed, lookup, matching, scope });
     },
     describe,
     ...createSessionRowAncestorReads({

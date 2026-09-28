@@ -111,6 +111,7 @@ const representativeConfigSteps: ConfigStep[] = [
   configSetJsonFile("channels-discord", "discord-channel", "channels.discord"),
   configSetJsonFile("channels-telegram", "telegram-channel", "channels.telegram"),
   configSetJsonFile("channels-whatsapp", "whatsapp-channel", "channels.whatsapp"),
+  configSetJsonFile("tools-tool-search", "tool-search", "tools.toolSearch"),
 ];
 
 const configuredPluginInstallSteps = [
@@ -227,8 +228,14 @@ export function resolveUpgradeSurvivorConfigSteps(
   if (updateChannel !== "stable" && updateChannel !== "beta") {
     throw new Error(`invalid upgrade survivor update channel: ${updateChannel}`);
   }
+  const toolSearchRecipe =
+    process.env.OPENCLAW_FROZEN_UPGRADE_SURVIVOR_TOOL_SEARCH_RECIPE ?? "current";
+  if (toolSearchRecipe !== "current" && toolSearchRecipe !== "absent") {
+    throw new Error(`invalid selected Tool Search recipe: ${toolSearchRecipe}`);
+  }
   const sharedSteps = sharedRecipe
     .slice(0, -1)
+    .filter((step) => step.intent !== "tool-search" || toolSearchRecipe === "current")
     .filter(
       (step) =>
         !connectionOnlyScenarios.has(scenario) || connectionOnlySharedIntents.has(step.intent),

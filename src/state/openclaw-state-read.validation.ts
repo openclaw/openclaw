@@ -7,16 +7,6 @@ import { isPluginBlobReadCommand } from "../plugin-state/plugin-blob-worker-cont
 import { isTuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
 import type { OpenClawStateReadRequest } from "./openclaw-state-read.types.js";
 
-function isTaskSnapshotScope(input: unknown): boolean {
-  return (
-    isRecord(input) &&
-    typeof input.taskId === "string" &&
-    (input.flowId === undefined || typeof input.flowId === "string") &&
-    (input.runId === undefined || typeof input.runId === "string") &&
-    (input.childSessionKey === undefined || typeof input.childSessionKey === "string")
-  );
-}
-
 export function isReadRequest(input: unknown): input is OpenClawStateReadRequest {
   if (!isRecord(input) || !isRecord(input.context) || !isRecord(input.command)) {
     return false;
@@ -110,13 +100,6 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
       input.command.type === "subagents.sessionList" ||
       (input.command.type === "subagents.forChildSession" &&
         typeof input.command.childSessionKey === "string") ||
-      (input.command.type === "tasks.mutationSnapshot" &&
-        (input.command.input === undefined ||
-          (Array.isArray(input.command.input)
-            ? Array.from(input.command.input).every(isTaskSnapshotScope)
-            : isTaskSnapshotScope(input.command.input)))) ||
-      (input.command.type === "tasks.retentionSource" &&
-        typeof input.command.taskId === "string") ||
       (input.command.type === "subagents.runs" &&
         isRecord(input.command.scope) &&
         ((input.command.scope.kind === "session" &&
@@ -242,6 +225,7 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         (input.command.profileIds === undefined ||
           (Array.isArray(input.command.profileIds) &&
             input.command.profileIds.every((id) => typeof id === "string")))) ||
+      input.command.type === "workers.placementRecoveryCandidates" ||
       (input.command.type === "workers.placementProjection" &&
         Array.isArray(input.command.sessionIds) &&
         input.command.sessionIds.every((id) => typeof id === "string") &&

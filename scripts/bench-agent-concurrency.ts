@@ -65,15 +65,11 @@ const SPAWN_INVARIANT_FIELDS = [
   "reservationsReleased",
   "blockedWaits",
   "settledRuns",
-  "settledTasks",
   "outstandingWaits",
   "durableSubagentRows",
-  "durableTaskRows",
   "durableStateFile",
   "postTeardownRegistryRows",
-  "postTeardownTaskRows",
   "postTeardownDurableSubagentRows",
-  "postTeardownDurableTaskRows",
   "postTeardownActiveRootWork",
 ] as const;
 

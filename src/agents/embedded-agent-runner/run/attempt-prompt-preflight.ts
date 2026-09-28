@@ -12,7 +12,6 @@ import {
   truncateOversizedToolResultsInSessionManager,
 } from "../tool-result-truncation.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
-import { resolveAttemptStreamAuthProfileId } from "./attempt-run-decisions.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
@@ -188,7 +187,7 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
         replay: {
           model: attempt.model,
           sessionId: attempt.sessionId,
-          authProfileId: resolveAttemptStreamAuthProfileId(attempt),
+          authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
           enabled: input.compactionReplayEnabled,
         },
       });

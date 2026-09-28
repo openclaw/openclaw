@@ -13,11 +13,11 @@ import { installGlobalProxy } from "@openclaw/proxyline";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
+import { captureWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
 import {
   parseWorkerWorkspaceManifest,
   serializeWorkerWorkspaceManifest,
 } from "../gateway/worker-environments/workspace-manifest.js";
-import { readActualWorkspaceManifest } from "../gateway/worker-environments/workspace-reconcile.js";
 import { runNodeWorkerWorkspaceTransfer } from "./node-worker-transfer-client.js";
 import { listen } from "./node-worker-transfer-client.test-support.js";
 
@@ -426,9 +426,8 @@ describe("node worker transfer client", () => {
       expect(hidPeerCertificate).toBe(true);
 
       await fs.writeFile(path.join(workspaceDir, "changed.txt"), "changed on node\n");
-      uploadManifestRef = (
-        await readActualWorkspaceManifest({ root: workspaceDir, baseCommit: null })
-      ).manifestRef;
+      uploadManifestRef = (await captureWorkspaceManifest({ root: workspaceDir, baseCommit: null }))
+        .manifestRef;
       await expect(
         runNodeWorkerWorkspaceTransfer({
           gatewayUrl,
@@ -842,9 +841,8 @@ describe("node worker transfer client", () => {
           Buffer.from("captured tail\n"),
         ]),
       );
-      const currentRef = (
-        await readActualWorkspaceManifest({ root: workspaceDir, baseCommit: null })
-      ).manifestRef;
+      const currentRef = (await captureWorkspaceManifest({ root: workspaceDir, baseCommit: null }))
+        .manifestRef;
       await expect(
         runNodeWorkerWorkspaceTransfer({
           gatewayUrl,
@@ -940,9 +938,8 @@ describe("node worker transfer client", () => {
       deepStrictEqual(await fs.readFile(path.join(workspaceDir, "large.bin")), body);
 
       await fs.writeFile(path.join(workspaceDir, "large.bin"), Buffer.alloc(body.byteLength, "b"));
-      uploadManifestRef = (
-        await readActualWorkspaceManifest({ root: workspaceDir, baseCommit: null })
-      ).manifestRef;
+      uploadManifestRef = (await captureWorkspaceManifest({ root: workspaceDir, baseCommit: null }))
+        .manifestRef;
       await expect(
         runNodeWorkerWorkspaceTransfer({
           gatewayUrl,

@@ -1,6 +1,5 @@
 import { vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { getTaskRegistryProcessState } from "../../../tasks/task-registry.process-state.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import * as mod from "./subagent-registry.test-helpers.js";
 
@@ -57,19 +56,7 @@ export function createLifecycleAgentCallWaits(
 }
 
 export function createLifecycleWaits(requesterSessionKey: string) {
-  const flushAsync = async () => {
-    await vi.dynamicImportSettled();
-    // Fake-time polling does not join native worker commits. Delivery can enqueue
-    // another task mutation after terminal settlement, so drain each accepted tail.
-    for (
-      let pending = getTaskRegistryProcessState().projection.mutationTail;
-      pending;
-      pending = getTaskRegistryProcessState().projection.mutationTail
-    ) {
-      await pending;
-      await vi.dynamicImportSettled();
-    }
-  };
+  const flushAsync = () => vi.dynamicImportSettled();
 
   const waitForCleanupHandledFalse = async (runId: string) => {
     // Cleanup can be released asynchronously after announce failure; poll fake

@@ -123,6 +123,10 @@
   padding: 7px;
 }
 
+.channels-detail__close svg {
+  stroke-width: 2;
+}
+
 .channels-detail__body {
   display: grid;
   gap: var(--space-3);

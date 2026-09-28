@@ -221,8 +221,11 @@ export function createRuntimeImportGraph(
         // Exact runtime files and computed generator inputs can be outside the
         // compiler's discovered graph. Admit them into this same projection.
         roots.add(absolute);
-        const updated = session.api.updateSnapshot({ fileChanges: { changed: [configFileName] } });
-        const nextProject = updated.getProject(configFileName);
+        const updated = snapshot.update({
+          fileNotifications: { changed: [configFileName] },
+          ensurePrograms: true,
+        });
+        const nextProject = updated.getConfiguredProject(configFileName);
         if (!nextProject) {
           throw new Error(`Native TypeScript did not reopen runtime graph ${configFileName}`);
         }

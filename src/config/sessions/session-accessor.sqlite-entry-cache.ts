@@ -330,7 +330,12 @@ function publishSqliteSessionEntryCacheUpsert(
 
 export function publishSessionEntryCacheInvalidation(
   database: SessionEntryCacheDatabase & { path: string },
-  update: { sessionKey: string; entry?: SessionEntry; facts?: SessionRowFacts },
+  update: {
+    sessionKey: string;
+    entry?: SessionEntry;
+    previousEntry?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
+    facts?: SessionRowFacts;
+  },
   writeGeneration?: SqliteSessionEntryCacheWriteGeneration,
 ): void {
   let facts = update.facts;

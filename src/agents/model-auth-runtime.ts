@@ -138,6 +138,7 @@ type RuntimeProviderAuthParams = {
   allowPluginSyntheticAuth?: boolean;
   runtimeLookup?: RuntimeProviderAuthLookup;
   modelApi?: string;
+  capability?: string;
   store?: AuthProfileStore;
 };
 
@@ -172,6 +173,7 @@ function resolveRuntimeAvailableProviderAuth<T>(
     isAuthModeAllowedForModel({
       provider,
       modelApi: params.modelApi,
+      capability: params.capability,
       mode: envAuth.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
     }) &&
     (!authConfig.isConfigBackedInlineProviderApiKey({
@@ -190,7 +192,9 @@ function resolveRuntimeAvailableProviderAuth<T>(
       provider,
       env: params.env,
     }) &&
-    inlineProviderApiKeyUsable
+    inlineProviderApiKeyUsable &&
+    (!params.capability ||
+      isAuthModeAllowedForModel({ provider, capability: params.capability, mode: "api-key" }))
   ) {
     return true;
   }
@@ -200,6 +204,13 @@ function resolveRuntimeAvailableProviderAuth<T>(
   });
   if (
     managedRuntimeAuth &&
+    (!params.capability ||
+      isAuthModeAllowedForModel({
+        provider,
+        capability: params.capability,
+        mode: managedRuntimeAuth.mode,
+        authFlow: managedRuntimeAuth.authFlow,
+      })) &&
     (!authConfig.isConfigBackedInlineProviderApiKey({
       cfg: params.cfg,
       provider,

@@ -219,6 +219,7 @@ describe("GatewayChatClient", () => {
       const client = new CapturingGatewayChatClient({
         url: "wss://remote.example/rpc",
         deviceAuthScope: "wss://remote.example/rpc",
+        sshTunnel: { target: "me@studio", remotePort: 18789 },
         token: "test-token",
         tlsFingerprint: "sha256:11:22:33:44",
         preauthHandshakeTimeoutMs: 30_000,
@@ -233,6 +234,7 @@ describe("GatewayChatClient", () => {
         preauthHandshakeTimeoutMs: 30_000,
         tlsFingerprint: "sha256:11:22:33:44",
         deviceAuthScope: "wss://remote.example/rpc",
+        sshTunnel: { target: "me@studio", remotePort: 18789 },
         notifyOnStartupRetry: true,
       });
       expect(constructedOptions[0]).not.toHaveProperty("deviceIdentity");

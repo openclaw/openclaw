@@ -2,11 +2,18 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import net from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import * as webhookIngressSdk from "openclaw/plugin-sdk/webhook-ingress";
 import {
   applyBasicWebhookRequestGuards,
   createFixedWindowRateLimiter,
   WEBHOOK_RATE_LIMIT_DEFAULTS,
 } from "openclaw/plugin-sdk/webhook-ingress";
+
+// The 2026.9.6 host predates Gateway-owned legacy listeners and Doctor info notes.
+// Retire this adapter when the declared host floor includes that Gateway capability.
+export const telegramWebhookHost: Partial<
+  Pick<typeof webhookIngressSdk, "getWebhookLegacyListener">
+> = webhookIngressSdk;
 
 function parseIpLiteral(value: string | undefined): string | undefined {
   const trimmed = value?.trim();

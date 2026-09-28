@@ -205,6 +205,7 @@ data class ChatToolActivity(
   val arguments: kotlinx.serialization.json.JsonObject? = null,
   @kotlinx.serialization.Transient val activity: ChatAgentActivity? = null,
   @kotlinx.serialization.Transient val activityPrepared: Boolean = false,
+  @kotlinx.serialization.Transient val browserTab: ChatBrowserTab? = null,
 )
 
 @Serializable
@@ -260,21 +261,6 @@ data class ChatDiffStat(
   val removed: Int,
   val files: Int? = null,
 )
-
-data class ChatSubagentActivity(
-  val id: String,
-  val status: String,
-  val snippet: String?,
-  val diffStat: ChatDiffStat?,
-  val terminalSummary: String?,
-  val error: String?,
-  val startedAtMs: Long,
-  val endedAtMs: Long?,
-  val childSessionKey: String?,
-) {
-  val isWorking: Boolean
-    get() = status == "queued" || status == "running"
-}
 
 enum class ChatPlanStepStatus {
   Pending,
@@ -462,6 +448,9 @@ data class ChatSessionEntry(
   val updatedAtMs: Long?,
   val sessionId: String? = null,
   val ownerAgentId: String? = null,
+  val createdActorType: String? = null,
+  val createdVia: String? = null,
+  val subject: String? = null,
   val classification: String? = null,
   val accountId: String? = null,
   val peerKind: String? = null,
@@ -516,6 +505,10 @@ data class ChatSessionEntry(
   val hasActiveRunMetadata: Boolean = hasActiveRun != null || activeRunIds != null,
   val hasActiveRunIdsMetadata: Boolean = activeRunIds != null,
   val parentSessionKey: String? = null,
+  val worktreeId: String? = null,
+  val hasWorktreeMetadata: Boolean = worktreeId != null,
+  val spawnDepth: Int? = null,
+  val forkedFromParent: Boolean? = null,
   val spawnedBy: String? = null,
   val hasActiveSubagentRun: Boolean? = null,
   val subagentRunState: String? = null,

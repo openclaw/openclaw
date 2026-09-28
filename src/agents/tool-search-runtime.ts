@@ -503,7 +503,7 @@ export class ToolSearchRuntime {
     catalog.callCount += 1;
     const normalizedInput = input ?? {};
     const parentId = sanitizeToolCallIdPart(options?.parentToolCallId ?? "direct");
-    const toolCallId = `tool_search_code:${parentId}:${entry.name}:${++this.callSequence}`;
+    const toolCallId = `tool_call:${parentId}:${entry.name}:${++this.callSequence}`;
     bindJoinedCollectorInvocation(entry.tool, toolCallId);
     await assertCatalogOutputSchemaIsValid(entry);
     const outputVariants =

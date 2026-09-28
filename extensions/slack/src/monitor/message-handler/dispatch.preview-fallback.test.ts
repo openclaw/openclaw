@@ -3507,10 +3507,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(collectNativeTaskUpdates()).toEqual([]);
     expectNativeStreamText("Checking");
     // A snapshot arriving inside the throttle window rides the completion append.
-    expectNativeProgressAppend(0, [
-      { type: "markdown_text", text: " the Slack handler" },
-      planUpdate("Working"),
-    ]);
+    expectNativeProgressAppend(0, [{ type: "markdown_text", text: " the Slack handler" }]);
     expectNativeStreamText(`\n${FINAL_REPLY_TEXT}`);
   });
 

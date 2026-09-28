@@ -172,7 +172,7 @@ describe("hosted media provider live CLI", () => {
         providers: [],
         skippedReason: "no providers selected",
       },
-      { suite: MEDIA_SUITES.video, providers: ["openai"] },
+      { suite: MEDIA_SUITES.video, providers: [], skippedReason: "no providers selected" },
     ]);
 
     expect(skipped).toEqual([]);
@@ -209,6 +209,7 @@ describe("hosted media provider live CLI", () => {
   it("defaults to all suites with auth filtering", async () => {
     vi.stubEnv("TEST_AUTH_OPENAI", "1");
     vi.stubEnv("TEST_AUTH_GOOGLE", "1");
+    vi.stubEnv("TEST_AUTH_KIE", "1");
     vi.stubEnv("TEST_AUTH_MINIMAX", "1");
     vi.stubEnv("TEST_AUTH_FAL", "1");
     vi.stubEnv("TEST_AUTH_VYDRA", "1");
@@ -230,15 +231,20 @@ describe("hosted media provider live CLI", () => {
     expect(requirePlanEntry(plan, "music").providers).toEqual(["fal", "google", "minimax"]);
     expect(requirePlanEntry(plan, "video").providers).toEqual([
       "google",
+      "kie",
       "minimax",
-      "openai",
       "vydra",
     ]);
   });
 
   it("supports suite-specific provider filters without auth narrowing", async () => {
     const plan = await buildRunPlan(
-      parseArgs(["video", "--video-providers", "fal,openai,runway", "--all-providers"]),
+      parseArgs([
+        "video",
+        "--video-providers",
+        "fal,google,kie,novita,pixverse,runway,zai",
+        "--all-providers",
+      ]),
       {
         collectProviderApiKeysImpl: collectProviderApiKeysMock,
         getProviderEnvVarsImpl: (provider) => [`TEST_AUTH_${provider.toUpperCase()}`],
@@ -249,7 +255,15 @@ describe("hosted media provider live CLI", () => {
     expect(plan).toHaveLength(1);
     const [entry] = plan;
     expect(entry?.suite.id).toBe("video");
-    expect(entry?.providers).toEqual(["fal", "openai", "runway"]);
+    expect(entry?.providers).toEqual([
+      "fal",
+      "google",
+      "kie",
+      "novita",
+      "pixverse",
+      "runway",
+      "zai",
+    ]);
   });
 
   it("forwards quiet flags separately from passthrough args", () => {

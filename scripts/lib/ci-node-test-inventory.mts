@@ -5,6 +5,7 @@ import {
 } from "../../test/vitest/vitest.agents-paths.mjs";
 import { getCliVitestProjectOwner } from "../../test/vitest/vitest.cli-paths.mjs";
 import { cliProcessTestFiles } from "../../test/vitest/vitest.cli-process-paths.mjs";
+import { commandsLightTestFiles } from "../../test/vitest/vitest.commands-light-paths.mjs";
 import {
   databaseWorkerCoreTestFiles,
   isDatabaseWorkerCoreTestFile,
@@ -21,17 +22,22 @@ import {
   gatewayMethodsTestExclude,
   gatewayMethodsIsolatedTestFiles,
 } from "../../test/vitest/vitest.gateway-server-paths.mjs";
-import { filterFilesByPatterns } from "../../test/vitest/vitest.include-patterns.ts";
+import {
+  filterFilesByPatterns,
+  isPlainRepoRelativePath,
+} from "../../test/vitest/vitest.include-patterns.ts";
 import {
   autoReplyCoreTestInclude,
   autoReplyCoreTestExclude,
   autoReplyTopLevelReplyTestInclude,
+  tuiPtyTestFiles,
 } from "../../test/vitest/vitest.test-shards.mjs";
 import {
   getUnitFastTestFiles,
   getUnitFastIsolatedTestFiles,
 } from "../../test/vitest/vitest.unit-fast-paths.mjs";
 import {
+  boundaryTestFiles,
   bundledPluginDependentUnitTestFiles,
   filterUnitConfigTestFiles,
 } from "../../test/vitest/vitest.unit-paths.mjs";
@@ -47,13 +53,17 @@ export function listScopedOwnerTestFiles(owner: {
   // Scoped configs drop unit-fast files, so a lister that keeps them prices
   // stripes on files the shard never runs and hands Vitest inert patterns.
   const unitFastFiles = new Set(getUnitFastTestFiles());
-  return filterFilesByPatterns(
-    listTrackedTestFiles(owner.root).filter((file) =>
-      isStripeEligibleTestFile(file, unitFastFiles),
-    ),
-    owner.include,
-    owner.exclude,
-    matchesGlob,
+  const files = listTrackedTestFiles(owner.root).filter((file) =>
+    isStripeEligibleTestFile(file, unitFastFiles),
+  );
+  const literalFiles = new Set(files.filter(isPlainRepoRelativePath));
+  const literalPatterns = new Set(
+    [...owner.include, ...owner.exclude].filter(isPlainRepoRelativePath),
+  );
+  return filterFilesByPatterns(files, owner.include, owner.exclude, (file, pattern) =>
+    literalFiles.has(file) && literalPatterns.has(pattern)
+      ? file === pattern
+      : matchesGlob(file, pattern),
   );
 }
 
@@ -69,12 +79,6 @@ const runtimeSharedProjectOwners = [
     root: "src/shared",
     include: ["src/shared/**/*.test.ts"],
     exclude: [],
-  },
-  {
-    config: "test/vitest/vitest.tasks.config.ts",
-    root: "src/tasks",
-    include: ["src/tasks/**/*.test.ts"],
-    exclude: databaseWorkerCoreTestFiles,
   },
   {
     config: "test/vitest/vitest.utils.config.ts",
@@ -138,6 +142,11 @@ const CONFIG_FILE_OWNERS = new Map<string, Parameters<typeof listScopedOwnerTest
   ],
 ]);
 const EXACT_CONFIG_FILES = new Map<string, string[]>([
+  ["test/vitest/vitest.boundary.config.ts", boundaryTestFiles],
+  [
+    "test/vitest/vitest.tui-pty.config.ts",
+    ["src/tui/tui-pty-harness-assertion-test-support.test.ts", ...tuiPtyTestFiles],
+  ],
   ["test/vitest/vitest.gateway-server-isolated.config.ts", gatewayServerIsolatedTestFiles],
   ["test/vitest/vitest.gateway-database-workers.config.ts", gatewayDatabaseWorkerTestFiles],
 ]);
@@ -166,6 +175,53 @@ const WHOLE_CONFIG_FILE_OWNERS = new Map<
   string,
   { listFiles: () => string[]; splitByFile?: false }
 >([
+  [
+    "agentic-agents-tools",
+    {
+      listFiles: () => listScopedOwnerTestFiles(agentVitestProjectOwners.tools),
+      splitByFile: false,
+    },
+  ],
+  [
+    "auto-reply-core-top-level",
+    {
+      listFiles: () => [
+        ...listNodeTestConfigFiles("test/vitest/vitest.auto-reply-core.config.ts")!,
+        ...listNodeTestConfigFiles("test/vitest/vitest.auto-reply-top-level.config.ts")!,
+      ],
+      splitByFile: false,
+    },
+  ],
+  [
+    "agentic-command-support",
+    {
+      listFiles: () => [
+        ...listScopedOwnerTestFiles({
+          root: "src/commands",
+          include: commandsLightTestFiles,
+          exclude: databaseWorkerCoreTestFiles,
+        }),
+        ...listScopedOwnerTestFiles({
+          root: "src",
+          include: ["src/daemon/**/*.test.ts"],
+          exclude: [],
+        }),
+      ],
+      splitByFile: false,
+    },
+  ],
+  [
+    "core-runtime-hooks",
+    {
+      listFiles: () =>
+        listScopedOwnerTestFiles({
+          root: "src/hooks",
+          include: ["src/hooks/**/*.test.ts"],
+          exclude: databaseWorkerCoreTestFiles,
+        }),
+      splitByFile: false,
+    },
+  ],
   [
     "core-runtime-shared",
     {
@@ -212,10 +268,7 @@ const WHOLE_CONFIG_FILE_OWNERS = new Map<
     "agentic-gateway-server-isolated",
     { listFiles: () => [...gatewayServerIsolatedTestFiles, ...gatewayDatabaseWorkerTestFiles] },
   ],
-  [
-    "agentic-cli",
-    { listFiles: () => listScopedOwnerTestFiles(getCliVitestProjectOwner()), splitByFile: false },
-  ],
+  ["agentic-cli", { listFiles: () => listScopedOwnerTestFiles(getCliVitestProjectOwner()) }],
   ["agentic-cli-process", { listFiles: () => cliProcessTestFiles }],
   [
     "agentic-agents-support",

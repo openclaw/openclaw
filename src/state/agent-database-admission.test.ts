@@ -1,11 +1,19 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
+import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { AgentDatabaseAdmissionRefusalSchema } from "../../packages/gateway-protocol/src/schema/agent-database-admission.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
+  findStartupMaintenanceRequiredError,
+  StartupMaintenanceRequiredError,
+} from "../infra/startup-maintenance-required.js";
+import {
+  AgentDatabaseAdmissionError,
   captureAgentDatabaseAdmission,
   createAgentDatabaseInspectionRefusal,
   evaluateAgentDatabaseAdmissions,
@@ -13,6 +21,7 @@ import {
   readAgentDatabaseAdmissionRefusal,
   recordAgentDatabaseAdmissions,
 } from "./agent-database-admission.js";
+import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -33,6 +42,99 @@ afterEach(() => {
 });
 
 describe("agent database admission", () => {
+  it("does not let an unavailable required agent hide a newer required database", async () => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-admission-mixed-") };
+    const config: OpenClawConfig = {
+      agents: {
+        entries: { main: { default: true }, worker: {} },
+        defaults: { systemAgent: { agentId: "worker" } },
+      },
+    };
+    const unavailablePath = openOpenClawAgentDatabase({ agentId: "main", env }).path;
+    const newerPath = openOpenClawAgentDatabase({ agentId: "worker", env }).path;
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    // The registered path exists but cannot be opened as a database; no schema fact is available.
+    fs.unlinkSync(unavailablePath);
+    fs.mkdirSync(unavailablePath);
+    const database = new (requireNodeSqlite().DatabaseSync)(newerPath);
+    database.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`);
+    database.close();
+    await withAgentDatabaseStartupAdmission(async () => {
+      const failure = await assertOpenClawDatabasesReady({
+        env,
+        operation: "gateway-startup",
+        config,
+      }).catch((error: unknown) => error);
+      expect(findStartupMaintenanceRequiredError(failure)).toMatchObject({ kind: "newer-schema" });
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect(String(failure)).toContain(unavailablePath);
+      expect(String(failure)).toContain(newerPath);
+    });
+  });
+
+  it("keeps a secondary with malformed ownership isolated while required agents start", async () => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-admission-ownerless-") };
+    const config: OpenClawConfig = {
+      agents: { entries: { main: { default: true }, worker: {} } },
+    };
+    openOpenClawAgentDatabase({ agentId: "main", env });
+    const pathname = openOpenClawAgentDatabase({ agentId: "worker", env }).path;
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    const database = new (requireNodeSqlite().DatabaseSync)(pathname);
+    database.exec("UPDATE schema_meta SET agent_id = NULL WHERE meta_key = 'primary'");
+    database.close();
+    const before = fs.readFileSync(pathname);
+    await withAgentDatabaseStartupAdmission(async () => {
+      await expect(
+        assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config }),
+      ).resolves.toBeUndefined();
+      expect(readAgentDatabaseAdmissionRefusal("worker", { env })).toMatchObject({
+        code: "agent-database-inspection-failed",
+        reason: expect.stringContaining("no agent owner"),
+      });
+      expect(readAgentDatabaseAdmissionRefusal("main", { env })).toBeUndefined();
+      expect(fs.readFileSync(pathname)).toEqual(before);
+    });
+  });
+
+  it.each([false, true])(
+    "retains merged inspection causes without changing public refusals (maintenance first=%s)",
+    (maintenanceFirst) => {
+      const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-admission-causes-") };
+      const maintenance = new StartupMaintenanceRequiredError(
+        "state-migrations",
+        "repair required",
+      );
+      const failures = [new Error("storage unavailable"), maintenance];
+      if (maintenanceFirst) {
+        failures.reverse();
+      }
+      recordAgentDatabaseAdmissions(
+        failures.map((cause, index) =>
+          createAgentDatabaseInspectionRefusal({
+            agentId: "main",
+            paths: [`/synthetic/${index}.sqlite`],
+            reason: cause.message,
+            cause,
+          }),
+        ),
+        { env },
+      );
+      const refusal = expectDefined(
+        readAgentDatabaseAdmissionRefusal("main", { env }),
+        "Expected the merged refusal",
+      );
+      const failure = new AgentDatabaseAdmissionError(refusal);
+      expect(findStartupMaintenanceRequiredError(failure)).toBe(maintenance);
+      expect(Value.Check(AgentDatabaseAdmissionRefusalSchema, refusal)).toBe(true);
+      expect(() => captureAgentDatabaseAdmission("main", { env })()).toThrow(
+        expect.objectContaining({ cause: failure.cause }),
+      );
+    },
+  );
+
   it("retains its selected agent and state while observing current refusal publications", () => {
     const stateDir = tempDirs.make("openclaw-prepared-admission-");
     const env = { OPENCLAW_STATE_DIR: stateDir };

@@ -16,7 +16,7 @@ import { resolveGatewayService } from "../daemon/service.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveCleanupPlanForDryRun, resolveCleanupPlanForRemoval } from "./cleanup-plan.js";
 import {
-  listAgentSessionDirs,
+  removeAgentSessions,
   removePath,
   removeStateAndLinkedPaths,
   removeWorkspaceDirs,
@@ -154,20 +154,15 @@ export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
 
   let failed = false;
   if (scope === "config+creds+sessions") {
+    try {
+      await removeAgentSessions(cleanupPlan, runtime, { dryRun });
+    } catch (error) {
+      runtime.error(`Failed to reset session history: ${String(error)}`);
+      failed = true;
+    }
     const configRemoval = await removePath(configPath, runtime, { dryRun, label: configPath });
     const oauthRemoval = await removePath(oauthDir, runtime, { dryRun, label: oauthDir });
-    failed = !configRemoval.ok || !oauthRemoval.ok;
-    const sessionDirs = await listAgentSessionDirs(stateDir).catch((error: unknown) => {
-      runtime.error(`Failed to inspect session directories: ${String(error)}`);
-      failed = true;
-      return [];
-    });
-    // Session stores are per-agent directories under state; enumerate them from
-    // disk so reset handles agents that are no longer present in config.
-    for (const dir of sessionDirs) {
-      const removal = await removePath(dir, runtime, { dryRun, label: dir });
-      failed ||= !removal.ok;
-    }
+    failed ||= !configRemoval.ok || !oauthRemoval.ok;
   }
 
   if (scope === "full") {

@@ -199,6 +199,10 @@ public enum OpenClawChatGatewayPayloadCodec {
             return .modelSelectionChanged
         case "sessions.changed":
             return decode(OpenClawChatSessionsChangedEvent.self).map(OpenClawChatTransportEvent.sessionsChanged)
+        case "session.narration":
+            // Native foreground subscriptions use full streams; bounded narration
+            // tails cannot replace transcript messages.
+            return nil
         case "session.observer":
             return decode(SessionObserverDigest.self).map(OpenClawChatTransportEvent.sessionObserver)
         case "seqGap":
@@ -238,8 +242,6 @@ public enum OpenClawChatGatewayPayloadCodec {
             return decode(OpenClawAgentEventPayload.self).map(OpenClawChatTransportEvent.agent)
         case "progressCard.changed":
             return decode(ProgressCardChangedEvent.self).map(OpenClawChatTransportEvent.progressCardChanged)
-        case "task":
-            return decode(OpenClawChatTaskEvent.self).map(OpenClawChatTransportEvent.task)
         case "question.requested":
             return decode(QuestionRecord.self).map(OpenClawChatTransportEvent.questionRequested)
         case "question.resolved":

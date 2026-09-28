@@ -21,7 +21,6 @@ import {
 } from "./browser/server-context.lifecycle.js";
 import { startBrowserControlServiceFromConfig } from "./control-service.js";
 
-type SessionBorrow = ReturnType<SessionBrowserAuthority["retainSession"]>;
 const MAX_SESSION_DASHBOARDS = 64;
 
 function keyFor(definition: BrowserDashboardDefinition) {
@@ -64,7 +63,7 @@ async function createResource(
       "The Gateway has reached its isolated dashboard limit. Remove an unused browser widget and retry.",
     );
   }
-  const session: SessionBorrow = authority.retainSession();
+  const session = authority.retainSession();
   const controller = new AbortController();
   const key = keyFor(definition);
   let retired = false;
@@ -77,7 +76,7 @@ async function createResource(
   const close = () => {
     retired = true;
     controller.abort(new Error("The isolated browser dashboard was retired."));
-    session.signal.removeEventListener("abort", onSessionAbort);
+    session.signal.removeEventListener("abort", onAbort);
     session.release();
     removeProfileAbort?.();
     removeProfileAbort = undefined;
@@ -134,10 +133,10 @@ async function createResource(
     },
     close,
   };
-  const onSessionAbort = () => {
+  const onAbort = () => {
     void close().catch(() => {});
   };
-  session.signal.addEventListener("abort", onSessionAbort, { once: true });
+  session.signal.addEventListener("abort", onAbort, { once: true });
   resources.set(key, resource);
   try {
     authority.assertCurrent();
@@ -180,12 +179,8 @@ async function createResource(
           throw new Error("The browser profile changed. Reopen the dashboard.");
         }
       };
-      const onProfileAbort = () => {
-        void close().catch(() => {});
-      };
-      lifecycle.controller.signal.addEventListener("abort", onProfileAbort, { once: true });
-      removeProfileAbort = () =>
-        lifecycle.controller.signal.removeEventListener("abort", onProfileAbort);
+      lifecycle.controller.signal.addEventListener("abort", onAbort, { once: true });
+      removeProfileAbort = () => lifecycle.controller.signal.removeEventListener("abort", onAbort);
       const playwright = await getPwAiModule({ mode: "strict" });
       authority.assertCurrent();
       assertProfileCurrent();

@@ -49,7 +49,6 @@ function runtime(catalog = CATALOG): ToolSearchRuntime {
   return new ToolSearchRuntime(ctx as never, {
     enabled: true,
     mode: "directory",
-    codeTimeoutMs: 1000,
     searchDefaultLimit: 10,
     maxSearchLimit: 50,
   });

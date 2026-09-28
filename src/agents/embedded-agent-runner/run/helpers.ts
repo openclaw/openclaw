@@ -146,12 +146,7 @@ export function buildUsageAgentMetaFields(params: {
   };
 }
 
-/**
- * Build agentMeta for error return paths, preserving accumulated usage so that
- * session totalTokens reflects the actual context size rather than going stale.
- * Without this, error returns omit usage and the session keeps whatever
- * totalTokens was set by the previous successful run.
- */
+/** Error returns retain usage so the session does not keep an older context total. */
 export function buildErrorAgentMeta(params: {
   sessionId: string;
   sessionFile?: string;
