@@ -28,8 +28,9 @@ function hasMeaningfulConversationContent(message: AgentMessage): boolean {
   if ("excludeFromContext" in message && message.excludeFromContext === true) {
     return false;
   }
-  if (message.role === "custom") {
-    return message.display !== false && hasMeaningfulMessageContent(message.content);
+  if ((message as { role?: unknown }).role === "custom") {
+    const custom = message as { content?: unknown; display?: unknown };
+    return custom.display !== false && hasMeaningfulMessageContent(custom.content);
   }
   if (message.role === "bashExecution") {
     const command = typeof message.command === "string" ? message.command : "";

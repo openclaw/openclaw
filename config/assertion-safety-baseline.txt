@@ -1383,7 +1383,7 @@ src/agents/compaction-planning-projection.ts	6
 src/agents/compaction-planning-worker.ts	1
 src/agents/compaction-planning.ts	1
 src/agents/compaction-planning.worker.ts	1
-src/agents/compaction-real-conversation.ts	2
+src/agents/compaction-real-conversation.ts	4
 src/agents/compaction-usage.ts	1
 src/agents/compaction.ts	4
 src/agents/content-blocks.ts	1
