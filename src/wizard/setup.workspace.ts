@@ -1,11 +1,34 @@
+import fs from "node:fs";
+import path from "node:path";
 import {
   resolveOnboardingWorkspaceConflict,
   type OnboardingWorkspaceConflict,
 } from "../commands/onboard-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isMissingPathError } from "../infra/errno.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
+
+export function validateSetupWorkspacePath(workspaceDir: string): string | undefined {
+  let candidate = resolveUserPath(workspaceDir);
+  while (true) {
+    try {
+      return fs.statSync(candidate).isDirectory()
+        ? undefined
+        : t("wizard.setup.workspaceNotDirectory", { path: candidate });
+    } catch (error) {
+      if (!isMissingPathError(error)) {
+        return undefined;
+      }
+    }
+    const parent = path.dirname(candidate);
+    if (parent === candidate) {
+      return undefined;
+    }
+    candidate = parent;
+  }
+}
 
 /** Resolves a proposed setup workspace without silently remapping an existing fleet. */
 export async function resolveSetupWorkspaceSelection(params: {
@@ -21,6 +44,10 @@ export async function resolveSetupWorkspaceSelection(params: {
   allowWorkspaceChange: boolean;
   conflict?: OnboardingWorkspaceConflict;
 }> {
+  const workspaceError = validateSetupWorkspacePath(params.requestedWorkspaceDir);
+  if (workspaceError) {
+    throw new Error(workspaceError);
+  }
   if (
     params.approvedWorkspaceDir &&
     resolveUserPath(params.approvedWorkspaceDir) === resolveUserPath(params.requestedWorkspaceDir)

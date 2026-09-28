@@ -436,6 +436,7 @@ export const en = {
         "Existing agents currently use {current}. The requested workspace is {requested}. Changing this fleet-wide default can disconnect agents from their memory and bootstrap files.",
       workspaceConflictTitle: "Existing agent workspace",
       workspaceDirectory: "Workspace directory",
+      workspaceNotDirectory: '"{path}" is not a directory. Choose a workspace inside a directory.',
     },
     security: {
       askForHelp:

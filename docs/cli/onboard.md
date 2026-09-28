@@ -154,7 +154,9 @@ baseline setup resumes under its existing onboarding owner.
 In guided mode, `--workspace <dir>` supplies OpenClaw's proposed workspace
 and the isolated inference context. It is not persisted until you approve the
 OpenClaw setup proposal. Classic and noninteractive onboarding persist their
-workspace through their normal setup flow. On a rerun with an existing agent
+workspace through their normal setup flow. A workspace must be a directory or
+a new path beneath directories; a file or non-directory ancestor is rejected
+before setup or reset, with the blocking path named. On a rerun with an existing agent
 roster, onboarding preserves the configured fleet workspace: the classic
 wizard shows both paths and requires explicit confirmation before moving it,
 while non-interactive setup warns and keeps the current value.

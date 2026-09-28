@@ -426,6 +426,7 @@ export const zh_CN = {
         "现有 agent 当前使用 {current}。请求的工作区是 {requested}。更改此 fleet-wide 默认值可能会使 agent 与其记忆和 bootstrap 文件断开连接。",
       workspaceConflictTitle: "现有 agent 工作区",
       workspaceDirectory: "工作区目录",
+      workspaceNotDirectory: '"{path}" 不是目录。请在目录中选择工作区路径。',
     },
     security: {
       askForHelp: "启用工具或暴露到互联网之前，请找有经验的人协助。",
