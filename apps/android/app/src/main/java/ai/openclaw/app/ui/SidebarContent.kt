@@ -290,7 +290,7 @@ internal fun sidebarCatalogSessionCreationEnabled(
   catalog: SessionCatalog,
   canMutateSessions: Boolean,
   canStartTerminal: Boolean,
-): Boolean = if (catalog.canStartTerminal) canStartTerminal else catalog.canCreateSession && canMutateSessions
+): Boolean = if (catalog.canCreateSession) canMutateSessions else catalog.canStartTerminal && canStartTerminal
 
 internal fun toggleSidebarCatalogExpansion(
   expandedCatalogIds: List<String>,
@@ -807,7 +807,7 @@ internal fun OpenClawSidebar(
                 catalogSections.forEach { section ->
                   val catalog = section.catalog
                   val primaryActionAvailable = sidebarCatalogSessionCreationEnabled(catalog, canMutateSessions, canStartTerminal)
-                  val separateChatAvailable = catalog.canStartTerminal && catalog.canCreateSession && canMutateSessions
+                  val separateTerminalAvailable = catalog.canCreateSession && catalog.canStartTerminal && canStartTerminal
                   key("catalog:${catalog.id}") {
                     SidebarCollapsibleHeader(
                       label = catalog.label,
@@ -819,20 +819,20 @@ internal fun OpenClawSidebar(
                       },
                       trailingContent =
                         if (
-                          (primaryActionAvailable || separateChatAvailable) &&
+                          (primaryActionAvailable || separateTerminalAvailable) &&
                           catalogState.continuingEntryId == null
                         ) {
                           {
                             Row {
-                              if (separateChatAvailable) {
+                              if (separateTerminalAvailable) {
                                 IconButton(
-                                  onClick = { onCreateCatalogSession(catalog.id) },
+                                  onClick = { onStartCatalogSession(catalog) },
                                   enabled = !sessionCreating,
                                   modifier = Modifier.size(40.dp),
                                 ) {
                                   Icon(
-                                    imageVector = ClawIcons.Chat,
-                                    contentDescription = nativeString("\$action — \$catalog", nativeString("New chat"), catalog.label),
+                                    imageVector = ClawIcons.Terminal,
+                                    contentDescription = nativeString("\$action — \$catalog", nativeString("New terminal session"), catalog.label),
                                     tint = palette.text,
                                     modifier = Modifier.size(18.dp),
                                   )
@@ -840,13 +840,13 @@ internal fun OpenClawSidebar(
                               }
                               if (primaryActionAvailable) {
                                 IconButton(
-                                  onClick = { if (catalog.canStartTerminal) onStartCatalogSession(catalog) else onCreateCatalogSession(catalog.id) },
+                                  onClick = { if (catalog.canCreateSession) onCreateCatalogSession(catalog.id) else onStartCatalogSession(catalog) },
                                   enabled = !sessionCreating,
                                   modifier = Modifier.size(40.dp),
                                 ) {
                                   Icon(
                                     imageVector = Icons.Default.Add,
-                                    contentDescription = nativeString("\$action — \$catalog", nativeString("New session"), catalog.label),
+                                    contentDescription = nativeString("\$action — \$catalog", if (catalog.canCreateSession) nativeString("New session") else nativeString("New terminal session"), catalog.label),
                                     tint = palette.text,
                                     modifier = Modifier.size(18.dp),
                                   )

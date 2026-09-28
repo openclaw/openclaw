@@ -228,15 +228,15 @@ class SidebarGatewayPickerTest {
     capture(if (terminalCapable) "dual-catalog-actions" else "model-catalog-plus")
     if (terminalCapable) {
       composeRule.onNodeWithContentDescription("New session — Model chat").assertIsEnabled()
-      composeRule.onNodeWithContentDescription("New chat — Model chat").assertIsEnabled()
+      composeRule.onNodeWithContentDescription("New terminal session — Model chat").assertIsEnabled()
       composeRule.runOnIdle {
         scopes.value = listOf("operator.read", "operator.write")
         controlPage.value = null
       }
-      composeRule.onNodeWithContentDescription("New session — Model chat").assertDoesNotExist()
+      composeRule.onNodeWithContentDescription("New terminal session — Model chat").assertDoesNotExist()
     }
     composeRule
-      .onNodeWithContentDescription(if (terminalCapable) "New chat — Model chat" else "New session — Model chat")
+      .onNodeWithContentDescription("New session — Model chat")
       .performScrollTo()
       .assertIsEnabled()
       .performClick()
@@ -250,7 +250,13 @@ class SidebarGatewayPickerTest {
 
   @Test
   @Config(sdk = [31], qualifiers = "w412dp-h820dp-mdpi")
-  fun nativeCatalogPlusOpensGatewaySetupInsteadOfCreatingChat() {
+  fun nativeCatalogPlusOpensGatewaySetupInsteadOfCreatingChat() = assertNativeCatalogStart(dualCapability = false)
+
+  @Test
+  @Config(sdk = [31], qualifiers = "w412dp-h820dp-mdpi")
+  fun dualCatalogTerminalActionOffersPairedGatewaySignInRecovery() = assertNativeCatalogStart(dualCapability = true)
+
+  private fun assertNativeCatalogStart(dualCapability: Boolean) {
     model.enterScreenshotFixtureMode(AndroidScreenshotScene.CompletedWork)
     val catalogs =
       parseSessionCatalogs(
@@ -260,18 +266,25 @@ class SidebarGatewayPickerTest {
     ReflectionHelpers.getField<MutableStateFlow<SessionCatalogState>>(runtime, "_sessionCatalogState").value =
       SessionCatalogState(catalogs = catalogs, agentId = "main")
     ReflectionHelpers.getField<MutableStateFlow<Boolean>>(runtime, "_sessionCatalogAvailable").value = true
+    if (dualCapability) {
+      val state = ReflectionHelpers.getField<MutableStateFlow<SessionCatalogState>>(runtime, "_sessionCatalogState")
+      state.value = state.value.copy(catalogs = state.value.catalogs.map { it.copy(canCreateSession = true) })
+    }
     val originalSession = model.chatSessionKey.value
     val controlPage = ReflectionHelpers.getField<MutableStateFlow<NodeRuntime.GatewayControlPage?>>(runtime, "_gatewayControlPage")
-    val page = requireNotNull(controlPage.value)
+    val page = requireNotNull(controlPage.value).copy(usesStoredDeviceToken = dualCapability)
     controlPage.value = null
     showSidebarAndComposer(dark = false, showShell = true)
     composeRule.onNodeWithContentDescription("Show Sidebar").performClick()
     composeRule.onNodeWithText("Codex").performScrollTo().assertIsDisplayed()
-    composeRule.onNodeWithContentDescription("New session — Codex").assertDoesNotExist()
+    composeRule.onNodeWithContentDescription("New terminal session — Codex").assertDoesNotExist()
     composeRule.runOnIdle { controlPage.value = page }
     capture("catalog-plus")
-    composeRule.onNodeWithContentDescription("New session — Codex").assertIsEnabled().performClick()
+    composeRule.onNodeWithContentDescription("New terminal session — Codex").assertIsEnabled().performClick()
     composeRule.onNodeWithText("Terminal").assertIsDisplayed()
+    val recovery = composeRule.onNodeWithText("If this page asks for a token or password, enter the Gateway credentials in Settings → Gateway → Manual Gateway, then choose Save & Connect.")
+    capture(if (dualCapability) "paired-terminal-recovery" else "native-terminal-setup")
+    if (dualCapability) recovery.assertIsDisplayed() else recovery.assertDoesNotExist()
     composeRule.runOnIdle {
       val webView =
         WindowInspector

@@ -1108,6 +1108,7 @@ class NodeRuntime private constructor(
     val password: String?,
     val tlsFingerprintSha256: String?,
     val browserFocusAvailable: Boolean = false,
+    val usesStoredDeviceToken: Boolean = false,
   )
 
   private val appContext = context.applicationContext
@@ -5189,12 +5190,14 @@ class NodeRuntime private constructor(
       _gatewayControlPage.value = null
       return
     }
-    val pageAuth = resolveGatewayControlPageAuth(auth ?: resolveGatewayConnectAuth(endpoint), storedOperatorToken)
+    val connectAuth = auth ?: resolveGatewayConnectAuth(endpoint)
+    val pageAuth = resolveGatewayControlPageAuth(connectAuth, storedOperatorToken)
     _gatewayControlPage.value =
       GatewayControlPage(
         baseUrl = gatewayControlPageBaseUrl(endpoint),
         token = pageAuth.token,
         password = pageAuth.password,
+        usesStoredDeviceToken = operatorSessionUsesStoredDeviceToken(connectAuth, storedOperatorToken),
         tlsFingerprintSha256 = gatewayControlPageTlsFingerprint(prefs, endpoint),
         browserFocusAvailable = browserFocusAvailable,
       )

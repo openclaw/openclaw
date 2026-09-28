@@ -523,6 +523,25 @@ class GatewayBootstrapAuthTest {
   }
 
   @Test
+  fun controlPageDistinguishesStoredDeviceAuthFromSharedCredentials() =
+    runBlocking {
+      val (app, prefs, runtime) = gatewayFixture()
+      neutralizeColdStartAutoConnect(runtime)
+      prefs.setManualTls(false)
+      val endpoint = GatewayEndpoint.manual("127.0.0.1", 1, false)
+      val deviceId = DeviceIdentityStore.withPrefs(app, prefs).loadOrCreate().deviceId
+      val authStore = DeviceAuthStore(prefs)
+      authStore.saveToken(endpoint.stableId, deviceId, "operator", "stored-token")
+      for ((suppliedAuth, usesDeviceToken) in listOf(auth() to true, auth(token = "shared-token") to false, auth(password = "password") to false)) {
+        assertTrue(runtime.connectSwitchingGateway(endpoint, suppliedAuth))
+        assertEquals(usesDeviceToken, runtime.gatewayControlPage.value?.usesStoredDeviceToken)
+      }
+      authStore.clearToken(endpoint.stableId, deviceId, "operator")
+      assertTrue(runtime.connectSwitchingGateway(endpoint, auth()))
+      assertEquals(false, runtime.gatewayControlPage.value?.usesStoredDeviceToken)
+    }
+
+  @Test
   fun resolveGatewayControlPageAuthFallsBackToStoredOperatorToken() {
     val resolved =
       resolveGatewayControlPageAuth(

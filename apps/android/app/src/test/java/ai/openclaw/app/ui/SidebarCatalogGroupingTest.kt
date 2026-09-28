@@ -262,7 +262,7 @@ class SidebarCatalogGroupingTest {
     for (canCreate in listOf(false, true)) {
       for (canWrite in listOf(false, true)) {
         for (canStart in listOf(false, true)) {
-          assertEquals(canStart, sidebarCatalogSessionCreationEnabled(creatable.copy(canCreateSession = canCreate), canWrite, canStart))
+          assertEquals(if (canCreate) canWrite else canStart, sidebarCatalogSessionCreationEnabled(creatable.copy(canCreateSession = canCreate), canWrite, canStart))
           assertEquals(canCreate && canWrite, sidebarCatalogSessionCreationEnabled(creatable.copy(canCreateSession = canCreate, canStartTerminal = false), canWrite, canStart))
         }
       }

@@ -131,66 +131,76 @@ internal fun ControlUiWebView(
   var currentUrl by rememberSaveable(page.baseUrl, url) { mutableStateOf(url) }
   val currentExternalLink by rememberUpdatedState(onExternalLink)
 
-  // A WebView reads prefers-color-scheme from the Context it was built with, so an appearance
-  // flip has to rebuild it; keying on the resolved boolean keeps that to real dark/light changes.
-  // The reload is safe because both Control UI surfaces reattach to server-side state: the shell
-  // outlives the page, and the desktop session lingers on the Gateway long enough to re-observe.
-  key(page, darkAppearance, rendererGeneration) {
-    AndroidView(
-      modifier = modifier,
-      factory = {
-        val webView =
-          object : WebView(controlUiWebViewContext(context, darkAppearance)) {
-            override fun onDetachedFromWindow() {
-              releaseControlUiInputFocus(this, focusManager)
-              super.onDetachedFromWindow()
+  Column(modifier = modifier) {
+    if (page.usesStoredDeviceToken) {
+      Text(
+        text = nativeString("If this page asks for a token or password, enter the Gateway credentials in Settings → Gateway → Manual Gateway, then choose Save & Connect."),
+        style = ClawTheme.type.caption,
+        color = ClawTheme.colors.textMuted,
+        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+      )
+    }
+    // A WebView reads prefers-color-scheme from the Context it was built with, so an appearance
+    // flip has to rebuild it; keying on the resolved boolean keeps that to real dark/light changes.
+    // The reload is safe because both Control UI surfaces reattach to server-side state: the shell
+    // outlives the page, and the desktop session lingers on the Gateway long enough to re-observe.
+    key(page, darkAppearance, rendererGeneration) {
+      AndroidView(
+        modifier = Modifier.fillMaxWidth().weight(1f),
+        factory = {
+          val webView =
+            object : WebView(controlUiWebViewContext(context, darkAppearance)) {
+              override fun onDetachedFromWindow() {
+                releaseControlUiInputFocus(this, focusManager)
+                super.onDetachedFromWindow()
+              }
             }
+          // WRAP_CONTENT forces a zero-height CSS viewport even when Compose measures the view exactly.
+          webView.layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+          val webSettings = webView.settings
+          webSettings.setAllowContentAccess(false)
+          webSettings.setAllowFileAccess(false)
+          webSettings.setAllowFileAccessFromFileURLs(false)
+          webSettings.setAllowUniversalAccessFromFileURLs(false)
+          webSettings.setSafeBrowsingEnabled(true)
+          webSettings.javaScriptEnabled = true
+          webSettings.domStorageEnabled = true
+          webSettings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+          webSettings.builtInZoomControls = false
+          webSettings.displayZoomControls = false
+          webSettings.setSupportZoom(false)
+          if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
+            WebSettingsCompat.setAlgorithmicDarkeningAllowed(webSettings, false)
           }
-        // WRAP_CONTENT forces a zero-height CSS viewport even when Compose measures the view exactly.
-        webView.layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-        val webSettings = webView.settings
-        webSettings.setAllowContentAccess(false)
-        webSettings.setAllowFileAccess(false)
-        webSettings.setAllowFileAccessFromFileURLs(false)
-        webSettings.setAllowUniversalAccessFromFileURLs(false)
-        webSettings.setSafeBrowsingEnabled(true)
-        webSettings.javaScriptEnabled = true
-        webSettings.domStorageEnabled = true
-        webSettings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-        webSettings.builtInZoomControls = false
-        webSettings.displayZoomControls = false
-        webSettings.setSupportZoom(false)
-        if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
-          WebSettingsCompat.setAlgorithmicDarkeningAllowed(webSettings, false)
-        }
-        webView.overScrollMode = View.OVER_SCROLL_NEVER
-        // The native gateway connection already established this route's trust.
-        // Reuse only that exact accepted fingerprint; every other SSL error cancels.
-        // The same client protects both terminal and dashboard pages.
-        webView.webViewClient =
-          ControlUiWebViewClient(
-            page = page,
-            navigationUrl = url.takeIf { onExternalLink != null },
-            onExternalLink = { currentExternalLink?.invoke(it) },
-            onRendererGone = { rendererGeneration += 1 },
-            onUrlChanged = { currentUrl = it },
-          )
-        installControlUiAuthScript(webView, page)
-        val origin = controlUiOriginRule(page.baseUrl)
-        val restoredUrl = currentUrl.takeIf { origin != null && controlUiOriginRule(it) == origin && (onExternalLink == null || it == url) }
-        webView.loadUrl(restoredUrl ?: url)
-        webView
-      },
-      update = { webView ->
-        if (!interactive) releaseControlUiInputFocus(webView, focusManager)
-        webView.importantForAccessibility = if (interactive) View.IMPORTANT_FOR_ACCESSIBILITY_AUTO else View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
-        webView.isFocusable = interactive
-        webView.isFocusableInTouchMode = interactive
-      },
-      onRelease = { webView ->
-        (webView.webViewClient as? ControlUiWebViewClient)?.release(webView)
-      },
-    )
+          webView.overScrollMode = View.OVER_SCROLL_NEVER
+          // The native gateway connection already established this route's trust.
+          // Reuse only that exact accepted fingerprint; every other SSL error cancels.
+          // The same client protects both terminal and dashboard pages.
+          webView.webViewClient =
+            ControlUiWebViewClient(
+              page = page,
+              navigationUrl = url.takeIf { onExternalLink != null },
+              onExternalLink = { currentExternalLink?.invoke(it) },
+              onRendererGone = { rendererGeneration += 1 },
+              onUrlChanged = { currentUrl = it },
+            )
+          installControlUiAuthScript(webView, page)
+          val origin = controlUiOriginRule(page.baseUrl)
+          val restoredUrl = currentUrl.takeIf { origin != null && controlUiOriginRule(it) == origin && (onExternalLink == null || it == url) }
+          webView.loadUrl(restoredUrl ?: url)
+          webView
+        },
+        update = { webView ->
+          if (!interactive) releaseControlUiInputFocus(webView, focusManager)
+          webView.importantForAccessibility = if (interactive) View.IMPORTANT_FOR_ACCESSIBILITY_AUTO else View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+          webView.isFocusable = interactive
+          webView.isFocusableInTouchMode = interactive
+        },
+        onRelease = { webView ->
+          (webView.webViewClient as? ControlUiWebViewClient)?.release(webView)
+        },
+      )
+    }
   }
 }
 
