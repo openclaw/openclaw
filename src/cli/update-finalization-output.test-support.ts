@@ -211,7 +211,8 @@ export const preparePostCorePluginConfig = async () => ({
   ],
   [
     sourceUrl("../daemon/gateway-entrypoint.ts"),
-    `export const resolveGatewayInstallEntrypoint = async () => ${JSON.stringify(installedEntry)};`,
+    `export * from ${JSON.stringify(`${sourceUrl("../daemon/gateway-entrypoint.ts")}?fixture-original`)};\n` +
+      `export const resolveGatewayInstallEntrypoint = async () => ${JSON.stringify(installedEntry)};`,
   ],
 ]);
 const blockedPhase = repairDeadline

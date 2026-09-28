@@ -93,6 +93,18 @@ function captureServiceOutput(
   };
 }
 
+type CommandSettlement = {
+  startedAtMs: number;
+  observedAtMs?: number;
+  launcherReadyAtMs?: number;
+  commandSpawnedAtMs?: number;
+  commandPid?: number;
+  exitAtMs?: number;
+  closeAtMs?: number;
+  stdout: { lastDataAtMs?: number; closeAtMs?: number };
+  stderr: { lastDataAtMs?: number; closeAtMs?: number };
+};
+
 export type CommandRecord = {
   args: string[];
   launcherPid: number | null;
@@ -101,6 +113,7 @@ export type CommandRecord = {
   signal: string | null;
   joined: boolean;
   elapsedMs: number;
+  settlement?: CommandSettlement;
   failureOutput?: { stdout: string; stderr: string; captureTruncated: boolean };
   serviceOutput?: ReturnType<typeof captureServiceOutput>;
 };
@@ -112,12 +125,17 @@ export async function run(
   expectedExit = 0,
   signal?: AbortSignal,
   options: {
+    expectedStderr?: readonly string[];
     observeService?: ServiceObservation;
     commandBudget?: "published-update";
   } = {},
 ) {
-  const { observeService } = options;
+  const { expectedStderr = [], observeService } = options;
   const started = performance.now();
+  const settlement: CommandSettlement | undefined =
+    options.commandBudget === "published-update"
+      ? { startedAtMs: Date.now(), stdout: {}, stderr: {} }
+      : undefined;
   let child: ChildProcess | undefined;
   let stdout = "";
   let stderr = "";
@@ -139,7 +157,38 @@ export async function run(
       signal,
       onReady(launched) {
         child = launched;
+        if (settlement) {
+          settlement.observedAtMs = Date.now();
+          launched.on("message", (message: unknown) => {
+            const control = asOptionalRecord(message);
+            if (typeof control?.job !== "string") {
+              return;
+            }
+            if (control.type === "ready") {
+              settlement.launcherReadyAtMs ??= Date.now();
+            } else if (
+              control.type === "spawned" &&
+              typeof control.pid === "number" &&
+              Number.isSafeInteger(control.pid) &&
+              control.pid > 0
+            ) {
+              settlement.commandSpawnedAtMs ??= Date.now();
+              settlement.commandPid ??= control.pid;
+            }
+          });
+          launched.once("close", () => {
+            settlement.closeAtMs = Date.now();
+          });
+          for (const stream of ["stdout", "stderr"] as const) {
+            launched[stream]?.once("close", () => {
+              settlement[stream].closeAtMs = Date.now();
+            });
+          }
+        }
         launched.stdout?.on("data", (chunk: Buffer) => {
+          if (settlement) {
+            settlement.stdout.lastDataAtMs = Date.now();
+          }
           stdout += chunk.toString();
           if (stdout.length > 262144) {
             truncated = true;
@@ -147,6 +196,9 @@ export async function run(
           }
         });
         launched.stderr?.on("data", (chunk: Buffer) => {
+          if (settlement) {
+            settlement.stderr.lastDataAtMs = Date.now();
+          }
           stderr += chunk.toString();
           if (stderr.length > 262144) {
             truncated = true;
@@ -154,6 +206,9 @@ export async function run(
           }
         });
         launched.once("exit", (exitCode, receivedSignal) => {
+          if (settlement) {
+            settlement.exitAtMs = Date.now();
+          }
           code = exitCode;
           exitSignal = receivedSignal;
           beforeCleanup = inspectManagedProcessGroup(launched, { errorPolicy: "indeterminate" });
@@ -166,6 +221,7 @@ export async function run(
   const afterCleanup = child
     ? inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" })
     : undefined;
+  const stderrMatches = expectedStderr.every((expected) => stderr.includes(expected));
   const failed =
     failure ||
     afterCleanup !== "dead" ||
@@ -173,7 +229,8 @@ export async function run(
     truncated ||
     exitSignal !== null ||
     code !== expectedExit ||
-    result !== expectedExit;
+    result !== expectedExit ||
+    !stderrMatches;
   const redaction = { env, stateDir: env.OPENCLAW_STATE_DIR ?? cwd };
   const diagnostic = (value: string) => {
     // A truncated capture may have lost the field name needed for redaction.
@@ -204,11 +261,10 @@ export async function run(
     beforeCleanup,
     joined: afterCleanup === "dead" && !hasUnjoinedWork(failure),
     elapsedMs: performance.now() - started,
+    ...(settlement ? { settlement } : {}),
     ...(failureOutput ? { failureOutput } : {}),
     ...(observeService
-      ? {
-          serviceOutput: captureServiceOutput(observeService, stdout, truncated, diagnostic),
-        }
+      ? { serviceOutput: captureServiceOutput(observeService, stdout, truncated, diagnostic) }
       : {}),
   });
   if (child && afterCleanup !== "dead") {
@@ -229,5 +285,10 @@ export async function run(
   const details = failureOutput ? JSON.stringify(failureOutput, null, 2) : "";
   assert.equal(code, expectedExit, details);
   assert.equal(result, expectedExit, details);
+  assert.equal(
+    stderrMatches,
+    true,
+    `Command stderr did not match expected diagnostics.\n${details}`,
+  );
   return stdout;
 }

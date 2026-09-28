@@ -9,7 +9,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { applyAuthChoice as applyProviderAuthChoice } from "./auth-choice.apply.js";
 import { withLoopbackTestServer } from "./loopback-server.test-support.js";
 
 const mocks = vi.hoisted(() => ({
@@ -37,14 +36,17 @@ vi.mock("./auth-choice-prompt.js", () => ({
   promptAuthChoiceGrouped: mocks.promptAuthChoiceGrouped,
 }));
 
-vi.mock("./auth-choice.js", () => ({
+vi.mock("./auth-choice.apply.js", () => ({
   applyAuthChoice: mocks.applyAuthChoice,
+}));
+
+vi.mock("../plugins/provider-auth-choice-preference.js", () => ({
   resolvePreferredProviderForAuthChoice: mocks.resolvePreferredProviderForAuthChoice,
 }));
 
-vi.mock("./model-picker.js", async () => {
+vi.mock("../flows/model-picker.js", async (importOriginal) => {
   const { applyModelAllowlist, applyModelFallbacksFromSelection } =
-    await import("../flows/model-picker.js");
+    await importOriginal<typeof import("../flows/model-picker.js")>();
   return {
     applyModelAllowlist,
     applyModelFallbacksFromSelection,
@@ -66,6 +68,9 @@ vi.mock("./models/list.manifest-catalog.js", () => ({
 }));
 
 import { promptAuthConfig } from "./configure.gateway-auth.js";
+
+const { applyAuthChoice: applyProviderAuthChoice } =
+  await vi.importActual<typeof import("./auth-choice.apply.js")>("./auth-choice.apply.js");
 
 beforeEach(() => {
   // These provider fixtures expose no CLI backends; policy checks need no plugin discovery.

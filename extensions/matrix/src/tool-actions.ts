@@ -9,6 +9,7 @@ import {
   ToolAuthorizationError,
 } from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
+import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -66,67 +67,31 @@ const MATRIX_ACTION_DISABLED_MESSAGES = {
 } satisfies Record<keyof NonNullable<MatrixAccountConfig["actions"]>, string>;
 
 function projectMatrixMessagesForDisplay(messages: readonly MatrixMessageSummary[]) {
-  return messages.map((message) => ({
-    ...message,
-    ...(message.eventId ? { id: message.eventId } : {}),
-    ...(message.sender ? { authorTag: message.sender } : {}),
-    ...(message.body !== undefined ? { content: message.body } : {}),
-    ...(typeof message.timestamp === "number" &&
-    Number.isFinite(message.timestamp) &&
-    Math.abs(message.timestamp) <= 8_640_000_000_000_000
-      ? { ts: new Date(message.timestamp).toISOString() }
-      : {}),
-  }));
+  return messages.map((message) => {
+    const ts = timestampMsToIsoString(message.timestamp);
+    return {
+      ...message,
+      ...(message.eventId ? { id: message.eventId } : {}),
+      ...(message.sender ? { authorTag: message.sender } : {}),
+      ...(message.body !== undefined ? { content: message.body } : {}),
+      ...(ts ? { ts } : {}),
+    };
+  });
 }
 
 function readRoomId(params: Record<string, unknown>): string {
-  const direct = readStringParam(params, "roomId") ?? readStringParam(params, "channelId");
-  if (direct) {
-    return direct;
-  }
-  return readStringParam(params, "to", { required: true });
+  return (
+    readStringParam(params, "roomId") ??
+    readStringParam(params, "channelId") ??
+    readStringParam(params, "to", { required: true })
+  );
 }
 
-function toSnakeCaseKey(key: string): string {
-  return normalizeOptionalLowercaseString(
-    key.replace(/([A-Z]+)([A-Z][a-z])/g, "$1_$2").replace(/([a-z0-9])([A-Z])/g, "$1_$2"),
-  )!;
-}
-
-function readRawParam(params: Record<string, unknown>, key: string): unknown {
-  if (Object.hasOwn(params, key)) {
-    return params[key];
-  }
-  const snakeKey = toSnakeCaseKey(key);
-  if (snakeKey !== key && Object.hasOwn(params, snakeKey)) {
-    return params[snakeKey];
-  }
-  return undefined;
-}
-
-function readStringAliasParam(
-  params: Record<string, unknown>,
-  keys: string[],
-  options: { required?: boolean } = {},
-): string | undefined {
-  for (const key of keys) {
-    const raw = readRawParam(params, key);
-    if (typeof raw !== "string") {
-      continue;
-    }
-    const trimmed = raw.trim();
-    if (trimmed) {
-      return trimmed;
-    }
-  }
-  if (options.required) {
-    throw new Error(`${keys[0]} required`);
-  }
-  return undefined;
-}
-
-function readPositiveIntegerArrayParam(params: Record<string, unknown>, key: string): number[] {
-  const raw = readRawParam(params, key);
+function readPollOptionIndexes(params: Record<string, unknown>): number[] {
+  const key = Object.hasOwn(params, "pollOptionIndexes")
+    ? "pollOptionIndexes"
+    : "poll_option_indexes";
+  const raw = Object.hasOwn(params, key) ? params[key] : undefined;
   if (raw == null) {
     return [];
   }
@@ -143,8 +108,8 @@ function readPositiveIntegerArrayParam(params: Record<string, unknown>, key: str
         return [];
       }
     }
-    const index = readPositiveIntegerParam({ [key]: value }, key, {
-      message: `${key} must contain positive integers.`,
+    const index = readPositiveIntegerParam({ pollOptionIndexes: value }, "pollOptionIndexes", {
+      message: "pollOptionIndexes must contain positive integers.",
     });
     return index === undefined ? [] : [index];
   });
@@ -378,12 +343,9 @@ export async function handleMatrixAction(
     const { clientOpts, withReadTarget } = prepareAction("pins");
     return await withReadTarget(roomId, async (target) => {
       const actionOpts = { ...clientOpts, client: target.client };
-      if (request.kind === "pin") {
-        const result = await pinMatrixMessage(target.roomId, request.messageId, actionOpts);
-        return jsonResult({ ok: true, pinned: result.pinned });
-      }
-      if (request.kind === "unpin") {
-        const result = await unpinMatrixMessage(target.roomId, request.messageId, actionOpts);
+      if (request.kind !== "list") {
+        const updatePin = request.kind === "pin" ? pinMatrixMessage : unpinMatrixMessage;
+        const result = await updatePin(target.roomId, request.messageId, actionOpts);
         return jsonResult({ ok: true, pinned: result.pinned });
       }
       const result = await listMatrixPins(target.roomId, actionOpts);
@@ -440,7 +402,7 @@ export async function handleMatrixAction(
   if (action === "poll-vote") {
     const { clientOpts, withReadTarget } = prepareAction();
     const roomId = readRoomId(params);
-    const pollId = readStringAliasParam(params, ["pollId", "messageId"], { required: true });
+    const pollId = readStringParam(params, "pollId") ?? readStringParam(params, "messageId");
     if (!pollId) {
       throw new Error("pollId required");
     }
@@ -453,7 +415,7 @@ export async function handleMatrixAction(
       ...(optionId ? [optionId] : []),
     ];
     const optionIndexes = [
-      ...readPositiveIntegerArrayParam(params, "pollOptionIndexes"),
+      ...readPollOptionIndexes(params),
       ...(optionIndex !== undefined ? [optionIndex] : []),
     ];
     const result = await withReadTarget(roomId, async (target) => {

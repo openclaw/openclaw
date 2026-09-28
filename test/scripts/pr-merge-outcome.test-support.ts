@@ -456,7 +456,7 @@ else if(args[0]==="api"&&args.includes("repos/fixture/repo/branches/main/protect
 else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/rules/branches/main?"))) {
   out(s.restPolicy==="missing"?[null]:[[
     {type:"required_status_checks",parameters:{required_status_checks:s.restContexts.map(context=>({context,integration_id:s.restRequiredApp}))}},
-    ...(s.priorCi.enabled?[{type:"pull_request",parameters:{required_approving_review_count:s.priorCi.reviewCount,require_code_owner_review:false,require_last_push_approval:false,required_review_thread_resolution:s.priorCi.requireThreads}}]:[]),
+    ...(s.priorCi.enabled?[{type:"pull_request",parameters:{required_approving_review_count:s.priorCi.reviewCount,require_code_owner_review:s.priorCi.requireCodeOwners,require_last_push_approval:s.priorCi.requireLastPush,required_review_thread_resolution:s.priorCi.requireThreads}}]:[]),
     ...(s.restPolicy==="queue"?[{type:"merge_queue"}]:s.restPolicy==="unsupported"?[{type:"workflows"}]:[])
   ]]);
 }

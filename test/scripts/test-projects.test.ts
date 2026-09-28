@@ -978,6 +978,16 @@ describe("scripts/test-projects changed-target routing", () => {
     expectChangedTargets([".crabbox.yaml"], ["test/scripts/package-acceptance-workflow.test.ts"]);
   });
 
+  it.each(["", ".tooling", ".scripts", ".e2e", ".other"])(
+    "routes root type graph%s to its coverage and routing tests",
+    (suffix) => {
+      expectChangedTargets(
+        [`test/tsconfig/tsconfig.test.root${suffix}.json`],
+        ["test/scripts/tsgo-core-test-shards.test.ts", "test/scripts/changed-lanes.test.ts"],
+      );
+    },
+  );
+
   it("keeps scripts tsconfig edits on oxlint config tests", () => {
     expectChangedTargets(["scripts/tsconfig.json"], ["test/scripts/oxlint-config.test.ts"]);
   });

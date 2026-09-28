@@ -11,9 +11,12 @@ import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
 import { resolveLocalCheckEnv } from "./lib/local-check-runtime.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
+  expandTsgoExecutionGraphs,
+  TSGO_ROOT_TEST_SHARDS,
   selectTsgoCoreTestShards,
   selectChangedTsgoCoreTestShards,
   selectChangedCiTsgoGraphs,
+  resolveChangedCiTsgoInputs,
   resolveCiTsgoGraphs,
   TSGO_CI_GRAPHS,
   TSGO_CORE_TEST_SHARDS,
@@ -57,7 +60,13 @@ async function runTsgoCoreTestShards(
   shards: readonly { name: string; config: string }[],
   options: { concurrency?: number; env?: NodeJS.ProcessEnv } = {},
 ): Promise<number> {
-  const concurrency = options.concurrency ?? 1;
+  const executionGraphs = expandTsgoExecutionGraphs(shards);
+  // Root partitions bound one large checker heap. Concurrent partitions would
+  // reconstruct that aggregate peak, including callers that request CI overlap.
+  const isRootPartition = (graph: { config: string }) =>
+    TSGO_ROOT_TEST_SHARDS.some((root) => root.config === graph.config);
+  const hasRootPartitions = executionGraphs.some(isRootPartition);
+  const concurrency = hasRootPartitions ? 1 : (options.concurrency ?? 1);
   const env = resolveLocalCheckEnv(options.env ?? process.env);
   const evidenceMode = env.OPENCLAW_CI_STATIC_EVIDENCE === "1" && process.platform !== "win32";
   const id = randomUUID();
@@ -65,7 +74,10 @@ async function runTsgoCoreTestShards(
   // The batch owns outputs once; its existing compiler concurrency stays intact
   // without children waiting to reacquire their parent's lock.
   const resultCode = await withDistArtifactOwnership(repoRoot, async () => {
-    const queue = shards.map((shard, index) => ({ ...shard, evidenceId: `${id}:${index}` }));
+    const queue = executionGraphs.map((shard, index) => ({
+      ...shard,
+      evidenceId: `${id}:${index}`,
+    }));
     let failureCode = 0;
     let stopped = false;
     const workers = Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
@@ -92,7 +104,7 @@ async function runTsgoCoreTestShards(
           leaves.push(shard.evidenceId);
         }
         // Only complete native diagnostics can justify draining a failed graph.
-        if (evidenceMode ? !verified : code !== 0) {
+        if ((isRootPartition(shard) && code !== 0) || (evidenceMode ? !verified : code !== 0)) {
           stopped = true;
           failureCode ||= 1;
         }
@@ -107,9 +119,9 @@ async function runTsgoCoreTestShards(
     }
     return failureCode;
   });
-  if (evidenceMode && leaves.length === shards.length) {
+  if (evidenceMode && leaves.length === executionGraphs.length) {
     console.log(
-      `[ci-static:tsgo:completion] ${JSON.stringify({ version: 1, id, planned: shards.length, completed: leaves.length, leaves })}`,
+      `[ci-static:tsgo:completion] ${JSON.stringify({ version: 1, id, planned: executionGraphs.length, completed: leaves.length, leaves })}`,
     );
   }
   return resultCode;
@@ -161,6 +173,9 @@ export async function createChangedCiTypeCheckPlan(
   options: { cwd?: string } = {},
 ) {
   const cwd = realpathSync(options.cwd ?? repoRoot);
+  if (!resolveChangedCiTsgoInputs(paths, (file) => existsSync(path.resolve(cwd, file)))) {
+    return { mode: "full", graphs: TSGO_CI_GRAPHS };
+  }
   const { inspectCiTsgoCheckGraphs } = await import("./check-tsgo-core-boundary.mts");
   const inspected = await inspectCiTsgoCheckGraphs({ cwd });
   const selected = paths.every((file) => existsSync(path.resolve(cwd, file)))
