@@ -404,8 +404,11 @@ for a year, up to 200 stored voices on the project, and returns a preview clip.
 Speak it later by passing that `voice_…` id as `speakerVoice` or
 `openclaw infer tts convert --provider google --model google/gemini-3.8-flash-tts --voice <id>`.
 Voice design uses `gemini-3.8-flash-tts` unless you pass `--model gemini-3.8-flash-lite-tts`.
-It does not change the implicit Google TTS model. Talk and Live still use
-prebuilt voice names.
+It does not change the implicit Google TTS model or override an explicitly
+selected synthesis model for stored ids. The Gemini 3.8 Interactions route requests
+24 kHz L16 explicitly. WAV responses are normalized to mono PCM16 before file,
+voice-note, or telephony output. Talk and Live
+still use prebuilt voice names.
 
 ## Voice replication
 
@@ -432,7 +435,14 @@ that id. OpenClaw does not synthesize the consent statement for you.
 Control UI records both takes in place: Settings → Communications → Voice →
 **Create from my voice**. That path captures 24 kHz WAV in the browser and
 calls `tts.replicateVoice`. Composer tap-to-talk is dictation (8 kHz, text
-only) and cannot clone a voice.
+only) and cannot clone a voice. Store is disabled while a replacement take is
+recording or finalizing, and recording controls are frozen during creation.
+
+A timeout or uncertain provider outcome may follow a successful store. The UI
+locks Store to avoid a second non-idempotent request. Use **Refresh** to inspect
+the project catalog; an incomplete listing is shown as an error, not an empty
+project. A name match does not automatically unlock Store. Local design and
+replication commands use the same auth-profile key preparation as conversion.
 
 ## Realtime voice
 

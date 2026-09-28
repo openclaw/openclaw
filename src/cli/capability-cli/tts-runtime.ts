@@ -152,7 +152,7 @@ function resolveTtsProviderForAuthHydration(params: {
   return getTtsProvider(ttsConfig, resolveTtsPrefsPath(ttsConfig));
 }
 
-async function injectTtsAuthProfileApiKey(params: {
+export async function injectTtsAuthProfileApiKey(params: {
   cfg: OpenClawConfig;
   provider?: string;
   channelId?: string;

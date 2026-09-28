@@ -2,11 +2,11 @@ import { encodeWavPcm16Mono, floatToPcm16, resampleFloat32Mono } from "../../lib
 import { RealtimeTalkPcmInputPump } from "../chat/talk/audio.ts";
 import { RealtimeTalkInputController } from "../chat/talk/input.ts";
 
-export const TTS_CLIP_TARGET_SAMPLE_RATE_HZ = 24_000;
+const TTS_CLIP_TARGET_SAMPLE_RATE_HZ = 24_000;
 export const TTS_CLIP_MAX_DURATION_MS = 30_000;
 
 export type TtsRecordedClip = {
-  wav: Uint8Array;
+  wav: Uint8Array<ArrayBuffer>;
   mimeType: "audio/wav";
   durationMs: number;
   sampleRate: number;

@@ -66,6 +66,32 @@ Register each capability inside `register(api)` alongside your existing
     `readProviderResponseErrorText(response, limitBytes, headers)` helper
     from the same SDK entrypoint.
 
+    Speech providers can implement optional `listVoices`, `designVoice`, and
+    `replicateVoice` hooks. Discovery through `tts.providers` reports configured
+    state and store capabilities separately; method advertisement alone does not
+    establish provider availability.
+
+    Voice-list entries mark persistent identities with `stored: true`. A fallback
+    catalog carries `projectListingIncomplete`; the Gateway serializes this marker
+    on the result object, not the array. Clients must not present a failed project
+    read as an empty project.
+
+    Store hooks return an id and preview bytes (an empty preview is valid for
+    replication), or `{ outcome: "uncertain", message }` when a write may have
+    completed. Do not retry non-idempotent creation after that outcome. A local
+    Gateway timeout with `requestSent: true` also remains uncertain. Refresh the
+    catalog for inspection; matching display names are not proof that a particular
+    request created a voice.
+
+    The request's `assertCurrent` callback carries live caller authority. Recheck
+    it immediately before irreversible I/O, including after awaited transport
+    preparation. The bundled Google implementation carries the fence through the
+    existing guarded-fetch authority scope on the bundled-only
+    `ssrf-runtime-internal` SDK surface. DNS/proxy preparation and redirects retain
+    the same live pre-fetch check. This does not grant new authority or publish a
+    new public SDK helper. SDK/security owner review is required for the store-hook
+    contract before release.
+
   </Tab>
   <Tab title="Realtime transcription">
     Consumers can pass candidate provider IDs as the optional second argument

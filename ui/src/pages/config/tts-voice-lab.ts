@@ -1,5 +1,9 @@
 import { consume } from "@lit/context";
 import { initialState, Task, TaskStatus } from "@lit/task";
+import {
+  GatewayProtocolRequestTimeoutError,
+  isGatewayProtocolResponseError,
+} from "@openclaw/gateway-client/browser";
 import { html, nothing, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
@@ -12,7 +16,6 @@ import {
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { registerTtsVoiceLabEnglish } from "../../i18n/locales/en-tts-voice-lab.ts";
 import { bytesToBase64 } from "../../lib/bytes-base64.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -25,29 +28,22 @@ import {
   type TtsRecordedClip,
 } from "./tts-clip-recorder.ts";
 import {
-  isGoogleVoiceStoreInternal,
-  isGoogleVoiceStoreUncertain,
-  isStoredSpeechVoice,
   shouldAcceptMicStart,
   shouldClearCreateErrorOnClose,
-  snapshotStoredVoiceIds,
-  storedVoiceCreatedSince,
   voiceLabSubmitBlock,
   type StoredSpeechVoice,
 } from "./tts-voice-lab-state.ts";
 
-registerTtsVoiceLabEnglish();
-
 const GOOGLE_PROVIDER = "google";
 
-type VoicesGatewayResult =
-  | StoredSpeechVoice[]
-  | {
-      voices?: StoredSpeechVoice[];
-      projectListingIncomplete?: boolean;
-    };
+type VoicesGatewayResult = {
+  voices: StoredSpeechVoice[];
+  projectListingIncomplete?: boolean;
+};
 
 type ReplicateGatewayResult = {
+  outcome?: "stored" | "uncertain";
+  message?: string;
   id?: string;
   name?: string;
   mimeType?: string;
@@ -86,7 +82,7 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
   private sourceUrl: string | null = null;
   private recordSession = 0;
 
-  disconnectedCallback(): void {
+  override disconnectedCallback(): void {
     super.disconnectedCallback();
     this.recorder.dispose();
     this.clearTimer();
@@ -103,7 +99,9 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
   }
 
   private get replicationAdvertised() {
-    return isGatewayMethodAdvertised(this.context?.gateway.snapshot ?? {}, "tts.replicateVoice");
+    return (
+      this.voicesTask.status === TaskStatus.COMPLETE && this.voicesTask.value?.canReplicate === true
+    );
   }
 
   private readonly voicesTask = new Task(this, {
@@ -113,15 +111,28 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
         return initialState;
       }
       if (isGatewayMethodAdvertised(this.context.gateway.snapshot, "tts.voices") === false) {
-        return { voices: [] as StoredSpeechVoice[] };
+        return { voices: [], canReplicate: false, projectListingIncomplete: false };
       }
+      const discovery = await client.request<{
+        providers: Array<{
+          id: string;
+          configured: boolean;
+          capabilities: { replicateVoice: boolean };
+        }>;
+      }>("tts.providers", {}, { signal });
+      const provider = discovery.providers.find((entry) => entry.id === GOOGLE_PROVIDER);
+      const canReplicate = provider?.configured === true && provider.capabilities.replicateVoice;
       const result = await client.request<VoicesGatewayResult>(
         "tts.voices",
         { provider: GOOGLE_PROVIDER },
         { signal },
       );
-      const voices = Array.isArray(result) ? result : (result.voices ?? []);
-      return { voices: voices.filter(isStoredSpeechVoice) };
+      const voices = result.voices;
+      return {
+        voices: voices.filter((voice) => voice.stored === true),
+        canReplicate,
+        projectListingIncomplete: result.projectListingIncomplete === true,
+      };
     },
   });
 
@@ -142,7 +153,7 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
   };
 
   private startRecording(slot: ClipSlot) {
-    if (this.recording || this.pending || !this.canWrite) {
+    if (this.creating || this.recording || this.pending || !this.canWrite) {
       return;
     }
     this.createError = null;
@@ -158,7 +169,7 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
     const status = native?.snapshot?.permissions?.entries.find(
       (entry) => entry.id === "microphone",
     )?.status;
-    if (status === "notDetermined") {
+    if (native && status === "notDetermined") {
       native.requestPermission("microphone");
     }
   }
@@ -254,65 +265,63 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
       connected: Boolean(client),
       storeUncertain: this.storeUncertain,
     });
-    if (!client || this.creating || !this.consent || !this.source || block) {
+    if (
+      !client ||
+      !this.canWrite ||
+      !this.replicationAdvertised ||
+      this.creating ||
+      this.recording ||
+      this.pending ||
+      !this.consent ||
+      !this.source ||
+      block
+    ) {
       this.createError = t(`ttsVoiceLab.${block ?? "createError"}`);
       return;
     }
+    const consent = this.consent;
+    const source = this.source;
+    const displayName = this.displayName.trim();
     this.creating = true;
     this.createError = null;
     this.storeUncertain = false;
-    const listedVoices = (result: VoicesGatewayResult): StoredSpeechVoice[] => {
-      const voices = Array.isArray(result) ? result : (result.voices ?? []);
-      return voices.filter(isStoredSpeechVoice);
-    };
-    let beforeIds: Set<string> | undefined;
+    let requestSent = false;
     try {
-      beforeIds = snapshotStoredVoiceIds(
-        await client.request<VoicesGatewayResult>("tts.voices", { provider: GOOGLE_PROVIDER }),
+      const result = await client.request<ReplicateGatewayResult>(
+        "tts.replicateVoice",
+        {
+          provider: GOOGLE_PROVIDER,
+          displayName,
+          sourceAudioBase64: bytesToBase64(source.wav),
+          consentAudioBase64: bytesToBase64(consent.wav),
+          sourceMimeType: source.mimeType,
+          consentMimeType: consent.mimeType,
+        },
+        {
+          onSent: () => {
+            requestSent = true;
+          },
+        },
       );
-    } catch {
-      beforeIds = undefined;
-    }
-    try {
-      const result = await client.request<ReplicateGatewayResult>("tts.replicateVoice", {
-        provider: GOOGLE_PROVIDER,
-        displayName: this.displayName.trim(),
-        sourceAudioBase64: bytesToBase64(this.source.wav),
-        consentAudioBase64: bytesToBase64(this.consent.wav),
-        sourceMimeType: this.source.mimeType,
-        consentMimeType: this.consent.mimeType,
-      });
-      this.storedPreview = result;
-      this.voicesTask.run();
-    } catch (error) {
-      if (isGoogleVoiceStoreUncertain(error)) {
-        this.createError = t("ttsVoiceLab.storeUncertain");
-        try {
-          const listed = await client.request<VoicesGatewayResult>("tts.voices", {
-            provider: GOOGLE_PROVIDER,
-          });
-          const afterIds = snapshotStoredVoiceIds(listed);
-          const match =
-            beforeIds === undefined || afterIds === undefined
-              ? undefined
-              : storedVoiceCreatedSince(beforeIds, listedVoices(listed), this.displayName);
-          if (match) {
-            this.storeUncertain = false;
-            this.storedPreview = { id: match.id, name: match.name };
-            this.createError = null;
-            this.voicesTask.run();
-            return;
-          }
-        } catch {
-          // Listing failed; keep the uncertain lock so Store cannot POST again.
-        }
+      if (result.outcome === "uncertain") {
         this.storeUncertain = true;
-        this.voicesTask.run();
-        return;
+        this.createError = result.message ?? t("ttsVoiceLab.storeUncertain");
+      } else {
+        this.storedPreview = result;
       }
-      this.createError = isGoogleVoiceStoreInternal(error)
-        ? t("ttsVoiceLab.googleInternal")
-        : formatUiError(error);
+      void this.voicesTask.run();
+    } catch (error) {
+      if (
+        error instanceof GatewayProtocolRequestTimeoutError
+          ? error.requestSent
+          : requestSent && !isGatewayProtocolResponseError(error)
+      ) {
+        this.storeUncertain = true;
+        this.createError = t("ttsVoiceLab.storeUncertain");
+        void this.voicesTask.run();
+      } else {
+        this.createError = formatUiError(error);
+      }
     } finally {
       this.creating = false;
     }
@@ -378,7 +387,7 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
         <button
           type="button"
           class="btn"
-          ?disabled=${!this.canWrite || this.pending !== null || (this.recording !== null && !recording)}
+          ?disabled=${this.creating || !this.canWrite || this.pending !== null || (this.recording !== null && !recording)}
           @click=${() => (recording ? void this.stopRecording() : this.startRecording(slot))}
         >
           ${
@@ -406,7 +415,7 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
       connected: Boolean(this.client),
       storeUncertain: this.storeUncertain,
     });
-    const canSubmit = !this.creating && submitBlock === null;
+    const canSubmit = !this.creating && !this.recording && !this.pending && submitBlock === null;
     return html`
       <openclaw-modal-dialog
         label=${t("ttsVoiceLab.create")}
@@ -431,7 +440,9 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
               placeholder=${t("ttsVoiceLab.namePlaceholder")}
               ?disabled=${this.creating}
               @input=${(event: Event) => {
-                this.displayName = (event.target as HTMLInputElement).value;
+                if (event.target instanceof HTMLInputElement) {
+                  this.displayName = event.target.value;
+                }
               }}
             />
           </label>
@@ -498,7 +509,11 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
     const voices =
       this.voicesTask.status === TaskStatus.COMPLETE ? (this.voicesTask.value?.voices ?? []) : [];
     const listError =
-      this.voicesTask.status === TaskStatus.ERROR ? formatUiError(this.voicesTask.error) : null;
+      this.voicesTask.status === TaskStatus.ERROR
+        ? formatUiError(this.voicesTask.error)
+        : this.voicesTask.value?.projectListingIncomplete
+          ? t("ttsVoiceLab.listError")
+          : null;
     return renderSettingsPage(html`
       <div class="settings-stack" id=${COMMUNICATION_SETTINGS_TARGET_IDS.ttsVoiceLab}>
         ${renderSettingsSection(
@@ -506,25 +521,32 @@ class TtsVoiceLabSettings extends OpenClawLightDomElement {
             title: t("ttsVoiceLab.title"),
             description: t("ttsVoiceLab.intro"),
             actions: html`<button
-              type="button"
-              class="btn primary"
-              ?disabled=${advertised === false || !this.client || !this.canWrite}
-              @click=${this.openDialog}
-            >
-              ${t("ttsVoiceLab.create")}
-            </button>`,
+                type="button"
+                class="btn"
+                ?disabled=${!this.client || this.creating || this.voicesTask.status === TaskStatus.PENDING}
+                @click=${() => void this.voicesTask.run()}
+              >
+                ${t("common.refresh")}</button
+              ><button
+                type="button"
+                class="btn primary"
+                ?disabled=${!advertised || !this.client || !this.canWrite}
+                @click=${this.openDialog}
+              >
+                ${t("ttsVoiceLab.create")}
+              </button>`,
           },
           html`
             ${
               !this.client
                 ? renderSettingsStatus({ kind: "muted", label: t("ttsVoiceLab.disconnected") })
-                : advertised === false
+                : !advertised
                   ? renderSettingsStatus({ kind: "warn", label: t("ttsVoiceLab.unavailable") })
                   : nothing
             }
             ${listError ? renderSettingsStatus({ kind: "danger", label: listError }) : nothing}
             ${
-              voices.length === 0 && !listError
+              this.voicesTask.status === TaskStatus.COMPLETE && voices.length === 0 && !listError
                 ? html`<p class="settings-page__intro">${t("ttsVoiceLab.empty")}</p>`
                 : voices.map((voice) =>
                     renderSettingsRow({

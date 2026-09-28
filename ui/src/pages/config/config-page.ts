@@ -1134,7 +1134,7 @@ export class ConfigPage extends OpenClawLightDomElement {
         activeSection,
         mutationDisabled: this.isCuratedConfigMutationDisabled(),
         advanced: this.routeData?.advanced === true,
-        targetBlockId: this.routeData?.targetBlockId,
+        targetBlockId: this.routeData?.targetBlockId ?? undefined,
       }),
       sectionPrelude:
         activeSection === "browser" && browserPanelAvailable && !hasNativeBrowserBridge()

@@ -6,16 +6,8 @@ const SOURCE_MIN_MS = 10_000;
 export type StoredSpeechVoice = {
   id: string;
   name?: string;
-  category?: string;
+  stored?: boolean;
 };
-
-export function isStoredSpeechVoice(voice: StoredSpeechVoice): boolean {
-  return (
-    voice.id.startsWith("voice_") ||
-    voice.category === "prompted" ||
-    voice.category === "replicated"
-  );
-}
 
 export type VoiceLabSubmitBlock =
   | "disconnected"
@@ -51,72 +43,6 @@ export function voiceLabSubmitBlock(input: {
     return "sourceTooLong";
   }
   return null;
-}
-
-export function voiceLabCanSubmit(input: {
-  name: string;
-  consentMs: number;
-  sourceMs: number;
-}): boolean {
-  return (
-    voiceLabSubmitBlock({
-      ...input,
-      connected: true,
-    }) === null
-  );
-}
-
-export function isGoogleVoiceStoreBusy(error: unknown): boolean {
-  const text = error instanceof Error ? error.message : String(error ?? "");
-  return /\b503\b|UNAVAILABLE|currently unavailable/i.test(text);
-}
-
-export function isGoogleVoiceStoreInternal(error: unknown): boolean {
-  const text = error instanceof Error ? error.message : String(error ?? "");
-  return /\b500\b|INTERNAL error|Internal error encountered/i.test(text);
-}
-
-export function isGoogleVoiceStoreUncertain(error: unknown): boolean {
-  const text = error instanceof Error ? error.message : String(error ?? "");
-  return (
-    isGoogleVoiceStoreBusy(error) ||
-    /\btimeout\b|ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT|aborted/i.test(text)
-  );
-}
-
-export function storedVoiceIds(voices: readonly StoredSpeechVoice[]): Set<string> {
-  return new Set(voices.filter(isStoredSpeechVoice).map((voice) => voice.id));
-}
-
-export function snapshotStoredVoiceIds(
-  result:
-    | readonly StoredSpeechVoice[]
-    | {
-        voices?: readonly StoredSpeechVoice[];
-        projectListingIncomplete?: boolean;
-      },
-): Set<string> | undefined {
-  if (!Array.isArray(result) && result.projectListingIncomplete) {
-    return undefined;
-  }
-  const voices = Array.isArray(result) ? result : (result.voices ?? []);
-  return storedVoiceIds(voices);
-}
-
-export function storedVoiceCreatedSince(
-  beforeIds: ReadonlySet<string>,
-  after: readonly StoredSpeechVoice[],
-  name?: string,
-): StoredSpeechVoice | undefined {
-  const created = after.filter((voice) => isStoredSpeechVoice(voice) && !beforeIds.has(voice.id));
-  if (created.length === 0) {
-    return undefined;
-  }
-  const expected = name?.trim();
-  if (expected) {
-    return created.find((voice) => (voice.name ?? "").trim() === expected);
-  }
-  return created.length === 1 ? created[0] : undefined;
 }
 
 export function shouldAcceptMicStart(input: {

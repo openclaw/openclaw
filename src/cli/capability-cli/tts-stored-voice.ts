@@ -15,9 +15,10 @@ import {
 import { getTtsCommandSecretTargetIds } from "../command-secret-targets.js";
 import { publishOutputFileAtomically } from "../media-output.js";
 import type { CapabilityTransport } from "./metadata.js";
-import { resolveLocalCapabilityRuntimeConfig } from "./shared.js";
+import { pinRuntimeConfigSnapshot, resolveLocalCapabilityRuntimeConfig } from "./shared.js";
+import { injectTtsAuthProfileApiKey } from "./tts-runtime.js";
 
-export function storedVoicePreviewOutputs(input: {
+function storedVoicePreviewOutputs(input: {
   target: string;
   audio: Buffer;
   mimeType?: string;
@@ -75,6 +76,8 @@ export async function runTtsDesignVoice(params: {
       );
     }
     const result: {
+      outcome?: "uncertain";
+      message?: string;
       provider?: string;
       id?: string;
       name?: string;
@@ -92,6 +95,9 @@ export async function runTtsDesignVoice(params: {
       },
       timeoutMs: 120_000,
     });
+    if (result.outcome === "uncertain") {
+      throw new Error(result.message ?? "Voice store outcome is uncertain; do not retry.");
+    }
     const audio = Buffer.from(result.audioBase64 ?? "", "base64");
     if (!result.id || audio.length === 0) {
       throw new Error("Gateway voice design did not return a voice id and preview");
@@ -107,13 +113,14 @@ export async function runTtsDesignVoice(params: {
       outputs: [{ path: target, format: result.mimeType ?? "audio/wav" }],
     };
   }
-  const cfg = await resolveLocalCapabilityRuntimeConfig({
+  let cfg = await resolveLocalCapabilityRuntimeConfig({
     commandName: "infer tts design",
     targetIds: getTtsCommandSecretTargetIds(),
   });
   const config = resolveTtsConfig(cfg);
   const provider =
     normalizeOptionalString(params.provider) ?? getTtsProvider(config, resolveTtsPrefsPath(config));
+  cfg = await prepareStoredVoiceAuth(cfg, provider);
   const designed = await designSpeechVoice({
     cfg,
     provider,
@@ -123,6 +130,9 @@ export async function runTtsDesignVoice(params: {
     gender: params.gender,
     model: params.model,
   });
+  if (designed.outcome === "uncertain") {
+    throw new Error(designed.message);
+  }
   await writePreviewAudio(target, designed.previewAudio);
   return {
     ok: true,
@@ -161,6 +171,8 @@ export async function runTtsReplicateVoice(params: {
       );
     }
     const result: {
+      outcome?: "uncertain";
+      message?: string;
       provider?: string;
       id?: string;
       name?: string;
@@ -179,6 +191,9 @@ export async function runTtsReplicateVoice(params: {
       },
       timeoutMs: 120_000,
     });
+    if (result.outcome === "uncertain") {
+      throw new Error(result.message ?? "Voice store outcome is uncertain; do not retry.");
+    }
     if (!result.id) {
       throw new Error("Gateway voice replication did not return a voice id");
     }
@@ -201,13 +216,14 @@ export async function runTtsReplicateVoice(params: {
       outputs,
     };
   }
-  const cfg = await resolveLocalCapabilityRuntimeConfig({
+  let cfg = await resolveLocalCapabilityRuntimeConfig({
     commandName: "infer tts replicate",
     targetIds: getTtsCommandSecretTargetIds(),
   });
   const config = resolveTtsConfig(cfg);
   const provider =
     normalizeOptionalString(params.provider) ?? getTtsProvider(config, resolveTtsPrefsPath(config));
+  cfg = await prepareStoredVoiceAuth(cfg, provider);
   const replicated = await replicateSpeechVoice({
     cfg,
     provider,
@@ -218,6 +234,9 @@ export async function runTtsReplicateVoice(params: {
     consentMimeType,
     model: params.model,
   });
+  if (replicated.outcome === "uncertain") {
+    throw new Error(replicated.message);
+  }
   const outputs = storedVoicePreviewOutputs({
     target,
     audio: replicated.previewAudio,
@@ -235,4 +254,15 @@ export async function runTtsReplicateVoice(params: {
     name: replicated.name,
     outputs,
   };
+}
+
+async function prepareStoredVoiceAuth(
+  cfg: Parameters<typeof injectTtsAuthProfileApiKey>[0]["cfg"],
+  provider: string,
+) {
+  const hydrated = await injectTtsAuthProfileApiKey({ cfg, provider });
+  if (hydrated !== cfg) {
+    pinRuntimeConfigSnapshot(hydrated);
+  }
+  return hydrated;
 }

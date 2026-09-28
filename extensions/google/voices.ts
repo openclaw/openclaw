@@ -22,9 +22,13 @@ const MAX_VOICE_PAGES = 10;
 const MAX_PROMPT_CHARS = 2_000;
 const VOICE_HTTP_RETRY_LIMIT = 3;
 
+class GoogleVoiceStoreUncertainError extends Error {
+  override name = "GoogleVoiceStoreUncertainError";
+}
+
 type GoogleHttpRequest = ReturnType<typeof sanitizeConfiguredModelProviderRequest>;
 
-export type GoogleVoiceDesignRequest = {
+type GoogleVoiceDesignRequest = {
   apiKey: string;
   baseUrl?: string;
   request?: GoogleHttpRequest;
@@ -37,7 +41,7 @@ export type GoogleVoiceDesignRequest = {
   assertCurrent?: () => void;
 };
 
-export type GoogleVoiceDesignResult = {
+type GoogleVoiceDesignResult = {
   id: string;
   name: string;
   preview: Buffer;
@@ -72,6 +76,7 @@ function readVoiceOption(value: unknown): SpeechVoiceOption | undefined {
   return {
     id,
     name,
+    stored: id.startsWith("voice_"),
     ...(category ? { category } : {}),
     ...(description ? { description } : {}),
     ...(locale ? { locale } : {}),
@@ -114,18 +119,13 @@ async function resolveGoogleVoiceHttp(params: {
 }
 
 function isRetryableGoogleVoiceHttpError(error: unknown): boolean {
-  if (!error || typeof error !== "object") {
+  const record = asOptionalRecord(error);
+  if (!record) {
     return false;
   }
-  const record = error as {
-    status?: unknown;
-    statusCode?: unknown;
-    code?: unknown;
-    message?: unknown;
-  };
   const status = Number(record.status ?? record.statusCode);
-  const code = String(record.code ?? "");
-  const message = String(record.message ?? error);
+  const code = typeof record.code === "string" ? record.code : "";
+  const message = typeof record.message === "string" ? record.message : "";
   return (
     status === 503 ||
     code === "UNAVAILABLE" ||
@@ -163,6 +163,8 @@ async function googleVoicesFetchOnce(params: {
     ...(http.dispatcherPolicy ? { dispatcherPolicy: http.dispatcherPolicy } : {}),
   };
   const posted = params.method === "POST";
+  let admittedToDispatch = false;
+  let authoritativeRejection = false;
   const send = async () => {
     const { response, release } = posted
       ? await postJsonRequest({
@@ -182,6 +184,10 @@ async function googleVoicesFetchOnce(params: {
           fetch,
           guarded,
         );
+    if (posted) {
+      admittedToDispatch = true;
+      authoritativeRejection = response.status >= 400 && response.status < 500;
+    }
     try {
       if (!response.ok) {
         await assertOkOrThrowProviderError(response, "Google voices request failed");
@@ -199,8 +205,32 @@ async function googleVoicesFetchOnce(params: {
   if (!posted) {
     return await send();
   }
-  const { withGuardedFetchRequestAuthority } = await import("openclaw/plugin-sdk/ssrf-runtime");
-  return await withGuardedFetchRequestAuthority(params.assertCurrent, send);
+  const { withGuardedFetchRequestAuthority } =
+    await import("openclaw/plugin-sdk/ssrf-runtime-internal");
+  let preparing = false;
+  try {
+    return await withGuardedFetchRequestAuthority(
+      () => {
+        params.assertCurrent?.();
+        // The first check enters the scope. Later checks are the synchronous
+        // pre-fetch fences, after transport preparation and live authorization.
+        if (preparing) {
+          admittedToDispatch = true;
+        }
+      },
+      async () => {
+        preparing = true;
+        return await send();
+      },
+    );
+  } catch (error) {
+    if (admittedToDispatch && !authoritativeRejection) {
+      throw new GoogleVoiceStoreUncertainError("Google voice store did not settle", {
+        cause: error,
+      });
+    }
+    throw error;
+  }
 }
 
 async function googleVoicesFetch(params: {
@@ -227,13 +257,15 @@ async function googleVoicesFetch(params: {
       if (!isRetryableGoogleVoiceHttpError(error) || attempt === VOICE_HTTP_RETRY_LIMIT - 1) {
         throw error;
       }
-      await new Promise((resolve) => setTimeout(resolve, voiceHttpRetryDelayMs(attempt)));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, voiceHttpRetryDelayMs(attempt));
+      });
     }
   }
   throw lastError;
 }
 
-export async function listGoogleProjectVoices(params: {
+async function listGoogleProjectVoices(params: {
   apiKey: string;
   baseUrl?: string;
   request?: GoogleHttpRequest;
@@ -290,7 +322,7 @@ function assertDesignInput(params: GoogleVoiceDesignRequest): {
   if (prompt.length > MAX_PROMPT_CHARS) {
     throw new Error(`Google voice design prompt must be ${MAX_PROMPT_CHARS} characters or fewer`);
   }
-  if (!GOOGLE_VOICE_DESIGN_MODELS.includes(model as (typeof GOOGLE_VOICE_DESIGN_MODELS)[number])) {
+  if (!GOOGLE_VOICE_DESIGN_MODELS.some((candidate) => candidate === model)) {
     throw new Error(
       `Google voice design model ${model} is not supported. Use ${GOOGLE_VOICE_DESIGN_MODELS.join(" or ")}.`,
     );
@@ -369,13 +401,14 @@ export function createGoogleSpeechVoiceMethods(deps: GoogleVoiceMethodDeps): {
   return {
     listVoices: async (req) => {
       const transport = await resolveTransport(req);
-      if (!transport.apiKey) {
+      const apiKey = transport.apiKey;
+      if (!apiKey) {
         return staticGoogleVoices();
       }
       try {
         return mergeGoogleVoiceCatalog(
           await listGoogleProjectVoices({
-            apiKey: transport.apiKey,
+            apiKey,
             baseUrl: transport.baseUrl,
             request: transport.request,
             timeoutMs: req.timeoutMs ?? 30_000,
@@ -387,57 +420,51 @@ export function createGoogleSpeechVoiceMethods(deps: GoogleVoiceMethodDeps): {
     },
     designVoice: async (req) => {
       const transport = await resolveTransport(req);
-      if (!transport.apiKey) {
+      const apiKey = transport.apiKey;
+      if (!apiKey) {
         throw new Error("Google API key missing");
       }
-      const designed = await designGooglePromptedVoice({
-        apiKey: transport.apiKey,
-        baseUrl: transport.baseUrl,
-        request: transport.request,
-        timeoutMs: req.timeoutMs ?? 60_000,
-        displayName: req.displayName,
-        prompt: req.prompt,
-        languageCode: req.languageCode,
-        gender: req.gender,
-        model: req.model,
-        assertCurrent: req.assertCurrent,
-      });
-      return {
-        id: designed.id,
-        name: designed.name,
-        previewAudio: designed.preview,
-        mimeType: designed.mimeType,
-      };
+      return await storeVoice(() =>
+        designGooglePromptedVoice({
+          apiKey,
+          baseUrl: transport.baseUrl,
+          request: transport.request,
+          timeoutMs: req.timeoutMs ?? 60_000,
+          displayName: req.displayName,
+          prompt: req.prompt,
+          languageCode: req.languageCode,
+          gender: req.gender,
+          model: req.model,
+          assertCurrent: req.assertCurrent,
+        }),
+      );
     },
     replicateVoice: async (req) => {
       const transport = await resolveTransport(req);
-      if (!transport.apiKey) {
+      const apiKey = transport.apiKey;
+      if (!apiKey) {
         throw new Error("Google API key missing");
       }
-      const replicated = await replicateGoogleVoice({
-        apiKey: transport.apiKey,
-        baseUrl: transport.baseUrl,
-        request: transport.request,
-        timeoutMs: req.timeoutMs ?? 60_000,
-        displayName: req.displayName,
-        sourceAudio: req.sourceAudio,
-        consentAudio: req.consentAudio,
-        sourceMimeType: req.sourceMimeType,
-        consentMimeType: req.consentMimeType,
-        model: req.model,
-        assertCurrent: req.assertCurrent,
-      });
-      return {
-        id: replicated.id,
-        name: replicated.name,
-        previewAudio: replicated.preview,
-        mimeType: replicated.mimeType,
-      };
+      return await storeVoice(() =>
+        replicateGoogleVoice({
+          apiKey,
+          baseUrl: transport.baseUrl,
+          request: transport.request,
+          timeoutMs: req.timeoutMs ?? 60_000,
+          displayName: req.displayName,
+          sourceAudio: req.sourceAudio,
+          consentAudio: req.consentAudio,
+          sourceMimeType: req.sourceMimeType,
+          consentMimeType: req.consentMimeType,
+          model: req.model,
+          assertCurrent: req.assertCurrent,
+        }),
+      );
     },
   };
 }
 
-export async function designGooglePromptedVoice(
+async function designGooglePromptedVoice(
   params: GoogleVoiceDesignRequest,
 ): Promise<GoogleVoiceDesignResult> {
   const input = assertDesignInput(params);
@@ -483,7 +510,9 @@ function parseStoredGoogleVoice(
   const id = readVoiceId(voice);
   const preview = readPreview(voice) ?? readPreview(payload);
   if (!id?.startsWith("voice_")) {
-    throw new Error(`Google voice ${action} response did not include a voice_ id`);
+    throw new GoogleVoiceStoreUncertainError(
+      `Google voice ${action} response did not include a voice_ id`,
+    );
   }
   const name = trim(voice.display_name) ?? trim(voice.displayName) ?? fallbackName;
   // CreateVoice leaves sample_audio unset for replicated voices; prompted voices
@@ -492,11 +521,15 @@ function parseStoredGoogleVoice(
     if (action === "replication") {
       return { id, name, preview: Buffer.alloc(0), mimeType: "audio/wav" };
     }
-    throw new Error(`Google voice ${action} response missing preview audio`);
+    throw new GoogleVoiceStoreUncertainError(
+      `Google voice ${action} response missing preview audio`,
+    );
   }
   const canonical = canonicalizeGoogleProviderBase64(preview.data);
   if (!canonical) {
-    throw new Error(`Google voice ${action} returned malformed preview audio`);
+    throw new GoogleVoiceStoreUncertainError(
+      `Google voice ${action} returned malformed preview audio`,
+    );
   }
   return {
     id,
@@ -506,7 +539,7 @@ function parseStoredGoogleVoice(
   };
 }
 
-export type GoogleVoiceReplicateRequest = {
+type GoogleVoiceReplicateRequest = {
   apiKey: string;
   baseUrl?: string;
   request?: GoogleHttpRequest;
@@ -520,7 +553,7 @@ export type GoogleVoiceReplicateRequest = {
   assertCurrent?: () => void;
 };
 
-export async function replicateGoogleVoice(
+async function replicateGoogleVoice(
   params: GoogleVoiceReplicateRequest,
 ): Promise<GoogleVoiceDesignResult> {
   const displayName = trim(params.displayName);
@@ -528,7 +561,7 @@ export async function replicateGoogleVoice(
     throw new Error("Google voice replication requires a display name");
   }
   const model = trim(params.model) ?? DEFAULT_GOOGLE_VOICE_DESIGN_MODEL;
-  if (!GOOGLE_VOICE_DESIGN_MODELS.includes(model as (typeof GOOGLE_VOICE_DESIGN_MODELS)[number])) {
+  if (!GOOGLE_VOICE_DESIGN_MODELS.some((candidate) => candidate === model)) {
     throw new Error(`Unsupported Google voice replication model: ${model}`);
   }
   const http = await resolveGoogleVoiceHttp(params);
@@ -550,4 +583,29 @@ export async function replicateGoogleVoice(
     },
   });
   return parseStoredGoogleVoice(payload, displayName, "replication");
+}
+
+async function storeVoice(
+  run: () => Promise<GoogleVoiceDesignResult>,
+): Promise<SpeechDesignVoiceResult> {
+  try {
+    const stored = await run();
+    return {
+      id: stored.id,
+      name: stored.name,
+      previewAudio: stored.preview,
+      mimeType: stored.mimeType,
+    };
+  } catch (error) {
+    const record = asOptionalRecord(error);
+    const status = Number(record?.status ?? record?.statusCode);
+    if (error instanceof GoogleVoiceStoreUncertainError || (status >= 500 && status < 600)) {
+      return {
+        outcome: "uncertain",
+        message:
+          "Google may already have stored this voice. Check the project voice catalog before attempting another store.",
+      };
+    }
+    throw error;
+  }
 }

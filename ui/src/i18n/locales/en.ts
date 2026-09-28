@@ -2051,7 +2051,7 @@ export const en: TranslationMap & {
     stored: "Stored {name}",
     preview: "Preview",
     empty: "No stored custom voices on this Google project yet.",
-    unavailable: "This Gateway does not advertise voice replication yet.",
+    unavailable: "Configure a speech provider with voice replication to create a custom voice.",
     disconnected: "Connect to the Gateway to create a custom voice.",
     listError: "Could not list stored voices.",
     createError: "Could not store that voice.",

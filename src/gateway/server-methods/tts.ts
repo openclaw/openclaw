@@ -336,6 +336,10 @@ export const ttsHandlers: GatewayRequestHandlers = {
           id: candidate.id,
           name: candidate.label,
           configured: configuredByProvider.get(candidate.id) === true,
+          capabilities: {
+            designVoice: Boolean(candidate.designVoice),
+            replicateVoice: Boolean(candidate.replicateVoice),
+          },
           models: [...(candidate.models ?? [])],
           voices: [...(candidate.voices ?? [])],
         })),
@@ -398,6 +402,10 @@ export const ttsHandlers: GatewayRequestHandlers = {
         model: normalizeOptionalString(params.modelId),
         assertCurrent: () => assertCurrentTtsWriteCaller(options),
       });
+      if (designed.outcome === "uncertain") {
+        respond(true, { provider, ...designed });
+        return;
+      }
       respond(true, {
         provider,
         id: designed.id,
@@ -443,6 +451,10 @@ export const ttsHandlers: GatewayRequestHandlers = {
         model: normalizeOptionalString(params.modelId),
         assertCurrent: () => assertCurrentTtsWriteCaller(options),
       });
+      if (replicated.outcome === "uncertain") {
+        respond(true, { provider, ...replicated });
+        return;
+      }
       respond(true, {
         provider,
         id: replicated.id,

@@ -15,12 +15,12 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveGoogleEnvApiKey } from "./gemini-auth.js";
 import type { GoogleGenerateContentResponse } from "./generate-content-response.js";
+import { googleSpeechPcm } from "./speech-audio.js";
 import { GOOGLE_PREBUILT_VOICES } from "./voice-catalog.js";
 import { createGoogleSpeechVoiceMethods } from "./voices.js";
 
 // Implicit default stays on the generateContent path; Gemini 3.8 is an explicit opt-in.
 const DEFAULT_GOOGLE_TTS_MODEL = "gemini-3.1-flash-tts-preview";
-const GOOGLE_STORED_TTS_MODEL = "gemini-3.8-flash-tts";
 const DEFAULT_GOOGLE_TTS_VOICE = "Kore";
 const GOOGLE_TTS_SAMPLE_RATE = 24_000;
 const GOOGLE_TTS_CHANNELS = 1;
@@ -36,8 +36,6 @@ const GOOGLE_TTS_GENERATE_CONTENT_MODELS = [
   "gemini-3.1-flash-tts-preview",
   "gemini-2.5-flash-preview-tts",
   "gemini-2.5-pro-preview-tts",
-  "gemini-3.8-flash-tts",
-  "gemini-3.8-flash-lite-tts",
 ] as const;
 
 const GOOGLE_TTS_MODELS = [
@@ -137,28 +135,6 @@ function normalizeGoogleTtsVoiceName(voiceName: unknown): string {
   return normalizeOptionalString(voiceName) ?? DEFAULT_GOOGLE_TTS_VOICE;
 }
 
-function isStoredGoogleTtsVoice(voiceName: string): boolean {
-  return voiceName.startsWith("voice_");
-}
-
-function isGemini38TtsModel(model: string): boolean {
-  return model.includes("gemini-3.8");
-}
-
-function resolveGoogleTtsSynthesisModel(model: string, voiceName: string): string {
-  if (!isStoredGoogleTtsVoice(voiceName) || isGemini38TtsModel(model)) {
-    return model;
-  }
-  return GOOGLE_STORED_TTS_MODEL;
-}
-
-function googleTtsSpeechVoiceConfig(voiceName: string): Record<string, unknown> {
-  if (isStoredGoogleTtsVoice(voiceName)) {
-    return { voice: voiceName };
-  }
-  return { prebuiltVoiceConfig: { voiceName } };
-}
-
 function normalizeGooglePromptTemplate(
   value: unknown,
 ): typeof GOOGLE_AUDIO_PROFILE_PROMPT_TEMPLATE | undefined {
@@ -192,7 +168,7 @@ function resolveGoogleTtsApiKey(params: {
 
 function resolveGoogleTtsBaseUrl(params: {
   cfg?: OpenClawConfig;
-  providerConfig: GoogleTtsProviderConfig;
+  providerConfig: Pick<GoogleTtsProviderConfig, "baseUrl">;
 }): string | undefined {
   return (
     params.providerConfig.baseUrl ??
@@ -261,44 +237,6 @@ function composeGoogleTtsText(params: {
   ]
     .filter((part): part is string => part !== undefined)
     .join("\n\n");
-}
-
-function googleTtsSpeechStyle(params: {
-  audioProfile?: string;
-  personaPrompt?: string;
-}): string | undefined {
-  const style = [
-    normalizeOptionalString(params.audioProfile),
-    normalizeOptionalString(params.personaPrompt),
-  ]
-    .filter((part): part is string => part !== undefined)
-    .join("\n");
-  return style || undefined;
-}
-
-function googleTtsContentPart(params: {
-  text: string;
-  model: string;
-  audioProfile?: string;
-  speakerName?: string;
-  personaPrompt?: string;
-}): Record<string, unknown> {
-  if (!isGemini38TtsModel(params.model)) {
-    return { text: composeGoogleTtsText(params) };
-  }
-  const style = googleTtsSpeechStyle(params);
-  const speaker = normalizeOptionalString(params.speakerName);
-  return {
-    text: params.text,
-    ...(style || speaker
-      ? {
-          speechMetadata: {
-            ...(style ? { style } : {}),
-            ...(speaker ? { speaker } : {}),
-          },
-        }
-      : {}),
-  };
 }
 
 function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
@@ -449,26 +387,6 @@ function prepareGoogleInteractionsSynthesis(text: string): { text: string } | un
   return transcript ? { text: transcript } : undefined;
 }
 
-function stripWavContainerToPcm(audio: Buffer): Buffer {
-  if (
-    audio.subarray(0, 4).toString("ascii") !== "RIFF" ||
-    audio.subarray(8, 12).toString("ascii") !== "WAVE"
-  ) {
-    return audio;
-  }
-  let offset = 12;
-  while (offset + 8 <= audio.length) {
-    const chunkId = audio.subarray(offset, offset + 4).toString("ascii");
-    const chunkSize = audio.readUInt32LE(offset + 4);
-    const dataStart = offset + 8;
-    if (chunkId === "data") {
-      return audio.subarray(dataStart, Math.min(dataStart + chunkSize, audio.length));
-    }
-    offset = dataStart + chunkSize + (chunkSize % 2);
-  }
-  throw new Error("Google TTS WAV response missing PCM data");
-}
-
 function readGoogleInteractionsAudioData(
   payload: GoogleInteractionsSpeechResponse,
 ): string | undefined {
@@ -582,10 +500,12 @@ async function synthesizeGoogleTtsPcmOnce(params: {
               ],
             },
           ],
-        generationConfig: {
+          generationConfig: {
             responseModalities: ["AUDIO"],
             speechConfig: {
-              voiceConfig: googleTtsSpeechVoiceConfig(params.voiceName),
+              voiceConfig: params.voiceName.startsWith("voice_")
+                ? { voice: params.voiceName }
+                : { prebuiltVoiceConfig: { voiceName: params.voiceName } },
             },
           },
         },
@@ -625,7 +545,8 @@ async function synthesizeGoogleTtsPcmOnce(params: {
       if (!canonicalAudio) {
         throw new Error("Google TTS response returned malformed base64 audio data");
       }
-      return stripWavContainerToPcm(Buffer.from(canonicalAudio, "base64"));
+      const audio = Buffer.from(canonicalAudio, "base64");
+      return googleSpeechPcm(audio);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       throw new GoogleTtsRetryableError(message);
@@ -657,11 +578,8 @@ async function synthesizeConfiguredGoogleTts(req: GoogleTtsSynthesisRequest): Pr
     apiKey,
     baseUrl: resolveGoogleTtsBaseUrl({ cfg: req.cfg, providerConfig: config }),
     request: sanitizeConfiguredModelProviderRequest(req.cfg?.models?.providers?.google?.request),
+    model: normalizeGoogleTtsModel(overrides.model ?? config.model),
     voiceName: normalizeGoogleTtsVoiceName(overrides.voiceName ?? config.voiceName),
-    model: resolveGoogleTtsSynthesisModel(
-      normalizeGoogleTtsModel(overrides.model ?? config.model),
-      normalizeGoogleTtsVoiceName(overrides.voiceName ?? config.voiceName),
-    ),
     audioProfile: overrides.audioProfile ?? config.audioProfile,
     speakerName: overrides.speakerName ?? config.speakerName,
     personaPrompt: config.personaPrompt,

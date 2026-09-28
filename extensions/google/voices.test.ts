@@ -87,10 +87,11 @@ describe("Google project voices", () => {
       id: "voice_stored",
       name: "Dry Lab Assistant",
       category: "prompted",
+      stored: true,
       locale: "en-US",
     });
     expect(voices?.filter((voice) => voice.id === "Achernar")).toEqual([
-      { id: "Achernar", name: "Achernar", category: "prebuilt" },
+      { id: "Achernar", name: "Achernar", category: "prebuilt", stored: false },
     ]);
     expect(voices?.some((voice) => voice.id === "Kore")).toBe(true);
     const firstUrl = String(fetchWithTimeoutMock.mock.calls[0]?.[0]);
@@ -119,6 +120,9 @@ describe("Google project voices", () => {
       languageCode: "en-US",
       timeoutMs: 5_000,
     });
+    if (!designed || designed.outcome === "uncertain") {
+      throw new Error("Expected a stored voice");
+    }
     expect(designed?.id).toBe("voice_created");
     expect(designed?.name).toBe("Night Desk");
     expect(designed?.mimeType).toBe("audio/wav");
@@ -172,6 +176,9 @@ describe("Google project voices", () => {
       consentAudio,
       timeoutMs: 5_000,
     });
+    if (!replicated || replicated.outcome === "uncertain") {
+      throw new Error("Expected a stored voice");
+    }
     expect(replicated?.id).toBe("voice_replicated");
     expect(replicated?.name).toBe("Bobby");
     expect(replicated?.previewAudio.equals(Buffer.alloc(0))).toBe(true);
@@ -211,9 +218,36 @@ describe("Google project voices", () => {
         consentAudio,
         timeoutMs: 5_000,
       }),
-    ).rejects.toThrow(/503|UNAVAILABLE/);
+    ).resolves.toMatchObject({ outcome: "uncertain" });
     expect(postJsonRequestMock).toHaveBeenCalledTimes(1);
   });
+
+  it.each([502, 504, "malformed-json", "malformed-preview"])(
+    "keeps ambiguous CreateVoice %s outcomes uncertain",
+    async (failure) => {
+      postJsonRequestMock.mockResolvedValue({
+        response:
+          typeof failure === "number"
+            ? new Response("upstream failure", { status: failure })
+            : failure === "malformed-json"
+              ? new Response("{", { headers: { "content-type": "application/json" } })
+              : jsonResponse({
+                  id: "voice_created",
+                  sample_audio: { data: "not base64!", mime_type: "audio/wav" },
+                }),
+        release: vi.fn(async () => {}),
+      });
+      const result = await buildGoogleSpeechProvider().replicateVoice?.({
+        providerConfig: { apiKey: "test-key" },
+        displayName: "Test",
+        sourceAudio: Buffer.from("source"),
+        consentAudio: Buffer.from("consent"),
+        timeoutMs: 5000,
+      });
+      expect(result).toMatchObject({ outcome: "uncertain" });
+      expect(postJsonRequestMock).toHaveBeenCalledOnce();
+    },
+  );
 
   it("retries a 503 list once, then returns project voices", async () => {
     const busy = Object.assign(
@@ -236,6 +270,7 @@ describe("Google project voices", () => {
       id: "voice_stored",
       name: "Dry Lab Assistant",
       category: "prompted",
+      stored: true,
     });
     expect(voices?.some((voice) => voice.id === "Kore")).toBe(true);
     expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(2);

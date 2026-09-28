@@ -117,6 +117,8 @@ export type SpeechProviderPreparedSynthesis = {
 /** Voice metadata returned by provider list-voices hooks. */
 export type SpeechVoiceOption = {
   id: string;
+  /** Provider-owned identity classification; clients must not infer it from id prefixes. */
+  stored?: boolean;
   name?: string;
   category?: string;
   description?: string;
@@ -157,12 +159,19 @@ export type SpeechDesignVoiceRequest = {
 };
 
 /** Stored voice id plus the provider's preview audio. */
-export type SpeechDesignVoiceResult = {
-  id: string;
-  name?: string;
-  previewAudio: Buffer;
-  mimeType: string;
-};
+export type SpeechDesignVoiceResult =
+  | {
+      outcome?: "stored";
+      id: string;
+      name?: string;
+      previewAudio: Buffer;
+      mimeType: string;
+    }
+  | {
+      /** A non-idempotent write may have completed; callers must not retry it. */
+      outcome: "uncertain";
+      message: string;
+    };
 
 /** Provider request to store a replicated voice from two recordings. */
 export type SpeechReplicateVoiceRequest = {

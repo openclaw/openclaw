@@ -35,7 +35,7 @@ export function floatToPcm16(samples: Float32Array): Uint8Array {
   return bytes;
 }
 
-export function encodeWavPcm16Mono(pcm16: Uint8Array, sampleRate: number): Uint8Array {
+export function encodeWavPcm16Mono(pcm16: Uint8Array, sampleRate: number): Uint8Array<ArrayBuffer> {
   if (pcm16.byteLength % 2 !== 0) {
     throw new Error("PCM16 WAV payload must contain a whole number of samples");
   }

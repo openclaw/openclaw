@@ -5,6 +5,7 @@ import { TtsClipRecorder, TtsClipRecorderCancelledError } from "./tts-clip-recor
 describe("TTS clip recorder", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("does not open the default microphone after an exact selection fails", async () => {
@@ -57,14 +58,9 @@ describe("TTS clip recorder", () => {
   });
 
   it("stops the opened microphone when AudioContext fails to start", async () => {
-    vi.stubGlobal(
-      "AudioContext",
-      class {
-        constructor() {
-          throw new Error("audio context failed");
-        }
-      },
-    );
+    vi.stubGlobal("AudioContext", function AudioContext() {
+      throw new Error("audio context failed");
+    });
     const { RealtimeTalkInputController } = await import("../chat/talk/input.ts");
     const stopTrack = vi.fn();
     const stop = vi.spyOn(RealtimeTalkInputController.prototype, "stop");

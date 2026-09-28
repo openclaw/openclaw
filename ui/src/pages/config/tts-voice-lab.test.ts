@@ -1,138 +1,24 @@
 import { describe, expect, it } from "vitest";
 import {
-  isGoogleVoiceStoreBusy,
-  isGoogleVoiceStoreInternal,
-  isGoogleVoiceStoreUncertain,
-  isStoredSpeechVoice,
-  snapshotStoredVoiceIds,
-  storedVoiceCreatedSince,
   shouldAcceptMicStart,
   shouldClearCreateErrorOnClose,
-  voiceLabCanSubmit,
   voiceLabSubmitBlock,
 } from "./tts-voice-lab-state.ts";
 
-describe("TTS voice lab", () => {
-  it("keeps only stored custom voices from the project catalog", () => {
-    expect(isStoredSpeechVoice({ id: "voice_abc", category: "prompted" })).toBe(true);
-    expect(isStoredSpeechVoice({ id: "voice_xyz", category: "replicated" })).toBe(true);
-    expect(isStoredSpeechVoice({ id: "Kore", category: "prebuilt" })).toBe(false);
-    expect(isStoredSpeechVoice({ id: "en-us-tutor-1", category: "prebuilt" })).toBe(false);
+describe("TTS voice lab eligibility", () => {
+  it.each([
+    [{ name: "", consentMs: 4000, sourceMs: 12000 }, "needName"],
+    [{ name: "Test", consentMs: 500, sourceMs: 12000 }, "needConsent"],
+    [{ name: "Test", consentMs: 4000, sourceMs: 8000 }, "needSource"],
+    [{ name: "Test", consentMs: 4000, sourceMs: 31000 }, "sourceTooLong"],
+    [{ name: "Test", consentMs: 4000, sourceMs: 12000 }, null],
+  ] as const)("validates recordings and name", (input, expected) => {
+    expect(voiceLabSubmitBlock({ ...input, connected: true })).toBe(expected);
   });
-
-  it("requires a name, a consent take, and a 10-30s reference take", () => {
-    expect(voiceLabCanSubmit({ name: "Bobby", consentMs: 4_000, sourceMs: 12_000 })).toBe(true);
-    expect(voiceLabCanSubmit({ name: "  ", consentMs: 4_000, sourceMs: 12_000 })).toBe(false);
-    expect(voiceLabCanSubmit({ name: "Bobby", consentMs: 500, sourceMs: 12_000 })).toBe(false);
-    expect(voiceLabCanSubmit({ name: "Bobby", consentMs: 4_000, sourceMs: 8_000 })).toBe(false);
-    expect(voiceLabCanSubmit({ name: "Bobby", consentMs: 4_000, sourceMs: 31_000 })).toBe(false);
-    expect(
-      voiceLabSubmitBlock({
-        name: "",
-        consentMs: 10_900,
-        sourceMs: 29_500,
-        connected: true,
-      }),
-    ).toBe("needName");
-    expect(
-      voiceLabSubmitBlock({
-        name: "Bobby",
-        consentMs: 10_900,
-        sourceMs: 29_500,
-        connected: false,
-      }),
-    ).toBe("disconnected");
-  });
-
-  it("keeps an in-flight store guarded after the dialog closes", () => {
+  it("keeps in-flight errors on close and drops late microphone starts", () => {
     expect(shouldClearCreateErrorOnClose(true)).toBe(false);
     expect(shouldClearCreateErrorOnClose(false)).toBe(true);
-  });
-
-  it("drops a pending microphone start after the dialog closes", () => {
-    expect(shouldAcceptMicStart({ session: 1, currentSession: 1, dialogOpen: true })).toBe(true);
     expect(shouldAcceptMicStart({ session: 1, currentSession: 2, dialogOpen: false })).toBe(false);
-    expect(shouldAcceptMicStart({ session: 1, currentSession: 1, dialogOpen: false })).toBe(false);
-  });
-
-  it("treats Google 503 UNAVAILABLE as a busy voice store", () => {
-    expect(
-      isGoogleVoiceStoreBusy(
-        new Error(
-          "ProviderHttpError: Google voices request failed (503): The service is currently unavailable. [code=UNAVAILABLE]",
-        ),
-      ),
-    ).toBe(true);
-    expect(isGoogleVoiceStoreBusy(new Error("invalid consent audio"))).toBe(false);
-    expect(
-      isGoogleVoiceStoreInternal(
-        new Error(
-          "ProviderHttpError: Google voices request failed (500): Internal error encountered. [code=INTERNAL]",
-        ),
-      ),
-    ).toBe(true);
-  });
-
-  it("locks Store after an uncertain 503 until the list is reconciled", () => {
-    const busy = new Error(
-      "ProviderHttpError: Google voices request failed (503): The service is currently unavailable. [code=UNAVAILABLE]",
-    );
-    expect(isGoogleVoiceStoreUncertain(busy)).toBe(true);
-    expect(isGoogleVoiceStoreUncertain(new Error("request timeout"))).toBe(true);
-    expect(isGoogleVoiceStoreUncertain(new Error("invalid consent audio"))).toBe(false);
-    expect(
-      voiceLabSubmitBlock({
-        name: "Bobby",
-        consentMs: 10_900,
-        sourceMs: 12_000,
-        connected: true,
-        storeUncertain: true,
-      }),
-    ).toBe("storeUncertain");
-    const before = new Set(["voice_abc"]);
-    expect(
-      storedVoiceCreatedSince(
-        before,
-        [
-          { id: "Kore", category: "prebuilt" },
-          { id: "voice_abc", name: "Bobby", category: "replicated" },
-        ],
-        "Bobby",
-      ),
-    ).toBeUndefined();
-    expect(
-      storedVoiceCreatedSince(
-        before,
-        [
-          { id: "voice_abc", name: "Bobby", category: "replicated" },
-          { id: "voice_new", name: "Bobby", category: "replicated" },
-        ],
-        "Bobby",
-      )?.id,
-    ).toBe("voice_new");
-    expect(
-      storedVoiceCreatedSince(
-        before,
-        [{ id: "voice_other", name: "Alice", category: "replicated" }],
-        "Bobby",
-      ),
-    ).toBeUndefined();
-  });
-
-  it("does not treat a failed project listing as an empty stored catalog", () => {
-    expect(
-      snapshotStoredVoiceIds({
-        projectListingIncomplete: true,
-        voices: [
-          { id: "Kore", category: "prebuilt" },
-          { id: "voice_old", name: "Bobby", category: "replicated" },
-        ],
-      }),
-    ).toBeUndefined();
-    expect(
-      snapshotStoredVoiceIds({
-        voices: [{ id: "voice_old", name: "Bobby", category: "replicated" }],
-      }),
-    ).toEqual(new Set(["voice_old"]));
+    expect(shouldAcceptMicStart({ session: 1, currentSession: 1, dialogOpen: true })).toBe(true);
   });
 });

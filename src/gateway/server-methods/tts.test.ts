@@ -255,6 +255,7 @@ describe("ttsHandlers", () => {
               id: "openai",
               name: "OpenAI",
               configured: false,
+              capabilities: { designVoice: false, replicateVoice: false },
               models: ["openai-speech-model"],
               voices: ["openai-voice"],
             },
@@ -262,6 +263,7 @@ describe("ttsHandlers", () => {
               id: "google",
               name: "Google",
               configured: true,
+              capabilities: { designVoice: false, replicateVoice: false },
               models: ["google-speech-model"],
               voices: ["google-voice"],
             },
@@ -433,7 +435,10 @@ describe("ttsHandlers", () => {
     const { replicateSpeechVoice } = await import("../../tts/tts.js");
     const respond = vi.fn();
     await expect(
-      expectDefined(ttsHandlers["tts.replicateVoice"])({
+      expectDefined(
+        ttsHandlers["tts.replicateVoice"],
+        "tts.replicateVoice handler",
+      )({
         params: {
           provider: "google",
           displayName: "Bobby",
@@ -462,7 +467,10 @@ describe("ttsHandlers", () => {
     });
     const respond = vi.fn();
     await expect(
-      expectDefined(ttsHandlers["tts.replicateVoice"])({
+      expectDefined(
+        ttsHandlers["tts.replicateVoice"],
+        "tts.replicateVoice handler",
+      )({
         params: {
           provider: "google",
           displayName: "Bobby",
@@ -476,6 +484,25 @@ describe("ttsHandlers", () => {
     ).rejects.toMatchObject({
       name: "SessionMutationAuthorizationChangedError",
       error: { code: ErrorCodes.FORBIDDEN },
+    });
+  });
+
+  it("preserves a provider's uncertain store outcome in the Gateway response", async () => {
+    const { replicateSpeechVoice } = await import("../../tts/tts.js");
+    vi.mocked(replicateSpeechVoice).mockResolvedValueOnce({
+      outcome: "uncertain",
+      message: "Inspect the project catalog.",
+    });
+    const respond = await callTts("tts.replicateVoice", {
+      provider: "google",
+      displayName: "Test",
+      sourceAudioBase64: "AQI=",
+      consentAudioBase64: "AwQ=",
+    });
+    expect(respond).toHaveBeenCalledWith(true, {
+      provider: "google",
+      outcome: "uncertain",
+      message: "Inspect the project catalog.",
     });
   });
 

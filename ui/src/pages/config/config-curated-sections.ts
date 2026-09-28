@@ -1,9 +1,9 @@
-import type { TemplateResult } from "lit";
 import type { ConfigPageId } from "./config-sections.ts";
 import { renderMeetingCapture } from "./meeting-capture.ts";
 import { renderSessionStorage } from "./session-storage.ts";
 import { COMMUNICATION_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 import { renderTtsVoiceLab } from "./tts-voice-lab.ts";
+import type { ConfigProps } from "./view-types.ts";
 
 export function resolveCuratedConfigRenderSection(params: {
   pageId: ConfigPageId;
@@ -11,7 +11,7 @@ export function resolveCuratedConfigRenderSection(params: {
   mutationDisabled: boolean;
   advanced: boolean;
   targetBlockId?: string;
-}): ((editor: TemplateResult) => TemplateResult) | undefined {
+}): ConfigProps["renderSection"] {
   const { pageId, activeSection, mutationDisabled, advanced, targetBlockId } = params;
   if (pageId === "communications" && activeSection === "tts") {
     return (editor) =>
