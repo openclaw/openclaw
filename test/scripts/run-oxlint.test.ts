@@ -722,8 +722,7 @@ describe("run-oxlint", () => {
         platform: "linux",
         ...scenario,
         hostResources: {
-          totalMemoryBytes:
-            "totalMemoryBytes" in scenario ? scenario.totalMemoryBytes : 16 * 1024 ** 3,
+          totalMemoryBytes: scenario.totalMemoryBytes ?? 16 * 1024 ** 3,
           logicalCpuCount: scenario.logicalCpuCount ?? 4,
           memoryCapacityBytes:
             "memoryCapacityBytes" in scenario ? scenario.memoryCapacityBytes : 15 * 1024 ** 3,
