@@ -90,7 +90,9 @@ its workers and removes that directory after success, failure, an exception, or
 `SIGINT`/`SIGTERM`, including failures while reporting the outcome. If a worker
 cannot settle or removal fails, it records `Runtime retained at <path>: <reason>`
 and leaves cleanup available to Doctor. A cleanup warning does not replace the
-original update outcome.
+original update outcome. An earlier nonzero exit remains nonzero while cleanup
+is draining. Mutation and recovery owners must still drain; their failures produce
+a nonzero exit even if the printed command result was successful.
 
 Retention copies plugin manifests and files inspected by plugin safety checks,
 so retaining the updater does not make the checkout's plugins fail hardlink
@@ -100,7 +102,10 @@ These lifecycle and copying changes apply when the installed updater supports
 them; installing a newer candidate cannot change the updater already running.
 After that updater exits, run the newer `openclaw doctor --fix` from the original
 checkout to locate its sibling runtime directories. Doctor also checks known
-temporary directories, including the managed service's `TMPDIR`. Recognized
+temporary directories, including the managed service's `TMPDIR`, `TMP`, and `TEMP`.
+Relative service paths require its recorded absolute working directory. Legacy
+pnpm projections remain recognizable after a versioned package-root change within
+the same store; lookup is limited to 4,096 immediate projected-store entries. Recognized
 runtime projections are disposable; Doctor removes them when no worker still
 uses them. If ownership or process liveness cannot be verified, Doctor preserves
 the directory and reports the reason.
@@ -135,10 +140,10 @@ openclaw update repair --json
 openclaw update repair --accept-capabilities
 ```
 
-When repair runs under Bun, its fresh Doctor, config validation, readiness,
-completion, and non-interactive failure-diagnostic commands use that same Bun
-executable. Node and command-shim invocations keep their existing Node selection
-policy. Managed-service runtime selection remains owned by the service configuration.
+When update, post-core continuation, or repair runs under Bun, its OpenClaw
+maintenance children use that same Bun executable, including fresh Doctor,
+config validation, readiness, completion, and non-interactive failure diagnostics.
+Managed-service runtime selection stays with the service definition and its runtime pin.
 
 If an older updater publishes the new core but then reports
 `update-executor-settlement-failed` with `Parent executor is suspended for its candidate.`,

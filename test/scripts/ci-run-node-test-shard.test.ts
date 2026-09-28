@@ -32,6 +32,7 @@ import {
   resolveCiTestRuntimeSelections,
 } from "../../scripts/lib/ci-test-runtime.mts";
 import { refitTestTimings } from "../../scripts/lib/ci-test-timings-refit.mts";
+import * as buildPrerequisites from "../../scripts/lib/vitest-build-prerequisites.mts";
 import { resolveLocalVitestScheduling } from "../../scripts/lib/vitest-local-scheduling.mts";
 import * as workerOwner from "../../scripts/lib/vitest-worker-run.mts";
 import * as groupOwner from "../../scripts/vitest-process-group.mts";
@@ -72,6 +73,33 @@ afterEach(() => {
 });
 
 describe("scripts/ci-run-node-test-shard.mts", () => {
+  it.each([0, 23])(
+    "settles package preparation before starting shard readers (exit %s)",
+    async (code) => {
+      vi.spyOn(groupOwner, "shouldUseDetachedVitestProcessGroup").mockReturnValue(false);
+      const started = createDeferred();
+      const prepared = createDeferred<number>();
+      vi.spyOn(buildPrerequisites, "preparePrebuiltAiPackage").mockImplementation(async () => {
+        started.resolve();
+        return prepared.promise;
+      });
+      const runChild = vi.fn().mockResolvedValue(0);
+      const pending = runShardPlans(
+        [{ kind: "target", name: "AI package", target: "packages/ai/src/package.e2e.test.ts" }],
+        {
+          env: { OPENCLAW_E2E_USE_PREBUILT_DIST: "1" },
+          scratchDir: makeScratchDir(),
+          runChild,
+        },
+      );
+      await started.promise;
+      expect(runChild).not.toHaveBeenCalled();
+      prepared.resolve(code);
+      expect(await pending).toBe(code);
+      expect(runChild).toHaveBeenCalledTimes(code === 0 ? 1 : 0);
+    },
+  );
+
   it.each(["stdout", "stderr"] as const)(
     "preserves workflow commands at column zero while labeling child %s",
     async (channel) => {
@@ -579,6 +607,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       const nodeFiles = [
         skippedOnBun,
         v8HeapTest,
+        "src/plugins/runtime.retention.test.ts",
         "src/agents/code-mode-node.test.ts",
         nodeHistoryBenchmark,
         nativeCompilerTest,

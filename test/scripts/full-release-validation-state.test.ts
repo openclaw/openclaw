@@ -1155,41 +1155,6 @@ describe("full release execution plan", () => {
     });
   });
 
-  it.each([
-    { targetVersion: "2026.8.1", evidenceReuse: false, rerunGroup: "all", required: false },
-    { targetVersion: "2026.8.1-1", evidenceReuse: false, rerunGroup: "all", required: false },
-    { targetVersion: "2026.8.1-beta.1", evidenceReuse: false, rerunGroup: "all", required: false },
-    { targetVersion: "2026.8.33", evidenceReuse: false, rerunGroup: "all", required: false },
-    { targetVersion: "2026.8.1-alpha.1", evidenceReuse: false, rerunGroup: "all", required: true },
-    { targetVersion: "2026.8.1-alpha.1", evidenceReuse: true, rerunGroup: "all", required: false },
-    {
-      targetVersion: "2026.8.1-alpha.1",
-      evidenceReuse: false,
-      rerunGroup: "package",
-      required: false,
-    },
-  ])(
-    "enforces standalone Docker assets for $targetVersion (reuse=$evidenceReuse, group=$rerunGroup)",
-    ({ required, ...input }) => {
-      for (const dockerPreflightResult of ["success", "failure", "skipped", "cancelled"]) {
-        const { gates } = plan({ ...input, dockerPreflightResult });
-        expect(gates.find((gate) => gate.name === "Verify Docker runtime image assets")).toEqual({
-          name: "Verify Docker runtime image assets",
-          required,
-          result: dockerPreflightResult,
-        });
-        expect(
-          classifyReleaseSnapshot({
-            children: [],
-            localFailures: releasePlanGateFailures(gates),
-            releaseProfile: "stable",
-            workflowRef: "main",
-          }).state,
-        ).toBe(required && dockerPreflightResult !== "success" ? "blocked_complete" : "passed");
-      }
-    },
-  );
-
   it.each(["install-smoke", "qa-parity", "qa-live"])(
     "does not require candidate preparation for focused %s",
     (rerunGroup) => {
@@ -3995,12 +3960,11 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
       }
       // Earlier producers required this gate for regular releases too. A collector
       // retry must preserve that recorded policy, including a failed gate.
-      const legacyDockerGate = sealed.gates.find(
-        (gate) => gate.name === "Verify Docker runtime image assets",
-      );
-      assert(legacyDockerGate);
-      legacyDockerGate.required = true;
-      legacyDockerGate.result = dockerPreflightResult;
+      sealed.gates.push({
+        name: "Verify Docker runtime image assets",
+        required: true,
+        result: dockerPreflightResult,
+      });
       sealed.sha256 = releaseExecutionPlanSha256(sealed);
       writeFileSync(output, JSON.stringify(sealed));
       const result = runCollector("plan", {

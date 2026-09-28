@@ -12,6 +12,7 @@ import {
   withWorkspaceHashContext,
   withWorkspaceHashMemo,
 } from "./workspace-hash-memo.js";
+import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
 import {
   MAX_RECONCILIATION_ENTRIES,
   type WorkerWorkspaceManifest,
@@ -27,7 +28,6 @@ import {
   hasReplacedBaseEntryAncestor,
   manifestNodes,
   preflightWorkspaceApply,
-  readActualWorkspaceManifest,
   retainedConflictPaths,
   type WorkerWorkspaceApplyResult,
 } from "./workspace-reconcile-core.js";
@@ -130,7 +130,7 @@ async function applyStagedWorkerWorkspaceWithMemo(
     ? new Set([...baseNodes.keys(), ...currentNodes.keys()])
     : undefined;
   const createApplyResult = (
-    actual: Awaited<ReturnType<typeof readActualWorkspaceManifest>>,
+    actual: Awaited<ReturnType<typeof captureWorkspaceManifest>>,
     conflictPaths: string[],
   ): WorkerWorkspaceApplyResult => ({
     ...actual,
@@ -156,7 +156,7 @@ async function applyStagedWorkerWorkspaceWithMemo(
     reconcile: Extract<typeof acceptance, { kind: "reconcile" }>,
     preparedPreflight?: Awaited<ReturnType<typeof inspectPaths>>,
   ) => {
-    const actual = await readActualWorkspaceManifest({
+    const actual = await captureWorkspaceManifest({
       root,
       baseCommit: params.current.baseCommit,
       preserveDirectories,

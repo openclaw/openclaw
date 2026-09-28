@@ -138,9 +138,7 @@ internal fun ProvidersModelsScreen(
 
         errorText?.let { message ->
           item {
-            ClawPanel {
-              Text(text = message, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-            }
+            SettingsMessagePanel(text = message)
           }
         }
       }

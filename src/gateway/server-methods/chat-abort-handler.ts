@@ -71,9 +71,11 @@ export async function handleChatAbortRequestWithLifecycle(
 ): Promise<void> {
   const { params, respond, context, client, sessionMutationAuthorization } = options;
   const authority = readGatewayRequestMutationAuthority(options);
+  const requester = resolveChatAbortRequester(client, sessionMutationAuthorization);
   const assertCurrent = () => {
     authority.assertCurrent();
     sessionMutationAuthorization?.assertCurrent();
+    requester.sessionAuthority?.assertCurrent();
   };
   if (!assertValidParams(params, validateChatAbortParams, "chat.abort", respond)) {
     return;
@@ -152,7 +154,9 @@ export async function handleChatAbortRequestWithLifecycle(
     );
     return;
   }
-  const narrow = authority.sessionScope === "operator.sessions.write";
+  const narrow =
+    authority.sessionScope === "operator.sessions.write" ||
+    requester.sessionAuthority !== undefined;
   const admittedTarget = sessionMutationAuthorization?.admittedTarget;
   if (
     narrow &&
@@ -169,7 +173,6 @@ export async function handleChatAbortRequestWithLifecycle(
   }
   const requiredSessionId = narrow ? admittedTarget?.sessionId : undefined;
   const ops = createChatAbortOps(context);
-  const requester = resolveChatAbortRequester(client);
 
   const abortSession: Result<ReturnType<typeof loadSessionEntry>, unknown> = (() => {
     try {

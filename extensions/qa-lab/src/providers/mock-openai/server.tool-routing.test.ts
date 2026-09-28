@@ -75,7 +75,10 @@ describe("mock scenario tool routing", () => {
           ? `React to this WhatsApp${group ? " group" : ""} message with thumbs up for QA action check ${token}. Do not send any visible text reply after the reaction.`
           : `Use the WhatsApp message tool upload-file action to send a PNG with caption ${token}. Do not send any visible text reply after the upload.`);
       const input: unknown[] = [
-        { role: "developer", content: "Use message for channel actions through the tool catalog." },
+        {
+          role: "developer",
+          content: "## Messaging\n### message tool\n- Proactive send/channel action: `message`.",
+        },
         makeUserInput(prompt),
       ];
       // Custom Responses endpoints carry guidance in input, not body.instructions.
@@ -238,7 +241,7 @@ describe("mock scenario tool routing", () => {
         tools: catalogTools,
         input,
         instructions:
-          "Visible source replies are not automatically delivered for this run. Use message(action=send) for user-visible source-channel output. When the message is the completed reply to the current source conversation, set final=true.",
+          "## Messaging\n### message tool\nVisible source replies are not automatically delivered for this run. Use message(action=send) for user-visible source-channel output. When the message is the completed reply to the current source conversation, set final=true.",
       });
     const payload = await request();
     const call = outputItem(payload);

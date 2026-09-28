@@ -26,7 +26,7 @@ export function createWorkerWorkspaceReconcileRequest(params: {
   remoteWorkspaceDir: string;
   baseManifestRef: string;
   journal: WorkerLocalWorkspaceReconcileRequest["journal"];
-  stagedResult: NonNullable<WorkerLocalWorkspaceReconcileRequest["stagedResult"]>;
+  stagedResult: WorkerLocalWorkspaceReconcileRequest["stagedResult"];
   assertCurrent: () => void;
 }): WorkerWorkspaceReconcileRequest {
   const { workspace, remoteWorkspaceDir, baseManifestRef, journal, stagedResult } = params;

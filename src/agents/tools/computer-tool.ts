@@ -228,8 +228,14 @@ export function createComputerTool(options?: {
             : projected.result;
         };
 
-        if (action === "screenshot" || action === "wait") {
+        if (action === "screenshot" || action === "wait" || action === "take_control") {
           const noteLines: string[] = [];
+          if (action === "take_control") {
+            await session.takeControl(resolved, toolCallId, signal);
+            noteLines.push(
+              "Agent took control of this desktop; the operator can take control again.",
+            );
+          }
           if (action === "wait") {
             const seconds =
               readFiniteNumberParam(params, "duration", {

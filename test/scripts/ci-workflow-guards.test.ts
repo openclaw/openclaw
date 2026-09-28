@@ -1492,9 +1492,12 @@ AFTER_CD
 
   it("starts Apple builds and screenshots directly on hosted capacity", () => {
     const workflow = readCiWorkflow();
-    for (const jobName of ["macos-swift", "ios-build", "ios-screenshot-shard"]) {
+    for (const jobName of ["macos-swift", "ios-build"]) {
       expect(evaluateWorkflowRunner(workflow.jobs[jobName]["runs-on"]), jobName).toBe("xcode-27");
     }
+    expect(evaluateWorkflowRunner(workflow.jobs["ios-screenshot-shard"]["runs-on"])).toBe(
+      "xcode-27-xlarge",
+    );
     expect(workflow.jobs["macos-swift"]["timeout-minutes"]).toBe(30);
   });
 
@@ -1517,9 +1520,14 @@ AFTER_CD
     expect(workflow.jobs.check["timeout-minutes"]).toBe(
       "${{ fromJSON(inputs.timeout_minutes || '240') }}",
     );
-    expect(workflow.jobs.check["runs-on"]).toBe(
-      "${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}",
-    );
+    for (const [eventName, expectedRunner] of [
+      ["pull_request", "ubuntu-24.04"],
+      ["workflow_dispatch", "blacksmith-32vcpu-ubuntu-2404"],
+    ] as const) {
+      expect(evaluateWorkflowRunner(workflow.jobs.check["runs-on"], { eventName })).toBe(
+        expectedRunner,
+      );
+    }
     const beginStep = workflow.jobs.check.steps.find(
       (step: { name?: string }) => step.name === "Begin Testbox",
     );
@@ -3627,7 +3635,7 @@ require("node:fs").writeFileSync("scheduler-baseline", process.env.OPENCLAW_UPGR
       for (const jobName of jobNames) {
         const job = workflow.jobs[jobName];
         expect(evaluateWorkflowRunner(job["runs-on"]), `${workflowPath}: ${jobName}`).toBe(
-          "xcode-27",
+          jobName === "ios-screenshot-shard" ? "xcode-27-xlarge" : "xcode-27",
         );
         const selection = expectDefined(
           job.steps.find((step: WorkflowStep) =>
@@ -4224,7 +4232,7 @@ setImmediate(() => {
       "docker-seed-e2e": "blacksmith-16vcpu-ubuntu-2404",
       "qa-smoke-ci-profile": "blacksmith-16vcpu-ubuntu-2404",
       "check-test-types-hosted-core-shard": "blacksmith-16vcpu-ubuntu-2404",
-      "check-lint-hosted-core-shard": "blacksmith-8vcpu-ubuntu-2404",
+      "check-lint-hosted-core-shard": "blacksmith-16vcpu-ubuntu-2404",
       "ci-gate": "blacksmith-4vcpu-ubuntu-2404",
       "checks-ui": "blacksmith-8vcpu-ubuntu-2404",
       "checks-windows": "blacksmith-16vcpu-windows-2025",
@@ -4273,7 +4281,9 @@ setImmediate(() => {
           { runnerBackend: "runson" },
           jobName === "check-plan" || jobName === "checks-baseline-ratchets"
             ? hostedRunner
-            : expectedHybridFirstAttemptRunners[jobName as keyof typeof expectedHostedRunners],
+            : jobName === "check-lint-hosted-core-shard"
+              ? "blacksmith-8vcpu-ubuntu-2404"
+              : expectedHybridFirstAttemptRunners[jobName as keyof typeof expectedHostedRunners],
         ],
         ["RunsOn retry", { runnerBackend: "runson", runAttempt: 2 }, hostedRunner],
         [
@@ -4347,12 +4357,20 @@ setImmediate(() => {
       for (const [label, overrides, expected] of [
         ["main", { eventName: "push" }, runner],
         [
-          "heavy packed core stripe",
+          "first packed core stripe",
           { runnerProfile: "hybrid", matrix: { stripe: 1 } },
           jobName === "check-lint-hosted-core-shard" ? "blacksmith-16vcpu-ubuntu-2404" : runner,
         ],
-        ["lighter packed core stripe", { runnerProfile: "hybrid", matrix: { stripe: 2 } }, runner],
-        ["unpaired core stripe", { runnerProfile: "github", matrix: { stripe: 1 } }, runner],
+        [
+          "second packed core stripe",
+          { runnerProfile: "hybrid", matrix: { stripe: 2 } },
+          jobName === "check-lint-hosted-core-shard" ? "blacksmith-16vcpu-ubuntu-2404" : runner,
+        ],
+        [
+          "unpaired core stripe",
+          { runnerProfile: "github", matrix: { stripe: 1 } },
+          jobName === "check-lint-hosted-core-shard" ? "blacksmith-8vcpu-ubuntu-2404" : runner,
+        ],
         ["noncanonical", { repository: "contributor/openclaw" }, "ubuntu-24.04"],
         ["manual", { eventName: "workflow_dispatch" }, "ubuntu-24.04"],
         [
@@ -4360,7 +4378,9 @@ setImmediate(() => {
           { headRepository: "contributor/openclaw", runnerProfile: "github" },
           jobName === "check-plan" || jobName === "checks-baseline-ratchets"
             ? "ubuntu-24.04"
-            : runner,
+            : jobName === "check-lint-hosted-core-shard"
+              ? "blacksmith-8vcpu-ubuntu-2404"
+              : runner,
         ],
         ["frozen target", { frozenTarget: true }, jobName === "ci-gate" ? runner : "ubuntu-24.04"],
         [
@@ -4368,6 +4388,7 @@ setImmediate(() => {
           {
             eventName: "workflow_dispatch",
             runnerBackend: "github",
+            runnerProfile: "hybrid",
             preflightOutputs: {
               ci_qualification: "true",
               qualification_runner_backend: "hybrid",
@@ -4399,7 +4420,9 @@ setImmediate(() => {
           },
           jobName === "check-plan" || jobName === "checks-baseline-ratchets"
             ? "ubuntu-24.04"
-            : runner,
+            : jobName === "check-lint-hosted-core-shard"
+              ? "blacksmith-8vcpu-ubuntu-2404"
+              : runner,
         ],
         [
           "qualification retry",
@@ -7774,10 +7797,7 @@ server.listen(0, "127.0.0.1", () => {
   it("bounds release ref validation fetches across checkout auth modes", () => {
     const resolveTargetSteps = readReleaseChecksWorkflow().jobs.resolve_target.steps;
 
-    for (const stepName of [
-      "Validate selected ref belongs to this repository",
-      "Validate Tideclaw alpha target matches workflow branch",
-    ]) {
+    for (const stepName of ["Validate selected ref belongs to this repository"]) {
       const step = resolveTargetSteps.find(
         (candidate: WorkflowStep) => candidate.name === stepName,
       );
@@ -11560,7 +11580,6 @@ it.each(["publish", "promote"])(
       ["v2026.9.4", "latest", "success", true],
       ["v2026.9.4", "beta", "success", true],
       ["v2026.9.4-beta.1", "beta", "success", false],
-      ["v2026.9.4-alpha.1", "alpha", "success", false],
       ["v2026.8.33", "extended-stable", "success", false],
       ["v2026.9.4", "latest", "failure", false],
       ["v2026.9.4", "latest", "skipped", false],

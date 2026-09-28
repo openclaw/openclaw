@@ -102,14 +102,10 @@ function normalizePlacement(raw: unknown): SessionBindingPlacement | undefined {
 }
 
 function resolveAdapterPlacements(adapter: SessionBindingAdapter): SessionBindingPlacement[] {
-  const configured = adapter.capabilities?.placements?.map((value) => normalizePlacement(value));
-  const placements = configured?.filter((value): value is SessionBindingPlacement =>
-    Boolean(value),
+  const placements = adapter.capabilities?.placements?.filter(
+    (value) => normalizePlacement(value) !== undefined,
   );
-  if (placements && placements.length > 0) {
-    return uniqueValues(placements);
-  }
-  return ["current", "child"];
+  return placements?.length ? uniqueValues(placements) : ["current", "child"];
 }
 
 function resolveAdapterCapabilities(

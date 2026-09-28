@@ -97,6 +97,12 @@ described [above](/start/wizard-cli-reference#what-the-wizard-does).
   </Step>
   <Step title="Workspace">
     - Default `~/.openclaw/workspace` (configurable).
+    - The prompt and `--workspace` reject files, non-directory ancestors,
+      dangling symbolic links, and symlink loops at the workspace path or any
+      ancestor, identifying the failing path. Other inspection failures, such
+      as permission errors, are reported, not treated as missing directories.
+      Missing directories and symbolic links to existing directories are
+      allowed.
     - Seeds workspace files needed for first-run bootstrap.
     - On rerun, an existing agent roster keeps its fleet-wide workspace unless
       you explicitly confirm the move. Non-interactive reruns warn and preserve
@@ -170,6 +176,7 @@ described [above](/start/wizard-cli-reference#what-the-wizard-does).
       - If task creation is denied, OpenClaw falls back to a per-user Startup-folder login item and starts the gateway immediately.
       - Scheduled Tasks remain preferred because they provide better supervisor status.
     - Runtime selection: Node is the primary, default, and recommended runtime. Bun 1.4+ with WAL-reset-safe `node:sqlite` is available as an explicit opt-in.
+      QuickStart reports the runtime selected by the install plan, including Bun when no supported Node is available on a Bun-only first install.
     - A SecretRef-managed `gateway.auth.token` is validated without copying its
       resolved plaintext value into supervisor service metadata. An unresolved
       token ref blocks daemon installation with remediation guidance.

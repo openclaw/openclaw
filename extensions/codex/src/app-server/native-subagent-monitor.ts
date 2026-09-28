@@ -82,6 +82,7 @@ import {
   type CodexNativeSubagentCompletion,
 } from "./native-subagent-notification.js";
 import {
+  canNativeParentConsumeCompletion,
   observeNativeParentTurn,
   registerNativeSubagentParent,
   type NativeParentRegistration,
@@ -769,11 +770,7 @@ class Monitor {
       : undefined;
     const parent = threadId ? this.parentStates.get(threadId) : undefined;
     if (parent) {
-      observeNativeParentTurn(
-        parent,
-        notification.method,
-        isJsonObject(params?.turn) ? readString(params.turn, "id") : undefined,
-      );
+      observeNativeParentTurn(parent, notification);
     }
     const tracksRecoveryRevision = Boolean(threadId && this.recovery.hasRevision(threadId));
     if (
@@ -809,7 +806,7 @@ class Monitor {
       return;
     }
     const childState = threadId && !pendingNativeTurn ? this.currentChild(threadId) : undefined;
-    if (parent && parent.turnIds.has(readString(params, "turnId") ?? "")) {
+    if (parent && canNativeParentConsumeCompletion(parent, readString(params, "turnId"))) {
       observeCodexNativeSubagentDeliveryReceipts({
         state: parent,
         notification,

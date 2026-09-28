@@ -12,13 +12,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getActivePluginChannelRegistryVersion } from "../../plugins/runtime.js";
 import { captureChannelReadAuthority } from "../../shared/channel-read-authority.js";
 
-/**
- * Normalizes raw user/channel target input before provider-specific parsing.
- */
-export function normalizeChannelTargetInput(raw: string): string {
-  return raw.trim();
-}
-
 type TargetNormalizer = ((raw: string) => string | undefined) | undefined;
 type TargetNormalizerCacheEntry = {
   version: number;
@@ -136,7 +129,7 @@ type TargetResolveKindLike = ChannelDirectoryEntryKind | "channel";
 /**
  * Resolved outbound target returned by a channel plugin target resolver.
  */
-type ResolvedPluginMessagingTarget = {
+export type ResolvedPluginMessagingTarget = {
   to: string;
   kind: TargetResolveKindLike;
   display?: string;
@@ -152,7 +145,7 @@ export function resolveNormalizedTargetInput(
   raw?: string,
   plugin?: ChannelPlugin,
 ): { raw: string; normalized: string } | undefined {
-  const trimmed = normalizeChannelTargetInput(raw ?? "");
+  const trimmed = raw?.trim();
   if (!trimmed) {
     return undefined;
   }

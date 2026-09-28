@@ -47,7 +47,8 @@ const hostBirth: {
   paths: Set<string>;
   mode: "zero" | "changing" | "ctime" | undefined;
   relocated: boolean;
-} = { paths: new Set(), mode: undefined, relocated: false };
+  ctimeAdvanceNs: bigint;
+} = { paths: new Set(), mode: undefined, relocated: false, ctimeAdvanceNs: 0n };
 
 afterEach(async () => {
   try {
@@ -58,6 +59,7 @@ afterEach(async () => {
     hostBirth.paths.clear();
     hostBirth.mode = undefined;
     hostBirth.relocated = false;
+    hostBirth.ctimeAdvanceNs = 0n;
   }
 });
 
@@ -76,21 +78,26 @@ function observeHostBirthtime(mode: typeof hostBirth.mode, paths: string[]): voi
   vi.spyOn(fs, "statSync").mockImplementation((...args) => {
     const result = readStat(...args);
     if (result && args[1]?.bigint && hostBirth.paths.has(String(args[0]))) {
-      Object.defineProperty(result, "birthtimeNs", {
-        value:
-          mode === "ctime" && "ctimeNs" in result
-            ? result.ctimeNs
-            : mode === "zero"
-              ? 0n
-              : hostBirth.relocated
-                ? 2n
-                : 1n,
-      });
+      if (mode === "ctime" && "ctimeNs" in result) {
+        const ctimeNs = result.ctimeNs + hostBirth.ctimeAdvanceNs;
+        Object.defineProperty(result, "ctimeNs", { value: ctimeNs });
+        Object.defineProperty(result, "birthtimeNs", { value: ctimeNs });
+      } else {
+        Object.defineProperty(result, "birthtimeNs", {
+          value: mode === "zero" ? 0n : hostBirth.relocated ? 2n : 1n,
+        });
+      }
     }
     return result;
   });
   // Native-passthrough identity modules must observe the same builtin as this test.
   syncBuiltinESMExports();
+}
+
+// Coarse-timestamp filesystems (ext4 before Linux 6.13, CI overlays) keep ctime across a
+// write or link within one clock tick; advance it explicitly so fallback birthtime moves.
+function advanceHostCtime(): void {
+  hostBirth.ctimeAdvanceNs += 1n;
 }
 
 it("keeps healthy same-file admissions when birthtime falls back to ctime", async () => {
@@ -109,9 +116,10 @@ it("keeps healthy same-file admissions when birthtime falls back to ctime", asyn
     peer.exec("PRAGMA user_version = 0");
     peer.close();
     linkSync(pathname, alias);
+    advanceHostCtime();
     const after = statSync(pathname, { bigint: true });
     expect(after.ino).toBe(before.ino);
-    expect(after.ctimeNs).not.toBe(before.ctimeNs);
+    expect(after.birthtimeNs).not.toBe(before.birthtimeNs);
     const linked = lifecycle.capture(alias);
     expect(linked.identity.key).toBe(admitted.identity.key);
     expect(admitted.assertCurrent).not.toThrow();
@@ -143,9 +151,10 @@ it("permits a lazy native write after healthy peer changes when birthtime falls 
       peer.exec("PRAGMA wal_checkpoint(TRUNCATE)");
       peer.close();
       linkSync(pathname, alias);
+      advanceHostCtime();
       const after = statSync(pathname, { bigint: true });
       expect(after.ino).toBe(before.ino);
-      expect(after.ctimeNs).not.toBe(before.ctimeNs);
+      expect(after.birthtimeNs).not.toBe(before.birthtimeNs);
       await withExistingOpenClawStateSchema({ path: pathname }, async () => {
         const current = captureOpenClawStateWorkerContext({ env: state.env });
         expect(

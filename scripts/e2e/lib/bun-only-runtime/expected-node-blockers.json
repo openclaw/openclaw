@@ -35,27 +35,6 @@
           "spawnNodeTerminalPty"
         ]
       }
-    },
-    {
-      "id": "node-host-auto-update-discovery",
-      "origin": "known-blocker",
-      "feature": "Node host updater",
-      "owner": "Updater steps on Bun task (src/node-host/auto-update.ts)",
-      "callSite": "src/node-host/auto-update.ts -> src/infra/update-check-package-target.ts fetchNpmPackageTargetStatus",
-      "step": "node-host",
-      "evidence": "spawn",
-      "match": {
-        "stack": [
-          "fetchNpmPackageTargetStatus"
-        ],
-        "argv": [
-          "view",
-          "openclaw@latest",
-          "engines.node",
-          "openclaw.schemaVersions",
-          "--global"
-        ]
-      }
     }
   ]
 }

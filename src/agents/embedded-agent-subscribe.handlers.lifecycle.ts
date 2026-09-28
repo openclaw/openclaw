@@ -4,7 +4,10 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { projectChatErrorDetail } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
-import { hasAcceptedSessionSpawn } from "./accepted-session-spawn.js";
+import {
+  hasAcceptedSessionSpawn,
+  hasCompletionMessageSessionSpawn,
+} from "./accepted-session-spawn.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
 import {
   buildApiErrorObservationFields,
@@ -17,7 +20,10 @@ import {
   GENERIC_ASSISTANT_ERROR_TEXT,
 } from "./embedded-agent-helpers.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "./embedded-agent-runner/delivery-evidence.js";
-import { hasAttemptTerminalState } from "./embedded-agent-runner/run/attempt-terminal-evidence.js";
+import {
+  hasAttemptTerminalState,
+  hasAsyncActivity,
+} from "./embedded-agent-runner/run/attempt-terminal-evidence.js";
 import { resolveFinalAssistantVisibleText } from "./embedded-agent-runner/run/helpers.js";
 import { isIncompleteTerminalAssistantTurn } from "./embedded-agent-runner/run/incomplete-turn-classification.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
@@ -37,6 +43,10 @@ export {
 } from "./embedded-agent-subscribe.handlers.compaction.js";
 
 export function handleAgentStart(ctx: EmbeddedAgentSubscribeContext) {
+  // A same-prompt follow-up starts another core loop under the same delivery policy.
+  ctx.state.deferBlockReplyDelivery =
+    typeof ctx.params.onBeforeTerminalDelivery === "function" &&
+    ctx.params.deferTerminalDelivery !== false;
   ctx.log.debug(`embedded run agent start: runId=${ctx.params.runId}`);
   const data = { phase: "start", startedAt: Date.now() };
   emitAgentEvent({
@@ -66,7 +76,10 @@ export function handleAgentEnd(
   evt?: Extract<AgentSessionEvent, { type: "agent_end" }>,
 ): void | Promise<void> {
   ctx.state.liveEditDiffStateById.clear();
-  type BeforeTerminalDeliveryDecision = void | { suppressTerminalDelivery?: boolean };
+  type BeforeTerminalDeliveryDecision = void | {
+    suppressTerminalDelivery?: boolean;
+    continueCurrentTurn?: boolean;
+  };
   const lastAssistant = ctx.state.lastAssistant;
   const isError = isAssistantMessage(lastAssistant) && lastAssistant.stopReason === "error";
   let lifecycleErrorText: string | undefined;
@@ -291,6 +304,12 @@ export function handleAgentEnd(
       isError,
       incompleteTerminalAssistant,
       hadDeterministicSideEffect: hadBeforeFinalizeSideEffect,
+      hasPendingContinuation:
+        ctx.state.yielded ||
+        ctx.state.deterministicApprovalPromptPending ||
+        ctx.state.deterministicApprovalPromptSent ||
+        hasCompletionMessageSessionSpawn(ctx.state.acceptedSessionSpawns) ||
+        hasAsyncActivity(ctx.state.toolMetas),
     });
   };
 
@@ -335,6 +354,14 @@ export function handleAgentEnd(
     finalizeAgentEnd();
   };
 
+  const continueCurrentTurn = () => {
+    // Publish this checkpoint normally, but keep the run and its delivery owner
+    // alive until the already-queued same-prompt follow-up settles.
+    ctx.releaseDeferredReplies();
+    finalizeAgentEnd();
+    return ctx.flushBlockReplyBuffer();
+  };
+
   let lifecycleTerminalEmitted = false;
   const emitLifecycleTerminalOnce = (): void | Promise<void> => {
     if (lifecycleTerminalEmitted) {
@@ -369,7 +396,7 @@ export function handleAgentEnd(
     return deliverTerminalWithLifecycleErrorFallback();
   }
 
-  if (isPromiseLike<void | { suppressTerminalDelivery?: boolean }>(beforeTerminalDelivery)) {
+  if (isPromiseLike<BeforeTerminalDeliveryDecision>(beforeTerminalDelivery)) {
     return Promise.resolve(beforeTerminalDelivery)
       .catch((error: unknown) => {
         ctx.log.warn(`before terminal delivery failed: ${String(error)}`);
@@ -380,12 +407,18 @@ export function handleAgentEnd(
           suppressTerminalDelivery();
           return undefined;
         }
+        if (decision?.continueCurrentTurn === true) {
+          return continueCurrentTurn();
+        }
         return deliverTerminalWithLifecycleErrorFallback();
       });
   }
   if (beforeTerminalDelivery?.suppressTerminalDelivery === true) {
     suppressTerminalDelivery();
     return undefined;
+  }
+  if (beforeTerminalDelivery?.continueCurrentTurn === true) {
+    return continueCurrentTurn();
   }
   return deliverTerminalWithLifecycleErrorFallback();
 }

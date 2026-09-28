@@ -12,7 +12,7 @@ const nativeAnchor =
 
 export function createPnpmArchiveFixture(
   command: CommandFixture,
-  options: { platform?: string; arch?: string; glibc?: boolean } = {},
+  options: { platform?: string; arch?: string; glibc?: boolean; registryUrl?: string } = {},
 ) {
   const root = command.createTempDir("pnpm-verified-download-");
   const image = path.join(root, "image");
@@ -58,8 +58,15 @@ cp "$FIXTURE_REGISTRY/$name" "$out"
 `,
     { mode: 0o755 },
   );
+  if (options.registryUrl) {
+    fs.unlinkSync(curl);
+  }
   const script = fs
     .readFileSync(owner, "utf8")
+    .replace(
+      'const registry = "https://registry.npmjs.org";',
+      `const registry = ${JSON.stringify(options.registryUrl ?? "https://registry.npmjs.org")};`,
+    )
     .replaceAll("/opt/crabbox/toolchain-archives", image)
     .replaceAll("process.platform", JSON.stringify(options.platform ?? "linux"))
     .replaceAll("process.arch", JSON.stringify(options.arch ?? "x64"))
@@ -86,6 +93,7 @@ cp "$FIXTURE_REGISTRY/$name" "$out"
         env: {
           PATH: `${bin}${path.delimiter}${process.env.PATH}`,
           RUNNER_TEMP: runner,
+          CURL_HOME: root,
           CURL_CALLS: calls,
           FIXTURE_REGISTRY: registry,
           PNPM_CONFIG_STORE_DIR: store,

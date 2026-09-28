@@ -207,6 +207,28 @@ describe("createApplicationGateway authentication diagnostics", () => {
     }
   });
 
+  it("retires a rejected browser handoff before retrying with the Gateway secret", () => {
+    const { gateway, current } = store;
+    gateway.connect({ bootstrapToken: "synthetic-used-bootstrap", bootstrapProfile: "owner" });
+    current().opts.onClose?.({
+      code: 4008,
+      reason: "connect failed",
+      willRetry: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "unauthorized: bootstrap token invalid",
+        details: { code: ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID },
+      },
+    });
+
+    gateway.connect({ token: "synthetic-replacement-secret" });
+
+    expect(current().opts.token).toBe("synthetic-replacement-secret");
+    expect(current().opts.bootstrapToken).toBeUndefined();
+    expect(current().opts.bootstrapProfile).toBeUndefined();
+    gateway.stop();
+  });
+
   it("lets the replacement handoff join the pending document probe for the same build", async () => {
     const { replace, probe, fetchMock } = stubBuildReloadDocument();
     const { gateway } = store;

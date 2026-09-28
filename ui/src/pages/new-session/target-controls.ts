@@ -123,6 +123,7 @@ export function renderNewSessionPlaceControls({
     destination: place.cloudProfileId ? "cloud" : place.remotePlacement ? "remote" : "local",
     worktree: place.worktree,
     worktreeAvailable: place.worktreeAvailable(),
+    worktreeName: place.worktreeName,
     headBranch: branches?.headBranch,
     baseRef: place.baseRef,
     repository: Boolean(place.remoteRepository),

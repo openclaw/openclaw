@@ -21,8 +21,6 @@ describe("npm preflight publication channels", () => {
   it.each([
     ["2026.8.1", "beta", ["beta", "latest"]],
     ["2026.8.1-1", "latest", ["beta", "latest"]],
-    ["2026.8.1", "alpha", ["alpha"]],
-    ["2026.8.1-alpha.1", "alpha", ["alpha"]],
     ["2026.8.1-beta.1", "beta", ["beta"]],
     ["2026.6.33", "extended-stable", ["extended-stable"]],
   ])("qualifies %s on %s against its supported selectors", (version, tag, selectors) => {
@@ -58,7 +56,6 @@ describe("npm preflight publication channels", () => {
       { ...manifest, version: 1 },
       { ...manifest, pluginSdkApi: receipt },
       { ...manifest, packageVersion: "2026.8.1-beta.1" },
-      { ...manifest, packageVersion: "2026.8.1-alpha.1", npmDistTag: "alpha" },
       { ...manifest, packageVersion: "2026.6.33", npmDistTag: "extended-stable" },
       { ...manifest, pluginSdkApi: { ...manifest.pluginSdkApi, selectors: { beta: receipt } } },
     ]) {
@@ -67,7 +64,7 @@ describe("npm preflight publication channels", () => {
       ).toThrow("dist-tag mismatch");
     }
     expect(() => validateNpmPreflightDistTag({ manifest, npmDistTag: "alpha" })).toThrow(
-      "dist-tag mismatch",
+      "Alpha releases are retired;",
     );
     expect(() =>
       validateNpmPreflightDistTag({
@@ -99,9 +96,7 @@ describe("npm extended-stable publication boundary", () => {
   });
 
   it.each([
-    ["2026.6.11-alpha.1", "alpha"],
     ["2026.6.11-beta.1", "beta"],
-    ["2026.6.11", "alpha"],
     ["2026.6.11", "beta"],
     ["2026.6.11", "latest"],
     ["2026.6.11-1", "latest"],
@@ -120,6 +115,21 @@ describe("npm extended-stable publication boundary", () => {
     ["2026.6.33", "nightly"],
   ])("rejects %s on %s", (version, distTag) => {
     expect(() => validateNpmPublishBoundary(version, distTag)).toThrow();
+  });
+
+  it.each([
+    ["2026.6.11-alpha.1", "alpha"],
+    ["2026.6.11-alpha.1", "beta"],
+    ["2026.6.11-alpha.1", "latest"],
+    ["2026.6.11-alpha.1", "extended-stable"],
+    ["2026.6.11", "alpha"],
+    ["2026.6.11-beta.1", "alpha"],
+    ["2026.6.33", "alpha"],
+  ])("rejects retired alpha version or selector %s/%s", (version, tag) => {
+    expect(() => validateNpmPublishBoundary(version, tag)).toThrow("Alpha releases are retired;");
+    expect(() => resolveNpmPreflightSdkSelectors(version, tag)).toThrow(
+      "Alpha releases are retired;",
+    );
   });
 
   it("prints exactly channel then publish tag from the dependency-free CLI", () => {
