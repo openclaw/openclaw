@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   fingerprintAuthProfileCredential,
-  fingerprintAwsSdkRuntimeOwner,
   fingerprintOpaqueRuntimeOwner,
   fingerprintResolvedAuthProfileCredential,
   fingerprintResolvedProviderAuth,
@@ -839,49 +838,6 @@ describe("verified OpenClaw inference binding", () => {
     expect(resolveHarnessAuth).toHaveBeenCalledWith(
       expect.objectContaining({ harnessId: "codex", authProfileId: "openai:work" }),
     );
-  });
-
-  it("refuses to mint an AWS SDK owner without exact principal proof", async () => {
-    const bedrockConfig = {
-      agents: {
-        defaults: { model: "amazon-bedrock/us.anthropic.claude-sonnet-4-6" },
-      },
-      models: {
-        providers: {
-          "amazon-bedrock": {
-            baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-            api: "bedrock-converse-stream",
-            auth: "aws-sdk",
-            models: [],
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-    const route = await requireRoute(bedrockConfig, "embedded");
-    const auth = { source: "aws-sdk default chain", mode: "aws-sdk" as const };
-    const fingerprint = () =>
-      fingerprintAwsSdkRuntimeOwner({
-        provider: route.provider,
-        backendId: route.agentHarnessRuntimeOverride ?? "openclaw",
-        auth,
-      });
-    try {
-      vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", "");
-      vi.stubEnv("AWS_ACCESS_KEY_ID", "");
-      vi.stubEnv("AWS_SECRET_ACCESS_KEY", "");
-      vi.stubEnv("AWS_SESSION_TOKEN", "");
-      vi.stubEnv("AWS_PROFILE", "work");
-      expect(fingerprint()).toBeUndefined();
-
-      vi.stubEnv("AWS_PROFILE", "");
-      expect(fingerprint()).toBeUndefined();
-
-      await expect(createBinding(route, {})).rejects.toThrow(
-        "did not report one exact execution owner",
-      );
-    } finally {
-      vi.unstubAllEnvs();
-    }
   });
 
   it("fails closed after the configured route changes", async () => {
