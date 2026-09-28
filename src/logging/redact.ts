@@ -176,11 +176,14 @@ type RedactOptions = {
   mode?: RedactSensitiveMode;
   patterns?: readonly RedactPattern[];
   sensitiveFieldPatterns?: readonly RedactPattern[];
+  /** Candidate secret values matching any of these patterns are exempt from masking. */
+  allowPatterns?: readonly RedactPattern[];
 };
 
 type ResolvedRedactOptions = {
   mode: RedactSensitiveMode;
   patterns: ResolvedRedactPattern[];
+  allowPatterns: ResolvedRedactPattern[];
 };
 
 function normalizeMode(value?: string): RedactSensitiveMode {
@@ -250,6 +253,29 @@ function usesBuiltInRedactPatterns(value?: readonly RedactPattern[]): boolean {
   return (
     !value?.length || value === DEFAULT_REDACT_PATTERNS || value === TOOL_PAYLOAD_REDACT_PATTERNS
   );
+}
+
+// Allow patterns are plain user regexes. Unlike the redact-pattern lists they must not gain the
+// implicit AWS matcher, or an exemption list would silently exempt bare AWS secret access keys.
+function resolveAllowPatterns(value?: readonly RedactPattern[]): ResolvedRedactPattern[] {
+  if (!value?.length) {
+    return [];
+  }
+  return value
+    .map(parsePattern)
+    .filter((pattern): pattern is ResolvedRedactPattern => Boolean(pattern));
+}
+
+function matchesAnyRedactPattern(
+  text: string,
+  patterns: readonly ResolvedRedactPattern[],
+): boolean {
+  for (const pattern of patterns) {
+    for (const _match of iterateRedactMatches(text, pattern)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function maskToken(token: string): string {
@@ -625,6 +651,7 @@ function prepareRedactionCapture(
   { match, groups, input, offset, replacement: policyReplacement }: RedactMatch,
   pattern: ResolvedRedactPattern,
   preserveSourceAssignment?: (text: string, offset: number) => boolean,
+  allowPatterns?: readonly ResolvedRedactPattern[],
 ): RedactionCapture | undefined {
   if (match.includes("PRIVATE KEY-----")) {
     return {
@@ -655,6 +682,11 @@ function prepareRedactionCapture(
     value: selected.value,
     redact: (target) => {
       const token = target.value;
+      // The exemption list wins over every built-in and user pattern so an operator can always
+      // suppress a known false positive without weakening the defaults. Default [] keeps behavior.
+      if (allowPatterns?.length && matchesAnyRedactPattern(token, allowPatterns)) {
+        return undefined;
+      }
       if (isAssignmentFamilyPattern(pattern) && isNonSecretReferenceValue(input, target.start)) {
         return undefined;
       }
@@ -707,8 +739,9 @@ function redactMatch(
   match: RedactMatch,
   pattern: ResolvedRedactPattern,
   preserveSourceAssignment?: (text: string, offset: number) => boolean,
+  allowPatterns?: readonly ResolvedRedactPattern[],
 ): string {
-  const capture = prepareRedactionCapture(match, pattern, preserveSourceAssignment);
+  const capture = prepareRedactionCapture(match, pattern, preserveSourceAssignment, allowPatterns);
   const edit = capture?.redact(capture);
   return edit
     ? match.match.slice(0, edit.start - match.offset) +
@@ -723,6 +756,7 @@ export function redactText(
   options?: {
     fullContext?: boolean;
     preserveSourceAssignment?: (text: string, offset: number) => boolean;
+    allowPatterns?: readonly ResolvedRedactPattern[];
   },
 ): string {
   const finishMeasurement = startRedactionMeasurement("text");
@@ -733,7 +767,7 @@ export function redactText(
     );
     let pattern: ResolvedRedactPattern;
     const replace = (match: RedactMatch) =>
-      redactMatch(match, pattern, options?.preserveSourceAssignment);
+      redactMatch(match, pattern, options?.preserveSourceAssignment, options?.allowPatterns);
     const replaceRegex = (...args: unknown[]) => replace(readRedactMatch(args));
     // Each replacement finishes synchronously before this invocation advances its pattern.
     for (pattern of patterns) {
@@ -762,6 +796,7 @@ function markPatternMatchRedaction(
   input: string,
   pattern: ResolvedRedactPattern,
   match: RedactMatch,
+  allowPatterns?: readonly ResolvedRedactPattern[],
 ): void {
   const fullMatch = match.match;
   if (fullMatch.includes("PRIVATE KEY-----")) {
@@ -774,6 +809,17 @@ function markPatternMatchRedaction(
       ? 0
       : getSecretCaptureStart(pattern, input, fullMatch, match.offset, selected);
   if (tokenStart < 0) {
+    return;
+  }
+  // Keep the bitmap aligned with text redaction: exempt values and non-secret references must not
+  // be marked as secrets.
+  if (allowPatterns?.length && matchesAnyRedactPattern(selected.value, allowPatterns)) {
+    return;
+  }
+  if (
+    isAssignmentFamilyPattern(pattern) &&
+    isNonSecretReferenceValue(input, match.offset + tokenStart)
+  ) {
     return;
   }
   const selectedSecret = formAwareEqualsAssignmentPatterns.has(pattern)
@@ -803,7 +849,7 @@ export function computeSensitiveRedactionBitmap(
   markFormBodyRedactions(text, bitmap);
   for (const pattern of resolved.patterns) {
     for (const match of iterateRedactMatches(text, pattern)) {
-      markPatternMatchRedaction(bitmap, text, pattern, match);
+      markPatternMatchRedaction(bitmap, text, pattern, match, resolved.allowPatterns);
     }
   }
   return bitmap;
@@ -824,13 +870,18 @@ function resolveConfigRedaction(): RedactOptions {
   return {
     mode: DEFAULT_REDACT_MODE,
     patterns: cfg?.redactPatterns,
+    allowPatterns: cfg?.redactAllowPatterns,
   };
 }
 
 export function resolveRedactOptions(options?: RedactOptions): ResolvedRedactOptions {
   const resolved = options ?? resolveConfigRedaction();
   const mode = normalizeMode(resolved.mode);
-  return { mode, patterns: mode === "off" ? [] : resolvePatterns(resolved.patterns) };
+  return {
+    mode,
+    patterns: mode === "off" ? [] : resolvePatterns(resolved.patterns),
+    allowPatterns: mode === "off" ? [] : resolveAllowPatterns(resolved.allowPatterns),
+  };
 }
 
 export function redactSensitiveText(text: string, options?: RedactOptions): string {
@@ -874,7 +925,7 @@ function redactSensitiveTextWithOptions(
     return exactRedacted;
   }
   const resolved = resolveRedactOptions(resolvedOptions);
-  return redactText(exactRedacted, resolved.patterns);
+  return redactText(exactRedacted, resolved.patterns, { allowPatterns: resolved.allowPatterns });
 }
 
 export function redactToolDetail(detail: string): string {
@@ -889,7 +940,7 @@ function resolveToolPayloadRedaction(
     userPatterns && userPatterns.length > 0
       ? [...userPatterns, ...DEFAULT_REDACT_PATTERNS]
       : undefined;
-  return { mode: "tools", patterns };
+  return { mode: "tools", patterns, allowPatterns: loggingConfig?.redactAllowPatterns };
 }
 
 function resolveModelVisibleToolPayloadRedaction(
@@ -905,6 +956,7 @@ function resolveModelVisibleToolPayloadRedaction(
     sensitiveFieldPatterns: hasUserPatterns
       ? [...userPatterns, ...DEFAULT_REDACT_PATTERNS]
       : DEFAULT_REDACT_PATTERNS,
+    allowPatterns: loggingConfig?.redactAllowPatterns,
   };
 }
 
@@ -929,6 +981,7 @@ function redactToolPayloadTextWithPolicy(
   const resolved = resolveRedactOptions(options);
   return redactText(redactRegisteredSecretValues(text, maskToken), resolved.patterns, {
     fullContext: true,
+    allowPatterns: resolved.allowPatterns,
   });
 }
 
@@ -957,6 +1010,7 @@ export function redactInputTextWithSourcePolicy(
   return redactText(prepared, resolvePatterns(), {
     fullContext: true,
     preserveSourceAssignment,
+    allowPatterns: resolveAllowPatterns(loggingConfig?.redactAllowPatterns),
   });
 }
 
@@ -1025,6 +1079,11 @@ function redactSensitiveFieldValueWithOptions(
   if (resolved.mode === "off") {
     return exactRedacted;
   }
+  // Exempt structured field values matching an allow pattern. Registered exact secrets inside the
+  // value stay masked (exactRedacted), so the exemption cannot leak a duplicate of a real secret.
+  if (resolved.allowPatterns.length > 0 && matchesAnyRedactPattern(value, resolved.allowPatterns)) {
+    return exactRedacted;
+  }
   // Structured payloads can contain thousands of short, benign strings. Avoid
   // walking the full default pattern table for each one; the prefilter is kept
   // in sync with every built-in pattern and sensitive form/URL key. Explicit
@@ -1032,7 +1091,7 @@ function redactSensitiveFieldValueWithOptions(
   const redacted =
     !usesBuiltInRedactPatterns(fieldOptions.patterns) ||
     couldMatchDefaultRedactPatterns(exactRedacted)
-      ? redactText(exactRedacted, resolved.patterns)
+      ? redactText(exactRedacted, resolved.patterns, { allowPatterns: resolved.allowPatterns })
       : exactRedacted;
   const shouldRedactAppPassword = redacted !== value || STRUCTURED_APP_PASSWORD_FIELD_RE.test(key);
   if (shouldRedactAppPassword) {
