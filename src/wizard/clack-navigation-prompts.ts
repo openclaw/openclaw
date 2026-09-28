@@ -1,4 +1,3 @@
-// Clack prompt wrappers that add onboarding navigation footers.
 import { styleText } from "node:util";
 import {
   AutocompletePrompt,
@@ -43,13 +42,7 @@ function getOptionLabel<Value>(option: Option<Value>): string {
 }
 
 function computeLabel(label: string, format: (text: string) => string): string {
-  if (!label.includes("\n")) {
-    return format(label);
-  }
-  return label
-    .split("\n")
-    .map((line) => format(line))
-    .join("\n");
+  return label.split("\n").map(format).join("\n");
 }
 
 function getFilteredOption<Value>(searchText: string, option: Option<Value>): boolean {
@@ -139,29 +132,19 @@ export function selectWithNavigationFooter<Value>(
       const title = `${showGuide ? `${styleText("gray", S_BAR)}\n` : ""}${messageLines}\n`;
 
       switch (this.state) {
-        case "submit": {
-          const submitPrefix = showGuide ? `${styleText("gray", S_BAR)}  ` : "";
-          const wrappedLines = wrapTextWithPrefix(
-            opts.output,
-            selectOptionRenderer(
-              expectDefined(this.options[this.cursor], "options entry at this.cursor"),
-              "selected",
-            ),
-            submitPrefix,
-          );
-          return `${title}${wrappedLines}`;
-        }
+        case "submit":
         case "cancel": {
-          const cancelPrefix = showGuide ? `${styleText("gray", S_BAR)}  ` : "";
+          const cancelled = this.state === "cancel";
+          const prefix = showGuide ? `${styleText("gray", S_BAR)}  ` : "";
           const wrappedLines = wrapTextWithPrefix(
             opts.output,
             selectOptionRenderer(
               expectDefined(this.options[this.cursor], "options entry at this.cursor"),
-              "cancelled",
+              cancelled ? "cancelled" : "selected",
             ),
-            cancelPrefix,
+            prefix,
           );
-          return `${title}${wrappedLines}${showGuide ? `\n${styleText("gray", S_BAR)}` : ""}`;
+          return `${title}${wrappedLines}${cancelled && showGuide ? `\n${styleText("gray", S_BAR)}` : ""}`;
         }
         default: {
           const prefix = showGuide ? `${styleText("cyan", S_BAR)}  ` : "";
@@ -230,7 +213,6 @@ export function autocompleteWithNavigationFooter<Value>(
               label,
             )}`;
         }
-        return "";
       };
 
       switch (this.state) {
@@ -553,40 +535,28 @@ export function multiselectWithNavigationFooter<Value>(
           );
           return `${title}${wrappedLabel}${showGuide ? `\n${styleText("gray", S_BAR)}` : ""}`;
         }
-        case "error": {
-          const prefix = showGuide ? `${styleText("yellow", S_BAR)}  ` : "";
-          const footer = this.error
-            .split("\n")
-            .map((line, index) =>
-              index === 0
-                ? `${showGuide ? `${styleText("yellow", S_BAR_END)}  ` : ""}${styleText(
-                    "yellow",
-                    line,
-                  )}`
-                : `   ${line}`,
-            )
-            .join("\n");
-          const titleLineCount = title.split("\n").length;
-          const footerLineCount = footer.split("\n").length + 1;
-          return `${title}${prefix}${limitOptions({
-            output: opts.output,
-            options: this.options,
-            cursor: this.cursor,
-            maxItems: opts.maxItems,
-            columnPadding: prefix.length,
-            rowPadding: titleLineCount + footerLineCount,
-            style: styleOption,
-          }).join(`\n${prefix}`)}\n${footer}\n`;
-        }
         default: {
-          const prefix = showGuide ? `${styleText("cyan", S_BAR)}  ` : "";
-          const footerLines = [
-            ...navigationFooterLines(showGuide, "cyan", opts.navigation, [
-              styleText("dim", "↑/↓ option"),
-              styleText("dim", "space select"),
-            ]),
-            showGuide ? styleText("cyan", S_BAR_END) : "",
-          ];
+          const barStyle = this.state === "error" ? "yellow" : "cyan";
+          const prefix = showGuide ? `${styleText(barStyle, S_BAR)}  ` : "";
+          const footerLines =
+            this.state === "error"
+              ? this.error
+                  .split("\n")
+                  .map((line, index) =>
+                    index === 0
+                      ? `${showGuide ? `${styleText("yellow", S_BAR_END)}  ` : ""}${styleText(
+                          "yellow",
+                          line,
+                        )}`
+                      : `   ${line}`,
+                  )
+              : [
+                  ...navigationFooterLines(showGuide, "cyan", opts.navigation, [
+                    styleText("dim", "↑/↓ option"),
+                    styleText("dim", "space select"),
+                  ]),
+                  showGuide ? styleText("cyan", S_BAR_END) : "",
+                ];
           const titleLineCount = title.split("\n").length;
           const footerLineCount = footerLines.length + 1;
           return `${title}${prefix}${limitOptions({

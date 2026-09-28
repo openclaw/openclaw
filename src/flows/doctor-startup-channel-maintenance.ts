@@ -42,18 +42,14 @@ export async function collectChannelPreviewWarningHealthFindings(params: {
   });
   return warnings.map((warning): HealthFinding => {
     const path = warningPath(warning);
-    return Object.assign(
-      {
-        checkId: CHANNEL_PREVIEW_WARNINGS_CHECK_ID,
-        severity: "warning",
-        message: normalizeWarningMessage(warning),
-      } satisfies HealthFinding,
-      path ? { path } : {},
-      {
-        requirement: "Configured channels should not emit doctor preview warnings.",
-        fixHint: `Run \`${doctorFixCommand}\` if the channel warning recommends repair, or update the affected channel config manually.`,
-      },
-    );
+    return {
+      checkId: CHANNEL_PREVIEW_WARNINGS_CHECK_ID,
+      severity: "warning",
+      message: normalizeWarningMessage(warning),
+      ...(path ? { path } : {}),
+      requirement: "Configured channels should not emit doctor preview warnings.",
+      fixHint: `Run \`${doctorFixCommand}\` if the channel warning recommends repair, or update the affected channel config manually.`,
+    };
   });
 }
 

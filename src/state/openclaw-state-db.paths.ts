@@ -5,6 +5,11 @@ import { resolveStateDir } from "../config/paths.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { normalizeWindowsPathPreservingCase } from "../infra/path-guards.js";
+import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
+
+export function resolveDatabasePath(options: OpenClawStateDatabaseOptions = {}): string {
+  return path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env));
+}
 
 export function existingPathOrUndefined(pathname: string): string | undefined {
   try {

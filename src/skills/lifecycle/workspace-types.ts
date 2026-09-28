@@ -60,17 +60,16 @@ export type ClawHubSkillFileLock = {
   sha256: string;
 };
 
-export type ClawHubSkillVerificationLock = {
-  schema: ClawHubSkillVerificationResponse["schema"];
-  ok: boolean;
-  decision: ClawHubSkillVerificationResponse["decision"];
-  reasons: string[];
-  card?: unknown;
-  artifact?: unknown;
-  provenance?: unknown;
-  security?: unknown;
-  signature?: unknown;
-};
+export type ClawHubSkillVerificationLock = Pick<
+  ClawHubSkillVerificationResponse,
+  "schema" | "ok" | "decision" | "reasons"
+> &
+  Partial<
+    Pick<
+      ClawHubSkillVerificationResponse,
+      "card" | "artifact" | "provenance" | "security" | "signature"
+    >
+  >;
 
 type ClawHubSkillLockEntry = Omit<
   ClawHubSkillOrigin,
